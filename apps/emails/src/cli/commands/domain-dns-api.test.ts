@@ -1,3 +1,4 @@
+import { buildServer } from "../../mcp/server.js";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Command } from "commander";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
@@ -251,3 +252,37 @@ test("a changed API account stops a pending verification loop before another req
   ).rejects.toThrow("configuration changed");
   expect(requests).toBe(1);
 }, 10000);
+
+test("MCP provision_domain executes the authenticated DNS plan and rejects foreign bindings", async () => {
+  const f = fixture();
+  const mcp = buildServer() as unknown as {
+    _registeredTools: Record<string, { handler: (args: Record<string, unknown>) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> }>;
+  };
+  const handler = mcp._registeredTools.provision_domain!.handler;
+  const result = await handler({ domain: "example.test", provider_id: "provider", dry_run: true, add_mx: true, mail_from: "mail" });
+  expect(result.isError).not.toBe(true);
+  expect(JSON.parse(result.content[0]!.text)).toMatchObject({ dry_run: true, job: { status: "planned" } });
+  expect(f.calls()).toBe(0);
+  expect(f.resolved).toHaveLength(1);
+  const blocked = await handler({ domain: "foreign.test", provider_id: "provider", dry_run: true });
+  expect(blocked.isError).toBe(true);
+  expect(f.calls()).toBe(0);
+});
+
+test("MCP does not turn an HTTP 200 blocked DNS receipt into success", async () => {
+  fixture();
+  server!.stop(true);
+  server = Bun.serve({ port: 0, fetch: () => Response.json({
+    dry_run: false, job: { id: "fixture-job", domain: "example.test", provider_id: "provider", zone_id: "zone",
+      status: "blocked", phase: "resolve", dns_published: false, verified_for_sending: false,
+      requires_reconciliation: false, plan: null, message: "Server binding changed" }
+  }) });
+  process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${server.port}/v1`;
+  const mcp = buildServer() as unknown as {
+    _registeredTools: Record<string, { handler: (args: Record<string, unknown>) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> }>;
+  };
+  const result = await mcp._registeredTools.provision_domain!.handler({ domain: "example.test", provider_id: "provider" });
+  expect(result.isError).toBe(true);
+  const payload = JSON.parse(result.content[0]!.text);
+  expect(JSON.parse(payload.error.message).job.status).toBe("blocked");
+});

@@ -77,7 +77,7 @@ export function cliEquivalentForTool(name: string, input: unknown): string {
       + " it is pure local computation only for a domain with no provider",
     verify_domain: () => `emails domain verify ${domain ?? id ?? "<domain-or-id>"} --json`,
     remove_domain: () => `emails domain remove ${id ?? domain ?? "<domain-or-id>"} --yes --json`,
-    provision_domain: () => `emails provision domain ${domain ?? "<domain>"} --provider ${provider ?? "<provider-id>"}${enabled(input, "add_mx")}${enabled(input, "force_mx_switch")} --json`,
+    provision_domain: () => `emails provision domain ${domain ?? "<domain>"} --provider ${provider ?? "<provider-id>"}${enabled(input, "add_mx")}${enabled(input, "force_mx_switch")}${enabled(input, "dry_run")}${enabled(input, "wait")}${flag(input, "mail_from")}${flag(input, "send_provider", "send")}${flag(input, "timeout_seconds", "timeout")} --json`,
     add_forwarding_rule: () => `emails forwarding add ${arg(input, "source_address") ?? "<source>"} ${arg(input, "target_address") ?? "<target>"}${provider ? ` --provider ${provider}` : ""}${flag(input, "from_address", "from")}${enabled(input, "enabled") ? "" : ((input as Record<string, unknown>)?.enabled === false ? " --disabled" : "")} --json`,
     list_forwarding_rules: () => `emails forwarding list${flag(input, "source_address", "source")}${enabled(input, "enabled")}${(input as Record<string, unknown>)?.enabled === false ? " --disabled" : ""}${flag(input, "limit")}${flag(input, "offset")} --json`,
     run_forwarding_rules: () => `emails forwarding run${provider ? ` --provider ${provider}` : ""}${flag(input, "from_address", "from")}${flag(input, "limit")}${enabled(input, "backfill")} --json`,
