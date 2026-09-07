@@ -12,7 +12,7 @@
     },
     "apps/attachments": {
       "name": "@hasna/attachments",
-      "version": "1.1.9",
+      "version": "1.2.0",
       "bin": {
         "attachments": "dist/cli/index.js",
         "attachments-mcp": "dist/mcp/server.js",
@@ -330,7 +330,7 @@
     },
     "apps/economy": {
       "name": "@hasna/economy",
-      "version": "0.3.28",
+      "version": "0.4.0",
       "bin": {
         "economy": "dist/cli/index.js",
         "economy-mcp": "dist/mcp/index.js",
@@ -1101,7 +1101,7 @@
     },
     "apps/telephony": {
       "name": "@hasna/telephony",
-      "version": "0.2.11",
+      "version": "0.3.1",
       "bin": {
         "telephony": "dist/cli/index.js",
         "telephony-mcp": "dist/mcp/index.js",
