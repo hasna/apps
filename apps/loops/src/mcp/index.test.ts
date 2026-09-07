@@ -58,7 +58,22 @@ async function connectMcp(
     // stdio integration tests must explicitly opt into the stdio transport.
     args: ["run", "src/mcp/index.ts", "--stdio"],
     cwd: process.cwd(),
-    env: cleanEnv({ LOOPS_DATA_DIR: dataDir, MCP_STDIO: "1", ...env }),
+    // Ambient credential isolation: the spawned server inherits the operator's
+    // real home, and the shared resolver's disk tier
+    // (~/.hasna/loops/config/credentials) outranks the env tier — a provisioned
+    // station's real credential REFUSES the fixture authority as written for a
+    // different one before the guard under test can fire (green on CI, red on
+    // the station). Anchor the home-layout roots at the test data dir (no
+    // credentials file can exist there), so the disk tier consults nothing on
+    // both kinds of machine. The per-call env overrides still come last.
+    env: cleanEnv({
+      LOOPS_DATA_DIR: dataDir,
+      MCP_STDIO: "1",
+      HOME: dataDir,
+      HASNA_HOME: dataDir,
+      HASNA_CONFIG_HOME: dataDir,
+      ...env,
+    }),
     stderr: "pipe",
   });
   const client = new Client({ name: "open-loops-mcp-test", version: "0.0.0" });
