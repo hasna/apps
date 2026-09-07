@@ -1453,17 +1453,21 @@ describe("the collapsed module", () => {
   });
 
   it("leaves every consumer importing the facade rather than a deleted arm", () => {
-    const consumers = [
+    const shippedConsumers = [
       ["cli", "commands", "alias.ts"],
       ["cli", "commands", "domain.ts"],
-      ["cli", "commands", "inbox.local.ts"],
       ["mcp", "tools", "domains-impl.ts"],
       ["lib", "delivery-doctor.ts"],
     ];
-    for (const parts of consumers) {
+    // The retired inbox implementation is a test fixture, not a shipped consumer.
+    const fixtureConsumers = [["cli", "commands", "inbox.local.test-support.ts"]];
+    for (const parts of [...shippedConsumers, ...fixtureConsumers]) {
       const source = readFileSync(join(dbDir, "..", ...parts), "utf8");
       expect(source, parts.join("/")).toMatch(/from ["'](?:\.\.\/)+db\/aliases\.js["']/);
       expect(/aliases\.(local|remote)\.js/.test(source), `${parts.join("/")} imports a deleted arm`).toBe(false);
     }
+    const inbox = readFileSync(join(dbDir, "..", "cli", "commands", "inbox.ts"), "utf8");
+    expect(inbox).toContain('from "./inbox.remote.js"');
+    expect(inbox).not.toMatch(/inbox\.local|test-support/);
   });
 });
