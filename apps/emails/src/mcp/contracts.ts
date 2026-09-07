@@ -28,6 +28,12 @@ function flag(input: unknown, key: string, name = key.replace(/_/g, "-")): strin
   return value ? ` --${name} ${value}` : "";
 }
 
+function providerCredentialHint(input: unknown): string {
+  const obj = input && typeof input === "object" ? input as Record<string, unknown> : {};
+  return ["api_key", "access_key", "secret_key"].some(key => obj[key] !== undefined)
+    ? " # requires secure provider credential input; values omitted" : "";
+}
+
 /** True when the caller supplied per-member template vars (which the CLI cannot take). */
 function hasVars(input: unknown): boolean {
   const obj = input && typeof input === "object" ? input as Record<string, unknown> : {};
@@ -62,8 +68,8 @@ export function cliEquivalentForTool(name: string, input: unknown): string {
     diagnose_inbound_delivery: () => `emails doctor delivery ${email ?? "<address>"} --json`,
 
     list_providers: () => `emails provider list${flag(input, "limit")}${flag(input, "offset")} --json`,
-    add_provider: () => `emails provider add --name ${arg(input, "name") ?? "<name>"} --type ${arg(input, "type") ?? "<type>"} --json`,
-    update_provider: () => `emails provider update ${id ?? "<provider-id>"} --json`,
+    add_provider: () => `emails provider add --name ${arg(input, "name") ?? "<name>"} --type ${arg(input, "type") ?? "<type>"}${flag(input, "id")}${flag(input, "region")}${enabled(input, "skip_validation")} --json${providerCredentialHint(input)}`,
+    update_provider: () => `emails provider update ${id ?? "<provider-id>"}${flag(input, "name")}${flag(input, "region")}${enabled(input, "skip_validation")} --json${providerCredentialHint(input)}`,
     remove_provider: () => `emails provider remove ${id ?? "<provider-id>"} --yes --json`,
 
     list_domains: () => `emails domain list${provider ? ` --provider ${provider}` : ""}${flag(input, "limit")}${flag(input, "offset")} --json`,
