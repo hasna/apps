@@ -353,23 +353,15 @@ export function registerEmailOpsTools(server: McpServer): void {
 
   server.tool(
   "pull_events",
-  "Pull latest events from provider(s) and store locally",
+  "Reconcile known provider messages through the account API; returns counts, failures, and completeness without client provider credentials",
   {
     provider_id: z.string().optional().describe("Provider ID (syncs all if not specified)"),
   },
   async ({ provider_id }) => {
     try {
-      const { syncProvider, syncAll } = await import('../../lib/sync.js');
-      const { resolveId } = await import('../helpers.js');
-      let result: Record<string, number>;
-      if (provider_id) {
-        const id = resolveId("providers", provider_id);
-        const count = await syncProvider(id);
-        result = { [id]: count };
-      } else {
-        result = await syncAll();
-      }
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      const { pullProviderObservations } = await import("../../lib/provider-sync-api.js");
+      const result = await pullProviderObservations(provider_id);
+      return { content: [{ type: "text", text: JSON.stringify(result) }], ...(!result.ok ? { isError: true } : {}) };
     } catch (e) {
       return toolError(e);
     }

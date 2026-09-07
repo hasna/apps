@@ -97,6 +97,8 @@ function publishedResourceContract() {
     };
   }
   paths["/v1/messages/send"] = published["/v1/messages/send"];
+  paths["/v1/inbox/sync-s3"] = published["/v1/inbox/sync-s3"];
+  paths["/v1/providers/{id}/sync"] = published["/v1/providers/{id}/sync"];
   paths["/v1/messages"] = { get: { parameters: (published["/v1/messages"]?.get as { parameters?: unknown })?.parameters ?? [] } };
   return { openapi: emailsSelfHostedOpenApi.openapi, info: emailsSelfHostedOpenApi.info,
     security: emailsSelfHostedOpenApi.security, components: {}, paths };
@@ -1249,6 +1251,13 @@ const server = Bun.serve({
         })
         .slice(offset, offset + limit);
       return json({ rows });
+    }
+    if (req.method === "POST" && ((resource === "inbox" && sub === "sync-s3") || (resource === "providers" && parts[3] === "sync"))) {
+      const body = await req.json();
+      const operation = resource === "inbox" ? "sync-s3" : "provider-sync";
+      rowsFor("sync-requests").push({ id: crypto.randomUUID(), operation, ...(resource === "providers" ? { provider_id: sub } : {}), ...body });
+      const fixture = rowsFor("sync-results").find(row => row.operation === operation && (row.provider_id === undefined || row.provider_id === sub) && (row.cursor ?? null) === (body.cursor ?? body.after ?? null));
+      return fixture ? json(fixture.receipt, Number(fixture.status ?? 200)) : json({ error: "No configured sync fixture" }, 404);
     }
     if (resource === "domains" && ["setup", "setup-cloudflare"].includes(sub) && req.method === "POST") {
       const fixture = rowsFor("dns-setup-results").find(row => row.operation === sub);

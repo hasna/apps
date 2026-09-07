@@ -4,8 +4,8 @@ This is a source implementation matrix, not a claim that the public service or n
 
 | Command or family | Source closure | Remaining acceptance/dependency |
 | --- | --- | --- |
-| `test`, `batch` | Authenticated send composition, templates/CSV validation, retry identities and partial-failure receipts | Provider selector requires provider-aware send service; no production test messages authorized |
-| `email list`, `log --from/--status` | Filters implemented before paging; bounded reads fail explicitly on an incomplete scan | Provider provenance/filter support is a separate integration |
+| `test`, `batch` | Authenticated send composition, templates/CSV validation, retry identities and partial-failure receipts | Deploy provider-aware send service; no production test messages authorized |
+| `email list/export`, `log --from/--status`, MCP `list_emails/get_email` | Provider provenance and filters carried through every API page and readback; incomplete scans fail explicitly | Deploy provenance migration and advertised provider filter contract; older APIs refuse scoped reads |
 | `doctor delivery`, `inbox explain` | API registry/message diagnostics; optional public MX inspection | Registry evidence does not establish provider credentials or worker health |
 | `inbox realtime-status` | Registered sources and last-sync metadata, paginated beyond 500 | Worker heartbeat/queue health remains unmeasured until a service endpoint exposes it |
 | `schedule run`, `scheduler` | `/v1/scheduled/run`, atomic tenant-scoped claims, expiring leases, fenced completion, stable send-intent identity; `--once`, `--limit`, interval polling | Deploy routes and migration0029, then exercise installed client; sequences have independent limits and measured results |
@@ -31,6 +31,12 @@ This is a source implementation matrix, not a claim that the public service or n
 | `logs tail` | Persisted tenant API operation events, with operator authorization and fixed fields | Deploy migration 0037 and routes; historical activity and container stdout are not reconstructed |
 | `daemon start/status/restart` | Foreground scheduler/sequence workers with durable ownership, fenced claims, drain and confirmed restart generations | Deploy migration 0038 and worker routes; expired or uncertain owners require reconciliation |
 | `self-hosted key/idp-principal`, `db`, `serve` | Canonical `server key/idp-principal/db` operator namespace; `self-hosted` and root `db` compatibility aliases | Server database/signing credentials remain required for bootstrap actions; ordinary account API keys use `keys` |
+| MCP `sync_s3_inbox`, `pull_events` | Existing authenticated ingestion/provider APIs; bounded S3 paging and partial receipts retain counts, failures and continuation cursors | Deploy existing sync routes and tenant source/provider bindings; no client AWS credentials or local mail database |
+| MCP `send_email` headers/tags | Bounded custom X-* headers and tags validated, persisted, hashed for retries and preserved in scheduled sends | Deploy metadata contract and migration 0040; reserved routing/auth/tracking headers remain private |
+| MCP `send_feedback` | Tenant-scoped API stores feedback and acknowledges saved, not delivered | Deploy feedback route and migration 0039; no external delivery implied |
+| MCP `batch_send` and domain setup helpers | Shared API execution, durable per-send/job receipts and explicit incomplete/blocked results | Deploy corresponding send/setup routes and configured bindings; no implicit purchase or fabricated readiness |
+
+Native cloud-bound library helpers remain explicit compatibility APIs. Ordinary MCP tools use the shared service and do not invoke those local ingestion implementations.
 
 ## Scheduled execution boundaries
 

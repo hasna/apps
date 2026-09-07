@@ -110,6 +110,7 @@ export function cliEquivalentForTool(name: string, input: unknown): string {
     search_emails: () => `emails search ${arg(input, "query") ?? "<query>"}${flag(input, "since")}${flag(input, "limit")}${flag(input, "offset")} --json`,
     get_email: () => `emails show ${id ?? "<email-id>"} --json`,
     get_email_content: () => `emails show ${id ?? "<email-id>"} --content --json`,
+    sync_s3_inbox: () => `emails inbox sync-s3${flag(input, "bucket")}${flag(input, "source_id", "source")}${flag(input, "prefix")}${flag(input, "region")}${provider ? ` --provider ${provider}` : ""}${flag(input, "limit")}${flag(input, "cursor")} --json`,
     pull_events: () => `emails sync${provider ? ` --provider ${provider}` : ""} --json`,
     get_stats: () => `emails stats${provider ? ` --provider ${provider}` : ""} --json`,
 
@@ -246,6 +247,18 @@ function normalizeResult(toolName: string, input: unknown, result: ToolResult): 
           }), null, 2) }] };
         }
       } catch { /* Ordinary validation failures use the common error envelope. */ }
+    }
+    if (["sync_s3_inbox", "pull_events"].includes(toolName)) {
+      try {
+        const receipt = JSON.parse(text) as Record<string, unknown>;
+        const rows = toolName === "sync_s3_inbox" ? receipt.sources : receipt.providers;
+        if (receipt.ok === false && Array.isArray(rows)) {
+          return { ...result, content: [{ type: "text", text: JSON.stringify(redactSecrets({ ...receipt,
+            error: { code: "sync_incomplete", message: "Inspect the partial sync receipt and continuation cursor before retrying.", retryable: false },
+            cli_equivalent: cliEquivalent,
+          }), null, 2) }] };
+        }
+      } catch { /* Validation and preflight failures use the common error envelope. */ }
     }
     if (toolName === "batch_send") {
       try {

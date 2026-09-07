@@ -2,9 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 import { buildServer } from "./server.js";
 
-// Self-hosted-ONLY: there is no local SQLite. These guards prove that send routes
-// through the /v1 stub and that local-state tools fail fast with the API-only guard
-// message (the guards still live in src/mcp/tools/{email-ops,misc-ops}.ts).
+// Actual MCP wrappers route operations through the authenticated API; no local mail database.
 
 let stub: V1Stub;
 
@@ -165,38 +163,14 @@ describe("MCP self_hosted guards", () => {
     });
   });
 
-  it("fails self-hosted-client-only tools without touching a local DB", async () => {
-    // These read/write server-owned state; the self-hosted client refuses them.
-    //
-    // `get_stats` USED TO BE IN THIS LIST and has moved to its own case below, because
-    // the refusal it asserted is no longer true rather than no longer checked. Delivery
-    // statistics collapsed to one implementation that measures them by enumerating the
-    // store the operator configured (src/lib/stats.ts), and every operation it needs —
-    // the delivery-event list and the outbound message stream — is served over `/v1`. A
-    // refusal here would now be a refusal of something this client demonstrably can do,
-    // which is what the case below demonstrates.
-    const cases: Array<[string, Record<string, unknown>]> = [
-      ["sync_s3_inbox", { bucket: "inbound-bucket" }],
-    ];
-
-    for (const [name, args] of cases) {
+  it("requires an updated API for S3 and provider sync before submitting work", async () => {
+    await stub.seed({ providers: [{ id: "provider-one", name: "One", type: "ses", active: true }] });
+    for (const [name, args] of [["sync_s3_inbox", { bucket: "inbound-bucket" }], ["pull_events", {}]] as const) {
       const result = await callTool(name, args);
       expect(result.isError).toBe(true);
-      expect(resultText(result)).toContain("not available in the self-hosted client");
+      expect(resultText(result)).toContain("needs an update");
     }
-  });
-
-  it("REFUSES pull_events in the ingestion pipeline's own storage-derived words", async () => {
-    // `pull_events` USED TO BE IN THE LIST ABOVE. It still refuses — provider
-    // delivery-event ingestion writes ledgers that exist only beside a local database,
-    // and pulls with credentials this client does not hold — but the refusal is no
-    // longer the deleted client stub's sentence: the collapsed family derives it from
-    // STORAGE configuration (src/lib/sync.ts) and names the setting to change, which
-    // is strictly more actionable than "not available".
-    const result = await callTool("pull_events", {});
-    expect(result.isError).toBe(true);
-    expect(resultText(result)).toContain("ingestion belongs to that service");
-    expect(resultText(result)).toContain("Unset HASNA_EMAILS_API_URL");
+    expect(await stub.list("sync-requests")).toHaveLength(0);
   });
 
   it("MEASURES delivery statistics over /v1 instead of refusing them", async () => {

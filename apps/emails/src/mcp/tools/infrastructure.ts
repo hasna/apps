@@ -155,19 +155,21 @@ export function registerInfrastructureTools(server: McpServer): void {
 
   server.tool(
   "sync_s3_inbox",
-  "Sync inbound emails from an S3 bucket (stored by SES receipt rules) into local DB. Parses raw RFC 2822 email files.",
+  "Sync inbound mail through the account API using a server-bound S3 source. Returns counts and a continuation cursor; no client AWS credentials are used.",
   {
-    bucket: z.string().describe("S3 bucket name"),
+    bucket: z.string().min(1).describe("S3 bucket name; must match the server binding"),
+    source_id: z.string().min(1).optional().describe("Registered source ID; required when the account has multiple ingest bindings"),
+    cursor: z.string().min(1).optional().describe("Opaque next_cursor to resume a previous partial sync"),
     prefix: z.string().optional().describe("S3 key prefix (e.g. inbound/example.com/)"),
-    region: z.string().optional().describe("AWS region (default: us-east-1)"),
-    provider_id: z.string().optional().describe("Associate emails with this provider ID"),
+    region: z.string().optional().describe("AWS region matching the server source binding"),
+    provider_id: z.string().optional().describe("Provider ID; must match the server ingest binding"),
     limit: z.number().int().positive().max(MAX_MCP_S3_SYNC_LIMIT).optional().describe("Max emails per run (default: 100, max: 10000)"),
   },
-  async ({ bucket, prefix, region, provider_id, limit }) => {
+  async ({ bucket, source_id, cursor, prefix, region, provider_id, limit }) => {
     try {
-      const { syncS3Inbox } = await import("../../lib/s3-sync.js");
-      const result = await syncS3Inbox({ bucket, prefix, region, providerId: provider_id, limit: limit ?? 100 });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      const { syncS3InboxApi } = await import("../../lib/inbox-ingest-api.js");
+      const result = await syncS3InboxApi({ bucket, source_id, cursor, prefix, region, provider_id, limit });
+      return { content: [{ type: "text", text: JSON.stringify(result) }], ...(!result.ok ? { isError: true } : {}) };
     } catch (e) {
       return { content: [{ type: "text", text: `Error: ${formatError(e)}` }], isError: true };
     }
