@@ -1,18 +1,19 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { saveApiFeedback } from "./feedback-api.js";
 import { normalizeFeedback } from "../server/self-hosted/feedback.js";
-const saved = { ...process.env };
+let saved: NodeJS.ProcessEnv;
 const home = mkdtempSync(join(tmpdir(), "emails-feedback-api-"));
 let status = 201;
 let receiptStatus = "saved";
 let calls = 0;
 let responseBody: Record<string, unknown> = {};
 let server: ReturnType<typeof Bun.serve>;
-beforeAll(() => {
-  mkdirSync(join(home, "tmp"), { mode: 0o700 });
+beforeAll(() => { mkdirSync(join(home, "tmp"), { mode: 0o700 }); });
+beforeEach(() => {
+  saved = { ...process.env };
   for (const key of Object.keys(process.env)) if (/^(?:HASNA_EMAILS_|EMAILS_)/.test(key)) delete process.env[key];
   delete process.env.HASNA_CONFIG_HOME;
   delete process.env.HASNA_HOME;
@@ -32,12 +33,12 @@ beforeAll(() => {
   process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${server.port}`;
   process.env.HASNA_EMAILS_API_KEY = crypto.randomUUID();
 });
-afterAll(async () => {
+afterEach(async () => {
   await server.stop(true);
   for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
   Object.assign(process.env, saved);
-  rmSync(home, { recursive: true, force: true });
 });
+afterAll(() => rmSync(home, { recursive: true, force: true }));
 test("feedback normalizes bounded input without accepting caller tenant/status", () => {
   expect(normalizeFeedback({ message: " hi ", tenant_id: "other", status: "sent" }, true)).toEqual({ message: "hi" });
   expect(normalizeFeedback({ email: null }, false)).toEqual({ email: null });

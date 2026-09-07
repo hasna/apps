@@ -8,8 +8,9 @@ import { testAuthDeps } from "./auth/test-support.js";
 import { resourceSpecForPath } from "./resources.js";
 import { registerInfrastructureTools } from "../../mcp/tools/infrastructure.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-const url = process.env.EMAILS_TEST_POSTGRES_URL;
-const run = test.skipIf(!url);
+function run(name: string, body: () => Promise<void>) {
+  test.skipIf(!process.env.EMAILS_TEST_POSTGRES_URL)(name, body);
+}
 let db: PoolQueryClient;
 const other = "00000000-0000-4000-8000-000000000039";
 const secret = crypto.randomUUID();
@@ -22,6 +23,7 @@ async function request(path: string, method = "GET", body?: unknown, credential:
   })))!;
 }
 beforeAll(async () => {
+  const url = process.env.EMAILS_TEST_POSTGRES_URL;
   if (!url) return;
   db = createQueryClient(createPgPool({ connectionString: url, env: { PGSSLMODE: "disable" } }));
   await db.execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public");
