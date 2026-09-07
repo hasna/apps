@@ -75,16 +75,9 @@ interface SelfHostedEmailDetail extends SelfHostedEmailSummary {
   flags: string[];
 }
 
-// The local test-send and the local webhook/event listener have no /v1
-// equivalent in this self-hosted-only client: one drives the local provider
-// pipeline, the other binds a local HTTP port to receive provider callbacks that
-// are addressed to the operator's server. Both are kept for discoverability but
-// fail loud.
-//
-// `emails export` is NOT one of them: src/lib/export.ts reads through the routed
-// `db/emails.js` and `db/events.js` repositories, which are `/v1/messages` and
-// `/v1/events` clients in this mode — the same path the MCP `export_emails` /
-// `export_events` tools already take.
+// The webhook listener still requires a service ingestion operation. Test sends
+// compose through the same authenticated send API as ordinary mail; export reads
+// through the configured message/event repositories.
 function serverOnly(command: string): never {
   throw new Error(
     `${command} is not available in the self-hosted client; it runs on the self-hosted server.`,
@@ -101,8 +94,6 @@ function parseReplyPage(opts: ReplyPageOpts): { limit: number; offset: number } 
 function assertSupportedSelfHostedSentFilters(command: string, opts: SentLogPageOpts): void {
   const unsupported = [
     opts.provider ? "--provider" : null,
-    opts.status ? "--status" : null,
-    opts.from ? "--from" : null,
   ].filter(Boolean);
   if (unsupported.length === 0) return;
   handleError(new Error(
@@ -298,13 +289,35 @@ async function selfHostedSentList(
   command: string,
 ): Promise<void> {
   assertSupportedSelfHostedSentFilters(command, opts);
-  const rows = await ds.listMailbox("sent", {
-    limit: parseCliPositiveIntOption(opts.limit, 20),
-    offset: parseCliNonNegativeIntOption(opts.offset),
-    since: opts.since,
-  });
+  if (opts.status && !["sent", "delivered", "bounced", "complained", "failed", "queued", "blocked", "uncertain"].includes(opts.status)) {
+    throw new Error(`Invalid email status: ${opts.status}`);
+  }
+  const limit = parseCliPositiveIntOption(opts.limit, 20, 1000);
+  const offset = parseCliNonNegativeIntOption(opts.offset);
+  let rows: TuiMessage[];
+  if (opts.from?.trim() || opts.status) {
+    const { canonicalSender } = await import("../../lib/email-address.js");
+    const wantedFrom = opts.from?.trim() ? canonicalSender(opts.from) ?? opts.from.trim().toLowerCase() : undefined;
+    const matches: TuiMessage[] = [];
+    const seen = new Set<string>();
+    let complete = false;
+    for (let cursor = 0; cursor < 10000; cursor += 500) {
+      const page = await ds.listMailbox("sent", { limit: 500, offset: cursor, since: opts.since, from: wantedFrom });
+      for (const message of page) {
+        if (seen.has(message.id)) throw new Error("Sent mail changed while paging; retry the filtered query");
+        seen.add(message.id);
+        const sender = canonicalSender(message.from) ?? message.from.trim().toLowerCase();
+        if ((!wantedFrom || sender === wantedFrom) && (!opts.status || message.status === opts.status)) matches.push(message);
+      }
+      if (page.length < 500 || matches.length >= offset + limit) { complete = true; break; }
+    }
+    if (!complete) throw new Error("Filtered sent-mail scan exceeded 10000 messages; narrow --since before retrying");
+    rows = matches.slice(offset, offset + limit);
+  } else {
+    rows = await ds.listMailbox("sent", { limit, offset, since: opts.since });
+  }
   const summaries = rows.map(toSelfHostedSummary);
-  output(summaries, formatSelfHostedSummaries(summaries, "Self-hosted sent mail"));
+  output(summaries, formatSelfHostedSummaries(summaries, "Sent mail"));
 }
 
 async function selfHostedSentSearch(
@@ -639,9 +652,16 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
 
   // ─── TEST ────────────────────────────────────────────────────────────────────
   program.command("test [provider-id]").description("Send a test email")
-    .option("--to <email>", "Recipient email address")
-    .action(async () => {
-      try { serverOnly("emails test"); } catch (e) { handleError(e); }
+    .option("--to <email>", "Recipient email address (defaults to sender)")
+    .option("--from <email>", "Sender address (defaults to a configured active address)")
+    .option("--idempotency-key <key>", "Retry a test send without sending it twice")
+    .action(async (provider: string | undefined, opts: { from?: string; to?: string; idempotencyKey?: string }) => {
+      try {
+        const { sendApiTest } = await import("./api-send-composition.js");
+        const result = await sendApiTest({ ...opts, provider });
+        if (result.inProgress) process.exitCode = 1;
+        output(result, result.inProgress ? `Test send is still processing: ${result.id}` : `Test email sent to ${result.to} (${result.id})${result.warning ? `\nWarning: ${result.warning}` : ""}`);
+      } catch (e) { handleError(e); }
     });
 
   // ─── EXPORT ──────────────────────────────────────────────────────────────────

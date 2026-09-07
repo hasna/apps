@@ -29,16 +29,9 @@ interface ScheduleListOptions {
   verbose?: boolean;
 }
 
-// What is left here is genuinely server-side. The scheduler LOOP sends mail
-// through the local provider pipeline (src/lib/send.local.ts), the batch sender
-// reads a CSV and drives that same pipeline, and inbound delivery diagnosis
-// inspects local ingestion state — none of those have a client implementation in
-// this mode, so they fail loud instead of pretending.
-//
-// Reading and cancelling the schedule is NOT one of them: `GET/PATCH
-// /v1/scheduled` exists and src/db/scheduled.remote.ts is a complete client for
-// it, which is how the MCP `list_scheduled` / `cancel_scheduled` tools already
-// work over the same route.
+// Scheduler execution and ingestion diagnostics still need service operations.
+// Batch sends compose API requests; schedule listing/cancellation use the
+// existing /v1/scheduled resource.
 function serverOnly(command: string): never {
   throw new Error(
     `${command} is not available in the self-hosted client; it runs on the self-hosted server.`,
@@ -200,9 +193,15 @@ export function registerMiscCommands(program: Command, output: (data: unknown, f
     .requiredOption("--template <name>", "Template name to use")
     .requiredOption("--from <email>", "Sender email address")
     .option("--provider <id>", "Provider ID (uses first active if not specified)")
-    .option("--force", "Send even to suppressed contacts")
-    .action(async () => {
-      try { serverOnly("emails batch"); } catch (e) { handleError(e); }
+    .option("--force", "Send even to suppressed contacts (requires server authority)")
+    .option("--idempotency-key <key>", "Batch retry identity; defaults to rendered content hash. Use a new key to intentionally resend")
+    .action(async (opts: import("./api-send-composition.js").ApiBatchOptions) => {
+      try {
+        const { sendApiBatch } = await import("./api-send-composition.js");
+        const result = await sendApiBatch(opts);
+        output(result, `Batch ${result.batch_id}: ${result.sent} sent, ${result.pending} processing, ${result.failed} failed of ${result.total}\n${result.errors.map(error => `${error.email}: ${error.error}`).join("\n")}`);
+        if (result.failed || result.pending) process.exitCode = 1;
+      } catch (e) { handleError(e); }
     });
 
   // ─── COMPLETION ───────────────────────────────────────────────────────────────

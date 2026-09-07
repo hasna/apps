@@ -35,6 +35,7 @@ afterAll(() => stub.stop());
 beforeEach(async () => {
   await stub.reset();
   stub.applyEnv();
+  process.env.EMAILS_SESSION_TOKEN = stub.apiKey; // Fixture wins over this machine's Keychain.
 });
 afterEach(() => stub.clearEnv());
 
@@ -263,10 +264,6 @@ describe("server-only scheduling, batch and diagnostics commands", () => {
   const SERVER_ONLY = [
     { name: "schedule run", args: ["schedule", "run"] },
     { name: "scheduler", args: ["scheduler"] },
-    {
-      name: "batch",
-      args: ["batch", "--csv", "recipients.csv", "--template", "welcome", "--from", "sender@example.com"],
-    },
     { name: "doctor delivery", args: ["doctor", "delivery", "ops@example.com"] },
   ] as const;
 

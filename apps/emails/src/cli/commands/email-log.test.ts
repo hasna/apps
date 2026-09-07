@@ -95,6 +95,7 @@ afterAll(() => stub.stop());
 beforeEach(async () => {
   await stub.reset();
   stub.applyEnv();
+  process.env.EMAILS_SESSION_TOKEN = stub.apiKey; // Fixture wins over this machine's Keychain.
 });
 afterEach(() => stub.clearEnv());
 
@@ -125,7 +126,7 @@ describe("email list / log — routes to the /v1 sent log", () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: "out-1", subject: "Server sent subject" });
-    expect(out).toContain("Self-hosted sent mail");
+    expect(out).toContain("Sent mail");
   });
 
   it("rejects local-only sent-log filters that have no /v1 surface", async () => {
@@ -133,10 +134,9 @@ describe("email list / log — routes to the /v1 sent log", () => {
     expect(errors).toContain("does not support local sent-log filter(s): --provider");
   });
 
-  it("rejects --status and --from sent-log filters together", async () => {
-    const errors = await runEmailLogCommandExpectingExit(["email", "list", "--status", "bounced", "--from", "a@x.com"]);
-    expect(errors).toContain("--status");
-    expect(errors).toContain("--from");
+  it("accepts --status and --from sent-log filters together", async () => {
+    const { data } = await runEmailLogCommand(["email", "list", "--status", "bounced", "--from", "a@x.com"]);
+    expect(data).toEqual([]);
   });
 });
 
@@ -431,10 +431,6 @@ describe("email thread / conversation / replies — routes to /v1", () => {
 
 describe("server-only commands block in the self-hosted client", () => {
   const cases: Array<{ args: string[]; message: string }> = [
-    {
-      args: ["test"],
-      message: "emails test is not available in the self-hosted client; it runs on the self-hosted server.",
-    },
     {
       args: ["webhook", "listen", "--port", "19877"],
       message: "emails webhook listen is not available in the self-hosted client; it runs on the self-hosted server.",
