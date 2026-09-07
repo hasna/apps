@@ -642,6 +642,9 @@ describe("reconcileRegistry", () => {
           expect(entry?.state).toBe("changed-locally");
           expect(entry?.action).toBe("push");
           expect(result.summary.conflicts).toBe(0);
+          expect(entry?.result?.ok).toBe(true);
+          expect(result.summary.pushed).toBe(1);
+          expect(result.summary.errors).toBe(0);
 
           // The instance now serves a published row with a digest for the slug.
           const reader = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
