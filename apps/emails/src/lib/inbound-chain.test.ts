@@ -19,7 +19,7 @@ import {
   auditInboundChain,
   preflightInboundProvisioning,
   type ActiveReceiptRules,
-} from "./inbound-chain.js";
+} from "./inbound-chain.test-support.js";
 import { classifyMxRecords, type MxAssessment } from "./mx-ownership.js";
 
 const REGION = "us-east-1";

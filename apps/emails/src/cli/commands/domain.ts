@@ -1,20 +1,16 @@
 import { connectDomain, formatDomainConnection, type ConnectDomainOptions } from "../../lib/domain-connect-api.js";
 import { selfHostedApiRequest } from "../../db/self-hosted-store.js";
 import { Option, type Command } from "commander";
-import type { DnsRecord, DomainType, Provider } from "../../types/index.js";
+import type { DnsRecord, Provider } from "../../types/index.js";
 import chalk from "../../lib/chalk-lite.js";
-import { createDomain, listDomains, listUsableDomains, deleteDomain, findDomainsByName, getDomain, getDomainByName, moveDomainProvider, updateDnsStatus, updateDomainReadiness } from "../../db/domains.js";
-import { getProvider, getProviderWithCredentials } from "../../db/providers.js";
-import { createCatchAll, ensureDefaultCatchAll } from "../../db/aliases.js";
-import { setDomainProvisioning } from "../../db/provisioning.js";
-import { getAdapter, providerDnsPublishing } from "../../providers/index.js";
+import { listDomains, listUsableDomains, deleteDomain, findDomainsByName, getDomain, getDomainByName, moveDomainProvider } from "../../db/domains.js";
+import { getProvider } from "../../db/providers.js";
+import { providerDnsPublishing } from "../../providers/index.js";
 import { createWarmingSchedule, deleteWarmingSchedule, getWarmingSchedule, listWarmingSchedules, updateWarmingStatus } from "../../db/warming.js";
 import { describeWarmingProgress, formatWarmingStatus, generateWarmingPlan, getTodaySentCountsByDomain, type WarmingSchedule } from "../../lib/warming.js";
 import { colorDnsStatus, tableRow, truncate } from "../../lib/format.js";
 import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutput, parseCliListPage, parseCliPage, resolveId } from "../utils.js";
 import { normalizeRoute53RegistrationContact } from "../../lib/route53-contact.js";
-import { resolveClientMode } from "../../lib/mode.js";
-import { now } from "../../db/runtime.js";
 
 /**
  * The DNS records `domain` is expected to publish.
@@ -51,12 +47,6 @@ async function expectedDnsRecords(
   return { records: result.records as DnsRecord[], providerId: provider.id, provider, dkimUnavailable: null };
 }
 
-function normalizeDomainType(value: string | undefined): DomainType | undefined {
-  if (!value) return undefined;
-  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
-  if (["system", "self_hosted", "local_only"].includes(normalized)) return normalized as DomainType;
-  handleError(new Error(`Invalid domain type '${value}'. Use system, self_hosted, or local_only.`));
-}
 
 function resolveSelfHostedDomainId(ref: string): string {
   const exact = getDomain(ref);
@@ -237,155 +227,10 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
     commandPrefix: "domain" | "domains",
   ) => {
     try {
-      // The domain row is created directly on the /v1/domains API. Providers are
-      // a label carried through, so we do NOT resolve a local provider row or
-      // call a provider adapter. But a row alone is NOT an added domain: mail is
-      // received only when the SES receipt rule (S3 action into the inbound
-      // bucket) exists too, so by default this command provisions BOTH, refuses
-      // up front when the SES leg cannot be provisioned from this context, and
-      // reserves the row-only shape for an explicit `--send-only`. The one way
-      // to get a domain without inbound is to ask for it. (The incident class
-      // this ends: an operator ran `domain add`, skipped the separate
-      // setup-inbound step nothing enforced, and SES 550-bounced every message
-      // for a domain that looked "added".)
-      const existing = getDomainByName(opts.provider, domain);
-      const mode = resolveClientMode();
-      const domainType = normalizeDomainType(opts.domainType) ?? "self_hosted";
-      const { getInboundConfig } = await import("../../lib/config.js");
-      const inboundConfig = getInboundConfig();
-      const bucket = opts.bucket ?? inboundConfig.bucket;
-      const region = opts.region ?? inboundConfig.region;
-      const mxRecord = `10 inbound-smtp.${region}.amazonaws.com`;
-      if (opts.dryRun) {
-        output({
-          dry_run: true,
-          domain,
-          provider_id: opts.provider,
-          mode: mode.mode,
-          provider: null,
-          // Not selectable: a domain created through this client is owned by the
-          // app's `/v1` database, and both domain mappers report `postgres`
-          // unconditionally. There is no local-SQLite-owned domain to choose, so
-          // this is reported, not requested.
-          source_of_truth: "postgres",
-          domain_type: domainType,
-          existing: existing ? { id: existing.id, domain: existing.domain } : null,
-          would_create_domain: !existing,
-          would_call_provider: false,
-          // The whole chain the real run creates (or deliberately skips), so the
-          // plan is honest about receiving, not only about the row.
-          inbound_chain: opts.sendOnly
-            ? {
-              planned: false,
-              reason: "--send-only: the SES receipt rule is deliberately skipped; mail to this domain will not be received",
-            }
-            : {
-              planned: true,
-              bucket: bucket ?? null,
-              region,
-              mx_record: mxRecord,
-              would_wire_receipt_rule: bucket !== undefined,
-              ...(bucket ? {} : {
-                blocked_by: "no inbound S3 bucket is resolvable (pass --bucket or set EMAILS_INBOUND_S3_BUCKET) — "
-                  + "a real run will refuse rather than register a domain that cannot receive",
-              }),
-            },
-          cli_equivalent: `emails ${commandPrefix} add ${domain} --provider ${opts.provider}${opts.sendOnly ? " --send-only" : ""}`,
-        }, existing
-          ? chalk.dim(`Domain already exists: ${domain} (${existing.id.slice(0, 8)})`)
-          : opts.sendOnly
-            ? chalk.dim(`Would create ${domain} on the /v1 API (provider label ${opts.provider}) WITHOUT inbound — send-only by request.`)
-            : bucket
-              ? chalk.dim(`Would create ${domain} on the /v1 API (provider label ${opts.provider}) AND ensure the SES receipt rule into s3://${bucket} (${region}); MX to publish: ${mxRecord}.`)
-              : chalk.dim(`Would REFUSE: ${domain} cannot receive without an inbound bucket (pass --bucket, set EMAILS_INBOUND_S3_BUCKET, or use --send-only).`));
-        return;
-      }
-
-      if (opts.sendOnly) {
-        if (existing) {
-          output(existing, chalk.green(`✓ Domain already exists: ${domain} (${existing.id.slice(0, 8)})`) + "\n"
-            + chalk.dim(`  send-only: inbound was deliberately not touched. Audit: emails domain readiness ${domain}`));
-          return;
-        }
-        const created = createDomain(opts.provider, domain);
-        output(created, [
-          chalk.green(`✓ Domain added (send-only): ${domain} (${created.id.slice(0, 8)})`),
-          chalk.yellow(`  Inbound receiving was deliberately NOT provisioned — mail to @${domain} will not be received.`),
-          chalk.dim(`  Wire it later with: emails aws setup-inbound --domain ${domain}   ·   audit: emails domain readiness ${domain}`),
-        ].join("\n"));
-        return;
-      }
-
-      // Refuse BEFORE the row write when the SES leg cannot be provisioned from
-      // this context — never a silent app-only domain that bounces its mail.
-      const { preflightInboundProvisioning } = await import("../../lib/inbound-chain.js");
-      const preflight = await preflightInboundProvisioning({ bucket, region });
-      if (!preflight.ok) {
-        // The refusal names the true row state: an existing registration is not
-        // un-registered by refusing, and a new one was never written.
-        handleError(new Error(existing
-          ? `${domain} is already registered (${existing.id.slice(0, 8)}) but its inbound chain cannot be provisioned from this context: ${preflight.message} `
-            + `An app row without an SES receipt rule silently bounces all inbound mail. Fix the context and re-run, `
-            + `then verify with 'emails domain readiness ${domain}'.`
-          : `Refusing to add ${domain}: ${preflight.message} `
-            + `The domain was NOT registered — an app row without an SES receipt rule silently bounces all inbound mail. `
-            + `Fix the context and re-run, or register a send-only domain on purpose with --send-only.`,
-        ));
-        return;
-      }
-
-      const rec = existing ?? createDomain(opts.provider, domain);
-      try {
-        const { setupInboundEmail } = await import("../../lib/aws-inbound.js");
-        // Merge-safe by construction: get -> merge-by-Sid -> put on the bucket
-        // policy, additive CreateReceiptRule. Idempotent, so re-running `add`
-        // CONVERGES a half-provisioned domain instead of erroring on it.
-        const wired = await setupInboundEmail({ domain, bucket: bucket!, region });
-        const [{ addInboundBucket }, { registerS3Source }] = await Promise.all([
-          import("../../lib/config.js"),
-          import("../../lib/s3-sync.js"),
-        ]);
-        // Register the bucket + source so the watcher/sync actually reads what
-        // the receipt rule delivers — the same two calls `domain adopt` and
-        // `aws setup-inbound` make; without them mail lands where nothing reads.
-        addInboundBucket(wired.bucket, region);
-        const source = registerS3Source({
-          bucket: wired.bucket,
-          prefix: wired.s3_prefix,
-          region,
-          name: `${domain} SES/S3 inbound`,
-          status: "live",
-          liveSyncEnabled: true,
-        });
-        output({
-          ...rec,
-          inbound: {
-            bucket: wired.bucket,
-            prefix: wired.s3_prefix,
-            region,
-            rule_set: wired.rule_set,
-            rule_name: wired.rule_name,
-            source_id: source.id,
-            mx_record: wired.mx_record,
-          },
-        }, [
-          existing
-            ? chalk.green(`✓ Domain already registered: ${domain} (${rec.id.slice(0, 8)})`)
-            : chalk.green(`✓ Domain added: ${domain} (${rec.id.slice(0, 8)})`),
-          chalk.green(`✓ SES inbound → s3://${wired.bucket}/${wired.s3_prefix}`) + chalk.dim(` (rule ${wired.rule_name}${wired.bucket_created ? ", bucket created" : ""})`),
-          chalk.dim(`  Publish MX in DNS:  ${wired.mx_record}  (for @${domain})`),
-          chalk.dim(`  Audit the chain any time: emails domain readiness ${domain}`),
-        ].join("\n"));
-      } catch (e) {
-        // The row exists but the chain does not: that is a FAILURE with the
-        // row's state named, never a success that hides a bouncing domain.
-        handleError(new Error(
-          `Domain ${domain} is registered (${rec.id.slice(0, 8)}) but SES inbound was NOT wired: `
-          + `${e instanceof Error ? e.message : String(e)}. Mail to @${domain} will bounce until the receipt rule exists. `
-          + `Complete it with 'emails aws setup-inbound --domain ${domain}${bucket ? ` --bucket ${bucket}` : ""}' or re-run this command; `
-          + `verify with 'emails domain readiness ${domain}'.`,
-        ));
-      }
+      const { registerSharedDomain } = await import("../../lib/domain-registration-api.js");
+      const result = await registerSharedDomain(domain, opts);
+      output({ ...result, cli_equivalent: `emails ${commandPrefix} add ${domain} --provider ${opts.provider}${opts.sendOnly ? " --send-only" : ""}` }, JSON.stringify(result, null, 2));
+      if (!result.ok) process.exitCode = 1;
     } catch (e) {
       handleError(e);
     }
@@ -416,10 +261,10 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
     .command("add <domain>")
     .description("Add a domain and provision its SES inbound receipt rule (use --send-only to deliberately skip inbound)")
     .requiredOption("--provider <id>", "Provider ID")
-    .option("--domain-type <type>", "Domain type: system, self_hosted, or local_only")
+    .addOption(new Option("--domain-type <type>", "Legacy compatibility label; account storage is server-owned").hideHelp())
     .option("--send-only", "Register the domain WITHOUT inbound: deliberately skip the SES receipt rule (mail to the domain will not be received)")
-    .option("--bucket <name>", "Inbound S3 bucket (default: config inbound_s3_bucket / EMAILS_INBOUND_S3_BUCKET)")
-    .option("--region <region>", "AWS region for SES/S3 inbound (default: config inbound_s3_region or us-east-1)")
+    .option("--bucket <name>", "Inbound S3 bucket selector (defaults to the matching account source)")
+    .option("--region <region>", "Region selector for the registered account source")
     .option("--dry-run", "Resolve inputs and show the planned change — the app row AND the inbound chain — without calling AWS or writing to the DB")
     .action((domain: string, opts: { provider: string; dryRun?: boolean; domainType?: string; sendOnly?: boolean; bucket?: string; region?: string }) => addDomainAction(domain, opts, "domains"));
 
@@ -474,68 +319,25 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
     .command("add <domain>")
     .description("Add a domain and provision its SES inbound receipt rule (use --send-only to deliberately skip inbound)")
     .requiredOption("--provider <id>", "Provider ID")
-    .option("--domain-type <type>", "Domain type: system, self_hosted, or local_only")
+    .addOption(new Option("--domain-type <type>", "Legacy compatibility label; account storage is server-owned").hideHelp())
     .option("--send-only", "Register the domain WITHOUT inbound: deliberately skip the SES receipt rule (mail to the domain will not be received)")
-    .option("--bucket <name>", "Inbound S3 bucket (default: config inbound_s3_bucket / EMAILS_INBOUND_S3_BUCKET)")
-    .option("--region <region>", "AWS region for SES/S3 inbound (default: config inbound_s3_region or us-east-1)")
+    .option("--bucket <name>", "Inbound S3 bucket selector (defaults to the matching account source)")
+    .option("--region <region>", "Region selector for the registered account source")
     .option("--dry-run", "Resolve inputs and show the planned change — the app row AND the inbound chain — without calling AWS or writing to the DB")
     .action((domain: string, opts: { provider: string; dryRun?: boolean; domainType?: string; sendOnly?: boolean; bucket?: string; region?: string }) => addDomainAction(domain, opts, "domain"));
 
   // ── readiness: the inbound-chain drift detector ─────────────────────────────
-  // Read-only. Audits the LIVE chain a domain needs to receive — public MX, the
-  // active SES receipt rule set, the app registration, and (best-effort) S3
-  // delivery evidence — and reports each link as ok / MISSING / unknown with its
-  // remediation. This is a different question from the stored lifecycle ledger
-  // (`emails domains status`) and from expected-vs-published DNS
-  // (`emails domain check`): it exists so a half-provisioned domain is caught by
-  // an audit instead of by a bounced message.
+  // Read shared registry evidence without treating it as a live AWS probe.
   domainCmd
     .command("readiness [domain]")
-    .description("Audit the inbound chain (MX → SES receipt rule → app registration → S3 evidence) per domain; exits 1 when drift is found")
-    .option("--bucket <name>", "Inbound S3 bucket to audit against (default: config inbound_s3_bucket / EMAILS_INBOUND_S3_BUCKET)")
-    .option("--region <region>", "AWS region (default: config inbound_s3_region or us-east-1)")
+    .description("Read account inbound readiness evidence; explicitly marks unobserved live AWS state")
+    .option("--bucket <name>", "Filter account sources by bucket")
+    .option("--region <region>", "Filter account sources by region")
     .action(async (domainArg: string | undefined, opts: { bucket?: string; region?: string }) => {
       try {
-        const { getInboundConfig } = await import("../../lib/config.js");
-        const inboundConfig = getInboundConfig();
-        const bucket = opts.bucket ?? inboundConfig.bucket;
-        const region = opts.region ?? inboundConfig.region;
-        const registered = listDomains();
-        const registeredNames = new Set(registered.map((d) => d.domain.trim().toLowerCase()));
-        const targets = domainArg ? [domainArg] : [...registeredNames];
-        if (targets.length === 0) {
-          output({ bucket: bucket ?? null, region, reports: [] }, chalk.dim("No domains registered — nothing to audit."));
-          return;
-        }
-        const { auditInboundChain } = await import("../../lib/inbound-chain.js");
-        const reports = [];
-        for (const target of targets) {
-          reports.push(await auditInboundChain({
-            domain: target,
-            region,
-            bucket,
-            appRegistered: registeredNames.has(target.trim().toLowerCase()),
-          }));
-        }
-        const statusWord = (status: string): string =>
-          status === "ok" ? chalk.green("ok") : status === "missing" ? chalk.red("MISSING") : chalk.yellow("unknown");
-        const lines: string[] = [chalk.bold("\nInbound chain readiness:")];
-        for (const report of reports) {
-          lines.push(`\n  ${chalk.cyan(report.domain)}  ${report.receiving_ready ? chalk.green("receiving-ready") : report.drift ? chalk.red("DRIFT") : chalk.yellow("unverified")}`);
-          for (const link of report.links) {
-            lines.push(`    ${statusWord(link.status)}  ${link.link}: ${link.detail}`);
-            if (link.status === "missing" && link.remediation) lines.push(chalk.dim(`          fix: ${link.remediation}`));
-          }
-        }
-        const drifted = reports.filter((report) => report.drift);
-        if (drifted.length > 0) {
-          lines.push("");
-          lines.push(chalk.red(`  ${drifted.length} of ${reports.length} domain(s) have a broken inbound chain: ${drifted.map((report) => report.domain).join(", ")}`));
-        }
-        lines.push("");
-        output({ bucket: bucket ?? null, region, reports }, lines.join("\n"));
-        // Drift makes the audit exit non-zero so it can gate cron/CI directly.
-        if (drifted.length > 0) process.exitCode = 1;
+        const { sharedInboundStatus } = await import("../../lib/domain-registration-api.js");
+        const report = await sharedInboundStatus({ domain: domainArg, ...opts });
+        output(report, JSON.stringify(report, null, 2));
       } catch (e) {
         handleError(e);
       }
@@ -551,135 +353,23 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
     .action(async (domain: string, opts: ConnectDomainOptions) => { try { const result=await connectDomain(domain,opts); output(result,formatDomainConnection(result)); if(result.connection.status === "blocked")process.exitCode=1; } catch(error){handleError(error);} });
 
   // ── adopt: seamlessly add an already-registered & SES-verified domain ────────
-  // Operator command. Domain/alias/provisioning writes route through the /v1 db
-  // repos; SES/S3 wiring runs against the operator's own AWS credentials.
+  // Account-backed connection, inbound setup, alias registration and optional sync.
   domainCmd
     .command("adopt <domain>")
     .description("Add an already-registered, SES-verified domain: register it, wire SES inbound (S3), add a catch-all, and optionally sync")
     .requiredOption("--provider <id>", "SES provider where the domain is verified")
     .option("--no-inbound", "Skip SES inbound (S3 receipt rule) setup")
-    .option("--bucket <name>", "Inbound S3 bucket (default: config, else emails-inbound-<accountId>)")
-    .option("--region <region>", "AWS region (default: the provider's region)")
+    .option("--bucket <name>", "Inbound S3 bucket selector (defaults to the matching account source)")
+    .option("--region <region>", "Region selector for the registered account source")
     .option("--catch-all <target>", "Route ALL mail for this domain to this address")
     .option("--sync", "Run an initial inbound sync after wiring")
-    .option("--force-mx-switch", "Allow SES inbound setup even when public root MX belongs to another provider")
+    .option("--force-mx-switch", "Legacy option: use setup-cloudflare --add-mx --force-mx-switch for explicit MX changes")
     .action(async (domain: string, opts: { provider: string; inbound?: boolean; bucket?: string; region?: string; catchAll?: string; sync?: boolean; forceMxSwitch?: boolean }) => {
       try {
-        const providerId = resolveId("providers", opts.provider);
-        const provider = getProviderWithCredentials(providerId);
-        if (!provider) return handleError(new Error(`Provider not found: ${opts.provider}`));
-
-        const region = opts.region ?? provider.region ?? "us-east-1";
-        const accessKeyId = provider.access_key ?? undefined;
-        const secretAccessKey = provider.secret_key ?? undefined;
-        const lines: string[] = [chalk.bold(`\nAdopting ${domain} → ${provider.name}`)];
-
-        if (opts.inbound !== false && provider.type === "ses") {
-          const { guardSesInboundMx } = await import("../../lib/mx-ownership.js");
-          await guardSesInboundMx(domain, !!opts.forceMxSwitch);
-        }
-
-        // 1. Ensure the SES identity exists (idempotent if already verified).
-        const adapter = getAdapter(provider);
-        await adapter.addDomain(domain);
-        lines.push(chalk.green(`✓ SES identity ensured`));
-
-        // 2. Register in the emails store (/v1).
-        const rec = getDomainByName(providerId, domain) ?? createDomain(providerId, domain);
-        // AWAITED. `setDomainProvisioning` reaches the store seam and returns a promise;
-        // un-awaited it is a floating write whose rejection escapes this command's error
-        // handling, and `adopt` would print the success line below for a write that failed.
-        // `tsc` cannot see it — the result is discarded, so the promise is never touched.
-        await setDomainProvisioning(rec.id, {
-          provisioning_status: "ses_identity_created",
-          dns_provider: "cloudflare",
-          send_provider: provider.type,
-          last_error: null,
-        });
-        lines.push(chalk.green(`✓ Registered in Emails (${rec.id.slice(0, 8)})`));
-
-        // 3. Record verification status.
-        try {
-          const st = await adapter.verifyDomain(domain);
-          updateDnsStatus(rec.id, st.dkim, st.spf, st.dmarc);
-          if (st.dkim === "verified") {
-            await setDomainProvisioning(rec.id, { provisioning_status: "verified", next_check_at: null, last_error: null });
-          }
-          lines.push(`  ${colorDnsStatus(st.dkim)} DKIM · ${colorDnsStatus(st.spf)} SPF · ${colorDnsStatus(st.dmarc)} DMARC`);
-        } catch { /* non-fatal */ }
-
-        // 4. Inbound — per provider.
-        if (opts.inbound !== false && provider.type === "resend") {
-          lines.push(chalk.green(`✓ Resend domain ready`));
-          lines.push(chalk.dim(`  Inbound is push: add a Resend inbound webhook -> POST /webhook/resend-inbound on 'emails serve'`));
-        }
-        // 4a. SES inbound (S3 bucket + receipt rule → mail for *@domain lands in S3).
-        if (opts.inbound !== false && provider.type === "ses") {
-          // Bucket is account-specific — resolve the SES account for this provider
-          // so domains in different accounts get the right bucket.
-          let bucket = opts.bucket;
-          if (!bucket) {
-            const { STSClient, GetCallerIdentityCommand } = await import("@aws-sdk/client-sts");
-            const sts = new STSClient({ region, credentials: accessKeyId && secretAccessKey ? { accessKeyId, secretAccessKey } : undefined });
-            const acct = (await sts.send(new GetCallerIdentityCommand({}))).Account;
-            bucket = `emails-inbound-${acct}`;
-          }
-          const { setupInboundEmail } = await import("../../lib/aws-inbound.js");
-          const r = await setupInboundEmail({ domain, bucket, region, accessKeyId, secretAccessKey });
-          lines.push(chalk.green(`✓ SES inbound → s3://${r.bucket}/${r.s3_prefix}`) + chalk.dim(` (rule ${r.rule_name}${r.bucket_created ? ", bucket created" : ""})`));
-          lines.push(chalk.dim(`  Publish MX in DNS:  ${r.mx_record}  (for @${domain})`));
-          // Register the bucket so 'inbox watch' / the TUI auto-pull sync it
-          // (multi-bucket: domains can live in different AWS accounts).
-          const { addInboundBucket } = await import("../../lib/config.js");
-          addInboundBucket(r.bucket, region, providerId);
-          const { registerS3Source } = await import("../../lib/s3-sync.js");
-          const source = registerS3Source({
-            bucket: r.bucket,
-            prefix: r.s3_prefix,
-            region,
-            providerId,
-            name: `${domain} SES/S3 inbound`,
-            status: "live",
-            liveSyncEnabled: true,
-          });
-          await setDomainProvisioning(rec.id, { provisioning_status: "ready", next_check_at: null, last_error: null });
-          updateDomainReadiness(rec.id, {
-            provider_metadata: {
-              inbound: {
-                strategy: "ses-s3",
-                bucket: r.bucket,
-                prefix: r.s3_prefix,
-                region,
-                source_id: source.id,
-                rule_set: r.rule_set,
-                rule_name: r.rule_name,
-              },
-            },
-            last_inbound_check_at: now(),
-          });
-        }
-
-        // 5. Catch-all: the protected global catch-all already covers every domain;
-        // optionally pin a domain-specific target.
-        await ensureDefaultCatchAll();
-        if (opts.catchAll) {
-          await createCatchAll(domain, opts.catchAll);
-          lines.push(chalk.green(`✓ catch-all *@${domain} → ${opts.catchAll}`));
-        }
-
-        // 6. Optional initial sync.
-        if (opts.sync && opts.inbound !== false) {
-          const { getInboundConfig } = await import("../../lib/config.js");
-          const bucket = opts.bucket ?? getInboundConfig().bucket;
-          if (bucket) {
-            const { syncS3Inbox } = await import("../../lib/s3-sync.js");
-            const sr = await syncS3Inbox({ bucket, prefix: `inbound/${domain}/`, region, providerId, limit: 500 });
-            lines.push(chalk.green(`✓ Synced ${sr.synced} message(s)`) + (sr.errors.length ? chalk.yellow(` (${sr.errors.length} errors)`) : ""));
-          }
-        }
-
-        lines.push(chalk.dim(`\n  Live mail:  emails inbox watch   ·   browse:  emails ui`));
-        output({ domain, provider: provider.name, domain_id: rec.id }, lines.join("\n"));
+        const { registerSharedDomain } = await import("../../lib/domain-registration-api.js");
+        const result = await registerSharedDomain(domain, { ...opts, sendOnly: opts.inbound === false, adopt: true });
+        output(result, JSON.stringify(result, null, 2));
+        if (!result.ok) process.exitCode = 1;
       } catch (e) { handleError(e); }
     });
 

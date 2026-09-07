@@ -9,8 +9,7 @@
 //   - `domain list` and `domain usable` pagination/filtering over /v1
 //   - `domain move-provider` writing through /v1 (server owns address moves)
 //   - `domain warm-list` reading the /v1 `warming` resource
-//   - the genuinely server-owned commands that fail loud (live DNS/provider
-//     orchestration and the lifecycle-readiness ledger)
+//   - API capability failures without client-side fallback state
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { Command } from "commander";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
@@ -88,15 +87,17 @@ afterEach(() => stub.clearEnv());
 
 describe("domain add command", () => {
   it("supports dry-run without mutating domain state", async () => {
-    const result = await runDomainCommand(["domain", "add", "example.com", "--provider", "sandbox", "--dry-run"]);
+    await stub.seed({ providers: [{ id: "provider-ses", name: "ses", type: "ses", active: true }] });
+    const result = await runDomainCommand(["domain", "add", "example.com", "--provider", "provider-ses", "--send-only", "--dry-run"]);
 
     expect(result.data).toMatchObject({
       dry_run: true,
       domain: "example.com",
-      provider_id: "sandbox",
+      provider_id: "provider-ses",
       would_create_domain: true,
-      // The self-hosted client never calls a provider adapter — the /v1 API owns creation.
-      would_call_provider: false,
+      // The server performs provider registration when this plan is executed.
+      would_call_provider: true,
+      inbound_chain: { planned: false },
     });
     expect(await stub.list("domains")).toHaveLength(0);
   });
@@ -185,20 +186,21 @@ describe("domain list command", () => {
 
 describe("domains lifecycle commands", () => {
   it("supports plural add dry-run without mutating state", async () => {
+    await stub.seed({ providers: [{ id: "provider-ses", name: "ses", type: "ses", active: true }] });
     const result = await runDomainCommand([
       "domains", "add", "example.com",
-      "--provider", "sandbox",
-      "--dry-run",
+      "--provider", "provider-ses",
+      "--send-only", "--dry-run",
     ]);
 
     expect(result.data).toMatchObject({
       dry_run: true,
       domain: "example.com",
-      provider_id: "sandbox",
+      provider_id: "provider-ses",
       // Reported, not requested: the client always creates `/v1`-owned domains.
       source_of_truth: "postgres",
       would_create_domain: true,
-      cli_equivalent: "emails domains add example.com --provider sandbox",
+      cli_equivalent: "emails domains add example.com --provider provider-ses --send-only",
     });
     expect(await stub.list("domains")).toHaveLength(0);
   });

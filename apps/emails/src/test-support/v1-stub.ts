@@ -1259,6 +1259,37 @@ const server = Bun.serve({
       const fixture = rowsFor("sync-results").find(row => row.operation === operation && (row.provider_id === undefined || row.provider_id === sub) && (row.cursor ?? null) === (body.cursor ?? body.after ?? null));
       return fixture ? json(fixture.receipt, Number(fixture.status ?? 200)) : json({ error: "No configured sync fixture" }, 404);
     }
+    if (resource === "inbox" && sub === "setup-ses-inbound" && req.method === "POST") {
+      const body = await req.json();
+      const fixture = rowsFor("ses-setup-results").find(row => row.domain === body.domain);
+      if (!fixture) return json({ error: "No bound SES setup fixture" }, 404);
+      rowsFor("ses-setup-requests").push({ id: crypto.randomUUID(), ...body });
+      return json(fixture.receipt, Number(fixture.status ?? 200));
+    }
+    // Explicit opt-in for command routing suites. Default remains an older API
+    // without orchestration, so missing-capability tests cannot pass by accident.
+    if (resource === "domains" && sub === "connect" && req.method === "POST" && rowsFor("domain-connect-enabled").length) {
+      const body = await req.json();
+      rowsFor("domain-connect-requests").push({ id: crypto.randomUUID(), ...body });
+      const provider = rowsFor("providers").find(row => row.id === body.provider_id);
+      if (!provider || !provider.active) return json({ error: "Provider not found", reason: "provider_not_found" }, 404);
+      if (!["ses", "resend"].includes(provider.type)) return json({ error: "Provider unavailable", reason: "provider_unavailable" }, 409);
+      const domain = String(body.domain).trim().toLowerCase();
+      const domains = rowsFor("domains");
+      let row = domains.find(item => item.domain === domain);
+      if (row && row.provider !== provider.id) return json({ error: "Provider mismatch", reason: "provider_mismatch" }, 409);
+      if (!row && !body.dry_run) {
+        row = normalizeDomainRow({ id: crypto.randomUUID(), domain, provider: provider.id, verified: true });
+        domains.push(row);
+      }
+      return json({ dry_run: body.dry_run === true, connection: {
+        id: body.dry_run ? null : crypto.randomUUID(), domain_id: row?.id ?? null,
+        domain, provider_id: provider.id, dns_provider: body.dns_provider ?? "manual",
+        register_provider: body.register_provider !== false, status: body.dry_run ? "planned" : "verified",
+        provider_registered: body.dry_run ? null : true, checked_at: new Date().toISOString(),
+        message: "Synthetic provider connection", dns_tasks: [],
+      } });
+    }
     if (resource === "domains" && ["setup", "setup-cloudflare"].includes(sub) && req.method === "POST") {
       const fixture = rowsFor("dns-setup-results").find(row => row.operation === sub);
       if (!fixture) return json({ error: "not found" }, 404);
