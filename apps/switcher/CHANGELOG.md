@@ -4,10 +4,15 @@ title: "Switcher changelog"
 type: "release-notes"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:54:59Z"
-updated_at: "2026-09-07T04:00:19.108311+00:00"
+updated_at: "2026-09-07T06:18:57.827391+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+## 0.1.4
+### Patch Changes
+
+- Resolve API and vault operator credentials through the canonical Contracts chain; honor config/credentials, Keychain, URL defaults and rotation without manual process injection while retaining explicit account boundaries.
 
 ## 0.1.3
 ### Patch Changes

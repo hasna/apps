@@ -30,6 +30,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import { dirname, join } from "node:path";
 
 import { createRemoteSkillsClient } from "./remote-client.js";
+import { hasSkillsOwnershipMarker } from "./agent-sync.js";
 import {
   getPortableSkillsRoot,
   installCorpusSkillAtomically,
@@ -383,13 +384,13 @@ function provenRevision(meta: CorpusSkillMeta, slug: string, bundle: { sha256?: 
  * and is still inside its tombstone window — remove the local copy". Success is the
  * reconcile happening, not an install; `removed` records whether anything was there.
  *
- * Only a PULL-MANAGED entry is removed: the marker file is the proof this directory was
- * installed by a pull. An unmanaged or user-created skill with the same slug is never
+ * Only a Skills-owned entry is removed: the marker must name the exact Skills owner.
+ * An unmanaged or user-created skill with the same slug is never
  * deleted by a remote 410 — it is reported as left in place instead.
  */
 function reconcileTombstone(slug: string, corpusOptions: PortableSkillOptions): PulledSkillResult {
   const target = join(getPortableSkillsRoot(corpusOptions), slug);
-  if (!existsSync(join(target, PULL_MARKER_FILE))) {
+  if (!hasSkillsOwnershipMarker(target)) {
     return { name: slug, success: true, tombstoned: true, removed: false, leftInPlace: true };
   }
   rmSync(target, { recursive: true, force: true });

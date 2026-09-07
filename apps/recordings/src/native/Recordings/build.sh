@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build, sign, notarize, and finalize a HasnaRecordings.app artifact.
+# Build, sign, notarize, and finalize a Hasna Recordings.app artifact.
 # Usage: ./build.sh [debug|local] | ./build.sh release <initial-bootstrap|app-update>
 
 set -euo pipefail
@@ -120,11 +120,11 @@ if [ "$VARIANT" = "bar" ]; then
 fi
 # Fleet naming rule (knowledge k_msxd5rz3_jfvl3i): every Hasna macOS app is
 # Hasna<Name>.app with 'Hasna' at the beginning. The bundle is named
-# HasnaRecordings.app for BOTH variants (full and bar); the 'bar' is a variant, never
+# Hasna Recordings.app for BOTH variants (full and bar); the 'bar' is a variant, never
 # a separate app name. Bundle identifier stays com.hasna.recordings so TCC keeps
 # keying on bundle id + signing identity, and the executable inside the bundle stays
 # "Recordings".
-APP_BUNDLE_NAME="HasnaRecordings.app"
+APP_BUNDLE_NAME="Hasna Recordings.app"
 readonly APP_BUNDLE_NAME
 APP_BASENAME="${APP_BUNDLE_NAME%.app}"
 PLIST_BUDDY="$(select_executable "/usr/libexec/PlistBuddy" "${RECORDINGS_TEST_PLIST_BUDDY_EXECUTABLE:-${PLIST_BUDDY:-}}")"
@@ -1256,7 +1256,7 @@ fi
 
 generate_and_verify_native_fs_guard
 
-echo "Building HasnaRecordings.app ($MODE)..."
+echo "Building Hasna Recordings.app ($MODE)..."
 if [ "$MODE" = "release" ]; then
     OUTPUT_BUILD_DIR="$BUILD_ROOT/release-output"
 else
@@ -1992,7 +1992,7 @@ if [ "$MODE" = "local" ]; then
 fi
 
 verify_signed_code "$HELPERS/recordings" "Companion CLI"
-verify_signed_code "$APP_DIR" "HasnaRecordings.app"
+verify_signed_code "$APP_DIR" "Hasna Recordings.app"
 ARTIFACT_BASENAME="${APP_BASENAME}-${VERSION}-macos-${RELEASE_SUBTYPE}"
 NOTARY_ARCHIVE="$OUTPUT_BUILD_DIR/${ARTIFACT_BASENAME}-notarization.zip"
 FINAL_ARCHIVE="$OUTPUT_BUILD_DIR/${ARTIFACT_BASENAME}.zip"
@@ -2044,7 +2044,7 @@ run_xcrun stapler validate "$APP_DIR"
 run_release_sensitive_tool "$SPCTL_EXECUTABLE" --assess --type execute --verbose=2 "$APP_DIR"
 run_release_sensitive_tool "$SYSPOLICY_CHECK_EXECUTABLE" distribution "$APP_DIR"
 verify_signed_code "$HELPERS/recordings" "Companion CLI"
-verify_signed_code "$APP_DIR" "HasnaRecordings.app"
+verify_signed_code "$APP_DIR" "Hasna Recordings.app"
 run_codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 
 run_release_sensitive_tool "$DITTO_EXECUTABLE" -c -k --sequesterRsrc --keepParent "$APP_DIR" "$FINAL_ARCHIVE"

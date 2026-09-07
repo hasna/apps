@@ -1,9 +1,48 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { formatShortUrl, loadConfig, normalizeHostname, updateConfig } from "./config.js";
+import {
+  formatShortUrl,
+  getConfigPath,
+  getDataDir,
+  getDatabasePath,
+  loadConfig,
+  normalizeHostname,
+  saveConfig,
+  updateConfig,
+} from "./config.js";
+
+describe("app home derivation (the caller's env, never a silent process.env read)", () => {
+  test("SHORTLINKS_HOME wins, then HASNA_HOME/shortlinks, then $HOME/.hasna/shortlinks", () => {
+    expect(getDataDir({ SHORTLINKS_HOME: "/x/home", HASNA_HOME: "/x/hasna", HOME: "/x/user" })).toBe(resolve("/x/home"));
+    expect(getDataDir({ HASNA_HOME: "/x/hasna", HOME: "/x/user" })).toBe(join(resolve("/x/hasna"), "shortlinks"));
+    expect(getDataDir({ HOME: "/x/user" })).toBe(join(resolve("/x/user"), ".hasna", "shortlinks"));
+    // Declared-but-blank means unset, as everywhere else at this seam.
+    expect(getDataDir({ SHORTLINKS_HOME: " ", HOME: "/x/user" })).toBe(join(resolve("/x/user"), ".hasna", "shortlinks"));
+  });
+
+  test("path lookups create nothing: only a write creates the app home", () => {
+    const home = mkdtempSync(join(tmpdir(), "shortlinks-home-"));
+    const env = { HOME: home };
+    try {
+      const dir = getDataDir(env);
+      expect(getConfigPath(env)).toBe(join(dir, "config.json"));
+      expect(getDatabasePath(undefined, env)).toBe(join(dir, "shortlinks.db"));
+      expect(getDatabasePath("./explicit.db", env)).toBe(resolve("./explicit.db"));
+      expect(getDatabasePath(undefined, { ...env, SHORTLINKS_DB: "/x/other.db" })).toBe(resolve("/x/other.db"));
+      expect(loadConfig(env)).toEqual({});
+      // Nothing was created by the lookups above — not even the directory.
+      expect(existsSync(dir)).toBe(false);
+      saveConfig({ defaultDomain: "has.na" }, env);
+      expect(loadConfig(env).defaultDomain).toBe("has.na");
+      expect(existsSync(join(dir, "config.json"))).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("normalizeHostname", () => {
   test("normalizes protocol, case, path, and trailing dot", () => {

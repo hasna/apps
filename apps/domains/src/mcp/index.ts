@@ -107,6 +107,8 @@ import {
   type Route53Record,
 } from "../lib/route53.js";
 import { applySafeModeToolFilter } from "./tool-filter.js";
+import { getStoreResolution } from "../db/store.js";
+import { announceLocal } from "../lib/local-opt-in.js";
 import { formatDate, pageItems, truncateText } from "../lib/compact-output.js";
 import type { DomainOwner, DomainWithOwner } from "../db/owners.js";
 
@@ -1958,6 +1960,21 @@ async function main() {
   if (argv.includes("--version") || argv.includes("-V")) {
     console.log(getPackageVersion());
     process.exit(0);
+  }
+  // FAIL CLOSED AT STARTUP (hasna/apps#1720 acceptance (c); mirrors mementos
+  // #1868). Tool calls already refuse without a resolvable credential, but a
+  // server that starts anyway looks healthy to the MCP client until its first
+  // call. Resolve the store decision ONCE before any transport is connected
+  // or any port bound: no credential and no explicit local opt-in exits 1
+  // with the resolver's one-line refusal (naming the Keychain item, the
+  // credentials file and HASNA_DOMAINS_API_KEY) and creates nothing; a local
+  // opt-in announces itself on stderr here, at startup. The report never
+  // opens a database — the store itself is still resolved fresh per call.
+  try {
+    if (getStoreResolution().transport === "local") announceLocal();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
   }
   const { isStdioMode } = await import("./http.js");
   if (isStdioMode(argv)) {

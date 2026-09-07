@@ -28,5 +28,5 @@ tool("launch_plan","Validate a local launch plan; does not execute a remote proc
 tool("runs_list","List launch metadata.",page,p=>clientFromEnv().listRuns(p));
 tool("runs_get","Get launch metadata.",{id:z.string()},p=>clientFromEnv().getRun(p.id));
 if(process.argv.includes("--version")) console.log(VERSION);
-else if(process.argv.includes("--help")) console.log("switcher-mcp: authenticated Switcher API tools over MCP stdio. Requires HASNA_SWITCHER_API_URL and HASNA_SWITCHER_API_KEY.");
+else if(process.argv.includes("--help")) console.log("switcher-mcp: authenticated Switcher API tools over MCP stdio. Resolves API URL/key through @hasna/contracts (Keychain, canonical config/credentials, or environment).");
 else await server.connect(new StdioServerTransport());

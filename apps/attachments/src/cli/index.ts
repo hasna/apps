@@ -63,4 +63,12 @@ program.addCommand(initCommand());
 program.addCommand(heartbeatCommand());
 program.addCommand(focusCommand());
 
-program.parse(process.argv);
+// Every data command resolves its store through the shared credential chain
+// before its own try/catch. A resolver refusal (no credential, authority
+// conflict) must reach the operator as ONE actionable stderr line and exit 1
+// — never Bun's unhandled-rejection stack trace (#1720 validation). The
+// resolver's messages name credential SOURCES only, never values.
+program.parseAsync(process.argv).catch((err: unknown) => {
+  process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+  process.exit(1);
+});

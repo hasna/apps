@@ -58,6 +58,42 @@ async function runCli(
   return { stdout, stderr, exitCode };
 }
 
+/**
+ * Spawn the MCP entry (`conversations-mcp`) with a piped stdin. `stdinText`
+ * is written first (a JSON-RPC line, say); stdin is then closed, which ends a
+ * stdio session that did start. A server that refused at startup has exited
+ * long before stdin matters.
+ */
+async function runMcp(
+  args: string[],
+  env: Record<string, string>,
+  stdinText = "",
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const proc = Bun.spawn(["bun", "run", "src/mcp/index.ts", ...args], {
+    cwd: ROOT,
+    env,
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (stdinText) proc.stdin.write(stdinText);
+  proc.stdin.end();
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const exitCode = await proc.exited;
+  return { stdout, stderr, exitCode };
+}
+
+const INITIALIZE_REQUEST =
+  JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "fail-closed-probe", version: "0" } },
+  }) + "\n";
+
 /** Recursively list every *.db / *.sqlite / *.sqlite3 file under a root. */
 function sqliteFilesUnder(dir: string): string[] {
   const out: string[] = [];
@@ -196,5 +232,145 @@ describe("fail-closed: events-drain is local-only and local is opt-in (spawned C
     expect(result.stderr).toContain("LOCAL mode");
     expect(result.stdout).toContain("events-drain: scanned 0");
     expect(existsSync(localDb)).toBe(true);
+  });
+
+  // Round-2 review of hasna/apps#1864: the command accepted no `--json`, so
+  // Commander rejected the flag as unknown before the action ran and the
+  // refusal never reached the JSON error contract.
+  test("under --json the refusal honours the JSON error contract on stdout, and nothing is opened", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "conversations-fail-closed-drain-json-"));
+    tempRoots.push(tempRoot);
+    const env = hermeticEnv(tempRoot);
+
+    const result = await runCli(["events-drain", "--json"], env);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).not.toContain("unknown option");
+    const parsed = JSON.parse(result.stdout.trim());
+    expect(parsed.code).toBe("CONVERSATIONS_STORE_CONFIG");
+    expect(parsed.error).toContain("events-drain");
+    expect(parsed.error).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
+  });
+
+  test("under --json with the local opt-in the drain report is a JSON object on stdout", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "conversations-drain-local-json-"));
+    tempRoots.push(tempRoot);
+    const env = hermeticEnv(tempRoot);
+    env["HASNA_CONVERSATIONS_DB_PATH"] = join(tempRoot, "store.db");
+
+    const result = await runCli(["events-drain", "--json"], env);
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stderr).toContain("LOCAL mode");
+    expect(JSON.parse(result.stdout.trim())).toEqual({ scanned: 0, transported: 0, skipped: 0, spooled: 0 });
+  });
+});
+
+// The MCP server must fail closed BEFORE SERVING, not per tool call
+// (acceptance (c) of hasna/apps#1720; round-2 review of #1864; the gate
+// @hasna/mementos received in #1868). Until now `startMcpServer()` connected
+// the stdio transport straight away and every tool resolved the store on its
+// own: hosted with no credential, `initialize` was answered and each tool
+// returned an `isError` result — a healthy-looking server on a station that
+// had nothing to serve.
+describe("fail-closed: the MCP server refuses before serving (spawned conversations-mcp)", () => {
+  test("hosted with no credential: exits non-zero before serving, names the tiers and the opt-in, creates no SQLite", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "conversations-mcp-fail-closed-"));
+    tempRoots.push(tempRoot);
+    const env = hermeticEnv(tempRoot);
+
+    const result = await runMcp(["--stdio"], env);
+
+    expect(result.exitCode).not.toBe(0);
+    // Nothing was served: a stdio MCP server writes JSON-RPC to stdout only.
+    expect(result.stdout).toBe("");
+    // The FIRST stderr line is the refusal, and it names where the credential
+    // should live plus the explicit local opt-in.
+    const firstLine = result.stderr.split("\n")[0] ?? "";
+    expect(firstLine).toContain("HASNA_CONVERSATIONS_API_KEY");
+    expect(result.stderr).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    expect(result.stderr).not.toMatch(/-local-fallback/i);
+    expect(result.stderr).not.toMatch(/falling?\s*back/i);
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
+    expect(existsSync(join(tempRoot, ".hasna", "conversations"))).toBe(false);
+  });
+
+  test("an initialize request over stdio is NOT answered when no credential resolves", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "conversations-mcp-fail-closed-init-"));
+    tempRoots.push(tempRoot);
+    const env = hermeticEnv(tempRoot);
+
+    const result = await runMcp(["--stdio"], env, INITIALIZE_REQUEST);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain("serverInfo");
+    expect(result.stdout).not.toContain('"result"');
+    expect(result.stderr).toContain("HASNA_CONVERSATIONS_API_KEY");
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
+  });
+
+  test("a resolved hosted credential is not enough to open local: still hosted, nothing under HOME", async () => {
+    // Positive control for the gate itself: with a credential in the env
+    // tier the server starts (initialize is answered) and no on-box store is
+    // created as a side effect of startup. No request leaves the process —
+    // initialize is answered locally by the MCP SDK.
+    const tempRoot = mkdtempSync(join(tmpdir(), "conversations-mcp-hosted-"));
+    tempRoots.push(tempRoot);
+    const env = hermeticEnv(tempRoot);
+    env["HASNA_CONVERSATIONS_API_KEY"] = ["fixture", "not", "a", "credential"].join("-");
+
+    const result = await runMcp(["--stdio"], env, INITIALIZE_REQUEST);
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout).toContain("serverInfo");
+    expect(result.stderr).not.toContain("LOCAL mode");
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
+    expect(existsSync(join(tempRoot, ".hasna", "conversations"))).toBe(false);
+  }, 30_000);
+
+  test("the explicit local opt-in starts the server, answers initialize, and says 'local' on stderr", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "conversations-mcp-local-opt-in-"));
+    tempRoots.push(tempRoot);
+    const env = hermeticEnv(tempRoot);
+    env["HASNA_CONVERSATIONS_DB_PATH"] = join(tempRoot, "store.db");
+
+    const result = await runMcp(["--stdio"], env, INITIALIZE_REQUEST);
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout).toContain("serverInfo");
+    // Announced once, at startup — a local MCP must never be mistakable for a
+    // hosted one with an empty store.
+    expect(result.stderr).toContain("LOCAL mode");
+    expect(result.stderr.match(/LOCAL mode/g)).toHaveLength(1);
+  }, 30_000);
+
+  test("--http: hosted with no credential exits non-zero before binding a port", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "conversations-mcp-http-fail-closed-"));
+    tempRoots.push(tempRoot);
+    const env = hermeticEnv(tempRoot);
+
+    // `--port 0` would let the OS pick a free port if the server ever got
+    // that far; the gate must fire first.
+    const result = await runMcp(["--http", "--port", "0"], env);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).not.toContain("listening");
+    expect(result.stderr).toContain("HASNA_CONVERSATIONS_API_KEY");
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
+  });
+
+  test("the CLI's `mcp` subcommand raises the same refusal through the CLI error surface", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "conversations-cli-mcp-fail-closed-"));
+    tempRoots.push(tempRoot);
+    const env = hermeticEnv(tempRoot);
+
+    const result = await runCli(["mcp"], env);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("HASNA_CONVERSATIONS_API_KEY");
+    expect(result.stderr).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
   });
 });

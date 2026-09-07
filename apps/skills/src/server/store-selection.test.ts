@@ -182,7 +182,7 @@ describe("startup durability guard", () => {
     // left to the handler so the test can close the handle it opened.
     const store = await createStore({});
     const handler = await createSkillsFetchHandler({ store, config: { inlineWorker: false } });
-    const server = Bun.serve({ port: 0, fetch: handler });
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
     try {
       const health = await fetch(`http://127.0.0.1:${server.port}/health`);
       expect(health.status).toBe(200);
@@ -215,7 +215,7 @@ describe("startup durability guard", () => {
       store,
       config: { databaseUrl: "postgres://nobody@127.0.0.1:1/none", allowEphemeralStore: true, inlineWorker: false },
     });
-    const server = Bun.serve({ port: 0, fetch: handler });
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
     try {
       expect((await fetch(`http://127.0.0.1:${server.port}/health`)).status).toBe(200);
     } finally {

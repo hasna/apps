@@ -197,6 +197,8 @@ const READY_ROLE = {
   can_api_keys: true,
   can_recording_idempotency: true,
   can_use_public: true,
+  owner_can_tombstone_recording_idempotency: true,
+  owner_can_delete_recording_tags: true,
   is_superuser: false,
   can_create_role: false,
   can_create_database: false,
@@ -465,6 +467,17 @@ describe("cloud schema readiness", () => {
       await expect(assertCloudSchemaReady(readinessPg({
         role: { ...READY_ROLE, [capability]: true },
       }))).rejects.toThrow("surplus table privileges");
+    }
+  });
+
+  test("rejects revoked owner privileges needed by recording deletion triggers", async () => {
+    for (const [capability, table] of [
+      ["owner_can_tombstone_recording_idempotency", "recording_idempotency"],
+      ["owner_can_delete_recording_tags", "recording_tags"],
+    ] as const) {
+      await expect(assertCloudSchemaReady(readinessPg({
+        role: { ...READY_ROLE, [capability]: false },
+      }))).rejects.toThrow(`${table} owner lacks`);
     }
   });
 

@@ -34,7 +34,7 @@ import { sliceBetweenUnique } from "./helpers/source-assertions";
 
 const temporaryDirectories: string[] = [];
 /** `check` must make no network call, and only strace can settle that; see the test below. */
-const testWithStrace = Bun.spawnSync(["strace", "-V"]).exitCode === 0 ? test : test.skip;
+const testWithStrace = Bun.which("strace") && Bun.spawnSync(["strace", "-V"]).exitCode === 0 ? test : test.skip;
 const repoRoot = join(import.meta.dir, "..", "..");
 const cliEntry = join("src", "cli", "index.ts");
 
@@ -406,9 +406,9 @@ describe("a stored trigger that the running app has not picked up", () => {
 describe("a trigger write that the running app will not pick up", () => {
   test("is not armed while an instance is running, and armed when none is", () => {
     expect(describeTriggerPickup([]).armed).toBe(true);
-    const pickup = describeTriggerPickup(["/Applications/HasnaRecordings.app"]);
+    const pickup = describeTriggerPickup(["/Applications/Hasna Recordings.app"]);
     expect(pickup.armed).toBe(false);
-    expect(pickup.runningBundlePaths).toEqual(["/Applications/HasnaRecordings.app"]);
+    expect(pickup.runningBundlePaths).toEqual(["/Applications/Hasna Recordings.app"]);
   });
 
   /**
@@ -418,7 +418,7 @@ describe("a trigger write that the running app will not pick up", () => {
    */
   test("recordings shortcut exits non-zero when it writes while an instance runs", () => {
     const home = scratchHome("pickup");
-    const bundle = join(home, "Applications", "HasnaRecordings.app");
+    const bundle = join(home, "Applications", "Hasna Recordings.app");
     mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
     writeFileSync(join(bundle, "Contents", "Info.plist"), "<plist/>");
 
@@ -471,21 +471,21 @@ describe("the running-bundle scan does not re-ask questions it has answered", ()
   test("reads each distinct candidate path exactly once across the whole listing", () => {
     const reads: string[] = [];
     const listing = [
-      "/Applications/HasnaRecordings.app/Contents/MacOS/Recordings",
+      "/Applications/Hasna Recordings.app/Contents/MacOS/Recordings",
       "/Applications/Safari.app/Contents/MacOS/Safari",
       "/Applications/Mail.app/Contents/MacOS/Mail",
-      "/Applications/HasnaRecordings.app/Contents/MacOS/Recordings",
+      "/Applications/Hasna Recordings.app/Contents/MacOS/Recordings",
     ].join("\n");
 
     const found = runningAppBundlePaths({
       listProcesses: () => listing,
       readBundleIdentifier: (path) => {
         reads.push(path);
-        return path === "/Applications/HasnaRecordings.app" ? "com.hasna.recordings" : null;
+        return path === "/Applications/Hasna Recordings.app" ? "com.hasna.recordings" : null;
       },
     });
 
-    expect(found).toEqual(["/Applications/HasnaRecordings.app"]);
+    expect(found).toEqual(["/Applications/Hasna Recordings.app"]);
     // Each line contributes its own "/..." prefixes; the shared ones must be asked once.
     expect(reads.length).toBe(new Set(reads).size);
     // Without the cache the two Recordings lines and the two decoys re-ask "/Applications"

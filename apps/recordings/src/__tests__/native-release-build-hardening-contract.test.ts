@@ -266,7 +266,7 @@ describe("native release build hardening contract", () => {
     expect(normalizer).toBeDefined();
 
     const root = mkdtempSync(join(tmpdir(), "recordings-bundle-modes-"));
-    const app = join(root, "HasnaRecordings.app");
+    const app = join(root, "Hasna Recordings.app");
     const directories = [
       app,
       join(app, "Contents"),
@@ -571,7 +571,7 @@ describe("native release build hardening contract", () => {
     expect(companionScript).toContain("--frozen-lockfile");
     expect(companionScript).toContain("--ignore-scripts");
     expect(companionScript).toContain("--minimum-release-age=604800");
-    expect(companionScript).toContain('"$CP_EXECUTABLE" -R "$ROOT/src" "$STAGED_ROOT/src"');
+    expect(companionScript).toContain('"$CP_EXECUTABLE" -R "$source_entry" "$STAGED_ROOT/src/"');
     expect(companionScript).not.toContain("${ROOT}/node_modules");
     expectOrder(
       companionScript,

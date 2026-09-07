@@ -16,7 +16,8 @@ function fixture() {
   const marker = join(cwd, "executions"), denied = join(cwd, "denied"), guard = join(cwd, "guard.ts");
   const sourceFiles: Array<[string, string]> = [];
   const entries: string[] = [];
-  for (const [name, exitCode, hosted] of [["local-ok", 0, false], ["local-fail", 7, false], ["hosted-fixture", 0, true]] as const) {
+  for (const [name, exitCode, hosted] of [["local-ok", 0, false], ["local-fail", 7, false], ["hosted-fixture", 0, true],
+    ["local-noisy", 0, false], ["local-noisy-fail", 7, false]] as const) {
     const dir = join(data, "installed", name), entry = join(dir, "src", "index.ts");
     mkdirSync(join(dir, "src"), { recursive: true });
     // No package installation is part of this test. The skill has no dependencies.
@@ -24,7 +25,9 @@ function fixture() {
     const files: Array<[string, string]> = [
       [join(dir, "package.json"), JSON.stringify({ name, version: "1.0.0", bin: { [name]: "src/index.ts" }, ...(hosted ? { skills: { runtime: "hosted" } } : {}) })],
       [join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: Owned scheduled execution fixture.\n---\n# Fixture\n`],
-      [entry, `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(marker)}, ${JSON.stringify(name + "\n")}); process.exitCode = ${exitCode};\n`],
+      [entry, `import ${JSON.stringify(guard)}; import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(marker)}, ${JSON.stringify(name + "\n")});
+${name.startsWith("local-noisy") ? `console.log(${JSON.stringify(`${name}: owned stdout`)}); console.error(${JSON.stringify(`${name}: owned stderr`)});` : ""}
+process.exitCode = ${exitCode};\n`],
     ];
     for (const [file, contents] of files) { writeFileSync(file, contents); sourceFiles.push([file, contents]); }
     if (!hosted) entries.push(entry);
@@ -40,8 +43,9 @@ globalThis.fetch = async (input, init) => {
   return request(input, init);
 };
 const spawn = Bun.spawn.bind(Bun), allowed = ${JSON.stringify(entries)}.map(path => realpathSync(path));
+const isSkillChild = allowed.includes(process.argv[1]);
 Bun.spawn = (command, options) => {
-  if (!Array.isArray(command) || command.length !== 3 || command[0] !== "bun" || command[1] !== "run" || !allowed.includes(realpathSync(command[2]))) return deny("unowned Bun child");
+  if (isSkillChild || !Array.isArray(command) || command.length !== 3 || command[0] !== "bun" || command[1] !== "run" || !allowed.includes(realpathSync(command[2]))) return deny("unowned Bun child");
   return spawn(command, options);
 };
 Bun.spawnSync = () => deny("Bun sync child");
@@ -208,4 +212,67 @@ for (const json of [false, true]) {
       f.unchangedSources();
     } finally { rmSync(f.cwd, { recursive: true, force: true }); }
   });
+
+  test(`noisy scheduled children preserve output, exit and mixed history (${json ? "JSON" : "human"})`, async () => {
+    const f = fixture();
+    try {
+      f.writeSchedules(["local-noisy"]);
+      const success = await f.cli(["schedule", "run", ...(json ? ["--json"] : [])]);
+      expect(success.exitCode).toBe(0);
+      if (json) {
+        expect(JSON.parse(success.stdout)).toEqual({ ran: 1, results: [{ name: "local-noisy", skill: "local-noisy", status: "success", attempted: true, paid: false }] });
+        expect(success.stdout).not.toContain("owned stdout");
+        expect(success.stderr).toContain("local-noisy: owned stdout");
+      } else expect(success.stdout).toContain("local-noisy: owned stdout");
+      expect(success.stderr).toContain("local-noisy: owned stderr");
+      expect(JSON.parse(readFileSync(f.file, "utf8")).schedules[0].lastRunStatus).toBe("success");
+      expect(f.executions()).toEqual(["local-noisy"]);
+
+      const before = f.writeSchedules(["local-noisy-fail", "hosted-fixture", "local-ok"]);
+      const mixed = await f.cli(["schedule", "run", ...(json ? ["--json"] : [])]);
+      expect(mixed.exitCode).toBe(1);
+      if (json) {
+        expect(JSON.parse(mixed.stdout)).toMatchObject({ ran: 2, results: [
+          { name: "local-noisy-fail", status: "error", attempted: true, error: "Skill 'local-noisy-fail' exited with 7" },
+          { name: "hosted-fixture", status: "error", attempted: false },
+          { name: "local-ok", status: "success", attempted: true, paid: false },
+        ] });
+        expect(mixed.stdout).not.toContain("owned stdout");
+        expect(mixed.stderr).toContain("local-noisy-fail: owned stdout");
+      } else {
+        expect(mixed.stdout).toContain("local-noisy-fail: owned stdout");
+        expect(mixed.stdout).toContain("Skill 'local-noisy-fail' exited with 7");
+      }
+      expect(mixed.stderr).toContain("local-noisy-fail: owned stderr");
+      const after = JSON.parse(readFileSync(f.file, "utf8")).schedules;
+      expect(after[0].lastRunStatus).toBe("error"); expect(after[2].lastRunStatus).toBe("success");
+      expect(after[1]).toEqual(before.schedules[1]);
+      expect(f.executions()).toEqual(["local-noisy", "local-noisy-fail", "local-ok"]);
+      f.unchangedSources();
+    } finally { rmSync(f.cwd, { recursive: true, force: true }); }
+  });
 }
+
+test.skipIf(process.getuid?.() === 0)("noisy JSON schedule history failure retains execution status without polluting stdout", async () => {
+  const f = fixture();
+  try {
+    const before = f.writeSchedules(["local-noisy", "local-noisy-fail"]);
+    chmodSync(f.file, 0o400);
+    expect(() => writeFileSync(f.file, before.bytes)).toThrow();
+    const result = await f.cli(["schedule", "run", "--json"]);
+    expect(result.exitCode).toBe(1);
+    const output = JSON.parse(result.stdout);
+    expect(output.ran).toBe(2);
+    expect(output.results).toMatchObject([
+      { name: "local-noisy", status: "error", attempted: true, executionStatus: "success" },
+      { name: "local-noisy-fail", status: "error", attempted: true, executionStatus: "error", error: "Skill 'local-noisy-fail' exited with 7" },
+    ]);
+    for (const item of output.results) expect(item.historyError).toContain("Inspect the skill's effects before retrying");
+    for (const name of ["local-noisy", "local-noisy-fail"]) {
+      expect(result.stderr).toContain(`${name}: owned stdout`); expect(result.stderr).toContain(`${name}: owned stderr`);
+    }
+    expect(readFileSync(f.file, "utf8")).toBe(before.bytes);
+    expect(f.executions()).toEqual(["local-noisy", "local-noisy-fail"]);
+    f.unchangedSources();
+  } finally { chmodSync(f.file, 0o600); rmSync(f.cwd, { recursive: true, force: true }); }
+});

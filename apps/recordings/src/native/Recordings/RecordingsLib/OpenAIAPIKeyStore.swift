@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 struct ProcessingModelSelection: Equatable, Sendable {
     let transcriptionPrompt: String
@@ -16,11 +17,17 @@ enum OpenAIAPIKeyStore {
     static func load(
         homePath: String,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        userDefaultKey: String? = UserDefaults.standard.string(forKey: "openAIAPIKey")
+        userDefaultKey: String? = UserDefaults.standard.string(forKey: "openAIAPIKey"),
+        keychainLoader: (() throws -> String?)? = nil
     ) -> String {
-        if let key = firstNonEmpty(environment["OPENAI_API_KEY"], environment["RECORDINGS_API_KEY"]) {
+        if let key = firstNonEmpty(environment["RECORDINGS_OPENAI_API_KEY"], environment["OPENAI_API_KEY"], environment["RECORDINGS_API_KEY"]) {
             return key
         }
+        // Test and resolver homes must never read the owner's credentials.
+        if let loader = keychainLoader,
+           let key = try? loader(), let key = firstNonEmpty(key) { return key }
+        if keychainLoader == nil, homePath == FileManager.default.homeDirectoryForCurrentUser.path,
+           let key = try? loadKeychain(), let key = firstNonEmpty(key) { return key }
         if let key = firstNonEmpty(userDefaultKey) {
             return key
         }
@@ -96,30 +103,77 @@ enum OpenAIAPIKeyStore {
         )
     }
 
-    /// Persist the key into ~/.hasna/recordings/config.json so the CLI (which the app
-    /// shells out to for final transcription) uses the same key as the app itself.
-    static func save(key: String, homePath: String) throws {
+    /// The app and its embedded helper share the provider credential through Keychain
+    /// and an in-memory child environment. Never write a new key into preferences.
+    static func save(
+        key: String, homePath: String,
+        defaults: UserDefaults = .standard,
+        keychainWriter: (String) throws -> Void = saveKeychain
+    ) throws {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        let dir = URL(fileURLWithPath: homePath)
-            .appendingPathComponent(".hasna")
-            .appendingPathComponent("recordings")
-        let url = dir.appendingPathComponent("config.json")
-
-        var json: [String: Any] = [:]
-        if let data = try? Data(contentsOf: url),
-           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            json = existing
+        try keychainWriter(trimmed)
+        var json = loadMutableConfig(homePath: homePath)
+        if json.removeValue(forKey: "openai_api_key") != nil || json["api_key"] != nil {
+            json.removeValue(forKey: "api_key")
+            try writeConfig(json, homePath: homePath)
         }
+        defaults.removeObject(forKey: "openAIAPIKey")
+    }
 
-        if trimmed.isEmpty {
-            json.removeValue(forKey: "openai_api_key")
-        } else {
-            json["openai_api_key"] = trimmed
+    private static var keychainQuery: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: "hasna.credentials.openai.api-key",
+         kSecAttrAccount as String: "openai/api_key"]
+    }
+
+    static func loadKeychain(allowInteraction: Bool = false) throws -> String? {
+        var query = keychainQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        if !allowInteraction { query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail }
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw KeychainFailure(status: status) }
+        return (result as? Data).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    private static func saveKeychain(_ key: String) throws {
+        let query = keychainQuery
+        if key.isEmpty {
+            let status = SecItemDelete(query as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainFailure(status: status) }
+            return
         }
+        let value = [kSecValueData as String: Data(key.utf8)]
+        var status = SecItemUpdate(query as CFDictionary, value as CFDictionary)
+        if status == errSecItemNotFound {
+            var item = query.merging(value) { _, new in new }
+            item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            status = SecItemAdd(item as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else { throw KeychainFailure(status: status) }
+    }
 
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: url, options: .atomic)
+    struct KeychainFailure: Error, LocalizedError {
+        let status: OSStatus
+        var errorDescription: String? { "Could not access the OpenAI key in Keychain (\(status))." }
+    }
+
+    static func childEnvironment(
+        base: [String: String], homePath: String,
+        keyLoader: (() -> String)? = nil
+    ) -> [String: String] {
+        var result = base
+        let key = keyLoader?() ?? load(homePath: homePath, environment: base)
+        // RECORDINGS_API_KEY is also an alias in the Hasna service resolver. Keeping
+        // it would send a provider key to the service API as its authentication.
+        result.removeValue(forKey: "RECORDINGS_API_KEY")
+        if !key.isEmpty {
+            result["OPENAI_API_KEY"] = key
+            result["RECORDINGS_OPENAI_API_KEY"] = key
+        }
+        return result
     }
 
     static func saveLanguage(language: String, homePath: String) throws {

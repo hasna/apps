@@ -4,6 +4,12 @@ import Darwin
 import SwiftUI
 import KeyboardShortcuts
 import RecordingsLib
+import Combine
+
+private final class RecorderPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
 
 private final class PermissionRequestResultBox: @unchecked Sendable {
     private let lock = NSLock()
@@ -63,7 +69,14 @@ final class RecordingsAppState: ObservableObject {
     private let runtimeSmokeOutputPath: String?
     private let runtimeSmokeAcknowledgementPath: String?
     private let runtimeSmokeCompletionPath: String?
+    @Published var page: RecorderPage = .recorder
     private var mainWindow: NSWindow?
+    private var settingsWindowController: SettingsWindowController?
+    private var historyWindow: NSWindow?
+    private var transcriptionBar: NSPanel?
+    private var recentPastesWindow: NSWindow?
+    private var subscriptions = Set<AnyCancellable>()
+    private var compactSettingsWindow: NSWindow?
     private(set) var windowCreationCount = 0
     private(set) var windowActivationCount = 0
 
@@ -77,8 +90,28 @@ final class RecordingsAppState: ObservableObject {
         runtimeSmokeCompletionPath = plan.runtimeSmokeCompletionPath
         runtimeSmokeProbe = plan.runtimeSmokeMode == "normal" ? RuntimeSmokeProbe() : nil
         if plan.installsGlobalHandlers {
-            let store = RecordingsStore()
+            let store: RecordingsStore
+            #if DEBUG
+            if CommandLine.arguments.contains("--visual-preview") {
+                let home = NSTemporaryDirectory() + "recordings-design-preview"
+                store = RecordingsStore(engine: RecordingEngine(homePath: home, installsGlobalHandlers: false),
+                    preferences: ProjectStore(filePath: home + "/projects.json"), voiceShortcuts: VoiceShortcuts(homePath: home))
+                store.isVisualPreview = true
+                let labels = ["Interview notes", "Project idea", "Quick thought", "Meeting recap", "Voice memo"]
+                let durations = [737000, 343000, 68000, 1691000, 156000]
+                store.library = labels.enumerated().map { i, name in
+                    Recording(id: "visual-preview-\(i)", audioPath: ProcessInfo.processInfo.environment["RECORDINGS_VISUAL_PREVIEW_AUDIO"], rawText: name, durationMs: durations[i],
+                              createdAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(Double(-i * 86400))))
+                }
+                if CommandLine.arguments.contains("--visual-preview-recording") {
+                    store.engine.configureVisualPreview()
+                }
+            } else { store = RecordingsStore() }
+            #else
+            store = RecordingsStore()
+            #endif
             self.store = store
+            store.$showMenuBar.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &subscriptions)
             if plan.declaresMainWindow {
                 Task { @MainActor [weak self] in
                     self?.openRecordings()
@@ -90,6 +123,8 @@ final class RecordingsAppState: ObservableObject {
     }
 
     func openRecordings() {
+        page = .recorder
+        resizeDesktop()
         // Bar launches never create the workspace window — on any path, including the
         // reopen handler and the runtime smoke. Keyed on declaresWindow (NOT on
         // declaresMainWindow, which excludes every runtime smoke): a full build's
@@ -99,10 +134,131 @@ final class RecordingsAppState: ObservableObject {
         // deterministically on every build.
         guard declaresWindow else { return }
         if let store {
-            showWindow(contentView: NSHostingView(rootView: ContentView(store: store)))
+            showWindow(contentView: NSHostingView(rootView: ContentView(store: store, state: self, windowAction: performWindowAction)))
         } else if runtimeSmokeMode == "normal" {
             showWindow(contentView: NSHostingView(rootView: Text("Recordings runtime smoke")))
         }
+    }
+
+    private func showPage(_ destination: RecorderPage) {
+        if mainWindow == nil { openRecordings() }
+        page = destination
+        resizeDesktop()
+        activate(mainWindow)
+    }
+
+    private func resizeDesktop() {
+        guard let mainWindow else { return }
+        mainWindow.contentMinSize = page.size
+        mainWindow.contentMaxSize = page.size
+        mainWindow.setContentSize(page.size)
+    }
+
+    private func performWindowAction(_ kind: NSWindow.ButtonType) {
+        switch kind {
+        case .closeButton: mainWindow?.performClose(nil)
+        case .miniaturizeButton: mainWindow?.miniaturize(nil)
+        case .zoomButton: mainWindow?.toggleFullScreen(nil)
+        default: break
+        }
+    }
+
+    func openBar() {
+        guard let store else { return }
+        if transcriptionBar == nil {
+            let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
+            let width = min(820, screen.width - 48) + 16
+            let panel = RecorderPanel(contentRect: NSRect(x: screen.midX - width / 2, y: screen.maxY - 84, width: width, height: 76),
+                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.title = "Hasna Recordings — Live Transcript"
+            panel.isOpaque = false; panel.backgroundColor = .clear
+            panel.level = .floating; panel.hasShadow = true
+            panel.isMovableByWindowBackground = true
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            panel.isReleasedWhenClosed = false
+            panel.contentView = NSHostingView(rootView: MenuBarStatusView(store: store, openRecordings: openRecordings,
+                openSettings: openSettings, openHistory: openHistory, openRecent: openRecent,
+                closeBar: { [weak self] in self?.transcriptionBar?.orderOut(nil) }, barOnly: barOnly))
+            transcriptionBar = panel
+        }
+        transcriptionBar?.makeKeyAndOrderFront(nil)
+    }
+
+    func openRecent() {
+        guard let store else { return }
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
+        let width = min(760, screen.width - 48)
+        if recentPastesWindow == nil {
+            recentPastesWindow = makePanel(title: "Recent pastes", width: width, height: 350,
+                content: NSHostingView(rootView: VStack(spacing: 0) {
+                    PanelPointer().fill(Color(red: 0.94, green: 0.95, blue: 0.97))
+                        .frame(width: 26, height: 12).offset(x: width * 0.34)
+                    RecentPastesView(store: store, close: { [weak self] in self?.recentPastesWindow?.close() })
+                        .frame(width: width, height: 338)
+                }))
+            recentPastesWindow?.level = .floating
+        }
+        let barBottom = transcriptionBar?.frame.minY ?? (screen.maxY - 84)
+        recentPastesWindow?.setFrameOrigin(NSPoint(x: screen.midX - width / 2, y: barBottom - 356))
+        activate(recentPastesWindow)
+    }
+
+    func openHistory() {
+        guard let store else { return }
+        store.selection = nil
+        store.searchText = ""
+        if !barOnly { showPage(.history); return }
+        store.searchText = ""
+        if historyWindow == nil {
+            historyWindow = makePanel(title: "Recordings", width: 500, height: 354,
+                content: NSHostingView(rootView: RecordingsListView(store: store, close: { [weak self] in self?.historyWindow?.close() }).background(FrostedBackground())))
+        }
+        store.loadLibrary()
+        activate(historyWindow)
+    }
+
+    func openSettings() {
+        guard let store else { return }
+        if !barOnly { showPage(.settings); return }
+        if compactSettingsWindow == nil {
+            compactSettingsWindow = makePanel(title: "Hasna Recordings Settings", width: 420, height: 314,
+                content: NSHostingView(rootView: RecorderSettingsView(store: store,
+                    close: { [weak self] in self?.compactSettingsWindow?.close() }, advanced: openAdvancedSettings).background(FrostedBackground())))
+        }
+        activate(compactSettingsWindow)
+    }
+
+    private func makePanel(title: String, width: CGFloat, height: CGFloat, content: NSView) -> NSWindow {
+        let panel = RecorderPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+                            styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
+        panel.title = title
+        panel.isReleasedWhenClosed = false
+        panel.isMovableByWindowBackground = true
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
+        panel.appearance = NSAppearance(named: .aqua)
+        panel.contentView = content
+        panel.center()
+        return panel
+    }
+
+    private func activate(_ window: NSWindow?) {
+        NSApplication.shared.activate()
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    func openAdvancedSettings() {
+        guard let store, !store.isVisualPreview else { return }
+        if !barOnly { showPage(.advanced); return }
+        if settingsWindowController == nil {
+            settingsWindowController = SettingsWindowController {
+                NSHostingView(rootView: SettingsView(
+                    engine: store.engine,
+                    shortcuts: store.voiceShortcuts,
+                    preferences: store.preferences
+                ))
+            }
+        }
+        settingsWindowController?.show()
     }
 
     private func showWindow(contentView: NSView) {
@@ -116,22 +272,31 @@ final class RecordingsAppState: ObservableObject {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
+            contentRect: NSRect(x: 0, y: 0, width: 224, height: 244),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        window.title = "Recordings"
+        window.title = "Hasna Recordings"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.isMovableByWindowBackground = true
+        window.appearance = NSAppearance(named: .aqua)
         window.isReleasedWhenClosed = false
         window.contentView = contentView
+        window.contentMinSize = NSSize(width: 224, height: 244)
+        window.contentMaxSize = NSSize(width: 224, height: 244)
         window.center()
         mainWindow = window
         windowCreationCount += 1
         NSApplication.shared.activate()
         NSRunningApplication.current.activate(options: [.activateAllWindows])
         window.makeKeyAndOrderFront(nil)
+        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window.standardWindowButton(kind)?.isHidden = true
+        }
     }
 
     func startRuntimeSmokeIfNeeded() {
@@ -351,6 +516,10 @@ struct RecordingsApp: App {
                 MenuBarStatusView(
                     store: store,
                     openRecordings: state.openRecordings,
+                    openSettings: state.openSettings,
+                    openHistory: state.openHistory,
+                    openRecent: state.openRecent,
+                    openBar: state.openBar,
                     barOnly: state.barOnly
                 )
             } else if state.runtimeSmokeProbe != nil {
@@ -370,23 +539,30 @@ struct RecordingsApp: App {
 
         Settings {
             if let store = state.store {
-                SettingsView(engine: store.engine, shortcuts: store.voiceShortcuts, projectStore: store.projectStore)
+                SettingsView(engine: store.engine, shortcuts: store.voiceShortcuts, preferences: store.preferences)
             } else {
                 EmptyView()
             }
         }
         .commands {
             if let store = state.store {
+                CommandGroup(replacing: .appSettings) {
+                    Button("Settings…", action: state.openSettings)
+                        .keyboardShortcut(",", modifiers: .command)
+                }
                 CommandGroup(replacing: .newItem) {
                     Button("New Recording") {
-                        store.pane = .record
-                        store.engine.startRecording()
+                        self.state.openRecordings()
+                        store.beginRecording()
                     }
                     .keyboardShortcut("n", modifiers: .command)
+                    .disabled(!store.engine.canStartRecording)
                 }
                 CommandGroup(after: .toolbar) {
-                    Button("Recordings Library") { store.pane = .library }
+                    Button("Recordings") { state.openHistory() }
                         .keyboardShortcut("l", modifiers: .command)
+                    Button("Show Transcription Bar", action: state.openBar)
+                        .keyboardShortcut("b", modifiers: [.command, .shift])
                 }
             }
         }
@@ -394,7 +570,7 @@ struct RecordingsApp: App {
 
     private var menuBarInsertion: Binding<Bool> {
         Binding(
-            get: { state.declaresMenuBar && (state.store != nil || state.runtimeSmokeProbe != nil) },
+            get: { state.declaresMenuBar && (state.store?.showMenuBar == true || state.runtimeSmokeProbe != nil) },
             set: { _ in }
         )
     }

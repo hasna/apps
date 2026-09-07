@@ -62,7 +62,7 @@ describe("macOS artifact command pinning", () => {
     const root = mkdtempSync(join(tmpdir(), "recordings-requirement-command-pinning-"));
     temporaryDirectories.push(root);
     const hostileBin = join(root, "hostile-bin");
-    const appPath = join(root, "HasnaRecordings.app");
+    const appPath = join(root, "Hasna Recordings.app");
     const hostileMarker = join(root, "hostile-codesign-invoked");
     const pinnedCodesign = join(root, "pinned-codesign");
     mkdirSync(hostileBin);

@@ -1,83 +1,68 @@
 import SwiftUI
 import RecordingsLib
 
-/// Root layout: a narrow violet Liquid-Glass sidebar on the left, and ONE continuous canvas
-/// on the right — a compact header line, then either the Record workspace (default) or the
-/// recordings library (list | detail), separated only by hairline dividers. No boxed panels.
-struct ContentView: View {
-    @ObservedObject var store: RecordingsStore
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        HStack(spacing: 0) {
-            SidebarView(store: store)
-                .frame(width: Theme.sidebarWidth)
-                .background(Theme.sidebarGradient(colorScheme).ignoresSafeArea())
-
-            VStack(spacing: 0) {
-                HeaderBar(store: store)
-                Divider().opacity(0.5)
-
-                switch store.pane {
-                case .record:
-                    RecordWorkspaceView(store: store)
-                case .library:
-                    HSplitView {
-                        RecordingsListView(store: store)
-                            .frame(minWidth: 280, idealWidth: 340)
-                        RecordingDetailView(store: store)
-                            .frame(minWidth: 420)
-                    }
-                }
-            }
-            .background(Theme.canvas(colorScheme))
-        }
-        .frame(minWidth: 940, minHeight: 620)
-        .ignoresSafeArea(.container, edges: .top)
-        .onAppear { store.loadLibrary() }
-        .alert("Recordings Error", isPresented: Binding(
-            get: { store.operationError != nil },
-            set: { if !$0 { store.operationError = nil } }
-        )) {
-            Button("OK", role: .cancel) { store.operationError = nil }
-        } message: {
-            Text(store.operationError ?? "The operation failed.")
+enum RecorderPage {
+    case recorder, history, settings, advanced
+    var size: NSSize {
+        switch self {
+        case .recorder: NSSize(width: 224, height: 244)
+        case .history: NSSize(width: 500, height: 390)
+        case .settings: NSSize(width: 420, height: 350)
+        case .advanced: NSSize(width: 520, height: 540)
         }
     }
 }
 
-/// Compact header line: "12 recordings · Updated 3m ago" + actions.
-private struct HeaderBar: View {
+/// One retained app window and one shared glass/title bar across every destination.
+struct ContentView: View {
     @ObservedObject var store: RecordingsStore
+    @ObservedObject var state: RecordingsAppState
+    let windowAction: (NSWindow.ButtonType) -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text("\(store.library.count) recording\(store.library.count == 1 ? "" : "s")")
-            if let updated = store.lastUpdated {
-                Text("·")
-                Text("Updated \(updated.relativeDescription)")
+        VStack(spacing: 0) {
+            HStack(spacing: 7) {
+                windowDot(.red, label: "Close", kind: .closeButton)
+                windowDot(.yellow, label: "Minimize", kind: .miniaturizeButton)
+                windowDot(.green, label: "Zoom", kind: .zoomButton)
+                Spacer(minLength: 6)
+                Text("Hasna Recordings").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }.padding(.horizontal, 12).frame(height: 36)
+            switch state.page {
+            case .recorder:
+                RecordWorkspaceView(store: store)
+                HStack {
+                    GlassIconButton(symbol: "clock", label: "Recordings", action: state.openHistory)
+                    Spacer()
+                    GlassIconButton(symbol: "gearshape", label: "Settings", action: state.openSettings)
+                }.padding(.horizontal, 18).padding(.bottom, 14)
+            case .history:
+                RecordingsListView(store: store, close: state.openRecordings)
+            case .settings:
+                RecorderSettingsView(store: store, close: state.openRecordings, advanced: state.openAdvancedSettings)
+            case .advanced:
+                HStack {
+                    Button(action: state.openSettings) { Label("Settings", systemImage: "chevron.left") }.buttonStyle(GlassButtonStyle())
+                    Spacer()
+                }.padding(.horizontal, 16)
+                SettingsView(engine: store.engine, shortcuts: store.voiceShortcuts, preferences: store.preferences)
             }
-            Spacer()
-
-            Button { store.loadLibrary() } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.plain)
-            .help("Refresh library")
-
-            Button {
-                store.pane = .record
-            } label: {
-                Image(systemName: "mic.circle.fill")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.accent)
-            .help("New recording")
         }
-        .font(.system(.subheadline, design: .rounded))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 18)
-        .padding(.top, 20)
-        .padding(.bottom, 10)
+        .font(.system(size: 13))
+        .frame(width: state.page.size.width, height: state.page.size.height)
+        .background(FrostedBackground())
+        .ignoresSafeArea()
+        .onAppear { store.loadLibrary() }
+        .alert("Recordings Error", isPresented: Binding(get: { store.operationError != nil }, set: { if !$0 { store.operationError = nil } })) {
+            Button("OK", role: .cancel) { store.operationError = nil }
+        } message: { Text(store.operationError ?? "The operation failed.") }
+    }
+
+    private func windowDot(_ color: Color, label: String, kind: NSWindow.ButtonType) -> some View {
+        Button { windowAction(kind) } label: {
+            Circle().fill(color.gradient).frame(width: 12, height: 12)
+                .overlay(Circle().strokeBorder(.white.opacity(0.6), lineWidth: 0.5))
+        }.buttonStyle(.plain).accessibilityLabel(label)
     }
 }

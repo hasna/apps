@@ -6,7 +6,7 @@ struct RecordingStartGateTests {
     @Test("permission-only launch skips global handlers and terminates after handling")
     func permissionHelperLaunchPlan() {
         let plan = PermissionRequestLaunchPlan(arguments: [
-            "/Applications/HasnaRecordings.app/Contents/MacOS/Recordings",
+            "/Applications/Hasna Recordings.app/Contents/MacOS/Recordings",
             "--request-permissions",
             "--open-permission-settings",
         ])
