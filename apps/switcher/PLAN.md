@@ -4,20 +4,32 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-07T04:00:19.108311+00:00"
+updated_at: "2026-09-07T05:34:56.280279+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
-# Active model-policy release
+# Completed model-policy release: 0.1.3
 
-The next patch adds automatic model guidance to every managed Messages, Chat, Responses, and Gemini request, including auxiliary and child-agent requests. A per-launch loopback gateway owns the upstream credential and validates exact model IDs before forwarding. Native role settings prevent known harness defaults from choosing another provider model. The catalog remains visible; selecting a catalog entry requires that it also belongs to the launch policy.
+Switcher **0.1.3 is published, installed and live-tested**. [PR #1877](https://github.com/hasna/apps/pull/1877) merged reviewed source `13b629927bbdf84254ae42e6e03bb69f75794903` as `77164e16126d49503cb4aff2a96fb493bf3cf2bf` after all nine required checks passed. npm published at `2026-09-07T05:26:05.569Z` with SHA-1 `44d296e0e8ee1b2ec3b312e517c69b1cb3cbf678`. All **60 installed package files** match the reviewed archive. The normal `switcher`, `switcher-serve` and `switcher-mcp` commands report 0.1.3; the previous install and quarantine policy are preserved.
 
-Default policy assigns every supported native role to the selected main model. Explicit role models, allowed IDs, aliases, and ordered transient-error fallbacks are stored in the profile and bound to its launch-plan token. An upgraded API rejects older launchers that cannot declare policy support. This cannot enforce a downgrade to an older local CLI/server, provider-internal routing, or requests made by user extensions/tools outside Switcher's managed endpoint.
+Every managed launch automatically supplies model guidance and pins verified native child/utility slots. A per-launch authenticated loopback gateway keeps the real provider credential in the launcher and enforces exact approved model IDs. The default permitted set contains the selected main model; explicit role assignments, allowed alternatives, aliases and ordered transient fallbacks are available. The complete compatible catalog remains visible, while model use follows the policy. See [automatic model guidance](docs/MODEL-POLICY.md) for supported native roles and boundaries.
 
-Acceptance requires protocol-level rejection/injection/fallback tests, native role and catalog tests, persisted request-routing evidence, SQLite/PostgreSQL and package checks, independent review of the exact release commit, PR/CI merge, npm publication and installed-CLI live tests in owned ephemeral tmux sessions. The original DeepSeek session remains preserved. No next-version registry or live evidence is claimed until those steps finish.
+A dry-run of the following installed-CLI launch passed with the station’s existing credential binding, saved profile and three discovered DeepSeek IDs:
 
-Owning branch: `codex/fixer/2026-09-06-switcher-model-policy`; worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/model-policy`; fetched base: `e43a4d18c25121afe72ff0d4e8f1c9f6181a98c8`. Canonical directive: `~/Workspace/scratch/universal-harness-switcher/directives/2026-09-06-01a07181-ship-model-policy.md`. Tasks are tracked as M01–M10 in TODOS.md.
+```sh
+switcher launch claude --provider deepseek --model deepseek-v4-flash
+```
+
+The installed release passed **14 direct native paths and both Ori paths**, each with a fresh task and a resumed process after proof-file deletion. Aider verified its native file-context/edit/history interface. An additional actual Claude custom agent declared as `opus` returned its read proof through DeepSeek, while the parent made no direct Read call. All accepted runs retained policy-version-1 routing evidence with zero dropped events and no foreign-model resolution. Prompt compliance remains probabilistic; the managed gateway supplies the enforceable model boundary.
+
+The published source passed **215 package tests / 2,091 assertions**, **147 root tests / 560 assertions**, **43 affected builds**, real PostgreSQL/native opt-ins and generated/type/manifest/secret/artifact/frozen-lock checks. Registry-installed Node 26.8.1 and Bun 1.3.14 CLI/API/SDK/server/standalone MCP tests passed. No Hasna MCP server was registered. Both host storage backends passed 0.1.2→0.1.3→0.1.2→0.1.3; old launchers are rejected by the upgraded API and historical runs receive no fabricated model-policy evidence.
+
+The exact candidate archive separately passed four Linux container scenarios and fourteen API starts on SQLite/PostgreSQL 17, including recreation, rollback and reupgrade. Container routing records were synthetic storage inputs, not observed provider inference. Its 55 copied runtime files matched the archive; owned container resources were removed. The candidate image was `sha256:1a11fd00abed8c1124970e2c41de5f42010f5b63e28351d02b719a6fccbc5ae1`.
+
+The [evidence index](docs/verification-evidence.json) retains independent reviews, actual registry receipts, candidate-only checks and prior release identities. Local evidence lives under `~/Workspace/scratch/universal-harness-switcher`. The original user `switcher-deepseek` tmux session remains preserved.
+
+Worktree owner: `codex-fixer`, task `01a07181-ca8d-70c1-99a2-b276dc5770f3`. Evidence branch: `codex/fixer/2026-09-07-switcher-model-policy-evidence`, based on merged `77164e16126d49503cb4aff2a96fb493bf3cf2bf`, in the owned `worktrees/model-policy` directory. This follow-up changes only files excluded from the published package. Final documentation CI/merge and terminal task status are tracked in task `61cf6e30-abe9-4fbc-a840-fb0cf8827896`.
 
 # Previous delivery: 0.1.2
 
