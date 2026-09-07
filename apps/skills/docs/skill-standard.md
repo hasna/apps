@@ -313,6 +313,19 @@ Each unmarked home skill's `SKILL.md` is hashed (line endings normalized,
 Every written marker is listed in a rollback record under
 `~/.hasna/skills/rollback/`. Nothing is ever deleted by adoption.
 
+### Managed home ownership
+
+Ordinary sync updates an existing directory only when its regular
+`.hasna-skills.json` sidecar contains `managedBy: "@hasna/skills"`. Missing,
+foreign or malformed markers leave the directory unmanaged. A directory with
+`SKILL.md` can still be explicitly replaced using `skills sync --force`;
+an unmanaged directory without `SKILL.md` is always preserved. Preview mode
+uses the same ownership decision and writes nothing.
+
+The library's `removeManagedAgentSkill` follows the same exact-owner check.
+It returns `false` and preserves a directory without valid Skills ownership;
+it has no force override.
+
 ### Home drift census
 
 ```bash
@@ -334,4 +347,3 @@ Invalid selections fail before any apply write. Prune requires the marker
 deletion authority. Adoption also leaves every already-marked directory alone.
 Rollback records contain identities, hashes and markers, not backups of removed
 file content.
-
