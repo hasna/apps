@@ -8,7 +8,8 @@ import { planReleaseSuite, validateReleaseRun, groupEnvironment, type GroupRepor
 const lifecycle = "src/__tests__/macos-app-lifecycle.test.ts";
 const publication = "src/__tests__/release-output-publication-contract.test.ts";
 const ordinary = "src/__tests__/newly-added.test.ts";
-const files = [lifecycle, publication, ordinary];
+const recorder = "src/__tests__/recorder.test.ts";
+const files = [lifecycle, publication, recorder, ordinary];
 const escape = (s: string) => s.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;");
 function report(id: string, cases: Array<[string, string, string, boolean]>, selected: number, skips = 0): GroupReport {
   const body = cases.map(([file, group, name, skipped]) => `<testsuite name="${escape(file)}" file="${escape(file)}"><testsuite name="${escape(group)}" file="${escape(file)}"><testcase name="${escape(name)}" file="${escape(file)}" line="1">${skipped ? "<skipped/>" : ""}</testcase></testsuite></testsuite>`).join("");
@@ -16,6 +17,7 @@ function report(id: string, cases: Array<[string, string, string, boolean]>, sel
 }
 function receipts(): GroupReport[] {
   return [
+    report("recorder", [[recorder, "recorder", "simulated capture", false]], 1),
     report("publication", [[lifecycle, "macOS finalized artifact installer", "install", false], [lifecycle, "macOS signed artifact build", "sign", true], [publication, "release output publication contract", "publish", false]], 2),
     report("lifecycle", [[lifecycle, "macOS finalized artifact installer", "install", true], [lifecycle, "macOS signed artifact build", "sign", false]], 1),
     report("ordinary", [[ordinary, "ordinary", "new & correct", false]], 1),
@@ -24,10 +26,10 @@ function receipts(): GroupReport[] {
 describe("release suite orchestration", () => {
   test("partitions publication from child-confined lifecycle and retains newly discovered files", () => {
     const plan = planReleaseSuite(files, "darwin");
-    expect(plan.map(g => g.id)).toEqual(["publication", "lifecycle", "ordinary"]);
+    expect(plan.map(g => g.id)).toEqual(["recorder", "publication", "lifecycle", "ordinary"]);
     expect(plan.find(g => g.id === "ordinary")!.files).toEqual([ordinary]);
-    expect(planReleaseSuite(files, "linux")).toEqual([{ id: "ordinary", files, runner: "bun" }]);
-    expect(validateReleaseRun(plan, receipts())).toEqual({ passed: 4, skipped: 0, tests: 4, files: 3 });
+    expect(planReleaseSuite(files, "linux")).toEqual([{ id: "recorder", files: [recorder], runner: "recorder" }, { id: "ordinary", files: files.filter(f => f !== recorder), runner: "bun" }]);
+    expect(validateReleaseRun(plan, receipts())).toEqual({ passed: 5, skipped: 0, tests: 5, files: 4 });
   });
   test("refuses empty, duplicated, unsafe and missing required group files", () => {
     for (const input of [[], [ordinary], [...files, ordinary], [...files, "../escape.test.ts"]]) {
@@ -51,7 +53,7 @@ describe("release suite orchestration", () => {
       report("lifecycle", [[lifecycle, "macOS finalized artifact installer", "install", false], [lifecycle, "macOS signed artifact build", "sign", false]], 2),
       report("lifecycle", [[lifecycle, "macOS signed artifact build", "sign", false]], 1),
     ]) {
-      const records = receipts(); records[1] = replacement;
+      const records = receipts(); records[2] = replacement;
       expect(() => validateReleaseRun(planReleaseSuite(files, "darwin"), records)).toThrow();
     }
   });

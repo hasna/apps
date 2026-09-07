@@ -11,7 +11,7 @@ import { join } from "node:path";
 export interface SuiteGroup {
   id: string;
   files: string[];
-  runner: "bun" | "publication";
+  runner: "bun" | "publication" | "recorder";
   pattern?: string;
 }
 export interface GroupReport {
@@ -24,17 +24,21 @@ export interface GroupReport {
 }
 const LIFECYCLE = "src/__tests__/macos-app-lifecycle.test.ts";
 const PUBLICATION = "src/__tests__/release-output-publication-contract.test.ts";
+const RECORDER = "src/__tests__/recorder.test.ts";
 const PUBLICATION_NAMES = "(?:macOS finalized artifact installer|release output publication contract)(?:\\s|$)";
 
 export function planReleaseSuite(files: string[], platform: string): SuiteGroup[] {
   if (!files.length || new Set(files).size !== files.length || files.some(f => !/^src\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_.-]+\.test\.ts$/.test(f))) {
     throw new Error("empty, duplicate or unsafe manifest-gated files");
   }
-  if (platform !== "darwin") return [{ id: "ordinary", files: [...files], runner: "bun" }];
-  for (const file of [LIFECYCLE, PUBLICATION]) if (!files.includes(file)) throw new Error(`required Darwin fixture file missing: ${file}`);
-  const ordinary = files.filter(f => f !== LIFECYCLE && f !== PUBLICATION);
+  const recorder: SuiteGroup[] = files.includes(RECORDER) ? [{ id: "recorder", files: [RECORDER], runner: "recorder" }] : [];
+  const remaining = files.filter(f => f !== RECORDER);
+  if (platform !== "darwin") return [...recorder, ...(remaining.length ? [{ id: "ordinary", files: remaining, runner: "bun" as const }] : [])];
+  for (const file of [LIFECYCLE, PUBLICATION, RECORDER]) if (!files.includes(file)) throw new Error(`required Darwin fixture file missing: ${file}`);
+  const ordinary = remaining.filter(f => f !== LIFECYCLE && f !== PUBLICATION);
   if (!ordinary.length) throw new Error("empty ordinary group");
   return [
+    ...recorder,
     { id: "publication", files: [LIFECYCLE, PUBLICATION], runner: "publication", pattern: `^${PUBLICATION_NAMES}` },
     { id: "lifecycle", files: [LIFECYCLE], runner: "bun", pattern: `^(?!${PUBLICATION_NAMES})` },
     { id: "ordinary", files: ordinary, runner: "bun" },
@@ -164,7 +168,7 @@ export function groupEnvironment(root: string, inherited: NodeJS.ProcessEnv = pr
     HOME: join(root, "home"), TMPDIR: join(root, "tmp") + "/",
     PATH: `${join(root, "bin")}:${inherited.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin"}`,
     XDG_CONFIG_HOME: join(root, "config"), XDG_CACHE_HOME: join(root, "cache"),
-    XDG_DATA_HOME: join(root, "data"), npm_config_cache: join(root, "npm-cache"),
+    XDG_DATA_HOME: join(root, "data"), NPM_CONFIG_CACHE: join(root, "npm-cache"),
     BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(root, "bun-cache"),
     RECORDINGS_TEST_TIMEOUT_MS: "120000", NO_COLOR: "1", TERM: "dumb",
     ...(inherited.CI ? { CI: inherited.CI } : {}),
@@ -189,9 +193,11 @@ export function releaseMain(): number {
     const junitPath = join(logDir, `${group.id}.xml`);
     const command = group.runner === "publication"
       ? ["/usr/bin/python3", "-I", "-B", "src/__tests__/helpers/run-publication-fixtures.py", "--bun", process.execPath, "--report-outfile", junitPath]
+      : group.runner === "recorder"
+      ? [process.execPath, "scripts/test-recorder-fixtures.ts", "--junit-output", junitPath]
       : [process.execPath, "test", "--no-orphans", "--timeout", "120000", ...group.files.map(f => `./${f}`), ...(group.pattern ? ["--test-name-pattern", group.pattern] : []), "--reporter=junit", "--reporter-outfile", junitPath];
     const environmentRoot = mkdtempSync(join(logDir, `${group.id}-environment-`));
-    const child = spawnSync(command[0]!, command.slice(1), { encoding: "utf8", env: groupEnvironment(environmentRoot), maxBuffer: 128 * 1024 * 1024, timeout: group.runner === "publication" ? 360000 : 30 * 60 * 1000 });
+    const child = spawnSync(command[0]!, command.slice(1), { encoding: "utf8", env: groupEnvironment(environmentRoot), maxBuffer: 128 * 1024 * 1024, timeout: group.runner === "publication" ? 360000 : group.runner === "recorder" ? 60000 : 30 * 60 * 1000 });
     const output = (child.stdout ?? "") + (child.stderr ?? "");
     writeFileSync(join(logDir, `${group.id}.log`), output);
     let junit = ""; try { junit = readFileSync(junitPath, "utf8"); } catch { /* Missing reports fail validation. */ }
