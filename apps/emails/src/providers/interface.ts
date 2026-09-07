@@ -30,7 +30,7 @@ export interface ProviderAdapter {
   /** Optional: re-initiate domain identity/DKIM verification and return DNS records to publish. */
   reinitiateDomainVerification?(domain: string): Promise<DnsRecord[]>;
   /** Optional: set a custom MAIL FROM domain (SES). Returns the mail-from domain used. */
-  setMailFrom?(domain: string, mailFromDomain?: string): Promise<string>;
+  setMailFrom?(domain: string, mailFromDomain?: string, signal?: AbortSignal): Promise<string>;
   listAddresses(): Promise<RemoteAddress[]>;
   addAddress(email: string): Promise<void>;
   verifyAddress(email: string): Promise<boolean>;

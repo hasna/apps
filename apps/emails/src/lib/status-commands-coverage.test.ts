@@ -160,7 +160,7 @@ describe("refusal registry covers every CLI refusal call site", () => {
     expect(shared).not.toContain("emails domain status");
     expect(shared).not.toContain("emails domain verify");
     expect(shared).not.toContain("emails address provision");
-    expect(shared).toContain("emails provision domain");
+    expect(shared).not.toContain("emails provision domain");
     expect(isCommandAvailableInMode("emails address provision ops@example.com", "self_hosted")).toBe(true);
     expect(isCommandAvailableInMode("emails provision address ops@example.com", "self_hosted")).toBe(true);
   });

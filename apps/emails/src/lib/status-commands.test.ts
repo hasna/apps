@@ -27,8 +27,9 @@ describe("command suggestion availability", () => {
 
   it("narrows incomplete provisioning to its missing actions while allowing status", () => {
     for (const mode of ["local", "self_hosted"] as const) {
-      for (const command of ["emails provision domain example.com", "emails provision up example.com", "emails provision roundtrip", "emails provision daemon"])
+      for (const command of ["emails provision up example.com", "emails provision roundtrip", "emails provision daemon"])
         expect(isCommandAvailableInMode(command, mode), command).toBe(false);
+      expect(isCommandAvailableInMode("emails provision domain example.com", mode)).toBe(true);
       expect(isCommandAvailableInMode("emails provision status", mode)).toBe(true);
       expect(keepAvailableCommands(["emails provision status", "emails provision up example.com", "emails domain list --json"], mode))
         .toEqual(["emails provision status", "emails domain list --json"]);
@@ -44,7 +45,7 @@ describe("command suggestion availability", () => {
 
   it("matches command words and preserves suggestion ordering", () => {
     expect(isCommandAvailableInMode("emails provision domain-report", "self_hosted")).toBe(true);
-    expect(isCommandAvailableInMode("emails provision domain example.com", "self_hosted")).toBe(false);
+    expect(isCommandAvailableInMode("emails provision domain example.com", "self_hosted")).toBe(true);
     expect(keepAvailableCommands(["emails status --json", "emails stats --json", "emails refresh", "emails provider list --json"], "self_hosted"))
       .toEqual(["emails status --json", "emails stats --json", "emails provider list --json"]);
   });

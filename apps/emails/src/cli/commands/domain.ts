@@ -46,13 +46,6 @@ interface UnshippedSurface {
 }
 
 const UNSHIPPED_DOMAIN_SURFACES: Record<string, UnshippedSurface> = {
-  "emails domain setup-cloudflare": {
-    missing: "the Cloudflare DNS writer ships as a library but no command is wired to it, because "
-      + "it would publish records using whatever provider and Cloudflare credentials the calling "
-      + "machine happens to have",
-    instead: "Publish the records from 'emails domain dns <domain>' yourself, then confirm them "
-      + "with 'emails domain check <domain>'.",
-  },
   "emails domain setup": {
     missing: "the buy -> zone -> provider -> DNS orchestration does not ship",
     instead: "Run the steps that do: 'emails domain available <domain>', 'emails domain buy "
@@ -905,14 +898,20 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
 
   domainCmd
     .command("setup-cloudflare <domain>")
-    .description("Auto-create DNS records in Cloudflare for email sending (NOT IMPLEMENTED in this build)")
+    .description("Publish sending DNS through the API's bound Cloudflare zone")
     .requiredOption("--provider <id>", "SES or Resend provider ID")
-    .option("--cloudflare-token <token>", "Cloudflare API token (falls back to config/env)")
     .option("--mx", "Also add MX record for receiving email")
-    .option("--mx-server <host>", "Custom MX server hostname")
+    .option("--mx-server <host>", "Assert the exact inbound MX hostname configured in the server DNS binding")
     .option("--register-ses", "Register the domain with SES first if not already added")
     .option("--force-mx-switch", "Allow adding MX even when existing root MX belongs to another provider")
-    .action(() => { try { notImplementedAnywhere("emails domain setup-cloudflare"); } catch (e) { handleError(e); } });
+    .option("--dry-run", "Resolve server bindings without provider calls or writes")
+    .action(async (domain: string, opts: import("../../lib/domain-dns-api.js").DomainDnsOptions) => {
+      try { const { setupDomainCloudflare, formatDomainDns, domainDnsSucceeded } = await import("../../lib/domain-dns-api.js"); const result = await setupDomainCloudflare(domain, opts); output(result, formatDomainDns(result)); if (!domainDnsSucceeded(result)) process.exitCode = 1; }
+      catch (error) { handleError(error); }
+    });
+
+  domainCmd.command("dns-job <id>").description("Inspect a shared domain DNS provisioning receipt")
+    .action(async (id: string) => { try { const { inspectDomainDnsJob, formatDomainDns } = await import("../../lib/domain-dns-api.js"); const result = await inspectDomainDnsJob(id); output(result, formatDomainDns(result)); if (result.job.status === "blocked") process.exitCode = 1; } catch (error) { handleError(error); } });
 
   // ─── DOMAIN WARMING ────────────────────────────────────────────────────────
   // Warming schedules are a first-class repository resource (`warming_schedules`

@@ -12,6 +12,7 @@ export const LIVE_POSTGRES_SUITES = Object.freeze([
   "address-provisioning.integration.test.ts",
   "attachment-inventory.integration.test.ts",
   "domain-connect.integration.test.ts",
+  "domain-dns.integration.test.ts",
   "forwarding.integration.test.ts",
   "idp.integration.test.ts",
   "inbox-perf.integration.test.ts",
@@ -37,7 +38,7 @@ export const OPTIONAL_SKIPS = Object.freeze({
   "idp.integration.test.ts": "live @hasna/tenants JWKS endpoint > serves a JWKS the authenticator accepts, and refuses our locally-signed token (typed unknown_kid)",
 });
 
-// Executed-case floors from the registration census (213 cases, including the
+// Executed-case floors from the registration census (221 cases, including the
 // two named optional checks). The multi-tenancy floor is the suite's own 34
 // tenancy and outbound-enforcement cases as merged onto origin/main; the
 // counts here are re-derived from the actual suites whenever main moves them.
@@ -45,6 +46,7 @@ export const MINIMUM_PASS_COUNTS = Object.freeze({
   "address-provisioning.integration.test.ts": 8,
   "attachment-inventory.integration.test.ts": 28,
   "domain-connect.integration.test.ts": 7,
+  "domain-dns.integration.test.ts": 8,
   "forwarding.integration.test.ts": 5,
   "idp.integration.test.ts": 8,
   "inbox-perf.integration.test.ts": 7,

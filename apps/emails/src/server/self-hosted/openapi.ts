@@ -4867,4 +4867,139 @@ emailsSelfHostedOpenApi.paths!["/v1/providers/secrets/status"]={get:{operationId
     providers:{type:"array",items:{type:"object",required:["provider_id","name","type","active","configured","credential_source","externally_managed"],properties:{provider_id:{type:"string"},name:{type:"string"},type:{type:"string"},active:{type:"boolean"},configured:{type:"boolean"},credential_source:{type:"string"},externally_managed:{type:"boolean"}}}}
   }}}}},"405":errorResponse("Only GET is supported for provider credential status.")
 }}};
+const domainDnsRecordSchema = {
+  type: "object",
+  required: ["type", "name", "content"],
+  properties: {
+    id: { type: "string" },
+    type: { type: "string" },
+    name: { type: "string" },
+    content: { type: "string" },
+    priority: { type: "integer" },
+    proxied: { type: "boolean" },
+    ttl: { type: "integer" },
+  },
+};
+const domainDnsResultSchema = {
+  type: "object",
+  required: ["dry_run", "job"],
+  properties: {
+    dry_run: { type: "boolean" },
+    job: {
+      type: "object",
+      required: [
+        "id",
+        "domain",
+        "provider_id",
+        "zone_id",
+        "status",
+        "phase",
+        "dns_published",
+        "verified_for_sending",
+        "requires_reconciliation",
+        "plan",
+        "message",
+      ],
+      properties: {
+        id: { type: "string", nullable: true },
+        domain: { type: "string" },
+        provider_id: { type: "string" },
+        zone_id: { type: "string" },
+        status: {
+          type: "string",
+          enum: [
+            "planned",
+            "processing",
+            "blocked",
+            "pending_verification",
+            "verified",
+          ],
+        },
+        phase: { type: "string" },
+        dns_published: { type: "boolean" },
+        verified_for_sending: { type: "boolean" },
+        requires_reconciliation: { type: "boolean" },
+        message: { type: "string" },
+        plan: {
+          type: "object",
+          nullable: true,
+          required: ["creates", "deletes", "existing"],
+          properties: {
+            creates: { type: "array", items: domainDnsRecordSchema },
+            deletes: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["id"],
+                properties: { id: { type: "string" } },
+              },
+            },
+            existing: { type: "array", items: domainDnsRecordSchema },
+          },
+        },
+      },
+    },
+  },
+};
+const domainDnsResponses = {
+  "200": {
+    description:
+      "Durable DNS publication receipt or a plan without provider calls",
+    content: { "application/json": { schema: domainDnsResultSchema } },
+  },
+  "400": errorResponse("Invalid DNS options"),
+  "401": errorResponse("Authentication required"),
+  "403": errorResponse("Tenant operator required"),
+  "404": errorResponse("Tenant reference or job not found"),
+  "409": errorResponse("DNS plan or binding conflict"),
+  "502": errorResponse("DNS provider did not confirm the request"),
+  "503": errorResponse("Server binding or service unavailable"),
+};
+for (const [path, operationId] of [
+  ["/v1/domains/setup-cloudflare", "setupDomainCloudflare"],
+  ["/v1/domains/provision", "provisionSendingDomain"],
+])
+  emailsSelfHostedOpenApi.paths![path!] = {
+    post: {
+      operationId,
+      summary:
+        "Publish sending DNS using an explicit tenant/provider/zone server binding",
+      security: [{ apiKeyAuth: [] }, { bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["domain", "provider_id"],
+              properties: {
+                domain: { type: "string" },
+                provider_id: { type: "string" },
+                dry_run: { type: "boolean" },
+                register_provider: { type: "boolean" },
+                add_mx: { type: "boolean" },
+                force_mx_switch: { type: "boolean" },
+                mail_from: { type: "string" },
+                mx_server: { type: "string" },
+                send: { type: "string", enum: ["ses"] },
+              },
+            },
+          },
+        },
+      },
+      responses: domainDnsResponses,
+    },
+  };
+emailsSelfHostedOpenApi.paths!["/v1/domain-dns-jobs/{id}"] = {
+  get: {
+    operationId: "getDomainDnsJob",
+    summary: "Inspect a tenant operator's durable DNS publication receipt",
+    security: [{ apiKeyAuth: [] }, { bearerAuth: [] }],
+    parameters: [
+      { name: "id", in: "path", required: true, schema: { type: "string" } },
+    ],
+    responses: domainDnsResponses,
+  },
+};
 addRoutineErrorParity(emailsSelfHostedOpenApi);

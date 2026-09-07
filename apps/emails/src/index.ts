@@ -1,3 +1,5 @@
+export { setupDomainCloudflare, provisionSendingDomain, inspectDomainDnsJob, formatDomainDns, domainDnsSucceeded } from "./lib/domain-dns-api.js";
+export type { DomainDnsOptions, DomainDnsReceipt } from "./lib/domain-dns-api.js";
 // Public API — types
 export type {
   Provider,

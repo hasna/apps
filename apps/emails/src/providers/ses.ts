@@ -266,7 +266,7 @@ export class SESAdapter implements ProviderAdapter {
    * Set a custom MAIL FROM domain (improves SPF/DMARC alignment). Defaults to
    * `mail.<domain>`. Requires the MAIL FROM MX + SPF records to be published.
    */
-  async setMailFrom(domain: string, mailFromDomain?: string): Promise<string> {
+  async setMailFrom(domain: string, mailFromDomain?: string, signal?: AbortSignal): Promise<string> {
     const mailFrom = mailFromDomain ?? `mail.${domain}`;
     await this.client.send(
       new PutEmailIdentityMailFromAttributesCommand({
@@ -274,6 +274,7 @@ export class SESAdapter implements ProviderAdapter {
         MailFromDomain: mailFrom,
         BehaviorOnMxFailure: "REJECT_MESSAGE",
       }),
+      ...(signal ? [{ abortSignal: signal }] : []),
     );
     return mailFrom;
   }

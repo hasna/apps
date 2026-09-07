@@ -45,7 +45,6 @@ import type { ClientMode } from "./mode.js";
  */
 export const NEVER_AVAILABLE_COMMANDS: readonly string[] = [
   // src/cli/commands/provision.ts — notImplementedAnywhere()
-  "emails provision domain",
   "emails provision up",
   "emails provision roundtrip",
   "emails provision daemon",
@@ -61,7 +60,6 @@ export const NEVER_AVAILABLE_COMMANDS: readonly string[] = [
   // remedies several of the refusals below point at. Leaving them listed would
   // have suppressed a working command from every suggestion path.
   "emails domain setup",
-  "emails domain setup-cloudflare",
   // NOT a refusal call site — `emails refresh` is not a registered command at all
   // (`error: unknown command 'refresh'`; the verb is `emails pull`, alias
   // `emails provider sync`). It belongs here rather than in a per-mode list for

@@ -634,6 +634,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Inspect a tenant operator's durable DNS publication receipt */
+    async getDomainDnsJob(id: string, init?: RequestInit): Promise<{ "dry_run": boolean; "job": { "id": string | null; "domain": string; "provider_id": string; "zone_id": string; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "phase": string; "dns_published": boolean; "verified_for_sending": boolean; "requires_reconciliation": boolean; "message": string; "plan": { "creates": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }>; "deletes": Array<{ "id": string }>; "existing": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }> } | null } }> {
+      return this.request("GET", `/v1/domain-dns-jobs/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List sending domains */
     async listDomains(query?: { "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "domains": Array<Domain> }> {
       return this.request("GET", `/v1/domains`, {
@@ -655,6 +664,24 @@ export class EmailsSelfHostClient {
     /** Connect an already-owned domain using the server provider binding and record DNS tasks */
     async connectDomain(body: { "domain": string; "provider_id": string; "dns_provider"?: "manual" | "cloudflare" | "route53"; "register_provider"?: boolean; "dry_run"?: boolean }, init?: RequestInit): Promise<{ "dry_run": boolean; "connection": { "id": string | null; "domain_id": string | null; "domain": string; "provider_id": string; "dns_provider": "manual" | "cloudflare" | "route53"; "register_provider": boolean; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "provider_registered": boolean | null; "checked_at": string; "message": string; "dns_tasks": Array<{ "type": "TXT" | "CNAME" | "MX"; "name": string; "value": string; "purpose": "DKIM" | "SPF" | "MAIL_FROM"; "status": "pending" | "verified"; "priority"?: number }> } }> {
       return this.request("POST", `/v1/domains/connect`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Publish sending DNS using an explicit tenant/provider/zone server binding */
+    async provisionSendingDomain(body: { "domain": string; "provider_id": string; "dry_run"?: boolean; "register_provider"?: boolean; "add_mx"?: boolean; "force_mx_switch"?: boolean; "mail_from"?: string; "mx_server"?: string; "send"?: "ses" }, init?: RequestInit): Promise<{ "dry_run": boolean; "job": { "id": string | null; "domain": string; "provider_id": string; "zone_id": string; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "phase": string; "dns_published": boolean; "verified_for_sending": boolean; "requires_reconciliation": boolean; "message": string; "plan": { "creates": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }>; "deletes": Array<{ "id": string }>; "existing": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }> } | null } }> {
+      return this.request("POST", `/v1/domains/provision`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Publish sending DNS using an explicit tenant/provider/zone server binding */
+    async setupDomainCloudflare(body: { "domain": string; "provider_id": string; "dry_run"?: boolean; "register_provider"?: boolean; "add_mx"?: boolean; "force_mx_switch"?: boolean; "mail_from"?: string; "mx_server"?: string; "send"?: "ses" }, init?: RequestInit): Promise<{ "dry_run": boolean; "job": { "id": string | null; "domain": string; "provider_id": string; "zone_id": string; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "phase": string; "dns_published": boolean; "verified_for_sending": boolean; "requires_reconciliation": boolean; "message": string; "plan": { "creates": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }>; "deletes": Array<{ "id": string }>; "existing": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }> } | null } }> {
+      return this.request("POST", `/v1/domains/setup-cloudflare`, {
         body,
         query: undefined,
         init,

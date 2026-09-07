@@ -1,3 +1,5 @@
+import { publishDomainDns, normalizeDomainDns } from "./domain-dns.js";
+import { DomainDnsError, type DomainDnsBinding, type BoundDnsClient } from "./domain-dns-provider.js";
 import {readProviderSecretStatus} from "./provider-secret-status.js";
 import { importSmtpMessage, smtpImportCapability, SmtpImportError, SMTP_IMPORT_JSON_BYTES } from "./smtp-import.js";
 import { relayWebhook, resolveWebhookRelay, providerWebhookRequest, WebhookRelayError, type WebhookRelayDeps } from "./webhook-relay.js";
@@ -183,6 +185,7 @@ async function readinessCheck(deps: SelfHostedServiceDeps): Promise<ReadyResult>
 }
 
 export interface SelfHostedServiceDeps {
+  domainDns?: { client: (binding: DomainDnsBinding, env: NodeJS.ProcessEnv, signal: AbortSignal) => BoundDnsClient };
   tracking?: TrackingConfig;
   webhookRelay?: WebhookRelayDeps;
   provisioning?: { resolveMx?: typeof import("node:dns/promises").resolveMx };
@@ -975,6 +978,26 @@ export async function handleSelfHostedRequest(
     // own credential resolution + role gates). Returns null when not an auth path.
     const authResponse = await handleAuthRoutes(deps, req, url, { socketAddress: context.socketAddress ?? null });
     if (authResponse) return authResponse;
+
+    if (path === "/v1/domains/setup-cloudflare" || path === "/v1/domains/provision" || /^\/v1\/domain-dns-jobs\/[^/]+$/.test(path)) {
+      const inspect = path.startsWith("/v1/domain-dns-jobs/");
+      if (method !== (inspect ? "GET" : "POST")) return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, inspect ? read : write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "domain DNS provisioning");
+      if (denied) return denied;
+      try {
+        if (inspect) {
+          const result = await auth.store.domainDnsJobs().read(decodeURIComponent(path.split("/").at(-1)!));
+          return result ? json(200, result) : json(404, { error: "Domain DNS job not found" });
+        }
+        const body = await readJsonBody(req), input = normalizeDomainDns(body, path.endsWith("/provision") ? "provision_domain" : "setup_cloudflare");
+        return json(200, await publishDomainDns(auth.store, auth.ctx.tenantId, input, body.dry_run === true, deps.resolveSender, deps.env ?? process.env, auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator", deps.domainDns?.client));
+      } catch (error) {
+        if (error instanceof DomainDnsError || error instanceof DomainConnectError) return json(error.status, { error: error.message });
+        return json(503, { error: "DNS provisioning did not confirm completion. Inspect the durable job before retrying." });
+      }
+    }
 
     if (
       path === "/v1/domains/connect" ||
