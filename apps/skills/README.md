@@ -137,7 +137,11 @@ as silent aliases one rung below the canonical names, for one release. Use the
   non-zero. Running on this machine is no longer the silence that follows a
   missing credential: an unconfigured install fails closed, opening no local
   database and emitting no local-fallback event, and the error names the way
-  out;
+  out and where the credential should live. This holds on every data surface:
+  `list`, `search`, `categories`, `tags`, `info`, `show`, `docs`, `requires`
+  and the bare `skills` listing all exit 1; `skills-mcp` exits 1 at startup
+  before answering `initialize` or binding a port, and each MCP data tool
+  answers `AUTH_REQUIRED` on its own;
 - the explicit local opt-in → **local**. Skills ships its corpus, so running on
   this machine is a real mode — but it must be asked for:
   `HASNA_SKILLS_LOCAL=1` (alias `SKILLS_LOCAL=1`). It prints one line saying

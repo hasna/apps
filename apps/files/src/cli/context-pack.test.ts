@@ -66,6 +66,15 @@ describe("context-pack CLI", () => {
       HASNA_FILES_DB_PATH: join(dataDir, "files.db"),
       HASNA_FILES_API_URL: "https://files.md/v1",
       HASNA_FILES_API_KEY: "hf_test_key_not_used_offline",
+      // A station's own `~/.hasna/files/config/credentials` (disk tier) outranks
+      // the env tier, so with the fake authority above it would be REFUSED as
+      // written for a different authority (REMOTE_API_CONFIG_MISSING) before the
+      // local-transport guard has a chance to fire. Point the child's ambient
+      // credential roots at the scratch dir — no credentials file can exist
+      // there — so the refusal under test is the guard, not the resolver.
+      HOME: testDir!,
+      HASNA_HOME: testDir!,
+      HASNA_CONFIG_HOME: testDir!,
     };
 
     for (const args of [["context-pack", "open-files://file/f_missing"], ["search-pack", "anything"]]) {

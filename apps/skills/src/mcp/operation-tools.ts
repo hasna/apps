@@ -10,9 +10,10 @@ import {
   getSkill,
   getSkillsByCategory,
   findSimilarSkills,
-  loadRegistry,
   type Category,
 } from "../lib/registry.js";
+import { getBrowseRegistry, requireSkillsReadAccess } from "../lib/read-access.js";
+import { describeCredentialState } from "../lib/credential-state.js";
 import {
   installSkill,
   getInstalledSkills,
@@ -43,7 +44,7 @@ import {
   compactRunRecord,
   previewText,
 } from "../lib/compact-output.js";
-import { cacheClear, mcpError, mcpJson, remoteRunNextActions } from "./helpers.js";
+import { cacheClear, mcpError, mcpJson, readSurface, remoteRunNextActions } from "./helpers.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
 import { resolveConfiguredRunRouting } from "../lib/run-routing.js";
 
@@ -221,23 +222,30 @@ export function registerOperationTools(server: McpServer): void {
     };
   });
 
+  // The three DATA tools below run the same fail-closed preamble as the CLI's
+  // `categories` / `tags` / `requires` (lib/read-access.ts): AUTH_REQUIRED
+  // instead of the bundled catalog when the ladder refuses (#1720 validation).
   server.registerTool("list_categories", {
     title: "List Categories",
     description: "List all 17 skill categories with skill counts.",
-  }, async () => {
-    const cats = CATEGORIES.map(category => ({
+  }, async () => readSurface(async () => {
+    const registry = await getBrowseRegistry({ all: true });
+    const extras = Array.from(new Set(registry.map((skill) => skill.category)))
+      .filter((category) => !CATEGORIES.includes(category as Category))
+      .sort();
+    const cats = [...CATEGORIES, ...extras].map(category => ({
       name: category,
-      count: getSkillsByCategory(category).length,
+      count: registry.filter((skill) => skill.category === category).length,
     }));
-    return { content: [{ type: "text", text: JSON.stringify(cats, null, 2) }] };
-  });
+    return { content: [{ type: "text" as const, text: JSON.stringify(cats, null, 2) }] };
+  }));
 
   server.registerTool("list_tags", {
     title: "List Tags",
     description: "List all unique skill tags with occurrence counts.",
-  }, async () => {
+  }, async () => readSurface(async () => {
     const tagCounts = new Map<string, number>();
-    for (const skill of loadRegistry()) {
+    for (const skill of await getBrowseRegistry({ all: true })) {
       for (const tag of skill.tags) {
         tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
       }
@@ -245,8 +253,8 @@ export function registerOperationTools(server: McpServer): void {
     const sorted = Array.from(tagCounts.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, count]) => ({ name, count }));
-    return { content: [{ type: "text", text: JSON.stringify(sorted, null, 2) }] };
-  });
+    return { content: [{ type: "text" as const, text: JSON.stringify(sorted, null, 2) }] };
+  }));
 
   server.registerTool("get_requirements", {
     title: "Get Requirements",
@@ -254,13 +262,14 @@ export function registerOperationTools(server: McpServer): void {
     inputSchema: {
       name: z.string(),
     },
-  }, async ({ name }) => {
+  }, async ({ name }) => readSurface(async () => {
+    await requireSkillsReadAccess();
     const reqs = getSkillRequirements(name);
     if (!reqs) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
     }
-    return { content: [{ type: "text", text: JSON.stringify(reqs, null, 2) }] };
-  });
+    return { content: [{ type: "text" as const, text: JSON.stringify(reqs, null, 2) }] };
+  }));
 
   server.registerTool("run_skill", {
     title: "Run Skill",
@@ -301,23 +310,25 @@ export function registerOperationTools(server: McpServer): void {
     let inputFiles;
     try { inputFiles = (await import("../lib/remote-files.js")).decodeRemoteFiles(files ?? []); }
     catch (error) { return mcpError("INVALID_INPUT_FILES", (error as Error).message); }
+
+    if (routing.route === "error") {
+      // Refused before it started: no run record. Writing
+      // .skills/runs/<day>/<id>/{run.json,events.ndjson,artifacts.json} for a
+      // run the credential ladder turned away was a local write from a refusal
+      // that is supposed to touch nothing (#1720 validation). The record exists
+      // only for runs that actually start (below).
+      const suggestions = routing.code === "REMOTE_REQUIRES_ORIGIN"
+        ? ["skills setup --api-url <url>", "skills auth login"]
+        : ["skills auth login"];
+      return mcpError(routing.code, routing.error, suggestions);
+    }
+
     const runContext = createSkillRun({
       skill: skillName,
       args: runArgs,
       remote: routing.route === "remote",
       ...(routing.route === "remote" ? { remoteApiOrigin: routing.apiOrigin } : {}),
     });
-
-
-    if (routing.route === "error") {
-      const error = routing.error;
-      writeRunLogs(runContext, "", error + "\n");
-      const run = completeSkillRun(runContext, { status: "failed", error });
-      const suggestions = routing.code === "REMOTE_REQUIRES_ORIGIN"
-        ? ["skills setup --api-url <url>", "skills auth login"]
-        : ["skills auth login"];
-      return mcpError(routing.code, `${error}. Local run metadata: ${run.paths.runDir}/run.json`, suggestions);
-    }
 
     if (routing.route === "remote") {
       try {
@@ -489,10 +500,14 @@ export function registerOperationTools(server: McpServer): void {
 
   server.registerTool("whoami", {
     title: "Skills Whoami",
-    description: "Show setup summary: version, pinned skills, agent configs, cwd.",
+    description: "Show setup summary: version, pinned skills, agent configs, cwd, and the credential/transport SOURCES (never values).",
   }, async () => {
     const version = pkg.version;
     const cwd = process.cwd();
+    // Same block `skills setup-info` reports: mode, authority, and the SOURCE of
+    // the credential (an env key name, a Keychain reference, a path) so an
+    // agent can see over MCP which tier is deciding — never a value.
+    const credential = describeCredentialState();
 
     const installed = getInstalledSkills();
 
@@ -521,6 +536,7 @@ export function registerOperationTools(server: McpServer): void {
       agents,
       skillsDir,
       cwd,
+      credential,
     };
 
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
