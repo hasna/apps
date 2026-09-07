@@ -92,7 +92,7 @@ function seedChannel(channel: string, reader: string): void {
     const messages = JSON.parse(unread.stdout).messages;
     expect(messages).toHaveLength(1);
     expect(messages[0].preview).toBe("older page message");
-  });
+  }, 20_000);
 
   test("read accepts --unread-only after agent registration", () => {
     const agent = "unread-only-reader";

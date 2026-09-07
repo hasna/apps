@@ -62,6 +62,9 @@ async function scenario(mode: "send" | "failure-draft" | "failure-restore" | "re
     `);
     const env=Object.fromEntries(Object.entries(process.env).filter(([key,value])=>value!==undefined&&!/^(HASNA_|CONVERSATIONS_|DATABASE_URL$|PG|XDG_)/.test(key))) as Record<string,string>;
     Object.assign(env,{HOME:root,HASNA_HOME:root,HASNA_CONFIG_HOME:root,HASNA_STATION:`fixture-${randomUUID()}`});
+    // These children model an interactive terminal; Ink otherwise defers CI frames until unmount.
+    env.CI = "false";
+    env.CONTINUOUS_INTEGRATION = "false";
     const child=Bun.spawn([process.execPath,script],{cwd:root,env,stdout:"pipe",stderr:"pipe"});
     const timer=setTimeout(()=>child.kill(),9000);
     try {

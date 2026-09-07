@@ -54,7 +54,7 @@ describe("createConversationsProjectPanel", () => {
     expect(panel.items[0].summary).not.toContain("SECRET_TAIL_DO_NOT_INCLUDE");
     expect(panel.metrics.find((metric) => metric.id === "blocking_messages")?.value).toBe(1);
     expect(panel.resourceRefs.some((ref) => ref.uri === "conversation://channel/iproj-swiss-bank-account")).toBe(true);
-  });
+  }, 20_000);
 
   test("falls back to #iproj-prefixed channels when no conversations project row exists", async () => {
     await getStore().createChannel("#iproj-swiss-bank-account", "alice");

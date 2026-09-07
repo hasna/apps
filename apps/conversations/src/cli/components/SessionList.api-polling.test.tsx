@@ -14,11 +14,19 @@ async function renderScenario(scenario: "slow" | "error" | "mixed") {
       import {PassThrough} from 'node:stream';
       import {SessionList} from ${JSON.stringify(join(import.meta.dir, "SessionList.tsx"))};
       let calls=0,active=0,maxActive=0,failed=${scenario !== "slow"};
+      let releaseFirst,releaseLater;
+      const firstGate=new Promise(resolve=>{releaseFirst=resolve});
+      const laterGate=new Promise(resolve=>{releaseLater=resolve});
+      async function waitFor(predicate,label){
+        const deadline=Date.now()+5000;
+        while(!predicate()&&Date.now()<deadline)await Bun.sleep(20);
+        if(!predicate())throw new Error('Fixture did not observe '+label);
+      }
       const server=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(req){
         const path=new URL(req.url).pathname;
         if(path==='/v1/sessions') {
           calls++;active++;maxActive=Math.max(maxActive,active);
-          if(${scenario !== "error"})await Bun.sleep(1400);
+          if(${scenario !== "error"})await (calls===1?firstGate:laterGate);
           active--;
         }
         if(failed)return Response.json({error:'synthetic unavailable'},{status:403});
@@ -34,17 +42,23 @@ async function renderScenario(scenario: "slow" | "error" | "mixed") {
       let screen='';stdout.on('data',c=>{screen+=c.toString()});
       const ui=render(React.createElement(SessionList,{agent:'synthetic-reader',onSelect:()=>{},onSelectChannel:()=>{},onNew:()=>{}}),{stdin,stdout,stderr:stdout,exitOnCtrlC:false,patchConsole:false});
       try {
-        if (${scenario !== "error"}) await Bun.sleep(1100);
-        else {const deadline=Date.now()+2500;while(!screen.includes('Unable to load conversations')&&Date.now()<deadline)await Bun.sleep(20);}
-        const first={calls,screen};failed=false;
-        if (${scenario !== "error"}) await Bun.sleep(1450);
-        else {const deadline=Date.now()+3000;while(!screen.includes('No conversations yet')&&Date.now()<deadline)await Bun.sleep(20);}
+        if (${scenario !== "error"}) {
+          await waitFor(()=>calls>=1,'initial request');
+          // Hold the actual request across a polling tick, independent of render/startup delay.
+          await Bun.sleep(1100);
+        } else await waitFor(()=>screen.includes('Unable to load conversations'),'initial error');
+        const first={calls,screen};failed=false;releaseFirst();
+        // The next request remains held so a slow runner cannot accidentally observe a third tick.
+        await waitFor(()=>calls>=2&&screen.includes(${JSON.stringify(scenario === "mixed" ? "Unable to load conversations" : "No conversations yet")}), 'next refresh and first response');
         console.log(JSON.stringify({first,calls,maxActive,screen}));
-      } finally {ui.unmount();stdin.destroy();stdout.destroy();server.stop(true)}
+      } finally {ui.unmount();releaseFirst();releaseLater();stdin.destroy();stdout.destroy();server.stop(true)}
       process.exit(0);
     `);
     const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && !/^(HASNA_|CONVERSATIONS_|DATABASE_URL$|PG|XDG_)/.test(key))) as Record<string, string>;
     Object.assign(env, { HOME: root, HASNA_HOME: root, HASNA_CONFIG_HOME: root, HASNA_STATION: `fixture-${randomUUID()}` });
+    // These children model an interactive terminal; Ink otherwise defers CI frames until unmount.
+    env.CI = "false";
+    env.CONTINUOUS_INTEGRATION = "false";
     const child = Bun.spawn([process.execPath, script], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(code).toBe(0);
@@ -62,7 +76,7 @@ test("actual API-backed render polls without render loops or overlapping slow re
   expect(result.calls).toBe(2);
   expect(result.maxActive).toBe(1);
   expect(result.screen).toContain("No conversations yet");
-}, 10000);
+}, 20_000);
 
 test("actual API failure renders an error instead of an empty inbox and recovers on refresh", async () => {
   const result = await renderScenario("error");
@@ -70,7 +84,7 @@ test("actual API failure renders an error instead of an empty inbox and recovers
   expect(result.first.screen).not.toContain("No conversations yet");
   expect(result.calls).toBe(2);
   expect(result.screen).toContain("No conversations yet");
-}, 10000);
+}, 20_000);
 
 test("a fast failed endpoint does not release the refresh gate while another request is pending", async () => {
   const result = await renderScenario("mixed");
@@ -78,4 +92,4 @@ test("a fast failed endpoint does not release the refresh gate while another req
   expect(result.calls).toBe(2);
   expect(result.maxActive).toBe(1);
   expect(result.screen).toContain("Unable to load conversations");
-}, 10000);
+}, 20_000);

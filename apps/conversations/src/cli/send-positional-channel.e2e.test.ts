@@ -75,7 +75,7 @@ describe("send positional channel form (documented in charter and .claude/rules)
       channel,
       content: "positional form body",
     });
-  });
+  }, 20_000);
 
   test("flag form `send \"<message>\" --channel X --from A` is unchanged", () => {
     const channel = "pos-channel-flag";

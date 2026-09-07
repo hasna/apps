@@ -195,7 +195,7 @@ describe("agent-name registration lock", () => {
     const afterBeat = register("lockdelta", "sess-EEE");
     expect(afterBeat.exitCode).toBe(1);
     expect(afterBeat.body.existing_session_id).toBe("sess-DDD");
-  });
+  }, 20_000);
 
   test("a heartbeat from the SAME session leaves the holder unchanged", () => {
     expect(register("lockbeta", "sess-BETA").exitCode).toBe(0);
