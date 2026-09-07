@@ -1,10 +1,107 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 ### Minor Changes
 
 - feat(recordings): upload audio at creation to an S3 bucket via the artifact kit (hasna/apps#1645). When `HASNA_RECORDINGS_S3_BUCKET` (or `RECORDINGS_S3_BUCKET`) is set, `recordings record`/`transcribe` places the audio as a content-addressed object `recordings/<recording_id>/<sha256>.<ext>` and stores `audio_object_key`/`audio_sha256`/`audio_bytes` on the row; without it, behaviour is unchanged (local `audio_path` provenance only). Upload failures fail soft — the recording is still saved. Bucket/task-role provisioning is infra-side and documented on the issue.
+
+- 3ccd183: Resolve credentials and the service authority through the `@hasna/contracts`
+  client chain (hasna/apps#1720, class B).
+
+  The CLI, the MCP server and the `./sdk` client no longer carry a credential
+  chain of their own. All three call the one resolver in `@hasna/contracts`
+  (pinned to 1.0.2), which reads, per call: an explicit `--api-key`/`--profile`,
+  then `HASNA_RECORDINGS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
+  `HASNA_RECORDINGS_API_KEY_REF`, then the macOS Keychain item
+  `hasna.credentials.recordings.api-key`, then
+  `~/.hasna/recordings/config/credentials` (owner-only 0400/0600), then
+  `HASNA_RECORDINGS_API_KEY`. The authority follows the same ladder —
+  `HASNA_RECORDINGS_API_URL`, the Keychain `api-url` item, the credentials file —
+  and now DEFAULTS to the fleet gateway `https://api.hasna.com/recordings` once a
+  credential resolves, so a key alone is a complete configuration. The hosted
+  client re-resolves the credential on every request, so a rotation heals a
+  long-lived MCP server or SDK client without a restart.
+
+  What this removes:
+
+  - `resolveTransport()` and the own env-selection chain behind it (breaking):
+    the two-variable presence test, the `HASNA_RECORDINGS_CLIENT_STORE` switch
+    (`sqlite` | `http`, which this branch no longer reads at all), the
+    partial-pair fail-closed warnings, and the `TransportResolution` /
+    `ClientStore` / `TransportKind` public types. Nothing reads
+    `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna` or
+    `$XDG_CONFIG_HOME`. No `*_MODE` / `*_STORAGE_MODE` variable exists; the
+    transport is decided by what RESOLVES, never by a mode word.
+  - The `auto:api-url+api-key` store-report source (`AUTO_FLIP_MODE_SOURCE`):
+    `recordings check` now names the ACTUAL credential + authority sources (an
+    env key name, a Keychain item reference, a file path, or the gateway
+    default) and warns when the credential came from the process env, because a
+    shell export is a snapshot a rotation cannot heal until the shell exits.
+  - The old SDK docs telling consumers to read `process.env.HASNA_RECORDINGS_API_URL`
+    / `HASNA_RECORDINGS_API_KEY` themselves (a private copy of the chain per
+    consumer).
+
+  What this adds:
+
+  - `resolveRecordingsTransport`, `resolveRecordingsCloudClient` and
+    `getRecordingsTransportStatus` on the `./storage` surface, with the crossed
+    `@hasna/contracts` types spelled locally so the published declarations stay
+    boundary-clean.
+  - `@hasna/recordings/sdk` exports `resolveRecordingsSdkTransport`,
+    `createRecordingsV1Client` and `RECORDINGS_LOCAL_SERVE_URL`, so a consumer
+    can see WHICH tier supplied its credential (never the value) and build the
+    hosted `/v1` client without writing a private copy of the chain.
+  - The deliberate unhosted opt-in `HASNA_RECORDINGS_LOCAL=1` (alias
+    `RECORDINGS_LOCAL=1`): the on-box SQLite file is reachable only through it,
+    it is answered BEFORE the resolver runs (an opted-in run reads neither the
+    Keychain nor any credential file), a configured authority outranks it, and
+    every local SDK run prints one "LOCAL mode" line on stderr.
+
+  Behaviour worth knowing about:
+
+  - Hosted mode with no credential still fails closed — non-zero exit, no SQLite,
+    no local-fallback event — and the message now names every tier it consulted
+    behind a stable `REMOTE_API_*` code (`REMOTE_API_CONFIG_MISSING`,
+    `REMOTE_API_CREDENTIAL_INVALID`, `REMOTE_API_URL_INVALID`).
+  - A credential with no URL used to be refused as a half-configured pair; it
+    now resolves the fleet gateway, so `HASNA_RECORDINGS_API_KEY` alone is a
+    complete hosted configuration.
+  - `RECORDINGS_API_KEY` keeps its older meaning — the OpenAI transcription-key
+    override (credential-seam waiver in `src/lib/config.ts`) — and BOTH
+    unprefixed spellings (`RECORDINGS_API_URL`, `RECORDINGS_API_KEY`) are carved
+    out of the resolver environment: an OpenAI key can never authenticate as a
+    Hasna credential, and a workstation combining `HASNA_RECORDINGS_LOCAL=1`
+    with a plain `RECORDINGS_API_KEY` still lands on the local store.
+  - A declared-but-blank authority variable no longer disables the Keychain tier
+    (the `keychain.enabled` carry across the normalising copy, hasna/apps#1788),
+    and the SDK never consults the ambient chain for an explicit `baseUrl`, so a
+    pinned authority cannot attract the fleet key (hasna/apps#1794).
+  - An authority URL carrying userinfo is REFUSED by the resolver instead of
+    reaching the transport, so `recordings check` reports the refusal rather
+    than redacting a password out of a URL that was about to be used.
+  - `@hasna/contracts` stays a runtime dependency (unchanged position): the
+    serve bundle externalises it for `@hasna/contracts/auth`, and the SDK entry
+    imports it; the CLI and MCP bundles inline it as before.
+
+### Patch Changes
+
+- 7a6442e: Simplify Hasna Recordings to one recordings window, remove native project navigation,
+  repair Settings in the app and menu bar, and use the spaced app bundle filename.
+  Add a configurable native API connection with an endpoint-scoped Keychain credential,
+  and exclude live Swift build caches from the embedded CLI build.
+  Read the saved OpenAI provider key from Keychain on Finder launches, save new provider
+  keys securely, and pass them to the helper without confusing service authentication.
+  Flush complete JSON output before the companion exits so large recording histories,
+  search results, and long transcripts load without truncated responses.
+  Parse PostgreSQL timestamps in native recording history, and detect revoked table
+  owner cleanup privileges before the API reports ready with broken deletion.
+  Keep realtime transcription responsive with a lightweight recording panel, cached
+  history searches, and microphone shutdown off the UI thread. Default new native
+  installations to dictation without an extra question/command classification request.
+- Export RecordingsLib for native clients with isolated preferences and state, live PCM provider sessions, partial transcription, cancellation, and the existing verified paste flow. Preserve the legacy recorder initializer and align its service bridge with the current explicit local-mode resolver.
+- 3a467ee: fix(recordings): make the prepublish gate pass in a normal local environment (HC-00677). The `prepublishOnly` wiring to the gated partition and the fail-closed `release-suite-gate` script are already on main (merged after this PR's base); this change delivers the remaining defect from the same finding: `test:gated`'s timeout delivery. `RECORDINGS_TEST_TIMEOUT_MS="${...:-120000}" bun test --timeout "$RECORDINGS_TEST_TIMEOUT_MS"` expands the bare `$RECORDINGS_TEST_TIMEOUT_MS` argument BEFORE the assignment prefix takes effect (POSIX simple-command semantics; `/bin/sh` is dash here), so `--timeout` reached bun empty and the suite ran at Bun's 5000ms default — measured failing `database.test.ts > closeDatabase` at 5000ms (6035ms elapsed) on the first gated run. The argument now carries its own `:-120000` default and provably reaches bun as `--timeout 120000`. Contract regression tests pin the gate shape (prepublishOnly → release-suite-gate, never a bare `bun test`; test:gated keeps the partition check and the non-empty timeout). The macOS-only native fs-guard prebuild requirement is unchanged and remains enforced at pack time by `prepack:platform-gate`.
+- dec445d: Rebuild the macOS recorder and menu bar with compact glass controls and native-sized typography, history and settings in one retained app window, a persistent live transcription bar, local audio playback, pause/resume, and session paste receipts. Meter actual captured PCM, exclude paused audio from duration and transcription, and allow automatic paste to be disabled without losing saved recordings. Preserve configurable service routing and Keychain credentials.
 
 ## 0.3.13
 

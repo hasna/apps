@@ -1,6 +1,6 @@
 {
   "name": "@hasna/recordings",
-  "version": "0.3.13",
+  "version": "0.4.0",
   "type": "module",
   "description": "Speech-to-text recording tool with MCP and CLI — records, transcribes, and optionally enhances text using AI",
   "repository": {
@@ -70,6 +70,8 @@
   "files": [
     "dist/",
     "scripts/",
+    "!scripts/**/__pycache__/",
+    "!scripts/**/*.pyc",
     "Dockerfile.package",
     "bun.lock",
     "src/native/Recordings/App/",
