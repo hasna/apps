@@ -35,7 +35,7 @@ export async function fetchProviderServerHealth(providerId: string, live = true,
   }
   throw new Error("No Emails API credential is configured.");
 }
-export async function listServerProviderHealth(live = true): Promise<ServerProviderHealth[]> {
+export async function listServerProviderIds(): Promise<string[]> {
   const { createConfiguredEmailStore } = await import("../store-resolution.js");
   const store = createConfiguredEmailStore();
   const providers: Array<{ id: string }> = [];
@@ -53,9 +53,13 @@ export async function listServerProviderHealth(live = true): Promise<ServerProvi
     }
   }
   if (!complete) throw new Error("Provider registry enumeration was incomplete; no complete health report is available.");
+  return providers.map(provider => provider.id);
+}
+export async function listServerProviderHealth(live = true): Promise<ServerProviderHealth[]> {
+  const providers = await listServerProviderIds();
   const results: ServerProviderHealth[] = [];
   for (let offset = 0; offset < providers.length; offset += 8) {
-    results.push(...await Promise.all(providers.slice(offset, offset + 8).map((provider) => fetchProviderServerHealth(provider.id, live))));
+    results.push(...await Promise.all(providers.slice(offset, offset + 8).map((provider) => fetchProviderServerHealth(provider, live))));
   }
   return results;
 }

@@ -24551,6 +24551,171 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     }
   },
   {
+    "method": "POST",
+    "operationId": "syncProviderDelivery",
+    "path": "/v1/providers/{id}/sync",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "provider_id",
+        "complete",
+        "checked",
+        "synced",
+        "failures"
+      ],
+      "properties": {
+        "provider_id": {
+          "type": "string"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "checked": {
+          "type": "integer"
+        },
+        "synced": {
+          "type": "integer"
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "syncProviderDelivery",
+    "path": "/v1/providers/{id}/sync",
+    "status": 400,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "syncProviderDelivery",
+    "path": "/v1/providers/{id}/sync",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "syncProviderDelivery",
+    "path": "/v1/providers/{id}/sync",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "syncProviderDelivery",
+    "path": "/v1/providers/{id}/sync",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "syncProviderDelivery",
+    "path": "/v1/providers/{id}/sync",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "syncProviderDelivery",
+    "path": "/v1/providers/{id}/sync",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "syncProviderDelivery",
+    "path": "/v1/providers/{id}/sync",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
     "method": "GET",
     "operationId": "listResourceProvisioning",
     "path": "/v1/provisioning",

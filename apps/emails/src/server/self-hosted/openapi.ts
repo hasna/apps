@@ -3419,6 +3419,14 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
         responses: { "200": { content: { "application/json": { schema: deleteReceiptSchema } } } },
       },
     },
+    "/v1/providers/{id}/sync": {
+      post: {
+        operationId: "syncProviderDelivery", summary: "Reconcile known tenant provider message delivery observations",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: { after: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 10 } } } } } },
+        responses: { "200": { description: "Bounded provider sync report with explicit completeness and failures", content: { "application/json": { schema: { type: "object", additionalProperties: true, required: ["provider_id", "complete", "checked", "synced", "failures"], properties: { provider_id: { type: "string" }, complete: { type: "boolean" }, checked: { type: "integer" }, synced: { type: "integer" }, failures: { type: "array", items: { type: "object", additionalProperties: true } } } } } } }, "404": errorResponse("Provider not found"), "503": errorResponse("Provider binding is unavailable") },
+      },
+    },
     "/v1/providers/{id}/health": {
       get: {
         operationId: "getProviderHealth", summary: "Read server binding metadata or probe provider credentials",

@@ -1,3 +1,4 @@
+import type { ProviderDeliveryRead, ProviderDeliveryObservation } from "./provider-delivery.js";
 import { getAdapter } from "../../providers/index.js";
 import { resolveSesCredentials } from "../../providers/ses.js";
 import type { Provider, SendEmailOptions } from "../../types/index.js";
@@ -27,6 +28,7 @@ export interface SelfHostedSender {
   readonly region?: string;
   verifyDomain?(domain: string): Promise<{ verifiedForSending?: boolean; dkim: import("../../types/index.js").DnsStatus; spf: import("../../types/index.js").DnsStatus; dmarc: import("../../types/index.js").DnsStatus }>;
   checkInboundDomain?(domain: string, bucket: string): Promise<{ ready: boolean; reason: string }>;
+  readDelivery?(messageId: string, signal: AbortSignal): Promise<ProviderDeliveryRead>;
   probe?(signal: AbortSignal): Promise<{ sendingEnabled?: boolean; productionAccessEnabled?: boolean }>;
   send(input: SendEmailOptions): Promise<string>;
 }
@@ -200,6 +202,35 @@ export function buildSelfHostedSender(env: NodeJS.ProcessEnv = process.env): Sel
       ? SES_CREDENTIAL_SOURCE_LABEL[resolveSesCredentials(provider).source]
       : "api_key",
     region: provider.region ?? undefined,
+    readDelivery: async (messageId, signal) => {
+      if (raw === "ses") {
+        const { SESv2Client, GetMessageInsightsCommand } = await import("@aws-sdk/client-sesv2");
+        const credentials = resolveSesCredentials(provider).credentials;
+        const client = new SESv2Client({ region: provider.region ?? undefined, ...(credentials ? { credentials } : {}) });
+        try {
+          const result = await client.send(new GetMessageInsightsCommand({ MessageId: messageId }), { abortSignal: signal });
+          if (result.MessageId !== messageId) throw new Error("Provider message identity mismatch");
+          const types: Record<string, ProviderDeliveryObservation["type"]> = { SEND: "sent", DELIVERY: "delivered", BOUNCE: "bounced", PERMANENT_BOUNCE: "bounced", TRANSIENT_BOUNCE: "bounced", UNDETERMINED_BOUNCE: "bounced", COMPLAINT: "complained", OPEN: "opened", CLICK: "clicked", REJECT: "failed", RENDERING_FAILURE: "failed" };
+          const observations: ProviderDeliveryObservation[] = [];
+          for (const insight of result.Insights ?? []) for (const event of insight.Events ?? []) {
+            const type = types[event.Type ?? ""];
+            if (!type) continue;
+            if (!event.Timestamp || !insight.Destination) throw new Error("Provider event omitted its timestamp or recipient");
+            observations.push({ type, recipient: insight.Destination, occurredAt: event.Timestamp.toISOString(), permanentBounce: event.Details?.Bounce?.BounceType === "PERMANENT" });
+          }
+          return { observations, evidence: "event_history" };
+        } finally { client.destroy(); }
+      }
+      const response = await fetch(`https://api.resend.com/emails/${encodeURIComponent(messageId)}`, { headers: { Authorization: `Bearer ${provider.api_key!}` }, signal });
+      if (!response.ok) throw new Error("Provider delivery status could not be read");
+      const result = await response.json() as { id?: string; last_event?: string; to?: string[]; cc?: string[]; bcc?: string[] };
+      if (result.id !== messageId) throw new Error("Provider message identity mismatch");
+      const types: Record<string, ProviderDeliveryObservation["type"]> = { sent: "sent", delivered: "delivered", bounced: "bounced", complained: "complained", opened: "opened", clicked: "clicked", failed: "failed" };
+      const type = types[result.last_event ?? ""];
+      if (!type) throw new Error("Provider status is not a supported delivery observation");
+      const recipients = [...new Set([...(result.to ?? []), ...(result.cc ?? []), ...(result.bcc ?? [])])];
+      return { observations: [{ type, ...(recipients.length === 1 ? { recipient: recipients[0] } : {}) }], evidence: "current_status" };
+    },
     probe: async (signal) => {
       if (raw === "ses") {
         const { SESv2Client, GetAccountCommand } = await import("@aws-sdk/client-sesv2");

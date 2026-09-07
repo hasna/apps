@@ -2983,6 +2983,14 @@ const SEQUENCE_EXECUTION_LEASE = defineMigration("0029_sequence_execution_lease"
   CREATE INDEX IF NOT EXISTS sequence_execution_due ON sequence_enrollments(tenant_id,next_send_at) WHERE status='active';
 `);
 
+/** Current provider snapshots have observation times, not historical event times. */
+const PROVIDER_STATUS_OBSERVATIONS = defineMigration(
+  "0031_provider_status_observations",
+  `ALTER TABLE events DROP CONSTRAINT IF EXISTS events_type_enum_check;
+   ALTER TABLE events ADD CONSTRAINT events_type_enum_check
+   CHECK (type IN ('delivered','bounced','complained','opened','clicked','unsubscribed','status_observed')) NOT VALID;`,
+);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3021,5 +3029,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     MESSAGE_PROVIDER_PROVENANCE,
     SCHEDULED_ENQUEUE_IDENTITY,
     SEQUENCE_EXECUTION_LEASE,
+    PROVIDER_STATUS_OBSERVATIONS,
   ];
 }

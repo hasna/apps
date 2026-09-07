@@ -721,3 +721,51 @@ describe.skipIf(!pgClient)("inbound readiness survives lifecycle ordering", () =
     expect(await pgClient!.get("SELECT tenant_id FROM inbound_domain_routes WHERE domain = $1", ["inbound-order.example"])).toMatchObject({ tenant_id: owner.tenantId });
   });
 });
+
+describe.skipIf(!pgClient)("provider delivery reconciliation", () => {
+  it("atomically deduplicates observations and recipient effects within tenant/provider scope", async () => {
+    const deps = makeDeps({ provider: "resend", send: async () => "never" });
+    const tenant = await makeTenant("sync-owner");
+    const other = await makeTenant("sync-other");
+    const provider = await call(deps, "POST", "/v1/providers", { token: tenant.token, body: { name: "sync", type: "resend", active: true } });
+    const second = await call(deps, "POST", "/v1/providers", { token: tenant.token, body: { name: "other-sync", type: "resend", active: true } });
+    const store = deps.store.forTenant(tenant.tenantId);
+    const recipient = "target@sync.example";
+    const contact = await call(deps, "POST", "/v1/contacts", { token: tenant.token, body: { email: recipient } });
+    expect(contact.status).toBe(201);
+    const message = await store.createMessage({ from_addr: "sender@sync.example", to_addrs: [recipient], provider_id: provider.body.id, provider_message_id: "remote-sync", direction: "outbound", status: "sent", send_state: "sent" });
+    await store.createMessage({ from_addr: "sender@sync.example", to_addrs: [recipient], provider_id: second.body.id, provider_message_id: "do-not-read", direction: "outbound", status: "sent", send_state: "sent" });
+    let calls = 0;
+    deps.resolveSender = (tid, pid) => tid === tenant.tenantId && pid === provider.body.id ? { provider: "resend", send: async () => "never", readDelivery: async id => { expect(id).toBe("remote-sync"); calls++; return { observations: [{ type: "complained", recipient }], evidence: "current_status" }; } } : null;
+    const path = `/v1/providers/${provider.body.id}/sync`;
+    const limited = mintApiKey({ app: "emails", scopes: ["emails:write"], signingSecret: SIGNING_SECRET });
+    await pgClient!.execute("INSERT INTO api_key_tenants (kid,tenant_id) VALUES ($1,$2)", [limited.kid, tenant.tenantId]);
+    expect((await call(deps, "POST", path, { token: limited.token, body: {} })).status).toBe(403);
+
+    expect((await call(deps, "POST", path, { token: other.token, body: {} })).status).toBe(404);
+    expect(calls).toBe(0);
+    const results = await Promise.all([call(deps, "POST", path, { token: tenant.token, body: {} }), call(deps, "POST", path, { token: tenant.token, body: {} })]);
+    expect(results.map(item => item.status)).toEqual([200, 200]);
+    expect(results.reduce((sum, item) => sum + item.body.synced, 0)).toBe(1);
+    expect(await pgClient!.get("SELECT complaint_count, suppressed FROM contacts WHERE tenant_id = $1 AND email = $2", [tenant.tenantId, recipient])).toMatchObject({ complaint_count: 1, suppressed: true });
+    expect((await store.getMessage(message.id))?.status).toBe("complained");
+    expect(await pgClient!.get("SELECT type, metadata->>'event_time_known' AS known FROM events WHERE tenant_id = $1 AND email_id = $2", [tenant.tenantId, message.id])).toMatchObject({ type: "status_observed", known: "false" });
+    const actual = await store.applyDeliveryObservations(provider.body.id, message.id, { evidence: "event_history", observations: [{ type: "complained", recipient, occurredAt: "2026-01-01T00:00:00Z" }] });
+    expect(actual.contacts_updated).toBe(0);
+    expect(await pgClient!.get("SELECT complaint_count FROM contacts WHERE tenant_id = $1 AND email = $2", [tenant.tenantId, recipient])).toMatchObject({ complaint_count: 1 });
+    await expect(store.applyDeliveryObservations(second.body.id, message.id, { evidence: "current_status", observations: [{ type: "bounced", recipient }] })).rejects.toThrow("not owned");
+    await expect(store.applyDeliveryObservations(provider.body.id, message.id, { evidence: "event_history", observations: [{ type: "bounced", recipient, occurredAt: "2026-01-01T00:00:00Z" }, { type: "complained", recipient: "wrong@elsewhere.example" }] })).rejects.toThrow("unexpected recipient");
+    expect(await pgClient!.get("SELECT bounce_count FROM contacts WHERE tenant_id = $1 AND email = $2", [tenant.tenantId, recipient])).toMatchObject({ bounce_count: 0 });
+    expect((await call(deps, "POST", path, { token: tenant.token, body: { provider_id: second.body.id } })).status).toBe(400);
+    const unrelatedRecipient = "new-contact@sync.example";
+    const fresh = await store.createMessage({ from_addr: "sender@sync.example", to_addrs: [unrelatedRecipient], provider_id: provider.body.id, provider_message_id: "fresh-sync", direction: "outbound", status: "sent", send_state: "sent" });
+    const snapshot = await store.applyDeliveryObservations(provider.body.id, fresh.id, { evidence: "current_status", observations: [{ type: "bounced" }] });
+    expect(snapshot.unattributed).toBe(1);
+    expect(snapshot.contacts_updated).toBe(0);
+    await store.createWebhookDeliveryEvent("sns", "fixture-webhook", { email_id: fresh.id, type: "bounced", recipient: unrelatedRecipient, metadata: {}, occurred_at: "2026-02-01T00:00:00Z" });
+    const reconciled = await store.applyDeliveryObservations(provider.body.id, fresh.id, { evidence: "event_history", observations: [{ type: "bounced", recipient: unrelatedRecipient, permanentBounce: true, occurredAt: "2026-02-01T00:00:00Z" }] });
+    expect(reconciled).toMatchObject({ inserted: 0, contacts_updated: 1 });
+    expect(await pgClient!.get("SELECT bounce_count, suppressed FROM contacts WHERE tenant_id = $1 AND email = $2", [tenant.tenantId, unrelatedRecipient])).toMatchObject({ bounce_count: 1, suppressed: true });
+
+  });
+});

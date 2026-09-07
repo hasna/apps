@@ -316,3 +316,36 @@ An older API produces an explicit update error. No provider registration or mail
 send occurs during health checks. Inactive and unsupported/unbound registry rows
 remain visible. DNS provisioning, purchase, and inbox end-to-end delivery are not
 claimed by these checks.
+
+### Provider delivery sync
+
+`emails provider sync [--provider <id>]` and `emails pull` call the operator-only
+`POST /v1/providers/{id}/sync` route. `pull --watch --interval 5m` repeats the API
+operation and exits on Ctrl+C. The API processes at most ten known messages per
+request; the client follows its cursor, preserves failures, and exits nonzero
+for incomplete results. Provider credentials stay in the server bindings.
+Migration `0031_provider_status_observations` must be deployed before syncing.
+
+SES uses [GetMessageInsights](https://docs.aws.amazon.com/ses/latest/APIReference-V2/API_GetMessageInsights.html)
+for recorded provider message IDs, with one-second spacing within each batch.
+The binding needs insights permission and provider-retained data. Throttling,
+expired history, unavailable insights, and authentication errors are reported as
+partial failures; they are never zero-event successes.
+
+Resend uses [Retrieve Sent Email](https://resend.com/docs/api-reference/emails/retrieve-email)
+for each known message. Its current-status response does not supply an event
+timestamp: the app records `status_observed` with `observed_status` metadata,
+updates the message state, and does not misdate it as a new delivery/bounce event
+in period analytics. Multiple-recipient snapshots do not identify an affected
+recipient, so contact counters are left unchanged and the report names the
+unattributed count. No complete provider event history is claimed.
+
+Each message's observations, monotonic delivery status, and attributable contact
+effects commit atomically. Repeated/concurrent syncs do not count a recipient's
+bounce or complaint twice for the same message. A matching timestamped webhook
+event is reused. Complaints, proven permanent bounces, and three distinct bounced
+messages suppress the contact; absent contacts are created within the transaction.
+Only messages carrying the selected tenant/provider provenance are queried.
+Messages sent outside this app, old rows without provenance, and inbox/Gmail/S3
+imports require their own ingestion paths; this command does not imply they were
+pulled. The existing webhook ingestion remains active independently of sync.

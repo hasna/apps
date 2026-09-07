@@ -5,15 +5,32 @@ import { getAnalytics, formatAnalytics } from "../../lib/analytics.js";
 import { createConfiguredEmailStore } from "../../store-resolution.js";
 import { getInboundStats, formatInboundStats } from "../../lib/inbound-stats.js";
 
-// Provider ingestion still needs its API command handlers.
-// Statistics read the same configured store as the rest of the application.
-function serverOnly(command: string): never {
-  throw new Error(
-    `${command} is not available in the self-hosted client; it runs on the self-hosted server.`,
-  );
-}
-
 export function registerSyncCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
+  const syncAction = async (opts: { provider?: string; watch?: boolean; interval?: string }) => {
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+    try {
+      const duration = /^(\d+(?:\.\d+)?)(s|m|h)$/.exec(opts.interval ?? "5m");
+      if (!duration) throw new Error("Use a positive watch interval such as 30s, 5m, or 1h.");
+      const interval = Number(duration[1]) * ({ s: 1000, m: 60000, h: 3600000 }[duration[2]!] ?? 0);
+      if (interval < 1000 || interval > 86400000) throw new Error("Watch interval must be between 1 second and 24 hours.");
+      const { pullProviderObservations } = await import("../../lib/provider-sync-api.js");
+      do {
+        const result = await pullProviderObservations(opts.provider, controller.signal);
+        output(result, result.providers.length ? result.providers.map(row => `${row.provider_id}: ${row.status}; ${row.checked} messages checked, ${row.synced} new observations${row.failures.length ? `, ${row.failures.length} failures` : ""}\n${row.note}`).join("\n") : "No providers configured.");
+        if (!opts.watch) { if (!result.ok) process.exitCode = 1; break; }
+        await new Promise<void>(resolve => {
+          const finish = () => { clearTimeout(timer); controller.signal.removeEventListener("abort", finish); resolve(); };
+          const timer = setTimeout(finish, interval);
+          controller.signal.addEventListener("abort", finish, { once: true });
+          if (controller.signal.aborted) finish();
+        });
+      } while (!controller.signal.aborted);
+    } catch (error) { if (!controller.signal.aborted) handleError(error); }
+    finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); }
+  };
   // ─── PROVIDER SYNC ────────────────────────────────────────────────────────────
   const providerCmd = program.commands.find(c => c.name() === "provider");
   if (providerCmd) {
@@ -22,9 +39,7 @@ export function registerSyncCommands(program: Command, output: (data: unknown, f
       .description("Sync delivery events from all providers")
       .option("-j, --json", "Print JSON output", false)
       .option("--provider <id>", "Specific provider ID")
-      .action(async () => {
-        try { serverOnly("emails provider sync"); } catch (e) { handleError(e); }
-      });
+      .action(syncAction);
   }
 
   // ─── PULL ─────────────────────────────────────────────────────────────────────
@@ -35,9 +50,7 @@ export function registerSyncCommands(program: Command, output: (data: unknown, f
     .option("--provider <id>", "Provider ID (syncs all if not specified)")
     .option("--watch", "Keep syncing on an interval")
     .option("--interval <duration>", "Watch interval (e.g. 30s, 5m, 1h)", "5m")
-    .action(async () => {
-      try { serverOnly("emails pull"); } catch (e) { handleError(e); }
-    });
+    .action(syncAction);
 
   // ─── STATS ────────────────────────────────────────────────────────────────────
   program

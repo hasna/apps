@@ -1,3 +1,4 @@
+import { syncProviderDelivery, ProviderSyncError } from "./provider-sync.js";
 import { readProviderHealth } from "./provider-health.js";
 import { runDomainOperation, DomainOperationError, type DomainOperation } from "./domain-operations.js";
 // HTTP request handler for the Emails self-hosted service.
@@ -2523,6 +2524,23 @@ export async function handleSelfHostedRequest(
       const { runSequenceBatch } = await import("./sequence-worker.js");
       const sequenceResult = sequenceLimit === 0 ? { sequences: { attempted: 0, sent: 0, failed: 0, pending: 0, skipped: 0 }, sequence_items: [] } : await runSequenceBatch(auth.store.sequenceWorker(), send, sequenceLimit);
       return json(200, { ...result, ...sequenceResult, sequence_execution: sequenceLimit === 0 ? "not_requested" : "executed" });
+    }
+
+    const providerSync = path.match(/^\/v1\/providers\/([^/]+)\/sync$/);
+    if (providerSync) {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "synchronizing provider delivery observations");
+      if (denied) return denied;
+      const body = await readJsonBody(req);
+      if (Object.keys(body).some(key => !["after", "limit"].includes(key)) || (body.after !== undefined && (typeof body.after !== "string" || !body.after.trim())) || (body.limit !== undefined && (typeof body.limit !== "number" || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 10))) return json(400, { error: "Use optional non-empty after cursor and integer limit from 1 to 10." });
+      try {
+        return json(200, await syncProviderDelivery(auth.store, auth.ctx.tenantId, decodeURIComponent(providerSync[1]!), { after: body.after as string | undefined, limit: body.limit as number | undefined, resolveSender: deps.resolveSender }));
+      } catch (error) {
+        if (error instanceof ProviderSyncError) return json(error.status, { error: error.message });
+        throw error;
+      }
     }
 
     const providerHealth = path.match(/^\/v1\/providers\/([^/]+)\/health$/);

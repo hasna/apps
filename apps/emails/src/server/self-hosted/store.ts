@@ -1,4 +1,5 @@
 import { SequenceWorkerStore } from "./sequence-worker.js";
+import type { ProviderDeliveryRead } from "./provider-delivery.js";
 // Postgres repository for the Emails self-hosted service.
 //
 // Amendment A1 (PURE REMOTE): every method reads/writes the self_hosted Postgres
@@ -2331,6 +2332,57 @@ export class TenantScopedStore {
         [randomUUID(), this.tenantId, provider, eventId, event.id],
       );
       return event;
+    });
+  }
+
+  async listDeliverySyncMessages(providerId: string, after: string | undefined, limit: number): Promise<Array<Pick<MessageRecord, "id" | "provider_message_id">>> {
+    return this.client.many(`SELECT id, provider_message_id FROM messages WHERE tenant_id = $1 AND provider_id = $2 AND direction = 'outbound' AND provider_message_id IS NOT NULL AND send_state = 'sent' AND ($3::text IS NULL OR id > $3) ORDER BY id ASC LIMIT $4`, [this.tenantId, providerId, after ?? null, limit]);
+  }
+
+  async applyDeliveryObservations(providerId: string, messageId: string, read: ProviderDeliveryRead): Promise<{ inserted: number; contacts_updated: number; unattributed: number }> {
+    if (!this.atomicClient) throw new Error("Provider sync requires a transactional store");
+    return this.atomicClient.transaction(async (tx) => {
+      await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
+      const message = await tx.get<{ id: string; to_addrs: string[]; cc_addrs: string[]; status: string }>(`SELECT id, to_addrs, cc_addrs, status FROM messages WHERE tenant_id = $1 AND provider_id = $2 AND id = $3 AND direction = 'outbound' FOR UPDATE`, [this.tenantId, providerId, messageId]);
+      if (!message) throw new Error("Message is not owned by this tenant/provider");
+      let inserted = 0, contacts_updated = 0, unattributed = 0;
+      const recipients = new Set([...message.to_addrs, ...message.cc_addrs].map(canonicalAddress));
+      for (const observation of read.observations) {
+        const recipient = observation.recipient ? canonicalAddress(observation.recipient) : null;
+        if (recipient && !recipients.has(recipient)) throw new Error("Provider returned an unexpected recipient");
+        const eventId = `sync:${providerId}:${messageId}:${observation.type}:${recipient ?? "all"}:${observation.occurredAt ?? "snapshot"}`;
+        const eventType = read.evidence === "current_status" || ["sent", "failed"].includes(observation.type) ? "status_observed" : observation.type;
+        const counterType = observation.type === "bounced" || observation.type === "complained";
+        if (counterType && !recipient) unattributed++;
+        const prior = counterType && recipient ? await tx.get<{ id: string }>(`SELECT id FROM events WHERE tenant_id = $1 AND email_id = $2 AND (type = $3 OR (type = 'status_observed' AND metadata->>'observed_status' = $3)) AND recipient = $4 AND metadata->>'sync_contact_effect' = 'true' LIMIT 1`, [this.tenantId, messageId, observation.type, recipient]) : null;
+        const appliesCounter = counterType && recipient !== null && !prior;
+        const existing = read.evidence === "event_history" && eventType !== "status_observed" && observation.occurredAt
+          ? await tx.get<{ id: string }>(`SELECT id FROM events WHERE tenant_id = $1 AND email_id = $2 AND type = $3 AND recipient IS NOT DISTINCT FROM $4::text AND occurred_at = $5::timestamptz LIMIT 1 FOR UPDATE`, [this.tenantId, messageId, eventType, recipient, observation.occurredAt]) : null;
+        const row = existing ?? await tx.get<{ id: string }>(`INSERT INTO events (id,tenant_id,email_id,provider_id,provider_event_id,type,recipient,metadata,occurred_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::timestamptz) ON CONFLICT (tenant_id,provider_event_id) WHERE provider_event_id IS NOT NULL DO NOTHING RETURNING id`, [randomUUID(), this.tenantId, messageId, providerId, eventId, eventType, recipient, JSON.stringify({ source: "provider_sync", observed_status: observation.type, evidence: read.evidence, observed_at: new Date().toISOString(), event_time_known: !!observation.occurredAt, sync_contact_effect: appliesCounter }), observation.occurredAt ?? new Date().toISOString()]);
+        if (!row) continue;
+        if (!existing) inserted++;
+        else if (appliesCounter) await tx.execute(`UPDATE events SET metadata = metadata || '{"sync_contact_effect":true}'::jsonb WHERE tenant_id = $1 AND id = $2`, [this.tenantId, existing.id]);
+        if (["delivered", "bounced", "complained"].includes(observation.type)) {
+          const rank: Record<string, number> = { delivered: 1, bounced: 2, complained: 3 };
+          if ((rank[observation.type] ?? 0) > (rank[message.status] ?? 0)) {
+            await tx.execute(`UPDATE messages SET status = $3, updated_at = now() WHERE tenant_id = $1 AND id = $2`, [this.tenantId, messageId, observation.type]);
+            message.status = observation.type;
+          }
+        }
+        if (counterType && recipient) {
+          const counter = observation.type === "bounced" ? "bounce_count" : "complaint_count";
+          const suppress = observation.type === "complained" || observation.permanentBounce === true;
+          // Serialize different messages affecting the same canonical contact.
+          await tx.execute(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`${this.tenantId}:${recipient}`]);
+          let contact = await tx.get<{ id: string }>(`SELECT id FROM contacts WHERE tenant_id = $1 AND lower(email) = $2 ORDER BY id LIMIT 1 FOR UPDATE`, [this.tenantId, recipient]);
+          if (!contact && appliesCounter) contact = await tx.get<{ id: string }>(`INSERT INTO contacts (id,tenant_id,email) VALUES ($1,$2,$3) RETURNING id`, [randomUUID(), this.tenantId, recipient]);
+          if (contact && (appliesCounter || suppress)) {
+            const changed = await tx.get<{ id: string }>(`UPDATE contacts SET ${counter} = ${counter} + $4, suppressed = suppressed OR $3::boolean OR ($5::boolean AND bounce_count + $4 >= 3), updated_at = now() WHERE tenant_id = $1 AND id = $2 AND ($4 > 0 OR (NOT suppressed AND $3::boolean)) RETURNING id`, [this.tenantId, contact.id, suppress, appliesCounter ? 1 : 0, observation.type === "bounced"]);
+            if (changed) contacts_updated++;
+          }
+        }
+      }
+      return { inserted, contacts_updated, unattributed };
     });
   }
 

@@ -390,7 +390,7 @@ export interface EmailRow {
 }
 
 // Event
-export type EventType = "delivered" | "bounced" | "complained" | "opened" | "clicked" | "unsubscribed";
+export type EventType = "delivered" | "bounced" | "complained" | "opened" | "clicked" | "unsubscribed" | "status_observed";
 
 export interface EmailEvent {
   id: string;
