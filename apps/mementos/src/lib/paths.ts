@@ -9,10 +9,13 @@ import { join, resolve } from "node:path";
 import { homedir as pathsResolverHomedir } from "node:os";
 import { join as pathsResolverJoin } from "node:path";
 
-export type PathKind = "config" | "data" | "state" | "cache";
+// No "config" kind: mementos keeps its config.json under the DATA root, and the
+// resolver's config location (`~/.config/hasna`) is retired for credentials —
+// the credential file lives under `~/.hasna/mementos/config/credentials`
+// (`HASNA_HOME`), resolved by @hasna/contracts, never here.
+export type PathKind = "data" | "state" | "cache";
 
 const PATHS_RESOLVER_KIND_ENV: Record<PathKind, string> = {
-  config: "HASNA_CONFIG_HOME",
   data: "HASNA_DATA_HOME",
   state: "HASNA_STATE_HOME",
   cache: "HASNA_CACHE_HOME",
@@ -56,7 +59,6 @@ function pathsResolverBaseDir(kind: PathKind, options: PathsResolverOptions): st
   const platform = options.platform ?? process.platform;
   if (platform === "darwin") {
     switch (kind) {
-      case "config":
       case "data":
         return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
       case "cache":
@@ -66,8 +68,6 @@ function pathsResolverBaseDir(kind: PathKind, options: PathsResolverOptions): st
     }
   }
   switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
     case "data":
       return pathsResolverJoin(home, ".local", "share", "hasna");
     case "state":
