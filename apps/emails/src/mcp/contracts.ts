@@ -238,7 +238,8 @@ function normalizeResult(toolName: string, input: unknown, result: ToolResult): 
       try {
         const receipt = JSON.parse(text) as Record<string, unknown>;
         const job = receipt.job as Record<string, unknown> | undefined;
-        if (job && typeof job.id === "string" && typeof job.status === "string") {
+        const sesReceipt = toolName === "setup_ses_inbound" && receipt.ok === false && receipt.verified === false && typeof receipt.source_id === "string" && Array.isArray(receipt.attempted) && Array.isArray(receipt.changed);
+        if (sesReceipt || (job && typeof job.id === "string" && typeof job.status === "string")) {
           return { ...result, content: [{ type: "text", text: JSON.stringify(redactSecrets({ ...receipt,
             error: { code: "provisioning_incomplete", message: "Inspect the provisioning receipt before retrying.", retryable: false },
             cli_equivalent: cliEquivalent,

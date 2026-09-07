@@ -1,9 +1,21 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { REFUSAL_HELPERS, cliRefusalFor, scanCliRefusalSource } from "../test-support/cli-refusals.js";
-import { cliEquivalentForTool } from "./contracts.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { cliEquivalentForTool, installMcpToolContracts } from "./contracts.js";
 
 describe("MCP CLI equivalents", () => {
+  it("retains partial SES setup evidence through the installed MCP contract", async () => {
+    const server = new McpServer({name:"receipt-fixture",version:"1"});
+    installMcpToolContracts(server);
+    const receipt = {ok:false,verified:false,source_id:"source-1",domain:"example.test",bucket:"fixture",changed:["bucket_created"],attempted:["bucket_created","bucket_policy_updated"],changes_may_have_applied:true,worker_started:false,delivery_tested:false};
+    server.tool("setup_ses_inbound", "fixture", {}, async () => ({isError:true,content:[{type:"text" as const,text:JSON.stringify(receipt)}]}));
+    const handler = (server as unknown as {_registeredTools:Record<string,{handler(input:unknown):Promise<{isError?:boolean;content:Array<{text:string}>}>}>})._registeredTools.setup_ses_inbound!.handler;
+    const result = await handler({});
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject({...receipt,error:{code:"provisioning_incomplete",retryable:false}});
+  });
+
   it("includes provider pagination flags", () => {
     expect(cliEquivalentForTool("list_providers", { limit: 2, offset: 1 }))
       .toBe("emails provider list --limit 2 --offset 1 --json");
