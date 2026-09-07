@@ -95,7 +95,6 @@ describe("MCP self_hosted guards", () => {
     // silently-ignored one is an authorization decision that never happened.
     const cases: Array<[string, unknown]> = [
       ["auth_token", "esk_example"],
-      ["unsubscribe_url", "https://example.com/u/1"],
       ["headers", { "X-Thing": "1" }],
       ["tags", { campaign: "spring" }],
     ];
@@ -286,24 +285,17 @@ describe("MCP self_hosted guards", () => {
     expect(resultText(result)).toContain("POST /v1/domains/provision failed: 405");
   });
 
-  it("tells the truth about provisioning tools that no mode implements", async () => {
-    // The local provisioning orchestrator was unreachable dead code and is gone;
-    // the self-hosted server exposes no /v1 provisioning route. Claiming these
-    // "run on the self-hosted server" sent operators looking for a service that
-    // does not exist, so the error names the real, runnable alternative instead.
-    const cases: Array<[string, Record<string, unknown>, string]> = [
-      ["provision_status", {}, "emails domain list --json"],
-    ];
-
-    for (const [name, args, alternative] of cases) {
-      const result = await callTool(name, args);
-      expect(result.isError).toBe(true);
-      const text = resultText(result);
-      expect(text).toContain("is not implemented in this build");
-      expect(text).toContain(alternative);
-      expect(text).not.toContain("runs on the self-hosted server");
-      expect(text).not.toContain("not available in the self-hosted client");
-    }
+  it("reads shared provisioning status and preserves empty and missing-domain semantics", async () => {
+    const empty = await callTool("provision_status", {});
+    expect(empty.isError).not.toBe(true);
+    expect(JSON.parse(resultText(empty))).toMatchObject({ items: [] });
+    await stub.seed({ domains: [{ id: "00000000-0000-4000-8000-000000000071", domain: "example.test", provider_id: null, provisioning_status: "ready" }], addresses: [{ id: "00000000-0000-4000-8000-000000000072", domain_id: "00000000-0000-4000-8000-000000000071", email: "ops@example.test", provisioning_status: "pending" }] });
+    const result = await callTool("provision_status", { domain: "EXAMPLE.TEST", limit: 1 });
+    expect(result.isError, resultText(result)).not.toBe(true);
+    expect(JSON.parse(resultText(result)).cli_equivalent).toContain("emails provision status EXAMPLE.TEST --limit 1 --json");
+    expect(JSON.parse(resultText(result))).toMatchObject({ items: [{ domain: "example.test", provisioning: { provisioning_status: "ready" }, addresses: [{ email: "ops@example.test", provisioning: { provisioning_status: "pending" } }] }] });
+    expect((await callTool("provision_status", { domain: "missing.test" })).isError).toBe(true);
+    expect((await callTool("provision_status", { domain: " " })).isError).toBe(true);
   });
 
   it("refuses infrastructure-mutating provisioning tools instead of using client cloud credentials", async () => {

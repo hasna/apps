@@ -548,13 +548,23 @@ export function registerInfrastructureTools(server: McpServer): void {
       limit: z.number().int().positive().max(1000).optional().describe("Maximum domains to return"),
       offset: z.number().int().min(0).optional().describe("Number of domains to skip"),
     },
-    async () => {
-      // No provisioning orchestrator ships in ANY mode (see provision_domain).
-      // Fail loud with the truth (rule 6).
-      return {
-        content: [{ type: "text" as const, text: "Error: provision_status is not implemented in this build: there is no local provisioning orchestrator and the self-hosted server exposes no provisioning route. List what is registered with `emails domain list --json` and `emails address list --json`." }],
-        isError: true,
-      };
+    async ({ domain: reference, limit = 50, offset = 0 }) => {
+      try {
+        if (!Number.isInteger(limit) || limit < 1 || limit > 1000 || !Number.isInteger(offset) || offset < 0) throw new Error("Invalid provisioning pagination");
+        const { listDomains } = await import("../../db/domains.js");
+        const { listDomainProvisioningByIds, listAddressProvisioningByDomains } = await import("../../db/provisioning.js");
+        const normalized = reference?.trim().toLowerCase();
+        if (reference !== undefined && !normalized) throw new Error("Domain must not be blank");
+        const matching = listDomains().filter(domain => !normalized || domain.domain.toLowerCase() === normalized || domain.id.startsWith(normalized));
+        if (normalized && matching.length === 0) throw new Error(`Domain not found: ${reference}`);
+        if (normalized && matching.length > 1) throw new Error(`Ambiguous domain: ${reference}`);
+        const domains = matching.slice(offset, offset + limit);
+        const ids = domains.map(domain => domain.id);
+        const [states, addresses] = await Promise.all([listDomainProvisioningByIds(ids), listAddressProvisioningByDomains(ids)]);
+        return { content: [{ type: "text" as const, text: JSON.stringify(domains.map(domain => ({ id: domain.id, domain: domain.domain, provider_id: domain.provider_id, provisioning: states.get(domain.id), addresses: addresses.get(domain.id) ?? [] }))) }] };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${formatError(error)}` }], isError: true };
+      }
     },
   );
 

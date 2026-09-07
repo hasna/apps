@@ -154,6 +154,7 @@ export interface V1Stub {
   dump(): Promise<V1StubResources>;
   /** Select a deterministic send outcome for controlled-send regressions. */
   setSendBehavior(behavior: "normal" | "delayed_success" | "post_send_warning" | "warming_rejected"): Promise<void>;
+  sendRequests(): Promise<Array<Record<string, unknown>>>;
   /** Read the number of provider-send calls made since the last reset. */
   sendStats(): Promise<{ providerCalls: number }>;
   /**
@@ -337,6 +338,7 @@ let listRotateCalls = {};
 // Test-only send controls. They stay outside the dumped resource store so the
 // fixture cannot accidentally expose them as product data.
 let sendBehavior = "normal";
+let sendRequests: Array<Record<string, unknown>> = [];
 let providerSendCalls = 0;
 // Declared ORDER BY per generic resource, injected from the server's own registry
 // (SELF_HOSTED_RESOURCES + resourceListOrderBy) so the stub orders lists the way the
@@ -921,6 +923,7 @@ const server = Bun.serve({
       listRotateCalls = {};
       listQueries = {};
       sendBehavior = "normal";
+      sendRequests = [];
       providerSendCalls = 0;
       return json({ ok: true });
     }
@@ -936,6 +939,7 @@ const server = Bun.serve({
       sendBehavior = next;
       return json({ ok: true });
     }
+    if (req.method === "GET" && parts[0] === "v1" && parts[1] === "__send_requests") return json({ requests: sendRequests });
     if (req.method === "GET" && parts[0] === "v1" && parts[1] === "__send_stats") {
       return json({ provider_calls: providerSendCalls });
     }
@@ -1247,6 +1251,7 @@ const server = Bun.serve({
     }
     if (resource === "messages" && sub === "send" && req.method === "POST") {
       const body = await req.json().catch(function () { return {}; });
+      sendRequests.push(body);
       const key = typeof body.idempotency_key === "string" ? body.idempotency_key : "";
       const existing = rowsFor("messages").find(function (row) {
         return key && row.idempotency_key === key;
@@ -1715,6 +1720,7 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
       const body = (await res.json()) as { resources?: V1StubResources };
       return body.resources ?? {};
     },
+    async sendRequests() { const response = await fetch(`${baseUrl}/v1/__send_requests`); if (!response.ok) throw new Error("Cannot read fixture send requests"); return (await response.json() as { requests: Array<Record<string, unknown>> }).requests; },
     async setSendBehavior(behavior) {
       const res = await fetch(`${baseUrl}/v1/__send_behavior`, {
         method: "POST",

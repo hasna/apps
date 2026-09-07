@@ -88,7 +88,6 @@ describe("collapsed email-ops tool family", () => {
     // restatement of the old.
     const cases: Array<[string, unknown]> = [
       ["auth_token", "esk_this_key_does_not_exist"],
-      ["unsubscribe_url", "https://example.test/unsubscribe/1"],
       ["headers", { "X-Custom": "1" }],
       ["tags", { campaign: "spring" }],
     ];
@@ -116,6 +115,14 @@ describe("collapsed email-ops tool family", () => {
       // And it must be a REFUSAL, not a quiet success: nothing was sent.
       expect(await stub.list("messages"), `${option} must not send`).toHaveLength(0);
     }
+  });
+
+  it("carries unsubscribe_url to the authenticated send request", async () => {
+    const url = "https://example.test/unsubscribe/one";
+    const sent = await call("send_email", { from: "agent@example.test", to: "recipient@example.test", subject: "unsubscribe", text: "hi", unsubscribe_url: url });
+    expect(sent.isError, text(sent)).not.toBe(true);
+    expect(await stub.sendRequests()).toMatchObject([{ unsubscribe_url: url }]);
+    expect(await stub.list("messages")).toHaveLength(1);
   });
 
   it("still refuses a suppressed recipient, with no force escape", async () => {
