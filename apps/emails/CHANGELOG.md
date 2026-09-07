@@ -6,10 +6,21 @@
 
   The hosted Emails client no longer owns a second credential chain. The API URL
   and key now resolve through the shared `@hasna/contracts/client` resolver,
-  fresh on every request, from the same five tiers every hosted Hasna CLI uses:
-  `--api-key`/`--profile`, `HASNA_EMAILS_API_KEY_REF` pointers, the macOS
-  Keychain item for the Emails API key, the
-  `~/.hasna/emails/config/credentials` file, then `HASNA_EMAILS_API_KEY`.
+  fresh on every request, from the same tiers every hosted Hasna CLI uses: the
+  deliberate `HASNA_EMAILS_API_KEY_OVERRIDE` / `HASNA_PROFILE` selections (a
+  blank override or an absent profile REFUSES — it is never resolved around),
+  the macOS Keychain item for the Emails API key, the
+  `~/.hasna/emails/config/credentials` file (or `credentials-<profile>`), then
+  `HASNA_EMAILS_API_KEY`. The `emails` CLI has no `--api-key` / `--profile`
+  resolver arguments (its only `--profile` is the AWS profile on inbox and
+  provisioning commands, its only `--api-key` the Resend key on `provider add`).
+  A `HASNA_EMAILS_API_KEY_REF` secrets-vault pointer is recognised as a
+  deliberate selection but refused with a message naming it: this client
+  resolves its credential synchronously and cannot complete a vault pointer per
+  request. The environment snapshot handed to the resolver carries every
+  deliberate tier (the 1.5.0 release review found the first cut dropped them,
+  so a blank override, an absent profile or a bogus pointer silently served the
+  Keychain identity; fixed before publication).
 
   **Canonical env names** are now `HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`.
   The legacy `EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` spellings
@@ -33,6 +44,14 @@
 - db20efd: Render formatted HTML and Markdown mail with collapsible code, quoted replies, and thread messages. Add a mailbox-name switcher with an All mailboxes option, improve inbox search and message previews, and fix reader scrolling, picker navigation, and time formatting.
 
   Show contextual empty and error states, hide unavailable actions, and replace nested settings menus with a responsive preferences panel and working session controls.
+
+- Shipped since 1.4.10 and omitted from the first cut of this section (release review, hasna/apps#1720):
+  - Removed the static web dashboard and its SPA fallback from `emails-serve`; the server serves the authenticated `/v1` API only (hasna/apps#1686, closes #1619).
+  - Storage-free SMTP receiver: the receiver-only `@hasna/emails/inbound` surface hands accepted mail to a `persist()` callback instead of owning a store (hasna/apps#1509).
+  - Ingest worker: progress-based liveness and a bounded receive poll, so a stalled drain is reported instead of looking healthy (hasna/apps#1693).
+  - One canonical API client configuration boundary for the hosted HTTP client (hasna/apps#1506).
+  - npm artifacts are verified without local install state (hasna/apps#1505).
+  - Container image: Alpine OpenSSL apk pin bumped to the served 3.5.8-r0 (hasna/apps#1450); `container_architecture` defaults to X86_64 to match production Fargate (hasna/apps#1327).
 
 ## 1.4.10
 

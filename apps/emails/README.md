@@ -66,11 +66,17 @@ SQLite. Rotation, locked-keyring recovery, and backup rebind procedures are in
 | `HASNA_HOME` / `HASNA_CONFIG_HOME` | Relocate `~/.hasna/emails/config/credentials` (never XDG). |
 | `HASNA_STATION` | Keychain account (falls back to `hostname -s`, then `$USER`). |
 
-The resolver tiers, in order: an explicit `--api-key` / `--profile` argument;
-`HASNA_EMAILS_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_EMAILS_API_KEY_REF`
-pointers; the macOS Keychain items for this app (`api-key`, and `api-url` for the
+The resolver tiers, in order: the deliberate `HASNA_EMAILS_API_KEY_OVERRIDE`
+(a literal key) or `HASNA_PROFILE` (reads `~/.hasna/emails/config/credentials-<profile>`)
+selections — a blank override or an absent profile REFUSES, it is never resolved
+around; the macOS Keychain items for this app (`api-key`, and `api-url` for the
 authority); the `~/.hasna/emails/config/credentials` file (0600); then
-`HASNA_EMAILS_API_KEY`. The authority follows `HASNA_EMAILS_API_URL` → Keychain
+`HASNA_EMAILS_API_KEY`. A `HASNA_EMAILS_API_KEY_REF` secrets-vault pointer is
+recognised as a deliberate selection but refused by name: this client resolves
+its credential synchronously and cannot complete a vault pointer per request.
+The `emails` CLI has no `--api-key` / `--profile` resolver flags (`--profile`
+on inbox/provisioning commands is the AWS profile; `--api-key` on `provider add`
+is the Resend key). The authority follows `HASNA_EMAILS_API_URL` → Keychain
 `api-url` → credentials file → the shared default gateway once a credential
 resolves. Nothing configured fails closed; a URL without a credential refuses
 rather than falling back to local data.
@@ -156,10 +162,13 @@ Authentication records are required only for the capability you enable:
   aggregation, but it should be present before production sending and monitored
   before moving from `p=none` to stricter policies.
 
-Self-hosted clients must select `self_hosted` using the
-[client mode settings](#deployment), set `EMAILS_SELF_HOSTED_URL`, and one bearer credential:
-`EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`, or
-`EMAILS_SELF_HOSTED_API_KEY` (in that precedence order). The service uses
+Self-hosted clients configure the authority and a bearer credential through the
+shared resolver described in [Deployment](#deployment): `HASNA_EMAILS_API_URL`
+(or the Keychain `api-url` item / credentials file) plus one of
+`EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`, or the resolved API key
+(`HASNA_EMAILS_API_KEY`, in that precedence order; the `EMAILS_SELF_HOSTED_URL` /
+`EMAILS_SELF_HOSTED_API_KEY` spellings remain one-release aliases). There is no
+mode switch to select. The service uses
 `EMAILS_DATABASE_URL`, `EMAILS_API_SIGNING_KEY`,
 `EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS`, and `EMAILS_AUTH_FROM`; Postgres is authoritative
 and there is no hybrid SQLite synchronization mode.
