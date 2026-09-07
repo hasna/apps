@@ -1,4 +1,7 @@
 import { beforeEach as configureIntegrationFixture } from "bun:test";
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 configureIntegrationFixture(() => {
   process.env.HASNA_ATTACHMENTS_API_URL = "https://attachments.example.test";
   process.env.HASNA_ATTACHMENTS_API_KEY = "test-attachment-key";
@@ -8,6 +11,10 @@ configureIntegrationFixture(() => {
   process.env.HASNA_SESSIONS_API_URL = "https://sessions.example.test";
   process.env.HASNA_SESSIONS_API_KEY = "test-session-key";
 });
+// The station's own ~/.hasna/{attachments,todos}/config/credentials files
+// select the real fleet authorities; point HASNA_HOME at a scratch root so
+// the ambient disk tier cannot disagree with the fixture authorities.
+process.env.HASNA_HOME = mkdtempSync(join(tmpdir(), "attachments-journal-home-"));
 import { describe, it, expect, mock, spyOn } from "bun:test";
 import {
   fetchTaskMeta,

@@ -5,9 +5,13 @@
  * Retired with this rewrite — the per-app env chain is gone:
  *
  *   - `*_MODE` / `*_STORAGE_MODE` switches (no transport is ever selected by a
- *     mode word; the resolver decides by what RESOLVES, and hosted mode fails
- *     loud when nothing does),
- *   - client database URLs / `DB_PATH` (a client never opens a database),
+ *     mode word; the store seam in `local-opt-in.ts` decides by the explicit
+ *     opt-in OR by what RESOLVES, and hosted mode fails loud when nothing
+ *     does),
+ *   - client database URLs (a client never opens a raw server DSN — the only
+ *     database a client ever opens is the on-box SQLite file selected by
+ *     `HASNA_ATTACHMENTS_DB_PATH` / `ATTACHMENTS_DB_PATH` or the local flag,
+ *     decided before the resolver is consulted),
  *   - `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`,
  *     `$XDG_CONFIG_HOME`, and any `~/.attachments/config.json` key store
  *     (nothing reads them; an operator who still writes one gets the resolver's
@@ -34,8 +38,11 @@
  * unprefixed `ATTACHMENTS_*` spellings survive only as the resolver's silent
  * alias fallback for one release.
  *
- * FAIL LOUD: hosted mode with no credential throws — there is no SQLite
- * fallback, no local-fallback event, and no local default.
+ * FAIL LOUD: hosted mode with no credential throws — the resolver has no local
+ * return branch. The on-box local store is a SEPARATE transport, selected by
+ * the store seam in `local-opt-in.ts` BEFORE this resolver is ever consulted
+ * (an explicit DB path or the local opt-in flag when no authority is
+ * configured); it is never a fallback from a failed hosted resolution.
  */
 import {
   ClientTransportConfigurationError,
@@ -136,10 +143,12 @@ export function attachmentsClientEnvKeys(): AttachmentsClientEnvKeys {
 }
 
 /**
- * Resolve the authoritative transport fresh: one pass down the credential
- * chain, one pass over the authority ladder, both in `@hasna/contracts`.
- * Throws on missing, blank, conflicting or invalid configuration — there is
- * no local return branch.
+ * Resolve the authoritative hosted transport fresh: one pass down the
+ * credential chain, one pass over the authority ladder, both in
+ * `@hasna/contracts`. Throws on missing, blank, conflicting or invalid
+ * configuration — the local transport is decided by the store seam
+ * (`local-opt-in.ts`) BEFORE this resolver is consulted, never by this module
+ * and never as a fallback.
  */
 export function resolveAttachmentsTransport(
   env: Env = process.env,

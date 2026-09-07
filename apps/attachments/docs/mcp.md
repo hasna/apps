@@ -21,13 +21,17 @@ Use --help for transport options and attachments mcp for client installation.
 
 Tool profiles use ATTACHMENTS_PROFILE. Tool discovery exposes the schemas for
 upload/download/list/delete, links, presigned uploads, reports and supported
-Todos/Sessions workflows. All attachment mutations go through the remote Store.
-Todos and Sessions tools additionally need their own explicit authenticated HTTPS
-configuration; no localhost defaults or unrelated authority overrides are accepted.
+Todos/Sessions workflows. All attachment mutations go through the resolved
+Store (hosted /v1 or the on-box local store under the explicit opt-in, decided
+by the same seam as the CLI). Todos and Sessions tools additionally need their
+own explicit authenticated HTTPS configuration; no localhost defaults or
+unrelated authority overrides are accepted.
 
-configure_s3 is retained only as an explicit retired-operation error; it never
-persists credentials. Agent registry tools describe process-local coordination,
-not a local attachment store. Preferences and attribution are non-authoritative.
+configure_s3 persists the ON-BOX S3 details (bucket/region, optional static
+keys or endpoint) used by local-transport presigned uploads; in hosted mode
+the service mints presigned URLs and the on-box configuration is never sent
+anywhere. Agent registry tools describe process-local coordination, not a
+local attachment store. Preferences and attribution are non-authoritative.
 
 The service, not the MCP process, owns PostgreSQL and S3 credentials. Public share
 links keep their existing access controls. API redirects are rejected with no

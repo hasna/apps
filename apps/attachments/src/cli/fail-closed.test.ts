@@ -149,7 +149,7 @@ describe("fleet CLI fail-closed without API env", () => {
       expect(result.stderr).toContain("BLOCKED");
       expect(result.stderr).toMatch(/no API key could be resolved/i);
       expect(result.stderr).toContain("HASNA_ATTACHMENTS_API_URL and HASNA_ATTACHMENTS_API_KEY");
-      expect(result.stderr).toContain("No local fallback exists");
+      expect(result.stderr).toContain("HASNA_ATTACHMENTS_LOCAL");
       expect(existsSync(join(home, ".hasna", "attachments"))).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -223,6 +223,73 @@ describe("attachments-mcp fail-closed at startup without a credential", () => {
       const version = await runEntry(MCP_ENTRY, ["--version"], home);
       expect(version.code).toBe(0);
       expect(version.stdout).toMatch(/\d+\.\d+\.\d+/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("fleet CLI local opt-in (never a fallback — always deliberate)", () => {
+  test("HASNA_ATTACHMENTS_LOCAL=1 with no authority serves the on-box store and announces it", async () => {
+    const home = scratchHome();
+    try {
+      const result = await runEntry(CLI_ENTRY, ["list"], home, { HASNA_ATTACHMENTS_LOCAL: "1" });
+      expect(result.timedOut).toBe(false);
+      expect(result.code).toBe(0);
+      // The one mandatory stderr line: this run is LOCAL, never mistaken for hosted.
+      expect(result.stderr).toContain("LOCAL mode");
+      expect(result.stderr).toContain("attachments: LOCAL mode");
+      // The on-box database opened under the scratch data root.
+      expect(existsSync(join(home, ".local", "share", "hasna", "attachments", "db.sqlite"))).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("an explicit DB path selects the on-box store even in a scrubbed env", async () => {
+    const home = scratchHome();
+    const dbPath = join(home, "custom", "attachments.db");
+    try {
+      const result = await runEntry(CLI_ENTRY, ["list"], home, { HASNA_ATTACHMENTS_DB_PATH: dbPath });
+      expect(result.timedOut).toBe(false);
+      expect(result.code).toBe(0);
+      expect(result.stderr).toContain("LOCAL mode");
+      expect(existsSync(dbPath)).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a configured authority outranks a stale local flag — the run stays hosted", async () => {
+    const home = scratchHome();
+    try {
+      const result = await runEntry(CLI_ENTRY, ["list"], home, {
+        HASNA_ATTACHMENTS_LOCAL: "1",
+        HASNA_ATTACHMENTS_API_KEY: "fixture-key",
+      });
+      // A key alone is a complete hosted configuration (default gateway); the
+      // stale local flag must NOT win. The list then fails at the network,
+      // never against an on-box database, and never announces local.
+      expect(result.timedOut).toBe(false);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).not.toContain("LOCAL mode");
+      expect(existsSync(join(home, ".local", "share", "hasna", "attachments", "db.sqlite"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("attachments-mcp starts under the local opt-in with no fleet credential", async () => {
+    const home = scratchHome();
+    try {
+      // stdin is closed immediately: a server that DID start exits 0 on stdio
+      // EOF. The hosted-only startup preflight must be bypassed for the local
+      // opt-in, which is answered by the store seam before the resolver and
+      // needs no credential.
+      const result = await runEntry(MCP_ENTRY, ["--stdio"], home, { HASNA_ATTACHMENTS_LOCAL: "1" });
+      expect(result.timedOut).toBe(false);
+      expect(result.code).toBe(0);
+      expect(result.stderr).not.toMatch(/no API key could be resolved/i);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

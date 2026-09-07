@@ -4,11 +4,18 @@ Authenticated HTTPS attachment clients and a PostgreSQL-backed service.
 
 ## Client usage
 
-Every hosted surface — the `attachments` CLI, `attachments-mcp`, the package
-root and `@hasna/attachments/sdk` — resolves its credential and service
-authority through the ONE shared resolver in `@hasna/contracts` (1.0.2),
-fresh on every call. There is no per-app chain, no local database and no
-fallback: hosted mode with no resolvable credential fails loudly.
+Every command, MCP tool and SDK method resolves its store through the ONE
+store seam (`resolveStore()` in the package root): the authenticated hosted
+transport when an authority + credential resolve (env, Keychain or
+`~/.hasna/attachments/config/credentials` — the shared `@hasna/contracts`
+chain, fresh on every call), or the on-box local transport under the
+deliberate opt-in. There is no per-app chain, no transport mode word and no
+fallback: hosted mode with no resolvable credential fails loudly, and the
+on-box store is reachable ONLY through its explicit opt-in
+(`HASNA_ATTACHMENTS_LOCAL=1` / `ATTACHMENTS_LOCAL=1` with no authority
+configured, or the precedence-1 explicit `HASNA_ATTACHMENTS_DB_PATH` /
+`ATTACHMENTS_DB_PATH` file), never as a fallback from a failed hosted
+resolution.
 
 ### Resolver chain (per call)
 
@@ -47,9 +54,13 @@ client — resolved per request, so a key rotation heals a long-lived process
 without a rebuild. An explicit `baseUrl` with no `apiKey` never attaches the
 ambient fleet key. All authenticated requests refuse redirects.
 
-attachments-mcp exposes attachment operations over MCP. Client S3
-configuration, LocalStore and the old unauthenticated /api SDK are retired.
-S3 credentials and PostgreSQL DSNs belong only on the service.
+attachments-mcp exposes attachment operations over MCP. The on-box
+LocalStore transport is first-class again (explicit opt-in only — see
+[configuration](docs/configuration.md)), and the MCP `configure_s3` tool
+persists the on-box S3 details used by local-transport presigned uploads. The
+old unauthenticated /api SDK is retired. S3 credentials and PostgreSQL DSNs
+for the SERVICE belong only on the service; a client only ever holds on-box
+object-storage configuration for the local transport.
 
 ## Service
 

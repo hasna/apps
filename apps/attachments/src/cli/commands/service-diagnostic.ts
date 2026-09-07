@@ -2,11 +2,19 @@ import { resolveStore } from "../../core/store";
 import { CONFIG_PATH } from "../../core/config";
 import { attachmentsClientEnvKeys, resolveAttachmentsTransport, type Env } from "../../core/client-config";
 import { ClientTransportConfigurationError, CredentialResolutionError } from "@hasna/contracts/client";
+import {
+  ATTACHMENTS_LOCAL_OPT_IN_ENV_KEYS,
+  ATTACHMENTS_DB_PATH_ENV_KEYS,
+  selectsAttachmentsLocalStore,
+} from "../../core/local-opt-in";
+import { resolveAttachmentsDbPathValue } from "../../core/paths";
 
 /**
- * Diagnostics must prove authenticated access, never imply a local dataset
- * exists. Fail closed: without a resolvable credential the blocked report
- * names the required configuration, and no local fallback is ever offered.
+ * Diagnostics prove that the store seam answered (hosted or local), never
+ * imply a dataset exists. Fail closed: hosted with no resolvable credential
+ * reports BLOCKED naming the required configuration; local is only reported
+ * when the deliberate opt-in selected it — there is no fallback and no
+ * transport is ever guessed.
  *
  * The report never reads a credential value and never reads the API env pair
  * past the shared seam — the resolver decides, and only its SOURCE names are
@@ -37,6 +45,34 @@ export function writeDiagnosticReport(result: { ok: boolean; lines: string[] }):
 export async function serviceDiagnostic(
   env: Env = process.env,
 ): Promise<{ ok: boolean; lines: string[] }> {
+  if (selectsAttachmentsLocalStore(env)) {
+    try {
+      const store = resolveStore(env);
+      try {
+        const rows = await store.list({ limit: 1 });
+        return {
+          ok: true,
+          lines: [
+            "Transport: local (on-box SQLite store)",
+            "Database: " + resolveAttachmentsDbPathValue(),
+            "Health: open and usable",
+            "Sample records: " + rows.length,
+            "Preferences: " + CONFIG_PATH,
+          ],
+        };
+      } finally {
+        store.close();
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        lines: [
+          "Health: BLOCKED",
+          `Local store error: ${error instanceof Error ? error.message : String(error)}`,
+        ],
+      };
+    }
+  }
   try {
     const resolved = resolveAttachmentsTransport(env);
     const store = resolveStore(env);
@@ -72,7 +108,8 @@ export async function serviceDiagnostic(
           `Fleet API configuration: set ${apiUrlKeys[0]} and ${apiKeyKeys[0]} (aliases ` +
             `${apiUrlKeys[1]} / ${apiKeyKeys[1]}); the shared chain also checks the Keychain item ` +
             `hasna.credentials.attachments.api-key and ~/.hasna/attachments/config/credentials. ` +
-            "No local fallback exists; attachments is remote-only.",
+            `For the on-box store instead, use the deliberate local opt-in ` +
+            `${ATTACHMENTS_DB_PATH_ENV_KEYS[0]} (explicit file) or ${ATTACHMENTS_LOCAL_OPT_IN_ENV_KEYS[0]}=1 with no authority configured.`,
         ],
       };
     }

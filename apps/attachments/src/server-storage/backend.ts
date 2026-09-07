@@ -1,8 +1,9 @@
-/** Server-only PostgreSQL configuration; never used by a client. */
+/**
+ * Server-only PostgreSQL configuration; the service ignores client-side
+ * `*_MODE` / `*_STORAGE_MODE` variables (they are inert since the adoption
+ * stripped the ratchet that used to turn them into errors).
+ */
 export function resolveServerDatabase(env: NodeJS.ProcessEnv): string {
-  for (const name of ["HASNA_ATTACHMENTS_STORAGE_MODE", "ATTACHMENTS_STORAGE_MODE", "HASNA_ATTACHMENTS_MODE"]) {
-    if (env[name] !== undefined) throw new Error(`${name} is retired; the service requires PostgreSQL.`);
-  }
   const values = [env.HASNA_ATTACHMENTS_DATABASE_URL, env.ATTACHMENTS_DATABASE_URL].filter((v): v is string => v !== undefined);
   if (!values.length || values.some(v => !v.trim() || v !== v.trim() || /[\x00-\x1f\x7f]/.test(v)) || new Set(values).size !== 1) {
     throw new Error("Missing, blank, or conflicting server PostgreSQL configuration.");

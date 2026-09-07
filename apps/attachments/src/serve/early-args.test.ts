@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 /**
  * Regression tests for the binds-before-help class (BUG row 970d7c6f).
  *
- * attachments-serve --help and --version answered with rc=1 and
+ * attachments-serve --help and --version used to answer with rc=1 and
  *
  *   [attachments-serve] fatal: createCloudPoolFromEnv requires attachments
  *   storage mode 'cloud', got 'local'. Set HASNA_ATTACHMENTS_STORAGE_MODE=cloud.
@@ -14,8 +14,10 @@ import { describe, expect, test } from "bun:test";
  *
  * The probes are two-sided: --help/--version must answer rc=0 WITHOUT pool
  * creation (positive), and plain serve must STILL create the pool on the real
- * path — under a deliberately broken (local-mode) environment that means the
- * same createCloudPoolFromEnv fatal, never a silent skip (negative).
+ * path — under a deliberately broken environment (a retired `*_MODE` word set,
+ * which is INERT since the adoption stripped the ratchet, plus no
+ * PostgreSQL DSN) that means the PostgreSQL-configuration fatal, never a
+ * silent skip (negative).
  */
 
 const SERVE_ENTRY = new URL("./index.ts", import.meta.url).pathname;
@@ -88,13 +90,19 @@ describe("attachments-serve early arguments (binds-before-help class, BUG 970d7c
     async () => {
       // The real serve path must be unchanged by the early-args fix: with no
       // --help/--version, the entry still creates the pool from env, which in
-      // a deliberately local-mode environment fails with the pool fatal. A
-      // fix that swallowed or skipped pool creation would regress this side.
+      // this deliberately broken environment (no PostgreSQL DSN; the retired
+      // `HASNA_ATTACHMENTS_STORAGE_MODE` word is present but inert) fails with
+      // the PostgreSQL-configuration fatal. A fix that swallowed or skipped
+      // pool creation would regress this side.
       const result = await runServe();
       expect(result.timedOut).toBe(false);
       expect(result.code).toBe(1);
       expect(result.stderr).toContain("[attachments-serve] fatal:");
       expect(result.stderr).toContain("startup failed");
+      // The failure is the missing/blank server PostgreSQL configuration, NOT
+      // the retired mode word (which is inert and selects nothing).
+      expect(result.stderr).toContain("PostgreSQL");
+      expect(result.stderr).not.toContain("STORAGE_MODE");
     },
     15_000,
   );

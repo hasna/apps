@@ -15,6 +15,22 @@ test("show reports preferences without creating state or leaking historical S3 c
 });
 test("set changes only supported preferences", async () => { await run(["set", "--expiry", "1h", "--link-type", "server"]); expect(getConfig().defaults).toEqual({ expiry: "1h", linkType: "server" }); });
 for (const args of [["set", "--expiry", "nonsense"], ["set", "--link-type", "local"], ["set", "--storage-backend", "local"], ["set", "--secret-key", "fixture"]]) test("rejects unsupported or invalid config " + args[1], async () => { await expect(run(args)).rejects.toThrow(); expect(existsSync(join(dir, "config.json"))).toBe(false); });
-test("config test requires explicit credentials", async () => {
- const saved = { ...process.env }; try { for (const k of Object.keys(process.env)) if (k.includes("ATTACHMENTS")) delete process.env[k]; await expect(run(["test"])).rejects.toThrow(); } finally { process.env = saved; }
+test("config test requires explicit credentials or the local opt-in", async () => {
+  // No authority env, no local opt-in, and a scratch HASNA_HOME so the
+  // station's own ~/.hasna credential file cannot resolve for the fixture:
+  // `config test` must refuse rather than silently picking a dataset.
+  const saved = { ...process.env };
+  const scratchHome = mkdtempSync(join(tmpdir(), "attachments-config-cfgtest-"));
+  try {
+    for (const k of Object.keys(process.env)) if (k.includes("ATTACHMENTS")) delete process.env[k];
+    process.env.HASNA_HOME = scratchHome;
+    await expect(run(["test"])).rejects.toThrow();
+    // The deliberate local opt-in is the other way this command can answer.
+    process.env.HASNA_ATTACHMENTS_LOCAL = "1";
+    process.env.HASNA_ATTACHMENTS_DB_PATH = join(scratchHome, "db.sqlite");
+    expect(await run(["test"])).toContain("local");
+  } finally {
+    process.env = saved;
+    rmSync(scratchHome, { recursive: true, force: true });
+  }
 });

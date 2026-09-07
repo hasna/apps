@@ -3,7 +3,8 @@ import { Command } from "commander";
 import * as configModule from "../../core/config";
 import * as childProcess from "child_process";
 import { tmpdir } from "os";
-import { unlinkSync, writeFileSync } from "fs";
+import { join } from "path";
+import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from "fs";
 
 // ---------------------------------------------------------------------------
 // Mock core/upload and core/config before importing the command
@@ -564,9 +565,15 @@ describe("upload command", () => {
     const savedUrl = process.env.HASNA_ATTACHMENTS_API_URL;
     const savedKey = process.env.HASNA_ATTACHMENTS_API_KEY;
     const savedMode = process.env.HASNA_ATTACHMENTS_STORAGE_MODE;
+    const savedHome = process.env.HASNA_HOME;
     process.env.HASNA_ATTACHMENTS_API_URL = "https://attachments.hasna.xyz";
     process.env.HASNA_ATTACHMENTS_API_KEY = "hasna_" + "attachments_testkey_" + "0000";
     delete process.env.HASNA_ATTACHMENTS_STORAGE_MODE;
+    // The station's own ~/.hasna credential file selects the fleet authority;
+    // point HASNA_HOME at a scratch root so the ambient disk tier cannot
+    // disagree with the fixture authority under test.
+    const scratchHome = mkdtempSync(join(tmpdir(), "attachments-uploadhome-"));
+    process.env.HASNA_HOME = scratchHome;
     const tmp = `${tmpdir()}/localonly-encrypt-${process.pid}.png`;
     writeFileSync(tmp, "fake-png-bytes");
     try {
@@ -586,6 +593,8 @@ describe("upload command", () => {
       if (savedUrl === undefined) delete process.env.HASNA_ATTACHMENTS_API_URL; else process.env.HASNA_ATTACHMENTS_API_URL = savedUrl;
       if (savedKey === undefined) delete process.env.HASNA_ATTACHMENTS_API_KEY; else process.env.HASNA_ATTACHMENTS_API_KEY = savedKey;
       if (savedMode === undefined) delete process.env.HASNA_ATTACHMENTS_STORAGE_MODE; else process.env.HASNA_ATTACHMENTS_STORAGE_MODE = savedMode;
+      if (savedHome === undefined) delete process.env.HASNA_HOME; else process.env.HASNA_HOME = savedHome;
+      rmSync(scratchHome, { recursive: true, force: true });
     }
   });
 });

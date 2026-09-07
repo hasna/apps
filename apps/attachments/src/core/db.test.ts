@@ -2,7 +2,7 @@ import { describe, it, expect, mock, beforeAll, beforeEach, afterEach } from "bu
 import { Database as SqliteDatabase } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join } from "path";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import type { Attachment } from "./db";
 
 // AttachmentsDB is dynamically imported after mock.restore() so we always get the real class,
@@ -252,12 +252,32 @@ describe("AttachmentsDB", () => {
   });
 });
 
-describe("AttachmentsDB requires explicit test/server fixture path", () => {
-  it("never opens an implicit local database", () => { expect(() => new DB()).toThrow("retired"); });
-  it("does not accept the retired DB_PATH as implicit authority", () => {
+describe("AttachmentsDB on-box path", () => {
+  it("opens the default on-box database without an explicit path", () => {
+    const previous = process.env.HASNA_ATTACHMENTS_DB_PATH;
+    const dir = mkdtempSync(join(tmpdir(), "attachments-db-default-"));
+    try {
+      process.env.HASNA_ATTACHMENTS_DB_PATH = join(dir, "db.sqlite");
+      const onBox = new DB();
+      onBox.insert(makeAttachment({ id: "att_default_path" }));
+      expect(onBox.findById("att_default_path")).not.toBeNull();
+      onBox.close();
+      expect(existsSync(join(dir, "db.sqlite"))).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.HASNA_ATTACHMENTS_DB_PATH; else process.env.HASNA_ATTACHMENTS_DB_PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("honors the explicit DB_PATH env as the on-box authority", () => {
     const previous = process.env.HASNA_ATTACHMENTS_DB_PATH;
     process.env.HASNA_ATTACHMENTS_DB_PATH = ":memory:";
-    try { expect(() => new DB()).toThrow("retired"); }
-    finally { if (previous === undefined) delete process.env.HASNA_ATTACHMENTS_DB_PATH; else process.env.HASNA_ATTACHMENTS_DB_PATH = previous; }
+    try {
+      const memory = new DB();
+      memory.insert(makeAttachment({ id: "att_memory" }));
+      expect(memory.findById("att_memory")).not.toBeNull();
+      memory.close();
+    } finally {
+      if (previous === undefined) delete process.env.HASNA_ATTACHMENTS_DB_PATH; else process.env.HASNA_ATTACHMENTS_DB_PATH = previous;
+    }
   });
 });

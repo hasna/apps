@@ -47,8 +47,19 @@ describe("ApiStore — custom base URL upload option on the hosted path", () => 
     expect(seen).toMatchObject({ baseUrl: INTERNAL_BASE });
   });
 });describe("Canonical Store boundary", () => {
-  test("local overrides are refused instead of generating on-box links", () => {
-    expect(() => resolveStore({}, { forceLocal: true })).toThrow("retired");
+  test("forceLocal selects the on-box store, never an API refusal", () => {
+    const previous = process.env.HASNA_ATTACHMENTS_DB_PATH;
+    const tmp = mkdtempSync(join(tmpdir(), "attachments-forcelocal-"));
+    try {
+      process.env.HASNA_ATTACHMENTS_DB_PATH = join(tmp, "db.sqlite");
+      const store = resolveStore({}, { forceLocal: true });
+      expect(store.transport).toBe("local");
+      expect(store.baseUrl).toBeNull();
+      store.close();
+    } finally {
+      if (previous === undefined) delete process.env.HASNA_ATTACHMENTS_DB_PATH; else process.env.HASNA_ATTACHMENTS_DB_PATH = previous;
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
   test("custom base URL regeneration is forwarded to the service", async () => {
     let seen: unknown;

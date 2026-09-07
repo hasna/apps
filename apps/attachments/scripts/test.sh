@@ -8,14 +8,23 @@ set -e
 # Keep unit tests hermetic even when the operator's shell is configured to target
 # the production cloud API.
 #
-# ATTACHMENTS_CLIENT_MODE is read by nothing in this codebase — it never made the
-# suite hermetic. The client flip actually looks at HASNA_ATTACHMENTS_STORAGE_MODE
-# / _MODE and at the API URL + key pair (see core/cloud-v1.ts:resolveStorageClient),
-# so with those exported the CLI/MCP tests silently ran against the real service
-# and 8 test files failed for environmental reasons on a clean checkout.
+# The retired `*_MODE` / `*_STORAGE_MODE` words are INERT and select nothing
+# (the adoption stripped the ratchet) — they are unset here only so no fixture
+# can depend on a stale fragment from the host environment. The hosted flip is
+# driven by the API URL + key pair via the ONE @hasna/contracts resolver; the
+# on-box store is reachable ONLY through the deliberate local opt-in
+# (HASNA_ATTACHMENTS_DB_PATH / ATTACHMENTS_DB_PATH, or HASNA_ATTACHMENTS_LOCAL=1
+# / ATTACHMENTS_LOCAL=1 with no authority configured), which is unset too so
+# the suite never silently reads or writes an on-box database.
 unset HASNA_ATTACHMENTS_STORAGE_MODE
+unset ATTACHMENTS_STORAGE_MODE
 unset ATTACHMENTS_CLIENT_MODE
 unset HASNA_ATTACHMENTS_MODE
+unset ATTACHMENTS_MODE
+unset HASNA_ATTACHMENTS_LOCAL
+unset ATTACHMENTS_LOCAL
+unset HASNA_ATTACHMENTS_DB_PATH
+unset ATTACHMENTS_DB_PATH
 unset HASNA_ATTACHMENTS_API_URL
 unset HASNA_ATTACHMENTS_API_KEY
 unset ATTACHMENTS_API_URL

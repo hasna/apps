@@ -32,12 +32,35 @@ strings or fragments. Keys must not contain whitespace or control characters.
 Credentials are never included in diagnostics and never writable to config
 files.
 
-The CLI, MCP and root SDK use /v1. No network, auth or configuration failure
-selects local storage. Requests reject redirects and are not retried with
-their bodies. MODE/STORAGE_MODE switches, client database URLs, DB_PATH and
---client-mode are retired and read nowhere. Nothing reads `~/.hasna/fleet-env`,
-`~/.hasna/cloud`, `~/.config/hasna`, `$XDG_CONFIG_HOME` or any
-`~/.attachments/config.json` key store.
+The CLI, MCP and root SDK use /v1 in hosted mode. No network, auth or
+configuration failure selects local storage: the on-box store is reachable ONLY
+through the deliberate local opt-in, never as a fallback. The retired
+`*_MODE` / `*_STORAGE_MODE` words are inert (nothing reads them),
+`--client-mode` always fails, and a client never opens a raw server DSN
+(`HASNA_ATTACHMENTS_DATABASE_URL` stays server-only). Nothing reads
+`~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`, `$XDG_CONFIG_HOME`
+or any `~/.attachments/config.json` key store.
+
+### Local transport (on-box store)
+
+Every command works in the local transport too, selected by the SAME store
+seam the hosted transport uses (`resolveStore`) — decided BEFORE the resolver,
+so a local run never reads the Keychain or a credential file:
+
+| Env variable | Meaning |
+|---|---|
+| `HASNA_ATTACHMENTS_DB_PATH` / `ATTACHMENTS_DB_PATH` | Explicit on-box SQLite file — precedence 1: selects local even with a full API configuration. |
+| `HASNA_ATTACHMENTS_LOCAL=1` / `ATTACHMENTS_LOCAL=1` | Local opt-in flag — selects local ONLY when the environment configures no authority or credential. |
+
+A local run prints one mandatory stderr line —
+`attachments: LOCAL mode — serving the on-box SQLite store (...), not the hosted fleet.` —
+so it can never be mistaken for a hosted one. The default database lives under
+the @hasna/paths data root (`HASNA_DATA_HOME` or `~/.local/share/hasna/attachments/db.sqlite`
+on Linux); object bytes default to `~/.hasna/attachments/objects` and can be
+re-pointed through the on-box `config.json` (`storage.localDir`), with an S3
+backend supported by the same config (see `attachments config set` and the MCP
+`configure_s3` tool). Presigned uploads in local mode are minted from the
+on-box S3 configuration; in hosted mode the `/v1` service mints them.
 
 `@hasna/attachments/sdk` exports `resolveAttachmentsSdkTransport` and
 `createAttachmentsApiClient`: the generated client with the resolver behind
@@ -51,9 +74,11 @@ not create directories or migrate data. Existing `~/.hasna`, `~/.attachments`
 and `~/.open-attachments` content is preserved in place and is not
 authoritative for credentials.
 
-Client config set accepts only expiry and link-type preferences. API
-credentials are injected by the resolver chain, never written to config files.
-S3 configuration is server-only.
+Client `config set` accepts expiry and link-type preferences plus on-box S3
+details (bucket/region, static keys or an AWS profile, optional endpoint) used
+by local-transport presigned uploads. API credentials are injected by the
+resolver chain, never written to config files. The hosted path needs no client
+S3 configuration at all — the service mints presigned URLs.
 
 Todos and Sessions workflows resolve the `todos` / `sessions` service chains
 through the same shared seam (Keychain item, credential file, env pair,
@@ -73,7 +98,9 @@ strict `@hasna/contracts` 1.0.2 middleware wired through the store's
 `keyStatus` hook, so revocation state is enforced per request. Terminate HTTPS
 before the HTTP listener using your deployment's approved TLS boundary.
 Use attachments-serve --help for explicit migration/startup options.
-The old local attachments serve command is retired.
+The old `attachments serve` command returns as the on-box HTTP server
+(`attachments serve` starts it; run `attachments-serve` for the PostgreSQL
+service executable).
 
 Live PostgreSQL verification is NOT established by skipped unit tests.
 The contract's pgTestGate requires a separately authorized disposable database;

@@ -768,11 +768,25 @@ describe("MCP Server — get_link", () => {
   });
 });
 
-describe("MCP Server — retired configure_s3", () => {
+describe("MCP Server — configure_s3", () => {
   beforeEach(() => mockSetConfig.mockClear());
-  for (const args of [{ bucket: "bucket", region: "region", access_key: "fixture", secret_key: "sensitive" }, { bucket: "bucket", region: "region", base_url: "https://example.test" }, { bucket: "bucket", region: "region" }, { bucket: "bucket", access_key: "partial" }]) it("never persists server credentials on the client", async () => {
-    const result = await callTool(createServer(), "configure_s3", args) as { isError?: boolean; content: Array<{text:string}> };
-    expect(result.isError).toBe(true); expect(mockSetConfig).not.toHaveBeenCalled(); expect(result.content[0]!.text).not.toContain("sensitive");
+  it("valid on-box S3 configuration is persisted to the non-authoritative config", async () => {
+    const result = await callTool(createServer(), "configure_s3", { bucket: "bucket", region: "region" }) as { isError?: boolean; content: Array<{text:string}> };
+    expect(result.isError).toBeFalsy();
+    expect(mockSetConfig).toHaveBeenCalledTimes(1);
+    expect(result.content[0]!.text).toContain("Saved on-box S3 configuration");
+  });
+  it("paired static keys are accepted and never echoed in the response", async () => {
+    const result = await callTool(createServer(), "configure_s3", { bucket: "bucket", region: "region", access_key: "fixture", secret_key: "sensitive" }) as { isError?: boolean; content: Array<{text:string}> };
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]!.text).not.toContain("sensitive");
+  });
+  it("unpaired keys and missing bucket/region are refusals that persist nothing", async () => {
+    for (const args of [{ bucket: "bucket", access_key: "partial" }, { region: "region" }, {}]) {
+      const result = await callTool(createServer(), "configure_s3", args) as { isError?: boolean; content: Array<{text:string}> };
+      expect(result.isError).toBe(true);
+      expect(mockSetConfig).not.toHaveBeenCalled();
+    }
   });
 });
 

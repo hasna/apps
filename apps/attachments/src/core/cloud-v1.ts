@@ -1,4 +1,7 @@
-// Authenticated HTTPS attachment client; no local transport or DSN.
+// Authenticated HTTPS attachment client. The on-box local transport lives in
+// the store seam (`core/store.ts` + `core/local-opt-in.ts`), which decides
+// BEFORE this module: an explicit local opt-in never reaches the resolver.
+// This module is the hosted /v1 client and nothing else.
 import { createWriteStream, existsSync, statSync } from "fs";
 import { basename, join } from "path";
 import { Readable } from "stream";

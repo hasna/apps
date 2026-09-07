@@ -15,7 +15,8 @@ import { completeTaskWithFiles } from "../cli/commands/complete-task.js";
 import { linkAttachmentToTask } from "../cli/commands/link-task.js";
 import { resolveStore } from "../core/store.js";
 import { resolveAttachmentsTransport } from "../core/client-config.js";
-import { getConfig, parseExpiryStrict } from "../core/config.js";
+import { selectsAttachmentsLocalStore } from "../core/local-opt-in.js";
+import { getConfig, parseExpiryStrict, setConfig } from "../core/config.js";
 
 // ---------------------------------------------------------------------------
 // In-memory agent registry (attribution for uploads)
@@ -812,7 +813,24 @@ function handleConfigureS3(args: {
   if (!!args.access_key !== !!args.secret_key) {
     throw new Error("access_key and secret_key must be provided together, or both omitted for default credential-chain auth");
   }
-  throw new Error("Client-side S3 configuration is retired; configure the HTTPS API using environment credentials.");
+  if (!args.bucket || !args.region) {
+    throw new Error("bucket and region are required");
+  }
+  // On-box (local transport) presigned uploads are minted from the client's
+  // own S3 configuration, so the tool persists it to the non-authoritative
+  // on-box config. In hosted mode the `/v1` service mints presigned URLs and
+  // this configuration is never sent anywhere — it only ever belongs to the
+  // on-box store.
+  setConfig({
+    s3: {
+      bucket: args.bucket,
+      region: args.region,
+      accessKeyId: args.access_key ?? getConfig().s3.accessKeyId,
+      secretAccessKey: args.secret_key ?? getConfig().s3.secretAccessKey,
+      ...(args.base_url ? { endpoint: args.base_url } : {}),
+    },
+  });
+  return `Saved on-box S3 configuration (bucket=${args.bucket}, region=${args.region}); hosted presigned uploads are minted by the service.`;
 }
 
 function handleDescribeTools(args: { tool_name?: string }) {
@@ -1225,17 +1243,22 @@ async function main(): Promise<void> {
   }
 
   // FAIL-CLOSED at STARTUP (#1720 acceptance (c), mirrors mementos #1868):
-  // attachments is remote-only, so a server with no resolvable fleet
-  // credential has nothing to serve. Resolve through the shared chain once
-  // here — with the LIVE process.env so the ambient Keychain and disk tiers
-  // run — and exit 1 naming the credential sources before either transport
-  // opens. Tools still resolve per call; this only refuses to serve a session
-  // that every call would reject. Nothing is created under the app home.
-  try {
-    resolveAttachmentsTransport(process.env);
-  } catch (error) {
-    process.stderr.write(`[attachments-mcp] ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
+  // a server with no resolvable fleet credential AND no local opt-in has
+  // nothing to serve. Resolve through the shared chain once here — with the
+  // LIVE process.env so the ambient Keychain and disk tiers run — and exit 1
+  // naming the credential sources before either transport opens. The local
+  // opt-in (`HASNA_ATTACHMENTS_DB_PATH` / `HASNA_ATTACHMENTS_LOCAL`) is
+  // answered by the store seam BEFORE the resolver and needs no credential,
+  // so the preflight only runs for the hosted transport. Tools still resolve
+  // per call; this only refuses to serve a session that every call would
+  // reject. Nothing is created under the app home.
+  if (!selectsAttachmentsLocalStore(process.env)) {
+    try {
+      resolveAttachmentsTransport(process.env);
+    } catch (error) {
+      process.stderr.write(`[attachments-mcp] ${error instanceof Error ? error.message : String(error)}\n`);
+      process.exit(1);
+    }
   }
 
   if (isStdioMode()) {

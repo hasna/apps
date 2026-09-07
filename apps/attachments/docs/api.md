@@ -1,7 +1,9 @@
 # HTTP API and SDK
 
 The supported attachment API is the service's authenticated /v1 surface.
-The retired local /api server and AttachmentsClient are not public package exports.
+The old unauthenticated /api server and AttachmentsClient are not public
+package exports; the app's own authenticated on-box HTTP server runs via
+`attachments serve` and serves the local store.
 An approved deployment terminates HTTPS in front of attachments-serve.
 
 Every client requires an explicit HTTPS base URL and API key. Missing, blank or
@@ -28,7 +30,8 @@ access controls; they are not unauthenticated client CRUD endpoints.
 ## Public clients
 
 The package root exports resolveStore, ApiStore and resolveAttachmentsV1.
-They adapt command/MCP workflows to the authenticated service; file input and
+They adapt command/MCP workflows to the authenticated service in hosted mode
+and to the on-box store under the explicit local opt-in; file input and
 explicit download output are not a local application-data backend.
 
 @hasna/attachments/sdk (the only SDK surface; there is no separate

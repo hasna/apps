@@ -1,4 +1,6 @@
-// Canonical public client boundary. No server, configuration secrets, or local CRUD exports.
+// Canonical public client boundary. The store seam can serve either transport
+// (hosted `ApiStore` or on-box `LocalStore`); classes and server internals are
+// NOT exported here — callers go through `resolveStore`.
 export { ApiStore, resolveStore } from "./core/store.js";
 export type { Store, ListOptions, LinkResult, RegenerateLinkOptions, ResolveStoreOptions, UploadOptions, FeedbackInput } from "./core/store.js";
 export { resolveAttachmentsV1 } from "./core/cloud-v1.js";

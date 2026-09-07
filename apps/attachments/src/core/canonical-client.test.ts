@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { resolveAttachmentsV1 } from "./cloud-v1";
 import { resolveServerDatabase } from "../serve/database";
 import { AttachmentsApiClient } from "../sdk/generated";
@@ -9,11 +12,28 @@ describe("canonical HTTPS boundary", () => {
   test("public exports cannot construct local databases or services", () => {
     for (const name of ["LocalStore", "LocalObjectStore", "AttachmentsDB", "createApp", "startServer", "uploadFile", "createObjectStore", "S3Client"]) expect(name in publicApi).toBe(false);
     expect(() => publicApi.resolveStore({})).toThrow();
-    expect(() => publicApi.resolveStore(valid, { forceLocal: true })).toThrow();
+    // `forceLocal` selects the on-box store without consulting the API config;
+    // the classes themselves stay private to the package boundary.
+    const previous = process.env.HASNA_ATTACHMENTS_DB_PATH;
+    const tmp = mkdtempSync(join(tmpdir(), "attachments-boundary-"));
+    try {
+      process.env.HASNA_ATTACHMENTS_DB_PATH = join(tmp, "db.sqlite");
+      const store = publicApi.resolveStore(valid, { forceLocal: true });
+      expect(store.transport).toBe("local");
+      expect(store.baseUrl).toBeNull();
+      store.close();
+    } finally {
+      if (previous === undefined) delete process.env.HASNA_ATTACHMENTS_DB_PATH; else process.env.HASNA_ATTACHMENTS_DB_PATH = previous;
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
   test("server requires validated PostgreSQL, never SQLite or a mode", () => {
-    for (const env of [{}, { HASNA_ATTACHMENTS_DATABASE_URL: "sqlite:local.db" }, { HASNA_ATTACHMENTS_DATABASE_URL: " " }, { HASNA_ATTACHMENTS_DATABASE_URL: "postgres://host/db", ATTACHMENTS_DATABASE_URL: "postgres://other/db" }, { HASNA_ATTACHMENTS_STORAGE_MODE: "local", HASNA_ATTACHMENTS_DATABASE_URL: "postgres://host/db" }]) expect(() => resolveServerDatabase(env)).toThrow();
-    expect(resolveServerDatabase({ HASNA_ATTACHMENTS_DATABASE_URL: "postgresql://host/db" })).toBe("postgresql://host/db");
+    // A SQLite DSN, a blank DSN, and conflicting aliases are all refusals even
+    // when a retired `*_MODE` word is present (the word itself is INERT and
+    // changes nothing).
+    for (const env of [{}, { HASNA_ATTACHMENTS_DATABASE_URL: "sqlite:local.db" }, { HASNA_ATTACHMENTS_DATABASE_URL: " " }, { HASNA_ATTACHMENTS_DATABASE_URL: "postgres://host/db", ATTACHMENTS_DATABASE_URL: "postgres://other/db" }]) expect(() => resolveServerDatabase(env)).toThrow();
+    expect(resolveServerDatabase({ HASNA_ATTACHMENTS_DATABASE_URL: "postgres://host/db" })).toBe("postgres://host/db");
+    expect(resolveServerDatabase({ HASNA_ATTACHMENTS_STORAGE_MODE: "local", HASNA_ATTACHMENTS_MODE: "cloud", HASNA_ATTACHMENTS_DATABASE_URL: "postgres://host/db" })).toBe("postgres://host/db");
   });
   test("generated SDK requires credentials and refuses auth overrides or redirects", async () => {
     expect(() => new AttachmentsApiClient({ baseUrl: "http://localhost", apiKey: "test-key" })).toThrow();
@@ -49,13 +69,29 @@ describe("canonical HTTPS boundary", () => {
       { HASNA_ATTACHMENTS_MODE: "local" },
       { HASNA_ATTACHMENTS_DATABASE_URL: "postgres://example/db" },
       { ATTACHMENTS_DATABASE_URL: "postgres://example/db" },
-      { HASNA_ATTACHMENTS_DB_PATH: "/tmp/attachments.db" },
     ]) {
       const resolved = resolveAttachmentsV1({ ...valid, ...extra }, {
         fetchImpl: (async () => Response.json([])) as unknown as typeof fetch,
       });
       expect(resolved.transport).toBe("cloud-http");
       if (resolved.transport === "cloud-http") expect(resolved.store.baseUrl).toBe("https://attachments.example.test/v1");
+    }
+  });
+  test("a local DB path is precedence-1 — the explicit file selects the on-box store even with API config", () => {
+    // The narrowest local signal (HASNA_ATTACHMENTS_DB_PATH / ATTACHMENTS_DB_PATH)
+    // outranks a complete API configuration, exactly like the resolver's own
+    // explicit-argument tier. The choice is answered WITHOUT the resolver.
+    const previous = process.env.HASNA_ATTACHMENTS_DB_PATH;
+    const tmp = mkdtempSync(join(tmpdir(), "attachments-dbpath-"));
+    try {
+      const dbPath = join(tmp, "db.sqlite");
+      process.env.HASNA_ATTACHMENTS_DB_PATH = dbPath;
+      const store = publicApi.resolveStore({ ...valid, HASNA_ATTACHMENTS_DB_PATH: dbPath });
+      expect(store.transport).toBe("local");
+      store.close();
+    } finally {
+      if (previous === undefined) delete process.env.HASNA_ATTACHMENTS_DB_PATH; else process.env.HASNA_ATTACHMENTS_DB_PATH = previous;
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
   test("authenticated requests disable redirects and never replay bodies", async () => {
