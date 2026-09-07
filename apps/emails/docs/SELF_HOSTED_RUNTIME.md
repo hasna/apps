@@ -235,3 +235,38 @@ commit SHAs. Refresh them in a reviewed dependency update: verify the upstream
 tag/release, resolve its current digest/SHA, run the full isolated suite and
 Postgres integration job, then record the change in the changelog. Never
 silently retag a deployment.
+
+### Binding registry providers to senders
+
+The provider registry stores metadata. Sending credentials remain on the server.
+A client can select `emails send --provider <id>` after the server operator binds
+that active registry ID to a sender in `EMAILS_SENDER_BINDINGS`. Bindings are keyed
+by both tenant ID and provider ID, so another tenant cannot select your sender.
+
+The JSON array contains secret **environment variable names**, never secret
+values. Inject those variables through your deployment's secret manager:
+
+```json
+[
+  { "tenant_id": "tenant-id", "provider_id": "primary-provider-id", "sender": "default" },
+  { "tenant_id": "tenant-id", "provider_id": "resend-provider-id", "type": "resend", "api_key_env": "TRANSACTIONAL_RESEND_TOKEN" },
+  { "tenant_id": "tenant-id", "provider_id": "ses-provider-id", "type": "ses", "region": "us-east-1", "access_key_env": "TRANSACTIONAL_SES_ACCESS", "secret_key_env": "TRANSACTIONAL_SES_SECRET" }
+]
+```
+
+`sender: "default"` explicitly binds the existing `EMAILS_SEND_PROVIDER` sender,
+including its deployment role when configured. Additional SES bindings require
+both named credential variables and a region. Additional Resend bindings require
+the named API key variable. Unknown fields, missing variables, or duplicate
+bindings prevent startup. Restart the API after updating these settings.
+
+Omitting `--provider` keeps the existing default sender. An explicit provider
+without a binding fails before sending; it never falls back to the default.
+The selected provider is recorded on the message and included in the idempotency
+payload. Changing providers while reusing an idempotency key is a conflict.
+
+`--unsubscribe-url https://example.com/unsubscribe` passes an HTTP(S) URL to the
+provider adapters, which emit the List-Unsubscribe headers. The URL participates
+in idempotency checking. Clients check the advertised send API contract before
+using provider selection or unsubscribe URLs; an older API must be upgraded
+first so these options cannot be silently dropped.

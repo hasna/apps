@@ -198,3 +198,68 @@ export function buildSelfHostedSender(env: NodeJS.ProcessEnv = process.env): Sel
     send: (input) => adapter.sendEmail(input),
   };
 }
+
+/** Tenant/provider bindings contain secret environment names, never credential values. */
+export type SenderResolver = (tenantId: string, providerId: string) => SelfHostedSender | null;
+
+export function buildSenderResolver(
+  defaultSender: SelfHostedSender,
+  env: NodeJS.ProcessEnv = process.env,
+  build: (env: NodeJS.ProcessEnv) => SelfHostedSender = buildSelfHostedSender,
+): SenderResolver {
+  const raw = env.EMAILS_SENDER_BINDINGS?.trim();
+  if (!raw) return () => null;
+  let entries: unknown;
+  try { entries = JSON.parse(raw); }
+  catch { throw new Error("EMAILS_SENDER_BINDINGS must be a JSON array of tenant/provider bindings."); }
+  if (!Array.isArray(entries)) throw new Error("EMAILS_SENDER_BINDINGS must be a JSON array.");
+  const bindings = new Map<string, SelfHostedSender>();
+  const allowed = new Set(["tenant_id", "provider_id", "sender", "type", "region", "api_key_env", "access_key_env", "secret_key_env"]);
+  const requiredName = (value: unknown, label: string): string => {
+    if (typeof value !== "string" || !value.trim() || value.length > 256 || /[\x00-\x1f\x7f]/.test(value)) {
+      throw new Error(`EMAILS_SENDER_BINDINGS requires a valid ${label}.`);
+    }
+    return value.trim();
+  };
+  const secretFrom = (name: unknown): string => {
+    if (typeof name !== "string" || !/^[A-Z][A-Z0-9_]*$/.test(name)) {
+      throw new Error("Sender credential references must be environment variable names.");
+    }
+    const value = env[name]?.trim();
+    if (!value) throw new Error(`Sender credential environment variable ${name} is not set.`);
+    return value;
+  };
+  for (const value of entries) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid sender binding.");
+    const entry = value as Record<string, unknown>;
+    if (Object.keys(entry).some((key) => !allowed.has(key))) throw new Error("Sender bindings accept credential environment names only; remove unknown fields.");
+    const tenant = requiredName(entry.tenant_id, "tenant_id");
+    const provider = requiredName(entry.provider_id, "provider_id");
+    const key = JSON.stringify([tenant, provider]);
+    if (bindings.has(key)) throw new Error("Duplicate tenant/provider sender binding.");
+    let sender: SelfHostedSender;
+    if (entry.sender === "default") {
+      if (entry.type !== undefined || entry.api_key_env !== undefined || entry.access_key_env !== undefined || entry.secret_key_env !== undefined || entry.region !== undefined) {
+        throw new Error("A default sender binding cannot override its credentials or provider type.");
+      }
+      sender = defaultSender;
+    } else {
+      if (entry.sender !== undefined) throw new Error("The sender binding selector must be 'default' or omitted.");
+      const config: NodeJS.ProcessEnv = {};
+      if (entry.type === "resend") {
+        if (entry.access_key_env !== undefined || entry.secret_key_env !== undefined || entry.region !== undefined) throw new Error("Resend bindings accept api_key_env only.");
+        config.EMAILS_SEND_PROVIDER = "resend";
+        config.RESEND_API_KEY = secretFrom(entry.api_key_env);
+      } else if (entry.type === "ses") {
+        if (entry.api_key_env !== undefined) throw new Error("SES bindings require access_key_env and secret_key_env.");
+        config.EMAILS_SEND_PROVIDER = "ses";
+        config.EMAILS_SES_ACCESS_KEY_ID = secretFrom(entry.access_key_env);
+        config.EMAILS_SES_SECRET_ACCESS_KEY = secretFrom(entry.secret_key_env);
+        config.EMAILS_AWS_REGION = requiredName(entry.region, "SES region");
+      } else throw new Error("A sender binding type must be ses or resend.");
+      sender = build(config);
+    }
+    bindings.set(key, sender);
+  }
+  return (tenantId, providerId) => bindings.get(JSON.stringify([tenantId, providerId])) ?? null;
+}

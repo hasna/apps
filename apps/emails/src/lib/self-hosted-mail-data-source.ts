@@ -2265,28 +2265,6 @@ export class SelfHostedMailDataSource implements MailDataSource {
     if (input.scheduledAt) {
       throw new Error("Scheduled send is not supported on the self-hosted emails serve.");
     }
-    if (input.providerId) {
-      // The /v1 send contract has no provider selector: the server sends with
-      // the single operator-configured provider (EMAILS_SEND_PROVIDER + its
-      // server-side credentials). Accepting the flag and ignoring it made an
-      // operator believe mail had been re-routed to another SES account when it
-      // had not.
-      throw new Error(
-        "--provider is not supported in self_hosted mode: the server selects the outbound provider "
-          + "(EMAILS_SEND_PROVIDER) and holds its credentials. Re-run without --provider.",
-      );
-    }
-    if (input.unsubscribeUrl) {
-      // Same class as --provider above: the POST /v1/messages/send contract carries
-      // no unsubscribe_url field, so the RFC 8058 List-Unsubscribe headers cannot be
-      // honored on this path. Accepting the flag and mailing WITHOUT the headers is
-      // a compliance failure the operator cannot see — refuse before the request.
-      throw new Error(
-        "--unsubscribe-url is not supported against the emails serve send API: its send contract "
-          + "carries no unsubscribe_url field, so the List-Unsubscribe headers would be silently "
-          + "dropped. Re-run without --unsubscribe-url, or send through a local provider.",
-      );
-    }
     const to = input.to.split(",").map((v) => v.trim()).filter(Boolean);
     const useMarkdown = input.markdown !== false;
     const html = input.html ?? (useMarkdown ? renderMarkdown(input.body) : undefined);
@@ -2298,6 +2276,16 @@ export class SelfHostedMailDataSource implements MailDataSource {
       html,
       idempotency_key: input.idempotencyKey ?? crypto.randomUUID(),
     };
+    if (input.providerId || input.unsubscribeUrl) {
+      const contract = await this.request("GET", "/openapi.json");
+      const doc = contract.json as { paths?: Record<string, { post?: { requestBody?: { content?: Record<string, { schema?: { properties?: Record<string, unknown> } }> } } }> };
+      const properties = doc?.paths?.["/v1/messages/send"]?.post?.requestBody?.content?.["application/json"]?.schema?.properties;
+      if (contract.status !== 200 || (input.providerId && !properties?.provider_id) || (input.unsubscribeUrl && !properties?.unsubscribe_url)) {
+        throw new Error("The Emails API needs an update to support provider selection and unsubscribe headers; no message was sent.");
+      }
+    }
+    if (input.providerId) body["provider_id"] = input.providerId;
+    if (input.unsubscribeUrl) body["unsubscribe_url"] = input.unsubscribeUrl;
     if (input.attachments?.length) body["attachments"] = input.attachments;
     if (input.cc) body["cc"] = input.cc.split(",").map((v) => v.trim()).filter(Boolean);
     if (input.bcc) body["bcc"] = input.bcc.split(",").map((v) => v.trim()).filter(Boolean);

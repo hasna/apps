@@ -3614,6 +3614,8 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
               schema: {
                 type: "object",
                 properties: {
+                  provider_id: { type: "string", description: "Active tenant provider with a server sender binding." },
+                  unsubscribe_url: { type: "string", format: "uri", description: "HTTP(S) unsubscribe URL emitted as List-Unsubscribe headers." },
                   from: { type: "string" },
                   to: { type: "array", items: { type: "string" } },
                   cc: { type: "array", items: { type: "string" } },

@@ -72,6 +72,7 @@ import {
   classifyProviderSendError,
   providerSendLogFields,
   type SelfHostedSender,
+  type SenderResolver,
 } from "./sender.js";
 import {
   isTenantOperator,
@@ -174,6 +175,7 @@ export interface SelfHostedServiceDeps {
   store: EmailsSelfHostedStore;
   verifier: ApiKeyVerifier;
   sender: SelfHostedSender;
+  resolveSender?: SenderResolver;
   migrations: readonly Migration[];
   version: string;
   // ---- multi-tenancy + auth (WI-2) ----
@@ -1364,6 +1366,32 @@ export async function handleSelfHostedRequest(
       } catch (error) {
         return json(400, { error: error instanceof Error ? error.message : "invalid attachment" });
       }
+      const requestedProviderId = typeof body.provider_id === "string" ? body.provider_id.trim() : "";
+      if (body.provider_id !== undefined && (!requestedProviderId || typeof body.provider_id !== "string")) {
+        return json(400, { error: "provider_id must be a non-empty provider identifier", reason: "invalid_provider" });
+      }
+      let sender = deps.sender;
+      let providerId = `self-hosted-${sender.provider}`;
+      if (requestedProviderId) {
+        const registry = resourceSpecForPath("providers");
+        const provider = registry ? await auth.store.getResource(registry, requestedProviderId) : null;
+        if (!provider) return json(404, { error: "provider not found in this tenant", reason: "provider_not_found" });
+        if (provider.active === false) return json(409, { error: "provider is inactive", reason: "provider_inactive" });
+        const bound = deps.resolveSender?.(auth.ctx.tenantId, requestedProviderId);
+        if (!bound) return json(503, { error: "This provider has no server sender binding. Configure EMAILS_SENDER_BINDINGS for this tenant and provider using credential environment variable names.", reason: "provider_sender_unconfigured" });
+        if (provider.type !== bound.provider) return json(409, { error: "The sender binding type does not match the provider registry.", reason: "provider_sender_type_mismatch" });
+        sender = bound;
+        providerId = requestedProviderId;
+      }
+      let unsubscribeUrl: string | undefined;
+      if (body.unsubscribe_url !== undefined) {
+        if (typeof body.unsubscribe_url !== "string" || /[\r\n<>]/.test(body.unsubscribe_url)) return json(400, { error: "unsubscribe_url must be an HTTP(S) URL", reason: "invalid_unsubscribe_url" });
+        try {
+          const parsed = new URL(body.unsubscribe_url);
+          if (!["https:", "http:"].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error("invalid");
+          unsubscribeUrl = parsed.toString();
+        } catch { return json(400, { error: "unsubscribe_url must be an HTTP(S) URL", reason: "invalid_unsubscribe_url" }); }
+      }
       const payload = {
         from,
         to,
@@ -1374,7 +1402,9 @@ export async function handleSelfHostedRequest(
         text: typeof body.text === "string" ? body.text : null,
         html: typeof body.html === "string" ? body.html : null,
         attachments,
-        provider: deps.sender.provider,
+        provider: sender.provider,
+        ...(requestedProviderId ? { provider_id: providerId } : {}),
+        ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
       };
       const sendKeyToken = typeof body.send_key === "string"
         ? body.send_key.trim()
@@ -1383,6 +1413,7 @@ export async function handleSelfHostedRequest(
       try {
         reserved = await auth.store.reserveSendIntent({
           direction: "outbound",
+          provider_id: providerId,
           from_addr: from,
           to_addrs: to,
           cc_addrs: cc,
@@ -1419,7 +1450,7 @@ export async function handleSelfHostedRequest(
           }
           return json(200, {
             message: publicMessage(reserved.record),
-            provider: deps.sender.provider,
+            provider: sender.provider,
             idempotent_replay: true,
             // The original attempt succeeded: say so at the top level, exactly
             // like a fresh success, so callers have ONE place to check.
@@ -1436,7 +1467,7 @@ export async function handleSelfHostedRequest(
               retry_safe: false,
             });
           }
-          return json(202, { message: publicMessage(reserved.record), provider: deps.sender.provider, in_progress: true });
+          return json(202, { message: publicMessage(reserved.record), provider: sender.provider, in_progress: true });
         }
         if (reserved.record.send_state === "blocked") {
           return json(409, {
@@ -1517,7 +1548,7 @@ export async function handleSelfHostedRequest(
           }
           return json(200, {
             message: publicMessage(latest),
-            provider: deps.sender.provider,
+            provider: sender.provider,
             idempotent_replay: true,
             sent: true,
             provider_message_id: latest.provider_message_id,
@@ -1542,7 +1573,7 @@ export async function handleSelfHostedRequest(
         }
         return json(202, {
           message: publicMessage(latest ?? reserved.record),
-          provider: deps.sender.provider,
+          provider: sender.provider,
           in_progress: true,
         });
       }
@@ -1564,8 +1595,9 @@ export async function handleSelfHostedRequest(
           fromRecord?.display_name && isSafeFromDisplayName(fromRecord.display_name)
             ? formatSenderDisplayName(fromRecord.display_name, from)
             : from;
-        messageId = await deps.sender.send({
-          provider_id: `self-hosted-${deps.sender.provider}`,
+        messageId = await sender.send({
+          provider_id: providerId,
+          unsubscribe_url: unsubscribeUrl,
           from: fromForProvider,
           to,
           cc: cc.length ? cc : undefined,
@@ -1582,7 +1614,7 @@ export async function handleSelfHostedRequest(
         const outcome = classifyProviderSendError(error);
         console.error("[emails-self-hosted] provider send failed", {
           message_id: claimed.id,
-          provider: deps.sender.provider,
+          provider: sender.provider,
           ...providerSendLogFields(outcome),
         });
         if (outcome.kind === "rejected") {
@@ -1618,7 +1650,7 @@ export async function handleSelfHostedRequest(
         // guess what happened from the HTTP status alone.
         return json(202, {
           message: publicMessage(completed),
-          provider: deps.sender.provider,
+          provider: sender.provider,
           sent: true,
           provider_message_id: messageId,
         });
@@ -1629,7 +1661,7 @@ export async function handleSelfHostedRequest(
         // client mail on 2026-07-25.
         console.error("[emails-self-hosted] ledger finalization failed after provider accept", {
           message_id: claimed.id,
-          provider: deps.sender.provider,
+          provider: sender.provider,
           provider_message_id: messageId,
           error: error instanceof Error ? `${error.name}: ${error.message}` : "UnknownError",
         });
@@ -1641,7 +1673,7 @@ export async function handleSelfHostedRequest(
         const uncertain = await auth.store.markSendUncertain(claimed.id, messageId).catch(() => null);
         return json(202, {
           message: publicMessage(uncertain ?? claimed),
-          provider: deps.sender.provider,
+          provider: sender.provider,
           provider_message_id: messageId,
           sent: true,
           warning: "the provider ACCEPTED this message (it was sent) but recording the final state failed; " +

@@ -1,3 +1,4 @@
+import { emailsSelfHostedOpenApi } from "../server/self-hosted/openapi.js";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import {
   SelfHostedMailDataSource,
@@ -2009,20 +2010,20 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(result.warning).toBeUndefined();
   });
 
-  it("rejects --provider instead of silently ignoring it (the server owns the sender)", async () => {
-    // The flag was parsed and then dropped, so an operator who "re-pointed" a
-    // send at another SES provider got the old one with no warning at all.
-    let called = 0;
-    const serve: SelfHostedFetch = async () => {
-      called += 1;
-      return { status: 202, async text() { return JSON.stringify({ message: { id: "m" }, sent: true }); } };
-    };
-    const ds = new SelfHostedMailDataSource({ baseUrl: "https://emails.example/v1", apiKey: "k", fetchImpl: serve });
-    await expect(ds.send({
-      to: "x@example.com", from: "me@example.com", subject: "s", body: "b", providerId: "some-provider-id",
-    })).rejects.toThrow(/--provider is not supported in self_hosted mode/);
-    expect(called).toBe(0);
-  });
+  for (const options of [{ providerId: "some-provider-id" }, { unsubscribeUrl: "https://example.com/unsubscribe" }]) {
+    it(`refuses unsupported ${Object.keys(options)[0]} on an older server without sending`, async () => {
+      const paths: string[] = [];
+      const serve: SelfHostedFetch = async (url) => {
+        paths.push(String(url));
+        return { status: 200, async text() { return JSON.stringify({ ...emailsSelfHostedOpenApi, paths: {} }); } };
+      };
+      const ds = new SelfHostedMailDataSource({ baseUrl: "https://emails.example/v1", apiKey: "k", fetchImpl: serve });
+      await expect(ds.send({
+        to: "x@example.com", from: "me@example.com", subject: "s", body: "b", ...options,
+      })).rejects.toThrow(/API needs an update/);
+      expect(paths).toEqual(["https://emails.example/v1/openapi.json"]);
+    });
+  }
 
   it("never turns a provider REJECT into a resolved send", async () => {
     const serveReject: SelfHostedFetch = async () => ({

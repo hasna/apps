@@ -613,3 +613,39 @@ describe.skipIf(!pgClient)("C: uncertain sends can be found and closed out on ev
     for (const key of keys) expect((await ledgerRow(key))?.send_state).toBe("failed");
   });
 });
+
+describe.skipIf(!pgClient)("D: explicit tenant provider dispatch", () => {
+  it("uses the selected sender over the client/API path and cannot cross tenants or replay another provider", async () => {
+    let defaultCalls = 0;
+    const calls: Array<{ provider_id?: string; unsubscribe_url?: string }> = [];
+    const deps = makeDeps({ provider: "ses", send: async () => { defaultCalls++; return "wrong-default"; } });
+    const tenant = await makeTenant("honesty-provider-owner");
+    const outsider = await makeTenant("honesty-provider-outsider");
+    await registerSender(deps, tenant.token, "provider-owner.example", "sender@provider-owner.example");
+    const first = await call(deps, "POST", "/v1/providers", { token: tenant.token, body: { name: "first-bound", type: "resend", active: true } });
+    const second = await call(deps, "POST", "/v1/providers", { token: tenant.token, body: { name: "second-bound", type: "resend", active: true } });
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    const providerId = first.body.id;
+    deps.resolveSender = (tenantId, selected) => tenantId === tenant.tenantId && [providerId, second.body.id].includes(selected)
+      ? { provider: "resend", send: async (input) => { calls.push(input); return "selected-provider-accepted"; } } : null;
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (req) => (await handleSelfHostedRequest(deps, req)) ?? new Response("missing", { status: 404 }) });
+    try {
+      const { SelfHostedMailDataSource } = await import("../../lib/self-hosted-mail-data-source.js");
+      const client = new SelfHostedMailDataSource({ baseUrl: `http://127.0.0.1:${server.port}/v1`, apiKey: tenant.token });
+      const key = `provider-selection-${crypto.randomUUID()}`;
+      const sent = await client.send({ from: "sender@provider-owner.example", to: "target@external.example", subject: "selected", body: "fixture", providerId, unsubscribeUrl: "https://example.com/unsubscribe", idempotencyKey: key });
+      expect(sent.id).toBeTruthy();
+      expect(defaultCalls).toBe(0);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({ provider_id: providerId, unsubscribe_url: "https://example.com/unsubscribe" });
+      const row = await pgClient!.one<{ provider_id: string }>("SELECT provider_id FROM messages WHERE id = $1", [sent.id]);
+      expect(row.provider_id).toBe(providerId);
+      await expect(client.send({ from: "sender@provider-owner.example", to: "target@external.example", subject: "selected", body: "fixture", providerId: second.body.id, unsubscribeUrl: "https://example.com/unsubscribe", idempotencyKey: key })).rejects.toThrow();
+      expect(calls).toHaveLength(1);
+      const cross = await call(deps, "POST", "/v1/messages/send", { token: outsider.token, body: { from: "sender@provider-owner.example", to: ["target@external.example"], subject: "cross-tenant", idempotency_key: crypto.randomUUID(), provider_id: providerId } });
+      expect(cross.status).toBe(404);
+      expect(calls).toHaveLength(1);
+    } finally { server.stop(true); }
+  }, 20_000);
+});

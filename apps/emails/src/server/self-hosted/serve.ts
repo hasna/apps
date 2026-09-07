@@ -10,7 +10,7 @@ import { formatApiAuthAuditLine, verifyApiKeyWithAliases } from "./api-key-verif
 import { emailsSelfHostedMigrations } from "./migrations.js";
 import { EmailsSelfHostedStore } from "./store.js";
 import { handleSelfHostedRequest, type SelfHostedServiceDeps } from "./service.js";
-import { buildSelfHostedSender } from "./sender.js";
+import { buildSelfHostedSender, buildSenderResolver } from "./sender.js";
 import { AuthStore } from "./auth/store.js";
 import { RateLimiter } from "./auth/rate-limit.js";
 import { buildAuthMailerConfig } from "./auth/mailer.js";
@@ -75,6 +75,7 @@ export function buildSelfHostedService(version: string): SelfHostedServiceDeps {
     store: new EmailsSelfHostedStore(client),
     verifier,
     sender,
+    resolveSender: buildSenderResolver(sender),
     migrations: emailsSelfHostedMigrations(),
     version,
     // ---- multi-tenancy + auth (WI-2) ----
