@@ -455,6 +455,15 @@ describe("installer maintenance marker", () => {
     "keeps a live reader lease created under a localized process environment",
     async () => {
       const fixture = createEarlyInstallerFixture();
+      // A cold installer can need more than two seconds to acquire its marker.
+      // Delay only this owned launcher to make the readiness boundary repeatable.
+      const originalInstaller = fixture.installer;
+      fixture.installer = join(fixture.root, "delayed-installer.sh");
+      const quotedInstaller = "'" + originalInstaller.replaceAll("'", "'\\''") + "'";
+      writeExecutable(fixture.installer, `#!/bin/bash
+/bin/sleep 2.25
+exec /bin/bash ${quotedInstaller} "$@"
+`);
       const probe = join(fixture.root, "localized-reader.ts");
       const moduleUrl = pathToFileURL(
         join(repositoryRoot, "src", "lib", "install-maintenance.ts"),
@@ -500,11 +509,17 @@ await new Promise(() => {});
           stdout: "ignore",
           stderr: "pipe",
         });
+        const childStderr = new Response(child.stderr).text();
         try {
-          for (let attempt = 0; attempt < 200 && !existsSync(fixture.marker); attempt += 1) {
-            await Bun.sleep(10);
+          const deadline = performance.now() + 10_000;
+          while (!existsSync(fixture.marker) && child.exitCode === null && performance.now() < deadline) {
+            await Bun.sleep(20);
           }
-          expect(existsSync(fixture.marker)).toBeTrue();
+          const startup = existsSync(fixture.marker) ? "marker acquired" : JSON.stringify({
+            exitCode: child.exitCode,
+            stderr: child.exitCode === null ? "installer readiness deadline exceeded" : (await childStderr).slice(-8_000),
+          });
+          expect(existsSync(fixture.marker), startup).toBeTrue();
           await Bun.sleep(100);
           expect(child.exitCode).toBeNull();
           expect(readdirSync(readers).some((entry) => entry.startsWith("lease-"))).toBeTrue();
@@ -514,7 +529,7 @@ await new Promise(() => {});
             reader.exited,
             readerReady,
             child.exited,
-            new Response(child.stderr).text(),
+            childStderr,
           ]);
           expect(readerExit, readerStdout).toBe(0);
           expect(readerStdout).toContain("ready");
@@ -530,6 +545,7 @@ await new Promise(() => {});
         await reader.exited;
       }
     },
+    20_000,
   );
 
   test("orders exclusivity before recovery and the authoritative stopped-state copy", () => {
