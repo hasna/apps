@@ -63,7 +63,7 @@ function handleError(error: unknown): never {
  * credential — the Keychain item, ~/.hasna/shortlinks/config/credentials, or
  * HASNA_SHORTLINKS_API_KEY, with the authority defaulting to the fleet gateway
  * — otherwise the CLI FAILS CLOSED with an error naming the credential chain
- * unless local mode was explicitly opted into (HASNA_SHORTLINKS_LOCAL=1 /
+ * unless the local backend was explicitly opted into (HASNA_SHORTLINKS_LOCAL=1 /
  * SHORTLINKS_LOCAL=1 or --db <path>), which is announced on stderr.
  * There is no DSN/postgres client path: a client never touches the raw RDS.
  */
@@ -965,10 +965,10 @@ program
   .action(async (opts) => {
     try {
       // The redirect server reads/records through the same Store seam as every
-      // other command: the cloud ApiStore when the flip is on, the on-box
-      // LocalStore only under an explicit opt-in (--db / SHORTLINKS_LOCAL=1),
-      // otherwise the resolution fails closed. No DSN path here — a client
-      // never opens the raw RDS.
+      // other command: the cloud ApiStore when a shortlinks credential
+      // resolves, the on-box LocalStore only under an explicit opt-in (--db /
+      // SHORTLINKS_LOCAL=1), otherwise the resolution fails closed. No DSN path
+      // here — a client never opens the raw RDS.
       const store = resolveStore(process.env, { dbPath: program.opts().db });
       const server = serveShortlinks({
         store,
@@ -1127,9 +1127,9 @@ program
       const data = await withRuntimeStore(async (store) => {
         // The hosted transport report comes from the contracts client seam —
         // the same resolver that built the store — never a hand-rolled env
-        // read of the API key. In explicit local mode there is no hosted
-        // transport to report, so the sources are null rather than resolved
-        // and discarded.
+        // read of the API key. With the local backend selected there is no
+        // hosted transport to report, so the sources are null rather than
+        // resolved and discarded.
         const hosted = store.kind === "http" ? resolveClientTransport("shortlinks", process.env) : null;
         return {
           service: "shortlinks",
