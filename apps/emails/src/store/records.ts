@@ -209,6 +209,7 @@ export interface MessageRecord {
   body_html: string | null;
   status: string;
   provider_id?: string | null;
+  tags?: Record<string, string> | null;
   provider_message_id: string | null;
   message_id: string | null;
   in_reply_to: string | null;
@@ -243,6 +244,7 @@ export interface MessageListRecord {
   subject: string | null;
   status: string;
   provider_id?: string | null;
+  tags?: Record<string, string> | null;
   provider_message_id: string | null;
   message_id: string | null;
   in_reply_to: string | null;

@@ -1,21 +1,10 @@
-// `emails send` must not mail a suppressed recipient.
-//
-// The suppression check printed "Warning: Suppressed recipients: …" followed by
-// "Use --force to send anyway." and then FELL THROUGH — no `return`, no
-// filtering, no exit. So the recipient was mailed whether or not `--force` was
-// passed, and in local mode nothing further down the chain stops it. `--force`
-// was inverted: the flag that was supposed to be required to send anyway made no
-// difference at all.
-//
-// Self-hosted is covered against the out-of-process /v1 stub; local is covered
-// against an in-memory SQLite DB with a sandbox provider, because local mode is
-// where there is no second gate.
+// Suppression is checked through the authenticated API for every normal send
+// surface. The explicit batch-library compatibility regression remains separate.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Command } from "commander";
 import { closeDatabase, getDatabase, resetDatabase } from "../../db/database.js";
 import { suppressContact } from "../../db/contacts.js";
 import { createProvider } from "../../db/providers.local.js";
-import { listSandboxEmails } from "../../db/sandbox.js";
 import { resetMailDataSource } from "../../lib/mail-data-source.js";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
 import { registerSendCommands } from "./send.js";
@@ -29,6 +18,12 @@ function restoreInheritedProcessEnv(): void {
     if (!Object.prototype.hasOwnProperty.call(INHERITED_PROCESS_ENV, key)) delete process.env[key];
   }
   Object.assign(process.env, INHERITED_PROCESS_ENV);
+}
+
+async function outboundMessages(stub: V1Stub) {
+  const messages = (await stub.list("messages")).filter(message => message.direction === "outbound");
+  expect((await stub.sendStats()).providerCalls).toBe(messages.length);
+  return messages;
 }
 
 interface RunResult {
@@ -73,7 +68,7 @@ async function runSend(args: string[]): Promise<RunResult> {
 
 // ---- self-hosted -------------------------------------------------------------
 
-describe("emails send — suppressed recipients (self-hosted)", () => {
+describe("emails send — suppressed recipients through the API", () => {
   let stub: V1Stub;
 
   beforeAll(async () => { stub = await startV1Stub(); });
@@ -101,7 +96,7 @@ describe("emails send — suppressed recipients (self-hosted)", () => {
     expect(result.errorOutput).toContain("Refusing to send to suppressed recipient(s): blocked@ext.com");
     expect(result.errorOutput).toContain("emails contact unsuppress");
     // The defect was the mail going out regardless. Nothing may be recorded.
-    expect(await stub.list("messages")).toHaveLength(0);
+    expect(await outboundMessages(stub)).toHaveLength(0);
   });
 
   it("refuses a suppressed recipient hidden in --cc or --bcc", async () => {
@@ -113,7 +108,7 @@ describe("emails send — suppressed recipients (self-hosted)", () => {
 
       expect(result.exited).toBe(true);
       expect(result.errorOutput).toContain("blocked@ext.com");
-      expect(await stub.list("messages")).toHaveLength(0);
+      expect(await outboundMessages(stub)).toHaveLength(0);
     }
   });
 
@@ -129,7 +124,7 @@ describe("emails send — suppressed recipients (self-hosted)", () => {
     expect(result.exited).toBe(false);
     expect(result.consoleOutput).toContain("--force: sending to the suppressed recipient(s) anyway.");
     expect(result.consoleOutput).toContain("Email sent to blocked@ext.com");
-    expect(await stub.list("messages")).toHaveLength(1);
+    expect(await outboundMessages(stub)).toHaveLength(1);
   });
 
   it("reports but does not refuse during a dry run", async () => {
@@ -141,7 +136,7 @@ describe("emails send — suppressed recipients (self-hosted)", () => {
     expect(result.consoleOutput).toContain("Suppressed recipients: blocked@ext.com");
     expect(result.consoleOutput).toContain("A real send would be refused; --force overrides on both backends");
     expect(result.consoleOutput).toContain("[NOT SENT]");
-    expect(await stub.list("messages")).toHaveLength(0);
+    expect(await outboundMessages(stub)).toHaveLength(0);
   });
 
   it("still sends to a recipient that is not suppressed", async () => {
@@ -151,94 +146,81 @@ describe("emails send — suppressed recipients (self-hosted)", () => {
 
     expect(result.exited).toBe(false);
     expect(result.consoleOutput).toContain("Email sent to fine@ext.com");
-    expect(await stub.list("messages")).toHaveLength(1);
+    expect(await outboundMessages(stub)).toHaveLength(1);
   });
 });
 
-// ---- local -------------------------------------------------------------------
+// ---- explicit suppression overrides ------------------------------------------
 
-describe("emails send — suppressed recipients (local)", () => {
-  let providerId: string;
-
+describe("emails send — explicit suppression override API behavior", () => {
+  let stub: V1Stub;
+  beforeAll(async () => { stub = await startV1Stub({ openapi: true }); });
+  afterAll(() => stub.stop());
   beforeEach(async () => {
     captureInheritedProcessEnv();
-    process.env["EMAILS_DB_PATH"] = ":memory:";
-    resetDatabase();
+    await stub.reset();
+    stub.applyEnv();
     resetMailDataSource();
-    providerId = createProvider({ name: "sandbox", type: "sandbox", active: true }).id;
-    // The collapsed contacts family is async and store-seam-backed; hand it the
-    // memoised connection explicitly so the seed lands on the database this suite
-    // resets, whatever the surrounding environment configures.
-    await suppressContact("blocked@ext.com", getDatabase());
+    await suppressContact("blocked@ext.com");
   });
-
   afterEach(() => {
-    closeDatabase();
+    stub.clearEnv();
     resetMailDataSource();
-    delete process.env["EMAILS_MODE"];
-    delete process.env["EMAILS_DB_PATH"];
     restoreInheritedProcessEnv();
   });
+
 
   it("refuses the send instead of mailing a suppressed recipient", async () => {
     const result = await runSend([
       "send", "--from", "agent@acme.com", "--to", "blocked@ext.com", "--subject", "Hi", "--body", "x",
-      "--provider", providerId,
     ]);
 
     expect(result.exited).toBe(true);
     expect(result.errorOutput).toContain("Refusing to send to suppressed recipient(s): blocked@ext.com");
-    // Local mode has no second gate, so this assertion is the whole finding.
-    expect(await listSandboxEmails(providerId, 10)).toHaveLength(0);
+    // Refusal must precede a recorded send, not merely print a warning.
+    expect(await outboundMessages(stub)).toHaveLength(0);
   });
 
   it("honours --force, which is what the flag always claimed to do", async () => {
     const result = await runSend([
       "send", "--from", "agent@acme.com", "--to", "blocked@ext.com", "--subject", "Hi", "--body", "x",
-      "--provider", providerId, "--force",
+      "--force",
     ]);
 
     expect(result.exited).toBe(false);
     expect(result.consoleOutput).toContain("--force: sending to the suppressed recipient(s) anyway.");
-    expect(await listSandboxEmails(providerId, 10)).toHaveLength(1);
+    expect(await outboundMessages(stub)).toHaveLength(1);
   });
 
   it("still sends to a recipient that is not suppressed, without --force", async () => {
     const result = await runSend([
       "send", "--from", "agent@acme.com", "--to", "fine@ext.com", "--subject", "Hi", "--body", "x",
-      "--provider", providerId,
     ]);
 
     expect(result.exited).toBe(false);
-    expect(await listSandboxEmails(providerId, 10)).toHaveLength(1);
+    expect(await outboundMessages(stub)).toHaveLength(1);
   });
 });
 
 // ---- the recipient string must not be a way around the gate ----------------
 
 describe("suppression matches the recipient canonically, not by exact string", () => {
-  let providerId: string;
-
-  beforeEach(() => {
+  let stub: V1Stub;
+  beforeAll(async () => { stub = await startV1Stub({ openapi: true }); });
+  afterAll(() => stub.stop());
+  beforeEach(async () => {
     captureInheritedProcessEnv();
-    process.env["EMAILS_DB_PATH"] = ":memory:";
-    resetDatabase();
+    await stub.reset();
+    stub.applyEnv();
     resetMailDataSource();
-    providerId = createProvider({ name: "sandbox", type: "sandbox", active: true }).id;
   });
-
   afterEach(() => {
-    closeDatabase();
+    stub.clearEnv();
     resetMailDataSource();
-    delete process.env["EMAILS_MODE"];
-    delete process.env["EMAILS_DB_PATH"];
     restoreInheritedProcessEnv();
   });
 
-  // `contacts.email` has no COLLATE NOCASE and nothing canonicalized either
-  // side, so an exact string comparison let a differently-spelled recipient
-  // through — while the self-hosted server, which canonicalizes both sides,
-  // refused the same send. Local enforcement must not be the weaker one.
+  // Alternate casing, whitespace and display names must not bypass suppression.
   const spellings = [
     "Blocked@ext.com",
     "BLOCKED@EXT.COM",
@@ -248,91 +230,73 @@ describe("suppression matches the recipient canonically, not by exact string", (
   ];
 
   it("refuses every spelling of a suppressed recipient", async () => {
-    await suppressContact("blocked@ext.com", getDatabase());
+    await suppressContact("blocked@ext.com");
 
     for (const spelling of spellings) {
       const result = await runSend([
         "send", "--from", "agent@acme.com", "--to", spelling, "--subject", "Hi", "--body", "x",
-        "--provider", providerId,
-      ]);
+        ]);
 
       expect(result.exited).toBe(true);
       expect(result.errorOutput).toContain("Refusing to send to suppressed recipient(s)");
-      expect(await listSandboxEmails(providerId, 10)).toHaveLength(0);
+      expect(await outboundMessages(stub)).toHaveLength(0);
     }
   });
 
   it("refuses when the stored contact is the differently-spelled one", async () => {
     // The operator suppressed a mixed-case address; a lowercase send must still
     // be refused, or `emails contact suppress` silently did nothing.
-    await suppressContact("Blocked@Ext.com", getDatabase());
+    await stub.seed({ contacts: [{ id: "mixed-case-contact", email: "Blocked@Ext.com", suppressed: true }] });
 
     const result = await runSend([
       "send", "--from", "agent@acme.com", "--to", "blocked@ext.com", "--subject", "Hi", "--body", "x",
-      "--provider", providerId,
     ]);
 
     expect(result.exited).toBe(true);
-    expect(await listSandboxEmails(providerId, 10)).toHaveLength(0);
+    expect(await outboundMessages(stub)).toHaveLength(0);
   });
 
   it("does not over-match a different address that merely looks similar", async () => {
-    await suppressContact("blocked@ext.com", getDatabase());
+    await suppressContact("blocked@ext.com");
 
     const result = await runSend([
       "send", "--from", "agent@acme.com", "--to", "notblocked@ext.com", "--subject", "Hi", "--body", "x",
-      "--provider", providerId,
     ]);
 
     expect(result.exited).toBe(false);
-    expect(await listSandboxEmails(providerId, 10)).toHaveLength(1);
+    expect(await outboundMessages(stub)).toHaveLength(1);
   });
 });
 
-// ---- the other local send surfaces that reach ds.send ----------------------
+// ---- the other API send surfaces that reach ds.send ----------------------------
 
 describe("reply, forward, and the MCP send tool refuse suppressed recipients too", () => {
-  let providerId: string;
-
+  let stub: V1Stub;
+  beforeAll(async () => { stub = await startV1Stub({ openapi: true }); });
+  afterAll(() => stub.stop());
   beforeEach(async () => {
     captureInheritedProcessEnv();
-    process.env["EMAILS_DB_PATH"] = ":memory:";
-    resetDatabase();
+    await stub.reset();
+    stub.applyEnv();
     resetMailDataSource();
-    providerId = createProvider({ name: "sandbox", type: "sandbox", active: true }).id;
-    // The collapsed contacts family is async and store-seam-backed; hand it the
-    // memoised connection explicitly so the seed lands on the database this suite
-    // resets, whatever the surrounding environment configures.
-    await suppressContact("blocked@ext.com", getDatabase());
+    await suppressContact("blocked@ext.com");
   });
-
   afterEach(() => {
-    closeDatabase();
+    stub.clearEnv();
     resetMailDataSource();
-    delete process.env["EMAILS_MODE"];
-    delete process.env["EMAILS_DB_PATH"];
     restoreInheritedProcessEnv();
   });
 
   async function seedInbound(): Promise<string> {
-    const { storeInboundEmail } = await import("../../db/inbound.local.js");
-    const stored = storeInboundEmail({
-      provider_id: null,
-      message_id: "<parent@ext.com>",
-      in_reply_to_email_id: null,
-      from_address: "blocked@ext.com",
-      to_addresses: ["agent@acme.com"],
-      cc_addresses: [],
-      subject: "Original",
-      text_body: "body",
-      html_body: null,
-      attachments: [],
-      attachment_paths: [],
-      headers: {},
-      raw_size: 100,
-      received_at: new Date().toISOString(),
+    const id = crypto.randomUUID();
+    await stub.seed({
+      contacts: [{ id: "blocked", email: "blocked@ext.com", suppressed: true }],
+      messages: [{ id, direction: "inbound", message_id: "<parent@ext.com>",
+        from_addr: "blocked@ext.com", to_addrs: ["agent@acme.com"], cc_addrs: [],
+        subject: "Original", body_text: "body", body_html: null, attachments: [],
+        headers: {}, received_at: new Date().toISOString() }],
     });
-    return stored.id;
+    return id;
   }
 
   async function runReplyCommand(args: string[]): Promise<RunResult> {
@@ -371,7 +335,7 @@ describe("reply, forward, and the MCP send tool refuse suppressed recipients too
 
     expect(result.exited).toBe(true);
     expect(result.errorOutput).toContain("Refusing to forward to suppressed recipient(s)");
-    expect(await listSandboxEmails(providerId, 10)).toHaveLength(0);
+    expect(await outboundMessages(stub)).toHaveLength(0);
   });
 
   it("emails reply refuses a suppressed recipient it derived itself", async () => {
@@ -382,7 +346,7 @@ describe("reply, forward, and the MCP send tool refuse suppressed recipients too
 
     expect(result.exited).toBe(true);
     expect(result.errorOutput).toContain("Refusing to reply to suppressed recipient(s)");
-    expect(await listSandboxEmails(providerId, 10)).toHaveLength(0);
+    expect(await outboundMessages(stub)).toHaveLength(0);
   });
 
   it("the MCP send_email tool refuses a suppressed recipient, with no force escape", async () => {
@@ -400,12 +364,11 @@ describe("reply, forward, and the MCP send tool refuse suppressed recipients too
       to: "Blocked Person <blocked@ext.com>",
       subject: "Hi",
       text: "x",
-      provider_id: providerId,
     });
 
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toContain("suppressed recipient(s)");
-    expect(await listSandboxEmails(providerId, 10)).toHaveLength(0);
+    expect(await outboundMessages(stub)).toHaveLength(0);
     // No `force` parameter exists on this tool — an agent cannot opt out.
     expect(JSON.stringify(tool.inputSchema ?? {})).not.toContain("force");
   });
@@ -415,12 +378,9 @@ describe("reply, forward, and the MCP send tool refuse suppressed recipients too
 
 describe("emails batch keeps its (already correct) skip-unless-force shape", () => {
   it("skips a suppressed row and counts it, rather than mailing it", async () => {
-    // RESTORE, NEVER DELETE. The deployment word used to be SET here to force the
-    // local arm; the word is removed (hasna/apps#1566) and a set word now trips
-    // the retired-variable guard, so the explicit database path alone selects
-    // local. The path is restored rather than deleted because the hermetic runner
-    // INHERITS this process the database path — a delete would strip it from every
-    // file that ran after this one in the shared test process.
+    // Explicit library compatibility test; this does not invoke an ordinary
+    // client. Restore the prior path so later shared-process tests keep their
+    // own configuration.
     const priorDbPath = process.env["EMAILS_DB_PATH"];
     process.env["EMAILS_DB_PATH"] = ":memory:";
     resetDatabase();

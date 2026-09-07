@@ -96,6 +96,9 @@ function publishedResourceContract() {
       post: { requestBody: post?.requestBody ?? null },
     };
   }
+  paths["/v1/messages/send"] = published["/v1/messages/send"];
+  paths["/v1/inbox/sync-s3"] = published["/v1/inbox/sync-s3"];
+  paths["/v1/providers/{id}/sync"] = published["/v1/providers/{id}/sync"];
   paths["/v1/messages"] = { get: { parameters: (published["/v1/messages"]?.get as { parameters?: unknown })?.parameters ?? [] } };
   return { openapi: emailsSelfHostedOpenApi.openapi, info: emailsSelfHostedOpenApi.info,
     security: emailsSelfHostedOpenApi.security, components: {}, paths };
@@ -123,14 +126,19 @@ export interface V1StubOptions {
    *
    * So a suite that needs the contract asks for it, and the ask is visible in the diff.
    *
-   * Turning this on does NOT make the fixture faithful for filtered reads: the generic
+   * Turning this on alone does NOT make the fixture faithful for filtered reads: the generic
    * list handler still IGNORES equality filters and merely records the query string, so it
    * serves the UNFILTERED list for a filter it now declares it accepts. A client that
    * trusted the filter would be wrong here and right in production, which is worse than no
    * evidence at all — use `src/test-support/v1-store-api.ts` for filtered or paged
-   * store-seam tests.
+   * store-seam tests. The separate resourceFilters option applies registry-declared
+   * generic equality filters for subprocess CLI selector tests.
    */
   openapi?: boolean;
+  /** Apply declared generic equality filters before paging; default keeps fault-injection behavior. */
+  resourceFilters?: boolean;
+  /** Opt-in managed-provider transport fixture. Stores metadata/field names only, never credential values. */
+  managedProviders?: boolean;
 }
 
 export interface V1Stub {
@@ -147,7 +155,8 @@ export interface V1Stub {
   /** Read the entire store back from the stub. */
   dump(): Promise<V1StubResources>;
   /** Select a deterministic send outcome for controlled-send regressions. */
-  setSendBehavior(behavior: "normal" | "delayed_success" | "post_send_warning"): Promise<void>;
+  setSendBehavior(behavior: "normal" | "delayed_success" | "post_send_warning" | "warming_rejected"): Promise<void>;
+  sendRequests(): Promise<Array<Record<string, unknown>>>;
   /** Read the number of provider-send calls made since the last reset. */
   sendStats(): Promise<{ providerCalls: number }>;
   /**
@@ -233,6 +242,7 @@ const V1_STUB_RESOURCE_DEFAULTS: Record<string, Record<string, unknown>> = {
     status: "pending",
   },
   aliases: { target_address: "", protected: false },
+  feedback: { message: "", email: null, category: "general", status: "saved" },
   forwarding: { mode: "app-copy", enabled: true },
   warming: { target_daily_volume: 0, status: "active" },
   triage: { priority: 3, confidence: 0, triaged_at: NOW_DEFAULT },
@@ -331,11 +341,13 @@ let listRotateCalls = {};
 // Test-only send controls. They stay outside the dumped resource store so the
 // fixture cannot accidentally expose them as product data.
 let sendBehavior = "normal";
+let sendRequests: Array<Record<string, unknown>> = [];
 let providerSendCalls = 0;
 // Declared ORDER BY per generic resource, injected from the server's own registry
 // (SELF_HOSTED_RESOURCES + resourceListOrderBy) so the stub orders lists the way the
 // real route does. Shape: { resource: [{ column, desc }, ...] }.
 const listOrder = safeParse(process.env.V1_STUB_LIST_ORDER);
+const resourceFilters = safeParse(process.env.V1_STUB_RESOURCE_FILTERS);
 // The service's published contract for the generic resource routes, injected from the
 // server's own generated OpenAPI document (see the /v1/openapi.json route below).
 const openApiContract = safeParse(process.env.V1_STUB_OPENAPI);
@@ -914,6 +926,7 @@ const server = Bun.serve({
       listRotateCalls = {};
       listQueries = {};
       sendBehavior = "normal";
+      sendRequests = [];
       providerSendCalls = 0;
       return json({ ok: true });
     }
@@ -923,12 +936,13 @@ const server = Bun.serve({
     if (req.method === "POST" && parts[0] === "v1" && parts[1] === "__send_behavior") {
       const body = await req.json().catch(function () { return {}; });
       const next = String(body.behavior || "");
-      if (next !== "normal" && next !== "delayed_success" && next !== "post_send_warning") {
+      if (next !== "normal" && next !== "delayed_success" && next !== "post_send_warning" && next !== "warming_rejected") {
         return json({ error: "unsupported send behavior" }, 400);
       }
       sendBehavior = next;
       return json({ ok: true });
     }
+    if (req.method === "GET" && parts[0] === "v1" && parts[1] === "__send_requests") return json({ requests: sendRequests });
     if (req.method === "GET" && parts[0] === "v1" && parts[1] === "__send_stats") {
       return json({ provider_calls: providerSendCalls });
     }
@@ -1061,7 +1075,7 @@ const server = Bun.serve({
     // serve the UNFILTERED list for a filter it now declares it accepts. A client that
     // trusted the filter is still wrong here and right in production, which is worse than
     // useless as evidence: use src/test-support/v1-store-api.ts for filtered or paged
-    // store-seam tests.
+    // store-seam tests. resourceFilters separately opts into generic equality filtering.
     // Absent unless the suite asked for it (V1StubOptions.openapi) — see that field's note.
     // Without it this path answers the same 404 it always did, which is what keeps an
     // existing suite's negative control a control.
@@ -1166,6 +1180,42 @@ const server = Bun.serve({
     const sub = parts[2];
     const id = sub !== undefined ? decodeURIComponent(sub) : undefined;
 
+    // Transport-only managed-provider fixture; real KMS/transaction semantics are
+    // tested by managed-provider-secrets.integration.test.ts, not simulated here.
+    if (process.env.V1_STUB_MANAGED_PROVIDERS === "1" && resource === "providers") {
+      const providers = rowsFor("providers");
+      const receipts = rowsFor("managed-provider-receipts");
+      if (sub === "secrets" && parts[3] === "status" && req.method === "GET") {
+        return json({ source: "server_managed_envelopes", complete: true, checked: false,
+          activeKeyId: "00000000-0000-4000-8000-000000000036", availableKeyIds: ["00000000-0000-4000-8000-000000000036"], referencedKeyIds: ["00000000-0000-4000-8000-000000000036"],
+          managed_envelopes: receipts.length, lifecycle_requirement: "Synthetic managed-provider fixture",
+          capabilities: { status: true, rewrap: true, rotate_root: true, revoke_root: true }, default_sender: null,
+          providers: providers.map(function (provider) {
+            const receipt = receipts.find(function (item) { return item.provider_id === provider.id; });
+            return { provider_id: provider.id, name: provider.name, type: provider.type, active: provider.active,
+              configured: !!receipt, credential_source: receipt ? "managed_envelope" : "external",
+              externally_managed: !receipt, ...(receipt ? { revision: receipt.revision } : {}) };
+          }) });
+      }
+      if (id && parts[3] === "managed" && req.method === "PUT") {
+        const body = await req.json();
+        const prior = receipts.find(function (item) { return item.provider_id === id; });
+        const provider = providers.find(function (item) { return item.id === id; });
+        if (body.expected_revision !== (prior ? prior.revision : null) || body.create === true && provider) return json({ error: "Provider revision conflict" }, 409);
+        if (!body.credentials || typeof body.credentials !== "object" || Object.values(body.credentials).some(function (value) { return typeof value !== "string" || !value.trim(); })) return json({ error: "Invalid credential fields" }, 400);
+        if (body.create === true && (!body.name || body.type !== "ses" || !body.region || !body.credentials.access_key || !body.credentials.secret_key)) return json({ error: "Fixture creation requires complete SES input" }, 400);
+        if (!provider && body.create !== true) return json({ error: "Provider not found" }, 404);
+        if (body.skip_validation !== true) return json({ error: "Synthetic fixture does not probe real providers" }, 422);
+        const now = new Date().toISOString();
+        if (!provider) providers.push(normalizeResourceRow("providers", { id: id, name: body.name, type: body.type, region: body.region, active: true, created_at: now, updated_at: now }));
+        else { if (body.name !== undefined) provider.name = body.name; if (body.region !== undefined) provider.region = body.region; provider.updated_at = now; }
+        const revision = prior ? prior.revision + 1 : 1;
+        const evidence = { provider_id: id, revision: revision, credential_fields: Object.keys(body.credentials).sort(), skip_validation: body.skip_validation };
+        if (prior) Object.assign(prior, evidence); else receipts.push(evidence);
+        return json({ provider_id: id, revision: revision, root_id: "00000000-0000-4000-8000-000000000036", status: "complete", checked: false });
+      }
+    }
+
     // Messages special endpoints.
     if (resource === "messages" && sub === "counts" && req.method === "GET") {
       return json({ counts: messageCounts() });
@@ -1202,8 +1252,64 @@ const server = Bun.serve({
         .slice(offset, offset + limit);
       return json({ rows });
     }
+    if (req.method === "POST" && ((resource === "inbox" && sub === "sync-s3") || (resource === "providers" && parts[3] === "sync"))) {
+      const body = await req.json();
+      const operation = resource === "inbox" ? "sync-s3" : "provider-sync";
+      rowsFor("sync-requests").push({ id: crypto.randomUUID(), operation, ...(resource === "providers" ? { provider_id: sub } : {}), ...body });
+      const fixture = rowsFor("sync-results").find(row => row.operation === operation && (row.provider_id === undefined || row.provider_id === sub) && (row.cursor ?? null) === (body.cursor ?? body.after ?? null));
+      return fixture ? json(fixture.receipt, Number(fixture.status ?? 200)) : json({ error: "No configured sync fixture" }, 404);
+    }
+    if (resource === "inbox" && sub === "setup-ses-inbound" && req.method === "POST") {
+      const body = await req.json();
+      const fixture = rowsFor("ses-setup-results").find(row => row.domain === body.domain);
+      if (!fixture) return json({ error: "No bound SES setup fixture" }, 404);
+      rowsFor("ses-setup-requests").push({ id: crypto.randomUUID(), ...body });
+      return json(fixture.receipt, Number(fixture.status ?? 200));
+    }
+    // Explicit opt-in for command routing suites. Default remains an older API
+    // without orchestration, so missing-capability tests cannot pass by accident.
+    if (resource === "domains" && sub === "connect" && req.method === "POST" && rowsFor("domain-connect-enabled").length) {
+      const body = await req.json();
+      rowsFor("domain-connect-requests").push({ id: crypto.randomUUID(), ...body });
+      const provider = rowsFor("providers").find(row => row.id === body.provider_id);
+      if (!provider || !provider.active) return json({ error: "Provider not found", reason: "provider_not_found" }, 404);
+      if (!["ses", "resend"].includes(provider.type)) return json({ error: "Provider unavailable", reason: "provider_unavailable" }, 409);
+      const domain = String(body.domain).trim().toLowerCase();
+      const domains = rowsFor("domains");
+      let row = domains.find(item => item.domain === domain);
+      if (row && row.provider !== provider.id) return json({ error: "Provider mismatch", reason: "provider_mismatch" }, 409);
+      if (!row && !body.dry_run) {
+        row = normalizeDomainRow({ id: crypto.randomUUID(), domain, provider: provider.id, verified: true });
+        domains.push(row);
+      }
+      return json({ dry_run: body.dry_run === true, connection: {
+        id: body.dry_run ? null : crypto.randomUUID(), domain_id: row?.id ?? null,
+        domain, provider_id: provider.id, dns_provider: body.dns_provider ?? "manual",
+        register_provider: body.register_provider !== false, status: body.dry_run ? "planned" : "verified",
+        provider_registered: body.dry_run ? null : true, checked_at: new Date().toISOString(),
+        message: "Synthetic provider connection", dns_tasks: [],
+      } });
+    }
+    if (resource === "domains" && ["setup", "setup-cloudflare"].includes(sub) && req.method === "POST") {
+      const fixture = rowsFor("dns-setup-results").find(row => row.operation === sub);
+      if (!fixture) return json({ error: "not found" }, 404);
+      const body = await req.json();
+      rowsFor("dns-setup-requests").push({ id: crypto.randomUUID(), operation: sub, ...body });
+      return json(fixture.receipt);
+    }
+    if (resource === "domains" && parts[3] === "dns-records" && req.method === "GET") {
+      const fixture = rowsFor("dns-records").find(row => row.domain_id === sub);
+      if (fixture) return json(fixture);
+      return json({ error: "not found" }, 404);
+    }
+    if (resource === "domains" && parts[3] === "verify" && req.method === "POST") {
+      const fixture = rowsFor("dns-verifications").find(row => row.id === sub);
+      if (fixture) return json({ domain: fixture });
+      return json({ error: "not found" }, 404);
+    }
     if (resource === "messages" && sub === "send" && req.method === "POST") {
       const body = await req.json().catch(function () { return {}; });
+      sendRequests.push(body);
       const key = typeof body.idempotency_key === "string" ? body.idempotency_key : "";
       const existing = rowsFor("messages").find(function (row) {
         return key && row.idempotency_key === key;
@@ -1253,6 +1359,7 @@ const server = Bun.serve({
           retry_safe: false,
         }, 409);
       }
+      if (sendBehavior === "warming_rejected") return json({ error: "Warming limit reached", reason: "warming_limit_exceeded", message: null, retry_safe: false }, 409);
       providerSendCalls += 1;
       if (sendBehavior === "delayed_success") await Bun.sleep(300);
       const now = new Date().toISOString();
@@ -1267,6 +1374,9 @@ const server = Bun.serve({
         body_text: typeof body.text === "string" ? body.text : null,
         body_html: typeof body.html === "string" ? body.html : null,
         status: "sent",
+        provider_id: body.provider_id ?? null,
+        headers: body.headers ?? {},
+        tags: body.tags ?? null,
         provider_message_id: providerMessageId,
         message_id: "stub-" + (rowsFor("messages").length + 1),
         is_read: true,
@@ -1460,7 +1570,14 @@ const server = Bun.serve({
       const offset = rawOffset === null || Number.isNaN(Number(rawOffset)) || Number(rawOffset) < 0
         ? 0
         : Math.floor(Number(rawOffset));
-      const ordered = rotateForList(resource, sortForList(resource, rows));
+      const declaredFilters = resourceFilters[resource] || [];
+      const filtered = rows.filter(function (row) {
+        return declaredFilters.every(function (column) {
+          const value = url.searchParams.get(column);
+          return value === null || String(row[column]) === value;
+        });
+      });
+      const ordered = rotateForList(resource, sortForList(resource, filtered));
       let windowed = offset > 0 ? ordered.slice(offset) : ordered;
       const parsedLimit = rawLimit === null ? Number.NaN : Number(rawLimit);
       const limit = !parsedLimit || Number.isNaN(parsedLimit)
@@ -1600,10 +1717,12 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
     env: {
       ...process.env,
       V1_STUB_API_KEY: apiKey,
+      V1_STUB_MANAGED_PROVIDERS: options.managedProviders === true ? "1" : "",
       V1_STUB_SEED: initialSeed,
       V1_STUB_RESOURCE_SPECS: JSON.stringify(V1_STUB_RESOURCE_SPECS),
       V1_STUB_RESOURCE_DEFAULTS: JSON.stringify(V1_STUB_RESOURCE_DEFAULTS),
       V1_STUB_LIST_ORDER: JSON.stringify(declaredListOrder()),
+      V1_STUB_RESOURCE_FILTERS: JSON.stringify(options.resourceFilters ? Object.fromEntries(SELF_HOSTED_RESOURCES.map(spec => [spec.path, spec.filters ?? []])) : {}),
       V1_STUB_OPENAPI: options.openapi === true ? JSON.stringify(publishedResourceContract()) : "",
     },
     stdout: "pipe",
@@ -1661,6 +1780,7 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
       const body = (await res.json()) as { resources?: V1StubResources };
       return body.resources ?? {};
     },
+    async sendRequests() { const response = await fetch(`${baseUrl}/v1/__send_requests`); if (!response.ok) throw new Error("Cannot read fixture send requests"); return (await response.json() as { requests: Array<Record<string, unknown>> }).requests; },
     async setSendBehavior(behavior) {
       const res = await fetch(`${baseUrl}/v1/__send_behavior`, {
         method: "POST",

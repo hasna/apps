@@ -333,18 +333,11 @@ export const WRITABLE_EMAIL_STATUSES: readonly EmailStatus[] = [
 /**
  * One entry in the outbound sent ledger.
  *
- * THREE FIELDS ARE NULLABLE BECAUSE A STORE MAY NOT PUBLISH THEM, and that is a different
- * fact from the value being empty. The store seam's message projections
- * (`MessageRecord` / `MessageListRecord`, src/store/records.ts) carry no `provider_id`, no
- * `bcc_addrs` and no `tags`, so `src/db/emails.ts` answers `null` for all three rather than
- * the `"self_hosted"` / `[]` / `{}` the deleted HTTP arm invented — three comfortable
- * values indistinguishable from three real ones. `src/lib/sent-ledger.local.ts`, which
- * writes the `emails` table directly, fills all three.
- *
- * `reply_to` was already nullable and is the one field where "there is no reply-to" and
- * "this store does not record one" still collide; separating them needs a second field on
- * this published type and is named in the `src/db/emails.ts` header rather than left to be
- * discovered.
+ * Provider identity and tags are returned when the store records them; older
+ * projections may return null. BCC remains nullable where the store does not
+ * publish it. Null means unknown, rather than inventing an empty value.
+ * Explicit sent-ledger writers can still populate their legacy columns.
+
  */
 export interface Email {
   id: string;

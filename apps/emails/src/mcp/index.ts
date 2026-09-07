@@ -40,6 +40,8 @@ if (args.includes("--version") || args.includes("-V")) {
 }
 
 async function main(): Promise<void> {
+  const { assertApiClientStorage } = await import("../lib/client-storage-policy.js");
+  assertApiClientStorage();
   const { isHttpMode, isStdioMode, resolveHttpPort } = await import("./options.js");
   // HTTP is opt-in. Serving the full tool graph (send_email, add_forwarding_rule,
   // set_config, create_send_key, ...) on a listening socket must be a deliberate

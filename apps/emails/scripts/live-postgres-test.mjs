@@ -12,13 +12,18 @@ export const LIVE_POSTGRES_SUITES = Object.freeze([
   "address-provisioning.integration.test.ts",
   "attachment-inventory.integration.test.ts",
   "domain-connect.integration.test.ts",
+  "domain-dns.integration.test.ts",
+  "feedback.integration.test.ts",
   "forwarding.integration.test.ts",
   "idp.integration.test.ts",
   "inbox-perf.integration.test.ts",
+  "managed-provider-secrets.integration.test.ts",
   "message-id-resolution.integration.test.ts",
   "multi-tenancy.integration.test.ts",
   "postgres.integration.test.ts",
+  "provision-up.integration.test.ts",
   "rls.integration.test.ts",
+  "runtime-log.integration.test.ts",
   "scheduler.integration.test.ts",
   "send-failure-semantics.integration.test.ts",
   "send-honesty-and-reconciliation.integration.test.ts",
@@ -26,6 +31,7 @@ export const LIVE_POSTGRES_SUITES = Object.freeze([
   "smtp-import.integration.test.ts",
   "store-conformance.integration.test.ts",
   "webhooks.integration.test.ts",
+  "worker-supervisor.integration.test.ts",
 ]);
 
 // These optional checks have private/external prerequisites: a production-schema
@@ -37,7 +43,7 @@ export const OPTIONAL_SKIPS = Object.freeze({
   "idp.integration.test.ts": "live @hasna/tenants JWKS endpoint > serves a JWKS the authenticator accepts, and refuses our locally-signed token (typed unknown_kid)",
 });
 
-// Executed-case floors from the registration census (213 cases, including the
+// Executed-case floors from the registration census (263 cases, including the
 // two named optional checks). The multi-tenancy floor is the suite's own 34
 // tenancy and outbound-enforcement cases as merged onto origin/main; the
 // counts here are re-derived from the actual suites whenever main moves them.
@@ -45,20 +51,26 @@ export const MINIMUM_PASS_COUNTS = Object.freeze({
   "address-provisioning.integration.test.ts": 8,
   "attachment-inventory.integration.test.ts": 28,
   "domain-connect.integration.test.ts": 7,
+  "domain-dns.integration.test.ts": 10,
+  "feedback.integration.test.ts": 3,
   "forwarding.integration.test.ts": 5,
   "idp.integration.test.ts": 8,
   "inbox-perf.integration.test.ts": 7,
+  "managed-provider-secrets.integration.test.ts": 6,
   "message-id-resolution.integration.test.ts": 5,
   "multi-tenancy.integration.test.ts": 34,
   "postgres.integration.test.ts": 22,
+  "provision-up.integration.test.ts": 16,
   "rls.integration.test.ts": 12,
+  "runtime-log.integration.test.ts": 3,
   "scheduler.integration.test.ts": 4,
   "send-failure-semantics.integration.test.ts": 7,
-  "send-honesty-and-reconciliation.integration.test.ts": 26,
+  "send-honesty-and-reconciliation.integration.test.ts": 31,
   "sequence-worker.integration.test.ts": 4,
   "smtp-import.integration.test.ts": 3,
   "store-conformance.integration.test.ts": 8,
   "webhooks.integration.test.ts": 23,
+  "worker-supervisor.integration.test.ts": 7,
 });
 
 export function validateTestDatabaseUrl(value) {

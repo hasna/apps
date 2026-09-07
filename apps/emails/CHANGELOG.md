@@ -12,8 +12,8 @@
   the macOS Keychain item for the Emails API key, the
   `~/.hasna/emails/config/credentials` file (or `credentials-<profile>`), then
   `HASNA_EMAILS_API_KEY`. The `emails` CLI has no `--api-key` / `--profile`
-  resolver arguments (its only `--profile` is the AWS profile on inbox and
-  provisioning commands, its only `--api-key` the Resend key on `provider add`).
+  resolver arguments (`--profile` on inbox and provisioning commands is a legacy provider selector,
+  not an account credential; `--api-key` on `provider add` is the Resend key).
   A `HASNA_EMAILS_API_KEY_REF` secrets-vault pointer is recognised as a
   deliberate selection but refused with a message naming it: this client
   resolves its credential synchronously and cannot complete a vault pointer per

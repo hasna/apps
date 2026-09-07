@@ -6,8 +6,8 @@
  *             pull here; it lands the moment the server receives it.
  * Entirely best-effort: missing config/creds is a silent no-op.
  */
-import { buildS3PullTargets } from "./autopull-targets.js";
-export type { S3PullTarget } from "./autopull-targets.js";
+import { buildS3PullTargets } from "./autopull-targets.test-support.js";
+export type { S3PullTarget } from "./autopull-targets.test-support.js";
 
 export interface PullForwardingResult { attempted: number; sent: number; failed: number; skipped: number }
 export interface PullResult { pulled: number; ok: boolean; reason?: string; configured: boolean; forwarded?: PullForwardingResult }
@@ -86,7 +86,7 @@ export async function autoPull(opts?: PullOpts): Promise<PullResult> {
         // would consume the redelivery signal for mail that never landed.
         if (queueUrl && syncErrors.length === 0) {
           try {
-            const { makeSqsAdapter } = await import("../../lib/inbound-realtime-aws.js");
+            const { makeSqsAdapter } = await import("../../lib/inbound-realtime-aws.test-support.js");
             const { watchInboundOnce } = await import("../../lib/inbound-realtime.js");
             const sqs = makeSqsAdapter({ queueUrl, region: inbound.region, waitTimeSeconds: 1 });
             await watchInboundOnce(sqs, queueUrl, async () => ({ synced: 0 }));

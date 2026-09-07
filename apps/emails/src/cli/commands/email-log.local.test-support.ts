@@ -20,7 +20,7 @@ import { handleError, parseCliPositiveIntOption, parseCliNonNegativeIntOption, r
 import { listReplies, listReplySummaries, getReplyCount } from "../../db/inbound.local.js";
 import type { InboundEmail, InboundEmailSummary } from "../../db/inbound.local.js";
 import { readableMessageText } from "../tui/format.js";
-import { resolveMailDataSource } from "../../lib/mail-data-source.js";
+import { SqliteMailDataSource } from "../../lib/mail-data-source.js";
 // The mailbox-wide search is shared with the self-hosted surface: it reads
 // through the routed MailDataSource, so it is mode-agnostic despite its module.
 import { mailboxSearch, type MailSearchOpts } from "./email-log.remote.js";
@@ -299,7 +299,7 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
     .option("--offset <n>", "Skip first N results", "0")
     .action(async (query: string, opts: MailSearchOpts) => {
       try {
-        await mailboxSearch(resolveMailDataSource(), query, opts, output);
+        await mailboxSearch(new SqliteMailDataSource(), query, opts, output);
       } catch (e) { handleError(e); }
     });
 
