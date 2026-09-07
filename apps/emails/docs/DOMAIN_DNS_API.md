@@ -18,3 +18,12 @@ and DMARC advice remains available. Non-publishing providers explicitly report
 that they do not require their own records. A registered publishing provider
 requires the DNS-read API capability; an older server is reported as an error
 instead of suggesting that users put provider secrets on their machine.
+
+MCP `setup_domain_for_email` uses the owned-domain setup API. MCP
+`setup_cloudflare_dns` uses the Cloudflare setup API, preserving optional MX,
+custom MX, registration, and explicit MX-switch choices. Both return the actual
+DNS job receipt and report blocked or still-processing jobs as incomplete.
+They require the same operator authority and preconfigured server bindings as
+the corresponding CLI operations. Purchase contacts/durations and inline
+Cloudflare tokens are rejected before submitting a setup request; purchases
+belong to the separate registrar workflow and provider secrets stay server-side.

@@ -1250,6 +1250,13 @@ const server = Bun.serve({
         .slice(offset, offset + limit);
       return json({ rows });
     }
+    if (resource === "domains" && ["setup", "setup-cloudflare"].includes(sub) && req.method === "POST") {
+      const fixture = rowsFor("dns-setup-results").find(row => row.operation === sub);
+      if (!fixture) return json({ error: "not found" }, 404);
+      const body = await req.json();
+      rowsFor("dns-setup-requests").push({ id: crypto.randomUUID(), operation: sub, ...body });
+      return json(fixture.receipt);
+    }
     if (resource === "domains" && parts[3] === "dns-records" && req.method === "GET") {
       const fixture = rowsFor("dns-records").find(row => row.domain_id === sub);
       if (fixture) return json(fixture);

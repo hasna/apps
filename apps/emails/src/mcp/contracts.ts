@@ -69,14 +69,6 @@ export function cliEquivalentForTool(name: string, input: unknown): string {
     list_domains: () => `emails domain list${provider ? ` --provider ${provider}` : ""}${flag(input, "limit")}${flag(input, "offset")} --json`,
     list_usable_domains: () => `emails domain usable${provider ? ` --provider ${provider}` : ""}${enabled(input, "send")}${enabled(input, "receive")}${flag(input, "limit")}${flag(input, "offset")} --json`,
     add_domain: () => `emails domain add ${domain ?? "<domain>"} --provider ${provider ?? "<provider-id>"} --json`,
-    // The note is load-bearing, not decoration. `get_dns_records` is guarded in
-    // self_hosted mode for ONE reason — with a `/v1/providers` row of type `ses` the
-    // adapter resolves credentials from the CALLER's ambient AWS environment, and an
-    // MCP client's environment is not the operator's shell. `emails domain dns` runs,
-    // and for a provider-backed domain it takes that same adapter path. Handing an
-    // agent the bare command therefore routed it straight around the guard by
-    // following the guard's own advice. Say so instead: the command is still the right
-    // one to name, because for a domain with no provider it is pure local computation.
     get_dns_records: () => `emails domain dns ${domain ?? id ?? "<domain-or-id>"}${provider ? ` --provider ${provider}` : ""} --json`,
     verify_domain: () => `emails domain verify ${domain ?? id ?? "<domain-or-id>"} --json`,
     remove_domain: () => `emails domain remove ${id ?? domain ?? "<domain-or-id>"} --yes --json`,
@@ -242,6 +234,18 @@ function normalizeResult(toolName: string, input: unknown, result: ToolResult): 
   const cliEquivalent = cliEquivalentForTool(toolName, input);
   if (result.isError) {
     const text = result.content?.find((item) => item.type === "text")?.text ?? "Tool failed";
+    if (["setup_domain_for_email", "setup_cloudflare_dns", "setup_ses_inbound", "provision_domain", "provision_address"].includes(toolName)) {
+      try {
+        const receipt = JSON.parse(text) as Record<string, unknown>;
+        const job = receipt.job as Record<string, unknown> | undefined;
+        if (job && typeof job.id === "string" && typeof job.status === "string") {
+          return { ...result, content: [{ type: "text", text: JSON.stringify(redactSecrets({ ...receipt,
+            error: { code: "provisioning_incomplete", message: "Inspect the provisioning receipt before retrying.", retryable: false },
+            cli_equivalent: cliEquivalent,
+          }), null, 2) }] };
+        }
+      } catch { /* Ordinary validation failures use the common error envelope. */ }
+    }
     if (toolName === "batch_send") {
       try {
         const batch = JSON.parse(text) as Record<string, unknown>;

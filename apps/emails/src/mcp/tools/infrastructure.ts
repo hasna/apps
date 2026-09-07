@@ -3,58 +3,17 @@ import { provisionAddress, addressProvisioningReady } from "../../lib/address-pr
 // MCP tool module: infrastructure.ts
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createDomain } from '../../db/domains.js';
-import { getProvider } from '../../db/providers.js';
-import { getAdapter } from '../../providers/index.js';
 import { AGENT_WRITABLE_CONFIG_KEYS, loadConfig, getConfigValue, setAgentConfigValue } from '../../lib/config.js';
 import { normalizeRoute53RegistrationContact } from '../../lib/route53-contact.js';
 import { resolveClientMode } from '../../lib/mode.js';
-import { formatError, resolveId, ProviderNotFoundError } from '../helpers.js';
+import { formatError, resolveId } from '../helpers.js';
 
 const MAX_MCP_S3_SYNC_LIMIT = 10000;
 const MAX_MCP_PROVISION_WAIT_SECONDS = 300;
 const MAX_MCP_PROVISION_INTERVAL_SECONDS = 60;
 const MAX_DOMAIN_REGISTRATION_YEARS = 10;
 
-/**
- * Refuse SES/DNS/S3-mutating provisioning tools in self_hosted mode.
- *
- * In self_hosted mode `getProvider` returns a row whose secrets are nulled by
- * policy (`db/providers.remote.ts`), so the SES adapter resolves credentials
- * from the ambient `AWS_*` environment of the CLIENT machine
- * (`providers/ses.ts`) and Cloudflare falls back to this client's token. A
- * tenant member can therefore stand up a SES identity in their own AWS account,
- * repoint a zone's DKIM/SPF/DMARC at it, and install receipt rules into their
- * own bucket. Where the tool also calls `createDomain`, that lands in the
- * OPERATOR's shared domain state as a domain the operator's SES cannot send
- * from.
- *
- * The line this draws: tools that MUTATE SES identities, DNS records or SES
- * receipt rules are refused. Read-only lookups and registrar-only operations
- * (`check_domain_availability`, `register_domain`,
- * `get_domain_registration_status`, `list_registered_domains`,
- * `get_cloudflare_zone`) stay live — they touch no mail-delivery configuration
- * and they back `emails domain available|buy|purchase-status|list-registered`,
- * which still execute. Note `register_domain` does spend money in the ambient
- * account; that is pre-existing behaviour of the `domain buy` surface and is
- * deliberately left alone here rather than removed as a side effect.
- *
- * SCOPE WARNING — this does NOT close the class. The CLI twin `emails domain
- * adopt` performs the same `addDomain` + `createDomain` + `setupInboundEmail`
- * sequence in self_hosted mode with no mode guard (`cli/commands/domain.ts`),
- * and is deliberately kept live there. Closing that requires pushing the policy
- * down into `lib/aws-inbound.ts` / `lib/cloudflare-dns.ts` and the
- * `adapter.addDomain` call sites, which is a separate change.
- *
- * The self-hosted server exposes no route that performs provisioning, so this
- * refuses instead of claiming the work happens server-side. Local mode still
- * runs the real thing.
- *
- * The wording deliberately avoids the words "credential", "auth" and
- * "provider": `mcp/contracts.ts` classifies error codes and fix_commands by
- * regex over the message, and those words would mislabel a mode refusal as an
- * `auth_error` whose remedy points at provider credentials.
- */
+/** Remaining SES bucket/rule setup needs an authenticated server operation. */
 function assertProvisioningInfraAllowed(toolName: string): void {
   if (resolveClientMode().mode !== "self_hosted") return;
   throw new Error(
@@ -138,7 +97,7 @@ export function registerInfrastructureTools(server: McpServer): void {
 
   server.tool(
   "setup_domain_for_email",
-  "Full setup: buy domain (Route53) + create Cloudflare zone + delegate nameservers to Cloudflare + register with SES + publish DKIM/SPF/DMARC DNS records IN CLOUDFLARE. DNS is always managed in Cloudflare regardless of registrar. One call to go from domain name to fully configured email sending.",
+  "Configure an already-owned domain through the account API and server-bound provider/Cloudflare zone. Returns the durable DNS setup receipt; does not purchase domains.",
   {
     domain: z.string().describe("Domain to set up"),
     provider_id: z.string().describe("SES or Resend provider ID"),
@@ -147,74 +106,17 @@ export function registerInfrastructureTools(server: McpServer): void {
       phone: z.string(), address_line_1: z.string(), city: z.string(),
       state: z.string().optional(), country_code: z.string(), zip_code: z.string(),
       organization_name: z.string().optional(),
-    }).optional().describe("Registrant contact info (omit if domain already purchased)"),
+    }).optional().describe("Legacy purchase input: rejected by this owned-domain operation; use the registrar workflow"),
     duration_years: z.number().int().positive().max(MAX_DOMAIN_REGISTRATION_YEARS).optional(),
     add_mx: z.boolean().optional().describe("Also publish an inbound MX record for receiving (default false)"),
     force_mx_switch: z.boolean().optional().describe("Allow adding inbound MX when an existing provider already owns root MX"),
   },
   async ({ domain, provider_id, contact, duration_years, add_mx, force_mx_switch }) => {
     try {
-      assertProvisioningInfraAllowed("setup_domain_for_email");
-      const {
-        r53CheckAvailability, r53RegisterDomain, r53GetRegistrationStatus,
-        r53UpdateNameservers, cfEnsureZone, pollRegistrationUntilDone,
-      } = await import("@hasna/domains");
-
-      const provider = getProvider(resolveId("providers", provider_id));
-      if (!provider) throw new ProviderNotFoundError(provider_id);
-      if (add_mx) {
-        const { guardSesInboundMx } = await import("../../lib/mx-ownership.js");
-        await guardSesInboundMx(domain, !!force_mx_switch);
-      }
-
-      const steps: string[] = [];
-
-      // 1. Buy domain if contact info provided, and wait for registration.
-      if (contact) {
-        const avail = await r53CheckAvailability(domain);
-        if (!avail.available) throw new Error(`${domain} is not available for registration`);
-        steps.push(`availability: ${avail.available}, price: ${avail.price ?? "unknown"} ${avail.currency ?? ""}`);
-        const reg = await r53RegisterDomain(domain, normalizeRoute53RegistrationContact(contact) as Parameters<typeof r53RegisterDomain>[1], duration_years ?? 1);
-        steps.push(`registration submitted, operation_id: ${reg.operationId}`);
-        const result = await pollRegistrationUntilDone(reg.operationId, {
-          getStatus: async (id: string) => await r53GetRegistrationStatus(id),
-        });
-        if (result.status !== "success") throw new Error(`registration ${result.status}: ${result.message ?? ""}`);
-        steps.push("registration complete");
-      }
-
-      // 2. Create/reuse the CLOUDFLARE zone and delegate the registrar NS to it.
-      //    DNS is always Cloudflare — never a Route53 hosted zone.
-      const zone = await cfEnsureZone(domain);
-      steps.push(`cloudflare zone: ${zone.id} (ns ${zone.nameservers.join(", ")})`);
-      try {
-        await r53UpdateNameservers(domain, zone.nameservers);
-        steps.push("registrar nameservers delegated to Cloudflare");
-      } catch (e) {
-        steps.push(`nameserver delegation skipped/failed (domain may be at another registrar): ${formatError(e)}`);
-      }
-
-      // 3. Register with SES.
-      const adapter = getAdapter(provider);
-      await adapter.addDomain(domain);
-      createDomain(resolveId("providers", provider_id), domain);
-      steps.push("domain registered with SES");
-
-      // 4. Publish DKIM/SPF/DMARC (+ optional MX) records IN CLOUDFLARE.
-      const { setupEmailDns } = await import("../../lib/cloudflare-dns.js");
-      const dns = await setupEmailDns({ domain, provider, addMx: add_mx ?? false, forceMxSwitch: !!force_mx_switch });
-      steps.push(`${dns.created} DNS records published to Cloudflare (${dns.skipped} skipped, ${dns.failed} failed)`);
-
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            domain, cloudflare_zone_id: zone.id, nameservers: zone.nameservers,
-            dns_provider: "cloudflare",
-            steps, next: `Verify SES: emails domain verify ${domain} --provider ${provider_id}`,
-          }, null, 2),
-        }],
-      };
+      if (contact !== undefined || duration_years !== undefined) throw new Error("This setup operation configures an already-owned domain. Use the separate registrar workflow for purchases; no setup request was submitted.");
+      const { setupOwnedDomain } = await import("../../lib/domain-dns-api.js");
+      const result = await setupOwnedDomain(domain, { provider: resolveId("providers", provider_id), addMx: add_mx, forceMxSwitch: force_mx_switch });
+      return { content: [{ type: "text", text: JSON.stringify(result) }], ...(!domainDnsSucceeded(result) ? { isError: true } : {}) };
     } catch (e) { return { content: [{ type: "text", text: `Error: ${formatError(e)}` }], isError: true }; }
   },
   );
@@ -247,7 +149,7 @@ export function registerInfrastructureTools(server: McpServer): void {
   {
     domain: z.string().describe("Domain to configure"),
     provider_id: z.string().describe("SES or Resend provider ID"),
-    cloudflare_token: z.string().optional().describe("Cloudflare API token (falls back to cloudflare_api_token config or CLOUDFLARE_API_TOKEN env)"),
+    cloudflare_token: z.string().optional().describe("Legacy inline token input: rejected; configure the server-held account binding"),
     add_mx: z.boolean().optional().describe("Also add MX record for receiving email"),
     mx_server: z.string().optional().describe("Custom MX server hostname (default: inbound-smtp.<region>.amazonaws.com for SES)"),
     register_domain: z.boolean().optional().describe("Register the domain with SES/Resend first if not already added"),
@@ -255,31 +157,10 @@ export function registerInfrastructureTools(server: McpServer): void {
   },
   async ({ domain, provider_id, cloudflare_token, add_mx, mx_server, register_domain, force_mx_switch }) => {
     try {
-      assertProvisioningInfraAllowed("setup_cloudflare_dns");
-      const provider = getProvider(resolveId("providers", provider_id));
-      if (!provider) throw new ProviderNotFoundError(provider_id);
-      if (add_mx) {
-        const { guardSesInboundMx } = await import("../../lib/mx-ownership.js");
-        await guardSesInboundMx(domain, !!force_mx_switch);
-      }
-
-      if (register_domain) {
-        const adapter = getAdapter(provider);
-        await adapter.addDomain(domain);
-        createDomain(resolveId("providers", provider_id), domain);
-      }
-
-      const { setupEmailDns } = await import("../../lib/cloudflare-dns.js");
-      const result = await setupEmailDns({
-        domain,
-        provider,
-        apiToken: cloudflare_token,
-        addMx: add_mx,
-        mxServer: mx_server,
-        forceMxSwitch: !!force_mx_switch,
-      });
-
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      if (cloudflare_token !== undefined) throw new Error("Cloudflare DNS setup uses the account's server-held token. Configure that binding through the operator workflow; inline tokens are not accepted and no setup request was submitted.");
+      const { setupDomainCloudflare } = await import("../../lib/domain-dns-api.js");
+      const result = await setupDomainCloudflare(domain, { provider: resolveId("providers", provider_id), registerSes: register_domain, addMx: add_mx, mxServer: mx_server, forceMxSwitch: force_mx_switch });
+      return { content: [{ type: "text", text: JSON.stringify(result) }], ...(!domainDnsSucceeded(result) ? { isError: true } : {}) };
     } catch (e) {
       return { content: [{ type: "text", text: `Error: ${formatError(e)}` }], isError: true };
     }

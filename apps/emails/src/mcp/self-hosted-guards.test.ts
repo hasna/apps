@@ -300,8 +300,8 @@ describe("MCP self_hosted guards", () => {
     // tenant member stand up a SES identity in their own AWS account and record a
     // domain the operator's SES cannot send from, so these refuse outright.
     const cases: Array<[string, Record<string, unknown>]> = [
-      ["setup_domain_for_email", { domain: "attacker.example.com", provider_id: "provider-1", add_mx: true }],
-      ["setup_cloudflare_dns", { domain: "attacker.example.com", provider_id: "provider-1", register_domain: true }],
+
+
       ["setup_ses_inbound", { domain: "attacker.example.com", bucket: "attacker-inbound" }],
     ];
 

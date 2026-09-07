@@ -196,15 +196,10 @@ export function registerDomainTools(server: McpServer): void {
       }
 
       if (!provider) {
-        // No provider resolved: return the generic SPF/DMARC pair. This path is
-        // pure local computation (src/lib/dns.ts) and needs no credentials, so it
-        // runs in BOTH configurations — the CLI twin `emails domain dns` does the
-        // same. In self_hosted mode the /v1 providers resource carries no
-        // credential columns, so a provider that fails to resolve here is simply
-        // absent server-side, exactly as in local mode.
-        const { generateSpfRecord, generateDmarcRecord, formatDnsTable } = await import("../../lib/dns.js");
+        // Unregistered domains receive recommendations, never fabricated live DKIM evidence.
+        const { generateSpfRecord, generateDmarcRecord } = await import("../../lib/dns.js");
         const records = [generateSpfRecord(domain), generateDmarcRecord(domain)];
-        return { content: [{ type: "text", text: formatDnsTable(records) }] };
+        return { content: [{ type: "text", text: JSON.stringify({ domain, source: "generic_recommendation", records, message: "Register a provider-bound domain to read its live DKIM records." }) }] };
       }
 
       const { providerDnsPublishing } = await import("../../providers/index.js");
