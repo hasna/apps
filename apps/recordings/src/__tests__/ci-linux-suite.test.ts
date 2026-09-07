@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 import {
@@ -25,6 +27,21 @@ import {
  * only on inputs it accepts proves nothing about the one job it has.
  */
 const repoRoot = join(import.meta.dir, "..", "..");
+
+test("alternate Bun test suffixes fail discovery instead of silently losing coverage", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "recordings-gate-suffix-")));
+  try {
+    mkdirSync(join(root, "templates"));
+    const env = { HOME: root, PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    for (const args of [["-c", `init.templateDir=${join(root, "templates")}`, "init", "--quiet"], ["add", "."]]) {
+      if (args[0] === "add") for (const name of ["new.spec.ts", "other_test.js", "view.test.tsx"]) writeFileSync(join(root, name), "// fictional test\n");
+      const child = spawnSync("/usr/bin/git", args, { cwd: root, env, encoding: "utf8", timeout: 15000 });
+      expect(child.status, child.stderr).toBe(0);
+    }
+    expect(() => testFilesFromGit(root)).toThrow("unsupported test suffix");
+    expect(() => testFilesFromWalk(root)).toThrow("unsupported test suffix");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 describe("entriesMissingReason", () => {
   test("accepts an entry with a reason: marker directly above it", () => {

@@ -4,6 +4,8 @@
 
 ### Minor Changes
 
+- feat(recordings): upload audio at creation to an S3 bucket via the artifact kit (hasna/apps#1645). When `HASNA_RECORDINGS_S3_BUCKET` (or `RECORDINGS_S3_BUCKET`) is set, `recordings record`/`transcribe` places the audio as a content-addressed object `recordings/<recording_id>/<sha256>.<ext>` and stores `audio_object_key`/`audio_sha256`/`audio_bytes` on the row; without it, behaviour is unchanged (local `audio_path` provenance only). Upload failures fail soft — the recording is still saved. Bucket/task-role provisioning is infra-side and documented on the issue.
+
 - 3ccd183: Resolve credentials and the service authority through the `@hasna/contracts`
   client chain (hasna/apps#1720, class B).
 
@@ -105,11 +107,24 @@
     Settings writes. CLI/transcriber hints now point at `OPENAI_API_KEY` (e.g.
     `secrets exec <key> --as OPENAI_API_KEY -- recordings …`).
 
-## Unreleased
+### Patch Changes
 
-### Minor Changes
-
-- feat(recordings): upload audio at creation to an S3 bucket via the artifact kit (hasna/apps#1645). When `HASNA_RECORDINGS_S3_BUCKET` (or `RECORDINGS_S3_BUCKET`) is set, `recordings record`/`transcribe` places the audio as a content-addressed object `recordings/<recording_id>/<sha256>.<ext>` and stores `audio_object_key`/`audio_sha256`/`audio_bytes` on the row; without it, behaviour is unchanged (local `audio_path` provenance only). Upload failures fail soft — the recording is still saved. Bucket/task-role provisioning is infra-side and documented on the issue.
+- 7a6442e: Simplify Hasna Recordings to one recordings window, remove native project navigation,
+  repair Settings in the app and menu bar, and use the spaced app bundle filename.
+  Add a configurable native API connection with an endpoint-scoped Keychain credential,
+  and exclude live Swift build caches from the embedded CLI build.
+  Read the saved OpenAI provider key from Keychain on Finder launches, save new provider
+  keys securely, and pass them to the helper without confusing service authentication.
+  Flush complete JSON output before the companion exits so large recording histories,
+  search results, and long transcripts load without truncated responses.
+  Parse PostgreSQL timestamps in native recording history, and detect revoked table
+  owner cleanup privileges before the API reports ready with broken deletion.
+  Keep realtime transcription responsive with a lightweight recording panel, cached
+  history searches, and microphone shutdown off the UI thread. Default new native
+  installations to dictation without an extra question/command classification request.
+- Export RecordingsLib for native clients with isolated preferences and state, live PCM provider sessions, partial transcription, cancellation, and the existing verified paste flow. Preserve the legacy recorder initializer and align its service bridge with the current explicit local-mode resolver.
+- 3a467ee: fix(recordings): make the prepublish gate pass in a normal local environment (HC-00677). The `prepublishOnly` wiring to the gated partition and the fail-closed `release-suite-gate` script are already on main (merged after this PR's base); this change delivers the remaining defect from the same finding: `test:gated`'s timeout delivery. `RECORDINGS_TEST_TIMEOUT_MS="${...:-120000}" bun test --timeout "$RECORDINGS_TEST_TIMEOUT_MS"` expands the bare `$RECORDINGS_TEST_TIMEOUT_MS` argument BEFORE the assignment prefix takes effect (POSIX simple-command semantics; `/bin/sh` is dash here), so `--timeout` reached bun empty and the suite ran at Bun's 5000ms default — measured failing `database.test.ts > closeDatabase` at 5000ms (6035ms elapsed) on the first gated run. The argument now carries its own `:-120000` default and provably reaches bun as `--timeout 120000`. Contract regression tests pin the gate shape (prepublishOnly → release-suite-gate, never a bare `bun test`; test:gated keeps the partition check and the non-empty timeout). The macOS-only native fs-guard prebuild requirement is unchanged and remains enforced at pack time by `prepack:platform-gate`.
+- dec445d: Rebuild the macOS recorder and menu bar with compact glass controls and native-sized typography, history and settings in one retained app window, a persistent live transcription bar, local audio playback, pause/resume, and session paste receipts. Meter actual captured PCM, exclude paused audio from duration and transcription, and allow automatic paste to be disabled without losing saved recordings. Preserve configurable service routing and Keychain credentials.
 
 ## 0.3.13
 

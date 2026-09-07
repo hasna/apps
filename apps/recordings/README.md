@@ -622,17 +622,18 @@ only when post-processing actually produced enhanced output.
 
 ## Releasing
 
-The release version is hand-maintained in four places: `package.json`, `src/version.ts`, and both
-`CFBundleShortVersionString` and `CFBundleVersion` in
-`src/native/Recordings/RecordingsLib/Info.plist`. Bump them together, never by hand:
+Apply the applicable Changesets in a release worktree first. `package.json` is
+the version authority; `src/version.ts` derives its value at runtime. Synchronize
+both native bundle version fields in `src/native/Recordings/RecordingsLib/Info.plist`
+and regenerate the SDK after the Changesets bump:
 
 ```bash
-bun run version:set 0.3.0   # rewrites every hand-maintained site
+bun run version:set 0.4.0   # use the version selected by Changesets
 bun run generate:sdk        # restamps the generated SDK's header
 bun run version:check       # exits 1 if any site disagrees with package.json
 ```
 
-A fifth copy is **generated**, not written: `src/server/openapi.ts` stamps `VERSION` into the
+The SDK version stamp is **generated**, not written: `src/server/openapi.ts` stamps `VERSION` into the
 OpenAPI document and `bun run generate:sdk` bakes it into the `// Source: …` header of
 `src/sdk/v1.generated.ts`. `version:set` leaves that file alone — the generator owns it, and
 patching the stamp by hand would hide real regeneration drift — so regenerate after every bump.
@@ -650,7 +651,7 @@ suite on every push through the turbo `build-test` job (this app's `test` script
 what makes the two guards below actually block a branch rather than wait for someone to run
 them locally. `prepack` runs `build:native-fs-guard` first (the
 fail-closed macOS gate), then `version:check`, so a partial bump stops before the build
-rather than deep inside it. And `prepublishOnly` runs `bun test`, which covers the sites
+rather than deep inside it. And `prepublishOnly` runs the complete gated release suite, which covers the sites
 through `src/__tests__/native-bundle-version.test.ts` and
 `src/__tests__/version-site-guard.test.ts`.
 
@@ -735,3 +736,52 @@ keystroke is never a confirmed delivery. Pass a `captureID` to
 `pasteIntoFrontApp` when manually pasting a saved recording. Early permission
 or target failures remain visible in the engine status without a completed
 transaction receipt.
+
+
+### Native dependency receipts
+
+An npm archive includes the complete Swift package at `src/native/Recordings`,
+including `RecordingsLib`, its resources, updater targets, and resolved dependency
+pins. An application can extract the verified archive into its dependency cache
+and use that Swift package as a local SwiftPM dependency. This is consumption of
+published package bytes; a development checkout alone is not release evidence.
+
+Create a sidecar receipt for the exact reviewed npm archive after committing the
+release metadata. The helper checks the shipped native bytes and package version
+against the specified public Git revision. It does not extract into the working
+app, access credentials, install software, or publish anything:
+
+```sh
+python3 scripts/native-core-receipt.py /path/to/recordings-0.4.0.tgz \
+  --source-revision <full-public-release-commit> \
+  --repository /path/to/hasna-apps \
+  --output /path/to/recordings-0.4.0.prepared.json
+```
+
+After the separately authorized npm publication, run the same command with
+`--verify-registry` and a new output filename. That explicit read-only step checks
+the version and integrity in public registry metadata, downloads the registry
+archive, and requires byte equality with the reviewed archive. It never upgrades
+a prepared receipt merely because a version exists. Existing receipt files are
+never overwritten.
+
+The external JSON format has `schemaVersion: 1` and
+`kind: "hasna.recordings.native-core"`. It records:
+
+- `package`: exact npm name and version.
+- `source`: public repository URL and full verified Git revision.
+- `distribution`: `status: "prepared"`, or `status: "published"` with registry
+  authority and verification time after the actual registry archive matches.
+- `archive`: fixed npm URL, byte count, SHA-256, and npm SHA-512 integrity.
+- `native`: package path, `RecordingsLib` product, Swift 6.2/macOS 26 requirements,
+  and each shipped native file's relative path, mode, byte count, and SHA-256.
+  `treeSHA256` hashes UTF-8 lines sorted by path, each formatted as
+  `path + NUL + octalMode + NUL + decimalBytes + NUL + sha256 + LF`.
+
+A receipt is integrity evidence, not a signature or permission to release. A
+consumer must pin the reviewed receipt digest through its own trusted release
+configuration, require `distribution.status == "published"`, and compare the
+archive and extracted source bytes before building. Co-delivered metadata must
+not supply its own trusted expected digest. The receipt stays outside the npm
+archive so its archive hash has no circular dependency. Notarization, signing,
+and end-user acceptance of the consuming application remain separate checks.
