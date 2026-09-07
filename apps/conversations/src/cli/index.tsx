@@ -91,7 +91,12 @@ program
   // (hasna/apps#1720 validation, round 2).
   .option("-j, --json", "Output the drain report as JSON")
   .action(async (opts) => {
-    const result = await getStore().drainEventOutbox({ limit: opts.limit });
+    // Generalized from the old local worker's guard: an unparseable `--limit`
+    // (commander's parseInt yields NaN, e.g. `--limit abc`) must not reach the
+    // stores — the hosted route tolerates it via positiveInteger() but the
+    // on-box worker would pass `LIMIT NaN` to SQLite. One spelling for both.
+    const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : undefined;
+    const result = await getStore().drainEventOutbox({ limit });
     if (opts.json) {
       printJsonLine({ scanned: result.scanned, transported: result.transported, skipped: result.skipped, spooled: result.spooled });
       return;

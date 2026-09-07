@@ -12,7 +12,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ConversationsStoreConfigError, assertUnambiguousStoreEnv, getStore } from "../lib/store/index.js";
-import { announceConversationsLocalMode, isConversationsLocalOptIn } from "../lib/contracts-env.js";
+import { announceConversationsLocalStore, isConversationsLocalOptIn } from "../lib/contracts-env.js";
 import { getDbPath } from "../lib/db.js";
 
 import { registerMessagingTools } from "./tools/messaging.js";
@@ -133,7 +133,7 @@ export const server = buildServer();
 export function assertMcpStoreConfigured(env: Record<string, string | undefined> = process.env): void {
   assertUnambiguousStoreEnv(env);
   if (isConversationsLocalOptIn(env)) {
-    announceConversationsLocalMode(getDbPath(env));
+    announceConversationsLocalStore(getDbPath(env));
   }
 }
 

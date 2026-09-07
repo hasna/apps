@@ -253,7 +253,8 @@ describe("fail-closed: events-drain resolves through the Store (spawned CLI)", (
     expect(result.stderr).not.toContain("unknown option");
     const parsed = JSON.parse(result.stdout.trim());
     expect(parsed.code).toBe("CONVERSATIONS_STORE_CONFIG");
-    expect(parsed.error).toContain("events-drain");
+    // The refusal is the generic store config refusal (the old per-surface
+    // gate message that named `events-drain` is gone), and it names the opt-in.
     expect(parsed.error).toContain("HASNA_CONVERSATIONS_DB_PATH");
     expect(sqliteFilesUnder(tempRoot)).toEqual([]);
   });
@@ -267,7 +268,7 @@ describe("fail-closed: events-drain resolves through the Store (spawned CLI)", (
     const result = await runCli(["events-drain", "--json"], env);
 
     expect(result.exitCode, result.stderr).toBe(0);
-    expect(result.stderr).toContain("LOCAL mode");
+    expect(result.stderr).toContain("local store");
     expect(JSON.parse(result.stdout.trim())).toEqual({ scanned: 0, transported: 0, skipped: 0, spooled: 0 });
   });
 });
@@ -346,8 +347,8 @@ describe("fail-closed: the MCP server refuses before serving (spawned conversati
     expect(result.stdout).toContain("serverInfo");
     // Announced once, at startup — a local MCP must never be mistakable for a
     // hosted one with an empty store.
-    expect(result.stderr).toContain("LOCAL mode");
-    expect(result.stderr.match(/LOCAL mode/g)).toHaveLength(1);
+    expect(result.stderr).toContain("local store");
+    expect(result.stderr.match(/local store/g)).toHaveLength(1);
   }, 30_000);
 
   test("--http: hosted with no credential exits non-zero before binding a port", async () => {

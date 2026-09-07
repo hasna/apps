@@ -67,7 +67,7 @@ describe("assertMcpStoreConfigured — the store is decided before any transport
     expect(lines.join("")).not.toContain("LOCAL mode");
   });
 
-  test("the explicit local opt-in passes the gate and announces LOCAL mode once, without opening the store", () => {
+  test("the explicit local opt-in passes the gate and announces the local store once, without opening the store", () => {
     const env = hermeticEnv();
     const dbPath = join(env["HOME"]!, "store.db");
     env["HASNA_CONVERSATIONS_DB_PATH"] = dbPath;
@@ -85,9 +85,9 @@ describe("assertMcpStoreConfigured — the store is decided before any transport
       process.stderr.write = write;
     }
     const notice = lines.join("");
-    expect(notice).toContain("LOCAL mode");
+    expect(notice).toContain("local store");
     expect(notice).toContain(dbPath);
-    expect(notice.match(/LOCAL mode/g)).toHaveLength(1);
+    expect(notice.match(/local store/g)).toHaveLength(1);
     // The gate only decides; the first SQLite open belongs to the store.
     expect(existsSync(dbPath)).toBe(false);
   });

@@ -320,10 +320,12 @@ describe("the guard covers the whole PUBLIC surface, not one entry point", () =>
   });
 
   // THE PREDICATES ARE NOT THE CAPABILITY, AND MUST NOT START THROWING.
-  // `isCloudStore()` is called BARE in production code (admin-redaction.ts) to
-  // decide a branch, and a suite here deliberately exports cloud credentials so
-  // that bare call resolves true. A predicate hands back a boolean, never a client
-  // that can write, so guarding it would break a real caller to close nothing.
+  // `isCloudStore()` is how `status`/`doctor`/`analytics --json` report which
+  // store answered (and admin redaction used to branch on it before the
+  // Store-routed redaction landed), so a suite here deliberately exports cloud
+  // credentials so that a bare call resolves true. A predicate hands back a
+  // boolean, never a client that can write, so guarding it would break a real
+  // caller to close nothing.
   test("ambient isCloudStore() still answers instead of throwing", () => {
     withAmbientCloudEnv(() => {
       expect(isCloudStore()).toBe(true);
