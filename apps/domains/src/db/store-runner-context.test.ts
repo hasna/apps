@@ -98,7 +98,7 @@ describe("store resolution outside a test run (plain bun subprocess)", () => {
       const probe = runUnprotected({ DOMAINS_DB_PATH: join(dir, "scratch.db") });
       expect(probe.outcome).toStartWith("THREW:");
       expect(probe.outcome).toContain("DOMAINS_DB_PATH");
-      expect(probe.outcome).toContain("Refusing");
+      expect(probe.outcome).toContain("no longer supported");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -115,7 +115,7 @@ describe("store resolution outside a test run (plain bun subprocess)", () => {
     }
   });
 
-  test("a local path with NOTHING else configured is the explicit opt-in: local", () => {
+  test("a local path without credentials is rejected", () => {
     const dir = mkdtempSync(join(tmpdir(), "domains-guard-"));
     try {
       const probe = runUnprotected({
@@ -123,7 +123,7 @@ describe("store resolution outside a test run (plain bun subprocess)", () => {
         HASNA_DOMAINS_API_URL: "",
         HASNA_DOMAINS_API_KEY: "",
       });
-      expect(probe.outcome).toBe("local");
+      expect(probe.outcome).toContain("no longer supported");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
