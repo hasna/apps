@@ -183,7 +183,6 @@ describe("MCP self_hosted guards", () => {
     // refusal here would now be a refusal of something this client demonstrably can do,
     // which is what the case below demonstrates.
     const cases: Array<[string, Record<string, unknown>]> = [
-      ["batch_send", { recipients: [], template_name: "welcome", from_address: "ops@example.com" }],
       ["sync_s3_inbox", { bucket: "inbound-bucket" }],
     ];
 
