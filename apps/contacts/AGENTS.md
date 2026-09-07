@@ -110,6 +110,9 @@ hostname → `$USER`), `~/.hasna/contacts/config/credentials` (0400/0600), then
 path, storage mode, or local SQLite fallback.
 
 Use `contacts_connection_status` to inspect value-free configuration details.
+The MCP server fails closed at startup: without a resolvable credential it
+exits non-zero before the stdio transport is connected or the HTTP port is
+bound, and the first stderr line names where the credential should live.
 For retired local data, use `contacts legacy inspect` and `contacts legacy
 preserve`; these commands never select the database as a live store.
 

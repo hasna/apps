@@ -1,3 +1,6 @@
+import { LocalStore } from "../../db/store.js";
+import { useLocalStoreFixture } from "../../test/local-store-fixture.test-support.js";
+useLocalStoreFixture();
 import React from "react";
 import { describe, test, expect, beforeAll, beforeEach, afterAll } from "bun:test";
 import { rmSync } from "node:fs";
@@ -29,9 +32,8 @@ async function waitForInk(ms = 50): Promise<void> {
 }
 
 async function clearDomains(): Promise<void> {
-  for (const domain of await listDomains()) {
-    await deleteDomain(domain.id);
-  }
+  const fixture = new LocalStore();
+  for (const domain of await fixture.listDomains()) await fixture.deleteDomain(domain.id);
 }
 
 describe("Header", () => {

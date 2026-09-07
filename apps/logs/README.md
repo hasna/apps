@@ -36,8 +36,12 @@ release and never outrank the canonical `HASNA_LOGS_*` pair. Retired inputs
 
 **Hosted mode fails loud.** A data-plane command with no resolvable credential
 exits non-zero with one actionable line — no SQLite fallback, no local-fallback
-event. The on-box SQLite store (`~/.hasna/logs/logs.db`) is reachable only
-through the explicit opt-in:
+event. A deliberate tier that cannot be honoured (`HASNA_PROFILE` naming a
+profile with no key, or a `HASNA_LOGS_API_KEY_REF` vault pointer this process
+cannot complete) is refused the same way, never resolved around — and
+`logs-mcp` refuses it at startup, before `initialize` is answered. The on-box
+SQLite store (`~/.hasna/logs/logs.db`) is reachable only through the explicit
+opt-in:
 
 ```bash
 export HASNA_LOGS_LOCAL=1   # alias: LOGS_LOCAL=1
@@ -68,7 +72,7 @@ non-zero startup with no SQLite.
 | `HASNA_HOME` / `HASNA_CONFIG_HOME` | CLI / MCP / SDK | Move the disk credential/config root |
 | `HASNA_LOGS_LOCAL` (`LOGS_LOCAL`) | CLI / MCP / `logs-serve` | Explicit opt-in for the on-box SQLite store/collector |
 | `HASNA_LOGS_DATABASE_URL` (`LOGS_DATABASE_URL`) | `logs-serve`, `logs db migrate/status` | PostgreSQL connection URL for the hosted serve |
-| `HASNA_LOGS_DATA_DIR` / `HASNA_LOGS_DB_PATH` | local store | On-box SQLite location (default `~/.hasna/logs/logs.db`) |
+| `HASNA_LOGS_DATA_DIR` / `HASNA_LOGS_DB_PATH` | local store | On-box SQLite location (default `$HASNA_HOME/logs/logs.db`, i.e. `~/.hasna/logs/logs.db`; `HASNA_HOME` moves the data with the config) |
 | `HASNA_LOGS_API_TOKEN` (`LOGS_API_TOKEN`) | `logs-serve` | API token required for `/api/*` requests |
 | `HASNA_LOGS_API_SIGNING_KEY` | `logs-serve` | Signing secret for hosted `/v1` API keys |
 | `HASNA_LOGS_SECRET_KEY` (`LOGS_SECRET_KEY`) | `logs-serve` | Encrypt page-scanner credentials at rest |
@@ -161,7 +165,13 @@ release.
 
 ## Data Directory
 
-Data is stored in `~/.hasna/logs/`.
+Local-mode data (`logs.db`, the raw event segments and the persistent
+`agent-registry.db` of a local `logs-mcp`) is stored in `~/.hasna/logs/` —
+`$HASNA_HOME/logs/` when `HASNA_HOME` replaces the `~/.hasna` root, or
+`HASNA_LOGS_DATA_DIR` when set. It is only ever created under the explicit
+`HASNA_LOGS_LOCAL=1` opt-in: a hosted `logs` / `logs-mcp` / `@hasna/logs/sdk`
+process opens no SQLite file (a hosted `logs-mcp` keeps its agent registry in
+memory, per process, and its tool descriptions say so).
 
 ## License
 

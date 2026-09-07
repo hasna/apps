@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -6,46 +9,46 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { buildServer } from "./server.js";
 import { isHttpMode, isStdioMode, startMcpHttpServer } from "./http.js";
 import { resetStore } from "../lib/store/index.js";
+import {
+  HERMETIC_STORE_ENV_NAMES,
+  hermeticChildEnv,
+  optInLocalStore,
+  snapshotStoreEnv,
+} from "../../tests/support/hermetic-store-env.js";
 
 const repoRoot = new URL("../..", import.meta.url).pathname;
 const MCP_TRANSPORT_ENV_KEYS = new Set(["MCP_HTTP", "MCP_STDIO"]);
 
 /**
- * API-pair + local opt-in env keys the in-process MCP server would otherwise
- * inherit from the operator's shell. These tools must read the on-box store
- * here; a developer exporting HASNA_TELEPHONY_API_URL + an API key would
- * otherwise route the assertions at a live service, which is not what this
- * file is testing.
+ * Every credential tier, the opt-in and the data-home overrides the in-process
+ * or spawned MCP server would otherwise inherit from the operator's shell or
+ * the machine (a Keychain item outranks the local opt-in by design). These
+ * tools must read the on-box store here; anything else would route the
+ * assertions at a live service, which is not what this file is testing.
  */
-const CLIENT_FLIP_ENV_KEYS = [
-  "HASNA_TELEPHONY_STORAGE_MODE",
-  "HASNA_TELEPHONY_MODE",
-  "HASNA_TELEPHONY_API_URL",
-  "HASNA_TELEPHONY_API_KEY",
-  "HASNA_TELEPHONY_LOCAL",
-  "TELEPHONY_STORAGE_MODE",
-  "TELEPHONY_MODE",
-  "TELEPHONY_API_URL",
-  "TELEPHONY_API_KEY",
-  "TELEPHONY_LOCAL",
-] as const;
+const CLIENT_FLIP_ENV_KEYS = HERMETIC_STORE_ENV_NAMES;
+
+/** Scratch root for the on-box store: DB path, data home and credential home all live here. */
+const scratchRoot = mkdtempSync(join(tmpdir(), "telephony-mcp-test-"));
+
+afterAll(() => {
+  rmSync(scratchRoot, { recursive: true, force: true });
+});
 
 /**
  * Force the on-box store for the process: scrub the client-flip env, then
  * select local mode EXPLICITLY (HASNA_TELEPHONY_LOCAL=1) — the store resolver
  * fails closed without the API env and without that opt-in (owner directive
- * 2026-09-04); local SQLite is never the default.
+ * 2026-09-04); local SQLite is never the default. The opt-in yields to any
+ * resolved credential, so the Keychain and disk tiers are pointed at the
+ * scratch root first and the helper proves the LocalStore was selected.
  */
 function withOnBoxStore(): () => void {
-  const saved = new Map(CLIENT_FLIP_ENV_KEYS.map((key) => [key, process.env[key]]));
-  for (const key of CLIENT_FLIP_ENV_KEYS) delete process.env[key];
-  process.env.HASNA_TELEPHONY_LOCAL = "1";
+  const restore = snapshotStoreEnv();
+  optInLocalStore(scratchRoot);
   resetStore();
   return () => {
-    for (const [key, value] of saved) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
+    restore();
     resetStore();
   };
 }
@@ -60,6 +63,9 @@ function envWith(overrides: Record<string, string>): Record<string, string> {
           !(CLIENT_FLIP_ENV_KEYS as readonly string[]).includes(entry[0]),
       ),
     ),
+    // The spawned server's Keychain lookup misses deterministically and its
+    // credential file lives under the scratch root — never the station's.
+    ...hermeticChildEnv(scratchRoot),
     TELEPHONY_DB_PATH: ":memory:",
     // The spawned server resolves its store from this child env: local mode is
     // selected EXPLICITLY here (never by a missing API env alone).

@@ -71,7 +71,7 @@ describe("fail closed without a resolvable credential", () => {
     }
   });
 
-  test("explicit local opt-in via a local path var still works and says 'local' on stderr", () => {
+  test("legacy local path is rejected without creating a database", () => {
     const dir = mkdtempSync(join(tmpdir(), "domains-fail-closed-optin-"));
     const dbPath = join(dir, "explicit.db");
     try {
@@ -84,12 +84,10 @@ describe("fail closed without a resolvable credential", () => {
       };
       const result = runCli(["domain", "list"], env);
 
-      // Local mode survives strictly as an explicit opt-in: the command runs
-      // against the database the operator named, and announces it on stderr.
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("No domains found.");
-      expect(result.stderr).toContain("LOCAL mode");
-      expect(existsSync(dbPath)).toBe(true);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("no longer supported");
+      expect(existsSync(dbPath)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

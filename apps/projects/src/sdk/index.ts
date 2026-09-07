@@ -27,6 +27,12 @@
 // There is no local fallback here: an SDK client with no resolvable credential
 // THROWS, so a caller cannot read a local dataset while believing it is talking
 // to the fleet.
+//
+// A caller-supplied `baseUrl` is a deliberate PIN of the authority
+// (hasna/apps#1794): it requires a caller-supplied `apiKey` and the ambient
+// chain (Keychain, credentials file, HASNA_PROJECTS_API_KEY) is never consulted
+// on its behalf, so a credential that resolved for the fleet is never sent to
+// a server the caller named.
 
 export * from "./client.js";
 import {
@@ -56,9 +62,21 @@ export interface CreateProjectsClientOptions extends Partial<ProjectsClientOptio
   keychain?: KeychainTierOptions;
 }
 
+/** The SDK's refusal for an explicit authority without an explicit key (#1794). */
+export const PROJECTS_SDK_AUTHORITY_PIN_MESSAGE =
+  "projects SDK: a caller-supplied baseUrl requires an explicit apiKey; the ambient fleet " +
+  "credential (Keychain, credentials file, HASNA_PROJECTS_API_KEY) is never attached to a " +
+  "named authority (hasna/apps#1794). Pass `apiKey` explicitly, or omit `baseUrl` and let the " +
+  "@hasna/contracts chain resolve the credential and the authority together.";
+
 /**
  * Build a ProjectsClient whose credential and base URL come from the shared
  * @hasna/contracts resolver.
+ *
+ * - explicit `baseUrl` + `apiKey` → a deliberate pin, used verbatim; the
+ *   ambient chain is never consulted (hasna/apps#1794).
+ * - explicit `baseUrl` without `apiKey` → throws, before any tier is read.
+ * - otherwise the chain resolves credential and authority together.
  *
  * Throws when no credential resolves from any tier — the SDK never falls back
  * to an unauthenticated client or to local data.
@@ -68,6 +86,15 @@ export function createProjectsClientFromEnv(
   overrides: CreateProjectsClientOptions = {},
 ): ProjectsClient {
   const { baseUrl: baseUrlOverride, apiKey: apiKeyOverride, profile, keychain, ...rest } = overrides;
+
+  if (baseUrlOverride !== undefined) {
+    // A named authority is pinned by the caller. The credential must be the
+    // caller's own: the chain below is never run for it, so a Keychain or disk
+    // credential that resolved for the fleet cannot leak to another server.
+    if (!apiKeyOverride) throw new Error(PROJECTS_SDK_AUTHORITY_PIN_MESSAGE);
+    return new ProjectsClient({ baseUrl: baseUrlOverride, apiKey: apiKeyOverride, ...rest });
+  }
+
   const credentials: CredentialChainOptions = {
     ...(apiKeyOverride ? { apiKey: apiKeyOverride } : {}),
     ...(profile ? { profile } : {}),
@@ -87,7 +114,7 @@ export function createProjectsClientFromEnv(
   // The seam hands back `<origin>/v1`; the generated client already carries the
   // `/v1` prefix on its data routes and needs the origin-and-path root (the
   // `/health` and `/ready` probes live above `/v1`).
-  const baseUrl = baseUrlOverride ?? resolution.baseUrl.replace(/\/v1$/, "");
+  const baseUrl = resolution.baseUrl.replace(/\/v1$/, "");
 
   // A vault pointer carries no value at construction time — it is completed
   // through the secrets SDK on each request, exactly as the shared transport

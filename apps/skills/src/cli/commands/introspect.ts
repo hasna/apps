@@ -9,6 +9,8 @@ import type { Command } from "commander";
 import { execSync } from "child_process";
 import { getSkill, findSimilarSkills, loadRegistry, clearRegistryCache } from "../../lib/registry.js";
 import { loadRemoteRegistry, loadRemoteSkill } from "../../lib/remote-registry.js";
+import { isSkillsFleetCredentialError } from "../../lib/fleet-credentials.js";
+import { requireSkillsReadAccess } from "../../lib/read-access.js";
 import { getSkillDocs, getSkillRequirements } from "../../lib/skillinfo.js";
 import { getInstallMeta, getInstalledSkills, getSkillPath } from "../../lib/installer.js";
 import { validateSkillDirectory } from "../../lib/skill-validation.js";
@@ -32,12 +34,7 @@ export function registerIntrospect(parent: Command) {
     .option("--remote", "Use the remote registry (the resolved Skills credential; HASNA_SKILLS_API_URL for your own instance)", false)
     .description("Show details about a specific skill")
     .action((name: string, options: { json: boolean; brief: boolean; remote: boolean }) => {
-      return handleInfo(name, options).catch(async (error) => {
-        const notFound = await resolveRemoteNotFound(name, options.remote, (error as Error).message);
-        if (options.json) console.log(JSON.stringify(notFound));
-        else skillNotFound(name, notFound.similar);
-        process.exitCode = 1;
-      });
+      return handleInfo(name, options).catch((error) => handleInfoError(name, options, error));
     });
 
   parent
@@ -48,12 +45,7 @@ export function registerIntrospect(parent: Command) {
     .option("--remote", "Use the remote registry (the resolved Skills credential; HASNA_SKILLS_API_URL for your own instance)", false)
     .description("Show details about a specific skill")
     .action((name: string, options: { json: boolean; brief: boolean; remote: boolean }) => {
-      return handleInfo(name, options).catch(async (error) => {
-        const notFound = await resolveRemoteNotFound(name, options.remote, (error as Error).message);
-        if (options.json) console.log(JSON.stringify(notFound));
-        else skillNotFound(name, notFound.similar);
-        process.exitCode = 1;
-      });
+      return handleInfo(name, options).catch((error) => handleInfoError(name, options, error));
     });
 
   // Docs
@@ -63,7 +55,7 @@ export function registerIntrospect(parent: Command) {
     .option("--json", "Output as JSON", false)
     .option("--file <file>", "Specific file: skill, readme, claude", "")
     .description("Show documentation for a skill")
-    .action((name: string, options: { json: boolean; file: string }) => handleDocs(name, options));
+    .action((name: string, options: { json: boolean; file: string }) => handleDocs(name, options).catch(handleReadRefusal));
 
   // Requires
   parent
@@ -71,7 +63,7 @@ export function registerIntrospect(parent: Command) {
     .argument("<skill>", "Skill name")
     .option("--json", "Output as JSON", false)
     .description("Show what a skill needs (env vars, system deps, dependencies)")
-    .action((name: string, options: { json: boolean }) => handleRequires(name, options));
+    .action((name: string, options: { json: boolean }) => handleRequires(name, options).catch(handleReadRefusal));
 
   // Validate
   parent
@@ -95,7 +87,33 @@ function skillNotFound(name: string, similar: string[] = findSimilarSkills(name)
   if (similar.length > 0) console.error(chalk.dim(`Did you mean: ${similar.join(", ")}?`));
 }
 
+/**
+ * The ladder's refusal on a read verb: one line on stderr, exit 1, nothing on
+ * stdout — the same exit `skills list` has taken since the fail-closed ruling
+ * (handleBrowseError in list.ts). Anything else propagates as before.
+ */
+function handleReadRefusal(error: unknown): void {
+  if (!isSkillsFleetCredentialError(error)) throw error;
+  console.error(chalk.red(error.message));
+  process.exitCode = 1;
+}
+
+async function handleInfoError(name: string, options: { json: boolean; remote?: boolean }, error: unknown): Promise<void> {
+  // A credential refusal is not "skill not found": printing the not-found
+  // shape for it would send the operator looking for a typo in the name.
+  if (isSkillsFleetCredentialError(error)) return handleReadRefusal(error);
+  const notFound = await resolveRemoteNotFound(name, options.remote, (error as Error).message);
+  if (options.json) console.log(JSON.stringify(notFound));
+  else skillNotFound(name, notFound.similar);
+  process.exitCode = 1;
+}
+
 async function handleInfo(name: string, options: { json: boolean; brief: boolean; remote?: boolean }) {
+  // Fail closed BEFORE the bundled catalog or the on-machine corpus is read:
+  // without a credential and without the local opt-in this is a refusal, as
+  // `skills list` already was (#1720 validation). `--remote` resolves through
+  // the same ladder inside loadRemoteSkill().
+  if (!options.remote) await requireSkillsReadAccess();
   const skill = options.remote ? await loadRemoteSkill(name) : getSkill(name);
   if (!skill) {
     if (options.json) console.log(JSON.stringify({ error: `Skill '${name}' not found`, similar: findSimilarSkills(name) }));
@@ -151,7 +169,8 @@ async function resolveRemoteNotFound(name: string, remote: boolean | undefined, 
   }
 }
 
-function handleDocs(name: string, options: { json: boolean; file: string }) {
+async function handleDocs(name: string, options: { json: boolean; file: string }) {
+  await requireSkillsReadAccess();
   const docs = getSkillDocs(name);
   if (!docs) {
     if (options.json) console.log(JSON.stringify({ skill: name, error: `Skill '${name}' not found`, similar: findSimilarSkills(name) }));
@@ -182,7 +201,8 @@ function handleDocs(name: string, options: { json: boolean; file: string }) {
   console.log(content);
 }
 
-function handleRequires(name: string, options: { json: boolean }) {
+async function handleRequires(name: string, options: { json: boolean }) {
+  await requireSkillsReadAccess();
   const reqs = getSkillRequirements(name);
   if (!reqs) {
     if (options.json) console.log(JSON.stringify({ skill: name, error: `Skill '${name}' not found`, similar: findSimilarSkills(name) }));

@@ -62,6 +62,7 @@ import {
   EMAILS_SELF_HOSTED_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   EMAILS_IDP_TOKEN_ENV,
+  isEmailsCredentialResolutionError,
   isEmailsTransportConfigurationError,
   type EmailsClientCredentialSetting,
 } from "./lib/emails-credentials.js";
@@ -248,7 +249,11 @@ export function planEmailStore(env: NodeJS.ProcessEnv = process.env): StorePlan 
     try {
       hosted = resolveEmailsHostedTransport(env);
     } catch (error) {
-      if (isEmailsTransportConfigurationError(error)) {
+      // A DELIBERATE tier the resolver could not honour (a blank override, a
+      // profile with no credential, a malformed vault pointer) is the resolver's
+      // own typed refusal; it is reported exactly like a missing credential —
+      // one message, one exit — and never resolved around (#1720 validation).
+      if (isEmailsTransportConfigurationError(error) || isEmailsCredentialResolutionError(error)) {
         throw new StoreConfigurationError(
           (error as Error).message,
           [API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS, ...DATABASE_PATH_SETTINGS],

@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, cpSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { MIGRATIONS } from "./migrations.js";
 import { getDataRoot } from "../lib/paths.js";
+import { selectsMementosLocalStore } from "../lib/local-opt-in.js";
 
 // ============================================================================
 // Path resolution
@@ -49,6 +50,15 @@ function migrateGlobalDir(): void {
   // the same root getDataRoot() returns (exact-app override, adopted XDG root,
   // or legacy ~/.hasna/mementos default) — so the migration and the store the
   // runtime actually opens can never diverge.
+  //
+  // ONLY for a run that will actually open the on-box store (the explicit
+  // local opt-in). getDbPath() is also called from side-effect-free
+  // diagnostics (`storage mode`, `status`, `doctor`, resolveStoreBackend) in
+  // hosted mode, and copying the legacy directory from there materialised a
+  // SQLite file under ~/.hasna/mementos on a hosted station with no opt-in —
+  // exactly the local store the fail-closed gate refuses to open
+  // (hasna/apps#1720 acceptance (f)).
+  if (!selectsMementosLocalStore()) return;
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
   const newDir = getDataRoot();
   const oldDir = join(home, ".mementos");

@@ -510,6 +510,12 @@ describe("recordings check exit contract", () => {
         HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
         RECORDINGS_AUDIO_DIR: join(home, "audio"),
         OPENAI_API_KEY: "test-openai-key",
+        // `check` fails closed (report "none", exit 1) when no credential
+        // resolves, so these spawns pin an env-tier fixture key against a
+        // sentinel station: the exit code answers only the trigger question
+        // on any host, with no Keychain or disk-tier dependency.
+        HASNA_STATION: "no-such-station",
+        HASNA_RECORDINGS_API_KEY: "fixture-check-trigger-key",
         ...(fake ?? {}),
       },
     });
@@ -581,6 +587,8 @@ printf '%s\\n' "$value"
         HOME: home,
         HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
         OPENAI_API_KEY: "test-openai-key",
+        HASNA_STATION: "no-such-station",
+        HASNA_RECORDINGS_API_KEY: "fixture-check-trigger-key",
         ...fakeDefaults(home, "0", "0"),
       },
     });
@@ -715,8 +723,14 @@ printf '%s\\n' "$value"
         env: {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
           HOME: home,
-            HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
+          HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
           OPENAI_API_KEY: "test-openai-key",
+          // A credential must resolve so `check` exits 0 (it fails closed —
+          // "none", exit 1 — when nothing resolves); the assertion is that
+          // the command makes NO connect(2) syscall even though it resolves
+          // the hosted store.
+          HASNA_STATION: "no-such-station",
+          HASNA_RECORDINGS_API_KEY: "fixture-check-trigger-key",
           ...fakeDefaults(home, STORED_F5, "1"),
         },
       },

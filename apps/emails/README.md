@@ -64,11 +64,17 @@ need account access, not independent provider registrations or mail databases.
 | `HASNA_HOME` / `HASNA_CONFIG_HOME` | Relocate `~/.hasna/emails/config/credentials` (never XDG). |
 | `HASNA_STATION` | Keychain account (falls back to `hostname -s`, then `$USER`). |
 
-The resolver tiers, in order: an explicit `--api-key` / `--profile` argument;
-`HASNA_EMAILS_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_EMAILS_API_KEY_REF`
-pointers; the macOS Keychain items for this app (`api-key`, and `api-url` for the
+The resolver tiers, in order: the deliberate `HASNA_EMAILS_API_KEY_OVERRIDE`
+(a literal key) or `HASNA_PROFILE` (reads `~/.hasna/emails/config/credentials-<profile>`)
+selections — a blank override or an absent profile REFUSES, it is never resolved
+around; the macOS Keychain items for this app (`api-key`, and `api-url` for the
 authority); the `~/.hasna/emails/config/credentials` file (0600); then
-`HASNA_EMAILS_API_KEY`. The authority follows `HASNA_EMAILS_API_URL` → Keychain
+`HASNA_EMAILS_API_KEY`. A `HASNA_EMAILS_API_KEY_REF` secrets-vault pointer is
+recognised as a deliberate selection but refused by name: this client resolves
+its credential synchronously and cannot complete a vault pointer per request.
+The `emails` CLI has no `--api-key` / `--profile` resolver flags (`--profile`
+on inbox/provisioning commands is a legacy provider selector, not an account
+credential; `--api-key` on `provider add` is the Resend key). The authority follows `HASNA_EMAILS_API_URL` → Keychain
 `api-url` → credentials file → the shared default gateway once a credential
 resolves. Nothing configured fails closed; a URL without a credential refuses
 rather than falling back to local data.

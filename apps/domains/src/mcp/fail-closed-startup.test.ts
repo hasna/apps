@@ -107,7 +107,7 @@ describe("domains-mcp fails closed at startup without a credential", () => {
   );
 
   test(
-    "CONTROL: an explicit local opt-in starts the stdio server and announces LOCAL mode at startup",
+    "a legacy local path is refused before stdio starts",
     async () => {
       const home = mkdtempSync(join(tmpdir(), "domains-mcp-local-optin-"));
       try {
@@ -115,11 +115,12 @@ describe("domains-mcp fails closed at startup without a credential", () => {
           { ...baseEnv(home), DOMAINS_DB_PATH: join(home, "explicit.db") },
           true,
         );
-        // Alive on stdin until killed: the stdio path is intact.
-        expect(result.timedOut).toBe(true);
-        expect(result.stderr).toContain("domains: LOCAL mode");
+        expect(result.timedOut).toBe(false);
+        expect(result.exitCode).not.toBe(0);
+        expect(dbFilesUnder(home)).toEqual([]);
+        expect(result.stderr).toContain("no longer supported");
         expect(result.stderr).toContain("DOMAINS_DB_PATH");
-        expect(result.stderr).toContain("domains MCP server running on stdio");
+        expect(result.stderr).not.toContain("domains MCP server running on stdio");
         expect(result.stderr).not.toContain("fails closed");
       } finally {
         rmSync(home, { recursive: true, force: true });
@@ -144,7 +145,7 @@ describe("domains-mcp fails closed at startup without a credential", () => {
         );
         expect(result.timedOut).toBe(false);
         expect(result.exitCode).not.toBe(0);
-        expect(result.stderr).toContain("Refusing");
+        expect(result.stderr).toContain("no longer supported");
         expect(result.stderr).toContain("DOMAINS_DB_PATH");
         expect(result.stderr).not.toContain("domains MCP server running on stdio");
         expect(dbFilesUnder(home)).toEqual([]);
