@@ -948,6 +948,7 @@ public final class RecordingEngine: ObservableObject {
     private var fnKeyIsDown = false
     private var targetAppBundleIdentifier: String?
     private var targetAppPid: pid_t?
+    private var frozenPasteTargetsByGeneration: [UInt64: RecordingPasteTargetSelection] = [:]
     private var pasteTargetProcessIdentityByGeneration: [UInt64: PasteTargetProcessIdentity] = [:]
     public var projectStore: ProjectStore?
     /// The minimal app uses only global cleanup preferences from the legacy settings
@@ -979,6 +980,12 @@ public final class RecordingEngine: ObservableObject {
             bundleIdentifier: app.bundleIdentifier,
             launchDate: app.launchDate
         )
+    }
+    var pasteTargetApplicationLookup: (pid_t) -> PasteApplicationObservation? = {
+        NSRunningApplication(processIdentifier: $0).map(PasteApplicationObservation.init)
+    }
+    var pasteFallbackWriter: (String) -> Bool = { text in
+        RecordingEngine.writeClipboardPreservingOnFailure(text, to: .general)
     }
     var recorderFactory: (@escaping @Sendable (Data) -> Void) -> PCMRecordingSource = {
         NativePCMRecorder(onPCM: $0)
@@ -1738,7 +1745,8 @@ public final class RecordingEngine: ObservableObject {
 
     // MARK: - Start Recording (Streaming)
 
-    public func startRecording(trigger: RecordingTrigger = .manual) {
+    public func startRecording(trigger: RecordingTrigger = .manual,
+                               pasteTarget: RecordingPasteTargetSelection = .frontmostApplication) {
         guard Self.canBeginRecording(
             isRecording: isRecording,
             isTranscribing: isTranscribing,
@@ -1755,11 +1763,12 @@ public final class RecordingEngine: ObservableObject {
         }
         log("startRecording trigger=\(trigger) microphoneStatus=\(microphoneAuthorization().rawValue) accessibility=\(accessibilityTrustCheck())")
         recordingGeneration &+= 1
-        if pasteTargetProcessIdentityByGeneration.count >= 32 {
+        if pasteTargetProcessIdentityByGeneration.count >= 32 || frozenPasteTargetsByGeneration.count >= 32 {
             let oldestRetainedGeneration = recordingGeneration > 16 ? recordingGeneration - 16 : 0
             pasteTargetProcessIdentityByGeneration = pasteTargetProcessIdentityByGeneration.filter {
                 $0.key >= oldestRetainedGeneration
             }
+            frozenPasteTargetsByGeneration = frozenPasteTargetsByGeneration.filter { $0.key >= oldestRetainedGeneration }
         }
         activeTrigger = trigger
         keyboardShortcutIsDown = trigger == .keyboardShortcut
@@ -1778,7 +1787,19 @@ public final class RecordingEngine: ObservableObject {
         setBlockedReason(nil, for: .delivery)
 
         let myPID = ProcessInfo.processInfo.processIdentifier
-        let frontmostApp = frontmostAppSnapshot()
+        let frontmostApp: FrontmostAppSnapshot?
+        switch pasteTarget {
+        case .frontmostApplication:
+            frontmostApp = frontmostAppSnapshot()
+        case .frozen(let target):
+            // Keep explicit nil distinct from omission, including when a previously
+            // observed target terminated between the host's snapshot and this call.
+            frozenPasteTargetsByGeneration[recordingGeneration] = pasteTarget
+            if let target, target.processIdentifier != myPID,
+               let app = pasteTargetApplicationLookup(target.processIdentifier), target.matches(app) {
+                frontmostApp = FrontmostAppSnapshot(pid: target.processIdentifier, bundleIdentifier: target.bundleIdentifier, launchDate: target.launchDate)
+            } else { frontmostApp = nil }
+        }
         let isOwnApp = frontmostApp?.pid == myPID
         targetAppBundleIdentifier = isOwnApp ? nil : frontmostApp?.bundleIdentifier
         targetAppPid = isOwnApp ? nil : frontmostApp?.pid
@@ -4272,13 +4293,21 @@ public final class RecordingEngine: ObservableObject {
             deliveryCompleted?()
             return
         }
-        let pb = NSPasteboard.general
+        if let generation = pipelineGeneration, frozenPasteTargetsByGeneration[generation] != nil,
+           pasteTargetProcessIdentityByGeneration[generation] == nil {
+            completeUnavailablePaste(text, deliveryKind: deliveryKind, captureID: captureID,
+                                     pipelineGeneration: pipelineGeneration)
+            deliveryCompleted?()
+            return
+        }
         var previousClipboard: ClipboardSnapshot?
 
         let accessibility = protectedOperationTrust()
         guard accessibility.trusted else {
             let shouldCopy = Self.shouldCopyPasteFallback(deliveryKind: deliveryKind)
-            let copied = shouldCopy && Self.writeClipboardPreservingOnFailure(text, to: pb)
+            let copied = shouldCopy && pasteFallbackWriter(text)
+            appendUndeliveredPaste(text: text, copied: copied, captureID: captureID,
+                                   pipelineGeneration: pipelineGeneration, fallbackBundle: targetAppBundleIdentifier)
             log("paste blocked by accessibility permission")
             let message = if deliveryKind == .commandRewrite {
                 "Paste cancelled because Accessibility permission changed"
@@ -4306,18 +4335,8 @@ public final class RecordingEngine: ObservableObject {
         )
 
         guard let app = targetApp else {
-            let shouldCopy = Self.shouldCopyPasteFallback(deliveryKind: deliveryKind)
-            let copied = shouldCopy && Self.writeClipboardPreservingOnFailure(text, to: pb)
-            log("paste target app not found")
-            updateDeliveryStatus(
-                deliveryKind == .commandRewrite
-                    ? "Paste cancelled because the target app is unavailable"
-                    : copied
-                        ? "Copied — no target app found"
-                        : "Transcription ready, but the clipboard could not be updated",
-                kind: .failure,
-                pipelineGeneration: pipelineGeneration
-            )
+            completeUnavailablePaste(text, deliveryKind: deliveryKind, captureID: captureID,
+                                     pipelineGeneration: pipelineGeneration, fallbackBundle: targetAppBundleIdentifier)
             deliveryCompleted?()
             return
         }
@@ -4840,15 +4859,37 @@ public final class RecordingEngine: ObservableObject {
         setBlockedReason(nil, for: .pressConsumed)
     }
 
+    private func appendUndeliveredPaste(text: String, copied: Bool, captureID: String?,
+                                       pipelineGeneration: UInt64?, fallbackBundle: String? = nil) {
+        let selection = pipelineGeneration.flatMap { frozenPasteTargetsByGeneration[$0] }
+        let target: RecordingPasteTarget? = if case .frozen(let value) = selection { value } else { nil }
+        recentPastes.insert(RecentPaste(text: text, bundleIdentifier: target?.bundleIdentifier ?? fallbackBundle,
+            appName: target?.applicationName ?? fallbackBundle ?? "No target app",
+            location: copied ? "Clipboard only" : "", status: copied ? "Copied; paste not delivered" : "Paste not delivered",
+            verified: false, captureID: captureID, deliveryStatus: .notDelivered), at: 0)
+        if recentPastes.count > 50 { recentPastes.removeLast() }
+    }
+
+    private func completeUnavailablePaste(_ text: String, deliveryKind: PasteDeliveryKind, captureID: String?,
+                                          pipelineGeneration: UInt64?, fallbackBundle: String? = nil) {
+        let copied = Self.shouldCopyPasteFallback(deliveryKind: deliveryKind) && pasteFallbackWriter(text)
+        appendUndeliveredPaste(text: text, copied: copied, captureID: captureID,
+                               pipelineGeneration: pipelineGeneration, fallbackBundle: fallbackBundle)
+        log("paste target app not found")
+        updateDeliveryStatus(deliveryKind == .commandRewrite
+            ? "Paste cancelled because the target app is unavailable"
+            : copied ? "Copied — no target app found" : "Transcription ready, but the clipboard could not be updated",
+            kind: .failure, pipelineGeneration: pipelineGeneration)
+    }
+
     private func selectedRunningPasteTarget(
         targetAppBundleIdentifier: String?,
         targetAppPid: pid_t?,
         frontmostPid: pid_t?,
         pipelineGeneration: UInt64?
     ) -> NSRunningApplication? {
-        let myPID = ProcessInfo.processInfo.processIdentifier
         let runningApps = NSWorkspace.shared.runningApplications
-        let candidates = runningApps.map {
+        let candidates = runningApps.filter { !$0.isTerminated }.map {
             PasteTargetCandidate(
                 pid: $0.processIdentifier,
                 bundleIdentifier: $0.bundleIdentifier,
@@ -4856,21 +4897,28 @@ public final class RecordingEngine: ObservableObject {
                 launchDate: $0.launchDate
             )
         }
-        let requiredProcessIdentity = pipelineGeneration.flatMap {
-            pasteTargetProcessIdentityByGeneration[$0]
-        }
-        let selectedTarget = Self.selectPasteTarget(
-            candidates: candidates,
-            currentPid: myPID,
-            targetBundleIdentifier: targetAppBundleIdentifier,
-            targetPid: targetAppPid,
-            frontmostPid: frontmostPid,
-            requiredProcessIdentity: requiredProcessIdentity,
-            requiresProcessIdentity: pipelineGeneration != nil && targetAppPid != nil
+        let selectedTarget = resolvePasteTarget(
+            candidates: candidates, targetBundleIdentifier: targetAppBundleIdentifier,
+            targetPid: targetAppPid, frontmostPid: frontmostPid, pipelineGeneration: pipelineGeneration
         )
         return selectedTarget.flatMap { selected in
             runningApps.first { $0.processIdentifier == selected.pid }
         }
+    }
+
+    func resolvePasteTarget(candidates: [PasteTargetCandidate], targetBundleIdentifier: String?,
+                            targetPid: pid_t?, frontmostPid: pid_t?, pipelineGeneration: UInt64?) -> PasteTargetCandidate? {
+        let frozen = pipelineGeneration.flatMap { frozenPasteTargetsByGeneration[$0] }
+        let identity = pipelineGeneration.flatMap { pasteTargetProcessIdentityByGeneration[$0] }
+        if frozen != nil {
+            // No bundle-only or foreground fallback for an explicitly frozen capture.
+            guard let identity, targetPid == identity.pid,
+                  targetBundleIdentifier == identity.bundleIdentifier else { return nil }
+        }
+        return Self.selectPasteTarget(candidates: frozen == nil ? candidates : candidates.filter(\.isRegularApp),
+            currentPid: ProcessInfo.processInfo.processIdentifier, targetBundleIdentifier: targetBundleIdentifier,
+            targetPid: targetPid, frontmostPid: frontmostPid, requiredProcessIdentity: identity,
+            requiresProcessIdentity: frozen != nil || (pipelineGeneration != nil && targetPid != nil))
     }
 
     nonisolated static func selectPasteTarget(

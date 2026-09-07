@@ -458,7 +458,7 @@ describe("native capture warm-up contract", () => {
     const engine = read("RecordingsLib/RecordingEngine.swift");
     const startRecording = region(
       engine,
-      "public func startRecording(trigger: RecordingTrigger = .manual) {",
+      "public func startRecording(",
       "let myPID = ProcessInfo.processInfo.processIdentifier",
     );
     // Reached only when the gate passed, so it is the boundary the clears must sit behind.

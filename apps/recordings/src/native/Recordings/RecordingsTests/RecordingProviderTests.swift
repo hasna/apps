@@ -113,6 +113,34 @@ struct RecordingProviderTests {
         #expect(recorder.stopped)
     }
 
+    @Test("explicit no-target capture saves transcript and records copy-only non-delivery without AX or a paste")
+    func frozenNoTargetReceipt() async throws {
+        for copied in [true, false] {
+            let session = ProviderTestSession()
+            let recorder = ProviderTestRecorder()
+            let engine = try engine(session, recorder: recorder)
+            engine.autoPasteEnabled = true
+            engine.protectedOperationTrust = { Issue.record("No-target delivery must not request Accessibility"); return AccessibilityTrustResult(trusted: false, didPrompt: false) }
+            var writes: [String] = []
+            engine.pasteFallbackWriter = { text in writes.append(text); return copied }
+            engine.startRecording(pasteTarget: .frozen(nil))
+            recorder.emit(Data(repeating: 1, count: 4_800))
+            #expect(await eventually { engine.isRecording })
+            engine.stopAndTranscribe()
+            #expect(await eventually { engine.recentPastes.count == 1 })
+            let transcript = try #require(engine.recentTranscriptions.first)
+            let receipt = try #require(engine.recentPastes.first)
+            #expect(receipt.captureID == transcript.captureID)
+            #expect(receipt.deliveryStatus == .notDelivered)
+            #expect(!receipt.verified)
+            #expect(receipt.bundleIdentifier == nil)
+            #expect(receipt.appName == "No target app")
+            #expect(receipt.location == (copied ? "Clipboard only" : ""))
+            #expect(writes == ["Spoken words."])
+            #expect(engine.canStartRecording)
+        }
+    }
+
     @Test("cancel during provider finalization drops late text and allows another capture")
     func cancellationDropsStaleCompletions() async throws {
         let session = ProviderTestSession(delayFinish: true)
