@@ -1,3 +1,4 @@
+import { ENCRYPTION_TABLES, validateEncryptionReceipt } from "../encryption-maintenance.js";
 // ApiStore — the hosted API transport.
 //
 // Every read and write routes to the hosted secrets HTTP API at `<API_URL>/v1`
@@ -391,13 +392,16 @@ export class ApiStore implements Store {
     return { mode: "api", location };
   }
 
+  async encryptionStatus() {
+    return validateEncryptionReceipt(await this.transport.get("/encryption/status"));
+  }
+
   async encryptVault(): Promise<EncryptVaultResult> {
-    // The hosted vault encrypts EVERY value at rest on write with its own
-    // server-side master key (cloud-crypto; PURE REMOTE, Amendment A1) — there
-    // is never a plaintext row to migrate. Report the at-rest state truthfully
-    // (nothing migrated, every stored value already encrypted) instead of
-    // refusing the command: `encrypt-vault` works in both transports.
-    const alreadyEncrypted = (await this.listSecretMetadata()).length;
-    return { migrated: 0, alreadyEncrypted };
+    const receipt = validateEncryptionReceipt(await this.transport.post("/encryption/repair", {}));
+    if (!receipt.verified) throw new Error("Encryption repair was not verified");
+    return {
+      migrated: ENCRYPTION_TABLES.reduce((n,t)=>n+receipt.tables[t].repaired,0),
+      alreadyEncrypted: ENCRYPTION_TABLES.reduce((n,t)=>n+receipt.tables[t].active+receipt.tables[t].previous-receipt.tables[t].repaired,0),
+    };
   }
 }

@@ -140,10 +140,10 @@ export interface Store {
   /** Describe the transport and its (key-free) location. */
   describe(): StoreDescriptor;
   /**
-   * Encrypt any plaintext rows in the ACTIVE vault. Local: re-encrypts plaintext
-   * rows with the local master key. Api: the server already encrypts every value
-   * at rest on write, so the store reports the at-rest state (0 migrated, N
-   * already encrypted) rather than failing the command.
+   * Encrypt any plaintext rows in the ACTIVE vault. Local: encrypts plaintext rows.
+   * API: atomically verifies all four tenant payload tables and encrypts legacy
+   * plaintext under secrets:migrate; unreadable ciphertext fails closed.
    */
+  encryptionStatus?(): Promise<import("../encryption-maintenance.js").EncryptionReceipt>;
   encryptVault(): Promise<EncryptVaultResult>;
 }

@@ -1,3 +1,4 @@
+import { inspectEncryption } from "./encryption-maintenance.js";
 /**
  * Postgres-backed secrets store for the deployed serve (PURE REMOTE, A1).
  *
@@ -186,7 +187,7 @@ export class CloudSecretsStore {
   constructor(private readonly db: TypedQueryClient) {}
 
   private async audit(
-    action: "get" | "set" | "delete" | "restore",
+    action: "get" | "set" | "delete" | "restore" | "encryption_repair",
     key: string,
     actor: string,
     tenantId: string,
@@ -516,6 +517,17 @@ export class CloudSecretsStore {
     if (rows.length === 0) return false;
     await this.audit("delete", key, actor, tenant);
     return true;
+  }
+
+  async encryptionStatus(tenantId: string) {
+    return inspectEncryption(this.db, requireTenantId(tenantId), false);
+  }
+
+  async repairEncryption(actor: string, tenantId: string) {
+    const tenant = requireTenantId(tenantId);
+    const result = await inspectEncryption(this.db, tenant, true);
+    await this.audit("encryption_repair", "tenant-payloads", actor, tenant);
+    return result;
   }
 
   /** Invoked through tenantStore so deletion and audit records commit together. */

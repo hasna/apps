@@ -1,112 +1,38 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { test, expect } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { mkdtempSync,mkdirSync,writeFileSync,readdirSync,rmSync } from "node:fs";
 import { join } from "node:path";
-import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { encryptionReceipt } from "./encryption-fixture.js";
 
-// The storage-mode axis is retired (owner directive 2026-08-15): `key`,
-// `encrypt-vault` and `gc` must WORK in the hosted transport, not refuse to run.
-// These tests drive the real CLI at a stand-in cloud API and assert exit 0 plus
-// truthful output — the guards this suite replaces exited 1 with
-// "is a local-vault operation; in api mode ...".
-// Exercise mirrors tests/cli-get.test.ts (in-process Bun.serve stub so spawn is
-// async; spawnSync would deadlock the shared event loop).
-
-const rootDir = join(import.meta.dir, "..");
-const fixtureHome = mkdtempSync(join(tmpdir(), "secrets-maintenance-"));
-
-let server: ReturnType<typeof Bun.serve>;
-
-const META = {
-  "expired/allcmds/1": { key: "expired/allcmds/1", type: "other", expires_at: "2020-01-01T00:00:00.000Z", created_at: "t", updated_at: "t" },
-  "live/allcmds/1": { key: "live/allcmds/1", type: "api_key", expires_at: "2999-01-01T00:00:00.000Z", created_at: "t", updated_at: "t" },
-  "live/allcmds/2": { key: "live/allcmds/2", type: "password", created_at: "t", updated_at: "t" },
-};
-
-beforeAll(() => {
-  const deleted: string[] = [];
-  server = Bun.serve({
-    port: 0,
-    fetch(req: Request) {
-      const url = new URL(req.url);
-      if (url.pathname === "/v1/secrets" && req.method === "GET") {
-        return Response.json({ secrets: Object.values(META) });
-      }
-      if (url.pathname === "/v1/secrets/prune-expired" && req.method === "POST") {
-        deleted.push("expired/allcmds/1");
-        return Response.json({ pruned: 1 });
-      }
-      return Response.json({ error: "Not found" }, { status: 404 });
-    },
-  });
-  (globalThis as any).__allcmdsDeleted = deleted;
-});
-
-afterAll(() => {
-  server.stop(true);
-  rmSync(fixtureHome, { recursive: true, force: true });
-});
-
-async function runCli(...args: string[]) {
-  const proc = Bun.spawn({
-    cmd: [process.execPath, "src/index.ts", ...args],
-    cwd: rootDir,
-    env: {
-      PATH: process.env.PATH!,
-      HOME: fixtureHome, HASNA_HOME: fixtureHome, HASNA_CONFIG_HOME: fixtureHome,
-      HASNA_STATION: crypto.randomUUID(),
-      HASNA_SECRETS_API_URL: `http://localhost:${server.port}`,
-      HASNA_SECRETS_API_KEY_OVERRIDE: crypto.randomUUID(),
-      NO_COLOR: "1",
-    },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { stdout, stderr, exitCode };
+async function fixture(run:(cli:(...args:string[])=>Promise<{stdout:string;stderr:string;exitCode:number}>,state:{requests:string[];fail:()=>void;malformed:()=>void})=>Promise<void>) {
+ const home=mkdtempSync(join(tmpdir(),"secrets-encryption-cli-"));const token=randomUUID();const requests:string[]=[];let failure=false,malformed=false;
+ const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(req){
+  expect(req.headers.get("x-api-key")??req.headers.get("authorization")).toContain(token);
+  const path=new URL(req.url).pathname;requests.push(`${req.method} ${path}`);
+  if(failure)return Response.json({error:"unavailable"},{status:503});
+  if(path==="/v1/encryption/status"&&req.method==="GET" || path==="/v1/encryption/repair"&&req.method==="POST")return Response.json(malformed?{verified:true}:encryptionReceipt());
+  if(path==="/v1/secrets/prune-expired"&&req.method==="POST")return Response.json({pruned:1});
+  return Response.json({error:"not found"},{status:404});
+ }});
+ const config=join(home,".hasna/secrets/config");mkdirSync(config,{recursive:true,mode:0o700});writeFileSync(join(config,"credentials"),`HASNA_SECRETS_API_URL=${server.url.origin}\nHASNA_SECRETS_API_KEY=${token}\n`,{mode:0o600});
+ const cli=async(...args:string[])=>{const p=Bun.spawn([process.execPath,"src/index.ts",...args],{cwd:join(import.meta.dir,".."),env:{PATH:process.env.PATH!,HOME:home,HASNA_STATION:`fixture-${randomUUID()}`,NO_COLOR:"1"},stdout:"pipe",stderr:"pipe"});const timer=setTimeout(()=>p.kill(),10000);try {const [stdout,stderr,exitCode]=await Promise.all([new Response(p.stdout).text(),new Response(p.stderr).text(),p.exited]);return {stdout,stderr,exitCode};}finally{clearTimeout(timer);}};
+ try {await run(cli,{requests,fail:()=>{failure=true;},malformed:()=>{malformed=true;}});expect(readdirSync(home,{recursive:true}).map(String).filter(p=>/\.(db|sqlite|sqlite3)$|vault\.key|kms\.json/.test(p))).toEqual([]);}
+ finally{server.stop(true);rmSync(home,{recursive:true,force:true});}
 }
-
-describe("hosted transport: maintenance commands are not transport-gated", () => {
-  it("key / key init / key path / key exists / key kms all exit 0 and report server-owned encryption", async () => {
-    const status = await runCli("key");
-    expect(status.exitCode, status.stderr).toBe(0);
-    expect(status.stdout).toContain("server-owned");
-    expect(status.stdout).toContain("hosted vault");
-
-    const init = await runCli("key", "init");
-    expect(init.exitCode).toBe(0);
-    expect(init.stdout).toContain("Nothing to initialize");
-
-    const path = await runCli("key", "path");
-    expect(path.exitCode).toBe(0);
-    expect(path.stdout.trim()).toContain(`http://localhost:${server.port}`);
-
-    const exists = await runCli("key", "exists");
-    expect(exists.exitCode).toBe(0);
-    expect(exists.stdout.trim()).toBe("no");
-
-    const kms = await runCli("key", "kms");
-    expect(kms.exitCode).toBe(0);
-    expect(kms.stdout).toContain("KMS envelope encryption is managed by the hosted deployment");
-
-    const kmsSetup = await runCli("key", "kms", "setup", "--key-id", "alias/exercise");
-    expect(kmsSetup.exitCode).toBe(0);
-  });
-
-  it("encrypt-vault exits 0 and reports every stored value already encrypted at rest", async () => {
-    const { stdout, stderr, exitCode } = await runCli("encrypt-vault");
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain("Encrypted 0 secret(s). 3 already encrypted.");
-    expect(stderr).not.toContain("local-vault operation");
-  });
-
-  it("gc prunes lapsed rows through the API instead of being a silent no-op", async () => {
-    const { stdout, exitCode } = await runCli("gc");
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain("Pruned 1 expired secret(s)");
-    expect((globalThis as any).__allcmdsDeleted).toEqual(["expired/allcmds/1"]);
-  });
-});
+test("saved-account key operations verify service state; KMS setup cannot fabricate success",async()=>{
+ await fixture(async(cli,state)=>{
+  for(const args of [["key"],["key","init"],["key","exists"],["key","path"],["key","kms"]]) {const r=await cli(...args);expect(r.exitCode,r.stderr).toBe(0);}
+  expect(state.requests).toEqual(Array(5).fill("GET /v1/encryption/status"));
+  const kms=await cli("key","kms","setup","--key-id","alias/fixture");expect(kms.exitCode).toBe(1);expect(kms.stderr).toContain("operator-managed server binding");expect(state.requests.length).toBe(5);
+  state.fail();const failed=await cli("key","exists");expect(failed.exitCode).toBe(1);expect(failed.stdout).not.toContain("yes");
+ });
+},30000);
+test("saved-account repair and GC use server operations and reject incomplete evidence",async()=>{
+ await fixture(async(cli,state)=>{
+  const repair=await cli("encrypt-vault");expect(repair.exitCode,repair.stderr).toBe(0);expect(repair.stdout).toContain("4 already encrypted and verified");
+  const gc=await cli("gc");expect(gc.exitCode,gc.stderr).toBe(0);expect(gc.stdout).toContain("Pruned 1");
+  expect(state.requests).toEqual(["POST /v1/encryption/repair","POST /v1/secrets/prune-expired"]);
+  state.malformed();const bad=await cli("encrypt-vault");expect(bad.exitCode).toBe(1);expect(bad.stdout).not.toContain("Encrypted");
+ });
+},30000);

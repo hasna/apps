@@ -1,3 +1,4 @@
+import { encryptionReceipt } from "./encryption-fixture.js";
 import { describe, it, expect } from "bun:test";
 import type { HasnaStorageClient } from "../src/store/client.js";
 import { ApiStore, getStore, LocalStore, SecretDecryptionError } from "../src/store/index.js";
@@ -172,17 +173,16 @@ describe("ApiStore route mapping", () => {
     expect(calls.some((c) => c[0] === "POST" && c[1] === "/feedback")).toBe(true);
   });
 
-  it("encryptVault reports the hosted at-rest state (nothing to migrate — every value is encrypted on write)", async () => {
-    const store = new ApiStore(fakeClient({
-      "GET /secrets": {
-        secrets: [
-          { key: "a/b", type: "other", created_at: "t", updated_at: "t" },
-          { key: "c/d", type: "api_key", created_at: "t", updated_at: "t" },
-        ],
-      },
-    }).client);
-    const result = await store.encryptVault();
-    expect(result).toEqual({ migrated: 0, alreadyEncrypted: 2 });
+  it("encryptVault requires complete server-verified repair evidence for every payload table", async () => {
+    const receipt=encryptionReceipt();receipt.tables.secret_versions.repaired=1;
+    const {client,calls}=fakeClient({"POST /encryption/repair":receipt,"GET /encryption/status":receipt});
+    const store=new ApiStore(client);
+    expect(await store.encryptVault()).toEqual({migrated:1,alreadyEncrypted:3});
+    expect((await store.encryptionStatus()).verified).toBe(true);
+    expect(calls.map(c=>c.slice(0,2))).toEqual([["POST","/encryption/repair"],["GET","/encryption/status"]]);
+    for(const invalid of [{}, {...receipt,complete:false},{...receipt,tables:{}},{...receipt,verified:false}]) {
+      await expect(new ApiStore(fakeClient({"POST /encryption/repair":invalid}).client).encryptVault()).rejects.toThrow();
+    }
   });
 
   it("pruneExpired uses the atomic server operation and validates its receipt", async () => {

@@ -1,3 +1,4 @@
+import { EncryptionMaintenanceError } from "./encryption-maintenance.js";
 /**
  * secrets-serve — the deployed HTTP API (PURE REMOTE, Amendment A1).
  *
@@ -111,6 +112,17 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       }
       if (path === "/openapi.json" && method === "GET") {
         return json(buildOpenApiDocument(VERSION));
+      }
+
+      if ((path === "/v1/encryption/status" && method === "GET") || (path === "/v1/encryption/repair" && method === "POST")) {
+        const repair = method === "POST";
+        const a = await auth(req, repair ? ["secrets:migrate"] : READ);
+        if (!a.ok) return a.res;
+        try {
+          return json(repair ? await a.store.repairEncryption(a.actor, a.tenantId) : await a.store.encryptionStatus(a.tenantId));
+        } catch (error) {
+          return json({error:error instanceof EncryptionMaintenanceError ? error.code : "encryption_verification_unavailable"}, error instanceof EncryptionMaintenanceError ? error.status : 503);
+        }
       }
 
       if (path === "/v1/migrations/vault" && (method === "GET" || method === "POST")) {

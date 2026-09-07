@@ -1,3 +1,4 @@
+import { ENCRYPTION_RECEIPT_SCHEMA } from "../encryption-maintenance.js";
 import { vaultMigrationOpenApi } from "../migration/openapi.js";
 /**
  * OpenAPI 3 document for the secrets serve API. Single source of truth for the
@@ -203,6 +204,14 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           responses: okResponse(),
         },
       },
+      ...Object.fromEntries((["status","repair"] as const).map(action=>[
+        `/v1/encryption/${action}`, {[action === "status" ? "get" : "post"]:{
+          operationId: action === "status" ? "encryptionStatus" : "repairEncryption",
+          summary: action === "status" ? "Verify tenant payload encryption; requires secrets:read" : "Atomically encrypt tenant plaintext payloads; requires secrets:migrate",
+          description:"Inspects all four payload tables with a consistent snapshot. Limits: 10,000 rows and 64 MiB. Metadata is not encrypted. KMS backing is not attested.",
+          responses:{"200":{description:"Complete tenant-scoped verification",content:{"application/json":{schema:ENCRYPTION_RECEIPT_SCHEMA}}},...Object.fromEntries([401,403,409,413,503].map(status=>[status,{description:"Verification did not complete",content:{"application/json":{schema:{type:"object",required:["error"],properties:{error:{type:"string"}}}}}}]))},
+        }}
+      ])),
       "/v1/secrets/prune-expired": {
         post: {
           operationId: "pruneExpiredSecrets",

@@ -11,7 +11,7 @@ export async function setTenantContext(db: TypedQueryClient, tenantId: string): 
   await db.execute("SELECT set_config('app.secrets_tenant_id',$1,true)", [tenantId]);
 }
 const OPERATIONS = new Set([
- "setSecret","getSecret","deleteSecret","pruneExpired","listSecretMetadata","searchSecretMetadata",
+ "encryptionStatus","repairEncryption","setSecret","getSecret","deleteSecret","pruneExpired","listSecretMetadata","searchSecretMetadata",
  "listVersions","checkVersion","restoreVersion","pruneVersionHistory","runVersionBackfill",
  "setVaultItem","getVaultItem","deleteVaultItem","listVaultItemMetadata","searchVaultItemMetadata",
  "registerUser","listUsers","deleteUser","getAuditLog","addFeedback",
@@ -23,6 +23,11 @@ export function tenantStore(pool: PoolQueryClient, tenantId: string, kid: string
       const method = Reflect.get(target,name,receiver);
       if(typeof name!=="string" || !OPERATIONS.has(name)) return method;
       return (...args: unknown[]) => pool.transaction(async db => {
+        if (name === "encryptionStatus" || name === "repairEncryption") {
+          await db.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
+          await db.execute("SET LOCAL lock_timeout = '5s'");
+          await db.execute("SET LOCAL statement_timeout = '15s'");
+        }
         await setTenantContext(db, tenantId);
         const authority = await db.get("SELECT k.kid FROM api_keys k JOIN tenants t ON t.id=k.tenant_id WHERE k.kid=$1 AND k.tenant_id=$2 AND t.status='active' AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now()) AND (k.scopes ? '*' OR k.scopes ? 'secrets:*' OR k.scopes @> $3::jsonb) FOR SHARE OF k,t", [kid, tenantId,JSON.stringify(scopes)]);
         if (!authority) throw new Error("Tenant authority is no longer active");

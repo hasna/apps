@@ -817,12 +817,11 @@ variable — the transport is decided by the credential and the authority alone.
 release**; the canonical `HASNA_SECRETS_*` names are the supported spelling and
 no longer shadowed by them.
 
-Every command works in every transport. Maintenance commands act on the ACTIVE
-vault: `key` / `key init` / `key path` and `encrypt-vault` manage the on-box
-master key and plaintext rows in local mode, and report the hosted vault's
-server-owned at-rest encryption (creating nothing) in hosted mode; `gc` prunes
-expired secrets through whichever transport is active instead of being a silent
-no-op.
+Maintenance commands act on the active vault. API maintenance now verifies the configured runtime key and all four
+payload tables. `encrypt-vault` requires `secrets:migrate` and repairs plaintext
+atomically; unreadable ciphertext fails closed. KMS backing is not attested,
+and KMS setup still requires a separate operator-managed capability. See
+[verified encryption maintenance](docs/ENCRYPTION_MAINTENANCE.md).
 
 ## Safety Notes
 
