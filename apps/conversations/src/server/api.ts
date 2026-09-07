@@ -130,6 +130,7 @@ export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
 const SCOPE_WRITE = `${APP}:write`;
 export const SCOPE_INCIDENT_PROJECT = `${APP}:incident-project`;
+export const SCOPE_ADMIN_REDACT = `${APP}:admin-redact`;
 
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -1544,17 +1545,18 @@ export function startApiServer(options: StartApiServerOptions = {}) {
         if (path === "/v1" || path.startsWith("/v1/")) {
           const writing = method !== "GET" && method !== "HEAD";
           const incidentProjectionWrite = path === "/v1/incident-projections" && method === "POST";
+          const adminRedaction = path === "/v1/admin/redact-messages" && method === "POST";
           const decision = await verifier.authenticate(req.headers, {
             method,
             path,
-            requiredScopes: [incidentProjectionWrite ? SCOPE_INCIDENT_PROJECT : writing ? SCOPE_WRITE : SCOPE_READ],
+            requiredScopes: [adminRedaction ? SCOPE_ADMIN_REDACT : incidentProjectionWrite ? SCOPE_INCIDENT_PROJECT : writing ? SCOPE_WRITE : SCOPE_READ],
           });
           if (!decision.ok) {
             return json({ error: decision.message, reason: decision.reason }, decision.status, {
               "WWW-Authenticate": "Bearer",
             });
           }
-          return await handleV1(path, method, req, url, deps, decision.principal.agent);
+          return await handleV1(path, method, req, url, deps, decision.principal.agent, decision.principal.kid);
         }
 
         return json({ error: "Not found" }, 404);
@@ -1671,6 +1673,7 @@ async function handleV1(
   url: URL,
   deps: ApiServerDeps,
   agent: string | null,
+  keyId: string,
 ): Promise<Response> {
   const { client } = deps;
   const sub = path.slice("/v1/".length);
@@ -1691,7 +1694,13 @@ async function handleV1(
   // ---- admin: audited message redaction (hosted path of `admin redact-messages`) ----
   if (sub === "admin/redact-messages" && method === "POST") {
     const body = (await readJson(req)) as Record<string, unknown>;
-    return json(await redactMessagesPg(client, normalizeRedactMessagesBody(body)));
+    const options = normalizeRedactMessagesBody(body);
+    const actor = agent ?? `api-key:${keyId}`;
+    if (options.actor && options.actor !== actor) return json({ error: "Redaction actor must match the authenticated identity." }, 403);
+    options.actor = actor;
+    return json(options.apply
+      ? await client.transaction(tx => redactMessagesPg(tx, options))
+      : await redactMessagesPg(client, options));
   }
 
   // ---- package-owned project channel registration authority ----------------

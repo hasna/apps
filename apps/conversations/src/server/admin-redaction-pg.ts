@@ -203,7 +203,7 @@ export async function redactMessagesPg(
 
   const rows = await client.many<PgMessageRow>(
     `SELECT id, uuid, session_id, from_agent, to_agent, channel, content, metadata, attachments, created_at
-     FROM messages WHERE id = ANY($1::bigint[])`,
+     FROM messages WHERE id = ANY($1::bigint[]) ORDER BY id${apply ? " FOR UPDATE" : ""}`,
     [ids],
   );
   const byId = new Map(rows.map((row) => [Number(row.id), row]));

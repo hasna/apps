@@ -302,6 +302,14 @@ via the vendored `@hasna/contracts` storage kit (the server backend switch is
 `/v1/*` are authenticated with `@hasna/contracts` API keys (scope grammar
 `conversations:read` / `conversations:write`).
 
+Administrative message redaction at `POST /v1/admin/redact-messages` requires
+`conversations:admin-redact`, including dry runs. Ordinary write permission
+does not grant this operation. A supplied actor must match the key's agent;
+if omitted, the server records the authenticated agent or key identity.
+Apply and confirmation flags must be JSON booleans. Applying redaction locks
+the affected messages and commits message, outbox, attachment and audit changes
+in one PostgreSQL transaction.
+
 ```bash
 # the app DSN for the postgresql backend (generate/rotate per deployment)
 export HASNA_CONVERSATIONS_DATABASE_URL=<your-postgres-dsn>

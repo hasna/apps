@@ -727,7 +727,7 @@ export const openapiSpec = {
       post: {
         operationId: "redactMessages",
         summary: "Audited admin message-redaction over the hosted store (hosted path of admin redact-messages)",
-        description: "Requires conversations:write and, to apply, the owner gates (backup confirmation, dry-run confirmation, authority). Dry-run by default.",
+        description: "Requires conversations:admin-redact. The actor must match the authenticated identity. Apply requires boolean backup and dry-run confirmations plus authority; all changes commit in one transaction. Dry-run by default.",
         requestBody: {
           required: true,
           content: {

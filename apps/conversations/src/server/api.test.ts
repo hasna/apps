@@ -1223,12 +1223,14 @@ let server: ReturnType<typeof startApiServer>;
 let base: string;
 let rwKey: string;
 let roKey: string;
+let adminRedactKey: string;
 
 beforeAll(() => {
   server = startApiServer({ port: 0, host: "127.0.0.1", deps: makeDeps() });
   base = `http://127.0.0.1:${server.port}`;
   rwKey = mintApiKey({ app: "conversations", agent: "test", scopes: ["conversations:read", "conversations:write"], signingSecret: SIGNING }).token;
   roKey = mintApiKey({ app: "conversations", agent: "ro", scopes: ["conversations:read"], signingSecret: SIGNING }).token;
+  adminRedactKey = mintApiKey({ app: "conversations", agent: "security", scopes: ["conversations:admin-redact"], signingSecret: SIGNING }).token;
 });
 
 afterAll(() => { server.stop(true); });
@@ -5233,7 +5235,7 @@ describe("hosted paths for the once-gated surfaces", () => {
     try {
       const response = await fetch(`${base}/v1/admin/redact-messages`, {
         method: "POST",
-        headers: postHeaders(),
+        headers: { "x-api-key": adminRedactKey, "content-type": "application/json" },
         body: JSON.stringify({ ids: [900001, 424242], actor: "security", reason: "credential-shaped message remediation" }),
       });
       if (response.status !== 200) console.log("REDACT RESP", response.status, await response.text());
@@ -5253,7 +5255,7 @@ describe("hosted paths for the once-gated surfaces", () => {
   test("POST /v1/admin/redact-messages apply without the owner gates is a 400", async () => {
     const response = await fetch(`${base}/v1/admin/redact-messages`, {
       method: "POST",
-      headers: postHeaders(),
+      headers: { "x-api-key": adminRedactKey, "content-type": "application/json" },
       body: JSON.stringify({ ids: [9001], actor: "security", apply: true }),
     });
     expect(response.status).toBe(400);
@@ -5263,7 +5265,7 @@ describe("hosted paths for the once-gated surfaces", () => {
   test("POST /v1/admin/redact-messages rejects string booleans before applying", async () => {
     for (const field of ["apply", "backup_confirmed", "dry_run_confirmed", "purge_attachments"]) {
       const response = await fetch(`${base}/v1/admin/redact-messages`, {
-        method: "POST", headers: postHeaders(),
+        method: "POST", headers: { "x-api-key": adminRedactKey, "content-type": "application/json" },
         body: JSON.stringify({ ids: [9001], actor: "security", apply: true,
           authority: "owner", backup_confirmed: true, dry_run_confirmed: true,
           [field]: "false" }),
@@ -5271,6 +5273,22 @@ describe("hosted paths for the once-gated surfaces", () => {
       expect(response.status).toBe(400);
       expect((await response.json() as { error: string }).error).toBe(`${field} must be a JSON boolean.`);
     }
+  });
+
+  test("ordinary write keys cannot perform administrative redaction", async () => {
+    const response = await fetch(`${base}/v1/admin/redact-messages`, {
+      method: "POST", headers: postHeaders(), body: JSON.stringify({ ids: [9001] }),
+    });
+    expect(response.status).toBe(403);
+  });
+
+  test("administrative redaction cannot spoof the audit actor", async () => {
+    const response = await fetch(`${base}/v1/admin/redact-messages`, {
+      method: "POST", headers: { "x-api-key": adminRedactKey, "content-type": "application/json" },
+      body: JSON.stringify({ ids: [9001], actor: "another-operator" }),
+    });
+    expect(response.status).toBe(403);
+    expect((await response.json() as { error: string }).error).toContain("authenticated identity");
   });
 
   test("a read-only key is refused on every write surface", async () => {
