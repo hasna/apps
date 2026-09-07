@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1
+
+### Patch Changes
+
+- Keep fresh-auth MCP account, workspace member, and API-key operations bound to the live user and membership of the host's named credential profile. Capture authority per invocation, refuse stale or revoked profiles without default-workspace fallback, and return safe key-operation errors without persisting JWTs or mutating global profile selection.
+- Add fresh-auth CLI workspace discovery and explicit named-profile membership enrollment. Verify the selected session and newly issued key before saving, preserve unrelated profiles, and retain the live selected workspace for subsequent fresh-auth account, member, and key operations. Reject stale metadata, unsafe or oversized profile storage, and viewer key enrollment without adding persistent JWT sessions.
+- Add SDK workspace discovery and ephemeral session selection with explicit user and membership validation. Fresh-auth account, workspace, member and key operations can preserve a selected workspace after verification without changing saved keys or profiles. Existing default-workspace callers remain compatible.
+
 ## 0.5.0
 
 ### Minor Changes
