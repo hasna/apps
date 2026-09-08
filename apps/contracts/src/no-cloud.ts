@@ -1,13 +1,13 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
-import { lockfileWalk, manifestEdges, type DependencyEdge, type LockfileWalk } from "./dependency-edge";
+import { lockfileWalk, manifestEdges, type DependencyEdge, type LockfileWalk } from "./dependency-edge.js";
 import {
   commonArchiveRoot,
   isPackedArtifactPath,
   listArchiveEntries,
   normalizeArchiveEntry,
   readArchiveMemberText
-} from "./packed-artifact";
+} from "./packed-artifact.js";
 import {
   blankConstantSpans,
   commentSyntaxForPath,
@@ -20,7 +20,7 @@ import {
   quotedConstantSpan,
   type ConstantSpan,
   type InlineDataNode
-} from "./source-text";
+} from "./source-text.js";
 import {
   FORBIDDEN_SHARED_CLOUD_RUNTIMES,
   AppCloudManifestSchema,
@@ -31,7 +31,7 @@ import {
   type NoCloudEvidencePack,
   type NoCloudFinding,
   type NoCloudFindingSeverity
-} from "./schemas";
+} from "./schemas.js";
 
 export interface NoCloudScanOptions {
   id?: string;

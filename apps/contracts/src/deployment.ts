@@ -7,13 +7,13 @@ import type {
   ResourcePointer,
   ValidationPlan,
   WorkRun,
-} from "./schemas";
+} from "./schemas.js";
 import {
   canonicalizeTodosValue,
   sha256TodosText,
   sha256TodosValue,
   stableTodosJson,
-} from "./todos/common";
+} from "./todos/common.js";
 import { z } from "zod";
 
 export const DEPLOYMENT_CONTRACT_VERSION = "1.0.0" as const;

@@ -1,6 +1,6 @@
 import type { z } from "zod";
-import { type ServiceContractManifest } from "./schemas";
-import { type ServerDataBackendEnvKeys } from "./server-backend";
+import { type ServiceContractManifest } from "./schemas.js";
+import { type ServerDataBackendEnvKeys } from "./server-backend.js";
 export declare const SERVICE_CONTRACT_MANIFEST_FILENAME = "hasna.contract.json";
 /**
  * Draft-07 JSON Schema for `hasna.contract.json`. This is the source of truth

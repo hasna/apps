@@ -1,4 +1,4 @@
-import type { ActorPointer, CostEstimate, DecisionEnvelope, EvidencePointer, ProviderCapabilityCard, ResourcePointer, ValidationPlan, WorkRun } from "./schemas";
+import type { ActorPointer, CostEstimate, DecisionEnvelope, EvidencePointer, ProviderCapabilityCard, ResourcePointer, ValidationPlan, WorkRun } from "./schemas.js";
 import { z } from "zod";
 export declare const DEPLOYMENT_CONTRACT_VERSION: "1.0.0";
 export declare const DEPLOYMENT_SCHEMA_IDS: {

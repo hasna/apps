@@ -5,8 +5,8 @@
 // blank, invalid, or conflicting declarations fail closed; they never select
 // SQLite. Retired storage/mode variables are inert and never select anything.
 
-import { type ServerDataBackend } from "./schemas";
-import { envToken, type Env } from "./env-token";
+import { type ServerDataBackend } from "./schemas.js";
+import { envToken, type Env } from "./env-token.js";
 
 export { envToken };
 export type { Env };

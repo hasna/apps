@@ -27,16 +27,16 @@ import {
   type ServiceContractManifest,
   type ServiceSurfaceKind,
   type StorageEngine
-} from "./schemas";
-import { loadServiceContractManifest, type LoadServiceContractResult } from "./service-contract";
+} from "./schemas.js";
+import { loadServiceContractManifest, type LoadServiceContractResult } from "./service-contract.js";
 import {
   resolveServerDataBackend,
   serverDataBackendEnvKeys,
   type Env,
-} from "./server-backend";
-import { API_KEY_TOKEN_PATTERN } from "./auth/keys";
-import { scanNoCloudTarget } from "./no-cloud";
-import { scanCredentialSeam } from "./credential-seam";
+} from "./server-backend.js";
+import { API_KEY_TOKEN_PATTERN } from "./auth/keys.js";
+import { scanNoCloudTarget } from "./no-cloud.js";
+import { scanCredentialSeam } from "./credential-seam.js";
 
 export type ConformanceStatus = "pass" | "fail" | "skip";
 
