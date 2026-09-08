@@ -3842,10 +3842,7 @@ async function runDurableWorker(options) {
         return;
       watcher?.close();
       try {
-        watcher = watch(inboxDir, (_eventType, filename) => {
-          if (!filename || filename.toString().endsWith(".json"))
-            scheduleDebouncedCycle();
-        });
+        watcher = watch(inboxDir, () => scheduleDebouncedCycle());
         watcher.on("error", () => {
           watcher?.close();
           watcher = undefined;
