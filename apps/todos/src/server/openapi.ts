@@ -2697,6 +2697,8 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             { name: "project_id", in: "query", schema: { type: "string" } },
             { name: "parent_id", in: "query", schema: { type: "string", nullable: true } },
             { name: "include_subtasks", in: "query", schema: { type: "boolean" } },
+            { name: "include_archived", in: "query", schema: { type: "boolean" }, description:"Explicit archive selection; false excludes archived rows" },
+            { name: "plan_read_contract", in: "query", schema: { type: "string", enum:["1"] }, description:"Requires plan_id and explicit include_subtasks=true/include_archived; returns a versioned selection receipt" },
             { name: "plan_id", in: "query", schema: { type: "string" } },
             { name: "task_list_id", in: "query", schema: { type: "string" } },
             { name: "assigned_to", in: "query", schema: { type: "string" } },
@@ -2727,6 +2729,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                       tasks: { type: "array", items: { $ref: "#/components/schemas/Task" } },
                       count: { type: "integer", minimum: 0 },
                       total: { type: "integer", minimum: 0 },
+                      selection:{type:"object",required:["schema_version","plan_id","include_subtasks","include_archived"],properties:{schema_version:{type:"integer",enum:[1]},plan_id:{type:"string"},include_subtasks:{type:"boolean",enum:[true]},include_archived:{type:"boolean"}}},
                     },
                   },
                 },
@@ -3216,6 +3219,131 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
         },
       },
+      "/v1/plans/{id}/comments": {
+  "get": {
+    "operationId": "listPlanComments",
+    "summary": "Read complete plan comment history",
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      {
+        "name": "plan_read_contract",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "1"
+          ]
+        },
+        "description": "Require complete history support; unsupported adapters fail instead of returning empty history"
+      }
+    ],
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "comments",
+                "count"
+              ],
+              "properties": {
+                "count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "comments": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "plan_id",
+                      "content",
+                      "created_at",
+                      "agent_id",
+                      "session_id",
+                      "type",
+                      "progress_pct"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "plan_id": {
+                        "type": "string"
+                      },
+                      "content": {
+                        "type": "string"
+                      },
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "agent_id": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "session_id": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "comment",
+                          "progress",
+                          "note"
+                        ]
+                      },
+                      "progress_pct": {
+                        "type": "number",
+                        "nullable": true,
+                        "minimum": 0,
+                        "maximum": 100
+                      }
+                    }
+                  }
+                },
+                "history_selection": {
+                  "type": "object",
+                  "required": [
+                    "schema_version",
+                    "plan_id",
+                    "complete"
+                  ],
+                  "properties": {
+                    "schema_version": {
+                      "type": "integer",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "plan_id": {
+                      "type": "string"
+                    },
+                    "complete": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+},
       "/v1/plans/{id}/delete-preserving": {
         post: {
           operationId:"deletePlanPreserving",

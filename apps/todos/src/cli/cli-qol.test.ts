@@ -1,6 +1,7 @@
 import {Database} from "bun:sqlite";
 import {randomUUID} from "node:crypto";
 import {runMigrations} from "../db/schema.js";
+import {createPlan} from "../db/plans.js";
 import {createTaskList,listTaskLists} from "../db/task-lists.js";
 import {createLocalSqliteTodosStorageAdapter} from "../storage/local-sqlite.js";
 import {handleV1Request} from "../server/v1.js";
@@ -58,6 +59,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
+
+function seedPlan(name:string){const db=new Database(dbPath);try{runMigrations(db);return createPlan({name},db);}finally{db.close();}}
 
 describe("CLI QoL commands", () => {
   it("config --set writes to ~/.hasna/todos/config.json", () => {
@@ -171,8 +174,8 @@ describe("CLI QoL commands", () => {
   // ── plan moves ─────────────────────────────────────────────────
 
   it("update --plan should move a task between plans", () => {
-    const planA = JSON.parse(run("--json plans --add 'CLI QoL Plan A'"));
-    const planB = JSON.parse(run("--json plans --add 'CLI QoL Plan B'"));
+    const planA = seedPlan("CLI QoL Plan A");
+    const planB = seedPlan("CLI QoL Plan B");
     const task = JSON.parse(run(`add 'Move between plans' --plan ${planA.id} --json`));
     expect(task.plan_id).toBe(planA.id);
 
@@ -184,7 +187,7 @@ describe("CLI QoL commands", () => {
   });
 
   it("update --clear-plan should remove a task from its plan", () => {
-    const plan = JSON.parse(run("--json plans --add 'CLI QoL Clear Plan'"));
+    const plan = seedPlan("CLI QoL Clear Plan");
     const task = JSON.parse(run(`add 'Clear plan assignment' --plan ${plan.id} --json`));
 
     const updated = JSON.parse(run(`--json update ${task.id} --clear-plan`));
@@ -195,7 +198,7 @@ describe("CLI QoL commands", () => {
   });
 
   it("bulk plan should move multiple tasks into a plan", () => {
-    const plan = JSON.parse(run("--json plans --add 'CLI QoL Bulk Plan'"));
+    const plan = seedPlan("CLI QoL Bulk Plan");
     const t1 = JSON.parse(run("add 'Bulk plan task 1' --json"));
     const t2 = JSON.parse(run("add 'Bulk plan task 2' --json"));
 
@@ -212,7 +215,7 @@ describe("CLI QoL commands", () => {
   });
 
   it("bulk plan --clear-plan should clear multiple task plan assignments", () => {
-    const plan = JSON.parse(run("--json plans --add 'CLI QoL Bulk Clear Plan'"));
+    const plan = seedPlan("CLI QoL Bulk Clear Plan");
     const t1 = JSON.parse(run(`add 'Bulk clear plan task 1' --plan ${plan.id} --json`));
     const t2 = JSON.parse(run(`add 'Bulk clear plan task 2' --plan ${plan.id} --json`));
 

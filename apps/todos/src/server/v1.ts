@@ -859,6 +859,23 @@ export async function handleV1Request(
           if (includeSubtasks !== null && includeSubtasks !== "true" && includeSubtasks !== "false") {
             return error(400, "include_subtasks must be true or false");
           }
+          const includeArchived = url.searchParams.get("include_archived");
+          if (includeArchived !== null && includeArchived !== "true" && includeArchived !== "false") {
+            return error(400, "include_archived must be true or false");
+          }
+          const planRead = url.searchParams.get("plan_read_contract");
+          if (planRead !== null) {
+            const keys = [...url.searchParams.keys()];
+            const allowed = new Set([
+              "plan_read_contract", "plan_id", "include_subtasks", "include_archived", "limit", "offset",
+            ]);
+            if (new Set(keys).size !== keys.length || keys.some((key) => !allowed.has(key))) {
+              return error(400, "Plan read contract requires an exact unambiguous plan selection");
+            }
+            if (planRead !== "1" || !url.searchParams.get("plan_id") || includeSubtasks !== "true" || includeArchived === null || url.searchParams.has("parent_id")) {
+              return error(400, "plan_read_contract=1 requires plan_id and explicit complete selection flags");
+            }
+          }
           const hasParentFilter = url.searchParams.has("parent_id");
           // Reject an out-of-vocabulary status/priority here rather than casting it
           // `as never` into the store, where it matched nothing and the endpoint
@@ -887,6 +904,7 @@ export async function handleV1Request(
           const offsetParam = paginationQueryParam(url, "offset");
           if (!offsetParam.ok) return offsetParam.response;
           const filter = {
+            ...(includeArchived !== null ? { include_archived: includeArchived === "true" } : {}),
             ...(updatedAfter !== null && updatedAfter.ok ? { updated_after: updatedAfter.value } : {}),
             ...(url.searchParams.get("q") ? { query: url.searchParams.get("q")! } : {}),
             ...(statusParam.value !== undefined ? { status: statusParam.value } : {}),
@@ -917,7 +935,19 @@ export async function handleV1Request(
           // list and the count are SQL-side now — no O(n) JS materialization.
           const { limit: _l, offset: _o, ...countFilter } = filter;
           const total = await store.tasks.count(countFilter);
-          return json({ tasks, count: tasks.length, total });
+          return json({
+            tasks,
+            count: tasks.length,
+            total,
+            ...(planRead === "1" ? {
+              selection: {
+                schema_version: 1,
+                plan_id: filter.plan_id,
+                include_subtasks: true,
+                include_archived: filter.include_archived,
+              },
+            } : {}),
+          });
         }
         if (method === "POST") {
           const body = await readJson<CreateTaskInput>(req);
@@ -1568,7 +1598,8 @@ export async function handleV1Request(
       if (id && action === "comments") {
         if (!(await store.plans.get(id))) return error(404, "plan not found");
         if (method === "GET") {
-          if (store.plans.getCommentsPage) {
+          const completeHistoryRequested = url.searchParams.has("plan_read_contract");
+          if (!completeHistoryRequested && store.plans.getCommentsPage) {
             const rawLimit = url.searchParams.get("limit");
             const cursor = url.searchParams.get("cursor");
             const limit = rawLimit === null ? DEFAULT_COMMENT_PAGE_SIZE : Number(rawLimit);
@@ -1597,9 +1628,26 @@ export async function handleV1Request(
               next_cursor: hasMore && comments[0] ? encodeCommentCursor(comments[0]) : null,
             });
           }
-          const comments = ((await store.plans.getComments?.(id, contextFromPrincipal(principal))) ?? [])
-            .map(redactPlanComment);
-          return json({ comments, count: comments.length });
+          if (completeHistoryRequested) {
+            if (url.searchParams.get("plan_read_contract") !== "1") {
+              return error(400, "Unsupported plan read contract");
+            }
+            if (!store.plans.getComments) {
+              return error(503, "Complete plan history is unavailable");
+            }
+          }
+          const history = await store.plans.getComments?.(id, contextFromPrincipal(principal));
+          if (completeHistoryRequested && !Array.isArray(history)) {
+            return error(503, "Complete plan history is unavailable");
+          }
+          const comments = (history ?? []).map(redactPlanComment);
+          return json({
+            comments,
+            count: comments.length,
+            ...(completeHistoryRequested ? {
+              history_selection: { schema_version: 1, plan_id: id, complete: true },
+            } : {}),
+          });
         }
         if (method === "POST") {
           const body = (await readJson<{

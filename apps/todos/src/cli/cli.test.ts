@@ -1,7 +1,8 @@
 import { runTemplateApiFixture } from "./test-support/template-cli-api.js";
+import {runPlanApiFixture} from "./test-support/plan-cli-api.js";
 import { describe, it, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
@@ -68,6 +69,7 @@ async function spawnCli(args: string[], dbPath: string, extraEnv: Record<string,
 }
 
 async function runCli(args: string[], dbPath: string, extraEnv: Record<string, string> = {}): Promise<CliResult> {
+  if(args.includes("plans")) return runPlanApiFixture(args,dbPath,join(testRoot,"plan-api-home"));
   let result = await spawnCli(args, dbPath, extraEnv);
   // Bounded retry: only re-run when the failure is a transient SQLite lock, so a
   // genuine command failure still surfaces immediately without being masked.
@@ -1202,6 +1204,8 @@ describe("CLI integration", () => {
       projectRoot,
       "--json",
       "plans",
+      "--artifact-root",
+      projectRoot,
       "--add",
       "CLI artifact plan",
       "--slug",
@@ -1222,13 +1226,15 @@ describe("CLI integration", () => {
       projectRoot,
       "--json",
       "plans",
+      "--artifact-root",
+      projectRoot,
       "--show",
       "readable-artifact-plan",
     ], dbPath);
     expect(shown.exitCode).toBe(0);
     const details = JSON.parse(shown.stdout);
     expect(details.plan.id).toBe(plan.id);
-    expect(details.artifact.path).toBe(artifactPath);
+    expect(details.artifact.path).toBe(realpathSync(artifactPath));
     expect(details.artifact.metadata.project_id).toBe(project.id);
     expect(details.artifact.body).toContain("Persist this plan locally");
 
@@ -1237,12 +1243,14 @@ describe("CLI integration", () => {
       projectRoot,
       "--json",
       "plans",
+      "--artifact-root",
+      projectRoot,
       "--artifact",
       "readable-artifact-plan",
     ], dbPath);
     expect(artifact.exitCode).toBe(0);
     const artifactDetails = JSON.parse(artifact.stdout);
-    expect(artifactDetails.artifact.path).toBe(artifactPath);
+    expect(artifactDetails.artifact.path).toBe(realpathSync(artifactPath));
     expect(artifactDetails.artifact.exists).toBe(true);
     expect(artifactDetails.artifact.conflicts).toEqual([]);
 
@@ -1252,12 +1260,14 @@ describe("CLI integration", () => {
       projectRoot,
       "--json",
       "plans",
+      "--artifact-root",
+      projectRoot,
       "--write-artifacts",
     ], dbPath);
     expect(exported.exitCode).toBe(0);
     expect(JSON.parse(exported.stdout)).toMatchObject({
       count: 1,
-      artifacts: [{ plan_id: plan.id, path: artifactPath }],
+      artifacts: [{ plan_id: plan.id, path: realpathSync(artifactPath) }],
     });
     expect(existsSync(artifactPath)).toBe(true);
 
@@ -1266,6 +1276,8 @@ describe("CLI integration", () => {
       projectRoot,
       "--json",
       "plans",
+      "--artifact-root",
+      projectRoot,
       "--add",
       "Duplicate artifact plan",
       "--slug",
