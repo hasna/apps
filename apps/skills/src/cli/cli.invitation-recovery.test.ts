@@ -110,7 +110,10 @@ test("recovery MCP refuses incompatible flags and keeps the ordinary credential 
   const ordinary: Record<string, string> = { ...f.env, HASNA_CONFIG_HOME: join(f.root, "emptyconfig"), QA_GUARD_EVENTS: join(scratch, "normal-credential-denials") };
   delete ordinary.HASNA_PROFILE; delete ordinary.HASNA_SKILLS_API_KEY_REF;
   const refused = await processResult(f, [mcp, "--stdio"], "", ordinary);
-  expect(refused.status).toBe(1); expect(refused.stdout).toBe(""); expect(refused.stderr).toContain("OWNED_RECOVERY_GUARD"); expect(f.calls).toHaveLength(0);
+  expect(refused.status).toBe(1); expect(refused.stdout).toBe("");
+  // Only macOS attempts the guarded Keychain subprocess; other hosts reach the missing-key refusal directly.
+  expect(refused.stderr).toContain(process.platform === "darwin" ? "OWNED_RECOVERY_GUARD" : "no API key resolved — refusing to run locally instead.");
+  expect(f.calls).toHaveLength(0);
 }));
 test("actual recovery terminal masks token/code, rejects overflow, and restores raw mode on completion and cancellation", async () => fixture(async f => {
   for (const mode of ["challenge", "accept", "overflow", "code-overflow", "code-invalid", "cancel"] as const) {
