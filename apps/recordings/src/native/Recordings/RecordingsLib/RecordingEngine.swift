@@ -1823,8 +1823,8 @@ public final class RecordingEngine: ObservableObject {
         // The selection is still frozen for every recording (not only an exposed "command
         // mode"), so a later command decision can only ever act on the exact text and
         // element that were selected when the user started speaking. The Accessibility IPC
-        // that reads it runs on a detached task, concurrently with recorder start: the
-        // microphone must never wait on a beachballing target app, and the MainActor stays
+        // that reads it runs on a blocking-work queue, concurrently with recorder start:
+        // neither the microphone nor a cooperative worker waits on a beachballing app. The MainActor stays
         // free to process the key-up that stops the recording. Skipped entirely when intent
         // detection is off — no command route exists to consume it.
         let shouldCaptureSelection = Self.shouldCaptureSelection(
@@ -1837,12 +1837,14 @@ public final class RecordingEngine: ObservableObject {
         let windowTitleLookup = focusedWindowTitleLookup
         let windowTitlePid = frontmostApp?.pid
         let axSnapshotTask = Task.detached(priority: .userInitiated) { () -> RecordingStartAXSnapshot in
-            let selectionToken = shouldCaptureSelection ? capturePid.flatMap { captureSelection($0) } : nil
-            let focusedWindowTitle = windowTitlePid.flatMap { windowTitleLookup($0) }
-            return RecordingStartAXSnapshot(
-                selectionToken: selectionToken,
-                focusedWindowTitle: focusedWindowTitle
-            )
+            await BlockingOperation.run {
+                let selectionToken = shouldCaptureSelection ? capturePid.flatMap { captureSelection($0) } : nil
+                let focusedWindowTitle = windowTitlePid.flatMap { windowTitleLookup($0) }
+                return RecordingStartAXSnapshot(
+                    selectionToken: selectionToken,
+                    focusedWindowTitle: focusedWindowTitle
+                )
+            }
         }
 
         // Project auto-selection and the processing configuration resolve with the
@@ -4102,9 +4104,9 @@ public final class RecordingEngine: ObservableObject {
                 processingConfiguration: processingConfiguration
             )
             let runCLI = self.commandCLI
-            let result = await Task.detached {
+            let result = await BlockingOperation.run {
                 runCLI(rewriteArguments, homePath, Self.commandRewriteTimeout)
-            }.value
+            }
             if self.canOwnBusyState(pipelineGeneration: pipelineGeneration) {
                 self.isTranscribing = false
                 self.liveTranscriptionText = ""
