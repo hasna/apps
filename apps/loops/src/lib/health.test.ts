@@ -146,6 +146,13 @@ describe("loop health classification", () => {
     }
   });
 
+  test("malformed workflow step statuses cannot throw or impersonate a failed step", () => {
+    for (const status of [{ toString: null }, { toString: {} }, ["failed"], null, 401]) {
+      const stdout = JSON.stringify({ workflowRun: {}, steps: [{ status, stderrExcerpt: "HTTP 401 Unauthorized" }] });
+      expect(classifyRunFailure(run({ stdout }))?.classification).toBe("unknown");
+    }
+  });
+
   test("classifies common agent-run failures", () => {
     const cases: Array<[RunFailureClassification, Partial<LoopRun>]> = [
       ["rate_limit", { error: "429 too many requests" }],
