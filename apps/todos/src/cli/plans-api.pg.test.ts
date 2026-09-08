@@ -12,6 +12,7 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
+import { toV1BaseUrl } from "@hasna/contracts/client";
 import { createTodosCloudQueryClient } from "../storage/cloud-client.js";
 import { createPostgresTodosStorageAdapter } from "../storage/postgres-adapter.js";
 import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
@@ -242,7 +243,7 @@ pgTest(
         `plan_read_contract=1&plan_id=${plan.id}&include_subtasks=true&include_archived=invalid`,
         `plan_read_contract=1&plan_id=${plan.id}&plan_id=other&include_subtasks=true&include_archived=true`,
       ]) {
-        const response = await fetch(`${server.url.origin}/v1/tasks?${query}`, {
+        const response = await fetch(`${toV1BaseUrl(server.url.href)}/tasks?${query}`, {
           headers: { authorization: `Bearer ${key.token}` },
         });
         expect(response.status).toBe(400);
@@ -329,7 +330,7 @@ pgTest(
         expect(JSON.parse(refusedRead.stdout)).toHaveProperty("error");
       }
       readFailure = undefined;
-      const historyUrl = `${server.url.origin}/v1/plans/${plan.id}/comments?plan_read_contract=1`;
+      const historyUrl = `${toV1BaseUrl(server.url.href)}/plans/${plan.id}/comments?plan_read_contract=1`;
       const historyResponse = await fetch(historyUrl, {
         headers: { authorization: `Bearer ${key.token}` },
       });
