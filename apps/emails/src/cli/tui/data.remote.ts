@@ -464,9 +464,9 @@ export function listMailboxSources(opts?: ListMailboxSourcesOptions): MailboxSou
   const stats = scanMailboxStats(undefined);
   const source: MailboxSourceSummary = {
     id: "all",
-    label: "Self-hosted Emails",
+    label: "All mailboxes",
     kind: "all",
-    badges: ["self_hosted"],
+    badges: [],
     counts: stats.counts,
     countsComplete: stats.countsComplete,
     total: stats.total,

@@ -2,41 +2,52 @@ import { Database } from "bun:sqlite";
 import { MIGRATIONS } from "./migrations.js";
 import { sqliteTodosProjectRegistrationSchemaSql } from "../project-registration/schema.js";
 
+/** Migrations 67/68 contain only trusted single statements delimited at line
+ * ends (no triggers or string literals containing semicolons). Execute each
+ * separately: Bun's multi-statement exec can continue past a constraint error. */
+function runPrGroupLineageMigration(db: Database, migration: string, rebuild: boolean): void {
+  if (db.inTransaction) throw new Error("PR-group migration requires its own transaction");
+  const priorForeignKeys = (db.query("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys;
+  try {
+    if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
+    db.exec("BEGIN IMMEDIATE");
+    for (const statement of migration.split(/;\s*(?:\n|$)/).map(value => value.trim()).filter(Boolean)) {
+      if (/^(?:PRAGMA foreign_keys\s*=|BEGIN IMMEDIATE$|COMMIT$)/i.test(statement)) continue;
+      db.run(statement);
+    }
+    const completed = db.query("SELECT id FROM _migrations WHERE id = ?").get(rebuild ? 68 : 67);
+    if (!completed) throw new Error("PR-group lineage backfill is incomplete; migration rolled back");
+    if (rebuild && db.query("PRAGMA foreign_key_check").all().length) {
+      throw new Error("PR-group migration failed foreign-key integrity verification");
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    if (db.inTransaction) db.exec("ROLLBACK");
+    throw error;
+  } finally {
+    db.exec(`PRAGMA foreign_keys = ${priorForeignKeys ? "ON" : "OFF"}`);
+  }
+}
+
 export function runMigrations(db: Database): void {
-  let strictMigrationFailure: unknown = null;
-  const executeMigration = (migration: string, index: number): void => {
+  let currentLevel = 0;
+  try {
+    currentLevel = (db.query("SELECT MAX(id) as max_id FROM _migrations").get() as {max_id:number|null}|null)?.max_id ?? 0;
+  } catch {
+    // A fresh database has no migration ledger. Migration errors below must
+    // never be mistaken for this case and replayed over partially changed data.
+  }
+  for (let index = currentLevel; index < MIGRATIONS.length; index++) {
     try {
-      db.exec(migration);
+      if (index === 66 || index === 67) runPrGroupLineageMigration(db,MIGRATIONS[index]!,index === 67);
+      else db.exec(MIGRATIONS[index]!);
     } catch (error) {
-      try {
-        db.exec("ROLLBACK");
-      } catch {
-        // Migration was not running in an explicit transaction.
-      }
-      if (index + 1 >= 68) strictMigrationFailure = error;
+      if (db.inTransaction) db.exec("ROLLBACK");
+      // Lineage backfill must succeed before strict table rebuilding starts.
+      if (index + 1 >= 67) throw error;
       // Older migrations remain best-effort because ensureSchema repairs them.
     }
-  };
-  // Check current migration level
-  try {
-    const result = db.query("SELECT MAX(id) as max_id FROM _migrations").get() as { max_id: number | null } | null;
-    const currentLevel = result?.max_id ?? 0;
-
-    for (let i = currentLevel; i < MIGRATIONS.length; i++) {
-      executeMigration(MIGRATIONS[i]!, i);
-    }
-  } catch {
-    // _migrations table doesn't exist yet, run all migrations
-    for (const [index, migration] of MIGRATIONS.entries()) {
-      executeMigration(migration, index);
-    }
   }
-  if (strictMigrationFailure) throw strictMigrationFailure;
-
-  // Ensure ALL schema elements exist regardless of migration history.
-  // This is the safety net: if any migration partially failed, or if the
-  // user upgraded from a very old version, this fills in all gaps.
-  // It's idempotent — safe to run on every startup.
   ensureSchema(db);
 }
 
@@ -1488,16 +1499,18 @@ export function ensureSchema(db: Database): void {
       SET leaf_task_id = COALESCE(leaf_task_id, (
             SELECT attempt.leaf_task_id
             FROM pr_group_attempts AS attempt
+            JOIN pr_groups AS owner ON owner.id = attempt.group_id
             WHERE attempt.group_id = pr_groups.id
-            ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+            ORDER BY CASE WHEN attempt.id = owner.active_attempt_id THEN 0 ELSE 1 END,
                      attempt.created_at ASC, attempt.id ASC
             LIMIT 1
           )),
           branch = COALESCE(branch, (
             SELECT attempt.branch
             FROM pr_group_attempts AS attempt
+            JOIN pr_groups AS owner ON owner.id = attempt.group_id
             WHERE attempt.group_id = pr_groups.id
-            ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+            ORDER BY CASE WHEN attempt.id = owner.active_attempt_id THEN 0 ELSE 1 END,
                      attempt.created_at ASC, attempt.id ASC
             LIMIT 1
           ));
@@ -1518,16 +1531,18 @@ export function ensureSchema(db: Database): void {
       SET pr_number = COALESCE(pr_number, (
             SELECT attempt.pr_number
             FROM pr_group_attempts AS attempt
+            JOIN pr_groups AS owner ON owner.id = attempt.group_id
             WHERE attempt.group_id = pr_groups.id AND attempt.pr_number IS NOT NULL
-            ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+            ORDER BY CASE WHEN attempt.id = owner.active_attempt_id THEN 0 ELSE 1 END,
                      attempt.created_at ASC, attempt.id ASC
             LIMIT 1
           )),
           base_sha = COALESCE(base_sha, (
             SELECT attempt.base_sha
             FROM pr_group_attempts AS attempt
+            JOIN pr_groups AS owner ON owner.id = attempt.group_id
             WHERE attempt.group_id = pr_groups.id AND attempt.base_sha IS NOT NULL
-            ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+            ORDER BY CASE WHEN attempt.id = owner.active_attempt_id THEN 0 ELSE 1 END,
                      attempt.created_at ASC, attempt.id ASC
             LIMIT 1
           ));
