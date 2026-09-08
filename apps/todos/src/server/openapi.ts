@@ -625,6 +625,7 @@ const taskManifestBindingLookupResponseSchema = {
 const taskListSchema = {
   type: "object",
   properties: {
+    status: { type: "string", enum: ["active", "completed", "archived"] },
     id: { type: "string" },
     project_id: { type: "string", nullable: true },
     slug: { type: "string" },
@@ -1428,6 +1429,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           required: ["name"],
           properties: {
+          status: { type: "string", enum: ["active", "completed", "archived"] },
             name: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             project_id: { type: "string" },
@@ -1440,6 +1442,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           minProperties: 1,
           properties: {
+          status: { type: "string", enum: ["active", "completed", "archived"] },
             slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             name: { type: "string" },
             description: { type: "string" },
@@ -3321,6 +3324,19 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: {
             "201": { content: { "application/json": { schema: { type: "object", properties: { task_list: { $ref: "#/components/schemas/TaskList" } } } } } },
             "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-lists/{id}/delete-preserving": {
+        post: {
+          operationId: "deleteTaskListPreserving",
+          summary: "Delete a task list, optionally detaching linked tasks and plans while retaining their content and history",
+          parameters: [{name:"id",in:"path",required:true,schema:{type:"string"}}],
+          requestBody: {required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,properties:{force:{type:"boolean",default:false}}}}}},
+          responses: {
+            "200": {content:{"application/json":{schema:{type:"object",additionalProperties:false,required:["schema_version","task_list_id","deleted","detached_task_ids","detached_plan_ids","detached_tasks","detached_plans"],properties:{schema_version:{type:"integer",enum:[1]},task_list_id:{type:"string"},deleted:{type:"boolean"},detached_task_ids:{type:"array",items:{type:"string"}},detached_plan_ids:{type:"array",items:{type:"string"}},detached_tasks:{type:"integer",minimum:0},detached_plans:{type:"integer",minimum:0}}}}}},
+            "409": {content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "501": {content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
           },
         },
       },
