@@ -20,6 +20,25 @@
 // Both directions are asserted everywhere the type crosses in both.
 
 import { describe, expect, it, test } from "bun:test";
+import { z } from "zod";
+import {
+  ProjectResourceAuthoritySchema as ContractsProjectResourceAuthoritySchema,
+  ProjectResourceLinkCollectionV1Schema as ContractsProjectResourceLinkCollectionV1Schema,
+  ProjectResourceLinkInputSchema as ContractsProjectResourceLinkInputSchema,
+  ProjectResourceLinkLabelsSchema as ContractsProjectResourceLinkLabelsSchema,
+  ProjectResourceLinkLocatorSchema as ContractsProjectResourceLinkLocatorSchema,
+  ProjectResourceLinkSchema as ContractsProjectResourceLinkSchema,
+  ProjectResourceTargetKindSchema as ContractsProjectResourceTargetKindSchema,
+} from "@hasna/contracts/schemas";
+import {
+  ProjectResourceAuthoritySchema,
+  ProjectResourceLinkCollectionV1Schema,
+  ProjectResourceLinkInputSchema,
+  ProjectResourceLinkLabelsSchema,
+  ProjectResourceLinkLocatorSchema,
+  ProjectResourceLinkSchema,
+  ProjectResourceTargetKindSchema,
+} from "./project-resource-schemas.js";
 import type {
   ProjectResourceAuthority as ContractsProjectResourceAuthority,
   ProjectResourceLink as ContractsProjectResourceLink,
@@ -101,6 +120,72 @@ type _StatusOut = AssertAssignable<ContractsApiKeyStatus, ApiKeyStatus>;
 type _StatusIn = AssertAssignable<ApiKeyStatus, ContractsApiKeyStatus>;
 type _HookOut = AssertAssignable<ContractsAuthAuditHook, AuthAuditHook>;
 type _HookIn = AssertAssignable<AuthAuditHook, ContractsAuthAuditHook>;
+
+// ── the seven root schema re-exports: input/output fidelity ────────────────
+// `project-resource-schemas.ts` re-states each contracts schema through the
+// local output spellings. For five of them that re-statement is
+// `z.ZodType<Output>`, which deliberately DROPS the concrete zod member API
+// (`.shape`, `.extend()`, `.pick()`, `.partial()`, `.keyof()`, `.options`,
+// `.discriminator()`, `.innerType()`, `.sourceType()`) from the published
+// type — a documented breaking type change, recorded in
+// `.changeset/1720-seam-projects-contract-free-dts.md`. What must NOT drift is
+// the schemas' INPUT and OUTPUT types: they are the published
+// `.parse()`/`.safeParse()` contract and what consumer generics read. The
+// `AssertAssignable` block above pins only the inferred OUTPUT types of the
+// plain type aliases; these assertions pin `z.input`/`z.output` of the schema
+// VALUES, in both directions, so a local spelling that stops matching the
+// contracts schema fails the same build that emits the declarations.
+// NOTE: these are spelled flat, per schema and per direction, on purpose. A
+// generic helper (`type Io<S extends z.ZodTypeAny, T extends z.ZodTypeAny> =
+// AssertAssignable<z.input<S>, z.input<T>>`) is VACUOUS: the constraint is
+// checked against the deferred `z.input<S>`/`z.input<T>` and never re-checked
+// once S and T are substituted, so a drifted schema annotation type-checks
+// clean. Measured on this file: with the labels schema's input parameter
+// drifted to `ProjectResourceLinkLabels | undefined`, the generic form passed
+// `tsc --noEmit` while the flat form below fails. Keep it flat.
+type ContractsAuthoritySchema = typeof ContractsProjectResourceAuthoritySchema;
+type LocalAuthoritySchema = typeof ProjectResourceAuthoritySchema;
+type ContractsTargetKindSchema = typeof ContractsProjectResourceTargetKindSchema;
+type LocalTargetKindSchema = typeof ProjectResourceTargetKindSchema;
+type ContractsLabelsSchema = typeof ContractsProjectResourceLinkLabelsSchema;
+type LocalLabelsSchema = typeof ProjectResourceLinkLabelsSchema;
+type ContractsLocatorSchema = typeof ContractsProjectResourceLinkLocatorSchema;
+type LocalLocatorSchema = typeof ProjectResourceLinkLocatorSchema;
+type ContractsInputSchema = typeof ContractsProjectResourceLinkInputSchema;
+type LocalInputSchema = typeof ProjectResourceLinkInputSchema;
+type ContractsLinkSchema = typeof ContractsProjectResourceLinkSchema;
+type LocalLinkSchema = typeof ProjectResourceLinkSchema;
+type ContractsCollectionSchema = typeof ContractsProjectResourceLinkCollectionV1Schema;
+type LocalCollectionSchema = typeof ProjectResourceLinkCollectionV1Schema;
+
+type _IoAuthorityIn = AssertAssignable<z.input<ContractsAuthoritySchema>, z.input<LocalAuthoritySchema>>;
+type _IoAuthorityInBack = AssertAssignable<z.input<LocalAuthoritySchema>, z.input<ContractsAuthoritySchema>>;
+type _IoAuthorityOut = AssertAssignable<z.output<ContractsAuthoritySchema>, z.output<LocalAuthoritySchema>>;
+type _IoAuthorityOutBack = AssertAssignable<z.output<LocalAuthoritySchema>, z.output<ContractsAuthoritySchema>>;
+type _IoTargetKindIn = AssertAssignable<z.input<ContractsTargetKindSchema>, z.input<LocalTargetKindSchema>>;
+type _IoTargetKindInBack = AssertAssignable<z.input<LocalTargetKindSchema>, z.input<ContractsTargetKindSchema>>;
+type _IoTargetKindOut = AssertAssignable<z.output<ContractsTargetKindSchema>, z.output<LocalTargetKindSchema>>;
+type _IoTargetKindOutBack = AssertAssignable<z.output<LocalTargetKindSchema>, z.output<ContractsTargetKindSchema>>;
+type _IoLabelsIn = AssertAssignable<z.input<ContractsLabelsSchema>, z.input<LocalLabelsSchema>>;
+type _IoLabelsInBack = AssertAssignable<z.input<LocalLabelsSchema>, z.input<ContractsLabelsSchema>>;
+type _IoLabelsOut = AssertAssignable<z.output<ContractsLabelsSchema>, z.output<LocalLabelsSchema>>;
+type _IoLabelsOutBack = AssertAssignable<z.output<LocalLabelsSchema>, z.output<ContractsLabelsSchema>>;
+type _IoLocatorIn = AssertAssignable<z.input<ContractsLocatorSchema>, z.input<LocalLocatorSchema>>;
+type _IoLocatorInBack = AssertAssignable<z.input<LocalLocatorSchema>, z.input<ContractsLocatorSchema>>;
+type _IoLocatorOut = AssertAssignable<z.output<ContractsLocatorSchema>, z.output<LocalLocatorSchema>>;
+type _IoLocatorOutBack = AssertAssignable<z.output<LocalLocatorSchema>, z.output<ContractsLocatorSchema>>;
+type _IoInputIn = AssertAssignable<z.input<ContractsInputSchema>, z.input<LocalInputSchema>>;
+type _IoInputInBack = AssertAssignable<z.input<LocalInputSchema>, z.input<ContractsInputSchema>>;
+type _IoInputOut = AssertAssignable<z.output<ContractsInputSchema>, z.output<LocalInputSchema>>;
+type _IoInputOutBack = AssertAssignable<z.output<LocalInputSchema>, z.output<ContractsInputSchema>>;
+type _IoLinkIn = AssertAssignable<z.input<ContractsLinkSchema>, z.input<LocalLinkSchema>>;
+type _IoLinkInBack = AssertAssignable<z.input<LocalLinkSchema>, z.input<ContractsLinkSchema>>;
+type _IoLinkOut = AssertAssignable<z.output<ContractsLinkSchema>, z.output<LocalLinkSchema>>;
+type _IoLinkOutBack = AssertAssignable<z.output<LocalLinkSchema>, z.output<ContractsLinkSchema>>;
+type _IoCollectionIn = AssertAssignable<z.input<ContractsCollectionSchema>, z.input<LocalCollectionSchema>>;
+type _IoCollectionInBack = AssertAssignable<z.input<LocalCollectionSchema>, z.input<ContractsCollectionSchema>>;
+type _IoCollectionOut = AssertAssignable<z.output<ContractsCollectionSchema>, z.output<LocalCollectionSchema>>;
+type _IoCollectionOutBack = AssertAssignable<z.output<LocalCollectionSchema>, z.output<ContractsCollectionSchema>>;
 
 describe("published @hasna/contracts crossing types", () => {
   it("is a declaration-only leaf: nothing in it can execute or import", async () => {

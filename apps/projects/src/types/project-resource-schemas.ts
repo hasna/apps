@@ -36,11 +36,18 @@ import {
   ProjectResourceTargetKindSchema as ContractsProjectResourceTargetKindSchema,
 } from "@hasna/contracts/schemas";
 
-// The two enums keep the exact generic shape contracts declares. The
-// object/effect schemas are stated as the plain zod type over the local
-// output spellings: every one of these schemas has identical input and output
-// shapes, so a single type parameter is faithful (pinned by the conformance
-// suite).
+// The two enums keep the exact generic shape contracts declares. The five
+// object/effect schemas are stated as `z.ZodType<Output>` over the local
+// output spellings: every one of them has identical input and output shapes,
+// so the single type parameter is faithful for `.parse()`/`.safeParse()` and
+// for `z.input`/`z.output` (both asserted against the contracts schemas in
+// `client-types.test.ts`). It is NOT faithful for the concrete zod member API:
+// `.shape`, `.extend()`, `.pick()`, `.partial()`, `.keyof()`, `.options`,
+// `.discriminator()`, `.innerType()`, `.sourceType()` are deliberately absent
+// from the published type, because re-spelling the eight-branch unions and
+// their discriminated locators by hand is not maintainable. That drop is a
+// documented breaking type change for consumers — see
+// `.changeset/1720-seam-projects-contract-free-dts.md`.
 export const ProjectResourceAuthoritySchema: z.ZodEnum<
   ["todos", "conversations", "knowledge", "mementos", "orgs", "contacts"]
 > = ContractsProjectResourceAuthoritySchema;
