@@ -947,7 +947,7 @@
     },
     "apps/servers": {
       "name": "@hasna/servers",
-      "version": "0.1.25",
+      "version": "0.2.0",
       "bin": {
         "servers": "dist/cli/index.js",
         "servers-mcp": "dist/mcp/index.js",
