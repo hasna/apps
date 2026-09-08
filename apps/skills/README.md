@@ -484,6 +484,43 @@ switch instances. `HASNA_HOME` / `HASNA_CONFIG_HOME` isolate credential state;
 `HASNA_SKILLS_DIR` separately isolates corpus/configuration data. They do not
 require changing `HOME`.
 
+Private source publication uses a separate hosted contract advertised by
+`capabilities.privatePublishing`. It requires fresh email verification, an
+existing private/team skill UUID, and an explicit comparison with the observed
+current version UUID (or `--expect-empty`). Request a code with `auth signup`
+first, then enter it over stdin; do not put verification codes in shell history.
+
+```sh
+skills --profile customer publication publish ./my-skill \
+  --skill-id <skill-uuid> --expect-empty --recovery-dir "$PWD/publication-receipt" \
+  --email you@example.com --code-stdin --confirm --json
+skills --profile customer publication status --recovery-dir "$PWD/publication-receipt" \
+  --email you@example.com --code-stdin --json
+```
+
+Without an enrolled named profile, also supply the observed `--user-id` and
+`--membership-id`. `publication resume` and `publication cancel` use the same
+recovery directory, fresh verification, and `--confirm`. The directory must be
+new for `publish`, have a canonical absolute parent path, and contain no symbolic
+links. It keeps immutable archive bytes and a generated idempotency key before
+the first publication request. Preserve it after interruption: resume reconciles
+the same declaration, and an uncertain upload is never sent twice. If a process
+crashes while holding `operation.lock`, confirm it has stopped before removing
+that lock explicitly. Status and cancellation remain available when new
+publishing is disabled. Exit 2 means publication is still pending; `committed`
+means source was published. Private execution remains unavailable.
+
+The SDK exports `RemotePrivatePublicationsClient` through both the root and
+`./sdk`; `RemoteSkillsAuthClient.openPrivatePublications` creates one from fresh
+workspace verification. The shared `preparePrivatePublication`,
+`continuePrivatePublication`, `inspectPrivatePublication`, and
+`readPrivatePublicationRecovery` functions implement the same durable workflow.
+MCP exposes `publish_private_skill`, `get_private_publication`,
+`resume_private_publication`, and `cancel_private_publication` with equivalent
+explicit authority and consent. Recovery directories are local to the MCP host;
+request history may retain supplied verification codes. Tokens and signed upload
+URLs are never returned or written to the recovery directory.
+
 A paid remote run requires explicit approval. Interactive runs ask before
 submission; JSON and other noninteractive runs require `--yes`. The approved
 quote becomes the server-enforced credit ceiling. A changed price above that

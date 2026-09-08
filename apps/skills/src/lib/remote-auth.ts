@@ -1,4 +1,5 @@
 import { requestInvitationEmail, type RequestInvitationEmailChallenge, type AcceptInvitationEmailChallenge } from "./remote-invitation-recovery.js";
+import { RemotePrivatePublicationsClient } from "./remote-private-publications.js";
 import { invitationInput, type ListRemoteWorkspaceInvitations, type IssueRemoteWorkspaceInvitation,
   type ResendRemoteWorkspaceInvitation, type RevokeRemoteWorkspaceInvitation, type AcceptRemoteWorkspaceInvitation } from "./remote-invitations.js";
 import { workspaceLeaveInput, type LeaveRemoteWorkspace } from "./remote-workspace-leave.js";
@@ -103,6 +104,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export class RemoteSkillsAuthClient {
   readonly apiOrigin: string;
   constructor(apiUrl: string) { this.apiOrigin = normalizeSkillsApiOrigin(apiUrl); }
+  /** One fresh workspace-bound session for an entire publication. No credentials are saved. */
+  async openPrivatePublications(email: string, code: string, context: RemoteWorkspaceContext): Promise<RemotePrivatePublicationsClient> {
+    const origin = this.apiOrigin, captured = workspaceContext(context);
+    return new RemotePrivatePublicationsClient(origin, await this.switchWorkspace(email, code, captured));
+  }
   requestInvitationEmailChallenge(input: RequestInvitationEmailChallenge) { return requestInvitationEmail(this.apiOrigin, "challenge", input); }
   acceptInvitationEmailChallenge(input: AcceptInvitationEmailChallenge) { return requestInvitationEmail(this.apiOrigin, "accept", input); }
   requestCode(email: string) { return this.request("/api/auth/login", { method: "POST", body: JSON.stringify({ email }) }); }
