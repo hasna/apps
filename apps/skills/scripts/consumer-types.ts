@@ -166,6 +166,66 @@ const wrongInvitationAcceptedSdk: false = invitationAcceptedSdk.accepted;
 // @ts-expect-error Error codes are closed.
 const wrongInvitationCodeSdk: InvSdk.RemoteWorkspaceInvitationErrorCode = "UNKNOWN";
 
+import * as RecoveryRoot from "@hasna/skills";
+const recoveryChallengeRoot: RecoveryRoot.RequestInvitationEmailChallenge = { invitationId: "observed-invitation", challengeId: "retained-challenge", token: "secret-input-only", confirm: true };
+const recoveryAcceptRoot: RecoveryRoot.AcceptInvitationEmailChallenge = { ...recoveryChallengeRoot, code: "000000" };
+const recoveryClientRoot = new RecoveryRoot.RemoteSkillsAuthClient("https://skills.example.com/api/v1");
+const recoveryRequestedRoot: Promise<RecoveryRoot.RemoteInvitationEmailChallenge> = recoveryClientRoot.requestInvitationEmailChallenge(recoveryChallengeRoot);
+const recoveryAcceptedRoot: Promise<RecoveryRoot.RemoteInvitationEmailAcceptance> = recoveryClientRoot.acceptInvitationEmailChallenge(recoveryAcceptRoot);
+declare const recoveryChallengeResultRoot: Awaited<typeof recoveryRequestedRoot>;
+declare const recoveryAcceptResultRoot: Awaited<typeof recoveryAcceptedRoot>;
+const recoveryTtlRoot: 600 = recoveryChallengeResultRoot.expiresIn;
+const recoverySignInRoot: true = recoveryAcceptResultRoot.signInRequired;
+const recoveryErrorCodeRoot: RecoveryRoot.RemoteInvitationEmailErrorCode = "INVITATION_PROOF_UNAVAILABLE";
+new RecoveryRoot.RemoteInvitationEmailError(recoveryErrorCodeRoot);
+new RecoveryRoot.InvitationEmailInputError(); new RecoveryRoot.RemoteInvitationEmailUnconfirmedError("accept");
+// @ts-expect-error Recovery confirmation is mandatory, not any.
+recoveryClientRoot.requestInvitationEmailChallenge({ invitationId: "id", challengeId: "id", token: "secret" });
+// @ts-expect-error Accept needs fresh code proof, not only challenge possession.
+recoveryClientRoot.acceptInvitationEmailChallenge(recoveryChallengeRoot);
+// @ts-expect-error The safe challenge projection never exposes an OTP.
+const recoveryCodeLeakRoot: string = recoveryChallengeResultRoot.code;
+// @ts-expect-error The accepted result never creates a session token.
+const recoveryTokenLeakRoot: string = recoveryAcceptResultRoot.token;
+// @ts-expect-error TTL remains a concrete literal, not any.
+const recoveryWrongTtlRoot: 1 = recoveryChallengeResultRoot.expiresIn;
+// @ts-expect-error Accepted sign-in requirement is literal true.
+const recoveryWrongSignInRoot: false = recoveryAcceptResultRoot.signInRequired;
+// @ts-expect-error Error codes are a closed union.
+const recoveryWrongCodeRoot: RecoveryRoot.RemoteInvitationEmailErrorCode = "UNKNOWN";
+// @ts-expect-error A membership ID must retain string inference.
+const recoveryWrongMembershipRoot: number = recoveryAcceptResultRoot.membershipId;
+
+import * as RecoverySdk from "@hasna/skills/sdk";
+const recoveryChallengeSdk: RecoverySdk.RequestInvitationEmailChallenge = { invitationId: "observed-invitation", challengeId: "retained-challenge", token: "secret-input-only", confirm: true };
+const recoveryAcceptSdk: RecoverySdk.AcceptInvitationEmailChallenge = { ...recoveryChallengeSdk, code: "000000" };
+const recoveryClientSdk = new RecoverySdk.RemoteSkillsAuthClient("https://skills.example.com/api/v1");
+const recoveryRequestedSdk: Promise<RecoverySdk.RemoteInvitationEmailChallenge> = recoveryClientSdk.requestInvitationEmailChallenge(recoveryChallengeSdk);
+const recoveryAcceptedSdk: Promise<RecoverySdk.RemoteInvitationEmailAcceptance> = recoveryClientSdk.acceptInvitationEmailChallenge(recoveryAcceptSdk);
+declare const recoveryChallengeResultSdk: Awaited<typeof recoveryRequestedSdk>;
+declare const recoveryAcceptResultSdk: Awaited<typeof recoveryAcceptedSdk>;
+const recoveryTtlSdk: 600 = recoveryChallengeResultSdk.expiresIn;
+const recoverySignInSdk: true = recoveryAcceptResultSdk.signInRequired;
+const recoveryErrorCodeSdk: RecoverySdk.RemoteInvitationEmailErrorCode = "INVITATION_PROOF_UNAVAILABLE";
+new RecoverySdk.RemoteInvitationEmailError(recoveryErrorCodeSdk);
+new RecoverySdk.InvitationEmailInputError(); new RecoverySdk.RemoteInvitationEmailUnconfirmedError("accept");
+// @ts-expect-error Recovery confirmation is mandatory, not any.
+recoveryClientSdk.requestInvitationEmailChallenge({ invitationId: "id", challengeId: "id", token: "secret" });
+// @ts-expect-error Accept needs fresh code proof, not only challenge possession.
+recoveryClientSdk.acceptInvitationEmailChallenge(recoveryChallengeSdk);
+// @ts-expect-error The safe challenge projection never exposes an OTP.
+const recoveryCodeLeakSdk: string = recoveryChallengeResultSdk.code;
+// @ts-expect-error The accepted result never creates a session token.
+const recoveryTokenLeakSdk: string = recoveryAcceptResultSdk.token;
+// @ts-expect-error TTL remains a concrete literal, not any.
+const recoveryWrongTtlSdk: 1 = recoveryChallengeResultSdk.expiresIn;
+// @ts-expect-error Accepted sign-in requirement is literal true.
+const recoveryWrongSignInSdk: false = recoveryAcceptResultSdk.signInRequired;
+// @ts-expect-error Error codes are a closed union.
+const recoveryWrongCodeSdk: RecoverySdk.RemoteInvitationEmailErrorCode = "UNKNOWN";
+// @ts-expect-error A membership ID must retain string inference.
+const recoveryWrongMembershipSdk: number = recoveryAcceptResultSdk.membershipId;
+
 declare const selectedSession: Awaited<ReturnType<typeof auth.switchWorkspace>>;
 const sessionContract: import("@hasna/skills/sdk").RemoteWorkspaceSession = selectedSession;
 const rootSessionContract: import("@hasna/skills").RemoteWorkspaceSession = sessionContract;

@@ -1,3 +1,4 @@
+import { registerInvitationRecoveryCommands } from "./invitation-recovery.js";
 import type { Command } from "commander";
 import { prepareProfileWorkspace } from "../../lib/workspace-profile.js";
 import { RemoteSkillsAuthClient } from "../../lib/remote-auth.js";
@@ -10,6 +11,7 @@ type Options = { userId: string; membershipId: string; email: string; json?: boo
   after?: string; recipient?: string; role?: IssueRemoteWorkspaceInvitation["role"]; idempotencyKey?: string; expectedGeneration?: string };
 export function registerWorkspaceInvitationCommands(workspace: Command) {
   const invitations = workspace.command("invitations").description("Manage workspace invitations with fresh verification and unchanged saved credentials");
+  registerInvitationRecoveryCommands(invitations);
   for (const action of ["list", "get", "issue", "resend", "revoke", "accept"] as const) {
     const targeted = ["get", "resend", "revoke", "accept"].includes(action), mutation = !["list", "get"].includes(action);
     const command = invitations.command(action + (targeted ? " <invitation-id>" : "")).allowExcessArguments(false)
