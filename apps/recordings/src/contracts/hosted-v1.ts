@@ -18,6 +18,8 @@ export interface HostedAccount { id: string; displayName: string; email: string;
 export interface HostedPageOptions { limit?: number; before?: string; beforeId?: string }
 export interface HostedAccountResponse { account: HostedAccount; wireVersion?: string; capabilities?: string[]; [key: string]: unknown }
 export interface HostedVersionResponse { name: "recordings"; version: string; apiVersion: "v1"; wireVersion?: string; capabilities?: string[]; [key: string]: unknown }
+export interface HostedHealthResponse { status: "ok"; [key: string]: unknown }
+export interface HostedReadyResponse { status: "ready"; [key: string]: unknown }
 
 function parser<T>(schema: { parse(value: unknown): T }): ContractParser<T> {
   return {
@@ -56,6 +58,8 @@ export const bootstrapInputParser: ContractParser<Record<string, never>> = parse
 export const renameInputParser: ContractParser<{ title: string }> = parser(z.object({ title }).strict());
 export const accountResponseParser: ContractParser<HostedAccountResponse> = parser(object({ account, ...advertised }).refine(compatible));
 export const versionResponseParser: ContractParser<HostedVersionResponse> = parser(object({ name: z.literal("recordings"), version: z.string(), apiVersion: z.literal("v1"), ...advertised }).refine(compatible));
+export const healthResponseParser: ContractParser<HostedHealthResponse> = parser(object({ status: z.literal("ok") }));
+export const readyResponseParser: ContractParser<HostedReadyResponse> = parser(object({ status: z.literal("ready") }));
 export const recordingResponseParser: ContractParser<{ recording: HostedRecording; [key: string]: unknown }> = parser(object({ recording }));
 export const recordingListParser: ContractParser<{ recordings: HostedRecording[]; [key: string]: unknown }> = parser(object({ recordings: z.array(recording).max(100) }));
 export const pasteResponseParser: ContractParser<{ receipt: HostedPasteReceipt; [key: string]: unknown }> = parser(object({ receipt }));

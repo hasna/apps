@@ -1165,6 +1165,42 @@
         "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
       },
       "valid": false
+    },
+    {
+      "parser": "healthResponseParser",
+      "name": "healthy status preserves future JSON",
+      "valid": true,
+      "value": {
+        "status": "ok",
+        "future": {
+          "available": true
+        }
+      }
+    },
+    {
+      "parser": "healthResponseParser",
+      "name": "unknown health status refused",
+      "valid": false,
+      "value": {
+        "status": "ready"
+      }
+    },
+    {
+      "parser": "readyResponseParser",
+      "name": "ready status preserves future JSON",
+      "valid": true,
+      "value": {
+        "status": "ready",
+        "future": {
+          "available": true
+        }
+      }
+    },
+    {
+      "parser": "readyResponseParser",
+      "name": "missing ready status refused",
+      "valid": false,
+      "value": {}
     }
   ]
 }
