@@ -1,22 +1,24 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
+import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
-const TEST_DB = join(tmpdir(), `conversations-cli-exit-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 function runCli(args: string[], apiMode = false) {
   const env: Record<string, string> = {
-    ...process.env,
-    CONVERSATIONS_DB_PATH: TEST_DB,
+    ...fixture.env,
     CONVERSATIONS_AGENT_ID: "cli-exit-tester",
     FORCE_COLOR: "0",
   };
 
   if (apiMode) {
     env.HASNA_CONVERSATIONS_API_URL = "http://127.0.0.1:9";
-    env.HASNA_CONVERSATIONS_API_KEY = "test-only-key";
+    env.HASNA_CONVERSATIONS_API_KEY = crypto.randomUUID();
   } else {
     delete env.HASNA_CONVERSATIONS_API_URL;
     delete env.HASNA_CONVERSATIONS_API_KEY;
@@ -47,9 +49,8 @@ function expectUnknownTopLevelCommand(args: string[], apiMode = false) {
 
 describe("top-level command routing", () => {
   afterAll(() => {
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-    try { unlinkSync(`${TEST_DB}-shm`); } catch {}
+
+
   });
 
   test("an unknown command is rejected instead of invoking the API-mode TUI fallback", () => {
@@ -79,7 +80,7 @@ describe("top-level command routing", () => {
       status: "online",
       heartbeat: true,
     });
-    // Local mode announces itself once on stderr (hasna/apps#1720).
-    expect(result.stderr).toContain("LOCAL mode");
+    // API clients must not announce a local store.
+    expect(result.stderr).not.toContain("local store");
   });
 });

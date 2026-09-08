@@ -1,3 +1,7 @@
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -31,8 +35,7 @@ import { join } from "path";
  * load-bearing as the positive ones.
  */
 
-const TEST_DB = join(tmpdir(), `conversations-sender-filter-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 /** The measured scenario: a coordinator probing for a sub-agent's post. */
 const CHANNEL = "senderfilter-probe";
@@ -45,12 +48,7 @@ function runCli(args: string[], agent: string) {
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
     env: {
-      ...process.env,
-      // Precedence rule 1 in src/lib/store/index.ts: an explicit DB path wins
-      // over exported API credentials, so fleet credentials in the ambient
-      // environment cannot pull this suite onto the production store. Verified
-      // by measurement, not assumed — see the task record.
-      CONVERSATIONS_DB_PATH: TEST_DB,
+      ...fixture.env,
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",
     },
@@ -91,9 +89,6 @@ describe("sender filter is never silent", () => {
   }, 30_000);
 
   afterAll(() => {
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try { unlinkSync(`${TEST_DB}${suffix}`); } catch {}
-    }
   });
 
   // ---- the message is reachable at all (fixture control) ----
@@ -252,8 +247,8 @@ describe("sender filter is never silent", () => {
     expect(res.exitCode).toBe(0);
     expect(JSON.parse(res.stdout).count).toBe(1);
     expect(JSON.parse(res.stdout).detail).toBe("preview");
-    // Local mode announces itself once on stderr (hasna/apps#1720).
-    expect(res.stderr).toContain("LOCAL mode");
+    // Shared API clients do not announce a local store.
+    expect(res.stderr).not.toContain("local store");
   });
 
   test("export: csv format discloses an empty export too", () => {

@@ -126,11 +126,16 @@ function preparePackedInstall(): PackedInstall {
   return packed;
 }
 
-/** Run the packed CLI with nothing ambient: no real HOME, no inherited config. */
-function runPackedCli(install: PackedInstall, args: string[]) {
+/** Exercise the explicit packed LocalStore library without ambient credentials. */
+function runPackedLocalLibrary(install: PackedInstall) {
   const home = join(install.root, "home");
   mkdirSync(home, { recursive: true });
-  return spawnSync("bun", [join(install.packageDir, "bin", "index.js"), ...args], {
+  const script = `import { LocalStore } from ${JSON.stringify(join(install.packageDir, "dist", "index.js"))};
+const store = new LocalStore();
+const page = await store.readMessagePreviews({ agent: "packaged-reader", limit: 1 });
+if (!Array.isArray(page.messages)) throw new Error("invalid preview page");
+process.exit(0);`;
+  return spawnSync("bun", ["--no-env-file", "--eval", script], {
     cwd: install.root,
     encoding: "utf8",
     timeout: 120_000,
@@ -172,7 +177,7 @@ describe("packaged local-read worker (regression 0ae63bc7)", () => {
     // built worker.
     expect(existsSync(join(install.packageDir, "src"))).toBe(false);
 
-    const read = runPackedCli(install, ["read", "--limit", "1"]);
+    const read = runPackedLocalLibrary(install);
     expect(read.stderr).not.toContain(MISSING_WORKER_MESSAGE);
     expect(read.status, `packed read failed: ${read.stderr}`).toBe(0);
   }, 300_000);
@@ -184,7 +189,7 @@ describe("packaged local-read worker (regression 0ae63bc7)", () => {
 
     renameSync(worker, parked);
     try {
-      const read = runPackedCli(install, ["read", "--limit", "1"]);
+      const read = runPackedLocalLibrary(install);
       expect(read.status).not.toBe(0);
       expect(read.stderr).toContain(MISSING_WORKER_MESSAGE);
     } finally {

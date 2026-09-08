@@ -17,6 +17,7 @@ function client(overrides: Record<string, unknown> = {}) {
   return {
     async get(sql: string) {
       if (sql.includes("SELECT tenant_id FROM api_keys")) return { tenant_id: TEST_TENANT };
+      if (sql.includes("FROM pg_roles")) return {rolsuper:false,rolbypassrls:false,ownership_write:false,rls_tables:8};
       return { ok: 1 };
     },
     async many() { return []; },
@@ -85,6 +86,7 @@ function completeStore() {
       }
       return { ...versionMeta(3, { change_kind: "restore", source_version: version, current: true }), ...opts };
     },
+    async pruneExpired(...args: unknown[]) { record("pruneExpired", args); return 2; },
     async pruneVersionHistory() { record("pruneVersionHistory", []); return { versions: 0 }; },
     async runVersionBackfill() { record("runVersionBackfill", []); return 0; },
     async listVaultItemMetadata(...args: unknown[]) { record("listVaultItemMetadata", args); return [item]; },
@@ -147,6 +149,14 @@ describe("cloud server route matrix", () => {
     expect((await body(await handle(request("/v1/secrets/get?key=demo%2Fkey")))).value).toBe("value");
     expect((await handle(request("/v1/secrets/search"))).status).toBe(400);
     expect(await body(await handle(request("/v1/secrets/search?q=demo")))).toHaveProperty("results");
+  });
+
+  it("routes garbage collection with the verified actor and tenant", async () => {
+    const { handle, store } = makeHandler();
+    const response = await handle(request("/v1/secrets/prune-expired", "POST", {}));
+    expect(response.status).toBe(200);
+    expect(await body(response)).toEqual({ pruned: 2 });
+    expect(store.calls.at(-1)).toEqual({ method: "pruneExpired", args: ["kid-only", TEST_TENANT] });
   });
 
   it("covers vault-item list/create/search/get/delete routes", async () => {
@@ -240,7 +250,7 @@ describe("cloud server route matrix", () => {
     const unready = makeHandler(completeStore(), client({ async get() { throw "schema unavailable"; } }));
     res = await unready.handle(request("/ready"));
     expect(res.status).toBe(503);
-    expect(await body(res)).toMatchObject({ status: "not_ready", pendingMigrations: [] });
+    expect(await body(res)).toMatchObject({ status: "not_ready", reason: "tenant_security_not_ready" });
 
     const throwsError = completeStore();
     throwsError.listSecretMetadata = async () => { throw new Error("store failed"); };

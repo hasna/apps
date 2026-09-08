@@ -1,3 +1,7 @@
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -17,11 +21,10 @@ import { tmpdir } from "node:os";
  * reading the channel, never by the author.
  */
 
-const CLI = ["bun", "run", "src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "src/cli/index.tsx"];
 const REDACTION_EXIT_CODE = 2;
 
 let TMP_DIR: string;
-let TEST_DB: string;
 
 function syntheticDatabaseUrl(): string {
   return ["postgres", "://", "e2e_user:synthetic-password", "@db.example.invalid:5432/app"].join("");
@@ -38,12 +41,11 @@ const PRESENCE_REPORT = [
 
 function runCli(args: string[], agent = "e2e-sender") {
   const env: Record<string, string | undefined> = {
-    ...process.env,
-    CONVERSATIONS_DB_PATH: TEST_DB,
+    ...fixture.env,
     CONVERSATIONS_AGENT_ID: agent,
     FORCE_COLOR: "0",
   };
-  // Scrub any ambient store credentials so this suite tests the local store.
+  // Use the isolated saved API credentials for the CLI process.
   for (const key of ["HASNA_CONVERSATIONS_API_URL", "CONVERSATIONS_API_URL",
     "HASNA_CONVERSATIONS_API_KEY", "CONVERSATIONS_API_KEY"]) {
     delete env[key];
@@ -64,7 +66,6 @@ function runCli(args: string[], agent = "e2e-sender") {
 
 beforeAll(() => {
   TMP_DIR = mkdtempSync(join(tmpdir(), "conversations-redaction-e2e-"));
-  TEST_DB = join(TMP_DIR, "redaction.db");
 });
 
 afterAll(() => {

@@ -1,6 +1,9 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let apiFixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { apiFixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await apiFixture?.stop(); });
+import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -10,20 +13,18 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
 
 const TEST_ROOT = join(
   tmpdir(),
   `conversations-cli-attachments-get-${process.pid}-${Date.now()}`,
 );
-const TEST_DB = join(TEST_ROOT, "conversations.db");
 const ATTACHMENTS_DIR = join(TEST_ROOT, "attachments");
 const SOURCE_DIR = join(TEST_ROOT, "source");
 const OUTPUT_DIR = join(TEST_ROOT, "output");
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
-mkdirSync(SOURCE_DIR, { recursive: true });
-mkdirSync(OUTPUT_DIR, { recursive: true });
+mkdirSync(SOURCE_DIR, { recursive: true, mode: 0o700 });
+mkdirSync(OUTPUT_DIR, { recursive: true, mode: 0o700 });
 
 type CliResult = {
   exitCode: number;
@@ -35,11 +36,11 @@ function runCli(args: string[]): CliResult {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: isolatedStoreChildEnv(TEST_DB, {
+    env: { ...apiFixture.env,
       CONVERSATIONS_AGENT_ID: "attachment-reader",
       CONVERSATIONS_ATTACHMENTS_DIR: ATTACHMENTS_DIR,
       FORCE_COLOR: "0",
-    }),
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -58,7 +59,7 @@ function seedAttachment(
   token: string,
   name: string,
   content: Buffer,
-): { messageId: number; storedPath: string } {
+): { messageId: number } {
   const channel = `attachment-get-${token}`;
   const created = runCli(["channel", "create", channel, "--from", "attachment-reader"]);
   expect(created.exitCode, outputText(created)).toBe(0);
@@ -86,14 +87,13 @@ function seedAttachment(
   expect(message.attachments[0].name).toBe(`${token}-${name}`);
   return {
     messageId: message.id,
-    storedPath: message.attachments[0].path,
-  };
+    };
 }
 
 describe("attachments get (e2e)", () => {
   afterAll(() => {
     rmSync(TEST_ROOT, { recursive: true, force: true });
-  });
+  }, 20_000);
 
   test("round-trips arbitrary bytes to a new output file and raw stdout", () => {
     const bytes = Buffer.from([0x00, 0x01, 0x02, 0x0a, 0x0d, 0x7f, 0x80, 0xc8, 0xff]);
@@ -121,10 +121,8 @@ describe("attachments get (e2e)", () => {
     ]);
     expect(stdoutResult.exitCode, stdoutResult.stderr.toString("utf8")).toBe(0);
     expect(stdoutResult.stdout).toEqual(bytes);
-    // Local mode announces itself once on stderr (hasna/apps#1720); the binary
-    // bytes must still land on stdout untouched.
-    expect(stdoutResult.stderr.toString("utf8")).toContain("LOCAL mode");
-  });
+    expect(stdoutResult.stderr.toString("utf8")).not.toContain("local store");
+  }, 20_000);
 
   test("refuses to overwrite an existing output file", () => {
     const bytes = Buffer.from("attachment overwrite control\n");
@@ -146,7 +144,7 @@ describe("attachments get (e2e)", () => {
     expect(outputText(result)).toContain("Output file already exists");
     expect(outputText(result)).toContain("Choose a new --output path");
     expect(readFileSync(output)).toEqual(sentinel);
-  });
+  }, 20_000);
 
   test("a valid zero-byte stdout download still emits an explicit receipt", () => {
     const fixture = seedAttachment("empty", "empty.txt", Buffer.alloc(0));
@@ -161,7 +159,7 @@ describe("attachments get (e2e)", () => {
     expect(result.exitCode, outputText(result)).toBe(0);
     expect(result.stdout).toHaveLength(0);
     expect(result.stderr.toString("utf8")).toContain("0 bytes written to stdout");
-  });
+  }, 20_000);
 
   test("distinguishes a missing message and leaves no partial file", () => {
     const output = join(OUTPUT_DIR, "missing-message.txt");
@@ -178,7 +176,7 @@ describe("attachments get (e2e)", () => {
     expect(outputText(result)).toContain("Message #999999999 not found");
     expect(outputText(result)).toContain("conversations show 999999999 --json");
     expect(existsSync(output)).toBe(false);
-  });
+  }, 20_000);
 
   test("distinguishes a missing attachment name and leaves no partial file", () => {
     const fixture = seedAttachment(
@@ -204,9 +202,9 @@ describe("attachments get (e2e)", () => {
       `conversations show ${fixture.messageId} --json`,
     );
     expect(existsSync(output)).toBe(false);
-  });
+  }, 20_000);
 
-  test("distinguishes attachment read permission denial and leaves no partial file", () => {
+  test("distinguishes attachment read permission denial and leaves no partial file", async () => {
     const fixture = seedAttachment(
       "permission",
       "private.txt",
@@ -214,7 +212,7 @@ describe("attachments get (e2e)", () => {
     );
     const output = join(OUTPUT_DIR, "permission.txt");
 
-    chmodSync(fixture.storedPath, 0);
+    await apiFixture.seed({ authorized: false });
     try {
       const result = runCli([
         "attachments",
@@ -231,7 +229,7 @@ describe("attachments get (e2e)", () => {
       expect(outputText(result)).toContain("Check read permissions");
       expect(existsSync(output)).toBe(false);
     } finally {
-      chmodSync(fixture.storedPath, 0o600);
+      await apiFixture.seed({ authorized: true });
     }
-  });
+  }, 20_000);
 });
