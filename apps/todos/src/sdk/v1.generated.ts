@@ -154,7 +154,7 @@ export interface UpdatePlanInput { "name"?: string; "slug"?: string; "descriptio
 
 export interface CreateTemplateInput { "name": string; "title_pattern": string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<TemplateVariable>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown>; "tasks"?: Array<CreateTemplateTaskInput> }
 
-export interface UpdateTemplateInput { "name"?: string; "title_pattern"?: string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<Record<string, unknown>>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown> }
+export interface UpdateTemplateInput { "expected_version"?: number; "name"?: string; "title_pattern"?: string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<Record<string, unknown>>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown> }
 
 export interface PrGroupCiProof { "provider": string; "provider_run_id": string; "status": "success"; "repository": string; "pr_number": number; "base_sha": string; "head_sha": string }
 
@@ -894,6 +894,15 @@ export class TodosV1Client {
       });
     }
 
+    /** Atomically initialize server-owned bundled definitions, retaining existing same-name templates */
+    async initializeTemplates(body: Record<string, unknown>, init?: RequestInit): Promise<{ "schema_version": 1; "created": number; "skipped": number; "names": Array<string>; "records": Array<{ "definition_index": number; "ids": Array<string>; "name": string; "status": "created" | "skipped" }> }> {
+      return this.request("POST", `/v1/templates/initialize`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Get one reusable task template with its checklist steps */
     async getTemplate(id: string, init?: RequestInit): Promise<{ "template"?: Template }> {
       return this.request("GET", `/v1/templates/${encodeURIComponent(String(id))}`, {
@@ -913,9 +922,18 @@ export class TodosV1Client {
     }
 
     /** Update reusable template metadata and defaults */
-    async updateTemplate(id: string, body: UpdateTemplateInput, init?: RequestInit): Promise<{ "template"?: Template }> {
+    async updateTemplate(id: string, body: UpdateTemplateInput, init?: RequestInit): Promise<{ "template"?: Template; "history_write"?: { "schema_version": 1; "template_id": string; "previous_version": number; "version": number; "recorded": true } }> {
       return this.request("PATCH", `/v1/templates/${encodeURIComponent(String(id))}`, {
         body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read recorded template versions with explicit missing-version evidence */
+    async getTemplateHistory(id: string, init?: RequestInit): Promise<{ "current_version": number; "versions": Array<{ "id": string; "template_id": string; "version": number; "snapshot": string; "created_at": string }>; "selection": { "schema_version": 1; "template_id": string; "complete": boolean; "missing_versions": Array<number> } }> {
+      return this.request("GET", `/v1/templates/${encodeURIComponent(String(id))}/history`, {
+        body: undefined,
         query: undefined,
         init,
       });

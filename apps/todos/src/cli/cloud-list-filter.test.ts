@@ -62,7 +62,7 @@ async function runCli(args: string[], root: string, baseUrl: string, env: Record
       HOME: root,
       TMPDIR: root,
       LANG: "C.UTF-8",
-      ...(args.includes("lists") ? {} : {TODOS_DB_PATH: join(root, "todos.db")}),
+      ...(args.some(arg => arg === "lists" || arg === "templates" || /^templates?-/.test(arg)) ? {} : {TODOS_DB_PATH: join(root, "todos.db")}),
       TODOS_AUTO_PROJECT: "false",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,

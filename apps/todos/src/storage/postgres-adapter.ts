@@ -1,3 +1,4 @@
+import { builtinTemplateInputs } from "../lib/builtin-template-library.js";
 import {validatePlanSchedule} from "../lib/plan-schedule.js";
 import { createAtomicProjectMigration } from "./atomic-project-migration.js";
 import { createPostgresMachineRegistry, validateMachines } from "./machine-registry.js";
@@ -31,6 +32,7 @@ import type {
   TemplateTask,
   TemplateTaskInput,
   TemplateWithTasks,
+  TemplateVersion,
   UpdatePlanInput,
   UpdateProjectInput,
   UpdateTaskInput,
@@ -54,6 +56,8 @@ import type {
   TodosPlanProjectLinkApplyInput,
   TodosPlanProjectLinkRollbackInput,
   TodosStorageAdapter,
+  TodosTemplateHistory,
+  TodosTemplateInitialization,
   TodosStorageContext,
   TodosStorageImportResult,
   TodosStorageSnapshot,
@@ -112,7 +116,7 @@ import {
 } from "./audit-history-import.js";
 import { deterministicUuid } from "../task-manifest/canonical.js";
 
-type RemoteObjectType = "machines" | TodosPostgresSyncRecordType | "comments" | "plan_comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
+type RemoteObjectType = "template_versions" | "machines" | TodosPostgresSyncRecordType | "comments" | "plan_comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -271,10 +275,13 @@ export function createPostgresTodosStorageAdapter(
       deletePreserving: (id, force, context) => store.deleteTaskListPreserving(id, force, context),
     },
     templates: {
+      updateWithHistory: (id,input) => store.withTemplateTransaction(scoped => updateTemplate(id,input,scoped)),
+      history: (id) => store.withTemplateTransaction(scoped => readTemplateHistory(id, scoped)),
+      initialize: (context) => store.withTemplateTransaction(scoped => initializeTemplates(scoped, context)),
       create: (input, context) => createTemplate(input, store, context),
       get: (id) => store.get<TaskTemplate>("templates", id),
       list: async () => (await store.list<TaskTemplate>("templates")).sort((a, b) => a.name.localeCompare(b.name)),
-      update: (id, input) => updateTemplate(id, input, store),
+      update: (id, input) => store.withTemplateTransaction(scoped => updateTemplate(id, input, scoped)),
       delete: (id, context) => deleteTemplate(id, store, context),
       getWithTasks: async (id) => {
         const template = await store.get<TaskTemplate>("templates", id);
@@ -360,6 +367,40 @@ class PostgresJsonRecordStore {
       scoped.projectIntegrityLocked = true;
       return fn(scoped);
     });
+  }
+
+  /** One service-scoped lock serializes initialization and version snapshots. */
+  async withTemplateTransaction<T>(fn: (store: PostgresJsonRecordStore) => Promise<T>): Promise<T> {
+    await this.ensureSchema();
+    const transaction = this.options.client.transaction;
+    if (!transaction) throw new Error("TEMPLATE_ATOMICITY_UNAVAILABLE: upgrade the Todos storage backend");
+    return transaction(async client => {
+      await client.query("/* todos:template-integrity-lock */ SELECT pg_advisory_xact_lock(hashtextextended($1 || ':template-integrity', 0))", [this.service]);
+      const scoped = new PostgresJsonRecordStore({ ...this.options, client });
+      scoped.schemaReady = Promise.resolve();
+      return fn(scoped);
+    });
+  }
+
+  async lockTemplate(id: string): Promise<void> {
+    await this.options.client.query(`/* todos:template-row-lock */ SELECT object_id FROM ${this.tableName} WHERE service = $1 AND object_type = 'templates' AND object_id = $2 AND deleted_at IS NULL FOR UPDATE`, [this.service, id]);
+  }
+
+  /** The caller holds the template row lock; stale writes must roll back history. */
+  async persistTemplateRevision(template: TaskTemplate, previousVersion: number): Promise<TaskTemplate> {
+    const result = await this.options.client.query<{payload: unknown}>(
+      `/* todos:template-version-cas */ UPDATE ${this.tableName}
+       SET payload = $3::jsonb,
+           updated_at = GREATEST(clock_timestamp(), COALESCE(updated_at, 'epoch'::timestamptz) + interval '1 microsecond'),
+           version = $5
+       WHERE service = $1 AND object_type = 'templates' AND object_id = $2
+         AND deleted_at IS NULL AND (payload->>'version')::integer = $4
+         AND COALESCE(version, 1) = $4
+       RETURNING payload`,
+      [this.service, template.id, jsonbParam(template), previousVersion, template.version],
+    );
+    if (result.rows.length !== 1) throw new ResourceConflictError("TEMPLATE_VERSION_CONFLICT", "Template revision write was refused; no history was committed");
+    return payloadRecord<TaskTemplate>(result.rows[0]!.payload);
   }
 
   async ensureSchema(): Promise<void> {
@@ -3403,17 +3444,139 @@ async function deleteTemplate(
   return store.deleteTemplateWithTasks(id, context);
 }
 
-async function updateTemplate(id: string, input: UpdateTemplateInput, store: PostgresJsonRecordStore): Promise<TaskTemplate | null> {
+async function templateWithTasks(
+  id: string,
+  store: PostgresJsonRecordStore,
+): Promise<TemplateWithTasks | null> {
   const template = await store.get<TaskTemplate>("templates", id);
   if (!template) return null;
-  return store.upsert("templates", {
-    ...template,
-    ...definedPatch(input),
-    tags: input.tags ?? template.tags,
-    variables: input.variables ?? template.variables,
-    metadata: input.metadata ?? template.metadata,
-    version: template.version + 1,
+  const tasks = (await store.list<TemplateTask>("template_tasks"))
+    .filter((row) => row.template_id === id)
+    .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+  return { ...template, tasks };
+}
+
+async function updateTemplate(
+  id: string,
+  input: UpdateTemplateInput,
+  store: PostgresJsonRecordStore,
+): Promise<TemplateWithTasks | null> {
+  await store.lockTemplate(id);
+  const current = await templateWithTasks(id, store);
+  if (!current) return null;
+  if (!Number.isSafeInteger(current.version) || current.version < 1 || current.version >= 10000) throw new Error("Template revision is invalid or exceeds the supported bound");
+  if (
+    input.expected_version !== undefined &&
+    input.expected_version !== current.version
+  ) {
+    throw new ResourceConflictError(
+      "TEMPLATE_VERSION_CONFLICT",
+      "Template changed; fetch its current version before updating",
+    );
+  }
+  const {
+    id: _id,
+    version: _version,
+    created_at: _created,
+    machine_id: _machine,
+    synced_at: _synced,
+    ...snapshot
+  } = current;
+  await store.upsert("template_versions", {
+    id: randomUUID(),
+    template_id: id,
+    version: current.version,
+    snapshot: JSON.stringify(snapshot),
+    created_at: new Date().toISOString(),
   });
+  const { tasks, ...template } = current;
+  const { expected_version: _expected, ...patch } = input;
+  const updated = await store.persistTemplateRevision({
+    ...template,
+    ...definedPatch(patch),
+    version: current.version + 1,
+  }, current.version);
+  return { ...updated, tasks };
+}
+
+async function readTemplateHistory(
+  id: string,
+  store: PostgresJsonRecordStore,
+): Promise<TodosTemplateHistory | null> {
+  await store.lockTemplate(id);
+  const current = await store.get<TaskTemplate>("templates", id);
+  if (!current) return null;
+  if (
+    !Number.isSafeInteger(current.version) ||
+    current.version < 1 ||
+    current.version > 10000
+  )
+    throw new Error("Template history exceeds the supported version bound");
+  const versions = (await store.list<TemplateVersion>("template_versions"))
+    .filter((row) => row.template_id === id)
+    .sort((a, b) => b.version - a.version);
+  const seen = new Set<number>();
+  for (const row of versions) {
+    if (
+      !Number.isSafeInteger(row.version) ||
+      row.version < 1 ||
+      row.version >= current.version ||
+      seen.has(row.version)
+    )
+      throw new Error("Template history has conflicting versions");
+    seen.add(row.version);
+  }
+  const missing_versions = Array.from(
+    { length: current.version - 1 },
+    (_, index) => index + 1,
+  ).filter((version) => !seen.has(version));
+  return {
+    current_version: current.version,
+    versions,
+    selection: {
+      schema_version: 1,
+      template_id: id,
+      complete: missing_versions.length === 0,
+      missing_versions,
+    },
+  };
+}
+
+async function initializeTemplates(
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TodosTemplateInitialization> {
+  const existing = await store.list<TaskTemplate>("templates");
+  const records: TodosTemplateInitialization["records"] = [];
+  for (const [definition_index, input] of builtinTemplateInputs().entries()) {
+    const matches = existing.filter((row) => row.name === input.name);
+    if (matches.length) {
+      records.push({
+        definition_index,
+        ids: matches.map((row) => row.id).sort(),
+        name: input.name,
+        status: "skipped",
+      });
+    } else {
+      const template = await createTemplate(input, store, context);
+      records.push({
+        definition_index,
+        ids: [template.id],
+        name: template.name,
+        status: "created",
+      });
+    }
+  }
+  const names = records
+    .filter((row) => row.status === "created")
+    .map((row) => row.name);
+  return {
+    schema_version: 1,
+    created: names.length,
+    skipped: records.length - names.length,
+    names,
+    records,
+  };
 }
 
 async function logTaskChange(

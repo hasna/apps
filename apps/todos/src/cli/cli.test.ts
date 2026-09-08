@@ -1,3 +1,4 @@
+import { runTemplateApiFixture } from "./test-support/template-cli-api.js";
 import { describe, it, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -42,6 +43,10 @@ function isTransientDbLock(result: CliResult): boolean {
 }
 
 async function spawnCli(args: string[], dbPath: string, extraEnv: Record<string, string>): Promise<CliResult> {
+  if(args.some(arg => arg === "templates" || /^templates?-(?:init|history|preview|export|import)$/.test(arg))) {
+    return runTemplateApiFixture(args,dbPath,join(testRoot,"template-client"));
+  }
+
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: import.meta.dir + "/../..",
     env: localRoutingTestEnv({
@@ -2711,7 +2716,7 @@ describe("CLI integration", () => {
     const template = JSON.parse(imported.stdout);
 
     const used = await runCli(["templates", "--use", template.id, "--var", "feature=dashboard", "--json"], dbPath);
-    expect(used.exitCode).toBe(0);
+    expect(used.exitCode, used.stderr + used.stdout).toBe(0);
     const tasks = JSON.parse(used.stdout);
     expect(tasks).toHaveLength(2);
     expect(tasks[0].title).toBe("Plan dashboard");

@@ -1,3 +1,4 @@
+import { assertTemplateApiEnvironment } from "../lib/template-client-boundary.js";
 import {assertTaskListApiEnvironment} from "../lib/task-list-client-boundary.js";
 import { Command, Help } from "commander";
 import {
@@ -205,7 +206,7 @@ const REMOTE_COMMANDS = new Set([
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
   "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-registration", "project-rename", "project-resources", "projects", "project-panel", "recap",
   "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists",
-  "stale-lock-handoff", "task-manifest", "task-subtree-transfer", "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "unlock", "unassign", "untag", "update",
+  "stale-lock-handoff", "task-manifest", "task-subtree-transfer", "template-export", "template-import", "template-preview", "template-init", "template-history", "templates", "timeline", "tl", "unlock", "unassign", "untag", "update",
 ]);
 const REMOTE_COMMAND_CAPABILITIES =
   new Map<string, TodosRemoteCommandCapability>([
@@ -695,6 +696,12 @@ export function initializeTodosCliAuthority(
   env: Env = process.env as Env,
 ): TodosCliAuthorityInitialization {
   const requested = parseInvocation(args);
+  const templateCommands = new Set(["templates", "template-init", "templates-init", "template-preview", "templates-preview", "template-export", "templates-export", "template-import", "templates-import", "template-history", "templates-history"]);
+  if (templateCommands.has(requested.command ?? "")) {
+    if (isMetadataInvocation(args, requested)) return {route:"remote-diagnostic",v1_base_url:null};
+    assertTemplateApiEnvironment(env);
+  }
+
   if (["lists", "task-lists", "tl"].includes(requested.command ?? "")) {
     if (isMetadataInvocation(args, requested)) return {route:"remote-diagnostic",v1_base_url:null};
     assertTaskListApiEnvironment(env);
@@ -703,6 +710,9 @@ export function initializeTodosCliAuthority(
   try {
     resolution = resolveTodosCliTransport(env);
   } catch (error) {
+    if (templateCommands.has(requested.command ?? "") && error instanceof Error && error.message.startsWith("REMOTE_API_CONFIG_MISSING")) {
+      throw new Error("REMOTE_API_CONFIG_MISSING: Templates require HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, or saved account credentials.");
+    }
     if (["lists", "task-lists", "tl"].includes(requested.command ?? "") && error instanceof Error && error.message.startsWith("REMOTE_API_CONFIG_MISSING")) {
       throw new Error("REMOTE_API_CONFIG_MISSING: Task-list commands require HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, or saved account credentials. Configure the authenticated shared API.");
     }

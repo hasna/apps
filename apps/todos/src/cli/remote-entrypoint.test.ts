@@ -43,8 +43,8 @@ const REPO_ROOT = join(import.meta.dir, "../..");
  * in either direction must be reviewed deliberately rather than silently
  * changing which authority a command can reach.
  */
-// project-panel now belongs to the shared API capability family.
-const EXPECTED_LOCAL_ONLY_COMMANDS = 107;
+// Template initialization/history and their plural aliases now use the shared API.
+const EXPECTED_LOCAL_ONLY_COMMANDS = 103;
 const TASK_FIXTURE_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_TASK_FIXTURE_ID = "22222222-2222-4222-8222-222222222222";
 const tempRoots: string[] = [];
@@ -244,6 +244,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     const registered = [...registeredCliNames()].sort();
     const matrix = getTodosCliCommandCapabilityMatrix();
     expect([...matrix.keys()].sort()).toEqual(registered);
+    for (const name of ["template-init", "templates-init", "template-history", "templates-history"]) expect(matrix.get(name)).toBe("remote-http");
     expect([...matrix.values()].filter((owner) => owner === "local-only").length).toBe(EXPECTED_LOCAL_ONLY_COMMANDS);
     expect([...matrix.values()].every((owner) => ["diagnostic", "remote-http", "local-only"].includes(owner))).toBe(true);
   });

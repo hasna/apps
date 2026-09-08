@@ -443,7 +443,22 @@ export interface TodosTaskListStore {
   }>;
 }
 
+export interface TodosTemplateHistory {
+  current_version: number;
+  versions: import("../types/index.js").TemplateVersion[];
+  selection: { schema_version: 1; template_id: string; complete: boolean; missing_versions: number[] };
+}
+export interface TodosTemplateInitialization {
+  schema_version: 1;
+  created: number;
+  skipped: number;
+  names: string[];
+  records: Array<{ definition_index: number; ids: string[]; name: string; status: "created" | "skipped" }>;
+}
 export interface TodosTemplateStore {
+  updateWithHistory?(id: string, input: UpdateTemplateInput, context?: TodosStorageContext): MaybePromise<TemplateWithTasks | null>;
+  history?(id: string, context?: TodosStorageContext): MaybePromise<TodosTemplateHistory | null>;
+  initialize?(context?: TodosStorageContext): MaybePromise<TodosTemplateInitialization>;
   create(input: CreateTemplateInput, context?: TodosStorageContext): MaybePromise<TaskTemplate>;
   get(id: string, context?: TodosStorageContext): MaybePromise<TaskTemplate | null>;
   list(context?: TodosStorageContext): MaybePromise<TaskTemplate[]>;
@@ -453,6 +468,7 @@ export interface TodosTemplateStore {
 }
 
 export interface UpdateTemplateInput {
+  expected_version?: number;
   name?: string;
   title_pattern?: string;
   description?: string | null;
