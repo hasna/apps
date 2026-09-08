@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -90,7 +90,7 @@ test("built terminal publish and lost-upload resume use exact bytes and fresh au
   const work = mkdtempSync(join(root, "cli-")), source = scaffoldPortableSkill("terminal-publication", { rootDir: work }).path, recovery = join(work, "receipt");
   f.losePut();
   const first = await cli(f.origin, work, ["publish", source, "--skill-id", skillId!, "--expect-empty", "--recovery-dir", recovery, "--confirm", "--wait-seconds", "0"]);
-  expect(first.exitCode).toBe(1); expect(first.result).toMatchObject({ uncertain: true, code: "PUBLICATION_UPLOAD_UNCONFIRMED" }); expect(f.puts()).toBe(1);
+  expect(first.exitCode).toBe(1); expect(first.result, JSON.stringify({ requests: f.calls, puts: f.puts(), recoveryPhase: existsSync(join(recovery, "receipt.json")) ? JSON.parse(readFileSync(join(recovery, "receipt.json"), "utf8")).phase : "absent" })).toMatchObject({ uncertain: true, code: "PUBLICATION_UPLOAD_UNCONFIRMED" }); expect(f.puts()).toBe(1);
   const saved = JSON.parse(readFileSync(join(recovery, "receipt.json"), "utf8")); expect(saved.phase).toBe("upload_uncertain");
   const second = await cli(f.origin, work, ["resume", "--recovery-dir", recovery, "--confirm", "--wait-seconds", "0"]);
   expect(second.exitCode).toBe(0); expect(second.result).toMatchObject({ committed: true, executionEnabled: false, state: "committed" }); expect(f.puts()).toBe(1);
