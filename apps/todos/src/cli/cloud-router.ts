@@ -11,6 +11,7 @@
  * contract; it has no dependency on a private SaaS API or database connection
  * string, and the client never opens Postgres directly.
  */
+import { assertProjectReceipt } from "../lib/project-receipt.js";
 import {
   clientTransportEnvKeys,
   resolveClientTransport,
@@ -1975,12 +1976,7 @@ export async function cloudListProjects(client: HasnaStorageClient): Promise<Pro
   return Array.isArray(envelope?.projects) ? envelope!.projects : res.items;
 }
 
-function unwrapProject(raw: unknown): Project {
-  if (raw && typeof raw === "object" && "project" in (raw as Record<string, unknown>)) {
-    return (raw as { project: Project }).project;
-  }
-  return raw as Project;
-}
+function unwrapProject(raw: unknown): Project { return assertProjectReceipt(raw); }
 
 async function cloudGetProjectById(client: HasnaStorageClient, id: string): Promise<Project | null> {
   const raw = await client.get<unknown>("projects", id);
@@ -1991,7 +1987,7 @@ export async function cloudCreateProject(
   client: HasnaStorageClient,
   input: Record<string, unknown>,
 ): Promise<Project> {
-  return unwrapProject(await requiredRemoteRoute(client, "/v1/projects", () => client.create("projects", input)));
+  return assertProjectReceipt(await requiredRemoteRoute(client, "/v1/projects", () => client.create("projects", input)), input);
 }
 
 function cloudProjectSlug(value: string): string {
@@ -2023,6 +2019,7 @@ function resolveCloudProjectRef(projects: Project[], ref: string): string {
   const slug = cloudProjectSlug(pathLike ? cloudProjectPathBasename(input) : input);
   const matchGroups = [
     uniqueProjectMatches(projects, (project) => project.id.toLowerCase() === normalizedRef),
+    uniqueProjectMatches(projects, (project) => project.short_id?.toLowerCase() === normalizedRef),
     uniqueProjectMatches(
       projects,
       (project) => project.path === input ||
@@ -2084,21 +2081,20 @@ export async function cloudUpdateProject(
   patch: Record<string, unknown>,
 ): Promise<Project> {
   const raw = await client.update<unknown>("projects", id, patch);
-  if (raw && typeof raw === "object" && "project" in (raw as Record<string, unknown>)) {
-    return (raw as { project: Project }).project;
-  }
-  return raw as Project;
+  return assertProjectReceipt(raw,{...patch,id});
 }
 
-/** Delete one cloud project (`DELETE /v1/projects/:id`). */
+/** Delete a project only through the atomic reference-preserving API. */
+export async function cloudDeleteProjectPreserving(client: HasnaStorageClient, id: string, force = false, requireCompletedTasks = false): Promise<import("../storage/interfaces.js").TodosProjectDeleteReceipt> {
+  const raw = await requiredRemoteRoute(client, "/v1/projects/:id/delete-preserving", () => client.transport.post<unknown>(`/projects/${encodeURIComponent(id)}/delete-preserving`, {force,require_completed_tasks:requireCompletedTasks}));
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid project deletion receipt");
+  const receipt = raw as import("../storage/interfaces.js").TodosProjectDeleteReceipt;
+  if (receipt.schema_version !== 1 || receipt.project_id !== id || typeof receipt.deleted !== "boolean" || [receipt.preserved_tasks,receipt.preserved_plans,receipt.detached_task_lists,receipt.detached_child_projects].some(value=>!Number.isSafeInteger(value)||value<0)) throw new Error("Invalid project deletion receipt");
+  if (!receipt.deleted && [receipt.preserved_tasks,receipt.preserved_plans,receipt.detached_task_lists,receipt.detached_child_projects].some(value=>value!==0)) throw new Error("Invalid project deletion receipt");
+  return receipt;
+}
 export async function cloudDeleteProject(client: HasnaStorageClient, id: string): Promise<boolean> {
-  try {
-    await client.transport.del<unknown>(`/projects/${encodeURIComponent(id)}`);
-  } catch (error) {
-    if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return false;
-    throw error;
-  }
-  return true;
+  return (await cloudDeleteProjectPreserving(client, id)).deleted;
 }
 
 /** Plan a non-mutating repair of an existing project's declared task list. */
