@@ -15,6 +15,7 @@
  * fallback, while malformed successful server responses remain explicit
  * contract failures and are never presented as an empty mailbox.
  */
+import { loadTuiPreferences, saveTuiPreference, type TuiPreferences } from "../../lib/tui-preferences.js";
 import { uuid } from "../../db/runtime.js";
 import { selfHostedStoreFor, type SelfHostedResourceStore } from "../../db/self-hosted-store.js";
 import { SELF_HOSTED_SERVER_PAGE_MAX, enumerateSelfHostedRows } from "../../db/self-hosted-page.js";
@@ -31,13 +32,12 @@ import {
 import { listDomains } from "../../db/domains.js";
 import { findAddressesByEmail, listAddresses, listActiveAddressCountsByDomains, getPreferredActiveAddressEmail } from "../../db/addresses.js";
 import { getLatestActiveProviderId } from "../../db/providers.js";
-import { getInboundBuckets, loadConfig, saveConfig } from "../../lib/config.js";
+import { getInboundBuckets } from "../../lib/config.js";
 import { assessDomainReadiness } from "../../lib/domain-readiness.js";
 import { resolveClientMode } from "../../lib/mode.js";
 import { rethrowSelfHostedResponseFailure } from "../../lib/self-hosted-wire.js";
 import { describeIdentity, fetchIdentitySafe, type IdentityContext } from "../../lib/whoami.js";
 import { listS3Sources } from "../../lib/s3-sync.js";
-import { normalizeThemeMode, type TuiThemeMode } from "./theme.js";
 import {
   type AttachmentInfo,
   type ComposeInput,
@@ -306,17 +306,6 @@ function normalizeSubjectKey(subject: string): string {
 }
 
 // ── mode / config helpers (unchanged; read config, not the DB) ─────────────
-
-function isSelfHostedTuiMode(): boolean {
-  try {
-    return resolveClientMode().mode === "self_hosted";
-  } catch {
-    // A display helper never throws for an environment that cannot resolve to a
-    // store: boot paths refuse that configuration loudly in their own words, and
-    // here "not an API deployment" is the safe answer.
-    return false;
-  }
-}
 
 function pageFromOptions(opts: { limit?: number; offset?: number } | undefined, fallbackLimit: number): { limit: number; offset: number } | undefined {
   if (!opts) return undefined;
@@ -871,54 +860,16 @@ export function listSources(): InboxSource[] {
   }));
 }
 
-// ── settings (persisted to config.json) ────────────────────────────────────────
+// ── device preferences (dedicated JSON, no mail store) ────────────────────────────────────────
 
-export interface TuiSettings {
-  autoPull: boolean;
-  dimRead: boolean;
-  defaultMailbox: Mailbox;
-  defaultAddress: string | null;
-  defaultFrom: string | null;
-  theme: TuiThemeMode;
-}
-
-const DEFAULT_TUI_SETTINGS: TuiSettings = {
-  autoPull: false,
-  dimRead: false,
-  defaultMailbox: "inbox",
-  defaultAddress: null,
-  defaultFrom: null,
-  theme: "light",
-};
+export type TuiSettings = Pick<TuiPreferences, "autoPull" | "dimRead" | "defaultMailbox" | "defaultAddress" | "defaultFrom" | "theme">;
 
 export function getSettings(): TuiSettings {
-  if (isSelfHostedTuiMode()) return { ...DEFAULT_TUI_SETTINGS };
-  const c = loadConfig();
-  return {
-    autoPull: c["tui_autopull"] === true,
-    dimRead: c["tui_dim_read"] === true, // default false = high contrast
-    defaultMailbox: normalizeMailbox(c["default_mailbox"]),
-    defaultAddress: extractEmail(c["tui_default_address"]) ?? null,
-    defaultFrom: extractEmail(c["tui_default_from"]) ?? null,
-    theme: c["tui_theme"] == null ? "light" : normalizeThemeMode(c["tui_theme"]),
-  };
+  const { autoPull, dimRead, defaultMailbox, defaultAddress, defaultFrom, theme } = loadTuiPreferences();
+  return { autoPull, dimRead, defaultMailbox, defaultAddress, defaultFrom, theme };
 }
-
 export function setSetting<K extends keyof TuiSettings>(key: K, value: TuiSettings[K]): void {
-  if (isSelfHostedTuiMode()) {
-    throw new Error("TUI settings write local config and are disabled in self_hosted API-only mode.");
-  }
-  const c = loadConfig();
-  const map: Record<keyof TuiSettings, string> = {
-    autoPull: "tui_autopull",
-    dimRead: "tui_dim_read",
-    defaultMailbox: "default_mailbox",
-    defaultAddress: "tui_default_address",
-    defaultFrom: "tui_default_from",
-    theme: "tui_theme",
-  };
-  c[map[key]] = value as never;
-  saveConfig(c);
+  saveTuiPreference<keyof TuiSettings>(key, value);
 }
 
 // ── tenant / identity context (TUI header) ──────────────────────────────────

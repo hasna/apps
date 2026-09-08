@@ -181,6 +181,7 @@ export function Sidebar() {
           <Button label="Settings" onPress={() => emails.actions.openDialog("settings")} />
           <text fg={theme.textMuted}>{emails.state.loading ? "Loading" : "Ready"}</text>
         </box>
+        <Show when={emails.state.preferenceError}><text fg={theme.error} wrapMode="word">{emails.state.preferenceError}</text></Show>
         <Show when={emails.state.lastError}>
           <text fg={theme.error}>{emails.state.lastError}</text>
         </Show>
