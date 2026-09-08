@@ -3309,6 +3309,31 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                       }
                     }
                   }
+                },
+                "history_selection": {
+                  "type": "object",
+                  "required": [
+                    "schema_version",
+                    "plan_id",
+                    "complete"
+                  ],
+                  "properties": {
+                    "schema_version": {
+                      "type": "integer",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "plan_id": {
+                      "type": "string"
+                    },
+                    "complete": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  }
                 }
               }
             }

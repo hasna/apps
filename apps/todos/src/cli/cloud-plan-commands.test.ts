@@ -68,7 +68,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         const body = ["POST", "PATCH"].includes(request.method) ? await request.json() : undefined;
         requests.push({ method: request.method, path: url.pathname, body });
         if (url.pathname === "/v1/plans" && request.method === "POST") {
@@ -192,7 +192,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         const body = ["POST", "PATCH"].includes(request.method) ? await request.json() : undefined;
         requests.push({
           method: request.method,
@@ -330,7 +330,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         requests.push({ method: request.method, path: url.pathname });
         if (url.pathname === `/v1/plans/${missingPlanId}` && request.method === "GET") {
           return Response.json({ error: "plan not found" }, { status: 404 });
@@ -378,7 +378,7 @@ describe("cloud CLI plan commands", () => {
         port: 0,
         fetch(request) {
           const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
           requests.push({ method: request.method, path: url.pathname });
           if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
             return Response.json({ plan });
@@ -428,7 +428,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         requests.push({ method: request.method, path: url.pathname });
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") return Response.json({ plan });
         if (url.pathname === "/v1/plans" && request.method === "GET") {
@@ -478,7 +478,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan });
         }
@@ -582,7 +582,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         const body = request.method === "POST" ? await request.json() : undefined;
         requests.push({ method: request.method, path: url.pathname, body });
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
@@ -642,7 +642,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan });
         }
@@ -739,7 +739,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan });
         }
@@ -829,7 +829,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan });
         }
@@ -903,7 +903,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan });
         }
@@ -974,7 +974,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         const body = request.method === "POST" ? await request.json() : undefined;
         requests.push({ method: request.method, path: url.pathname, query: url.search, body });
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
@@ -1122,7 +1122,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         requests.push({ method: request.method, path: url.pathname });
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan });
@@ -1184,7 +1184,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         requests.push({ method: request.method, path: url.pathname });
         if (url.pathname === "/v1/plans" && request.method === "GET") {
           return Response.json({
@@ -1216,7 +1216,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan: { id: PLAN_ID, slug: "legacy", name: "Legacy", status: "active" } });
         }

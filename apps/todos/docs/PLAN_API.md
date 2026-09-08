@@ -83,3 +83,8 @@ stable totals on every page. The server applies explicit plan, subtask and archi
 filters to both list and count. Predecessor APIs without that evidence fail before
 Markdown replacement. Plan history requires a valid count and unique same-plan
 comment rows; missing history support is an error, not an empty history claim.
+
+Complete history also requires an explicit `history_selection` receipt carrying
+schema version 1, the requested plan ID, and `complete: true`. A legacy empty
+array with count zero is insufficient. The server emits this receipt only after
+a supported complete history operation returns an array.

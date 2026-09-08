@@ -334,7 +334,7 @@ export class TodosV1Client {
     }
 
     /** Read complete plan comment history */
-    async listPlanComments(id: string, query?: { "plan_read_contract"?: "1" }, init?: RequestInit): Promise<{ "count": number; "comments": Array<{ "id": string; "plan_id": string; "content": string; "created_at": string; "agent_id": string | null; "session_id": string | null; "type": "comment" | "progress" | "note"; "progress_pct": number | null }> }> {
+    async listPlanComments(id: string, query?: { "plan_read_contract"?: "1" }, init?: RequestInit): Promise<{ "count": number; "comments": Array<{ "id": string; "plan_id": string; "content": string; "created_at": string; "agent_id": string | null; "session_id": string | null; "type": "comment" | "progress" | "note"; "progress_pct": number | null }>; "history_selection"?: { "schema_version": 1; "plan_id": string; "complete": true } }> {
       return this.request("GET", `/v1/plans/${encodeURIComponent(String(id))}/comments`, {
         body: undefined,
         query,

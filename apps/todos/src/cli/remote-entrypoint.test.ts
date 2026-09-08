@@ -2121,7 +2121,7 @@ describe("remote CLI entrypoint authority boundary", () => {
           const exists=Boolean(find(plans,id));remove(plans,id);
           return Response.json({schema_version:1,plan_id:id,deleted:exists,detached_tasks:linked.length,detached_task_ids:linked.map(task=>task.id),detached_task_lists:lists.length,detached_task_list_ids:lists.map(list=>list.id)});
         }
-        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         const planMatch = url.pathname.match(/^\/v1\/plans\/([^/]+)$/);
         if (planMatch) {
           const plan = find(plans, planMatch[1]!);

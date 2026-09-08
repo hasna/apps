@@ -208,7 +208,7 @@ describe("todos comment on a plan (cloud /v1)", () => {
           return Response.json({ comment }, { status: 201 });
         }
         if (url.pathname === `/v1/plans/${PLAN_ID}/comments` && request.method === "GET") {
-          return Response.json({ comments: planComments, count: planComments.length });
+          return Response.json({ comments: planComments, count: planComments.length, history_selection:{schema_version:1,plan_id:PLAN_ID,complete:true} });
         }
         if (url.pathname === "/v1/tasks" && request.method === "GET") {
           return Response.json({ tasks: [], count: 0, total: 0, selection:{schema_version:1,plan_id:url.searchParams.get("plan_id"),include_subtasks:url.searchParams.get("include_subtasks")==="true",include_archived:url.searchParams.get("include_archived")==="true"} });

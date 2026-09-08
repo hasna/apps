@@ -84,7 +84,10 @@ export async function readCompletePlanComments(
     !Array.isArray(raw.comments) ||
     !Number.isSafeInteger(raw.count) ||
     raw.count !== raw.comments.length ||
-    raw.count > 10000
+    raw.count > 10000 ||
+    raw.history_selection?.schema_version !== 1 ||
+    raw.history_selection?.plan_id !== planId ||
+    raw.history_selection?.complete !== true
   )
     throw incomplete();
   const ids = new Set<string>();

@@ -85,6 +85,7 @@ describe("task list and completion OpenAPI contract", () => {
     ]);
     expect(list.responses["200"].content["application/json"].schema.properties.selection.required).toEqual(["schema_version","plan_id","include_subtasks","include_archived"]);
     expect(document.paths["/v1/plans/{id}/comments"].get.responses["200"].content["application/json"].schema.required).toEqual(["comments","count"]);
+    expect(document.paths["/v1/plans/{id}/comments"].get.responses["200"].content["application/json"].schema.properties.history_selection.required).toEqual(["schema_version","plan_id","complete"]);
     // The since-cursor must be DECLARED, not merely implemented: an undeclared
     // parameter is dropped silently, so every caller believes it is bounding a
     // read that is in fact returning the whole table.

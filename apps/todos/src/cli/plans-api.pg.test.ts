@@ -70,6 +70,8 @@ pgTest(
           readFailure?.startsWith("comments") &&
           url.pathname.endsWith("/comments")
         ) {
+          if (readFailure === "comments-empty-legacy")
+            return Response.json({ comments: [], count: 0 });
           if (readFailure === "comments404")
             return new Response(null, { status: 404 });
           const row = {
@@ -88,7 +90,15 @@ pgTest(
               : readFailure === "comments-foreign"
                 ? [{ ...row, plan_id: "other-plan" }]
                 : [row, row];
-          return Response.json({ comments, count: comments.length });
+          return Response.json({
+            comments,
+            count: comments.length,
+            history_selection: {
+              schema_version: 1,
+              plan_id: url.pathname.split("/")[3],
+              complete: true,
+            },
+          });
         }
         if (rejectDelete && url.pathname.endsWith("/delete-preserving"))
           return new Response(null, { status: 405 });
@@ -307,6 +317,7 @@ pgTest(
       }
       readFailure = undefined;
       for (const failure of [
+        "comments-empty-legacy",
         "comments404",
         "comments-malformed",
         "comments-foreign",
@@ -318,6 +329,63 @@ pgTest(
         expect(JSON.parse(refusedRead.stdout)).toHaveProperty("error");
       }
       readFailure = undefined;
+      const historyUrl = `${server.url.origin}/v1/plans/${plan.id}/comments?plan_read_contract=1`;
+      const historyResponse = await fetch(historyUrl, {
+        headers: { authorization: `Bearer ${key.token}` },
+      });
+      expect(historyResponse.status).toBe(200);
+      expect(await historyResponse.json()).toMatchObject({
+        comments: [],
+        count: 0,
+        history_selection: {
+          schema_version: 1,
+          plan_id: plan.id,
+          complete: true,
+        },
+      });
+      for (let index = 0; index < 101; index++) {
+        await store.plans.addComment!({
+          plan_id: plan.id,
+          content: `Synthetic history ${index}`,
+        });
+      }
+      const completeHistory = await fetch(historyUrl, {
+        headers: { authorization: `Bearer ${key.token}` },
+      });
+      const completeHistoryBody = await completeHistory.json();
+      expect(completeHistory.status).toBe(200);
+      expect(completeHistoryBody.count).toBe(101);
+      expect(completeHistoryBody.comments).toHaveLength(101);
+      expect(completeHistoryBody.history_selection).toEqual({
+        schema_version: 1,
+        plan_id: plan.id,
+        complete: true,
+      });
+      const pagedHistory = await fetch(
+        historyUrl.replace("?plan_read_contract=1", ""),
+        {
+          headers: { authorization: `Bearer ${key.token}` },
+        },
+      );
+      const pagedHistoryBody = await pagedHistory.json();
+      expect(pagedHistoryBody.count).toBe(100);
+      expect(pagedHistoryBody.has_more).toBe(true);
+      expect(pagedHistoryBody).not.toHaveProperty("history_selection");
+      const unsupported = await handleV1Request(
+        new Request(historyUrl, {
+          headers: { authorization: `Bearer ${key.token}` },
+        }),
+        new URL(historyUrl),
+        {
+          ...deps,
+          getStorageAdapter: () => ({
+            ...store,
+            plans: { ...store.plans, getComments: undefined },
+          }),
+        },
+      );
+      expect(unsupported?.status).toBe(503);
+      expect(await unsupported!.json()).not.toHaveProperty("history_selection");
       const complete = await run(["--json", "plans", "--complete", plan.id]);
       expect(complete.code, complete.stderr).toBe(0);
       expect(JSON.parse(complete.stdout).status).toBe("completed");
