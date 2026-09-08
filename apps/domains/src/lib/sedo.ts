@@ -476,9 +476,9 @@ export async function checkSedoBlacklist(
 // ============================================================
 
 /**
- * Record a Sedo domain purchase in the local DB.
+ * Record a Sedo domain purchase in the shared portfolio.
  * Sedo doesn't have a direct purchase API — purchases go through
- * their marketplace UI. This records the acquisition locally.
+ * their marketplace UI. This records the acquisition in the shared portfolio.
  */
 export async function recordSedoPurchase(
   domain: string,
@@ -487,7 +487,7 @@ export async function recordSedoPurchase(
 ) {
   const existing = await getDomainByName(domain);
   if (existing) {
-    throw new Error(`Domain '${domain}' already exists in local database`);
+    throw new Error(`Domain '${domain}' already exists in the shared portfolio`);
   }
 
   const created = await createDomain({
