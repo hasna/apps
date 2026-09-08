@@ -69,6 +69,7 @@ export interface TodosStorageAdapter {
   readonly templates: TodosTemplateStore;
   readonly audit: TodosAuditStore;
   readonly sync: TodosSyncStore;
+  readonly atomicProjectMigration?: { apply(request: import("./atomic-project-migration.js").AtomicMigrationRequest): Promise<import("./atomic-project-migration.js").AtomicMigrationReceipt> };
   /**
    * Task dependency edges. Optional because only the cloud/remote adapters expose
    * it through the `/v1` API — the local CLI/MCP paths call the sqlite `db/*`
