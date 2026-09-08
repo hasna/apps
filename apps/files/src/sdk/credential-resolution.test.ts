@@ -14,8 +14,11 @@
  *  - fail-closed: no credential anywhere => throws, no client, no fallback.
  *  - transport-report: `resolveFilesSdkTransport` names the tier and source
  *    (never the value).
- *  - authority pinning (#1794): an explicit `baseUrl` with no `apiKey` never
- *    receives the ambient fleet key.
+ *  - authority pinning (#1794, #1720): an explicit `baseUrl` never receives
+ *    the ambient fleet key. It requires a NON-BLANK explicit key — the
+ *    top-level `apiKey` or `credentials.apiKey` — and refuses loudly
+ *    otherwise, so `""` / whitespace (a set-but-blank env var) cannot reach
+ *    the unauthenticated path.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -253,5 +256,61 @@ describe("SDK authority pinning (#1794) and loud refusal on an unpinned credenti
     await files.listSources();
     expect(requests[0]!.url.startsWith("https://pinned.example.test/v1/")).toBe(true);
     expect(requests[0]!.xApiKey).toBe("pinned-key");
+  });
+
+  test("a BLANK apiKey is not a pin — '' and whitespace REFUSE loudly, no request", () => {
+    // A set-but-blank env var (common in .env files) is the exact shape that
+    // used to reach the unauthenticated path: `client.ts` sets `x-api-key`
+    // only for a truthy key, so "" (and "   ") would have sent NO credential
+    // to the caller-named authority. Both must refuse like a missing key.
+    let calls = 0;
+    const captureFetch = (async () => {
+      calls += 1;
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    for (const blank of ["", "   "]) {
+      expect(() =>
+        createFilesClientFromEnv(fakeHomeEnv({ HASNA_FILES_API_KEY: KEY_ENV }), {
+          baseUrl: "https://self-hosted.example.test",
+          apiKey: blank,
+          fetch: captureFetch,
+        }),
+      ).toThrow(FILES_SDK_AUTHORITY_PIN_MESSAGE);
+    }
+    expect(calls).toBe(0);
+  });
+
+  test("a BLANK key in the resolver's credentials slot refuses for a pinned baseUrl too", () => {
+    expect(() =>
+      createFilesClientFromEnv(fakeHomeEnv({ HASNA_FILES_API_KEY: KEY_ENV }), {
+        baseUrl: "https://self-hosted.example.test",
+        credentials: { apiKey: "" },
+      }),
+    ).toThrow(FILES_SDK_AUTHORITY_PIN_MESSAGE);
+  });
+
+  test("credentials.apiKey is a pin source for an explicit baseUrl (the sibling @hasna/secrets shape)", async () => {
+    // A caller who pins the key in the documented tier-1 `credentials.apiKey`
+    // slot is NOT falsely refused: the pair is still a deliberate pin and the
+    // ambient chain (env here) is never consulted.
+    const { files, requests } = capturedClient(
+      fakeHomeEnv({ HASNA_FILES_API_KEY: KEY_ENV }),
+      { baseUrl: "https://pinned-credentials.example.test", credentials: { apiKey: "pinned-via-credentials" } },
+    );
+    await files.listSources();
+    expect(requests[0]!.url.startsWith("https://pinned-credentials.example.test/v1/")).toBe(true);
+    expect(requests[0]!.xApiKey).toBe("pinned-via-credentials");
+  });
+
+  test("a blank apiKey with no baseUrl is UNSET, not a pin: the chain still resolves", async () => {
+    // No caller-named authority => no cross-authority risk; a blank override
+    // falls through to the chain (which resolves or throws) instead of
+    // building a client that sends no credential at all.
+    const { files, requests } = capturedClient(
+      fakeHomeEnv({ HASNA_FILES_API_KEY: KEY_ENV }),
+      { apiKey: "" },
+    );
+    await files.listSources();
+    expect(requests[0]!.xApiKey).toBe(KEY_ENV);
   });
 });
