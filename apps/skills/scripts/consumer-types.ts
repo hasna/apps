@@ -64,6 +64,37 @@ const partialInspection: InspectedSkillBundle = inspection;
 const disabledInspection: InspectSkillBundleOptions = { limits: { decompressedBytes: false } };
 // @ts-expect-error Hard ceilings are immutable.
 SKILL_BUNDLE_INSPECTION_LIMITS.entries = 0;
+import { computeContentHashFromEntries, verifyContentHashFromEntries, CONTENT_HASH_LIMITS, ContentHashInputError,
+  revisionIdOf, type ContentHashOptions, type ContentHashVerification, type RevisionContent } from "@hasna/skills/sdk";
+import { computeContentHashFromEntries as rootEntryHash, verifyContentHashFromEntries as rootEntryVerify,
+  ContentHashInputError as RootHashError, revisionIdOf as rootRevision, type RevisionContent as RootRevisionContent } from "@hasna/skills";
+const hashOptions: ContentHashOptions = { limits: { rawBytes: 1024, normalizedBytes: 1024, manifestDepth: 8 }, signal: new AbortController().signal };
+const entryDigest: Promise<string> = computeContentHashFromEntries(inspected.entries, hashOptions);
+const rootDigest: Promise<string> = rootEntryHash(inspected.entries, hashOptions);
+const entryVerification: Promise<ContentHashVerification> = verifyContentHashFromEntries(inspected.entries);
+const rootVerification: Promise<ContentHashVerification> = rootEntryVerify(inspected.entries);
+const revisionContent: RevisionContent = { slug: "fixture", displayName: "Fixture", description: "Fixture", category: "Development", tags: [], source: "private", kind: "instruction" };
+const rootRevisionContent: RootRevisionContent = revisionContent;
+const revision: string = revisionIdOf(revisionContent);
+const rootRevisionIdentity: string = rootRevision(rootRevisionContent);
+const contentCode: "CONTENT_HASH_INVALID" | "CONTENT_HASH_LIMIT" | "CONTENT_HASH_ABORTED" | "CONTENT_HASH_TIMEOUT" = new ContentHashInputError("CONTENT_HASH_LIMIT", "fixture").code;
+const rootContentCode: typeof contentCode = new RootHashError("CONTENT_HASH_LIMIT", "fixture").code;
+// @ts-expect-error Hashing yields a promise, never a synchronous digest or any.
+const synchronousHash: string = entryDigest;
+// @ts-expect-error Root inference must retain the digest type.
+const numericHash: Promise<number> = rootEntryHash(inspected.entries);
+// @ts-expect-error Verification is a typed result, not a digest or any.
+const wrongVerification: Promise<string> = entryVerification;
+// @ts-expect-error Hard ceilings cannot be disabled.
+const disabledContentHash: ContentHashOptions = { limits: { rawBytes: false } };
+// @ts-expect-error Caller-supplied manifests cannot substitute for the captured entry.
+verifyContentHashFromEntries(inspected.entries, { manifest: {} });
+// @ts-expect-error Hard ceilings are immutable.
+CONTENT_HASH_LIMITS.entries = 0;
+// @ts-expect-error Revision tags retain their declared ordered array type.
+revisionIdOf({ ...revisionContent, tags: "unordered" });
+// @ts-expect-error Root revision declarations cannot silently lose required fields.
+rootRevision({ slug: "fixture" });
 declare const store: SkillsProductStore;
 // Only compiled, never executed: preserve the existing modes and check the
 // additive streaming option through actual installed declarations.
@@ -436,5 +467,34 @@ console.log("Installed bundle SDK runtime: 17 assertions passed.");
   await run([process.execPath, "node_modules/typescript/bin/tsc", "-p", "tsconfig.json"], workspace);
   console.log((await run([process.execPath, "--no-env-file", "admin-list-runtime.ts"], workspace)).trim());
   console.log((await run([process.execPath, "--no-env-file", "bundle-runtime.ts"], workspace)).trim());
+  await writeFile(join(workspace, "content-hash-runtime.ts"), `
+import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { computeContentHash, computeContentHashFromEntries as rootHash, revisionIdOf as rootRevision } from "@hasna/skills";
+import { inspectSkillBundle, packSkillBundle, computeContentHashFromEntries, verifyContentHashFromEntries, ContentHashInputError, revisionIdOf } from "@hasna/skills/sdk";
+const dir = join(import.meta.dir, "owned-content-fixture"); mkdirSync(dir);
+const manifest = { name: "fixture", version: "1.0.0", provenance: { source_commit: "fixture", content_hash: "" } };
+writeFileSync(join(dir, "SKILL.md"), "Body.\\r\\n"); writeFileSync(join(dir, "skill.json"), JSON.stringify(manifest));
+const first = await inspectSkillBundle(packSkillBundle(dir).bytes);
+const expected = computeContentHash(dir);
+assert.equal(await computeContentHashFromEntries(first.entries), expected);
+assert.equal(await rootHash(first.entries), expected);
+manifest.provenance.content_hash = expected; writeFileSync(join(dir, "skill.json"), JSON.stringify(manifest));
+const second = await inspectSkillBundle(packSkillBundle(dir).bytes);
+const before = second.entries.map(entry => Array.from(entry.bytes));
+assert.deepEqual(await verifyContentHashFromEntries(second.entries), { declared: true, valid: true, declaredHash: expected, computedHash: expected });
+assert.deepEqual(second.entries.map(entry => Array.from(entry.bytes)), before);
+assert.equal(readFileSync(join(dir, "SKILL.md"), "utf8"), "Body.\\r\\n");
+await assert.rejects(computeContentHashFromEntries([...second.entries, { path: "../outside", mode: 420, bytes: new Uint8Array() }]), error => error instanceof ContentHashInputError && error.code === "CONTENT_HASH_INVALID");
+await assert.rejects(computeContentHashFromEntries(second.entries, { limits: { rawBytes: 1 } }), error => error instanceof ContentHashInputError && error.code === "CONTENT_HASH_LIMIT");
+const controller = new AbortController(), pending = computeContentHashFromEntries(second.entries, { signal: controller.signal }); controller.abort();
+await assert.rejects(pending, error => error instanceof ContentHashInputError && error.code === "CONTENT_HASH_ABORTED");
+const revision = { slug: "hash-fixture", displayName: "Hash Fixture", description: "Fixture.", category: "Development", tags: ["one", "two"], source: "private", kind: "instruction" as const };
+assert.equal(revisionIdOf(revision), "5187855fb5088247a5551ee18ee8e27cfe47466b019b4443b992f0e233c79248");
+assert.equal(rootRevision(revision), revisionIdOf(revision));
+console.log("Installed content hash/revision runtime: 10 assertions passed.");
+`);
+  console.log((await run([process.execPath, "--no-env-file", "content-hash-runtime.ts"], workspace)).trim());
   console.log(`Consumer types: @hasna/skills@${metadata.version} passed strict installed-package checking for all four exports (skipLibCheck=false).`);
 } finally { await rm(workspace, { recursive: true, force: true }); }
