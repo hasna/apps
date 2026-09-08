@@ -1,3 +1,4 @@
+import {assertPlanApiEnvironment} from "../lib/plan-client-boundary.js";
 import {assertTaskListApiEnvironment} from "../lib/task-list-client-boundary.js";
 import { Command, Help } from "commander";
 import {
@@ -501,7 +502,7 @@ function disqualifyingArgument(invocation: ParsedInvocation): Disqualification |
       if (hasOption(args, "--deregister")) return null;
       return firstPresentOption(args, ["--path-prefix", "--dry-run"]);
     case "plans":
-      return firstPresentOption(args, ["--artifact", "--write-artifacts"]);
+      return null;
     // `list --tags/--tag` is serviced remotely: the /v1 list route filters by
     // tag server-side and the cloud router preflights the capability against
     // the authority's OpenAPI contract (task 90c0b178).
@@ -695,6 +696,10 @@ export function initializeTodosCliAuthority(
   env: Env = process.env as Env,
 ): TodosCliAuthorityInitialization {
   const requested = parseInvocation(args);
+  if (requested.command === "plans") {
+    if (isMetadataInvocation(args, requested)) return {route:"remote-diagnostic",v1_base_url:null};
+    assertPlanApiEnvironment(env);
+  }
   if (["lists", "task-lists", "tl"].includes(requested.command ?? "")) {
     if (isMetadataInvocation(args, requested)) return {route:"remote-diagnostic",v1_base_url:null};
     assertTaskListApiEnvironment(env);
@@ -703,8 +708,11 @@ export function initializeTodosCliAuthority(
   try {
     resolution = resolveTodosCliTransport(env);
   } catch (error) {
-    if (["lists", "task-lists", "tl"].includes(requested.command ?? "") && error instanceof Error && error.message.startsWith("REMOTE_API_CONFIG_MISSING")) {
-      throw new Error("REMOTE_API_CONFIG_MISSING: Task-list commands require HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, or saved account credentials. Configure the authenticated shared API.");
+    if (error instanceof Error && error.message.startsWith("REMOTE_API_CONFIG_MISSING")) {
+      if (requested.command === "plans") throw new Error("REMOTE_API_CONFIG_MISSING: Plan commands require HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, or saved account credentials.");
+      if (["lists", "task-lists", "tl"].includes(requested.command ?? "")) {
+        throw new Error("REMOTE_API_CONFIG_MISSING: Task-list commands require HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, or saved account credentials. Configure the authenticated shared API.");
+      }
     }
     // A partial API pair (URL without KEY, or KEY without URL) — or a fully
     // absent pair without the explicit local opt-in (fail closed, hasna/apps#1613)
