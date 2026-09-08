@@ -8,7 +8,7 @@
 
   The CLI, the MCP server and the `./sdk` client no longer carry a credential
   chain of their own. All three call the one resolver in `@hasna/contracts`
-  (bumped to 1.0.1), which reads, per call: an explicit `--api-key`/`--profile`,
+  (bumped to 1.0.2), which reads, per call: an explicit `--api-key`/`--profile`,
   then `HASNA_TODOS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
   `HASNA_TODOS_API_KEY_REF`, then the macOS Keychain item
   `hasna.credentials.todos.api-key`, then `~/.hasna/todos/config/credentials`
