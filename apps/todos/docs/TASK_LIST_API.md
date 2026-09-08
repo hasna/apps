@@ -36,3 +36,19 @@ This closes five additional MCP callbacks. The historical 107 CLI / 93 MCP
 remaining-surface assessment is a baseline, not a claim that all Todos commands
 are converted. Other administrative and local compatibility surfaces still need
 separate migration and release acceptance.
+
+## CLI lists
+
+`todos lists`, `todos task-lists`, and `todos tl` use the same shared API.
+`--add`, `--show`, `--update`, and `--delete` are mutually exclusive. Names,
+slugs and descriptions retain their existing flags; `--status` filters the list
+or sets status during add/update. Show includes all matching task pages, including
+subtasks, under the 10,000-task bound. Explicit `--project` retains scoped lookup
+and update rebinding semantics; there is no local cwd database discovery.
+
+Deletion returns the checked preserving receipt. `--force` detaches linked
+records without deleting their content. Unsupported or malformed server results
+fail rather than printing successful deletion. Database/local-mode selectors are
+rejected before command modules load, even when API credentials are also present.
+Credential-free help remains available. Other CLI families, including remaining
+plan artifact paths, are outside this bounded conversion.
