@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "baseRevision": "e482756b7530cc4c8c05620af644af8e6920baa4",
+  "change": "Move four synchronous blocking call sites off Swift cooperative workers",
+  "productionAndTestInputsSHA256": {
+    "apps/recordings/src/native/Recordings/RecordingsLib/BlockingOperation.swift": "b196b3ff43f13876a951d5a54556926c57f5320dcf3a5fe337d1c40fe92954bf",
+    "apps/recordings/src/native/Recordings/RecordingsLib/RecordingEngine.swift": "fb3e23d25baf57f9f0fff265a3dd7b2ac3a2a1ba51d7ae8724cf87c570a8568a",
+    "apps/recordings/src/native/Recordings/RecordingsLib/ProjectStore.swift": "d282b3aacad3ddf68dfdc52af880c8eaaff283e865f1298229e69598874ce70f",
+    "apps/recordings/src/native/Recordings/RecordingsTests/BlockingOperationTests.swift": "9b7307bb8136c847842d42e946cd1c657adbc8a86dd1dece4e4ef34293fbcf2d",
+    "apps/recordings/src/native/Recordings/RecordingsTests/CLIRunnerTests.swift": "baa66eb9213f40b486a2ca01074d410159834371a56d11061306217d2d53e3ab",
+    "apps/recordings/src/native/Recordings/RecordingsTests/ProjectStoreTests.swift": "d87bffc166559635e9febe0cde32d454edf46bd3c7ee75c7f6f9d4d20c0a8441",
+    "apps/recordings/src/native/Recordings/RecordingsTests/RecordingEngineDeliveryTests.swift": "6e8b0803f60b7ed7a8664501266057ce43a3a303cb7adffe53b32852c456fb22"
+  },
+  "runs": [
+    {
+      "label": "red",
+      "source": "e482756b7530cc4c8c05620af644af8e6920baa4+owned-adapter-diff",
+      "selection": "BlockingOperationTests",
+      "exitCode": 1,
+      "elapsedSeconds": 2.761,
+      "testBundleSHA256": "7c95fe49a6722ec28028abb43b1af4e291897a5a6ef288bf4c632fc5fb1387cb",
+      "networkDenied": true,
+      "outsideWritesDenied": true,
+      "hostToolsDenied": true,
+      "logSHA256": "d37f4db4baf62704adbd057e837876220a9324f5784341610096bb943e6272ea",
+      "profileSHA256": "2e0c1dac408eb66add840e69301a1689b6b7fe08d8d10feeb4aae1eae3226926",
+      "receiptSHA256": "b36e1b7424805e204f292806619e4c2b06fec06926002f586d0cd328bc966a92"
+    },
+    {
+      "label": "green",
+      "source": "e482756b7530cc4c8c05620af644af8e6920baa4+owned-adapter-diff",
+      "selection": "BlockingOperationTests",
+      "exitCode": 0,
+      "elapsedSeconds": 0.425,
+      "testBundleSHA256": "fe7a98cc173ae2b3639739183f35ab42a50458a8c048a45161ba9765bf964dc8",
+      "networkDenied": true,
+      "outsideWritesDenied": true,
+      "hostToolsDenied": true,
+      "logSHA256": "2013c49f432624f4de63e3e0c9a0350e0fb2158a6599ab202201ae9d87a5473a",
+      "profileSHA256": "1d1e5dfa578c34ebc2d8e8f4d13ea67fae8ba6d67b0c6cbb605574c2a29394fa",
+      "receiptSHA256": "9694754ecccdc93c072a4dee91f273d441fafbe05a2dd4dd16abee39c28efe89"
+    },
+    {
+      "label": "interaction",
+      "source": "e482756b7530cc4c8c05620af644af8e6920baa4+owned-adapter-diff",
+      "selection": "BlockingOperationTests|RecordingStartTimingTests|RecordingCaptureWarmUpTests|CommandRouteTests/cancelWhileRewriting|NativePCMRecorderTests|ProjectStoreTests|CLIRunnerTests/(hungRewriteHelperReturnsWithinInteractiveBudget|exhaustedRewriteDeadlineWithHeldPipesReturnsUnderCeiling|silentEscapedDescendantCannotPinCaptureReaders)",
+      "strictPool": "unset",
+      "exitCode": 0,
+      "elapsedSeconds": 9.598,
+      "testBundleSHA256": "186514deea557c1ca6f5f586c007a1d93d2c81ba4d441ddea0145d542e0b509a",
+      "networkDenied": true,
+      "outsideWritesDenied": true,
+      "hostToolsDenied": true,
+      "logSHA256": "f0fa3bee7e8fde94c6e9dbc22cbd60cc706dbf35682a0784522832f116f0bfe2",
+      "profileSHA256": "adc78e74b936d7a404932b5b7b116f98d3b2cbb6cf794267b0ef148bc9c33d39",
+      "receiptSHA256": "1d0d24f61aba9809e254026875c59fccacf9ca3807f6e6ac4364d81e1ff16bee"
+    },
+    {
+      "label": "strict-interaction",
+      "source": "e482756b7530cc4c8c05620af644af8e6920baa4+owned-adapter-diff",
+      "selection": "BlockingOperationTests|RecordingStartTimingTests|RecordingCaptureWarmUpTests|CommandRouteTests/cancelWhileRewriting|NativePCMRecorderTests|ProjectStoreTests|CLIRunnerTests/(hungRewriteHelperReturnsWithinInteractiveBudget|exhaustedRewriteDeadlineWithHeldPipesReturnsUnderCeiling|silentEscapedDescendantCannotPinCaptureReaders)",
+      "strictPool": "1",
+      "exitCode": 0,
+      "elapsedSeconds": 9.841,
+      "testBundleSHA256": "186514deea557c1ca6f5f586c007a1d93d2c81ba4d441ddea0145d542e0b509a",
+      "networkDenied": true,
+      "outsideWritesDenied": true,
+      "hostToolsDenied": true,
+      "logSHA256": "529cf3b35a893898535bbaab66c95482a45c5b08c2fb09ebc921edee16666101",
+      "profileSHA256": "a98119f83caecdf6c6370608e476765bb2e5cd9306dacfe2bf14951f5c044fc9",
+      "receiptSHA256": "48dd96ed493ac88b688268036a81c6488a44856be75b82e6f4b93e9ff9580d48"
+    }
+  ],
+  "buildLogsSHA256": {
+    "red-build.log": "9c78c4b065b33fbff7fbd61e6b868065f5f8963d8f60bae4653c0cf166898e48",
+    "green-build.log": "4242e77230aeddb078035f6fc27a132393dd597bb51ab216df5d6745237bcb18",
+    "interaction-build.log": "f7b8165c16c9307567f58b4f97e05b83b912d08409f809d78ed7ab528b853f6d"
+  },
+  "supervisorsSHA256": {
+    "build.py": "e3963b3f1f9e4dbef5b16e78c7b00a08624915606a016a8dd740c607b6b9fed2",
+    "build.sb": "f9e4b2f9374998bc8239b1af50acda2cf413d152a7b71220f6184aed5940608a",
+    "test-adapter-executed.py": "36b743c96564bd458a1bfd27f3e05109aebede9790b04ab84b44e12d4c679016",
+    "test-interaction-executed.py": "7f1b3c0c088075ab22ccaab4f8a8151b8497918655a7c4c1f6d6d053f74a5e80"
+  },
+  "baselineAdapterSHA256": "f9a1bc69a6d4386b5d9ece2856dcdcdc07f4e40b057e6221c7cf6f8e9fec730d",
+  "ciSample": {
+    "run": 34227774235,
+    "revision": "0068f36a4143a2d1880517d9b9f2c33cda2162be",
+    "sampleSHA256": "2e0cb3cf437b6f55914a16dfa00f7561b7e69d4932cb6d53e4fd86657a2e228a"
+  },
+  "limits": [
+    "Focused validation only; full native CI completion remains unverified.",
+    "No installed app, real microphone, AX target, clipboard or provider execution.",
+    "Baseline used the actual new adapter API with its run body replaced by the previous detached execution behavior; only peer-progress assertions failed.",
+    "Cancelled synchronous work still drains; it is not forcibly interrupted."
+  ],
+  "reviewedSupervisorFailurePath": {
+    "change": "Bound final pipe drain and reap; report cleanup-unconfirmed without signaling a reaped leader",
+    "validation": "4 synthetic Popen timeout/drain/leader-liveness controls; no process execution",
+    "inputsSHA256": {
+      "test-adapter.py": "eb3deffc37c8ac6a689fd9434ca2718cefe0f810220ee0615eb2956fc2a4030b",
+      "test-interaction.py": "a865da739bde568ccaf4ffa4d85fd98c59c3d8e09c2269cfe3f5683ff5f73f52",
+      "check-supervisor-timeout.py": "e2f90ba8f6a38ec2a29031ab789af84fcb173c771addf6b27c8e428aa4e4a133",
+      "supervisor-timeout-receipt.json": "909a59039f79c7a1ab9b1d1b59eb354ba1bda2127e16a20b86ee778de0f12a4c"
+    },
+    "successfulRunsAboveUseOriginalSupervisorHashes": true
+  }
+}
