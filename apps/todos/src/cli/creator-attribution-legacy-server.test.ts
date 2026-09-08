@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -59,12 +60,13 @@ function legacyTask(n: number, createdBy: string | null) {
 
 /** Ignores created_by/not_created_by exactly as the deployed 0.13.0 server does,
  *  but honours `limit` — which is what makes filter-then-truncate order matter. */
-function startLegacyServer(rows: Array<Record<string, unknown>>) {
+function startLegacyServer(rows: Array<Record<string, unknown>>, port = 0) {
   const seen: string[] = [];
   return {
     seen,
     server: Bun.serve({
-      port: 0,
+      hostname: "127.0.0.1",
+      port,
       fetch(req) {
         const url = new URL(req.url);
         seen.push(url.search);
@@ -85,6 +87,7 @@ async function runCli(args: string[], root: string, baseUrl: string, extraEnv: R
     env: {
       PATH: process.env.PATH ?? "",
       HOME: root,
+      HASNA_STATION: `fixture-${randomUUID()}`,
       TMPDIR: root,
       LANG: "C.UTF-8",
       TODOS_DB_PATH: join(root, "todos.db"),
@@ -118,7 +121,7 @@ describe("--inbox against a server that cannot attribute at all", () => {
       const result = await runCli(["--json", "list", "--inbox"], root, `http://127.0.0.1:${server.port}`, {
         TODOS_AGENT_ID: "cassius",
       });
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stderr).toContain("does not record task authorship");
       // The rows are still returned — unfiltered but honest, not silently dropped.
       expect(JSON.parse(result.stdout)).toHaveLength(3);
@@ -138,7 +141,7 @@ describe("--inbox against a server that cannot attribute at all", () => {
       const result = await runCli(["--json", "list", "--inbox"], root, `http://127.0.0.1:${server.port}`, {
         TODOS_AGENT_ID: "cassius",
       });
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stderr).not.toContain("does not record task authorship");
     } finally {
       server.stop(true);
@@ -168,7 +171,7 @@ describe("--inbox against a server that ignores the creator filter", () => {
         // lives in the CLI. It only has to be larger than the 15 fixture rows.
         { TODOS_AGENT_ID: "cassius", TODOS_LIST_SCAN_LIMIT: "1000" },
       );
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode, result.stderr).toBe(0);
       const titles = (JSON.parse(result.stdout) as Array<{ title: string }>).map((t) => t.title);
       expect(titles).toEqual(["theirs 11", "theirs 12", "theirs 13", "theirs 14", "theirs 15"]);
       // The CALLER's limit must not reach the authority: this server honours `limit`,
@@ -207,7 +210,7 @@ describe("--inbox against a server that ignores the creator filter", () => {
         `http://127.0.0.1:${server.port}`,
         { TODOS_AGENT_ID: "cassius" },
       );
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toHaveLength(4);
     } finally {
       server.stop(true);
@@ -225,7 +228,7 @@ describe("--inbox against a server that ignores the creator filter", () => {
         root,
         `http://127.0.0.1:${server.port}`,
       );
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toHaveLength(3);
       // Withholding the limit is scoped to client-side filtering and reordering.
       // One scalar status needs neither, so it must not pull the whole table — and
@@ -239,4 +242,13 @@ describe("--inbox against a server that ignores the creator filter", () => {
       server.stop(true);
     }
   }, 30000);
+});
+
+// A wildcard listener can share a loopback port on macOS and route our client
+// into a different fixture. Allocation must use the exact requested interface.
+test("legacy fixture refuses an occupied loopback endpoint", () => {
+  const occupied = Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>new Response("occupied fixture",{status:403})});
+  let contender: ReturnType<typeof startLegacyServer> | undefined;
+  try { expect(() => { contender = startLegacyServer([], occupied.port); }).toThrow(); }
+  finally { contender?.server.stop(true); occupied.stop(true); }
 });

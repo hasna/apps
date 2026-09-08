@@ -1254,6 +1254,22 @@ export async function cloudListPlanTasks(client: HasnaStorageClient, planId: str
   return tasks;
 }
 
+/** Complete, bounded task-list detail with server pagination and scope evidence. */
+export async function cloudListTaskListTasks(client: HasnaStorageClient, taskListId: string): Promise<Task[]> {
+  const tasks: Task[] = []; const ids = new Set<string>(); let total: number | undefined;
+  do {
+    const page = await requestRawCloudTaskPage(client, {task_list_id: taskListId, include_subtasks: true, limit: 200, offset: tasks.length});
+    if (page.total === undefined || page.total > 10000 || (total !== undefined && page.total !== total)) throw new Error("Incomplete task-list detail; upgrade the Todos API or narrow the query");
+    total = page.total;
+    if (tasks.length + page.tasks.length > total || (page.tasks.length === 0 && tasks.length < total)) throw new Error("Incomplete task-list pagination");
+    for (const task of page.tasks) {
+      if (!task || typeof task.id !== "string" || !task.id || task.task_list_id !== taskListId || ids.has(task.id)) throw new Error("Invalid or incorrectly scoped task-list task page");
+      ids.add(task.id); tasks.push(task);
+    }
+  } while (tasks.length < total);
+  return tasks;
+}
+
 function cloudTaskListFilterError(
   code:
     | "REMOTE_TASK_LIST_FILTER_UNSUPPORTED"
