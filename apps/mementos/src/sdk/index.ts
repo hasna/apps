@@ -775,6 +775,8 @@ export function resolveMementosApiBase(
 
 import {
   clientTransportEnvKeys,
+  createClientTransport,
+  toV1BaseUrl,
   resolveClientTransport,
   resolveCredential,
   ClientTransportConfigurationError,
@@ -980,15 +982,19 @@ export function resolveMementosSdkTransport(
 export class MementosClient {
   private baseUrl: string;
   private _fetch: typeof globalThis.fetch;
-  private apiKey?: string;
+  private binding?: { mode: "http" | "anonymous" | "local-serve"; baseUrl: string };
   private prefix: string;
   private readonly _resolveOptions: ResolveMementosSdkTransportOptions;
 
   constructor(config: MementosClientConfig = {}) {
+    // An explicit invalid authority must never become the default endpoint.
+    if (config.baseUrl !== undefined) toV1BaseUrl(config.baseUrl);
+    if (config.prefix !== undefined && !/^\/(?:[A-Za-z0-9_-]+\/?)*$/.test(config.prefix)) {
+      throw new MementosConfigError("mementos route prefix must be an absolute path without traversal, query, or fragment data");
+    }
     const resolved = resolveMementosApiBase(config.baseUrl, config.prefix);
     this.baseUrl = resolved.baseUrl;
     this._fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
-    this.apiKey = config.apiKey;
     this.prefix = resolved.prefix;
     // The options every request re-resolves through the @hasna/contracts chain
     // against: explicit arguments stay tier 1 (an explicit baseUrl keeps its
@@ -1022,9 +1028,7 @@ export class MementosClient {
    * requests actually go to.
    */
   get apiUrl(): string {
-    const transport = resolveMementosSdkTransport(this._resolveOptions);
-    const base = transport.mode === "http" ? transport.baseUrl : this.baseUrl;
-    return `${base}${this.prefix}`;
+    return `${this.currentTransport().baseUrl}${this.prefix}`;
   }
 
   // --------------------------------------------------------------------------
@@ -1037,8 +1041,45 @@ export class MementosClient {
    * re-read on every request, so a rotation heals a long-lived process without
    * a restart. An explicit baseUrl/apiKey (tier 1) is used verbatim.
    */
-  private currentTransport(): MementosSdkTransport {
-    return resolveMementosSdkTransport(this._resolveOptions);
+  private currentTransport(): { baseUrl: string; fetch: typeof globalThis.fetch } {
+    const options = this._resolveOptions;
+    const rawEnv = options.env ?? (typeof process !== "undefined" ? process.env : {});
+    const requestedCredentials = {
+      ...options.credentials,
+      ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
+    };
+    const explicit = options.baseUrl !== undefined;
+    const { env, credentials } = explicit
+      ? { env: { HASNA_MEMENTOS_API_URL: this.baseUrl }, credentials: { apiKey: options.apiKey, keychain: { enabled: false } } }
+      : mementosResolverInputs(rawEnv, requestedCredentials);
+    const local = !explicit && selectsMementosLocalStore(env);
+    const mode = local ? "local-serve" : explicit && options.apiKey === undefined ? "anonymous" : "http";
+    let baseUrl = local ? MEMENTOS_DEFAULT_BASE_URL : stripV1(toV1BaseUrl(this.baseUrl));
+    let send = this._fetch;
+    if (mode === "http") {
+      try {
+        // Fresh normalization and the shared resolver capture a stable URL/key
+        // pair together, including vault pointers. Never pin a separately read key.
+        const connected = createClientTransport("mementos", env, {
+          credentials, fetchImpl: this._fetch,
+        });
+        baseUrl = stripV1(connected.resolution.baseUrl);
+        send = connected.client.fetch.bind(connected.client) as typeof globalThis.fetch;
+      } catch (error) {
+        if (error instanceof ClientTransportConfigurationError && /is not set and no API key could be resolved/.test(error.message)) {
+          throw new MementosConfigError(unconfiguredSdkMessage(), { cause: error });
+        }
+        throw error;
+      }
+    } else if (local && (options.apiKey !== undefined || options.credentials?.apiKey !== undefined)) {
+      throw new MementosConfigError("An authenticated client cannot select the anonymous local serve; configure an explicit API authority");
+    }
+    if (this.binding && (this.binding.mode !== mode || this.binding.baseUrl !== baseUrl)) {
+      throw new MementosConfigError("Mementos SDK authority or transport changed; create a new client for the new configuration");
+    }
+    this.binding ??= { mode, baseUrl };
+    if (local) announceLocal(options.notice, "the explicit local opt-in selects the on-box server");
+    return { baseUrl, fetch: send };
   }
 
   private async request<T>(
@@ -1048,8 +1089,7 @@ export class MementosClient {
     query?: Record<string, string | number | boolean | undefined>
   ): Promise<T> {
     const transport = this.currentTransport();
-    const baseUrl = transport.mode === "http" ? transport.baseUrl : this.baseUrl;
-    const apiKey = transport.mode === "http" ? (transport.apiKey ?? this.apiKey) : this.apiKey;
+    const baseUrl = transport.baseUrl;
     // Route legacy `/api/...` method paths through the configured version prefix.
     const routed = path.startsWith("/api/") ? `${this.prefix}${path.slice(4)}` : path;
     let url = `${baseUrl}${routed}`;
@@ -1064,15 +1104,11 @@ export class MementosClient {
 
     const headers: Record<string, string> = {};
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    if (apiKey) {
-      headers["Authorization"] = `Bearer ${apiKey}`;
-      headers["x-api-key"] = apiKey;
-    }
-
-    const res = await this._fetch(url, {
+    const res = await transport.fetch(url, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      redirect: "manual",
     });
 
     if (!res.ok) {

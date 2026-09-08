@@ -159,6 +159,12 @@ service authority through the ONE resolver in `@hasna/contracts`
 (`@hasna/contracts/client`), fresh on every call so a key rotation heals a
 long-lived shell or MCP server without a restart:
 
+The SDK binds its authority on the first request or `apiUrl` read. Keys can
+rotate at that authority; changing the URL or selecting local serving requires
+a new client. Invalid or removed credentials refuse before dispatch, and SDK
+requests do not follow redirects. An explicit `baseUrl` without an `apiKey`
+remains anonymous and never borrows credentials from the environment.
+
 | Tier | Source |
 | --- | --- |
 | 1 | explicit arguments (`--api-key` / `--profile`, or `baseUrl` / `apiKey` in the SDK) |
