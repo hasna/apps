@@ -2367,7 +2367,7 @@ class PostgresJsonRecordStore {
     const updatedAt = stringValue(tombstone.updated_at) ?? deletedAt;
     const existing = await this.clock(tombstone.object_type, tombstone.object_id);
     if (existing && compareClock(existing.updatedAt, updatedAt) > 0) return false;
-    await this.options.client.query(
+    const result = await this.options.client.query<{ object_id: string }>(
       `INSERT INTO ${this.tableName} (
         service, object_type, object_id, payload, updated_at,
         deleted_at, source_machine_id, version
@@ -2378,7 +2378,8 @@ class PostgresJsonRecordStore {
         deleted_at = EXCLUDED.deleted_at,
         source_machine_id = EXCLUDED.source_machine_id,
         version = EXCLUDED.version
-      WHERE ${this.tableName}.updated_at IS NULL OR ${this.tableName}.updated_at <= EXCLUDED.updated_at`,
+      WHERE ${this.tableName}.updated_at IS NULL OR ${this.tableName}.updated_at <= EXCLUDED.updated_at
+      RETURNING object_id`,
       [
         this.service,
         tombstone.object_type,
@@ -2390,7 +2391,7 @@ class PostgresJsonRecordStore {
         tombstone.version ?? null,
       ],
     );
-    return true;
+    return result.rows.length > 0;
   }
 
   async clock(type: RemoteObjectType, id: string): Promise<RemoteRecordClock | null> {

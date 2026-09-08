@@ -2712,6 +2712,26 @@ describe("storage adapter contracts", () => {
     expect(await adapter.tasks.get(parent.id)).toMatchObject({ id: parent.id });
   });
 
+  test("tombstone receipts count returned rows and retain timestamp-only equal-clock semantics", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const task = await adapter.tasks.create({ title: "Synthetic receipt fixture" });
+    const snapshot: TodosStorageSnapshot = { ...await adapter.sync.exportSnapshot!(), tasks: [], tombstones: [{
+      object_type: "tasks", object_id: task.id, deleted_at: task.updated_at, version: 0,
+    }] };
+    const accepted = await adapter.sync.importSnapshot!(snapshot);
+    expect(accepted.errors).toEqual([]);
+    expect(accepted.deleted).toBe(1);
+    expect(await adapter.tasks.get(task.id)).toBeNull();
+    // The fixture models a database statement that returns no rows. The
+    // adapter must not infer success from the absence of a thrown SQL error.
+    const rejectedClient = createMemoryPostgresClient({ rejectWritesForObjectType: "tasks" });
+    const rejected = await createPostgresTodosStorageAdapter({ client: rejectedClient.client }).sync.importSnapshot!(snapshot);
+    expect(rejected.errors).toEqual([]);
+    expect(rejected.deleted ?? 0).toBe(0);
+    expect(rejected.skipped).toBe(1);
+  });
+
   test("preserves direct Postgres tombstone clocks and rejects stale import records", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({
@@ -4076,11 +4096,10 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
         const existing = rows.get(key);
         const nextUpdatedAt = String(updatedAt);
         const nextVersion = nullableNumber(syncStoreInsert ? values[7] : values[6]);
-        // Conflict guard now resolves by (updated_at, version); detect it by the
-        // EXCLUDED.updated_at reference which both the adapter upsert and the
-        // sync push share.
+        // Upsert uses timestamp/version ties; tombstones use timestamp only.
+        // Detect the actual version predicate, not a column in the SET clause.
         const guarded = sql.includes("EXCLUDED.updated_at");
-        const versionAware = guarded && sql.includes("version");
+        const versionAware = guarded && sql.includes("COALESCE(EXCLUDED.version, 0)");
         const returning = sql.includes("RETURNING");
         if (existing && guarded) {
           const clockCmp = compareIsoClock(existing.updatedAt, nextUpdatedAt);
