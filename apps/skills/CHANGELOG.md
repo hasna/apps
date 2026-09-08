@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.3
+
+### Patch Changes
+
+- 0343a7e: Expose a bounded asynchronous bundle inspector and deterministic packer through the SDK. Uploaded gzip/ustar bundles can now be validated with streaming decompression, finite byte/path/entry/deadline budgets, strict archive checks, owned file buffers and no filesystem writes or execution. Existing synchronous unpack callers remain unchanged and must migrate separately for untrusted input.
+- e9e0eb6: Expose bounded entry-based canonical content hashing and same-entry manifest verification without extraction, preserving directory hashes. Export the existing content revision identity through supported SDK entrypoints.
+- 97ff397: Add explicit invitation email recovery to SDK and CLI, plus a separate two-tool MCP stdio mode. Preserve caller challenge IDs, bounded proof input, uncertain outcomes and unchanged credentials; require ordinary sign-in after acceptance.
+- 7e99f9a: Add explicitly confirmed workspace invitation operations to the SDK, CLI and MCP. Fresh verification binds the observed account and current membership, validates bounded results, preserves saved credentials and retains caller idempotency for uncertain issue or resend outcomes. Acceptance secrets use stdin or masked terminal input.
+
 ## 0.5.2
 
 ### Patch Changes
