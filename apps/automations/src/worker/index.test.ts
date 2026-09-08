@@ -280,13 +280,17 @@ describe("TypedActionWorker", () => {
 
   test("supports detach and timeout without reporting false success", async () => {
     const store = new AutomationsStore();
+    let releaseAction!: () => void;
+    const actionMayFinish = new Promise<void>((resolve) => { releaseAction = resolve; });
+    let executionStarted = false;
+    let settled = false;
+    const deadline = Date.now() + 4_000;
     try {
       store.createAutomation(spec("typed.slow"));
-      let settled = false;
       const worker = new TypedActionWorker({
         store,
         definitions: [definition("typed.slow", async () => {
-          await Bun.sleep(40);
+          await actionMayFinish;
           return { output: { ok: true } };
         })],
       });
@@ -296,23 +300,84 @@ describe("TypedActionWorker", () => {
       expect(detached.run).toBeUndefined();
       expect(store.requireRun(detached.runId).status).toBe("materialized");
 
-      const timed = await worker.run("typed.worker.demo@1.0.0", { timeoutMs: 1, leaseMs: 15, onSettled: () => { settled = true; } });
+      executionStarted = true;
+      const timed = await worker.run("typed.worker.demo@1.0.0", { timeoutMs: 1, onSettled: () => { settled = true; } });
       expect(timed.status).toBe("running");
       expect(store.requireRun(timed.runId).status).toBe("running");
-      // The 1ms caller timeout must not report false success: the 40ms action
-      // is still in flight when run() returns, and the run only settles once
-      // the worker actually finishes and persists the terminal receipt. Wait
-      // for that settlement instead of sleeping a fixed 70ms — under CI load
-      // the action's sleep can overshoot the window (measured flake, #1796),
-      // and a poll keeps failing exactly when it should: a run that never
-      // settles (deadline) or settles as anything but succeeded still reds.
-      const deadline = Date.now() + 4_000;
+      expect(settled).toBe(false);
+      // Caller timeout and lease renewal are separate contracts. Hold the
+      // action until the timeout is observed, using the normal worker lease;
+      // the dedicated lease tests below cover renewal, expiry and fencing.
+      releaseAction();
       while (!settled && Date.now() < deadline) {
         await Bun.sleep(10);
       }
+      // onSettled also runs after rejection. Only the persisted receipt proves
+      // that releasing this action completed successfully.
       expect(store.requireRun(timed.runId).status).toBe("succeeded");
       expect(settled).toBe(true);
     } finally {
+      releaseAction();
+      const cleanupDeadline = performance.now() + 500;
+      while (executionStarted && !settled && performance.now() < cleanupDeadline) {
+        await Bun.sleep(10);
+      }
+      if (executionStarted && !settled) throw new Error("worker did not settle before fixture teardown");
+      store.close();
+    }
+  });
+
+  test("keeps rejected lease settlement distinct from persisted success", async () => {
+    const store = new AutomationsStore();
+    let releaseAction!: () => void;
+    const actionMayFinish = new Promise<void>((resolve) => { releaseAction = resolve; });
+    let executionStarted = false;
+    let settled = false;
+    let settlementError: unknown;
+    const deadline = Date.now() + 4_000;
+    const failAction = store.failAction.bind(store);
+    store.failAction = (options) => {
+      try { return failAction(options); }
+      catch (error) { settlementError = error; throw error; }
+    };
+    try {
+      store.createAutomation(spec("typed.expired"));
+      const worker = new TypedActionWorker({
+        store,
+        definitions: [definition("typed.expired", async () => {
+          await actionMayFinish;
+          return { output: { ok: true } };
+        })],
+      });
+      executionStarted = true;
+      const timed = await worker.run("typed.worker.demo@1.0.0", { timeoutMs: 1, onSettled: () => { settled = true; } });
+      expect(timed.status).toBe("running");
+      expect(settled).toBe(false);
+      const action = store.requireQueueEntry(timed.actionIds[0]!);
+      // Place this owned lease in the past through the store's explicit
+      // clock input. No scheduler race or global clock override is required.
+      const expired = store.renewActionLease({
+        actionId: action.id, runnerId: worker.runnerId,
+        fencingToken: action.leaseGeneration!, leaseMs: 15, now: new Date(0),
+      });
+      expect(expired.leaseExpiresAt).toBe("1970-01-01T00:00:00.015Z");
+      releaseAction();
+      while (!settled && Date.now() < deadline) {
+        await Bun.sleep(10);
+      }
+      expect(settled).toBe(true);
+      expect(settlementError).toBeInstanceOf(Error);
+      expect((settlementError as Error).message).toStartWith("queue entry lease expired:");
+      expect(store.requireRun(timed.runId).status).toBe("running");
+      expect(store.requireQueueEntry(action.id).status).toBe("leased");
+      expect(store.requireQueueEntry(action.id).result).toBeUndefined();
+    } finally {
+      releaseAction();
+      const cleanupDeadline = performance.now() + 500;
+      while (executionStarted && !settled && performance.now() < cleanupDeadline) {
+        await Bun.sleep(10);
+      }
+      if (executionStarted && !settled) throw new Error("worker did not settle before fixture teardown");
       store.close();
     }
   });
