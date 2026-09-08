@@ -1,3 +1,4 @@
+import {assertTaskListApiEnvironment} from "../lib/task-list-client-boundary.js";
 import { Command, Help } from "commander";
 import {
   getTodosCloudClient,
@@ -693,10 +694,18 @@ export function initializeTodosCliAuthority(
   args: string[] = process.argv.slice(2),
   env: Env = process.env as Env,
 ): TodosCliAuthorityInitialization {
+  const requested = parseInvocation(args);
+  if (["lists", "task-lists", "tl"].includes(requested.command ?? "")) {
+    if (isMetadataInvocation(args, requested)) return {route:"remote-diagnostic",v1_base_url:null};
+    assertTaskListApiEnvironment(env);
+  }
   let resolution: TodosCliTransportResolution;
   try {
     resolution = resolveTodosCliTransport(env);
   } catch (error) {
+    if (["lists", "task-lists", "tl"].includes(requested.command ?? "") && error instanceof Error && error.message.startsWith("REMOTE_API_CONFIG_MISSING")) {
+      throw new Error("REMOTE_API_CONFIG_MISSING: Task-list commands require HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, or saved account credentials. Configure the authenticated shared API.");
+    }
     // A partial API pair (URL without KEY, or KEY without URL) — or a fully
     // absent pair without the explicit local opt-in (fail closed, hasna/apps#1613)
     // — is a hard error for real commands, but DIAGNOSTIC commands must still
