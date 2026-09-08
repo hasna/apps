@@ -56,7 +56,7 @@ function setPath(input, path, replacement) {
     cursor[last] = replacement;
 }
 
-// ../../../conversations-events-outbox-20260908/apps/contracts/dist/client/transport.js
+// ../contracts/dist/client/transport.js
 import { isIP as isIP2 } from "net";
 import { spawnSync } from "child_process";
 import { closeSync, fstatSync, openSync, readFileSync } from "fs";
