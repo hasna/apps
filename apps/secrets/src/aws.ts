@@ -13,7 +13,7 @@ import { parseKnownFiles, type Profile } from "@smithy/core/config";
 import { randomUUID } from "node:crypto";
 import { chmodSync, readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "fs";
 import { dirname, join } from "path";
-import { ensureOperatorDataDir } from "./data-dir.js";
+import { ensureClientDataDir } from "./data-dir.js";
 import { getStore } from "./store/index.js";
 import {
   assertTestVaultPathAllowed,
@@ -140,7 +140,7 @@ interface RemoteSecretMetadata {
 }
 
 function getAwsConfigPath(): string {
-  const dir = isTestVaultRedirectContext() ? testVaultDir() : ensureOperatorDataDir();
+  const dir = isTestVaultRedirectContext() ? testVaultDir() : ensureClientDataDir();
   return join(dir, "aws.json");
 }
 
@@ -168,7 +168,7 @@ function getAwsSyncStatePath(): string {
     return override;
   }
   if (isTestVaultRedirectContext()) return join(testVaultDir(), "aws-sync-state.json");
-  return join(ensureOperatorDataDir(), "aws-sync-state.json");
+  return join(ensureClientDataDir(), "aws-sync-state.json");
 }
 
 function emptyAwsSyncState(): AwsSyncState {
