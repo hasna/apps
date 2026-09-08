@@ -277,8 +277,26 @@ function redactedEvidence(value: string | undefined): string | undefined {
   return redact(bounded(value));
 }
 
+/** Read workflow failure evidence without treating identifiers or timings as HTTP errors. */
+function workflowDiagnosticText(stdout: string | undefined): string | undefined {
+  if (!stdout) return stdout;
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(stdout);
+  } catch {
+    return stdout;
+  }
+  if (!isRecord(envelope) || !isRecord(envelope.workflowRun) || !Array.isArray(envelope.steps)) return stdout;
+  const diagnostics = [stringValue(envelope.workflowRun.error)];
+  for (const step of envelope.steps) {
+    if (!isRecord(step) || !["failed", "timed_out", "cancelled"].includes(String(step.status))) continue;
+    diagnostics.push(stringValue(step.error), stringValue(step.stderrExcerpt), stringValue(step.stdoutExcerpt));
+  }
+  return diagnostics.filter(Boolean).join("\n");
+}
+
 function searchableText(run: LoopRun): string {
-  return [run.error, run.stderr, run.stdout].filter(Boolean).join("\n");
+  return [run.error, run.stderr, workflowDiagnosticText(run.stdout)].filter(Boolean).join("\n");
 }
 
 /**
