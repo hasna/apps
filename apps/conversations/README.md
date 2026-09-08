@@ -458,3 +458,22 @@ readback are complete; changing a data directory is not a migration.
 ## License
 
 Apache-2.0 -- see [LICENSE](LICENSE)
+
+
+### PostgreSQL Events intake
+
+New message creation, task creation and task transitions capture Events intent in
+ the same PostgreSQL transaction after explicit corpus adoption. Migration 16
+ adds frozen source identity, payload hashes, leases and durable receipt evidence.
+ `conversations events-drain --limit 20 --json` invokes the authenticated worker;
+ its key requires `conversations:events-drain`. `conversations events-receipt
+ <event-id> --json` reads metadata with `conversations:read`. MCP exposes
+ `events_drain` / `events_receipt`; the typed SDK exposes `drainEventOutbox` /
+ `getEventDelivery`.
+
+An `accepted` count means a verified durable Events intake receipt. Redaction of
+ a source message invalidates outstanding claims and reports any accepted or
+ uncertain downstream copy for separate reconciliation. Historical outbox rows
+ without frozen ownership are preserved and require an explicit migration.
+ See [Events intake and reconciliation](docs/events-intake-outbox.md) for operator
+ configuration, bounded retries and the pending dependency release requirement.

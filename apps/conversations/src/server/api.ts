@@ -42,6 +42,9 @@ import { PROJECT_LIST_ORDER, pinnedOrderByClause, simpleOrderByClause } from "..
 import { decodeAttachmentUploads } from "../lib/attachments.js";
 import { BAKED_BUILD_SHA } from "./build-sha.generated.js";
 import { drainServerEventOutbox } from "./events-outbox-pg.js";
+import { appendEventIntent, EventsOutboxError } from "./events-outbox-store.js";
+import type { ResolvedEventsIntake } from "./events-intake-client.js";
+import type { SourceBinding } from "./events-outbox-store.js";
 import { normalizeRedactMessagesBody, redactMessagesPg } from "./admin-redaction-pg.js";
 import { saveFeedbackPg } from "./feedback-pg.js";
 import {
@@ -133,6 +136,7 @@ const SCOPE_READ = `${APP}:read`;
 const SCOPE_WRITE = `${APP}:write`;
 export const SCOPE_INCIDENT_PROJECT = `${APP}:incident-project`;
 export const SCOPE_ADMIN_REDACT = `${APP}:admin-redact`;
+export const SCOPE_EVENTS_DRAIN = `${APP}:events-drain`;
 
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -178,6 +182,7 @@ export interface ApiServerDeps {
   verifier: ApiKeyVerifier;
   incidentProjector?: IncidentProjectorContext | null;
   corpusExpectation?: CorpusExpectation;
+  eventsIntake?: (source: SourceBinding) => ResolvedEventsIntake;
 }
 
 function incidentProjectorContextFromEnv(): IncidentProjectorContext | null {
@@ -1375,12 +1380,7 @@ async function emitTaskOutboxRow(
     },
     appEvent: { kind: "task.updated", action },
   });
-  await tx.query(
-    `INSERT INTO conversations_event_outbox (id, source, type, envelope_json, created_at, status, attempts)
-     VALUES ($1,$2,$3,$4,$5,'pending',0)
-     ON CONFLICT (id) DO NOTHING`,
-    [envelope.id, CONVERSATIONS_SOURCE, envelope.type, JSON.stringify(envelope), envelope.time],
-  );
+  await appendEventIntent(tx, envelope);
 }
 
 function parseTaskRow(row: Record<string, unknown>): Record<string, unknown> {
@@ -1541,6 +1541,7 @@ export function startApiServer(options: StartApiServerOptions = {}) {
   const { client, verifier } = deps;
   const port = options.port ?? Number(process.env.PORT || 8080);
   const host = options.host ?? process.env.HOST ?? "0.0.0.0";
+  const stopping = new AbortController();
 
   const server = Bun.serve({
     port,
@@ -1585,10 +1586,11 @@ export function startApiServer(options: StartApiServerOptions = {}) {
           const writing = method !== "GET" && method !== "HEAD";
           const incidentProjectionWrite = path === "/v1/incident-projections" && method === "POST";
           const adminRedaction = path === "/v1/admin/redact-messages" && method === "POST";
+          const eventsDrain = path === "/v1/events/outbox/drain" && method === "POST";
           const decision = await verifier.authenticate(req.headers, {
             method,
             path,
-            requiredScopes: [adminRedaction ? SCOPE_ADMIN_REDACT : incidentProjectionWrite ? SCOPE_INCIDENT_PROJECT : writing ? SCOPE_WRITE : SCOPE_READ],
+            requiredScopes: [eventsDrain ? SCOPE_EVENTS_DRAIN : adminRedaction ? SCOPE_ADMIN_REDACT : incidentProjectionWrite ? SCOPE_INCIDENT_PROJECT : writing ? SCOPE_WRITE : SCOPE_READ],
           });
           if (!decision.ok) {
             return json({ error: decision.message, reason: decision.reason }, decision.status, {
@@ -1596,12 +1598,13 @@ export function startApiServer(options: StartApiServerOptions = {}) {
             });
           }
           await authorizeCorpus(client, decision.principal, deps.corpusExpectation);
-          return await handleV1(path, method, req, url, deps, decision.principal);
+          return await handleV1(path, method, req, url, deps, decision.principal, stopping.signal);
         }
 
         return json({ error: "Not found" }, 404);
       } catch (e) {
         if (e instanceof CorpusBindingError) return json({error:e.message,code:"CORPUS_BINDING"},e.status);
+        if (e instanceof EventsOutboxError) return json({error:e.code,code:e.code},e.status);
         if (isProjectChannelCollectionChangedError(e)) {
           return json({
             error: e.message,
@@ -1614,7 +1617,14 @@ export function startApiServer(options: StartApiServerOptions = {}) {
     },
   });
 
-  const shutdown = () => { server.stop(); process.exit(0); };
+  const originalStop = server.stop.bind(server);
+  server.stop = (closeActiveConnections?: boolean) => {
+    stopping.abort();
+    process.off("SIGINT", shutdown);
+    process.off("SIGTERM", shutdown);
+    return originalStop(closeActiveConnections);
+  };
+  const shutdown = () => { void server.stop().then(() => process.exit(0)); };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
@@ -1714,16 +1724,37 @@ async function handleV1(
   url: URL,
   deps: ApiServerDeps,
   principal: ApiKeyPrincipal,
+  stopping: AbortSignal,
 ): Promise<Response> {
   const { agent, kid: keyId } = principal;
   const { client } = deps;
   const sub = path.slice("/v1/".length);
 
+  if (sub === "events/outbox/receipt" && method === "GET") {
+    const source = await authorizeCorpus(client,principal,deps.corpusExpectation);
+    const { EventsOutboxStore } = await import("./events-outbox-store.js");
+    const store = new EventsOutboxStore(client,source);
+    await store.ready();
+    const receipt = await store.inspect(url.searchParams.get("event_id") ?? "");
+    return receipt ? json(receipt) : json({error:"event_delivery_not_found"},404);
+  }
+
   // ---- events outbox worker (hosted path of `conversations events-drain`) ----
   if (sub === "events/outbox/drain" && method === "POST") {
     const rawLimit = url.searchParams.get("limit");
-    const limit = rawLimit === null ? undefined : positiveInteger(rawLimit);
-    return json(await drainServerEventOutbox(client, limit));
+    if (rawLimit !== null && !/^[1-9][0-9]?$|^100$/.test(rawLimit))
+      throw new EventsOutboxError("invalid_events_drain_limit",400);
+    const limit = rawLimit === null ? undefined : Number(rawLimit);
+    return json(await drainServerEventOutbox(client, limit, {
+      signal: AbortSignal.any([req.signal,stopping]),
+      resolveIntake: deps.eventsIntake,
+      authorizeSource: async () => {
+        const fresh = await deps.verifier.authenticate(req.headers,{method,path,requiredScopes:[SCOPE_EVENTS_DRAIN]});
+        if (!fresh.ok || fresh.principal.kid !== principal.kid || fresh.principal.tid !== principal.tid)
+          throw new EventsOutboxError("events_source_authorization_changed",403);
+        return authorizeCorpus(client,fresh.principal,deps.corpusExpectation);
+      },
+    }));
   }
 
   // ---- feedback (hosted path of the MCP `send_feedback` tool) --------------
@@ -2966,12 +2997,7 @@ async function handleV1(
         },
         appEvent: { kind: "message.created" },
       });
-      await tx.query(
-        `INSERT INTO conversations_event_outbox (id, source, type, envelope_json, created_at, status, attempts)
-         VALUES ($1,$2,$3,$4,$5,'pending',0)
-         ON CONFLICT (id) DO NOTHING`,
-        [envelope.id, CONVERSATIONS_SOURCE, envelope.type, JSON.stringify(envelope), envelope.time],
-      );
+      await appendEventIntent(tx, envelope);
       return inserted;
     });
     if (!row) return json({ error: "Message insert returned no row" }, 500);
@@ -4564,12 +4590,7 @@ async function handleTasks(
           },
           appEvent: { kind: "task.created" },
         });
-        await tx.query(
-          `INSERT INTO conversations_event_outbox (id, source, type, envelope_json, created_at, status, attempts)
-           VALUES ($1,$2,$3,$4,$5,'pending',0)
-           ON CONFLICT (id) DO NOTHING`,
-          [envelope.id, CONVERSATIONS_SOURCE, envelope.type, JSON.stringify(envelope), envelope.time],
-        );
+        await appendEventIntent(tx, envelope);
       }
       return createdId;
     });

@@ -53,6 +53,8 @@ const EXPECTED_TOOL_NAMES = [
   "delete_task",
   "describe_tools",
   "edit_message",
+  "events_drain",
+  "events_receipt",
   "expand_thread",
   "export_messages",
   "get_agent_network",

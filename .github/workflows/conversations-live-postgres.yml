@@ -5,6 +5,7 @@ on:
     paths:
       - 'apps/conversations/**'
       - 'apps/contracts/**'
+      - 'apps/events/**'
       - 'bun.lock'
       - '.github/workflows/conversations-live-postgres.yml'
   push:
@@ -12,6 +13,7 @@ on:
     paths:
       - 'apps/conversations/**'
       - 'apps/contracts/**'
+      - 'apps/events/**'
       - 'bun.lock'
       - '.github/workflows/conversations-live-postgres.yml'
 

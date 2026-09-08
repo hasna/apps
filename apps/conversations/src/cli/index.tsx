@@ -74,35 +74,29 @@ program
     await startMcpServer();
   });
 
-// ---- events-drain: Conversations→Events source outbox worker ----
-// One command, one semantics on whichever store the resolver selected: the
-// on-box SQLite outbox spools into the on-box events durable spool inbox, and
-// the hosted API runs the server's own outbox worker over its Postgres store.
-// Routing through getStore() means a hosted station can never silently open
-// (or create) ~/.hasna/conversations/messages.db — the fail-closed property
-// hasna/apps#1720 demanded, kept by delegation instead of by a gate.
+// ---- authenticated Events intake operations ----
 program
   .command("events-drain")
-  .description("Drain the Conversations→Events source outbox into the Events durable spool inbox")
-  .option("--limit <n>", "Maximum pending rows to transport per run", parseInt)
-  // Declared so the refusal above can honour the JSON error contract: without
-  // the option Commander rejected `--json` as unknown before the action ran,
-  // and the fail-closed refusal was reachable on the human path only
-  // (hasna/apps#1720 validation, round 2).
-  .option("-j, --json", "Output the drain report as JSON")
+  .description("Advance PostgreSQL event intents to authenticated Events intake (requires conversations:events-drain)")
+  .option("--limit <n>", "Maximum intents to claim, 1–100")
+  .option("-j, --json", "Output the complete intake receipt")
   .action(async (opts) => {
-    // Generalized from the old local worker's guard: an unparseable `--limit`
-    // (commander's parseInt yields NaN, e.g. `--limit abc`) must not reach the
-    // stores — the hosted route tolerates it via positiveInteger() but the
-    // on-box worker would pass `LIMIT NaN` to SQLite. One spelling for both.
-    const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : undefined;
-    const result = await getStore().drainEventOutbox({ limit });
-    if (opts.json) {
-      printJsonLine({ scanned: result.scanned, transported: result.transported, skipped: result.skipped, spooled: result.spooled });
-      return;
+    if (opts.limit !== undefined && !/^(?:[1-9][0-9]?|100)$/.test(opts.limit))
+      throw new Error("--limit must be an integer from 1 to 100.");
+    const result = await getStore().drainEventOutbox({ limit: opts.limit === undefined ? undefined : Number(opts.limit) });
+    if (opts.json) { printJsonLine(result); return; }
+    if ("protocol" in result) {
+      printLine(`events-drain: scanned ${result.scanned}, accepted ${result.accepted}, retryable ${result.retryable}, quarantined ${result.quarantined}, lost claim ${result.lost_claim}`);
+    } else {
+      printLine(`events-drain: legacy receipt; scanned ${result.scanned}, spooled ${result.spooled}. Durable intake acceptance is unconfirmed.`);
     }
-    printLine(`events-drain: scanned ${result.scanned}, transported ${result.transported}, skipped ${result.skipped}, spooled ${result.spooled}`);
   });
+
+program
+  .command("events-receipt <event-id>")
+  .description("Inspect frozen event delivery metadata and downstream reconciliation requirements")
+  .option("-j, --json", "Output receipt metadata as JSON")
+  .action(async (eventId: string) => { printJsonLine(await getStore().getEventDelivery(eventId)); });
 
 // ---- default: TUI ----
 // The interactive TUI is Store-backed exactly like every other surface: it

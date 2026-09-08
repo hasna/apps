@@ -64,7 +64,7 @@ import type {
   MessagePreview,
   MessagePreviewPage,
 } from "../../types.js";
-import type { DrainEventOutboxResult } from "../events-bridge.js";
+import type { EventsDrainReceipt, EventDeliveryStatus } from "../events-delivery.js";
 import type { SaveFeedbackResult } from "../feedback.js";
 import type { RedactMessagesResult } from "../admin-redaction.js";
 
@@ -1536,7 +1536,10 @@ export class ApiStore implements ConversationsStore {
   // The server owns the outbox table; this asks the server to run its own
   // outbox worker and returns the same counts the local worker reports.
   drainEventOutbox: ConversationsStore["drainEventOutbox"] = async (opts) =>
-    this.post<DrainEventOutboxResult>("/events/outbox/drain", undefined, { limit: opts?.limit });
+    this.post<EventsDrainReceipt>("/events/outbox/drain", undefined, { limit: opts?.limit });
+
+  getEventDelivery: ConversationsStore["getEventDelivery"] = async (eventId) =>
+    this.get<EventDeliveryStatus>("/events/outbox/receipt", { event_id: eventId });
 
   // ── feedback (hosted path) ────────────────────────────────────────────────
   saveFeedback: ConversationsStore["saveFeedback"] = async (input) =>

@@ -4,6 +4,8 @@
  * Equivalent of the SQLite schema in db.ts, translated for PostgreSQL.
  * Each element is a standalone SQL string that must be executed in order.
  */
+import { EVENTS_OUTBOX_PG_MIGRATION } from "./events-outbox-pg-migration.js";
+
 export const PG_MIGRATIONS: string[] = [
   // Migration 1: Full schema (consolidated from SQLite incremental migrations)
   `
@@ -1310,4 +1312,5 @@ export const PG_MIGRATIONS: string[] = [
   INSERT INTO _migrations (id) VALUES (15) ON CONFLICT DO NOTHING;
   `,
 
+  EVENTS_OUTBOX_PG_MIGRATION,
 ];

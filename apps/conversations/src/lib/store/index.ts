@@ -46,6 +46,7 @@ import type { IncidentProjectionRecord, IncidentProjectionRequestV1, Message, Me
 import { previewAsCompatibilityMessage, COLLECTION_MAX_MAX_BYTES } from "../message-previews.js";
 import { runLocalReadWorker } from "../local-read-runner.js";
 import { drainConversationEventOutbox, type DrainEventOutboxResult } from "../events-bridge.js";
+import type { EventsDrainReceipt, EventDeliveryStatus } from "../events-delivery.js";
 import { saveFeedbackLocal, type SaveFeedbackInput, type SaveFeedbackResult } from "../feedback.js";
 import { redactMessagesById, type RedactMessagesOptions, type RedactMessagesResult } from "../admin-redaction.js";
 
@@ -430,10 +431,9 @@ export interface ConversationsStore {
   appendIncidentProjection: (request: IncidentProjectionRequestV1) => Promise<IncidentProjectionRecord>;
   getIncidentProjection: (eventId: string) => Promise<IncidentProjectionRecord | null>;
 
-  // events outbox worker: same command, one semantics on whichever store
-  // resolved — on-box SQLite spools into the on-box events spool inbox; the
-  // hosted API runs the server's own outbox worker.
-  drainEventOutbox: (opts?: { limit?: number }) => Promise<DrainEventOutboxResult>;
+  // Ordinary clients use PostgreSQL intake; explicit LocalStore retains legacy spool semantics.
+  drainEventOutbox: (opts?: { limit?: number }) => Promise<DrainEventOutboxResult | EventsDrainReceipt>;
+  getEventDelivery: (eventId: string) => Promise<EventDeliveryStatus>;
 
   // feedback: on-box table row, or the hosted API's feedback route.
   saveFeedback: (input: SaveFeedbackInput) => Promise<SaveFeedbackResult>;
@@ -703,6 +703,10 @@ export class LocalStore implements ConversationsStore {
   // events durable spool inbox.
   drainEventOutbox: ConversationsStore["drainEventOutbox"] = async (opts) =>
     drainConversationEventOutbox(getDb(), { limit: opts?.limit });
+
+  getEventDelivery: ConversationsStore["getEventDelivery"] = async () => {
+    throw new Error("Events intake receipts require the authenticated Conversations API.");
+  };
 
   saveFeedback: ConversationsStore["saveFeedback"] = async (input) => saveFeedbackLocal(input);
 

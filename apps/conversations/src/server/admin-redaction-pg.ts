@@ -22,6 +22,7 @@ import {
   type RedactionMessageReport,
   type RedactMessagesOptions,
   type RedactMessagesResult,
+  type EventCopyReconciliation,
 } from "../lib/admin-redaction.js";
 
 /** The surfaces an apply run scrubs on the hosted store. */
@@ -191,6 +192,23 @@ async function loadAttachmentStats(client: TypedQueryClient, messageIds: number[
   return byId;
 }
 
+async function eventCopyReconciliation(client: TypedQueryClient, uuid: string | null): Promise<EventCopyReconciliation[]> {
+  if (!uuid) return [];
+  const rows = await client.many<{id:string;status:string;state:string|null;sink_id:string|null;producer_id:string|null;
+    envelope_sha256:string|null;receipt_id:string|null;external_may_exist:boolean|null;reconciliation_required:boolean|null}>(
+    `SELECT o.id,o.status,d.state,d.sink_id,d.producer_id,d.envelope_sha256,d.receipt->>'receipt_id' receipt_id,
+       d.external_may_exist,d.reconciliation_required
+     FROM conversations_event_outbox o LEFT JOIN conversations_event_deliveries d ON d.outbox_id=o.id
+     WHERE o.type='conversations.message.created' AND o.envelope_json::jsonb->'data'->>'uuid'=$1`,[uuid]);
+  return rows.map(row => {
+    const external = !!(row.external_may_exist || row.reconciliation_required || row.receipt_id);
+    const legacy = !row.state && ["spooled","delivered"].includes(row.status);
+    return {outbox_id:row.id,required:external || legacy,source_state:row.state ?? row.status,
+      sink_id:row.sink_id,producer_id:row.producer_id,envelope_sha256:row.envelope_sha256,receipt_id:row.receipt_id,
+      reason:external ? "accepted_or_uncertain_copy" : legacy ? "legacy_copy_unverified" : "no_external_dispatch"};
+  });
+}
+
 export async function redactMessagesPg(
   client: TypedQueryClient,
   options: RedactMessagesOptions,
@@ -239,13 +257,14 @@ export async function redactMessagesPg(
            AND envelope_json::jsonb -> 'data' ->> 'uuid' = $2`,
         [replacementContent, report.message_uuid],
       );
+      report.events_downstream_reconciliation = await eventCopyReconciliation(client,report.message_uuid);
       await client.execute(
         `INSERT INTO message_redaction_audit (
            id, message_id, message_uuid, actor, authority, reason, redacted_at,
            fields, secret_classes, before_hashes, attachment_file_count,
            attachment_file_path_hashes, attachment_files_deleted,
-           attachment_file_delete_errors, unsafe_attachment_file_count
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, 0, $13)`,
+           attachment_file_delete_errors, unsafe_attachment_file_count, events_reconciliation_json
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, 0, $13, $14)`,
         [
           auditId,
           report.id,
@@ -260,6 +279,7 @@ export async function redactMessagesPg(
           report.attachment_file_count,
           JSON.stringify(report.attachment_file_path_hashes),
           report.unsafe_attachment_file_count,
+          JSON.stringify(report.events_downstream_reconciliation),
         ],
       );
       if (options.purgeAttachments !== false && report.attachment_file_count > 0) {
@@ -271,6 +291,10 @@ export async function redactMessagesPg(
         );
       }
     }
+  }
+
+  if (!apply) for (const report of reports) if (report.exists) {
+    report.events_downstream_reconciliation = await eventCopyReconciliation(client,report.message_uuid);
   }
 
   const matchedCount = reports.filter((report) => report.exists).length;

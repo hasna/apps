@@ -1,70 +1,74 @@
-// Hosted outbox worker: `POST /v1/events/outbox/drain`.
-//
-// Mirrors the local outbox worker (`drainConversationEventOutbox` in
-// src/lib/events-bridge.ts) on the server's own store: pending rows in the
-// server's `conversations_event_outbox` table are transported into the Events
-// durable spool inbox on the server box, then marked `spooled`; malformed
-// envelopes are dead-lettered. The CLI's `events-drain` command reaches this
-// through ApiStore when the hosted API resolves — one command, one semantics,
-// on whichever store the resolver selected.
-import { getEventsDataDir } from "@hasna/events";
-import { DurableEventSpool } from "@hasna/events/durable-spool";
-import type { TypedQueryClient } from "../generated/storage-kit/query.js";
+import type { PoolQueryClient } from "../generated/storage-kit/query.js";
+import { EventsOutboxError, EventsOutboxStore, type SourceBinding } from "./events-outbox-store.js";
+import { resolveEventsIntake, type ResolvedEventsIntake } from "./events-intake-client.js";
+import type { EventsDrainReceipt } from "../lib/events-delivery.js";
 
-export interface DrainEventOutboxResult {
-  scanned: number;
-  transported: number;
-  skipped: number;
-  spooled: number;
+export type DrainEventOutboxResult = EventsDrainReceipt;
+export interface DrainEventOutboxOptions {
+  signal: AbortSignal;
+  /** Re-authenticates the source caller and reads the persisted corpus binding. */
+  authorizeSource: () => Promise<SourceBinding>;
+  resolveIntake?: (source: SourceBinding) => ResolvedEventsIntake;
 }
 
-export async function drainServerEventOutbox(
-  client: TypedQueryClient,
-  limit?: number,
-  options: { dataDir?: string } = {},
-): Promise<DrainEventOutboxResult> {
-  const maxRows = limit !== undefined && limit > 0 ? Math.max(1, Math.floor(limit)) : 100;
-  const rows = await client.many<{ id: string; envelope_json: string }>(
-    `SELECT id, envelope_json FROM conversations_event_outbox
-     WHERE status = 'pending' ORDER BY created_at ASC LIMIT $1`,
-    [maxRows],
-  );
-  const result: DrainEventOutboxResult = { scanned: rows.length, transported: 0, skipped: 0, spooled: 0 };
-  if (rows.length === 0) return result;
-
-  const spool = new DurableEventSpool({ dataDir: options.dataDir ?? getEventsDataDir() });
-  const transportedIds: string[] = [];
-  try {
-    for (const row of rows) {
-      let event: unknown;
-      try {
-        event = JSON.parse(row.envelope_json);
-      } catch {
-        // Malformed envelope: dead-letter instead of re-scanning it forever.
-        await client.execute("UPDATE conversations_event_outbox SET status = 'dead' WHERE id = $1", [row.id]);
-        result.skipped += 1;
-        continue;
+/** Bounded PostgreSQL claim/HTTP/ack cycles. No transaction spans network I/O. */
+export async function drainServerEventOutbox(client: PoolQueryClient, limit = 20, options: DrainEventOutboxOptions): Promise<DrainEventOutboxResult> {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new EventsOutboxError("invalid_events_drain_limit",400);
+  const signal = AbortSignal.any([options.signal,AbortSignal.timeout(25_000)]);
+  signal.throwIfAborted();
+  const source = await options.authorizeSource();
+  const store = new EventsOutboxStore(client,source);
+  await store.ready();
+  const resolve = options.resolveIntake ?? resolveEventsIntake;
+  // Missing configuration refuses before reserving any source work.
+  resolve(source);
+  const result: DrainEventOutboxResult = {protocol:"conversations.events-delivery.v1",scanned:0,accepted:0,retryable:0,
+    quarantined:0,lost_claim:0,transported:0,skipped:0,spooled:0};
+  const reauthorize = async () => {
+    const fresh = await options.authorizeSource();
+    if (fresh.tenant_id !== source.tenant_id || fresh.corpus_id !== source.corpus_id || fresh.authority_id !== source.authority_id)
+      throw new EventsOutboxError("events_source_binding_changed");
+  };
+  for (let n=0;n<limit && !signal.aborted;n++) {
+    await reauthorize();
+    signal.throwIfAborted();
+    const resolved = resolve(source);
+    const claim = await store.claim(resolved.target,30_000);
+    if (!claim) break;
+    result.scanned++;
+    if (claim === "quarantined") { result.quarantined++; result.skipped++; continue; }
+    try {
+      signal.throwIfAborted();
+      await reauthorize();
+      const current = resolve(source);
+      if (!await store.beforeDispatch(claim,current.target)) { result.lost_claim++; continue; }
+      signal.throwIfAborted();
+      const ioSignal = AbortSignal.any([signal,AbortSignal.timeout(10_000)]);
+      let receipt;
+      if (claim.external_may_exist) {
+        try { receipt = await current.client.receipt(claim.request,ioSignal); }
+        catch (error) {
+          // An authenticated, exact-identity miss permits replay; other readback
+          // failures retain the same uncertain intent without another write.
+          if (!(error && typeof error === "object" && "status" in error && error.status === 404)) throw error;
+        }
       }
-      const enqueued = await spool.enqueue(event as Parameters<DurableEventSpool["enqueue"]>[0]);
-      if (enqueued.stored || enqueued.deduped) {
-        transportedIds.push(row.id);
-        result.transported += 1;
-      } else {
-        result.skipped += 1;
+      if (!receipt) {
+        // Receipt lookup is a separate network round trip. Redaction, revocation
+        // or destination drift during that lookup must fence the replay too.
+        await reauthorize();
+        const replay = resolve(source);
+        if (!await store.beforeDispatch(claim,replay.target)) { result.lost_claim++; continue; }
+        ioSignal.throwIfAborted();
+        receipt = await replay.client.accept(claim.request,ioSignal);
       }
+      await reauthorize();
+      if (await store.complete(claim,receipt,resolve(source).target)) { result.accepted++; result.transported++; }
+      else result.lost_claim++;
+    } catch {
+      if (await store.retry(claim)) result.retryable++;
+      else result.lost_claim++;
     }
-  } finally {
-    await spool.close();
-  }
-
-  if (transportedIds.length > 0) {
-    const updated = await client.query(
-      `UPDATE conversations_event_outbox
-       SET status = 'spooled', attempts = attempts + 1
-       WHERE id = ANY($1::text[])`,
-      [transportedIds],
-    );
-    result.spooled = updated.rowCount ?? transportedIds.length;
   }
   return result;
 }

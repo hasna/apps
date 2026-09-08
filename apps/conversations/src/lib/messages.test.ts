@@ -373,8 +373,9 @@ describe("readMessages", () => {
     // returned the 20 OLDEST rows of a 110-row window.
     test("a since filter returns the NEWEST N of the window, chronologically", () => {
       const seeded = ["1", "2", "3", "4", "5"].map((n) => sendMessage({ from: "a", to: "b", content: n }));
+      const setCreatedAt = getDb().prepare("UPDATE messages SET created_at = ? WHERE id = ?");
+      seeded.forEach((message, index) => setCreatedAt.run(`2026-01-01T00:00:0${index}.000Z`, message.id));
       const anchor = readMessages({ latest: 5 }).find((m) => m.content === "1")!.created_at;
-      void seeded;
       const msgs = readMessages({ since: anchor, limit: 2 });
       expect(msgs.map((m) => m.content)).toEqual(["4", "5"]);
     });

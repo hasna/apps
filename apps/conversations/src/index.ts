@@ -82,3 +82,5 @@ export type {
 } from "./lib/admin-redaction.js";
 
 export { IdentityError, resolveIdentity, describeIdentitySource } from "./lib/identity.js";
+
+export type { EventsDrainReceipt, EventDeliveryStatus } from "./lib/events-delivery.js";

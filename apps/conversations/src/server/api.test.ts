@@ -4017,13 +4017,15 @@ describe("hosted paths for the once-gated surfaces", () => {
     expect(response.status).toBe(400);
   });
 
-  test("POST /v1/events/outbox/drain answers the worker counts and a limit", async () => {
+  test("ordinary write scope cannot dispatch the Events outbox", async () => {
     const response = await fetch(`${base}/v1/events/outbox/drain?limit=5`, {
       method: "POST",
       headers: postHeaders(),
     });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ scanned: 0, transported: 0, skipped: 0, spooled: 0 });
+    expect(response.status).toBe(403);
+    // Actual PostgreSQL/HTTP worker counts and limit behavior are required in
+    // events-intake-delivery.pg.test.ts; this generic fixture pins the stricter scope.
+    expect(await response.json()).toMatchObject({ reason: "insufficient_scope" });
   });
 
   test("POST /v1/admin/redact-messages dry-run reports credential-shaped content without mutating", async () => {

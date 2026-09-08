@@ -39,6 +39,19 @@ export interface RedactionMessageReport {
   attachment_file_delete_errors: number;
   unsafe_attachment_file_count: number;
   audit_id: string | null;
+  /** Hosted Events copies require separate reconciliation; source redaction is not global erasure. */
+  events_downstream_reconciliation?: EventCopyReconciliation[];
+}
+
+export interface EventCopyReconciliation {
+  outbox_id: string;
+  required: boolean;
+  source_state: string;
+  sink_id: string | null;
+  producer_id: string | null;
+  envelope_sha256: string | null;
+  receipt_id: string | null;
+  reason: "accepted_or_uncertain_copy" | "legacy_copy_unverified" | "no_external_dispatch";
 }
 
 export interface RedactMessagesOptions {

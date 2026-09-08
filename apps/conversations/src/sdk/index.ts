@@ -264,8 +264,17 @@ export class ConversationsClient {
     }
 
     /** Run the Conversations→Events outbox worker (hosted path of the events-drain command) */
-    async drainEventOutbox(query?: { "limit"?: number }, init?: RequestInit): Promise<{ "scanned"?: number; "transported"?: number; "skipped"?: number; "spooled"?: number }> {
+    async drainEventOutbox(query?: { "limit"?: number }, init?: RequestInit): Promise<{ "protocol": "conversations.events-delivery.v1"; "scanned": number; "accepted": number; "retryable": number; "quarantined": number; "lost_claim": number; "transported": number; "skipped": number; "spooled": 0 }> {
       return this.request("POST", `/v1/events/outbox/drain`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Inspect one frozen event intent without returning its payload */
+    async getEventDelivery(query?: { "event_id": string }, init?: RequestInit): Promise<{ "outbox_id": string; "tenant_id": string; "corpus_id": string; "authority_id": string; "envelope_sha256": string; "state": "pending" | "leased" | "retryable" | "accepted" | "quarantined"; "sink_id": string | null; "producer_id": string | null; "generation": string; "attempts": number; "external_may_exist": boolean; "reconciliation_required": boolean; "receipt_id": string | null; "accepted_at": string | null; "error_code": string | null }> {
+      return this.request("GET", `/v1/events/outbox/receipt`, {
         body: undefined,
         query,
         init,

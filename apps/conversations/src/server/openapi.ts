@@ -715,13 +715,40 @@ export const openapiSpec = {
     "/v1/events/outbox/drain": {
       post: {
         operationId: "drainEventOutbox",
+        "x-required-scope": "conversations:events-drain",
         summary: "Run the Conversations→Events outbox worker (hosted path of the events-drain command)",
-        description: "Transports pending outbox rows into the Events durable spool inbox on the server, marking rows spooled. Requires conversations:write.",
-        parameters: [{ name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 1000 } }],
+        description: "Requires conversations:events-drain. Advances newly corpus-bound PostgreSQL intents with leases to authenticated Events intake. accepted counts verified durable sink receipts, not downstream delivery. Historical unbound rows remain untouched; spooled is always zero.",
+        parameters: [{ name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 100 } }],
         responses: {
-          "200": { description: "worker counts", content: { "application/json": { schema: { type: "object", properties: { scanned: { type: "integer" }, transported: { type: "integer" }, skipped: { type: "integer" }, spooled: { type: "integer" } } } } } },
+          "200": { description: "bounded intake worker receipt", content: { "application/json": { schema: {
+            type: "object", required: ["protocol","scanned","accepted","retryable","quarantined","lost_claim","transported","skipped","spooled"],
+            properties: { protocol: {type:"string",enum:["conversations.events-delivery.v1"]},
+              scanned:{type:"integer"},accepted:{type:"integer"},retryable:{type:"integer"},quarantined:{type:"integer"},
+              lost_claim:{type:"integer"},transported:{type:"integer"},skipped:{type:"integer"},spooled:{type:"integer",enum:[0]} }
+          } } } },
+          "400": {description:"invalid limit"}, "403": {description:"source tenant or dedicated scope refused"},
+          "503": {description:"intake configuration or source readiness unavailable"},
         },
       },
+    },
+    "/v1/events/outbox/receipt": {
+      get: {
+        operationId:"getEventDelivery", summary:"Inspect one frozen event intent without returning its payload",
+        "x-required-scope":"conversations:read",
+        description:"Requires conversations:read for the persisted corpus tenant. Quarantine and reconciliation evidence remain inspectable; a source redaction does not erase an accepted or uncertain downstream copy.",
+        parameters:[{name:"event_id",in:"query",required:true,schema:{type:"string",minLength:1,maxLength:512}}],
+        responses:{
+          "200":{description:"frozen delivery metadata",content:{"application/json":{schema:{type:"object",
+            required:["outbox_id","tenant_id","corpus_id","authority_id","envelope_sha256","state","sink_id","producer_id","generation","attempts","external_may_exist","reconciliation_required","receipt_id","accepted_at","error_code"],
+            properties:{outbox_id:{type:"string"},tenant_id:{type:"string"},corpus_id:{type:"string"},authority_id:{type:"string"},
+              envelope_sha256:{type:"string"},state:{type:"string",enum:["pending","leased","retryable","accepted","quarantined"]},
+              sink_id:{type:"string",nullable:true},producer_id:{type:"string",nullable:true},generation:{type:"string"},attempts:{type:"integer"},
+              external_may_exist:{type:"boolean"},reconciliation_required:{type:"boolean"},receipt_id:{type:"string",nullable:true},
+              accepted_at:{type:"string",nullable:true},error_code:{type:"string",nullable:true}}}}}},
+          "400":{description:"invalid event identity"},"403":{description:"tenant or read scope refused"},
+          "404":{description:"no bound delivery intent"},"503":{description:"source readiness unavailable"}
+        }
+      }
     },
     "/v1/admin/redact-messages": {
       post: {

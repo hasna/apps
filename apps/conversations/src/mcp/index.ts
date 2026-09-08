@@ -18,6 +18,7 @@ import { registerChannelTools } from "./tools/channels.js";
 import { registerProjectTools } from "./tools/projects.js";
 import { registerAgentTools } from "./tools/agents.js";
 import { registerAdvancedTools } from "./tools/advanced.js";
+import { registerEventsIntakeTools } from "./tools/events-intake.js";
 import { registerChannelBridge } from "./channel.js";
 import { registerTelegramChannel } from "./telegram-channel.js";
 import { registerTmuxTools } from "./tools/tmux.js";
@@ -89,6 +90,7 @@ export function buildServer(forHttp = false): McpServer {
   registerProjectTools(srv);
   registerAgentTools(srv, agentFocus, getAgentFocus);
   registerAdvancedTools(srv, pkg.version);
+  registerEventsIntakeTools(srv);
   registerTaskTools(srv);
   registerTmuxTools(srv);
   registerThreadTools(srv);
