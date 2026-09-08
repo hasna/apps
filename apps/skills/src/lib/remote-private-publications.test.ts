@@ -236,3 +236,19 @@ test("recovery caps fd reads when a file grows after its initial stat", async ()
     expect(grew).toBe(true); expect(allocated).toBe(original.length + 1); expect(allocated).toBeLessThan(65537);
   } finally { stat.mockRestore(); read.mockRestore(); }
 });
+
+
+test("publication views accept real PostgreSQL timezone offsets and reject malformed offsets", async () => {
+  const s = server(), p = await prepared();
+  const view: PrivatePublicationView = { id: intentId, skillId, version: p.receipt.declaration.version, expectedCurrentVersionId: null,
+    archiveSha256: p.receipt.declaration.archiveSha256, archiveByteSize: p.receipt.declaration.archiveByteSize, state: "awaiting_upload",
+    createdAt: "2026-09-08T22:35:20.123456+03:00", expiresAt: "2026-09-09T22:35:20.123456+03:00", versionId: null };
+  s.customize(url => url.pathname.endsWith("/publication-uploads") || url.pathname.endsWith(intentId) ? Response.json({ upload: view }) : undefined);
+  expect((await p.c.begin(skillId, p.receipt.declaration)).createdAt).toBe(view.createdAt);
+  view.createdAt = "2026-09-08T10:35:20.123456-09:00";
+  expect((await p.c.get(skillId, intentId)).createdAt).toBe(view.createdAt);
+  for (const offset of ["+24:00", "+03:60", "+3:00", "+0300"]) {
+    view.createdAt = "2026-09-08T22:35:20.123456" + offset;
+    await expect(p.c.get(skillId, intentId)).rejects.toMatchObject({ code: "INVALID_PUBLICATION_RESPONSE" });
+  }
+});

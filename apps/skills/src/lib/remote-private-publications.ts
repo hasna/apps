@@ -55,7 +55,7 @@ export const publicationUuid = (v: unknown): v is string => typeof v === "string
 const hash = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const exact = (v: unknown, keys: string[]): v is Record<string, unknown> => record(v) && Object.keys(v).sort().join(",") === keys.sort().join(",");
-const date = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d\d-\d\dT[0-9:.]+(?:Z|\+00:00)$/.test(v) && Number.isFinite(Date.parse(v));
+const date = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d\d-\d\dT[0-9:.]+(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(v) && Number.isFinite(Date.parse(v));
 export const publicationSha256 = (bytes: Uint8Array | string): string => createHash("sha256").update(bytes).digest("hex");
 
 export function checkedPublicationDeclaration(value: unknown): PrivatePublicationDeclaration {
