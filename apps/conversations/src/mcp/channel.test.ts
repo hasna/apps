@@ -3,28 +3,26 @@ import { readFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { closeDb, getDb, getDataDir } from "../lib/db.js";
-import { readMessages, sendMessage } from "../lib/messages.js";
+import { getDataDir } from "../lib/db.js";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../lib/store/test-support/client-environment.js";
 import { createChannel } from "../lib/channels.js";
 import { readChannelNotifications, subscribeToChannelNotifications } from "../lib/channel-notifications.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerChannelBridge, setSessionAgent, setClaudeSessionId, getSessionAgent, getClaudeSessionId, liveChannelBridgeCountForTests } from "./channel.js";
 import { ENV_KEYS, getStore } from "../lib/store/index.js";
 
-function createTestDbPath(): string {
-  return join(tmpdir(), `conversations-channel-${Date.now()}-${Math.random().toString(16).slice(2)}.db`);
-}
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+let restore: () => void;
+beforeEach(async () => { fixture=await startLoopbackApiFixture(); restore=activateClientEnvironment(fixture.env); });
+afterEach(async () => { try { await fixture.stop(); } finally { restore(); } });
 
 function syntheticDatabaseUrl(): string {
   return ["postgres", "://", "bridge_user:synthetic-password", "@db.example.invalid/app"].join("");
 }
 
-function insertLegacyChannelMessage(channel: string, content: string): number {
-  const result = getDb().prepare(`
-    INSERT INTO messages (session_id, from_agent, to_agent, channel, content)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(`channel:${channel}`, "legacy-sender", channel, channel, content);
-  return Number(result.lastInsertRowid);
+async function insertLegacyChannelMessage(channel:string,content:string) {
+  await fixture.seed({messages:[{session_id:`channel:${channel}`,from_agent:"legacy-sender",to_agent:channel,channel,content}]});
 }
 
 async function waitFor(check: () => boolean, timeoutMs = 1500): Promise<void> {
@@ -36,24 +34,11 @@ async function waitFor(check: () => boolean, timeoutMs = 1500): Promise<void> {
   throw new Error("Timed out waiting for channel bridge condition");
 }
 
-afterEach(() => {
-  closeDb();
-  const dbPath = process.env.CONVERSATIONS_DB_PATH;
-  if (dbPath) {
-    try { unlinkSync(dbPath); } catch {}
-    try { unlinkSync(dbPath + "-wal"); } catch {}
-    try { unlinkSync(dbPath + "-shm"); } catch {}
-    delete process.env.CONVERSATIONS_DB_PATH;
-  }
-});
-
 describe("channel bridge delivery", () => {
   test("retries channel blurbs after a transient transport failure and only clears after delivery", async () => {
-    process.env.CONVERSATIONS_DB_PATH = createTestDbPath();
-    closeDb();
 
-    createChannel("notify-bridge", "creator");
-    subscribeToChannelNotifications("notify-bridge", "watcher", { preview_chars: 24 });
+    await getStore().createChannel("notify-bridge", "creator");
+    await getStore().subscribeToChannelNotifications("notify-bridge", "watcher", { preview_chars: 24 });
 
     let allowDelivery = false;
     let attempts = 0;
@@ -77,7 +62,7 @@ describe("channel bridge delivery", () => {
     });
 
     try {
-      sendMessage({
+      await getStore().sendMessage({
         from: "alice",
         to: "notify-bridge",
         channel: "notify-bridge",
@@ -86,7 +71,7 @@ describe("channel bridge delivery", () => {
       });
 
       await waitFor(() => attempts >= 1);
-      expect(readChannelNotifications({ agent: "watcher", unread_only: true }).notifications).toHaveLength(1);
+      expect((await getStore().readChannelNotifications({ agent: "watcher", unread_only: true })).notifications).toHaveLength(1);
       expect(delivered).toHaveLength(0);
 
       allowDelivery = true;
@@ -97,7 +82,7 @@ describe("channel bridge delivery", () => {
       expect(delivered[0].params.meta.channel).toBe("notify-bridge");
       expect(delivered[0].params.content).toContain("alice posted in #notify-bridge");
       expect(delivered[0].params.content).toContain("Preview only for channel message");
-      expect(readChannelNotifications({ agent: "watcher", unread_only: true }).notifications).toHaveLength(0);
+      expect((await getStore().readChannelNotifications({ agent: "watcher", unread_only: true })).notifications).toHaveLength(0);
     } finally {
       stop();
     }
@@ -105,11 +90,9 @@ describe("channel bridge delivery", () => {
 
   test("channel blurbs redact legacy sensitive notification previews", async () => {
     const blocked = syntheticDatabaseUrl();
-    process.env.CONVERSATIONS_DB_PATH = createTestDbPath();
-    closeDb();
 
-    createChannel("notify-bridge-redact", "creator");
-    subscribeToChannelNotifications("notify-bridge-redact", "watcher", { preview_chars: 120 });
+    await getStore().createChannel("notify-bridge-redact", "creator");
+    await getStore().subscribeToChannelNotifications("notify-bridge-redact", "watcher", { preview_chars: 120 });
 
     const delivered: Array<{ method: string; params: any }> = [];
     const bridgeServer = {
@@ -127,7 +110,7 @@ describe("channel bridge delivery", () => {
     });
 
     try {
-      insertLegacyChannelMessage("notify-bridge-redact", `legacy ${blocked}`);
+      await insertLegacyChannelMessage("notify-bridge-redact", `legacy ${blocked}`);
       await waitFor(() => delivered.length === 1);
 
       expect(delivered[0].params.content).toContain("[REDACTED:DATABASE_URL]");
@@ -138,8 +121,6 @@ describe("channel bridge delivery", () => {
   });
 
   test("retries direct session deliveries after a transient transport failure", async () => {
-    process.env.CONVERSATIONS_DB_PATH = createTestDbPath();
-    closeDb();
 
     let allowDelivery = false;
     let attempts = 0;
@@ -161,7 +142,7 @@ describe("channel bridge delivery", () => {
     });
 
     try {
-      const message = sendMessage({
+      const message = await getStore().sendMessage({
         from: "alice",
         to: "session:claude-session-direct",
         session_id: "alice-session",
@@ -169,7 +150,7 @@ describe("channel bridge delivery", () => {
       });
 
       await waitFor(() => attempts >= 1);
-      expect(readMessages({ to: "session:claude-session-direct", unread_only: true })).toHaveLength(1);
+      expect(await getStore().readMessages({ to: "session:claude-session-direct", unread_only: true })).toHaveLength(1);
       expect(delivered).toHaveLength(0);
 
       allowDelivery = true;
@@ -178,7 +159,7 @@ describe("channel bridge delivery", () => {
       expect(delivered[0].method).toBe("notifications/claude/channel");
       expect(delivered[0].params.meta.mode).toBe("direct");
       expect(delivered[0].params.meta.message_id).toBe(String(message.id));
-      expect(readMessages({ to: "session:claude-session-direct", unread_only: true })).toHaveLength(0);
+      expect(await getStore().readMessages({ to: "session:claude-session-direct", unread_only: true })).toHaveLength(0);
     } finally {
       stop();
     }
@@ -372,14 +353,16 @@ describe("channel bridge — store failure visibility (regression d3c6b65e)", ()
  * Two-sided on purpose. Asserting only that `disposeServer` resolves would pass
  * against a stub that does nothing, and asserting only that a bridge starts
  * would pass against the leak this replaces. So: the count must RISE when a
- * stdio server is built, and FALL BACK when that server is disposed.
+ * stdio server connects, and FALL BACK when that server is disposed.
  */
 describe("buildServer channel-bridge lifecycle (regression 890b269e)", () => {
-  test("a stdio server exposes and drains the bridge it created", async () => {
+  test("an unconnected stdio server has no bridge, then connects and drains its bridge", async () => {
     const { buildServer, disposeServer } = await import("./index.js");
 
     const before = liveChannelBridgeCountForTests();
     const server = buildServer();
+    expect(liveChannelBridgeCountForTests()).toBe(before);
+    await server.connect({ start: async()=>{}, send: async()=>{}, close: async()=>{} });
     expect(liveChannelBridgeCountForTests()).toBe(before + 1);
 
     await disposeServer(server);

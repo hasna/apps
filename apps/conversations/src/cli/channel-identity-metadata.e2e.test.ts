@@ -1,13 +1,14 @@
-import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { Database } from "bun:sqlite";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
+import { beforeAll, afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "conversations-channel-identity-"));
-const TEST_DB = join(TEST_DIR, "channels.db");
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 setDefaultTimeout(60_000);
 
@@ -15,10 +16,10 @@ function runCli(args: string[]) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: isolatedStoreChildEnv(TEST_DB, {
+    env: { ...fixture.env,
       CONVERSATIONS_AGENT_ID: "channel-identity-test",
       FORCE_COLOR: "0",
-    }),
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -32,7 +33,7 @@ function runCli(args: string[]) {
 afterAll(() => rmSync(TEST_DIR, { recursive: true, force: true }));
 
 describe("channel canonical identity repair CLI", () => {
-  test("rename plus metadata/tag update reconciles identity without changing channel state", () => {
+  test("rename plus metadata/tag update reconciles identity without changing channel state", async () => {
     const created = runCli(["channel", "create", "platform-sample", "--from", "alice", "--json"]);
     expect(created.exitCode, created.stderr).toBe(0);
     const createdChannel = JSON.parse(created.stdout);
@@ -71,13 +72,7 @@ describe("channel canonical identity repair CLI", () => {
       "repo:hasnastudio/platform-sample",
       "keep:coordination",
     ];
-    const db = new Database(TEST_DB);
-    db.prepare("UPDATE channels SET metadata = ?, tags = ? WHERE name = ?").run(
-      JSON.stringify(staleMetadata),
-      JSON.stringify(staleTags),
-      "platform-sample",
-    );
-    db.close();
+    await fixture.seed({channels:[{name:"platform-sample",metadata:JSON.stringify(staleMetadata),tags:JSON.stringify(staleTags)}]});
 
     const renamed = runCli(["channel", "rename", "platform-sample", "sample", "--json"]);
     expect(renamed.exitCode, renamed.stderr).toBe(0);

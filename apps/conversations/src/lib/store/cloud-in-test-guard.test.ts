@@ -32,10 +32,7 @@
 // store holds a different dataset and the swap is silent. A fallback here would
 // reintroduce exactly that failure under a different name.
 
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { afterEach, describe, expect, test } from "bun:test";
 import { HERMETIC_STATION } from "../../test/hermetic.js";
 import {
   ALLOW_CLOUD_IN_TESTS_ENV_KEY,
@@ -55,6 +52,7 @@ const KEY_VAR = ENV_KEYS.apiKeyKeys[0]!;
 const PROD_URL = "https://conversations.hasna.xyz";
 /** Not a credential: a syntactically plausible but deliberately invalid stub. */
 const FAKE_KEY = ["hasna", "conversations", "FAKE", "NOT", "A", "REAL", "KEY"].join("_");
+import { diskTierSandboxEnv } from "./isolated-test-env.js";
 
 /**
  * EVERY variable that can select a store, in precedence order.
@@ -99,27 +97,18 @@ function withOnlyStoreEnv<T>(fn: () => T, only: Record<string, string> = {}): T 
   // workstation the shared chain reads the operator's REAL api-key / api-url
   // items above the env tier, and a synthetic URL beside a real api-url item
   // is a "different authorities" refusal — not the case being asserted.
-  //
-  // The DISK tier gets the same treatment one level down: it reads
-  // `$HOME/.hasna/conversations/config/credentials` (rooted at the env's
-  // HOME/HASNA_HOME/HASNA_CONFIG_HOME), and a provisioned station's real
-  // file outranks the env pair below — the ambient cases then refuse as
-  // "different service authorities" before the guard fires, or resolve the
-  // REAL credential instead of the synthetic one. Anchoring every home-layout
-  // root at the scratch dir — no credentials file can exist there — makes the
-  // disk tier consult nothing, identically on a station and a clean runner.
-  const pinned: Record<string, string> = {
-    HASNA_STATION: HERMETIC_STATION,
-    HOME: SCRATCH_HOME,
-    HASNA_HOME: SCRATCH_HOME,
-    HASNA_CONFIG_HOME: SCRATCH_HOME,
-    ...only,
-  };
-  const names = [...new Set([...STORE_SELECTING_KEYS, ...Object.keys(pinned)])];
+  const pinned: Record<string, string> = { HASNA_STATION: HERMETIC_STATION, ...only };
+  const sandbox = diskTierSandboxEnv();
+  const names = [...new Set([...STORE_SELECTING_KEYS, ...Object.keys(pinned), ...Object.keys(sandbox)])];
   const saved = new Map(names.map((n) => [n, process.env[n]]));
   try {
     for (const n of names) delete process.env[n];
-    for (const [k, v] of Object.entries(pinned)) process.env[k] = v;
+    // HOME is the disk tier's root (`~/.hasna/<app>/config/credentials`, the
+    // station credential location since 2026-09-07). An AMBIENT resolution
+    // reads it, so every ambient case here must point it at a scratch root
+    // with no credential file — otherwise the station's real credential
+    // answers beside the synthetic URL and the case never runs.
+    for (const [k, v] of Object.entries({ ...pinned, ...sandbox })) process.env[k] = v;
     return fn();
   } finally {
     for (const [n, v] of saved) {
@@ -137,16 +126,6 @@ function withAmbientCloudEnv<T>(fn: () => T, extra: Record<string, string> = {})
 afterEach(() => {
   // Belt and braces: nothing this file sets may outlive it.
   expect(process.env[ALLOW_CLOUD_IN_TESTS_ENV_KEY]).toBeUndefined();
-});
-
-/**
- * Scratch home the disk credential tier is anchored at (see withOnlyStoreEnv).
- * Can never contain a credentials file; removed when the suite finishes.
- */
-const SCRATCH_HOME = mkdtempSync(join(tmpdir(), "conversations-guard-home-"));
-
-afterAll(() => {
-  rmSync(SCRATCH_HOME, { recursive: true, force: true });
 });
 
 describe("detectTestRuntime", () => {
@@ -300,7 +279,8 @@ describe("getStore refuses the production store when it resolved it AMBIENTLY", 
       expect(err.code).toBe("CONVERSATIONS_CLOUD_IN_TEST");
       expect(err.host).toBe("conversations.hasna.xyz");
       expect(err.indicators.length).toBeGreaterThan(0);
-      expect(err.message).toContain("CONVERSATIONS_DB_PATH");
+      expect(err.message).toContain("isolated loopback API fixture");
+      expect(err.message).not.toContain("CONVERSATIONS_DB_PATH");
       expect(err.message).toContain(ALLOW_CLOUD_IN_TESTS_ENV_KEY);
       // A credential value must never reach a message, a field, or a stack.
       const rendered = `${err.message}\n${err.stack ?? ""}\n${JSON.stringify({ h: err.host, i: err.indicators })}`;
@@ -341,10 +321,12 @@ describe("the guard covers the whole PUBLIC surface, not one entry point", () =>
   });
 
   // THE PREDICATES ARE NOT THE CAPABILITY, AND MUST NOT START THROWING.
-  // `isCloudStore()` is called BARE in production code (admin-redaction.ts) to
-  // decide a branch, and a suite here deliberately exports cloud credentials so
-  // that bare call resolves true. A predicate hands back a boolean, never a client
-  // that can write, so guarding it would break a real caller to close nothing.
+  // `isCloudStore()` is how `status`/`doctor`/`analytics --json` report which
+  // store answered (and admin redaction used to branch on it before the
+  // Store-routed redaction landed), so a suite here deliberately exports cloud
+  // credentials so that a bare call resolves true. A predicate hands back a
+  // boolean, never a client that can write, so guarding it would break a real
+  // caller to close nothing.
   test("ambient isCloudStore() still answers instead of throwing", () => {
     withAmbientCloudEnv(() => {
       expect(isCloudStore()).toBe(true);
@@ -405,11 +387,10 @@ describe("the guard stays silent where it must — known-negative cases", () => 
     );
   });
 
-  test("the documented isolation variable still selects local, with no refusal", () => {
+  test("a retired isolation selector refuses without minting a client", () => {
     withAmbientCloudEnv(
       () => {
-        const store = getStore();
-        expect(store.transport).toBe("local");
+        expect(() => getStore()).toThrow(/no longer supported/);
       },
       { CONVERSATIONS_DB_PATH: "/tmp/conversations-guard-negative-control.db" },
     );
@@ -492,12 +473,9 @@ try {
       childEnv[KEY_VAR] = FAKE_KEY;
       // Same pin as the in-process cases: the station Keychain must not answer.
       childEnv.HASNA_STATION = HERMETIC_STATION;
-      // Same pin as the in-process cases, for the DISK tier: a provisioned
-      // station's real ~/.hasna/conversations/config/credentials would refuse
-      // the PROD_URL fixture as a different authority in the production arm.
-      childEnv.HOME = SCRATCH_HOME;
-      childEnv.HASNA_HOME = SCRATCH_HOME;
-      childEnv.HASNA_CONFIG_HOME = SCRATCH_HOME;
+      // Same disk-tier sandbox: the station's real credentials file must not
+      // answer beside the synthetic URL.
+      Object.assign(childEnv, diskTierSandboxEnv());
       delete childEnv.NODE_ENV;
 
       const run = async (argv: string[]) => {

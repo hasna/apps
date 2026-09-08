@@ -1,55 +1,7 @@
-// The routing preamble every conversations surface runs before the shared
-// @hasna/contracts credential chain (owner rulings 2026-09-04, hasna/apps#1720).
-//
-// WHAT THIS FILE IS. Conversations does not resolve credentials itself any more.
-// The CLI, the MCP server, the hook and the library `getStore()` all route data
-// through `src/lib/store/index.ts`, which calls the ONE client seam in
-// `@hasna/contracts/client` (and `/client/storage`) fresh on every resolution.
-// That seam decides which credential and which service authority apply:
-//
-//   1. an explicit argument      — `credentials.apiKey` / `credentials.profile`
-//   2. a deliberate env pointer  — HASNA_CONVERSATIONS_API_KEY_OVERRIDE,
-//                                  HASNA_PROFILE, HASNA_CONVERSATIONS_API_KEY_REF
-//   3. the macOS Keychain        — generic-password `hasna.credentials.conversations.api-key`,
-//                                  account HASNA_STATION, else `hostname -s`, else $USER
-//   4. disk                      — `~/.hasna/conversations/config/credentials`, owner-only
-//                                  0400/0600 (HASNA_HOME / HASNA_CONFIG_HOME move the root)
-//   5. HASNA_CONVERSATIONS_API_KEY — a legitimate tier below disk, no deprecation notice
-//
-// and the authority follows HASNA_CONVERSATIONS_API_URL, then the Keychain
-// `api-url` item, then the credentials file, then the fleet gateway
-// `https://api.hasna.com/conversations` (the client appends `/v1`). The legacy
-// unprefixed `CONVERSATIONS_*` spellings survive only as the resolver's silent
-// alias fallback; the canonical `HASNA_CONVERSATIONS_*` names are the
-// documented ones and are what every message here names.
-//
-// RETIRED, and inputs nowhere: `~/.hasna/fleet-env/`, `~/.hasna/cloud/`,
-// `~/.config/hasna/`, `$XDG_CONFIG_HOME` and the app's own key reads — the
-// vendored transport copy that used to read `~/.hasna/fleet-env/<app>.env` is
-// gone. No `*_MODE` / `*_STORAGE_MODE` variable is read: the transport is
-// decided by what RESOLVES, never by a mode word.
-//
-// WHAT THIS FILE DECIDES ITSELF. Two things the shared resolver cannot know:
-//
-// (a) that conversations ALSO has an on-box SQLite store, reachable ONLY by
-//     the explicit local opt-in `HASNA_CONVERSATIONS_DB_PATH` /
-//     `CONVERSATIONS_DB_PATH`. Hosted with no credential the app FAILS LOUD
-//     (non-zero exit, no SQLite opened, no `*-local-fallback` event); local is
-//     never a fallback from failure, it is a named request, and it announces
-//     itself once on stderr.
-//
-// (b) the declared-but-blank normalisation the resolver's stricter rule forces.
-//     `@hasna/contracts` REFUSES a declared-but-blank authority variable loudly
-//     ("set but blank") rather than reading it as absent, and it gates its
-//     AMBIENT tiers (the macOS Keychain) on the OBJECT IDENTITY of the env it
-//     is handed (`env === process.env`). Conversations has always spelled
-//     "blank means unset" (`firstSet` in ./store/index.ts), so a blank legacy
-//     alias beside a real canonical pair is a complete, unambiguous
-//     configuration to THIS app but a refusal to the resolver — and deleting
-//     the blank would hand the resolver a COPY, silently turning the Keychain
-//     tier off. `conversationsResolverInputs` resolves that: blanks are removed
-//     WITHOUT dropping the ambient gate (the Keychain tier's `enabled` control
-//     carries it across the copy), exactly as the todos pattern does.
+// Shared credential inputs for Conversations. Ordinary client resolution uses
+// the API only; database-path names remain solely for rejecting retired settings
+// and for explicitly constructed storage-library compatibility handles.
+// Preserve ambient Keychain selection when normalizing blank legacy aliases.
 import {
   clientTransportEnvKeys,
   credentialOverrideEnvKey,
@@ -69,7 +21,7 @@ export const APP = "conversations";
 /** The env-key spec for the canonical pair, from the shared resolver. */
 export const ENV_KEYS = clientTransportEnvKeys(APP);
 
-/** Local SQLite path overrides — the ONLY way local is selected. */
+/** Retired client selectors; explicit storage-library handles may still use these paths. */
 export const DB_PATH_KEYS = [
   `HASNA_${envToken(APP)}_DB_PATH`,
   `${envToken(APP)}_DB_PATH`,
@@ -77,7 +29,7 @@ export const DB_PATH_KEYS = [
 
 export type ConversationsLocalOptInEnv = Record<string, string | undefined>;
 
-/** True when the operator asked for the on-box SQLite store by name. */
+/** Detect legacy path settings for rejection by ordinary client surfaces. */
 export function isConversationsLocalOptIn(env: ConversationsLocalOptInEnv = process.env): boolean {
   return DB_PATH_KEYS.some((key) => (env[key] ?? "").trim() !== "");
 }
@@ -176,32 +128,32 @@ export function conversationsResolverInputs<T extends ConversationsLocalOptInEnv
  * happens to be empty — the false green the 2026-09-04 ruling closes. It goes
  * to STDERR so `--json` output stays a clean parseable document on stdout.
  */
-export function conversationsLocalModeNotice(dbPath: string): string {
+export function conversationsLocalStoreNotice(dbPath: string): string {
   return (
-    `conversations: LOCAL mode — using the on-box SQLite store at ${dbPath}, not the hosted fleet. ` +
+    `conversations: local store — using the on-box SQLite store at ${dbPath}, not the hosted API. ` +
     `Unset ${DB_PATH_KEYS[0]} and provide a credential via the Keychain item ` +
     `hasna.credentials.conversations.api-key, ~/.hasna/conversations/config/credentials, or ` +
-    `HASNA_CONVERSATIONS_API_KEY to work against https://api.hasna.com/conversations.`
+    `HASNA_CONVERSATIONS_API_KEY to work against the hosted API.`
   );
 }
 
 let localNoticePrinted = false;
 
-/** Reset the once-per-process local-mode notice. Test seam only. */
+/** Reset the once-per-process local-store notice. Test seam only. */
 export function __resetConversationsLocalNotice(): void {
   localNoticePrinted = false;
 }
 
 /**
- * Print the local-mode notice once per process. A no-op for hosted runs, so a
+ * Print the local-store notice once per process. A no-op for hosted runs, so a
  * hosted run's stderr stays empty. `dbPath` is the resolved on-box store path.
  */
-export function announceConversationsLocalMode(
+export function announceConversationsLocalStore(
   dbPath: string,
   write: (line: string) => void = (line) => process.stderr.write(`${line}\n`),
 ): boolean {
   if (localNoticePrinted) return false;
   localNoticePrinted = true;
-  write(conversationsLocalModeNotice(dbPath));
+  write(conversationsLocalStoreNotice(dbPath));
   return true;
 }
