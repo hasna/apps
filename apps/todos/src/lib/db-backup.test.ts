@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import * as fs from "node:fs";
+import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, linkSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
@@ -115,4 +116,38 @@ describe("standalone WAL backup safety", () => {
     expect(readdirSync(tempDir).sort()).toEqual(before);
     expect(checkDatabaseIntegrity(invalidPath).foreign_keys).toBe(false);
   });
+});
+
+
+it("refuses the source path and inode aliases without changing live WAL bytes", () => {
+  const sourcePath=join(tempDir,"preserved-wal.db");const source=new Database(sourcePath);
+  try {
+    source.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE fixture(id); INSERT INTO fixture VALUES(1);");
+    expect(backupDatabase(join(tempDir,"safe.db"),sourcePath).bytes).toBeGreaterThan(0);
+    expect(source.query("SELECT count(*) AS n FROM fixture").get()).toEqual({n:1});
+    const hard=join(tempDir,"hard.db"),sym=join(tempDir,"symbolic.db");linkSync(sourcePath,hard);symlinkSync(sourcePath,sym);
+    const before=readFileSync(sourcePath),wal=readFileSync(`${sourcePath}-wal`);
+    for(const output of [sourcePath,join(tempDir,".","preserved-wal.db"),hard,sym]) expect(()=>backupDatabase(output,sourcePath)).toThrow("same database");
+    expect(readFileSync(sourcePath)).toEqual(before);expect(readFileSync(`${sourcePath}-wal`)).toEqual(wal);
+    // macOS SQLite reports SQLITE_IOERR_VNODE after hard-link manipulation;
+    // SQL usability was verified before constructing that synthetic alias.
+  } finally {source.close();}
+});
+
+
+it("preserves the old backup on pre-rename fsync failure and reports post-rename uncertainty",()=>{
+ const output=join(tempDir,"durable.db");writeFileSync(output,"old backup");
+ const realSync=fs.fsyncSync;let calls=0;
+ const sync=spyOn(fs,"fsyncSync").mockImplementation(()=>{throw new Error("fixture file sync failed");});
+ const cleanup=spyOn(fs,"rmdirSync").mockImplementation(()=>{throw new Error("fixture cleanup failed");});
+ try {
+  expect(()=>backupDatabase(output,dbPath)).toThrow("fixture file sync failed");
+  expect(readFileSync(output,"utf8")).toBe("old backup");
+ } finally {sync.mockRestore();cleanup.mockRestore();}
+ const directorySync=spyOn(fs,"fsyncSync").mockImplementation(fd=>{calls++;if(calls===2)throw new Error("fixture directory sync failed");realSync(fd);});
+ try {
+  expect(()=>backupDatabase(output,dbPath)).toThrow("replacement may have completed");
+  expect(calls).toBe(2);
+  expect(checkDatabaseIntegrity(output).ok).toBe(true);
+ } finally {directorySync.mockRestore();}
 });
