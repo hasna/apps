@@ -625,6 +625,7 @@ const taskManifestBindingLookupResponseSchema = {
 const taskListSchema = {
   type: "object",
   properties: {
+    status: { type: "string", enum: ["active", "completed", "archived"] },
     id: { type: "string" },
     project_id: { type: "string", nullable: true },
     slug: { type: "string" },
@@ -824,7 +825,9 @@ const planSchema = {
     agent_id: { type: "string", nullable: true },
     name: { type: "string" },
     description: { type: "string", nullable: true },
-    status: { type: "string", enum: ["active", "completed", "archived"] },
+    start_date: {type:"string",format:"date",nullable:true},
+    end_date: {type:"string",format:"date",nullable:true},
+    status: { type: "string", enum: ["active", "completed", "archived", "planning", "cancelled"] },
     created_at: { type: "string", format: "date-time" },
     updated_at: { type: "string", format: "date-time" },
   },
@@ -1403,6 +1406,15 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             expected_plan_revision: { type: "string", minLength: 1 },
           },
         },
+        PlanProjectLinkConflictResponse: {
+          type:"object",required:["error"],
+          properties:{
+            error:{type:"string"},code:{type:"string"},conflict:{type:"boolean"},
+            operation_committed:{type:"boolean",enum:[true],description:"Present only when a previously persisted accepted receipt was authoritatively read"},
+            current_state_matches_receipt:{type:"boolean",enum:[false]},
+            receipt:{$ref:"#/components/schemas/PlanProjectLinkReceipt"},
+          },
+        },
         ErrorResponse: {
           type: "object",
           required: ["error"],
@@ -1417,6 +1429,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           required: ["name"],
           properties: {
+          status: { type: "string", enum: ["active", "completed", "archived"] },
             name: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             project_id: { type: "string" },
@@ -1429,6 +1442,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           minProperties: 1,
           properties: {
+          status: { type: "string", enum: ["active", "completed", "archived"] },
             slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             name: { type: "string" },
             description: { type: "string" },
@@ -1458,7 +1472,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             project_id: { type: "string", minLength: 1 },
             task_list_id: { type: "string", minLength: 1 },
             agent_id: { type: "string", minLength: 1 },
-            status: { type: "string", enum: ["active", "completed", "archived"] },
+            start_date: {type:"string",format:"date",nullable:true},
+    end_date: {type:"string",format:"date",nullable:true},
+    status: { type: "string", enum: ["active", "completed", "archived", "planning", "cancelled"] },
           },
         },
         UpdatePlanInput: {
@@ -1471,7 +1487,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             description: { type: "string" },
             task_list_id: { type: "string", minLength: 1 },
             agent_id: { type: "string", minLength: 1 },
-            status: { type: "string", enum: ["active", "completed", "archived"] },
+            start_date: {type:"string",format:"date",nullable:true},
+    end_date: {type:"string",format:"date",nullable:true},
+    status: { type: "string", enum: ["active", "completed", "archived", "planning", "cancelled"] },
           },
         },
         CreateTemplateInput: {
@@ -3197,6 +3215,15 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
         },
       },
+      "/v1/plans/{id}/delete-preserving": {
+        post: {
+          operationId:"deletePlanPreserving",
+          summary:"Delete a plan, detaching linked records only with force and preserving their content/history",
+          parameters:[{name:"id",in:"path",required:true,schema:{type:"string"}}],
+          requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,properties:{force:{type:"boolean"}}}}}},
+          responses:{"200":{content:{"application/json":{schema:{type:"object",required:["schema_version","plan_id","deleted","detached_task_ids","detached_task_list_ids","detached_tasks","detached_task_lists"],properties:{schema_version:{type:"integer",enum:[1]},plan_id:{type:"string"},deleted:{type:"boolean"},detached_task_ids:{type:"array",items:{type:"string"}},detached_task_list_ids:{type:"array",items:{type:"string"}},detached_tasks:{type:"integer",minimum:0},detached_task_lists:{type:"integer",minimum:0}}}}}},"409":{description:"Nonempty plan requires force"},"501":{description:"Backend upgrade required"}},
+        },
+      },
       "/v1/plans/{id}/project-link": {
         get: {
           operationId: "planPlanProjectLink",
@@ -3224,7 +3251,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkResult" } } } },
             "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
             "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
-            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkConflictResponse" } } } },
           },
         },
       },
@@ -3297,6 +3324,19 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: {
             "201": { content: { "application/json": { schema: { type: "object", properties: { task_list: { $ref: "#/components/schemas/TaskList" } } } } } },
             "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-lists/{id}/delete-preserving": {
+        post: {
+          operationId: "deleteTaskListPreserving",
+          summary: "Delete a task list, optionally detaching linked tasks and plans while retaining their content and history",
+          parameters: [{name:"id",in:"path",required:true,schema:{type:"string"}}],
+          requestBody: {required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,properties:{force:{type:"boolean",default:false}}}}}},
+          responses: {
+            "200": {content:{"application/json":{schema:{type:"object",additionalProperties:false,required:["schema_version","task_list_id","deleted","detached_task_ids","detached_plan_ids","detached_tasks","detached_plans"],properties:{schema_version:{type:"integer",enum:[1]},task_list_id:{type:"string"},deleted:{type:"boolean"},detached_task_ids:{type:"array",items:{type:"string"}},detached_plan_ids:{type:"array",items:{type:"string"}},detached_tasks:{type:"integer",minimum:0},detached_plans:{type:"integer",minimum:0}}}}}},
+            "409": {content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "501": {content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
           },
         },
       },

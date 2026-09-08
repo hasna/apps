@@ -3534,6 +3534,15 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
     async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
       calls.push({ sql, values });
 
+      if (sql.includes("SELECT payload->>'task_list_id' AS task_list_id")) {
+        const row = rows.get(recordKey(values[0], values[1], values[2]));
+        return { rows: (!row || row.deletedAt ? [] : [{task_list_id: (row.payload as Record<string, unknown>).task_list_id ?? null}]) as T[] };
+      }
+      if (sql.includes("object_type='task_lists'") && sql.includes("FOR KEY SHARE")) {
+        const row = rows.get(recordKey(values[0], "task_lists", values[1]));
+        return { rows: (!row || row.deletedAt ? [] : [{object_id: row.objectId}]) as T[] };
+      }
+
       if (sql.includes("object_type='projects'") && sql.includes("object_id=$2") && (sql.includes("FOR KEY SHARE") || sql.includes("SELECT deleted_at"))) {
         const row = rows.get(recordKey(values[0], "projects", values[1]));
         return { rows: (!row || (sql.includes("FOR KEY SHARE") && row.deletedAt) ? [] : [{ object_id: row.objectId, deleted_at: row.deletedAt }]) as T[] };

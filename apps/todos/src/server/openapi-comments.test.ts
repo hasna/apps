@@ -373,6 +373,8 @@ describe("plan mutation OpenAPI contract", () => {
     expect(document.paths["/v1/plans/{id}"].delete.operationId).toBe("deletePlan");
     expect(document.paths["/v1/plans/{id}/project-link"].get.operationId).toBe("planPlanProjectLink");
     expect(document.paths["/v1/plans/{id}/project-link"].post.operationId).toBe("applyPlanProjectLink");
+    expect(document.paths["/v1/plans/{id}/project-link"].post.responses["409"].content["application/json"].schema).toEqual({$ref:"#/components/schemas/PlanProjectLinkConflictResponse"});
+    expect(document.components.schemas.PlanProjectLinkConflictResponse.properties.operation_committed.enum).toEqual([true]);
     expect(document.paths["/v1/plans/{id}/project-link/rollback"].post.operationId).toBe("rollbackPlanProjectLink");
     expect(document.components.schemas.PlanProjectLinkApplyInput).toMatchObject({
       additionalProperties: false,
@@ -387,7 +389,7 @@ describe("plan mutation OpenAPI contract", () => {
     expect(document.components.schemas.UpdatePlanInput).toMatchObject({
       additionalProperties: false,
       minProperties: 1,
-      properties: { status: { enum: ["active", "completed", "archived"] } },
+      properties: { status: { enum: ["active", "completed", "archived", "planning", "cancelled"] }, start_date:{format:"date"},end_date:{format:"date"} },
     });
     expect(document.components.schemas.Plan.properties.slug).toMatchObject({ type: "string", nullable: true });
   });
