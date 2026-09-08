@@ -68,7 +68,7 @@ RECORD WHILE WORKING (Recording V2 — mandatory for every agent of this workflo
 (4) knowledge: on durable doctrine, file a follow-up task 'KNOWLEDGE: <item>' for the knowledge lane (never a silent add).
 (5) skills: on a repeated procedure, file a 'SKILL: <name>' follow-up.
 (6) instructions: only when the workflow itself changes rules (then file 'INSTRUCTIONS: <config>').
-Cloud env (fleet-env primary; legacy ~/.hasna/cloud removed 2026-10-01): for f in todos conversations mementos knowledge; do if [ -f "$HOME/.hasna/fleet-env/$f.env" ]; then set -a; . "$HOME/.hasna/fleet-env/$f.env"; set +a; elif [ -f "$HOME/.hasna/cloud/$f.env" ]; then set -a; . "$HOME/.hasna/cloud/$f.env"; set +a; fi; done
+Cloud credentials (LIVE disk tier: ~/.hasna/<app>/config/credentials — owner-only 0600, holding HASNA_<APP>_API_KEY / HASNA_<APP>_API_URL; the deprecated ~/.hasna/fleet-env/*.env and retired ~/.hasna/cloud/*.env are never sourced): for f in todos conversations mementos knowledge; do c="$HOME/.hasna/$f/config/credentials"; k="HASNA_$(printf %s "$f" | tr a-z A-Z)_API_KEY"; if [ -r "$c" ]; then set -a; . "$c"; set +a; elif printenv "$k" >/dev/null 2>&1; then :; else echo "FATAL: no credential for $f — consulted env $k and $c; ~/.hasna/fleet-env and ~/.hasna/cloud are retired and never read; provision $c (0600) or use the secrets vault" >&2; exit 1; fi; done
 NEVER print a credential value.`;
 
 const AT = ['Bash', 'Read', 'Grep'];
