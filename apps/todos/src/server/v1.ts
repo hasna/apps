@@ -1,3 +1,4 @@
+import { AtomicMigrationError, type AtomicMigrationRequest } from "../storage/atomic-project-migration.js";
 import { MachineRegistryError, validateMachines } from "../storage/machine-registry.js";
 /**
  * Versioned `/v1` HTTP API for `todos-serve` (A1 pure-remote).
@@ -53,6 +54,7 @@ export interface V1RequestDependencies {
   ensureSchema?: typeof ensureCloudSchema;
   getStorageAdapter?: typeof getCloudStorageAdapter;
   getMachineRegistryTenantId?: typeof getCloudTenantId;
+  getAtomicMigrationDeploymentId?: () => string | undefined;
   getPrGroupLedger?: typeof getCloudPrGroupLedger;
   getProjectRegistrationAuthority?: typeof getCloudProjectRegistrationAuthority;
   getTaskManifestAuthority?: typeof getCloudTaskManifestAuthority;
@@ -723,6 +725,25 @@ export async function handleV1Request(
 
 
   try {
+    if (resource === "project-migrations") {
+      if (!principal.scopes.includes("todos:migrate")) return error(403,"Explicit todos:migrate scope is required");
+      const deploymentId=(dependencies.getAtomicMigrationDeploymentId ?? (()=>process.env.HASNA_TODOS_MIGRATION_DEPLOYMENT_ID))();
+      if(!deploymentId||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(deploymentId))return error(503,"Atomic migration deployment identity is not configured");
+      const migrationAuthority={...machineAuthority(),deployment_id:deploymentId};
+      if (!machineTenantAllowed()) return error(403, "Migration key does not belong to this deployment tenant");
+      if (!store.atomicProjectMigration) return error(501, "Upgrade the Todos backend for atomic project migration");
+      if (id) return error(404, "Unknown project migration path");
+      if (method === "GET") return json({schema_version:1,authority:migrationAuthority,supported_families:["projects","tasks","plans","taskLists","auditHistory"],supported_tombstones:["projects"],max_records:1000,max_bytes:2097152,atomic:true});
+      if (method !== "POST") return error(405, "Method not allowed");
+      // Bound the actual stream, not an untrusted Content-Length header.
+      const reader=req.body?.getReader();if(!reader)return error(400,"Missing migration body");
+      let size=0;const chunks:Uint8Array[]=[];
+      try { while(true){const part=await reader.read();if(part.done)break;size+=part.value.byteLength;if(size>2200000){await reader.cancel();return error(413,"Migration request exceeds the bounded body limit");}chunks.push(part.value);} } finally {reader.releaseLock();}
+      let body:unknown;try{body=JSON.parse(Buffer.concat(chunks).toString("utf8"));}catch{return error(400,"Invalid migration JSON");}
+      if(!body||typeof body!=="object"||Array.isArray(body))return error(400,"Invalid migration request");
+      if(!machineAuthorityMatches((body as Record<string,unknown>).expected_authority)||((body as Record<string,unknown>).expected_authority as Record<string,unknown>).deployment_id!==deploymentId)return error(409,"Migration authority changed or was not confirmed; no records imported");
+      return json(await store.atomicProjectMigration.apply(body as AtomicMigrationRequest));
+    }
     if (resource === "machines") {
       if (!machineTenantAllowed()) return error(403, "Machine registry key does not belong to this deployment tenant");
       if (!store.machines) return error(501, "Upgrade the Todos API: machine registry is unavailable");
@@ -1965,6 +1986,7 @@ export async function handleV1Request(
 
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
+    if (e instanceof AtomicMigrationError) return error(e.status,e.message,{atomic:true,committed:false,...(e.record?{record:e.record}:{})});
     if (e instanceof MachineRegistryError) return error(e.status, e.message);
     if (e instanceof PlanProjectLinkError) {
       const status = e.code === "PLAN_PROJECT_LINK_PLAN_NOT_FOUND"

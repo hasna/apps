@@ -403,6 +403,24 @@ export class TodosV1Client {
       });
     }
 
+    /** Inspect bounded atomic migration authority (explicit todos:migrate scope required) */
+    async getAtomicProjectMigrationCapability(init?: RequestInit): Promise<{ "schema_version": 1; "authority": { "tenant_id": string; "kid": string; "deployment_id": string }; "supported_families": Array<string>; "supported_tombstones": Array<string>; "max_records": number; "max_bytes": number; "atomic": true }> {
+      return this.request("GET", `/v1/project-migrations`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Atomically reconcile a bounded project snapshot with durable replay receipts */
+    async importAtomicProjectSnapshot(body: { "schema_version": 1; "operation_id": string; "expected_authority": { "tenant_id": string; "kid": string; "deployment_id": string }; "snapshot_hash": string; "snapshot": Record<string, unknown> }, init?: RequestInit): Promise<{ "schema_version": 1; "operation_id": string; "snapshot_hash": string; "authority": { "tenant_id": string; "kid": string; "deployment_id": string }; "status": "complete"; "records": Array<{ "object_type": string; "object_id": string; "outcome": "inserted" | "updated" | "identical" | "superseded" | "deleted" | "detached"; "before_hash": string | null; "after_hash": string; "source_hash": string }> }> {
+      return this.request("POST", `/v1/project-migrations`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Read the live package-owned Projects to Todos registration capability */
     async getProjectRegistrationCapability(init?: RequestInit): Promise<{ "capability": ProjectRegistrationCapability }> {
       return this.request("GET", `/v1/project-registration/capability`, {

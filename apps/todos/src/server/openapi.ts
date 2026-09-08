@@ -6,6 +6,9 @@
 import { getPackageVersion } from "../lib/package-version.js";
 import { TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 
+const atomicMigrationAuthoritySchema = {type:"object",required:["tenant_id","kid","deployment_id"],properties:{tenant_id:{type:"string"},kid:{type:"string"},deployment_id:{type:"string",format:"uuid"}}} as const;
+const atomicMigrationReceiptSchema = {type:"object",required:["schema_version","operation_id","snapshot_hash","authority","status","records"],properties:{schema_version:{type:"integer",enum:[1]},operation_id:{type:"string"},snapshot_hash:{type:"string"},authority:atomicMigrationAuthoritySchema,status:{type:"string",enum:["complete"]},records:{type:"array",items:{type:"object",required:["object_type","object_id","outcome","before_hash","after_hash","source_hash"],properties:{object_type:{type:"string"},object_id:{type:"string"},outcome:{type:"string",enum:["inserted","updated","identical","superseded","deleted","detached"]},before_hash:{type:"string",nullable:true},after_hash:{type:"string"},source_hash:{type:"string"}}}}}} as const;
+
 const taskSchema = {
   type: "object",
   properties: {
@@ -3399,6 +3402,20 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           operationId: "getStats",
           summary: "Aggregate counts",
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { tasks: { type: "number" }, projects: { type: "number" } } } } } } },
+        },
+      },
+      "/v1/project-migrations": {
+        get: {
+          operationId:"getAtomicProjectMigrationCapability",
+          summary:"Inspect bounded atomic migration authority (explicit todos:migrate scope required)",
+          responses:{"200":{content:{"application/json":{schema:{type:"object",required:["schema_version","authority","supported_families","supported_tombstones","max_records","max_bytes","atomic"],properties:{schema_version:{type:"integer",enum:[1]},authority:atomicMigrationAuthoritySchema,supported_families:{type:"array",items:{type:"string"}},supported_tombstones:{type:"array",items:{type:"string"}},max_records:{type:"integer"},max_bytes:{type:"integer"},atomic:{type:"boolean",enum:[true]}}}}}}},
+        },
+        post: {
+          operationId:"importAtomicProjectSnapshot",
+          summary:"Atomically reconcile a bounded project snapshot with durable replay receipts",
+          description:"Requires todos:write plus explicit todos:migrate. Frozen deployment/tenant/key authority must match. Original manifests remain server-side. Unsupported nonempty families, ambiguous clocks, active leases and graph conflicts fail before commit. Repeat the identical operation ID and snapshot hash after uncertain completion.",
+          requestBody:{required:true,content:{"application/json":{schema:{type:"object",required:["schema_version","operation_id","expected_authority","snapshot","snapshot_hash"],properties:{schema_version:{type:"integer",enum:[1]},operation_id:{type:"string",minLength:8,maxLength:128},expected_authority:atomicMigrationAuthoritySchema,snapshot_hash:{type:"string",pattern:"^[a-f0-9]{64}$"},snapshot:{type:"object",description:"At most 1000 records / 2 MiB. Supported arrays: projects, tasks, plans, taskLists, auditHistory, project tombstones. Clocks must be canonical millisecond UTC; original tombstone payload is required.",additionalProperties:true}}}}}},
+          responses:{"200":{content:{"application/json":{schema:atomicMigrationReceiptSchema}}}},
         },
       },
       "/v1/import": {
