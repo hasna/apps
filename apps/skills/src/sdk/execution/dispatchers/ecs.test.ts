@@ -355,3 +355,19 @@ test("a historical terminal marker cannot replace a missing physical task observ
   expect((await dispatcher.cancel(runId)).accepted).toBe(false);
   expect(client.runTaskCalls).toHaveLength(1);
 });
+
+test("historical cancelled state still requires physical stop proof before idempotent acceptance", async () => {
+  const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), dispatcher = makeDispatcher(store, client);
+  const runId = await admittedRunId(store, "historical-cancelled"); const launched = await dispatcher.launchAttempt(runId);
+  if (launched.kind !== "launched") throw Error("expected owned task");
+  await store.setRunStatus(runId, "cancelled");
+  client.stopTask = async () => { throw Error("owned stop failure"); };
+  const attempt = (await store.listAttempts(runId))[0]!, before = await store.getReceipt(runId, attempt.attemptId);
+  expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+  expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(before);
+  client.launchedTasks.set(launched.taskId, { taskArn: launched.taskId, lastStatus: "STOPPED" });
+  expect((await dispatcher.cancel(runId)).accepted).toBe(true);
+  expect((await dispatcher.cancel(runId)).accepted).toBe(true);
+  expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(before);
+  expect(client.runTaskCalls).toHaveLength(1);
+});

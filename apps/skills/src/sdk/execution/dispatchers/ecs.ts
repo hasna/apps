@@ -173,13 +173,13 @@ export class EcsDispatcher implements Dispatcher {
   async cancel(runId: string): Promise<DispatchResult> {
     const run = await this.store.getRun(runId);
     if (!run) return { accepted: false, detail: "no such run" };
-    if (run.status === "cancelled") return { accepted: true, detail: "already cancelled" };
     if (run.status === "succeeded" || run.status === "failed") {
       return { accepted: false, detail: `run already ${run.status}` };
     }
     const attempts = await this.store.listAttempts(runId);
     const current = attempts[attempts.length - 1];
     if (!current) {
+      if (run.status === "cancelled") return { accepted: true, detail: "already cancelled (no attempt launched)" };
       const cancelled = await this.stateMachine.cancel(runId);
       return cancelled.ok ? { accepted: true, detail: "cancelled (no attempt launched)" } : { accepted: false, detail: cancelled.reason };
     }
@@ -197,6 +197,7 @@ export class EcsDispatcher implements Dispatcher {
         return { accepted: false, target: observation.taskId, detail: "task stop is not yet confirmed; reconcile before retrying cancellation" };
       }
     }
+    if (run.status === "cancelled") return { accepted: true, target: taskArn, detail: "already cancelled; task stop confirmed" };
     const cancelled = await this.stateMachine.cancel(runId);
     if (!cancelled.ok) return { accepted: false, detail: cancelled.reason };
     await this.writeCancellationReceipt(run.admission, current, taskArn);
@@ -347,67 +348,68 @@ export class EcsDispatcher implements Dispatcher {
   }
 }
 
-/**
- * The one place the real AWS SDK is wired in. Returns a client bound to the
- * configured region; credentials resolve through the standard SDK chain.
- * Tests never construct this — they inject a mock `EcsRunTaskClient`.
- */
-export function createAwsEcsClient(region: string): EcsRunTaskClient {
-  const client = new ECSClient({ region });
+/** Injectable command transport exercises the actual AWS command adapter without network. */
+export interface EcsCommandTransport {
+  send(command: RunTaskCommand | ListTasksCommand | DescribeTasksCommand | StopTaskCommand): Promise<unknown>;
+}
+export interface AwsEcsClientOptions { cluster?: string; transport?: EcsCommandTransport }
 
+/** Pass an explicit cluster when restoring an existing named-cluster attempt.
+ * The legacy one-argument factory binds to the first operation's cluster; read
+ * operations before RunTask retain AWS's default-cluster behavior. */
+export function createAwsEcsClient(region: string, options: AwsEcsClientOptions = {}): EcsRunTaskClient {
+  if (options.cluster !== undefined && !validText(options.cluster)) throw Error("An explicit nonempty ECS cluster is required");
+  const client: EcsCommandTransport = options.transport ?? new ECSClient({ region });
+  let boundCluster = options.cluster;
+  const cluster = (requested?: string): string => {
+    const next = requested ?? boundCluster ?? "default";
+    if (!validText(next) || (boundCluster !== undefined && next !== boundCluster)) throw Error("ECS client cluster binding changed");
+    return boundCluster ??= next;
+  };
+  const response = (value: unknown): Record<string, any> => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw Error("Incomplete ECS response");
+    const result = value as Record<string, any>;
+    if (result.failures !== undefined && (!Array.isArray(result.failures) || result.failures.length > 0)) throw Error("ECS response contains failures");
+    return result;
+  };
   return {
     async runTask(input) {
-      const response = await client.send(
-        new RunTaskCommand({
-          cluster: input.cluster,
-          taskDefinition: input.taskDefinition,
-          launchType: input.launchType,
-          clientToken: input.clientToken,
-          startedBy: input.startedBy,
-          networkConfiguration: {
-            awsvpcConfiguration: {
-              subnets: input.subnets,
-              securityGroups: input.securityGroups,
-              assignPublicIp: "DISABLED",
-            },
-          },
-          overrides: {
-            containerOverrides: [
-              {
-                name: input.containerName,
-                environment: input.environment,
-                cpu: Number(input.cpu),
-                memory: Number(input.memory),
-              },
-            ],
-          },
-        }),
-      );
-      const taskArn = response.tasks?.[0]?.taskArn ?? null;
-      if (!taskArn) {
-        const failure = response.failures?.[0];
-        throw new Error(`RunTask refused: ${failure?.reason ?? "no task and no failure detail"}`);
-      }
-      return { taskArn };
+      const result = response(await client.send(new RunTaskCommand({
+        cluster: cluster(input.cluster), taskDefinition: input.taskDefinition, launchType: input.launchType,
+        clientToken: input.clientToken, startedBy: input.startedBy,
+        networkConfiguration: { awsvpcConfiguration: { subnets: input.subnets, securityGroups: input.securityGroups, assignPublicIp: "DISABLED" } },
+        overrides: { containerOverrides: [{ name: input.containerName, environment: input.environment, cpu: Number(input.cpu), memory: Number(input.memory) }] },
+      })));
+      if (!Array.isArray(result.tasks) || result.tasks.length !== 1 || !validText(result.tasks[0]?.taskArn)) throw Error("RunTask did not return one exact task");
+      return { taskArn: result.tasks[0].taskArn };
     },
-
     async listTasksByStartedBy(startedBy) {
-      const response = await client.send(new ListTasksCommand({ startedBy }));
-      return response.taskArns ?? [];
+      const configuredCluster = cluster(), arns: string[] = [], tokens = new Set<string>();
+      let nextToken: string | undefined;
+      for (let page = 0; page < 20; page++) {
+        const result = response(await client.send(new ListTasksCommand({ cluster: configuredCluster, startedBy, ...(nextToken ? { nextToken } : {}) })));
+        if (!Array.isArray(result.taskArns) || result.taskArns.length > 100 || !result.taskArns.every(validText)) throw Error("Incomplete ECS task listing");
+        arns.push(...result.taskArns);
+        if (new Set(arns).size !== arns.length) throw Error("Repeated ECS task identity in listing");
+        if (result.nextToken === undefined) return arns;
+        if (!validText(result.nextToken) || tokens.has(result.nextToken)) throw Error("Invalid ECS pagination cursor");
+        tokens.add(result.nextToken); nextToken = result.nextToken;
+      }
+      throw Error("ECS task listing exceeded the bounded page limit");
     },
-
     async describeTasks(taskArns) {
-      const response = await client.send(new DescribeTasksCommand({ tasks: taskArns }));
-      return (response.tasks ?? []).map((task) => ({
-        taskArn: task.taskArn ?? "",
-        lastStatus: task.lastStatus ?? "UNKNOWN",
-        stopCode: task.stopCode ?? null,
-        exitCode: task.containers?.[0]?.exitCode ?? null,
-      }));
+      if (!taskArns.length || taskArns.length > 100 || !taskArns.every(validText) || new Set(taskArns).size !== taskArns.length) throw Error("Invalid ECS task identities");
+      const result = response(await client.send(new DescribeTasksCommand({ cluster: cluster(), tasks: taskArns })));
+      if (!Array.isArray(result.tasks) || result.tasks.length !== taskArns.length || new Set(result.tasks.map((task: any) => task?.taskArn)).size !== taskArns.length
+        || result.tasks.some((task: any) => !taskArns.includes(task?.taskArn) || !validText(task?.lastStatus))) throw Error("Incomplete ECS task descriptions");
+      return result.tasks.map((task: any) => ({ taskArn: task.taskArn, lastStatus: task.lastStatus, stopCode: task.stopCode ?? null, exitCode: task.containers?.[0]?.exitCode ?? null }));
     },
-
     async stopTask(taskArn) {
-      await client.send(new StopTaskCommand({ task: taskArn }));
+      if (!validText(taskArn)) throw Error("Invalid ECS task identity");
+      const result = response(await client.send(new StopTaskCommand({ cluster: cluster(), task: taskArn })));
+      if (result.task?.taskArn !== taskArn || !validText(result.task?.lastStatus)) throw Error("Incomplete ECS stop response");
+      // An acknowledged stop is not terminal proof. The dispatcher re-describes.
     },
   };
 }
+function validText(value: unknown): value is string { return typeof value === "string" && value.length > 0 && value.trim() === value && value.length <= 2048; }
