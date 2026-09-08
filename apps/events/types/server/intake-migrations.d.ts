@@ -1,4 +1,8 @@
 import type { Pool } from "pg";
+export declare const REQUIRED_INTAKE_SCHEMA: Readonly<{
+    id: "events_intake_0002";
+    sha256: string;
+}>;
 export declare const INTAKE_MIGRATIONS: readonly [...import("@hasna/contracts/auth").AuthMigration[], {
     readonly id: "events_intake_0001";
     readonly sql: `
@@ -52,6 +56,9 @@ CREATE TRIGGER grant_owner BEFORE INSERT OR UPDATE ON events_producer_key_grants
 CREATE TRIGGER grant_immutable BEFORE DELETE OR TRUNCATE ON events_producer_key_grants FOR EACH STATEMENT EXECUTE FUNCTION events_intake_immutable();
 ${string}
 `;
+}, {
+    readonly id: "events_intake_0002";
+    readonly sql: "\nALTER TABLE events_producer_bindings\n  ALTER COLUMN corpus_id TYPE TEXT USING corpus_id::text,\n  ALTER COLUMN source_authority_id TYPE TEXT USING source_authority_id::text;\nALTER TABLE events_producer_bindings\n  ADD CONSTRAINT events_corpus_identifier CHECK (length(corpus_id) BETWEEN 1 AND 128 AND corpus_id ~ '^[A-Za-z0-9]' AND corpus_id !~ '[^A-Za-z0-9_.:-]'),\n  ADD CONSTRAINT events_source_authority_identifier CHECK (length(source_authority_id) BETWEEN 1 AND 128 AND source_authority_id ~ '^[A-Za-z0-9]' AND source_authority_id !~ '[^A-Za-z0-9_.:-]');\n";
 }];
 /** Explicit owner operation only. Normal serve never invokes migrations. */
 export declare function migrateIntake(pool: Pool): Promise<void>;

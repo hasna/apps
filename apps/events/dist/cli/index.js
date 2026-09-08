@@ -1131,6 +1131,11 @@ function uuid(value) {
     throw new IntakeError("invalid_identity");
   return value;
 }
+function sourceIdentity(value) {
+  if (typeof value !== "string" || !SOURCE_ID_PATTERN.test(value))
+    throw new IntakeError("invalid_source_identity");
+  return value;
+}
 function boundedText(value, limit = 512) {
   if (typeof value !== "string" || !value.length || value.length > limit || /[\u0000-\u001f\u007f]/.test(value))
     throw new IntakeError("invalid_text");
@@ -1250,7 +1255,7 @@ function validateEnvelope(text) {
 }
 function validateBinding(raw) {
   const b = object(raw);
-  return { sink_id: uuid(b.sink_id), producer_id: uuid(b.producer_id), corpus_id: uuid(b.corpus_id), source_authority_id: uuid(b.source_authority_id) };
+  return { sink_id: uuid(b.sink_id), producer_id: uuid(b.producer_id), corpus_id: sourceIdentity(b.corpus_id), source_authority_id: sourceIdentity(b.source_authority_id) };
 }
 function validateRequest(raw) {
   const r = object(raw);
@@ -1274,7 +1279,7 @@ function validateReceipt(raw, request, tenant) {
     throw new IntakeError("unconfirmed_intake_receipt", 502);
   return r;
 }
-var INTAKE_PROTOCOL = "hasna.events.intake.v1", CANONICAL_ENCODING = "hasna.sorted-json.v1", MAX_ENVELOPE_BYTES, MAX_REQUEST_BYTES, IntakeError;
+var INTAKE_PROTOCOL = "hasna.events.intake.v1", CANONICAL_ENCODING = "hasna.sorted-json.v1", MAX_ENVELOPE_BYTES, MAX_REQUEST_BYTES, IntakeError, SOURCE_ID_PATTERN;
 var init_protocol = __esm(() => {
   MAX_ENVELOPE_BYTES = 256 * 1024;
   MAX_REQUEST_BYTES = MAX_ENVELOPE_BYTES * 2 + 8192;
@@ -1287,6 +1292,7 @@ var init_protocol = __esm(() => {
       this.status = status;
     }
   };
+  SOURCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\s\S])/;
 });
 
 // src/intake/generated.ts
@@ -1341,7 +1347,7 @@ __export(exports_cli, {
 });
 async function runIntakeCli(args) {
   if (args.length === 1 && ["--help", "-h"].includes(args[0])) {
-    console.log(`events intake capability|accept|receipt --tenant-id ID --sink-id UUID --producer-id UUID --corpus-id UUID --source-authority-id UUID
+    console.log(`events intake capability|accept|receipt --tenant-id ID --sink-id UUID --producer-id UUID --corpus-id ID --source-authority-id ID
 accept and receipt read one frozen IntakeRequest JSON object from stdin. Uses saved Events API credentials; no local store.`);
     return;
   }

@@ -76,6 +76,12 @@ function uuid(value) {
     throw new IntakeError("invalid_identity");
   return value;
 }
+var SOURCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\s\S])/;
+function sourceIdentity(value) {
+  if (typeof value !== "string" || !SOURCE_ID_PATTERN.test(value))
+    throw new IntakeError("invalid_source_identity");
+  return value;
+}
 function boundedText(value, limit = 512) {
   if (typeof value !== "string" || !value.length || value.length > limit || /[\u0000-\u001f\u007f]/.test(value))
     throw new IntakeError("invalid_text");
@@ -195,7 +201,7 @@ function validateEnvelope(text) {
 }
 function validateBinding(raw) {
   const b = object(raw);
-  return { sink_id: uuid(b.sink_id), producer_id: uuid(b.producer_id), corpus_id: uuid(b.corpus_id), source_authority_id: uuid(b.source_authority_id) };
+  return { sink_id: uuid(b.sink_id), producer_id: uuid(b.producer_id), corpus_id: sourceIdentity(b.corpus_id), source_authority_id: sourceIdentity(b.source_authority_id) };
 }
 function validateRequest(raw) {
   const r = object(raw);
@@ -227,6 +233,108 @@ function validateReceipt(raw, request, tenant) {
 // src/server/intake-postgres.ts
 import { randomUUID } from "crypto";
 import { ApiKeyStore } from "@hasna/contracts/auth";
+
+// src/server/intake-migrations.ts
+import { createHash as createHash2 } from "crypto";
+import { apiKeyMigrations } from "@hasna/contracts/auth";
+var OPAQUE_SOURCE_IDENTITIES = { id: "events_intake_0002", sql: `
+ALTER TABLE events_producer_bindings
+  ALTER COLUMN corpus_id TYPE TEXT USING corpus_id::text,
+  ALTER COLUMN source_authority_id TYPE TEXT USING source_authority_id::text;
+ALTER TABLE events_producer_bindings
+  ADD CONSTRAINT events_corpus_identifier CHECK (length(corpus_id) BETWEEN 1 AND 128 AND corpus_id ~ '^[A-Za-z0-9]' AND corpus_id !~ '[^A-Za-z0-9_.:-]'),
+  ADD CONSTRAINT events_source_authority_identifier CHECK (length(source_authority_id) BETWEEN 1 AND 128 AND source_authority_id ~ '^[A-Za-z0-9]' AND source_authority_id !~ '[^A-Za-z0-9_.:-]');
+` };
+var REQUIRED_INTAKE_SCHEMA = Object.freeze({
+  id: OPAQUE_SOURCE_IDENTITIES.id,
+  sha256: createHash2("sha256").update(OPAQUE_SOURCE_IDENTITIES.sql).digest("hex")
+});
+var INTAKE_MIGRATIONS = [
+  ...apiKeyMigrations(),
+  { id: "events_intake_0001", sql: `
+CREATE TABLE events_intake_identity (
+ singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+ sink_id UUID NOT NULL UNIQUE, authority_id UUID NOT NULL, protocol TEXT NOT NULL CHECK (protocol='hasna.events.intake.v1')
+);
+CREATE TABLE events_producer_bindings (
+ producer_id UUID PRIMARY KEY, tenant_id TEXT NOT NULL, app TEXT NOT NULL,
+ corpus_id UUID NOT NULL, source_authority_id UUID NOT NULL,
+ active BOOLEAN NOT NULL DEFAULT TRUE, generation BIGINT NOT NULL DEFAULT 1 CHECK (generation>0),
+ UNIQUE(tenant_id,producer_id)
+);
+CREATE TABLE events_producer_key_grants (
+ tenant_id TEXT NOT NULL, producer_id UUID NOT NULL, kid TEXT NOT NULL REFERENCES api_keys(kid),
+ active BOOLEAN NOT NULL DEFAULT TRUE, generation BIGINT NOT NULL DEFAULT 1 CHECK (generation>0),
+ PRIMARY KEY(tenant_id,producer_id,kid),
+ FOREIGN KEY(tenant_id,producer_id) REFERENCES events_producer_bindings(tenant_id,producer_id)
+);
+CREATE TABLE events_intake_records (
+ tenant_id TEXT NOT NULL, producer_id UUID NOT NULL, event_id TEXT NOT NULL, dedupe_key TEXT NOT NULL,
+ envelope_sha256 TEXT NOT NULL CHECK (envelope_sha256 ~ '^[0-9a-f]{64}$'),
+ envelope_json TEXT NOT NULL CHECK (octet_length(envelope_json)<=262144),
+ receipt_id UUID NOT NULL UNIQUE, accepted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+ PRIMARY KEY(tenant_id,producer_id,event_id), UNIQUE(tenant_id,producer_id,dedupe_key),
+ FOREIGN KEY(tenant_id,producer_id) REFERENCES events_producer_bindings(tenant_id,producer_id)
+);
+CREATE FUNCTION events_intake_immutable() RETURNS TRIGGER LANGUAGE plpgsql SET search_path=pg_catalog AS $$
+BEGIN RAISE EXCEPTION 'immutable intake evidence'; END $$;
+CREATE FUNCTION events_intake_owner_write() RETURNS TRIGGER LANGUAGE plpgsql SET search_path=pg_catalog AS $$
+BEGIN
+ IF current_user <> (SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid=TG_RELID) THEN RAISE EXCEPTION 'intake owner role required'; END IF;
+ IF TG_OP='UPDATE' THEN
+   IF (to_jsonb(NEW)-'active'-'generation') IS DISTINCT FROM (to_jsonb(OLD)-'active'-'generation') OR NEW.generation<>OLD.generation+1 THEN RAISE EXCEPTION 'immutable producer identity'; END IF;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE FUNCTION events_intake_key_owner() RETURNS TRIGGER LANGUAGE plpgsql SET search_path=pg_catalog AS $$
+BEGIN
+ IF current_user <> (SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid=TG_RELID) THEN RAISE EXCEPTION 'intake owner role required'; END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER keys_owner BEFORE INSERT OR UPDATE ON api_keys FOR EACH ROW EXECUTE FUNCTION events_intake_key_owner();
+CREATE TRIGGER keys_no_delete BEFORE DELETE OR TRUNCATE ON api_keys FOR EACH STATEMENT EXECUTE FUNCTION events_intake_immutable();
+CREATE TRIGGER identity_owner BEFORE INSERT ON events_intake_identity FOR EACH ROW EXECUTE FUNCTION events_intake_owner_write();
+CREATE TRIGGER identity_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON events_intake_identity FOR EACH STATEMENT EXECUTE FUNCTION events_intake_immutable();
+CREATE TRIGGER records_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON events_intake_records FOR EACH STATEMENT EXECUTE FUNCTION events_intake_immutable();
+CREATE TRIGGER binding_owner BEFORE INSERT OR UPDATE ON events_producer_bindings FOR EACH ROW EXECUTE FUNCTION events_intake_owner_write();
+CREATE TRIGGER binding_immutable BEFORE DELETE OR TRUNCATE ON events_producer_bindings FOR EACH STATEMENT EXECUTE FUNCTION events_intake_immutable();
+CREATE TRIGGER grant_owner BEFORE INSERT OR UPDATE ON events_producer_key_grants FOR EACH ROW EXECUTE FUNCTION events_intake_owner_write();
+CREATE TRIGGER grant_immutable BEFORE DELETE OR TRUNCATE ON events_producer_key_grants FOR EACH STATEMENT EXECUTE FUNCTION events_intake_immutable();
+${["events_producer_bindings", "events_producer_key_grants", "events_intake_records"].map((table) => `
+ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ${table} FORCE ROW LEVEL SECURITY;
+CREATE POLICY intake_tenant ON ${table} USING (tenant_id=nullif(current_setting('events.tenant_id',true),'')) WITH CHECK (tenant_id=nullif(current_setting('events.tenant_id',true),''));`).join(`
+`)}
+` },
+  OPAQUE_SOURCE_IDENTITIES
+];
+async function migrateIntake(pool) {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    await c.query("SELECT pg_advisory_xact_lock(725941039)");
+    await c.query("CREATE TABLE IF NOT EXISTS events_intake_migrations (id TEXT PRIMARY KEY, sha256 TEXT NOT NULL)");
+    for (const migration of INTAKE_MIGRATIONS) {
+      const hash = createHash2("sha256").update(migration.sql).digest("hex");
+      const existing = await c.query("SELECT sha256 FROM events_intake_migrations WHERE id=$1", [migration.id]);
+      if (existing.rows.length) {
+        if (existing.rows[0].sha256 !== hash)
+          throw new Error("Intake migration checksum mismatch");
+        continue;
+      }
+      await c.query(migration.sql);
+      await c.query("INSERT INTO events_intake_migrations VALUES($1,$2)", [migration.id, hash]);
+    }
+    await c.query("COMMIT");
+  } catch (error) {
+    await c.query("ROLLBACK");
+    throw error;
+  } finally {
+    c.release();
+  }
+}
+
+// src/server/intake-postgres.ts
 function authQueries(pool) {
   return {
     async many(sql, params) {
@@ -279,6 +387,11 @@ class IntakePostgres {
       FROM pg_roles r WHERE rolname=current_user`);
     if (!rows[0] || rows[0].rolsuper || rows[0].rolbypassrls || rows[0].owns)
       throw new IntakeError("runtime_role_must_not_own_intake", 503);
+    const schema = await this.pool.query(`SELECT sha256 FROM events_intake_migrations WHERE id=$1`, [REQUIRED_INTAKE_SCHEMA.id]);
+    const columns = await this.pool.query(`SELECT attname FROM pg_attribute WHERE attrelid='events_producer_bindings'::regclass
+      AND attname IN ('corpus_id','source_authority_id') AND atttypid='text'::regtype AND NOT attisdropped`);
+    if (schema.rows[0]?.sha256 !== REQUIRED_INTAKE_SCHEMA.sha256 || columns.rows.length !== 2)
+      throw new IntakeError("intake_schema_upgrade_required", 503);
     const durability = await this.pool.query("SELECT current_setting('fsync') AS fsync,current_setting('full_page_writes') AS full_page_writes");
     if (durability.rows[0]?.fsync !== "on" || durability.rows[0]?.full_page_writes !== "on")
       throw new IntakeError("intake_durable_postgres_required", 503);
@@ -351,93 +464,6 @@ class IntakePostgres {
   }
 }
 
-// src/server/intake-migrations.ts
-import { createHash as createHash2 } from "crypto";
-import { apiKeyMigrations } from "@hasna/contracts/auth";
-var INTAKE_MIGRATIONS = [
-  ...apiKeyMigrations(),
-  { id: "events_intake_0001", sql: `
-CREATE TABLE events_intake_identity (
- singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
- sink_id UUID NOT NULL UNIQUE, authority_id UUID NOT NULL, protocol TEXT NOT NULL CHECK (protocol='hasna.events.intake.v1')
-);
-CREATE TABLE events_producer_bindings (
- producer_id UUID PRIMARY KEY, tenant_id TEXT NOT NULL, app TEXT NOT NULL,
- corpus_id UUID NOT NULL, source_authority_id UUID NOT NULL,
- active BOOLEAN NOT NULL DEFAULT TRUE, generation BIGINT NOT NULL DEFAULT 1 CHECK (generation>0),
- UNIQUE(tenant_id,producer_id)
-);
-CREATE TABLE events_producer_key_grants (
- tenant_id TEXT NOT NULL, producer_id UUID NOT NULL, kid TEXT NOT NULL REFERENCES api_keys(kid),
- active BOOLEAN NOT NULL DEFAULT TRUE, generation BIGINT NOT NULL DEFAULT 1 CHECK (generation>0),
- PRIMARY KEY(tenant_id,producer_id,kid),
- FOREIGN KEY(tenant_id,producer_id) REFERENCES events_producer_bindings(tenant_id,producer_id)
-);
-CREATE TABLE events_intake_records (
- tenant_id TEXT NOT NULL, producer_id UUID NOT NULL, event_id TEXT NOT NULL, dedupe_key TEXT NOT NULL,
- envelope_sha256 TEXT NOT NULL CHECK (envelope_sha256 ~ '^[0-9a-f]{64}$'),
- envelope_json TEXT NOT NULL CHECK (octet_length(envelope_json)<=262144),
- receipt_id UUID NOT NULL UNIQUE, accepted_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
- PRIMARY KEY(tenant_id,producer_id,event_id), UNIQUE(tenant_id,producer_id,dedupe_key),
- FOREIGN KEY(tenant_id,producer_id) REFERENCES events_producer_bindings(tenant_id,producer_id)
-);
-CREATE FUNCTION events_intake_immutable() RETURNS TRIGGER LANGUAGE plpgsql SET search_path=pg_catalog AS $$
-BEGIN RAISE EXCEPTION 'immutable intake evidence'; END $$;
-CREATE FUNCTION events_intake_owner_write() RETURNS TRIGGER LANGUAGE plpgsql SET search_path=pg_catalog AS $$
-BEGIN
- IF current_user <> (SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid=TG_RELID) THEN RAISE EXCEPTION 'intake owner role required'; END IF;
- IF TG_OP='UPDATE' THEN
-   IF (to_jsonb(NEW)-'active'-'generation') IS DISTINCT FROM (to_jsonb(OLD)-'active'-'generation') OR NEW.generation<>OLD.generation+1 THEN RAISE EXCEPTION 'immutable producer identity'; END IF;
- END IF;
- RETURN NEW;
-END $$;
-CREATE FUNCTION events_intake_key_owner() RETURNS TRIGGER LANGUAGE plpgsql SET search_path=pg_catalog AS $$
-BEGIN
- IF current_user <> (SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid=TG_RELID) THEN RAISE EXCEPTION 'intake owner role required'; END IF;
- RETURN NEW;
-END $$;
-CREATE TRIGGER keys_owner BEFORE INSERT OR UPDATE ON api_keys FOR EACH ROW EXECUTE FUNCTION events_intake_key_owner();
-CREATE TRIGGER keys_no_delete BEFORE DELETE OR TRUNCATE ON api_keys FOR EACH STATEMENT EXECUTE FUNCTION events_intake_immutable();
-CREATE TRIGGER identity_owner BEFORE INSERT ON events_intake_identity FOR EACH ROW EXECUTE FUNCTION events_intake_owner_write();
-CREATE TRIGGER identity_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON events_intake_identity FOR EACH STATEMENT EXECUTE FUNCTION events_intake_immutable();
-CREATE TRIGGER records_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON events_intake_records FOR EACH STATEMENT EXECUTE FUNCTION events_intake_immutable();
-CREATE TRIGGER binding_owner BEFORE INSERT OR UPDATE ON events_producer_bindings FOR EACH ROW EXECUTE FUNCTION events_intake_owner_write();
-CREATE TRIGGER binding_immutable BEFORE DELETE OR TRUNCATE ON events_producer_bindings FOR EACH STATEMENT EXECUTE FUNCTION events_intake_immutable();
-CREATE TRIGGER grant_owner BEFORE INSERT OR UPDATE ON events_producer_key_grants FOR EACH ROW EXECUTE FUNCTION events_intake_owner_write();
-CREATE TRIGGER grant_immutable BEFORE DELETE OR TRUNCATE ON events_producer_key_grants FOR EACH STATEMENT EXECUTE FUNCTION events_intake_immutable();
-${["events_producer_bindings", "events_producer_key_grants", "events_intake_records"].map((table) => `
-ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;
-ALTER TABLE ${table} FORCE ROW LEVEL SECURITY;
-CREATE POLICY intake_tenant ON ${table} USING (tenant_id=nullif(current_setting('events.tenant_id',true),'')) WITH CHECK (tenant_id=nullif(current_setting('events.tenant_id',true),''));`).join(`
-`)}
-` }
-];
-async function migrateIntake(pool) {
-  const c = await pool.connect();
-  try {
-    await c.query("BEGIN");
-    await c.query("SELECT pg_advisory_xact_lock(725941039)");
-    await c.query("CREATE TABLE IF NOT EXISTS events_intake_migrations (id TEXT PRIMARY KEY, sha256 TEXT NOT NULL)");
-    for (const migration of INTAKE_MIGRATIONS) {
-      const hash = createHash2("sha256").update(migration.sql).digest("hex");
-      const existing = await c.query("SELECT sha256 FROM events_intake_migrations WHERE id=$1", [migration.id]);
-      if (existing.rows.length) {
-        if (existing.rows[0].sha256 !== hash)
-          throw new Error("Intake migration checksum mismatch");
-        continue;
-      }
-      await c.query(migration.sql);
-      await c.query("INSERT INTO events_intake_migrations VALUES($1,$2)", [migration.id, hash]);
-    }
-    await c.query("COMMIT");
-  } catch (error) {
-    await c.query("ROLLBACK");
-    throw error;
-  } finally {
-    c.release();
-  }
-}
-
 // src/server/intake-admin.ts
 async function owner(pool) {
   const row = await pool.query("SELECT pg_get_userbyid(relowner)=current_user AS owned FROM pg_class WHERE oid='events_intake_identity'::regclass");
@@ -457,8 +483,8 @@ async function initializeIntake(pool, sinkId, authorityId) {
 async function bindProducer(pool, input) {
   await owner(pool);
   uuid(input.producer_id);
-  uuid(input.corpus_id);
-  uuid(input.source_authority_id);
+  sourceIdentity(input.corpus_id);
+  sourceIdentity(input.source_authority_id);
   boundedText(input.tenant_id, 256);
   if (!/^[a-z][a-z0-9-]{0,62}$/.test(input.app))
     throw new IntakeError("invalid_producer_app");

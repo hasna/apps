@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,12 +12,12 @@ import { createIntakeClient, prepareIntake, type IntakeRequest } from "../intake
 import { initializeIntake, bindProducer, grantProducerKey, revokeProducerAccess } from "./intake-admin.js";
 import { IntakePostgres, authQueries, tenantTransaction } from "./intake-postgres.js";
 import { createIntakeHandler, bindingHeaders } from "./intake-api.js";
-import { migrateIntake } from "./intake-migrations.js";
+import { migrateIntake, INTAKE_MIGRATIONS, REQUIRED_INTAKE_SCHEMA } from "./intake-migrations.js";
 
 const dsn=process.env.EVENTS_TEST_DATABASE_URL;
 const pgTest=dsn?test:test.skip;
-async function fixture(run:(f:Awaited<ReturnType<typeof setup>>)=>Promise<void>, initialized=true){const f=await setup(initialized);try{await run(f);}finally{await f.close();}}
-async function setup(initialized=true){
+async function fixture(run:(f:Awaited<ReturnType<typeof setup>>)=>Promise<void>, initialized=true, identities: {corpus_id?:string;source_authority_id?:string} = {}, legacySchema=false){const f=await setup(initialized,identities,legacySchema);try{await run(f);}finally{await f.close();}}
+async function setup(initialized=true, identities: {corpus_id?:string;source_authority_id?:string} = {}, legacySchema=false){
   const parsed=new URL(dsn!);
   if (!["postgres:","postgresql:"].includes(parsed.protocol)||parsed.hostname!=="127.0.0.1"||parsed.username!=="events_test"||parsed.pathname!=="/events_test"||!parsed.port||parsed.search||parsed.hash||!["","events_test"].includes(parsed.password))throw new Error("Disposable Events test database required");
   const schema=`events_${randomUUID().replaceAll("-","")}`,role=`${schema}_runtime`;
@@ -26,8 +26,15 @@ async function setup(initialized=true){
   await admin.query(`CREATE ROLE ${role} NOLOGIN NOSUPERUSER NOBYPASSRLS`);
   const owner=new Pool({connectionString:dsn,options:`-csearch_path=${schema}`,max:4});
   const sink=randomUUID(),authority=randomUUID(),tenant=randomUUID();
-  if(initialized)await initializeIntake(owner,sink,authority);else await migrateIntake(owner);
-  const binding={sink_id:sink,producer_id:randomUUID(),corpus_id:randomUUID(),source_authority_id:randomUUID()};
+  if(legacySchema){
+    await owner.query("CREATE TABLE events_intake_migrations(id TEXT PRIMARY KEY,sha256 TEXT NOT NULL)");
+    for(const migration of INTAKE_MIGRATIONS.filter(m=>m.id!==REQUIRED_INTAKE_SCHEMA.id)){
+      await owner.query(migration.sql);
+      await owner.query("INSERT INTO events_intake_migrations VALUES($1,$2)",[migration.id,createHash("sha256").update(migration.sql).digest("hex")]);
+    }
+    await owner.query("INSERT INTO events_intake_identity(singleton,sink_id,authority_id,protocol) VALUES(TRUE,$1,$2,'hasna.events.intake.v1')",[sink,authority]);
+  }else if(initialized)await initializeIntake(owner,sink,authority);else await migrateIntake(owner);
+  const binding={sink_id:sink,producer_id:randomUUID(),corpus_id:randomUUID(),source_authority_id:randomUUID(),...identities};
   await bindProducer(owner,{producer_id:binding.producer_id,corpus_id:binding.corpus_id,source_authority_id:binding.source_authority_id,tenant_id:tenant,app:"conversations"});
   await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`);
   // Deliberately broad fixture grants test trigger protections as well as RLS.
@@ -176,7 +183,7 @@ pgTest("actual MCP tool calls use authenticated HTTP and preserve only verified 
     const refused=await client.callTool({name:"events_intake_accept",arguments:{...args,request:f.request}});
     expect(refused.isError).toBe(true);expect(JSON.stringify(refused)).toContain("unconfirmed");expect(JSON.stringify(refused)).not.toContain(f.key.token);expect(await f.count()).toBe(1);
   }finally{await client.close();await mcp.close();}
-}),30000);
+},true,{corpus_id:"cor_0123456789abcdef0123456789abcdef",source_authority_id:"Conversations:primary.authority-1"}),30000);
 
 pgTest("fresh CLI consumes saved API configuration and a frozen stdin request without creating local data",()=>fixture(async f=>{
   const home=mkdtempSync(join(tmpdir(),"events-intake-cli-"));
@@ -190,7 +197,7 @@ pgTest("fresh CLI consumes saved API configuration and a frozen stdin request wi
     expect(exit,stderr).toBe(0);expect(JSON.parse(stdout).status).toBe("accepted_durable");expect(stdout+stderr).not.toContain(f.key.token);
     expect(readdirSync(config)).toEqual(["credentials"]);expect(readdirSync(join(home,".hasna","events"))).toEqual(["config"]);expect(await f.count()).toBe(1);
   }finally{rmSync(home,{recursive:true,force:true});}
-}),30000);
+},true,{corpus_id:"cor_0123456789abcdef0123456789abcdef",source_authority_id:"Conversations:primary.authority-1"}),30000);
 
 pgTest("client freezes the reviewed request across asynchronous credential dispatch",()=>fixture(async f=>{
   const client=createIntakeClient({env:{HASNA_EVENTS_API_URL:f.server.url.origin,HASNA_EVENTS_API_KEY:f.key.token},binding:f.binding,tenantId:f.tenant});
@@ -200,3 +207,41 @@ pgTest("client freezes the reviewed request across asynchronous credential dispa
   expect((await f.owner.query("SELECT envelope_json FROM events_intake_records")).rows[0].envelope_json).toBe(f.request.envelope_json);
   expect(await f.count()).toBe(1);
 }),30000);
+
+pgTest("opaque Conversations corpus and source authority survive signed HTTP acceptance, restart and exact replay",()=>fixture(async f=>{
+  await f.store.ready();
+  const first=await f.post();expect(first.status).toBe(201);
+  const receipt=await first.json();
+  expect(receipt).toMatchObject({corpus_id:"cor_0123456789abcdef0123456789abcdef",source_authority_id:"Conversations:primary.authority-1"});
+  const restarted=f.start();
+  const client=createIntakeClient({binding:f.binding,tenantId:f.tenant,env:{HASNA_EVENTS_API_URL:restarted.url.origin,HASNA_EVENTS_API_KEY_OVERRIDE:f.key.token}});
+  expect(await client.receipt(f.request)).toEqual(receipt);
+  expect(await client.accept(f.request)).toEqual(receipt);expect(await f.count()).toBe(1);
+  const stored=(await f.owner.query("SELECT corpus_id,source_authority_id FROM events_producer_bindings")).rows[0];
+  expect(stored).toEqual({corpus_id:f.binding.corpus_id,source_authority_id:f.binding.source_authority_id});
+  const changed={...f.request,source_authority_id:"conversations:primary.authority-1"};
+  expect((await f.post(changed,f.key.token,{"x-events-source-authority-id":changed.source_authority_id})).status).toBe(403);
+  for(const value of [" cor_a","cor_a ","cor/a","a".repeat(129)])
+    await expect(bindProducer(f.owner,{producer_id:randomUUID(),tenant_id:f.tenant,app:"conversations",corpus_id:value,source_authority_id:"authority"})).rejects.toThrow("source_identity");
+},true,{corpus_id:"cor_0123456789abcdef0123456789abcdef",source_authority_id:"Conversations:primary.authority-1"}),30000);
+
+pgTest("migration 0002 is required and preserves existing UUID bindings, payloads and receipts",()=>fixture(async f=>{
+  await expect(f.store.ready()).rejects.toThrow("schema_upgrade_required");
+  expect((await f.post()).status).toBe(503);
+  const receiptId=randomUUID();
+  await f.owner.query("INSERT INTO events_intake_records(tenant_id,producer_id,event_id,dedupe_key,envelope_sha256,envelope_json,receipt_id) VALUES($1,$2,$3,$4,$5,$6,$7)",
+    [f.tenant,f.binding.producer_id,f.request.event_id,f.request.dedupe_key,f.request.envelope_sha256,f.request.envelope_json,receiptId]);
+  const before=(await f.owner.query("SELECT * FROM events_intake_records")).rows;
+  const bindingBefore=(await f.owner.query("SELECT * FROM events_producer_bindings")).rows;
+  const ledgerBefore=(await f.owner.query("SELECT * FROM events_intake_migrations ORDER BY id")).rows;
+  await migrateIntake(f.owner);await f.store.ready();
+  expect((await f.owner.query("SELECT * FROM events_intake_records")).rows).toEqual(before);
+  expect((await f.owner.query("SELECT * FROM events_producer_bindings")).rows).toEqual(bindingBefore);
+  expect((await f.owner.query("SELECT * FROM events_intake_migrations WHERE id<>$1 ORDER BY id",[REQUIRED_INTAKE_SCHEMA.id])).rows).toEqual(ledgerBefore);
+  expect((await (await f.post()).json()).receipt_id).toBe(receiptId);
+  await f.owner.query("UPDATE events_intake_migrations SET sha256=$1 WHERE id=$2",["0".repeat(64),REQUIRED_INTAKE_SCHEMA.id]);
+  await expect(f.store.ready()).rejects.toThrow("schema_upgrade_required");
+  await f.owner.query("UPDATE events_intake_migrations SET sha256=$1 WHERE id=$2",[REQUIRED_INTAKE_SCHEMA.sha256,REQUIRED_INTAKE_SCHEMA.id]);
+  await f.owner.query("ALTER TABLE events_producer_bindings ALTER COLUMN corpus_id TYPE VARCHAR(128)");
+  await expect(f.store.ready()).rejects.toThrow("schema_upgrade_required");
+},true,{},true),30000);

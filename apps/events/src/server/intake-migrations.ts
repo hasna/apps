@@ -2,6 +2,17 @@ import { createHash } from "node:crypto";
 import { apiKeyMigrations } from "@hasna/contracts/auth";
 import type { Pool } from "pg";
 
+const OPAQUE_SOURCE_IDENTITIES = { id: "events_intake_0002", sql: `
+ALTER TABLE events_producer_bindings
+  ALTER COLUMN corpus_id TYPE TEXT USING corpus_id::text,
+  ALTER COLUMN source_authority_id TYPE TEXT USING source_authority_id::text;
+ALTER TABLE events_producer_bindings
+  ADD CONSTRAINT events_corpus_identifier CHECK (length(corpus_id) BETWEEN 1 AND 128 AND corpus_id ~ '^[A-Za-z0-9]' AND corpus_id !~ '[^A-Za-z0-9_.:-]'),
+  ADD CONSTRAINT events_source_authority_identifier CHECK (length(source_authority_id) BETWEEN 1 AND 128 AND source_authority_id ~ '^[A-Za-z0-9]' AND source_authority_id !~ '[^A-Za-z0-9_.:-]');
+` } as const;
+export const REQUIRED_INTAKE_SCHEMA = Object.freeze({id:OPAQUE_SOURCE_IDENTITIES.id,
+  sha256:createHash("sha256").update(OPAQUE_SOURCE_IDENTITIES.sql).digest("hex")});
+
 export const INTAKE_MIGRATIONS = [
   ...apiKeyMigrations(),
   { id: "events_intake_0001", sql: `
@@ -58,6 +69,7 @@ ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ${table} FORCE ROW LEVEL SECURITY;
 CREATE POLICY intake_tenant ON ${table} USING (tenant_id=nullif(current_setting('events.tenant_id',true),'')) WITH CHECK (tenant_id=nullif(current_setting('events.tenant_id',true),''));`).join("\n")}
 ` },
+  OPAQUE_SOURCE_IDENTITIES,
 ] as const;
 
 /** Explicit owner operation only. Normal serve never invokes migrations. */

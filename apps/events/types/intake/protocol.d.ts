@@ -9,6 +9,9 @@ export declare class IntakeError extends Error {
     constructor(code: string, status?: number);
 }
 export declare function uuid(value: unknown): string;
+/** Producer-owned identity; preserve its exact spelling, including case. */
+export declare const SOURCE_ID_PATTERN: RegExp;
+export declare function sourceIdentity(value: unknown): string;
 export declare function boundedText(value: unknown, limit?: number): string;
 export declare function object(value: unknown): Record<string, unknown>;
 export declare function exactKeys(value: Record<string, unknown>, required: string[], optional?: string[]): void;

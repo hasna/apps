@@ -2,7 +2,7 @@ import { createIntakeClient, IntakeError, MAX_REQUEST_BYTES, validateBinding, va
 
 export async function runIntakeCli(args:string[]):Promise<void>{
   if(args.length===1&&["--help","-h"].includes(args[0]!)){
-    console.log("events intake capability|accept|receipt --tenant-id ID --sink-id UUID --producer-id UUID --corpus-id UUID --source-authority-id UUID\naccept and receipt read one frozen IntakeRequest JSON object from stdin. Uses saved Events API credentials; no local store.");return;
+    console.log("events intake capability|accept|receipt --tenant-id ID --sink-id UUID --producer-id UUID --corpus-id ID --source-authority-id ID\naccept and receipt read one frozen IntakeRequest JSON object from stdin. Uses saved Events API credentials; no local store.");return;
   }
   try{
     const [operation,...rest]=args;

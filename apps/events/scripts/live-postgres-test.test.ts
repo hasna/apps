@@ -5,7 +5,7 @@ import { REQUIRED_SUITES, assertSuiteInventory, buildTestEnv, discoverSuites, in
 
 const url = "postgresql://events_test@127.0.0.1:5432/events_test";
 const suite = "src/server/intake.pg.test.ts";
-const success = { status: 0, signal: null, stdout: "", stderr: Array.from({length:15},(_,i)=>`(pass) durable case ${i}`).join("\n")+"\n\n 15 pass\n 0 fail\nRan 15 tests across 1 file. [1.00s]\n" };
+const success = { status: 0, signal: null, stdout: "", stderr: Array.from({length:17},(_,i)=>`(pass) durable case ${i}`).join("\n")+"\n\n 17 pass\n 0 fail\nRan 17 tests across 1 file. [1.00s]\n" };
 
 test("only the explicitly disposable loopback test target is accepted without echoing rejected values", () => {
   expect(validateTestDatabaseUrl(url)).toBe(url);
@@ -28,7 +28,7 @@ test("the gate drops ambient credentials, local database paths and client profil
 test("required suite inventory includes every real PG file and rejects removals/additions/duplicates", () => {
   const inventory = discoverSuites(resolve(import.meta.dir, ".."));
   expect(() => assertSuiteInventory(inventory)).not.toThrow();
-  expect(Object.values(REQUIRED_SUITES).reduce((total, count) => total + count, 0)).toBe(15);
+  expect(Object.values(REQUIRED_SUITES).reduce((total, count) => total + count, 0)).toBe(17);
   for (const wrong of [inventory.slice(1), [...inventory, "src/new.pg.test.ts"], [...inventory, inventory[0]!]]) {
     expect(() => assertSuiteInventory(wrong)).toThrow("inventory changed");
   }
@@ -40,8 +40,8 @@ test("a crash, skip, partial output or stale passing census never certifies Post
     { ...success, status: 1 }, { ...success, signal: "SIGABRT" as const },
     { ...success, error: new Error("fixture timeout") }, { ...success, stderr: "(pass) partial output" },
     { ...success, stderr: success.stderr + success.stderr },
-    { ...success, stderr: success.stderr.replace("15 pass", "14 pass") },
-    { ...success, stderr: success.stderr.replace("(pass) durable case 9", "(skip) durable case 9").replace("15 pass", "14 pass\n 1 skip") },
+    { ...success, stderr: success.stderr.replace("17 pass", "16 pass") },
+    { ...success, stderr: success.stderr.replace("(pass) durable case 9", "(skip) durable case 9").replace("17 pass", "16 pass\n 1 skip") },
     { ...success, stderr: success.stderr.replace("0 fail", "1 fail") },
     { ...success, stderr: success.stderr.replace("1 file", "2 files") },
     { ...success, stderr: success.stderr.replace("(pass) durable case 9\n", "") },

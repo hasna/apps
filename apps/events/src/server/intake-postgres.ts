@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { ApiKeyStore, type ApiKeyPrincipal } from "@hasna/contracts/auth";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 import { INTAKE_PROTOCOL, IntakeError, boundedText, uuid, validateBinding, validateRequest, type IntakeBinding, type IntakeReceipt, type IntakeRequest } from "../intake/protocol.js";
+import { REQUIRED_INTAKE_SCHEMA } from "./intake-migrations.js";
 
 export function authQueries(pool: Pick<Pool, "query">) {
   return {
@@ -37,6 +38,10 @@ export class IntakePostgres {
       EXISTS(SELECT 1 FROM pg_class c WHERE c.relnamespace=current_schema()::regnamespace AND (c.relname LIKE 'events_%' OR c.relname='api_keys') AND pg_has_role(current_user,c.relowner,'MEMBER')) AS owns
       FROM pg_roles r WHERE rolname=current_user`);
     if (!rows[0] || rows[0].rolsuper || rows[0].rolbypassrls || rows[0].owns) throw new IntakeError("runtime_role_must_not_own_intake", 503);
+    const schema = await this.pool.query(`SELECT sha256 FROM events_intake_migrations WHERE id=$1`,[REQUIRED_INTAKE_SCHEMA.id]);
+    const columns = await this.pool.query(`SELECT attname FROM pg_attribute WHERE attrelid='events_producer_bindings'::regclass
+      AND attname IN ('corpus_id','source_authority_id') AND atttypid='text'::regtype AND NOT attisdropped`);
+    if (schema.rows[0]?.sha256 !== REQUIRED_INTAKE_SCHEMA.sha256 || columns.rows.length !== 2) throw new IntakeError("intake_schema_upgrade_required",503);
     const durability = await this.pool.query("SELECT current_setting('fsync') AS fsync,current_setting('full_page_writes') AS full_page_writes");
     if (durability.rows[0]?.fsync !== "on" || durability.rows[0]?.full_page_writes !== "on") throw new IntakeError("intake_durable_postgres_required", 503);
     const policies = await this.pool.query("SELECT relrowsecurity,relforcerowsecurity FROM pg_class WHERE relnamespace=current_schema()::regnamespace AND relname IN ('events_producer_bindings','events_producer_key_grants','events_intake_records')");

@@ -47,7 +47,11 @@
             "name": "x-events-corpus-id",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+              "description": "Exact producer-owned identifier; no trimming or case normalization."
             }
           },
           {
@@ -55,7 +59,11 @@
             "name": "x-events-source-authority-id",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+              "description": "Exact producer-owned identifier; no trimming or case normalization."
             }
           }
         ],
@@ -135,7 +143,11 @@
             "name": "x-events-corpus-id",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+              "description": "Exact producer-owned identifier; no trimming or case normalization."
             }
           },
           {
@@ -143,7 +155,11 @@
             "name": "x-events-source-authority-id",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+              "description": "Exact producer-owned identifier; no trimming or case normalization."
             }
           }
         ],
@@ -213,7 +229,11 @@
             "name": "x-events-corpus-id",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+              "description": "Exact producer-owned identifier; no trimming or case normalization."
             }
           },
           {
@@ -221,7 +241,11 @@
             "name": "x-events-source-authority-id",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+              "description": "Exact producer-owned identifier; no trimming or case normalization."
             }
           },
           {
@@ -305,11 +329,17 @@
           },
           "corpus_id": {
             "type": "string",
-            "format": "uuid"
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+            "description": "Exact producer-owned identifier; no trimming or case normalization."
           },
           "source_authority_id": {
             "type": "string",
-            "format": "uuid"
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+            "description": "Exact producer-owned identifier; no trimming or case normalization."
           },
           "event_id": {
             "type": "string",
@@ -371,11 +401,17 @@
           },
           "corpus_id": {
             "type": "string",
-            "format": "uuid"
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+            "description": "Exact producer-owned identifier; no trimming or case normalization."
           },
           "source_authority_id": {
             "type": "string",
-            "format": "uuid"
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+            "description": "Exact producer-owned identifier; no trimming or case normalization."
           },
           "event_id": {
             "type": "string",
@@ -439,11 +475,17 @@
           },
           "corpus_id": {
             "type": "string",
-            "format": "uuid"
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+            "description": "Exact producer-owned identifier; no trimming or case normalization."
           },
           "source_authority_id": {
             "type": "string",
-            "format": "uuid"
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+            "description": "Exact producer-owned identifier; no trimming or case normalization."
           },
           "tenant_id": {
             "type": "string"

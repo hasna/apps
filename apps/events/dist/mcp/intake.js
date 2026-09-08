@@ -6962,6 +6962,12 @@ function uuid(value) {
     throw new IntakeError("invalid_identity");
   return value;
 }
+var SOURCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\s\S])/;
+function sourceIdentity(value) {
+  if (typeof value !== "string" || !SOURCE_ID_PATTERN.test(value))
+    throw new IntakeError("invalid_source_identity");
+  return value;
+}
 function boundedText(value, limit = 512) {
   if (typeof value !== "string" || !value.length || value.length > limit || /[\u0000-\u001f\u007f]/.test(value))
     throw new IntakeError("invalid_text");
@@ -7081,7 +7087,7 @@ function validateEnvelope(text) {
 }
 function validateBinding(raw) {
   const b = object(raw);
-  return { sink_id: uuid(b.sink_id), producer_id: uuid(b.producer_id), corpus_id: uuid(b.corpus_id), source_authority_id: uuid(b.source_authority_id) };
+  return { sink_id: uuid(b.sink_id), producer_id: uuid(b.producer_id), corpus_id: sourceIdentity(b.corpus_id), source_authority_id: sourceIdentity(b.source_authority_id) };
 }
 function validateRequest(raw) {
   const r = object(raw);
@@ -20246,7 +20252,7 @@ var package_default = {
 // src/mcp/intake.ts
 function createIntakeMcpServer(env = process.env) {
   const server = new McpServer({ name: "events", version: package_default.version });
-  const common = { tenant_id: exports_external.string().min(1).max(256), sink_id: exports_external.string().uuid(), producer_id: exports_external.string().uuid(), corpus_id: exports_external.string().uuid(), source_authority_id: exports_external.string().uuid() };
+  const common = { tenant_id: exports_external.string().min(1).max(256), sink_id: exports_external.string().uuid(), producer_id: exports_external.string().uuid(), corpus_id: exports_external.string().regex(SOURCE_ID_PATTERN), source_authority_id: exports_external.string().regex(SOURCE_ID_PATTERN) };
   for (const operation of ["capability", "accept", "receipt"]) {
     server.registerTool(`events_intake_${operation}`, {
       description: operation === "accept" ? "Submit an already-frozen event request to the authenticated durable sink. Only a verified accepted_durable receipt acknowledges delivery." : operation === "receipt" ? "Read and verify the durable receipt for an already-frozen request." : "Verify the authenticated sink and producer binding without submitting an event.",

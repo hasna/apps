@@ -6,6 +6,17 @@ import type { EventEnvelope } from "../types.js";
 const binding={sink_id:randomUUID(),producer_id:randomUUID(),corpus_id:randomUUID(),source_authority_id:randomUUID()};
 const envelope=():EventEnvelope=>({id:"event:1",dedupeKey:"key:1",source:"conversations",type:"conversations.message.created",time:"2026-09-08T00:00:00.000Z",severity:"info",schemaVersion:"1.0",data:{preview:"synthetic\nmessage"},metadata:{app_event:{action:"created"}}});
 
+test("producer corpus and authority use exact bounded opaque identifiers while sink and producer stay UUIDs",()=>{
+  const source={...binding,corpus_id:"cor_0123456789abcdef0123456789abcdef",source_authority_id:"Conversations:primary.authority-1"};
+  const request=prepareIntake(source,envelope());
+  expect(request.corpus_id).toBe(source.corpus_id);expect(request.source_authority_id).toBe(source.source_authority_id);
+  for(const invalid of ["", " cor_a", "cor_a ", "cor/a", "cor\n_a", "cor_a\n", "cor_a\r", "é", "a".repeat(129)]) {
+    expect(()=>prepareIntake({...source,corpus_id:invalid},envelope())).toThrow();
+    expect(()=>prepareIntake({...source,source_authority_id:invalid},envelope())).toThrow();
+  }
+  for(const field of ["sink_id","producer_id"] as const)expect(()=>prepareIntake({...source,[field]:"cor_a"},envelope())).toThrow();
+});
+
 test("canonical bytes sort object keys recursively, preserve arrays and support existing app_event metadata",()=>{
   expect(canonicalJson({z:[{z:1,a:2},3],a:"é"})).toBe('{"a":"é","z":[{"a":2,"z":1},3]}');
   const r=prepareIntake(binding,envelope());expect(validateRequest(r)).toEqual(r);expect(validateEnvelope(r.envelope_json)).toEqual(envelope());

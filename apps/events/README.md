@@ -637,10 +637,16 @@ Events API. Set an explicit API authority for a deployment; the default gateway
 is not evidence that this new capability is deployed. It never opens local data
 storage or accepts an unsigned receipt. Calls require a frozen sink, producer,
 corpus, source-authority and tenant identity established by an operator.
+Corpus and source-authority IDs are exact 1–128 character identifiers matching
+`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`, including existing `cor_` corpus IDs.
+No trimming, case folding or identity rewriting occurs. Sink and producer IDs
+remain UUIDs. Explicit owner migration `events_intake_0002` upgrades the binding
+columns while preserving existing UUID values and receipts; service readiness
+refuses a missing or mismatched migration checksum or incompatible column types.
 
 ```ts
 import { createIntakeClient, prepareIntake } from '@hasna/events/intake';
-// binding contains sink_id, producer_id, corpus_id and source_authority_id UUIDs.
+// sink_id and producer_id are UUIDs; corpus_id and source_authority_id preserve source-owned IDs.
 const client = createIntakeClient({ binding, tenantId });
 await client.capability();
 const frozenRequest = prepareIntake(binding, envelope);
@@ -728,7 +734,7 @@ workflow. It accepts only an explicit disposable `events_test` user/database on
 literal loopback with an explicit port, uses unique schemas and a non-owner,
 non-BYPASSRLS runtime role, and never resets public. Missing DSN, skipped cases,
 partial summaries and crashes fail the gate. The ordinary suite may skip these
-15 database cases when no test DSN is supplied; this is not database acceptance.
+17 database cases when no test DSN is supplied; this is not database acceptance.
 
 
 The service also provides `events intake capability|accept|receipt` and the

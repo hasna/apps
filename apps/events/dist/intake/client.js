@@ -75,6 +75,12 @@ function uuid(value) {
     throw new IntakeError("invalid_identity");
   return value;
 }
+var SOURCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\s\S])/;
+function sourceIdentity(value) {
+  if (typeof value !== "string" || !SOURCE_ID_PATTERN.test(value))
+    throw new IntakeError("invalid_source_identity");
+  return value;
+}
 function boundedText(value, limit = 512) {
   if (typeof value !== "string" || !value.length || value.length > limit || /[\u0000-\u001f\u007f]/.test(value))
     throw new IntakeError("invalid_text");
@@ -194,7 +200,7 @@ function validateEnvelope(text) {
 }
 function validateBinding(raw) {
   const b = object(raw);
-  return { sink_id: uuid(b.sink_id), producer_id: uuid(b.producer_id), corpus_id: uuid(b.corpus_id), source_authority_id: uuid(b.source_authority_id) };
+  return { sink_id: uuid(b.sink_id), producer_id: uuid(b.producer_id), corpus_id: sourceIdentity(b.corpus_id), source_authority_id: sourceIdentity(b.source_authority_id) };
 }
 function validateRequest(raw) {
   const r = object(raw);
@@ -268,6 +274,7 @@ export {
   validateEnvelope,
   validateBinding,
   uuid,
+  sourceIdentity,
   prepareIntake,
   object,
   exactKeys,
@@ -275,6 +282,7 @@ export {
   createIntakeClient,
   canonicalJson,
   boundedText,
+  SOURCE_ID_PATTERN,
   MAX_REQUEST_BYTES,
   MAX_ENVELOPE_BYTES,
   IntakeError,

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 
 export const REQUIRED_SUITES = Object.freeze({
-  "src/server/intake.pg.test.ts": 15,
+  "src/server/intake.pg.test.ts": 17,
 });
 
 export function validateTestDatabaseUrl(value: string | undefined): string {

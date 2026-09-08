@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { ApiKeyStore, verifyApiKeyToken } from "@hasna/contracts/auth";
 import type { Pool } from "pg";
-import { INTAKE_PROTOCOL, IntakeError, boundedText, uuid } from "../intake/protocol.js";
+import { INTAKE_PROTOCOL, IntakeError, boundedText, uuid, sourceIdentity } from "../intake/protocol.js";
 import { authQueries, tenantTransaction } from "./intake-postgres.js";
 import { migrateIntake } from "./intake-migrations.js";
 
@@ -17,7 +17,7 @@ export async function initializeIntake(pool: Pool, sinkId: string, authorityId: 
   if (row.rows[0]?.sink_id !== sinkId || row.rows[0]?.authority_id !== authorityId) throw new IntakeError("sink_identity_is_immutable", 409);
 }
 export async function bindProducer(pool: Pool, input: { producer_id: string; tenant_id: string; app: string; corpus_id: string; source_authority_id: string }): Promise<void> {
-  await owner(pool); uuid(input.producer_id); uuid(input.corpus_id); uuid(input.source_authority_id); boundedText(input.tenant_id,256);
+  await owner(pool); uuid(input.producer_id); sourceIdentity(input.corpus_id); sourceIdentity(input.source_authority_id); boundedText(input.tenant_id,256);
   if (!/^[a-z][a-z0-9-]{0,62}$/.test(input.app)) throw new IntakeError("invalid_producer_app");
   await tenantTransaction(pool,input.tenant_id,async c => {
     await c.query("INSERT INTO events_producer_bindings(producer_id,tenant_id,app,corpus_id,source_authority_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",[input.producer_id,input.tenant_id,input.app,input.corpus_id,input.source_authority_id]);
