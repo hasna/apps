@@ -623,3 +623,128 @@ bun test
 bun run typecheck
 bun run build
 ```
+
+
+## Authenticated durable intake
+
+`events-serve` provides a separate PostgreSQL intake service. The existing Events
+CLI, local storage exports and filesystem/SQLite outboxes retain their documented
+compatibility behavior. Writing a local spool is not remote acceptance. This
+change does not deploy a service or wire Conversations delivery to it.
+
+The `@hasna/events/intake` client uses the shared saved-credential chain for the
+Events API. Set an explicit API authority for a deployment; the default gateway
+is not evidence that this new capability is deployed. It never opens local data
+storage or accepts an unsigned receipt. Calls require a frozen sink, producer,
+corpus, source-authority and tenant identity established by an operator.
+
+```ts
+import { createIntakeClient, prepareIntake } from '@hasna/events/intake';
+// binding contains sink_id, producer_id, corpus_id and source_authority_id UUIDs.
+const client = createIntakeClient({ binding, tenantId });
+await client.capability();
+const frozenRequest = prepareIntake(binding, envelope);
+const receipt = await client.accept(frozenRequest);
+// Only status === 'accepted_durable' acknowledges a committed destination record.
+```
+
+Persist the frozen request in the producer's transactional outbox before sending.
+A network timeout or lost response is uncertain: retain the source checkpoint and
+use `client.receipt(frozenRequest)` or resend the same request. An absent receipt
+is not permission to generate a new identity. The client does not automatically
+retry POST. A rotated key works only when the operator has granted that active,
+registered Events key to the same tenant and producer. Revocation also blocks
+replay and historical receipt lookup.
+
+The wire protocol is `hasna.events.intake.v1`, encoding `hasna.sorted-json.v1`:
+recursively sorted object keys, original array order, JSON scalar encoding, exact
+UTF-8 SHA-256. This is a versioned Hasna encoding, not RFC 8785. The envelope text
+must exactly equal its canonical re-encoding (including no duplicate keys). It
+must use EventEnvelope schema `1.0`, include a stable `id` and `dedupeKey`, and
+match the registered producer app in `source`. `metadata.app_event` remains small
+producer metadata; it is not interpreted as the separate full AppEvent schema.
+Envelope size is at most 256 KiB, depth 32 and 20,000 JSON values. Sensitive key
+names and recognizable credentials are rejected with fixed diagnostics, never
+silently redacted after the hash is frozen. Producers remain responsible for
+omitting sensitive content before constructing an envelope.
+
+Authenticated routes are `POST /v1/intake/events`, `GET /v1/intake/capability`,
+and `GET /v1/intake/receipts?event_id=...`. They require `x-events-tenant-id`,
+`x-events-sink-id`, `x-events-producer-id`, `x-events-corpus-id` and
+`x-events-source-authority-id` headers. The signed tenant must match the expected
+tenant header and persisted producer grant. POST requires `events:intake`;
+readback/capability requires `events:receipts`. A body cannot choose a tenant.
+Receipts contain identity, hash, receipt UUID and acceptance time, never envelope
+content. Identical replay returns the original receipt; either unique event ID
+or dedupe key reused with different content produces HTTP 409.
+
+### Explicit operator initialization
+
+Use a dedicated PostgreSQL schema and a separate owner connection for admin
+operations. Supply `HASNA_EVENTS_DATABASE_URL` securely; never put a production
+connection string or signing key in shell arguments. Server startup never runs
+migrations or adopts the first caller. Under the schema owner connection:
+
+```sh
+events-serve admin init --sink-id "$SINK_ID" --authority-id "$AUTHORITY_ID"
+events-serve admin bind --producer-id "$PRODUCER_ID" --tenant-id "$TENANT_ID" --app conversations --corpus-id "$CORPUS_ID" --source-authority-id "$SOURCE_AUTHORITY_ID"
+# Register an already-issued signed key through private stdin from a secret manager:
+# secret-manager-read | events-serve admin register-key
+events-serve admin grant --tenant-id "$TENANT_ID" --producer-id "$PRODUCER_ID" --kid "$KEY_ID"
+events-serve admin revoke --tenant-id "$TENANT_ID" --producer-id "$PRODUCER_ID" --kid "$KEY_ID"
+```
+
+`register-key` requires `HASNA_EVENTS_API_SIGNING_KEY` and validates the signed
+Events tenant claim. It stores only the shared hashed API-key record and never
+prints the key. `revoke` without `--kid` revokes the whole producer. Identical
+initialization is replayable; sink/producer identity reassignment is refused.
+These owner operations are not exposed through HTTP. A portfolio or environment
+value is not proof of corpus ownership; operators must verify the source corpus
+binding before granting it here.
+
+Give the runtime role schema USAGE, SELECT on `events_intake_identity`, SELECT
+and INSERT on `events_intake_records`, and SELECT/UPDATE on `api_keys`,
+`events_producer_bindings` and `events_producer_key_grants`. UPDATE is required
+by PostgreSQL row locks; owner-only triggers reject runtime mutation of these
+control tables. Do not grant schema CREATE, table ownership, membership of the
+owner role, SUPERUSER or BYPASSRLS. Set a fixed search_path for both connections.
+FORCE RLS scopes every tenant table using transaction-local context. Record
+updates/deletes/truncation and identity changes are rejected by database triggers.
+Provision the backing volume, backups and PostgreSQL durability settings before
+production use; the service's receipt proves COMMIT, not an independently tested
+backup or infrastructure configuration.
+
+Run `events-serve` under the restricted role with
+`HASNA_EVENTS_API_SIGNING_KEY`, `HASNA_EVENTS_SINK_ID`, and
+`HASNA_EVENTS_AUTHORITY_ID`. It refuses an owner/BYPASSRLS role or mismatched sink.
+The default listener is loopback port 3000; use `HOST`/`PORT` explicitly behind a
+trusted HTTPS reverse proxy. `/health` proves process liveness; `/ready` verifies
+the configured sink and restricted database role. Neither probes a producer key.
+
+### Required PostgreSQL verification
+
+`bun run test:postgres` is a fail-closed gate, also run by the dedicated CI
+workflow. It accepts only an explicit disposable `events_test` user/database on
+literal loopback with an explicit port, uses unique schemas and a non-owner,
+non-BYPASSRLS runtime role, and never resets public. Missing DSN, skipped cases,
+partial summaries and crashes fail the gate. The ordinary suite may skip these
+15 database cases when no test DSN is supplied; this is not database acceptance.
+
+
+The service also provides `events intake capability|accept|receipt` and the
+intake-only `events-mcp` tools `events_intake_capability`, `events_intake_accept`,
+and `events_intake_receipt`. Both use the same authenticated client and receipt
+validation; the accept/readback commands take the frozen JSON request through
+stdin. They do not expose legacy local spool or channel operations. Run their
+`--help` commands for identity selectors. A failed tool call reports unconfirmed,
+not cancelled; retain the producer checkpoint when no verified receipt is returned.
+
+The checked-in `/openapi.json` describes the three intake operations. `bun run
+sdk:generate` derives the typed route client used by the binding-aware wrapper;
+`bun run sdk:check` rejects schema/client drift. The root SDK retains its library
+exports and additionally exposes `createIntakeClient` and `prepareIntake`.
+
+Acceptance transactions force `synchronous_commit=on`; readiness also refuses a
+PostgreSQL server with `fsync` or `full_page_writes` disabled. The included
+Dockerfile packages only the intake service. Build/run infrastructure and operator
+initialization remain explicit deployment tasks, not effects of this source patch.
