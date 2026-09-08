@@ -483,7 +483,11 @@ export interface ApiKey {
 }
 
 // Task List
+export type TaskListStatus = "active" | "completed" | "archived";
+
 export interface TaskList {
+  /** Missing historical status means active. */
+  status?: TaskListStatus;
   id: string;
   project_id: string | null;
   slug: string;
@@ -510,6 +514,7 @@ export interface TaskListRow {
 }
 
 export interface CreateTaskListInput {
+  status?: TaskListStatus;
   name: string;
   slug?: string;
   project_id?: string;
@@ -518,6 +523,7 @@ export interface CreateTaskListInput {
 }
 
 export interface UpdateTaskListInput {
+  status?: TaskListStatus;
   slug?: string;
   name?: string;
   description?: string;
@@ -1424,7 +1430,7 @@ export class ProjectNotFoundError extends Error {
 
 export class ResourceConflictError extends Error {
   constructor(
-    public readonly code: "PLAN_NOT_EMPTY" | "PROJECT_INCOMPLETE" | "PROJECT_NOT_EMPTY" | "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT" | "TASK_PARENT_CYCLE" | "PROJECT_PARENT_CYCLE" | "SNAPSHOT_DESTINATION_CONFLICT",
+    public readonly code: "TASK_LIST_NOT_EMPTY" | "PLAN_NOT_EMPTY" | "PROJECT_INCOMPLETE" | "PROJECT_NOT_EMPTY" | "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT" | "TASK_PARENT_CYCLE" | "PROJECT_PARENT_CYCLE" | "SNAPSHOT_DESTINATION_CONFLICT",
     message: string,
   ) {
     super(message);

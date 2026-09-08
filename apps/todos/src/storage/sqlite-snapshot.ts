@@ -109,7 +109,6 @@ export function importSqliteTodosStorageSnapshot(
   snapshot: TodosStorageSnapshot,
   db?: Database,
 ): TodosStorageImportResult {
-  const d = db ?? getDatabase();
   const result: TodosStorageImportResult = {
     inserted: 0,
     updated: 0,
@@ -117,6 +116,11 @@ export function importSqliteTodosStorageSnapshot(
     skipped: 0,
     errors: [],
   };
+  if (snapshot.taskLists.some(row => row.status !== undefined)) {
+    result.errors.push("The explicit SQLite storage cannot retain task-list status; use the shared API");
+    return result;
+  }
+  const d = db ?? getDatabase();
   if ((snapshot.tombstones ?? []).some(row => (row.object_type as string) === "machines")) { result.errors.push("Machine tombstones require explicit registry lifecycle operations"); return result; }
   try { if (snapshot.machines !== undefined) validateMachines(snapshot.machines); } catch (e) { result.errors.push(e instanceof Error ? e.message : String(e)); return result; }
   result.errors.push(...validateSnapshotRoutingRecords(snapshot.projects, snapshot.taskLists));
