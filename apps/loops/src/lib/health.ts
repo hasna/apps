@@ -289,7 +289,7 @@ function workflowDiagnosticText(stdout: string | undefined): string | undefined 
   if (!isRecord(envelope) || !isRecord(envelope.workflowRun) || !Array.isArray(envelope.steps)) return stdout;
   const diagnostics = [stringValue(envelope.workflowRun.error)];
   for (const step of envelope.steps) {
-    if (!isRecord(step) || !["failed", "timed_out", "cancelled"].includes(String(step.status))) continue;
+    if (!isRecord(step) || typeof step.status !== "string" || !["failed", "timed_out", "cancelled"].includes(step.status)) continue;
     diagnostics.push(stringValue(step.error), stringValue(step.stderrExcerpt), stringValue(step.stdoutExcerpt));
   }
   return diagnostics.filter(Boolean).join("\n");
