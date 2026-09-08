@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.4
+
+### Patch Changes
+
+- 16d2ecb: Preserve known hosted quote refusal codes and display fixed, useful messages in the SDK and CLI. Unknown or malformed failures keep the safe generic HTTP error; server-controlled text is never displayed.
+
 ## 0.5.3
 
 ### Patch Changes
