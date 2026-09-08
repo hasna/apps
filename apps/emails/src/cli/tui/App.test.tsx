@@ -5,13 +5,13 @@
 // (see src/test-support/v1-stub.ts). The manual "Pull" affordance was LOCAL
 // S3→SQLite ingestion and no longer exists in the self-hosted-only client, so the
 // former local-Pull tests are gone and the self-hosted case simply asserts Pull is
-// absent. API-only view preferences live in the App session; priority rules
-// are persisted through the server. No local settings store is used.
+// absent. Device preferences use dedicated JSON; priority rules remain in the API.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { getDataRoot } from "../../paths.js";
 import { createEmailsKeymap } from "../tui-solid/keymap-input.js";
 import { KeymapProvider } from "@opentui/keymap/solid";
 import { testRender, useRenderer, type TestRendererSetup } from "@opentui/solid";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { onCleanup } from "solid-js";
@@ -302,6 +302,40 @@ describe("Emails Solid TUI", () => {
     expect(frame()).toContain("cd settings-demo");
     expect(frame()).toContain("Previous conversation");
     expect(frame()).not.toContain("self_hosted API-only mode");
+  });
+
+  it("reloads saved appearance and reading preferences in a new App", async () => {
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Appearance");
+    await clickText("Color scheme");
+    await clickText("Reading");
+    await clickText("Expand code blocks");
+    setup?.renderer.destroy(); setup = null;
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Appearance");
+    expect(frame()).toContain("Dark");
+    await clickText("Reading");
+    expect(frame()).toContain("On");
+    expect(frame()).not.toContain("until you close");
+  });
+
+  it("keeps preference actions immediate and shows save failures", async () => {
+    const root = getDataRoot();
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    writeFileSync(join(root, "config"), "synthetic config obstruction");
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Appearance");
+    await clickText("Color scheme");
+    expect(frame()).toContain("Dark");
+    expect(frame()).toContain("Could not save your preference");
+    await clickText("Attachments");
+    await clickText("When selecting an attachment");
+    expect(frame()).toContain("Copy link");
+    expect(frame()).toContain("Could not save your preference");
+    expect(readFileSync(join(root, "config"), "utf8")).toBe("synthetic config obstruction");
   });
 
   it("shows recoverable connection errors instead of an empty mailbox or message actions", async () => {
