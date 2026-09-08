@@ -175,7 +175,7 @@ describe("tui data — mailboxes", () => {
     expect(sources).toHaveLength(1);
     expect(sources[0]).toMatchObject({ id: "all", total: 2, unread: 1 });
 
-    expect(listSources()[0]?.label).toContain("Self-hosted Emails");
+    expect(listSources()[0]?.label).toBe("All mailboxes");
   });
 });
 

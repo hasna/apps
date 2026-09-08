@@ -11,7 +11,7 @@ export function registerServeCommands(program: Command, output: (data: unknown, 
   // ─── SERVE ────────────────────────────────────────────────────────────────────
   program
     .command("serve")
-    .description("Start the self-hosted HTTP service")
+    .description("Start the Emails API service")
     .option("--port <port>", "Port to listen on", "8080")
     .option("--host <host>", "Host to bind to (default: 0.0.0.0)", "0.0.0.0")
     .action(async (opts: { port?: string; host?: string }) => {
