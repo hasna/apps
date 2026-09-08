@@ -57,6 +57,9 @@ export interface CreateProjectSourceInput {
 
 // Project
 export interface Project {
+  status?: "active" | "completed" | "on_hold" | "archived";
+  short_id?: string | null;
+  metadata?: Record<string, unknown>;
   id: string;
   name: string;
   path: string;
@@ -73,6 +76,9 @@ export interface Project {
 }
 
 export interface CreateProjectInput {
+  status?: "active" | "completed" | "on_hold" | "archived";
+  short_id?: string | null;
+  metadata?: Record<string, unknown>;
   name: string;
   path: string;
   description?: string;
@@ -83,6 +89,9 @@ export interface CreateProjectInput {
 
 /** Ordinary project metadata update. Canonical slug changes require renameProject. */
 export interface UpdateProjectInput {
+  status?: "active" | "completed" | "on_hold" | "archived";
+  short_id?: string | null;
+  metadata?: Record<string, unknown>;
   name?: string;
   path?: string;
   description?: string | null;
@@ -1409,7 +1418,7 @@ export class ProjectNotFoundError extends Error {
 
 export class ResourceConflictError extends Error {
   constructor(
-    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT" | "TASK_PARENT_CYCLE" | "PROJECT_PARENT_CYCLE" | "SNAPSHOT_DESTINATION_CONFLICT",
+    public readonly code: "PROJECT_INCOMPLETE" | "PROJECT_NOT_EMPTY" | "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT" | "TASK_PARENT_CYCLE" | "PROJECT_PARENT_CYCLE" | "SNAPSHOT_DESTINATION_CONFLICT",
     message: string,
   ) {
     super(message);

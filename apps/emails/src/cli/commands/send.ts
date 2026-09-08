@@ -123,7 +123,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
     .option("--provider <id>", "Provider ID (uses first active if not specified)")
     .option("--template <name>", "Use a template by name")
     .option("--vars <json>", "Template variables as JSON string")
-    .option("--force", "Send to recipients marked suppressed (self-hosted mode: honored only with tenant-level send authority — the same authority that can unsuppress a contact)")
+    .option("--force", "Send to suppressed recipients (requires tenant-level send authority)")
     .option("--dry-run", "Preview what would be sent without actually sending")
     .option("--schedule <datetime>", "Schedule email for later (ISO 8601 datetime)")
     .option("--unsubscribe-url <url>", "Inject List-Unsubscribe headers (RFC 8058 one-click)")
@@ -244,15 +244,11 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
         // apply — the server owns sending.
         const attachments = readSendAttachments(opts.attachment);
         if (opts.dryRun) {
-          // --dry-run PREDICTS the send, so every claim below must be true for the
-          // mode that would actually run it. This block had no mode branch: in
-          // local mode it announced "(self-hosted)", quoted the server's
-          // attachment caps, and predicted that scheduling would fail — none of
-          // which applies to a local send, which does support scheduling.
+          // Keep preview limits consistent with the selected data source.
           const mode = getClientMode();
           const selfHosted = mode === "self_hosted";
           const limits = selfHosted ? SELF_HOSTED_SEND_ATTACHMENT_LIMITS : LOCAL_SEND_ATTACHMENT_LIMITS;
-          console.log(chalk.bold(`\n[DRY RUN] Would send (${selfHosted ? "self-hosted" : "local"}):`));
+          console.log(chalk.bold("\n[DRY RUN] Would send:"));
           console.log(`  ${chalk.dim("From:")}    ${opts.from}`);
           console.log(`  ${chalk.dim("To:")}      ${toAddresses.join(", ")}`);
           // A group expands into ONE message addressed to every member, so the
@@ -266,7 +262,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           if (htmlBody) console.log(`  ${chalk.dim("Body:")}    HTML (${htmlBody.length} chars)`);
           else if (textBody) console.log(`  ${chalk.dim("Body:")}    ${textBody.slice(0, 100)}${textBody.length > 100 ? "..." : ""}`);
           if (attachments.length) {
-            console.log(chalk.dim(`  Attachments: ${attachments.length} inline file(s); ${mode} caps are ${describeSendAttachmentLimits(limits)}`));
+            console.log(chalk.dim(`  Attachments: ${attachments.length} inline file(s); limits are ${describeSendAttachmentLimits(limits)}`));
           }
 
           // ── the part that makes this a PRECHECK rather than an echo ──────────

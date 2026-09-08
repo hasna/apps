@@ -1,3 +1,4 @@
+import { loadTuiPreferences, saveTuiPreference } from "../../../lib/tui-preferences.js";
 import { loadAttachmentAction, saveAttachmentAction, type AttachmentAction } from "../../../lib/attachment-preferences.js";
 import { createContext, createEffect, createMemo, createResource, onCleanup, onMount, useContext, type ParentProps } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
@@ -97,6 +98,7 @@ export interface EmailsState {
   now: number;
   loading: boolean;
   lastError: string | null;
+  preferenceError: string | null;
 }
 
 const PAGE_SIZE = 50;
@@ -164,6 +166,7 @@ function loadAddresses(search?: string): InboxAddressChoice[] {
 
 function createEmailsStore(initialMailbox?: Mailbox) {
   const settings = getSettings();
+  const view = loadTuiPreferences();
   // Resolve only the persisted default address at startup (one indexed lookup) instead of
   // scanning the whole observed-address list (which can take >200ms on a large mailbox) —
   // the full list loads in the post-mount reload, so first paint isn't blocked on it.
@@ -211,12 +214,13 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     readerScroll: 0,
     compose: null,
     settings,
-    viewPreferences: { autoRefresh: true, expandCode: false, expandQuotes: false, attachmentAction: loadAttachmentAction() },
+    viewPreferences: { autoRefresh: view.autoRefresh, expandCode: view.expandCode, expandQuotes: view.expandQuotes, attachmentAction: loadAttachmentAction() },
     mailboxError: null,
     readerError: null,
     now: Date.now(),
     loading: false,
     lastError: null,
+    preferenceError: null,
   });
 
   const currentAddress = createMemo(() => selectedAddress(state));
@@ -483,6 +487,15 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     setState("labels", await ds.listLabelSummaries({ limit: 80, search: state.labelSearch || undefined }));
   };
 
+  const failedPreferenceSaves = new Set<string>();
+  function savePreference(key: string, save: () => void) {
+    try { save(); failedPreferenceSaves.delete(key); }
+    catch { failedPreferenceSaves.add(key); }
+    setState("preferenceError", failedPreferenceSaves.size
+      ? "Could not save your preference. It applies now; check the device config directory permissions before restarting Emails."
+      : null);
+  }
+
   const actions = {
     reload,
     reloadWorkspace,
@@ -581,20 +594,9 @@ function createEmailsStore(initialMailbox?: Mailbox) {
 	    setAddress(id: string) {
 	      setState({ selectedAddressId: id, page: 0, selectedMessageId: null, route: "mailbox", readerScroll: 0 });
 	      const address = state.addresses.find((item) => item.id === id);
-	      // REMEMBERING the choice is a convenience; MAKING it is the action. Self-hosted
-	      // mode has no settings store at all — getSettings() returns the defaults and
-	      // setSetting() throws — and that throw used to land AFTER selectedAddressId had
-	      // already been committed on the line above. So the inbox stayed scoped while the
-	      // reload below never ran: the user was pinned to one inbox by an action that had
-	      // visibly failed, and every 30s tick from then on paid for a scoped counts walk.
-	      // Selecting an inbox is a view action, so a persistence failure must not abort it.
-	      try {
-	        persistSetting("defaultAddress", address?.address ?? null);
-	        setState("settings", "defaultAddress", address?.address ?? null);
-	      } catch {
-	        // No settings store in this mode. The selection still applies for this session.
-	      }
-	      reload({ preserveSelection: false });
+          setState("settings", "defaultAddress", address?.address ?? null);
+          savePreference("defaultAddress", () => persistSetting("defaultAddress", address?.address ?? null));
+          reload({ preserveSelection: false });
 	    },
 	    setSource(id: string) {
 	      setState({ selectedSourceId: id || "all", activeFilterId: null, page: 0, selectedMessageId: null });
@@ -739,17 +741,15 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     },
     sendCompose,
     setSetting<K extends keyof TuiSettings>(key: K, value: TuiSettings[K]) {
-      // API-only installations deliberately have no local settings store. View
-      // preferences still work in memory; the settings screen states their lifetime.
-      if (ds.mode !== "self_hosted") persistSetting(key, value);
       setState("settings", key, value);
+      savePreference(key, () => persistSetting(key, value));
     },
     setViewPreference<K extends keyof EmailsState["viewPreferences"]>(key: K, value: EmailsState["viewPreferences"][K]) {
-      if (key === "attachmentAction") {
-        try { saveAttachmentAction(value as AttachmentAction); }
-        catch { setState("lastError", "Could not save the attachment preference."); return; }
-      }
       setState("viewPreferences", key, value);
+      savePreference(key, () => {
+        if (key === "attachmentAction") saveAttachmentAction(value as AttachmentAction);
+        else saveTuiPreference(key, value as boolean);
+      });
     },
     retryBody() {
       void refetchBody();

@@ -946,3 +946,20 @@ Migration protocol: [lossless vault migration](docs/lossless-vault-migration.md)
 ### Shared expiry collection
 
 `secrets gc` calls `POST /v1/secrets/prune-expired` with `secrets:write`. The service compares expiration using its own clock, deletes only the authenticated tenant's expired rows and commits their audit records in the same transaction. A key renewed while collection waits for its row lock is rechecked and preserved. Invalid expiry data or audit failure aborts the transaction. This requires the updated service; clients do not fall back to deleting a stale metadata list. Secret version history and key ownership records remain preserved.
+
+### Required PostgreSQL acceptance tests
+
+`bun run test:postgres` executes all three dedicated PostgreSQL suites (lossless
+migration, encryption maintenance, and expiry pruning) without skips. CI runs
+this gate in `secrets live PostgreSQL`; missing suites, missing case output,
+failures, and skips fail the gate. Repository branch protection must require the
+`secrets-live-postgres` job before this becomes a protected merge requirement.
+
+Use only a disposable PostgreSQL fixture with the `secrets_test` administrative
+user and `secrets_test` database on literal `127.0.0.1` with an explicit port:
+`SECRETS_TEST_DATABASE_URL=postgresql://secrets_test@127.0.0.1:5432/secrets_test bun run test:postgres`.
+The runner rejects other targets and clears ambient credentials. Each suite
+creates and removes unique schemas and non-superuser/non-BYPASSRLS serving roles;
+the administrative fixture role is used only for schema/role setup and inspection.
+No production credentials or database resets are used. The older `test:pg`
+store proof remains available independently.

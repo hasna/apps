@@ -100,7 +100,7 @@ describe("emails send --to-group API behavior", () => {
     ]);
 
     expect(result.exited).toBe(false);
-    expect(result.consoleOutput).toContain("Would send (self-hosted)");
+    expect(result.consoleOutput).toContain("Would send:");
     expect(result.consoleOutput).toContain("Group:   team — 2 member(s), all in one To: header");
     expect(await stub.list("messages")).toHaveLength(0);
   });

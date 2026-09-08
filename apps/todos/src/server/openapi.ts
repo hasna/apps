@@ -6,6 +6,9 @@
 import { getPackageVersion } from "../lib/package-version.js";
 import { TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 
+const atomicMigrationAuthoritySchema = {type:"object",required:["tenant_id","kid","deployment_id"],properties:{tenant_id:{type:"string"},kid:{type:"string"},deployment_id:{type:"string",format:"uuid"}}} as const;
+const atomicMigrationReceiptSchema = {type:"object",required:["schema_version","operation_id","snapshot_hash","authority","status","records"],properties:{schema_version:{type:"integer",enum:[1]},operation_id:{type:"string"},snapshot_hash:{type:"string"},authority:atomicMigrationAuthoritySchema,status:{type:"string",enum:["complete"]},records:{type:"array",items:{type:"object",required:["object_type","object_id","outcome","before_hash","after_hash","source_hash"],properties:{object_type:{type:"string"},object_id:{type:"string"},outcome:{type:"string",enum:["inserted","updated","identical","superseded","deleted","detached"]},before_hash:{type:"string",nullable:true},after_hash:{type:"string"},source_hash:{type:"string"}}}}}} as const;
+
 const taskSchema = {
   type: "object",
   properties: {
@@ -111,6 +114,9 @@ const taskManifestCapabilityResponseSchema = {
 const projectSchema = {
   type: "object",
   properties: {
+    status: {type:"string",enum:["active","completed","on_hold","archived"]},
+    short_id: {type:"string",nullable:true,maxLength:64,pattern:"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+    metadata: {type:"object",additionalProperties:true},
     id: { type: "string" },
     name: { type: "string" },
     path: { type: "string" },
@@ -1314,6 +1320,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           required: ["name", "path"],
           properties: {
+    status: {type:"string",enum:["active","completed","on_hold","archived"]},
+    short_id: {type:"string",nullable:true,maxLength:64,pattern:"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+    metadata: {type:"object",additionalProperties:true},
             name: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             path: { type: "string", minLength: 1 },
             description: { type: "string" },
@@ -1327,6 +1336,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           minProperties: 1,
           properties: {
+    status: {type:"string",enum:["active","completed","on_hold","archived"]},
+    short_id: {type:"string",nullable:true,maxLength:64,pattern:"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+    metadata: {type:"object",additionalProperties:true},
             name: { type: "string", minLength: 1 },
             path: { type: "string", minLength: 1 },
             description: { type: "string", nullable: true },
@@ -3059,6 +3071,23 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
         },
       },
+      "/v1/projects/{id}/delete-preserving": {
+        post: {
+          operationId:"deleteProjectPreserving",summary:"Delete project identity and atomically detach linked records without deleting their content",
+          parameters:[{name:"id",in:"path",required:true,schema:{type:"string"}}],
+          requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,properties:{force:{type:"boolean"},require_completed_tasks:{type:"boolean"}}}}}},
+          responses:{
+            "200":{content:{"application/json":{schema:{type:"object",required:["schema_version","project_id","deleted","preserved_tasks","preserved_plans","detached_task_lists","detached_child_projects"],properties:{schema_version:{type:"integer",enum:[1]},project_id:{type:"string"},deleted:{type:"boolean"},preserved_tasks:{type:"integer",minimum:0},preserved_plans:{type:"integer",minimum:0},detached_task_lists:{type:"integer",minimum:0},detached_child_projects:{type:"integer",minimum:0}}}}}},
+            "400":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "401":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "403":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "404":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "405":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "409":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "501":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+          },
+        },
+      },
       "/v1/projects/{id}/task-list/ensure": {
         get: {
           operationId: "planProjectTaskListEnsure",
@@ -3373,6 +3402,20 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           operationId: "getStats",
           summary: "Aggregate counts",
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { tasks: { type: "number" }, projects: { type: "number" } } } } } } },
+        },
+      },
+      "/v1/project-migrations": {
+        get: {
+          operationId:"getAtomicProjectMigrationCapability",
+          summary:"Inspect bounded atomic migration authority (explicit todos:migrate scope required)",
+          responses:{"200":{content:{"application/json":{schema:{type:"object",required:["schema_version","authority","supported_families","supported_tombstones","max_records","max_bytes","atomic"],properties:{schema_version:{type:"integer",enum:[1]},authority:atomicMigrationAuthoritySchema,supported_families:{type:"array",items:{type:"string"}},supported_tombstones:{type:"array",items:{type:"string"}},max_records:{type:"integer"},max_bytes:{type:"integer"},atomic:{type:"boolean",enum:[true]}}}}}}},
+        },
+        post: {
+          operationId:"importAtomicProjectSnapshot",
+          summary:"Atomically reconcile a bounded project snapshot with durable replay receipts",
+          description:"Requires todos:write plus explicit todos:migrate. Frozen deployment/tenant/key authority must match. Original manifests remain server-side. Unsupported nonempty families, ambiguous clocks, active leases and graph conflicts fail before commit. Repeat the identical operation ID and snapshot hash after uncertain completion.",
+          requestBody:{required:true,content:{"application/json":{schema:{type:"object",required:["schema_version","operation_id","expected_authority","snapshot","snapshot_hash"],properties:{schema_version:{type:"integer",enum:[1]},operation_id:{type:"string",minLength:8,maxLength:128},expected_authority:atomicMigrationAuthoritySchema,snapshot_hash:{type:"string",pattern:"^[a-f0-9]{64}$"},snapshot:{type:"object",description:"At most 1000 records / 2 MiB. Supported arrays: projects, tasks, plans, taskLists, auditHistory, project tombstones. Clocks must be canonical millisecond UTC; original tombstone payload is required.",additionalProperties:true}}}}}},
+          responses:{"200":{content:{"application/json":{schema:atomicMigrationReceiptSchema}}}},
         },
       },
       "/v1/import": {

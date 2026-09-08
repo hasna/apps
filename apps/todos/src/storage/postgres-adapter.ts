@@ -1,3 +1,4 @@
+import { createAtomicProjectMigration } from "./atomic-project-migration.js";
 import { createPostgresMachineRegistry, validateMachines } from "./machine-registry.js";
 import { randomUUID } from "node:crypto";
 import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, VersionConflictError, isTerminalStatus } from "../types/index.js";
@@ -195,13 +196,14 @@ export function createPostgresTodosStorageAdapter(
       find: (ref) => findGitRefs(ref, store),
     },
     projects: {
-      create: (input, context) => createProject(input, store, context),
+      create: (input, context) => store.withDependencyGraphTransaction(scoped => createProject(input, scoped, context)),
       get: (id) => store.get<Project>("projects", id),
       getByPath: async (path) => (await store.list<Project>("projects")).find((project) => project.path === path) ?? null,
       list: async () => (await store.list<Project>("projects")).sort((a, b) => a.name.localeCompare(b.name)),
-      update: (id, input) => updateProject(id, input, store),
+      update: (id, input) => store.withDependencyGraphTransaction(scoped => updateProject(id, input, scoped)),
       rename: (id, input, context) => store.renameProject(id, input.new_slug, input.name, context),
-      delete: (id, context) => store.delete("projects", id, context),
+      delete: async (id, context) => (await store.deleteProjectPreserving(id, false, context)).deleted,
+      deletePreserving: (id, force, context, requireCompletedTasks) => store.deleteProjectPreserving(id, force, context, requireCompletedTasks),
     },
     plans: {
       create: (input, context) => createPlan(input, store, context),
@@ -310,6 +312,7 @@ export function createPostgresTodosStorageAdapter(
         .slice(0, limit),
     },
     machines: createPostgresMachineRegistry(options.client, options.service ?? "todos", options.tableName ?? DEFAULT_TODOS_POSTGRES_SYNC_TABLE, () => store.ensureSchema()),
+    atomicProjectMigration: createAtomicProjectMigration({ client: options.client, table: options.tableName ?? DEFAULT_TODOS_POSTGRES_SYNC_TABLE, service: options.service ?? "todos", ensureSchema: () => store.ensureSchema() }),
     sync: {
       getTasksChangedSince: (since, filters) => getChangedSince(since, filters, store),
       exportSnapshot: () => exportSnapshot(store),
@@ -329,6 +332,7 @@ class PostgresJsonRecordStore {
   private readonly tableName: string;
   private readonly cursorTableName: string;
   private schemaReady: Promise<void> | null = null;
+  private projectIntegrityLocked = false;
 
   constructor(private readonly options: CreatePostgresTodosStorageAdapterOptions) {
     this.service = options.service ?? "todos";
@@ -348,6 +352,7 @@ class PostgresJsonRecordStore {
       const scoped = new PostgresJsonRecordStore({ ...this.options, client });
       // Schema was ensured before BEGIN; do not run DDL inside this transaction.
       scoped.schemaReady = Promise.resolve();
+      scoped.projectIntegrityLocked = true;
       return fn(scoped);
     });
   }
@@ -903,6 +908,19 @@ class PostgresJsonRecordStore {
         throw new Error("Invalid task-list project scope — project_id must be null, missing, or a non-empty string");
       }
     }
+    const projectTypes = new Set<RemoteObjectType>(["projects", "tasks", "plans", "task_lists"]);
+    const reference = type === "projects" ? (value as {parent_id?:unknown}).parent_id : (value as {project_id?:unknown}).project_id;
+    const needsProjectFence = type === "projects" || (projectTypes.has(type) && typeof reference === "string" && reference.length > 0);
+    if (needsProjectFence && !this.projectIntegrityLocked) {
+      return this.withDependencyGraphTransaction(scoped => scoped.upsert(type, value, context));
+    }
+    if (projectTypes.has(type)) {
+      if (typeof reference === "string" && reference) await this.assertLiveProject(reference);
+      if (type === "projects") {
+        const prior = await this.options.client.query<{deleted_at:unknown}>(`SELECT deleted_at FROM ${this.tableName} WHERE service=$1 AND object_type='projects' AND object_id=$2 FOR UPDATE`,[this.service,value.id]);
+        if (prior.rows[0]?.deleted_at) throw new ProjectNotFoundError(value.id);
+      }
+    }
     await this.ensureSchema();
     const updatedAt = stringValue(value.updated_at) ?? stringValue(value.created_at) ?? new Date().toISOString();
     // M8: resolve conflicts by (updated_at, version) rather than wall-clock only.
@@ -1067,7 +1085,7 @@ class PostgresJsonRecordStore {
     const planIds = [...new Set(guardedPlanIds.filter(Boolean))].sort();
     if (planIds.length === 0 && !parentGuard) return this.upsert("tasks", value, context);
     await this.ensureSchema();
-    if (parentGuard && !queryClient) {
+    if (!queryClient) {
       return this.withTaskParentIntegrityTransaction((client) =>
         this.upsertTaskWithPlanMembershipGuard(
           value,
@@ -1080,6 +1098,7 @@ class PostgresJsonRecordStore {
       );
     }
     const client = queryClient ?? this.options.client;
+    if (value.project_id) await this.assertLiveProject(value.project_id, client);
     const updatedAt = value.updated_at;
     const targetPlanId = value.plan_id;
     const result = await client.query<{
@@ -1624,6 +1643,35 @@ class PostgresJsonRecordStore {
     const row = result.rows[0];
     if (!row || row.counter === null || row.counter === undefined) return null;
     return Number(row.counter);
+  }
+
+  async assertLiveProject(id: string, client: TodosPostgresQueryClient = this.options.client): Promise<void> {
+    const result = await client.query(`SELECT object_id FROM ${this.tableName} WHERE service=$1 AND object_type='projects' AND object_id=$2 AND deleted_at IS NULL FOR KEY SHARE`, [this.service,id]);
+    if (!result.rows.length) throw new ProjectNotFoundError(id);
+  }
+
+  async deleteProjectPreserving(id: string, force: boolean, context: TodosStorageContext = {}, requireCompletedTasks = false): Promise<import("./interfaces.js").TodosProjectDeleteReceipt> {
+    await this.ensureSchema();
+    return this.withTaskParentIntegrityTransaction(async client => {
+      const project = await client.query(`SELECT object_id FROM ${this.tableName} WHERE service=$1 AND object_type='projects' AND object_id=$2 AND deleted_at IS NULL FOR UPDATE`,[this.service,id]);
+      const receipt: import("./interfaces.js").TodosProjectDeleteReceipt = {schema_version:1,project_id:id,deleted:false,preserved_tasks:0,preserved_plans:0,detached_task_lists:0,detached_child_projects:0};
+      if (!project.rows.length) return receipt;
+      const related = await client.query<{object_type:string;object_id:string;status:string|null}>(`SELECT object_type,object_id,payload->>'status' AS status FROM ${this.tableName} WHERE service=$1 AND deleted_at IS NULL AND ((object_type IN ('tasks','plans','task_lists') AND payload->>'project_id'=$2) OR (object_type='projects' AND payload->>'parent_id'=$2)) FOR UPDATE`,[this.service,id]);
+      if (requireCompletedTasks && related.rows.some(row=>row.object_type==='tasks' && row.status!=='completed' && row.status!=='cancelled')) throw new ResourceConflictError("PROJECT_INCOMPLETE", "Project has incomplete tasks; deregistration refused");
+      if (related.rows.length && !force) throw new ResourceConflictError("PROJECT_NOT_EMPTY", "Project has linked records; force confirms detaching them without deleting their content");
+      const timestamp = new Date().toISOString();
+      // A collision when task-list scopes become global rolls back every detach.
+      await client.query(`UPDATE ${this.tableName} SET payload=jsonb_set(jsonb_set(payload,CASE WHEN object_type='projects' THEN '{parent_id}'::text[] ELSE '{project_id}'::text[] END,'null'::jsonb),'{updated_at}',to_jsonb($3::text)) || CASE WHEN object_type='tasks' THEN jsonb_build_object('version',COALESCE((payload->>'version')::integer,0)+1) ELSE '{}'::jsonb END, updated_at=$3::timestamptz, version=CASE WHEN object_type='tasks' THEN COALESCE(version,0)+1 ELSE version END,source_machine_id=$4 WHERE service=$1 AND deleted_at IS NULL AND ((object_type IN ('tasks','plans','task_lists') AND payload->>'project_id'=$2) OR (object_type='projects' AND payload->>'parent_id'=$2))`,[this.service,id,timestamp,context.requestId??this.sourceMachineId??null]);
+      await client.query(`UPDATE ${this.tableName} SET deleted_at=$3::timestamptz,updated_at=$3::timestamptz,source_machine_id=$4 WHERE service=$1 AND object_type='projects' AND object_id=$2 AND deleted_at IS NULL`,[this.service,id,timestamp,context.requestId??this.sourceMachineId??null]);
+      receipt.deleted=true;
+      for (const row of related.rows) {
+        if(row.object_type==='tasks')receipt.preserved_tasks++;
+        else if(row.object_type==='plans')receipt.preserved_plans++;
+        else if(row.object_type==='task_lists')receipt.detached_task_lists++;
+        else receipt.detached_child_projects++;
+      }
+      return receipt;
+    });
   }
 
   async delete(type: RemoteObjectType, id: string, context: TodosStorageContext = {}): Promise<boolean> {
@@ -2197,6 +2245,7 @@ class PostgresJsonRecordStore {
     context: TodosStorageContext = {},
   ): Promise<boolean> {
     await this.ensureSchema();
+    if ((tombstone.object_type as string) === "atomic_project_migrations") throw new Error("Migration evidence is immutable");
     const deletedAt = stringValue(tombstone.deleted_at) ?? new Date().toISOString();
     const updatedAt = stringValue(tombstone.updated_at) ?? deletedAt;
     const existing = await this.clock(tombstone.object_type, tombstone.object_id);
@@ -2908,6 +2957,9 @@ async function createProject(input: CreateProjectInput, store: PostgresJsonRecor
     id,
     name: input.name,
     path: input.path,
+    status: input.status ?? "active",
+    short_id: input.short_id ?? null,
+    metadata: input.metadata ?? {},
     description: input.description ?? null,
     task_list_id: taskListId,
     task_prefix: input.task_prefix ?? await generateProjectPrefix(input.name, store),
@@ -3370,7 +3422,9 @@ async function importSnapshot(
   machines?: import("./machine-registry.js").MachineRegistryStore,
 ): Promise<TodosStorageImportResult> {
   const result: TodosStorageImportResult = { inserted: 0, updated: 0, deleted: 0, skipped: 0, errors: [] };
+  if ((snapshot.tombstones ?? []).some(row => (row.object_type as string) === "atomic_project_migrations")) { result.errors.push("Migration evidence is immutable"); return result; }
   if ((snapshot.tombstones ?? []).some(row => (row.object_type as string) === "machines")) { result.errors.push("Machine tombstones require explicit registry lifecycle operations"); return result; }
+  if ((snapshot.tombstones ?? []).some(row => row.object_type === "projects")) { result.errors.push("Project tombstones require explicit reference-preserving project deletion"); return result; }
   try { if (snapshot.machines !== undefined) validateMachines(snapshot.machines); } catch (e) { result.errors.push(e instanceof Error ? e.message : String(e)); return result; }
   result.errors.push(...validateSnapshotRoutingRecords(snapshot.projects, snapshot.taskLists));
   if (result.errors.length > 0) return result;
@@ -3385,6 +3439,14 @@ async function importSnapshot(
     existingTaskLists,
   ));
   if (result.errors.length > 0) return result;
+  if (new Set(snapshot.projects.map(project => project.id)).size !== snapshot.projects.length) { result.errors.push("Snapshot contains duplicate project identities"); return result; }
+  const orderedProjects: Project[] = [];
+  const pendingProjects = new Map(snapshot.projects.map(project => [project.id, project]));
+  while (pendingProjects.size > 0) {
+    const ready = [...pendingProjects.values()].filter(project => !project.parent_id || !pendingProjects.has(project.parent_id));
+    if (ready.length === 0) { result.errors.push("Snapshot project hierarchy contains a cycle"); return result; }
+    for (const project of ready) { orderedProjects.push(project); pendingProjects.delete(project.id); }
+  }
   const auditHistory = await preflightAuditHistoryImport(snapshot.auditHistory, snapshot.tombstones ?? [], store);
   result.errors.push(...auditHistory.errors);
   if (result.errors.length > 0) return result;
@@ -3401,8 +3463,8 @@ async function importSnapshot(
     RemoteObjectType,
     { id: string; updated_at?: string; created_at?: string; version?: number },
   ]> = [
+    ...orderedProjects.map((row) => ["projects", row] as const),
     ...snapshot.tasks.map((row) => ["tasks", row] as const),
-    ...snapshot.projects.map((row) => ["projects", row] as const),
     ...(snapshot.projectMachinePaths ?? []).map((row) => ["project_machine_paths", row] as const),
     ...snapshot.plans.map((row) => ["plans", row] as const),
     ...snapshot.agents.map((row) => ["agents", row] as const),

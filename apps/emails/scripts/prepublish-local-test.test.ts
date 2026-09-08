@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -73,4 +73,26 @@ test("private fixture directories", () => {
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
+});
+
+
+test("the actual runner canonicalizes a symlinked temporary root before filesystem tests", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "emails-runner-canonical-"));
+  try {
+    const target = join(fixture, "target"); mkdirSync(target, { mode: 0o700 });
+    const alias = join(fixture, "alias"); symlinkSync(target, alias, "dir");
+    const file = join(fixture, "canonical.test.ts");
+    writeFileSync(file, `import { expect, test } from "bun:test";
+import { realpathSync } from "node:fs";
+test("canonical isolated paths", () => {
+  for (const key of ["HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]) {
+    expect(process.env[key]).toBe(realpathSync(process.env[key]!));
+  }
+});`);
+    const result = spawnSync(process.execPath, [join(import.meta.dir, "prepublish-local-test.mjs"), file], {
+      encoding: "utf8", timeout: 15000,
+      env: { ...buildPrepublishTestEnv(process.env, fixture), TMPDIR: alias, TEMP: alias, TMP: alias },
+    });
+    expect(result.status, result.stderr).toBe(0);
+  } finally { rmSync(fixture, { recursive: true, force: true }); }
 });

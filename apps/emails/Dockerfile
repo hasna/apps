@@ -32,6 +32,7 @@ RUN mkdir -p /runtime/usr/local/bin /runtime/lib /runtime/lib/apk/db /runtime/us
     /runtime/app /runtime/app/data /runtime/home/bun \
     && cp -a /usr/local/bin/bun /runtime/usr/local/bin/bun \
     && cp -a /etc/alpine-release /runtime/etc/alpine-release \
+    && cp -L /etc/os-release /runtime/etc/os-release \
     && awk 'BEGIN { RS = ""; order[1] = "libgcc"; order[2] = "libstdc++"; order[3] = "musl"; expected["libgcc"] = 1; expected["libstdc++"] = 1; expected["musl"] = 1 } { name = ""; line_count = split($0, lines, "\n"); for (line = 1; line <= line_count; line++) { if (substr(lines[line], 1, 2) == "P:") { name = substr(lines[line], 3); break } } if (name in expected) { if (name in records) { print "duplicate apk package record: " name > "/dev/stderr"; failed = 1 } records[name] = $0 } } END { for (position = 1; position <= 3; position++) { name = order[position]; if (!(name in records)) { print "missing apk package record: " name > "/dev/stderr"; failed = 1 } } if (failed) exit 1; for (position = 1; position <= 3; position++) { name = order[position]; printf "%s\n\n", records[name] } }' /lib/apk/db/installed > /runtime/lib/apk/db/installed \
     && ln -sf bun /runtime/usr/local/bin/bunx \
     && ln -sf bun /runtime/usr/local/bin/node \

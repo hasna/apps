@@ -202,7 +202,7 @@ const REMOTE_COMMANDS = new Set([
   // dead on exactly the fleet it was built for. Covered by delegate-routing.test.ts.
   "active", "add", "agent", "agents", "ai", "approve", "assign", "bulk", "claim", "comment", "count", "delegate", "delete", "deps", "fail",
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
-  "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-registration", "project-rename", "project-resources", "projects", "recap",
+  "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-registration", "project-rename", "project-resources", "projects", "project-panel", "recap",
   "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists",
   "stale-lock-handoff", "task-manifest", "task-subtree-transfer", "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "unlock", "unassign", "untag", "update",
 ]);
