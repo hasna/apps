@@ -12,7 +12,7 @@
  *     (run_id, attempt_id) and an immutable request digest,
  *  4. on a lost RunTask response, reconcile the SAME token — list tasks by
  *     startedBy, describe them — before any new attempt; a new attempt is
- *     forbidden until the previous launch is proven absent or terminal.
+ *     forbidden while the existing attempt remains unresolved.
  *
  * The AWS SDK is never called from tests: the `EcsRunTaskClient` interface is
  * the seam, `createAwsEcsClient` is the only place the real SDK is imported,
@@ -88,7 +88,14 @@ export interface EcsDispatcherOptions {
 }
 
 /** Terminal ECS task statuses, per the ECS task lifecycle. */
-const TERMINAL_TASK_STATUSES = new Set(["STOPPED"]);
+const LIVE_TASK_STATUSES = new Set(["PROVISIONING", "PENDING", "ACTIVATING", "RUNNING", "DEACTIVATING", "STOPPING", "DEPROVISIONING"]);
+
+/** Missing, partial, unexpected, or unknown observations are never stop proof. */
+function observedTask(states: EcsTaskState[], taskArn: string): EcsTaskState | undefined {
+  if (states.length !== 1 || states[0]?.taskArn !== taskArn) return undefined;
+  const state = states[0];
+  return state.lastStatus === "STOPPED" || LIVE_TASK_STATUSES.has(state.lastStatus) ? state : undefined;
+}
 
 export type LaunchOutcome =
   | { kind: "launched"; attemptId: string; taskId: string }
@@ -162,7 +169,7 @@ export class EcsDispatcher implements Dispatcher {
     }
   }
 
-  /** sdk Dispatcher surface: fence the current generation and stop the task. */
+  /** Confirm the task stopped before recording cancellation and its receipt. */
   async cancel(runId: string): Promise<DispatchResult> {
     const run = await this.store.getRun(runId);
     if (!run) return { accepted: false, detail: "no such run" };
@@ -176,27 +183,32 @@ export class EcsDispatcher implements Dispatcher {
       const cancelled = await this.stateMachine.cancel(runId);
       return cancelled.ok ? { accepted: true, detail: "cancelled (no attempt launched)" } : { accepted: false, detail: cancelled.reason };
     }
-    const taskArn = await this.resolveTaskArn(run.admission, current);
-    if (taskArn) {
-      try {
-        await this.client.stopTask(taskArn);
-      } catch {
-        // Stop raced the task to a terminal state; reconciliation at read time
-        // is authoritative.
+    const observation = await this.reconcile(run.admission, current);
+    if (observation.kind !== "already-launched" && observation.kind !== "previous-terminal") {
+      return { accepted: false, detail: "task state unknown; cancellation is not yet confirmed" };
+    }
+    const taskArn = observation.kind === "already-launched" ? observation.taskId
+      : (await this.store.listAttempts(runId)).find(row => row.attemptId === current.attemptId)?.taskId ?? null;
+    if (!taskArn) return { accepted: false, detail: "stopped task identity is not confirmed" };
+    if (observation.kind === "already-launched") {
+      try { await this.client.stopTask(observation.taskId); } catch { /* The subsequent exact observation is authoritative. */ }
+      const stopped = await this.reconcile(run.admission, { ...current, taskId: observation.taskId });
+      if (stopped.kind !== "previous-terminal") {
+        return { accepted: false, target: observation.taskId, detail: "task stop is not yet confirmed; reconcile before retrying cancellation" };
       }
     }
     const cancelled = await this.stateMachine.cancel(runId);
     if (!cancelled.ok) return { accepted: false, detail: cancelled.reason };
     await this.writeCancellationReceipt(run.admission, current, taskArn);
-    return { accepted: true, target: taskArn ?? undefined, detail: "cancelled and fenced" };
+    return { accepted: true, target: taskArn ?? undefined, detail: "cancelled after confirmed task stop" };
   }
 
   /**
    * Launch the next attempt of a run.
    *
    * A previous attempt whose launch outcome is unknown (launching / ambiguous /
-   * launched) is reconciled FIRST. Only when the previous launch is proven
-   * absent or terminal is a new attempt minted and claimed.
+   * launched) is reconciled FIRST. Missing observations remain ambiguous;
+   * terminal observations return to the owner without minting another attempt.
    */
   async launchAttempt(runId: string): Promise<LaunchOutcome> {
     const run = await this.store.getRun(runId);
@@ -207,20 +219,16 @@ export class EcsDispatcher implements Dispatcher {
 
     const attempts = await this.store.listAttempts(runId);
     const previous = attempts[attempts.length - 1];
-    if (previous && previous.status !== "terminal" && !isProvenAbsentOrTerminal(previous.launchState)) {
-      const reconciled = await this.reconcile(run.admission, previous);
-      if (reconciled.kind === "already-launched" || reconciled.kind === "previous-terminal") {
-        return reconciled;
+    if (previous) {
+      // An existing attempt is never replaced based on an eventually consistent
+      // empty listing. A terminal observation is returned to the run owner.
+      if (previous.status === "terminal" || previous.launchState === "terminal") {
+        return { kind: "previous-terminal", attemptId: previous.attemptId };
       }
-      if (reconciled.kind === "ambiguous") {
-        // The reconcile probe failed: the launch is still unknown, and a new
-        // attempt with a different clientToken could start a second ECS task.
-        return reconciled;
-      }
-      // Proven absent: fall through to mint a new attempt.
+      return this.reconcile(run.admission, previous);
     }
 
-    const attemptNumber = previous ? previous.attemptNumber + 1 : 1;
+    const attemptNumber = 1;
     const attempt = await this.store.createAttempt({ runId, attemptNumber });
     const claimed = await this.stateMachine.claim({
       runId,
@@ -258,75 +266,37 @@ export class EcsDispatcher implements Dispatcher {
     } catch {
       await this.store.recordLaunchState({ runId, attemptId: attempt.attemptId, launchState: "ambiguous" });
       const reconciled = await this.reconcile(run.admission, intent.attempt);
-      if (reconciled.kind === "already-launched") return reconciled;
-      return reconciled.kind === "previous-terminal"
-        ? reconciled
-        : { kind: "launch-failed-absent", attemptId: attempt.attemptId };
+      return reconciled;
     }
 
     await this.store.recordLaunchState({ runId, attemptId: attempt.attemptId, launchState: "launched", taskId: result.taskArn });
     return { kind: "launched", attemptId: attempt.attemptId, taskId: result.taskArn };
   }
 
-  /** Reconcile an attempt whose launch outcome is unknown. */
+  /** ECS is eventually consistent: empty lists and missing descriptions cannot
+   * prove absence. Only an exact recognized observation can change launch state. */
   async reconcile(admission: FrozenAdmission, attempt: AttemptRecord): Promise<LaunchOutcome> {
-    // A known taskId is described directly: ECS ListTasks omits STOPPED tasks,
-    // so the list-by-token probe alone cannot tell "absent" from "terminal".
-    if (attempt.taskId) {
-      let states: EcsTaskState[];
-      try {
-        states = await this.client.describeTasks([attempt.taskId]);
-      } catch {
-        return { kind: "ambiguous", attemptId: attempt.attemptId };
-      }
-      const live = states.filter((state) => !TERMINAL_TASK_STATUSES.has(state.lastStatus));
-      if (live.length > 0) {
-        return { kind: "already-launched", attemptId: attempt.attemptId, taskId: attempt.taskId };
-      }
-      await this.store.recordLaunchState({ runId: admission.runId, attemptId: attempt.attemptId, launchState: "terminal" });
-      return { kind: "previous-terminal", attemptId: attempt.attemptId };
-    }
-    const token = attempt.startedBy;
-    if (!token) {
-      await this.store.recordLaunchState({ runId: admission.runId, attemptId: attempt.attemptId, launchState: "absent" });
-      return { kind: "launch-failed-absent", attemptId: attempt.attemptId };
-    }
-    let taskArns: string[];
-    try {
-      taskArns = await this.client.listTasksByStartedBy(token);
-    } catch {
-      // The reconcile probe itself failed: the launch is still unknown, and a
-      // new attempt stays forbidden.
-      return { kind: "ambiguous", attemptId: attempt.attemptId };
-    }
-    if (taskArns.length === 0) {
-      await this.store.recordLaunchState({ runId: admission.runId, attemptId: attempt.attemptId, launchState: "absent" });
-      return { kind: "launch-failed-absent", attemptId: attempt.attemptId };
+    const ambiguous = (): LaunchOutcome => ({ kind: "ambiguous", attemptId: attempt.attemptId });
+    let taskArn = attempt.taskId;
+    if (!taskArn) {
+      if (!attempt.startedBy) return ambiguous();
+      let taskArns: string[];
+      try { taskArns = await this.client.listTasksByStartedBy(attempt.startedBy); } catch { return ambiguous(); }
+      // RunTask requests one task. Multiple matches need operator reconciliation,
+      // not an arbitrary first task or a partially described terminal result.
+      if (taskArns.length !== 1 || !taskArns[0]) return ambiguous();
+      taskArn = taskArns[0];
     }
     let states: EcsTaskState[];
-    try {
-      states = await this.client.describeTasks(taskArns);
-    } catch {
-      return { kind: "ambiguous", attemptId: attempt.attemptId };
+    try { states = await this.client.describeTasks([taskArn]); } catch { return ambiguous(); }
+    const state = observedTask(states, taskArn);
+    if (!state) return ambiguous();
+    if (state.lastStatus !== "STOPPED") {
+      await this.store.recordLaunchState({ runId: admission.runId, attemptId: attempt.attemptId, launchState: "launched", taskId: taskArn });
+      return { kind: "already-launched", attemptId: attempt.attemptId, taskId: taskArn };
     }
-    const live = states.filter((state) => !TERMINAL_TASK_STATUSES.has(state.lastStatus));
-    if (live.length > 0) {
-      const taskId = live[0]!.taskArn;
-      await this.store.recordLaunchState({ runId: admission.runId, attemptId: attempt.attemptId, launchState: "launched", taskId });
-      return { kind: "already-launched", attemptId: attempt.attemptId, taskId };
-    }
-    await this.store.recordLaunchState({ runId: admission.runId, attemptId: attempt.attemptId, launchState: "terminal", taskId: taskArns[0] });
+    await this.store.recordLaunchState({ runId: admission.runId, attemptId: attempt.attemptId, launchState: "terminal", taskId: taskArn });
     return { kind: "previous-terminal", attemptId: attempt.attemptId };
-  }
-
-  /** Resolve the task arn for the current attempt, reconciling if needed. */
-  private async resolveTaskArn(admission: FrozenAdmission, attempt: AttemptRecord): Promise<string | null> {
-    if (attempt.taskId) return attempt.taskId;
-    if (attempt.launchState === "launching" || attempt.launchState === "ambiguous") {
-      const outcome = await this.reconcile(admission, attempt);
-      if (outcome.kind === "already-launched") return outcome.taskId;
-    }
-    return null;
   }
 
   private runTaskInput(
@@ -378,10 +348,6 @@ export class EcsDispatcher implements Dispatcher {
       completedAt: this.now().toISOString(),
     });
   }
-}
-
-function isProvenAbsentOrTerminal(launchState: AttemptRecord["launchState"]): boolean {
-  return launchState === "absent" || launchState === "terminal";
 }
 
 /**
