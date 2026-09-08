@@ -2086,6 +2086,13 @@ describe("remote CLI entrypoint authority boundary", () => {
             return Response.json({ task_list }, { status: 201 });
           }
         }
+        const preservingList=url.pathname.match(/^\/v1\/task-lists\/([^/]+)\/delete-preserving$/);
+        if(preservingList&&request.method==="POST"){
+          const id=preservingList[1]!;const relatedTasks=tasks.filter(task=>task.task_list_id===id);const relatedPlans=plans.filter(plan=>plan.task_list_id===id);
+          if((relatedTasks.length||relatedPlans.length)&&body.force!==true)return Response.json({error:"linked records"},{status:409});
+          const deleted=Boolean(find(taskLists,id));for(const row of [...relatedTasks,...relatedPlans])row.task_list_id=null;remove(taskLists,id);
+          return Response.json({schema_version:1,task_list_id:id,deleted,detached_task_ids:relatedTasks.map(row=>row.id),detached_plan_ids:relatedPlans.map(row=>row.id),detached_tasks:relatedTasks.length,detached_plans:relatedPlans.length});
+        }
         const listMatch = url.pathname.match(/^\/v1\/task-lists\/([^/]+)$/);
         if (listMatch) {
           const task_list = find(taskLists, listMatch[1]!);
@@ -2307,7 +2314,10 @@ describe("remote CLI entrypoint authority boundary", () => {
       ];
 
       const runRemoteOk = async (invocation: string[]): Promise<string> => {
-        const invocationEnv={...env};if(invocation.includes("plans"))delete invocationEnv.TODOS_DB_PATH;
+        const invocationEnv = {...env};
+        // Converted families refuse database selectors rather than ignoring them.
+        // The no-file checks still cover both HOME and cwd.
+        if (invocation.includes("plans") || invocation.includes("lists")) delete invocationEnv.TODOS_DB_PATH;
         const result = await runCli(executable, invocation, invocationEnv, cwd);
         expect({ invocation, exitCode: result.exitCode, stderr: stderrWithoutAttributionWarning(result.stderr) }).toEqual({
           invocation,

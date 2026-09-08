@@ -1,6 +1,10 @@
 import {Database} from "bun:sqlite";
+import {randomUUID} from "node:crypto";
 import {runMigrations} from "../db/schema.js";
 import {createPlan} from "../db/plans.js";
+import {createTaskList,listTaskLists} from "../db/task-lists.js";
+import {createLocalSqliteTodosStorageAdapter} from "../storage/local-sqlite.js";
+import {handleV1Request} from "../server/v1.js";
 import { describe, it, expect, beforeAll, afterAll, setDefaultTimeout } from "bun:test";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -29,6 +33,20 @@ function run(args: string): string {
       env: localRoutingTestEnv({ HOME: fakeHome, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" }),
     },
   ).trim();
+}
+
+function withFixtureDb<T>(run:(db:Database)=>T):T {
+ const db=new Database(dbPath);db.run("PRAGMA foreign_keys = ON");try{runMigrations(db);return run(db);}finally{db.close();}
+}
+async function withTaskListApi(runTest:(run:(args:string[])=>Promise<string>)=>Promise<void>):Promise<void>{
+ const db=new Database(dbPath);db.run("PRAGMA foreign_keys = ON");runMigrations(db);
+ const store=createLocalSqliteTodosStorageAdapter({db});
+ const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch:async request=>(await handleV1Request(request,new URL(request.url),{ensureSchema:async()=>{},getStorageAdapter:()=>store,getMachineRegistryTenantId:()=>"fixture-tenant",getVerifier:()=>({authenticate:async()=>({ok:true,principal:{kid:"fixture",tid:"fixture-tenant",scopes:["todos:read","todos:write"]}})}) as any}))??new Response("Not found",{status:404})});
+ try{await runTest(async args=>{
+  const child=Bun.spawn([process.execPath,"--no-env-file","src/cli/index.tsx",...args],{cwd:CWD,env:{PATH:process.env.PATH??"",HOME:fakeHome,TMPDIR:tmpDir,HASNA_STATION:`fixture-${randomUUID()}`,HASNA_TODOS_API_URL:server.url.origin,HASNA_TODOS_API_KEY:"fixture-api-key"},stdout:"pipe",stderr:"pipe"});
+  const [stdout,stderr,code]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);
+  if(code!==0)throw Object.assign(new Error(stderr),{stderr});return stdout.trim();
+ });}finally{server.stop(true);db.close();}
 }
 
 beforeAll(async () => {
@@ -296,10 +314,10 @@ describe("CLI QoL commands", () => {
   it("projects --add routes task-list slug changes through the canonical cascade", () => {
     const projectPath = join(tmpDir, "canonical-project-slug");
     const created = JSON.parse(run(`--json projects --add ${projectPath} --name 'Canonical Project' --task-list-id original-slug`));
-    run(`--project ${created.id} --json lists --add 'Canonical List' --slug original-slug`);
+    withFixtureDb(db=>createTaskList({name:"Canonical List",slug:"original-slug",project_id:created.id},db));
 
     const updated = JSON.parse(run(`--json projects --add ${projectPath} --task-list-id next-slug`));
-    const lists = JSON.parse(run(`--project ${created.id} --json lists`));
+    const lists = withFixtureDb(db=>listTaskLists(created.id,db));
 
     expect(updated.task_list_id).toBe("next-slug");
     expect(lists).toEqual([expect.objectContaining({ slug: "next-slug" })]);
@@ -319,7 +337,7 @@ describe("CLI QoL commands", () => {
       task_list: null,
       receipt: null,
     });
-    expect(JSON.parse(run(`--project ${project.id} --json lists`))).toEqual([]);
+    expect(withFixtureDb(db=>listTaskLists(project.id,db))).toEqual([]);
 
     const first = JSON.parse(run(
       `--json projects --ensure-task-list ${project.id} --apply --idempotency-key ensure-project-default-list`,
@@ -339,7 +357,7 @@ describe("CLI QoL commands", () => {
       task_list: { id: first.task_list.id },
       receipt: { receipt_id: first.receipt.receipt_id },
     });
-    const lists = JSON.parse(run(`--project ${project.id} --json lists`));
+    const lists = withFixtureDb(db=>listTaskLists(project.id,db));
     expect(lists).toEqual([
       expect.objectContaining({ id: first.task_list.id, project_id: project.id, slug: "ensure-project" }),
     ]);
@@ -353,7 +371,7 @@ describe("CLI QoL commands", () => {
       task_list_id: first.task_list.id,
       accepted_receipt_id: first.receipt.receipt_id,
     });
-    expect(JSON.parse(run(`--project ${project.id} --json lists`))).toEqual([]);
+    expect(withFixtureDb(db=>listTaskLists(project.id,db))).toEqual([]);
   }, 30_000);
 
   it("project-panel --json should emit a project panel contract", () => {
@@ -692,14 +710,14 @@ describe("CLI QoL commands", () => {
   });
 
   it("update --list resolves a slug to the canonical task-list UUID", () => {
-    const list = JSON.parse(run("lists --add 'RepairList' --slug repair-list --json"));
+    const list = withFixtureDb(db=>createTaskList({name:"RepairList",slug:"repair-list"},db));
     const t = JSON.parse(run("add 'link me' --json"));
     const updated = JSON.parse(run(`update ${t.id} --list repair-list --json`));
     expect(updated.task_list_id).toBe(list.id);
   });
 
   it("update --list accepts an exact task-list UUID", () => {
-    const list = JSON.parse(run("lists --add 'UuidList' --slug uuid-list --json"));
+    const list = withFixtureDb(db=>createTaskList({name:"UuidList",slug:"uuid-list"},db));
     const t = JSON.parse(run("add 'link uuid' --json"));
     const updated = JSON.parse(run(`update ${t.id} --list ${list.id} --json`));
     expect(updated.task_list_id).toBe(list.id);
@@ -731,7 +749,7 @@ describe("CLI QoL commands", () => {
   });
 
   it("update --clear-list detaches the task from its list (undo round-trip)", () => {
-    const list = JSON.parse(run("lists --add 'ClearList' --slug clear-list --json"));
+    const list = withFixtureDb(db=>createTaskList({name:"ClearList",slug:"clear-list"},db));
     const t = JSON.parse(run("add 'list roundtrip' --json"));
     const linked = JSON.parse(run(`update ${t.id} --list ${list.id} --json`));
     expect(linked.task_list_id).toBe(list.id);
@@ -755,32 +773,24 @@ describe("CLI QoL commands", () => {
     }
   });
 
-  it("lists --update --project rebinds an unbound list to a registered project", () => {
+  it("lists --update --project rebinds an unbound list to a registered project", async () => {
     const project = JSON.parse(run("projects --add /tmp/rebind-target --name 'Rebind Target' --json"));
-    const list = JSON.parse(run("lists --add 'RebindList' --slug rebind-list --json"));
-    expect(list.project_id ?? null).toBeNull();
-
-    const rebound = JSON.parse(run(`lists --update ${list.id} --project rebind-target --json`));
-    expect(rebound.project_id).toBe(project.id);
-
-    // The rebind is authoritative: a fresh show reads the bound project back.
-    const shown = JSON.parse(run(`lists --show ${list.id} --json`));
-    expect(shown.project_id).toBe(project.id);
+    await withTaskListApi(async runApi=>{
+      const list=JSON.parse(await runApi(["lists","--add","RebindList","--slug","rebind-list","--json"]));
+      expect(list.project_id??null).toBeNull();
+      const rebound=JSON.parse(await runApi(["lists","--update",list.id,"--project","rebind-target","--json"]));
+      expect(rebound.project_id).toBe(project.id);
+      const shown=JSON.parse(await runApi(["lists","--show",list.id,"--json"]));expect(shown.project_id).toBe(project.id);
+    });
   });
 
-  it("lists --update --project refuses a reference that resolves to no project", () => {
-    const list = JSON.parse(run("lists --add 'UnresolvableRebind' --slug unresolvable-rebind --json"));
-    let thrown = false;
-    let errorOutput = "";
-    try {
-      run(`lists --update ${list.id} --project no-such-project-anywhere --json`);
-    } catch (e: any) {
-      thrown = true;
-      errorOutput = e.stderr?.toString() || e.message || "";
-    }
-    expect(thrown).toBe(true);
-    expect(errorOutput).toMatch(/Project not found|not found/i);
-    const after = JSON.parse(run(`lists --show ${list.id} --json`));
-    expect(after.project_id ?? null).toBeNull();
+  it("lists --update --project refuses a reference that resolves to no project", async () => {
+    await withTaskListApi(async runApi=>{
+      const list=JSON.parse(await runApi(["lists","--add","UnresolvableRebind","--slug","unresolvable-rebind","--json"]));
+      let thrown=false;let errorOutput="";
+      try{await runApi(["lists","--update",list.id,"--project","no-such-project-anywhere","--json"]);}catch(error:any){thrown=true;errorOutput=error.stderr||error.message||"";}
+      expect(thrown).toBe(true);expect(errorOutput).toMatch(/Project not found|not found/i);
+      const after=JSON.parse(await runApi(["lists","--show",list.id,"--json"]));expect(after.project_id??null).toBeNull();
+    });
   });
 });
