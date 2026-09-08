@@ -18,7 +18,7 @@ const env = {
   BUN_INSTALL_CACHE_DIR: join(temporary, "cache"),
 };
 function run(args: string[], cwd: string, label: string): void {
-  const result = Bun.spawnSync([process.execPath, ...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync([process.execPath, "--no-env-file", ...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
   if (result.exitCode !== 0) {
     throw new Error(`${label} failed\n${new TextDecoder().decode(result.stdout)}\n${new TextDecoder().decode(result.stderr)}`);
   }

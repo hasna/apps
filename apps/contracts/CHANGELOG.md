@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.3
+
+- Fix extensionless imports in the public root declaration graph for strict NodeNext consumers.
+- Require a fresh archive install and strict root type check, including negative type assignments, during release verification.
+
 ## 1.0.2
 
 ### Patch Changes
