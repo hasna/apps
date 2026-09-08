@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+### Patch Changes
+
+- 5788bee: Add explicitly confirmed workspace self-leave through the SDK, CLI and MCP. Fresh verification stays bound to the observed membership and selected profile; uncertain outcomes never retry or modify saved credentials.
+
 ## 0.5.1
 
 ### Patch Changes
