@@ -928,6 +928,7 @@
         "secrets-serve": "dist/server/index.js",
       },
       "dependencies": {
+        "@aws-sdk/client-kms": "3.1127.0",
         "@aws-sdk/client-secrets-manager": "^3.1008.0",
         "@aws-sdk/credential-providers": "^3.1008.0",
         "@hasna/events": "^0.1.16",
@@ -993,7 +994,7 @@
     },
     "apps/skills": {
       "name": "@hasna/skills",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "bin": {
         "skills": "bin/index.js",
         "skills-mcp": "bin/mcp.js",

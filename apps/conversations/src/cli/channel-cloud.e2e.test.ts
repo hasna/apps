@@ -1,25 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { startApiServer, type ApiServerDeps } from "../server/api.js";
 import { mintApiKey, verifyApiKey, ApiKeyStore, type ApiKeyStatus } from "@hasna/contracts/auth";
-import { STORE_SELECTING_KEYS } from "../lib/store/isolated-test-env.js";
+import { STORE_SELECTING_KEYS, diskTierSandboxEnv } from "../lib/store/isolated-test-env.js";
 import { HERMETIC_STATION } from "../test/hermetic.js";
-
-// Ambient credential isolation (DISK tier): the shared resolver reads
-// `~/.hasna/conversations/config/credentials` rooted at the child env's
-// HOME/HASNA_HOME/HASNA_CONFIG_HOME, and a provisioned station's real file
-// outranks the fixture authority below — the loopback URL is then REFUSED as
-// written for a different authority (green on CI, red on the station).
-// Anchoring every home-layout root at a scratch dir — no credentials file
-// can exist there — makes the disk tier consult nothing, identically on both
-// kinds of machine.
-const scratchHome = mkdtempSync(join(tmpdir(), "conversations-e2e-home-"));
-
-afterAll(() => {
-  rmSync(scratchHome, { recursive: true, force: true });
-});
 
 const SIGNING = ["test", "signing", "material", "0123456789"].join("-");
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
@@ -115,9 +98,10 @@ async function runCli(args: string[], env: Record<string, string | undefined>) {
   // account to one no real item uses, or the operator's real key and api-url
   // items win over the fixture pair a case exports.
   childEnv.HASNA_STATION = HERMETIC_STATION;
-  childEnv.HOME = scratchHome;
-  childEnv.HASNA_HOME = scratchHome;
-  childEnv.HASNA_CONFIG_HOME = scratchHome;
+  // The disk tier (`~/.hasna/<app>/config/credentials`) is an ambient input:
+  // point the child's HOME at a scratch root so the station credential cannot
+  // answer beside the fixture's synthetic API URL.
+  Object.assign(childEnv, diskTierSandboxEnv());
   for (const [key, value] of Object.entries(env)) {
     if (value !== undefined) childEnv[key] = value;
   }
