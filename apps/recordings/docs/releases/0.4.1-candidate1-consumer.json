@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "checkedAt": "2026-09-08T10:43:36.455003+00:00",
+  "checkedAt": "2026-09-08T08:17:51.139156+00:00",
   "archive": {
-    "sha256": "a7a342c2a206e1ee2f06c957d6a654d7d54f92cdad626bc89958593f6cb73d68",
-    "bytes": 950710,
-    "integrity": "sha512-FlrqgbeXysDBREKK1I74WeTMXBang1xsvmMEausVaakodEmBck2DzopnP1SGKzqbdzHjCk8o8SUeXe0LHx+sWw==",
+    "sha256": "a456db766592e41be7534cc152c2222ed4286e5d9422d5c5614cd368b1413e1d",
+    "bytes": 950020,
+    "integrity": "sha512-v3Siv0pPRgWXFUlQvQUZvadJsXLVthCPFDUWT2q9cdJlXp2ztB742CVz+AVm2h7hzYoooUnHIXqRd29n4O3pcw==",
     "fileCount": 267,
-    "expandedBytes": 4018024
+    "expandedBytes": 4014332
   },
-  "receiptSHA256": "4a4afb0d9e816734a39764a71cee6eb22d1bab9425f411b4e8e3e707aed7de7b",
-  "sourceRevision": "490b64f360e8baa0b4d49d1e17b3140e064242e5",
+  "receiptSHA256": "83dae83d03a6cbf3d6bf38dd1c626ef8ee757df6e618a99e7f6247daaf188132",
+  "sourceRevision": "9bc43d628f9bbd0a8db01c76c0412e119dcc826f",
   "distributionStatus": "prepared",
   "archiveAudit": {
     "regularFilesOnly": true,
@@ -34,7 +34,7 @@
   },
   "native": {
     "fileCount": 112,
-    "treeSHA256": "ffbd54eec6031d89a684164454946a083fff428403558c737f223c604324e349",
+    "treeSHA256": "07752428361055b0d7d6bcfdde11da311c81bca714880cd7fb46a033bbab7403",
     "sourceBytesAndModesMatch": true,
     "declarationsPresent": [
       "RecordingEngine",
@@ -114,5 +114,17 @@
     "No native runtime, microphone, clipboard, permissions, or installed app actions",
     "No provider, external network, PostgreSQL backend, or hosted authentication exercised",
     "Public declaration inventory is not Swift compilation"
-  ]
+  ],
+  "harnessAdaptation": {
+    "baselineSHA256": "1a6ef62b69d6981247ea7dc057d1dc2327774d099a5bd191a8dcd8d1ac0ec1e7",
+    "verifierSHA256": "64d1b2c7411e83ed3a5329a024ac627c5c9d0e2530cf45b80d151bfc373338ad",
+    "consumerSHA256": "3b6d4ff3aaf32d35be3625868f45f0304b5e55b5622c1372fbe121eedc98e93f",
+    "changes": [
+      "Three expected-version literals changed from 0.4.0 to 0.4.1",
+      "Supervisor signals its owned process group only while the child remains live"
+    ],
+    "packageCodeChanged": false,
+    "resolverAndLeaseFixtureChanged": false,
+    "dependencyInventorySHA256": "3215fca40fb87a78b7307cd2c7a8bfde5c4c3f3ac82777153cc34e2309b5eb89"
+  }
 }

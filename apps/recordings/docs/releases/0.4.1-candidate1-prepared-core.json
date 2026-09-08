@@ -7,23 +7,23 @@
   },
   "source": {
     "repository": "https://github.com/hasna/apps",
-    "revision": "490b64f360e8baa0b4d49d1e17b3140e064242e5"
+    "revision": "9bc43d628f9bbd0a8db01c76c0412e119dcc826f"
   },
   "distribution": {
     "status": "prepared"
   },
   "archive": {
     "url": "https://registry.npmjs.org/@hasna/recordings/-/recordings-0.4.1.tgz",
-    "bytes": 950710,
-    "sha256": "a7a342c2a206e1ee2f06c957d6a654d7d54f92cdad626bc89958593f6cb73d68",
-    "integrity": "sha512-FlrqgbeXysDBREKK1I74WeTMXBang1xsvmMEausVaakodEmBck2DzopnP1SGKzqbdzHjCk8o8SUeXe0LHx+sWw=="
+    "bytes": 950020,
+    "sha256": "a456db766592e41be7534cc152c2222ed4286e5d9422d5c5614cd368b1413e1d",
+    "integrity": "sha512-v3Siv0pPRgWXFUlQvQUZvadJsXLVthCPFDUWT2q9cdJlXp2ztB742CVz+AVm2h7hzYoooUnHIXqRd29n4O3pcw=="
   },
   "native": {
     "packagePath": "src/native/Recordings",
     "product": "RecordingsLib",
     "swiftToolsVersion": "6.2",
     "minimumMacOS": "26.0",
-    "treeSHA256": "ffbd54eec6031d89a684164454946a083fff428403558c737f223c604324e349",
+    "treeSHA256": "07752428361055b0d7d6bcfdde11da311c81bca714880cd7fb46a033bbab7403",
     "files": [
       {
         "path": "App/ContentView.swift",
@@ -441,8 +441,8 @@
       },
       {
         "path": "RecordingsTests/RecordingStartTimingTests.swift",
-        "sha256": "c37c1d114effcc0160c083bfab50e0c308f6db2462ce664e8c1c2d395d84a14b",
-        "bytes": 18939,
+        "sha256": "5bebb8abdaf688116d349863916ca327b71be9bcabcc64fb51f43f4a2987deac",
+        "bytes": 15247,
         "mode": 420
       },
       {
