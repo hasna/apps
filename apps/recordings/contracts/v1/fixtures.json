@@ -1,0 +1,1170 @@
+{
+  "fixtureVersion": 1,
+  "cases": [
+    {
+      "parser": "recordingInputParser",
+      "name": "recording",
+      "valid": true,
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "title": "Fictional recording",
+        "transcript": "A blue notebook is on the desk.",
+        "durationMs": 1000
+      }
+    },
+    {
+      "parser": "recordingInputParser",
+      "name": "trim title",
+      "valid": true,
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "title": "  Fictional title  ",
+        "transcript": "A blue notebook is on the desk.",
+        "durationMs": 1000
+      }
+    },
+    {
+      "parser": "recordingInputParser",
+      "name": "unknown input",
+      "valid": false,
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "title": "Fictional recording",
+        "transcript": "A blue notebook is on the desk.",
+        "durationMs": 1000,
+        "extra": true
+      }
+    },
+    {
+      "parser": "recordingInputParser",
+      "name": "invalid UUID",
+      "valid": false,
+      "value": {
+        "id": "legacy-local-id",
+        "title": "Fictional recording",
+        "transcript": "A blue notebook is on the desk.",
+        "durationMs": 1000
+      }
+    },
+    {
+      "parser": "recordingInputParser",
+      "name": "negative duration",
+      "valid": false,
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "title": "Fictional recording",
+        "transcript": "A blue notebook is on the desk.",
+        "durationMs": -1
+      }
+    },
+    {
+      "parser": "recordingInputParser",
+      "name": "too long duration",
+      "valid": false,
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "title": "Fictional recording",
+        "transcript": "A blue notebook is on the desk.",
+        "durationMs": 1800001
+      }
+    },
+    {
+      "parser": "recordingInputParser",
+      "name": "empty title",
+      "valid": false,
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "title": "   ",
+        "transcript": "A blue notebook is on the desk.",
+        "durationMs": 1000
+      }
+    },
+    {
+      "parser": "recordingResponseParser",
+      "name": "future nested response fields",
+      "valid": true,
+      "value": {
+        "recording": {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "title": "Fictional recording",
+          "transcript": "A blue notebook is on the desk.",
+          "durationMs": 1000,
+          "createdAt": "2026-01-02T03:04:05Z",
+          "updatedAt": "2026-01-02T03:04:05Z",
+          "future": {
+            "notes": [
+              "fictional",
+              null,
+              3
+            ]
+          }
+        },
+        "nextContract": true
+      }
+    },
+    {
+      "parser": "recordingResponseParser",
+      "name": "missing timestamp",
+      "valid": false,
+      "value": {
+        "recording": {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "title": "Fictional recording",
+          "transcript": "A blue notebook is on the desk.",
+          "durationMs": 1000
+        }
+      }
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "UTC client report",
+      "valid": true,
+      "value": {
+        "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "recordingId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional text",
+        "status": "confirmed",
+        "occurredAt": "2026-01-02T03:04:05Z"
+      }
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "reject offset input",
+      "valid": false,
+      "value": {
+        "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "recordingId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional text",
+        "status": "confirmed",
+        "occurredAt": "2026-01-02T03:04:05+02:00"
+      }
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "reject claimed server evidence",
+      "valid": false,
+      "value": {
+        "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "recordingId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional text",
+        "status": "confirmed",
+        "occurredAt": "2026-01-02T03:04:05Z",
+        "evidenceSource": "server_verified"
+      }
+    },
+    {
+      "parser": "pasteReceiptParser",
+      "name": "offset response and client reported evidence",
+      "valid": true,
+      "value": {
+        "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "recordingId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional text",
+        "status": "confirmed",
+        "occurredAt": "2026-01-02T03:04:05+02:00",
+        "createdAt": "2026-01-02T03:04:05Z",
+        "updatedAt": "2026-01-02T03:04:05Z",
+        "evidenceSource": "client_reported",
+        "future": true
+      }
+    },
+    {
+      "parser": "pasteReceiptParser",
+      "name": "reject server verification claim",
+      "valid": false,
+      "value": {
+        "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "recordingId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional text",
+        "status": "confirmed",
+        "occurredAt": "2026-01-02T03:04:05Z",
+        "createdAt": "2026-01-02T03:04:05Z",
+        "updatedAt": "2026-01-02T03:04:05Z",
+        "evidenceSource": "server_verified"
+      }
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "empty page",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "paired cursor",
+      "valid": true,
+      "value": {
+        "before": "2026-01-02T03:04:05Z",
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "time only cursor",
+      "valid": false,
+      "value": {
+        "before": "2026-01-02T03:04:05Z"
+      }
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "id alone cursor",
+      "valid": false,
+      "value": {
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "oversized page",
+      "valid": false,
+      "value": {
+        "limit": 101
+      }
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "legacy offset is not hosted cursor",
+      "valid": false,
+      "value": {
+        "offset": 20
+      }
+    },
+    {
+      "parser": "accountResponseParser",
+      "name": "legacy account without metadata",
+      "valid": true,
+      "value": {
+        "account": {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "displayName": "Fictional account",
+          "email": "person@example.invalid",
+          "createdAt": "2026-01-02T03:04:05Z"
+        }
+      }
+    },
+    {
+      "parser": "accountResponseParser",
+      "name": "modern account",
+      "valid": true,
+      "value": {
+        "account": {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "displayName": "Fictional account",
+          "email": "person@example.invalid",
+          "createdAt": "2026-01-02T03:04:05Z"
+        },
+        "wireVersion": "1.0",
+        "capabilities": [
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack",
+          "session-authorize"
+        ]
+      }
+    },
+    {
+      "parser": "versionResponseParser",
+      "name": "new compatible minor and capability",
+      "valid": true,
+      "value": {
+        "name": "recordings",
+        "version": "fictional",
+        "apiVersion": "v1",
+        "wireVersion": "1.12",
+        "capabilities": [
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack",
+          "session-authorize",
+          "future-feature"
+        ]
+      }
+    },
+    {
+      "parser": "accountResponseParser",
+      "name": "partial metadata",
+      "valid": false,
+      "value": {
+        "account": {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "displayName": "Fictional account",
+          "email": "person@example.invalid",
+          "createdAt": "2026-01-02T03:04:05Z"
+        },
+        "wireVersion": "1.0"
+      }
+    },
+    {
+      "parser": "accountResponseParser",
+      "name": "missing required capability",
+      "valid": false,
+      "value": {
+        "account": {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "displayName": "Fictional account",
+          "email": "person@example.invalid",
+          "createdAt": "2026-01-02T03:04:05Z"
+        },
+        "wireVersion": "1.0",
+        "capabilities": [
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack"
+        ]
+      }
+    },
+    {
+      "parser": "accountResponseParser",
+      "name": "duplicate capability",
+      "valid": false,
+      "value": {
+        "account": {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "displayName": "Fictional account",
+          "email": "person@example.invalid",
+          "createdAt": "2026-01-02T03:04:05Z"
+        },
+        "wireVersion": "1.0",
+        "capabilities": [
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack",
+          "session-authorize",
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack",
+          "session-authorize"
+        ]
+      }
+    },
+    {
+      "parser": "accountResponseParser",
+      "name": "bad capability",
+      "valid": false,
+      "value": {
+        "account": {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "displayName": "Fictional account",
+          "email": "person@example.invalid",
+          "createdAt": "2026-01-02T03:04:05Z"
+        },
+        "wireVersion": "1.0",
+        "capabilities": [
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack",
+          "session-authorize",
+          "Not valid"
+        ]
+      }
+    },
+    {
+      "parser": "accountResponseParser",
+      "name": "unsupported major",
+      "valid": false,
+      "value": {
+        "account": {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "displayName": "Fictional account",
+          "email": "person@example.invalid",
+          "createdAt": "2026-01-02T03:04:05Z"
+        },
+        "wireVersion": "2.0",
+        "capabilities": [
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack",
+          "session-authorize"
+        ]
+      }
+    },
+    {
+      "parser": "accountResponseParser",
+      "name": "trailing newline",
+      "valid": false,
+      "value": {
+        "account": {
+          "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "displayName": "Fictional account",
+          "email": "person@example.invalid",
+          "createdAt": "2026-01-02T03:04:05Z"
+        },
+        "wireVersion": "1.0\n",
+        "capabilities": [
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack",
+          "session-authorize"
+        ]
+      }
+    },
+    {
+      "parser": "bootstrapInputParser",
+      "name": "empty bootstrap",
+      "valid": true,
+      "value": {}
+    },
+    {
+      "parser": "bootstrapInputParser",
+      "name": "no profile authority input",
+      "valid": false,
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    },
+    {
+      "parser": "renameInputParser",
+      "name": "rename",
+      "valid": true,
+      "value": {
+        "title": "Fictional title"
+      }
+    },
+    {
+      "parser": "pendingDeletionParser",
+      "name": "pending cleanup with future metadata",
+      "valid": true,
+      "value": {
+        "audioCleanup": {
+          "state": "pending",
+          "future": true
+        }
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "legacy session start",
+      "valid": true,
+      "value": {
+        "type": "session.start",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "modern session start",
+      "valid": true,
+      "value": {
+        "type": "session.start",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "wireVersion": "1.0",
+        "capabilities": [
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack",
+          "session-authorize"
+        ],
+        "language": "en",
+        "model": "fictional-model"
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "finish",
+      "valid": true,
+      "value": {
+        "type": "input.finish"
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "cancel",
+      "valid": true,
+      "value": {
+        "type": "session.cancel"
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "authorize",
+      "valid": true,
+      "value": {
+        "type": "session.authorize",
+        "accessToken": "fictional-bearer"
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "start future key",
+      "valid": false,
+      "value": {
+        "type": "session.start",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "future": true
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "partial start metadata",
+      "valid": false,
+      "value": {
+        "type": "session.start",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "wireVersion": "1.0"
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "uppercase language",
+      "valid": false,
+      "value": {
+        "type": "session.start",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "language": "EN"
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "wrong major",
+      "valid": false,
+      "value": {
+        "type": "session.start",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "wireVersion": "2.0",
+        "capabilities": [
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack",
+          "session-authorize"
+        ]
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "finish fields",
+      "valid": false,
+      "value": {
+        "type": "input.finish",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "empty authorization",
+      "valid": false,
+      "value": {
+        "type": "session.authorize",
+        "accessToken": ""
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "legacy ready",
+      "valid": true,
+      "value": {
+        "type": "session.ready",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "format": {
+          "encoding": "pcm_s16le",
+          "sampleRateHz": 24000,
+          "channels": 1
+        },
+        "maxInFlightAudioBytes": 96000
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "modern ready",
+      "valid": true,
+      "value": {
+        "type": "session.ready",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "format": {
+          "encoding": "pcm_s16le",
+          "sampleRateHz": 24000,
+          "channels": 1
+        },
+        "maxInFlightAudioBytes": 96000,
+        "wireVersion": "1.0",
+        "capabilities": [
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack",
+          "session-authorize"
+        ],
+        "future": {
+          "enabled": true
+        }
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "future minor ready",
+      "valid": true,
+      "value": {
+        "type": "session.ready",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "format": {
+          "encoding": "pcm_s16le",
+          "sampleRateHz": 24000,
+          "channels": 1
+        },
+        "maxInFlightAudioBytes": 96000,
+        "wireVersion": "1.1",
+        "capabilities": [
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack",
+          "session-authorize"
+        ]
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "audio accepted",
+      "valid": true,
+      "value": {
+        "type": "audio.accepted",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "bytes": 4800,
+        "totalBytes": 9600
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "authorized",
+      "valid": true,
+      "value": {
+        "type": "session.authorized",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "expiresAt": 2000000000
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "partial",
+      "valid": true,
+      "value": {
+        "type": "partial",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "sequence": 1,
+        "segment": {
+          "id": "segment-1",
+          "text": "Fictional partial.",
+          "startSecond": 0,
+          "future": true
+        }
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "committed",
+      "valid": true,
+      "value": {
+        "type": "committed",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "sequence": 1,
+        "segment": {
+          "id": "segment-1",
+          "text": "Fictional partial.",
+          "startSecond": 0,
+          "future": true
+        }
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "minimal legacy final",
+      "valid": true,
+      "value": {
+        "type": "final",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "transcript": {
+          "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "text": "Fictional final."
+        }
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "final",
+      "valid": true,
+      "value": {
+        "type": "final",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "sequence": 2,
+        "recordingId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "transcript": {
+          "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "text": "Fictional final transcript.",
+          "segments": [
+            {
+              "id": "segment-1",
+              "text": "Fictional final transcript."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "future safe error code",
+      "valid": true,
+      "value": {
+        "type": "error",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "code": "future_error",
+        "message": "Fictional refusal."
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "wrong sample rate",
+      "valid": false,
+      "value": {
+        "type": "session.ready",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "format": {
+          "encoding": "pcm_s16le",
+          "sampleRateHz": 48000,
+          "channels": 1
+        },
+        "maxInFlightAudioBytes": 96000
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "oversized audio window",
+      "valid": false,
+      "value": {
+        "type": "session.ready",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "format": {
+          "encoding": "pcm_s16le",
+          "sampleRateHz": 24000,
+          "channels": 1
+        },
+        "maxInFlightAudioBytes": 192001
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "partial ready metadata",
+      "valid": false,
+      "value": {
+        "type": "session.ready",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "format": {
+          "encoding": "pcm_s16le",
+          "sampleRateHz": 24000,
+          "channels": 1
+        },
+        "maxInFlightAudioBytes": 96000,
+        "wireVersion": "1.0"
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "unsupported ready major",
+      "valid": false,
+      "value": {
+        "type": "session.ready",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "format": {
+          "encoding": "pcm_s16le",
+          "sampleRateHz": 24000,
+          "channels": 1
+        },
+        "maxInFlightAudioBytes": 96000,
+        "wireVersion": "2.0",
+        "capabilities": [
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack",
+          "session-authorize"
+        ]
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "odd ack",
+      "valid": false,
+      "value": {
+        "type": "audio.accepted",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "bytes": 3,
+        "totalBytes": 3
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "ack exceeds total",
+      "valid": false,
+      "value": {
+        "type": "audio.accepted",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "bytes": 4800,
+        "totalBytes": 2400
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "negative sequence",
+      "valid": false,
+      "value": {
+        "type": "partial",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "sequence": -1,
+        "segment": {
+          "id": "one",
+          "text": "Fictional"
+        }
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "foreign final identity",
+      "valid": false,
+      "value": {
+        "type": "final",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "sequence": 2,
+        "recordingId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "transcript": {
+          "sessionId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "text": "Fictional final transcript.",
+          "segments": [
+            {
+              "id": "segment-1",
+              "text": "Fictional final transcript."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "foreign recording identity",
+      "valid": false,
+      "value": {
+        "type": "final",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "sequence": 2,
+        "recordingId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "transcript": {
+          "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "text": "Fictional final transcript.",
+          "segments": [
+            {
+              "id": "segment-1",
+              "text": "Fictional final transcript."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "empty final",
+      "valid": false,
+      "value": {
+        "type": "final",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "sequence": 2,
+        "recordingId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "transcript": {
+          "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "text": "  ",
+          "segments": [
+            {
+              "id": "segment-1",
+              "text": "Fictional final transcript."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "parser": "streamEventParser",
+      "name": "unknown event kind",
+      "valid": false,
+      "value": {
+        "type": "unrecognized.event",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    },
+    {
+      "parser": "recordingIDParser",
+      "name": "UUID standard",
+      "value": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "valid": true
+    },
+    {
+      "parser": "recordingIDParser",
+      "name": "UUID uppercase standard",
+      "value": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+      "valid": true
+    },
+    {
+      "parser": "recordingIDParser",
+      "name": "UUID nil",
+      "value": "00000000-0000-0000-0000-000000000000",
+      "valid": true
+    },
+    {
+      "parser": "recordingIDParser",
+      "name": "UUID max",
+      "value": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      "valid": true
+    },
+    {
+      "parser": "recordingIDParser",
+      "name": "UUID uppercase max rejected",
+      "value": "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF",
+      "valid": false
+    },
+    {
+      "parser": "recordingIDParser",
+      "name": "UUID version zero rejected",
+      "value": "aaaaaaaa-aaaa-0aaa-8aaa-aaaaaaaaaaaa",
+      "valid": false
+    },
+    {
+      "parser": "recordingIDParser",
+      "name": "UUID newline rejected",
+      "value": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\n",
+      "valid": false
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "UTC qualified timestamp 2026-01-02T03:04Z",
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional",
+        "status": "attempted",
+        "occurredAt": "2026-01-02T03:04Z"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "Cursor qualified timestamp 2026-01-02T03:04Z",
+      "value": {
+        "before": "2026-01-02T03:04Z",
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "UTC qualified timestamp 2026-01-02T03:04:05Z",
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional",
+        "status": "attempted",
+        "occurredAt": "2026-01-02T03:04:05Z"
+      },
+      "valid": true
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "Cursor qualified timestamp 2026-01-02T03:04:05Z",
+      "value": {
+        "before": "2026-01-02T03:04:05Z",
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "valid": true
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "UTC qualified timestamp 2026-01-02T03:04:05.123Z",
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional",
+        "status": "attempted",
+        "occurredAt": "2026-01-02T03:04:05.123Z"
+      },
+      "valid": true
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "Cursor qualified timestamp 2026-01-02T03:04:05.123Z",
+      "value": {
+        "before": "2026-01-02T03:04:05.123Z",
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "valid": true
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "UTC qualified timestamp 2026-01-02T03:04:05+02:00",
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional",
+        "status": "attempted",
+        "occurredAt": "2026-01-02T03:04:05+02:00"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "Cursor qualified timestamp 2026-01-02T03:04:05+02:00",
+      "value": {
+        "before": "2026-01-02T03:04:05+02:00",
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "valid": true
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "UTC qualified timestamp 2026-01-02T03:04:05+0200",
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional",
+        "status": "attempted",
+        "occurredAt": "2026-01-02T03:04:05+0200"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "Cursor qualified timestamp 2026-01-02T03:04:05+0200",
+      "value": {
+        "before": "2026-01-02T03:04:05+0200",
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "UTC qualified timestamp 2026-01-02T03:04:05+02",
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional",
+        "status": "attempted",
+        "occurredAt": "2026-01-02T03:04:05+02"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "Cursor qualified timestamp 2026-01-02T03:04:05+02",
+      "value": {
+        "before": "2026-01-02T03:04:05+02",
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "UTC qualified timestamp 2026-01-02T03:04:05+23:59",
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional",
+        "status": "attempted",
+        "occurredAt": "2026-01-02T03:04:05+23:59"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "Cursor qualified timestamp 2026-01-02T03:04:05+23:59",
+      "value": {
+        "before": "2026-01-02T03:04:05+23:59",
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "valid": true
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "UTC qualified timestamp 2026-01-02T03:04:05+24:00",
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional",
+        "status": "attempted",
+        "occurredAt": "2026-01-02T03:04:05+24:00"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "Cursor qualified timestamp 2026-01-02T03:04:05+24:00",
+      "value": {
+        "before": "2026-01-02T03:04:05+24:00",
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "UTC qualified timestamp 2026-01-02T03:04:05+02:60",
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional",
+        "status": "attempted",
+        "occurredAt": "2026-01-02T03:04:05+02:60"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "Cursor qualified timestamp 2026-01-02T03:04:05+02:60",
+      "value": {
+        "before": "2026-01-02T03:04:05+02:60",
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "UTC qualified timestamp 2026-02-30T03:04:05Z",
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional",
+        "status": "attempted",
+        "occurredAt": "2026-02-30T03:04:05Z"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "Cursor qualified timestamp 2026-02-30T03:04:05Z",
+      "value": {
+        "before": "2026-02-30T03:04:05Z",
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "UTC qualified timestamp 2024-02-29T03:04:05Z",
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional",
+        "status": "attempted",
+        "occurredAt": "2024-02-29T03:04:05Z"
+      },
+      "valid": true
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "Cursor qualified timestamp 2024-02-29T03:04:05Z",
+      "value": {
+        "before": "2024-02-29T03:04:05Z",
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "valid": true
+    },
+    {
+      "parser": "pasteInputParser",
+      "name": "UTC qualified timestamp 2026-01-02T03:04:05Z [newline]",
+      "value": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "text": "Fictional",
+        "status": "attempted",
+        "occurredAt": "2026-01-02T03:04:05Z\n"
+      },
+      "valid": false
+    },
+    {
+      "parser": "pageOptionsParser",
+      "name": "Cursor qualified timestamp 2026-01-02T03:04:05Z [newline]",
+      "value": {
+        "before": "2026-01-02T03:04:05Z\n",
+        "beforeId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      },
+      "valid": false
+    }
+  ]
+}
