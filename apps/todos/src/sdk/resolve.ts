@@ -43,6 +43,7 @@ import {
   createHasnaHttpTransport,
   resolveClientTransport,
   resolveCredential,
+  toV1BaseUrl,
   type ClientTransportResolution,
   type CredentialChainOptions,
   type ResolveClientTransportOptions,
@@ -72,7 +73,7 @@ export interface TodosSdkTransport {
 }
 
 export interface ResolveTodosSdkTransportOptions {
-  /** Tier 1: an explicit authority. Used verbatim, minus a trailing slash. */
+  /** Tier 1: an explicit authority, validated and canonicalized by Contracts. */
   baseUrl?: string | undefined;
   /** Tier 1: an explicit credential. */
   apiKey?: string | undefined;
@@ -114,6 +115,22 @@ function announceLocal(notice: ((line: string) => void) | undefined, reason: str
 export function resolveTodosSdkTransport(
   options: ResolveTodosSdkTransportOptions = {},
 ): TodosSdkTransport {
+  // An explicit URL is a declaration even when blank. Validate it before any
+  // ambient store is consulted; invalid tier-1 input cannot select another URL.
+  if (options.baseUrl !== undefined) {
+    let baseUrl: string;
+    try {
+      baseUrl = stripV1(toV1BaseUrl(options.baseUrl));
+    } catch {
+      throw new ClientTransportConfigurationError("todos", "The explicit baseUrl must be a valid HTTPS service URL or exact loopback HTTP URL.");
+    }
+    return {
+      mode: "http", baseUrl,
+      apiKey: options.apiKey ?? null,
+      apiKeySource: options.apiKey ? "explicit apiKey argument" : null,
+      apiUrlSource: "explicit baseUrl argument",
+    };
+  }
   const rawEnv: Env = options.env ?? (typeof process !== "undefined" ? (process.env as Env) : {});
   // The credential options the chain will see, assembled BEFORE the env is
   // normalised: dropping a declared-but-blank variable hands the resolver a
@@ -124,18 +141,6 @@ export function resolveTodosSdkTransport(
     ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
   };
   const { env, credentials } = todosResolverInputs(rawEnv, requestedCredentials);
-
-  // Tier 1, and the only way to reach an arbitrary authority: an explicit
-  // argument is a deliberate selection, so it is never resolved around.
-  if (options.baseUrl) {
-    return {
-      mode: "http",
-      baseUrl: stripV1(options.baseUrl),
-      apiKey: options.apiKey ?? null,
-      apiKeySource: options.apiKey ? "explicit apiKey argument" : null,
-      apiUrlSource: "explicit baseUrl argument",
-    };
-  }
 
   // The same preamble the CLI runs: a configured environment outranks the
   // opt-in, so this arm is reached only when nothing at all is configured.
@@ -215,8 +220,8 @@ export function createTodosSdkRequestTransport(
 ): { baseUrl: string; authenticated: boolean; apiKey: () => string | null; fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response> } {
   const resolved = resolveTodosSdkTransport(options);
   const fetchImpl = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
-  const pinned = Boolean(options.baseUrl) || resolved.mode === "local-serve";
-  if (pinned && !resolved.apiKey) {
+  const pinned = options.baseUrl !== undefined || resolved.mode === "local-serve";
+  if (pinned && resolved.apiKey === null) {
     // Explicit anonymous servers never consult the ambient credential chain.
     // Preserve this library compatibility without attaching a station key.
     return {

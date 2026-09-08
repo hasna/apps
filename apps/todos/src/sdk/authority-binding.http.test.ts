@@ -120,6 +120,31 @@ for (const kind of ["namespaced", "v1"] as const) {
   });
 }
 
+test("constructor metadata rotation cannot pair its old key with the final transport authority", async () => {
+  const first = fixture();
+  const other = fixture();
+  first.save("fixture-initial");
+  let current = "fixture-initial";
+  const keysRead: string[] = [];
+  const client = createTodosV1Client({
+    credentials: { keychain: { platform: "darwin", run(argv) {
+      if (!argv.some(value => value.endsWith(".api-key"))) return { status: 44, stdout: "", stderr: "" };
+      const key = current;
+      keysRead.push(key);
+      if (key === "fixture-initial") {
+        current = "fixture-final";
+        other.save(current);
+      }
+      return { status: 0, stdout: key, stderr: "" };
+    } } },
+  });
+  await client.listTasks();
+  expect(keysRead[0]).toBe("fixture-initial");
+  expect(keysRead.slice(1).every(key => key === "fixture-final")).toBe(true);
+  expect(first.calls).toHaveLength(0);
+  expect(other.calls.map(call => call.key)).toEqual(["fixture-final"]);
+});
+
 test("raw SDK reads keep their bound authority and cannot send a key to an arbitrary URL", async () => {
   const first = fixture();
   const other = fixture();
@@ -167,6 +192,30 @@ test("explicit authority does not consult ambient credentials, with or without a
   await v1.listTasks();
   expect(remote.calls.map(call => call.key)).toEqual([null, "fixture-explicit", "fixture-explicit-v1"]);
 });
+
+for (const kind of ["namespaced", "v1"] as const) {
+  for (const baseUrl of ["", "   "]) {
+    test(`${kind} explicit ${baseUrl.length ? "whitespace" : "empty"} authority refuses before dispatch`, () => {
+      const remote = fixture();
+      remote.save("fixture-ambient");
+      const create = () => kind === "namespaced"
+        ? new TodosClient({ baseUrl, apiKey: "fixture-explicit" })
+        : createTodosV1Client({ baseUrl, apiKey: "fixture-explicit" });
+      expect(create).toThrow(/explicit baseUrl/);
+      expect(remote.calls).toHaveLength(0);
+    });
+  }
+
+  test(`${kind} explicit blank key does not become an anonymous request`, async () => {
+    const remote = fixture();
+    remote.save("fixture-ambient");
+    const list = kind === "namespaced"
+      ? () => new TodosClient({ baseUrl: remote.authority, apiKey: "" }).tasks.list()
+      : () => createTodosV1Client({ baseUrl: remote.authority, apiKey: "" }).listTasks();
+    await expect(list()).rejects.toThrow();
+    expect(remote.calls).toHaveLength(0);
+  });
+}
 
 test("raw and generated requests never follow redirects to another authority", async () => {
   const other = fixture();
