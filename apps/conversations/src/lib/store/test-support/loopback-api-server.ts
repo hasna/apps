@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { ApiKeyStore, mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { startApiServer, type ApiServerDeps } from "../../../server/api.js";
 import { makeFakeClient } from "./api-query-fixture.js";
+import { publishLoopbackReadiness } from "./loopback-api-readiness.js";
 
 const [home, readyPath] = process.argv.slice(2);
 if (!home || !readyPath) throw new Error("Fixture paths are required");
@@ -23,7 +24,7 @@ const url = `http://127.0.0.1:${server.port}`;
 const config = join(home, ".hasna", "conversations", "config");
 mkdirSync(config, { recursive: true, mode: 0o700 });
 writeFileSync(join(config, "credentials"), `HASNA_CONVERSATIONS_API_URL=${url}\nHASNA_CONVERSATIONS_API_KEY=${minted.token}\n`, { mode: 0o600 });
-writeFileSync(readyPath, JSON.stringify({ url }), { mode: 0o600 });
+publishLoopbackReadiness(readyPath, { url });
 
 // Private child IPC only: legacy/corrupt fixtures never become public HTTP routes.
 process.on("message", (input: unknown) => {
