@@ -1,7 +1,9 @@
+import { builtinTemplateInputs } from "../lib/builtin-template-library.js";
+import {validatePlanSchedule} from "../lib/plan-schedule.js";
 import { createAtomicProjectMigration } from "./atomic-project-migration.js";
 import { createPostgresMachineRegistry, validateMachines } from "./machine-registry.js";
 import { randomUUID } from "node:crypto";
-import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, VersionConflictError, isTerminalStatus } from "../types/index.js";
+import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskListNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, VersionConflictError, isTerminalStatus } from "../types/index.js";
 import type {
   Agent,
   CreateCommentInput,
@@ -30,6 +32,7 @@ import type {
   TemplateTask,
   TemplateTaskInput,
   TemplateWithTasks,
+  TemplateVersion,
   UpdatePlanInput,
   UpdateProjectInput,
   UpdateTaskInput,
@@ -53,6 +56,8 @@ import type {
   TodosPlanProjectLinkApplyInput,
   TodosPlanProjectLinkRollbackInput,
   TodosStorageAdapter,
+  TodosTemplateHistory,
+  TodosTemplateInitialization,
   TodosStorageContext,
   TodosStorageImportResult,
   TodosStorageSnapshot,
@@ -111,7 +116,7 @@ import {
 } from "./audit-history-import.js";
 import { deterministicUuid } from "../task-manifest/canonical.js";
 
-type RemoteObjectType = "machines" | TodosPostgresSyncRecordType | "comments" | "plan_comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
+type RemoteObjectType = "template_versions" | "machines" | TodosPostgresSyncRecordType | "comments" | "plan_comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -215,6 +220,7 @@ export function createPostgresTodosStorageAdapter(
       completeAtRevision: (id, expectedUpdatedAt, context) =>
         store.completePlanAtRevision(id, expectedUpdatedAt, context),
       delete: (id, context) => store.deletePlan(id, context),
+      deletePreserving: (id, force, context) => store.deletePlanPreserving(id, force, context),
       addComment: (input, context) => addPlanComment(input, store, context),
       getComments: async (planId) => {
         const pages: PlanComment[][] = [];
@@ -256,20 +262,26 @@ export function createPostgresTodosStorageAdapter(
     },
     taskLists: {
       create: (input, context) => createTaskList(input, store, context),
-      get: (id) => store.get<TaskList>("task_lists", id),
-      getBySlug: async (slug, projectId) => (await store.list<TaskList>("task_lists"))
-        .find((list) => list.slug === slug && (projectId === undefined || list.project_id === projectId)) ?? null,
-      list: async (projectId) => (await store.list<TaskList>("task_lists"))
+      get: async (id) => {const list=await store.get<TaskList>("task_lists", id);return list?withTaskListStatus(list):null;},
+      getBySlug: async (slug, projectId) => {
+        const list = (await store.list<TaskList>("task_lists")).find(list => list.slug === slug && (projectId === undefined || list.project_id === projectId));
+        return list ? withTaskListStatus(list) : null;
+      },
+      list: async (projectId) => (await store.list<TaskList>("task_lists")).map(withTaskListStatus)
         .filter((list) => projectId === undefined || list.project_id === projectId)
         .sort((a, b) => a.name.localeCompare(b.name)),
-      update: (id, input) => updateTaskList(id, input, store),
-      delete: (id, context) => store.delete("task_lists", id, context),
+      update: (id, input) => store.withDependencyGraphTransaction(scoped=>updateTaskList(id, input, scoped)).then(withTaskListStatus),
+      delete: async (id, context) => (await store.deleteTaskListPreserving(id, false, context)).deleted,
+      deletePreserving: (id, force, context) => store.deleteTaskListPreserving(id, force, context),
     },
     templates: {
+      updateWithHistory: (id,input) => store.withTemplateTransaction(scoped => updateTemplate(id,input,scoped)),
+      history: (id) => store.withTemplateTransaction(scoped => readTemplateHistory(id, scoped)),
+      initialize: (context) => store.withTemplateTransaction(scoped => initializeTemplates(scoped, context)),
       create: (input, context) => createTemplate(input, store, context),
       get: (id) => store.get<TaskTemplate>("templates", id),
       list: async () => (await store.list<TaskTemplate>("templates")).sort((a, b) => a.name.localeCompare(b.name)),
-      update: (id, input) => updateTemplate(id, input, store),
+      update: (id, input) => store.withTemplateTransaction(scoped => updateTemplate(id, input, scoped)),
       delete: (id, context) => deleteTemplate(id, store, context),
       getWithTasks: async (id) => {
         const template = await store.get<TaskTemplate>("templates", id);
@@ -355,6 +367,40 @@ class PostgresJsonRecordStore {
       scoped.projectIntegrityLocked = true;
       return fn(scoped);
     });
+  }
+
+  /** One service-scoped lock serializes initialization and version snapshots. */
+  async withTemplateTransaction<T>(fn: (store: PostgresJsonRecordStore) => Promise<T>): Promise<T> {
+    await this.ensureSchema();
+    const transaction = this.options.client.transaction;
+    if (!transaction) throw new Error("TEMPLATE_ATOMICITY_UNAVAILABLE: upgrade the Todos storage backend");
+    return transaction(async client => {
+      await client.query("/* todos:template-integrity-lock */ SELECT pg_advisory_xact_lock(hashtextextended($1 || ':template-integrity', 0))", [this.service]);
+      const scoped = new PostgresJsonRecordStore({ ...this.options, client });
+      scoped.schemaReady = Promise.resolve();
+      return fn(scoped);
+    });
+  }
+
+  async lockTemplate(id: string): Promise<void> {
+    await this.options.client.query(`/* todos:template-row-lock */ SELECT object_id FROM ${this.tableName} WHERE service = $1 AND object_type = 'templates' AND object_id = $2 AND deleted_at IS NULL FOR UPDATE`, [this.service, id]);
+  }
+
+  /** The caller holds the template row lock; stale writes must roll back history. */
+  async persistTemplateRevision(template: TaskTemplate, previousVersion: number): Promise<TaskTemplate> {
+    const result = await this.options.client.query<{payload: unknown}>(
+      `/* todos:template-version-cas */ UPDATE ${this.tableName}
+       SET payload = $3::jsonb,
+           updated_at = GREATEST(clock_timestamp(), COALESCE(updated_at, 'epoch'::timestamptz) + interval '1 microsecond'),
+           version = $5
+       WHERE service = $1 AND object_type = 'templates' AND object_id = $2
+         AND deleted_at IS NULL AND (payload->>'version')::integer = $4
+         AND COALESCE(version, 1) = $4
+       RETURNING payload`,
+      [this.service, template.id, jsonbParam(template), previousVersion, template.version],
+    );
+    if (result.rows.length !== 1) throw new ResourceConflictError("TEMPLATE_VERSION_CONFLICT", "Template revision write was refused; no history was committed");
+    return payloadRecord<TaskTemplate>(result.rows[0]!.payload);
   }
 
   async ensureSchema(): Promise<void> {
@@ -643,6 +689,8 @@ class PostgresJsonRecordStore {
       if (values.length === 0) return "1=0";
       return `${column} IN (${values.map((v) => p(v)).join(", ")})`;
     };
+    // Explicit archive selection is shared by list/count. Omitted requests retain predecessor behavior.
+    if (filter.include_archived === false) conds.push(`(payload->>'archived_at' IS NULL)`);
     if (filter.ids) conds.push(inClause("payload->>'id'", filter.ids));
     if (filter.project_id !== undefined) conds.push(`payload->>'project_id' = ${p(filter.project_id)}`);
     if (filter.parent_id !== undefined) conds.push(`payload->>'parent_id' IS NOT DISTINCT FROM ${p(filter.parent_id)}`);
@@ -910,9 +958,18 @@ class PostgresJsonRecordStore {
     }
     const projectTypes = new Set<RemoteObjectType>(["projects", "tasks", "plans", "task_lists"]);
     const reference = type === "projects" ? (value as {parent_id?:unknown}).parent_id : (value as {project_id?:unknown}).project_id;
-    const needsProjectFence = type === "projects" || (projectTypes.has(type) && typeof reference === "string" && reference.length > 0);
+    const planReference = (value as {plan_id?:unknown}).plan_id;
+    const needsPlanFence = type === "tasks" && typeof planReference === "string" && planReference.length > 0;
+    const listReference=(value as {task_list_id?:unknown}).task_list_id;
+    const needsListFence=(type==="tasks"||type==="plans")&&typeof listReference==="string"&&listReference.length>0;
+    const needsProjectFence = needsListFence || needsPlanFence || type === "projects" || (projectTypes.has(type) && typeof reference === "string" && reference.length > 0);
     if (needsProjectFence && !this.projectIntegrityLocked) {
       return this.withDependencyGraphTransaction(scoped => scoped.upsert(type, value, context));
+    }
+    if(needsListFence)await this.assertTaskListMembership(type as "tasks"|"plans",value.id,listReference);
+    if(needsPlanFence) {
+      const plan=await this.options.client.query(`SELECT object_id FROM ${this.tableName} WHERE service=$1 AND object_type='plans' AND object_id=$2 AND deleted_at IS NULL FOR KEY SHARE`,[this.service,planReference]);
+      if(!plan.rows.length)throw new PlanNotFoundError(planReference as string);
     }
     if (projectTypes.has(type)) {
       if (typeof reference === "string" && reference) await this.assertLiveProject(reference);
@@ -1099,6 +1156,7 @@ class PostgresJsonRecordStore {
     }
     const client = queryClient ?? this.options.client;
     if (value.project_id) await this.assertLiveProject(value.project_id, client);
+    await this.assertTaskListMembership("tasks",value.id,value.task_list_id,client);
     const updatedAt = value.updated_at;
     const targetPlanId = value.plan_id;
     const result = await client.query<{
@@ -1265,10 +1323,13 @@ class PostgresJsonRecordStore {
   /** Serialize ordinary plan updates with linkage and preserve its project. */
   async updatePlanWithProjectLinkGuard(
     value: Plan,
+    expectedUpdatedAt: string,
     context: TodosStorageContext = {},
   ): Promise<Plan> {
+    if(!this.projectIntegrityLocked)return this.withDependencyGraphTransaction(scoped=>scoped.updatePlanWithProjectLinkGuard(value,expectedUpdatedAt,context));
     await this.ensureSchema();
-    const result = await this.options.client.query<{ plan_found: boolean; payload: unknown | null }>(
+    await this.assertTaskListMembership("plans",value.id,value.task_list_id);
+    const result = await this.options.client.query<{ plan_found: boolean; current_revision: string; payload: unknown | null }>(
       `/* todos:plan-update-project-link-guard */ WITH locked_plan AS MATERIALIZED (
          SELECT payload FROM ${this.tableName}
          WHERE service = $1 AND object_type = 'plans' AND object_id = $2 AND deleted_at IS NULL
@@ -1287,9 +1348,11 @@ class PostgresJsonRecordStore {
            version = COALESCE(r.version, 0) + 1
          FROM locked_plan
          WHERE r.service = $1 AND r.object_type = 'plans' AND r.object_id = $2 AND r.deleted_at IS NULL
+           AND locked_plan.payload->>'updated_at' = $6
          RETURNING r.payload
        )
        SELECT EXISTS (SELECT 1 FROM locked_plan) AS plan_found,
+              (SELECT payload->>'updated_at' FROM locked_plan) AS current_revision,
               (SELECT payload FROM stored) AS payload`,
       [
         this.service,
@@ -1297,10 +1360,12 @@ class PostgresJsonRecordStore {
         jsonbParam(value),
         value.updated_at,
         context.requestId ?? this.sourceMachineId ?? null,
+        expectedUpdatedAt,
       ],
     );
     const row = result.rows[0];
-    if (!row?.plan_found || !row.payload) throw new PlanNotFoundError(value.id);
+    if (!row?.plan_found) throw new PlanNotFoundError(value.id);
+    if (!row.payload) throw new PlanRevisionConflictError(value.id, expectedUpdatedAt, row.current_revision);
     return payloadRecord<Plan>(row.payload);
   }
 
@@ -1645,6 +1710,30 @@ class PostgresJsonRecordStore {
     return Number(row.counter);
   }
 
+  async assertTaskListMembership(type:"tasks"|"plans",id:string,target:unknown,client:TodosPostgresQueryClient=this.options.client):Promise<void>{
+    if(target===undefined||target===null||target==="")return;
+    const prior=await client.query<{task_list_id:string|null}>(`SELECT payload->>'task_list_id' AS task_list_id FROM ${this.tableName} WHERE service=$1 AND object_type=$2 AND object_id=$3 AND deleted_at IS NULL`,[this.service,type,id]);
+    if(prior.rows[0]?.task_list_id===target)return;
+    const list=await client.query(`SELECT object_id FROM ${this.tableName} WHERE service=$1 AND object_type='task_lists' AND object_id=$2 AND deleted_at IS NULL FOR KEY SHARE`,[this.service,target]);
+    if(!list.rows.length)throw new TaskListNotFoundError(String(target));
+  }
+
+  async deleteTaskListPreserving(id:string,force:boolean,context:TodosStorageContext={}):Promise<import("./interfaces.js").TodosTaskListDeleteReceipt>{
+    await this.ensureSchema();
+    return this.withTaskParentIntegrityTransaction(async client=>{
+      const receipt:import("./interfaces.js").TodosTaskListDeleteReceipt={schema_version:1,task_list_id:id,deleted:false,detached_task_ids:[],detached_plan_ids:[],detached_tasks:0,detached_plans:0};
+      const target=await client.query<{updated_at:string}>(`SELECT object_id,updated_at FROM ${this.tableName} WHERE service=$1 AND object_type='task_lists' AND object_id=$2 AND deleted_at IS NULL FOR UPDATE`,[this.service,id]);
+      if(!target.rows.length)return receipt;
+      const related=await client.query<{object_type:string;object_id:string;updated_at:string}>(`SELECT object_type,object_id,updated_at FROM ${this.tableName} WHERE service=$1 AND deleted_at IS NULL AND object_type IN ('tasks','plans') AND payload->>'task_list_id'=$2 ORDER BY object_type,object_id FOR UPDATE`,[this.service,id]);
+      if(related.rows.length&&!force)throw new ResourceConflictError("TASK_LIST_NOT_EMPTY","Task list has linked records; force confirms detaching them without deleting content or history");
+      const timestamp=new Date([...target.rows,...related.rows].reduce((latest,row) => Math.max(latest, Date.parse(String(row.updated_at)) + 1), Date.now())).toISOString();
+      await client.query(`UPDATE ${this.tableName} SET payload=jsonb_set(payload,'{task_list_id}','null'::jsonb)||jsonb_build_object('updated_at',$3::text)||CASE WHEN object_type='tasks' THEN jsonb_build_object('version',COALESCE((payload->>'version')::integer,0)+1) ELSE '{}'::jsonb END,updated_at=$3::timestamptz,version=COALESCE(version,0)+1,source_machine_id=$4 WHERE service=$1 AND deleted_at IS NULL AND object_type IN ('tasks','plans') AND payload->>'task_list_id'=$2`,[this.service,id,timestamp,this.machineId(context)]);
+      await client.query(`UPDATE ${this.tableName} SET deleted_at=$3::timestamptz,updated_at=$3::timestamptz,version=COALESCE(version,0)+1,source_machine_id=$4 WHERE service=$1 AND object_type='task_lists' AND object_id=$2 AND deleted_at IS NULL`,[this.service,id,timestamp,this.machineId(context)]);
+      receipt.deleted=true;receipt.detached_task_ids=related.rows.filter(row=>row.object_type==='tasks').map(row=>row.object_id);receipt.detached_plan_ids=related.rows.filter(row=>row.object_type==='plans').map(row=>row.object_id);receipt.detached_tasks=receipt.detached_task_ids.length;receipt.detached_plans=receipt.detached_plan_ids.length;
+      return receipt;
+    });
+  }
+
   async assertLiveProject(id: string, client: TodosPostgresQueryClient = this.options.client): Promise<void> {
     const result = await client.query(`SELECT object_id FROM ${this.tableName} WHERE service=$1 AND object_type='projects' AND object_id=$2 AND deleted_at IS NULL FOR KEY SHARE`, [this.service,id]);
     if (!result.rows.length) throw new ProjectNotFoundError(id);
@@ -1807,6 +1896,7 @@ class PostgresJsonRecordStore {
   private async currentPlanProjectLinkResult(
     receipt: PlanProjectLinkReceipt,
     action: "linked" | "already_linked",
+    previouslyCommitted = false,
   ): Promise<PlanProjectLinkResult> {
     const [plan, project, tasks] = await Promise.all([
       this.get<Plan>("plans", receipt.plan_id),
@@ -1817,8 +1907,8 @@ class PostgresJsonRecordStore {
     if (!plan || !project || planProjectLinkResultDigest(plan, sortedTasks) !== receipt.result_digest) {
       throw new PlanProjectLinkError(
         "PLAN_PROJECT_LINK_RESULT_DRIFT",
-        "The accepted plan-project-link result has drifted",
-        { receipt_id: receipt.receipt_id },
+        previouslyCommitted ? "The plan-project link was already committed; current state has drifted from its immutable receipt" : "The accepted plan-project-link result has drifted",
+        { receipt_id: receipt.receipt_id, ...(previouslyCommitted ? {operation_committed:true,current_state_matches_receipt:false,receipt} : {}) },
       );
     }
     return { mode: "apply", action, plan, project, tasks: sortedTasks, receipt };
@@ -1828,6 +1918,12 @@ class PostgresJsonRecordStore {
     input: TodosPlanProjectLinkApplyInput,
     context: TodosStorageContext = {},
   ): Promise<PlanProjectLinkResult> {
+    // Hold the existing membership lock through the exact receipt readback.
+    // The outer helper returns only after COMMIT acknowledgment; an ambiguous
+    // commit still throws and must be reconciled by the immutable retry key.
+    if (!this.projectIntegrityLocked) {
+      return this.withDependencyGraphTransaction(scoped => scoped.applyPlanProjectLink(input, context));
+    }
     await this.ensureSchema();
     const existing = await this.getPlanProjectLinkReceipt(input.receipt_id);
     if (existing) {
@@ -1849,7 +1945,7 @@ class PostgresJsonRecordStore {
           { receipt_id: input.receipt_id },
         );
       }
-      return this.currentPlanProjectLinkResult(existing, "already_linked");
+      return this.currentPlanProjectLinkResult(existing, "already_linked", true);
     }
 
     const [plan, project, tasks, scopedPlans] = await Promise.all([
@@ -2018,7 +2114,7 @@ class PostgresJsonRecordStore {
       if (isPostgresUniqueViolation(error)) {
         const raced = await this.getPlanProjectLinkReceipt(input.receipt_id);
         if (raced && raced.plan_id === input.plan_id && raced.project_id === input.project_id) {
-          return this.currentPlanProjectLinkResult(raced, "already_linked");
+          return this.currentPlanProjectLinkResult(raced, "already_linked", true);
         }
         throw new PlanProjectLinkError(
           "PLAN_PROJECT_LINK_IDEMPOTENCY_CONFLICT",
@@ -2039,7 +2135,7 @@ class PostgresJsonRecordStore {
     if (accepted.plan_id !== plan.id || accepted.project_id !== project.id) {
       throw new PlanProjectLinkError("PLAN_PROJECT_LINK_IDEMPOTENCY_CONFLICT", "The idempotency key was accepted for a different target");
     }
-    return this.currentPlanProjectLinkResult(accepted, alreadyLinked ? "already_linked" : "linked");
+    return this.currentPlanProjectLinkResult(accepted, alreadyLinked ? "already_linked" : "linked", row.existing_receipt != null);
   }
 
   async rollbackPlanProjectLink(
@@ -2182,6 +2278,27 @@ class PostgresJsonRecordStore {
     const accepted = (row.existing_rollback ?? row.inserted_rollback) as PlanProjectLinkRollbackResult | null;
     if (!accepted) throw new PlanProjectLinkError("PLAN_PROJECT_LINK_ROLLBACK_CONFLICT", "Rollback did not produce an immutable receipt");
     return accepted;
+  }
+
+  async deletePlanPreserving(id: string, force: boolean, context: TodosStorageContext = {}): Promise<import("./interfaces.js").TodosPlanDeleteReceipt> {
+    await this.ensureSchema();
+    return this.withTaskParentIntegrityTransaction(async client => {
+      const receipt:import("./interfaces.js").TodosPlanDeleteReceipt={schema_version:1,plan_id:id,deleted:false,detached_task_ids:[],detached_task_list_ids:[],detached_tasks:0,detached_task_lists:0};
+      const target=await client.query<{object_id:string;task_list_id:string|null}>(`SELECT object_id,payload->>'task_list_id' AS task_list_id FROM ${this.tableName} WHERE service=$1 AND object_type='plans' AND object_id=$2 AND deleted_at IS NULL FOR UPDATE`,[this.service,id]);
+      if(!target.rows.length)return receipt;
+      const related=await client.query<{object_type:string;object_id:string}>(`SELECT object_type,object_id FROM ${this.tableName} WHERE service=$1 AND deleted_at IS NULL AND ((object_type='tasks' AND payload->>'plan_id'=$2) OR (object_type='task_lists' AND object_id=$3)) ORDER BY object_type,object_id FOR UPDATE`,[this.service,id,target.rows[0]!.task_list_id]);
+      const notes=await client.query(`SELECT object_id FROM ${this.tableName} WHERE service=$1 AND object_type='plan_comments' AND payload->>'plan_id'=$2 AND deleted_at IS NULL LIMIT 1`,[this.service,id]);
+      if((related.rows.length||notes.rows.length)&&!force)throw new ResourceConflictError("PLAN_NOT_EMPTY","Plan has linked records; force confirms detaching them while preserving content and history");
+      const timestamp=new Date().toISOString();
+      await client.query(`UPDATE ${this.tableName} SET payload=jsonb_set(payload,'{plan_id}','null'::jsonb) || jsonb_build_object('updated_at',$3::text) || jsonb_build_object('version',COALESCE((payload->>'version')::integer,0)+1),updated_at=$3::timestamptz,version=COALESCE(version,0)+1,source_machine_id=$4 WHERE service=$1 AND deleted_at IS NULL AND object_type='tasks' AND payload->>'plan_id'=$2`,[this.service,id,timestamp,this.machineId(context)]);
+      await client.query(`UPDATE ${this.tableName} SET deleted_at=$3::timestamptz,updated_at=$3::timestamptz,version=COALESCE(version,0)+1,source_machine_id=$4 WHERE service=$1 AND object_type='plans' AND object_id=$2 AND deleted_at IS NULL`,[this.service,id,timestamp,this.machineId(context)]);
+      // Plan comments and task histories remain intact; only membership is detached.
+      receipt.deleted=true;
+      receipt.detached_task_ids=related.rows.filter(row=>row.object_type==='tasks').map(row=>row.object_id);
+      receipt.detached_task_list_ids=related.rows.filter(row=>row.object_type==='task_lists').map(row=>row.object_id);
+      receipt.detached_tasks=receipt.detached_task_ids.length;receipt.detached_task_lists=receipt.detached_task_list_ids.length;
+      return receipt;
+    });
   }
 
   async deletePlan(id: string, context: TodosStorageContext = {}): Promise<boolean> {
@@ -3015,6 +3132,7 @@ async function updateProject(
 }
 
 async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Plan> {
+  const scheduleError=validatePlanSchedule(input); if(scheduleError)throw new Error(scheduleError);
   const timestamp = new Date().toISOString();
   const projectId = input.project_id ?? context?.projectId ?? null;
   const slug = await resolvePostgresPlanSlug({
@@ -3032,6 +3150,8 @@ async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore
     name: input.name,
     description: input.description ?? null,
     status: input.status ?? "active",
+    ...(input.start_date !== undefined ? {start_date:input.start_date} : {}),
+    ...(input.end_date !== undefined ? {end_date:input.end_date} : {}),
     created_at: timestamp,
     updated_at: timestamp,
     machine_id: store.machineId(context),
@@ -3041,6 +3161,7 @@ async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore
 
 async function updatePlan(id: string, input: UpdatePlanInput, store: PostgresJsonRecordStore): Promise<Plan> {
   const plan = await requireRecord<Plan>("plans", id, store);
+  const scheduleError=validatePlanSchedule({...plan,...input}); if(scheduleError)throw new Error(scheduleError);
   const patch = definedPatch(input);
   if (input.slug !== undefined) {
     patch.slug = await resolvePostgresPlanSlug({
@@ -3055,8 +3176,8 @@ async function updatePlan(id: string, input: UpdatePlanInput, store: PostgresJso
     ...plan,
     ...patch,
     project_id: plan.project_id,
-    updated_at: new Date().toISOString(),
-  });
+    updated_at: new Date(Math.max(Date.now(), Date.parse(plan.updated_at) + 1)).toISOString(),
+  }, plan.updated_at);
 }
 
 /**
@@ -3215,7 +3336,12 @@ async function releaseAgent(
   return { agent: updated, released: true };
 }
 
+function withTaskListStatus(list: TaskList): TaskList {
+  return {...list, status: list.status ?? "active"};
+}
+
 async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<TaskList> {
+  if (input.status !== undefined && !["active", "completed", "archived"].includes(input.status)) throw new Error("Invalid task-list status");
   const timestamp = new Date().toISOString();
   const slug = slugifyRaw(input.slug === undefined ? input.name : input.slug);
   if (!slug) throw new Error("Invalid task-list slug — must be non-empty kebab-case");
@@ -3226,6 +3352,7 @@ async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRec
     name: input.name,
     description: input.description ?? null,
     metadata: input.metadata ?? {},
+    status: input.status ?? "active",
     created_at: timestamp,
     updated_at: timestamp,
     machine_id: store.machineId(context),
@@ -3234,6 +3361,7 @@ async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRec
 }
 
 async function updateTaskList(id: string, input: UpdateTaskListInput, store: PostgresJsonRecordStore): Promise<TaskList> {
+  if (input.status !== undefined && !["active", "completed", "archived"].includes(input.status)) throw new Error("Invalid task-list status");
   const list = await requireRecord<TaskList>("task_lists", id, store);
   const patch = definedPatch(input);
   // A rebind changes the slug's scope, so the slug conflict check must run
@@ -3261,7 +3389,7 @@ async function updateTaskList(id: string, input: UpdateTaskListInput, store: Pos
     ...list,
     ...patch,
     metadata: input.metadata ?? list.metadata,
-    updated_at: new Date().toISOString(),
+    updated_at: new Date(Math.max(Date.now(),Date.parse(list.updated_at)+1)).toISOString(),
   });
 }
 
@@ -3318,17 +3446,139 @@ async function deleteTemplate(
   return store.deleteTemplateWithTasks(id, context);
 }
 
-async function updateTemplate(id: string, input: UpdateTemplateInput, store: PostgresJsonRecordStore): Promise<TaskTemplate | null> {
+async function templateWithTasks(
+  id: string,
+  store: PostgresJsonRecordStore,
+): Promise<TemplateWithTasks | null> {
   const template = await store.get<TaskTemplate>("templates", id);
   if (!template) return null;
-  return store.upsert("templates", {
-    ...template,
-    ...definedPatch(input),
-    tags: input.tags ?? template.tags,
-    variables: input.variables ?? template.variables,
-    metadata: input.metadata ?? template.metadata,
-    version: template.version + 1,
+  const tasks = (await store.list<TemplateTask>("template_tasks"))
+    .filter((row) => row.template_id === id)
+    .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+  return { ...template, tasks };
+}
+
+async function updateTemplate(
+  id: string,
+  input: UpdateTemplateInput,
+  store: PostgresJsonRecordStore,
+): Promise<TemplateWithTasks | null> {
+  await store.lockTemplate(id);
+  const current = await templateWithTasks(id, store);
+  if (!current) return null;
+  if (!Number.isSafeInteger(current.version) || current.version < 1 || current.version >= 10000) throw new Error("Template revision is invalid or exceeds the supported bound");
+  if (
+    input.expected_version !== undefined &&
+    input.expected_version !== current.version
+  ) {
+    throw new ResourceConflictError(
+      "TEMPLATE_VERSION_CONFLICT",
+      "Template changed; fetch its current version before updating",
+    );
+  }
+  const {
+    id: _id,
+    version: _version,
+    created_at: _created,
+    machine_id: _machine,
+    synced_at: _synced,
+    ...snapshot
+  } = current;
+  await store.upsert("template_versions", {
+    id: randomUUID(),
+    template_id: id,
+    version: current.version,
+    snapshot: JSON.stringify(snapshot),
+    created_at: new Date().toISOString(),
   });
+  const { tasks, ...template } = current;
+  const { expected_version: _expected, ...patch } = input;
+  const updated = await store.persistTemplateRevision({
+    ...template,
+    ...definedPatch(patch),
+    version: current.version + 1,
+  }, current.version);
+  return { ...updated, tasks };
+}
+
+async function readTemplateHistory(
+  id: string,
+  store: PostgresJsonRecordStore,
+): Promise<TodosTemplateHistory | null> {
+  await store.lockTemplate(id);
+  const current = await store.get<TaskTemplate>("templates", id);
+  if (!current) return null;
+  if (
+    !Number.isSafeInteger(current.version) ||
+    current.version < 1 ||
+    current.version > 10000
+  )
+    throw new Error("Template history exceeds the supported version bound");
+  const versions = (await store.list<TemplateVersion>("template_versions"))
+    .filter((row) => row.template_id === id)
+    .sort((a, b) => b.version - a.version);
+  const seen = new Set<number>();
+  for (const row of versions) {
+    if (
+      !Number.isSafeInteger(row.version) ||
+      row.version < 1 ||
+      row.version >= current.version ||
+      seen.has(row.version)
+    )
+      throw new Error("Template history has conflicting versions");
+    seen.add(row.version);
+  }
+  const missing_versions = Array.from(
+    { length: current.version - 1 },
+    (_, index) => index + 1,
+  ).filter((version) => !seen.has(version));
+  return {
+    current_version: current.version,
+    versions,
+    selection: {
+      schema_version: 1,
+      template_id: id,
+      complete: missing_versions.length === 0,
+      missing_versions,
+    },
+  };
+}
+
+async function initializeTemplates(
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TodosTemplateInitialization> {
+  const existing = await store.list<TaskTemplate>("templates");
+  const records: TodosTemplateInitialization["records"] = [];
+  for (const [definition_index, input] of builtinTemplateInputs().entries()) {
+    const matches = existing.filter((row) => row.name === input.name);
+    if (matches.length) {
+      records.push({
+        definition_index,
+        ids: matches.map((row) => row.id).sort(),
+        name: input.name,
+        status: "skipped",
+      });
+    } else {
+      const template = await createTemplate(input, store, context);
+      records.push({
+        definition_index,
+        ids: [template.id],
+        name: template.name,
+        status: "created",
+      });
+    }
+  }
+  const names = records
+    .filter((row) => row.status === "created")
+    .map((row) => row.name);
+  return {
+    schema_version: 1,
+    created: names.length,
+    skipped: records.length - names.length,
+    names,
+    records,
+  };
 }
 
 async function logTaskChange(
@@ -3464,11 +3714,11 @@ async function importSnapshot(
     { id: string; updated_at?: string; created_at?: string; version?: number },
   ]> = [
     ...orderedProjects.map((row) => ["projects", row] as const),
-    ...snapshot.tasks.map((row) => ["tasks", row] as const),
     ...(snapshot.projectMachinePaths ?? []).map((row) => ["project_machine_paths", row] as const),
-    ...snapshot.plans.map((row) => ["plans", row] as const),
     ...snapshot.agents.map((row) => ["agents", row] as const),
     ...snapshot.taskLists.map((row) => ["task_lists", row] as const),
+    ...snapshot.plans.map((row) => ["plans", row] as const),
+    ...snapshot.tasks.map((row) => ["tasks", row] as const),
     ...snapshot.templates.map((row) => ["templates", row] as const),
     ...(snapshot.templateTasks ?? []).map((row) => ["template_tasks", row] as const),
   ];

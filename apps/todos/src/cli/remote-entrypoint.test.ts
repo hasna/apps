@@ -43,8 +43,8 @@ const REPO_ROOT = join(import.meta.dir, "../..");
  * in either direction must be reviewed deliberately rather than silently
  * changing which authority a command can reach.
  */
-// project-panel now belongs to the shared API capability family.
-const EXPECTED_LOCAL_ONLY_COMMANDS = 107;
+// Template initialization/history and their plural aliases now use the shared API.
+const EXPECTED_LOCAL_ONLY_COMMANDS = 103;
 const TASK_FIXTURE_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_TASK_FIXTURE_ID = "22222222-2222-4222-8222-222222222222";
 const tempRoots: string[] = [];
@@ -244,6 +244,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     const registered = [...registeredCliNames()].sort();
     const matrix = getTodosCliCommandCapabilityMatrix();
     expect([...matrix.keys()].sort()).toEqual(registered);
+    for (const name of ["template-init", "templates-init", "template-history", "templates-history"]) expect(matrix.get(name)).toBe("remote-http");
     expect([...matrix.values()].filter((owner) => owner === "local-only").length).toBe(EXPECTED_LOCAL_ONLY_COMMANDS);
     expect([...matrix.values()].every((owner) => ["diagnostic", "remote-http", "local-only"].includes(owner))).toBe(true);
   });
@@ -808,10 +809,9 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["projects", "--path-prefix", "/tmp"],
       ["plans", "--write-artifacts"],
     ]) {
-      expect(() => initializeTodosCliAuthority(args, {
-        HASNA_TODOS_API_URL: "https://authority.invalid",
-        HASNA_TODOS_API_KEY: "fixture-remote-key",
-      })).toThrow("REMOTE_COMMAND_UNSUPPORTED");
+      const initialize=()=>initializeTodosCliAuthority(args,{HASNA_TODOS_API_URL:"https://authority.invalid",HASNA_TODOS_API_KEY:"fixture-remote-key"});
+      if(args[0]==="plans") expect(initialize().route).toBe("remote-http");
+      else expect(initialize).toThrow("REMOTE_COMMAND_UNSUPPORTED");
     }
 
     for (const args of [
@@ -949,7 +949,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         const requestCount = requests.length;
         const result = await runCli(executable, args, env, cwd);
         expect({ args, exitCode: result.exitCode }).toEqual({ args, exitCode: 1 });
-        expect(result.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+        expect(result.stderr).toContain(args[0]==="plans"?"Unset TODOS_DB_PATH":"REMOTE_COMMAND_UNSUPPORTED");
         expect(requests).toHaveLength(requestCount);
         expect(recursiveInventory(cwd)).toEqual(before);
         expectNoLocalDatabase(home, localDbPath);
@@ -2087,6 +2087,13 @@ describe("remote CLI entrypoint authority boundary", () => {
             return Response.json({ task_list }, { status: 201 });
           }
         }
+        const preservingList=url.pathname.match(/^\/v1\/task-lists\/([^/]+)\/delete-preserving$/);
+        if(preservingList&&request.method==="POST"){
+          const id=preservingList[1]!;const relatedTasks=tasks.filter(task=>task.task_list_id===id);const relatedPlans=plans.filter(plan=>plan.task_list_id===id);
+          if((relatedTasks.length||relatedPlans.length)&&body.force!==true)return Response.json({error:"linked records"},{status:409});
+          const deleted=Boolean(find(taskLists,id));for(const row of [...relatedTasks,...relatedPlans])row.task_list_id=null;remove(taskLists,id);
+          return Response.json({schema_version:1,task_list_id:id,deleted,detached_task_ids:relatedTasks.map(row=>row.id),detached_plan_ids:relatedPlans.map(row=>row.id),detached_tasks:relatedTasks.length,detached_plans:relatedPlans.length});
+        }
         const listMatch = url.pathname.match(/^\/v1\/task-lists\/([^/]+)$/);
         if (listMatch) {
           const task_list = find(taskLists, listMatch[1]!);
@@ -2114,6 +2121,15 @@ describe("remote CLI entrypoint authority boundary", () => {
             return Response.json({ plan }, { status: 201 });
           }
         }
+        const preservingPlanMatch=url.pathname.match(/^\/v1\/plans\/([^/]+)\/delete-preserving$/);
+        if(preservingPlanMatch&&request.method==="POST"){
+          const id=preservingPlanMatch[1]!;const linked=tasks.filter(task=>task.plan_id===id);const lists=taskLists.filter(list=>list.plan_id===id);
+          if(!body.force&&(linked.length||lists.length))return Response.json({error:"plan has linked records"},{status:409});
+          for(const task of linked)task.plan_id=null;for(const list of lists)list.plan_id=null;
+          const exists=Boolean(find(plans,id));remove(plans,id);
+          return Response.json({schema_version:1,plan_id:id,deleted:exists,detached_tasks:linked.length,detached_task_ids:linked.map(task=>task.id),detached_task_lists:lists.length,detached_task_list_ids:lists.map(list=>list.id)});
+        }
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         const planMatch = url.pathname.match(/^\/v1\/plans\/([^/]+)$/);
         if (planMatch) {
           const plan = find(plans, planMatch[1]!);
@@ -2160,7 +2176,7 @@ describe("remote CLI entrypoint authority boundary", () => {
             const total = items.length;
             const limit = Number(url.searchParams.get("limit") ?? items.length);
             items = items.slice(0, Number.isFinite(limit) ? limit : items.length);
-            return Response.json({ tasks: items, count: items.length, total });
+            return Response.json({ tasks: items, count: items.length, total, selection:{schema_version:1,plan_id:url.searchParams.get("plan_id"),include_subtasks:url.searchParams.get("include_subtasks")==="true",include_archived:url.searchParams.get("include_archived")==="true"} });
           }
           if (request.method === "POST") {
             const id = TASK_IDS[nextTaskId++]!;
@@ -2299,7 +2315,11 @@ describe("remote CLI entrypoint authority boundary", () => {
       ];
 
       const runRemoteOk = async (invocation: string[]): Promise<string> => {
-        const result = await runCli(executable, invocation, env, cwd);
+        const invocationEnv = {...env};
+        // Converted families refuse database selectors rather than ignoring them.
+        // The no-file checks still cover both HOME and cwd.
+        if (invocation.includes("plans") || invocation.includes("lists")) delete invocationEnv.TODOS_DB_PATH;
+        const result = await runCli(executable, invocation, invocationEnv, cwd);
         expect({ invocation, exitCode: result.exitCode, stderr: stderrWithoutAttributionWarning(result.stderr) }).toEqual({
           invocation,
           exitCode: 0,
@@ -2427,7 +2447,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         const requestCount = requests.length;
         const result = await runCli(executable, unsupported, env, cwd);
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+        expect(result.stderr).toContain(unsupported.includes("plans")?"Unset TODOS_DB_PATH":"REMOTE_COMMAND_UNSUPPORTED");
         expect(requests).toHaveLength(requestCount);
         expect(recursiveInventory(cwd)).toEqual(before);
         expectNoLocalDatabase(root, localDbPath);

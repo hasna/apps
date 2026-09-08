@@ -456,7 +456,7 @@ export function registerRoute53Commands(program: Command): void {
 
   r53
     .command("full-setup <domain>")
-    .description("Buy domain + create zone + sync to DB — all in one (contact defaults from: domains config set contact.*)")
+    .description("Buy domain + create zone + save to shared portfolio — all in one (contact defaults from: domains config set contact.*)")
     .option("--email <email>", "Registrant email")
     .option("--first-name <name>", "First name")
     .option("--last-name <name>", "Last name")
@@ -539,9 +539,9 @@ export function registerRoute53Commands(program: Command): void {
             (setup.nsUpdated ? ` — registry NS repointed to this zone` : ``),
         );
 
-        // 4. Add to local DB
-        printLine(`[4/4] Adding to local database...`);
-        createDomain({
+        // 4. Wait for the shared portfolio write before reporting completion.
+        printLine(`[4/4] Adding to shared portfolio...`);
+        await createDomain({
           name: domain,
           registrar: "AWS Route 53",
           status: "active",
