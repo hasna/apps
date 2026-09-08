@@ -7,8 +7,10 @@ export declare function createIntakeClient(options: {
     tenantId: string;
     env?: Record<string, string | undefined>;
     credentials?: CredentialChainOptions;
-}): {
+}): Readonly<{
+    /** Canonical authority captured by this exact transport; contains no credential. */
+    baseUrl: string;
     capability(): Promise<void>;
     accept(raw: IntakeRequest, signal?: AbortSignal): Promise<IntakeReceipt>;
     receipt(raw: IntakeRequest, signal?: AbortSignal): Promise<IntakeReceipt>;
-};
+}>;
