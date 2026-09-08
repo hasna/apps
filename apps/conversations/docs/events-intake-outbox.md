@@ -77,8 +77,9 @@ new-path acceptance does not certify those transfers.
 This source is stacked on the reviewed Events intake change (PR 2012), including
 its opaque identity correction. The new `@hasna/events/intake` export is not yet
 published. The Conversations registry dependency is pinned to the matching Events 0.1.18
-candidate. That exact version must be published with this export before declaring
-release dependency closure. The current workspace/frozen-lock build is source integration evidence,
+candidate. Contracts 1.0.3 is also required for its corrected public root declarations.
+Both dependency candidates must be published before Conversations can be released;
+registry availability must be checked immediately before publication. The current workspace/frozen-lock build is source integration evidence,
 not registry availability, deployment or live delivery proof. Protocol code is
 imported from the public Events package and is never vendored into Conversations.
 
