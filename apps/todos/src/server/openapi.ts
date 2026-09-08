@@ -111,6 +111,9 @@ const taskManifestCapabilityResponseSchema = {
 const projectSchema = {
   type: "object",
   properties: {
+    status: {type:"string",enum:["active","completed","on_hold","archived"]},
+    short_id: {type:"string",nullable:true,maxLength:64,pattern:"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+    metadata: {type:"object",additionalProperties:true},
     id: { type: "string" },
     name: { type: "string" },
     path: { type: "string" },
@@ -1314,6 +1317,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           required: ["name", "path"],
           properties: {
+    status: {type:"string",enum:["active","completed","on_hold","archived"]},
+    short_id: {type:"string",nullable:true,maxLength:64,pattern:"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+    metadata: {type:"object",additionalProperties:true},
             name: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             path: { type: "string", minLength: 1 },
             description: { type: "string" },
@@ -1327,6 +1333,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           minProperties: 1,
           properties: {
+    status: {type:"string",enum:["active","completed","on_hold","archived"]},
+    short_id: {type:"string",nullable:true,maxLength:64,pattern:"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+    metadata: {type:"object",additionalProperties:true},
             name: { type: "string", minLength: 1 },
             path: { type: "string", minLength: 1 },
             description: { type: "string", nullable: true },
@@ -3057,6 +3066,23 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           summary: "Delete a project",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
+        },
+      },
+      "/v1/projects/{id}/delete-preserving": {
+        post: {
+          operationId:"deleteProjectPreserving",summary:"Delete project identity and atomically detach linked records without deleting their content",
+          parameters:[{name:"id",in:"path",required:true,schema:{type:"string"}}],
+          requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,properties:{force:{type:"boolean"},require_completed_tasks:{type:"boolean"}}}}}},
+          responses:{
+            "200":{content:{"application/json":{schema:{type:"object",required:["schema_version","project_id","deleted","preserved_tasks","preserved_plans","detached_task_lists","detached_child_projects"],properties:{schema_version:{type:"integer",enum:[1]},project_id:{type:"string"},deleted:{type:"boolean"},preserved_tasks:{type:"integer",minimum:0},preserved_plans:{type:"integer",minimum:0},detached_task_lists:{type:"integer",minimum:0},detached_child_projects:{type:"integer",minimum:0}}}}}},
+            "400":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "401":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "403":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "404":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "405":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "409":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "501":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+          },
         },
       },
       "/v1/projects/{id}/task-list/ensure": {

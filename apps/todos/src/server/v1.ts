@@ -272,12 +272,28 @@ function validateTaskPatchVocabulary(value: unknown):
   return { ok: true, patch: body as Partial<UpdateTaskInput> };
 }
 
+function projectMetadataError(body: Record<string, unknown>): string | null {
+  if (body.status !== undefined && (typeof body.status !== "string" || !["active", "completed", "on_hold", "archived"].includes(body.status))) return "invalid project status";
+  if (body.short_id !== undefined && body.short_id !== null && (typeof body.short_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(body.short_id))) return "short_id must be a bounded identifier or null";
+  if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata) || Buffer.byteLength(JSON.stringify(body.metadata)) > 65536)) return "metadata must be an object of at most 64 KiB";
+  if (body.metadata !== undefined) {
+    const pending: unknown[] = [body.metadata];
+    let visited = 0;
+    while (pending.length) {
+      const value = pending.pop();
+      if (++visited > 65536 || (typeof value === "number" && !Number.isFinite(value))) return "metadata must contain finite bounded JSON values";
+      if (value && typeof value === "object") pending.push(...Object.values(value));
+    }
+  }
+  return null;
+}
+
 function validateProjectPatch(value: unknown):
-  | { ok: true; patch: Partial<Pick<CreateProjectInput, "name" | "path" | "description" | "parent_id">> }
+  | { ok: true; patch: Partial<import("../types/index.js").UpdateProjectInput> }
   | { ok: false; message: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "project patch must be an object" };
   const body = value as Record<string, unknown>;
-  const allowed = new Set(["name", "path", "description", "parent_id"]);
+  const allowed = new Set(["name", "path", "description", "parent_id", "status", "short_id", "metadata"]);
   const unknown = Object.keys(body).find((key) => !allowed.has(key));
   if (unknown) return { ok: false, message: `unknown project field: ${unknown}` };
   if (Object.keys(body).length === 0) return { ok: false, message: "project patch must not be empty" };
@@ -285,15 +301,17 @@ function validateProjectPatch(value: unknown):
   if (body["path"] !== undefined && (typeof body["path"] !== "string" || !body["path"].trim())) return { ok: false, message: "path must be a non-empty string" };
   if (body["description"] !== undefined && body["description"] !== null && typeof body["description"] !== "string") return { ok: false, message: "description must be a string or null" };
   if (body["parent_id"] !== undefined && body["parent_id"] !== null && (typeof body["parent_id"] !== "string" || !body["parent_id"].trim())) return { ok: false, message: "parent_id must be a string or null" };
+  const metadataError = projectMetadataError(body);
+  if (metadataError) return {ok:false,message:metadataError};
   return { ok: true, patch: body as never };
 }
 
 function validateProjectCreate(value: unknown):
-  | { ok: true; input: Pick<CreateProjectInput, "name" | "path" | "description" | "task_list_id" | "task_prefix" | "parent_id"> }
+  | { ok: true; input: CreateProjectInput }
   | { ok: false; message: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "project body must be an object" };
   const body = value as Record<string, unknown>;
-  const allowed = new Set(["name", "path", "description", "task_list_id", "task_prefix", "parent_id"]);
+  const allowed = new Set(["name", "path", "description", "task_list_id", "task_prefix", "parent_id", "status", "short_id", "metadata"]);
   const unknown = Object.keys(body).find((key) => !allowed.has(key));
   if (unknown) return { ok: false, message: `unknown project field: ${unknown}` };
   if (typeof body["name"] !== "string" || !body["name"].trim()) return { ok: false, message: "name must be a non-empty string" };
@@ -309,6 +327,8 @@ function validateProjectCreate(value: unknown):
   if (body["parent_id"] !== undefined && (typeof body["parent_id"] !== "string" || !body["parent_id"].trim())) {
     return { ok: false, message: "parent_id must be a non-empty string" };
   }
+  const metadataError = projectMetadataError(body);
+  if (metadataError) return {ok:false,message:metadataError};
   return { ok: true, input: body as never };
 }
 
@@ -1329,6 +1349,15 @@ export async function handleV1Request(
 
     // ── /v1/projects ──
     if (resource === "projects") {
+      if (!machineTenantAllowed()) return error(403, "Project registry key does not belong to this deployment tenant");
+      if (id && action === "delete-preserving") {
+        if (subId) return error(404, "Project deletion route not found");
+        if (method !== "POST") return error(405, "Project deletion requires POST");
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(key => key !== "force" && key !== "require_completed_tasks") || (body.force !== undefined && typeof body.force !== "boolean") || (body.require_completed_tasks !== undefined && typeof body.require_completed_tasks !== "boolean")) return error(400, "force must be a boolean");
+        if (!store.projects.deletePreserving) return error(501, "Upgrade the Todos API: atomic project deletion is unavailable");
+        return json(await store.projects.deletePreserving(id, body.force === true, contextFromPrincipal(principal), body.require_completed_tasks === true));
+      }
       if (!id) {
         if (method === "GET") {
           const projects = await store.projects.list();
@@ -1417,8 +1446,9 @@ export async function handleV1Request(
         return json({ project });
       }
       if (method === "DELETE") {
-        await store.projects.delete(id, contextFromPrincipal(principal));
-        return json({ deleted: true, id });
+        if (!store.projects.deletePreserving) return error(501, "Upgrade the Todos API: atomic project deletion is unavailable");
+        const receipt=await store.projects.deletePreserving(id, false, contextFromPrincipal(principal));
+        return json({ ...receipt, id });
       }
       return error(405, `method ${method} not allowed on /v1/projects/:id`);
     }

@@ -1031,3 +1031,60 @@ unbounded results. `RemoteWorkspaceInvitationUnconfirmedError` requires explicit
 reconciliation of a mutation; it never triggers automatic replay. These adapters
 require service and real recipient acceptance testing before invitations can be
 offered as a live product capability.
+
+
+## Invitation email recovery
+
+An existing account with no usable membership can explicitly recover access by
+accepting an invitation with its secret and a fresh recovery code. This separate
+flow creates no session, key, workspace, default pointer or credit grant. New
+accounts use ordinary signup. A compatible service must enable email recovery.
+
+Set `HASNA_SKILLS_API_URL` (or `SKILLS_API_URL`) explicitly for recovery. If both
+are set, they must name the same API. Recovery never consults a keychain or saved
+key to choose its server. It preserves all profiles and never treats cached
+identity metadata as proof.
+
+Generate and retain a challenge UUID **before** the first request. Keep it with
+the same invitation ID and server, without storing the token or code. Run
+`skills workspace invitations email-challenge <invitation-id>
+--challenge-id <your-uuid> --confirm` to enter the invitation token through a
+masked prompt, or add `--token-stdin` for exactly one secret input line.
+The eligibility-neutral result does not confirm that a code was sent or delivered.
+A reused challenge ID never requests a replacement code automatically.
+
+After receiving the recovery code, run
+`skills workspace invitations email-accept <invitation-id>
+--challenge-id <same-uuid> --confirm`. Interactive entry masks the token and code;
+`--secrets-stdin` reads the recovery code on line one and the invitation token on
+line two. JSON use requires the corresponding stdin option. Never put proof in
+arguments, environment variables, URLs, scripts or shell history.
+
+Acceptance returns `accepted: true`, `changed: true`, `signInRequired: true` and
+the organization/membership IDs. Use fresh ordinary sign-in afterward. If the
+acceptance response is lost, sign in to inspect available memberships before any
+further action; never retry acceptance automatically. If necessary, deliberately
+request a new recovery challenge. An uncertain challenge response requires
+retaining its original ID and checking your inbox, without automatic rotation.
+
+Both SDK entrypoints expose `RemoteSkillsAuthClient` methods
+`requestInvitationEmailChallenge({ invitationId, token, challengeId, confirm: true })`
+and `acceptInvitationEmailChallenge({ invitationId, token, challengeId, code,
+confirm: true })`. Both send one anonymous POST to the captured API origin and
+return bounded, validated projections. `InvitationEmailInputError` rejects invalid
+input, `RemoteInvitationEmailError` exposes fixed service refusal codes, and
+`RemoteInvitationEmailUnconfirmedError` requires explicit reconciliation. No
+cookie, Authorization header, credential resolution, login or profile write is
+part of these methods.
+
+For an agent host without a key, start
+`skills-mcp --invitation-recovery --stdio` with an explicit API URL. This mode
+exposes only `request_invitation_email_challenge` and
+`accept_invitation_email_challenge`, with the same SDK input fields. It rejects
+other startup flags, HTTP mode and local mode. The ordinary MCP startup and data
+access gates remain in effect outside this mode. Treat host request history as
+sensitive: tokens and codes appear only in the MCP input body and are never
+returned or saved by the tools.
+
+These clients still require deployed configuration and controlled real recipient
+email acceptance before recovery can be offered as a live product capability.

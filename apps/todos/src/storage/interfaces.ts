@@ -273,7 +273,18 @@ export interface TodosTaskStore {
   getByFingerprint?(fingerprint: string, context?: TodosStorageContext): MaybePromise<Task | null>;
 }
 
+export interface TodosProjectDeleteReceipt {
+  schema_version: 1;
+  project_id: string;
+  deleted: boolean;
+  preserved_tasks: number;
+  preserved_plans: number;
+  detached_task_lists: number;
+  detached_child_projects: number;
+}
+
 export interface TodosProjectStore {
+  deletePreserving?(id: string, force: boolean, context?: TodosStorageContext, requireCompletedTasks?: boolean): MaybePromise<TodosProjectDeleteReceipt>;
   create(input: CreateProjectInput, context?: TodosStorageContext): MaybePromise<Project>;
   get(id: string, context?: TodosStorageContext): MaybePromise<Project | null>;
   getByPath(path: string, context?: TodosStorageContext): MaybePromise<Project | null>;

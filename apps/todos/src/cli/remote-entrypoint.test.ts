@@ -43,7 +43,8 @@ const REPO_ROOT = join(import.meta.dir, "../..");
  * in either direction must be reviewed deliberately rather than silently
  * changing which authority a command can reach.
  */
-const EXPECTED_LOCAL_ONLY_COMMANDS = 108;
+// project-panel now belongs to the shared API capability family.
+const EXPECTED_LOCAL_ONLY_COMMANDS = 107;
 const TASK_FIXTURE_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_TASK_FIXTURE_ID = "22222222-2222-4222-8222-222222222222";
 const tempRoots: string[] = [];
@@ -974,7 +975,7 @@ describe("remote CLI entrypoint authority boundary", () => {
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      fetch(request) {
+      async fetch(request) {
         const url = new URL(request.url);
         requests.push(`${request.method} ${url.pathname}${url.search}`);
         if (url.pathname === "/v1/projects" && request.method === "GET") {
@@ -984,9 +985,13 @@ describe("remote CLI entrypoint authority boundary", () => {
           const items = tasks.filter((task) => task.project_id === url.searchParams.get("project_id"));
           return Response.json({ tasks: items, count: items.length, total: items.length });
         }
-        if (url.pathname === `/v1/projects/${PROJECT_ID}` && request.method === "DELETE") {
+        if (url.pathname === `/v1/projects/${PROJECT_ID}/delete-preserving` && request.method === "POST") {
+          const body = await request.json();
+          expect(body).toEqual({ force: true, require_completed_tasks: true });
+          if (tasks.some(task => !["completed", "cancelled"].includes(String(task.status)))) return Response.json({error:"Project has incomplete tasks"},{status:409});
           deleted = true;
-          return Response.json({ deleted: true, id: PROJECT_ID });
+          for (const task of tasks) task.project_id = null;
+          return Response.json({schema_version:1,project_id:PROJECT_ID,deleted:true,preserved_tasks:tasks.length,preserved_plans:0,detached_task_lists:0,detached_child_projects:0});
         }
         return Response.json({ error: "fixture route missing" }, { status: 404 });
       },
@@ -1021,7 +1026,11 @@ describe("remote CLI entrypoint authority boundary", () => {
         tasks_preserved: true,
       });
       expect(deleted).toBe(false);
-      expect(requests).toContain(`GET /v1/tasks?project_id=${PROJECT_ID}&include_subtasks=true`);
+      const taskRead = requests.find(value => value.startsWith("GET /v1/tasks?"));
+      expect(taskRead).toBeDefined();
+      const query = new URL(taskRead!.slice(4), "http://fixture.test").searchParams;
+      expect(query.get("project_id")).toBe(PROJECT_ID);
+      expect(query.get("include_subtasks")).toBe("true");
 
       tasks.push({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", status: "pending", project_id: PROJECT_ID });
       const incomplete = await runCli(executable, [
@@ -1051,7 +1060,8 @@ describe("remote CLI entrypoint authority boundary", () => {
         tasks_preserved: true,
       });
       expect(deleted).toBe(true);
-      expect(requests.at(-1)).toBe(`DELETE /v1/projects/${PROJECT_ID}`);
+      expect(requests.at(-1)).toBe(`POST /v1/projects/${PROJECT_ID}/delete-preserving`);
+      expect(tasks).toEqual([expect.objectContaining({ title: "Completed probe", project_id: null })]);
       expect(recursiveInventory(cwd)).toEqual(before);
       expectNoLocalDatabase(root, localDbPath);
     } finally {

@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { cloudQueryTasks } from "../../cli/task-query-api.js";
 /**
  * Task project tools for the MCP server.
  * Auto-extracted from src/mcp/index.ts
@@ -26,6 +27,7 @@ import {
 import {
   getTodosCloudClient,
   cloudTaskAction,
+  cloudCreateProject, cloudListProjects, cloudResolveProject, cloudUpdateProject, cloudDeleteProjectPreserving, cloudListTasks,
   cloudUpdateTask,
   cloudAddComment,
   cloudGetTask,
@@ -1595,7 +1597,9 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async (params) => {
         try {
-          const project = createProject(params as Parameters<typeof createProject>[0]);
+          const cloud = getTodosCloudClient();
+          const input = {...params, ...(params.parent_id && cloud ? {parent_id: await cloudResolveProjectRef(cloud, params.parent_id)} : {})};
+          const project = cloud ? await cloudCreateProject(cloud, input) : createProject(input as Parameters<typeof createProject>[0]);
           return { content: [{ type: "text" as const, text: `Project created: ${project.id.slice(0,8)} ${project.name}` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -1610,15 +1614,16 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "List all projects.",
       {
         status: z.enum(["active", "completed", "on_hold", "archived"]).optional(),
-        limit: z.number().optional(),
+        limit: z.number().int().min(1).max(10000).optional(),
       },
       async ({ status, limit }) => {
         try {
-          let projects = listProjects();
+          const cloud = getTodosCloudClient();
+          let projects = cloud ? await cloudListProjects(cloud) : listProjects();
           if (status) projects = projects.filter((p) => p.status === status);
           if (limit) projects = projects.slice(0, limit);
           if (projects.length === 0) return { content: [{ type: "text" as const, text: "No projects found." }] };
-          const lines = projects.map(p => `[${p.status}] ${p.short_id || p.id.slice(0,8)} ${p.name}`);
+          const lines = projects.map(p => `[${p.status ?? "unknown"}] ${p.short_id || p.id.slice(0,8)} ${p.name}`);
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -1636,16 +1641,16 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ project_id }) => {
         try {
-          const resolvedId = resolveId(project_id, "projects");
-          const project = getProject(resolvedId);
+          const cloud = getTodosCloudClient();
+          const project = cloud ? await cloudResolveProject(cloud, project_id) : getProject(resolveId(project_id, "projects"));
           if (!project) throw new TaskNotFoundError(`Project not found: ${project_id}`);
-          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-          const tasks = listTasks({ project_id: resolvedId, limit: 100 }, undefined) as Task[];
+          const resolvedId = project.id;
+          const tasks = cloud ? await cloudQueryTasks(cloud, {project_id: resolvedId, include_subtasks:true}) : listTasks({ project_id: resolvedId }, undefined) as Task[];
           const lines = [
             `ID:          ${project.id}`,
             `Short ID:    ${project.short_id || "(none)"}`,
             `Name:        ${project.name}`,
-            `Status:      ${project.status}`,
+            `Status:      ${project.status ?? "unknown"}`,
             project.description ? `Description: ${project.description}` : null,
             `Tasks:       ${tasks.length}`,
             project.metadata && Object.keys(project.metadata).length > 0 ? `Metadata:    ${JSON.stringify(project.metadata)}` : null,
@@ -1674,8 +1679,9 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       async (params) => {
         try {
           const { project_id, ...updates } = params;
-          const resolvedId = resolveId(project_id, "projects");
-          const project = updateProject(resolvedId, updates as Parameters<typeof updateProject>[1]);
+          const cloud = getTodosCloudClient();
+          const resolvedId = cloud ? await cloudResolveProjectRef(cloud, project_id) : resolveId(project_id, "projects");
+          const project = cloud ? await cloudUpdateProject(cloud, resolvedId, updates) : updateProject(resolvedId, updates as Parameters<typeof updateProject>[1]);
           return { content: [{ type: "text" as const, text: `Project ${project.short_id || project.id.slice(0,8)} updated.` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -1687,15 +1693,22 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
   if (shouldRegisterTool("delete_project")) {
     server.tool(
       "delete_project",
-      "Permanently delete a project and all its tasks.",
+      "Delete a project while preserving linked task and plan content; force confirms detaching linked records.",
       {
         project_id: z.string().describe("Project ID"),
-        force: z.boolean().optional().describe("Skip confirmation (dangerous)"),
+        force: z.boolean().optional().describe("Confirm detaching linked records while preserving their content"),
       },
       async ({ project_id, force }) => {
         try {
-          deleteProject(resolveId(project_id, "projects"), force);
-          return { content: [{ type: "text" as const, text: `Project ${project_id.slice(0, 8)} deleted.` }] };
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const id = await cloudResolveProjectRef(cloud, project_id);
+            const receipt = await cloudDeleteProjectPreserving(cloud,id,force === true);
+            return { content: [{type:"text" as const,text:JSON.stringify(receipt)}] };
+          }
+          if (force) throw new Error("Reference-preserving project deletion requires the shared API");
+          const deleted = deleteProject(resolveId(project_id, "projects"));
+          return { content: [{ type: "text" as const, text: deleted ? `Project ${project_id.slice(0, 8)} deleted.` : "Project not found; nothing deleted." }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
