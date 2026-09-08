@@ -1,3 +1,4 @@
+import { registerWorkspaceInvitationCommands } from "./workspace-invitations.js";
 import type { Command } from "commander";
 import { prepareProfileWorkspace } from "../../lib/workspace-profile.js";
 import { registerWorkspaceListCommand } from "./workspace-selection.js";
@@ -15,6 +16,7 @@ export function registerCustomerProfileCommands(program: Command) {
   registerWorkspaceMembersCommand(workspace);
   registerWorkspaceMemberMutationCommands(workspace);
   registerWorkspaceLeaveCommand(workspace);
+  registerWorkspaceInvitationCommands(workspace);
   const commands = [
     { kind: "account", command: account.command("update") },
     { kind: "workspace", command: workspace.command("update") },

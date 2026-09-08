@@ -1,3 +1,4 @@
+import { registerRemoteInvitationTools } from "./remote-invitation-tools.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { RemoteSkillsAuthClient } from "../lib/remote-auth.js";
@@ -9,6 +10,7 @@ import { workspaceLeaveProfileContext, RemoteWorkspaceLeaveError, RemoteWorkspac
 import { mcpError, mcpJson } from "./helpers.js";
 
 export function registerRemoteCustomerTools(server: McpServer) {
+  registerRemoteInvitationTools(server);
   const memberRole = z.enum(["owner", "admin", "member", "viewer"]);
   const memberInput = { membershipId: z.string().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/),
     expectedRole: memberRole, email: z.string().email(), code: z.string().regex(/^\d{6}$/) };

@@ -674,7 +674,7 @@ skills/                      # Public skill contracts and local OSS skills
 |---|---|---|
 | Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 62 | `tools/list` against a live `buildServer()` |
+| MCP tools | 68 | `tools/list` against a live `buildServer()` |
 
 Every number in this table is re-derived from the source tree on each test run by
 `src/lib/readme-derived-counts.test.ts`, so a drifted figure fails a test rather
@@ -960,3 +960,74 @@ Saved credentials and unrelated profiles remain unchanged; credentials for the
 left membership no longer grant access. A lost or invalid response raises
 `RemoteWorkspaceLeaveUnconfirmedError`: inspect available memberships before any
 new action. Never automatically retry or substitute another membership ID.
+
+
+## Workspace invitations
+
+The SDK, CLI and MCP use the same invitation operations on your configured API.
+A compatible hosted service must enable invitation delivery. Every operation
+requires fresh verification bound to your observed user ID and current membership
+ID; any named profile must match. Owners can invite all roles; admins manage only
+member/viewer invitations. The server enforces current authority and verified
+recipient email. Existing accounts with no available membership still need the
+separate invitation recovery flow; these commands do not bypass ordinary login.
+
+Use `skills workspace list` to observe the account and membership IDs. The
+`workspace invitations` commands are `list`, `get <invitation-id>`, `issue`,
+`resend <invitation-id>`, `revoke <invitation-id>` and `accept <invitation-id>`.
+Each requires `--email`, `--user-id` and `--membership-id`. Mutations also require
+`--confirm`. `list --after <nextCursor>` reads one additional page, at most 50
+invitations; it never automatically traverses the account.
+
+For `issue`, supply `--recipient`, `--role` and your own
+`--idempotency-key <uuid>`. `resend` requires that key and
+`--expected-generation`; `revoke` requires `--expected-generation`. Save the
+request key with its original nonsecret context and parameters before issuing or
+resending. A lost response is not proof of failure: read current invitations or
+reconcile with exactly the same key and original parameters. Never replace the
+key to retry an uncertain action. No command retries or rewrites saved profiles.
+
+Read, issue, resend and revoke can read a previously requested six-digit code via
+`--code-stdin`. Otherwise an interactive terminal requests a code and masks input.
+Acceptance takes its invitation ID as the argument and reads the fresh code on
+stdin line one and the 43-character invitation token on line two with
+`--secrets-stdin`. Interactive acceptance masks both inputs. Do not put either
+secret in arguments, environment variables, shell history, scripts or profiles.
+Obtain both from your inbox and pass them through your terminal or an approved
+secret-input mechanism. JSON/noninteractive acceptance requires `--secrets-stdin`.
+
+Acceptance returns the joined organization and membership IDs. It does not change
+the current workspace, default home, saved keys or profiles. Inspect your workspace
+list and deliberately select a membership afterward. A delivery state of
+`provider_accepted` means the provider accepted the request, not that it reached
+an inbox.
+
+Both SDK entrypoints export `RemoteSkillsClient` methods
+`listWorkspaceInvitations(context, options?)`,
+`getWorkspaceInvitation(context, invitationId)`,
+`issueWorkspaceInvitation(context, input)`,
+`resendWorkspaceInvitation(context, invitationId, input)`,
+`revokeWorkspaceInvitation(context, invitationId, input)` and
+`acceptWorkspaceInvitation(context, invitationId, { token, confirm: true })`.
+The corresponding `RemoteSkillsAuthClient` methods prepend `email, code` to those
+arguments for fresh verification. `context` is `{ userId, membershipId }`.
+Issue input is `{ email, role, idempotencyKey, confirm: true }`; resend is
+`{ expectedGeneration, idempotencyKey, confirm: true }`; revoke is
+`{ expectedGeneration, confirm: true }`. Tokens and temporary sessions are never
+returned in invitation projections or persisted by these methods.
+
+MCP exposes `list_workspace_invitations`, `get_workspace_invitation`,
+`issue_workspace_invitation`, `resend_workspace_invitation`,
+`revoke_workspace_invitation` and `accept_workspace_invitation`. Supply explicit
+`userId`, `membershipId`, `email` and fresh `code` in each tool request. Issue uses
+`recipient` for the invitation email; acceptance's `token` travels only in the
+MCP request. Treat the host's request history as sensitive; the tools never echo
+that token or save it in a profile. Other mutation fields match the SDK.
+
+Known server refusals are fixed `RemoteWorkspaceInvitationError` codes.
+`WorkspaceInvitationInputError` rejects invalid inputs before authentication.
+`RemoteWorkspaceInvitationReadError` refuses malformed, cross-workspace or
+unbounded results. `RemoteWorkspaceInvitationUnconfirmedError` requires explicit
+reconciliation of a mutation; it never triggers automatic replay. These adapters
+require service and real recipient acceptance testing before invitations can be
+offered as a live product capability.
