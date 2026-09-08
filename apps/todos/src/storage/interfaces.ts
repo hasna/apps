@@ -69,6 +69,7 @@ export interface TodosStorageAdapter {
   readonly templates: TodosTemplateStore;
   readonly audit: TodosAuditStore;
   readonly sync: TodosSyncStore;
+  readonly atomicProjectMigration?: { apply(request: import("./atomic-project-migration.js").AtomicMigrationRequest): Promise<import("./atomic-project-migration.js").AtomicMigrationReceipt> };
   /**
    * Task dependency edges. Optional because only the cloud/remote adapters expose
    * it through the `/v1` API — the local CLI/MCP paths call the sqlite `db/*`
@@ -273,7 +274,18 @@ export interface TodosTaskStore {
   getByFingerprint?(fingerprint: string, context?: TodosStorageContext): MaybePromise<Task | null>;
 }
 
+export interface TodosProjectDeleteReceipt {
+  schema_version: 1;
+  project_id: string;
+  deleted: boolean;
+  preserved_tasks: number;
+  preserved_plans: number;
+  detached_task_lists: number;
+  detached_child_projects: number;
+}
+
 export interface TodosProjectStore {
+  deletePreserving?(id: string, force: boolean, context?: TodosStorageContext, requireCompletedTasks?: boolean): MaybePromise<TodosProjectDeleteReceipt>;
   create(input: CreateProjectInput, context?: TodosStorageContext): MaybePromise<Project>;
   get(id: string, context?: TodosStorageContext): MaybePromise<Project | null>;
   getByPath(path: string, context?: TodosStorageContext): MaybePromise<Project | null>;

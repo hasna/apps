@@ -488,7 +488,9 @@ function inspectionLimits(options: InspectSkillBundleOptions): SkillBundleInspec
  * parsing or retaining each chunk, so expansion is stopped during decompression.
  * Memory is bounded by the compressed snapshot, accepted file bodies, and stream
  * buffers. The deadline covers copying, hashing, decoding and parsing, with both
- * a timer and monotonic checks. No partial entries escape on any failure.
+ * a timer and monotonic checks. Decoding yields to timers every 256 KiB so Bun's
+ * stream microtasks cannot starve a caller's scheduled abort. No partial entries
+ * escape on any failure.
  */
 export async function inspectSkillBundle(bundle: Uint8Array, options: InspectSkillBundleOptions = {}): Promise<InspectedSkillBundle> {
   const signal = options.signal;
@@ -517,6 +519,7 @@ export async function inspectSkillBundle(bundle: Uint8Array, options: InspectSki
   const timer = setTimeout(() => stop("BUNDLE_TIMEOUT"), Math.max(1, deadline - performance.now()));
   signal?.addEventListener("abort", onAbort, { once: true });
   let decompressedByteSize = 0;
+  let bytesSinceYield = 0;
   try {
     check();
     decoder.end(snapshot);
@@ -525,6 +528,15 @@ export async function inspectSkillBundle(bundle: Uint8Array, options: InspectSki
       decompressedByteSize += chunk.byteLength;
       if (decompressedByteSize > limits.decompressedBytes) throw new SkillBundleInspectionError("BUNDLE_LIMIT", "Decompressed bundle exceeds byte limit");
       parser.push(chunk);
+      bytesSinceYield += chunk.byteLength;
+      if (bytesSinceYield >= 256 * 1024) {
+        // An already-resolved promise or queueMicrotask does not give caller
+        // abort timers a turn. The iterator retains bounded stream backpressure
+        // while this timer is pending. It resolves before we leave this scope.
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        bytesSinceYield = 0;
+        check();
+      }
     }
     check();
     const entries = parser.finish();

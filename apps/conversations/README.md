@@ -297,10 +297,11 @@ the first call instead of in the message history a day later.
 
 `conversations-serve` is the server HTTP API surface. Every read and write goes
 straight to the app's Postgres selected by `HASNA_CONVERSATIONS_DATABASE_URL`
-via the vendored `@hasna/contracts` storage kit (the server backend switch is
-`sqlite | postgresql`; this process serves the postgresql backend). Requests to
+via the vendored `@hasna/contracts` storage kit. Requests to
 `/v1/*` are authenticated with `@hasna/contracts` API keys (scope grammar
 `conversations:read` / `conversations:write`).
+
+Before admitting traffic, apply migration 15 and explicitly adopt the inspected corpus with `conversations-serve corpus inspect` / `corpus adopt` using the owner connection. The server requires a persisted tenant/authority binding, and every signed API key must name that tenant. Missing ownership fails readiness and corpus requests; server startup never adopts automatically. See [corpus ownership and historical receipt reconciliation](docs/corpus-ownership.md). This does not complete outbox migration or authorize deleting source databases.
 
 Administrative message redaction at `POST /v1/admin/redact-messages` requires
 `conversations:admin-redact`, including dry runs. Ordinary write permission

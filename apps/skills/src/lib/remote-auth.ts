@@ -1,3 +1,4 @@
+import { requestInvitationEmail, type RequestInvitationEmailChallenge, type AcceptInvitationEmailChallenge } from "./remote-invitation-recovery.js";
 import { invitationInput, type ListRemoteWorkspaceInvitations, type IssueRemoteWorkspaceInvitation,
   type ResendRemoteWorkspaceInvitation, type RevokeRemoteWorkspaceInvitation, type AcceptRemoteWorkspaceInvitation } from "./remote-invitations.js";
 import { workspaceLeaveInput, type LeaveRemoteWorkspace } from "./remote-workspace-leave.js";
@@ -102,6 +103,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export class RemoteSkillsAuthClient {
   readonly apiOrigin: string;
   constructor(apiUrl: string) { this.apiOrigin = normalizeSkillsApiOrigin(apiUrl); }
+  requestInvitationEmailChallenge(input: RequestInvitationEmailChallenge) { return requestInvitationEmail(this.apiOrigin, "challenge", input); }
+  acceptInvitationEmailChallenge(input: AcceptInvitationEmailChallenge) { return requestInvitationEmail(this.apiOrigin, "accept", input); }
   requestCode(email: string) { return this.request("/api/auth/login", { method: "POST", body: JSON.stringify({ email }) }); }
   verifyCode(email: string, code: string) { return this.request("/api/auth/verify", { method: "POST", body: JSON.stringify({ email, code }) }); }
   startDevice() { return this.request("/api/auth/device/start", { method: "POST", body: JSON.stringify({ client: "skills-sdk" }) }); }

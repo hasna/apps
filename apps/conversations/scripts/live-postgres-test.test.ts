@@ -28,7 +28,7 @@ test("the gate drops ambient credentials, local database paths and client profil
 test("required suite inventory includes every real PG file and rejects removals/additions/duplicates", () => {
   const inventory = discoverSuites(resolve(import.meta.dir, ".."));
   expect(() => assertSuiteInventory(inventory)).not.toThrow();
-  expect(Object.values(REQUIRED_SUITES).reduce((total, count) => total + count, 0)).toBe(9);
+  expect(Object.values(REQUIRED_SUITES).reduce((total, count) => total + count, 0)).toBe(15);
   for (const wrong of [inventory.slice(1), [...inventory, "src/new.pg.test.ts"], [...inventory, inventory[0]!]]) {
     expect(() => assertSuiteInventory(wrong)).toThrow("inventory changed");
   }

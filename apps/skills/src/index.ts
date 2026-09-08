@@ -500,3 +500,7 @@ export type { RemoteWorkspaceInvitation, RemoteWorkspaceInvitationsPage, RemoteW
   ResendRemoteWorkspaceInvitation, RevokeRemoteWorkspaceInvitation, AcceptRemoteWorkspaceInvitation, RemoteWorkspaceInvitationErrorCode } from "./lib/remote-invitations.js";
 export { WorkspaceInvitationInputError, RemoteWorkspaceInvitationError, RemoteWorkspaceInvitationUnconfirmedError,
   RemoteWorkspaceInvitationReadError } from "./lib/remote-invitations.js";
+
+export { InvitationEmailInputError, RemoteInvitationEmailError, RemoteInvitationEmailUnconfirmedError,
+  type RequestInvitationEmailChallenge, type AcceptInvitationEmailChallenge, type RemoteInvitationEmailChallenge,
+  type RemoteInvitationEmailAcceptance, type RemoteInvitationEmailErrorCode } from "./lib/remote-invitation-recovery.js";

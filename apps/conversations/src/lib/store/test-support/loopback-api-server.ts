@@ -10,7 +10,7 @@ import { makeFakeClient } from "./api-query-fixture.js";
 const [home, readyPath] = process.argv.slice(2);
 if (!home || !readyPath) throw new Error("Fixture paths are required");
 const signingSecret = randomBytes(32);
-const minted = mintApiKey({ app: "conversations", agent: "fixture", scopes: ["conversations:read", "conversations:write"], signingSecret });
+const minted = mintApiKey({ tid: "default", app: "conversations", agent: "fixture", scopes: ["conversations:read", "conversations:write"], signingSecret });
 const registered = new Set([minted.kid]);
 const fake = makeFakeClient([]);
 const client = fake as unknown as ApiServerDeps["client"];

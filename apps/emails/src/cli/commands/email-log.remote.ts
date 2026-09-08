@@ -320,7 +320,7 @@ async function selfHostedSentSearch(
     offset: parseCliNonNegativeIntOption(opts.offset),
   });
   const summaries = rows.map(toSelfHostedSummary);
-  output(summaries, formatSelfHostedSummaries(summaries, `Self-hosted sent search "${query}"`));
+  output(summaries, formatSelfHostedSummaries(summaries, `Sent search "${query}"`));
 }
 
 // ── mailbox-wide search (task db244cd4) ──────────────────────────────────────

@@ -809,6 +809,7 @@ describe("cloud CLI task-list filtering", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        if (url.pathname === `/v1/projects/${PROJECT_ID}`) return Response.json({ project: project() });
         if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
         if (url.pathname === "/v1/task-lists") return Response.json({ task_lists: lists });
         if (url.pathname === "/v1/tasks") taskRequests++;

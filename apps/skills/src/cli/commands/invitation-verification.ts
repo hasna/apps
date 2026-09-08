@@ -14,7 +14,12 @@ export async function readInvitationSecrets(): Promise<{ code: string; token: st
   return { code: matched[1], token: matched[2] };
 }
 /** Secret remains local to this prompt, never argv, history, logs or profile state. */
-export function promptInvitationToken(): Promise<string | null> {
+export function promptInvitationToken(): Promise<string | null> { return promptInvitationProof("token"); }
+export function promptInvitationRecoveryCode(): Promise<string | null> { return promptInvitationProof("code"); }
+function promptInvitationProof(kind: "token" | "code"): Promise<string | null> {
+  const length = kind === "token" ? 43 : 6;
+  const label = kind === "token" ? "invitation token" : "recovery code";
+  const character = kind === "token" ? /^[A-Za-z0-9_-]$/ : /^\d$/;
   const stdin = process.stdin, output = process.stderr, wasRaw = stdin.isRaw, wasFlowing = stdin.readableFlowing;
   return new Promise(resolve => {
     let value = "", settled = false, overflow = false;
@@ -30,20 +35,20 @@ export function promptInvitationToken(): Promise<string | null> {
     const keypress = (text: string, key: Key) => {
       if ((key.ctrl && ["c", "d"].includes(key.name ?? "")) || key.name === "escape") return cancel();
       if (key.name === "return" || key.name === "enter") {
-        if (overflow) { value = ""; overflow = false; output.write("\nEnter exactly 43 invitation token characters: "); return; }
-        if (value.length === 43) return finish(value);
-        output.write("\nEnter the complete invitation token: "); value = ""; return;
+        if (overflow) { value = ""; overflow = false; output.write(`\nEnter exactly ${length} ${label} characters: `); return; }
+        if (value.length === length) return finish(value);
+        output.write(`\nEnter the complete ${label}: `); value = ""; return;
       }
       if (overflow) return;
       if (key.name === "backspace") { if (value) { value = value.slice(0, -1); output.write("\b \b"); } }
-      else if (/^[A-Za-z0-9_-]$/.test(text)) {
-        if (value.length === 43) { overflow = true; output.write("\nInvitation token is too long. Press Enter to start again."); }
+      else if (character.test(text)) {
+        if (value.length === length) { overflow = true; output.write(`\nThe ${label} is too long. Press Enter to start again.`); }
         else { value += text; output.write("*"); }
       }
-      else if (text && !key.ctrl && !key.meta) { overflow = true; output.write("\nInvitation token contains invalid characters. Press Enter to start again."); }
+      else if (text && !key.ctrl && !key.meta) { overflow = true; output.write(`\nThe ${label} contains invalid characters. Press Enter to start again.`); }
     };
     const timer = setTimeout(cancel, 5 * 60 * 1000);
     emitKeypressEvents(stdin); stdin.setRawMode(true); stdin.on("keypress", keypress); stdin.once("end", cancel); process.once("SIGINT", cancel);
-    output.write("Enter the invitation token from your email: "); stdin.resume();
+    output.write(kind === "token" ? "Enter the invitation token from your email: " : "Enter the six-digit recovery code from your email: "); stdin.resume();
   });
 }
