@@ -71,6 +71,7 @@ export type AppSource = "monorepo" | "external";
  *   hole. An entry may only claim it with `notes` saying why.
  */
 export type KeyCheck = "probe" | "none";
+export type ProbeAuth = "x-api-key" | "bearer";
 
 /** One registry entry as written in hosted-apps.json. */
 export interface FleetAppEntry {
@@ -86,6 +87,8 @@ export interface FleetAppEntry {
    * from a dead one there and must name a real gated route instead.
    */
   probePath?: string;
+  /** Authentication scheme required by this app's origin. */
+  probeAuth?: ProbeAuth;
   keyCheck?: KeyCheck;
   notes?: string;
 }
@@ -98,6 +101,7 @@ export interface FleetApp {
   baseUrl: string;
   keySecretId: string;
   probePath: string;
+  probeAuth?: ProbeAuth;
   keyCheck: KeyCheck;
   notes?: string;
 }
@@ -153,6 +157,10 @@ export function resolveEntry(entry: FleetAppEntry): FleetApp {
   if (keyCheck === "none" && entry.probePath) {
     throw new Error(`hosted-apps.json: ${entry.app}: keyCheck "none" cannot also set probePath`);
   }
+  const probeAuth = entry.probeAuth ?? "x-api-key";
+  if (probeAuth !== "x-api-key" && probeAuth !== "bearer") {
+    throw new Error(`hosted-apps.json: ${entry.app}: probeAuth must be "x-api-key" or "bearer"`);
+  }
   const probePath = entry.probePath ?? KEY_PROBE_PATH;
   if (!probePath.startsWith("/")) {
     throw new Error(`hosted-apps.json: ${entry.app}: probePath must start with "/"`);
@@ -167,6 +175,7 @@ export function resolveEntry(entry: FleetAppEntry): FleetApp {
     baseUrl,
     keySecretId: entry.keySecretId ?? keySecretIdFor(entry.app),
     probePath,
+    probeAuth,
     keyCheck,
     ...(entry.notes ? { notes: entry.notes } : {}),
   };
@@ -400,7 +409,7 @@ export interface Io {
   /** Read a Secrets Manager string value; `null` when the secret does not exist. */
   readSecret(secretId: string, region: string): Promise<string | null>;
   /** GET a URL, returning the status; `null` when the request did not complete. */
-  probe(url: string, apiKey: string | null): Promise<number | null>;
+  probe(url: string, apiKey: string | null, auth?: ProbeAuth): Promise<number | null>;
   /** Run one `aws` invocation, returning stdout. Throws on a non-zero exit. */
   aws(args: readonly string[]): Promise<string>;
 }
@@ -552,13 +561,16 @@ export function createIo(options: { timeoutMs?: number } = {}): Io {
         throw new Error(`reading ${secretId} failed: ${firstLine(stderr) || (e as Error).message}`);
       }
     },
-    async probe(url, apiKey) {
+    async probe(url, apiKey, auth = "x-api-key") {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const headers: Record<string, string> = { accept: "application/json" };
-        if (apiKey) headers["x-api-key"] = apiKey;
-        const response = await fetch(url, { method: "GET", headers, signal: controller.signal });
+        if (apiKey) {
+          if (auth === "bearer") headers.authorization = `Bearer ${apiKey}`;
+          else headers["x-api-key"] = apiKey;
+        }
+        const response = await fetch(url, { method: "GET", headers, signal: controller.signal, redirect: "error", credentials: "omit" });
         return response.status;
       } catch {
         return null;
@@ -582,8 +594,8 @@ export async function checkApp(app: FleetApp, io: Io, region: string): Promise<K
     return assessKey({ app: app.app, secretPresent: true, verdict: "unreachable", keyCheck: "none" });
   }
   const url = probeUrlFor(app.baseUrl, app.probePath);
-  const withoutKey = await io.probe(url, null);
-  const withKey = await io.probe(url, secret);
+  const withoutKey = await io.probe(url, null, app.probeAuth);
+  const withKey = await io.probe(url, secret, app.probeAuth);
   const verdict = classifyProbe(withoutKey, withKey);
   return assessKey({ app: app.app, secretPresent: true, verdict, statuses: { withoutKey, withKey } });
 }

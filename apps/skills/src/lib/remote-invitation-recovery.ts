@@ -1,4 +1,4 @@
-import { normalizeSkillsApiOrigin } from "./fleet-credentials.js";
+import { normalizeSkillsApiOrigin, skillsApiRequestUrl } from "./fleet-credentials.js";
 import { readBoundedResponse } from "./remote-files.js";
 
 export type RequestInvitationEmailChallenge = Readonly<{ invitationId: string; token: string; challengeId: string; confirm: true }>;
@@ -54,7 +54,7 @@ export async function requestInvitationEmail<A extends "challenge" | "accept">(o
   try { target = normalizeSkillsApiOrigin(origin); } catch { throw new InvitationEmailInputError(); }
   const body = JSON.stringify({ invitationId: value.invitationId, token: value.token, challengeId: value.challengeId, ...(action === "accept" ? { code: value.code } : {}) });
   try {
-    const response = await fetch(`${target}/api/v1/account/invitations/email-${action}`, {
+    const response = await fetch(skillsApiRequestUrl(target, `/api/v1/account/invitations/email-${action}`), {
       method: "POST", headers: { "Content-Type": "application/json" }, body,
       credentials: "omit", redirect: "error", cache: "no-store", referrerPolicy: "no-referrer", signal: AbortSignal.timeout(15_000),
     });
