@@ -588,7 +588,8 @@ affected table's owner; the runtime role remains SELECT/INSERT on both tables.
 The typed `/v1` client is generated from the serve OpenAPI document
 (`bun run generate:sdk`). The resolver-backed factory resolves the credential
 and authority through the same `@hasna/contracts` chain as the CLI, fresh on
-every request, so a key rotation heals a client held open for hours:
+every request. A key rotation at the same authority is picked up without
+rebuilding the client:
 
 ```ts
 import { createRecordingsV1Client } from "@hasna/recordings/sdk";
@@ -597,14 +598,17 @@ const client = createRecordingsV1Client();       // resolves through the chain
 const { recordings } = await client.listRecordings({ limit: 20 });
 ```
 
-An explicit `baseUrl` pins the authority: with no `apiKey` beside it the
-client sends NO credential at all (the ambient chain is never consulted), and
-with one it sends exactly that key, every request. The unhosted local
-`recordings-serve` (`http://localhost:8874`) is reachable only under
-`HASNA_RECORDINGS_LOCAL=1` and prints one "LOCAL mode" line on stderr; every
-other refusal throws `RECORDINGS_CREDENTIAL_MISSING`. The raw generated
-constructor `new RecordingsV1Client({ baseUrl, apiKey })` still works for
-explicit configurations.
+An explicit `baseUrl` requires an explicit `apiKey`; the factory never borrows
+an ambient credential for it. For resolver-backed clients, removing or invalidating
+credentials fails before sending, and a changed authority requires rebuilding the
+client. Requests use the shared authenticated transport, which binds both auth
+headers and refuses redirects rather than forwarding credentials elsewhere.
+
+The factory is hosted-only and rejects the explicit local opt-in. The separate
+`resolveRecordingsSdkTransport` helper can report the local `recordings-serve`
+under `HASNA_RECORDINGS_LOCAL=1`; it does not make the factory a local client.
+The raw generated `RecordingsV1Client` constructor remains available for callers
+that explicitly manage their own transport and authentication.
 
 Useful agent tools include `recordings_status` for safe service/config diagnostics,
 `transcribe_audio`, `save_recording`, `list_recordings`, `search_recordings`,

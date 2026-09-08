@@ -40,6 +40,8 @@
  */
 import {
   ClientTransportConfigurationError,
+  createClientTransport,
+  toV1BaseUrl,
   resolveClientTransport,
   resolveCredential,
   type CredentialChainOptions,
@@ -225,56 +227,64 @@ export function resolveRecordingsSdkTransport(
 export function createRecordingsV1Client(
   options: ResolveRecordingsSdkTransportOptions & Pick<RecordingsV1ClientOptions, "fetch" | "headers"> = {},
 ): RecordingsV1Client {
-  const resolved = resolveRecordingsSdkTransport(options);
-  if (resolved.mode !== "http" || !resolved.apiKey) {
-    throw new Error(
-      "RECORDINGS_CREDENTIAL_MISSING: the /v1 client is hosted-only and no Hasna Recordings credential resolved. " +
-        "Looked at HASNA_RECORDINGS_API_KEY_OVERRIDE / HASNA_PROFILE / HASNA_RECORDINGS_API_KEY_REF, the Keychain item " +
-        "hasna.credentials.recordings.api-key, ~/.hasna/recordings/config/credentials, then HASNA_RECORDINGS_API_KEY.",
-    );
-  }
-  // PER-CALL, NOT PER-CLIENT. `RecordingsV1Client` is generated from the OpenAPI
-  // document and stores whatever `apiKey` it is handed, so a client built once
-  // and held for hours would keep sending the key that happened to resolve at
-  // startup — the staleness the fresh-per-call chain exists to remove. Rather
-  // than fork the generated file, the credential is refreshed in a `fetch`
-  // wrapper: the generated request has already set `x-api-key` from its stored
-  // value by the time we see it, and we overwrite that header with the key the
-  // chain resolves NOW. A re-resolution that throws or comes back empty leaves
-  // the generated header in place, so a transient unreadable Keychain cannot
-  // turn a working client into a failing one mid-flight.
-  const baseFetch = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
-  // When tier 1 pinned the authority (explicit `baseUrl`), the chain is NOT
-  // re-consulted on subsequent requests: the credential is the one the client
-  // was constructed with — an explicit `apiKey`, or nothing (#1794). Per-call
-  // re-resolution, and the rotation-healing it exists for, still applies to a
-  // client that resolved its own hosted authority.
-  const authorityPinned = options.baseUrl !== undefined;
-  const refreshOptions: ResolveRecordingsSdkTransportOptions = { ...options, notice: () => {} };
-  const fetchWithFreshCredential = ((input: RequestInfo | URL, init?: RequestInit) => {
-    // Normalise whatever shape the init carries. The generated client hands us
-    // a plain record today, but that was asserted only in a comment: an object
-    // spread over a `Headers` instance or a tuple array yields `{}` and would
-    // silently drop EVERY header, Content-Type included, the moment the client
-    // is regenerated. `Headers` normalises all three shapes for us.
-    const headers: Record<string, string> = {};
-    new Headers(init?.headers ?? {}).forEach((value, key) => {
-      headers[key] = value;
-    });
-    if (!authorityPinned) {
-      try {
-        const fresh = resolveRecordingsSdkTransport(refreshOptions).apiKey;
-        if (fresh) headers["x-api-key"] = fresh;
-      } catch {
-        // keep the credential the client was constructed with
-      }
+  // Validate deliberate input before placing it into resolver environment
+  // fields: blank/invalid authority must never become a gateway default.
+  const explicitUrl = options.baseUrl === undefined ? undefined : stripV1(toV1BaseUrl(options.baseUrl));
+  const explicitKey = options.apiKey;
+  const requestedCredentials: CredentialChainOptions = {
+    ...options.credentials,
+    ...(explicitKey !== undefined ? { apiKey: explicitKey } : {}),
+  };
+  const missing = () => new Error(
+    "RECORDINGS_CREDENTIAL_MISSING: the /v1 client is hosted-only. Supply apiKey with an explicit baseUrl, " +
+      "or configure Hasna Recordings credentials through the shared account chain.",
+  );
+  if (explicitUrl !== undefined && !explicitKey) throw missing();
+
+  const connect = () => {
+    // Explicit authority never attracts a disk, Keychain or environment key.
+    // Omitting HOME and disabling Keychain makes the shared chain hermetic.
+    if (explicitUrl !== undefined) {
+      return createClientTransport("recordings", { HASNA_RECORDINGS_API_URL: explicitUrl }, {
+        credentials: { apiKey: explicitKey, keychain: { enabled: false } },
+        ...(options.fetch ? { fetchImpl: options.fetch } : {}),
+      });
     }
-    return baseFetch(input, { ...init, headers });
+    // Normalize NOW, not when the factory was constructed: this seam may copy
+    // env while removing the unrelated OpenAI key. A retained copy would hide
+    // subsequent credential removal/rotation and changes of authority.
+    const rawEnv: Env = options.env ?? (typeof process !== "undefined" ? process.env : {});
+    const { env, credentials } = recordingsResolverInputs(rawEnv, requestedCredentials);
+    if (selectsRecordingsLocalStore(env)) throw missing();
+    try {
+      return createClientTransport("recordings", env, {
+        credentials,
+        ...(options.fetch ? { fetchImpl: options.fetch } : {}),
+      });
+    } catch (error) {
+      if (error instanceof ClientTransportConfigurationError && /no API key could be resolved/.test(error.message)) {
+        throw missing();
+      }
+      throw error;
+    }
+  };
+  const initial = connect();
+  const baseUrl = initial.resolution.baseUrl;
+  const boundFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const current = connect();
+    if (current.resolution.baseUrl !== baseUrl) {
+      throw new ClientTransportConfigurationError(
+        "recordings", "The configured service authority changed; rebuild the client before sending credentials.",
+      );
+    }
+    // The shared transport owns the stable authority/key pair, auth headers,
+    // path boundary and manual redirects. Resolver errors are never rescued
+    // with the startup key. Raw responses preserve the generated API contract.
+    return current.client.fetch(input, init);
   }) as typeof fetch;
   return new RecordingsV1Client({
-    baseUrl: resolved.baseUrl,
-    apiKey: resolved.apiKey,
-    fetch: fetchWithFreshCredential,
+    baseUrl: stripV1(baseUrl),
+    fetch: boundFetch,
     ...(options.headers ? { headers: options.headers } : {}),
   });
 }
