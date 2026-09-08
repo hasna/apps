@@ -1,3 +1,4 @@
+import {assertPlanApiEnvironment} from "../lib/plan-client-boundary.js";
 import { Command, Help } from "commander";
 import {
   getTodosCloudClient,
@@ -500,7 +501,7 @@ function disqualifyingArgument(invocation: ParsedInvocation): Disqualification |
       if (hasOption(args, "--deregister")) return null;
       return firstPresentOption(args, ["--path-prefix", "--dry-run"]);
     case "plans":
-      return firstPresentOption(args, ["--artifact", "--write-artifacts"]);
+      return null;
     // `list --tags/--tag` is serviced remotely: the /v1 list route filters by
     // tag server-side and the cloud router preflights the capability against
     // the authority's OpenAPI contract (task 90c0b178).
@@ -693,10 +694,17 @@ export function initializeTodosCliAuthority(
   args: string[] = process.argv.slice(2),
   env: Env = process.env as Env,
 ): TodosCliAuthorityInitialization {
+  const requestedPlan = parseInvocation(args);
+  if (requestedPlan.command === "plans") {
+    if (isMetadataInvocation(args, requestedPlan)) return {route:"remote-diagnostic",v1_base_url:null};
+    assertPlanApiEnvironment(env);
+  }
   let resolution: TodosCliTransportResolution;
   try {
     resolution = resolveTodosCliTransport(env);
   } catch (error) {
+    if (requestedPlan.command === "plans" && error instanceof Error && error.message.startsWith("REMOTE_API_CONFIG_MISSING")) throw new Error("REMOTE_API_CONFIG_MISSING: Plan commands require HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, or saved account credentials.");
+
     // A partial API pair (URL without KEY, or KEY without URL) — or a fully
     // absent pair without the explicit local opt-in (fail closed, hasna/apps#1613)
     // — is a hard error for real commands, but DIAGNOSTIC commands must still

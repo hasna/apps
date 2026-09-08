@@ -333,6 +333,15 @@ export class TodosV1Client {
       });
     }
 
+    /** Read complete plan comment history */
+    async listPlanComments(id: string, query?: { "plan_read_contract"?: "1" }, init?: RequestInit): Promise<{ "count": number; "comments": Array<{ "id": string; "plan_id": string; "content": string; "created_at": string; "agent_id": string | null; "session_id": string | null; "type": "comment" | "progress" | "note"; "progress_pct": number | null }> }> {
+      return this.request("GET", `/v1/plans/${encodeURIComponent(String(id))}/comments`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     /** Delete a plan, detaching linked records only with force and preserving their content/history */
     async deletePlanPreserving(id: string, body: { "force"?: boolean }, init?: RequestInit): Promise<{ "schema_version": 1; "plan_id": string; "deleted": boolean; "detached_task_ids": Array<string>; "detached_task_list_ids": Array<string>; "detached_tasks": number; "detached_task_lists": number }> {
       return this.request("POST", `/v1/plans/${encodeURIComponent(String(id))}/delete-preserving`, {
@@ -760,7 +769,7 @@ export class TodosV1Client {
     }
 
     /** List tasks */
-    async listTasks(query?: { "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled" | Array<"pending" | "in_progress" | "completed" | "failed" | "cancelled">; "priority"?: "low" | "medium" | "high" | "critical" | Array<"low" | "medium" | "high" | "critical">; "project_id"?: string; "parent_id"?: string | null; "include_subtasks"?: boolean; "plan_id"?: string; "task_list_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: string; "updated_after"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "tasks": Array<Task>; "count": number; "total": number }> {
+    async listTasks(query?: { "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled" | Array<"pending" | "in_progress" | "completed" | "failed" | "cancelled">; "priority"?: "low" | "medium" | "high" | "critical" | Array<"low" | "medium" | "high" | "critical">; "project_id"?: string; "parent_id"?: string | null; "include_subtasks"?: boolean; "include_archived"?: boolean; "plan_read_contract"?: "1"; "plan_id"?: string; "task_list_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: string; "updated_after"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "tasks": Array<Task>; "count": number; "total": number; "selection"?: { "schema_version": 1; "plan_id": string; "include_subtasks": true; "include_archived": boolean } }> {
       return this.request("GET", `/v1/tasks`, {
         body: undefined,
         query,

@@ -808,10 +808,9 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["projects", "--path-prefix", "/tmp"],
       ["plans", "--write-artifacts"],
     ]) {
-      expect(() => initializeTodosCliAuthority(args, {
-        HASNA_TODOS_API_URL: "https://authority.invalid",
-        HASNA_TODOS_API_KEY: "fixture-remote-key",
-      })).toThrow("REMOTE_COMMAND_UNSUPPORTED");
+      const initialize=()=>initializeTodosCliAuthority(args,{HASNA_TODOS_API_URL:"https://authority.invalid",HASNA_TODOS_API_KEY:"fixture-remote-key"});
+      if(args[0]==="plans") expect(initialize().route).toBe("remote-http");
+      else expect(initialize).toThrow("REMOTE_COMMAND_UNSUPPORTED");
     }
 
     for (const args of [
@@ -949,7 +948,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         const requestCount = requests.length;
         const result = await runCli(executable, args, env, cwd);
         expect({ args, exitCode: result.exitCode }).toEqual({ args, exitCode: 1 });
-        expect(result.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+        expect(result.stderr).toContain(args[0]==="plans"?"Unset TODOS_DB_PATH":"REMOTE_COMMAND_UNSUPPORTED");
         expect(requests).toHaveLength(requestCount);
         expect(recursiveInventory(cwd)).toEqual(before);
         expectNoLocalDatabase(home, localDbPath);
@@ -2114,6 +2113,15 @@ describe("remote CLI entrypoint authority boundary", () => {
             return Response.json({ plan }, { status: 201 });
           }
         }
+        const preservingPlanMatch=url.pathname.match(/^\/v1\/plans\/([^/]+)\/delete-preserving$/);
+        if(preservingPlanMatch&&request.method==="POST"){
+          const id=preservingPlanMatch[1]!;const linked=tasks.filter(task=>task.plan_id===id);const lists=taskLists.filter(list=>list.plan_id===id);
+          if(!body.force&&(linked.length||lists.length))return Response.json({error:"plan has linked records"},{status:409});
+          for(const task of linked)task.plan_id=null;for(const list of lists)list.plan_id=null;
+          const exists=Boolean(find(plans,id));remove(plans,id);
+          return Response.json({schema_version:1,plan_id:id,deleted:exists,detached_tasks:linked.length,detached_task_ids:linked.map(task=>task.id),detached_task_lists:lists.length,detached_task_list_ids:lists.map(list=>list.id)});
+        }
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0});
         const planMatch = url.pathname.match(/^\/v1\/plans\/([^/]+)$/);
         if (planMatch) {
           const plan = find(plans, planMatch[1]!);
@@ -2160,7 +2168,7 @@ describe("remote CLI entrypoint authority boundary", () => {
             const total = items.length;
             const limit = Number(url.searchParams.get("limit") ?? items.length);
             items = items.slice(0, Number.isFinite(limit) ? limit : items.length);
-            return Response.json({ tasks: items, count: items.length, total });
+            return Response.json({ tasks: items, count: items.length, total, selection:{schema_version:1,plan_id:url.searchParams.get("plan_id"),include_subtasks:url.searchParams.get("include_subtasks")==="true",include_archived:url.searchParams.get("include_archived")==="true"} });
           }
           if (request.method === "POST") {
             const id = TASK_IDS[nextTaskId++]!;
@@ -2299,7 +2307,8 @@ describe("remote CLI entrypoint authority boundary", () => {
       ];
 
       const runRemoteOk = async (invocation: string[]): Promise<string> => {
-        const result = await runCli(executable, invocation, env, cwd);
+        const invocationEnv={...env};if(invocation.includes("plans"))delete invocationEnv.TODOS_DB_PATH;
+        const result = await runCli(executable, invocation, invocationEnv, cwd);
         expect({ invocation, exitCode: result.exitCode, stderr: stderrWithoutAttributionWarning(result.stderr) }).toEqual({
           invocation,
           exitCode: 0,
@@ -2427,7 +2436,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         const requestCount = requests.length;
         const result = await runCli(executable, unsupported, env, cwd);
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+        expect(result.stderr).toContain(unsupported.includes("plans")?"Unset TODOS_DB_PATH":"REMOTE_COMMAND_UNSUPPORTED");
         expect(requests).toHaveLength(requestCount);
         expect(recursiveInventory(cwd)).toEqual(before);
         expectNoLocalDatabase(root, localDbPath);

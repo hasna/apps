@@ -55,3 +55,31 @@ unchanged accepted receipt and `operation_committed:true` /
 `current_state_matches_receipt:false`. Those fields are emitted only after
 reading a previously persisted receipt, never merely because a transaction
 callback has returned. Historical receipts are not rewritten to match new tasks.
+
+## API-only CLI plans
+
+`todos plans` uses authenticated shared storage for list, create, show, complete,
+preserving delete, project-link planning/apply, and receipt rollback. Local database
+selectors are rejected before command modules load. Templates remain outside this
+bounded conversion.
+
+`--artifact` and `--write-artifacts` retain local Markdown files, canonical slugged
+filenames, legacy UUID filename readback, and conflict diagnostics. Supply
+`--artifact-root <directory>` to explicitly choose an existing trusted local
+project directory. Server project paths never authorize client filesystem access.
+The files remain under `.hasna/todos/plans/<project-id>` inside that root. With
+create/complete, the root optionally requests an artifact after the shared action.
+If this export fails, a nonzero result retains the acknowledged plan receipt and
+reports artifact status as unconfirmed; do not repeat the server action.
+
+`--force` on deletion detaches linked tasks and task lists while preserving their
+content and history. Unsupported preserving endpoints fail closed. Plan details
+and artifact references read complete bounded task pages; artifact exports include
+archived tasks. An interrupted multi-plan Markdown export reports the files already
+written and the failed plan, without undoing or silently repeating them.
+
+Complete CLI task reads now require `plan_read_contract=1` selection receipts and
+stable totals on every page. The server applies explicit plan, subtask and archive
+filters to both list and count. Predecessor APIs without that evidence fail before
+Markdown replacement. Plan history requires a valid count and unique same-plan
+comment rows; missing history support is an error, not an empty history claim.

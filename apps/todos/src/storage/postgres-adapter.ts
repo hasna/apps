@@ -648,6 +648,8 @@ class PostgresJsonRecordStore {
       if (values.length === 0) return "1=0";
       return `${column} IN (${values.map((v) => p(v)).join(", ")})`;
     };
+    // Explicit archive selection is shared by list/count. Omitted requests retain predecessor behavior.
+    if (filter.include_archived === false) conds.push(`(payload->>'archived_at' IS NULL)`);
     if (filter.ids) conds.push(inClause("payload->>'id'", filter.ids));
     if (filter.project_id !== undefined) conds.push(`payload->>'project_id' = ${p(filter.project_id)}`);
     if (filter.parent_id !== undefined) conds.push(`payload->>'parent_id' IS NOT DISTINCT FROM ${p(filter.parent_id)}`);

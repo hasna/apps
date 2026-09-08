@@ -1,3 +1,4 @@
+import {runPlanApiFixture} from "./test-support/plan-cli-api.js";
 import { describe, it, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -63,6 +64,7 @@ async function spawnCli(args: string[], dbPath: string, extraEnv: Record<string,
 }
 
 async function runCli(args: string[], dbPath: string, extraEnv: Record<string, string> = {}): Promise<CliResult> {
+  if(args.includes("plans")) return runPlanApiFixture(args,dbPath,join(testRoot,"plan-api-home"));
   let result = await spawnCli(args, dbPath, extraEnv);
   // Bounded retry: only re-run when the failure is a transient SQLite lock, so a
   // genuine command failure still surfaces immediately without being masked.
@@ -1197,6 +1199,8 @@ describe("CLI integration", () => {
       projectRoot,
       "--json",
       "plans",
+      "--artifact-root",
+      projectRoot,
       "--add",
       "CLI artifact plan",
       "--slug",
@@ -1217,6 +1221,8 @@ describe("CLI integration", () => {
       projectRoot,
       "--json",
       "plans",
+      "--artifact-root",
+      projectRoot,
       "--show",
       "readable-artifact-plan",
     ], dbPath);
@@ -1232,6 +1238,8 @@ describe("CLI integration", () => {
       projectRoot,
       "--json",
       "plans",
+      "--artifact-root",
+      projectRoot,
       "--artifact",
       "readable-artifact-plan",
     ], dbPath);
@@ -1247,6 +1255,8 @@ describe("CLI integration", () => {
       projectRoot,
       "--json",
       "plans",
+      "--artifact-root",
+      projectRoot,
       "--write-artifacts",
     ], dbPath);
     expect(exported.exitCode).toBe(0);
@@ -1261,6 +1271,8 @@ describe("CLI integration", () => {
       projectRoot,
       "--json",
       "plans",
+      "--artifact-root",
+      projectRoot,
       "--add",
       "Duplicate artifact plan",
       "--slug",
