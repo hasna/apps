@@ -1820,6 +1820,7 @@ class PostgresJsonRecordStore {
   private async currentPlanProjectLinkResult(
     receipt: PlanProjectLinkReceipt,
     action: "linked" | "already_linked",
+    previouslyCommitted = false,
   ): Promise<PlanProjectLinkResult> {
     const [plan, project, tasks] = await Promise.all([
       this.get<Plan>("plans", receipt.plan_id),
@@ -1830,8 +1831,8 @@ class PostgresJsonRecordStore {
     if (!plan || !project || planProjectLinkResultDigest(plan, sortedTasks) !== receipt.result_digest) {
       throw new PlanProjectLinkError(
         "PLAN_PROJECT_LINK_RESULT_DRIFT",
-        "The accepted plan-project-link result has drifted",
-        { receipt_id: receipt.receipt_id },
+        previouslyCommitted ? "The plan-project link was already committed; current state has drifted from its immutable receipt" : "The accepted plan-project-link result has drifted",
+        { receipt_id: receipt.receipt_id, ...(previouslyCommitted ? {operation_committed:true,current_state_matches_receipt:false,receipt} : {}) },
       );
     }
     return { mode: "apply", action, plan, project, tasks: sortedTasks, receipt };
@@ -1841,6 +1842,12 @@ class PostgresJsonRecordStore {
     input: TodosPlanProjectLinkApplyInput,
     context: TodosStorageContext = {},
   ): Promise<PlanProjectLinkResult> {
+    // Hold the existing membership lock through the exact receipt readback.
+    // The outer helper returns only after COMMIT acknowledgment; an ambiguous
+    // commit still throws and must be reconciled by the immutable retry key.
+    if (!this.projectIntegrityLocked) {
+      return this.withDependencyGraphTransaction(scoped => scoped.applyPlanProjectLink(input, context));
+    }
     await this.ensureSchema();
     const existing = await this.getPlanProjectLinkReceipt(input.receipt_id);
     if (existing) {
@@ -1862,7 +1869,7 @@ class PostgresJsonRecordStore {
           { receipt_id: input.receipt_id },
         );
       }
-      return this.currentPlanProjectLinkResult(existing, "already_linked");
+      return this.currentPlanProjectLinkResult(existing, "already_linked", true);
     }
 
     const [plan, project, tasks, scopedPlans] = await Promise.all([
@@ -2031,7 +2038,7 @@ class PostgresJsonRecordStore {
       if (isPostgresUniqueViolation(error)) {
         const raced = await this.getPlanProjectLinkReceipt(input.receipt_id);
         if (raced && raced.plan_id === input.plan_id && raced.project_id === input.project_id) {
-          return this.currentPlanProjectLinkResult(raced, "already_linked");
+          return this.currentPlanProjectLinkResult(raced, "already_linked", true);
         }
         throw new PlanProjectLinkError(
           "PLAN_PROJECT_LINK_IDEMPOTENCY_CONFLICT",
@@ -2052,7 +2059,7 @@ class PostgresJsonRecordStore {
     if (accepted.plan_id !== plan.id || accepted.project_id !== project.id) {
       throw new PlanProjectLinkError("PLAN_PROJECT_LINK_IDEMPOTENCY_CONFLICT", "The idempotency key was accepted for a different target");
     }
-    return this.currentPlanProjectLinkResult(accepted, alreadyLinked ? "already_linked" : "linked");
+    return this.currentPlanProjectLinkResult(accepted, alreadyLinked ? "already_linked" : "linked", row.existing_receipt != null);
   }
 
   async rollbackPlanProjectLink(

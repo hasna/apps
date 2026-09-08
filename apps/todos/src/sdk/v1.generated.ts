@@ -138,6 +138,8 @@ export interface PlanProjectLinkApplyInput { "project_id": string; "expected_pla
 
 export interface PlanProjectLinkRollbackInput { "project_id": string; "receipt_id": string; "expected_plan_revision": string }
 
+export interface PlanProjectLinkConflictResponse { "error": string; "code"?: string; "conflict"?: boolean; "operation_committed"?: true; "current_state_matches_receipt"?: false; "receipt"?: PlanProjectLinkReceipt }
+
 export interface ErrorResponse { "error": string; "code"?: string; "conflict"?: boolean }
 
 export interface CreateTaskListInput { "name": string; "slug"?: string; "project_id"?: string; "description"?: string; "metadata"?: Record<string, unknown> }

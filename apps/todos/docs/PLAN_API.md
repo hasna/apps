@@ -44,7 +44,14 @@ task-manifest/subtree-transfer dispatches. The shared fence covers these too.
 This closes only the five named MCP callbacks from the historical remaining-local
 inventory (107 CLI / 93 MCP baseline); it is not a fresh whole-app census or an
 all-command completion claim. No deployment, data transfer, or database retirement
-is performed by this source change. A separately reproduced pre-existing
-plan-project-link concurrent-apply receipt drift remains tracked: the operation
-can commit, then detect a new member during receipt readback. It is not waived or
-reported as a passing regression here.
+is performed by this source change.
+
+Plan-project linkage holds its existing membership transaction lock through the
+initial exact-result readback. The caller receives success only after transaction
+commit acknowledgment. A failed or ambiguous commit acknowledgment remains an
+error; retrying the explicit idempotency key reconciles a committed operation.
+A later replay whose current state has drifted still returns HTTP 409, with the
+unchanged accepted receipt and `operation_committed:true` /
+`current_state_matches_receipt:false`. Those fields are emitted only after
+reading a previously persisted receipt, never merely because a transaction
+callback has returned. Historical receipts are not rewritten to match new tasks.
