@@ -1,6 +1,7 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { scaffoldPortableSkill } from "./portable-skills.js";
@@ -214,4 +215,24 @@ test("resuming cancelled and expired intents cannot upload or finalize again", a
     expect(result).toMatchObject({ state, committed: false, executionEnabled: false });
     expect(s.calls.slice(before).every(c => c.method === "GET")).toBe(true); expect(s.uploads).toBe(1);
   }
+});
+
+
+test("recovery caps fd reads when a file grows after its initial stat", async () => {
+  const p = await prepared(), file = join(p.recovery, "receipt.json"), original = readFileSync(file);
+  const initial = fs.statSync(file), originalStat = fs.fstatSync, originalRead = fs.readSync;
+  let grew = false, allocated = 0;
+  const stat = spyOn(fs, "fstatSync").mockImplementation(((fd: number, options?: unknown) => {
+    const result = originalStat(fd, options as any);
+    if (!grew && result.ino === initial.ino) { grew = true; fs.appendFileSync(file, Buffer.alloc(1024 * 1024)); }
+    return result;
+  }) as typeof fs.fstatSync);
+  const read = spyOn(fs, "readSync").mockImplementation(((fd: number, buffer: Uint8Array, ...args: unknown[]) => {
+    if (originalStat(fd).ino === initial.ino) allocated = Math.max(allocated, buffer.byteLength);
+    return (originalRead as Function)(fd, buffer, ...args);
+  }) as typeof fs.readSync);
+  try {
+    expect(() => readPrivatePublicationRecovery(p.recovery)).toThrow(PrivatePublicationError);
+    expect(grew).toBe(true); expect(allocated).toBe(original.length + 1); expect(allocated).toBeLessThan(65537);
+  } finally { stat.mockRestore(); read.mockRestore(); }
 });

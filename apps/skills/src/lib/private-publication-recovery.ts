@@ -1,4 +1,4 @@
-import { constants, closeSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { constants, closeSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { inspectSkillBundle, packSkillBundle } from "./skill-bundle.js";
@@ -37,7 +37,16 @@ function readOwned(directory: string, name: string, max: number): Buffer {
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.nlink !== 1 || stat.size > max || stat.size < 1 || (stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid())) return fail();
-    const bytes = readFileSync(fd); const after = fstatSync(fd);
+    // Read at most one byte beyond the permitted size, even if another process
+    // grows the file after fstat. Never read an unbounded stream to EOF.
+    const buffer = Buffer.alloc(Math.min(max, stat.size) + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const count = readSync(fd, buffer, length, buffer.length - length, length);
+      if (count === 0) break;
+      length += count;
+    }
+    const bytes = buffer.subarray(0, length), after = fstatSync(fd);
     unchangedDirectory(directory, identity);
     if (bytes.length !== stat.size || stat.size !== after.size || stat.mtimeMs !== after.mtimeMs || stat.ctimeMs !== after.ctimeMs) return fail();
     return bytes;
