@@ -1,4 +1,6 @@
 // @ts-nocheck
+import {normalizeSlug} from "../../lib/slugs.js";
+import {deleteSharedPlan, assertPlanReceipt, listSharedPlans} from "../plan-api.js";
 import { cloudQueryTasks } from "../../cli/task-query-api.js";
 /**
  * Task project tools for the MCP server.
@@ -27,6 +29,7 @@ import {
 import {
   getTodosCloudClient,
   cloudTaskAction,
+  cloudCreatePlan, cloudListPlans, cloudResolvePlan, cloudUpdatePlan, cloudListPlanTasks,
   cloudCreateProject, cloudListProjects, cloudResolveProject, cloudUpdateProject, cloudDeleteProjectPreserving, cloudListTasks,
   cloudUpdateTask,
   cloudAddComment,
@@ -1848,17 +1851,19 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       {
         name: z.string().describe("Plan name"),
         slug: z.string().optional().describe("Readable plan slug"),
-        project_id: z.string().optional().describe("Project ID"),
+        project_id: z.string().trim().min(1).optional().describe("Project ID"),
         description: z.string().optional(),
         start_date: z.string().optional().describe("ISO date"),
         end_date: z.string().optional().describe("ISO date"),
-        status: z.enum(["planning", "active", "completed", "cancelled"]).optional(),
+        status: z.enum(["planning", "active", "completed", "cancelled", "archived"]).optional(),
       },
       async (params) => {
         try {
-          const resolved: Record<string, unknown> = { ...params };
-          if (params.project_id) resolved.project_id = resolveId(params.project_id, "projects");
-          const plan = createPlan(resolved as Parameters<typeof createPlan>[0]);
+          const cloud = getTodosCloudClient();
+          if (!cloud) throw new Error("Plan tools require the authenticated Todos API");
+          const resolved = { ...params, name:params.name.trim(), ...(params.slug !== undefined ? {slug:normalizeSlug(params.slug)} : {}), ...(params.project_id ? {project_id: await cloudResolveProjectRef(cloud, params.project_id)} : {}) };
+          const plan = await cloudCreatePlan(cloud, resolved);
+          assertPlanReceipt(plan,resolved);
           return { content: [{ type: "text" as const, text: `Plan created: ${plan.id.slice(0,8)} ${plan.name}` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -1872,14 +1877,15 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "list_plans",
       "List plans.",
       {
-        project_id: z.string().optional().describe("Filter by project"),
-        status: z.enum(["planning", "active", "completed", "cancelled"]).optional(),
+        project_id: z.string().trim().min(1).optional().describe("Filter by project"),
+        status: z.enum(["planning", "active", "completed", "cancelled", "archived"]).optional(),
       },
       async ({ project_id, status }) => {
         try {
-          const resolved: Record<string, unknown> = { status };
-          if (project_id) resolved.project_id = resolveId(project_id, "projects");
-          const plans = listPlans(resolved as Parameters<typeof listPlans>[0]);
+          const cloud = getTodosCloudClient();
+          if (!cloud) throw new Error("Plan tools require the authenticated Todos API");
+          const project = project_id ? await cloudResolveProjectRef(cloud, project_id) : undefined;
+          const plans = (await listSharedPlans(cloud, project)).filter(plan => status === undefined || plan.status === status);
           if (plans.length === 0) return { content: [{ type: "text" as const, text: "No plans found." }] };
           const lines = plans.map(p => `[${p.status}] ${p.name} (${p.id.slice(0,8)})`);
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };
@@ -1895,18 +1901,18 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "get_plan",
       "Get a plan with its tasks.",
       {
-        plan_id: z.string().describe("Plan ID"),
+        plan_id: z.string().trim().min(1).describe("Plan ID"),
         include_tasks: z.boolean().optional().describe("Include tasks (default: true)"),
       },
       async ({ plan_id, include_tasks = true }) => {
         try {
-          const resolvedId = resolveId(plan_id, "plans");
-          const plan = getPlan(resolvedId);
+          const cloud = getTodosCloudClient();
+          if (!cloud) throw new Error("Plan tools require the authenticated Todos API");
+          const plan = await cloudResolvePlan(cloud, plan_id);
           if (!plan) throw new TaskNotFoundError(`Plan not found: ${plan_id}`);
           let tasks: Task[] = [];
           if (include_tasks) {
-            const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-            tasks = listTasks({ plan_id: resolvedId, limit: 200 }, undefined) as Task[];
+            tasks = await cloudListPlanTasks(cloud, plan.id);
           }
           const lines = [
             `ID:    ${plan.id}`,
@@ -1932,17 +1938,22 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "update_plan",
       "Update a plan's fields.",
       {
-        plan_id: z.string().describe("Plan ID"),
+        plan_id: z.string().trim().min(1).describe("Plan ID"),
         name: z.string().optional(),
         description: z.string().optional(),
         start_date: z.string().optional(),
         end_date: z.string().optional(),
-        status: z.enum(["planning", "active", "completed", "cancelled"]).optional(),
+        status: z.enum(["planning", "active", "completed", "cancelled", "archived"]).optional(),
       },
       async ({ plan_id, ...updates }) => {
         try {
-          const resolvedId = resolveId(plan_id, "plans");
-          const plan = updatePlan(resolvedId, updates as Parameters<typeof updatePlan>[1]);
+          const cloud = getTodosCloudClient();
+          if (!cloud) throw new Error("Plan tools require the authenticated Todos API");
+          const existing = await cloudResolvePlan(cloud, plan_id);
+          if (!existing) throw new TaskNotFoundError(`Plan not found: ${plan_id}`);
+          if(updates.name!==undefined)updates.name=updates.name.trim();
+          const plan = await cloudUpdatePlan(cloud, existing.id, updates);
+          assertPlanReceipt(plan,updates,existing.id);
           return { content: [{ type: "text" as const, text: `Plan ${plan.id.slice(0,8)} updated.` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -1954,15 +1965,19 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
   if (shouldRegisterTool("delete_plan")) {
     server.tool(
       "delete_plan",
-      "Permanently delete a plan and all its tasks.",
+      "Delete a plan; force confirms detaching linked tasks while preserving their content and history.",
       {
-        plan_id: z.string().describe("Plan ID"),
-        force: z.boolean().optional().describe("Skip confirmation (dangerous)"),
+        plan_id: z.string().trim().min(1).describe("Plan ID"),
+        force: z.boolean().optional().describe("Confirm detaching linked records; their content is preserved"),
       },
       async ({ plan_id, force }) => {
         try {
-          deletePlan(resolveId(plan_id, "plans"), force);
-          return { content: [{ type: "text" as const, text: `Plan ${plan_id.slice(0, 8)} deleted.` }] };
+          const cloud=getTodosCloudClient();
+          if(!cloud)throw new Error("Plan tools require the authenticated Todos API");
+          const plan=await cloudResolvePlan(cloud,plan_id);
+          if(!plan)throw new TaskNotFoundError(`Plan not found: ${plan_id}`);
+          const receipt=await deleteSharedPlan(cloud,plan.id,force===true);
+          return {content:[{type:"text" as const,text:JSON.stringify(receipt)}]};
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

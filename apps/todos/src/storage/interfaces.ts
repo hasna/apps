@@ -295,7 +295,17 @@ export interface TodosProjectStore {
   delete(id: string, context?: TodosStorageContext): MaybePromise<boolean>;
 }
 
+export interface TodosPlanDeleteReceipt {
+  schema_version: 1;
+  plan_id: string;
+  deleted: boolean;
+  detached_task_ids: string[];
+  detached_task_list_ids: string[];
+  detached_tasks: number;
+  detached_task_lists: number;
+}
 export interface TodosPlanStore {
+  deletePreserving?(id:string, force:boolean, context?:TodosStorageContext): MaybePromise<TodosPlanDeleteReceipt>;
   create(input: CreatePlanInput, context?: TodosStorageContext): MaybePromise<Plan>;
   get(id: string, context?: TodosStorageContext): MaybePromise<Plan | null>;
   list(projectId?: string, context?: TodosStorageContext): MaybePromise<Plan[]>;

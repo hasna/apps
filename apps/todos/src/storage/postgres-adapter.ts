@@ -1,3 +1,4 @@
+import {validatePlanSchedule} from "../lib/plan-schedule.js";
 import { createAtomicProjectMigration } from "./atomic-project-migration.js";
 import { createPostgresMachineRegistry, validateMachines } from "./machine-registry.js";
 import { randomUUID } from "node:crypto";
@@ -215,6 +216,7 @@ export function createPostgresTodosStorageAdapter(
       completeAtRevision: (id, expectedUpdatedAt, context) =>
         store.completePlanAtRevision(id, expectedUpdatedAt, context),
       delete: (id, context) => store.deletePlan(id, context),
+      deletePreserving: (id, force, context) => store.deletePlanPreserving(id, force, context),
       addComment: (input, context) => addPlanComment(input, store, context),
       getComments: async (planId) => {
         const pages: PlanComment[][] = [];
@@ -910,9 +912,15 @@ class PostgresJsonRecordStore {
     }
     const projectTypes = new Set<RemoteObjectType>(["projects", "tasks", "plans", "task_lists"]);
     const reference = type === "projects" ? (value as {parent_id?:unknown}).parent_id : (value as {project_id?:unknown}).project_id;
-    const needsProjectFence = type === "projects" || (projectTypes.has(type) && typeof reference === "string" && reference.length > 0);
+    const planReference = (value as {plan_id?:unknown}).plan_id;
+    const needsPlanFence = type === "tasks" && typeof planReference === "string" && planReference.length > 0;
+    const needsProjectFence = needsPlanFence || type === "projects" || (projectTypes.has(type) && typeof reference === "string" && reference.length > 0);
     if (needsProjectFence && !this.projectIntegrityLocked) {
       return this.withDependencyGraphTransaction(scoped => scoped.upsert(type, value, context));
+    }
+    if(needsPlanFence) {
+      const plan=await this.options.client.query(`SELECT object_id FROM ${this.tableName} WHERE service=$1 AND object_type='plans' AND object_id=$2 AND deleted_at IS NULL FOR KEY SHARE`,[this.service,planReference]);
+      if(!plan.rows.length)throw new PlanNotFoundError(planReference as string);
     }
     if (projectTypes.has(type)) {
       if (typeof reference === "string" && reference) await this.assertLiveProject(reference);
@@ -1265,10 +1273,11 @@ class PostgresJsonRecordStore {
   /** Serialize ordinary plan updates with linkage and preserve its project. */
   async updatePlanWithProjectLinkGuard(
     value: Plan,
+    expectedUpdatedAt: string,
     context: TodosStorageContext = {},
   ): Promise<Plan> {
     await this.ensureSchema();
-    const result = await this.options.client.query<{ plan_found: boolean; payload: unknown | null }>(
+    const result = await this.options.client.query<{ plan_found: boolean; current_revision: string; payload: unknown | null }>(
       `/* todos:plan-update-project-link-guard */ WITH locked_plan AS MATERIALIZED (
          SELECT payload FROM ${this.tableName}
          WHERE service = $1 AND object_type = 'plans' AND object_id = $2 AND deleted_at IS NULL
@@ -1287,9 +1296,11 @@ class PostgresJsonRecordStore {
            version = COALESCE(r.version, 0) + 1
          FROM locked_plan
          WHERE r.service = $1 AND r.object_type = 'plans' AND r.object_id = $2 AND r.deleted_at IS NULL
+           AND locked_plan.payload->>'updated_at' = $6
          RETURNING r.payload
        )
        SELECT EXISTS (SELECT 1 FROM locked_plan) AS plan_found,
+              (SELECT payload->>'updated_at' FROM locked_plan) AS current_revision,
               (SELECT payload FROM stored) AS payload`,
       [
         this.service,
@@ -1297,10 +1308,12 @@ class PostgresJsonRecordStore {
         jsonbParam(value),
         value.updated_at,
         context.requestId ?? this.sourceMachineId ?? null,
+        expectedUpdatedAt,
       ],
     );
     const row = result.rows[0];
-    if (!row?.plan_found || !row.payload) throw new PlanNotFoundError(value.id);
+    if (!row?.plan_found) throw new PlanNotFoundError(value.id);
+    if (!row.payload) throw new PlanRevisionConflictError(value.id, expectedUpdatedAt, row.current_revision);
     return payloadRecord<Plan>(row.payload);
   }
 
@@ -2184,6 +2197,27 @@ class PostgresJsonRecordStore {
     return accepted;
   }
 
+  async deletePlanPreserving(id: string, force: boolean, context: TodosStorageContext = {}): Promise<import("./interfaces.js").TodosPlanDeleteReceipt> {
+    await this.ensureSchema();
+    return this.withTaskParentIntegrityTransaction(async client => {
+      const receipt:import("./interfaces.js").TodosPlanDeleteReceipt={schema_version:1,plan_id:id,deleted:false,detached_task_ids:[],detached_task_list_ids:[],detached_tasks:0,detached_task_lists:0};
+      const target=await client.query<{object_id:string;task_list_id:string|null}>(`SELECT object_id,payload->>'task_list_id' AS task_list_id FROM ${this.tableName} WHERE service=$1 AND object_type='plans' AND object_id=$2 AND deleted_at IS NULL FOR UPDATE`,[this.service,id]);
+      if(!target.rows.length)return receipt;
+      const related=await client.query<{object_type:string;object_id:string}>(`SELECT object_type,object_id FROM ${this.tableName} WHERE service=$1 AND deleted_at IS NULL AND ((object_type='tasks' AND payload->>'plan_id'=$2) OR (object_type='task_lists' AND object_id=$3)) ORDER BY object_type,object_id FOR UPDATE`,[this.service,id,target.rows[0]!.task_list_id]);
+      const notes=await client.query(`SELECT object_id FROM ${this.tableName} WHERE service=$1 AND object_type='plan_comments' AND payload->>'plan_id'=$2 AND deleted_at IS NULL LIMIT 1`,[this.service,id]);
+      if((related.rows.length||notes.rows.length)&&!force)throw new ResourceConflictError("PLAN_NOT_EMPTY","Plan has linked records; force confirms detaching them while preserving content and history");
+      const timestamp=new Date().toISOString();
+      await client.query(`UPDATE ${this.tableName} SET payload=jsonb_set(payload,'{plan_id}','null'::jsonb) || jsonb_build_object('updated_at',$3::text) || jsonb_build_object('version',COALESCE((payload->>'version')::integer,0)+1),updated_at=$3::timestamptz,version=COALESCE(version,0)+1,source_machine_id=$4 WHERE service=$1 AND deleted_at IS NULL AND object_type='tasks' AND payload->>'plan_id'=$2`,[this.service,id,timestamp,this.machineId(context)]);
+      await client.query(`UPDATE ${this.tableName} SET deleted_at=$3::timestamptz,updated_at=$3::timestamptz,version=COALESCE(version,0)+1,source_machine_id=$4 WHERE service=$1 AND object_type='plans' AND object_id=$2 AND deleted_at IS NULL`,[this.service,id,timestamp,this.machineId(context)]);
+      // Plan comments and task histories remain intact; only membership is detached.
+      receipt.deleted=true;
+      receipt.detached_task_ids=related.rows.filter(row=>row.object_type==='tasks').map(row=>row.object_id);
+      receipt.detached_task_list_ids=related.rows.filter(row=>row.object_type==='task_lists').map(row=>row.object_id);
+      receipt.detached_tasks=receipt.detached_task_ids.length;receipt.detached_task_lists=receipt.detached_task_list_ids.length;
+      return receipt;
+    });
+  }
+
   async deletePlan(id: string, context: TodosStorageContext = {}): Promise<boolean> {
     await this.ensureSchema();
     const timestamp = new Date().toISOString();
@@ -3015,6 +3049,7 @@ async function updateProject(
 }
 
 async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Plan> {
+  const scheduleError=validatePlanSchedule(input); if(scheduleError)throw new Error(scheduleError);
   const timestamp = new Date().toISOString();
   const projectId = input.project_id ?? context?.projectId ?? null;
   const slug = await resolvePostgresPlanSlug({
@@ -3032,6 +3067,8 @@ async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore
     name: input.name,
     description: input.description ?? null,
     status: input.status ?? "active",
+    ...(input.start_date !== undefined ? {start_date:input.start_date} : {}),
+    ...(input.end_date !== undefined ? {end_date:input.end_date} : {}),
     created_at: timestamp,
     updated_at: timestamp,
     machine_id: store.machineId(context),
@@ -3041,6 +3078,7 @@ async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore
 
 async function updatePlan(id: string, input: UpdatePlanInput, store: PostgresJsonRecordStore): Promise<Plan> {
   const plan = await requireRecord<Plan>("plans", id, store);
+  const scheduleError=validatePlanSchedule({...plan,...input}); if(scheduleError)throw new Error(scheduleError);
   const patch = definedPatch(input);
   if (input.slug !== undefined) {
     patch.slug = await resolvePostgresPlanSlug({
@@ -3055,8 +3093,8 @@ async function updatePlan(id: string, input: UpdatePlanInput, store: PostgresJso
     ...plan,
     ...patch,
     project_id: plan.project_id,
-    updated_at: new Date().toISOString(),
-  });
+    updated_at: new Date(Math.max(Date.now(), Date.parse(plan.updated_at) + 1)).toISOString(),
+  }, plan.updated_at);
 }
 
 /**
