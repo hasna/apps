@@ -201,13 +201,13 @@ test("saved file rotation keeps a long-lived client on its original authority", 
   const other=Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>{throw new Error("Changed authority must not receive a request");}});
   const save=(url:string,key:string)=>writeFileSync(file,`HASNA_LOGS_API_URL=${url}\nHASNA_LOGS_API_KEY=${key}\n`,{mode:0o600});
   try{
-    save(server.url.origin,"fixture-one");const client=createLogsApiClientFromEnv({HOME:home});
-    expect(client.authorityBaseUrl).toBe(server.url.origin+"/v1");
+    save(new URL("gateway/logs",server.url).href,"fixture-one");const client=createLogsApiClientFromEnv({HOME:home});
+    expect(client.authorityBaseUrl).toBe(new URL("gateway/logs/v1",server.url).href);
     expect(Object.getOwnPropertyDescriptor(client,"authorityBaseUrl")?.writable).toBe(false);
     await client.ingestLog({message:"retained",level:"info"});
-    save(server.url.origin,"fixture-two");await client.listLogs();
+    save(new URL("gateway/logs",server.url).href,"fixture-two");await client.listLogs();
     expect(calls.map(call=>call.key)).toEqual(["fixture-one","fixture-two"]);
-    expect(calls[0]!.path).toBe("/v1/logs");expect(JSON.parse(calls[0]!.body).message).toBe("retained");
+    expect(calls[0]!.path).toBe("/gateway/logs/v1/logs");expect(JSON.parse(calls[0]!.body).message).toBe("retained");
     save(other.url.origin,"fixture-three");await expect(client.listLogs()).rejects.toThrow(/authority changed/);
     expect(calls).toHaveLength(2);
   }finally{server.stop(true);other.stop(true);}
