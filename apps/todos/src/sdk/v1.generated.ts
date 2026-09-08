@@ -98,7 +98,7 @@ export interface StaleLockHandoffReceipt { "schema_version": "todos.stale-lock-h
 
 export interface TaskGitRef { "id": string; "task_id": string; "ref_type": "branch" | "pull_request"; "name": string; "url": string | null; "provider": string | null; "metadata": Record<string, unknown>; "created_at": string; "updated_at": string }
 
-export interface Plan { "id": string; "slug": string | null; "project_id"?: string | null; "task_list_id"?: string | null; "agent_id"?: string | null; "name": string; "description"?: string | null; "status": "active" | "completed" | "archived"; "created_at": string; "updated_at": string }
+export interface Plan { "id": string; "slug": string | null; "project_id"?: string | null; "task_list_id"?: string | null; "agent_id"?: string | null; "name": string; "description"?: string | null; "start_date"?: string | null; "end_date"?: string | null; "status": "active" | "completed" | "archived" | "planning" | "cancelled"; "created_at": string; "updated_at": string }
 
 export interface PlanProjectLinkReceipt { "schema_version": "todos.plan-project-link.v1"; "receipt_id": string; "idempotency_key": string; "plan_id": string; "project_id": string; "prior_plan_project_id": string | null; "prior_task_project_ids": Record<string, string | null>; "task_ids": Array<string>; "task_count": number; "result_plan_revision": string; "result_digest": string; "rollback_supported": true; "created_at": string }
 
@@ -146,9 +146,9 @@ export interface UpdateTaskListInput { "slug"?: string; "name"?: string; "descri
 
 export interface CreateTaskCommentInput { "content": string; "agent_id"?: string; "session_id"?: string; "type"?: "comment" | "progress" | "note"; "progress_pct"?: number }
 
-export interface CreatePlanInput { "name": string; "slug"?: string; "description"?: string; "project_id"?: string; "task_list_id"?: string; "agent_id"?: string; "status"?: "active" | "completed" | "archived" }
+export interface CreatePlanInput { "name": string; "slug"?: string; "description"?: string; "project_id"?: string; "task_list_id"?: string; "agent_id"?: string; "start_date"?: string | null; "end_date"?: string | null; "status"?: "active" | "completed" | "archived" | "planning" | "cancelled" }
 
-export interface UpdatePlanInput { "name"?: string; "slug"?: string; "description"?: string; "task_list_id"?: string; "agent_id"?: string; "status"?: "active" | "completed" | "archived" }
+export interface UpdatePlanInput { "name"?: string; "slug"?: string; "description"?: string; "task_list_id"?: string; "agent_id"?: string; "start_date"?: string | null; "end_date"?: string | null; "status"?: "active" | "completed" | "archived" | "planning" | "cancelled" }
 
 export interface CreateTemplateInput { "name": string; "title_pattern": string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<TemplateVariable>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown>; "tasks"?: Array<CreateTemplateTaskInput> }
 
@@ -325,6 +325,15 @@ export class TodosV1Client {
     /** Update a plan */
     async updatePlan(id: string, body: UpdatePlanInput, init?: RequestInit): Promise<{ "plan"?: Plan }> {
       return this.request("PATCH", `/v1/plans/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete a plan, detaching linked records only with force and preserving their content/history */
+    async deletePlanPreserving(id: string, body: { "force"?: boolean }, init?: RequestInit): Promise<{ "schema_version": 1; "plan_id": string; "deleted": boolean; "detached_task_ids": Array<string>; "detached_task_list_ids": Array<string>; "detached_tasks": number; "detached_task_lists": number }> {
+      return this.request("POST", `/v1/plans/${encodeURIComponent(String(id))}/delete-preserving`, {
         body,
         query: undefined,
         init,

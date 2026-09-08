@@ -387,7 +387,7 @@ describe("plan mutation OpenAPI contract", () => {
     expect(document.components.schemas.UpdatePlanInput).toMatchObject({
       additionalProperties: false,
       minProperties: 1,
-      properties: { status: { enum: ["active", "completed", "archived"] } },
+      properties: { status: { enum: ["active", "completed", "archived", "planning", "cancelled"] }, start_date:{format:"date"},end_date:{format:"date"} },
     });
     expect(document.components.schemas.Plan.properties.slug).toMatchObject({ type: "string", nullable: true });
   });

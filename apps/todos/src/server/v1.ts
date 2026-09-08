@@ -1,3 +1,4 @@
+import {validatePlanSchedule} from "../lib/plan-schedule.js";
 import { AtomicMigrationError, type AtomicMigrationRequest } from "../storage/atomic-project-migration.js";
 import { MachineRegistryError, validateMachines } from "../storage/machine-registry.js";
 /**
@@ -339,7 +340,7 @@ function validatePlanCreate(value: unknown):
   | { ok: false; message: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "plan body must be an object" };
   const body = value as Record<string, unknown>;
-  const allowed = new Set(["title", "name", "slug", "description", "project_id", "task_list_id", "agent_id", "status"]);
+  const allowed = new Set(["title", "name", "slug", "description", "project_id", "task_list_id", "agent_id", "status", "start_date", "end_date"]);
   const unknown = Object.keys(body).find((key) => !allowed.has(key));
   if (unknown) return { ok: false, message: `unknown plan field: ${unknown}` };
   if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim())) return { ok: false, message: "name must be a non-empty string" };
@@ -358,13 +359,17 @@ function validatePlanCreate(value: unknown):
   if (body.slug !== undefined && !slug) return { ok: false, message: "slug must produce a non-empty canonical slug" };
   if (body.description !== undefined && typeof body.description !== "string") return { ok: false, message: "description must be a string" };
   if (body.status !== undefined &&
-      (typeof body.status !== "string" || !["active", "completed", "archived"].includes(body.status))) {
-    return { ok: false, message: "status must be active, completed, or archived" };
+      (typeof body.status !== "string" || !["active", "completed", "archived", "planning", "cancelled"].includes(body.status))) {
+    return { ok: false, message: "unsupported plan status" };
   }
+  const scheduleError = validatePlanSchedule(body);
+  if (scheduleError) return {ok:false,message:scheduleError};
   return {
     ok: true,
     input: {
       name,
+      ...(body.start_date !== undefined ? {start_date:body.start_date as string | null} : {}),
+      ...(body.end_date !== undefined ? {end_date:body.end_date as string | null} : {}),
       ...(slug ? { slug } : {}),
       ...(typeof body.description === "string" ? { description: body.description } : {}),
       ...(typeof body.project_id === "string" ? { project_id: body.project_id } : {}),
@@ -664,6 +669,14 @@ export async function handleV1Request(
     return error(decision.status, decision.message, { reason: decision.reason });
   }
   const principal = decision.principal;
+  // Every route below uses this deployment's single configured corpus, including
+  // specialized handlers. Authenticate first, then fence tenant before schema or
+  // storage work. A legacy untenanted key is valid only for the default corpus.
+  const registryTenant = (dependencies.getMachineRegistryTenantId ?? getCloudTenantId)();
+  if (typeof registryTenant !== "string" || !registryTenant.trim()) return error(503,"Todos deployment tenant is not configured");
+  if (principal.tid !== registryTenant && !(principal.tid == null && registryTenant === "default")) {
+    return error(403,"API key does not belong to this deployment tenant");
+  }
 
   // Schema is idempotently ensured on the first authenticated request.
   await (dependencies.ensureSchema ?? ensureCloudSchema)();
@@ -710,7 +723,6 @@ export async function handleV1Request(
   const subId = segments[4];
   // This deployment has one configured corpus. A tenant-bearing key must match
   // it; an untenanted legacy key is only valid for the default corpus.
-  const registryTenant = (dependencies.getMachineRegistryTenantId ?? getCloudTenantId)();
   const machineAuthority = () => ({ tenant_id: registryTenant, kid: principal.kid });
   const machineAuthorityMatches = (expected: unknown) => {
     if (!expected || typeof expected !== "object" || Array.isArray(expected)) return false;
@@ -1476,6 +1488,7 @@ export async function handleV1Request(
 
     // ── /v1/plans ──
     if (resource === "plans") {
+      if (!machineTenantAllowed()) return error(403,"Plan registry key does not belong to this deployment tenant");
       if (!id && method === "GET") {
         const plans = await store.plans.list(url.searchParams.get("project_id") ?? undefined);
         return json({ plans, count: plans.length });
@@ -1615,6 +1628,13 @@ export async function handleV1Request(
         }
         return error(405, `method ${method} not allowed on /v1/plans/:id/comments`);
       }
+      if (id && action === "delete-preserving" && !subId) {
+        if(method!=="POST")return error(405,"plan preserving deletion requires POST");
+        const body=await readJson<Record<string,unknown>>(req);
+        if(!body||typeof body!=="object"||Array.isArray(body)||Object.keys(body).some(key=>key!=="force")||(body.force!==undefined&&typeof body.force!=="boolean"))return error(400,"force must be a boolean");
+        if(!store.plans.deletePreserving)return error(501,"Upgrade the Todos API backend for reference-preserving plan deletion");
+        return json(await store.plans.deletePreserving(id,body.force===true,contextFromPrincipal(principal)));
+      }
       if (id && method === "GET") {
         const plan = await store.plans.get(id);
         return plan ? json({ plan }) : error(404, "plan not found");
@@ -1622,7 +1642,7 @@ export async function handleV1Request(
       if (id && (method === "PATCH" || method === "PUT")) {
         const body = await readJson<Record<string, unknown>>(req);
         if (!body || Object.keys(body).length === 0) return error(400, "plan patch is required");
-        const allowed = new Set(["name", "slug", "description", "status", "task_list_id", "agent_id"]);
+        const allowed = new Set(["name", "slug", "description", "status", "task_list_id", "agent_id", "start_date", "end_date"]);
         const unknownField = Object.keys(body).find((key) => !allowed.has(key));
         if (unknownField) return error(400, `unknown plan field: ${unknownField}`);
         for (const field of ["name", "slug", "task_list_id", "agent_id"] as const) {
@@ -1639,11 +1659,13 @@ export async function handleV1Request(
           return error(400, "description must be a string");
         }
         if (body.status !== undefined &&
-            (typeof body.status !== "string" || !["active", "completed", "archived"].includes(body.status))) {
-          return error(400, "status must be active, completed, or archived");
+            (typeof body.status !== "string" || !["active", "completed", "archived", "planning", "cancelled"].includes(body.status))) {
+          return error(400, "unsupported plan status");
         }
         const existing = await store.plans.get(id);
         if (!existing) return error(404, "plan not found");
+        const scheduleError = validatePlanSchedule({...existing,...body});
+        if (scheduleError) return error(400,scheduleError);
         if (typeof body.slug === "string") {
           const duplicate = (await store.plans.list(existing.project_id ?? undefined))
             .find((plan) => plan.id !== id && plan.project_id === existing.project_id && plan.slug === body.slug);
