@@ -1,6 +1,6 @@
 {
   "name": "@hasna/servers",
-  "version": "0.1.25",
+  "version": "0.2.0",
   "description": "Server management for AI coding agents \u2014 CLI + MCP server",
   "type": "module",
   "main": "dist/index.js",
@@ -19,10 +19,11 @@
     "dist",
     "skills",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "docs/previews.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --external zod --target bun --external ink --external react --external chalk && bun build src/mcp/index.ts --outdir dist/mcp --external zod --target bun && bun build src/index.ts --outdir dist --external zod --target bun && bun build src/tui/dashboard.tsx --outdir dist/tui --external zod --target bun --external ink --external react --external chalk && tsc --emitDeclarationOnly --outDir dist -p tsconfig.build.json",
+    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --external zod --target bun --external ink --external react --external chalk && bun build src/mcp/index.ts --outdir dist/mcp --external zod --target bun && bun build src/index.ts --outdir dist --external zod --target bun && bun build src/tui/dashboard.tsx --outdir dist/tui --external zod --target bun --external ink --external react --external chalk && tsc --emitDeclarationOnly --outDir dist -p tsconfig.build.json && bun build src/preview/daemon.ts --outdir dist/preview --target bun --external zod && bun build workers/router.ts --outfile dist/workers/preview-router.js --target browser && bun build workers/alias.ts --outfile dist/workers/preview-alias.js --target browser",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "contracts:check": "bun scripts/contracts-cli.mjs repo-conformance",
@@ -32,7 +33,8 @@
     "prepack": "bun run build && bun run artifact-scan",
     "prepublishOnly": "bun test && bun run build && bun run artifact-scan",
     "dev:cli": "bun run src/cli/index.ts",
-    "dev:mcp": "bun run src/mcp/index.ts"
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "test:previews": "bun test src/preview workers"
   },
   "keywords": [
     "servers",

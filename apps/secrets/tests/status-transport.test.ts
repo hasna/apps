@@ -101,14 +101,7 @@ describe("status transport provenance", () => {
     expect(JSON.stringify(status)).not.toContain(FIXTURE_KEY);
   });
 
-  it("reports transport: null for an opted-in local run", async () => {
-    const status = await getSecretReferenceStatus({
-      HASNA_SECRETS_LOCAL_VAULT: "1",
-      HASNA_HOME: join(testDir, "empty-hasna-home"),
-      HASNA_SECRETS_DB_PATH: join(testDir, "local-vault.db"),
-      HASNA_SECRETS_KEY_DIR: join(testDir, "local-keys"),
-    });
-    expect(status.mode).toBe("local");
-    expect(status.transport).toBeNull();
+  it("rejects legacy local selectors instead of reporting a different vault", async () => {
+    await expect(getSecretReferenceStatus({HASNA_SECRETS_LOCAL_VAULT:"1",HASNA_SECRETS_DB_PATH:join(testDir,"local-vault.db")})).rejects.toThrow("no longer supported");
   });
 });

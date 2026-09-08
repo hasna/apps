@@ -1,3 +1,7 @@
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -16,16 +20,14 @@ import { join } from "path";
  * that always appears are equally useless.
  */
 
-const TEST_DB = join(tmpdir(), `conversations-cli-search-trunc-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 function runCli(args: string[], agent: string) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
     env: {
-      ...process.env,
-      CONVERSATIONS_DB_PATH: TEST_DB,
+      ...fixture.env,
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",
     },
@@ -57,9 +59,8 @@ describe("search discloses truncation", () => {
   }, 30_000);
 
   afterAll(() => {
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-    try { unlinkSync(`${TEST_DB}-shm`); } catch {}
+
+
   });
 
   test("--json: a truncated page says so in the compact envelope", () => {

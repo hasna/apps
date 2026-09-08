@@ -145,6 +145,19 @@ describe("isAlive", () => {
 });
 
 describe("discoverServerPids", () => {
+  it("does not adopt or stop an unrelated listener in owned scope", async () => {
+    const port = await getFreePort();
+    const child = spawn(process.execPath, ["-e", `Bun.serve({hostname:'127.0.0.1',port:${port},fetch:()=>new Response('unrelated')});`], { detached: true, stdio: "ignore" });
+    spawned.push(child.pid!);
+    expect(await waitFor(() => findListenerPids(port).includes(child.pid!))).toBe(true);
+    const target = { pid: 2147483647, port, processScope: "owned" as const };
+    expect(discoverServerPids(target)).toEqual([]);
+    const stopped = await killTree({ ...target, gracePeriodMs: 100 });
+    expect(stopped.stopped).toBe(true);
+    expect(stopped.portStillListening).toBe(false);
+    expect(isAlive(child.pid)).toBe(true);
+  });
+
   it("does not match same-cwd processes on a generic package script name alone", async () => {
     const dir = makeTempDir();
     try {
@@ -318,7 +331,7 @@ describe("discoverServerPids", () => {
 });
 
 describe("killTree", () => {
-  it("kills a detached grandchild that escaped the recorded process group", async () => {
+  it.each([undefined, "owned"] as const)("kills a detached grandchild that escaped the recorded process group (%s scope)", async (processScope) => {
     const dir = makeTempDir();
     const port = await getFreePort();
     try {
@@ -357,6 +370,7 @@ setInterval(() => {}, 1000);
         port,
         command: "node wrapper.cjs",
         cwd: dir,
+        processScope,
         gracePeriodMs: 500,
       });
 

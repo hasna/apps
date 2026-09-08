@@ -1,9 +1,11 @@
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { closeDb, getDb } from "../lib/db.js";
-import { isolatedStoreChildEnv, pinStoreToDb, restoreStoreEnv } from "../lib/store/isolated-test-env.js";
 
 // Regression for the `conversations context --json` review finding on PR #39
 // (todos 2c25973b). That PR fixed three recency-shaped read call sites but left
@@ -20,8 +22,7 @@ import { isolatedStoreChildEnv, pinStoreToDb, restoreStoreEnv } from "../lib/sto
 // "newest 5" and "oldest 5" are genuinely different result sets and the test
 // can actually fail.
 
-const TEST_DB = join(tmpdir(), `conversations-cli-context-recency-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 const AGENT = "bob";
 const SENDER = "alice";
 // Ten seconds apart so all messages fall inside deterministic, distinct
@@ -33,10 +34,10 @@ function runCli(args: string[]) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: isolatedStoreChildEnv(TEST_DB, {
+    env: { ...fixture.env,
       CONVERSATIONS_AGENT_ID: AGENT,
       FORCE_COLOR: "0",
-    }),
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -56,52 +57,18 @@ function body(n: number): string {
 }
 
 describe("conversations context --json: unread_dms and recent_dms recency", () => {
-  beforeAll(() => {
-    pinStoreToDb(TEST_DB);
-    closeDb();
-    const db = getDb();
-    const insert = db.prepare(
-      `INSERT INTO messages (session_id, from_agent, to_agent, content, created_at) VALUES (?, ?, ?, ?, ?)`,
-    );
-    db.exec("BEGIN");
-    // DM-1 .. DM-8, oldest to newest, all to `bob`.
-    for (let n = 1; n <= 8; n++) {
-      insert.run("context-recency-session", SENDER, AGENT, body(n), stamp(n));
-    }
-    db.exec("COMMIT");
-    // Mark the two oldest as already read, leaving DM-3 .. DM-8 (six messages)
-    // unread — above the `unread_dms` limit of 5, so "oldest 5" and "newest 5"
-    // are genuinely different sets: DM-3..DM-7 vs DM-4..DM-8.
-    db.prepare(`UPDATE messages SET read_at = ? WHERE content IN (?, ?)`).run(
-      new Date().toISOString(),
-      body(1),
-      body(2),
-    );
-    closeDb();
-  });
-
-  afterAll(() => {
-    closeDb();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-    try { unlinkSync(`${TEST_DB}-shm`); } catch {}
-    // The pin is process-wide and `beforeAll` never restored it, so without this
-    // the suite's db path outlived the file and every later file in the same bun
-    // process inherited it — the defect this change exists to remove, pointed the
-    // other way.
-    restoreStoreEnv();
+  beforeAll(async () => {
+    await fixture.seed({messages:Array.from({length:8},(_,i)=>({session_id:"context-recency-session",from_agent:SENDER,to_agent:AGENT,content:body(i+1),created_at:stamp(i+1),read_at:i<2?new Date().toISOString():null}))});
   });
 
   test("the fixture actually has more unread DMs than the unread_dms limit", () => {
     // 6 unread (DM-3..DM-8) > the command's limit of 5, or this test cannot
     // distinguish "oldest 5" from "newest 5" and proves nothing.
-    closeDb();
-    pinStoreToDb(TEST_DB);
-    const db = getDb();
-    const unreadCount = (db.prepare(`SELECT COUNT(*) as c FROM messages WHERE to_agent = ? AND read_at IS NULL`).get(AGENT) as { c: number }).c;
+    const result=runCli(["read","--unread-only","--limit","100","--json"]);
+    expect(result.exitCode).toBe(0);
+    const unreadCount=JSON.parse(result.stdout).messages.length;
     expect(unreadCount).toBe(6);
     expect(unreadCount).toBeGreaterThan(5);
-    closeDb();
   });
 
   test("unread_dms surfaces the OLDEST unread backlog, not the newest slice", () => {

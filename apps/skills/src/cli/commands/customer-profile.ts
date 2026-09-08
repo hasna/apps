@@ -1,16 +1,22 @@
+import { registerWorkspaceInvitationCommands } from "./workspace-invitations.js";
 import type { Command } from "commander";
-import { getApiUrl } from "../../lib/auth-store.js";
+import { prepareProfileWorkspace } from "../../lib/workspace-profile.js";
+import { registerWorkspaceListCommand } from "./workspace-selection.js";
 import { RemoteSkillsAuthClient } from "../../lib/remote-auth.js";
 import { customerNamePatch } from "../../lib/remote-profile.js";
 import { NameInputError, promptCode, readCode } from "./customer-verification.js";
+import { registerWorkspaceLeaveCommand } from "./workspace-leave.js";
 import { registerWorkspaceMembersCommand } from "./workspace-members.js";
 import { registerWorkspaceMemberMutationCommands } from "./workspace-member-mutations.js";
 
 export function registerCustomerProfileCommands(program: Command) {
   const account = program.command("account").description("Manage your account on the selected Skills server");
   const workspace = program.command("workspace").description("Manage the current workspace on the selected Skills server");
+  registerWorkspaceListCommand(workspace);
   registerWorkspaceMembersCommand(workspace);
   registerWorkspaceMemberMutationCommands(workspace);
+  registerWorkspaceLeaveCommand(workspace);
+  registerWorkspaceInvitationCommands(workspace);
   const commands = [
     { kind: "account", command: account.command("update") },
     { kind: "workspace", command: workspace.command("update") },
@@ -24,7 +30,8 @@ export function registerCustomerProfileCommands(program: Command) {
       .option("--json", "Output JSON")
       .action(async (options: { email: string; displayName?: string; name?: string; json?: boolean; codeStdin?: boolean }) => {
         try {
-          const client = new RemoteSkillsAuthClient(getApiUrl(`Update ${kind} name`));
+          const pending = prepareProfileWorkspace(`Update ${kind} name`);
+          const client = new RemoteSkillsAuthClient(pending.origin);
           customerNamePatch(kind === "account" ? { displayName: options.displayName } : { name: options.name }, kind === "account" ? "displayName" : "name");
           if (!options.codeStdin && (options.json || !process.stdin.isTTY || !process.stderr.isTTY)) {
             throw new NameInputError("Use --code-stdin with a fresh verification code for JSON or noninteractive updates.");
@@ -33,9 +40,11 @@ export function registerCustomerProfileCommands(program: Command) {
           if (options.codeStdin) code = await readCode();
           else { await client.requestCode(options.email); code = await promptCode(); }
           if (code === null) return;
+          const target = await pending.resolve();
+          target.unchanged();
           const result = kind === "account"
-            ? await client.updateProfile(options.email, code, { displayName: options.displayName! })
-            : await client.updateCurrentWorkspace(options.email, code, { name: options.name! });
+            ? await client.updateProfile(options.email, code, { displayName: options.displayName! }, target.context)
+            : await client.updateCurrentWorkspace(options.email, code, { name: options.name! }, target.context);
           if (options.json) console.log(JSON.stringify(result));
           else console.log(kind === "account" ? "Display name saved." : "Workspace name saved.");
         } catch (error) {

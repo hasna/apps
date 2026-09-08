@@ -1,23 +1,21 @@
+import { startLoopbackApiFixture } from "../../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../../lib/store/test-support/client-environment.js";
+import { getStore } from "../../lib/store/index.js";
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerProjectTools } from "./projects";
-import { closeDb } from "../../lib/db";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { pinStoreToDb, restoreStoreEnv } from "../../lib/store/isolated-test-env.js";
-
-const TEST_DB = join(tmpdir(), `conversations-test-projects-mcp-${Date.now()}.db`);
 
 describe("projects MCP tools", () => {
   let client: Client;
+  let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+  let restoreClient: () => void;
 
   beforeAll(async () => {
-    pinStoreToDb(TEST_DB);
+    fixture = await startLoopbackApiFixture();
+    restoreClient = activateClientEnvironment(fixture.env);
     process.env.CONVERSATIONS_AGENT_ID = "projects-test-agent";
-    closeDb();
 
     const server = new McpServer({ name: "test-projects-mcp", version: "0.0.1" });
     registerProjectTools(server);
@@ -29,13 +27,11 @@ describe("projects MCP tools", () => {
   });
 
   afterAll(async () => {
-    restoreStoreEnv();
     delete process.env.CONVERSATIONS_AGENT_ID;
-    closeDb();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(TEST_DB + "-wal"); } catch {}
-    try { unlinkSync(TEST_DB + "-shm"); } catch {}
+
     await client.close();
+    restoreClient();
+    await fixture.stop();
   });
 
   function parseResult(result: { content: unknown[] }): unknown {

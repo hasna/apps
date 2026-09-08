@@ -33,7 +33,7 @@ function hermeticEnv(extra: Record<string, string> = {}): Record<string, string>
 }
 
 describe("assertMcpStoreConfigured — the store is decided before any transport connects", () => {
-  test("hosted with no credential anywhere throws the app's config error naming the tiers and the opt-in", () => {
+  test("hosted with no credential anywhere throws the app's config error naming the shared credential tiers", () => {
     const env = hermeticEnv();
 
     let thrown: unknown;
@@ -46,7 +46,7 @@ describe("assertMcpStoreConfigured — the store is decided before any transport
     expect(thrown).toBeInstanceOf(ConversationsStoreConfigError);
     const message = (thrown as Error).message;
     expect(message).toContain("HASNA_CONVERSATIONS_API_KEY");
-    expect(message).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    expect(message).toContain("HASNA_CONVERSATIONS_API_URL");
     // Deciding opened nothing.
     expect(existsSync(join(env["HASNA_HOME"]!, "conversations"))).toBe(false);
   });
@@ -67,28 +67,15 @@ describe("assertMcpStoreConfigured — the store is decided before any transport
     expect(lines.join("")).not.toContain("LOCAL mode");
   });
 
-  test("the explicit local opt-in passes the gate and announces LOCAL mode once, without opening the store", () => {
+  test("retired local selector fails without opening the store or printing its path", () => {
     const env = hermeticEnv();
     const dbPath = join(env["HOME"]!, "store.db");
     env["HASNA_CONVERSATIONS_DB_PATH"] = dbPath;
-    const lines: string[] = [];
-    const write = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      lines.push(String(chunk));
-      return true;
-    }) as typeof process.stderr.write;
-    try {
-      expect(() => assertMcpStoreConfigured(env)).not.toThrow();
-      // Once per process: a second decision does not repeat the notice.
-      expect(() => assertMcpStoreConfigured(env)).not.toThrow();
-    } finally {
-      process.stderr.write = write;
-    }
-    const notice = lines.join("");
-    expect(notice).toContain("LOCAL mode");
-    expect(notice).toContain(dbPath);
-    expect(notice.match(/LOCAL mode/g)).toHaveLength(1);
-    // The gate only decides; the first SQLite open belongs to the store.
+    let error: unknown;
+    try { assertMcpStoreConfigured(env); } catch (caught) { error = caught; }
+    expect(error).toBeInstanceOf(ConversationsStoreConfigError);
+    expect((error as Error).message).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    expect((error as Error).message).not.toContain(dbPath);
     expect(existsSync(dbPath)).toBe(false);
   });
 });

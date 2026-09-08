@@ -1,3 +1,4 @@
+import { awaitChannelDelivery } from "./channel-delivery.js";
 /**
  * Claude Code channel bridge for conversations MCP server.
  *
@@ -157,6 +158,7 @@ export function registerChannelBridge(
   let lastSessionMsgId = 0;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let startTimer: ReturnType<typeof setTimeout> | null = null;
+  const abort = new AbortController();
   let polling = false;
   /** The poll currently in flight, so the disposer can wait for it. */
   let inFlightPoll: Promise<void> | null = null;
@@ -178,7 +180,7 @@ export function registerChannelBridge(
       : `${msg.content}\n\n---\n[Via Conversations from ${msg.from_agent} (msg #${msg.id}). To reply, use conversations send_message with to="${msg.from_agent}". For direct session injection, use send_to_session with target_session_id from the sender's session.]`;
 
     try {
-      await server.server.notification({
+      await awaitChannelDelivery(() => server.server.notification({
         method: "notifications/claude/channel",
         params: {
           content: enrichedContent,
@@ -191,7 +193,8 @@ export function registerChannelBridge(
             ...(msg.priority && msg.priority !== "normal" ? { priority: msg.priority } : {}),
           },
         },
-      });
+      }), abort.signal);
+      if (abort.signal.aborted) return false;
 
       // Only acknowledge delivery after the channel transport accepts it.
       if (mode === "direct") {
@@ -210,7 +213,7 @@ export function registerChannelBridge(
   }
 
   async function pollOnce(): Promise<void> {
-    if (polling) return;
+    if (polling || abort.signal.aborted) return;
     polling = true;
     try {
       const agent = getSessionAgent(server);
@@ -228,6 +231,7 @@ export function registerChannelBridge(
       }
 
       // Poll direct session-targeted messages — skip self (no echoes)
+      if (abort.signal.aborted) return;
       if (sid) {
         const msgs = (await await resolveStore().readMessages({ to: `session:${sid}`, unread_only: true, order: "asc", limit: 20 }))
           .filter(m => m.id > lastSessionMsgId && m.from_agent !== agent);
@@ -238,6 +242,7 @@ export function registerChannelBridge(
         }
       }
 
+      if (abort.signal.aborted) return;
       if (agent) {
         const notificationPage = await resolveStore().readChannelNotifications({
           agent,
@@ -274,7 +279,7 @@ export function registerChannelBridge(
   // dropped by the `polling` guard must not replace it with a resolved promise
   // (todos 19c79404).
   function runPoll(): void {
-    if (polling) return;
+    if (polling || abort.signal.aborted) return;
     const running = pollOnce()
       .catch((error: unknown) => health.recordFailure(error))
       .finally(() => { if (inFlightPoll === running) inFlightPoll = null; });
@@ -313,6 +318,7 @@ export function registerChannelBridge(
    * ignore the promise, exactly as before.
    */
   return async () => {
+    abort.abort();
     if (startTimer) clearTimeout(startTimer);
     if (pollTimer) clearInterval(pollTimer);
     startTimer = null;
