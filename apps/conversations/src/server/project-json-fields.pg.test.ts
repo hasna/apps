@@ -1,3 +1,4 @@
+import { adoptCorpus, inspectCorpus } from "./corpus-binding.js";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -28,6 +29,8 @@ beforeAll(async () => {
   const setup = new Pool({ connectionString: dsn, options: `-csearch_path=${schema}`, max: 1 });
   try {
     for (const sql of PG_MIGRATIONS) await setup.query(sql);
+    const ownerClient = createQueryClient(setup);
+    await adoptCorpus(ownerClient, { ...await inspectCorpus(ownerClient), tenant_id: "default", authority_id: "conversations", actor: "fixture-operator" });
     await admin.query(`CREATE ROLE ${role} NOLOGIN NOSUPERUSER NOBYPASSRLS`);
     await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`);
     await admin.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${role}`);
@@ -38,7 +41,7 @@ beforeAll(async () => {
   expect(currentRole.rows[0]).toEqual({ name: role, rolsuper: false, rolbypassrls: false });
   const client = createQueryClient(pool);
   const signingSecret = randomBytes(32).toString("hex");
-  const minted = mintApiKey({ app: "conversations", agent: "project-json-fixture", scopes: ["*"], signingSecret });
+  const minted = mintApiKey({ app: "conversations", tid: "default", agent: "project-json-fixture", scopes: ["*"], signingSecret });
   server = startApiServer({ port: 0, host: "127.0.0.1", deps: {
     client, keys: new ApiKeyStore(client), incidentProjector: null,
     verifier: verifyApiKey({ app: "conversations", signingSecret, keyStatus: async () => "active" as const }),

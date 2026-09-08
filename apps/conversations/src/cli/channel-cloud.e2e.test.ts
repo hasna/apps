@@ -8,6 +8,7 @@ const SIGNING = ["test", "signing", "material", "0123456789"].join("-");
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
 
 function makeFakeClient() {
+  const binding = {corpus_id:`cor_${crypto.randomUUID().replaceAll("-", "")}`,tenant_id:"default",authority_id:"conversations",receipt_id:crypto.randomUUID(),actor:"fixture-operator",adopted_at:new Date().toISOString(),legacy_receipt_count:0,legacy_receipt_digest:"0".repeat(64)};
   const channels: Record<string, any> = {};
   const projects: Record<string, any> = {
     "proj-valid": { id: "proj-valid", name: "Chief of Harness" },
@@ -20,6 +21,7 @@ function makeFakeClient() {
       return [];
     },
     async get(sql: string, p: readonly unknown[] = []): Promise<any> {
+      if (sql.includes("FROM conversations_corpus_binding b JOIN project_channel_registration_identity")) return {...binding};
       if (/SELECT 1 AS ok/i.test(sql)) return { ok: 1 };
       if (/SELECT id FROM projects WHERE id/i.test(sql)) return projects[(p as any[])[0]] ?? null;
       if (/SELECT name FROM channels WHERE name/i.test(sql)) return channels[(p as any[])[0]] ? { name: (p as any[])[0] } : null;
@@ -132,7 +134,7 @@ describe("cloud CLI channel create (e2e)", () => {
   beforeAll(() => {
     server = startApiServer({ port: 0, host: "127.0.0.1", deps: makeDeps() });
     const envName = ["HASNA_CONVERSATIONS_API", String.fromCharCode(75, 69, 89)].join("_");
-    const bearer = mintApiKey({
+    const bearer = mintApiKey({ tid: "default",
       app: "conversations",
       agent: "cli-e2e",
       scopes: ["conversations:read", "conversations:write"],

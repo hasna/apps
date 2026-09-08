@@ -1,3 +1,4 @@
+import { adoptCorpus, inspectCorpus } from "./corpus-binding.js";
 import { expect, test } from "bun:test";
 import { randomBytes, randomUUID } from "node:crypto";
 import { Pool } from "pg";
@@ -27,6 +28,7 @@ async function fixture(run: (f: {
     pool = new Pool({ connectionString: dsn, options: `-csearch_path=${schema}`, application_name: schema, max: 5 });
     const client = createQueryClient(pool);
     for (const sql of PG_MIGRATIONS) await client.execute(sql);
+    await adoptCorpus(client, { ...await inspectCorpus(client), tenant_id: "default", authority_id: "conversations", actor: "fixture-operator" });
     const ids: number[] = [];
     for (let index = 0; index < 2; index++) {
       const uuid = randomUUID();
@@ -39,7 +41,7 @@ async function fixture(run: (f: {
       await client.execute("INSERT INTO conversations_event_outbox(id,source,type,envelope_json) VALUES($1,'fixture','conversations.message.created',$2)", [uuid, JSON.stringify({ data: { uuid, content_preview: `synthetic-private-preview-${index}`, preserved: "unchanged" } })]);
     }
     const signingSecret = randomBytes(32).toString("hex");
-    const minted = mintApiKey({ app: "conversations", agent: "redaction-fixture", scopes: ["conversations:admin-redact"], signingSecret });
+    const minted = mintApiKey({ app: "conversations", tid: "default", agent: "redaction-fixture", scopes: ["conversations:admin-redact"], signingSecret });
     server = startApiServer({ port: 0, host: "127.0.0.1", deps: {
       client, keys: new ApiKeyStore(client), incidentProjector: null,
       verifier: verifyApiKey({ app: "conversations", signingSecret, keyStatus: async () => "active" as const }),
