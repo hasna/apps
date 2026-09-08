@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { compileModelPolicy } from "../src/model-policy";
 import { createInferenceGateway } from "../src/inference-gateway";
+import { createServer } from "node:http";
 
 const models = [
   { id: "main", name: "Main", supportedParameters: ["tools"] },
@@ -13,6 +14,49 @@ const input = (protocol: any, baseUrl: string, events: any[]) => {
   return { harness: protocol === "gemini-generate-content" ? "gemini" : "pi", protocol, authStyle: protocol === "gemini-generate-content" ? "x-api-key" : "bearer", baseUrl, providerId: "fixture-provider", model: "main", models, credential, stateDir: "/Users/hasna/Workspace/scratch/universal-harness-switcher/model-routing-test-state", cwd: "/Users/hasna/Workspace/scratch/universal-harness-switcher", compiledPolicy, catalogPath: "/Users/hasna/Workspace/scratch/universal-harness-switcher/model-routing-test-catalog.json", onRoutingEvent: (event: any) => events.push(event) };
 };
 const auth = (protocol: string, token: string) => protocol === "gemini-generate-content" ? { "x-goog-api-key": token } : { authorization: `Bearer ${token}` };
+
+for (const [protocol, path, terminal] of [
+  ["anthropic-messages", "/messages", 'event: message_stop\ndata: {"type":"message_stop"}\n\n'],
+  ["openai-chat", "/chat/completions", "data: [DONE]\n\n"],
+  ["openai-responses", "/responses", 'event: response.completed\ndata: {"type":"response.completed","response":{"model":"main"}}\n\n'],
+] as const) test(`${protocol} completes a terminal SSE event without waiting for a broken HTTP tail`, async () => {
+  let calls = 0;
+  const upstream = createServer((_request, response) => {
+    calls++;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write('data: {"model":"main"}\n\n' + terminal);
+    setTimeout(() => response.destroy(), 25);
+  });
+  await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const events: any[] = [], gateway = createInferenceGateway(input(protocol, `http://127.0.0.1:${(upstream.address() as any).port}/v1`, events) as any);
+  try {
+    const response = await fetch(gateway.baseUrl + path, { method: "POST", headers: { ...auth(protocol, gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", messages: [], stream: true }) });
+    expect(await response.text()).toBe('data: {"model":"main"}\n\n' + terminal);
+    expect(calls).toBe(1);
+    expect(events).toHaveLength(1);
+    expect(events[0].reason).not.toBe("stream_interrupted");
+  } finally { await gateway.cleanup(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve())); }
+});
+
+test("a native client stopping after message_stop is not a provider interruption", async () => {
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    return new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"type":"message_stop"}\n\n'));
+    } }), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const events: any[] = [], gateway = createInferenceGateway(input("anthropic-messages", upstream.url.origin + "/v1", events) as any);
+  try {
+    const client = new AbortController();
+    const response = await fetch(gateway.baseUrl + "/messages", { method: "POST", signal: client.signal, headers: { ...auth("anthropic-messages", gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", messages: [], stream: true }) });
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("message_stop");
+    await reader.cancel();
+    client.abort();
+    for (let attempt = 0; !events.length && attempt < 100; attempt++) await Bun.sleep(5);
+    expect(events).toHaveLength(1);
+    expect(events[0].reason).not.toBe("stream_interrupted");
+  } finally { await gateway.cleanup(); await upstream.stop(true); }
+});
 
 test("gateway handles all four protocols, preserves native request content, and injects guidance once", async () => {
   const seen: any[] = [];

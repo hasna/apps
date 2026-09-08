@@ -44,6 +44,8 @@ try {
   await writeFile(join(workspace, "consumer.ts"), `
 import { createRunService, runAdmissionSchema, runTerminalSchema, type SkillsProductStore, RemoteCapabilityUnavailableError, RemoteRequestError } from "@hasna/skills/sdk";
 import { RemoteSkillsClient, RemoteSkillsAuthClient, RemoteCapabilityUnavailableError as RootCapabilityError, runSkill } from "@hasna/skills";
+import { RemoteQuoteUnavailableError, type RemoteQuoteUnavailableCode } from "@hasna/skills/sdk";
+import { RemoteQuoteUnavailableError as RootQuoteUnavailableError, type RemoteQuoteUnavailableCode as RootQuoteCode } from "@hasna/skills";
 import { SKILLS_NATIVE_STORAGE_ENV, type SkillsNativeStorageConfig } from "@hasna/skills/storage";
 import { SkillsAdminSetUserRoleRequestSchema, SkillsAdminSuspendOrganizationRequestSchema,
   SkillsAdminResumeOrganizationRequestSchema, SkillsAdminListUsersResponseSchema,
@@ -363,6 +365,12 @@ const unavailable = new RemoteCapabilityUnavailableError();
 const rootError: RemoteCapabilityUnavailableError = new RootCapabilityError();
 const requestError: RemoteRequestError = unavailable;
 const unavailableCode: "SUBSCRIPTION_CHECKOUT_UNAVAILABLE" = unavailable.code;
+const quoteCode: RemoteQuoteUnavailableCode = "RUNTIME_SKILL_NOT_ALLOWED";
+const rootQuoteCode: RootQuoteCode = quoteCode;
+const quoteError: RemoteQuoteUnavailableError = new RootQuoteUnavailableError("/api/v1/skills/fixture/quote", rootQuoteCode);
+const quoteBaseError: RemoteRequestError = quoteError;
+// @ts-expect-error Arbitrary server codes cannot enter the quote error vocabulary.
+new RemoteQuoteUnavailableError("/api/v1/skills/fixture/quote", "UNTRUSTED_SERVER_CODE");
 // @ts-expect-error Arbitrary server error codes are not part of this safe contract.
 const arbitraryCode: "ARBITRARY_SERVER_CODE" = unavailable.code;
 const storageEnv: "HASNA_SKILLS_DATABASE_URL" = SKILLS_NATIVE_STORAGE_ENV.databaseUrl;
@@ -496,5 +504,27 @@ assert.equal(rootRevision(revision), revisionIdOf(revision));
 console.log("Installed content hash/revision runtime: 10 assertions passed.");
 `);
   console.log((await run([process.execPath, "--no-env-file", "content-hash-runtime.ts"], workspace)).trim());
+  await writeFile(join(workspace, "quote-error-runtime.ts"), `
+import assert from "node:assert/strict";
+import * as root from "@hasna/skills";
+import * as sdk from "@hasna/skills/sdk";
+const original = globalThis.fetch;
+try {
+  for (const api of [root, sdk]) {
+    let requests = 0;
+    globalThis.fetch = async () => { requests++; return Response.json({ code: "RUNTIME_SKILL_NOT_ALLOWED", error: "untrusted-response-canary" }, { status: 503 }); };
+    const error = await new api.RemoteSkillsClient("consumer-owned-token", "https://skills.example.test").quoteRun("fixture").then(() => null, error => error);
+    assert.equal(requests, 1);
+    assert(error instanceof api.RemoteQuoteUnavailableError);
+    assert(error instanceof api.RemoteRequestError);
+    assert.equal(error.code, "RUNTIME_SKILL_NOT_ALLOWED");
+    assert.equal(error.status, 503);
+    assert.equal(error.message, "This skill is not enabled for hosted execution on this Skills instance.");
+    assert(!JSON.stringify(error).includes("untrusted-response-canary"));
+  }
+} finally { globalThis.fetch = original; }
+console.log("Installed quote error root/SDK runtime: 14 assertions passed.");
+`);
+  console.log((await run([process.execPath, "--no-env-file", "quote-error-runtime.ts"], workspace)).trim());
   console.log(`Consumer types: @hasna/skills@${metadata.version} passed strict installed-package checking for all four exports (skipLibCheck=false).`);
 } finally { await rm(workspace, { recursive: true, force: true }); }

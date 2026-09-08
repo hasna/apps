@@ -90,12 +90,14 @@ export function registerMcpCommand(program: Command): void {
   mcp
     .command("status")
     .description("Check if domains MCP server is registered")
+    .option("--project", "Check only the current project configuration")
     .option("-j, --json", "Output JSON")
-    .action((opts: { json?: boolean }) => {
+    .action((opts: { json?: boolean; project?: boolean }) => {
       const paths = getClaudeConfigPaths();
       const status: Array<{ scope: "global" | "project"; config_path: string; exists: boolean; registered: boolean; error?: string }> = [];
 
-      for (const [scope, configPath] of [["global", paths.global], ["project", paths.project]] as const) {
+      const scopes = opts.project ? [["project", paths.project] as const] : [["global", paths.global], ["project", paths.project]] as const;
+      for (const [scope, configPath] of scopes) {
         if (!existsSync(configPath)) {
           status.push({ scope, config_path: configPath, exists: false, registered: false });
           continue;

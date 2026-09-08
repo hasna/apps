@@ -1,3 +1,4 @@
+import {randomUUID} from "node:crypto";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -45,7 +46,7 @@ async function runCli(args: string[], root: string, baseUrl: string) {
       HOME: root,
       TMPDIR: root,
       LANG: "C.UTF-8",
-      TODOS_DB_PATH: join(root, "todos.db"),
+      HASNA_STATION: randomUUID(),
       TODOS_AUTO_PROJECT: "false",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,
@@ -67,6 +68,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         const body = ["POST", "PATCH"].includes(request.method) ? await request.json() : undefined;
         requests.push({ method: request.method, path: url.pathname, body });
         if (url.pathname === "/v1/plans" && request.method === "POST") {
@@ -93,12 +95,12 @@ describe("cloud CLI plan commands", () => {
           plan = plan ? { ...plan, ...(body as object) } : null;
           return plan ? Response.json({ plan }) : Response.json({ error: "not found" }, { status: 404 });
         }
-        if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "DELETE") {
+        if (url.pathname === `/v1/plans/${PLAN_ID}/delete-preserving` && request.method === "POST") {
           plan = null;
-          return Response.json({ deleted: true, id: PLAN_ID });
+          return Response.json({schema_version:1,deleted:true,plan_id:PLAN_ID,detached_tasks:0,detached_task_ids:[],detached_task_lists:0,detached_task_list_ids:[]});
         }
         if (url.pathname === "/v1/tasks" && request.method === "GET") {
-          return Response.json({ tasks: [], count: 0 });
+          return Response.json({ tasks: [], count: 0, total:0, selection:{schema_version:1,plan_id:url.searchParams.get("plan_id"),include_subtasks:url.searchParams.get("include_subtasks")==="true",include_archived:url.searchParams.get("include_archived")==="true"} });
         }
         return Response.json({ error: "not found" }, { status: 404 });
       },
@@ -127,7 +129,7 @@ describe("cloud CLI plan commands", () => {
 
       const deleted = await runCli(["--json", "plans", "--delete", PLAN_ID], root, `http://127.0.0.1:${server.port}`);
       expect(deleted).toMatchObject({ exitCode: 0, stderr: "" });
-      expect(JSON.parse(deleted.stdout)).toEqual({ deleted: true });
+      expect(JSON.parse(deleted.stdout)).toEqual({schema_version:1,deleted:true,plan_id:PLAN_ID,detached_tasks:0,detached_task_ids:[],detached_task_lists:0,detached_task_list_ids:[]});
       expect(requests[0]).toMatchObject({
         method: "POST",
         path: "/v1/plans",
@@ -138,7 +140,7 @@ describe("cloud CLI plan commands", () => {
         },
       });
       expect(requests.at(-3)).toMatchObject({ method: "PATCH", path: `/v1/plans/${PLAN_ID}`, body: { status: "completed" } });
-      expect(requests.at(-1)).toMatchObject({ method: "DELETE", path: `/v1/plans/${PLAN_ID}` });
+      expect(requests.at(-1)).toMatchObject({ method: "POST", path: `/v1/plans/${PLAN_ID}/delete-preserving`,body:{force:false} });
     } finally {
       server.stop(true);
     }
@@ -170,6 +172,7 @@ describe("cloud CLI plan commands", () => {
         id: "11111111-1111-4111-8111-111111111111",
         short_id: "CLOSE-1",
         title: "Root task",
+        priority: "medium",
         status: "completed",
         plan_id: PLAN_ID,
         parent_id: null,
@@ -178,6 +181,7 @@ describe("cloud CLI plan commands", () => {
         id: "22222222-2222-4222-8222-222222222222",
         short_id: "CLOSE-2",
         title: "Child task",
+        priority: "medium",
         status: "completed",
         plan_id: PLAN_ID,
         parent_id: "11111111-1111-4111-8111-111111111111",
@@ -188,6 +192,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         const body = ["POST", "PATCH"].includes(request.method) ? await request.json() : undefined;
         requests.push({
           method: request.method,
@@ -244,7 +249,7 @@ describe("cloud CLI plan commands", () => {
           });
         }
         if (url.pathname === "/v1/tasks" && request.method === "GET") {
-          return Response.json({ tasks, count: tasks.length, total: tasks.length });
+          return Response.json({ tasks, count: tasks.length, total: tasks.length, selection:{schema_version:1,plan_id:url.searchParams.get("plan_id"),include_subtasks:true,include_archived:url.searchParams.get("include_archived")==="true"} });
         }
         return Response.json({ error: "not found" }, { status: 404 });
       },
@@ -325,6 +330,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         requests.push({ method: request.method, path: url.pathname });
         if (url.pathname === `/v1/plans/${missingPlanId}` && request.method === "GET") {
           return Response.json({ error: "plan not found" }, { status: 404 });
@@ -372,6 +378,7 @@ describe("cloud CLI plan commands", () => {
         port: 0,
         fetch(request) {
           const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
           requests.push({ method: request.method, path: url.pathname });
           if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
             return Response.json({ plan });
@@ -421,6 +428,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         requests.push({ method: request.method, path: url.pathname });
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") return Response.json({ plan });
         if (url.pathname === "/v1/plans" && request.method === "GET") {
@@ -470,6 +478,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan });
         }
@@ -525,7 +534,7 @@ describe("cloud CLI plan commands", () => {
           });
         }
         if (url.pathname === "/v1/tasks" && request.method === "GET") {
-          return Response.json({ tasks: [], count: 0, total: 0 });
+          return Response.json({ tasks: [], count: 0, total: 0, selection:{schema_version:1,plan_id:url.searchParams.get("plan_id"),include_subtasks:url.searchParams.get("include_subtasks")==="true",include_archived:url.searchParams.get("include_archived")==="true"} });
         }
         return Response.json({ error: "not found" }, { status: 404 });
       },
@@ -573,6 +582,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         const body = request.method === "POST" ? await request.json() : undefined;
         requests.push({ method: request.method, path: url.pathname, body });
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
@@ -632,6 +642,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan });
         }
@@ -698,6 +709,8 @@ describe("cloud CLI plan commands", () => {
         id: "11111111-1111-4111-8111-111111111111",
         short_id: "PLAN-1",
         title: "Root",
+        priority: "medium",
+        status: "pending",
         plan_id: PLAN_ID,
         parent_id: null,
       },
@@ -705,6 +718,8 @@ describe("cloud CLI plan commands", () => {
         id: "22222222-2222-4222-8222-222222222222",
         short_id: "PLAN-2",
         title: "Child",
+        priority: "medium",
+        status: "pending",
         plan_id: PLAN_ID,
         parent_id: "11111111-1111-4111-8111-111111111111",
       },
@@ -712,6 +727,8 @@ describe("cloud CLI plan commands", () => {
         id: "33333333-3333-4333-8333-333333333333",
         short_id: "PLAN-3",
         title: "Grandchild",
+        priority: "medium",
+        status: "pending",
         plan_id: PLAN_ID,
         parent_id: "22222222-2222-4222-8222-222222222222",
       },
@@ -722,6 +739,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan });
         }
@@ -731,7 +749,7 @@ describe("cloud CLI plan commands", () => {
           const visibleTasks = url.searchParams.get("include_subtasks") === "true"
             ? planTasks
             : planTasks.filter((task) => task.parent_id === null);
-          return Response.json({ tasks: visibleTasks, count: visibleTasks.length });
+          return Response.json({ tasks: visibleTasks, count: visibleTasks.length, total:visibleTasks.length, selection:{schema_version:1,plan_id:url.searchParams.get("plan_id"),include_subtasks:url.searchParams.get("include_subtasks")==="true",include_archived:url.searchParams.get("include_archived")==="true"} });
         }
         return Response.json({ error: "not found" }, { status: 404 });
       },
@@ -772,6 +790,8 @@ describe("cloud CLI plan commands", () => {
       id: `10000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
       short_id: `PLAN-${index + 1}`,
       title: `Root ${index + 1}`,
+        priority: "medium",
+        status: "pending",
       plan_id: PLAN_ID,
       parent_id: null,
     }));
@@ -779,6 +799,8 @@ describe("cloud CLI plan commands", () => {
       id: "20000000-0000-4000-8000-000000000001",
       short_id: "PLAN-CHILD",
       title: "Existing child",
+        priority: "medium",
+        status: "pending",
       plan_id: PLAN_ID,
       parent_id: roots[0]!.id,
     };
@@ -786,6 +808,8 @@ describe("cloud CLI plan commands", () => {
       id: "30000000-0000-4000-8000-000000000001",
       short_id: "PLAN-NEW",
       title: "Newly linked root",
+        priority: "medium",
+        status: "pending",
       plan_id: PLAN_ID,
       parent_id: null,
     };
@@ -793,6 +817,8 @@ describe("cloud CLI plan commands", () => {
       id: "40000000-0000-4000-8000-000000000001",
       short_id: "OTHER-1",
       title: "Different plan",
+        priority: "medium",
+        status: "pending",
       plan_id: "88888888-8888-4888-8888-888888888888",
       parent_id: null,
     };
@@ -803,6 +829,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan });
         }
@@ -814,7 +841,7 @@ describe("cloud CLI plan commands", () => {
             : planTasks.filter((task) => task.parent_id === null);
           const offset = Number(url.searchParams.get("offset") ?? "0");
           const page = visibleTasks.slice(offset, offset + 72);
-          return Response.json({ tasks: page, count: page.length, total: visibleTasks.length });
+          return Response.json({ tasks: page, count: page.length, total: visibleTasks.length, selection:{schema_version:1,plan_id:url.searchParams.get("plan_id"),include_subtasks:url.searchParams.get("include_subtasks")==="true",include_archived:url.searchParams.get("include_archived")==="true"} });
         }
         return Response.json({ error: "not found" }, { status: 404 });
       },
@@ -865,6 +892,8 @@ describe("cloud CLI plan commands", () => {
       id: "40000000-0000-4000-8000-000000000001",
       short_id: "OTHER-1",
       title: "Different plan",
+        priority: "medium",
+        status: "pending",
       plan_id: "88888888-8888-4888-8888-888888888888",
       parent_id: null,
     };
@@ -874,12 +903,13 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan });
         }
         if (url.pathname === "/v1/tasks" && request.method === "GET") {
           taskQueries.push(new URLSearchParams(url.searchParams));
-          return Response.json({ tasks: [foreignTask], count: 1, total: 1 });
+          return Response.json({ tasks: [foreignTask], count: 1, total: 1, selection:{schema_version:1,plan_id:url.searchParams.get("plan_id"),include_subtasks:url.searchParams.get("include_subtasks")==="true",include_archived:url.searchParams.get("include_archived")==="true"} });
         }
         return Response.json({ error: "not found" }, { status: 404 });
       },
@@ -893,10 +923,10 @@ describe("cloud CLI plan commands", () => {
         `http://127.0.0.1:${server.port}`,
       );
       expect(result.exitCode).not.toBe(0);
-      expect(result.stderr).toContain("REMOTE_PLAN_TASK_LIST_INCOMPLETE");
-      expect(result.stderr).toContain(foreignTask.id);
+      expect(result.stderr).toContain("REMOTE_PLAN_READ_INCOMPLETE");
+      expect(result.stderr).not.toContain(foreignTask.id);
       expect(JSON.parse(result.stdout)).toMatchObject({
-        error: expect.stringContaining("REMOTE_PLAN_TASK_LIST_INCOMPLETE"),
+        error: expect.stringContaining("REMOTE_PLAN_READ_INCOMPLETE"),
       });
       expect(taskQueries).toHaveLength(1);
       expect(Object.fromEntries(taskQueries[0]!)).toMatchObject({
@@ -944,6 +974,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         const body = request.method === "POST" ? await request.json() : undefined;
         requests.push({ method: request.method, path: url.pathname, query: url.search, body });
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
@@ -1091,6 +1122,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         requests.push({ method: request.method, path: url.pathname });
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan });
@@ -1152,6 +1184,7 @@ describe("cloud CLI plan commands", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         requests.push({ method: request.method, path: url.pathname });
         if (url.pathname === "/v1/plans" && request.method === "GET") {
           return Response.json({
@@ -1177,19 +1210,20 @@ describe("cloud CLI plan commands", () => {
     }
   });
 
-  test("treats a resource DELETE 404 as a normal not-found result", async () => {
+  test("refuses an old API without preserving delete instead of using unsafe generic DELETE", async () => {
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        if(request.method==="GET"&&/^\/v1\/plans\/[^/]+\/comments$/.test(url.pathname))return Response.json({comments:[],count:0,history_selection:{schema_version:1,plan_id:url.pathname.split("/")[3],complete:true}});
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "GET") {
           return Response.json({ plan: { id: PLAN_ID, slug: "legacy", name: "Legacy", status: "active" } });
         }
         if (url.pathname === `/v1/plans/${PLAN_ID}` && request.method === "DELETE") {
           return Response.json({ error: "not found" }, { status: 404 });
         }
-        return Response.json({ error: "unexpected" }, { status: 500 });
+        return Response.json({ error: "preserving endpoint unavailable" }, { status: 405 });
       },
     });
     const root = mkdtempSync(join(tmpdir(), "todos-cloud-plans-old-server-"));
@@ -1197,8 +1231,8 @@ describe("cloud CLI plan commands", () => {
     try {
       const result = await runCli(["--json", "plans", "--delete", PLAN_ID], root, `http://127.0.0.1:${server.port}`);
       expect(result.exitCode).not.toBe(0);
-      expect(result.stderr).toBe("");
-      expect(JSON.parse(result.stdout)).toEqual({ deleted: false });
+      expect(result.stderr).toContain("405");
+      expect(JSON.parse(result.stdout)).toHaveProperty("error");
     } finally {
       server.stop(true);
     }

@@ -72,6 +72,8 @@ describe("task list and completion OpenAPI contract", () => {
       "project_id",
       "parent_id",
       "include_subtasks",
+      "include_archived",
+      "plan_read_contract",
       "plan_id",
       "task_list_id",
       "assigned_to",
@@ -81,6 +83,9 @@ describe("task list and completion OpenAPI contract", () => {
       "limit",
       "offset",
     ]);
+    expect(list.responses["200"].content["application/json"].schema.properties.selection.required).toEqual(["schema_version","plan_id","include_subtasks","include_archived"]);
+    expect(document.paths["/v1/plans/{id}/comments"].get.responses["200"].content["application/json"].schema.required).toEqual(["comments","count"]);
+    expect(document.paths["/v1/plans/{id}/comments"].get.responses["200"].content["application/json"].schema.properties.history_selection.required).toEqual(["schema_version","plan_id","complete"]);
     // The since-cursor must be DECLARED, not merely implemented: an undeclared
     // parameter is dropped silently, so every caller believes it is bounding a
     // read that is in fact returning the whole table.
@@ -373,6 +378,8 @@ describe("plan mutation OpenAPI contract", () => {
     expect(document.paths["/v1/plans/{id}"].delete.operationId).toBe("deletePlan");
     expect(document.paths["/v1/plans/{id}/project-link"].get.operationId).toBe("planPlanProjectLink");
     expect(document.paths["/v1/plans/{id}/project-link"].post.operationId).toBe("applyPlanProjectLink");
+    expect(document.paths["/v1/plans/{id}/project-link"].post.responses["409"].content["application/json"].schema).toEqual({$ref:"#/components/schemas/PlanProjectLinkConflictResponse"});
+    expect(document.components.schemas.PlanProjectLinkConflictResponse.properties.operation_committed.enum).toEqual([true]);
     expect(document.paths["/v1/plans/{id}/project-link/rollback"].post.operationId).toBe("rollbackPlanProjectLink");
     expect(document.components.schemas.PlanProjectLinkApplyInput).toMatchObject({
       additionalProperties: false,
@@ -387,7 +394,7 @@ describe("plan mutation OpenAPI contract", () => {
     expect(document.components.schemas.UpdatePlanInput).toMatchObject({
       additionalProperties: false,
       minProperties: 1,
-      properties: { status: { enum: ["active", "completed", "archived"] } },
+      properties: { status: { enum: ["active", "completed", "archived", "planning", "cancelled"] }, start_date:{format:"date"},end_date:{format:"date"} },
     });
     expect(document.components.schemas.Plan.properties.slug).toMatchObject({ type: "string", nullable: true });
   });

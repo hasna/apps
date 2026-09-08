@@ -4,10 +4,16 @@ title: "Switcher changelog"
 type: "release-notes"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:54:59Z"
-updated_at: "2026-09-07T06:18:57.827391+00:00"
+updated_at: "2026-09-08T12:20:00Z"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+## 0.1.5
+
+### Patch Changes
+
+- Finish completed provider SSE responses cleanly and distinguish native client cancellation from actual upstream stream failure.
 
 ## 0.1.4
 ### Patch Changes

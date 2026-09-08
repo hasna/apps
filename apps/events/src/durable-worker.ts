@@ -149,9 +149,9 @@ export async function runDurableWorker(options: DurableWorkerOptions): Promise<D
       if (stopped) return;
       watcher?.close();
       try {
-        watcher = watch(inboxDir, (_eventType, filename) => {
-          if (!filename || filename.toString().endsWith(".json")) scheduleDebouncedCycle();
-        });
+        // Hardlink publication may report only the temporary inode name (macOS).
+        // Treat notifications as hints; importSpool still selects committed .json files.
+        watcher = watch(inboxDir, () => scheduleDebouncedCycle());
         watcher.on("error", () => {
           watcher?.close();
           watcher = undefined;

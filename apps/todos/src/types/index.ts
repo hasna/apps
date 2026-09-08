@@ -18,7 +18,7 @@ export const TASK_PRIORITIES = [
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
 // Plan statuses
-export const PLAN_STATUSES = ["active", "completed", "archived"] as const;
+export const PLAN_STATUSES = ["active", "completed", "archived", "planning", "cancelled"] as const;
 export type PlanStatus = (typeof PLAN_STATUSES)[number];
 
 // Project Source — a data source or file location associated with a project
@@ -193,6 +193,8 @@ export interface CreateOrgInput {
 
 // Plan
 export interface Plan {
+  start_date?: string | null;
+  end_date?: string | null;
   id: string;
   slug: string | null;
   project_id: string | null;
@@ -208,6 +210,8 @@ export interface Plan {
 }
 
 export interface CreatePlanInput {
+  start_date?: string | null;
+  end_date?: string | null;
   name: string;
   slug?: string;
   project_id?: string;
@@ -218,6 +222,8 @@ export interface CreatePlanInput {
 }
 
 export interface UpdatePlanInput {
+  start_date?: string | null;
+  end_date?: string | null;
   name?: string;
   slug?: string;
   description?: string;
@@ -477,7 +483,11 @@ export interface ApiKey {
 }
 
 // Task List
+export type TaskListStatus = "active" | "completed" | "archived";
+
 export interface TaskList {
+  /** Missing historical status means active. */
+  status?: TaskListStatus;
   id: string;
   project_id: string | null;
   slug: string;
@@ -504,6 +514,7 @@ export interface TaskListRow {
 }
 
 export interface CreateTaskListInput {
+  status?: TaskListStatus;
   name: string;
   slug?: string;
   project_id?: string;
@@ -512,6 +523,7 @@ export interface CreateTaskListInput {
 }
 
 export interface UpdateTaskListInput {
+  status?: TaskListStatus;
   slug?: string;
   name?: string;
   description?: string;
@@ -1418,7 +1430,7 @@ export class ProjectNotFoundError extends Error {
 
 export class ResourceConflictError extends Error {
   constructor(
-    public readonly code: "PROJECT_INCOMPLETE" | "PROJECT_NOT_EMPTY" | "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT" | "TASK_PARENT_CYCLE" | "PROJECT_PARENT_CYCLE" | "SNAPSHOT_DESTINATION_CONFLICT",
+    public readonly code: "TEMPLATE_VERSION_CONFLICT" | "TASK_LIST_NOT_EMPTY" | "PLAN_NOT_EMPTY" | "PROJECT_INCOMPLETE" | "PROJECT_NOT_EMPTY" | "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT" | "TASK_PARENT_CYCLE" | "PROJECT_PARENT_CYCLE" | "SNAPSHOT_DESTINATION_CONFLICT",
     message: string,
   ) {
     super(message);
