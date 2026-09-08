@@ -89,6 +89,18 @@ test("explicit credentials cannot follow ambient authority changes and blank exp
   for (const apiKey of ["", " "]) await expect(new MementosClient({ baseUrl: server.url, apiKey }).listMemories({ limit: 1 })).rejects.toThrow();
   expect(server.calls.length).toBe(2);
 });
+test("nested explicit credentials authenticate the chosen base and invalid values never become anonymous", async () => {
+  const server = serve(); const nested = crypto.randomUUID(); const top = crypto.randomUUID();
+  const client = new MementosClient({ baseUrl: server.url, credentials: { apiKey: nested }, env: {} });
+  await client.listMemories({ limit: 1 });
+  expect(server.calls[0]?.key === nested).toBe(true);
+  const preferred = new MementosClient({ baseUrl: server.url, apiKey: top, credentials: { apiKey: nested }, env: {} });
+  await preferred.listMemories({ limit: 1 }); expect(server.calls[1]?.key === top).toBe(true);
+  for (const apiKey of ["", " "]) {
+    await expect(new MementosClient({ baseUrl: server.url, credentials: { apiKey }, env: {} }).listMemories({ limit: 1 })).rejects.toThrow();
+  }
+  expect(server.calls.length).toBe(2);
+});
 test("blank explicit authority and escaping prefixes refuse without dispatch", async () => {
   for (const baseUrl of ["", "   "]) expect(() => new MementosClient({ baseUrl, apiKey: crypto.randomUUID() })).toThrow();
   const server = serve();

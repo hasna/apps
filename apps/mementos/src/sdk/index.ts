@@ -1050,10 +1050,10 @@ export class MementosClient {
     };
     const explicit = options.baseUrl !== undefined;
     const { env, credentials } = explicit
-      ? { env: { HASNA_MEMENTOS_API_URL: this.baseUrl }, credentials: { apiKey: options.apiKey, keychain: { enabled: false } } }
+      ? { env: { HASNA_MEMENTOS_API_URL: this.baseUrl }, credentials: { apiKey: requestedCredentials.apiKey, keychain: { enabled: false } } }
       : mementosResolverInputs(rawEnv, requestedCredentials);
     const local = !explicit && selectsMementosLocalStore(env);
-    const mode = local ? "local-serve" : explicit && options.apiKey === undefined ? "anonymous" : "http";
+    const mode = local ? "local-serve" : explicit && requestedCredentials.apiKey === undefined ? "anonymous" : "http";
     let baseUrl = local ? MEMENTOS_DEFAULT_BASE_URL : stripV1(toV1BaseUrl(this.baseUrl));
     let send = this._fetch;
     if (mode === "http") {
