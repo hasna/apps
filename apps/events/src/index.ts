@@ -23,6 +23,7 @@ import { defaultEventTypeCatalog, type EventTypeCatalog } from "./catalog.js";
 import { redactPaths, redactSensitiveKeys, shouldRedactKey } from "./redaction.js";
 
 export * from "./types.js";
+export { createIntakeClient, prepareIntake } from "./intake/client.js";
 export * from "./storage.js";
 export * from "./filter.js";
 export * from "./signing.js";
