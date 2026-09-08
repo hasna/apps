@@ -16,6 +16,8 @@ import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./
 import { creditCount, parseRemoteBillingStatus, parseRemoteCheckout, parseRemoteCreditPacks, parseRemoteRunQuote, RemoteCreditApprovalError, type RemoteCreditPack, type RemoteRunApproval, type RemoteRunQuote } from "./remote-account.js";
 import { describeRemoteFiles, readBoundedResponse, sha256, MAX_REMOTE_FILE_BYTES, type RemoteInputFile } from "./remote-files.js";
 import { customerNamePatch, parseUpdatedProfile, parseUpdatedWorkspace, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
+import { quoteUnavailableMessages, readQuoteUnavailableCode, type RemoteQuoteUnavailableCode } from "./remote-quote-errors.js";
+export type { RemoteQuoteUnavailableCode } from "./remote-quote-errors.js";
 
 /**
  * A server that predates this client's pin/tag/incremental-sync routes answered
@@ -49,6 +51,16 @@ export class RemoteRequestError extends Error {
     // Keep the optional argument for existing SDK callers without displaying it.
     super(`Remote request to ${path} failed: HTTP ${status}`);
     this.name = "RemoteRequestError";
+  }
+}
+
+/** A recognized unavailable quote; status compatibility and client-owned copy. */
+export class RemoteQuoteUnavailableError extends RemoteRequestError {
+  constructor(path: string, readonly code: RemoteQuoteUnavailableCode) {
+    super(path, 503);
+    if (!Object.hasOwn(quoteUnavailableMessages, code)) throw new Error("Unknown quote refusal code");
+    this.name = "RemoteQuoteUnavailableError";
+    this.message = quoteUnavailableMessages[code];
   }
 }
 
@@ -165,7 +177,7 @@ export class RemoteSkillsClient {
   private async requestNewRoute(
     path: string,
     options?: RequestInit,
-    opts: { domainNotFoundCodes?: string[] } = {},
+    opts: { domainNotFoundCodes?: string[]; quoteRefusal?: boolean } = {},
   ): Promise<Response> {
     const response = await this.request(path, options);
     // Route identity for the error excludes the query string — the query is
@@ -183,6 +195,10 @@ export class RemoteSkillsClient {
       throw new RemoteRouteUnsupportedError(routePath, response.status, this.apiUrl);
     }
     if (!response.ok) {
+      if (opts.quoteRefusal && options?.method === "POST" && /^\/api\/v1\/skills\/[^/?#]+\/quote$/.test(routePath) && response.status === 503) {
+        const code = await readQuoteUnavailableCode(response);
+        if (code) throw new RemoteQuoteUnavailableError(routePath, code);
+      }
       if (path === "/api/v1/billing/checkout" && options?.method === "POST" && response.status === 503 &&
         await responseBodyCarriesCode(response, ["SUBSCRIPTION_CHECKOUT_UNAVAILABLE"])) {
         throw new RemoteCapabilityUnavailableError();
@@ -247,7 +263,7 @@ export class RemoteSkillsClient {
   async quoteRun(slug: string, input: Record<string, unknown> = {}, args: string[] = []): Promise<RemoteRunQuote> {
     const response = await this.requestNewRoute(`/api/v1/skills/${encodeURIComponent(slug)}/quote`, {
       method: "POST", body: JSON.stringify({ input, args }),
-    });
+    }, { quoteRefusal: true });
     return parseRemoteRunQuote(await response.json());
   }
 
