@@ -265,6 +265,7 @@ export function skillsApiRequestUrl(apiUrl: string, route: string): string {
     throw new SkillsFleetCredentialError("Invalid Skills API route", "INVALID_API_URL");
   }
   if (origin === "https://api.hasna.com/skills") {
+    if (route === "/api/auth/whoami") return `${origin}/v1/auth/whoami`;
     if (!route.startsWith("/api/v1/")) {
       throw new SkillsFleetCredentialError(
         "The internal Skills gateway has no established login contract yet. Select an explicitly configured instance with supported authentication.",
