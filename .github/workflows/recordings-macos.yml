@@ -131,7 +131,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          swift test --package-path src/native/Recordings 2>&1 | tee swift-test.log
+          # Darwin libc: flush stdout at newlines so SwiftPM cannot hide the final
+          # partial buffer if tests stall. This does not resolve a test timeout.
+          STDBUF1=L swift test --package-path src/native/Recordings 2>&1 | tee swift-test.log
 
       - name: What the native test run actually established
         if: always() && steps.compile.outputs.compiled == 'true'
@@ -146,7 +148,7 @@ jobs:
           elif [ -n "$summary" ]; then
             echo "::warning title=Native tests ran and did NOT pass::$summary  The native targets COMPILE but their behaviour is not verified. Not a gate. See the swift-test.log artifact."
           else
-            echo "::warning title=Native tests did NOT finish::swift test produced no run summary before its bound expired (step outcome: $OUTCOME); ${completed:-0} of the suite's tests had completed. The native targets COMPILE and LINK, and nothing whatever about their runtime behaviour is verified by this run. See the swift-test.log artifact."
+            echo "::warning title=Native tests did NOT finish::swift test produced no run summary before its bound expired (step outcome: $OUTCOME); ${completed:-0} completion lines were recorded. The native targets COMPILE and LINK, and nothing whatever about their runtime behaviour is verified by this run. See the swift-test.log artifact."
           fi
 
       - name: Native test suites were not attempted
