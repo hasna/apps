@@ -1,3 +1,4 @@
+import { proxyProviderStream } from "./provider-stream";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { authHeader } from "./auth";
 import { endpoint, Fault } from "./domain";
@@ -80,9 +81,9 @@ export function createInferenceGateway(input: GatewayInput) {
       if(!response)throw new Error("provider_request_failed");
       if(!response.ok){await response.body?.cancel();release();return fail(response.status>=300&&response.status<400?502:response.status,`upstream_http_${response.status}`);}
       if(!response.body){release();return new Response(null,{status:response.status});}
-      const reader=response.body.getReader(), decoder=new TextDecoder();
+      const decoder=new TextDecoder();
       const sse=response.headers.get("content-type")?.includes("text/event-stream");
-      let buffer="",ended=false,output:ReadableStreamDefaultController<Uint8Array>;
+      let buffer="";
       const observe=(text:string)=>{try{const value=JSON.parse(text);const reported=value.model??value.message?.model??value.response?.model??value.modelVersion;if(typeof reported==="string"){current.reportedModel=safeModel(reported);if(reported!==current.resolvedModel)current.reason="provider_reported_different_model";}}catch{}};
       const inspect=(chunk:Uint8Array,done=false)=>{
         buffer+=decoder.decode(chunk,{stream:!done});
@@ -90,9 +91,8 @@ export function createInferenceGateway(input: GatewayInput) {
         else if(buffer.length>131072)buffer="";
         if(done&&buffer)observe(buffer);
       };
-      const end=(error?:Error)=>{if(ended)return;ended=true;try{if(error&&!closing)output.error(error);else output.close();}catch{}release();};
-      const stream=new ReadableStream<Uint8Array>({start(controller){output=controller;},async pull(controller){try{const chunk=await reader.read();if(ended)return;if(chunk.done){inspect(new Uint8Array(),true);end();}else{inspect(chunk.value);controller.enqueue(chunk.value);}}catch{current.reason="stream_interrupted";end(new Error("Provider stream ended unexpectedly"));}},async cancel(){ended=true;abort.abort();try{await reader.cancel();}finally{release();}}});
-      record.cancel=async()=>{abort.abort();try{await reader.cancel();}catch{}finally{end();}};
+      const {stream,cancel}=proxyProviderStream({response,protocol:input.protocol,requestSignal:request.signal,abort,closing:()=>closing,release,inspect,interrupted:()=>{current.reason="stream_interrupted";}});
+      record.cancel=cancel;
       return new Response(stream,{status:response.status,headers:{"content-type":response.headers.get("content-type")??"application/json","cache-control":"no-store"}});
     }catch(error) {if(error instanceof Fault)current.reason=error.code;release();return fail(error instanceof Fault?error.status:502,error instanceof Fault?error.code:"provider_request_failed");}
   }});
