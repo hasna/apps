@@ -1,22 +1,21 @@
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
+import { assertNoClientDatabase, startLoopbackApiFixture } from "../../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../../lib/store/test-support/client-environment.js";
+import { getStore } from "../../lib/store/index.js";
+import { describe, test, expect, beforeAll, afterAll, afterEach } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAdvancedTools } from "./advanced";
-import { closeDb } from "../../lib/db";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-
-const TEST_DB = join(tmpdir(), `conversations-test-advanced-mcp-${Date.now()}.db`);
 
 describe("advanced MCP tools", () => {
   let client: Client;
+  let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+  let restoreClient: () => void;
 
   beforeAll(async () => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+    fixture = await startLoopbackApiFixture();
+    restoreClient = activateClientEnvironment(fixture.env);
     process.env.CONVERSATIONS_AGENT_ID = "advanced-test-agent";
-    closeDb();
 
     const server = new McpServer({ name: "test-advanced-mcp", version: "0.0.1" });
     registerAdvancedTools(server, "1.0.0-test");
@@ -27,14 +26,15 @@ describe("advanced MCP tools", () => {
     await client.connect(clientTransport);
   });
 
+  afterEach(() => assertNoClientDatabase(fixture.home));
+
   afterAll(async () => {
     delete process.env.CONVERSATIONS_DB_PATH;
     delete process.env.CONVERSATIONS_AGENT_ID;
-    closeDb();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(TEST_DB + "-wal"); } catch {}
-    try { unlinkSync(TEST_DB + "-shm"); } catch {}
+
     await client.close();
+    restoreClient();
+    await fixture.stop();
   });
 
   function parseResult(result: { content: unknown[] }): unknown {
@@ -56,7 +56,7 @@ describe("advanced MCP tools", () => {
   describe("mark_read_receipt", () => {
     test("marks a message as read by agent", async () => {
       // First send a message so message exists
-      const msg = (await import("../../lib/messages")).sendMessage({
+      const msg = await getStore().sendMessage({
         from: "receipt-sender", to: "advanced-test-agent", content: "receipt test"
       });
       const result = parseResult(await client.callTool({
@@ -70,8 +70,7 @@ describe("advanced MCP tools", () => {
   describe("react / add_reaction", () => {
     test("add_reaction toggles an emoji on (first add)", async () => {
       // First send a message so message 1 exists
-      const { sendMessage } = await import("../../lib/messages");
-      const msg = sendMessage({ from: "react-sender", to: "advanced-test-agent", content: "react test" });
+      const msg = await getStore().sendMessage({ from: "react-sender", to: "advanced-test-agent", content: "react test" });
 
       const result = parseResult(await client.callTool({
         name: "add_reaction",
@@ -82,7 +81,7 @@ describe("advanced MCP tools", () => {
     });
 
     test("react alias works and toggles off on the same actor re-add", async () => {
-      const msg = (await import("../../lib/messages")).sendMessage({
+      const msg = await getStore().sendMessage({
         from: "react-sender2", to: "advanced-test-agent", content: "react alias"
       });
       const result = parseResult(await client.callTool({
@@ -103,10 +102,9 @@ describe("advanced MCP tools", () => {
 
   describe("unreact / remove_reaction", () => {
     test("remove_reaction removes emoji", async () => {
-      const { sendMessage } = await import("../../lib/messages");
-      const msg = sendMessage({ from: "unreact-sender", to: "advanced-test-agent", content: "unreact test" });
+      const msg = await getStore().sendMessage({ from: "unreact-sender", to: "advanced-test-agent", content: "unreact test" });
       // Add a reaction first
-      await import("../../lib/reactions").then(m => m.addReaction(msg.id, "advanced-test-agent", "fire"));
+      await getStore().addReaction(msg.id, "advanced-test-agent", "fire");
 
       const result = parseResult(await client.callTool({
         name: "remove_reaction",
@@ -116,10 +114,10 @@ describe("advanced MCP tools", () => {
     });
 
     test("unreact alias works", async () => {
-      const msg = (await import("../../lib/messages")).sendMessage({
+      const msg = await getStore().sendMessage({
         from: "unreact-alias", to: "advanced-test-agent", content: "unreact alias"
       });
-      (await import("../../lib/reactions")).addReaction(msg.id, "advanced-test-agent", "rocket");
+      await getStore().addReaction(msg.id, "advanced-test-agent", "rocket");
 
       const result = parseResult(await client.callTool({
         name: "unreact",

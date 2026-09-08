@@ -1,18 +1,19 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { unlinkSync } from "fs";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
+import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { tmpdir } from "os";
 import { join } from "path";
 
-const TEST_DB = join(tmpdir(), `conversations-cli-compact-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 function runCli(args: string[], agent: string) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
     env: {
-      ...process.env,
-      CONVERSATIONS_DB_PATH: TEST_DB,
+      ...fixture.env,
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",
     },
@@ -37,11 +38,7 @@ function seedChannel(channel: string, reader: string): void {
 }
 
 
-  afterAll(() => {
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-    try { unlinkSync(`${TEST_DB}-shm`); } catch {}
-  });
+
 
   test("collection reads stay bounded and exact show keeps full content", () => {
     // Recipient-addressed DMs were removed (staged behind the messages-app v1
@@ -95,7 +92,7 @@ function seedChannel(channel: string, reader: string): void {
     const messages = JSON.parse(unread.stdout).messages;
     expect(messages).toHaveLength(1);
     expect(messages[0].preview).toBe("older page message");
-  });
+  }, 20_000);
 
   test("read accepts --unread-only after agent registration", () => {
     const agent = "unread-only-reader";

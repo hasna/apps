@@ -1,3 +1,4 @@
+import { validateEncryptionReceipt } from "../encryption-maintenance.js";
 // Typed client for the secrets serve API (@hasna/secrets/sdk).
 //
 // The method surface mirrors the serve OpenAPI document (src/server/openapi.ts).
@@ -278,6 +279,19 @@ export class SecretsClient {
         query,
         init,
       });
+    }
+
+    async encryptionStatus(init?: RequestInit): Promise<import("../encryption-maintenance.js").EncryptionReceipt> {
+      return validateEncryptionReceipt(await this.request("GET", "/encryption/status", { init }));
+    }
+
+    async repairEncryption(init?: RequestInit): Promise<import("../encryption-maintenance.js").EncryptionReceipt> {
+      return validateEncryptionReceipt(await this.request("POST", "/encryption/repair", { body: {}, init }));
+    }
+
+    /** Atomically prune expired secrets in the authenticated tenant. */
+    async pruneExpiredSecrets(init?: RequestInit): Promise<{ pruned: number }> {
+      return this.request("POST", "/secrets/prune-expired", { body: {}, init });
     }
 
     /** Get a secret value by key */

@@ -62,3 +62,21 @@ export { RemoteSkillsAuthClient, HostedApiError } from "../lib/remote-auth.js";
 export type { RemoteWorkspaceMember, RemoteWorkspaceMembersPage, RemoteWorkspaceMembersOptions } from "../lib/remote-workspace.js";
 export type { SetRemoteWorkspaceMemberRole, RemoveRemoteWorkspaceMember, RemoteWorkspaceMemberRoleResult, RemoteWorkspaceMemberRemovalResult, RemoteWorkspaceMemberErrorCode } from "../lib/remote-workspace.js";
 export type { RemoteCustomerRole, RemoteCustomerProfile, RemoteCurrentWorkspace, UpdateRemoteProfile, UpdateRemoteWorkspace } from "../lib/remote-profile.js";
+
+export type { RemoteWorkspaceContext, RemoteAccountWorkspace, RemoteAccountWorkspaces, RemoteWorkspaceIdentity,
+  RemoteWorkspaceSession, RemoteAccountWorkspaceDiscovery, RemoteWorkspaceSelectionErrorCode } from "../lib/remote-workspace-selection.js";
+export { WorkspaceContextInputError, WorkspaceIdentityMismatchError } from "../lib/remote-workspace-selection.js";
+export { RemoteWorkspaceSelectionError } from "../lib/remote-client.js";
+
+export type { LeaveRemoteWorkspace, RemoteWorkspaceLeaveResult, RemoteWorkspaceLeaveErrorCode } from "../lib/remote-workspace-leave.js";
+export { WorkspaceLeaveInputError, RemoteWorkspaceLeaveError, RemoteWorkspaceLeaveUnconfirmedError } from "../lib/remote-workspace-leave.js";
+
+export type { RemoteWorkspaceInvitation, RemoteWorkspaceInvitationsPage, RemoteWorkspaceInvitationResult,
+  RemoteWorkspaceInvitationAcceptance, ListRemoteWorkspaceInvitations, IssueRemoteWorkspaceInvitation,
+  ResendRemoteWorkspaceInvitation, RevokeRemoteWorkspaceInvitation, AcceptRemoteWorkspaceInvitation, RemoteWorkspaceInvitationErrorCode } from "../lib/remote-invitations.js";
+export { WorkspaceInvitationInputError, RemoteWorkspaceInvitationError, RemoteWorkspaceInvitationUnconfirmedError,
+  RemoteWorkspaceInvitationReadError } from "../lib/remote-invitations.js";
+
+export { InvitationEmailInputError, RemoteInvitationEmailError, RemoteInvitationEmailUnconfirmedError,
+  type RequestInvitationEmailChallenge, type AcceptInvitationEmailChallenge, type RemoteInvitationEmailChallenge,
+  type RemoteInvitationEmailAcceptance, type RemoteInvitationEmailErrorCode } from "../lib/remote-invitation-recovery.js";

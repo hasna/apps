@@ -22,6 +22,8 @@ export interface KillTreeOptions {
   command?: string | null;
   /** The configured working directory, used to disambiguate command matches. */
   cwd?: string | null;
+  /** Restrict discovery to the recorded PID, its descendants and process group. */
+  processScope?: "owned";
   /** How long to wait after SIGTERM before escalating to SIGKILL. */
   gracePeriodMs?: number;
   /** Poll interval while waiting for processes to exit. */
@@ -187,20 +189,21 @@ export function findListenerPids(port: number | null | undefined): number[] {
 interface ProcInfo {
   pid: number;
   ppid: number;
+  processGroup: number;
   command: string;
 }
 
 function listProcesses(): ProcInfo[] {
   // Portable across Linux and macOS. `=` headers suppress the column titles.
-  const out = runQuietly("ps", ["-eo", "pid=,ppid=,args="]);
+  const out = runQuietly("ps", ["-eo", "pid=,ppid=,pgid=,args="]);
   const procs: ProcInfo[] = [];
   for (const line of out.split(/\r?\n/)) {
-    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+    const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
     if (!m) continue;
     const pid = Number.parseInt(m[1]!, 10);
     const ppid = Number.parseInt(m[2]!, 10);
     if (!Number.isInteger(pid) || pid === process.pid) continue;
-    procs.push({ pid, ppid, command: m[3] ?? "" });
+    procs.push({ pid, ppid, processGroup: Number.parseInt(m[3]!, 10), command: m[4] ?? "" });
   }
   return procs;
 }
@@ -412,6 +415,7 @@ export function discoverServerPids(opts: {
   port?: number | null;
   command?: string | null;
   cwd?: string | null;
+  processScope?: "owned";
 }): number[] {
   const procs = listProcesses();
   const pids = new Set<number>();
@@ -421,6 +425,19 @@ export function discoverServerPids(opts: {
       if (isAlive(descendant)) pids.add(descendant);
     }
     if (isAlive(opts.pid)) pids.add(opts.pid);
+  }
+
+  if (opts.processScope === "owned") {
+    // Detached server groups remain identifiable even when their original
+    // leader has exited. Never add an unrelated listener or command match.
+    if (opts.pid) for (const proc of procs) {
+      if (proc.processGroup !== opts.pid) continue;
+      for (const descendant of collectDescendants(proc.pid, procs)) {
+        if (isAlive(descendant)) pids.add(descendant);
+      }
+    }
+    pids.delete(process.pid);
+    return [...pids];
   }
 
   for (const listener of findListenerPids(opts.port)) {
@@ -433,6 +450,12 @@ export function discoverServerPids(opts: {
 
   pids.delete(process.pid);
   return [...pids];
+}
+
+/** A healthy HTTP response alone cannot establish which process owns a port. */
+export function hasOwnedListener(pid: number | null | undefined, port: number | null | undefined): boolean {
+  const owned = new Set(discoverServerPids({ pid, processScope: "owned" }));
+  return findListenerPids(port).some((listener) => owned.has(listener));
 }
 
 function signal(pid: number, sig: NodeJS.Signals, group: boolean): void {
@@ -460,14 +483,33 @@ export async function killTree(opts: KillTreeOptions): Promise<KillTreeResult> {
   const escalate = opts.escalate ?? true;
 
   const initialTargets = discoverServerPids(opts);
+  const knownOwnedTargets = new Set(initialTargets);
+  const discoverTargets = () => {
+    const current = discoverServerPids(opts);
+    if (opts.processScope !== "owned") return current;
+    for (const pid of current) knownOwnedTargets.add(pid);
+    // Retain evidence of ownership through shutdown: a detached descendant
+    // can be reparented after its parent receives SIGTERM but before SIGKILL.
+    const procs = listProcesses();
+    const seeds = new Set(knownOwnedTargets);
+    for (const proc of procs) if (knownOwnedTargets.has(proc.processGroup)) seeds.add(proc.pid);
+    for (const pid of seeds) for (const descendant of collectDescendants(pid, procs)) {
+      if (isAlive(descendant)) knownOwnedTargets.add(descendant);
+    }
+    return [...knownOwnedTargets].filter(isAlive);
+  };
+  const portStillOwned = () => opts.processScope === "owned"
+    ? findListenerPids(opts.port).some((pid) => discoverTargets().includes(pid))
+    : findListenerPids(opts.port).length > 0;
 
   const sendToAll = (sig: NodeJS.Signals) => {
+    const targets = discoverTargets();
     // Signal the recorded group leader's whole group first (cheap, catches same-group children).
     if (opts.pid && isGroupAlive(opts.pid)) signal(opts.pid, sig, true);
-    for (const pid of discoverServerPids(opts)) signal(pid, sig, false);
+    for (const pid of targets) signal(pid, sig, false);
   };
 
-  if (initialTargets.length === 0 && !findListenerPids(opts.port).length) {
+  if (initialTargets.length === 0 && !portStillOwned()) {
     return { stopped: true, targeted: [], survivors: [], portStillListening: false };
   }
 
@@ -476,7 +518,7 @@ export async function killTree(opts: KillTreeOptions): Promise<KillTreeResult> {
 
   const deadline = Date.now() + grace;
   while (Date.now() < deadline) {
-    if (discoverServerPids(opts).length === 0 && findListenerPids(opts.port).length === 0) {
+    if (discoverTargets().length === 0 && !portStillOwned()) {
       return { stopped: true, targeted: initialTargets, survivors: [], portStillListening: false };
     }
     await sleep(pollMs);
@@ -487,15 +529,15 @@ export async function killTree(opts: KillTreeOptions): Promise<KillTreeResult> {
     sendToAll("SIGKILL");
     const killDeadline = Date.now() + Math.max(2000, Math.floor(grace / 2));
     while (Date.now() < killDeadline) {
-      if (discoverServerPids(opts).length === 0 && findListenerPids(opts.port).length === 0) {
+      if (discoverTargets().length === 0 && !portStillOwned()) {
         return { stopped: true, targeted: initialTargets, survivors: [], portStillListening: false };
       }
       await sleep(pollMs);
     }
   }
 
-  const survivors = discoverServerPids(opts);
-  const portStillListening = findListenerPids(opts.port).length > 0;
+  const survivors = discoverTargets();
+  const portStillListening = portStillOwned();
   return {
     stopped: survivors.length === 0 && !portStillListening,
     targeted: initialTargets,

@@ -168,7 +168,7 @@ describe("SDK credential resolution through the @hasna/contracts chain", () => {
     expect(reads.length).toBeGreaterThan(0);
   });
 
-  test("no credential anywhere: the hosted-only SDK fails loudly, naming every tier and the local opt-in", () => {
+  test("no credential anywhere: the /v1 SDK fails loudly, naming every tier and the local opt-in", () => {
     const home = tempHome();
     let caught: unknown;
     try {
