@@ -1207,4 +1207,31 @@ export const PG_MIGRATIONS: string[] = [
 
   INSERT INTO _migrations (id) VALUES (13) ON CONFLICT DO NOTHING;
   `,
+  // Migration 14: audit log for hosted message redaction (`admin
+  // redact-messages` through the API). Mirrors the on-box
+  // `message_redaction_audit` table so both stores carry the same evidence for
+  // a security remediation.
+  `
+  CREATE TABLE IF NOT EXISTS message_redaction_audit (
+    id TEXT PRIMARY KEY,
+    message_id BIGINT NOT NULL,
+    message_uuid TEXT,
+    actor TEXT NOT NULL,
+    authority TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    redacted_at TEXT NOT NULL,
+    fields TEXT NOT NULL,
+    secret_classes TEXT NOT NULL,
+    before_hashes TEXT NOT NULL,
+    attachment_file_count BIGINT NOT NULL DEFAULT 0,
+    attachment_file_path_hashes TEXT NOT NULL,
+    attachment_files_deleted BIGINT NOT NULL DEFAULT 0,
+    attachment_file_delete_errors BIGINT NOT NULL DEFAULT 0,
+    unsafe_attachment_file_count BIGINT NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_message_redaction_audit_message_id
+    ON message_redaction_audit(message_id);
+
+  INSERT INTO _migrations (id) VALUES (14) ON CONFLICT DO NOTHING;
+  `,
 ];

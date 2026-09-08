@@ -63,6 +63,9 @@
  * this module generalises what that file does by hand.
  */
 
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ALLOW_CLOUD_IN_TESTS_ENV_KEY, DB_PATH_KEYS, ENV_KEYS } from "./index.js";
 
 /**
@@ -177,5 +180,27 @@ export function isolatedStoreChildEnv(
     if (value !== undefined && !STORE_SELECTING_KEYS.includes(key)) env[key] = value;
   }
   for (const key of DB_PATH_KEYS) env[key] = dbPath;
-  return { ...env, ...extra };
+  return { ...env, ...extra, ...diskTierSandboxEnv() };
+}
+
+/**
+ * The disk tier's three roots, pointed at a scratch directory with no
+ * credentials file.
+ *
+ * The ruled disk tier reads `~/.hasna/<app>/config/credentials` (home-layout
+ * ruling 2026-09-04) — an AMBIENT input, live on every fleet workstation since
+ * the station credential moved to that file (2026-09-07). A suite that simulates
+ * a hosted run with a SYNTHETIC API URL must not let the station's real
+ * credential file answer beside it: the chain then refuses the "different
+ * service authorities" disagreement and the fixture never runs. HOME (and its
+ * two overrides) therefore point into a fresh empty scratch root for every
+ * spawned-CLI / ambient-resolution fixture.
+ */
+export function diskTierSandboxEnv(): Record<string, string> {
+  const home = mkdtempSync(join(tmpdir(), "conversations-test-home-"));
+  return {
+    HOME: home,
+    HASNA_HOME: join(home, ".hasna"),
+    HASNA_CONFIG_HOME: join(home, ".hasna-config"),
+  };
 }

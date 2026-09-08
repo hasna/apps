@@ -2,29 +2,37 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { resetDb } from "../src/db.js";
-import { exportEnv, importEnv } from "../src/env.js";
-import { LocalStore } from "../src/store/index.js";
 
-const _store = new LocalStore();
-const getSecret = _store.getSecret.bind(_store);
-const setSecret = _store.setSecret.bind(_store);
+import { exportEnv, importEnv } from "../src/env.js";
+import { getStore, type Store } from "../src/store/index.js";
+import { startLoopbackVault } from "./loopback-vault-fixture.mjs";
+
+let _store: Store;
+const getSecret: Store["getSecret"] = (...args) => _store.getSecret(...args);
+const setSecret: Store["setSecret"] = (...args) => _store.setSecret(...args);
 
 let testDir: string;
+let vault: Awaited<ReturnType<typeof startLoopbackVault>>;
+let savedEnv: NodeJS.ProcessEnv;
 let secretsDir: string;
 
 beforeEach(async () => {
+  savedEnv = { ...process.env };
   testDir = join(tmpdir(), `secrets-env-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   secretsDir = join(testDir, ".secrets");
   mkdirSync(secretsDir, { recursive: true });
-  process.env.OPEN_SECRETS_DB = join(testDir, "vault.db");
-  resetDb();
+  vault = await startLoopbackVault(testDir);
+  for (const key of Object.keys(process.env)) if (/^(HASNA_|SECRETS_|OPEN_SECRETS_|AWS_|DATABASE_URL$|PG|XDG_)/.test(key)) delete process.env[key];
+  Object.assign(process.env, vault.env(), { HASNA_SECRETS_TEST_ISOLATION: "1" });
+  _store = getStore();
 });
 
 afterEach(async () => {
-  resetDb();
-  delete process.env.OPEN_SECRETS_DB;
-  rmSync(testDir, { recursive: true, force: true });
+  try { await vault.stop(); } finally {
+    for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
+    Object.assign(process.env, savedEnv);
+    rmSync(testDir, { recursive: true, force: true });
+  }
 });
 
 describe("env-file bridge", () => {

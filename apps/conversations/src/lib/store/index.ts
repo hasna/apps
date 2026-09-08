@@ -1,44 +1,6 @@
-// ── The conversations Store abstraction ──────────────────────────────────────
-//
-// ONE interface, TWO transports. EVERY CLI command, MCP tool, and SDK method that
-// reads or writes conversations DATA goes through `ConversationsStore`. There are
-// exactly two implementations:
-//
-//   • LocalStore — on-box SQLite. Delegates to the domain helpers in ../*.ts
-//     (channels, tasks, locks, presence, projects, reactions, sessions, topics,
-//     graph, channel-notifications, summary, hot, messages). Those helpers are the
-//     ONLY place that opens `bun:sqlite`; nothing else in the app may touch it.
-//   • ApiStore — the HTTP API at `<origin>/v1` with a bearer key. Delegates to
-//     the @hasna/contracts storage client (`@hasna/contracts/client/storage`).
-//
-// `getStore()` resolves which transport to use through the ONE shared resolver
-// in `@hasna/contracts/client` (owner ruling 2026-09-04, hasna/apps#1720). The
-// credential and the service authority are resolved FRESH on every call:
-// explicit argument → HASNA_CONVERSATIONS_API_KEY_OVERRIDE / HASNA_PROFILE /
-// HASNA_CONVERSATIONS_API_KEY_REF → the macOS Keychain item
-// `hasna.credentials.conversations.api-key` → `~/.hasna/conversations/config/credentials`
-// → `HASNA_CONVERSATIONS_API_KEY`, with the authority following
-// HASNA_CONVERSATIONS_API_URL and defaulting to the fleet gateway. The vendored
-// client copy this module used to re-export is gone — the seam imports the
-// published resolver, so credential-resolution fixes land here by upgrade.
-//
-// FAIL CLOSED (owner ruling 2026-09-04, fail-closed campaign; supersedes the
-// 2026-07-29 "neither set -> local default" directive). The chain decides the
-// credential and the authority; hosted with no resolvable credential the app
-// exits non-zero naming every place that was consulted (a key alone is a
-// COMPLETE hosted configuration — the authority defaults to the fleet gateway
-// https://api.hasna.com/conversations). The on-box SQLite store is served ONLY
-// when an explicit store path (HASNA_CONVERSATIONS_DB_PATH /
-// CONVERSATIONS_DB_PATH) asks for it by name — local is an explicit opt-in,
-// never a default, and it announces itself once on stderr. Callers NEVER
-// branch on the transport themselves and NEVER touch sqlite or fetch directly
-// — that was the split-brain bug this module eliminates.
-//
-// `local` is first-class and fully functional; the server backend switch
-// (`sqlite | postgresql`) lives server-side via HASNA_CONVERSATIONS_DATABASE_URL.
-//
-// SAFETY: the API key never leaves the transport; it is never logged, returned, or
-// embedded in any value produced here. Only the HTTP transport ever holds it.
+// Ordinary clients always resolve the shared authenticated API. LocalStore is
+// retained only as an explicitly constructed library/migration compatibility handle.
+// Credential and authority resolution remain fresh and value-free.
 
 import { resolveStorageClient } from "@hasna/contracts/client/storage";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
@@ -48,13 +10,11 @@ import {
   APP,
   DB_PATH_KEYS,
   ENV_KEYS,
-  announceConversationsLocalMode,
   conversationsResolverInputs,
-  isConversationsLocalOptIn,
 } from "../contracts-env.js";
 import { assertAmbientCloudAllowed } from "./test-runtime.js";
 import { normalizeChannelName } from "../channel-names.js";
-import { getDbPath, localHealthChecks } from "../db.js";
+import { localHealthChecks, getDb } from "../db.js";
 import { ApiStore } from "./api-store.js";
 import {
   AGENT_LIST_ORDER,
@@ -85,6 +45,9 @@ import { attachSendRedaction } from "../content-safety.js";
 import type { IncidentProjectionRecord, IncidentProjectionRequestV1, Message, MessagePreviewPage } from "../../types.js";
 import { previewAsCompatibilityMessage, COLLECTION_MAX_MAX_BYTES } from "../message-previews.js";
 import { runLocalReadWorker } from "../local-read-runner.js";
+import { drainConversationEventOutbox, type DrainEventOutboxResult } from "../events-bridge.js";
+import { saveFeedbackLocal, type SaveFeedbackInput, type SaveFeedbackResult } from "../feedback.js";
+import { redactMessagesById, type RedactMessagesOptions, type RedactMessagesResult } from "../admin-redaction.js";
 
 /**
  * App slug for the client-flip env contract.
@@ -92,7 +55,7 @@ import { runLocalReadWorker } from "../local-read-runner.js";
  * Exported because the macOS shell's guard (`Sources/HasnaConversationsCore`) is
  * generated from the same contract rather than restating its key names. A guard
  * that classifies an env differently from this resolver is how a guard becomes
- * its own source of wrong-store bugs — see {@link firstSet}.
+ * its own source of wrong-store bugs — see {@link assertSharedConversationsSelection}.
  */
 export { APP } from "../contracts-env.js";
 
@@ -103,37 +66,7 @@ type Async<F extends (...args: never[]) => unknown> = (
   ...args: Parameters<F>
 ) => Promise<Awaited<ReturnType<F>>>;
 
-// ── Transport resolution ─────────────────────────────────────────────────────
-//
-// STORE RESOLUTION MUST NEVER SILENTLY DOWNGRADE.
-//
-// Measured on station01, 2026-07-30, at 0.5.9: with HASNA_CONVERSATIONS_API_URL
-// set and HASNA_CONVERSATIONS_API_KEY absent, `getStore()` handed back a LocalStore
-// over ~/.hasna/conversations/*.db and served a DIFFERENT dataset — 608 channels
-// instead of 844, newest message 2026-07-18 instead of today — with no error and no
-// flag. An agent reading that concludes the messages were never sent. It is the
-// same failure that got MCPs banned on this fleet (~/.claude/rules/no-mcps.md).
-//
-// The rule that prevents it: ANY configuration that does not unambiguously select
-// the API is an error, and local storage is NEVER a default. When the API is
-// expected and cannot be built, refuse — naming the missing variable — rather than
-// answering from a different dataset. When NO API configuration is present at all
-// (a CLI run outside the station wrapper, which exports the API pair into every
-// fleet process), refuse just the same, naming BOTH variables: serving the on-box
-// SQLite store from ~/.hasna/conversations in that state is the same wrong-answer
-// failure with the env missing instead of half-set (owner ruling 2026-09-04). An
-// explicit local configuration — a HASNA_CONVERSATIONS_DB_PATH /
-// CONVERSATIONS_DB_PATH store path — stays fully supported; the bug was local as
-// the DEFAULT, not local storage.
-//
-// This guard lives in the APP-OWNED layer on purpose. The shared resolver in
-// `@hasna/contracts/client` resolves only the credential and the authority; it
-// has no notion of an on-box store path, so it cannot decide "local by request"
-// for a client that also ships a local store. The app-owned layer answers the
-// explicit store path itself (never consulting the resolver for it) and routes
-// everything else to the shared chain, which decides the credential and the
-// authority and throws when none resolves — the fail-closed property the old
-// pair-guard enforced is preserved by delegation.
+// Shared API transport resolution.
 
 /** Raised when the environment does not unambiguously select one store. */
 export class ConversationsStoreConfigError extends Error {
@@ -146,141 +79,39 @@ export class ConversationsStoreConfigError extends Error {
 
 /** Env var names for this app, from the shared transport contract (never hardcoded). */
 export { ENV_KEYS } from "../contracts-env.js";
-/** Local SQLite path overrides, highest-precedence signal. */
+/** Retired local database selectors retained for configuration diagnostics. */
 export { DB_PATH_KEYS } from "../contracts-env.js";
 
-/**
- * First key in `keys` with a non-blank value in `env`, else null.
- *
- * Trims and treats a blank value as unset, matching `firstEnv` in the transport
- * resolver EXACTLY. If the two disagreed, this guard would classify an env the
- * resolver classifies differently — which is how a guard becomes its own source of
- * wrong-store bugs.
- */
-function firstSet(env: Env, keys: readonly string[]): { key: string; value: string } | null {
-  for (const key of keys) {
-    const value = env[key]?.trim();
-    if (value) return { key, value };
-  }
-  return null;
+/** Reject retired selectors before consulting credentials or opening any store. */
+export function assertSharedConversationsSelection(env: Env = process.env): void {
+  const keys = DB_PATH_KEYS.filter(key => (env[key] ?? "").trim() !== "");
+  if (keys.length) throw new ConversationsStoreConfigError(
+    `Local database selectors are no longer supported by Conversations clients: ${keys.join(", ")}. Remove them and configure saved account credentials or HASNA_CONVERSATIONS_API_URL / HASNA_CONVERSATIONS_API_KEY. Preserve existing databases for explicit migration.`,
+  );
 }
-
-/**
- * Suffix telling the operator how to ask for local explicitly.
- *
- * Local is opt-in ONLY: since 2026-09-04 an env with no store path refuses
- * (nothing configured is an error, never the local default), so "unset the API
- * variables" can no longer reach local — only a named store path can.
- */
-const LOCAL_ESCAPE_HATCH =
-  `If you meant to use the on-box SQLite store, set ${DB_PATH_KEYS[0]} to a local database ` +
-  `file — local mode is opt-in only, it is never the default.`;
 
 /**
  * Wrap a failure of the shared @hasna/contracts chain as the app's own config
  * error, preserving the resolver's message (which names every tier it consulted
  * — an env key NAME, a Keychain item reference, or a file PATH, never a value)
- * and appending the local opt-in hatch the old guard arms carried. The CLI's
+ * and naming saved account configuration. The CLI's
  * error surface (including the `--json` error contract) keys on
  * {@link ConversationsStoreConfigError}, so every chain refusal surfaces
  * through the same code.
  */
 function wrapConversationsChainFailure(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
-  throw new ConversationsStoreConfigError(`${message} ${LOCAL_ESCAPE_HATCH}`);
+  throw new ConversationsStoreConfigError(`${message} Configure saved account credentials or HASNA_CONVERSATIONS_API_URL / HASNA_CONVERSATIONS_API_KEY. No local database is opened.`);
 }
 
-/**
- * The gate for the few surfaces that are LOCAL-ONLY by nature — the
- * `events-drain` worker over the on-box outbox table and the MCP feedback
- * table — which have no hosted transport and used to call `getDb()` directly.
- *
- * A direct `getDb()` is a fallback nobody asked for: on a hosted station with
- * no credential resolvable it exited 0, printed no LOCAL notice, and created
- * `messages.db` (plus WAL/SHM) under the app home, which the fail-closed
- * ruling forbids for every surface, not only the Store-routed ones. So such a
- * surface asks HERE first: the on-box store is used only when the operator
- * named it (`HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH`), it is
- * announced once on stderr exactly as `getStore()` announces it, and the
- * resolved path is returned for the caller's own reporting. Anything else is
- * the app's config refusal — exit non-zero, nothing opened, the JSON error
- * contract honoured by the CLI's error surface — naming the opt-in.
- *
- * `surface` is the command or tool name, so the refusal says what would have
- * run. Never reads or embeds a credential value.
- */
-export function requireConversationsLocalStore(surface: string, env: Env = process.env): string {
-  if (!isConversationsLocalOptIn(env)) {
-    throw new ConversationsStoreConfigError(
-      `${surface} is local-only: it works on the on-box SQLite store and has no hosted transport, ` +
-        `and neither ${DB_PATH_KEYS[0]} nor ${DB_PATH_KEYS[1]} names a local store — so nothing was opened. ` +
-        LOCAL_ESCAPE_HATCH,
-    );
-  }
-  const dbPath = getDbPath(env);
-  announceConversationsLocalMode(dbPath);
-  return dbPath;
-}
-
-/**
- * Throw unless `env` unambiguously selects exactly one store.
- *
- * THE DECISION LAYER IS NOW THE SHARED CHAIN, NOT THIS FILE. An explicit local
- * SQLite path is the one app-level selector (step 1 below) and wins over
- * everything. Every other environment is decided by `@hasna/contracts/client`:
- * the credential comes from the argument / pointer / Keychain / disk / env
- * tiers, the authority from HASNA_CONVERSATIONS_API_URL / the Keychain api-url
- * item / the credentials file / the fleet gateway, and a chain that cannot
- * resolve — no credential anywhere, a blank or disagreeing declaration, an
- * invalid authority — THROWS. That throw is re-raised as
- * {@link ConversationsStoreConfigError} (see
- * {@link wrapConversationsChainFailure}) so no caller can drift onto the
- * wrong dataset or open local SQLite as a default.
- *
- * Never reads, logs, or embeds a credential value — only variable NAMES appear
- * in any message.
- */
+/** Verify shared account configuration without opening a database. */
 export function assertUnambiguousStoreEnv(env: Env = process.env): void {
-  // 1. An explicit local SQLite path is the narrowest, most specific signal and wins.
-  if (firstSet(env, DB_PATH_KEYS)) return;
-
-  // 2. The shared chain decides, and every refusal is the app's fail-loud
-  //    config error. (The resolution is a pure decision here; the caller that
-  //    actually needs the client resolves once more — the resolver is re-read
-  //    fresh on every call by design.)
   resolveCloudClientUnguarded(env);
 }
 
-/**
- * Return an env in which the API transport is selected when a credential
- * resolves. Never a DSN on the client. A command-level SQLite DB path is the
- * ONLY way to select the local store — an explicit local override, so local
- * CLI test/dev commands cannot accidentally write to the API when API
- * credentials are exported globally.
- *
- * Throws {@link ConversationsStoreConfigError} when the shared chain cannot
- * resolve a store from the env — including when NOTHING resolves — so no
- * caller can drift onto the wrong dataset or open local SQLite as a default.
- */
+/** Preserve credential-tier identity after validating shared API configuration. */
 export function conversationsCloudEnv(env: Env = process.env): Env {
-  if (firstSet(env, DB_PATH_KEYS)) {
-    // Explicit local: strip the API credentials so a later resolution cannot
-    // flip on them. Local is expressed by absence of an API pair (plus the DB
-    // path). The resolver is never consulted for this env — see
-    // `resolveCloudClientUnguarded` — so the copy is for callers that hold this
-    // value as a "local-only" env in its own right.
-    const local: Env = { ...env };
-    for (const key of ENV_KEYS.apiUrlKeys) delete local[key];
-    for (const key of ENV_KEYS.apiKeyKeys) delete local[key];
-    return local;
-  }
-  // Nothing app-level selected local: the shared chain must resolve a store
-  // from this env, and a chain that cannot fails loud HERE, before an env is
-  // handed back.
   resolveCloudClientUnguarded(env);
-  // The env itself is handed through unchanged (identity preserved, so the
-  // chain's ambient tiers keep their gate); the resolver infers the transport
-  // on its own.
   return env;
 }
 
@@ -298,13 +129,8 @@ export interface ConversationsResolveOptions {
  * exported wrapper below answers "hand me a client I can write with", which is a
  * CAPABILITY. The test-context guard belongs on the second and not the first.
  */
-function resolveCloudClientUnguarded(env: Env, options: ConversationsResolveOptions = {}): HasnaStorageClient | null {
-  // An explicit local store path is the ONLY way local is selected, and it is
-  // the highest-precedence signal: it wins even when the API pair is exported
-  // globally. The shared resolver is NEVER consulted for it — with no URL and
-  // no key the @hasna/contracts chain has nothing to resolve, and calling it
-  // would throw where the operator asked for local.
-  if (isConversationsLocalOptIn(env)) return null;
+function resolveCloudClientUnguarded(env: Env, options: ConversationsResolveOptions = {}): HasnaStorageClient {
+  assertSharedConversationsSelection(env);
   // Otherwise the shared chain decides the credential and the authority,
   // fresh on every call: explicit argument, the deliberate pointers, the
   // macOS Keychain, the credentials file, then HASNA_CONVERSATIONS_API_KEY;
@@ -325,7 +151,7 @@ function resolveCloudClientUnguarded(env: Env, options: ConversationsResolveOpti
 }
 
 /**
- * Resolve the cloud HTTP client, or `null` when the app should use local.
+ * Resolve the shared HTTP client or throw a configuration error.
  *
  * GUARDED AT THE MINT POINT, NOT AT ONE CALLER. `src/index.ts` re-exports this
  * module with `export *`, so this function is package public API and an SDK
@@ -340,7 +166,7 @@ function resolveCloudClientUnguarded(env: Env, options: ConversationsResolveOpti
 export function resolveConversationsCloud(
   env: Env = process.env,
   options: ConversationsResolveOptions = {},
-): HasnaStorageClient | null {
+): HasnaStorageClient {
   const client = resolveCloudClientUnguarded(env, options);
   // AMBIENT means "whatever the operator's shell happens to hold". A caller that
   // passes its own env has named its target, and that decision is not this
@@ -352,21 +178,7 @@ export function resolveConversationsCloud(
   return client;
 }
 
-/**
- * True when reads/writes are routed to the cloud API.
- *
- * Reads the UNGUARDED resolution ON PURPOSE. This is a predicate: it returns a
- * boolean, never a client that can write, so it closes nothing to guard it and
- * breaks a real caller if it throws — `admin-redaction.ts` calls it bare to pick
- * a branch, and a suite in this repository deliberately exports cloud
- * credentials so that bare call resolves true.
- *
- * Since 2026-09-04 the answer "false" is reachable ONLY under an explicit local
- * store path: an env with nothing configured throws `ConversationsStoreConfigError`
- * here (via `assertUnambiguousStoreEnv`) rather than reporting "local" — a caller
- * that branches on `false` to serve the on-box SQLite store must never reach it
- * from a configuration that merely forgot the API env.
- */
+/** Compatibility predicate: shared API configuration returns true or throws. */
 export function isCloudStore(env: Env = process.env): boolean {
   return resolveCloudClientUnguarded(env) !== null;
 }
@@ -617,6 +429,18 @@ export interface ConversationsStore {
 
   appendIncidentProjection: (request: IncidentProjectionRequestV1) => Promise<IncidentProjectionRecord>;
   getIncidentProjection: (eventId: string) => Promise<IncidentProjectionRecord | null>;
+
+  // events outbox worker: same command, one semantics on whichever store
+  // resolved — on-box SQLite spools into the on-box events spool inbox; the
+  // hosted API runs the server's own outbox worker.
+  drainEventOutbox: (opts?: { limit?: number }) => Promise<DrainEventOutboxResult>;
+
+  // feedback: on-box table row, or the hosted API's feedback route.
+  saveFeedback: (input: SaveFeedbackInput) => Promise<SaveFeedbackResult>;
+
+  // audited admin message redaction: on-box SQLite (secure_delete + file
+  // purge), or the hosted API's redaction route over the Postgres store.
+  redactMessages: (options: RedactMessagesOptions) => Promise<RedactMessagesResult>;
 }
 
 // ── LocalStore ────────────────────────────────────────────────────────────────
@@ -874,63 +698,25 @@ export class LocalStore implements ConversationsStore {
     incidentProjectionsLib.appendIncidentProjection(request, incidentProjectionsLib.resolveIncidentProjectorContext());
   getIncidentProjection: ConversationsStore["getIncidentProjection"] = async (eventId) =>
     incidentProjectionsLib.getIncidentProjection(eventId, incidentProjectionsLib.resolveIncidentProjectorContext());
+
+  // events outbox worker (local store): spool pending rows into the on-box
+  // events durable spool inbox.
+  drainEventOutbox: ConversationsStore["drainEventOutbox"] = async (opts) =>
+    drainConversationEventOutbox(getDb(), { limit: opts?.limit });
+
+  saveFeedback: ConversationsStore["saveFeedback"] = async (input) => saveFeedbackLocal(input);
+
+  redactMessages: ConversationsStore["redactMessages"] = async (options) => redactMessagesById(options);
 }
 
 // ── Resolver ──────────────────────────────────────────────────────────────────
 
-let localSingleton: LocalStore | null = null;
+/** Compatibility no-op: ordinary API stores are resolved fresh on every call. */
+export function resetStoreForTests(): void {}
 
-export function resetStoreForTests(): void {
-  localSingleton = null;
-}
-
-/**
- * Resolve the active {@link ConversationsStore} for the current environment.
- *
- * EXACTLY ONE of two things happens:
- *
- * 1. `HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH` set → LOCAL. A
- *    command-level SQLite path is the narrowest, most specific signal, so local
- *    dev and test commands cannot write to the API when fleet credentials are
- *    exported globally. This is the ONLY way local is selected — it is an
- *    explicit opt-in, never a default (owner ruling 2026-09-04) — and a local
- *    run announces itself once on stderr.
- * 2. Otherwise → the shared `@hasna/contracts` chain resolves the credential
- *    and the authority, fresh on every call. Any environment the chain cannot
- *    resolve — no credential anywhere (Keychain, disk, or env), a blank or
- *    disagreeing declaration, an invalid authority — raises
- *    {@link ConversationsStoreConfigError} naming every place that was
- *    consulted. There is no SQLite fallback and no `*-local-fallback` event:
- *    a CLI without a resolvable credential exits non-zero, never answer from
- *    ~/.hasna/conversations SQLite.
- *
- * An API URL that cannot be parsed is an ERROR wherever the API is expected, never
- * a quiet fall-back. No error message ever contains a credential value — only
- * names. The server backend switch (`sqlite | postgresql`) is selected separately
- * by HASNA_CONVERSATIONS_DATABASE_URL and never participates in client transport.
- */
+/** Always return the shared API store; never open or create a local database. */
 export function getStore(env?: Env, options: ConversationsResolveOptions = {}): ConversationsStore {
-  // The test-context guard lives in `resolveConversationsCloud`, which is the
-  // single place a writable client is produced, so it applies here by inheritance
-  // rather than by a second copy. The fleet exports the API URL and key into
-  // every interactive shell, so an ambient resolution inside a test runner
-  // reaches the LIVE deployment — measured in this repository at the hosted
-  // conversations API with no isolation variable set. A caller that passes
-  // an env has named its own target and is left alone; passing `process.env`
-  // through unchanged keeps the bare call an ambient read.
-  const activeEnv = env ?? process.env;
-  const client = resolveConversationsCloud(activeEnv, options);
-  if (client) {
-    return new ApiStore(client);
-  }
-  if (!localSingleton) {
-    localSingleton = new LocalStore();
-    // Say it out loud: a local run must never be mistakable for a hosted one
-    // with an empty store (hasna/apps#1720). Once per process, on stderr, so
-    // `--json` output stays a clean parseable document on stdout.
-    announceConversationsLocalMode(getDbPath(activeEnv));
-  }
-  return localSingleton;
+  return new ApiStore(resolveConversationsCloud(env ?? process.env, options));
 }
 
 export { normalizeChannelName };
