@@ -78,7 +78,8 @@ function environment(origin: string, work: string) {
 const verification = ["--email", "publisher@example.test", "--user-id", userId!, "--membership-id", membershipId!, "--code-stdin", "--json"];
 async function cli(origin: string, work: string, args: string[]) {
   const child = Bun.spawn([process.execPath, "--no-env-file", "--preload", guard, binary, "publication", ...args, ...verification], {
-    cwd: work, env: environment(origin, work), stdin: new Blob([code + "\n"]), stdout: "pipe", stderr: "pipe" });
+    cwd: work, env: environment(origin, work), stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  child.stdin.write(code + "\n"); child.stdin.end();
   const timer = setTimeout(() => child.kill("SIGKILL"), 15000);
   try {
     const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
