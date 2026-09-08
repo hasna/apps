@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
@@ -75,5 +75,44 @@ describe("db backup", () => {
   it("compacts database", () => {
     const result = compactDatabase(dbPath);
     expect(result.bytes_after).toBeGreaterThan(0);
+  });
+});
+
+
+describe("standalone WAL backup safety", () => {
+  it("includes committed uncheckpointed WAL rows and reopens read-only without sidecars", () => {
+    const sourcePath = join(tempDir, "active-wal.db");
+    const source = new Database(sourcePath);
+    try {
+      source.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE fixture(id INTEGER PRIMARY KEY, value TEXT);");
+      source.query("INSERT INTO fixture VALUES(?,?)").run(1,"committed fixture");
+      expect(statSync(`${sourcePath}-wal`).size).toBeGreaterThan(0);
+      const output = join(tempDir,"private snapshot #1.db");
+      const result = backupDatabase(output,sourcePath);
+      expect(result.method).toBe("sqlite_vacuum");
+      expect(statSync(output).mode & 0o777).toBe(0o600);
+      const check = new Database(output,{readonly:true});
+      try {
+        expect(check.query("SELECT * FROM fixture").all()).toEqual([{id:1,value:"committed fixture"}]);
+        expect(check.query("PRAGMA quick_check").get()).toEqual({quick_check:"ok"});
+      } finally { check.close(); }
+      expect(existsSync(`${output}-wal`)).toBe(false);
+      expect(existsSync(`${output}-shm`)).toBe(false);
+      expect(source.query("SELECT count(*) AS n FROM fixture").get()).toEqual({n:1});
+    } finally {source.close();}
+  });
+
+  it("rejects invalid foreign keys without replacing an existing backup or leaving staging files", () => {
+    const invalidPath = join(tempDir,"invalid-reference.db");
+    const source = new Database(invalidPath);
+    source.exec("PRAGMA foreign_keys=OFF; CREATE TABLE parents(id INTEGER PRIMARY KEY); CREATE TABLE children(parent_id INTEGER REFERENCES parents(id)); INSERT INTO children VALUES(99);");
+    source.close();
+    const output = join(tempDir,"existing-backup.db");
+    writeFileSync(output,"prior backup bytes",{mode:0o600});
+    const before = readdirSync(tempDir).sort();
+    expect(()=>backupDatabase(output,invalidPath)).toThrow("foreign_key_check");
+    expect(readFileSync(output,"utf8")).toBe("prior backup bytes");
+    expect(readdirSync(tempDir).sort()).toEqual(before);
+    expect(checkDatabaseIntegrity(invalidPath).foreign_keys).toBe(false);
   });
 });

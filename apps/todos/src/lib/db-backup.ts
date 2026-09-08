@@ -2,7 +2,8 @@
  * Local SQLite backup, restore, integrity, compact, and migration dry-run.
  */
 
-import { existsSync, copyFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, chmodSync, rmdirSync, copyFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import { getDatabase, closeDatabase } from "../db/database.js";
@@ -15,7 +16,7 @@ export interface BackupResult {
   source_path: string;
   backup_path: string;
   bytes: number;
-  method: "sqlite_backup" | "file_copy";
+  method: "sqlite_backup" | "sqlite_vacuum" | "file_copy";
   created_at: string;
 }
 
@@ -51,22 +52,36 @@ export function backupDatabase(outputPath: string, sourcePath?: string): BackupR
   const source = resolveDbPath(sourcePath);
   if (!existsSync(source)) throw new Error(`Database not found: ${source}`);
 
-  mkdirSync(dirname(outputPath), { recursive: true });
+  mkdirSync(dirname(outputPath), { recursive: true, mode: 0o700 });
 
   closeDatabase();
 
-  const src = new Database(source);
+  // serialize() preserves WAL header bytes, producing a standalone file that
+  // macOS SQLite cannot reopen read-only without sidecars. SQLite VACUUM INTO
+  // emits a complete rollback-journal image without modifying the source.
+  const stagingDir = join(dirname(outputPath), `.todos-backup-${randomUUID()}`);
+  const staging = join(stagingDir, "snapshot.db");
+  const src = new Database(source, { readonly: true });
+  let ownsStaging = false;
   try {
-    src.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  } catch {
-    /* best-effort checkpoint */
+    // macOS SQLite rejects even an existing empty VACUUM output. A private
+    // exclusively created directory protects the file throughout creation.
+    mkdirSync(stagingDir, { mode: 0o700 });
+    ownsStaging = true;
+    src.query("VACUUM INTO ?").run(staging);
+    chmodSync(staging, 0o600);
+    const integrity = checkDatabaseIntegrity(staging);
+    if (!integrity.ok) throw new Error(`Backup failed integrity check: ${integrity.errors.join("; ")}`);
+    renameSync(staging, outputPath);
+  } finally {
+    src.close();
+    if (ownsStaging) {
+      try { unlinkSync(staging); } catch { /* Renamed successfully or not created. */ }
+      rmdirSync(stagingDir);
+    }
   }
-  const image = src.serialize();
-  src.close();
 
-  writeFileSync(outputPath, image);
-
-  const method: BackupResult["method"] = "file_copy";
+  const method: BackupResult["method"] = "sqlite_vacuum";
 
   const bytes = statSync(outputPath).size;
   return {
