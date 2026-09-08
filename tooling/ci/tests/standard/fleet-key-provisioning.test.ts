@@ -49,6 +49,179 @@ import { main } from "../../../fleet/fleet-key.ts";
 
 const ROOT = repoRoot();
 
+describe("per-user OAuth inventory and anonymous boundary checks", () => {
+  const raw = {
+    app: "nest", source: "external" as const, authMode: "user-oauth" as const,
+    baseUrl: "https://api.getnest.sh", targetClientBase: "https://api.hasna.com/nest",
+    issuer: "https://getnest.sh/api/auth", healthPath: "/v1/health", unauthenticatedPath: "/v1/auth/me",
+    notes: "Built in hasna-products/nest; origin until the gateway route is verified.",
+  };
+  const app = resolveEntry(raw);
+
+  function anonymousIo(statuses: Array<number | null>) {
+    const calls: Array<{ url: string; key: string | null; options: unknown }> = [];
+    const io: Io = {
+      readSecret: async () => { throw new Error("unexpected secret IO"); },
+      aws: async () => { throw new Error("unexpected AWS IO"); },
+      probe: async (url, key, options) => {
+        calls.push({ url, key, options });
+        return statuses.shift() ?? null;
+      },
+    };
+    return { io, calls };
+  }
+
+  test("Nest records its current origin, canonical target and unchanged issuer with no key defaults", () => {
+    const nest = loadRegistry(ROOT).find((a) => a.app === "nest")!;
+    expect(nest.authMode).toBe("user-oauth");
+    expect(nest.baseUrl).toBe(raw.baseUrl);
+    expect(nest.targetClientBase).toBe(raw.targetClientBase);
+    expect(nest).not.toHaveProperty("keySecretId");
+    expect(nest).not.toHaveProperty("keyCheck");
+    expect(nest).not.toHaveProperty("probePath");
+    if (nest.authMode !== "user-oauth") throw new Error("wrong mode");
+    expect(nest.issuer).toBe(raw.issuer);
+    expect(nest.notes).toContain("until");
+    expect(nest.notes).toContain("membership");
+  });
+
+  test("auth modes cannot silently mix shared-key and user-identity configuration", () => {
+    for (const field of ["keySecretId", "keyCheck", "probePath", "probeAuth", "mintTarget"]) {
+      for (const value of ["configured", null, undefined]) {
+        expect(() => resolveEntry({ ...raw, [field]: value })).toThrow(/cannot set/);
+      }
+    }
+    for (const field of ["issuer", "healthPath", "unauthenticatedPath"]) {
+      expect(() => resolveEntry({ app: "widgets", source: "monorepo", [field]: "configured" })).toThrow(/require authMode/);
+    }
+    expect(() => resolveEntry({ ...raw, authMode: "unknown" as never })).toThrow(/authMode/);
+    expect(() => resolveEntry({ ...raw, notes: "" })).toThrow(/notes/);
+    expect(() => resolveEntry({ ...raw, issuer: undefined })).toThrow(/issuer/);
+  });
+
+  test("routes and URL bindings reject ambiguous paths, credentials, versions and undocumented overrides", () => {
+    for (const field of ["healthPath", "unauthenticatedPath"] as const) {
+      for (const value of [undefined, "//evil.example/v1/health", "/v1/../health", "/v1/%2e%2e/x", "/v1/x?q=1", "/v1/x#x", "/v1//x"]) {
+        expect(() => resolveEntry({ ...raw, [field]: value })).toThrow(/explicit \/v1/);
+      }
+    }
+    expect(() => resolveEntry({ ...raw, unauthenticatedPath: raw.healthPath })).toThrow(/must differ/);
+    for (const baseUrl of ["http://example.com", "https://user@example.com", "https://example.com/?x=1", "https://example.com/#x", "https://example.com/a/../b", "https://example.com/v1"]) {
+      expect(() => resolveEntry({ ...raw, baseUrl })).toThrow();
+    }
+    for (const issuer of ["http://example.com", "https://user@example.com", "https://example.com/?x=1"]) {
+      expect(() => resolveEntry({ ...raw, issuer })).toThrow();
+    }
+    expect(() => resolveEntry({ ...raw, targetClientBase: `${raw.targetClientBase}/v1` })).toThrow(/targetClientBase/);
+    expect(() => resolveEntry({ app: "widgets", source: "monorepo", baseUrl: "https://example.com" })).toThrow(/override must carry notes/);
+    const gateway = resolveEntry({ ...raw, baseUrl: raw.targetClientBase });
+    expect(gateway.authMode === "user-oauth" && gateway.issuer).toBe(raw.issuer);
+  });
+
+  test("only 200/401 is observed, with two credential-free requests and zero secret access", async () => {
+    const { io, calls } = anonymousIo([200, 401]);
+    const result = await checkApp(app, io, "unused");
+    expect(result.state).toBe("user-auth-observed");
+    expect(result.detail).toContain("membership NOT tested");
+    expect(calls).toEqual([
+      { url: "https://api.getnest.sh/v1/health", key: null, options: { anonymousBoundary: true } },
+      { url: "https://api.getnest.sh/v1/auth/me", key: null, options: { anonymousBoundary: true } },
+    ]);
+    const buckets = partition([result]);
+    expect(buckets.passes).toEqual([]);
+    expect(buckets.exempt).toEqual([]);
+    expect(buckets.observed).toEqual([result]);
+    const report = renderIncidentReport(buckets);
+    expect(report).toContain("OBSERVED nest:");
+    expect(report).toContain("0 healthy");
+    expect(report).toContain("no shared key is read or minted");
+  });
+
+  test("redirects, missing routes, wrong health and anonymous successes fail; outages remain unverified", async () => {
+    for (const statuses of [[200, 200], [200, 204], [200, 301], [200, 302], [200, 307], [200, 308], [200, 404], [200, 403], [404, 401], [401, 401], [302, 401], [null, 200], [503, 404], [302, null], [404, 429]]) {
+      const result = await checkApp(app, anonymousIo([...statuses]).io, "unused");
+      expect(result.state).toBe("user-auth-failed");
+      expect(partition([result]).failures).toEqual([result]);
+      expect(planMint(result, { allowRotate: true }).action).toBe("refuse");
+    }
+    for (const statuses of [[null, 401], [200, null], [503, 401], [200, 503], [429, 401], [200, 429]]) {
+      const result = await checkApp(app, anonymousIo([...statuses]).io, "unused");
+      expect(result.state).toBe("user-auth-unverifiable");
+      expect(partition([result]).warnings).toEqual([result]);
+      expect(partition([result], { strict: true }).failures).toEqual([result]);
+      expect(planMint(result, { allowRotate: true }).action).toBe("refuse");
+    }
+  });
+
+  test("every user-auth assessment refuses minting, even if a caller misclassifies it as a missing key", () => {
+    for (const state of ["user-auth-observed", "user-auth-failed", "user-auth-unverifiable", "missing", "rejected"] as const) {
+      for (const allowRotate of [false, true]) {
+        expect(planMint({ app: "nest", authMode: "user-oauth", state, detail: "" }, { allowRotate }).action).toBe("refuse");
+      }
+    }
+  });
+
+  test("the real provision command refuses all flags before any IO", async () => {
+    const calls: string[] = [];
+    const io: Io = {
+      readSecret: async () => { calls.push("secret"); return null; },
+      aws: async () => { calls.push("aws"); return ""; },
+      probe: async () => { calls.push("probe"); return 200; },
+    };
+    const error = console.error;
+    console.error = () => {};
+    try {
+      for (const flags of [[], ["--allow-rotate"], ["--dry-run"], ["--allow-rotate", "--manifest", "/not-a-mint-target"]]) {
+        expect(await main(["provision", "--app", "nest", ...flags], io)).toBe(1);
+      }
+    } finally { console.error = error; }
+    expect(calls).toEqual([]);
+  });
+
+  test("the real drift JSON and job output retain observed Nest without claiming a verified key", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-user-auth-"));
+    const output = path.join(directory, "output");
+    const previous = process.env.GITHUB_OUTPUT;
+    const log = console.log;
+    const printed: string[] = [];
+    process.env.GITHUB_OUTPUT = output;
+    console.log = (text) => { printed.push(String(text)); };
+    try {
+      expect(await main(["drift", "--apps", "nest", "--json", "--strict"], anonymousIo([200, 401]).io)).toBe(0);
+      const result = JSON.parse(printed[0]!);
+      expect(result.observed.map((a: KeyAssessment) => a.app)).toEqual(["nest"]);
+      expect(result.passes).toEqual([]);
+      expect(result.exempt).toEqual([]);
+      expect(fs.readFileSync(output, "utf8")).toContain("OBSERVED nest:");
+      expect(await main(["drift", "--apps", "nest", "--strict"], anonymousIo([200, 404]).io)).toBe(1);
+    } finally {
+      console.log = log;
+      if (previous === undefined) delete process.env.GITHUB_OUTPUT; else process.env.GITHUB_OUTPUT = previous;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("the actual anonymous HTTP transport never follows redirects or sends credentials", async () => {
+    const requests: Array<{ path: string; key: string | null; cookie: string | null; authorization: string | null }> = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const pathname = new URL(request.url).pathname;
+      requests.push({ path: pathname, key: request.headers.get("x-api-key"), cookie: request.headers.get("cookie"), authorization: request.headers.get("authorization") });
+      return pathname === "/redirect"
+        ? new Response(null, { status: 302, headers: { location: "/protected", "set-cookie": "test_only=1" } })
+        : new Response("test response body", { status: 401 });
+    } });
+    try {
+      const io = createIo({ timeoutMs: 1000 });
+      expect(await io.probe(`${server.url}redirect`, "test-only", { anonymousBoundary: true })).toBe(302);
+      expect(await io.probe(`${server.url}protected`, null, { anonymousBoundary: true })).toBe(401);
+      expect(requests).toEqual([
+        { path: "/redirect", key: null, cookie: null, authorization: null },
+        { path: "/protected", key: null, cookie: null, authorization: null },
+      ]);
+    } finally { server.stop(true); }
+  });
+});
+
 function entry(overrides: Record<string, unknown> = {}) {
   return { app: "widgets", source: "monorepo" as const, ...overrides };
 }
@@ -107,12 +280,12 @@ describe("registry: the written inventory of hosted apps", () => {
   });
 
   test("every key secret sits in the hasna/oss/<app>/api-key namespace", () => {
-    for (const app of registry) expect(app.keySecretId).toBe(keySecretIdFor(app.app));
+    for (const app of registry.filter((a) => a.authMode === "fleet-api-key")) expect(app.keySecretId).toBe(keySecretIdFor(app.app));
   });
 
   test("every probe path is absolute and every base URL is https", () => {
     for (const app of registry) {
-      expect(app.probePath.startsWith("/")).toBe(true);
+      if (app.authMode === "fleet-api-key") expect(app.probePath.startsWith("/")).toBe(true);
       expect(app.baseUrl.startsWith("https://")).toBe(true);
       expect(app.baseUrl.endsWith("/")).toBe(false);
     }
@@ -257,7 +430,7 @@ describe("assessment and partitioning", () => {
     expect(strict.failures.map((a) => a.app)).toEqual(["gone", "dead", "flaky"]);
     expect(strict.warnings).toEqual([]);
 
-    expect([...FAILING_STATES]).toEqual(["missing", "rejected"]);
+    expect([...FAILING_STATES]).toEqual(["missing", "rejected", "user-auth-failed"]);
   });
 
   test("no assessment detail can carry a key value — they are built from app names and statuses", () => {
@@ -302,6 +475,8 @@ describe("the #incidents report", () => {
 describe("checkApp drives the probe two-sidedly", () => {
   const app: FleetApp = {
     app: "messages",
+    authMode: "fleet-api-key",
+    targetClientBase: "https://api.hasna.com/messages",
     source: "monorepo",
     baseUrl: "https://api.hasna.com/messages",
     keySecretId: "hasna/oss/messages/api-key",
@@ -517,7 +692,7 @@ describe("rotation policy — what may overwrite a key every station holds", () 
   });
 
   test("every plan is decided for every state — no state falls through to a write", () => {
-    const states = ["verified", "exempt", "missing", "rejected", "unverifiable"] as const;
+    const states = ["verified", "exempt", "missing", "rejected", "unverifiable", "user-auth-observed", "user-auth-failed", "user-auth-unverifiable"] as const;
     for (const state of states) {
       for (const allowRotate of [false, true]) {
         const plan = planMint(assessed(state), { allowRotate });
@@ -1091,10 +1266,10 @@ test("probe transport selects bearer explicitly and never forwards keys through 
   } });
   try {
     const io = createIo({ timeoutMs: 3000 });
-    expect(await io.probe(origin.url.href, null, "bearer")).toBe(401);
-    expect(await io.probe(origin.url.href, "fixture-key", "bearer")).toBe(204);
+    expect(await io.probe(origin.url.href, null, { auth: "bearer" })).toBe(401);
+    expect(await io.probe(origin.url.href, "fixture-key", { auth: "bearer" })).toBe(204);
     expect(await io.probe(origin.url.href, "fixture-key")).toBe(204);
-    expect(await io.probe(new URL("/redirect", origin.url).href, "fixture-key", "bearer")).toBeNull();
+    expect(await io.probe(new URL("/redirect", origin.url).href, "fixture-key", { auth: "bearer" })).toBeNull();
     expect(redirected).toBe(0);
     expect(calls.slice(0, 3)).toEqual([
       { authorization: null, apiKey: null },
