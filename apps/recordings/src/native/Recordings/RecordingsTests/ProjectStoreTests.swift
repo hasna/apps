@@ -27,7 +27,7 @@ struct ProjectStoreTests {
     @Test("legacy app projects migrate to canonical Store ids without losing metadata")
     @MainActor
     func migratesProjectsToCanonicalStore() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = URL(fileURLWithPath: makeIsolatedTestHome("project-store"), isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let bin = root.appendingPathComponent(".bun/bin")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
@@ -80,7 +80,7 @@ struct ProjectStoreTests {
     @Test("duplicate legacy project ids reconcile without crashing or duplicating canonical rows")
     @MainActor
     func duplicateProjectIDsAreDeduplicated() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = URL(fileURLWithPath: makeIsolatedTestHome("project-store"), isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let bin = root.appendingPathComponent(".bun/bin")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
@@ -110,7 +110,7 @@ struct ProjectStoreTests {
     @Test("failed canonical registration preserves recording metadata and can be retried")
     @MainActor
     func failedRegistrationDoesNotDisableCaptureForAppLifetime() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = URL(fileURLWithPath: makeIsolatedTestHome("project-store"), isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let bin = root.appendingPathComponent(".bun/bin")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
@@ -180,7 +180,7 @@ struct ProjectStoreTests {
     @Test("adding a project preserves color in canonical local metadata")
     @MainActor
     func addProjectPreservesColor() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = URL(fileURLWithPath: makeIsolatedTestHome("project-store"), isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let bin = root.appendingPathComponent(".bun/bin")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
@@ -220,7 +220,7 @@ struct ProjectStoreTests {
     @Test("project mutations are rejected while canonical reconciliation is in flight")
     @MainActor
     func serializesReconciliationAndMutations() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = URL(fileURLWithPath: makeIsolatedTestHome("project-store"), isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let bin = root.appendingPathComponent(".bun/bin")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
@@ -257,7 +257,7 @@ struct ProjectStoreTests {
     @Test("project decode failures are visible and prevent readiness")
     @MainActor
     func reportsLoadFailure() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = URL(fileURLWithPath: makeIsolatedTestHome("project-store"), isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let file = root.appendingPathComponent("projects.json")
@@ -280,7 +280,7 @@ struct ProjectStoreTests {
     @Test("unreadable project data blocks every mutation without overwriting the file")
     @MainActor
     func unreadableDataBlocksMutations() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = URL(fileURLWithPath: makeIsolatedTestHome("project-store"), isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let file = root.appendingPathComponent("projects.json")
@@ -310,7 +310,7 @@ struct ProjectStoreTests {
     @Test("a project file that becomes unreadable after launch is never overwritten")
     @MainActor
     func postLaunchReadFailureBlocksMutations() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = URL(fileURLWithPath: makeIsolatedTestHome("project-store"), isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let file = root.appendingPathComponent("projects.json")
@@ -334,7 +334,7 @@ struct ProjectStoreTests {
     @Test("external project file changes are never replaced by stale in-memory settings")
     @MainActor
     func externalChangeBlocksMutations() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = URL(fileURLWithPath: makeIsolatedTestHome("project-store"), isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let file = root.appendingPathComponent("projects.json")
@@ -354,7 +354,7 @@ struct ProjectStoreTests {
     @Test("a stale app instance cannot overwrite a newer project save")
     @MainActor
     func staleStoreCannotOverwriteNewerSave() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = URL(fileURLWithPath: makeIsolatedTestHome("project-store"), isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let file = root.appendingPathComponent("projects.json")

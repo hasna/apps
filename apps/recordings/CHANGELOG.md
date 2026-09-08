@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+### Patch Changes
+
+- Ship the reviewed native streaming and paste-target fixes missing from the published 0.4.0 archive. Streaming adapters receive `inputEnded()` after PCM drains, and native capture freezes the intended paste target before the recorder takes focus. Include the native-core artifact receipt generator and universal macOS filesystem guard, with descriptor-relative extraction and supported-host path resolution fixes. Keep CLI, MCP, HTTP and SDK exports unchanged; retain the confined release test partitions and exclude test-only declarations from the package.
+
 ## 0.4.0
 
 ### Minor Changes
