@@ -7,9 +7,11 @@ export * from "./protocol.js";
 export function createIntakeClient(options: { binding: IntakeBinding; tenantId: string; env?: Record<string, string | undefined>; credentials?: CredentialChainOptions }) {
   const binding = Object.freeze(validateBinding(options.binding));
   const tenant = boundedText(options.tenantId, 256);
-  const { client } = createClientTransport("events", options.env ?? process.env, { credentials: options.credentials, retry: false, timeoutMs: 15_000 });
+  const { client, resolution } = createClientTransport("events", options.env ?? process.env, { credentials: options.credentials, retry: false, timeoutMs: 15_000 });
   const headers = { "x-events-sink-id": binding.sink_id, "x-events-producer-id": binding.producer_id, "x-events-corpus-id": binding.corpus_id, "x-events-source-authority-id": binding.source_authority_id, "x-events-tenant-id": tenant };
-  return {
+  return Object.freeze({
+    /** Canonical authority captured by this exact transport; contains no credential. */
+    baseUrl: resolution.baseUrl,
     async capability(): Promise<void> {
       const r = object(await intakeCapability(client, { headers, retry: false }));
       if (r.protocol !== INTAKE_PROTOCOL || r.tenant_id !== tenant || JSON.stringify(validateBinding(r)) !== JSON.stringify(binding) || typeof r.kid !== "string" || !r.kid) throw new IntakeError("intake_capability_mismatch", 502);
@@ -28,5 +30,5 @@ export function createIntakeClient(options: { binding: IntakeBinding; tenantId: 
       const response = await readReceipt(client, { headers, query: { event_id: request.event_id }, retry: false, signal });
       return validateReceipt(response, request, tenant);
     },
-  };
+  });
 }

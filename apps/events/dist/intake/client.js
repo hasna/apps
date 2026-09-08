@@ -244,9 +244,10 @@ function readReceipt(client, options) {
 function createIntakeClient(options) {
   const binding = Object.freeze(validateBinding(options.binding));
   const tenant = boundedText(options.tenantId, 256);
-  const { client } = createClientTransport("events", options.env ?? process.env, { credentials: options.credentials, retry: false, timeoutMs: 15000 });
+  const { client, resolution } = createClientTransport("events", options.env ?? process.env, { credentials: options.credentials, retry: false, timeoutMs: 15000 });
   const headers = { "x-events-sink-id": binding.sink_id, "x-events-producer-id": binding.producer_id, "x-events-corpus-id": binding.corpus_id, "x-events-source-authority-id": binding.source_authority_id, "x-events-tenant-id": tenant };
-  return {
+  return Object.freeze({
+    baseUrl: resolution.baseUrl,
     async capability() {
       const r = object(await intakeCapability(client, { headers, retry: false }));
       if (r.protocol !== INTAKE_PROTOCOL || r.tenant_id !== tenant || JSON.stringify(validateBinding(r)) !== JSON.stringify(binding) || typeof r.kid !== "string" || !r.kid)
@@ -266,7 +267,7 @@ function createIntakeClient(options) {
       const response = await readReceipt(client, { headers, query: { event_id: request.event_id }, retry: false, signal });
       return validateReceipt(response, request, tenant);
     }
-  };
+  });
 }
 export {
   validateRequest,
