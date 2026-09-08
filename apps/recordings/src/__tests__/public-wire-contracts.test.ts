@@ -11,6 +11,7 @@ const parsers: Record<string, stream.ContractParser<unknown>> = {
   renameInputParser: hosted.renameInputParser, pendingDeletionParser: hosted.pendingDeletionParser,
   streamControlParser: stream.streamControlParser, streamEventParser: stream.streamEventParser,
   recordingIDParser: stream.recordingIDParser,
+  healthResponseParser: hosted.healthResponseParser, readyResponseParser: hosted.readyResponseParser,
 };
 for (const fixture of vectors.cases) {
   test(`public wire fixture: ${fixture.parser}: ${fixture.name}`, () => {
