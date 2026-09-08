@@ -39,6 +39,8 @@
  */
 import {
   ClientTransportConfigurationError,
+  createClientTransport,
+  createHasnaHttpTransport,
   resolveClientTransport,
   resolveCredential,
   type ClientTransportResolution,
@@ -206,66 +208,101 @@ export function resolveTodosSdkTransport(
   };
 }
 
-/**
- * Build the hosted `/v1` client with the fleet resolver behind it — the
- * generated {@link TodosV1Client} takes an explicit `baseUrl` and has no
- * environment surface of its own, which left every caller writing a private
- * copy of the chain.
- *
- * Throws when no credential resolves: this client speaks only to the hosted
- * authority, so there is no local mode to degrade to.
- */
+/** The shared request binding used by both public SDK surfaces. */
+export function createTodosSdkRequestTransport(
+  options: ResolveTodosSdkTransportOptions & Pick<TodosV1ClientOptions, "fetch"> = {},
+  timeoutMs = 30_000,
+): { baseUrl: string; authenticated: boolean; apiKey: () => string | null; fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response> } {
+  const resolved = resolveTodosSdkTransport(options);
+  const fetchImpl = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
+  const pinned = Boolean(options.baseUrl) || resolved.mode === "local-serve";
+  if (pinned && !resolved.apiKey) {
+    // Explicit anonymous servers never consult the ambient credential chain.
+    // Preserve this library compatibility without attaching a station key.
+    return {
+      baseUrl: resolved.baseUrl,
+      authenticated: false,
+      apiKey: () => null,
+      async fetch(input, init) {
+        const request = new Request(input, init);
+        const target = new URL(request.url);
+        const base = new URL(resolved.baseUrl);
+        const path = base.pathname.replace(/\/$/, "");
+        if (target.origin !== base.origin || target.username || target.password || target.hash ||
+            (target.pathname !== path && !target.pathname.startsWith(`${path}/`)) || /%(?:2f|5c|25)/i.test(target.pathname)) {
+          throw new ClientTransportConfigurationError("todos", "The request URL is outside the configured application path.");
+        }
+        const controller = new AbortController();
+        const signal = AbortSignal.any([request.signal, controller.signal]);
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          signal.throwIfAborted();
+          return await fetchImpl(target.href, {
+            ...init, method: request.method, headers: Object.fromEntries(request.headers),
+            body: request.body, signal, redirect: "manual",
+            ...(request.body ? { duplex: "half" } : {}),
+          } as RequestInit);
+        } finally {
+          clearTimeout(timer);
+        }
+      },
+    };
+  }
+  const requestedCredentials: CredentialChainOptions = {
+    ...options.credentials,
+    ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
+  };
+  const rawEnv = options.env ?? process.env;
+  const prepare = () => {
+    if (pinned) return createHasnaHttpTransport({ name: "todos", baseUrl: resolved.baseUrl,
+      apiKey: resolved.apiKey!, fetchImpl, timeoutMs, retry: false });
+    // Normalize afresh for each request. A copied environment caused by a blank
+    // compatibility alias must never become the next request's configuration.
+    const { env, credentials } = todosResolverInputs(rawEnv, requestedCredentials);
+    return createClientTransport("todos", env, {
+      credentials, fetchImpl, timeoutMs, retry: false,
+    }).client;
+  };
+  const transport = prepare();
+  const baseUrl = stripV1(transport.baseUrl);
+  return {
+    baseUrl,
+    authenticated: true,
+    async fetch(input, init) {
+      const current = pinned ? transport : prepare();
+      if (current.baseUrl !== transport.baseUrl) {
+        throw new ClientTransportConfigurationError("todos", "The configured service authority changed; rebuild the client before sending credentials.");
+      }
+      return current.fetch(input, init);
+    },
+    apiKey: () => {
+      if (pinned) return resolved.apiKey;
+      // Compatibility metadata only. Dispatch always uses transport.fetch's
+      // complete shared authority/credential check, including pointer completion.
+      const fresh = resolveTodosSdkTransport({ ...options, notice: () => {} });
+      if (fresh.mode !== "http" || fresh.baseUrl !== baseUrl || !fresh.apiKey) {
+        throw new ClientTransportConfigurationError("todos", "The configured service authority changed; rebuild the client before sending credentials.");
+      }
+      return fresh.apiKey;
+    },
+  };
+}
+
+/** Build the generated hosted client using the same binding as raw SDK reads. */
 export function createTodosV1Client(
   options: ResolveTodosSdkTransportOptions & Pick<TodosV1ClientOptions, "fetch" | "headers"> = {},
 ): TodosV1Client {
-  const resolved = resolveTodosSdkTransport(options);
-  if (resolved.mode !== "http" || !resolved.apiKey) {
+  const transport = createTodosSdkRequestTransport(options);
+  if (!transport.authenticated) {
     throw new Error(
       "TODOS_CREDENTIAL_MISSING: the /v1 client is hosted-only and no Hasna Todos credential resolved. " +
         "Looked at HASNA_TODOS_API_KEY_OVERRIDE / HASNA_PROFILE / HASNA_TODOS_API_KEY_REF, the Keychain item " +
         "hasna.credentials.todos.api-key, ~/.hasna/todos/config/credentials, then HASNA_TODOS_API_KEY.",
     );
   }
-  // PER-CALL, NOT PER-CLIENT. `TodosV1Client` is generated from the OpenAPI
-  // document and stores whatever `apiKey` it is handed, so a client built once
-  // and held for hours would keep sending the key that happened to resolve at
-  // startup — the staleness the fresh-per-call chain exists to remove. Rather
-  // than fork the generated file, the credential is refreshed in a `fetch`
-  // wrapper: the generated request has already set `x-api-key` from its stored
-  // value by the time we see it, and we overwrite that header with the key the
-  // chain resolves NOW. A re-resolution that throws or comes back empty leaves
-  // the generated header in place, so a transient unreadable Keychain cannot
-  // turn a working client into a failing one mid-flight.
-  const baseFetch = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
-  // The per-request re-resolution must not TALK. It re-runs the same resolution
-  // that already succeeded above against the same environment, so any notice it
-  // produces is about a state this client is not in: a mid-flight degradation
-  // prints the "LOCAL mode — ... not the hosted fleet" line while the client is
-  // still addressing its original hosted authority with its constructed key.
-  // The refreshed credential is used; the commentary is dropped.
-  const refreshOptions: ResolveTodosSdkTransportOptions = { ...options, notice: () => {} };
-  const fetchWithFreshCredential = ((input: RequestInfo | URL, init?: RequestInit) => {
-    // Normalise whatever shape the init carries. The generated client hands us
-    // a plain record today, but that was asserted only in a comment: an object
-    // spread over a `Headers` instance or a tuple array yields `{}` and would
-    // silently drop EVERY header, Content-Type included, the moment the client
-    // is regenerated. `Headers` normalises all three shapes for us.
-    const headers: Record<string, string> = {};
-    new Headers(init?.headers ?? {}).forEach((value, key) => {
-      headers[key] = value;
-    });
-    try {
-      const fresh = resolveTodosSdkTransport(refreshOptions).apiKey;
-      if (fresh) headers["x-api-key"] = fresh;
-    } catch {
-      // keep the credential the client was constructed with
-    }
-    return baseFetch(input, { ...init, headers });
-  }) as typeof fetch;
   return new TodosV1Client({
-    baseUrl: resolved.baseUrl,
-    apiKey: resolved.apiKey,
-    fetch: fetchWithFreshCredential,
+    baseUrl: transport.baseUrl,
+    fetch: transport.fetch as typeof fetch,
     ...(options.headers ? { headers: options.headers } : {}),
   });
 }

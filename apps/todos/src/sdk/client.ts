@@ -68,7 +68,8 @@ import {
   TodosRateLimitError,
   TodosTimeoutError,
 } from "./types.js";
-import { resolveTodosSdkTransport } from "./resolve.js";
+import { createTodosSdkRequestTransport } from "./resolve.js";
+import { ClientTransportConfigurationError, CredentialResolutionError } from "@hasna/contracts/client";
 import type {
   AdmitPrGroupInput,
   AppendPrGroupEventInput,
@@ -521,15 +522,7 @@ export class TodosClient {
   readonly maxRetries: number;
   readonly retryDelay: number;
 
-  /** Tier 1: an `apiKey` argument is a deliberate pin and is never re-resolved. */
-  private readonly explicitApiKey: string | undefined;
-  /** The credential the chain produced at construction — the floor, never the answer. */
-  private readonly constructedApiKey: string | null;
-  /**
-   * Tier 1 named the authority, so this client is pinned to it and the ambient
-   * credential chain is never consulted again. See {@link currentApiKey}.
-   */
-  private readonly pinnedAuthority: boolean;
+  private readonly transport: ReturnType<typeof createTodosSdkRequestTransport>;
 
   /** Namespaced resource accessors */
   readonly tasks: TasksResource;
@@ -542,19 +535,12 @@ export class TodosClient {
   readonly prGroups: PrGroupsResource;
 
   constructor(options: TodosClientOptions = {}) {
-    // ONE resolver, no private chain: `TODOS_URL` and the `apiKey` field in
-    // ~/.todos/config.json are gone (hasna/apps#1720). See ./resolve.ts for the
-    // five tiers and for why the local serve is reachable only when nothing
-    // resolves or the operator opted in.
-    const resolved = resolveTodosSdkTransport({
+    this.timeout = options.timeout ?? 10000;
+    this.transport = createTodosSdkRequestTransport({
       ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
       ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
-    });
-    this.baseUrl = resolved.baseUrl;
-    this.timeout = options.timeout ?? 10000;
-    this.explicitApiKey = options.apiKey;
-    this.constructedApiKey = resolved.apiKey;
-    this.pinnedAuthority = Boolean(options.baseUrl);
+    }, this.timeout);
+    this.baseUrl = this.transport.baseUrl;
     this.maxRetries = options.maxRetries ?? 0;
     this.retryDelay = options.retryDelay ?? 1000;
 
@@ -580,80 +566,12 @@ export class TodosClient {
 
   /** Raw fetch — for endpoints that don't return JSON (text, CSV, SSE) */
   async _fetchRaw(url: string, init?: RequestInit): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeout);
-    try {
-      const headers = this._buildHeaders(init?.headers);
-      return await fetch(url, { ...init, headers, signal: controller.signal });
-    } finally {
-      clearTimeout(timer);
-    }
+    return this.transport.fetch(url, init);
   }
 
-  /**
-   * The credential to send RIGHT NOW, re-resolved through the @hasna/contracts
-   * chain rather than read from a snapshot.
-   *
-   * The chain is defined as fresh-per-call precisely so a rotation takes effect
-   * inside a long-lived process: an agent that built one `TodosClient` at start
-   * up and holds it for hours must pick up the new key from the Keychain or
-   * `~/.hasna/todos/config/credentials` without being restarted. Snapshotting
-   * here would reintroduce exactly the staleness the ruling removed.
-   *
-   * Two things are deliberately NOT re-resolved. An explicit `apiKey` argument
-   * is tier 1 — a deliberate pin the caller owns — and the authority is fixed
-   * for the life of the client, because a credential written for one authority
-   * must never be sent to another; rebuild the client to change it.
-   *
-   * THE AUTHORITY PIN IS ENFORCED HERE, NOT ONLY PROMISED. `baseUrl` is a
-   * public option, so `new TodosClient({ baseUrl: X })` with no `apiKey` is a
-   * caller pointing this client at an authority of their choosing — a local
-   * `todos-serve`, a staging box, a test double, any URL at all. The ambient
-   * chain (Keychain, ~/.hasna/todos/config/credentials, HASNA_TODOS_API_KEY)
-   * holds the credential written for the FLEET, and re-resolving it here would
-   * attach the station's hosted key as `x-api-key` on every request to X. That
-   * is the exact leak the "fixed for the life of a client" rule exists to
-   * prevent, so when tier 1 named the authority this returns the credential the
-   * client was CONSTRUCTED with — `options.apiKey`, or nothing — and never asks
-   * the chain again. Rotation-freshness is a hosted-authority property; a
-   * caller who pinned the authority pins the credential with it.
-   *
-   * A re-resolution that throws or comes back empty falls back to the
-   * credential this client was built with: a transient unreadable Keychain must
-   * not turn a working client into a failing one mid-flight, and the request
-   * itself still surfaces a 401 if the old key is genuinely dead.
-   */
-  private currentApiKey(): string | null {
-    if (this.explicitApiKey !== undefined) return this.explicitApiKey;
-    if (this.pinnedAuthority) return this.constructedApiKey;
-    try {
-      const fresh = resolveTodosSdkTransport({ notice: () => {} }).apiKey;
-      if (fresh) return fresh;
-    } catch {
-      // fall through to the constructed credential
-    }
-    return this.constructedApiKey;
-  }
-
-  /** The credential this client would send now. Re-resolved, never a stale snapshot. */
+  /** Compatibility metadata; dispatch uses the shared authority-bound transport. */
   get apiKey(): string | null {
-    return this.currentApiKey();
-  }
-
-  private _buildHeaders(existing?: HeadersInit): Record<string, string> {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    const apiKey = this.currentApiKey();
-    if (apiKey) headers["x-api-key"] = apiKey;
-    if (existing) {
-      if (existing instanceof Headers) {
-        existing.forEach((v, k) => { headers[k] = v; });
-      } else if (Array.isArray(existing)) {
-        for (const [k, v] of existing) headers[k] = v;
-      } else {
-        Object.assign(headers, existing);
-      }
-    }
-    return headers;
+    return this.transport.apiKey();
   }
 
   private async _fetchWithRetry<T>(path: string, init?: RequestInit): Promise<T> {
@@ -665,6 +583,7 @@ export class TodosClient {
         return await this._fetch<T>(path, init);
       } catch (e) {
         lastError = e as Error;
+        if (e instanceof ClientTransportConfigurationError || e instanceof CredentialResolutionError) throw e;
         if (e instanceof TodosAPIError && e.status < 500 && e.status !== 429) throw e;
         if (e instanceof TodosUnauthorizedError || e instanceof TodosNotFoundError || e instanceof TodosConflictError) throw e;
 
@@ -686,8 +605,10 @@ export class TodosClient {
     const timer = setTimeout(() => controller.abort(), this.timeout);
     try {
       const url = `${this.baseUrl}${path}`;
-      const headers = this._buildHeaders(init?.headers);
-      const res = await fetch(url, { ...init, headers, signal: controller.signal });
+      const headers = new Headers(init?.headers);
+      if (!headers.has("content-type")) headers.set("content-type", "application/json");
+      const signal = init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal;
+      const res = await this.transport.fetch(url, { ...init, headers, signal });
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };

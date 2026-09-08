@@ -503,6 +503,7 @@ function protectRemoteClient(client: HasnaStorageClient, requestTimeoutMs: numbe
   ): Promise<T> => withBoundedRemoteRequest(options, requestTimeoutMs, run);
   const transport = client.transport;
   const protectedTransport = {
+    ...transport,
     baseUrl: transport.baseUrl,
     request: <T = unknown>(method: string, path: string, body?: unknown, options?: Parameters<typeof transport.request>[3]) =>
       protect(path, () => bounded(options, (opts) => transport.request<T>(method, path, body, opts))),

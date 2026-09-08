@@ -26,6 +26,14 @@ tier 1 — a pin the caller owns — and the **service authority is fixed for th
 life of a client**, because a credential written for one authority must never be
 sent to another; build a new client to point somewhere else.
 
+Both `TodosClient` and `createTodosV1Client` reject a changed authority, removed
+credential, or invalid replacement before sending another request. They do not
+fall back to the key captured at construction. Raw CSV, text and SSE responses
+use the same shared transport and retain their status, headers and unread body.
+Caller authentication headers are refused and redirects are returned without
+following them. The namespaced client's configured JSON retry policy remains
+in effect; raw reads do not retry.
+
 That second rule binds the credential too. `new TodosClient({ baseUrl })` with
 no `apiKey` pins the authority *and* sends no credential at all: the key in your
 Keychain or `~/.hasna/todos/config/credentials` was written for the fleet, so it

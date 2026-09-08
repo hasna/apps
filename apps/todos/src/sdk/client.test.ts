@@ -191,15 +191,13 @@ describe("TodosClient local API config", () => {
     delete process.env["HASNA_TODOS_API_KEY"];
   });
 
-  test("a credential that stops resolving mid-flight does not break a working client", async () => {
+  test("a credential that becomes unsafe fails before dispatch without a stale fallback", async () => {
     // `test/setup.ts` sets the local opt-in on this process, and a configured
     // ENVIRONMENT is what outranks it — the disk tier alone does not. Declaring
     // a decoy env key routes hosted; the disk tier still outranks it.
     process.env["HASNA_TODOS_API_KEY"] = "env-token";
 
-    // A transient unreadable store must not convert a live client into a
-    // failing one; the request still carries the credential it was built with,
-    // and a genuinely dead key surfaces as the server's 401.
+    // A newly unsafe store cannot authorize another request with the old key.
     const file = join(fakeHome, ".hasna", "todos", "config", "credentials");
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, "HASNA_TODOS_API_KEY=disk-token\nHASNA_TODOS_API_URL=https://disk.todos.example\n", { mode: 0o600 });
@@ -214,9 +212,9 @@ describe("TodosClient local API config", () => {
     await client.tasks.list();
     // Make the file unsafe: the chain now REFUSES rather than resolving.
     chmodSync(file, 0o644);
-    await client.tasks.list();
+    await expect(client.tasks.list()).rejects.toThrow(/Refusing unsafe credential/);
 
-    expect(sent).toEqual(["disk-token", "disk-token"]);
+    expect(sent).toEqual(["disk-token"]);
     delete process.env["HASNA_TODOS_API_KEY"];
   });
 
