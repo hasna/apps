@@ -3,6 +3,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
 
 import type { PortableSkillManifest } from "./portable-skills-types.js";
+import type { SkillBundleEntry } from "./skill-bundle.js";
+import { SkillEntryPaths } from "./skill-entry-path.js";
 
 /**
  * Canonical content hashing for the hasna.skill.v1 portable bundle.
@@ -24,6 +26,10 @@ export const CONTENT_HASH_HEX_LENGTH = 64;
 
 /** Top-level and nested directories that never belong to the hashed bundle. */
 const HASH_EXCLUDE_DIRS = new Set([".git", "node_modules", "dist", "build", ".turbo"]);
+
+function excludedHashEntry(name: string, directory: boolean): boolean {
+  return name.startsWith(".") || (directory && HASH_EXCLUDE_DIRS.has(name));
+}
 
 /** Relative paths (from the skill root) covered by the hash. */
 const HASH_COVERAGE = [
@@ -120,7 +126,7 @@ function collectDirectory(files: BundleFile[], dir: string, rel: string): void {
     }
     if (stats.isSymbolicLink()) continue;
     if (stats.isDirectory()) {
-      if (HASH_EXCLUDE_DIRS.has(entry)) continue;
+      if (excludedHashEntry(entry, true)) continue;
       collectDirectory(files, absolute, childRel);
     } else if (stats.isFile()) {
       collectFile(files, absolute, childRel);
@@ -130,16 +136,18 @@ function collectDirectory(files: BundleFile[], dir: string, rel: string): void {
 
 function collectFile(files: BundleFile[], absolute: string, rel: string): void {
   const buffer = readFileSync(absolute);
+  files.push(normalizeBundleFile(rel.split(sep).join("/"), buffer));
+}
+
+function normalizeBundleFile(rel: string, buffer: Uint8Array): BundleFile {
   if (rel === "skill.json") {
-    files.push({ rel: rel.split(sep).join("/"), content: new TextEncoder().encode(canonicalizeManifest(new TextDecoder().decode(buffer))) });
-    return;
+    return { rel, content: new TextEncoder().encode(canonicalizeManifest(new TextDecoder().decode(buffer))) };
   }
   if (looksLikeText(buffer)) {
     const normalized = normalizeLineEndings(new TextDecoder().decode(buffer));
-    files.push({ rel: rel.split(sep).join("/"), content: new TextEncoder().encode(normalized) });
-    return;
+    return { rel, content: new TextEncoder().encode(normalized) };
   }
-  files.push({ rel: rel.split(sep).join("/"), content: buffer });
+  return { rel, content: buffer };
 }
 
 /**
@@ -147,14 +155,41 @@ function collectFile(files: BundleFile[], absolute: string, rel: string): void {
  * platforms: sorted posix paths, LF line endings, canonicalized manifest.
  */
 export function computeContentHash(skillPath: string): string {
-  const hash = createHash(CONTENT_HASH_ALGORITHM);
-  for (const file of collectBundleFiles(skillPath)) {
-    hash.update(new TextEncoder().encode(file.rel));
-    hash.update(new TextEncoder().encode(`\0${file.content.length}\0`));
-    hash.update(file.content);
-    hash.update(new TextEncoder().encode("\0"));
+  return hashBundleFiles(collectBundleFiles(skillPath));
+}
+
+function* bundleHashParts(files: readonly BundleFile[]): Generator<Uint8Array> {
+  for (const file of files) {
+    yield new TextEncoder().encode(file.rel);
+    yield new TextEncoder().encode(`\0${file.content.length}\0`);
+    yield file.content;
+    yield new TextEncoder().encode("\0");
   }
-  hash.update(new TextEncoder().encode("\0"));
+  yield new TextEncoder().encode("\0");
+}
+
+function hashBundleFiles(files: readonly BundleFile[]): string {
+  const hash = createHash(CONTENT_HASH_ALGORITHM);
+  for (const part of bundleHashParts(files)) hash.update(part);
+  return hash.digest("hex");
+}
+
+async function hashBundleFilesCooperatively(files: readonly BundleFile[], check: () => void): Promise<string> {
+  const hash = createHash(CONTENT_HASH_ALGORITHM);
+  let bytesSinceYield = 0;
+  for (const part of bundleHashParts(files)) {
+    for (let offset = 0; offset < part.byteLength; offset += 64 * 1024) {
+      check();
+      const chunk = part.subarray(offset, offset + 64 * 1024);
+      hash.update(chunk);
+      bytesSinceYield += chunk.byteLength;
+      if (bytesSinceYield >= 256 * 1024) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        bytesSinceYield = 0;
+      }
+    }
+  }
+  check();
   return hash.digest("hex");
 }
 
@@ -167,6 +202,197 @@ export interface ContentHashVerification {
   declaredHash?: string;
   /** The recomputed hash over the current bundle. */
   computedHash?: string;
+}
+
+export interface ContentHashLimits {
+  entries: number;
+  rawBytes: number;
+  normalizedBytes: number;
+  fileBytes: number;
+  normalizedFileBytes: number;
+  pathBytes: number;
+  manifestBytes: number;
+  manifestDepth: number;
+  timeoutMs: number;
+}
+
+/** Hard ceilings for the entry API. Callers may tighten these, never disable them. */
+export const CONTENT_HASH_LIMITS: Readonly<ContentHashLimits> = Object.freeze({
+  entries: 1024,
+  rawBytes: 64 * 1024 * 1024,
+  normalizedBytes: 64 * 1024 * 1024,
+  fileBytes: 16 * 1024 * 1024,
+  normalizedFileBytes: 16 * 1024 * 1024,
+  pathBytes: 100,
+  manifestBytes: 16 * 1024,
+  manifestDepth: 64,
+  timeoutMs: 5000,
+});
+
+export interface ContentHashOptions {
+  limits?: Partial<ContentHashLimits>;
+  signal?: AbortSignal;
+}
+
+export type ContentHashInputErrorCode = "CONTENT_HASH_INVALID" | "CONTENT_HASH_LIMIT" | "CONTENT_HASH_ABORTED" | "CONTENT_HASH_TIMEOUT";
+export class ContentHashInputError extends Error {
+  constructor(readonly code: ContentHashInputErrorCode, message: string) {
+    super(message);
+    this.name = "ContentHashInputError";
+  }
+}
+
+function invalidContent(message = "Invalid content hash input"): never {
+  throw new ContentHashInputError("CONTENT_HASH_INVALID", message);
+}
+function contentLimit(message: string): never {
+  throw new ContentHashInputError("CONTENT_HASH_LIMIT", message);
+}
+
+/** Ordinary data records only; accessor properties are refused without invoking them. */
+function contentRecord(value: unknown, allowed: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== "object" || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) invalidContent();
+  const result: Record<string, unknown> = Object.create(null);
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string" || !allowed.includes(key)) invalidContent();
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor)) invalidContent("Accessor content hash input is unsupported");
+    result[key] = descriptor.value;
+  }
+  return result;
+}
+
+function contentOptions(options: ContentHashOptions): { limits: ContentHashLimits; signal?: AbortSignal } {
+  const record = contentRecord(options, ["limits", "signal"]);
+  const limits = { ...CONTENT_HASH_LIMITS };
+  if (record.limits !== undefined) {
+    const supplied = contentRecord(record.limits, Object.keys(limits));
+    for (const key of Object.keys(supplied) as (keyof ContentHashLimits)[]) {
+      const value = supplied[key];
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > limits[key]) contentLimit("Invalid content hash limit");
+      limits[key] = value;
+    }
+  }
+  if (record.signal !== undefined && !(record.signal instanceof AbortSignal)) invalidContent("Invalid content hash signal");
+  return { limits, signal: record.signal as AbortSignal | undefined };
+}
+
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const byteLengthOf = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength")!.get!;
+const bufferOf = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer")!.get!;
+
+function snapshotContentEntries(entries: readonly SkillBundleEntry[], limits: ContentHashLimits, check: () => void): SkillBundleEntry[] {
+  if (!Array.isArray(entries)) invalidContent("Content hash entries must be an array");
+  if (entries.length > limits.entries) contentLimit("Content hash entry limit exceeded");
+  if (Reflect.ownKeys(entries).length !== entries.length + 1) invalidContent("Invalid content hash entry array");
+  const snapshot: SkillBundleEntry[] = [];
+  const paths = new SkillEntryPaths();
+  let rawBytes = 0;
+  for (let index = 0; index < entries.length; index++) {
+    check();
+    const descriptor = Object.getOwnPropertyDescriptor(entries, String(index));
+    if (!descriptor || !("value" in descriptor)) invalidContent("Invalid content hash entry array");
+    const entry = contentRecord(descriptor.value, ["path", "bytes", "mode"]);
+    if (typeof entry.path !== "string" || typeof entry.mode !== "number" || !Number.isInteger(entry.mode) || entry.mode < 0 || entry.mode > 0o777) invalidContent("Invalid regular-file content hash entry");
+    paths.add(entry.path, limits.pathBytes, invalidContent, () => contentLimit("Content hash path limit exceeded"));
+    if (!(entry.bytes instanceof Uint8Array) || !ArrayBuffer.isView(entry.bytes)) invalidContent("Content hash entry requires bytes");
+    const size: number = byteLengthOf.call(entry.bytes);
+    if (!(bufferOf.call(entry.bytes) instanceof ArrayBuffer)) invalidContent("Shared content hash bytes are unsupported");
+    if (size > limits.fileBytes || rawBytes + size > limits.rawBytes) contentLimit("Content hash raw byte limit exceeded");
+    if (entry.path === "skill.json" && size > limits.manifestBytes) contentLimit("Content hash manifest byte limit exceeded");
+    rawBytes += size;
+    const bytes = new Uint8Array(new ArrayBuffer(size));
+    bytes.set(entry.bytes);
+    snapshot.push({ path: entry.path, bytes, mode: entry.mode });
+  }
+  check();
+  return snapshot;
+}
+
+/** Match the directory collector, not the archive packer's different exclusions. */
+function coveredContentPath(path: string): boolean {
+  const segments = path.split("/");
+  if (!(HASH_COVERAGE as readonly string[]).includes(segments[0]!)) return false;
+  return !segments.slice(1).some((segment, index) => excludedHashEntry(segment, index < segments.length - 2));
+}
+
+function boundedManifest(raw: string, maxDepth: number): unknown {
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return undefined; }
+  const pending = [{ value: parsed, depth: 1 }];
+  while (pending.length) {
+    const { value, depth } = pending.pop()!;
+    if (!value || typeof value !== "object") continue;
+    if (depth > maxDepth) contentLimit("Content hash manifest depth limit exceeded");
+    for (const child of Object.values(value)) pending.push({ value: child, depth: depth + 1 });
+  }
+  return parsed;
+}
+
+async function hashContentEntries(entries: readonly SkillBundleEntry[], options: ContentHashOptions): Promise<{ hash: string; manifest: unknown }> {
+  const { limits, signal } = contentOptions(options);
+  const deadline = performance.now() + limits.timeoutMs;
+  let terminal: ContentHashInputError | undefined;
+  const abort = () => { terminal ??= new ContentHashInputError("CONTENT_HASH_ABORTED", "Content hashing aborted"); };
+  const timer = setTimeout(() => { terminal ??= new ContentHashInputError("CONTENT_HASH_TIMEOUT", "Content hashing deadline exceeded"); }, limits.timeoutMs);
+  const check = () => {
+    if (signal?.aborted) abort();
+    if (terminal) throw terminal;
+    if (performance.now() >= deadline) throw new ContentHashInputError("CONTENT_HASH_TIMEOUT", "Content hashing deadline exceeded");
+  };
+  try {
+    signal?.addEventListener("abort", abort, { once: true });
+    check();
+    // All caller bytes are captured before the first yield. Shared buffers are refused.
+    const snapshot = snapshotContentEntries(entries, limits, check);
+    const normalized: BundleFile[] = [];
+    let normalizedBytes = 0;
+    let manifest: unknown;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    for (const entry of snapshot) {
+      check();
+      if (!coveredContentPath(entry.path)) continue;
+      if (entry.path === "skill.json") manifest = boundedManifest(new TextDecoder().decode(entry.bytes), limits.manifestDepth);
+      const file = normalizeBundleFile(entry.path, entry.bytes);
+      check();
+      if (file.content.byteLength > limits.normalizedFileBytes || normalizedBytes + file.content.byteLength > limits.normalizedBytes) contentLimit("Content hash normalized byte limit exceeded");
+      normalizedBytes += file.content.byteLength;
+      normalized.push(file);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    normalized.sort((a, b) => a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0);
+    check();
+    return { hash: await hashBundleFilesCooperatively(normalized, check), manifest };
+  } catch (error) {
+    if (error instanceof ContentHashInputError) throw error;
+    throw new ContentHashInputError("CONTENT_HASH_INVALID", "Invalid content hash input");
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
+/**
+ * Hash bounded ordinary regular-file entries without filesystem access or extraction.
+ * Entries are revalidated and copied, even if supplied by inspectSkillBundle. This is
+ * content identity, not manifest validity, permission to execute, or a JS sandbox.
+ * Text uses the directory oracle's nonfatal UTF-8/LF normalization. Excluded paths
+ * still count toward input limits and collision checks. Inputs are never mutated.
+ */
+export async function computeContentHashFromEntries(entries: readonly SkillBundleEntry[], options: ContentHashOptions = {}): Promise<string> {
+  return (await hashContentEntries(entries, options)).hash;
+}
+
+/** Verify only the declaration in the same owned skill.json, never a second manifest. */
+export async function verifyContentHashFromEntries(entries: readonly SkillBundleEntry[], options: ContentHashOptions = {}): Promise<ContentHashVerification> {
+  const { hash, manifest } = await hashContentEntries(entries, options);
+  const provenance = manifest && typeof manifest === "object" && !Array.isArray(manifest) ? (manifest as Record<string, unknown>).provenance : undefined;
+  const value = provenance && typeof provenance === "object" && !Array.isArray(provenance) ? (provenance as Record<string, unknown>).content_hash : undefined;
+  if (value !== undefined && typeof value !== "string") invalidContent("Invalid content hash declaration");
+  const declaredHash = (value as string | undefined)?.trim() || undefined;
+  if (!declaredHash) return { declared: false, valid: false };
+  if (!/^[a-f0-9]{64}$/.test(declaredHash)) return { declared: true, valid: false, declaredHash };
+  return { declared: true, valid: hash === declaredHash, declaredHash, computedHash: hash };
 }
 
 /**

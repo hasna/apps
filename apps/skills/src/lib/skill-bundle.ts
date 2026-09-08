@@ -19,6 +19,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { createGunzip, type ZlibOptions } from "node:zlib";
 import type { TransformOptions } from "node:stream";
+import { SkillEntryPaths } from "./skill-entry-path.js";
 
 /** ustar block size. Every header and every file body is padded up to a multiple of it. */
 const BLOCK = 512;
@@ -549,8 +550,7 @@ class BoundedTarReader {
   private padding = 0;
   private zeroBlocks = 0;
   private readonly entries: SkillBundleEntry[] = [];
-  private readonly paths = new Set<string>();
-  private readonly directories = new Set<string>();
+  private readonly paths = new SkillEntryPaths();
   fileBytes = 0;
   constructor(private readonly limits: SkillBundleInspectionLimits, private readonly check: () => void) {}
   push(chunk: Uint8Array): void {
@@ -615,20 +615,9 @@ class BoundedTarReader {
     let path: string;
     try { path = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(raw); }
     catch { return invalidBundle("Invalid UTF-8 bundle path"); }
-    if (!path || /[\\:\x00-\x1f\x7f]/u.test(path)) invalidBundle("Unsafe bundle path");
-    const segments = path.split("/");
-    if (segments.some((s) => !s || s === "." || s === "..")) invalidBundle("Unsafe bundle path segment");
-    const key = path.normalize("NFC").toLowerCase().normalize("NFC");
-    if (this.paths.has(key) || this.directories.has(key)) invalidBundle("Duplicate or conflicting bundle path");
-    const parents = key.split("/");
-    parents.pop();
-    while (parents.length) {
-      const parent = parents.join("/");
-      if (this.paths.has(parent)) invalidBundle("Conflicting bundle file ancestor");
-      this.directories.add(parent);
-      parents.pop();
-    }
-    this.paths.add(key);
+    this.paths.add(path, this.limits.pathBytes, invalidBundle, () => {
+      throw new SkillBundleInspectionError("BUNDLE_LIMIT", "Bundle path byte limit exceeded");
+    });
     this.fileBytes += size;
     this.pending = { path, mode, bytes: new Uint8Array(new ArrayBuffer(size)) };
     this.bodyOffset = 0;

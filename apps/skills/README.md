@@ -1031,3 +1031,44 @@ unbounded results. `RemoteWorkspaceInvitationUnconfirmedError` requires explicit
 reconciliation of a mutation; it never triggers automatic replay. These adapters
 require service and real recipient acceptance testing before invitations can be
 offered as a live product capability.
+
+### Content identity without extraction
+
+`computeContentHashFromEntries` and `verifyContentHashFromEntries` are available
+from the root package and `@hasna/skills/sdk`. They consume regular-file entries
+such as the result of `inspectSkillBundle`, revalidate their shape and paths, and
+copy their bytes before yielding. Neither function reads a directory, extracts
+files, changes the supplied entries, or authorizes code execution.
+
+```ts
+import { inspectSkillBundle, computeContentHashFromEntries,
+  verifyContentHashFromEntries, revisionIdOf } from "@hasna/skills/sdk";
+
+const inspected = await inspectSkillBundle(uploadBytes, { signal });
+const contentHash = await computeContentHashFromEntries(inspected.entries, { signal });
+const verification = await verifyContentHashFromEntries(inspected.entries, { signal });
+```
+
+Verification reads `provenance.content_hash` from the same captured `skill.json`;
+it cannot accept a second manifest in place of those bytes. Manifest field
+validation remains a separate operation. `revisionIdOf` and `RevisionContent`
+expose the existing revision identity, whose optional fields default to null and
+whose published tag order matters. An archive SHA, canonical content hash and
+published revision ID describe different identities and are not interchangeable.
+
+The entry functions preserve the directory hash's coverage, LF normalization,
+binary handling, manifest self-hash removal, ordering and serialization. The
+archive packer has a different exclusion policy; hashing inspected entries does
+not add excluded files back into an archive. Existing directory functions remain
+synchronous and retain their previous behavior.
+
+`CONTENT_HASH_LIMITS` caps input at 1,024 entries, 64 MiB raw and normalized
+content, 16 MiB per raw/normalized file, 100 UTF-8 bytes per path, a 16 KiB root
+manifest with nesting depth 64, and a five-second deadline. Callers may lower
+these limits through `ContentHashOptions`; zero and values above the ceilings
+are refused. Excluded entries still count toward raw limits and path-collision
+checks. Paths must be canonical and distinct under NFC/case folding; shared
+buffers and accessor-backed entry fields are refused. This validates ordinary
+untrusted byte entries, not arbitrary JavaScript proxies or hostile host code.
+`ContentHashInputError` reports fixed invalid-input, limit, abort or timeout codes
+without including file contents or paths in its messages.

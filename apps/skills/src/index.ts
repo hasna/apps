@@ -276,10 +276,19 @@ export {
 export {
   canonicalizeManifest,
   computeContentHash,
+  computeContentHashFromEntries,
+  verifyContentHashFromEntries,
+  CONTENT_HASH_LIMITS,
+  ContentHashInputError,
+  type ContentHashLimits,
+  type ContentHashOptions,
+  type ContentHashInputErrorCode,
   normalizeLineEndings,
   verifyContentHash,
   type ContentHashVerification,
 } from "./lib/skill-hash.js";
+
+export { revisionIdOf, type RevisionContent } from "./lib/revision.js";
 
 export {
   validatePortableManifestContract,
