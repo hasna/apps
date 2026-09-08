@@ -82,7 +82,7 @@ export interface ProjectResource { "source_project_id": string; "kind": "project
 
 export interface ProjectResourcePage { "authority": "todos"; "route": "todos.project-registration.v1"; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "source_project_id": string; "todos_project_id": string; "task_list_id": string; "include_anchors": boolean; "collection_revision": string; "limit": number; "count": number; "resources": Array<ProjectResource>; "has_more": boolean; "next_cursor": string | null; "complete": boolean; "truncated": false }
 
-export interface TaskList { "id"?: string; "project_id"?: string | null; "slug"?: string; "name"?: string; "description"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
+export interface TaskList { "status"?: "active" | "completed" | "archived"; "id"?: string; "project_id"?: string | null; "slug"?: string; "name"?: string; "description"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
 export interface ProjectTaskListEnsureReceipt { "schema_version": "todos.project-task-list-ensure.v1"; "receipt_id": string; "idempotency_key": string; "project_id": string; "task_list_id": string; "slug": string; "created_by_operation": boolean; "result_revision": string; "result_digest": string; "rollback_supported": boolean; "created_at": string }
 
@@ -142,9 +142,9 @@ export interface PlanProjectLinkConflictResponse { "error": string; "code"?: str
 
 export interface ErrorResponse { "error": string; "code"?: string; "conflict"?: boolean }
 
-export interface CreateTaskListInput { "name": string; "slug"?: string; "project_id"?: string; "description"?: string; "metadata"?: Record<string, unknown> }
+export interface CreateTaskListInput { "status"?: "active" | "completed" | "archived"; "name": string; "slug"?: string; "project_id"?: string; "description"?: string; "metadata"?: Record<string, unknown> }
 
-export interface UpdateTaskListInput { "slug"?: string; "name"?: string; "description"?: string; "metadata"?: Record<string, unknown>; "project_id"?: string | null }
+export interface UpdateTaskListInput { "status"?: "active" | "completed" | "archived"; "slug"?: string; "name"?: string; "description"?: string; "metadata"?: Record<string, unknown>; "project_id"?: string | null }
 
 export interface CreateTaskCommentInput { "content": string; "agent_id"?: string; "session_id"?: string; "type"?: "comment" | "progress" | "note"; "progress_pct"?: number }
 
@@ -654,6 +654,15 @@ export class TodosV1Client {
     /** Update a task list */
     async updateTaskList(id: string, body: UpdateTaskListInput, init?: RequestInit): Promise<{ "task_list"?: TaskList }> {
       return this.request("PATCH", `/v1/task-lists/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete a task list, optionally detaching linked tasks and plans while retaining their content and history */
+    async deleteTaskListPreserving(id: string, body: { "force"?: boolean }, init?: RequestInit): Promise<{ "schema_version": 1; "task_list_id": string; "deleted": boolean; "detached_task_ids": Array<string>; "detached_plan_ids": Array<string>; "detached_tasks": number; "detached_plans": number }> {
+      return this.request("POST", `/v1/task-lists/${encodeURIComponent(String(id))}/delete-preserving`, {
         body,
         query: undefined,
         init,

@@ -1,4 +1,5 @@
 // @ts-nocheck
+import {assertTaskListReceipt, listSharedTaskLists, resolveSharedTaskList, deleteSharedTaskList} from "../task-list-api.js";
 import {normalizeSlug} from "../../lib/slugs.js";
 import {deleteSharedPlan, assertPlanReceipt, listSharedPlans} from "../plan-api.js";
 import { cloudQueryTasks } from "../../cli/task-query-api.js";
@@ -29,6 +30,7 @@ import {
 import {
   getTodosCloudClient,
   cloudTaskAction,
+  cloudCreateTaskList, cloudUpdateTaskList, cloudListTaskListTasks,
   cloudCreatePlan, cloudListPlans, cloudResolvePlan, cloudUpdatePlan, cloudListPlanTasks,
   cloudCreateProject, cloudListProjects, cloudResolveProject, cloudUpdateProject, cloudDeleteProjectPreserving, cloudListTasks,
   cloudUpdateTask,
@@ -1726,16 +1728,19 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "create_task_list",
       "Create a new task list.",
       {
-        name: z.string().describe("Task list name"),
-        project_id: z.string().optional().describe("Project ID"),
+        name: z.string().trim().min(1).describe("Task list name"),
+        project_id: z.string().trim().min(1).optional().describe("Project ID"),
         description: z.string().optional(),
         status: z.enum(["active", "completed", "archived"]).optional(),
       },
       async (params) => {
         try {
-          const resolved: Record<string, unknown> = { ...params };
-          if (params.project_id) resolved.project_id = resolveId(params.project_id, "projects");
-          const list = createTaskList(resolved as Parameters<typeof createTaskList>[0]);
+          const client = getTodosCloudClient();
+          if (!client) throw new Error("Task-list tools require the authenticated Todos API");
+          const resolved = {...params, name: params.name.trim(), slug: normalizeSlug(params.name)};
+          if (params.project_id) resolved.project_id = await cloudResolveProjectRef(client, params.project_id);
+          const list = await cloudCreateTaskList(client, resolved);
+          assertTaskListReceipt(list, resolved);
           return { content: [{ type: "text" as const, text: `Task list created: ${list.id.slice(0,8)} ${list.name}` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -1749,16 +1754,17 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "list_task_lists",
       "List all task lists.",
       {
-        project_id: z.string().optional().describe("Filter by project"),
+        project_id: z.string().trim().min(1).optional().describe("Filter by project"),
         status: z.enum(["active", "completed", "archived"]).optional(),
       },
       async ({ project_id, status }) => {
         try {
-          const resolved: Record<string, unknown> = { status };
-          if (project_id) resolved.project_id = resolveId(project_id, "projects");
-          const lists = listTaskLists(resolved as Parameters<typeof listTaskLists>[0]);
+          const client = getTodosCloudClient();
+          if (!client) throw new Error("Task-list tools require the authenticated Todos API");
+          const projectId = project_id ? await cloudResolveProjectRef(client, project_id) : undefined;
+          const lists = (await listSharedTaskLists(client, projectId)).filter(list => status === undefined || (list.status ?? "active") === status);
           if (lists.length === 0) return { content: [{ type: "text" as const, text: "No task lists found." }] };
-          const lines = lists.map(l => `[${l.status}] ${l.name} (${l.id.slice(0,8)})`);
+          const lines = lists.map(l => `[${l.status ?? "active"}] ${l.name} (${l.id.slice(0,8)})`);
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -1772,19 +1778,15 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "get_task_list",
       "Get a task list with its tasks.",
       {
-        task_list_id: z.string().describe("Task list ID"),
+        task_list_id: z.string().trim().min(1).describe("Task list ID"),
         include_tasks: z.boolean().optional().describe("Include tasks (default: true)"),
       },
       async ({ task_list_id, include_tasks = true }) => {
         try {
-          const resolvedId = resolveId(task_list_id, "task_lists");
-          const list = getTaskList(resolvedId);
-          if (!list) throw new TaskNotFoundError(`Task list not found: ${task_list_id}`);
-          let tasks: Task[] = [];
-          if (include_tasks) {
-            const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-            tasks = listTasks({ task_list_id: resolvedId, limit: 200 }, undefined) as Task[];
-          }
+          const client = getTodosCloudClient();
+          if (!client) throw new Error("Task-list tools require the authenticated Todos API");
+          const list = await resolveSharedTaskList(client, task_list_id);
+          const tasks = include_tasks ? await cloudListTaskListTasks(client, list.id) : [];
           const lines = [
             `ID:    ${list.id}`,
             `Name:  ${list.name}`,
@@ -1806,15 +1808,19 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "update_task_list",
       "Update a task list's fields.",
       {
-        task_list_id: z.string().describe("Task list ID"),
-        name: z.string().optional(),
+        task_list_id: z.string().trim().min(1).describe("Task list ID"),
+        name: z.string().trim().min(1).optional(),
         description: z.string().optional(),
         status: z.enum(["active", "completed", "archived"]).optional(),
       },
       async ({ task_list_id, ...updates }) => {
         try {
-          const resolvedId = resolveId(task_list_id, "task_lists");
-          const list = updateTaskList(resolvedId, updates as Parameters<typeof updateTaskList>[1]);
+          const client = getTodosCloudClient();
+          if (!client) throw new Error("Task-list tools require the authenticated Todos API");
+          const prior = await resolveSharedTaskList(client, task_list_id);
+          const expected = {...updates, ...(updates.name !== undefined ? {name: updates.name.trim()} : {})};
+          const list = await cloudUpdateTaskList(client, prior.id, expected);
+          assertTaskListReceipt(list, expected, prior.id);
           return { content: [{ type: "text" as const, text: `Task list ${list.id.slice(0,8)} updated.` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
@@ -1826,15 +1832,18 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
   if (shouldRegisterTool("delete_task_list")) {
     server.tool(
       "delete_task_list",
-      "Permanently delete a task list and all its tasks.",
+      "Delete a task list; force detaches linked tasks and plans while preserving their content and history.",
       {
-        task_list_id: z.string().describe("Task list ID"),
-        force: z.boolean().optional().describe("Skip confirmation (dangerous)"),
+        task_list_id: z.string().trim().min(1).describe("Task list ID"),
+        force: z.boolean().optional().describe("Allow detaching linked tasks and plans without deleting their content"),
       },
       async ({ task_list_id, force }) => {
         try {
-          deleteTaskList(resolveId(task_list_id, "task_lists"), force);
-          return { content: [{ type: "text" as const, text: `Task list ${task_list_id.slice(0, 8)} deleted.` }] };
+          const client = getTodosCloudClient();
+          if (!client) throw new Error("Task-list tools require the authenticated Todos API");
+          const list = await resolveSharedTaskList(client, task_list_id);
+          const receipt = await deleteSharedTaskList(client, list.id, force === true);
+          return { content: [{ type: "text" as const, text: JSON.stringify(receipt) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
