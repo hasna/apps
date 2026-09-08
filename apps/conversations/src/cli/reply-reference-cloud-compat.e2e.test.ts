@@ -1,23 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { STORE_SELECTING_KEYS } from "../lib/store/isolated-test-env.js";
+import { STORE_SELECTING_KEYS, diskTierSandboxEnv } from "../lib/store/isolated-test-env.js";
 import { HERMETIC_STATION } from "../test/hermetic.js";
-
-// Ambient credential isolation (DISK tier): the shared resolver reads
-// `~/.hasna/conversations/config/credentials` rooted at the child env's
-// HOME/HASNA_HOME/HASNA_CONFIG_HOME, and a provisioned station's real file
-// outranks the fixture authority below — the loopback URL is then REFUSED as
-// written for a different authority (green on CI, red on the station).
-// Anchoring every home-layout root at a scratch dir — no credentials file
-// can exist there — makes the disk tier consult nothing, identically on both
-// kinds of machine.
-const scratchHome = mkdtempSync(join(tmpdir(), "conversations-e2e-home-"));
-
-afterAll(() => {
-  rmSync(scratchHome, { recursive: true, force: true });
-});
 
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
 const PARENT = {
@@ -52,9 +35,11 @@ function cloudChildEnv(url: string): Record<string, string> {
   // account to one no real item uses, or the operator's real key and api-url
   // items win over the fixture pair below.
   env.HASNA_STATION = HERMETIC_STATION;
-  env.HOME = scratchHome;
-  env.HASNA_HOME = scratchHome;
-  env.HASNA_CONFIG_HOME = scratchHome;
+  // The disk tier (`~/.hasna/<app>/config/credentials`) is an ambient input: point
+  // the child's HOME at a scratch root so the station credential cannot answer
+  // beside the synthetic API URL of the fixture.
+  Object.assign(env, diskTierSandboxEnv());
+
   env.HASNA_CONVERSATIONS_API_URL = url;
   env.HASNA_CONVERSATIONS_API_KEY = ["fixture", "not", "a", "credential"].join("-");
   env.CONVERSATIONS_AGENT_ID = "bob";

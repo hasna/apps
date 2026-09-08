@@ -1,5 +1,5 @@
 {
-  "note": "ONE shared expectation for two resolvers that cannot call each other. The macOS shell (Sources/HasnaConversationsCore) decides which store the bundled server will use and then builds the environment it hands that server; src/lib/store/index.ts is what the server actually resolves with. They diverged: the shell read 3 env vars, the resolver honours more, and uncovered ones select the local store — so the shell logged store=hosted while the child served local SQLite, silently. Client transport is the API url + key pair alone (owner directive 2026-07-29; knowledge k_ms5wv466_u0jidq). Each arm below carries the input, what the shell must announce, and the exact store-selecting keys the child must receive. Tests/HasnaConversationsCoreTests asserts the shell half; src/lib/store/store-resolution-matrix.test.ts asserts the TypeScript resolver reaches the same store from that child environment. Neither half can drift without the other's test failing.",
+  "note": "API-only resolver matrix. savedCredentials represents the canonical owner-only credentials file, not the retired native fleet-env file. Native delegates selection to the bundled resolver and tests that real process separately.",
   "values": {
     "apiUrl": "https://conversations.hasna.xyz/v1",
     "apiKey": "fixture-not-a-real-credential",
@@ -8,238 +8,167 @@
   "arms": [
     {
       "name": "arm1-prefixed-url-and-key",
-      "note": "The fleet flip signal. Correct before and after the fix.",
-      "configFile": null,
       "environment": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
       "shell": "cloud",
       "announcedUrl": "https://conversations.hasna.xyz",
-      "childStoreEnv": {
-        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
-        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
-      },
-      "childStore": "cloud"
+      "savedCredentials": null
     },
     {
       "name": "arm2-inherited-prefixed-db-path-outranks-url-and-key",
-      "note": "The DB path is the resolver's highest-precedence signal among valid selectors — the shell announces local and the child gets local. The child env carries the DB path and nothing else.",
-      "configFile": null,
       "environment": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
         "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
-      "shell": "local",
-      "expectedSelectedBy": "HASNA_CONVERSATIONS_DB_PATH",
-      "childStoreEnv": {
-        "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
-      },
-      "childStore": "local"
+      "shell": "unresolved",
+      "savedCredentials": null,
+      "reasonContains": "no longer supported"
     },
     {
       "name": "arm3-inherited-unprefixed-db-path-outranks-url-and-key",
-      "note": "Same as arm2 through the unprefixed alias, which the old shell could not see at all.",
-      "configFile": null,
       "environment": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
         "CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
-      "shell": "local",
-      "expectedSelectedBy": "CONVERSATIONS_DB_PATH",
-      "childStoreEnv": {
-        "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
-      },
-      "childStore": "local"
+      "shell": "unresolved",
+      "savedCredentials": null,
+      "reasonContains": "no longer supported"
     },
     {
       "name": "arm6-unprefixed-url-and-key-only",
-      "note": "The mirror-image failure: the old shell saw neither key and refused to start on a configuration the resolver accepts. Failing closed, so an availability bug rather than a correctness one — now resolved and re-emitted under the canonical names.",
-      "configFile": null,
       "environment": {
         "CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
       "shell": "cloud",
       "announcedUrl": "https://conversations.hasna.xyz",
-      "childStoreEnv": {
-        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
-        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
-      },
-      "childStore": "cloud"
+      "savedCredentials": null
     },
     {
       "name": "arm2f-fleet-config-beats-inherited-prefixed-db-path",
-      "note": "THE DEPLOYED SHAPE, and the one the owner is waiting on. The fleet config file names the hosted service; a stray inherited DB_PATH must not silently redirect the app to a different dataset. The file outranks the inherited environment and the DB_PATH never reaches the child.",
-      "configFile": {
-        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
-        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
-      },
       "environment": {
         "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
-      "shell": "cloud",
-      "announcedUrl": "https://conversations.hasna.xyz",
-      "childStoreEnv": {
+      "shell": "unresolved",
+      "savedCredentials": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
-      "childStore": "cloud"
+      "reasonContains": "no longer supported"
     },
     {
       "name": "arm3f-fleet-config-beats-inherited-unprefixed-db-path",
-      "configFile": {
-        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
-        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
-      },
       "environment": {
         "CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
-      "shell": "cloud",
-      "announcedUrl": "https://conversations.hasna.xyz",
-      "childStoreEnv": {
+      "shell": "unresolved",
+      "savedCredentials": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
-      "childStore": "cloud"
+      "reasonContains": "no longer supported"
     },
     {
       "name": "file-fleet-config-names-cloud",
-      "note": "The fleet config file alone, with nothing inherited, resolves to the hosted service.",
-      "configFile": {
-        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
-        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
-      },
       "environment": {},
       "shell": "cloud",
       "announcedUrl": "https://conversations.hasna.xyz",
-      "childStoreEnv": {
+      "savedCredentials": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
-      },
-      "childStore": "cloud"
+      }
     },
     {
-      "name": "file-db-path-names-local",
-      "note": "A config file naming a local DB path resolves to local, announced by that key.",
-      "configFile": {
-        "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
-      },
+      "name": "retired-native-file-selector-forwarded-to-client-refuses",
       "environment": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
-        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
-      },
-      "shell": "local",
-      "expectedSelectedBy": "HASNA_CONVERSATIONS_DB_PATH",
-      "childStoreEnv": {
+        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
         "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
-      "childStore": "local"
+      "shell": "unresolved",
+      "savedCredentials": null,
+      "reasonContains": "no longer supported"
     },
     {
       "name": "env-db-path-only-names-local",
-      "note": "An inherited DB path alone resolves to local, announced by that key.",
-      "configFile": null,
       "environment": {
         "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
-      "shell": "local",
-      "expectedSelectedBy": "HASNA_CONVERSATIONS_DB_PATH",
-      "childStoreEnv": {
-        "HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
-      },
-      "childStore": "local"
+      "shell": "unresolved",
+      "savedCredentials": null,
+      "reasonContains": "no longer supported"
     },
     {
       "name": "env-unprefixed-db-path-only-names-local",
-      "note": "The unprefixed DB path alias is honoured and named as the selector.",
-      "configFile": null,
       "environment": {
         "CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
       },
-      "shell": "local",
-      "expectedSelectedBy": "CONVERSATIONS_DB_PATH",
-      "childStoreEnv": {
-        "CONVERSATIONS_DB_PATH": "/tmp/fixture-conversations.db"
-      },
-      "childStore": "local"
+      "shell": "unresolved",
+      "savedCredentials": null,
+      "reasonContains": "no longer supported"
     },
     {
       "name": "file-pair-beats-inherited-key-only",
-      "note": "The file outranks the inherited environment: a stray inherited key cannot turn the file's cloud config into a refusal.",
-      "configFile": {
-        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
-        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
-      },
       "environment": {
         "CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
       "shell": "cloud",
       "announcedUrl": "https://conversations.hasna.xyz",
-      "childStoreEnv": {
+      "savedCredentials": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
-      },
-      "childStore": "cloud"
+      }
     },
     {
-      "name": "file-pair-beats-inherited-url-only",
-      "note": "The file outranks the inherited environment: a stray inherited URL cannot turn the file's cloud config into a refusal.",
-      "configFile": {
-        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
-        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
-      },
+      "name": "saved-authority-conflicts-with-inherited-url",
       "environment": {
         "CONVERSATIONS_API_URL": "https://stray.invalid/v1"
       },
-      "shell": "cloud",
-      "announcedUrl": "https://conversations.hasna.xyz",
-      "childStoreEnv": {
+      "shell": "unresolved",
+      "savedCredentials": {
         "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
-      "childStore": "cloud"
+      "reasonContains": "different service authorities"
     },
     {
       "name": "file-url-without-key-refuses",
-      "note": "Half an API configuration is an error, never a fall-back to local. The reviewer listed this branch as having no evidence behind it.",
-      "configFile": {
-        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1"
-      },
       "environment": {},
       "shell": "unresolved",
-      "reasonContains": "HASNA_CONVERSATIONS_API_KEY"
+      "reasonContains": "HASNA_CONVERSATIONS_API_KEY",
+      "savedCredentials": {
+        "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1"
+      }
     },
     {
-      "name": "key-without-url-refuses",
-      "note": "The mirror half: a key with no URL is an error naming the missing URL variable.",
-      "configFile": {
+      "name": "saved-key-without-url-uses-gateway",
+      "environment": {},
+      "shell": "cloud",
+      "savedCredentials": {
         "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
       },
-      "environment": {},
-      "shell": "unresolved",
-      "reasonContains": "HASNA_CONVERSATIONS_API_URL"
+      "announcedUrl": "https://api.hasna.com/conversations"
     },
     {
       "name": "non-http-url-refuses",
-      "note": "assertUsableApiUrl refuses a URL the transport could not use. Mirrored here so the shell does not start a server that will throw.",
-      "configFile": {
-        "HASNA_CONVERSATIONS_API_URL": "ftp://conversations.hasna.xyz/v1",
-        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
-      },
       "environment": {},
       "shell": "unresolved",
-      "reasonContains": "http or https"
+      "reasonContains": "http",
+      "savedCredentials": {
+        "HASNA_CONVERSATIONS_API_URL": "ftp://conversations.hasna.xyz/v1",
+        "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential"
+      }
     },
     {
       "name": "nothing-configured-fails-closed",
-      "note": "The one deliberate divergence from the TypeScript resolver, and the reason this app exists: with nothing configured the library documents local SQLite as the single-operator default, while the app refuses to start. No child is launched, so the two cannot disagree about a running server.",
-      "configFile": null,
       "environment": {},
       "shell": "unresolved",
-      "reasonContains": "is missing, so there is no hosted-service configuration to read"
+      "reasonContains": "HASNA_CONVERSATIONS_API_KEY",
+      "savedCredentials": null
     }
   ]
 }

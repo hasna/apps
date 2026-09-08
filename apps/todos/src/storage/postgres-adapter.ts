@@ -1,3 +1,4 @@
+import { createAtomicProjectMigration } from "./atomic-project-migration.js";
 import { createPostgresMachineRegistry, validateMachines } from "./machine-registry.js";
 import { randomUUID } from "node:crypto";
 import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, VersionConflictError, isTerminalStatus } from "../types/index.js";
@@ -311,6 +312,7 @@ export function createPostgresTodosStorageAdapter(
         .slice(0, limit),
     },
     machines: createPostgresMachineRegistry(options.client, options.service ?? "todos", options.tableName ?? DEFAULT_TODOS_POSTGRES_SYNC_TABLE, () => store.ensureSchema()),
+    atomicProjectMigration: createAtomicProjectMigration({ client: options.client, table: options.tableName ?? DEFAULT_TODOS_POSTGRES_SYNC_TABLE, service: options.service ?? "todos", ensureSchema: () => store.ensureSchema() }),
     sync: {
       getTasksChangedSince: (since, filters) => getChangedSince(since, filters, store),
       exportSnapshot: () => exportSnapshot(store),
@@ -2243,6 +2245,7 @@ class PostgresJsonRecordStore {
     context: TodosStorageContext = {},
   ): Promise<boolean> {
     await this.ensureSchema();
+    if ((tombstone.object_type as string) === "atomic_project_migrations") throw new Error("Migration evidence is immutable");
     const deletedAt = stringValue(tombstone.deleted_at) ?? new Date().toISOString();
     const updatedAt = stringValue(tombstone.updated_at) ?? deletedAt;
     const existing = await this.clock(tombstone.object_type, tombstone.object_id);
@@ -3419,6 +3422,7 @@ async function importSnapshot(
   machines?: import("./machine-registry.js").MachineRegistryStore,
 ): Promise<TodosStorageImportResult> {
   const result: TodosStorageImportResult = { inserted: 0, updated: 0, deleted: 0, skipped: 0, errors: [] };
+  if ((snapshot.tombstones ?? []).some(row => (row.object_type as string) === "atomic_project_migrations")) { result.errors.push("Migration evidence is immutable"); return result; }
   if ((snapshot.tombstones ?? []).some(row => (row.object_type as string) === "machines")) { result.errors.push("Machine tombstones require explicit registry lifecycle operations"); return result; }
   if ((snapshot.tombstones ?? []).some(row => row.object_type === "projects")) { result.errors.push("Project tombstones require explicit reference-preserving project deletion"); return result; }
   try { if (snapshot.machines !== undefined) validateMachines(snapshot.machines); } catch (e) { result.errors.push(e instanceof Error ? e.message : String(e)); return result; }

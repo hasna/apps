@@ -16,6 +16,7 @@ import {
 const ENV_KEYS = [
   "HOME",
   "USERPROFILE",
+  "XDG_DATA_HOME",
   "HASNA_CONVERSATIONS_DB_PATH",
   "CONVERSATIONS_DB_PATH",
   "HASNA_DATA_HOME",
@@ -50,6 +51,7 @@ function isolateHome(): string {
   tempHome = home;
   process.env.HOME = home;
   delete process.env.USERPROFILE;
+  delete process.env.XDG_DATA_HOME;
   delete process.env.HASNA_CONVERSATIONS_DB_PATH;
   delete process.env.CONVERSATIONS_DB_PATH;
   delete process.env.HASNA_DATA_HOME;
@@ -62,7 +64,9 @@ function isolateHome(): string {
 describe("resolver (XDG) adoption — the legacy home must never become invisible", () => {
   test("resolver data root follows @hasna/paths under a fake HOME", () => {
     const home = isolateHome();
-    expect(getResolverDataRoot()).toBe(join(home, ".local", "share", "hasna", "conversations"));
+    expect(getResolverDataRoot()).toBe(process.platform === "darwin"
+      ? join(home, "Library", "Application Support", "Hasna", "conversations")
+      : join(home, ".local", "share", "hasna", "conversations"));
     expect(getLegacyDataRoot()).toBe(join(home, ".hasna", "conversations"));
     expect(getHomeDir()).toBe(home);
   });
@@ -85,7 +89,7 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
 
   test("an existing store at the resolver data root adopts it even without HASNA_DATA_HOME", () => {
     const home = isolateHome();
-    const xdg = join(home, ".local", "share", "hasna", "conversations");
+    const xdg = getResolverDataRoot();
     mkdirSync(xdg, { recursive: true });
     writeFileSync(join(xdg, "messages.db"), "existing-migrated-store");
     expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(true);

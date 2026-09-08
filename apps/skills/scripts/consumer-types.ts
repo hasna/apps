@@ -48,6 +48,22 @@ import { SKILLS_NATIVE_STORAGE_ENV, type SkillsNativeStorageConfig } from "@hasn
 import { SkillsAdminSetUserRoleRequestSchema, SkillsAdminSuspendOrganizationRequestSchema,
   SkillsAdminResumeOrganizationRequestSchema, SkillsAdminListUsersResponseSchema,
   SkillsAdminShowOrganizationResponseSchema, SkillsAdminSetUserRoleResponseSchema } from "@hasna/skills/admin-contract";
+import { inspectSkillBundle, packSkillBundle, SKILL_BUNDLE_INSPECTION_LIMITS, SkillBundleInspectionError,
+  type InspectSkillBundleOptions, type InspectedSkillBundle, type SkillBundleEntry, type OwnedBytes } from "@hasna/skills/sdk";
+const inspectionOptions: InspectSkillBundleOptions = { limits: { entries: 1, timeoutMs: 1000 }, signal: new AbortController().signal };
+const inspection: Promise<InspectedSkillBundle> = inspectSkillBundle(new Uint8Array(), inspectionOptions);
+const packedBundle = packSkillBundle("fixture", { maxUnpackedBytes: 1024 });
+const packedBody: OwnedBytes = packedBundle.bytes;
+declare const inspected: InspectedSkillBundle;
+const inspectedEntry: SkillBundleEntry | undefined = inspected.entries[0];
+const ownedBody: ArrayBuffer | undefined = inspectedEntry?.bytes.buffer;
+const inspectionCode: "BUNDLE_INVALID" | "BUNDLE_LIMIT" | "BUNDLE_ABORTED" | "BUNDLE_TIMEOUT" = new SkillBundleInspectionError("BUNDLE_INVALID", "fixture").code;
+// @ts-expect-error Inspection is asynchronous; partial entries never escape.
+const partialInspection: InspectedSkillBundle = inspection;
+// @ts-expect-error Finite limits are numeric, never an off switch.
+const disabledInspection: InspectSkillBundleOptions = { limits: { decompressedBytes: false } };
+// @ts-expect-error Hard ceilings are immutable.
+SKILL_BUNDLE_INSPECTION_LIMITS.entries = 0;
 declare const store: SkillsProductStore;
 // Only compiled, never executed: preserve the existing modes and check the
 // additive streaming option through actual installed declarations.
@@ -69,6 +85,183 @@ const wrongVersion: 2 = admission.contractVersion;
 const wrongStatus: "succeeded" = admission.status;
 const client = new RemoteSkillsClient("fixture", "https://skills.example.com/api/v1");
 const auth = new RemoteSkillsAuthClient("https://skills.example.com/api/v1");
+const workspaceContext: import("@hasna/skills/sdk").RemoteWorkspaceContext = { userId: "observed-user", membershipId: "observed-membership" };
+const rootWorkspaceContext: import("@hasna/skills").RemoteWorkspaceContext = workspaceContext;
+client.listAccountWorkspaces();
+client.switchWorkspace(workspaceContext);
+auth.listAccountWorkspaces("reader@example.test", "000000", workspaceContext.userId);
+auth.switchWorkspace("reader@example.test", "000000", workspaceContext);
+auth.updateCurrentWorkspace("reader@example.test", "000000", { name: "Selected" }, workspaceContext);
+auth.listWorkspaceMembers("reader@example.test", "000000", { limit: 1 }, workspaceContext);
+auth.createApiKey("reader@example.test", "000000", "selected", ["skills:read"], workspaceContext);
+import * as InvRoot from "@hasna/skills";
+const invitationListRoot: InvRoot.ListRemoteWorkspaceInvitations = { after: "observed-cursor" };
+const invitationIssueRoot: InvRoot.IssueRemoteWorkspaceInvitation = { email: "recipient@example.test", role: "viewer", idempotencyKey: "stable-key", confirm: true };
+const invitationResendRoot: InvRoot.ResendRemoteWorkspaceInvitation = { expectedGeneration: 1, idempotencyKey: "stable-key", confirm: true };
+const invitationRevokeRoot: InvRoot.RevokeRemoteWorkspaceInvitation = { expectedGeneration: 1, confirm: true };
+const invitationAcceptRoot: InvRoot.AcceptRemoteWorkspaceInvitation = { token: "secret-input-only", confirm: true };
+declare const invitationRoot: InvRoot.RemoteWorkspaceInvitation;
+declare const invitationPageRoot: InvRoot.RemoteWorkspaceInvitationsPage;
+declare const invitationResultRoot: InvRoot.RemoteWorkspaceInvitationResult;
+declare const invitationAcceptedRoot: InvRoot.RemoteWorkspaceInvitationAcceptance;
+const invitationErrorCodeRoot: InvRoot.RemoteWorkspaceInvitationErrorCode = "INVITATION_FORBIDDEN";
+new InvRoot.RemoteWorkspaceInvitationError(invitationErrorCodeRoot);
+new InvRoot.WorkspaceInvitationInputError(); new InvRoot.RemoteWorkspaceInvitationReadError(); new InvRoot.RemoteWorkspaceInvitationUnconfirmedError();
+const invitationClientRoot = new InvRoot.RemoteSkillsClient("fixture", "https://skills.example.com/api/v1");
+const invitationAuthRoot = new InvRoot.RemoteSkillsAuthClient("https://skills.example.com/api/v1");
+invitationClientRoot.listWorkspaceInvitations(workspaceContext, invitationListRoot);
+invitationClientRoot.getWorkspaceInvitation(workspaceContext, "observed-invitation");
+invitationClientRoot.issueWorkspaceInvitation(workspaceContext, invitationIssueRoot);
+invitationClientRoot.resendWorkspaceInvitation(workspaceContext, "observed-invitation", invitationResendRoot);
+invitationClientRoot.revokeWorkspaceInvitation(workspaceContext, "observed-invitation", invitationRevokeRoot);
+invitationClientRoot.acceptWorkspaceInvitation(workspaceContext, "observed-invitation", invitationAcceptRoot);
+invitationAuthRoot.listWorkspaceInvitations("reader@example.test", "000000", workspaceContext, invitationListRoot);
+invitationAuthRoot.getWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation");
+invitationAuthRoot.issueWorkspaceInvitation("reader@example.test", "000000", workspaceContext, invitationIssueRoot);
+invitationAuthRoot.resendWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation", invitationResendRoot);
+invitationAuthRoot.revokeWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation", invitationRevokeRoot);
+invitationAuthRoot.acceptWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation", invitationAcceptRoot);
+const invitationRoleRoot: "owner" | "admin" | "member" | "viewer" = invitationRoot.role;
+const invitationStatusRoot: "queued" | "sending" | "uncertain" | "provider_accepted" | "failed" | "cancelled" = invitationRoot.delivery.state;
+const invitationChangedRoot: boolean = invitationResultRoot.changed;
+const invitationAcceptedFlagRoot: true = invitationAcceptedRoot.accepted;
+// @ts-expect-error Confirmation cannot degrade to optional or any.
+invitationClientRoot.issueWorkspaceInvitation(workspaceContext, { email: "recipient@example.test", role: "member", idempotencyKey: "stable-key" });
+// @ts-expect-error Expected generation is numeric.
+const wrongInvitationGenerationRoot: string = invitationRoot.generation;
+// @ts-expect-error A projection never returns the acceptance secret.
+const exposedInvitationTokenRoot: string = invitationRoot.token;
+// @ts-expect-error Pagination retains useful item types.
+const wrongInvitationIdRoot: number = invitationPageRoot.invitations[0]!.id;
+// @ts-expect-error Accepted flag is a literal true.
+const wrongInvitationAcceptedRoot: false = invitationAcceptedRoot.accepted;
+// @ts-expect-error Error codes are closed.
+const wrongInvitationCodeRoot: InvRoot.RemoteWorkspaceInvitationErrorCode = "UNKNOWN";
+
+import * as InvSdk from "@hasna/skills/sdk";
+const invitationListSdk: InvSdk.ListRemoteWorkspaceInvitations = { after: "observed-cursor" };
+const invitationIssueSdk: InvSdk.IssueRemoteWorkspaceInvitation = { email: "recipient@example.test", role: "viewer", idempotencyKey: "stable-key", confirm: true };
+const invitationResendSdk: InvSdk.ResendRemoteWorkspaceInvitation = { expectedGeneration: 1, idempotencyKey: "stable-key", confirm: true };
+const invitationRevokeSdk: InvSdk.RevokeRemoteWorkspaceInvitation = { expectedGeneration: 1, confirm: true };
+const invitationAcceptSdk: InvSdk.AcceptRemoteWorkspaceInvitation = { token: "secret-input-only", confirm: true };
+declare const invitationSdk: InvSdk.RemoteWorkspaceInvitation;
+declare const invitationPageSdk: InvSdk.RemoteWorkspaceInvitationsPage;
+declare const invitationResultSdk: InvSdk.RemoteWorkspaceInvitationResult;
+declare const invitationAcceptedSdk: InvSdk.RemoteWorkspaceInvitationAcceptance;
+const invitationErrorCodeSdk: InvSdk.RemoteWorkspaceInvitationErrorCode = "INVITATION_FORBIDDEN";
+new InvSdk.RemoteWorkspaceInvitationError(invitationErrorCodeSdk);
+new InvSdk.WorkspaceInvitationInputError(); new InvSdk.RemoteWorkspaceInvitationReadError(); new InvSdk.RemoteWorkspaceInvitationUnconfirmedError();
+const invitationClientSdk = new InvSdk.RemoteSkillsClient("fixture", "https://skills.example.com/api/v1");
+const invitationAuthSdk = new InvSdk.RemoteSkillsAuthClient("https://skills.example.com/api/v1");
+invitationClientSdk.listWorkspaceInvitations(workspaceContext, invitationListSdk);
+invitationClientSdk.getWorkspaceInvitation(workspaceContext, "observed-invitation");
+invitationClientSdk.issueWorkspaceInvitation(workspaceContext, invitationIssueSdk);
+invitationClientSdk.resendWorkspaceInvitation(workspaceContext, "observed-invitation", invitationResendSdk);
+invitationClientSdk.revokeWorkspaceInvitation(workspaceContext, "observed-invitation", invitationRevokeSdk);
+invitationClientSdk.acceptWorkspaceInvitation(workspaceContext, "observed-invitation", invitationAcceptSdk);
+invitationAuthSdk.listWorkspaceInvitations("reader@example.test", "000000", workspaceContext, invitationListSdk);
+invitationAuthSdk.getWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation");
+invitationAuthSdk.issueWorkspaceInvitation("reader@example.test", "000000", workspaceContext, invitationIssueSdk);
+invitationAuthSdk.resendWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation", invitationResendSdk);
+invitationAuthSdk.revokeWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation", invitationRevokeSdk);
+invitationAuthSdk.acceptWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation", invitationAcceptSdk);
+const invitationRoleSdk: "owner" | "admin" | "member" | "viewer" = invitationSdk.role;
+const invitationStatusSdk: "queued" | "sending" | "uncertain" | "provider_accepted" | "failed" | "cancelled" = invitationSdk.delivery.state;
+const invitationChangedSdk: boolean = invitationResultSdk.changed;
+const invitationAcceptedFlagSdk: true = invitationAcceptedSdk.accepted;
+// @ts-expect-error Confirmation cannot degrade to optional or any.
+invitationClientSdk.issueWorkspaceInvitation(workspaceContext, { email: "recipient@example.test", role: "member", idempotencyKey: "stable-key" });
+// @ts-expect-error Expected generation is numeric.
+const wrongInvitationGenerationSdk: string = invitationSdk.generation;
+// @ts-expect-error A projection never returns the acceptance secret.
+const exposedInvitationTokenSdk: string = invitationSdk.token;
+// @ts-expect-error Pagination retains useful item types.
+const wrongInvitationIdSdk: number = invitationPageSdk.invitations[0]!.id;
+// @ts-expect-error Accepted flag is a literal true.
+const wrongInvitationAcceptedSdk: false = invitationAcceptedSdk.accepted;
+// @ts-expect-error Error codes are closed.
+const wrongInvitationCodeSdk: InvSdk.RemoteWorkspaceInvitationErrorCode = "UNKNOWN";
+
+import * as RecoveryRoot from "@hasna/skills";
+const recoveryChallengeRoot: RecoveryRoot.RequestInvitationEmailChallenge = { invitationId: "observed-invitation", challengeId: "retained-challenge", token: "secret-input-only", confirm: true };
+const recoveryAcceptRoot: RecoveryRoot.AcceptInvitationEmailChallenge = { ...recoveryChallengeRoot, code: "000000" };
+const recoveryClientRoot = new RecoveryRoot.RemoteSkillsAuthClient("https://skills.example.com/api/v1");
+const recoveryRequestedRoot: Promise<RecoveryRoot.RemoteInvitationEmailChallenge> = recoveryClientRoot.requestInvitationEmailChallenge(recoveryChallengeRoot);
+const recoveryAcceptedRoot: Promise<RecoveryRoot.RemoteInvitationEmailAcceptance> = recoveryClientRoot.acceptInvitationEmailChallenge(recoveryAcceptRoot);
+declare const recoveryChallengeResultRoot: Awaited<typeof recoveryRequestedRoot>;
+declare const recoveryAcceptResultRoot: Awaited<typeof recoveryAcceptedRoot>;
+const recoveryTtlRoot: 600 = recoveryChallengeResultRoot.expiresIn;
+const recoverySignInRoot: true = recoveryAcceptResultRoot.signInRequired;
+const recoveryErrorCodeRoot: RecoveryRoot.RemoteInvitationEmailErrorCode = "INVITATION_PROOF_UNAVAILABLE";
+new RecoveryRoot.RemoteInvitationEmailError(recoveryErrorCodeRoot);
+new RecoveryRoot.InvitationEmailInputError(); new RecoveryRoot.RemoteInvitationEmailUnconfirmedError("accept");
+// @ts-expect-error Recovery confirmation is mandatory, not any.
+recoveryClientRoot.requestInvitationEmailChallenge({ invitationId: "id", challengeId: "id", token: "secret" });
+// @ts-expect-error Accept needs fresh code proof, not only challenge possession.
+recoveryClientRoot.acceptInvitationEmailChallenge(recoveryChallengeRoot);
+// @ts-expect-error The safe challenge projection never exposes an OTP.
+const recoveryCodeLeakRoot: string = recoveryChallengeResultRoot.code;
+// @ts-expect-error The accepted result never creates a session token.
+const recoveryTokenLeakRoot: string = recoveryAcceptResultRoot.token;
+// @ts-expect-error TTL remains a concrete literal, not any.
+const recoveryWrongTtlRoot: 1 = recoveryChallengeResultRoot.expiresIn;
+// @ts-expect-error Accepted sign-in requirement is literal true.
+const recoveryWrongSignInRoot: false = recoveryAcceptResultRoot.signInRequired;
+// @ts-expect-error Error codes are a closed union.
+const recoveryWrongCodeRoot: RecoveryRoot.RemoteInvitationEmailErrorCode = "UNKNOWN";
+// @ts-expect-error A membership ID must retain string inference.
+const recoveryWrongMembershipRoot: number = recoveryAcceptResultRoot.membershipId;
+
+import * as RecoverySdk from "@hasna/skills/sdk";
+const recoveryChallengeSdk: RecoverySdk.RequestInvitationEmailChallenge = { invitationId: "observed-invitation", challengeId: "retained-challenge", token: "secret-input-only", confirm: true };
+const recoveryAcceptSdk: RecoverySdk.AcceptInvitationEmailChallenge = { ...recoveryChallengeSdk, code: "000000" };
+const recoveryClientSdk = new RecoverySdk.RemoteSkillsAuthClient("https://skills.example.com/api/v1");
+const recoveryRequestedSdk: Promise<RecoverySdk.RemoteInvitationEmailChallenge> = recoveryClientSdk.requestInvitationEmailChallenge(recoveryChallengeSdk);
+const recoveryAcceptedSdk: Promise<RecoverySdk.RemoteInvitationEmailAcceptance> = recoveryClientSdk.acceptInvitationEmailChallenge(recoveryAcceptSdk);
+declare const recoveryChallengeResultSdk: Awaited<typeof recoveryRequestedSdk>;
+declare const recoveryAcceptResultSdk: Awaited<typeof recoveryAcceptedSdk>;
+const recoveryTtlSdk: 600 = recoveryChallengeResultSdk.expiresIn;
+const recoverySignInSdk: true = recoveryAcceptResultSdk.signInRequired;
+const recoveryErrorCodeSdk: RecoverySdk.RemoteInvitationEmailErrorCode = "INVITATION_PROOF_UNAVAILABLE";
+new RecoverySdk.RemoteInvitationEmailError(recoveryErrorCodeSdk);
+new RecoverySdk.InvitationEmailInputError(); new RecoverySdk.RemoteInvitationEmailUnconfirmedError("accept");
+// @ts-expect-error Recovery confirmation is mandatory, not any.
+recoveryClientSdk.requestInvitationEmailChallenge({ invitationId: "id", challengeId: "id", token: "secret" });
+// @ts-expect-error Accept needs fresh code proof, not only challenge possession.
+recoveryClientSdk.acceptInvitationEmailChallenge(recoveryChallengeSdk);
+// @ts-expect-error The safe challenge projection never exposes an OTP.
+const recoveryCodeLeakSdk: string = recoveryChallengeResultSdk.code;
+// @ts-expect-error The accepted result never creates a session token.
+const recoveryTokenLeakSdk: string = recoveryAcceptResultSdk.token;
+// @ts-expect-error TTL remains a concrete literal, not any.
+const recoveryWrongTtlSdk: 1 = recoveryChallengeResultSdk.expiresIn;
+// @ts-expect-error Accepted sign-in requirement is literal true.
+const recoveryWrongSignInSdk: false = recoveryAcceptResultSdk.signInRequired;
+// @ts-expect-error Error codes are a closed union.
+const recoveryWrongCodeSdk: RecoverySdk.RemoteInvitationEmailErrorCode = "UNKNOWN";
+// @ts-expect-error A membership ID must retain string inference.
+const recoveryWrongMembershipSdk: number = recoveryAcceptResultSdk.membershipId;
+
+declare const selectedSession: Awaited<ReturnType<typeof auth.switchWorkspace>>;
+const sessionContract: import("@hasna/skills/sdk").RemoteWorkspaceSession = selectedSession;
+const rootSessionContract: import("@hasna/skills").RemoteWorkspaceSession = sessionContract;
+const selectedMembership: string = selectedSession.user.membershipId;
+const selectedRole: "owner" | "admin" | "member" | "viewer" = selectedSession.user.role;
+declare const discoveredWorkspaces: Awaited<ReturnType<typeof auth.listAccountWorkspaces>>;
+const discoveredUser: string = discoveredWorkspaces.userId;
+const currentWorkspace: boolean = discoveredWorkspaces.workspaces[0]!.current;
+// @ts-expect-error Workspace selection binds the expected user too.
+client.switchWorkspace({ membershipId: "observed-membership" });
+// @ts-expect-error Slugs cannot select a membership incarnation.
+auth.switchWorkspace("reader@example.test", "000000", { userId: "observed-user", slug: "workspace" });
+// @ts-expect-error Captured context is immutable.
+workspaceContext.membershipId = "changed";
+// @ts-expect-error Session roles retain concrete inference, not any.
+const inventedSelectionRole: "superuser" = selectedSession.user.role;
+// @ts-expect-error Safe discovery never exposes session credentials.
+const listedToken: string = discoveredWorkspaces.token;
+// @ts-expect-error A boolean current flag cannot lose inference to any.
+const wrongCurrentFlag: string = discoveredWorkspaces.workspaces[0]!.current;
 declare const profile: Awaited<ReturnType<typeof client.updateProfile>>;
 const displayName: string | null = profile.user.displayName;
 const customerRole: "owner" | "admin" | "member" | "viewer" = profile.user.role;
@@ -193,8 +386,55 @@ assert.equal(Output.safeParse({ ok: true, user }).success, false);
 assert.equal(Output.safeParse({ ok: true, user: { ...user, role: "viewer" } }).success, true);
 console.log("Installed admin list runtime: 10 assertions passed.");
 `);
+  await writeFile(join(workspace, "bundle-runtime.ts"), `
+import { strict as assert } from "node:assert";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
+import { getEventListeners } from "node:events";
+import { inspectSkillBundle, packSkillBundle, SkillBundleInspectionError } from "@hasna/skills/sdk";
+mkdirSync("bundle-fixture"); writeFileSync("bundle-fixture/SKILL.md", "# Installed fixture");
+const packed = packSkillBundle("bundle-fixture");
+const inspected = await inspectSkillBundle(packed.bytes);
+assert.equal(inspected.sha256, packed.sha256);
+assert.equal(inspected.fileCount, 1);
+assert.equal(inspected.entries[0].path, "SKILL.md");
+assert.equal(new TextDecoder().decode(inspected.entries[0].bytes), "# Installed fixture");
+assert.equal(inspected.entries[0].bytes.byteLength, inspected.entries[0].bytes.buffer.byteLength);
+assert.notEqual(inspected.entries[0].bytes.buffer, packed.bytes.buffer);
+await assert.rejects(inspectSkillBundle(gzipSync(new Uint8Array(1024 * 1024)), { limits: { decompressedBytes: 512 } }),
+  error => error instanceof SkillBundleInspectionError && error.code === "BUNDLE_LIMIT");
+const controller = new AbortController(); controller.abort();
+await assert.rejects(inspectSkillBundle(packed.bytes, { signal: controller.signal }),
+  error => error instanceof SkillBundleInspectionError && error.code === "BUNDLE_ABORTED");
+const expansion = gzipSync(new Uint8Array(64 * 1024 * 1024));
+const midstream = new AbortController();
+const pending = inspectSkillBundle(expansion, { signal: midstream.signal });
+const abortTimer = setTimeout(() => midstream.abort(), 1);
+try { await assert.rejects(pending, error => error instanceof SkillBundleInspectionError && error.code === "BUNDLE_ABORTED"); }
+finally { clearTimeout(abortTimer); }
+assert.equal(getEventListeners(midstream.signal, "abort").length, 0);
+let timerTurns = 0;
+const heartbeat = setInterval(() => { timerTurns++; }, 1);
+try {
+  assert.equal((await inspectSkillBundle(gzipSync(new Uint8Array(4 * 1024 * 1024)))).fileCount, 0);
+  assert.ok(timerTurns > 1);
+} finally { clearInterval(heartbeat); }
+const prescheduled = new AbortController();
+const preAbortTimer = setTimeout(() => prescheduled.abort(), 1);
+try { await assert.rejects(inspectSkillBundle(expansion, { signal: prescheduled.signal }),
+  error => error instanceof SkillBundleInspectionError && error.code === "BUNDLE_ABORTED"); }
+finally { clearTimeout(preAbortTimer); }
+assert.equal(getEventListeners(prescheduled.signal, "abort").length, 0);
+const timed = new AbortController();
+await assert.rejects(inspectSkillBundle(expansion, { signal: timed.signal, limits: { timeoutMs: 1 } }),
+  error => error instanceof SkillBundleInspectionError && error.code === "BUNDLE_TIMEOUT");
+assert.equal(getEventListeners(timed.signal, "abort").length, 0);
+assert.equal((await inspectSkillBundle(packed.bytes)).sha256, packed.sha256);
+console.log("Installed bundle SDK runtime: 17 assertions passed.");
+`);
   await run([process.execPath, "install", "--ignore-scripts", "--registry", "https://registry.npmjs.org"], workspace);
   await run([process.execPath, "node_modules/typescript/bin/tsc", "-p", "tsconfig.json"], workspace);
   console.log((await run([process.execPath, "--no-env-file", "admin-list-runtime.ts"], workspace)).trim());
+  console.log((await run([process.execPath, "--no-env-file", "bundle-runtime.ts"], workspace)).trim());
   console.log(`Consumer types: @hasna/skills@${metadata.version} passed strict installed-package checking for all four exports (skipLibCheck=false).`);
 } finally { await rm(workspace, { recursive: true, force: true }); }

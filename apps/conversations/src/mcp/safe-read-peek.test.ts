@@ -1,3 +1,5 @@
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../lib/store/test-support/client-environment.js";
 /**
  * MCP collection reads are PEEKS, and their envelopes state their own bounds.
  *
@@ -27,12 +29,10 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
 
-const TEST_DB = join(tmpdir(), `conversations-safe-read-peek-${Date.now()}.db`);
 let client: Client;
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+let restoreClient: () => void;
 let disposeBuiltServer: (() => Promise<void>) | undefined;
 
 type Envelope = Record<string, unknown>;
@@ -58,12 +58,10 @@ function setEnv(key: string, value: string | undefined): void {
 }
 
 beforeAll(async () => {
-  setEnv("CONVERSATIONS_DB_PATH", TEST_DB);
+  fixture = await startLoopbackApiFixture();
+  restoreClient = activateClientEnvironment(fixture.env);
   setEnv("CONVERSATIONS_AGENT_ID", "peek-reader");
   setEnv("CONVERSATIONS_USE_MACHINE_IDENTITY", undefined);
-
-  const { closeDb } = await import("../lib/db.js");
-  closeDb();
 
   const { buildServer, disposeServer } = await import("./index.js");
   const server = buildServer();
@@ -77,17 +75,15 @@ beforeAll(async () => {
 afterAll(async () => {
   await client.close();
   await disposeBuiltServer?.();
-  const { closeDb } = await import("../lib/db.js");
-  closeDb();
+
   const { _resetAutoName } = await import("../lib/identity.js");
   _resetAutoName();
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  for (const suffix of ["", "-wal", "-shm"]) {
-    try { unlinkSync(`${TEST_DB}${suffix}`); } catch {}
-  }
+  restoreClient();
+  await fixture.stop();
 });
 
 async function unreadCount(to: string): Promise<number> {
@@ -95,6 +91,7 @@ async function unreadCount(to: string): Promise<number> {
   return Number(envelope.count ?? 0);
 }
 
+// These checks span several authenticated HTTP calls and must fit loaded CI.
 describe("G4 — MCP collection reads do not mutate by default", () => {
   test("read_messages leaves unread state intact when mark_read is omitted", async () => {
     await call("send_message", { to: "peek-dm-a", from: "peek-writer", content: "peek dm one" });
@@ -103,7 +100,7 @@ describe("G4 — MCP collection reads do not mutate by default", () => {
     expect(await unreadCount("peek-dm-a")).toBe(2);
     // The read itself is the thing under test: asking twice must answer twice.
     expect(await unreadCount("peek-dm-a")).toBe(2);
-  });
+  }, 20_000);
 
   test("read_messages acknowledges only on an explicit mark_read:true", async () => {
     await call("send_message", { to: "peek-dm-b", from: "peek-writer", content: "peek ack one" });
@@ -115,7 +112,7 @@ describe("G4 — MCP collection reads do not mutate by default", () => {
     // filter the page to nothing and the assertion would pass vacuously.
     await call("read_messages", { to: "peek-dm-b", unread_only: true, limit: 100, mark_read: true });
     expect(await unreadCount("peek-dm-b")).toBe(0);
-  });
+  }, 20_000);
 
   test("an explicit mark_read:true acknowledges only the ids that page returned", async () => {
     for (let i = 1; i <= 4; i++) {
@@ -126,7 +123,7 @@ describe("G4 — MCP collection reads do not mutate by default", () => {
     // One page of two. The two rows outside the page must survive.
     await call("read_messages", { to: "peek-dm-c", unread_only: true, limit: 2, mark_read: true });
     expect(await unreadCount("peek-dm-c")).toBe(2);
-  });
+  }, 20_000);
 
   test("default compact read_channel leaves matching channel notifications unread", async () => {
     await call("create_channel", { name: "peek-chan" });
@@ -147,7 +144,7 @@ describe("G4 — MCP collection reads do not mutate by default", () => {
       "peek-chan",
       "peek-chan-other",
     ]);
-  });
+  }, 20_000);
 
   test("default verbose read_channel leaves matching channel notifications unread", async () => {
     await call("create_channel", { name: "peek-chan-verbose" });
@@ -162,7 +159,7 @@ describe("G4 — MCP collection reads do not mutate by default", () => {
       verbose: true,
     });
     expect((await call("read_channel_notifications", { from: "peek-watcher-verbose" })).count).toBe(1);
-  });
+  }, 20_000);
 
   test("read_channel with mark_read:true does consume the notification", async () => {
     await call("create_channel", { name: "peek-chan-ack" });
@@ -172,7 +169,7 @@ describe("G4 — MCP collection reads do not mutate by default", () => {
     expect((await call("read_channel_notifications", { from: "peek-watcher-ack" })).count).toBe(1);
     await call("read_channel", { channel: "peek-chan-ack", from: "peek-watcher-ack", limit: 10, mark_read: true });
     expect((await call("read_channel_notifications", { from: "peek-watcher-ack" })).count).toBe(0);
-  });
+  }, 20_000);
 
   test("read_channel_notifications does not acknowledge unless asked", async () => {
     await call("create_channel", { name: "peek-notify" });
@@ -181,7 +178,7 @@ describe("G4 — MCP collection reads do not mutate by default", () => {
 
     expect((await call("read_channel_notifications", { from: "peek-notify-watcher" })).count).toBe(1);
     expect((await call("read_channel_notifications", { from: "peek-notify-watcher" })).count).toBe(1);
-  });
+  }, 20_000);
 });
 
 describe("G5 — mention acknowledgement is exact-id only", () => {
@@ -199,19 +196,19 @@ describe("G5 — mention acknowledgement is exact-id only", () => {
     expect(broad.cleared ?? 0).toBe(0);
     // The load-bearing assertion: an unnamed request must clear NOTHING.
     expect(await unreadMentions("mention-target")).toBe(2);
-  });
+  }, 20_000);
 
   test("a channel-wide request is equally refused", async () => {
     const broad = await call("mark_mentions_read", { agent: "mention-target", channel: "mention-scope" });
     expect(broad.cleared ?? 0).toBe(0);
     expect(await unreadMentions("mention-target")).toBe(2);
-  });
+  }, 20_000);
 
   test("an explicitly empty id list is a no-op, not a broad acknowledgement", async () => {
     const empty = await call("mark_mentions_read", { agent: "mention-target", mention_ids: [] });
     expect(empty.cleared).toBe(0);
     expect(await unreadMentions("mention-target")).toBe(2);
-  });
+  }, 20_000);
 
   test("exact mention ids clear exactly those mentions", async () => {
     const page = await call("get_mentions", { agent: "mention-target", unread_only: true, limit: 100 });
@@ -221,7 +218,7 @@ describe("G5 — mention acknowledgement is exact-id only", () => {
     const cleared = await call("mark_mentions_read", { agent: "mention-target", mention_ids: [ids[0]] });
     expect(cleared.cleared).toBe(1);
     expect(await unreadMentions("mention-target")).toBe(1);
-  });
+  }, 20_000);
 });
 
 describe("G3 — MCP envelopes preserve the store's collection contract", () => {
@@ -236,7 +233,7 @@ describe("G3 — MCP envelopes preserve the store's collection contract", () => 
     expect(typeof envelope.max_bytes).toBe("number");
     expect(typeof envelope.timeout_ms).toBe("number");
     expect(typeof envelope.skipped_count).toBe("number");
-  });
+  }, 20_000);
 
   test("read_channel carries every bound the store page declared", async () => {
     await call("create_channel", { name: "peek-envelope-chan" });
@@ -245,14 +242,14 @@ describe("G3 — MCP envelopes preserve the store's collection contract", () => 
     for (const field of CONTRACT_FIELDS) {
       expect(Object.keys(envelope)).toContain(field);
     }
-  });
+  }, 20_000);
 
   test("get_mentions carries every bound the store page declared", async () => {
     const envelope = await call("get_mentions", { agent: "mention-target", limit: 5 });
     for (const field of CONTRACT_FIELDS) {
       expect(Object.keys(envelope)).toContain(field);
     }
-  });
+  }, 20_000);
 
   test("search_messages carries every bound the store page declared", async () => {
     await call("send_message", { to: "peek-search-envelope", from: "peek-writer", content: "search envelope probe alpha" });
@@ -260,7 +257,7 @@ describe("G3 — MCP envelopes preserve the store's collection contract", () => 
     for (const field of CONTRACT_FIELDS) {
       expect(Object.keys(envelope)).toContain(field);
     }
-  });
+  }, 20_000);
 
   test("get_pinned_messages carries every bound the store page declared", async () => {
     const sent = await call("send_message", { to: "peek-pinned-envelope", from: "peek-writer", content: "pinned envelope probe" });
@@ -269,7 +266,7 @@ describe("G3 — MCP envelopes preserve the store's collection contract", () => 
     for (const field of CONTRACT_FIELDS) {
       expect(Object.keys(envelope)).toContain(field);
     }
-  });
+  }, 20_000);
 
   /**
    * The one that matters. A byte cap small enough to drop rows must NOT be
@@ -290,5 +287,5 @@ describe("G3 — MCP envelopes preserve the store's collection contract", () => 
     expect(truncated).toBe(true);
     expect(envelope.has_more).toBe(true);
     expect(envelope.next_cursor).not.toBeNull();
-  });
+  }, 20_000);
 });
