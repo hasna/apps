@@ -353,12 +353,24 @@ const abortTimer = setTimeout(() => midstream.abort(), 1);
 try { await assert.rejects(pending, error => error instanceof SkillBundleInspectionError && error.code === "BUNDLE_ABORTED"); }
 finally { clearTimeout(abortTimer); }
 assert.equal(getEventListeners(midstream.signal, "abort").length, 0);
+let timerTurns = 0;
+const heartbeat = setInterval(() => { timerTurns++; }, 1);
+try {
+  assert.equal((await inspectSkillBundle(gzipSync(new Uint8Array(4 * 1024 * 1024)))).fileCount, 0);
+  assert.ok(timerTurns > 1);
+} finally { clearInterval(heartbeat); }
+const prescheduled = new AbortController();
+const preAbortTimer = setTimeout(() => prescheduled.abort(), 1);
+try { await assert.rejects(inspectSkillBundle(expansion, { signal: prescheduled.signal }),
+  error => error instanceof SkillBundleInspectionError && error.code === "BUNDLE_ABORTED"); }
+finally { clearTimeout(preAbortTimer); }
+assert.equal(getEventListeners(prescheduled.signal, "abort").length, 0);
 const timed = new AbortController();
 await assert.rejects(inspectSkillBundle(expansion, { signal: timed.signal, limits: { timeoutMs: 1 } }),
   error => error instanceof SkillBundleInspectionError && error.code === "BUNDLE_TIMEOUT");
 assert.equal(getEventListeners(timed.signal, "abort").length, 0);
 assert.equal((await inspectSkillBundle(packed.bytes)).sha256, packed.sha256);
-console.log("Installed bundle SDK runtime: 13 assertions passed.");
+console.log("Installed bundle SDK runtime: 17 assertions passed.");
 `);
   await run([process.execPath, "install", "--ignore-scripts", "--registry", "https://registry.npmjs.org"], workspace);
   await run([process.execPath, "node_modules/typescript/bin/tsc", "-p", "tsconfig.json"], workspace);

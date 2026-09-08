@@ -162,4 +162,20 @@ describe("bounded bundle inspection", () => {
     await refuses(bomb, "BUNDLE_TIMEOUT", { limits: { timeoutMs: 1 } });
     expect((await inspectSkillBundle(bundle(entry()))).fileCount).toBe(1);
   });
+  test("valid expanding padding cooperates with real caller timers", async () => {
+    const padding = gzipSync(new Uint8Array(4 * 1024 * 1024));
+    let turns = 0;
+    const heartbeat = setInterval(() => { turns++; }, 1);
+    try {
+      const inspected = await inspectSkillBundle(padding);
+      expect(inspected.fileCount).toBe(0);
+      expect(inspected.decompressedByteSize).toBe(4 * 1024 * 1024);
+      expect(turns).toBeGreaterThan(1);
+    } finally { clearInterval(heartbeat); }
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), 1);
+    try { await refuses(padding, "BUNDLE_ABORTED", { signal: controller.signal }); }
+    finally { clearTimeout(abortTimer); }
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  });
 });
