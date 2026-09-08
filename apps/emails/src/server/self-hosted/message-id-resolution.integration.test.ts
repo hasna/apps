@@ -14,6 +14,7 @@
 // Skipped entirely when EMAILS_TEST_POSTGRES_URL is not set.
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createSerialIntegrationFixture, MIGRATION_CASE_TIMEOUT_MS, MIGRATION_DRAIN_TIMEOUT_MS } from "../../../scripts/serial-integration-fixture.js";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { createPgPool, createQueryClient, MigrationLedger, type PoolQueryClient } from "../../storage-kit/index.js";
 import { emailsSelfHostedMigrations } from "./migrations.js";
@@ -115,16 +116,20 @@ async function insertMessage(tenantId: string, id: string): Promise<void> {
   });
 }
 
-beforeAll(async () => {
+// Applying the full migration history is fixture setup, not a message latency
+// assertion. Bun's hook timeout does not cancel SQL; drain before closing its pool.
+const setupFixture = createSerialIntegrationFixture();
+beforeAll(() => setupFixture.run(async () => {
   if (!pgClient) return;
   await pgClient.execute("DROP SCHEMA IF EXISTS public CASCADE");
   await pgClient.execute("CREATE SCHEMA public");
   await new MigrationLedger(pgClient, emailsSelfHostedMigrations()).migrate();
-});
+}), MIGRATION_CASE_TIMEOUT_MS);
 
 afterAll(async () => {
+  await setupFixture.drain();
   await pgClient?.close();
-});
+}, MIGRATION_DRAIN_TIMEOUT_MS + 1_000);
 
 describe.skipIf(!pgClient)("store.resolveMessageId (migration 0014 index)", () => {
   it("full uuid returns verbatim; unique prefix resolves; ambiguous -> ambiguous; none -> null", async () => {
