@@ -222,9 +222,6 @@ export class EcsDispatcher implements Dispatcher {
     if (previous) {
       // An existing attempt is never replaced based on an eventually consistent
       // empty listing. A terminal observation is returned to the run owner.
-      if (previous.status === "terminal" || previous.launchState === "terminal") {
-        return { kind: "previous-terminal", attemptId: previous.attemptId };
-      }
       return this.reconcile(run.admission, previous);
     }
 

@@ -343,3 +343,15 @@ test("eventually visible lost launch reconciles the original attempt without a r
   expect(await dispatcher.launchAttempt(runId)).toMatchObject({ kind: "already-launched", attemptId: original.attemptId, taskId: taskArn });
   expect(client.runTaskCalls).toHaveLength(1); expect(await store.listAttempts(runId)).toHaveLength(1);
 });
+
+
+test("a historical terminal marker cannot replace a missing physical task observation", async () => {
+  const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), dispatcher = makeDispatcher(store, client);
+  const runId = await admittedRunId(store, "historic-terminal"); await dispatcher.launchAttempt(runId);
+  const attempt = (await store.listAttempts(runId))[0]!;
+  await store.recordLaunchState({ runId, attemptId: attempt.attemptId, launchState: "terminal" });
+  client.describeTasks = async () => [];
+  expect((await dispatcher.launchAttempt(runId)).kind).toBe("ambiguous");
+  expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+  expect(client.runTaskCalls).toHaveLength(1);
+});
