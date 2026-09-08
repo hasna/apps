@@ -108,6 +108,8 @@ function publishedResourceContract() {
 export type V1StubResources = Record<string, Array<Record<string, unknown>>>;
 
 export interface V1StubOptions {
+  /** Test-only fixed loopback port for listener-collision regressions; default 0 asks the OS. */
+  port?: number;
   /** Bearer key the stub requires (default: a fixed test key). */
   apiKey?: string;
   /** Initial resources. Also used as the baseline restored by `reset()`. */
@@ -907,7 +909,10 @@ function messageCounts() {
 }
 
 const server = Bun.serve({
-  port: 0,
+  // Match the announced origin exactly. On macOS a wildcard socket may share
+  // a port with a live 127.0.0.1 fixture, whose handler then receives our calls.
+  hostname: "127.0.0.1",
+  port: Number(process.env.V1_STUB_PORT),
   async fetch(req) {
     const url = new URL(req.url);
     const parts = url.pathname.replace(/^\/+|\/+$/g, "").split("/");
@@ -1709,6 +1714,10 @@ const MANAGED_ENV_KEYS: readonly string[] = Object.freeze([
  *   afterEach(() => stub.clearEnv());
  */
 export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> {
+  const port = options.port ?? 0;
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error("v1-stub port must be an integer between 0 and 65535");
+  }
   const apiKey = options.apiKey ?? DEFAULT_API_KEY;
   const initialSeed = JSON.stringify(options.seed ?? {});
   let priorEnv: Record<string, string | undefined> | undefined;
@@ -1716,6 +1725,7 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
   const proc = Bun.spawn(["bun", "-e", SERVER_SRC], {
     env: {
       ...process.env,
+      V1_STUB_PORT: String(port),
       V1_STUB_API_KEY: apiKey,
       V1_STUB_MANAGED_PROVIDERS: options.managedProviders === true ? "1" : "",
       V1_STUB_SEED: initialSeed,

@@ -33,8 +33,7 @@ export interface UncertainSendIntentRow {
 function assertSelfHosted(command: string): void {
   if (getClientMode() === "self_hosted") return;
   throw new Error(
-    `${command} operates on the self-hosted send-intent ledger, which only exists in self_hosted mode. `
-      + "Local mode sends synchronously and records no uncertain state.",
+    `${command} requires access to the Emails API send-intent ledger. Configure your account API URL and key.`,
   );
 }
 
