@@ -96,7 +96,9 @@ describe("status transport provenance", () => {
     expect(status.transport?.api_key_tier).toBe("disk");
     // The resolver names the file; status must not spell the operator's home.
     expect(status.transport?.api_key_source).toBe(
-      home === process.env.HOME ? "~/.hasna/secrets/config/credentials" : join(configDir, "credentials"),
+      process.env.HOME && join(configDir, "credentials").startsWith(process.env.HOME + "/")
+        ? "~" + join(configDir, "credentials").slice(process.env.HOME.length)
+        : join(configDir, "credentials"),
     );
     expect(JSON.stringify(status)).not.toContain(FIXTURE_KEY);
   });

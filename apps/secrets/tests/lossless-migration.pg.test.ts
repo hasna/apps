@@ -17,7 +17,7 @@ import { COLUMNS, TABLES, proof, type Snapshot } from "../src/migration/snapshot
 import { _resetCloudMasterKey } from "../src/server/cloud-crypto.js";
 
 const dsn=process.env.SECRETS_TEST_DATABASE_URL;
-(dsn ? test : test.skip)("real PG: complete transfer, re-encryption, replay, conflict rollback and active tenant fence",async()=>{
+(dsn ? test : test.skip)("real PG: durable transfer, re-encryption, replay, conflict rollback and active tenant fence",async()=>{
  const schema='migration_'+randomUUID().replaceAll('-','');
  const admin=new Pool({connectionString:dsn});const saved=process.env.HASNA_SECRETS_MASTER_KEY;
  process.env.HASNA_SECRETS_MASTER_KEY=randomBytes(32).toString('hex');_resetCloudMasterKey();
@@ -34,7 +34,7 @@ const dsn=process.env.SECRETS_TEST_DATABASE_URL;
   await admin.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${role}`);
   await admin.query(`REVOKE ALL ON ${schema}.secret_key_owners FROM ${role}`);
   await admin.query(`GRANT USAGE,SELECT,UPDATE ON ALL SEQUENCES IN SCHEMA ${schema} TO ${role}`);
-  servicePool=new Pool({connectionString:dsn,options:`-c search_path=${schema} -c role=${role}`});const runtimeDb=createQueryClient(servicePool);
+  servicePool=new Pool({connectionString:dsn,options:`-c search_path=${schema} -c role=${role} -c synchronous_commit=off`});const runtimeDb=createQueryClient(servicePool);
   const a={tenantId:tenant,kid};await expect(migrationCapability(db,a)).rejects.toThrow('row-level security');expect((await migrationCapability(runtimeDb,a)).protocol).toBe('secrets-lossless-v1');
   const tables={} as Snapshot['tables'];const when='2020-01-01T00:00:00.000Z';
   for(const t of TABLES) {
@@ -51,9 +51,20 @@ const dsn=process.env.SECRETS_TEST_DATABASE_URL;
   }
   tables.secret_versions.push({...tables.secret_versions[0]!,key:'fixture/orphan',version:7});
   const snapshot:Snapshot={schema:1,audit_sequence:0,tables};const input={expected_tenant_id:tenant,expected_kid:kid,migration_id:randomUUID(),source_id:randomUUID(),nonce:randomBytes(32).toString('hex'),snapshot};
+  // Every serving connection starts asynchronous; the transaction must override it.
+  expect((await runtimeDb.get<{value:string}>("SELECT current_setting('synchronous_commit') AS value"))!.value).toBe('off');
+  await db.execute("ALTER TABLE vault_migrations ADD CONSTRAINT fixture_durable_receipt CHECK(current_setting('synchronous_commit')='on')");
+  // A late journal failure rolls back imported payloads, even after read/write work.
+  await db.execute("CREATE FUNCTION fixture_fail_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic commit failure'; END $$");
+  await db.execute("CREATE CONSTRAINT TRIGGER fixture_fail_commit AFTER INSERT ON vault_migrations DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fixture_fail_commit()");
+  await expect(importVault(runtimeDb,a,input)).rejects.toThrow('synthetic commit failure');
+  for(const table of [...TABLES,'vault_migrations','vault_migration_keys'])expect((await db.get<{n:string}>(`SELECT count(*) n FROM ${table}`))!.n).toBe('0');
+  expect((await runtimeDb.get<{value:string}>("SELECT current_setting('synchronous_commit') AS value"))!.value).toBe('off');
+  await db.execute('DROP TRIGGER fixture_fail_commit ON vault_migrations');
   const concurrent=await Promise.all([importVault(runtimeDb,a,input),importVault(runtimeDb,a,input)]);expect(concurrent.filter(r=>r.replayed)).toHaveLength(1);const receipt=concurrent[0]!;expect(receipt.proof).toBe(proof(snapshot,input.nonce));expect(Object.values(receipt.counts)).toEqual([1,1,1,1,1,2]);
   expect((await db.get<{value:string}>('SELECT value FROM secrets WHERE key=$1',['fixture/key']))!.value.startsWith('enc:v1:')).toBe(true);
   expect((await importVault(runtimeDb,a,input)).replayed).toBe(true);
+  expect((await runtimeDb.get<{value:string}>("SELECT current_setting('synchronous_commit') AS value"))!.value).toBe('off');
   await expect(importVault(runtimeDb,a,{...input,migration_id:randomUUID()})).rejects.toThrow('migration_destination_identity_conflict');
   await expect(importVault(runtimeDb,a,{...input,snapshot:{...snapshot,tables:{...tables,feedback:[]}}})).rejects.toThrow('migration_replay_conflict');
   const signing=randomBytes(32).toString('hex');const authStore=new ApiKeyStore(db);
