@@ -4,6 +4,12 @@ const PROBE_SESSION = `dispatch_tmux_probe_${process.pid}`;
 /** Opt out of the real-tmux suites in a sandbox that genuinely cannot host tmux. */
 const SKIP_ENV = "DISPATCH_SKIP_TMUX_INTEGRATION";
 
+/** Suites that start their own checked session do not need a disposable probe server. */
+export function hasTmuxExecutable(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env[SKIP_ENV] === "1") return false;
+  return spawnSync("tmux", ["-V"], { encoding: "utf8", env }).status === 0;
+}
+
 /**
  * Whether the real-tmux integration suites can run here.
  *
@@ -13,8 +19,7 @@ const SKIP_ENV = "DISPATCH_SKIP_TMUX_INTEGRATION";
  * var where tmux truly cannot run; having no tmux at all still skips quietly.
  */
 export function canRunTmuxIntegration(): boolean {
-  if (process.env[SKIP_ENV] === "1") return false;
-  if (spawnSync("tmux", ["-V"], { encoding: "utf8" }).status !== 0) return false;
+  if (!hasTmuxExecutable()) return false;
 
   spawnSync("tmux", ["kill-session", "-t", PROBE_SESSION], { encoding: "utf8" });
   const started = spawnSync("tmux", ["new-session", "-d", "-s", PROBE_SESSION, "-x", "80", "-y", "24"], {
