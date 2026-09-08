@@ -195,6 +195,8 @@ export {
   createRemoteSkillsClient,
   RemoteRouteUnsupportedError,
   RemoteRequestError,
+  RemoteQuoteUnavailableError,
+  type RemoteQuoteUnavailableCode,
   RemoteWorkspaceMemberError,
   RemoteCapabilityUnavailableError,
   type RemotePin,
