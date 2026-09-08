@@ -58,6 +58,9 @@ export async function importVault(client: PoolQueryClient, a: MigrationPrincipal
   return client.transaction(async db=>{
     await db.execute("SET LOCAL statement_timeout='10s'");
     await db.execute("SET LOCAL lock_timeout='5s'");
+    await db.execute("SET LOCAL synchronous_commit='on'");
+    const durable=await db.get<{fsync:string;full_page_writes:string;synchronous_commit:string}>("SELECT current_setting('fsync') AS fsync,current_setting('full_page_writes') AS full_page_writes,current_setting('synchronous_commit') AS synchronous_commit");
+    if(durable?.fsync!=='on'||durable.full_page_writes!=='on'||durable.synchronous_commit!=='on')throw new MigrationError('migration_durability_unavailable',503);
     await fence(db,a);
     // Blocks ordinary INSERT/UPDATE/DELETE while checking global identities and readback.
     await db.execute('LOCK TABLE secrets,vault_items,audit_log,users,feedback,secret_versions,vault_migrations,vault_migration_keys IN SHARE ROW EXCLUSIVE MODE');

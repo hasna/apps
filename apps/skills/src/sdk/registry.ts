@@ -43,3 +43,8 @@ export const currentVersionService: RegistryVersionService = {
 
 export { getServerSkill, getServerSkillMd, isValidSkillSlug, listServerSkills };
 export type { SkillMeta };
+
+// The safe upload seam is asynchronous. Legacy unbounded unpack is intentionally not exported here.
+export { inspectSkillBundle, packSkillBundle, SKILL_BUNDLE_INSPECTION_LIMITS, SkillBundleInspectionError } from "../lib/skill-bundle.js";
+export type { OwnedBytes, SkillBundleEntry, PackedSkillBundle, PackSkillBundleOptions,
+  InspectedSkillBundle, InspectSkillBundleOptions, SkillBundleInspectionLimits, SkillBundleInspectionErrorCode } from "../lib/skill-bundle.js";

@@ -17,6 +17,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { createGunzip, type ZlibOptions } from "node:zlib";
+import type { TransformOptions } from "node:stream";
 
 /** ustar block size. Every header and every file body is padded up to a multiple of it. */
 const BLOCK = 512;
@@ -281,7 +283,7 @@ function canonicalGzip(tar: OwnedBytes): OwnedBytes {
   return bytes;
 }
 
-/** Inverse of packSkillBundle. Used by the round-trip tests and by any future `pull`. */
+/** Legacy synchronous reader for trusted inputs. Unbounded; use inspectSkillBundle for uploads. */
 export function unpackSkillBundle(bundle: Uint8Array): SkillBundleEntry[] {
   return readTar(ownBytes(Bun.gunzipSync(ownBytes(bundle))));
 }
@@ -407,4 +409,250 @@ function concat(chunks: Uint8Array[]): OwnedBytes {
     offset += chunk.byteLength;
   }
   return merged;
+}
+
+
+/** Hard ceilings. Callers may tighten these limits, never disable or raise them. */
+export interface SkillBundleInspectionLimits {
+  compressedBytes: number;
+  decompressedBytes: number;
+  entries: number;
+  fileBytes: number;
+  pathBytes: number;
+  timeoutMs: number;
+}
+export const SKILL_BUNDLE_INSPECTION_LIMITS: Readonly<SkillBundleInspectionLimits> = Object.freeze({
+  compressedBytes: 16 * 1024 * 1024,
+  decompressedBytes: 64 * 1024 * 1024,
+  entries: 1024,
+  fileBytes: 16 * 1024 * 1024,
+  pathBytes: 100,
+  timeoutMs: 5000,
+});
+
+export interface InspectSkillBundleOptions {
+  limits?: Partial<SkillBundleInspectionLimits>;
+  signal?: AbortSignal;
+}
+export interface InspectedSkillBundle {
+  /** Each body has its own buffer. No path has been written or executed. */
+  entries: SkillBundleEntry[];
+  /** Hash of the complete owned compressed snapshot, not of extracted files. */
+  sha256: string;
+  compressedByteSize: number;
+  /** Includes headers, body padding, terminators and trailing zero padding. */
+  decompressedByteSize: number;
+  unpackedByteSize: number;
+  fileCount: number;
+}
+export type SkillBundleInspectionErrorCode = "BUNDLE_INVALID" | "BUNDLE_LIMIT" | "BUNDLE_ABORTED" | "BUNDLE_TIMEOUT";
+export class SkillBundleInspectionError extends Error {
+  constructor(readonly code: SkillBundleInspectionErrorCode, message: string) {
+    super(message);
+    this.name = "SkillBundleInspectionError";
+  }
+}
+function invalidBundle(message: string): never {
+  throw new SkillBundleInspectionError("BUNDLE_INVALID", message);
+}
+function inspectionLimits(options: InspectSkillBundleOptions): SkillBundleInspectionLimits {
+  const limits = { ...SKILL_BUNDLE_INSPECTION_LIMITS };
+  for (const key of Object.keys(options.limits ?? {})) {
+    if (!Object.hasOwn(limits, key)) throw new SkillBundleInspectionError("BUNDLE_LIMIT", "Unknown bundle limit");
+    const field = key as keyof SkillBundleInspectionLimits;
+    const value = options.limits![field];
+    if (!Number.isSafeInteger(value) || value! <= 0 || value! > limits[field]) {
+      throw new SkillBundleInspectionError("BUNDLE_LIMIT", "Bundle limits must be positive integers within the hard ceilings");
+    }
+    limits[field] = value!;
+  }
+  return limits;
+}
+
+/**
+ * Inspect a bounded gzipped ustar bundle without filesystem writes or execution.
+ * Resolves only after the entire gzip stream and tar structure validate. Returned
+ * entries are NOT permission to execute code or safely extract through existing
+ * filesystem symlinks; consumers still own storage, authorization and isolation.
+ *
+ * Only regular files, canonical relative slash paths (100 UTF-8 bytes maximum),
+ * no prefix/extension/link records, and modes without special bits are supported.
+ * Paths are unique under NFC + lowercase and cannot collide with a file ancestor.
+ * Noncanonical dot/empty/backslash segments are refused, not silently rewritten.
+ * Two zero tar blocks are required, followed only by complete zero padding blocks.
+ * Gzip members are decoded as one stream: an empty extra member is harmless, but
+ * a second nonempty archive after the tar terminator is rejected.
+ *
+ * The decoder has bounded stream buffers; decompressed bytes are counted before
+ * parsing or retaining each chunk, so expansion is stopped during decompression.
+ * Memory is bounded by the compressed snapshot, accepted file bodies, and stream
+ * buffers. The deadline covers copying, hashing, decoding and parsing, with both
+ * a timer and monotonic checks. Decoding yields to timers every 256 KiB so Bun's
+ * stream microtasks cannot starve a caller's scheduled abort. No partial entries
+ * escape on any failure.
+ */
+export async function inspectSkillBundle(bundle: Uint8Array, options: InspectSkillBundleOptions = {}): Promise<InspectedSkillBundle> {
+  const signal = options.signal;
+  const limits = inspectionLimits(options);
+  const deadline = performance.now() + limits.timeoutMs;
+  const check = () => {
+    if (signal?.aborted) throw new SkillBundleInspectionError("BUNDLE_ABORTED", "Bundle inspection aborted");
+    if (performance.now() >= deadline) throw new SkillBundleInspectionError("BUNDLE_TIMEOUT", "Bundle inspection deadline exceeded");
+  };
+  check();
+  if (bundle.byteLength > limits.compressedBytes) throw new SkillBundleInspectionError("BUNDLE_LIMIT", "Compressed bundle exceeds byte limit");
+  const snapshot = ownBytes(bundle);
+  check();
+  const sha256 = sha256Hex(snapshot);
+  check();
+  const parser = new BoundedTarReader(limits, check);
+  // Zlib forwards stream options; the node declaration omits the inherited fields.
+  const streamOptions: ZlibOptions & TransformOptions = { chunkSize: 16 * 1024, highWaterMark: 16 * 1024 };
+  const decoder = createGunzip(streamOptions);
+  let terminalError: SkillBundleInspectionError | undefined;
+  const stop = (code: "BUNDLE_ABORTED" | "BUNDLE_TIMEOUT") => {
+    terminalError ??= new SkillBundleInspectionError(code, code === "BUNDLE_ABORTED" ? "Bundle inspection aborted" : "Bundle inspection deadline exceeded");
+    decoder.destroy(terminalError);
+  };
+  const onAbort = () => stop("BUNDLE_ABORTED");
+  const timer = setTimeout(() => stop("BUNDLE_TIMEOUT"), Math.max(1, deadline - performance.now()));
+  signal?.addEventListener("abort", onAbort, { once: true });
+  let decompressedByteSize = 0;
+  let bytesSinceYield = 0;
+  try {
+    check();
+    decoder.end(snapshot);
+    for await (const chunk of decoder) {
+      check();
+      decompressedByteSize += chunk.byteLength;
+      if (decompressedByteSize > limits.decompressedBytes) throw new SkillBundleInspectionError("BUNDLE_LIMIT", "Decompressed bundle exceeds byte limit");
+      parser.push(chunk);
+      bytesSinceYield += chunk.byteLength;
+      if (bytesSinceYield >= 256 * 1024) {
+        // An already-resolved promise or queueMicrotask does not give caller
+        // abort timers a turn. The iterator retains bounded stream backpressure
+        // while this timer is pending. It resolves before we leave this scope.
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        bytesSinceYield = 0;
+        check();
+      }
+    }
+    check();
+    const entries = parser.finish();
+    return { entries, sha256, compressedByteSize: snapshot.byteLength, decompressedByteSize,
+      unpackedByteSize: parser.fileBytes, fileCount: entries.length };
+  } catch (error) {
+    if (terminalError) throw terminalError;
+    if (error instanceof SkillBundleInspectionError) throw error;
+    throw new SkillBundleInspectionError("BUNDLE_INVALID", "Invalid or truncated gzip bundle");
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+    decoder.destroy();
+  }
+}
+
+/** Incremental parser: one header block plus bounded owned file bodies. */
+class BoundedTarReader {
+  private readonly header = new Uint8Array(BLOCK);
+  private headerOffset = 0;
+  private pending: SkillBundleEntry | undefined;
+  private bodyOffset = 0;
+  private padding = 0;
+  private zeroBlocks = 0;
+  private readonly entries: SkillBundleEntry[] = [];
+  private readonly paths = new Set<string>();
+  private readonly directories = new Set<string>();
+  fileBytes = 0;
+  constructor(private readonly limits: SkillBundleInspectionLimits, private readonly check: () => void) {}
+  push(chunk: Uint8Array): void {
+    let offset = 0;
+    while (offset < chunk.byteLength) {
+      this.check();
+      if (this.pending) {
+        const count = Math.min(this.pending.bytes.byteLength - this.bodyOffset, chunk.byteLength - offset);
+        this.pending.bytes.set(chunk.subarray(offset, offset + count), this.bodyOffset);
+        offset += count;
+        this.bodyOffset += count;
+        if (this.bodyOffset === this.pending.bytes.byteLength) {
+          this.entries.push(this.pending);
+          this.pending = undefined;
+        }
+      } else if (this.padding) {
+        const count = Math.min(this.padding, chunk.byteLength - offset);
+        if (chunk.subarray(offset, offset + count).some((byte) => byte !== 0)) invalidBundle("Nonzero tar body padding");
+        offset += count;
+        this.padding -= count;
+      } else {
+        const count = Math.min(BLOCK - this.headerOffset, chunk.byteLength - offset);
+        this.header.set(chunk.subarray(offset, offset + count), this.headerOffset);
+        offset += count;
+        this.headerOffset += count;
+        if (this.headerOffset === BLOCK) {
+          this.readHeader();
+          this.headerOffset = 0;
+        }
+      }
+    }
+  }
+  finish(): SkillBundleEntry[] {
+    this.check();
+    if (this.pending || this.padding || this.headerOffset || this.zeroBlocks < 2) invalidBundle("Truncated tar bundle");
+    return this.entries;
+  }
+  private readHeader(): void {
+    this.check();
+    const h = this.header;
+    if (h.every((byte) => byte === 0)) { this.zeroBlocks++; return; }
+    if (this.zeroBlocks) invalidBundle("Nonzero tar data after terminator");
+    if (this.entries.length >= this.limits.entries) throw new SkillBundleInspectionError("BUNDLE_LIMIT", "Bundle entry limit exceeded");
+    let checksum = 0;
+    for (let i = 0; i < BLOCK; i++) checksum += i >= 148 && i < 156 ? 32 : h[i]!;
+    if (tarOctal(h.subarray(148, 156)) !== checksum) invalidBundle("Invalid tar header checksum");
+    if (new TextDecoder().decode(h.subarray(257, 265)) !== "ustar\0" + "00") invalidBundle("Unsupported tar format");
+    if ((h[156] !== 48 && h[156] !== 0) || h.subarray(157, 257).some((b) => b !== 0)
+      || h.subarray(345).some((b) => b !== 0)) invalidBundle("Unsupported tar entry or path prefix");
+    const mode = tarOctal(h.subarray(100, 108));
+    if (mode > 0o777) invalidBundle("Unsupported tar permission bits");
+    tarOctal(h.subarray(108, 116)); tarOctal(h.subarray(116, 124)); tarOctal(h.subarray(136, 148));
+    const size = tarOctal(h.subarray(124, 136));
+    if (size > this.limits.fileBytes || this.fileBytes + size > this.limits.decompressedBytes) {
+      throw new SkillBundleInspectionError("BUNDLE_LIMIT", "Bundle file byte limit exceeded");
+    }
+    const name = h.subarray(0, 100);
+    const end = name.indexOf(0);
+    if (end !== -1 && name.subarray(end).some((b) => b !== 0)) invalidBundle("Invalid tar path padding");
+    const raw = end === -1 ? name : name.subarray(0, end);
+    if (raw.byteLength > this.limits.pathBytes) throw new SkillBundleInspectionError("BUNDLE_LIMIT", "Bundle path byte limit exceeded");
+    let path: string;
+    try { path = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(raw); }
+    catch { return invalidBundle("Invalid UTF-8 bundle path"); }
+    if (!path || /[\\:\x00-\x1f\x7f]/u.test(path)) invalidBundle("Unsafe bundle path");
+    const segments = path.split("/");
+    if (segments.some((s) => !s || s === "." || s === "..")) invalidBundle("Unsafe bundle path segment");
+    const key = path.normalize("NFC").toLowerCase().normalize("NFC");
+    if (this.paths.has(key) || this.directories.has(key)) invalidBundle("Duplicate or conflicting bundle path");
+    const parents = key.split("/");
+    parents.pop();
+    while (parents.length) {
+      const parent = parents.join("/");
+      if (this.paths.has(parent)) invalidBundle("Conflicting bundle file ancestor");
+      this.directories.add(parent);
+      parents.pop();
+    }
+    this.paths.add(key);
+    this.fileBytes += size;
+    this.pending = { path, mode, bytes: new Uint8Array(new ArrayBuffer(size)) };
+    this.bodyOffset = 0;
+    this.padding = (BLOCK - size % BLOCK) % BLOCK;
+    if (!size) { this.entries.push(this.pending); this.pending = undefined; }
+  }
+}
+function tarOctal(field: Uint8Array): number {
+  const text = new TextDecoder().decode(field);
+  // Require digits plus trailing NUL/spaces; parseInt alone accepts junk and signs.
+  if (!/^[0-7]+[\0 ]*$/.test(text)) invalidBundle("Invalid tar octal field");
+  const value = Number.parseInt(text, 8);
+  if (!Number.isSafeInteger(value)) invalidBundle("Tar integer is out of range");
+  return value;
 }

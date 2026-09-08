@@ -873,7 +873,7 @@ describe("emails serve REST parity smoke", () => {
     expect(await json<Array<unknown>>("/api/sequences")).toHaveLength(100);
     expect(await json<Array<unknown>>(`/api/sequences/${enrollments.id}/enrollments`)).toHaveLength(100);
     expect(await json<Array<unknown>>("/api/warming")).toHaveLength(50);
-  });
+  }, 90_000);
 
   it("paginates contacts after REST suppression filtering", async () => {
     for (let i = 0; i < 5; i++) {

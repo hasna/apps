@@ -509,7 +509,7 @@ function handleKeysRevoke(output: OutputFn) {
 // ── registration ────────────────────────────────────────────────────────────
 
 export function registerAuthCommands(program: Command, output: OutputFn): void {
-  const auth = program.command("auth").description("User accounts, sessions, and tenant sign-in for the self-hosted service");
+  const auth = program.command("auth").description("User accounts, sessions, and tenant sign-in");
 
   auth
     .command("signup")
