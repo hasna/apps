@@ -6,6 +6,7 @@ useDefaultTestTimeout();
 import { createSubmitRunService } from "../admission.js";
 import { createImageProfileRegistry } from "../image-profile.js";
 import { MemoryRunExecutionStore } from "../storage.js";
+import { createReceiptService } from "../receipts.js";
 import type { FrozenAdmission } from "../types.js";
 import { EcsDispatcher, clientTokenFor, startedByFor, type EcsRunTaskClient, type EcsRunTaskInput, type EcsTaskState } from "./ecs.js";
 
@@ -367,7 +368,68 @@ test("historical cancelled state still requires physical stop proof before idemp
   expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(before);
   client.launchedTasks.set(launched.taskId, { taskArn: launched.taskId, lastStatus: "STOPPED" });
   expect((await dispatcher.cancel(runId)).accepted).toBe(true);
+  const terminal = await store.getReceipt(runId, attempt.attemptId);
+  expect(terminal?.status).toBe("cancelled");
   expect((await dispatcher.cancel(runId)).accepted).toBe(true);
-  expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(before);
+  expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(terminal);
   expect(client.runTaskCalls).toHaveLength(1);
+});
+
+
+test("failed cancellation receipt persistence repairs on retry and preserves terminal fields thereafter", async () => {
+  const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), receipts = createReceiptService(store);
+  let failures = 1, finalizes = 0;
+  const dispatcher = new EcsDispatcher(CONFIG, client, { store, receipts: { ...receipts, async finalize(input) {
+    finalizes++; if (failures-- > 0) throw Error("owned receipt write failure"); return receipts.finalize(input);
+  } } });
+  const runId = await admittedRunId(store, "receipt-retry"); await dispatcher.launchAttempt(runId);
+  const attempt = (await store.listAttempts(runId))[0]!;
+  expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+  expect((await store.getRun(runId))?.status).toBe("cancelled");
+  expect((await store.getReceipt(runId, attempt.attemptId))?.status).toBe(null);
+  expect((await dispatcher.cancel(runId)).accepted).toBe(true);
+  const terminal = await store.getReceipt(runId, attempt.attemptId);
+  expect(terminal?.status).toBe("cancelled"); expect(terminal?.completedAt).toBeTruthy();
+  expect((await store.getRun(runId))?.terminalReceiptId).toBe(attempt.attemptId);
+  expect((await dispatcher.cancel(runId)).accepted).toBe(true);
+  expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(terminal); expect(finalizes).toBe(2);
+});
+
+for (const outcome of ["succeeded", "failed"] as const) {
+  test(`contradictory ${outcome} receipt is preserved and cancellation is refused`, async () => {
+    const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), dispatcher = makeDispatcher(store, client);
+    const runId = await admittedRunId(store, `contradictory-${outcome}`); await dispatcher.launchAttempt(runId);
+    const attempt = (await store.listAttempts(runId))[0]!, receipt = (await store.getReceipt(runId, attempt.attemptId))!;
+    const terminal = { ...receipt, status: outcome, completedAt: "2026-09-08T12:00:00.000Z", exitCode: 0 };
+    await store.writeReceipt(terminal);
+    expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+    expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(terminal);
+    expect(client.stopTaskCalls).toHaveLength(0);
+  });
+}
+
+
+test("a persisted cancellation receipt repairs its missing run pointer without changing completedAt", async () => {
+  const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), dispatcher = makeDispatcher(store, client);
+  const runId = await admittedRunId(store, "receipt-pointer-retry"); await dispatcher.launchAttempt(runId);
+  const attempt = (await store.listAttempts(runId))[0]!, finalizeRun = store.finalizeRun.bind(store);
+  let failures = 1;
+  store.finalizeRun = async (...args) => { if (failures-- > 0) throw Error("owned run pointer loss"); return finalizeRun(...args); };
+  expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+  const persisted = await store.getReceipt(runId, attempt.attemptId);
+  expect(persisted?.status).toBe("cancelled"); expect(persisted?.completedAt).toBeTruthy();
+  expect((await store.getRun(runId))?.terminalReceiptId).toBeNull();
+  expect((await dispatcher.cancel(runId)).accepted).toBe(true);
+  expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(persisted);
+  expect((await store.getRun(runId))?.terminalReceiptId).toBe(attempt.attemptId);
+});
+
+test("a missing launch receipt cannot be invented during cancellation", async () => {
+  const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), receipts = createReceiptService(store);
+  const dispatcher = new EcsDispatcher(CONFIG, client, { store, receipts: { ...receipts, get: async () => null } });
+  const runId = await admittedRunId(store, "missing-launch-receipt"); await dispatcher.launchAttempt(runId);
+  const attempt = (await store.listAttempts(runId))[0]!, before = await store.getReceipt(runId, attempt.attemptId);
+  expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+  expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(before);
+  expect(client.stopTaskCalls).toHaveLength(0);
 });

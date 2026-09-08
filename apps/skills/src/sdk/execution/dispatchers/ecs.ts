@@ -4,7 +4,7 @@
  * Implements the sdk `Dispatcher` interface (submit/cancel) with the launch
  * machinery the interface seam leaves to this module:
  *
- *  1. CAS-claim the next attempt's `attempt_id` + `lease_generation`
+ *  1. generation-check the attempt's `attempt_id` + `lease_generation`
  *     (stale generation rejected),
  *  2. persist the launch intent (clientToken, startedBy, request digest)
  *     BEFORE calling ECS,
@@ -18,6 +18,10 @@
  * the seam, `createAwsEcsClient` is the only place the real SDK is imported,
  * and every test injects a mock client.
  *
+ * Cross-process fencing requires a store with atomic transactional claims and
+ * transitions. The generic state machine's separate reads and writes alone do
+ * not establish that guarantee.
+ *
  * Nothing here names a concrete cluster, task definition, subnet, or account:
  * all infrastructure identifiers come from configuration (R4).
  */
@@ -25,7 +29,7 @@
 import { createHash } from "node:crypto";
 import type { DispatchResult, Dispatcher } from "../../dispatcher.js";
 import type { RunExecutionStore } from "../storage.js";
-import type { AttemptRecord, FrozenAdmission } from "../types.js";
+import type { AttemptReceipt, AttemptRecord, FrozenAdmission } from "../types.js";
 import { canonicalJson } from "../types.js";
 import { createRunStateMachine, type RunStateMachine } from "../state-machine.js";
 import { createReceiptService, type ReceiptService } from "../receipts.js";
@@ -183,6 +187,9 @@ export class EcsDispatcher implements Dispatcher {
       const cancelled = await this.stateMachine.cancel(runId);
       return cancelled.ok ? { accepted: true, detail: "cancelled (no attempt launched)" } : { accepted: false, detail: cancelled.reason };
     }
+    if (!this.cancellationReceipt(await this.receipts.get(runId, current.attemptId), run.admission, current)) {
+      return { accepted: false, detail: "matching cancellation receipt is unavailable or contradictory" };
+    }
     const observation = await this.reconcile(run.admission, current);
     if (observation.kind !== "already-launched" && observation.kind !== "previous-terminal") {
       return { accepted: false, detail: "task state unknown; cancellation is not yet confirmed" };
@@ -197,11 +204,16 @@ export class EcsDispatcher implements Dispatcher {
         return { accepted: false, target: observation.taskId, detail: "task stop is not yet confirmed; reconcile before retrying cancellation" };
       }
     }
-    if (run.status === "cancelled") return { accepted: true, target: taskArn, detail: "already cancelled; task stop confirmed" };
-    const cancelled = await this.stateMachine.cancel(runId);
-    if (!cancelled.ok) return { accepted: false, detail: cancelled.reason };
-    await this.writeCancellationReceipt(run.admission, current, taskArn);
-    return { accepted: true, target: taskArn ?? undefined, detail: "cancelled after confirmed task stop" };
+    if (run.status !== "cancelled") {
+      const cancelled = await this.stateMachine.cancel(runId);
+      if (!cancelled.ok) return { accepted: false, detail: cancelled.reason };
+    }
+    try {
+      await this.writeCancellationReceipt(run.admission, current, taskArn);
+    } catch {
+      return { accepted: false, target: taskArn, detail: "task stopped; cancellation receipt is not yet confirmed" };
+    }
+    return { accepted: true, target: taskArn, detail: "cancelled after confirmed task stop and receipt" };
   }
 
   /**
@@ -328,23 +340,35 @@ export class EcsDispatcher implements Dispatcher {
     };
   }
 
-  private async writeCancellationReceipt(admission: FrozenAdmission, attempt: AttemptRecord, taskArn: string | null): Promise<void> {
-    const launch = await this.receipts.get(admission.runId, attempt.attemptId);
-    if (!launch) {
-      await this.receipts.recordLaunch({
-        admission,
-        attempt: { ...attempt, clientToken: attempt.clientToken ?? clientTokenFor(admission.runId, attempt.attemptId), requestDigest: attempt.requestDigest ?? "", startedBy: attempt.startedBy ?? "" },
-        taskId: taskArn,
-        launchedAt: this.now().toISOString(),
-      });
+  private cancellationReceipt(receipt: AttemptReceipt | null, admission: FrozenAdmission, attempt: AttemptRecord): receipt is AttemptReceipt {
+    try { return !!receipt && receipt.runId === admission.runId && receipt.attemptId === attempt.attemptId
+      && !!attempt.clientToken && receipt.clientToken === attempt.clientToken
+      && !!attempt.requestDigest && receipt.requestDigest === attempt.requestDigest
+      && !!attempt.startedBy && receipt.startedBy === attempt.startedBy
+      && receipt.bundleDigest === admission.bundleDigest && receipt.runtimeImageDigest === admission.runtimeImageDigest
+      && receipt.dependencyLayerTag === admission.dependencyLayerTag
+      && canonicalJson(receipt.policy) === canonicalJson(admission.policy) && canonicalJson(receipt.limits) === canonicalJson(admission.limits)
+      && (receipt.taskId === null || receipt.taskId === attempt.taskId)
+      && ((receipt.status === null && receipt.completedAt === null)
+        || (receipt.status === "cancelled" && typeof receipt.completedAt === "string" && Number.isFinite(Date.parse(receipt.completedAt)))); } catch { return false; }
+  }
+
+  private async writeCancellationReceipt(admission: FrozenAdmission, attempt: AttemptRecord, taskArn: string): Promise<void> {
+    const existing = await this.receipts.get(admission.runId, attempt.attemptId);
+    if (!this.cancellationReceipt(existing, admission, { ...attempt, taskId: taskArn })) throw Error("Cancellation receipt authority unavailable");
+    // A missing launch receipt cannot be reconstructed with an invented launch
+    // time. An existing terminal receipt must retain all its immutable fields.
+    const completedAt = existing.completedAt ?? this.now().toISOString();
+    const expected = { ...existing, status: "cancelled" as const, completedAt, exitCode: existing.status === "cancelled" ? existing.exitCode : null };
+    const run = await this.store.getRun(admission.runId);
+    if (existing.status !== "cancelled" || run?.status !== "cancelled" || run.terminalReceiptId !== attempt.attemptId) {
+      await this.receipts.finalize({ runId: admission.runId, attemptId: attempt.attemptId, status: "cancelled", exitCode: expected.exitCode, completedAt });
     }
-    await this.receipts.finalize({
-      runId: admission.runId,
-      attemptId: attempt.attemptId,
-      status: "cancelled",
-      exitCode: null,
-      completedAt: this.now().toISOString(),
-    });
+    const persisted = await this.receipts.get(admission.runId, attempt.attemptId);
+    const finalized = await this.store.getRun(admission.runId);
+    if (!persisted || canonicalJson(persisted) !== canonicalJson(expected) || finalized?.status !== "cancelled" || finalized.terminalReceiptId !== attempt.attemptId) {
+      throw Error("Cancellation receipt persistence is unconfirmed");
+    }
   }
 }
 
