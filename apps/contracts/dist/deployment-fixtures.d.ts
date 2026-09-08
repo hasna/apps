@@ -1,5 +1,5 @@
-import { type ArtifactAttestation, type BuildArtifact, type DeploymentApprovalDecision, type DeploymentAttempt, type DeploymentPlan, type DeploymentReceipt, type DeploymentRequest, type EnvironmentBinding, type IntentSnapshot, type LaunchEvidence, type ProductProjection, type ProviderReceipt, type VerifiedSourceCandidate } from "./schemas";
-import { type DeploymentContractSet, type DeploymentSchemaId } from "./deployment";
+import { type ArtifactAttestation, type BuildArtifact, type DeploymentApprovalDecision, type DeploymentAttempt, type DeploymentPlan, type DeploymentReceipt, type DeploymentRequest, type EnvironmentBinding, type IntentSnapshot, type LaunchEvidence, type ProductProjection, type ProviderReceipt, type VerifiedSourceCandidate } from "./schemas.js";
+import { type DeploymentContractSet, type DeploymentSchemaId } from "./deployment.js";
 export interface DeploymentFixtureSet {
     productProjection: ProductProjection;
     intentSnapshot: IntentSnapshot;

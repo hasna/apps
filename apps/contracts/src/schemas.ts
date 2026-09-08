@@ -2,11 +2,11 @@ import { createHash } from "node:crypto";
 import {
   createDeploymentSchemas,
   DEPLOYMENT_SCHEMA_IDS,
-} from "./deployment";
+} from "./deployment.js";
 import {
   createDeploymentEnvelopeSchema,
   DEPLOYMENT_ENVELOPE_SCHEMA_ID,
-} from "./deployment-envelope";
+} from "./deployment-envelope.js";
 import { z } from "zod";
 
 export const CONTRACTS_PACKAGE_NAME = "@hasna/contracts";

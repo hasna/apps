@@ -1,4 +1,4 @@
-import { type Env } from "./server-backend";
+import { type Env } from "./server-backend.js";
 export type ConformanceStatus = "pass" | "fail" | "skip";
 export interface ConformanceCheck {
     id: string;

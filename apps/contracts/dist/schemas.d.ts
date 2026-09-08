@@ -1,4 +1,4 @@
-import { DEPLOYMENT_SCHEMA_IDS } from "./deployment";
+import { DEPLOYMENT_SCHEMA_IDS } from "./deployment.js";
 import { z } from "zod";
 export declare const CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
 export declare const CONTRACTS_PACKAGE_VERSION = "1.0.2";

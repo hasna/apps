@@ -15,12 +15,12 @@ import {
   databaseUrlSecretRefFor,
   defaultSqlitePathFor,
   type ServiceContractManifest
-} from "./schemas";
+} from "./schemas.js";
 
 import {
   serverDataBackendEnvKeys,
   type ServerDataBackendEnvKeys,
-} from "./server-backend";
+} from "./server-backend.js";
 
 export const SERVICE_CONTRACT_MANIFEST_FILENAME = "hasna.contract.json";
 

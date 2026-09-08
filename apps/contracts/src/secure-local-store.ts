@@ -5,7 +5,7 @@ import {
   type SecureLocalStorePolicy,
   type SecureLocalStoreRetentionAdapter,
   type SecureLocalStoreSqliteMaintenance
-} from "./schemas";
+} from "./schemas.js";
 
 export const SECURE_LOCAL_STORE_POLICY_VERSION = "2026-07-06";
 

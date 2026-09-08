@@ -1,12 +1,12 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 import {
   DeploymentSchemaRegistry,
-} from "./schemas";
+} from "./schemas.js";
 import {
   createDeploymentFixtureSet,
   deploymentFixtureSetToContractSet,
   deploymentFixturesBySchemaId,
-} from "./deployment-fixtures";
+} from "./deployment-fixtures.js";
 import {
   DEPLOYMENT_CONTRACT_VERSION,
   DEPLOYMENT_SCHEMA_IDS,
@@ -15,7 +15,7 @@ import {
   sha256DeploymentValue,
   stableDeploymentJson,
   type DeploymentSchemaId,
-} from "./deployment";
+} from "./deployment.js";
 
 export const DEPLOYMENT_SCHEMA_BUNDLE_ID =
   "hasna.deployment.schema_bundle.v1" as const;
