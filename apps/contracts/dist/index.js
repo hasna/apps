@@ -22249,6 +22249,57 @@ function createHasnaHttpTransportInternal(options, requestBindingProvider) {
   const timeoutMs = options.timeoutMs ?? 30000;
   const sleep = options.sleepImpl ?? defaultSleep;
   const defaultRetry = options.retry;
+  async function fetchRaw(input, init) {
+    let request2;
+    try {
+      request2 = new Request(input, init);
+    } catch {
+      throw new ClientTransportConfigurationError(options.name, "The request URL, method, headers or body are invalid.");
+    }
+    const target = new URL(request2.url);
+    const application = new URL(base);
+    const rootPath = application.pathname.replace(/\/v1$/, "").replace(/\/$/, "");
+    if (target.origin !== application.origin || target.username || target.password || target.hash || target.pathname !== rootPath && !target.pathname.startsWith(`${rootPath}/`) || /%(?:2f|5c|25)/i.test(target.pathname)) {
+      throw new ClientTransportConfigurationError(options.name, "The request URL is outside the bound application path.");
+    }
+    const headers = new Headers(options.headers);
+    request2.headers.forEach((value, key) => headers.set(key, value));
+    assertNoAuthorityOverrideHeaders(Object.fromEntries(headers), "request");
+    if (headers.has("x-api-key") || headers.has("authorization")) {
+      throw new ClientTransportConfigurationError(options.name, "Authenticated request headers must not override the bound credential.");
+    }
+    request2.signal.throwIfAborted();
+    const binding = requestBindingProvider ? await requestBindingProvider() : { baseUrl: base, credential: await resolveRequestCredential(options.name, options.apiKey) };
+    if (binding.baseUrl !== base) {
+      throw new ClientTransportConfigurationError(options.name, "The configured service authority changed; rebuild the client before sending credentials.");
+    }
+    headers.set("x-api-key", binding.credential.apiKey);
+    headers.set("Authorization", `Bearer ${binding.credential.apiKey}`);
+    const timeout = new AbortController;
+    const signal = AbortSignal.any([request2.signal, timeout.signal]);
+    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    const fetchOptions = {
+      method: request2.method,
+      headers: Object.fromEntries(headers),
+      body: request2.body,
+      signal,
+      redirect: "manual",
+      cache: request2.cache,
+      credentials: request2.credentials,
+      integrity: request2.integrity,
+      keepalive: request2.keepalive,
+      mode: request2.mode,
+      referrer: request2.referrer,
+      referrerPolicy: request2.referrerPolicy,
+      ...request2.body ? { duplex: "half" } : {}
+    };
+    try {
+      signal.throwIfAborted();
+      return await fetchImpl(target.href, fetchOptions);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   function resolveRetry(callRetry) {
     const chosen = callRetry !== undefined ? callRetry : defaultRetry;
     if (chosen === false)
@@ -22375,6 +22426,7 @@ function createHasnaHttpTransportInternal(options, requestBindingProvider) {
   }
   return {
     baseUrl: base,
+    fetch: fetchRaw,
     request,
     get: (path, opts) => request("GET", path, undefined, opts),
     post: (path, body, opts) => request("POST", path, body, opts),

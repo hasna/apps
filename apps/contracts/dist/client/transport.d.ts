@@ -180,6 +180,13 @@ export interface HasnaHttpTransportOptions {
 }
 export interface HasnaHttpTransport {
     readonly baseUrl: string;
+    /**
+     * Fetch an absolute URL inside the configured application root (the canonical
+     * baseUrl without its terminal /v1). Returns the original unread Response,
+     * including error/redirect responses. No retries or response parsing occur.
+     * Authentication and manual redirect handling cannot be overridden by init.
+     */
+    fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>;
     request<T = unknown>(method: string, path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T>;
     get<T = unknown>(path: string, opts?: HasnaRequestOptions): Promise<T>;
     post<T = unknown>(path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T>;

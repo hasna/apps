@@ -46,6 +46,24 @@ Project metadata and vendored-kit manifests remain project-local. See
 [State layout](docs/STATE_LAYOUT.md) for the audited path inventory and
 ownership boundaries.
 
+## Authenticated raw responses
+
+`createClientTransport` from `@hasna/contracts/client` exposes both parsed JSON
+methods and `client.fetch(input, init)` for CSV, downloads and event streams.
+The raw method accepts an absolute URL, `URL`, or `Request` inside the configured
+application root (the canonical base without its terminal `/v1`). For example,
+a configured `/todos` gateway prefix permits `/todos/api/...` and `/todos/v1/...`.
+Different origins, sibling prefixes, and ambiguous encoded path separators or
+nested escapes are refused before credentials are sent.
+
+Raw fetch returns the original unread `Response`, including non-success and
+redirect statuses; the caller owns status handling, body consumption and stream
+cancellation. It never retries, parses a response, or follows a redirect, and
+caller headers cannot replace the bound credential. The timeout covers waiting
+for response headers; the caller's signal continues to cancel its response
+stream afterward. Saved credentials resolve afresh at the same bound authority;
+authority changes or invalid/removed credentials require a new valid client.
+
 ## Todos contract
 
 `@hasna/contracts/todos` is the pure customer contract for Todos. Import it

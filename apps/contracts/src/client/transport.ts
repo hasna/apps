@@ -803,6 +803,13 @@ export interface HasnaHttpTransportOptions {
 
 export interface HasnaHttpTransport {
   readonly baseUrl: string;
+  /**
+   * Fetch an absolute URL inside the configured application root (the canonical
+   * baseUrl without its terminal /v1). Returns the original unread Response,
+   * including error/redirect responses. No retries or response parsing occur.
+   * Authentication and manual redirect handling cannot be overridden by init.
+   */
+  fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>;
   request<T = unknown>(method: string, path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T>;
   get<T = unknown>(path: string, opts?: HasnaRequestOptions): Promise<T>;
   post<T = unknown>(path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T>;
@@ -854,6 +861,74 @@ function createHasnaHttpTransportInternal(
   const timeoutMs = options.timeoutMs ?? 30_000;
   const sleep = options.sleepImpl ?? defaultSleep;
   const defaultRetry = options.retry;
+
+  async function fetchRaw(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+    let request: Request;
+    try {
+      request = new Request(input, init);
+    } catch {
+      // Native Request errors can include the supplied URL or header value.
+      throw new ClientTransportConfigurationError(options.name, "The request URL, method, headers or body are invalid.");
+    }
+    const target = new URL(request.url);
+    const application = new URL(base);
+    const rootPath = application.pathname.replace(/\/v1$/, "").replace(/\/$/, "");
+    // URL parses dot segments before this comparison. Also reject encoded path
+    // separators and nested escapes: a gateway must not decode a path that we
+    // approved into a different application's route.
+    if (
+      target.origin !== application.origin || target.username || target.password || target.hash ||
+      (target.pathname !== rootPath && !target.pathname.startsWith(`${rootPath}/`)) ||
+      /%(?:2f|5c|25)/i.test(target.pathname)
+    ) {
+      throw new ClientTransportConfigurationError(options.name, "The request URL is outside the bound application path.");
+    }
+    const headers = new Headers(options.headers);
+    request.headers.forEach((value, key) => headers.set(key, value));
+    assertNoAuthorityOverrideHeaders(Object.fromEntries(headers), "request");
+    if (headers.has("x-api-key") || headers.has("authorization")) {
+      throw new ClientTransportConfigurationError(options.name, "Authenticated request headers must not override the bound credential.");
+    }
+    request.signal.throwIfAborted();
+    const binding = requestBindingProvider
+      ? await requestBindingProvider()
+      : { baseUrl: base, credential: await resolveRequestCredential(options.name, options.apiKey) };
+    // The dynamic provider checks this itself; keep the raw path invariant
+    // explicit for both static and dynamically bound transports.
+    if (binding.baseUrl !== base) {
+      throw new ClientTransportConfigurationError(options.name, "The configured service authority changed; rebuild the client before sending credentials.");
+    }
+    headers.set("x-api-key", binding.credential.apiKey);
+    headers.set("Authorization", `Bearer ${binding.credential.apiKey}`);
+    const timeout = new AbortController();
+    const signal = AbortSignal.any([request.signal, timeout.signal]);
+    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    // Use the Request's normalized body and headers together. This retains its
+    // multipart boundary and preserves streams instead of serializing JSON.
+    const fetchOptions: RequestInit & { duplex?: "half" } = {
+      method: request.method,
+      headers: Object.fromEntries(headers),
+      body: request.body,
+      signal,
+      redirect: "manual",
+      cache: request.cache,
+      credentials: request.credentials,
+      integrity: request.integrity,
+      keepalive: request.keepalive,
+      mode: request.mode,
+      referrer: request.referrer,
+      referrerPolicy: request.referrerPolicy,
+      ...(request.body ? { duplex: "half" as const } : {}),
+    };
+    try {
+      signal.throwIfAborted();
+      return await fetchImpl(target.href, fetchOptions);
+    } finally {
+      // The header deadline ends here; the caller still owns cancellation of
+      // an unread or streaming response through its original signal.
+      clearTimeout(timer);
+    }
+  }
 
   function resolveRetry(callRetry: HasnaRequestOptions["retry"]): Required<HasnaRetryOptions> | null {
     const chosen = callRetry !== undefined ? callRetry : defaultRetry;
@@ -1017,6 +1092,7 @@ function createHasnaHttpTransportInternal(
 
   return {
     baseUrl: base,
+    fetch: fetchRaw,
     request,
     get: (path, opts) => request("GET", path, undefined, opts),
     post: (path, body, opts) => request("POST", path, body, opts),
