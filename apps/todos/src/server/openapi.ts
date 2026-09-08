@@ -1405,6 +1405,15 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             expected_plan_revision: { type: "string", minLength: 1 },
           },
         },
+        PlanProjectLinkConflictResponse: {
+          type:"object",required:["error"],
+          properties:{
+            error:{type:"string"},code:{type:"string"},conflict:{type:"boolean"},
+            operation_committed:{type:"boolean",enum:[true],description:"Present only when a previously persisted accepted receipt was authoritatively read"},
+            current_state_matches_receipt:{type:"boolean",enum:[false]},
+            receipt:{$ref:"#/components/schemas/PlanProjectLinkReceipt"},
+          },
+        },
         ErrorResponse: {
           type: "object",
           required: ["error"],
@@ -3239,7 +3248,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkResult" } } } },
             "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
             "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
-            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkConflictResponse" } } } },
           },
         },
       },
