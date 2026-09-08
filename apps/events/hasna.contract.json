@@ -3,7 +3,7 @@
   "name": "events",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "1.0.2",
+  "kitVersion": "1.1.0",
   "description": "Event envelope libraries and explicit compatibility storage remain available. The separate events-serve intake API stores immutable tenant-scoped event receipts in PostgreSQL under registered producer grants; startup never adopts a tenant or creates a schema. Legacy spools do not constitute remote acceptance.",
   "bins": [
     "events",

@@ -4,7 +4,7 @@
   "name": "mementos",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "1.0.2",
+  "kitVersion": "1.1.0",
   "description": "Universal memory system for AI agents — CLI, MCP server, REST API, and TypeScript SDK over one SQLite or PostgreSQL store. Hosted clients (CLI, MCP server, ./sdk) resolve their credential and authority through the @hasna/contracts client chain, fresh per call; the on-box SQLite store is reachable only by the explicit local opt-ins (HASNA_MEMENTOS_DB_PATH / HASNA_MEMENTOS_LOCAL). mementos-serve reads PostgreSQL selected by HASNA_MEMENTOS_DATABASE_URL. The data backend is the only runtime switch; retired storage-mode variables are inert.",
   "bins": [
     "mementos",

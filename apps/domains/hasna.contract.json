@@ -3,7 +3,7 @@
   "name": "domains",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "1.0.2",
+  "kitVersion": "1.1.0",
   "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents. Four surfaces: CLI (domains), MCP (domains-mcp), HTTP API (domains-serve), and a generated SDK (@hasna/domains/sdk). The client resolves its authority and credential through the @hasna/contracts 1.0.2 resolver (HASNA_DOMAINS_API_URL/_API_KEY env, the macOS Keychain, or ~/.hasna/domains/config/credentials; default fleet gateway https://api.hasna.com/domains), or uses local SQLite at ~/.hasna/domains/domains.db when explicitly opted in with a local path variable and nothing else is configured; domains-serve reads and writes PostgreSQL directly (HASNA_DOMAINS_DATABASE_URL), no cache or sync in the service.",
   "bins": [
     "domains",

@@ -7,7 +7,7 @@
  * Run: bun run scan:artifact
  *
  * The scanner version is pinned here and nowhere else (pinned to the same
- * published @hasna/contracts 1.0.2 the client resolver comes from). There is
+ * exact @hasna/contracts version the client resolver comes from). There is
  * deliberately no environment override: a gate whose command can be replaced
  * at publish time is the exact bypass the gate exists to close.
  * scan-artifact.test.ts asserts the pin stays in lockstep with
@@ -19,7 +19,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
-export const CONTRACTS_KIT_VERSION = "1.0.2";
+export const CONTRACTS_KIT_VERSION = "1.1.0";
 
 function run(command: string[], cwd: string): string {
   const result = Bun.spawnSync(command, {
