@@ -8,6 +8,8 @@ import subprocess
 import sys
 import termios
 import time
+import urllib.parse
+import urllib.request
 
 
 def main():
@@ -18,6 +20,7 @@ def main():
     output = b""
     cursor = 0
     completed = 0
+    checkpoints = 0
     deadline = time.monotonic() + 12
     try:
         child = subprocess.Popen(sys.argv[1:], stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
@@ -31,6 +34,16 @@ def main():
                     if len(output) > 30000:
                         raise RuntimeError("output-bound")
             cursor = output.index(expected, cursor) + len(expected)
+            if "checkUrl" in step:
+                target = urllib.parse.urlsplit(step["checkUrl"])
+                if target.scheme != "http" or target.hostname != "127.0.0.1" or target.path != "/owned-pty-checkpoint" or target.username or target.password or target.query or target.fragment:
+                    raise RuntimeError("invalid-owned-checkpoint")
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                with opener.open(step["checkUrl"], timeout=2) as response:
+                    data = response.read(4097)
+                if len(data) > 4096 or json.loads(data).get("requestsSinceCheckpoint") != 0:
+                    raise RuntimeError("request-before-corrected-proof")
+                checkpoints += 1
             os.write(master, step["send"].encode())
             completed += 1
         while child.poll() is None:
@@ -45,7 +58,7 @@ def main():
             if len(output) > 30000:
                 raise RuntimeError("output-bound")
         text = output.decode(errors="replace")
-        report = {"exitCode": child.returncode, "steps": completed, "rawModeRestored": termios.tcgetattr(slave) == original,
+        report = {"exitCode": child.returncode, "steps": completed, "checkpoints": checkpoints, "rawModeRestored": termios.tcgetattr(slave) == original,
                   "canaryLeak": any(value in text for value in config["canaries"]),
                   "expectedOutput": all(value in text for value in config["expectedOutput"]), "outputBytes": len(output)}
         report["passed"] = report["exitCode"] == config["expectedExit"] and report["rawModeRestored"] and not report["canaryLeak"] and report["expectedOutput"]
