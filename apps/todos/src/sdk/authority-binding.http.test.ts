@@ -206,13 +206,13 @@ for (const kind of ["namespaced", "v1"] as const) {
     });
   }
 
-  test(`${kind} explicit blank key does not become an anonymous request`, async () => {
+  test(`${kind} explicit blank key does not become an anonymous request`, () => {
     const remote = fixture();
     remote.save("fixture-ambient");
-    const list = kind === "namespaced"
-      ? () => new TodosClient({ baseUrl: remote.authority, apiKey: "" }).tasks.list()
-      : () => createTodosV1Client({ baseUrl: remote.authority, apiKey: "" }).listTasks();
-    await expect(list()).rejects.toThrow();
+    const create = kind === "namespaced"
+      ? () => new TodosClient({ baseUrl: remote.authority, apiKey: "" })
+      : () => createTodosV1Client({ baseUrl: remote.authority, apiKey: "" });
+    expect(create).toThrow(/explicit apiKey argument is blank/);
     expect(remote.calls).toHaveLength(0);
   });
 }

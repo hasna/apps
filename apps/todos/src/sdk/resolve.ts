@@ -124,10 +124,13 @@ export function resolveTodosSdkTransport(
     } catch {
       throw new ClientTransportConfigurationError("todos", "The explicit baseUrl must be a valid HTTPS service URL or exact loopback HTTP URL.");
     }
+    const apiKey = options.apiKey === undefined
+      ? null
+      : resolveCredential("todos", {}, { apiKey: options.apiKey })!.apiKey;
     return {
       mode: "http", baseUrl,
-      apiKey: options.apiKey ?? null,
-      apiKeySource: options.apiKey ? "explicit apiKey argument" : null,
+      apiKey,
+      apiKeySource: apiKey ? "explicit apiKey argument" : null,
       apiUrlSource: "explicit baseUrl argument",
     };
   }
