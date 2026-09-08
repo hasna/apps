@@ -17,9 +17,13 @@ CONSUMER-VISIBLE BEHAVIOR CHANGE for the public `@hasna/files/sdk`: a call
 that previously returned an (unauthenticated) client now throws. A blank key
 is not a pin — `apiKey: ""` or a whitespace-only value, the shape a
 set-but-blank `.env` variable takes, refuses exactly like a missing key, so
-the unauthenticated path is closed rather than merely narrowed. The key may
-be pinned either as the top-level `apiKey` or as `credentials: { apiKey }` —
-the same tier-1 shapes the sibling `@hasna/secrets` SDK accepts — so a caller
-who supplies it in either slot is not falsely refused. The explicit
-`baseUrl` + explicit `apiKey` pin and the from-env chain path keep working
-unchanged; the regression suite pins all of these shapes.
+the unauthenticated path is closed rather than merely narrowed. For a pinned
+authority the key may be supplied either as the top-level `apiKey` or as
+`credentials: { apiKey }` — the same tier-1 shapes the sibling
+`@hasna/secrets` SDK accepts — so a caller who pins the key in either slot is
+not falsely refused. WITHOUT an explicit `baseUrl` both slots behave exactly
+as they did before this release: the top-level `apiKey` is the client-option
+pin, and `credentials.apiKey` stays a resolver tier-1 input that resolves the
+authority and the credential together (never a bare pin the constructor would
+reject). The explicit `baseUrl` + explicit `apiKey` pin and the from-env chain
+path keep working unchanged; the regression suite pins all of these shapes.

@@ -55,7 +55,10 @@ export interface CreateFilesClientOptions extends Partial<FilesClientOptions> {
  * to an authority it was not resolved for, and an unauthenticated client is
  * never built silently (adversarial credential-seam audit, hasna/apps#1720).
  * A blank key (`""` or whitespace — a set-but-blank env var) is NOT a key and
- * refuses exactly like a missing one.
+ * refuses exactly like a missing one. Without an explicit `baseUrl` the
+ * `credentials.apiKey` slot is NOT a pin: it stays a resolver tier-1 input and
+ * resolves the authority and the credential together (the sibling
+ * `@hasna/secrets` shape).
  */
 export const FILES_SDK_AUTHORITY_PIN_MESSAGE =
   "FILES_CREDENTIAL_PINNED: an explicit baseUrl requires a non-blank explicit apiKey " +
@@ -71,15 +74,20 @@ export function createFilesClientFromEnv(
 ): FilesClient {
   const { credentials: chainOptions, ...clientOverrides } = overrides;
   const explicitBaseUrl = clientOverrides.baseUrl ?? undefined;
-  // Tier 1 in BOTH shapes, exactly like the sibling `@hasna/secrets` SDK: the
-  // client option, or the resolver's own `credentials.apiKey` argument. Either
-  // is a literal key the caller pinned in code, never a chain read.
-  const explicitApiKey = clientOverrides.apiKey ?? chainOptions?.apiKey;
-  // A blank key is not a key. `client.ts` sets `x-api-key` only for a truthy
-  // value, so `""` (a set-but-empty env var — common in .env files) and a
-  // whitespace-only value would leave the caller with exactly the silently
-  // unauthenticated client this guard exists to prevent (hasna/apps#1720).
-  const hasExplicitApiKey = typeof explicitApiKey === "string" && explicitApiKey.trim() !== "";
+  // Tier 1 for a PINNED authority, in BOTH shapes, exactly like the sibling
+  // `@hasna/secrets` SDK: the client option, or the resolver's own
+  // `credentials.apiKey` argument. Either is a literal key the caller pinned
+  // in code, never a chain read. A blank key is not a key. `client.ts` sets
+  // `x-api-key` only for a truthy value, so `""` (a set-but-empty env var —
+  // common in .env files) and a whitespace-only value would leave the caller
+  // with exactly the silently unauthenticated client this guard exists to
+  // prevent (hasna/apps#1720).
+  const pinnedApiKey = clientOverrides.apiKey ?? chainOptions?.apiKey;
+  const hasPinnedApiKey = typeof pinnedApiKey === "string" && pinnedApiKey.trim() !== "";
+  // WITHOUT a pinned authority only the top-level `apiKey` is a client-option
+  // pin; `credentials.apiKey` is NOT lifted out of the chain there (see below).
+  const topLevelApiKey = clientOverrides.apiKey;
+  const hasTopLevelApiKey = typeof topLevelApiKey === "string" && topLevelApiKey.trim() !== "";
 
   // A caller-pinned authority never receives the ambient credential chain. The
   // authority is normalised to the fleet's `<origin>/v1` spelling either way,
@@ -89,15 +97,21 @@ export function createFilesClientFromEnv(
     // with no usable caller-supplied key there is nothing authentic to pin, and
     // a client built without one would be an UNAUTHENTICATED client that looks
     // like a fleet client (adversarial credential-seam audit, hasna/apps#1720).
-    if (!hasExplicitApiKey) throw new Error(FILES_SDK_AUTHORITY_PIN_MESSAGE);
-    const options: FilesClientOptions = { ...clientOverrides, baseUrl: toV1BaseUrl(explicitBaseUrl), apiKey: explicitApiKey } as FilesClientOptions;
+    if (!hasPinnedApiKey) throw new Error(FILES_SDK_AUTHORITY_PIN_MESSAGE);
+    const options: FilesClientOptions = { ...clientOverrides, baseUrl: toV1BaseUrl(explicitBaseUrl), apiKey: pinnedApiKey } as FilesClientOptions;
     return new FilesClient(options);
   }
-  // A blank key with no pinned authority is simply unset: fall through to the
-  // chain (which resolves or throws) rather than building a client that sends
-  // no credential at all.
-  if (hasExplicitApiKey) {
-    return new FilesClient({ ...clientOverrides, apiKey: explicitApiKey } as FilesClientOptions);
+  // No caller-named authority: a blank top-level key is simply unset and falls
+  // through to the chain (which resolves or throws) rather than building a
+  // client that sends no credential at all. `credentials.apiKey` is NOT lifted
+  // out of the chain here — it stays a resolver tier-1 input, so it still
+  // resolves the authority and the credential TOGETHER, exactly as before
+  // #1720 and exactly as the sibling `@hasna/secrets` SDK reads it (its
+  // `credentials?.apiKey` is consulted only inside the `baseUrl !== undefined`
+  // branch). Lifting it out would turn a credential-only override into a
+  // no-baseUrl pin that the FilesClient constructor rejects (hasna/apps#1990).
+  if (hasTopLevelApiKey) {
+    return new FilesClient({ ...clientOverrides, apiKey: topLevelApiKey } as FilesClientOptions);
   }
 
   const chain: CredentialChainOptions = (chainOptions ?? {}) as CredentialChainOptions;

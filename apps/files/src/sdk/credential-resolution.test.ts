@@ -302,6 +302,24 @@ describe("SDK authority pinning (#1794) and loud refusal on an unpinned credenti
     expect(requests[0]!.xApiKey).toBe("pinned-via-credentials");
   });
 
+  test("credentials.apiKey WITHOUT a baseUrl stays in the chain: the authority still resolves", async () => {
+    // Regression (hasna/apps#1990 review): lifting `credentials.apiKey` out of
+    // the chain on the no-baseUrl path turned a credential-only override into
+    // a pin that carries no authority, so the FilesClient constructor threw
+    // "FilesClient requires a baseUrl." instead of resolving as before. The
+    // sibling `@hasna/secrets` SDK reads `credentials?.apiKey` only inside the
+    // `baseUrl !== undefined` branch, and this factory must match: without a
+    // caller-named authority the slot is a resolver tier-1 input and the
+    // authority resolves with it.
+    const { files, requests } = capturedClient(
+      fakeHomeEnv({ HASNA_FILES_API_KEY: KEY_ENV }),
+      { credentials: { apiKey: KEY_CHAIN } },
+    );
+    await files.listSources();
+    expect(requests[0]!.url.startsWith("https://api.hasna.com/files/v1/")).toBe(true);
+    expect(requests[0]!.xApiKey).toBe(KEY_CHAIN);
+  });
+
   test("a blank apiKey with no baseUrl is UNSET, not a pin: the chain still resolves", async () => {
     // No caller-named authority => no cross-authority risk; a blank override
     // falls through to the chain (which resolves or throws) instead of
