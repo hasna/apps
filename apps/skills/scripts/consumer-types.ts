@@ -78,6 +78,94 @@ auth.switchWorkspace("reader@example.test", "000000", workspaceContext);
 auth.updateCurrentWorkspace("reader@example.test", "000000", { name: "Selected" }, workspaceContext);
 auth.listWorkspaceMembers("reader@example.test", "000000", { limit: 1 }, workspaceContext);
 auth.createApiKey("reader@example.test", "000000", "selected", ["skills:read"], workspaceContext);
+import * as InvRoot from "@hasna/skills";
+const invitationListRoot: InvRoot.ListRemoteWorkspaceInvitations = { after: "observed-cursor" };
+const invitationIssueRoot: InvRoot.IssueRemoteWorkspaceInvitation = { email: "recipient@example.test", role: "viewer", idempotencyKey: "stable-key", confirm: true };
+const invitationResendRoot: InvRoot.ResendRemoteWorkspaceInvitation = { expectedGeneration: 1, idempotencyKey: "stable-key", confirm: true };
+const invitationRevokeRoot: InvRoot.RevokeRemoteWorkspaceInvitation = { expectedGeneration: 1, confirm: true };
+const invitationAcceptRoot: InvRoot.AcceptRemoteWorkspaceInvitation = { token: "secret-input-only", confirm: true };
+declare const invitationRoot: InvRoot.RemoteWorkspaceInvitation;
+declare const invitationPageRoot: InvRoot.RemoteWorkspaceInvitationsPage;
+declare const invitationResultRoot: InvRoot.RemoteWorkspaceInvitationResult;
+declare const invitationAcceptedRoot: InvRoot.RemoteWorkspaceInvitationAcceptance;
+const invitationErrorCodeRoot: InvRoot.RemoteWorkspaceInvitationErrorCode = "INVITATION_FORBIDDEN";
+new InvRoot.RemoteWorkspaceInvitationError(invitationErrorCodeRoot);
+new InvRoot.WorkspaceInvitationInputError(); new InvRoot.RemoteWorkspaceInvitationReadError(); new InvRoot.RemoteWorkspaceInvitationUnconfirmedError();
+const invitationClientRoot = new InvRoot.RemoteSkillsClient("fixture", "https://skills.example.com/api/v1");
+const invitationAuthRoot = new InvRoot.RemoteSkillsAuthClient("https://skills.example.com/api/v1");
+invitationClientRoot.listWorkspaceInvitations(workspaceContext, invitationListRoot);
+invitationClientRoot.getWorkspaceInvitation(workspaceContext, "observed-invitation");
+invitationClientRoot.issueWorkspaceInvitation(workspaceContext, invitationIssueRoot);
+invitationClientRoot.resendWorkspaceInvitation(workspaceContext, "observed-invitation", invitationResendRoot);
+invitationClientRoot.revokeWorkspaceInvitation(workspaceContext, "observed-invitation", invitationRevokeRoot);
+invitationClientRoot.acceptWorkspaceInvitation(workspaceContext, "observed-invitation", invitationAcceptRoot);
+invitationAuthRoot.listWorkspaceInvitations("reader@example.test", "000000", workspaceContext, invitationListRoot);
+invitationAuthRoot.getWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation");
+invitationAuthRoot.issueWorkspaceInvitation("reader@example.test", "000000", workspaceContext, invitationIssueRoot);
+invitationAuthRoot.resendWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation", invitationResendRoot);
+invitationAuthRoot.revokeWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation", invitationRevokeRoot);
+invitationAuthRoot.acceptWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation", invitationAcceptRoot);
+const invitationRoleRoot: "owner" | "admin" | "member" | "viewer" = invitationRoot.role;
+const invitationStatusRoot: "queued" | "sending" | "uncertain" | "provider_accepted" | "failed" | "cancelled" = invitationRoot.delivery.state;
+const invitationChangedRoot: boolean = invitationResultRoot.changed;
+const invitationAcceptedFlagRoot: true = invitationAcceptedRoot.accepted;
+// @ts-expect-error Confirmation cannot degrade to optional or any.
+invitationClientRoot.issueWorkspaceInvitation(workspaceContext, { email: "recipient@example.test", role: "member", idempotencyKey: "stable-key" });
+// @ts-expect-error Expected generation is numeric.
+const wrongInvitationGenerationRoot: string = invitationRoot.generation;
+// @ts-expect-error A projection never returns the acceptance secret.
+const exposedInvitationTokenRoot: string = invitationRoot.token;
+// @ts-expect-error Pagination retains useful item types.
+const wrongInvitationIdRoot: number = invitationPageRoot.invitations[0]!.id;
+// @ts-expect-error Accepted flag is a literal true.
+const wrongInvitationAcceptedRoot: false = invitationAcceptedRoot.accepted;
+// @ts-expect-error Error codes are closed.
+const wrongInvitationCodeRoot: InvRoot.RemoteWorkspaceInvitationErrorCode = "UNKNOWN";
+
+import * as InvSdk from "@hasna/skills/sdk";
+const invitationListSdk: InvSdk.ListRemoteWorkspaceInvitations = { after: "observed-cursor" };
+const invitationIssueSdk: InvSdk.IssueRemoteWorkspaceInvitation = { email: "recipient@example.test", role: "viewer", idempotencyKey: "stable-key", confirm: true };
+const invitationResendSdk: InvSdk.ResendRemoteWorkspaceInvitation = { expectedGeneration: 1, idempotencyKey: "stable-key", confirm: true };
+const invitationRevokeSdk: InvSdk.RevokeRemoteWorkspaceInvitation = { expectedGeneration: 1, confirm: true };
+const invitationAcceptSdk: InvSdk.AcceptRemoteWorkspaceInvitation = { token: "secret-input-only", confirm: true };
+declare const invitationSdk: InvSdk.RemoteWorkspaceInvitation;
+declare const invitationPageSdk: InvSdk.RemoteWorkspaceInvitationsPage;
+declare const invitationResultSdk: InvSdk.RemoteWorkspaceInvitationResult;
+declare const invitationAcceptedSdk: InvSdk.RemoteWorkspaceInvitationAcceptance;
+const invitationErrorCodeSdk: InvSdk.RemoteWorkspaceInvitationErrorCode = "INVITATION_FORBIDDEN";
+new InvSdk.RemoteWorkspaceInvitationError(invitationErrorCodeSdk);
+new InvSdk.WorkspaceInvitationInputError(); new InvSdk.RemoteWorkspaceInvitationReadError(); new InvSdk.RemoteWorkspaceInvitationUnconfirmedError();
+const invitationClientSdk = new InvSdk.RemoteSkillsClient("fixture", "https://skills.example.com/api/v1");
+const invitationAuthSdk = new InvSdk.RemoteSkillsAuthClient("https://skills.example.com/api/v1");
+invitationClientSdk.listWorkspaceInvitations(workspaceContext, invitationListSdk);
+invitationClientSdk.getWorkspaceInvitation(workspaceContext, "observed-invitation");
+invitationClientSdk.issueWorkspaceInvitation(workspaceContext, invitationIssueSdk);
+invitationClientSdk.resendWorkspaceInvitation(workspaceContext, "observed-invitation", invitationResendSdk);
+invitationClientSdk.revokeWorkspaceInvitation(workspaceContext, "observed-invitation", invitationRevokeSdk);
+invitationClientSdk.acceptWorkspaceInvitation(workspaceContext, "observed-invitation", invitationAcceptSdk);
+invitationAuthSdk.listWorkspaceInvitations("reader@example.test", "000000", workspaceContext, invitationListSdk);
+invitationAuthSdk.getWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation");
+invitationAuthSdk.issueWorkspaceInvitation("reader@example.test", "000000", workspaceContext, invitationIssueSdk);
+invitationAuthSdk.resendWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation", invitationResendSdk);
+invitationAuthSdk.revokeWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation", invitationRevokeSdk);
+invitationAuthSdk.acceptWorkspaceInvitation("reader@example.test", "000000", workspaceContext, "observed-invitation", invitationAcceptSdk);
+const invitationRoleSdk: "owner" | "admin" | "member" | "viewer" = invitationSdk.role;
+const invitationStatusSdk: "queued" | "sending" | "uncertain" | "provider_accepted" | "failed" | "cancelled" = invitationSdk.delivery.state;
+const invitationChangedSdk: boolean = invitationResultSdk.changed;
+const invitationAcceptedFlagSdk: true = invitationAcceptedSdk.accepted;
+// @ts-expect-error Confirmation cannot degrade to optional or any.
+invitationClientSdk.issueWorkspaceInvitation(workspaceContext, { email: "recipient@example.test", role: "member", idempotencyKey: "stable-key" });
+// @ts-expect-error Expected generation is numeric.
+const wrongInvitationGenerationSdk: string = invitationSdk.generation;
+// @ts-expect-error A projection never returns the acceptance secret.
+const exposedInvitationTokenSdk: string = invitationSdk.token;
+// @ts-expect-error Pagination retains useful item types.
+const wrongInvitationIdSdk: number = invitationPageSdk.invitations[0]!.id;
+// @ts-expect-error Accepted flag is a literal true.
+const wrongInvitationAcceptedSdk: false = invitationAcceptedSdk.accepted;
+// @ts-expect-error Error codes are closed.
+const wrongInvitationCodeSdk: InvSdk.RemoteWorkspaceInvitationErrorCode = "UNKNOWN";
+
 declare const selectedSession: Awaited<ReturnType<typeof auth.switchWorkspace>>;
 const sessionContract: import("@hasna/skills/sdk").RemoteWorkspaceSession = selectedSession;
 const rootSessionContract: import("@hasna/skills").RemoteWorkspaceSession = sessionContract;

@@ -1,3 +1,5 @@
+import { invitationInput, type ListRemoteWorkspaceInvitations, type IssueRemoteWorkspaceInvitation,
+  type ResendRemoteWorkspaceInvitation, type RevokeRemoteWorkspaceInvitation, type AcceptRemoteWorkspaceInvitation } from "./remote-invitations.js";
 import { workspaceLeaveInput, type LeaveRemoteWorkspace } from "./remote-workspace-leave.js";
 import { workspaceContext, workspaceExpectedUserId, parseWorkspaceLogin,
   type RemoteWorkspaceContext, type RemoteWorkspaceSession, type RemoteAccountWorkspaceDiscovery } from "./remote-workspace-selection.js";
@@ -146,6 +148,33 @@ export class RemoteSkillsAuthClient {
     try { value = JSON.parse(new TextDecoder().decode(await readBoundedResponse(response, 64 * 1024))); }
     catch { throw new HostedApiError("The server returned an invalid account verification result."); }
     return { ...parseWorkspaceLogin(value, expected), apiOrigin };
+  }
+  async listWorkspaceInvitations(email: string, code: string, context: RemoteWorkspaceContext, options: ListRemoteWorkspaceInvitations = {}) {
+    const target = workspaceContext(context), captured = invitationInput("list", options);
+    return (await this.sessionClient(email, code, target)).listWorkspaceInvitations(target, captured);
+  }
+  async getWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, invitationId: string) {
+    const target = workspaceContext(context), captured = invitationInput("get", { invitationId });
+    return (await this.sessionClient(email, code, target)).getWorkspaceInvitation(target, captured.invitationId);
+  }
+  async issueWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, input: IssueRemoteWorkspaceInvitation) {
+    const target = workspaceContext(context), captured = invitationInput("issue", input);
+    return (await this.sessionClient(email, code, target)).issueWorkspaceInvitation(target, captured);
+  }
+  async resendWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, invitationId: string, input: ResendRemoteWorkspaceInvitation) {
+    const target = workspaceContext(context), captured = invitationInput("resend", { ...input, invitationId });
+    const { invitationId: id, ...options } = captured;
+    return (await this.sessionClient(email, code, target)).resendWorkspaceInvitation(target, id, options);
+  }
+  async revokeWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, invitationId: string, input: RevokeRemoteWorkspaceInvitation) {
+    const target = workspaceContext(context), captured = invitationInput("revoke", { ...input, invitationId });
+    const { invitationId: id, ...options } = captured;
+    return (await this.sessionClient(email, code, target)).revokeWorkspaceInvitation(target, id, options);
+  }
+  async acceptWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, invitationId: string, input: AcceptRemoteWorkspaceInvitation) {
+    const target = workspaceContext(context), captured = invitationInput("accept", { ...input, invitationId });
+    const { invitationId: id, ...options } = captured;
+    return (await this.sessionClient(email, code, target)).acceptWorkspaceInvitation(target, id, options);
   }
   async createApiKey(email: string, code: string, name: string, scopes?: string[], context?: RemoteWorkspaceContext) {
     const capturedScopes = scopes === undefined ? undefined : [...scopes];
