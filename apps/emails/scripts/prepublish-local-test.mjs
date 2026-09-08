@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -30,7 +30,7 @@ export function buildPrepublishTestEnv(processEnv = process.env, home) {
 }
 
 if (import.meta.main) {
-  const testHome = mkdtempSync(join(tmpdir(), "emails-prepublish-"));
+  const testHome = realpathSync(mkdtempSync(join(tmpdir(), "emails-prepublish-")));
   try {
     const env = buildPrepublishTestEnv(process.env, testHome);
     for (const name of ["config", "data", "cache", "state", "tmp"]) mkdirSync(join(testHome, name), { mode: 0o700 });
