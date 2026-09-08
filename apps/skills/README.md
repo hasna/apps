@@ -1062,9 +1062,9 @@ archive packer has a different exclusion policy; hashing inspected entries does
 not add excluded files back into an archive. Existing directory functions remain
 synchronous and retain their previous behavior.
 
-`CONTENT_HASH_LIMITS` caps input at 1,024 entries, 64 MiB raw and normalized
-content, 16 MiB per raw/normalized file, 100 UTF-8 bytes per path, a 16 KiB root
-manifest with nesting depth 64, and a five-second deadline. Callers may lower
+`CONTENT_HASH_LIMITS` caps the entry count at 1,024, raw and normalized content
+at 64 MiB, each raw/normalized file at 16 MiB, paths at 100 UTF-8 bytes, and the root
+manifest at 16 KiB with nesting depth 64. The deadline is five seconds. Callers may lower
 these limits through `ContentHashOptions`; zero and values above the ceilings
 are refused. Excluded entries still count toward raw limits and path-collision
 checks. Paths must be canonical and distinct under NFC/case folding; shared
