@@ -464,15 +464,19 @@ function validateTemplatePatch(value: unknown):
   | { ok: false; message: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "template patch must be an object" };
   const body = value as Record<string, unknown>;
-  const allowed = new Set(["name", "title_pattern", "description", "priority", "tags", "variables", "project_id", "plan_id", "metadata"]);
+  const allowed = new Set(["name", "title_pattern", "description", "priority", "tags", "variables", "project_id", "plan_id", "metadata", "expected_version"]);
   const unknown = Object.keys(body).find((key) => !allowed.has(key));
   if (unknown) return { ok: false, message: `unknown template field: ${unknown}` };
   if (Object.keys(body).length === 0) return { ok: false, message: "template patch must not be empty" };
-  const templateLike = { name: body.name ?? "template", title_pattern: body.title_pattern ?? "template", ...body };
+  if (body.expected_version !== undefined && (!Number.isSafeInteger(body.expected_version) || (body.expected_version as number) < 1)) return {ok:false,message:"expected_version must be a positive integer"};
+  const { expected_version, ...fields } = body;
+  if (!Object.keys(fields).length) return {ok:false,message:"Template patch requires changed fields"};
+  const templateLike = { name: body.name ?? "template", title_pattern: body.title_pattern ?? "template", ...fields };
   const validated = validateTemplateCreate(templateLike);
   if (!validated.ok) return validated;
   const { name: _name, title_pattern: _title, tasks: _tasks, ...patch } = validated.input;
   return { ok: true, patch: {
+    ...(expected_version !== undefined ? { expected_version: expected_version as number } : {}),
     ...(body.name !== undefined ? { name: validated.input.name } : {}),
     ...(body.title_pattern !== undefined ? { title_pattern: validated.input.title_pattern } : {}),
     ...patch,
@@ -1736,17 +1740,59 @@ export async function handleV1Request(
 
     // ── /v1/templates ──
     if (resource === "templates") {
+      if (id === "initialize") {
+        if (method !== "POST" || action)
+          return error(405, "Use POST /v1/templates/initialize");
+        const body = await readJson<unknown>(req);
+        if (
+          !body ||
+          typeof body !== "object" ||
+          Array.isArray(body) ||
+          Object.keys(body).length
+        )
+          return error(
+            400,
+            "Template initialization accepts an empty object only",
+          );
+        if (!store.templates.initialize)
+          return error(
+            501,
+            "Upgrade the Todos API/storage for shared template initialization",
+          );
+        return json(
+          await store.templates.initialize(contextFromPrincipal(principal)),
+        );
+      }
+      if (id && action === "history") {
+        if (method !== "GET") return error(405, "Template history is read-only");
+        if (!store.templates.history)
+          return error(501, "Upgrade the Todos API/storage for template history");
+        const history = await store.templates.history(
+          id,
+          contextFromPrincipal(principal),
+        );
+        return history ? json(history) : error(404, "template not found");
+      }
+      if (action) return error(404, "Unknown template action");
       if (!id && method === "GET") {
         const projectId = url.searchParams.get("project_id");
-        const templates = (await store.templates.list()).filter((template) => projectId === null || template.project_id === projectId);
+        const templates = (await store.templates.list()).filter(
+          (template) => projectId === null || template.project_id === projectId,
+        );
         return json({ templates, count: templates.length });
       }
       if (!id && method === "POST") {
         const body = await readJson<unknown>(req);
         const validated = validateTemplateCreate(body);
         if (!validated.ok) return error(400, validated.message);
-        const template = await store.templates.create(validated.input, contextFromPrincipal(principal));
-        return json({ template: await store.templates.getWithTasks(template.id) }, 201);
+        const template = await store.templates.create(
+          validated.input,
+          contextFromPrincipal(principal),
+        );
+        return json(
+          { template: await store.templates.getWithTasks(template.id) },
+          201,
+        );
       }
       if (!id) return error(405, `method ${method} not allowed on /v1/templates`);
       if (method === "GET") {
@@ -1757,12 +1803,51 @@ export async function handleV1Request(
         const body = await readJson<unknown>(req);
         const validated = validateTemplatePatch(body);
         if (!validated.ok) return error(400, validated.message);
-        const template = await store.templates.update(id, validated.patch, contextFromPrincipal(principal));
-        return template ? json({ template: await store.templates.getWithTasks(id) }) : error(404, "template not found");
+        const checked = validated.patch.expected_version !== undefined;
+        if (checked && !store.templates.updateWithHistory)
+          return error(
+            501,
+            "Upgrade storage for revision-checked template history writes",
+          );
+        const template = checked
+          ? await store.templates.updateWithHistory!(
+              id,
+              validated.patch,
+              contextFromPrincipal(principal),
+            )
+          : await store.templates.update(
+              id,
+              validated.patch,
+              contextFromPrincipal(principal),
+            );
+        return template
+          ? json({
+              template:
+                "tasks" in template
+                  ? template
+                  : await store.templates.getWithTasks(id),
+              ...(checked
+                ? {
+                    history_write: {
+                      schema_version: 1,
+                      template_id: id,
+                      previous_version: validated.patch.expected_version,
+                      version: template.version,
+                      recorded: true,
+                    },
+                  }
+                : {}),
+            })
+          : error(404, "template not found");
       }
       if (method === "DELETE") {
-        const deleted = await store.templates.delete(id, contextFromPrincipal(principal));
-        return deleted ? json({ deleted: true, id }) : error(404, "template not found");
+        const deleted = await store.templates.delete(
+          id,
+          contextFromPrincipal(principal),
+        );
+        return deleted
+          ? json({ deleted: true, id })
+          : error(404, "template not found");
       }
       return error(405, `method ${method} not allowed on /v1/templates/:id`);
     }

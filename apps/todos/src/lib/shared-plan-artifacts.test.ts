@@ -5,6 +5,7 @@ import {
   readFileSync,
   writeFileSync,
   renameSync,
+  realpathSync,
   symlinkSync,
   rmSync,
 } from "node:fs";
@@ -32,7 +33,7 @@ test("shared Markdown keeps legacy filename diagnostics and refuses directory/ta
     expect(result.path.endsWith("example--12345678.md")).toBe(true);
     const legacy = join(root, ".hasna/todos/plans/project-id", `${plan.id}.md`);
     renameSync(result.path, legacy);
-    expect(inspectSharedPlanArtifact(plan, [], root)?.path).toBe(legacy);
+    expect(inspectSharedPlanArtifact(plan, [], root)?.path).toBe(realpathSync(legacy));
     const external = join(outside, "target.md");
     writeFileSync(external, "keep");
     symlinkSync(external, result.path);

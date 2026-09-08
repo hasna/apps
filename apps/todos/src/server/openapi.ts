@@ -1514,6 +1514,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           minProperties: 1,
           properties: {
+            expected_version: { type: "integer", minimum: 1 },
             name: { type: "string", minLength: 1 },
             title_pattern: { type: "string", minLength: 1 },
             description: { type: "string", nullable: true },
@@ -3400,39 +3401,468 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           },
         },
       },
+      "/v1/templates/initialize": {
+        post: {
+          operationId: "initializeTemplates",
+          summary:
+            "Atomically initialize server-owned bundled definitions, retaining existing same-name templates",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: [
+                      "schema_version",
+                      "created",
+                      "skipped",
+                      "names",
+                      "records",
+                    ],
+                    properties: {
+                      schema_version: {
+                        type: "integer",
+                        enum: [1],
+                      },
+                      created: {
+                        type: "integer",
+                        minimum: 0,
+                      },
+                      skipped: {
+                        type: "integer",
+                        minimum: 0,
+                      },
+                      names: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                      },
+                      records: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          required: ["definition_index", "ids", "name", "status"],
+                          properties: {
+                            definition_index: {
+                              type: "integer",
+                              minimum: 0,
+                            },
+                            ids: {
+                              type: "array",
+                              items: {
+                                type: "string",
+                              },
+                            },
+                            name: {
+                              type: "string",
+                            },
+                            status: {
+                              type: "string",
+                              enum: ["created", "skipped"],
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            "400": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "401": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "403": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "404": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "405": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "409": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "500": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "501": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/templates/{id}/history": {
+        get: {
+          operationId: "getTemplateHistory",
+          summary:
+            "Read recorded template versions with explicit missing-version evidence",
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: {
+                type: "string",
+              },
+            },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["current_version", "versions", "selection"],
+                    properties: {
+                      current_version: {
+                        type: "integer",
+                        minimum: 1,
+                      },
+                      versions: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          required: [
+                            "id",
+                            "template_id",
+                            "version",
+                            "snapshot",
+                            "created_at",
+                          ],
+                          properties: {
+                            id: {
+                              type: "string",
+                            },
+                            template_id: {
+                              type: "string",
+                            },
+                            version: {
+                              type: "integer",
+                              minimum: 1,
+                            },
+                            snapshot: {
+                              type: "string",
+                            },
+                            created_at: {
+                              type: "string",
+                            },
+                          },
+                        },
+                      },
+                      selection: {
+                        type: "object",
+                        required: [
+                          "schema_version",
+                          "template_id",
+                          "complete",
+                          "missing_versions",
+                        ],
+                        properties: {
+                          schema_version: {
+                            type: "integer",
+                            enum: [1],
+                          },
+                          template_id: {
+                            type: "string",
+                          },
+                          complete: {
+                            type: "boolean",
+                          },
+                          missing_versions: {
+                            type: "array",
+                            items: {
+                              type: "integer",
+                              minimum: 1,
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            "400": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "401": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "403": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "404": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "405": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "409": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "500": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "501": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       "/v1/templates": {
         get: {
           operationId: "listTemplates",
           summary: "List reusable task templates",
-          parameters: [{ name: "project_id", in: "query", schema: { type: "string" } }],
-          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { templates: { type: "array", items: { $ref: "#/components/schemas/Template" } }, count: { type: "number" } } } } } } },
+          parameters: [
+            { name: "project_id", in: "query", schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      templates: {
+                        type: "array",
+                        items: { $ref: "#/components/schemas/Template" },
+                      },
+                      count: { type: "number" },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
         post: {
           operationId: "createTemplate",
           summary: "Create a reusable task template",
-          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateTemplateInput" } } } },
-          responses: { "201": { content: { "application/json": { schema: { type: "object", properties: { template: { $ref: "#/components/schemas/Template" } } } } } } },
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/CreateTemplateInput" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      template: { $ref: "#/components/schemas/Template" },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
       },
       "/v1/templates/{id}": {
         get: {
           operationId: "getTemplate",
           summary: "Get one reusable task template with its checklist steps",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { template: { $ref: "#/components/schemas/Template" } } } } } } },
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      template: { $ref: "#/components/schemas/Template" },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
         patch: {
           operationId: "updateTemplate",
           summary: "Update reusable template metadata and defaults",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateTemplateInput" } } } },
-          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { template: { $ref: "#/components/schemas/Template" } } } } } } },
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/UpdateTemplateInput" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      template: { $ref: "#/components/schemas/Template" },
+                      history_write: {
+                        type: "object",
+                        required: [
+                          "schema_version",
+                          "template_id",
+                          "previous_version",
+                          "version",
+                          "recorded",
+                        ],
+                        properties: {
+                          schema_version: { type: "integer", enum: [1] },
+                          template_id: { type: "string" },
+                          previous_version: { type: "integer", minimum: 1 },
+                          version: { type: "integer", minimum: 1 },
+                          recorded: { type: "boolean", enum: [true] },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
         delete: {
           operationId: "deleteTemplate",
           summary: "Delete a reusable task template and its checklist steps",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      deleted: { type: "boolean" },
+                      id: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
       },
       "/v1/task-lists": {
