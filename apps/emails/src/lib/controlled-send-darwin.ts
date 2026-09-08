@@ -91,7 +91,16 @@ export async function reserveDarwinControlledReceipt(pathValue:string) {
       ops.unlink(fd,temporary);fsyncSync(fd);
       const final=entry(ops,fd,leaf);if(!final||!same(inode,final))throw new Error("controlled receipt disappeared");privateFile(final,uid);receiptBytes(held,bytes,inode,uid,1,ops);
     } catch(error) {
-      if(linked){const current=entry(ops,fd,leaf);if(current&&same(inode,current)){ops.unlink(fd,leaf);fsyncSync(fd);}}
+      if(linked){
+        const current=entry(ops,fd,leaf);
+        if(current&&same(inode,current)){
+          // Preserve an uncertainty checkpoint even when failure follows pending unlink.
+          // If restoring it fails, retain the terminal inode rather than erase both.
+          let pending=entry(ops,fd,temporary);
+          if(!pending){ops.link(fd,leaf,temporary);fsyncSync(fd);pending=entry(ops,fd,temporary);}
+          if(pending&&same(inode,pending)){ops.unlink(fd,leaf);fsyncSync(fd);}
+        }
+      }
       throw error;
     } finally {closeSync(held);closeSync(fd);}
   }};
