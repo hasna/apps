@@ -16,4 +16,7 @@ asserted mutually assignable with the real contracts declarations by
 keeps importing the runtime `verifyApiKey`/`ApiKeyStore` VALUES from
 `@hasna/contracts`, which remains a dependency. Verified by a packed-package
 strict consumer compile (`moduleResolution: nodenext`, `skipLibCheck: false`)
-across every export subpath.
+across every export subpath. The conformance assertions are compile-time only,
+so `bun run typecheck:conformance` (`tsconfig.conformance.json`) is now part of
+`bun run build` — a drifted spelling fails the same build step that emits the
+declarations, which is what makes the guarantee real rather than aspirational.

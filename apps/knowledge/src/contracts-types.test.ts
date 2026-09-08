@@ -38,11 +38,16 @@ import type {
   KeychainTierOptions as ContractsKeychainTierOptions,
   KeychainCommandResult as ContractsKeychainCommandResult,
   KeychainCommandRunner as ContractsKeychainCommandRunner,
+  // `./client` maps to dist/client/transport.d.ts, which is where these two
+  // are declared and exported. `./client/storage` only IMPORTS them for its
+  // own signatures and re-exports neither (TS2459), so importing them from
+  // there resolves to an error type and makes the two AssertAssignable pairs
+  // below vacuous.
+  HasnaHttpTransport as ContractsHasnaHttpTransport,
+  HasnaRequestOptions as ContractsHasnaRequestOptions,
 } from "@hasna/contracts/client";
 import type {
   HasnaStorageClient as ContractsHasnaStorageClient,
-  HasnaHttpTransport as ContractsHasnaHttpTransport,
-  HasnaRequestOptions as ContractsHasnaRequestOptions,
   StorageListResult as ContractsStorageListResult,
 } from "@hasna/contracts/client/storage";
 import type { ProjectPanel as ContractsProjectPanel } from "@hasna/contracts";
