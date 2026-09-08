@@ -34,7 +34,7 @@ export class IntakePostgres {
   /** Fail closed on owner/superuser/BYPASSRLS service credentials or a wrong sink. */
   async ready(): Promise<void> {
     const { rows } = await this.pool.query(`SELECT r.rolsuper,r.rolbypassrls,
-      EXISTS(SELECT 1 FROM pg_class c WHERE c.relnamespace=current_schema()::regnamespace AND c.relname LIKE 'events_%' AND pg_has_role(current_user,c.relowner,'MEMBER')) AS owns
+      EXISTS(SELECT 1 FROM pg_class c WHERE c.relnamespace=current_schema()::regnamespace AND (c.relname LIKE 'events_%' OR c.relname='api_keys') AND pg_has_role(current_user,c.relowner,'MEMBER')) AS owns
       FROM pg_roles r WHERE rolname=current_user`);
     if (!rows[0] || rows[0].rolsuper || rows[0].rolbypassrls || rows[0].owns) throw new IntakeError("runtime_role_must_not_own_intake", 503);
     const durability = await this.pool.query("SELECT current_setting('fsync') AS fsync,current_setting('full_page_writes') AS full_page_writes");

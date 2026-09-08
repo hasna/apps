@@ -62,6 +62,8 @@ pgTest("owner initialization is explicit and immutable; runtime cannot adopt a s
   await expect(new IntakePostgres(f.runtime,randomUUID(),f.authority).ready()).rejects.toThrow("not_initialized");
   await f.owner.query(`GRANT events_test TO ${f.role}`);
   try { await expect(f.store.ready()).rejects.toThrow("runtime_role"); } finally { await f.owner.query(`REVOKE events_test FROM ${f.role}`); }
+  await f.owner.query(`ALTER TABLE api_keys OWNER TO ${f.role}`);
+  try { await expect(f.store.ready()).rejects.toThrow("runtime_role"); } finally { await f.owner.query("ALTER TABLE api_keys OWNER TO events_test"); }
 }),30000);
 
 pgTest("actual signed HTTP intake commits exact canonical bytes and replays one immutable receipt",()=>fixture(async f=>{
