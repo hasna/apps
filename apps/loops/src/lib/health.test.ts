@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { LoopRun } from "../types.js";
+import type { LoopRun, WorkflowRun, WorkflowStepRun } from "../types.js";
 import type { RunFailureClassification } from "./health.js";
 import {
   buildHealthReport,
@@ -10,6 +10,7 @@ import {
   scheduleOverdue,
 } from "./health.js";
 import { Store } from "./store.js";
+import { workflowRunEnvelope } from "./run-envelope.js";
 
 function run(patch: Partial<LoopRun>): LoopRun {
   return {
@@ -25,7 +26,126 @@ function run(patch: Partial<LoopRun>): LoopRun {
   };
 }
 
+function failedWorkflowEnvelope(
+  stderr: string,
+  metadata: Partial<WorkflowRun> = {},
+  precedingSteps: WorkflowStepRun[] = [],
+): string {
+  const timestamp = "2026-01-01T00:00:00.000Z";
+  return workflowRunEnvelope({
+    id: "workflow-run",
+    workflowId: "workflow",
+    workflowName: "capacity-check",
+    status: "failed",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    ...metadata,
+  }, [...precedingSteps, {
+    id: "step-run",
+    workflowRunId: "workflow-run",
+    stepId: "cursor-check",
+    sequence: precedingSteps.length,
+    status: "failed",
+    stderr,
+    exitCode: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }]);
+}
+
 describe("loop health classification", () => {
+  test("workflow metadata cannot override retry-pending provider diagnostics", () => {
+    const store = new Store(":memory:");
+    try {
+      const slot = "2026-01-01T00:00:00.000Z";
+      const loop = store.createLoop({
+        name: "capacity-check",
+        schedule: { type: "once", at: slot },
+        target: { type: "workflow", workflowId: "workflow" },
+        maxAttempts: 2,
+      }, new Date(slot));
+      const pendingLoop = { ...loop, retryScheduledFor: slot, nextRunAt: "2026-01-01T00:00:01.000Z" };
+      const stderr = "Connection lost to https://agentn.global.api5.cursor.sh attempts 1-3\nRetriableError: [resource_exhausted] Error";
+      const metadataCases: Array<Partial<WorkflowRun>> = [
+        {},
+        ...["400", "401", "403", "429", "500"].map((suffix) => ({ id: `00000000-0000-0000-0000-000000000${suffix}` })),
+        ...[401, 403, 429].map((durationMs) => ({ durationMs })),
+        { workflowName: "auth and rate limit audit" },
+      ];
+      let fingerprint: string | undefined;
+      for (const metadata of metadataCases) {
+        const latest = run({ loopId: loop.id, stdout: failedWorkflowEnvelope(stderr, metadata) });
+        const report = buildHealthReport({ listLoops: () => [pendingLoop], listRuns: () => [latest] }, { now: new Date(slot) });
+        const expectation = report.expectations[0];
+        expect(report.ok).toBe(true);
+        expect(report.summary.unhealthy).toBe(0);
+        expect(expectation?.check.status).toBe("warn");
+        expect(expectation?.failure?.classification).toBe("provider_capacity");
+        expect(expectation?.recommendedTask).toBeUndefined();
+        fingerprint ??= expectation?.failure?.fingerprint;
+        expect(expectation?.failure?.fingerprint).toBe(fingerprint);
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+  test("workflow diagnostics preserve real authentication, rate limit and provider failures", () => {
+    const cases: Array<[RunFailureClassification, string]> = [
+      ["auth", "HTTP 401 Unauthorized"],
+      ["auth", "HTTP 403 Forbidden"],
+      ["rate_limit", "HTTP 429 Too Many Requests"],
+      ["provider_capacity", "https://api2.cursor.sh RetriableError: [resource_exhausted] Error"],
+      ["provider_unavailable", "getaddrinfo EAI_AGAIN api2.cursor.sh"],
+      ["unknown", "process exited with code 1"],
+      ["auth", "HTTP 401 Unauthorized; https://api2.cursor.sh [resource_exhausted]"],
+      ["rate_limit", "HTTP 429 Too Many Requests; https://api2.cursor.sh [resource_exhausted]"],
+    ];
+    for (const [expected, stderr] of cases) {
+      const signal = classifyRunFailure(run({ stdout: failedWorkflowEnvelope(stderr, { workflowName: "auth audit", durationMs: 429 }) }));
+      expect(signal?.classification).toBe(expected);
+    }
+  });
+
+  test("successful workflow step output is not a failed step diagnostic", () => {
+    const stdout = failedWorkflowEnvelope("https://api2.cursor.sh [resource_exhausted]", {}, [{
+      id: "earlier-step",
+      workflowRunId: "workflow-run",
+      stepId: "auth-audit",
+      sequence: 0,
+      status: "succeeded",
+      stdout: "Verified HTTP 401 and 429 failure controls",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }]);
+    expect(classifyRunFailure(run({ stdout }))?.classification).toBe("provider_capacity");
+  });
+
+  test("reads workflow errors and failed terminal step diagnostic fields", () => {
+    const envelope = JSON.parse(failedWorkflowEnvelope(""));
+    envelope.workflowRun.error = "HTTP 401 Unauthorized";
+    expect(classifyRunFailure(run({ stdout: JSON.stringify(envelope) }))?.classification).toBe("auth");
+    delete envelope.workflowRun.error;
+    for (const status of ["failed", "timed_out", "cancelled"]) {
+      for (const field of ["error", "stderrExcerpt", "stdoutExcerpt"]) {
+        envelope.steps = [{ status, [field]: "HTTP 429 Too Many Requests" }];
+        expect(classifyRunFailure(run({ stdout: JSON.stringify(envelope) }))?.classification).toBe("rate_limit");
+      }
+    }
+  });
+
+  test("retains diagnostics in plain, malformed and non-workflow JSON output", () => {
+    const cases: Array<[RunFailureClassification, string]> = [
+      ["auth", "HTTP 401 Unauthorized"],
+      ["rate_limit", '{"workflowRun": HTTP 429 Too Many Requests'],
+      ["auth", JSON.stringify({ type: "result", result: "HTTP 401 Unauthorized" })],
+      ["rate_limit", JSON.stringify({ workflowRun: null, steps: [], error: "HTTP 429 Too Many Requests" })],
+    ];
+    for (const [expected, stdout] of cases) {
+      expect(classifyRunFailure(run({ stdout }))?.classification).toBe(expected);
+    }
+  });
+
   test("classifies common agent-run failures", () => {
     const cases: Array<[RunFailureClassification, Partial<LoopRun>]> = [
       ["rate_limit", { error: "429 too many requests" }],
