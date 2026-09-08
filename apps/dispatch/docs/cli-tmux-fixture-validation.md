@@ -1,6 +1,6 @@
 # CLI tmux fixture lifecycle — 2026-09-08
 
-Aggregate CI run [34223476891, job 102051864352](https://github.com/hasna/apps/actions/runs/34223476891/job/102051864352)
+Aggregate CI run [34223476891](https://github.com/hasna/apps/actions/runs/34223476891)
 failed in `beforeEach`: `new-session` returned `server exited unexpectedly`.
 The missing-target assertion never ran. Dispatch reported 541 passed, 3 skipped,
 and 1 failed. Its source was unchanged by the Recordings release branch.
