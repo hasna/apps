@@ -4,10 +4,17 @@ title: "Switcher changelog"
 type: "release-notes"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:54:59Z"
-updated_at: "2026-09-09T14:35:00Z"
+updated_at: "2026-09-09T18:20:24Z"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+## 0.1.7
+
+### Patch Changes
+
+- Replace the four-minute total provider-response deadline with a four-minute inactivity watchdog across all inference bridges. Keepalive bytes and streamed content allow long responses to finish, while idle headers or streams return a distinct sanitized timeout. Preserve caller cancellation, terminal completion and downstream backpressure without replaying partial responses.
+- Prevent a provider that never acknowledges stream cancellation from blocking local error handling or bridge cleanup.
 
 ## 0.1.6
 

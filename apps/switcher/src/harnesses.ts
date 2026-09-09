@@ -1,4 +1,5 @@
 import { proxyProviderStream } from "./provider-stream";
+import { createProviderRequest, type ProviderRequestTiming } from "./provider-request";
 import { claudeContextEnvironment } from "./claude-context";
 import { compileOpenCodeModelPolicy, openCodeInvocationModel } from "./opencode-model-policy";
 import { prepareKilo, validateKiloConfiguration } from "./kilo";
@@ -285,7 +286,7 @@ export function codexModel(model: HarnessLaunchInput["models"][number], priority
 // Its supported remote catalog seam accepts backend metadata. A task-local
 // authenticated bridge supplies that catalog and forwards the selected protocol
 // unchanged, keeping provider keys out of Grok's persistent model cache.
-function grokBridge(input: HarnessLaunchInput) {
+export function grokBridge(input: HarnessLaunchInput, timing: ProviderRequestTiming = {}) {
   const token=crypto.randomUUID()+crypto.randomUUID();const expected=createHash("sha256").update(`Bearer ${token}`).digest();
   const models=new Map(input.models.flatMap(m=>[[m.id,m.id],[grokAlias(input,m.id),m.id]]));
   let server: ReturnType<typeof Bun.serve>;
@@ -294,7 +295,7 @@ function grokBridge(input: HarnessLaunchInput) {
   const active=new Set<{abort:AbortController;done:Promise<void>;cancel?:()=>Promise<void>}>();
   const apiBackend={"anthropic-messages":"messages","openai-responses":"responses","openai-chat":"chat_completions","gemini-generate-content":"generate_content"}[input.protocol];
   const apiPath={"anthropic-messages":"/messages","openai-responses":"/responses","openai-chat":"/chat/completions","gemini-generate-content":"/generateContent"}[input.protocol];
-  server=Bun.serve({hostname:"127.0.0.1",port:0,maxRequestBodySize:4*1024*1024,idleTimeout:255,async fetch(request){
+  server=Bun.serve({hostname:"127.0.0.1",port:0,maxRequestBodySize:4*1024*1024,idleTimeout:255,async fetch(request, server){
     if(closing)return Response.json({error:{message:"Bridge is closing"}},{status:503});
     const auth=request.headers.get("authorization")??(request.headers.has("x-api-key")?`Bearer ${request.headers.get("x-api-key")}`:"");
     if(!timingSafeEqual(expected,createHash("sha256").update(auth).digest())) return Response.json({error:{message:"Unauthorized"}},{status:401});
@@ -320,16 +321,18 @@ function grokBridge(input: HarnessLaunchInput) {
     if(closing)return Response.json({error:{message:"Bridge is closing"}},{status:503});
     let complete!:()=>void;
     const record:{abort:AbortController;done:Promise<void>;cancel?:()=>Promise<void>}={abort:new AbortController(),done:new Promise<void>(resolve=>{complete=resolve;})};
-    const release=()=>{active.delete(record);complete();};
+    const activity=createProviderRequest(request.signal,record.abort.signal,timing);
+    const release=()=>{activity.finish();active.delete(record);complete();};
     active.add(record);
+    server.timeout(request,0);
     try {
-      const response=await fetch(`${input.baseUrl}${apiPath}`,{method:"POST",headers,body:JSON.stringify(body),redirect:"manual",signal:AbortSignal.any([record.abort.signal,request.signal,AbortSignal.timeout(240000)])});
-      if(!response.ok){await response.body?.cancel();release();return Response.json({error:{message:`Provider returned HTTP ${response.status}`}},{status:response.status>=300&&response.status<400?502:response.status});}
+      const response=await activity.run(()=>fetch(`${input.baseUrl}${apiPath}`,{method:"POST",headers,body:JSON.stringify(body),redirect:"manual",...activity.fetchOptions}));
+      if(!response.ok){void response.body?.cancel().catch(() => undefined);release();return Response.json({error:{message:`Provider returned HTTP ${response.status}`}},{status:response.status>=300&&response.status<400?502:response.status});}
       if(!response.body){release();return new Response(null,{status:response.status});}
-      const {stream,cancel}=proxyProviderStream({response,protocol:input.protocol,requestSignal:request.signal,abort:record.abort,closing:()=>closing,release});
+      const {stream,cancel}=proxyProviderStream({response,protocol:input.protocol,requestSignal:request.signal,abort:record.abort,closing:()=>closing,release,activity});
       record.cancel=cancel;
       return new Response(stream,{status:response.status,headers:{"content-type":response.headers.get("content-type")??"application/json","cache-control":"no-store"}});
-    }catch{release();return Response.json({error:{message:"Provider request failed"}},{status:502});}
+    }catch{release();return Response.json({error:{message:activity.timedOut()?"Provider request timed out waiting for activity":"Provider request failed"}},{status:activity.timedOut()?504:502});}
   }});
   return {baseUrl:new URL("v1",server.url).href,token,cleanup:()=>stopped??=(async()=>{
     closing=true;
