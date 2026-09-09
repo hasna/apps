@@ -1933,7 +1933,7 @@ export async function handleSelfHostedRequest(
         // Two display-name sources may decorate the provider From. The address
         // record's display_name (the configured identity name, bug e2578a8a)
         // wins when present and safe; otherwise the display name the caller
-        // supplied INLINE in `from` — `"Andrei Hasna" <andrei@hasna.com>` —
+        // supplied INLINE in `from` — `"Andrei Hasna" <andrei@example.com>` —
         // is used. `canonicalSender` strips that phrase to the bare address at
         // parse time, so without this fallback an inline display name was
         // silently dropped and recipients saw only the raw addr-spec

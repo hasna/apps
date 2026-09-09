@@ -3794,7 +3794,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                   from: {
                     type: "string",
                     description:
-                      "Sender mailbox. Either a bare address (`addr@example.com`) or the RFC 5322 display-name form (`\"Andrei Hasna\" <andrei@hasna.com>`). Authorization, the stored outbound record's from_addr, and idempotency all key on the bare addr-spec; the display name — unless overridden by the registered address record's display_name — is shown to recipients as the From sender.",
+                      "Sender mailbox. Either a bare address (`addr@example.com`) or the RFC 5322 display-name form (`\"Andrei Hasna\" <andrei@example.com>`). Authorization, the stored outbound record's from_addr, and idempotency all key on the bare addr-spec; the display name — unless overridden by the registered address record's display_name — is shown to recipients as the From sender.",
                   },
                   to: { type: "array", items: { type: "string" } },
                   cc: { type: "array", items: { type: "string" } },

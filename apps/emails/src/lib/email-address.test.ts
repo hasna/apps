@@ -38,26 +38,26 @@ describe("canonicalSender", () => {
 
 describe("senderDisplayName", () => {
   it("returns the phrase from an unquoted `Name <addr>` form", () => {
-    expect(senderDisplayName("Andrei Hasna <andrei@hasna.com>")).toBe("Andrei Hasna");
+    expect(senderDisplayName("Andrei Hasna <andrei@example.com>")).toBe("Andrei Hasna");
   });
 
   it("unquotes a quoted phrase for re-rendering", () => {
-    expect(senderDisplayName('"Andrei Hasna" <andrei@hasna.com>')).toBe("Andrei Hasna");
+    expect(senderDisplayName('"Andrei Hasna" <andrei@example.com>')).toBe("Andrei Hasna");
     expect(senderDisplayName('"Augustus (CEO seat)" <ceo@example.com>')).toBe("Augustus (CEO seat)");
   });
 
   it("preserves diacritics verbatim", () => {
-    expect(senderDisplayName("Andrei Hăsnaș <andrei@hasna.com>")).toBe("Andrei Hăsnaș");
+    expect(senderDisplayName("Andrei Hăsnaș <andrei@example.com>")).toBe("Andrei Hăsnaș");
   });
 
   it("returns null for a bare addr-spec (no display name to render)", () => {
-    expect(senderDisplayName("andrei@hasna.com")).toBeNull();
+    expect(senderDisplayName("andrei@example.com")).toBeNull();
   });
 
   it("returns null for an empty phrase or an ambiguous double angle-addr", () => {
-    expect(senderDisplayName("<andrei@hasna.com>")).toBeNull();
+    expect(senderDisplayName("<andrei@example.com>")).toBeNull();
     expect(senderDisplayName("x <a@x.com> <b@y.com>")).toBeNull();
-    expect(senderDisplayName("  <andrei@hasna.com>")).toBeNull();
+    expect(senderDisplayName("  <andrei@example.com>")).toBeNull();
     expect(senderDisplayName("")).toBeNull();
   });
 
