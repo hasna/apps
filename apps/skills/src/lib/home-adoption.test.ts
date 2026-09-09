@@ -1,5 +1,6 @@
-import { describe, expect, test, afterEach } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { describe, expect, test, afterEach, spyOn } from "bun:test";
+import * as fs from "node:fs";
+import { lstatSync, renameSync, symlinkSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -262,4 +263,45 @@ describe("pruneStrayHomes", () => {
       hash: hashSkillMarkdown(SKILL_CONTENT("stray")),
     });
   });
+});
+
+
+test("prune refuses linked, malformed and foreign markers while preserving unrelated user files", () => {
+  const home=tempHome(), homes=join(home,".codex/skills"), external=join(home,"external-marker.json");
+  const mark={managedBy:SYNC_MARKER_MANAGED_BY,skill:"owned",source:"source",syncedAt:"2026-09-09T00:00:00.000Z"};
+  writeFileSync(external,JSON.stringify(mark));
+  for(const name of ["owned","linked","malformed","foreign","unmarked"]){
+    writeSkillMd(join(homes,name),SKILL_CONTENT(name));writeFileSync(join(homes,name,"user.bin"),Buffer.from([0,128,255]));
+  }
+  writeFileSync(join(homes,"owned",SYNC_MARKER_FILE),JSON.stringify(mark));
+  symlinkSync(external,join(homes,"linked",SYNC_MARKER_FILE));
+  writeFileSync(join(homes,"malformed",SYNC_MARKER_FILE),"{broken-json");
+  writeFileSync(join(homes,"foreign",SYNC_MARKER_FILE),JSON.stringify({...mark,managedBy:"another-tool"}));
+  const paths=[external,...["linked","malformed","foreign","unmarked"].flatMap(name=>[join(homes,name,"SKILL.md"),join(homes,name,"user.bin")])];
+  const before=paths.map(path=>[readFileSync(path).toString("hex"),lstatSync(path).ino,lstatSync(path).mtimeMs]);
+  const result=pruneStrayHomes({homeDir:home,agents:["codex"],apply:true});
+  expect(result.pruned).toBe(1);expect(result.candidates.map(row=>row.skill)).toEqual(["owned"]);expect(existsSync(join(homes,"owned"))).toBe(false);
+  expect(paths.map(path=>[readFileSync(path).toString("hex"),lstatSync(path).ino,lstatSync(path).mtimeMs])).toEqual(before);
+  expect(lstatSync(join(homes,"linked",SYNC_MARKER_FILE)).isSymbolicLink()).toBe(true);
+});
+
+for(const replacement of ["linked","foreign","malformed","removed","same-bytes-new-file"] as const) test(`prune rechecks ownership after rollback recording: ${replacement}`,()=>{
+  const home=tempHome(),dir=join(home,".codex/skills/stale"),external=join(home,"external-marker.json"),path=join(dir,SYNC_MARKER_FILE);
+  writeSkillMd(dir,SKILL_CONTENT("stale"));writeFileSync(join(dir,"user.bin"),Buffer.from([3,2,1]));
+  const marker=JSON.stringify({managedBy:SYNC_MARKER_MANAGED_BY,skill:"stale",source:"source",syncedAt:"2026-09-09T00:00:00.000Z"});
+  writeFileSync(path,marker);writeFileSync(external,marker);const before=readFileSync(join(dir,"user.bin"));
+  const original=fs.writeFileSync;let changed=false;
+  const hook=spyOn(fs,"writeFileSync").mockImplementation(((file:any,...args:any[])=>{
+    const result=(original as any)(file,...args);
+    if(!changed && String(file).includes("/rollback/prune-")){
+      changed=true;rmSync(path);
+      if(replacement==="linked")symlinkSync(external,path);
+      else if(replacement!=="removed"){
+        const temporary=join(home,"replacement.json");original(temporary,replacement==="foreign"?JSON.stringify({managedBy:"another-tool"}):replacement==="malformed"?"{broken-json":marker);renameSync(temporary,path);
+      }
+    }
+    return result;
+  }) as typeof fs.writeFileSync);
+  try {const result=pruneStrayHomes({homeDir:home,agents:["codex"],apply:true});expect(changed).toBe(true);expect(result.pruned).toBe(0);expect(readFileSync(join(dir,"user.bin"))).toEqual(before);expect(readFileSync(join(dir,"SKILL.md"),"utf8")).toBe(SKILL_CONTENT("stale"));}
+  finally{hook.mockRestore();}
 });

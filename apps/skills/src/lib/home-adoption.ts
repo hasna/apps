@@ -17,7 +17,7 @@
  * operation that removes only marked-and-stray directories (marker present, no
  * canonical corpus entry) after recording every removal in the rollback store.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -26,6 +26,7 @@ import {
   SYNC_MARKER_FILE,
   SYNC_MARKER_MANAGED_BY,
   agentGlobalSkillsDir,
+  isSkillsOwnershipMarker,
   type SyncAgent,
   type SyncMarker,
 } from "./agent-sync.js";
@@ -253,8 +254,8 @@ function appendConflictsLedger(appDir: string, conflicts: HomeConflict[]): void 
 
 /**
  * Write one rollback record listing every marker written (mode "adopt") or
- * every directory removed (mode "prune"), so both operations are reversible
- * from a single machine-readable file.
+ * every directory removed (mode "prune"), so both operations are auditable
+ * from a single machine-readable file. Deleted resource bytes are not stored.
  */
 export function writeRollbackRecord(mode: "adopt" | "prune", entries: RollbackMarker[], appDir: string = getDataDir()): string {
   const dir = join(appDir, ROLLBACK_DIRNAME);
@@ -303,6 +304,31 @@ export function adoptUnmarkedHomes(options: AdoptionOptions = {}): AdoptionResul
  * corpus entry. Never touches an unmarked directory. Removals are recorded in
  * the rollback store before they happen.
  */
+/** Read a bounded regular marker without following links and retain its identity
+ * for the final pre-removal check. A rollback write cannot grant new ownership. */
+function pruneOwnership(dir: string): { marker: SyncMarker; identity: string } | undefined {
+  let descriptor: number | undefined;
+  try {
+    const directory = lstatSync(dir);
+    if (!directory.isDirectory()) return;
+    descriptor = openSync(join(dir, SYNC_MARKER_FILE), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const before = fstatSync(descriptor);
+    if (!before.isFile() || before.size < 1 || before.size > 65536) return;
+    const bytes = Buffer.alloc(before.size + 1); let length = 0;
+    while (length < bytes.length) {
+      const count = readSync(descriptor, bytes, length, bytes.length - length, length);
+      if (!count) break; length += count;
+    }
+    const after = fstatSync(descriptor), current = lstatSync(dir);
+    if (length !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs
+      || !current.isDirectory() || current.dev !== directory.dev || current.ino !== directory.ino) return;
+    const text = bytes.subarray(0, length).toString("utf8"), marker: unknown = JSON.parse(text);
+    if (!isSkillsOwnershipMarker(marker)) return;
+    return { marker: marker as unknown as SyncMarker, identity: JSON.stringify([directory.dev, directory.ino, before.dev, before.ino, before.mtimeMs, before.ctimeMs, text]) };
+  } catch { return; }
+  finally { if (descriptor !== undefined) closeSync(descriptor); }
+}
+
 export function pruneStrayHomes(options: AdoptionOptions = {}): PruneResult {
   const homeDir = options.homeDir ?? homedir();
   const corpusRoot = resolveCorpusRoot(options);
@@ -311,6 +337,7 @@ export function pruneStrayHomes(options: AdoptionOptions = {}): PruneResult {
   const names = selectedHomeNames(options, index, homeDir, agents);
 
   const candidates: PruneCandidate[] = [];
+  const ownership = new Map<string, string>();
   for (const agent of agents) {
     const home = agentGlobalSkillsDir(agent, homeDir);
     if (!existsSync(home)) continue;
@@ -329,17 +356,11 @@ export function pruneStrayHomes(options: AdoptionOptions = {}): PruneResult {
       } catch {
         continue;
       }
-      const markerPath = join(dir, SYNC_MARKER_FILE);
-      if (!existsSync(markerPath)) continue;
       if (index.has(skill)) continue;
-      let marker: SyncMarker;
-      try {
-        const parsed = JSON.parse(readFileSync(markerPath, "utf-8"));
-        if (!parsed || typeof parsed !== "object" || parsed.managedBy !== SYNC_MARKER_MANAGED_BY) continue;
-        marker = parsed as SyncMarker;
-      } catch {
-        continue;
-      }
+      const owned = pruneOwnership(dir);
+      if (!owned) continue;
+      const marker = owned.marker;
+      ownership.set(dir, owned.identity);
       const skillMdPath = join(dir, "SKILL.md");
       const hash = existsSync(skillMdPath) ? hashSkillMarkdownFile(skillMdPath) : "";
       candidates.push({ agent, skill, home, path: dir, hash, marker });
@@ -356,8 +377,11 @@ export function pruneStrayHomes(options: AdoptionOptions = {}): PruneResult {
     candidates.map(({ agent, skill, path, hash, marker }) => ({ agent, skill, path, hash, marker })),
     appDir,
   );
+  let pruned = 0;
   for (const candidate of candidates) {
+    if (pruneOwnership(candidate.path)?.identity !== ownership.get(candidate.path)) continue;
     rmSync(candidate.path, { recursive: true, force: true });
+    pruned++;
   }
-  return { candidates, pruned: candidates.length, dryRun: false, rollbackFile };
+  return { candidates, pruned, dryRun: false, rollbackFile };
 }
