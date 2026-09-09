@@ -2,7 +2,7 @@
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
-  isNativeCodewithSubagentLineage,
+  isReleaseReviewAgentId,
   parsePublisherAgentTrailer,
   validateNpmReleaseAgentReviewReceipt,
   type ExpectedNpmReleaseAgentReview,
@@ -57,9 +57,9 @@ function main(): void {
   }
   addContextFailure(
     failures,
-    !isNativeCodewithSubagentLineage(reviewerAgentId),
+    !isReleaseReviewAgentId(reviewerAgentId),
     "release-agent-review-reviewer-config",
-    "RELEASE_REVIEWER_AGENT must name the exact native Codewith sub-agent lineage fixed for this release candidate",
+    "RELEASE_REVIEWER_AGENT must name the canonical registered coding agent fixed for this release candidate",
   );
   addContextFailure(failures, !reviewerKeyId, "release-agent-review-key-id-config", "RELEASE_REVIEW_KEY_ID must identify the fixed reviewer public key");
   addContextFailure(failures, !reviewerPublicKey, "release-agent-review-public-key", "RELEASE_REVIEW_PUBLIC_KEY must contain the fixed reviewer public key");
