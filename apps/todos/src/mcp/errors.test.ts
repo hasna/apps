@@ -11,51 +11,12 @@ import {
   DependencyCycleError,
   CompletionGuardError,
 } from "../types/index.js";
-
-// Re-implement formatError here to test it in isolation (same logic as src/mcp/index.ts)
-function formatError(error: unknown): string {
-  if (error instanceof VersionConflictError) {
-    return JSON.stringify({ code: VersionConflictError.code, message: error.message, suggestion: VersionConflictError.suggestion });
-  }
-  if (error instanceof TaskNotFoundError) {
-    return JSON.stringify({ code: TaskNotFoundError.code, message: error.message, suggestion: TaskNotFoundError.suggestion });
-  }
-  if (error instanceof TaskReferenceAmbiguousError) {
-    return JSON.stringify({
-      code: TaskReferenceAmbiguousError.code,
-      message: error.message,
-      candidate_project_ids: error.candidateProjectIds,
-      candidate_task_ids: error.candidateTaskIds,
-      suggestion: "Use a full task UUID.",
-    });
-  }
-  if (error instanceof ProjectNotFoundError) {
-    return JSON.stringify({ code: ProjectNotFoundError.code, message: error.message, suggestion: ProjectNotFoundError.suggestion });
-  }
-  if (error instanceof PlanNotFoundError) {
-    return JSON.stringify({ code: PlanNotFoundError.code, message: error.message, suggestion: PlanNotFoundError.suggestion });
-  }
-  if (error instanceof TaskListNotFoundError) {
-    return JSON.stringify({ code: TaskListNotFoundError.code, message: error.message, suggestion: TaskListNotFoundError.suggestion });
-  }
-  if (error instanceof LockError) {
-    return JSON.stringify({ code: LockError.code, message: error.message, suggestion: LockError.suggestion });
-  }
-  if (error instanceof AgentNotFoundError) {
-    return JSON.stringify({ code: AgentNotFoundError.code, message: error.message, suggestion: AgentNotFoundError.suggestion });
-  }
-  if (error instanceof DependencyCycleError) {
-    return JSON.stringify({ code: DependencyCycleError.code, message: error.message, suggestion: DependencyCycleError.suggestion });
-  }
-  if (error instanceof CompletionGuardError) {
-    const retry = error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {};
-    return JSON.stringify({ code: CompletionGuardError.code, message: error.reason, suggestion: CompletionGuardError.suggestion, ...retry });
-  }
-  if (error instanceof Error) {
-    return JSON.stringify({ code: "UNKNOWN_ERROR", message: error.message });
-  }
-  return JSON.stringify({ code: "UNKNOWN_ERROR", message: String(error) });
-}
+// The REAL formatter, not a local copy: a re-implementation silently drifts
+// from the shipped one whenever a branch is added (the 0.16.0 typed
+// REMOTE_API_* refusal was exactly such a branch, and a copied formatter
+// cannot catch its regression).
+import { formatError } from "./index.js";
+import { REMOTE_API_CONFIG_MISSING, RemoteApiConfigMissingError } from "./remote-authority.js";
 
 describe("Error classes have correct static properties", () => {
   test("VersionConflictError has correct code and suggestion", () => {
@@ -203,19 +164,29 @@ describe("formatError returns structured JSON", () => {
     const err = new Error("something broke");
     const result = JSON.parse(formatError(err));
     expect(result.code).toBe("UNKNOWN_ERROR");
-    expect(result.message).toBe("something broke");
+    // The shipped formatter sanitizes an unclassified error rather than
+    // echoing its message (which can carry schema details).
+    expect(result.message).toBe("An unexpected error occurred. Check server logs for details.");
     expect(result.suggestion).toBeUndefined();
   });
 
   test("non-Error value gets UNKNOWN_ERROR code", () => {
     const result = JSON.parse(formatError("string error"));
     expect(result.code).toBe("UNKNOWN_ERROR");
-    expect(result.message).toBe("string error");
+    expect(result.message).toBe("An unexpected error occurred.");
   });
 
   test("null value gets UNKNOWN_ERROR code", () => {
     const result = JSON.parse(formatError(null));
     expect(result.code).toBe("UNKNOWN_ERROR");
-    expect(result.message).toBe("null");
+    expect(result.message).toBe("An unexpected error occurred.");
+  });
+
+  test("RemoteApiConfigMissingError gets the typed REMOTE_API_CONFIG_MISSING payload, not UNKNOWN_ERROR", () => {
+    const result = JSON.parse(formatError(new RemoteApiConfigMissingError("Plan")));
+    expect(result.code).toBe(REMOTE_API_CONFIG_MISSING);
+    expect(result.code).not.toBe("UNKNOWN_ERROR");
+    expect(result.message).toContain("Plan tools require the authenticated Todos API");
+    expect(result.suggestion).toContain("HASNA_TODOS_API_URL");
   });
 });
