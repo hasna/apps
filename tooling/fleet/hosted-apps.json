@@ -132,7 +132,9 @@
     {
       "app": "skills",
       "source": "monorepo",
-      "probePath": "/api/v1/skills"
+      "probeAuth": "bearer",
+      "probePath": "/v1/skills",
+      "notes": "Internal ecosystem target; independent Skills origin registration and authenticated live acceptance remain required. Commercial skills.md uses a separately selected instance."
     },
     {
       "app": "telephony",

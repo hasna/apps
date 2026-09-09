@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { Hash } from "node:crypto";
+import { Hash, type BinaryLike, type Encoding } from "node:crypto";
 import { getEventListeners } from "node:events";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { collectSkillBundleEntries, inspectSkillBundle, packSkillBundle, type SkillBundleEntry } from "./skill-bundle.js";
@@ -166,12 +166,12 @@ test("maximum input remains cancellable during actual SHA256 work, after normali
   const controller = new AbortController(), update = Hash.prototype.update;
   let bodyBytes = 0, scheduled = false, timer: ReturnType<typeof setTimeout> | undefined;
   // Observe genuine crypto work; preserve its exact implementation and output.
-  Hash.prototype.update = function (data, ...args) {
+  Hash.prototype.update = function (this: Hash, data: BinaryLike, inputEncoding?: Encoding): Hash {
     if (data instanceof Uint8Array && data.byteLength >= 64 * 1024) {
       bodyBytes += data.byteLength;
       if (!scheduled) { scheduled = true; timer = setTimeout(() => controller.abort(), 1); }
     }
-    return Reflect.apply(update, this, [data, ...args]);
+    return Reflect.apply(update, this, inputEncoding === undefined ? [data] : [data, inputEncoding]);
   };
   try { await expect(computeContentHashFromEntries(entries, { signal: controller.signal })).rejects.toMatchObject({ code: "CONTENT_HASH_ABORTED" }); }
   finally { Hash.prototype.update = update; if (timer) clearTimeout(timer); }

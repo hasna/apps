@@ -11,7 +11,7 @@ import { workspaceMemberRoleInput, workspaceMemberRemovalInput, parseWorkspaceMe
   workspaceMemberFailure, workspaceMemberFailures, invalidMemberResult, type RemoteWorkspaceMemberErrorCode,
   type SetRemoteWorkspaceMemberRole, type RemoveRemoteWorkspaceMember, type RemoteWorkspaceMemberRoleResult, type RemoteWorkspaceMemberRemovalResult } from "./remote-workspace.js";
 import { getApiUrl } from "./auth-store.js";
-import { normalizeSkillsApiOrigin, resolveSkillsConnection } from "./fleet-credentials.js";
+import { normalizeSkillsApiOrigin, skillsApiRequestUrl, resolveSkillsConnection } from "./fleet-credentials.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
 import { creditCount, parseRemoteBillingStatus, parseRemoteCheckout, parseRemoteCreditPacks, parseRemoteRunQuote, RemoteCreditApprovalError, type RemoteCreditPack, type RemoteRunApproval, type RemoteRunQuote } from "./remote-account.js";
 import { describeRemoteFiles, readBoundedResponse, sha256, MAX_REMOTE_FILE_BYTES, type RemoteInputFile } from "./remote-files.js";
@@ -144,7 +144,7 @@ export class RemoteSkillsClient {
   }
 
   private async request(path: string, options?: RequestInit): Promise<Response> {
-    return fetch(`${this.apiUrl}${path}`, {
+    return fetch(skillsApiRequestUrl(this.apiUrl, path), {
       ...options,
       redirect: "error",
       credentials: "omit", // Explicit bearer transport never borrows browser cookie authority.
@@ -611,7 +611,7 @@ export class RemoteSkillsClient {
     }
     const headers: Record<string, string> = { Authorization: `Bearer ${this.apiKey}` };
     if (ifMatch) headers["If-Match"] = ifMatch;
-    return fetch(`${this.apiUrl}/api/v1/skills`, {
+    return fetch(skillsApiRequestUrl(this.apiUrl, "/api/v1/skills"), {
       method: "POST",
       headers,
       body: form,
