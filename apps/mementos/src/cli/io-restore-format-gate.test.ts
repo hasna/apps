@@ -49,6 +49,10 @@ function buildLiveLocalDb(): void {
   db.run(
     `INSERT INTO memories (id, key, value) VALUES ('mem-format-1', 'format-key-1', 'seeded value')`,
   );
+  // WAL checkpoint before the byte-copy backup below: without it the seeded
+  // row can still live only in the -wal sidecar, and the backup file (a copy
+  // of the main file alone) would be missing it.
+  db.run("PRAGMA wal_checkpoint(TRUNCATE)");
   closeDatabase();
 }
 
@@ -109,6 +113,26 @@ afterAll(() => {
   }
 });
 
+function contentSignature(path: string): { tables: string[]; rowCounts: Record<string, number> } {
+  const db = new Database(path, { readonly: true });
+  try {
+    const tables = (
+      db
+        .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .all() as Array<{ name: string }>
+    )
+      .map((t) => t.name)
+      .sort();
+    const rowCounts: Record<string, number> = {};
+    for (const name of tables) {
+      rowCounts[name] = (db.query(`SELECT COUNT(*) AS count FROM "${name}"`).get() as { count: number }).count;
+    }
+    return { tables, rowCounts };
+  } finally {
+    db.close();
+  }
+}
+
 describe("mementos restore: local arm format gate (cross-transport)", () => {
   test("a hosted (memories-only carrier) backup is refused by the local restore arm and the live DB is untouched", async () => {
     // Produce the carrier with the REAL hosted backup arm against the stub.
@@ -136,7 +160,7 @@ describe("mementos restore: local arm format gate (cross-transport)", () => {
     );
     expect(restore.exitCode).toBe(1);
     expect(restore.stdout).toContain("memories-only cloud backup");
-    expect(restore.stdout).toContain("_backup_carrier");
+    expect(restore.stdout).toContain("not a full local database backup");
     expect(restore.stderr).not.toContain("completed");
 
     // The dry-run (no --force) refuses identically: the gate fires before
@@ -157,8 +181,7 @@ describe("mementos restore: local arm format gate (cross-transport)", () => {
   });
 
   test("a full local database backup restores over the on-box DB and keeps the whole schema", async () => {
-    const tablesBefore = sqliteTables(localDbPath);
-    expect(tablesBefore).toContain("agents");
+    const backupSignature = contentSignature(fullBackupPath);
 
     const restore = await runCli(
       ["restore", fullBackupPath, "--force", "--json"],
@@ -168,25 +191,18 @@ describe("mementos restore: local arm format gate (cross-transport)", () => {
     const result = JSON.parse(restore.stdout) as Record<string, unknown>;
     expect(result["action"]).toBe("restore");
     expect(result["status"]).toBe("completed");
-    expect(result["restored_memories"]).toBe(1);
 
-    // The restored file is the full backup, not a memories-only carrier:
-    // non-memory tables survived and the seeded row round-tripped.
-    const tablesAfter = sqliteTables(localDbPath);
-    expect(tablesAfter).toContain("agents");
-    expect(tablesAfter).toContain("_migrations");
-    expect(tablesAfter).toContain("memories");
-    expect(tablesAfter).not.toContain("_backup_carrier");
-    const db = new Database(localDbPath, { readonly: true });
-    try {
-      const row = db
-        .query("SELECT COUNT(*) AS count FROM memories")
-        .get() as { count: number };
-      expect(row.count).toBe(1);
-      expect(existsSync(localDbPath)).toBe(true);
-    } finally {
-      db.close();
-    }
+    // The restored on-box DB is exactly the full backup: every table of the
+    // migrated database (agents, _migrations, memory_versions, …) survived
+    // with the same rows — never a memories-only carrier.
+    const restored = contentSignature(localDbPath);
+    expect(restored.tables).toEqual(backupSignature.tables);
+    expect(restored.rowCounts).toEqual(backupSignature.rowCounts);
+    expect(restored.tables).toContain("agents");
+    expect(restored.tables).toContain("_migrations");
+    expect(restored.tables).toContain("memories");
+    expect(restored.tables).not.toContain("_backup_carrier");
+    expect(restored.rowCounts["memories"] ?? 0).toBeGreaterThanOrEqual(1);
   });
 
   test("a file with no mementos memories table is refused, not copied over the DB", async () => {
