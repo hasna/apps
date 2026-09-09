@@ -169,6 +169,7 @@ export interface HasnaRequestOptions {
 /** The authenticated HTTP transport. The API key lives inside it and is never returned. */
 export interface HasnaHttpTransport {
   readonly baseUrl: string;
+  fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>;
   request<T = unknown>(method: string, path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T>;
   get<T = unknown>(path: string, opts?: HasnaRequestOptions): Promise<T>;
   post<T = unknown>(path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T>;
