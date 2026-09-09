@@ -165,9 +165,20 @@ The `./sdk` surface fails closed the same way: with nothing resolved,
 `TODOS_CREDENTIAL_MISSING` naming every tier they consulted. `TodosClient` can
 speak to the on-box `todos-serve` at `http://localhost:19427` — that is a real
 mode for it — but only under the explicit opt-in below, never as a fallback.
-Every *other* refusal is a throw on all three surfaces too — a blank variable,
-aliases that disagree, an unreadable credential file, a URL with no key —
-because those are misconfigurations, not an absence of configuration.
+Every other refusal is a throw on all three surfaces too — aliases that
+disagree, an unreadable credential file, a URL with no key — because those are
+misconfigurations, not an absence of configuration.
+
+A **declared-but-blank** authority variable is deliberately *not* one of those
+refusals. At the Todos seam a blank has always meant "unset" — helpers in the
+wild blank rather than delete — so every authority variable that is declared
+but empty is removed before the resolver runs. `HASNA_TODOS_API_KEY=` therefore
+resolves the machine's ambient Keychain item exactly as an unset variable does:
+it neither configures a credential nor withholds one. To force the on-box store
+from a wrapper, set `HASNA_TODOS_LOCAL=1` — a blank authority variable counts as
+absent for the opt-in too, so the opt-in is still honoured when
+`HASNA_TODOS_API_KEY` is present but empty — instead of blanking a credential
+variable.
 
 On the hosted route the MCP server never opens the local store either: the
 tools and `todos://` resources that only exist for the on-box SQLite file
