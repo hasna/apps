@@ -24,7 +24,7 @@ async function fixture(run: (client: SourceClient, calls: Call[]) => Promise<voi
     }
     if (path.endsWith("/capabilities")) { options.onCapabilities?.(); return Response.json({ contractVersion: 1, apiVersion: 1, capabilities: ["runs.submit", "runs.uploads"], billing: { unit: "credits", boundedRunApproval: true } }); }
     if (options.status) return Response.json({ code: "PRIVATE_QUOTE_STALE", error: "UNTRUSTED_SERVER_CANARY" }, { status: options.status });
-    if (path.endsWith("/uploads")) return Response.json({ files: [{ name: "approved.txt", uploadUrl: server.url.origin + "/object" }] });
+    if (path.endsWith("/uploads")) return Response.json({ files: [{ name: "café !'()*.txt", uploadUrl: server.url.origin + "/object" }] });
     return Response.json({ id: "00000000-0000-4000-8000-000000000001", skill: "quoted-skill", status: "queued" });
   } });
   try { await run(new RemoteSkillsClient("owned-key", server.url.origin + "/prefix"), calls); }
@@ -82,7 +82,7 @@ test("stale and expired approval HTTP refusals stop without a new quote, retry, 
 });
 
 test("file quote, admission and signed upload retain owned bytes and descriptors before asynchronous lookup", async () => {
-  const original = new TextEncoder().encode("approved file bytes"), files = [{ name: "approved.txt", contentType: "text/plain", bytes: original.slice() }];
+  const original = new TextEncoder().encode("approved file bytes"), files = [{ name: "café !'()*.txt", contentType: "text/plain", bytes: original.slice() }];
   const expected = describeRemoteFiles(files), input = { nested: { approved: true } }, args = ["--approved"], approval = { maxCredits: 3, idempotencyKey: "file-approval" };
   await fixture(async (client, calls) => {
     await client.submitQuotedRunWithFiles("quoted-skill", input, args, files, approval);
@@ -95,7 +95,7 @@ test("file quote, admission and signed upload retain owned bytes and descriptors
 });
 
 test("explicit file approval refused by the server cannot upload bytes or obtain a replacement quote", async () => fixture(async (client, calls) => {
-  await expect(client.submitQuotedRunWithFiles("quoted-skill", {}, [], [{ name: "approved.txt", bytes: new Uint8Array([1]) }], { maxCredits: 3, quoteReceipt: receipt })).rejects.toThrow("HTTP 409");
+  await expect(client.submitQuotedRunWithFiles("quoted-skill", {}, [], [{ name: "café !'()*.txt", bytes: new Uint8Array([1]) }], { maxCredits: 3, quoteReceipt: receipt })).rejects.toThrow("HTTP 409");
   expect(calls.map(c => c.path)).toEqual(["/prefix/api/v1/capabilities", "/prefix/api/v1/runs/quoted-skill"]);
   expect(calls.at(-1)?.body.quoteReceipt).toBe(receipt);
 }, { status: 409 }));

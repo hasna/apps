@@ -44,7 +44,7 @@ async function fixture(action: (origin: string, calls: Call[]) => Promise<void>,
       if (mode === "files" && JSON.stringify((body as any).files) !== JSON.stringify(calls.find(c => c.path.endsWith("/quote"))?.body.files)) return Response.json({ code: "PRIVATE_QUOTE_STALE" }, { status: 409 });
       return Response.json({ id: runId, skill: "quoted-skill", status: mode === "files" ? "queued" : "completed", exitCode: 0 });
     }
-    if (path.endsWith("/uploads")) return Response.json({ files: [{ name: "approved.txt", uploadUrl: server.url.origin + "/object" }] });
+    if (path.endsWith("/uploads")) return Response.json({ files: [{ name: "café !'()*.txt", uploadUrl: server.url.origin + "/object" }] });
     if (path.endsWith("/logs") || path.endsWith("/artifacts")) return Response.json([]);
     return Response.json({ code: "NOT_FOUND" }, { status: 404 });
   } });
@@ -118,9 +118,9 @@ test("actual MCP auto-quote malformed response and malformed explicit receipt ca
 }), "malformed"));
 
 test("actual CLI quotes owned file descriptors before confirmation and uploads original bytes despite source change", async () => {
-  const file = join(root, "approved.txt"), bytes = new TextEncoder().encode("approved file bytes");
+  const file = join(root, "café !'()*.txt"), bytes = new TextEncoder().encode("approved file bytes");
   writeFileSync(file, bytes);
-  const descriptors = describeRemoteFiles([{ name: "approved.txt", bytes }]);
+  const descriptors = describeRemoteFiles([{ name: "café !'()*.txt", bytes }]);
   await fixture(async (origin, calls) => {
     const result = await cli(origin, file); expect(result.exitCode).toBe(0);
     expect(calls.filter(c => c.path.endsWith("/quote"))).toHaveLength(1);
@@ -134,11 +134,11 @@ test("actual CLI quotes owned file descriptors before confirmation and uploads o
 });
 
 for (const changed of [false, true]) test(`actual MCP file approval binds quoted descriptors before admission and PUT: changed=${changed}`, async () => fixture(async (origin, calls) => withMcp(origin, async client => {
-  const bytes = new TextEncoder().encode("approved file bytes"), files = [{ name: "approved.txt", base64: Buffer.from(bytes).toString("base64"), contentType: "text/plain" }];
+  const bytes = new TextEncoder().encode("approved file bytes"), files = [{ name: "café !'()*.txt", base64: Buffer.from(bytes).toString("base64"), contentType: "text/plain" }];
   const quoted = await client.callTool({ name: "quote_skill", arguments: { name: "quoted-skill", input: { approved: true }, files } });
   expect(quoted.isError).not.toBe(true);
   const value = JSON.parse((quoted.content as Array<{ text: string }>)[0]!.text);
-  const descriptors = describeRemoteFiles([{ name: "approved.txt", bytes, contentType: "text/plain" }]);
+  const descriptors = describeRemoteFiles([{ name: "café !'()*.txt", bytes, contentType: "text/plain" }]);
   expect(calls.find(c => c.path.endsWith("/quote"))?.body.files).toEqual(descriptors);
   if (changed) files[0]!.base64 = Buffer.from("changed file bytes").toString("base64");
   const result = await client.callTool({ name: "run_skill", arguments: { name: "quoted-skill", remote: true, input: { approved: true }, maxCredits: 3, quoteReceipt: value.quoteReceipt, files } });
