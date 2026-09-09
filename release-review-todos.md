@@ -1,24 +1,54 @@
 [REVIEW] STATUS — @hasna/todos@0.16.0 — branch `release/todos-0.16.0`, PR #2055 (OPEN) — registry npmjs
 
-# Current candidate (round-1, 2026-09-09)
+# Current candidate (round 2, 2026-09-09)
 
 - Package: `@hasna/todos@0.16.0` (`apps/todos/package.json` version 0.16.0).
-- Release vehicle: PR #2055, `release/todos-0.16.0`, state OPEN, title
-  "Release @hasna/todos 0.16.0 — shared credential resolver + three P1 fixes
-  (publish blocked: gate closed)".
+- Release vehicle: PR #2055, `release/todos-0.16.0`, state OPEN.
 - PR head == `origin/release/todos-0.16.0` == `3e63609f96b054a4230f53d72e89514db71f9e03`
   (`gh pr view 2055 --json headRefOid`; `git ls-remote origin release/todos-0.16.0`).
 - Worktree HEAD moves as sibling lanes commit in this shared worktree. The fix commits sit
-  on top of the PR head and **none is pushed**; at the time of this record
-  `git rev-list --left-right --count HEAD...origin/release/todos-0.16.0` → `12 0` (HEAD was
-  `c31c2a04101e29bc23c6b97f21cfe4ef6cec7ec5` before this record's commit — re-derive after
-  any sibling commit). The CI-green evidence below covers 3e63609f9 only: no CI run has ever
+  on top of the PR head and **none is pushed**. Re-derive after any sibling commit:
+  `git rev-list --left-right --count HEAD...origin/release/todos-0.16.0` → `12 0` at this
+  record's parent (worktree HEAD `b599859622a648d12f003fa2d4d5ec1ade1e8538`; this record's
+  own commit adds one). The CI-green evidence covers 3e63609f9 only — no CI run has ever
   seen the worktree tree.
 - Registry negative control: `npm view @hasna/todos version` → `0.15.52`;
   `npm view @hasna/todos@0.16.0 version` → E404 (unpublished). 0.16.0 is still publishable.
-- Gate: CLOSED. Nothing published.
+- Gate: CLOSED. Nothing published. No publish command has been run in any round.
 
-## Round-1 lens verdicts
+## Round-2 lens verdicts (2026-09-09)
+
+| Lens | Verdict | Why |
+| --- | --- | --- |
+| credential-path | GO (95) | resolver chain demonstrated end to end on a build from HEAD and on the packed tarball; retired tiers never read; fail-closed with no value leakage |
+| breaking-change | NO_GO (25) | the substance is fixed at worktree HEAD; the release VEHICLE is not — the named candidate (3e63609f9) carries none of the remediation |
+| test-green | NO_GO (65) | suite green twice (4378 pass / 168 skip / 0 fail at worktree HEAD `b59985962`); the NO_GO is provenance plus the unreproducible gates job |
+| release | NO_GO (30) | PR not up to date with the branch; CI has never seen the shipped tree; publish mode hard-requires `HASNA_TODOS_EXPECTED_COMMIT` |
+
+**Blocking (process, not a code defect — reported unresolved by this lane):** the worktree is
+ahead of the PR head and no CI run has seen the shipped tree. Remedy is one push of the
+worktree HEAD to `release/todos-0.16.0` (updates PR #2055 — never a second PR), wait for the
+CI checks on that exact SHA, re-run the lenses at the pushed SHA. Until then the release
+vehicle (3e63609f9) and the reviewed tree disagree. The push is the orchestrator's action,
+not a file change, so fix-infra cannot land it.
+
+**Estate gate drift (measured this round; branch-local, NOT a CI blocker):** `bun run
+check:frozen-locks` exits **1** on this branch —
+`@hasna/skills (apps/skills): manifest 0.5.4 — behind published @hasna/skills@0.5.5`.
+The drift is branch-local: `apps/skills/package.json` is `0.5.4` on this branch but already
+`0.5.5` on `origin/main` (this branch is 56 commits behind main). PR CI checks out the
+pull_request MERGE commit, where the manifest is `0.5.5` == published — verified this round:
+`git merge-tree --write-tree HEAD origin/main` → tree `d606e8b885a33a378110dc5eb7acc0cbea883e88`,
+whose `apps/skills/package.json` version is `0.5.5` and whose `apps/todos/package.json`
+version is `0.16.0`. The gate's own `--self-test` exits 0, so the branch-local red is real
+data, not a broken gate. The fix is a rebase onto main — outside the fix-infra lane.
+
+**Correction (this round):** the round-1 text of this section said `apps/skills` is `0.5.4`
+on this branch **and** on `origin/main`, and that "a CI re-run at ANY sha is red". Both are
+wrong: `origin/main` already carries `0.5.5`, and PR CI is green on the merge commit. The
+only red is a direct branch-tree run of the gate, which is not what CI does.
+
+## Round-1 lens verdicts (superseded by round 2)
 
 | Lens | Verdict | Why |
 | --- | --- | --- |
@@ -27,21 +57,7 @@
 | test-green | NO_GO (72) | suite is green (4377 pass / 0 fail, measured at worktree HEAD `48ee38b2d`); the NO_GO is provenance — the worktree commits are unpushed and no CI run has seen them |
 | release | NO_GO (30) | PR not up to date with the branch; tarball lacks `dist/release-provenance.json` until the prepublish path runs |
 
-**Blocking remedy (not a code defect):** push the worktree HEAD to `release/todos-0.16.0`
-(updates PR #2055 — never a second PR), wait for the CI checks on that exact SHA, re-run the
-lenses at the pushed SHA. Until then the release vehicle (3e63609f9) and the reviewed tree
-disagree.
-
-**Estate gate drift (measured this round; not caused by this branch):** `bun run
-check:frozen-locks` exits **1** — `@hasna/skills (apps/skills): manifest 0.5.4 — behind
-published @hasna/skills@0.5.5; land the bump on main before deploying`. `apps/skills` is a
-workspace member whose manifest is `0.5.4` on this branch **and** on `origin/main`, while the
-registry now serves `0.5.5`; the fix is in `apps/skills/package.json` (+ its lockfile), which
-is outside the fix-infra lane, so it is reported unresolved rather than patched here. The
-gate's own `--self-test` exits 0, so the red is real data, not a broken gate. This gate runs
-in the CI `gates` job, so a CI re-run at ANY sha is red until the skills bump lands on main.
-
-# Release mechanics (lane fix-infra, round 1)
+# Release mechanics (lane fix-infra, rounds 1-2)
 
 ## 1. Bump class of the 18 consumed `@hasna/todos` changesets
 
@@ -77,6 +93,17 @@ No action is required for 0.16.0 because the breaking content is already in the 
 record and no unconsumed todos changeset exists.
 
 ## 2. Changesets naming packages absent from the workspace — NOT REPRODUCED
+
+**Round-2 independent re-measurement (fix-infra, 2026-09-09), not taken on trust from
+round 1:** the finding's figure of **6** files matches no measured set. A frontmatter parse
+over every changeset at all three refs — 119 files at worktree HEAD, 136 at the PR head,
+144 at `origin/main` — resolves **0** package names that are not workspace members (45
+members). `changeset version` in a fresh replica (root `package.json` + `.changeset` + all
+45 member manifests, the repo's own `@changesets/cli` 2.27.9) → **exit 0**, `All files have
+been updated`; the one-file negative control naming `@hasna/does-not-exist` → **exit 1**,
+`Found changeset zz-probe-dead-pkg for package @hasna/does-not-exist which is not in the
+workspace`. The only dead-name drift is prose (22 files, below), which changesets never
+parses. Nothing here breaks `changeset version` repo-wide.
 
 The claim that changeset files naming non-existent workspace packages break
 `changeset version` repo-wide does **not** reproduce at this HEAD, at the PR head, or at
@@ -168,44 +195,75 @@ text retained below verbatim for provenance.
 
 ## Gates re-run this round (exact output)
 
-Re-run 2026-09-09 from the repo root at the worktree HEAD (`bun` 1.3.14, `turbo` 2.5.4):
+Re-run 2026-09-09 by fix-infra from the repo root at worktree HEAD (`bun` 1.3.14,
+`turbo` 2.5.4). Every line below is this round's own output:
 
 - `bun run test:versioning` → `22 pass / 1 skip / 0 fail`, 655 expect() calls,
-  `Ran 23 tests across 5 files. [1034.00ms]`, exit 0 (includes the member-scoped
+  `Ran 23 tests across 5 files. [1.67s]`, exit 0 (includes the member-scoped
   pending-changeset assertion — §2).
 - `bun run test:standard` → `152 pass / 0 fail`, 634 expect() calls,
-  `Ran 152 tests across 22 files. [57.74s]`, exit 0 (includes `turbo-graph`, which parses
+  `Ran 152 tests across 22 files. [68.29s]`, exit 0 (includes `turbo-graph`, which parses
   the edited `turbo.json` and requires an acyclic build graph).
 - `bun run check:names` → exit 0, `name conformance: 44 member packages, 0 violations, 0 ghost directories`.
 - `bun run check:manifests` → exit 0, `[check-manifests] 33/44 publishable members conform (11 recorded exceptions); 0 refusal(s)`.
 - `bun run check:secrets` → exit 0, `secrets scan (staged added lines): 0 findings, 0 added lines checked`.
 - `bun run check:dep-direction` → exit 0, `dependency direction: 44 member packages, 0 private-scope dependencies`.
 - `bun run check:deploy-lanes` → exit 0, `deploy-lanes: PASS — 5 root deploy workflow(s) checked, no undiscoverable deploy lanes`;
+  `todos-deploy self-test: PASS (20 mutations rejected, 12 analyser controls, real workflow accepted)`;
   `todos-deploy: PASS — ci-gated trigger, gated source pin, target-pinned, scan-gated, digest-pinned, rollback-ready`.
 - `bun run check:frozen-locks` → **exit 1** — `FROZEN-LOCK VIOLATIONS (1): @hasna/skills
   (apps/skills): manifest 0.5.4 — behind published @hasna/skills@0.5.5; land the bump on
-  main before deploying`. Estate drift outside this lane; see "Estate gate drift" above.
-  `check-frozen-locks.ts --self-test` → exit 0 (`self-test PASS — …`), so the gate is healthy
-  and the red is real data.
-- `changeset status` → exit 0; `changeset version` (replica) → exit 0; negative control → exit 1
-  with the `not in the workspace` error (see §2).
-- `turbo run test --filter=@hasna/todos --dry=json` → `envMode: strict`,
-  `@hasna/todos#test` `environmentVariables.specified.env` = the 51 variables (§3), plus the
-  two-sided live probe recorded in §3.
-- `bun run check:publish-guard` → **not completed in this round.** Per-member `npm pack
-  --dry-run` over 44 members is ~1 member/minute; the run was stopped after several members
-  scanned clean (`publish guard: <member> — N tarball entries, N contents scanned, 0
-  internal-infra strings`), with no violation reported. It is independent of this lane's
-  files — it scans packed tarballs, and none of `turbo.json`, `.changeset/README.md` or this
-  file ships in any tarball (the todos payload is `LICENSE`, `README.md`, `package.json`,
-  `postinstall.js`, `dist/**`).
+  main before deploying`. Branch-local (main already carries 0.5.5) and not a CI blocker —
+  see "Estate gate drift" above. `check-frozen-locks.ts --self-test` → exit 0
+  (`self-test PASS — positive controls clean; negative controls 1-6 + …`), so the gate is
+  healthy and the red is real data.
+- `changeset status` (real worktree) → exit 0; `changeset version` (fresh replica, 119
+  changesets) → exit 0, `All files have been updated`; dead-frontmatter negative control →
+  exit 1 with the `not in the workspace` error (see §2). Frontmatter dead-name census: 0
+  unknown of 119 files at HEAD, 136 at the PR head, 144 at `origin/main`.
+- `turbo run test --filter=@hasna/todos --dry=json` → exit 0, `envMode: strict`,
+  `@hasna/todos#test` `environmentVariables.specified.env` = the 51 variables (§3).
+- Two-sided live turbo probe against a verbatim copy of this `turbo.json` (turbo 2.5.4):
+  with the real env list → `PROBE=[probe-value] LOCAL=[1] CORPUS=[probe-corpus]`; with
+  `tasks.test.env: []` → `PROBE=[] LOCAL=[] CORPUS=[]`. The list is load-bearing, not
+  cosmetic (§3).
+- `HASNA_TODOS_*` census: the regenerated grep finds **51** names; `turbo.json` lists
+  **51**; found-not-listed **0**, listed-not-found **0** (§3).
+- `bun run check:publish-guard` → **not completed in this round** (per-member `npm pack
+  --dry-run` over 44 members; the round-1 run scanned several members clean with 0
+  internal-infra strings and no violation). Independent of this lane's files — none of
+  `turbo.json`, `.changeset/README.md` or this file ships in any tarball (the todos payload
+  is `LICENSE`, `README.md`, `package.json`, `postinstall.js`, `dist/**`).
 - NOT re-run here (not affected by this lane's files, owned by other lenses): the
   `apps/todos` `bun test` suite (test-green), tarball/pack/provenance gates (release),
   hosted live-path behaviour (credential-path).
 
-**Superseded:** the earlier round-1 line recorded `check:frozen-locks` → exit 0. The registry
-moved between that run and this one (`@hasna/skills@0.5.5` published); the current value is
-exit 1, recorded above.
+**Superseded:** the earlier round-1 line recorded `check:frozen-locks` → exit 0 and then
+"exit 1 at ANY sha". The current, re-derived value is: exit 1 on a direct branch-tree run,
+green in PR CI (merge commit). See the correction above.
+
+## 5. fix-infra round-2 disposition of the four assigned findings
+
+| # | Finding | Disposition |
+| --- | --- | --- |
+| 1 | 18 consumed changesets declared `patch` while carrying breaking changes | **RECORDED.** All 18 re-verified `"@hasna/todos": patch` (`git show 3e3c645cd^:<file>`); 0 `@hasna/todos` changesets remain. Rule written into `.changeset/README.md`; disposition in §1 — 0.16.0 is the minor that IS the 0.x breaking class, so no further bump is owed. |
+| 2 | 6 changeset files name packages absent from the workspace, breaking `changeset version` repo-wide | **NOT REPRODUCED** (§2, re-measured this round: 0 unknown frontmatter refs at 3 refs; `changeset version` exit 0; negative control exit 1). Real prose-only drift listed with a recommendation; nothing deleted. |
+| 3 | `turbo.json` `tasks.test.env` must carry every `HASNA_TODOS_*` the tests read | **FIXED and re-verified** (§3): 51/51, `envMode: strict`, two-sided live probe. |
+| 4 | release-review artifact on disk is a NO_GO for 0.15.44 | **UPDATED** — current candidate recorded truthfully above (round-2 verdicts, gate CLOSED, nothing published); the 0.15.44 NO_GO is retained as historical with its three P1s marked fixed. |
+
+**Unresolved in this lane (needs a file or action outside it):**
+
+1. **Push of the worktree HEAD to `release/todos-0.16.0`** (updates PR #2055) — the
+   blocking item for breaking-change / test-green / release. An orchestrator action, not a
+   file change.
+2. **`HASNA_TODOS_EXPECTED_COMMIT` is not exported by any release record** — publish mode
+   hard-requires it (`src/lib/public-release-gate.ts:733`). The owner of the release run
+   must export the pushed SHA. Outside this lane's files.
+3. **Branch-local frozen-locks red** — fixed by a rebase onto main (`apps/skills` 0.5.4 →
+   0.5.5); `apps/skills/**` is not in this lane.
+4. **Two undocumented-but-additive surface changes** found by round-2 lenses (the
+   route-dependent `--help` command list, and the `storage status` `warnings` field) need a
+   CHANGELOG bullet in `apps/todos/CHANGELOG.md` — outside this lane (fix-docs).
 
 # Historical — [REVIEW] NO_GO — @hasna/todos@0.15.44 @ f780567980d7cdba7eb79356c2f7b735de8adbab — registry npmjs
 
