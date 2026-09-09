@@ -28,15 +28,17 @@ two things change:
   `$XDG_CONFIG_HOME` — are not read.
 - **`todos plans`, `todos task-lists` (`lists`, `tl`) and the template commands
   are shared-API only.** They refuse `HASNA_TODOS_DB_PATH`, `TODOS_DB_PATH`,
-  `HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup.
+  `HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup — any one of them set is
+  enough to refuse the command, and the refusal names the ones that are set.
   `todos template-library` is unchanged and still credential-free. The MCP plan
   tools (`create_plan`, `list_plans`, `get_plan`, `update_plan`, `delete_plan`)
   and task-list tools (`create_task_list`, `list_task_lists`, `get_task_list`,
   `update_task_list`, `delete_task_list`) are shared-API only as well.
 
 Everything else still runs offline with `HASNA_TODOS_LOCAL=1`. The per-surface
-detail lives in `docs/PLAN_API.md`, `docs/TASK_LIST_API.md`,
-`docs/TEMPLATE_API.md` and `docs/TASK_QUERY_API.md`.
+detail lives in the repository under `apps/todos/docs/` (`PLAN_API.md`,
+`TASK_LIST_API.md`, `TEMPLATE_API.md`, `TASK_QUERY_API.md`); the npm tarball
+ships this README and `dist/` only, so read those files from the repo.
 
 ## Credentials and Service Authority
 

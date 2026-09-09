@@ -20,8 +20,9 @@ No data migration is required, but two things change under an existing install:
    rows.
 2. **`todos plans`, `todos task-lists` (aliases `lists`, `tl`) and the template
    commands are shared-API only.** They refuse `HASNA_TODOS_DB_PATH`,
-   `TODOS_DB_PATH`, `HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup, and
-   need `HASNA_TODOS_API_URL` and `HASNA_TODOS_API_KEY` (or saved account
+   `TODOS_DB_PATH`, `HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup — any
+   one of them set is enough to refuse the command — and need
+   `HASNA_TODOS_API_URL` and `HASNA_TODOS_API_KEY` (or saved account
    credentials). The five MCP plan tools (`create_plan`, `list_plans`,
    `get_plan`, `update_plan`, `delete_plan`) and the five MCP task-list tools
    (`create_task_list`, `list_task_lists`, `get_task_list`, `update_task_list`,
@@ -121,6 +122,20 @@ detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
 
 ### Patch Changes
 
+- b269abea4: Return the MCP shared-API refusal as a typed, actionable payload instead of
+  `UNKNOWN_ERROR`. The plan and task-list MCP tools are served only by the
+  authenticated shared API, but the guard threw a plain `Error`, which the MCP
+  error formatter sanitizes to `UNKNOWN_ERROR` ("An unexpected error occurred.
+  Check server logs for details.") — so a configuration requirement reached
+  clients as an opaque server fault and the reason ("Plan tools require the
+  authenticated Todos API") was visible only on stderr. The ten tools
+  `create_plan`, `list_plans`, `get_plan`, `update_plan`, `delete_plan`,
+  `create_task_list`, `list_task_lists`, `get_task_list`, `update_task_list` and
+  `delete_task_list` now return
+  `{"code":"REMOTE_API_CONFIG_MISSING","message":…,"suggestion":…}` naming the
+  missing configuration — the same code the CLI prints — in local mode (the
+  deliberate `HASNA_TODOS_LOCAL`/`TODOS_LOCAL` opt-in, which these tools do not
+  honour) and on a station with no credential. No other tool's payload changed.
 - 92d9dac: Stop the `./sdk` client sending the station's fleet credential to a
   caller-supplied `baseUrl` (hasna/apps#1781 review follow-up, regression from
   hasna/apps#1788).
@@ -231,15 +246,17 @@ normalization.md` (runner: `apps/todos/scripts/normalize-slug-prefixes.ts`,
   written before 2026-09-05 keeps working. `todos serve` prints one line at
   startup naming which variable supplied its accepted key, flagging the
   deprecated spelling when a fallback name was used.
-- 5a20d230a: Restore the admitted-local redaction's `delete env.TODOS_API_URL;` semantics in
-  stage-a and align the public-text-boundary exemption (and its gate tests) with
-  that emitted delete shape. The #1829 blanking workaround contradicted stage-a's
-  documented delete-not-blank law (a declared-but-blank authority is refused
-  loudly downstream) and left the gate stripping a shape the source no longer
-  emitted; the release-review P1 (0d22a7aa2) requires the exemption to match the
-  delete statement exactly, with every other spelling — a read, a blanking
-  assignment, any other module — still failing the boundary. The SDK README
-  documents the canonical HASNA_TODOS_API_URL / HASNA_TODOS_API_KEY names only.
+- 5a20d230a: Restore the admitted-local redaction's delete-not-blank semantics in
+  stage-a — the emitted statement deletes the legacy unprefixed authority variable
+  from the environment — and align the public-text-boundary exemption (and its
+  gate tests) with that emitted delete shape. The #1829 blanking workaround
+  contradicted stage-a's documented delete-not-blank law (a declared-but-blank
+  authority is refused loudly downstream) and left the gate stripping a shape the
+  source no longer emitted; the release-review P1 (0d22a7aa2) requires the
+  exemption to match the delete statement exactly, with every other spelling — a
+  read, a blanking assignment, any other module — still failing the boundary. The
+  SDK README documents the canonical HASNA_TODOS_API_URL / HASNA_TODOS_API_KEY
+  names only.
 - 17b09fae3: Route all CLI task-list aliases through authenticated shared storage, with complete task detail, status controls, preserving deletion and database-selector rejection before startup.
 
   **Breaking for local-SQLite users** (hasna/apps#2027). `todos task-lists` —
@@ -250,7 +267,10 @@ normalization.md` (runner: `apps/todos/scripts/normalize-slug-prefixes.ts`,
   HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, or saved account credentials.`; a
   run with no credential fails closed with `REMOTE_API_CONFIG_MISSING`. Task
   lists carry a persisted `status` on the shared record, task detail is read in
-  full, and deletion is confirmed by a checked receipt.
+  full, and deletion is confirmed by a checked receipt. As with plans, the
+  deletion option contract changed with the move: `--delete` removes an empty
+  task list, and `--force` (which requires `--delete`) detaches linked tasks and
+  plans while preserving their content and history.
 - b29183485: Route CLI plans through shared authenticated storage and preserve Markdown exports with an explicitly chosen local root, checked deletion receipts and accurate artifact-failure reporting.
 
   **Breaking for local-SQLite users** (hasna/apps#2034). `todos plans` and every
