@@ -538,14 +538,18 @@ URLs are never returned or written to the recovery directory.
 A paid remote run requires explicit approval. Interactive runs ask before
 submission; JSON and other noninteractive runs require `--yes`. The approved
 quote becomes the server-enforced credit ceiling. A changed price above that
-ceiling fails before admission. A compatible server must advertise bounded
+ceiling fails before admission. When the server returns `quoteReceipt`, the
+client preserves that opaque value from the approved quote without obtaining a
+replacement. The server checks its version, request and expiry binding; a refusal
+stops the submission. A compatible server must advertise bounded
 approval; older or unsupported APIs return errors, not local results. Reuse the
 same idempotency key only for an identical submission to safely recover an
 interrupted response. `runs cancel` and `runs resume` call the server's lifecycle
 operations and can be refused when the current state does not allow them.
 
-`run --remote --file input.txt ...` declares upload hashes before admission and
-uploads bytes without forwarding the account key to storage. Failed uploads
+`run --remote --file input.txt ...` quotes the owned files' names, sizes, SHA-256
+hashes and content types before approval, declares those same descriptors at
+admission, and uploads the original bytes without forwarding the account key to storage. Failed uploads
 request cancellation. Upload support must be advertised by the server.
 Downloads verify authenticated size and SHA-256 metadata before writing files;
 existing files and unsafe paths are refused. CLI/SDK downloads are bounded to
@@ -556,9 +560,11 @@ commands return external links; payment confirmation remains in the browser.
 The MCP server uses the same account, quote, run and artifact client. Agent
 hosts must launch `skills-mcp --stdio`; the standalone default is loopback HTTP.
 Configure its environment with the selected `HASNA_PROFILE` and isolated state
-paths. `run_skill` accepts `remote:true`, `maxCredits`, `idempotency_key`, and
+paths. `run_skill` accepts `remote:true`, `maxCredits`, `quoteReceipt`, `idempotency_key`, and
 optional inline `files:[{name,base64,contentType}]`. An omitted ceiling permits
-only free execution. `quote_skill` never submits a run.
+only free execution. `quote_skill` accepts the same input, args and inline files
+and never submits a run. After approval, pass its receipt unchanged to `run_skill`
+with those same values; do not automatically re-quote after a refusal.
 
 ```ts
 import { RemoteSkillsAuthClient, createRemoteSkillsClient } from "@hasna/skills/sdk";
@@ -575,6 +581,7 @@ const quote = await client.quoteRun("blog-article", {}, ["--topic", "Your topic"
 // Obtain explicit user approval of quote.pricing.costCents before this call.
 const run = await client.submitQuotedRun("blog-article", {}, ["--topic", "Your topic"], {
   maxCredits: quote.pricing.costCents,
+  quoteReceipt: quote.quoteReceipt,
   idempotencyKey: "article-001",
 });
 ```
@@ -582,7 +589,14 @@ const run = await client.submitQuotedRun("blog-article", {}, ["--topic", "Your t
 `submitRun` remains a low-level compatibility transport. New paid integrations
 should use `submitQuotedRun` or `submitQuotedRunWithFiles` so capability and
 approval checks run before submission. Credit counts are integers; `maxCostCents`
-is a legacy spelling for the same credit ceiling. Missing billing capabilities
+is a legacy spelling for the same credit ceiling. An optional receipt is a
+nonempty opaque string of at most 4,096 UTF-8 bytes, preserved without normalization.
+`quoteRun` accepts optional file descriptors as its fourth argument; each descriptor
+contains `name`, `sizeBytes`, `sha256`, and `contentType` and must match the later
+submission. `submitQuotedRunWithFiles` captures owned bytes and derives these
+descriptors before its asynchronous calls. Explicit receipts are never replaced;
+without one, it requests a quote and carries the returned receipt into admission.
+Missing billing capabilities
 on an internal instance are explicit unsupported responses; this package does
 not add a billing engine to the OSS server.
 
