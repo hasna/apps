@@ -35,7 +35,6 @@ try {
   }
   await writeFile(join(workspace, "package.json"), JSON.stringify({ private: true, type: "module",
     dependencies: { "@hasna/skills": `file:${join(workspace, filename)}` },
-    // bun-types accepts any Node types; retain the package's tested declaration pair.
     devDependencies: { typescript: "5.9.3", "@types/bun": metadata.devDependencies["@types/bun"], "@types/node": metadata.devDependencies["@types/node"] },
   }));
   await writeFile(join(workspace, "tsconfig.json"), JSON.stringify({ compilerOptions: {
