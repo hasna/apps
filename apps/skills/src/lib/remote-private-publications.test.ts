@@ -39,7 +39,7 @@ async function prepared(c = client()) {
   const receipt = await preparePrivatePublication(c, source, recovery, { skillId, expectedCurrentVersionId: null, idempotencyKey: ids[5] });
   return { root, source, recovery, receipt, c };
 }
-function server() {
+function server(apiPrefix = "/api/v1") {
   const calls: { method: string; path: string }[] = [];
   let view: PrivatePublicationView | undefined, uploads = 0, enabled = true, lostBegin = false, lostPut = false, lostFinalize = false;
   let custom: ((url: URL, init?: RequestInit) => Response | Promise<Response> | undefined) | undefined;
@@ -59,7 +59,7 @@ function server() {
       uploads++; if (lostPut) { lostPut = false; throw Error("sensitive-provider-error"); } return new Response(null, { status: 200 });
     }
     expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${token}`);
-    if (url.pathname === "/api/v1/capabilities") return Response.json({ contractVersion: 1, apiVersion: 1, privatePublishing: { ...capability, enabled } });
+    if (url.pathname === `${apiPrefix}/capabilities`) return Response.json({ contractVersion: 1, apiVersion: 1, privatePublishing: { ...capability, enabled } });
     if (url.pathname.endsWith("/publication-uploads")) {
       const d = checkedPublicationDeclaration(JSON.parse(String(init?.body)));
       view ??= { id: intentId, skillId, version: d.version, expectedCurrentVersionId: null, archiveSha256: d.archiveSha256, archiveByteSize: d.archiveByteSize,
@@ -251,4 +251,31 @@ test("publication views accept real PostgreSQL timezone offsets and reject malfo
     view.createdAt = "2026-09-08T22:35:20.123456" + offset;
     await expect(p.c.get(skillId, intentId)).rejects.toMatchObject({ code: "INVALID_PUBLICATION_RESPONSE" });
   }
+});
+
+// Run again against the final installed root and SDK candidate after API2053 integration.
+for (const [configured, apiPrefix] of [
+  ["https://api.hasna.com/skills", "/skills/v1"],
+  ["https://api.hasna.com/skills/v1", "/skills/v1"],
+  ["https://api.hasna.com/skills/api/v1", "/skills/v1"],
+  ["https://skills.md/api/v1", "/api/v1"],
+  ["https://instance.example.test/tenant/api/v1", "/tenant/api/v1"],
+  ["https://api.hasna.com/skills-other", "/skills-other/api/v1"],
+]) test(`publication routes retain the configured instance: ${configured}`, async () => {
+  const s = server(apiPrefix), c = new RemotePrivatePublicationsClient(configured, session);
+  s.customize(url => { if (!url.hostname.includes(".s3.")) expect(url.origin).toBe(new URL(configured).origin); return undefined; });
+  const p = await prepared(c);
+  expect((await c.getCapability()).enabled).toBe(true);
+  const begun = await c.begin(skillId, p.receipt.declaration);
+  expect((await c.get(skillId, begun.id)).id).toBe(begun.id);
+  await c.upload(skillId, begun, readPrivatePublicationRecovery(p.recovery).bytes);
+  expect((await c.finalize(skillId, begun.id)).state).toBe("committed");
+  expect((await c.wait(skillId, begun.id, { timeoutMs: 1000 })).state).toBe("committed");
+  expect(s.uploads).toBe(1);
+  expect(s.calls.filter(row => !row.path.startsWith("/private-publication-staging/"))
+    .every(row => row.path.startsWith(`${apiPrefix}/`))).toBe(true);
+  const cancelled = server(apiPrefix);
+  await c.begin(skillId, p.receipt.declaration);
+  expect((await c.cancel(skillId, intentId)).state).toBe("cancelled");
+  expect(cancelled.calls.some(row => row.method === "DELETE" && row.path === `${apiPrefix}/skills/${skillId}/publication-uploads/${intentId}`)).toBe(true);
 });

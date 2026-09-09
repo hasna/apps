@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { normalizeSkillsApiOrigin } from "./fleet-credentials.js";
+import { normalizeSkillsApiOrigin, skillsApiRequestUrl } from "./fleet-credentials.js";
 import { parseWorkspaceSession, type RemoteWorkspaceSession } from "./remote-workspace-selection.js";
 import { validatePortableManifestContract } from "./skill-contract.js";
 import type { PortableSkillManifest } from "./portable-skills.js";
@@ -142,7 +142,7 @@ export class RemotePrivatePublicationsClient {
   }
   async getCapability(options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<PrivatePublishingCapability> {
     if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > 15000)) return bad();
-    const response = await boundedJson(`${this.apiOrigin}/api/v1/capabilities`, {}, this.#token, false, options.timeoutMs, options.signal);
+    const response = await boundedJson(skillsApiRequestUrl(this.apiOrigin, "/api/v1/capabilities"), {}, this.#token, false, options.timeoutMs, options.signal);
     const p = record(response) && response.privatePublishing;
     if (!record(response) || response.contractVersion !== 1 || response.apiVersion !== 1
       || !exact(p, ["contractVersion", "enabled", "authentication", "maxArchiveBytes", "uploadMaxTtlSeconds", "executionEnabled"])
@@ -156,7 +156,7 @@ export class RemotePrivatePublicationsClient {
   }
   #path(skillId: string, intentId?: string): string {
     if (!publicationUuid(skillId) || (intentId !== undefined && !publicationUuid(intentId))) return bad();
-    return `${this.apiOrigin}/api/v1/skills/${skillId}/publication-uploads${intentId ? `/${intentId}` : ""}`;
+    return skillsApiRequestUrl(this.apiOrigin, `/api/v1/skills/${skillId}/publication-uploads${intentId ? `/${intentId}` : ""}`);
   }
   async #view(path: string, method: string, skillId: string, intentId?: string, declaration?: PrivatePublicationDeclaration, options: { timeoutMs?: number; signal?: AbortSignal } = {}) {
     const value = await boundedJson(path, { method, ...(method === "GET" ? {} : { body: JSON.stringify(declaration ?? {}) }) }, this.#token, method !== "GET", options.timeoutMs, options.signal);

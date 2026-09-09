@@ -407,6 +407,15 @@ const REGISTRY_ENV_KEYS = [
   "HOME",
   "HASNA_HOME",
   "HASNA_CONFIG_HOME",
+  // Keychain account: `keychainAccount()` reads HASNA_STATION, else the short
+  // hostname, else USER (apps/contracts/src/client/credentials.ts). This
+  // in-process suite resolves through the LIVE process.env, so on a macOS
+  // station with a real `hasna.credentials.projects.*` item under its own
+  // hostname the ambient tier would resolve next to the fixture authority —
+  // the refused-as-different-authority class the disk anchors close, one tier
+  // up. The sentinel keeps the tier a miss; captured and restored like the
+  // roots.
+  "HASNA_STATION",
 ] as const;
 
 function captureRegistryEnv(): Record<string, string | undefined> {
@@ -481,6 +490,7 @@ describe("project reports server registry transport", () => {
       process.env["HOME"] = root;
       process.env["HASNA_HOME"] = root;
       process.env["HASNA_CONFIG_HOME"] = root;
+      process.env["HASNA_STATION"] = "projects-hermetic-no-such-station";
 
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
         const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;

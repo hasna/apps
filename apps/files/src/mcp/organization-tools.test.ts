@@ -33,6 +33,10 @@ const ENV_KEYS = [
   "HOME",
   "HASNA_HOME",
   "HASNA_CONFIG_HOME",
+  // Keychain account pin (see mcp-transport.test.ts): a real macOS keychain
+  // item under this machine's hostname account would resolve for the fake
+  // authority below — same refusal class as the disk tier, one tier up.
+  "HASNA_STATION",
 ] as const;
 
 const savedEnv = new Map<string, string | undefined>();
@@ -48,6 +52,7 @@ beforeEach(() => {
   process.env.HOME = testDir;
   process.env.HASNA_HOME = testDir;
   process.env.HASNA_CONFIG_HOME = testDir;
+  process.env.HASNA_STATION = "files-hermetic-no-such-station";
   delete process.env.HASNA_FILES_API_URL;
   delete process.env.HASNA_FILES_API_KEY;
 });

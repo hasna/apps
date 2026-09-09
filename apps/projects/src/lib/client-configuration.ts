@@ -31,8 +31,8 @@ import {
   keychainConfigValue,
   resolveCredential,
   CREDENTIAL_PROFILE_ENV_KEY,
-  type CredentialChainOptions,
 } from "@hasna/contracts/client";
+import type { CredentialChainOptions } from "../types/client-types.js";
 
 /** Process-environment shape accepted by the shared @hasna/contracts seam. */
 export type ClientEnv = Record<string, string | undefined>;

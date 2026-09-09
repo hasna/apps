@@ -151,7 +151,7 @@ export interface LocalSkillsFleet {
 export type SkillsFleet = HostedSkillsFleet | LocalSkillsFleet;
 
 /** Machine-readable reasons a hosted resolution was refused. */
-export type SkillsFleetErrorCode = "MISSING_API_CREDENTIAL" | "INVALID_API_URL" | "INSTANCE_CREDENTIAL_MISMATCH";
+export type SkillsFleetErrorCode = "MISSING_API_CREDENTIAL" | "INVALID_API_URL" | "INSTANCE_CREDENTIAL_MISMATCH" | "GATEWAY_AUTH_UNAVAILABLE";
 
 /**
  * A configured install could not produce a usable hosted client.
@@ -243,7 +243,9 @@ export function normalizeSkillsApiOrigin(apiUrl: string): string {
     throw new SkillsFleetCredentialError("A Skills API URL must use HTTPS (or loopback HTTP), without credentials, query or fragment", "INVALID_API_URL");
   }
   const pathname = url.pathname.replace(/\/+$/, "");
-  if (pathname === "/api" || pathname === "/api/v1") {
+  if (url.origin === "https://api.hasna.com" && pathname === "/skills/v1") {
+    url.pathname = "/skills";
+  } else if (pathname === "/api" || pathname === "/api/v1") {
     url.pathname = "/";
   } else if (pathname.endsWith("/api/v1")) {
     url.pathname = pathname.slice(0, -"/api/v1".length) || "/";
@@ -251,6 +253,28 @@ export function normalizeSkillsApiOrigin(apiUrl: string): string {
     url.pathname = pathname.slice(0, -"/api".length) || "/";
   }
   return url.toString().replace(/\/+$/, "");
+}
+
+/** Compose a known Skills route without changing its credential-bound instance.
+ * The fleet gateway strips /skills and forwards /v1 to its independent origin.
+ * Other instances retain the established /api/v1 and /api/auth contracts.
+ */
+export function skillsApiRequestUrl(apiUrl: string, route: string): string {
+  const origin = normalizeSkillsApiOrigin(apiUrl);
+  if (!route.startsWith("/api/") || route.includes("#") || route.includes("\\")) {
+    throw new SkillsFleetCredentialError("Invalid Skills API route", "INVALID_API_URL");
+  }
+  if (origin === "https://api.hasna.com/skills") {
+    if (route === "/api/auth/whoami") return `${origin}/v1/auth/whoami`;
+    if (!route.startsWith("/api/v1/")) {
+      throw new SkillsFleetCredentialError(
+        "The internal Skills gateway has no established login contract yet. Select an explicitly configured instance with supported authentication.",
+        "GATEWAY_AUTH_UNAVAILABLE",
+      );
+    }
+    return `${origin}${route.slice("/api".length)}`;
+  }
+  return `${origin}${route}`;
 }
 
 /** One configured authority: its value and the source that decided it. */

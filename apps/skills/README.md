@@ -120,6 +120,20 @@ credential has resolved, so an install with no credential names no host at all.
 `skills setup --api-url <origin>` writes the credentials file; the address is
 per-user, never per-project.
 
+The internal gateway resource contract is `/skills/v1/...`; commercial and custom
+instances retain their `/api/v1/...` routes. A full gateway `/skills/v1` base is
+accepted and normalizes to the same credential-bound instance. Select a
+customer-owned instance explicitly with `HASNA_SKILLS_API_URL=https://skills.example` and
+its own profile/credential; configuring one instance does not select the other.
+The OSS server accepts `/v1/...` aliases through the same handlers as its
+`/api/v1/...` routes, plus `/v1/auth/whoami` for existing API-key identity and
+`/v1/health` for liveness. Gateway integration is incomplete until the internal
+origin runs this version and passes authenticated live acceptance. Login and
+device authorization still use `/api/auth/...` on standalone instances; the
+internal gateway has no interactive login service, so these operations stop
+before transmitting account input or credentials. This is an explicit readiness gap, not support for
+logging into the internal service through the commercial account.
+
 The unprefixed `SKILLS_API_KEY` and `SKILLS_API_URL` spellings are still accepted
 as silent aliases one rung below the canonical names, for one release. Use the
 `HASNA_`-prefixed names. `SKILL_API_KEY` (singular) is no longer read at all.

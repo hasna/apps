@@ -9,7 +9,7 @@ import { readBoundedResponse } from "./remote-files.js";
 import { workspaceMembersQuery, type RemoteWorkspaceMembersOptions } from "./remote-workspace.js";
 import { workspaceMemberRoleInput, workspaceMemberRemovalInput, type SetRemoteWorkspaceMemberRole, type RemoveRemoteWorkspaceMember } from "./remote-workspace.js";
 import { RemoteSkillsClient } from "./remote-client.js";
-import { normalizeSkillsApiOrigin } from "./fleet-credentials.js";
+import { normalizeSkillsApiOrigin, skillsApiRequestUrl } from "./fleet-credentials.js";
 import { customerNamePatch, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
 
 const MAX_ERROR_DETAIL_LENGTH = 200;
@@ -40,10 +40,11 @@ async function requestAuthApi(instance: string, path: string, options?: RequestI
   // sent to a default host, so the command fails before any request is made.
   const url = normalizeSkillsApiOrigin(instance);
   const safeUrl = url;
-  const endpoint = `${(options?.method || "GET").toUpperCase()} ${safeUrl}${path}`;
+  const requestUrl = skillsApiRequestUrl(url, path);
+  const endpoint = `${(options?.method || "GET").toUpperCase()} ${requestUrl}`;
   let res: Response;
   try {
-    res = await fetch(`${url}${path}`, {
+    res = await fetch(requestUrl, {
       ...options,
       redirect: "error",
       signal: options?.signal ?? AbortSignal.timeout(15_000),
@@ -144,9 +145,10 @@ export class RemoteSkillsAuthClient {
     const apiOrigin = this.apiOrigin;
     if (typeof email !== "string" || !email.includes("@") || typeof code !== "string" || !/^\d{6}$/.test(code))
       throw new Error("Fresh email and six-digit verification code are required to manage this account");
+    const requestUrl = skillsApiRequestUrl(apiOrigin, "/api/auth/verify");
     let response: Response;
     try {
-      response = await fetch(`${apiOrigin}/api/auth/verify`, { method: "POST", redirect: "error", credentials: "omit",
+      response = await fetch(requestUrl, { method: "POST", redirect: "error", credentials: "omit",
         signal: AbortSignal.timeout(15_000), headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, code }) });
     } catch { throw new HostedApiError("Unable to verify the Skills account."); }
     if (!response.ok) {

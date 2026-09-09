@@ -310,6 +310,82 @@ describe("MementosClient.fromEnv", () => {
 });
 
 // ============================================================================
+// AUTHORITY PIN (hasna/apps#1794): the key rotates per request, the AUTHORITY
+// is pinned for the life of the client. A mid-process authority change — a
+// re-pointed env var, a changed Keychain `api-url` item, a rewritten
+// credentials file — must refuse loudly, never silently send the client's data
+// to a different server with the key that resolved for it.
+// ============================================================================
+
+describe("authority pinned for the life of the client (hasna/apps#1794)", () => {
+  const scratch: string[] = [];
+  afterAll(() => {
+    for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function hermeticEnv(extra: Record<string, string> = {}): Record<string, string> {
+    const home = mkdtempSync(join(tmpdir(), "mementos-sdk-pin-"));
+    scratch.push(home);
+    return { HOME: home, HASNA_HOME: home, HASNA_CONFIG_HOME: home, HASNA_STATION: "no-such-station", ...extra };
+  }
+
+  function recorder(): { fetch: typeof globalThis.fetch; calls: string[] } {
+    const calls: string[] = [];
+    const fetch = (async (input: RequestInfo | URL) => {
+      calls.push(typeof input === "string" ? input : input.toString());
+      return new Response(JSON.stringify({ memories: [], count: 0, total: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof globalThis.fetch;
+    return { fetch, calls };
+  }
+
+  test("a KEY rotation heals without refusing; an authority change refuses loudly and never dispatches", async () => {
+    const { fetch, calls } = recorder();
+    const env = hermeticEnv({
+      HASNA_MEMENTOS_API_URL: "https://first.example/mementos",
+      HASNA_MEMENTOS_API_KEY: "k1",
+    });
+    const client = new MementosClient({ env, fetch });
+
+    // First request pins the resolved authority.
+    await client.listMemories({ limit: 1 });
+    expect(calls[0]).toContain("https://first.example/mementos/v1/memories");
+
+    // A KEY rotation re-resolves fresh and heals — no refusal (the authority
+    // is unchanged, so the pin holds).
+    env.HASNA_MEMENTOS_API_KEY = "k2";
+    await client.listMemories({ limit: 1 });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain("https://first.example/mementos/v1/memories");
+
+    // An AUTHORITY change refuses loudly — and the request never reaches the
+    // new server, with any credential.
+    env.HASNA_MEMENTOS_API_URL = "https://second.example/mementos";
+    await expect(client.listMemories({ limit: 1 })).rejects.toThrow(/MEMENTOS_AUTHORITY_CHANGED/);
+    expect(calls.filter((call) => call.includes("second.example"))).toEqual([]);
+  });
+
+  test("an explicit baseUrl pin is used verbatim and never re-derived from the chain", async () => {
+    const { fetch, calls } = recorder();
+    // The env points at a DIFFERENT authority — an explicit pin must win and
+    // must not silently move when the env changes.
+    const env = hermeticEnv({
+      HASNA_MEMENTOS_API_URL: "https://env.example/mementos",
+      HASNA_MEMENTOS_API_KEY: "env-key",
+    });
+    const client = new MementosClient({ env, fetch, baseUrl: "https://pinned.example/mementos", apiKey: "pin-key" });
+    await client.listMemories({ limit: 1 });
+    expect(calls[0]).toContain("https://pinned.example/mementos/v1/memories");
+
+    env.HASNA_MEMENTOS_API_URL = "https://env-other.example/mementos";
+    await client.listMemories({ limit: 1 });
+    expect(calls[1]).toContain("https://pinned.example/mementos/v1/memories");
+  });
+});
+
+// ============================================================================
 // FAIL CLOSED when nothing resolves (owner ruling 2026-09-04; hasna/apps#1720
 // acceptance (c)). The SDK used to degrade to the unhosted local serve with
 // only a stderr notice; it now refuses BEFORE any request is built, exactly as

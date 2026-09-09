@@ -26,6 +26,19 @@
     "./sdk": {
       "import": "./dist/sdk/index.js",
       "types": "./dist/sdk/index.d.ts"
+    },
+    "./contracts/hosted-v1": {
+      "import": "./dist/contracts/hosted-v1.js",
+      "types": "./dist/contracts/hosted-v1.d.ts"
+    },
+    "./contracts/stream-v1": {
+      "import": "./dist/contracts/stream-v1.js",
+      "types": "./dist/contracts/stream-v1.d.ts"
+    },
+    "./contracts/fixtures/v1": "./contracts/v1/fixtures.json",
+    "./hosted": {
+      "import": "./dist/hosted/index.js",
+      "types": "./dist/hosted/index.d.ts"
     }
   },
   "engines": {
@@ -37,7 +50,7 @@
     "build:cli": "bun build src/cli/index.ts --target=bun --outfile=dist/cli/index.js --external=commander --external=chalk --external=openai --external=@aws-sdk/client-s3",
     "build:mcp": "bun build src/mcp/index.ts --target=bun --outfile=dist/mcp/index.js --external=@modelcontextprotocol/sdk --external=openai --external=@aws-sdk/client-s3",
     "build:serve": "bun build src/server/index.ts --target=bun --outfile=dist/server/index.js --external=@modelcontextprotocol/sdk --external=@hasna/contracts --external=openai --external=pg --external=@aws-sdk/client-s3",
-    "build:lib": "bun build src/index.ts src/storage.ts src/sdk/index.ts --target=bun --outdir=dist --external=openai --external=@aws-sdk/client-s3",
+    "build:lib": "bun build src/index.ts src/storage.ts src/sdk/index.ts --target=bun --outdir=dist --external=openai --external=@aws-sdk/client-s3 && bun run build:contracts",
     "build:native-fs-guard": "/bin/bash scripts/build_native_fs_guard.sh",
     "generate:sdk": "bun run scripts/generate-sdk.ts",
     "migrate": "bun run scripts/migrate.ts",
@@ -65,7 +78,8 @@
     "prepack:platform-gate": "bash -c 'if [ \"$(uname -s)\" = Darwin ]; then bun run build:native-fs-guard; else echo \"WARN: native fs-guard build skipped on $(uname -s) — dry-run/CI pack; publish recordings from macOS\"; fi'",
     "prepublishOnly": "bun run typecheck && bun run release-suite-gate",
     "release-suite-gate": "bun run scripts/release-suite-gate.ts",
-    "typecheck:shortcut-contract": "tsc --noEmit -p tsconfig.test.json"
+    "typecheck:shortcut-contract": "tsc --noEmit -p tsconfig.test.json",
+    "build:contracts": "bun build src/contracts/hosted-v1.ts src/contracts/stream-v1.ts src/hosted/index.ts --target=bun --root src --outdir=dist --splitting --external=@hasna/contracts"
   },
   "files": [
     "dist/",
@@ -85,7 +99,10 @@
     "src/native/Recordings/build.sh",
     "packaging/macos/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "contracts/v1/fixtures.json",
+    "docs/wire-contracts.md",
+    "docs/hosted-sdk.md"
   ],
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1007.0",
