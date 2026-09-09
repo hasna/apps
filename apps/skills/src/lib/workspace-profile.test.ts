@@ -1,6 +1,6 @@
 import { test, expect, spyOn } from "bun:test";
 import * as fs from "node:fs";
-import { mkdirSync, renameSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync, existsSync, symlinkSync } from "node:fs";
+import { mkdirSync, renameSync, realpathSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync, existsSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -12,7 +12,9 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 useDefaultTestTimeout();
 
 async function fixture(run: (f: any) => Promise<void>) {
-  const home = mkdtempSync(join(tmpdir(), "skills-workspace-profile-"));
+  // macOS exposes its temporary directory through /var; fixture identity must
+  // be canonical while intentionally linked profile paths remain forbidden.
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "skills-workspace-profile-")));
   const userId = randomUUID(), a = randomUUID(), b = randomUUID(), orgA = randomUUID(), orgB = randomUUID();
   const keys = { a: `sk_${randomUUID()}`, b: `sk_${randomUUID()}` }, tokens = { a: randomUUID(), b: randomUUID() };
   const calls: string[] = []; let mode = "normal"; let hook = () => {};
@@ -95,6 +97,16 @@ test("different identity and symlink profile refuse without OTP consumption", as
   const file = getIdentityFilePath(f.env); rmSync(file); symlinkSync(getAuthFilePath(f.env), file);
   await expect(prepareWorkspaceEnrollment(f.b, f.env)).rejects.toThrow();
   expect(existsSync(getAuthFilePath(f.env))).toBe(true);
+}));
+
+test("symlink profile ancestor refuses before OTP and preserves credentials", async () => fixture(async f => {
+  f.setup();
+  const directory = f.env.HASNA_HOME, target = directory + "-actual";
+  const file = getAuthFilePath(f.env), before = readFileSync(file, "utf8");
+  renameSync(directory, target); symlinkSync(target, directory, "dir");
+  await expect(prepareWorkspaceEnrollment(f.b, f.env)).rejects.toThrow("profile directory must not be a symbolic link");
+  expect(f.calls).toEqual([]);
+  expect(readFileSync(file, "utf8")).toBe(before);
 }));
 
 test("second rename failure restores prior identity and preserves prior key", async () => fixture(async f => {
