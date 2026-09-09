@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { getDb, resetDb } from "../src/db.js";
+import { Database } from "bun:sqlite";
 import {
   getAwsSecretValueForEnv,
   getAwsSecretValue,
@@ -13,12 +13,15 @@ import {
   setAwsClientFactoryForTests,
   syncAll,
 } from "../src/aws.js";
-import { LocalStore } from "../src/store/index.js";
+import { getStore, type Store } from "../src/store/index.js";
+import { startLoopbackVault } from "./loopback-vault-fixture.mjs";
 
-const _store = new LocalStore();
-const setSecret = _store.setSecret.bind(_store);
+let _store: Store;
+const setSecret: Store["setSecret"] = (...args) => _store.setSecret(...args);
 
 let testDir: string;
+let vault: Awaited<ReturnType<typeof startLoopbackVault>>;
+let savedEnv: NodeJS.ProcessEnv;
 
 const envKeys = [
   "AWS_PROFILE",
@@ -35,20 +38,24 @@ const envKeys = [
 ];
 
 beforeEach(async () => {
+  savedEnv = { ...process.env };
   testDir = join(tmpdir(), `secrets-aws-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
-  process.env.OPEN_SECRETS_DB = join(testDir, "vault.db");
+  vault = await startLoopbackVault(testDir);
+  for (const key of Object.keys(process.env)) if (/^(HASNA_|SECRETS_|OPEN_SECRETS_|AWS_|DATABASE_URL$|PG|XDG_)/.test(key)) delete process.env[key];
+  Object.assign(process.env, vault.env(), { HASNA_SECRETS_TEST_ISOLATION: "1" });
+  _store = getStore();
   for (const key of envKeys) delete process.env[key];
   setAwsClientFactoryForTests();
-  resetDb();
 });
 
 afterEach(async () => {
   setAwsClientFactoryForTests();
-  resetDb();
-  delete process.env.OPEN_SECRETS_DB;
-  for (const key of envKeys) delete process.env[key];
-  rmSync(testDir, { recursive: true, force: true });
+  try { await vault.stop(); } finally {
+    for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
+    Object.assign(process.env, savedEnv);
+    rmSync(testDir, { recursive: true, force: true });
+  }
 });
 
 describe("AWS credential resolution", () => {
@@ -451,9 +458,11 @@ describe("AWS dry-run planning", () => {
       },
     }));
     await setSecret("example/app/prod/s3", "secret-value", "credential");
-    getDb()
-      .prepare("UPDATE secrets SET value = ? WHERE key = ?")
-      .run("enc:v1:malformed", "example/app/prod/s3");
+    const backend = new Database(vault.dbPath);
+    try {
+      backend.prepare("UPDATE secrets SET value = ? WHERE key = ?")
+        .run("enc:v1:malformed", "example/app/prod/s3");
+    } finally { backend.close(); }
 
     const plan = await pushSecret("example/app/prod/s3", {
       dryRun: true,
@@ -514,9 +523,11 @@ describe("AWS dry-run planning", () => {
       },
     }));
     await setSecret("example/app/prod/s3", "secret-value", "credential");
-    getDb()
-      .prepare("UPDATE secrets SET value = ? WHERE key = ?")
-      .run("enc:v1:malformed", "example/app/prod/s3");
+    const backend = new Database(vault.dbPath);
+    try {
+      backend.prepare("UPDATE secrets SET value = ? WHERE key = ?")
+        .run("enc:v1:malformed", "example/app/prod/s3");
+    } finally { backend.close(); }
 
     const result = await syncAll({ dryRun: true, profile: "example-aws-profile" });
 

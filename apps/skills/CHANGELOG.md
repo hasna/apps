@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.4
+
+### Patch Changes
+
+- 16d2ecb: Preserve known hosted quote refusal codes and display fixed, useful messages in the SDK and CLI. Unknown or malformed failures keep the safe generic HTTP error; server-controlled text is never displayed.
+
+## 0.5.3
+
+### Patch Changes
+
+- 0343a7e: Expose a bounded asynchronous bundle inspector and deterministic packer through the SDK. Uploaded gzip/ustar bundles can now be validated with streaming decompression, finite byte/path/entry/deadline budgets, strict archive checks, owned file buffers and no filesystem writes or execution. Existing synchronous unpack callers remain unchanged and must migrate separately for untrusted input.
+- e9e0eb6: Expose bounded entry-based canonical content hashing and same-entry manifest verification without extraction, preserving directory hashes. Export the existing content revision identity through supported SDK entrypoints.
+- 97ff397: Add explicit invitation email recovery to SDK and CLI, plus a separate two-tool MCP stdio mode. Preserve caller challenge IDs, bounded proof input, uncertain outcomes and unchanged credentials; require ordinary sign-in after acceptance.
+- 7e99f9a: Add explicitly confirmed workspace invitation operations to the SDK, CLI and MCP. Fresh verification binds the observed account and current membership, validates bounded results, preserves saved credentials and retains caller idempotency for uncertain issue or resend outcomes. Acceptance secrets use stdin or masked terminal input.
+
+## 0.5.2
+
+### Patch Changes
+
+- 5788bee: Add explicitly confirmed workspace self-leave through the SDK, CLI and MCP. Fresh verification stays bound to the observed membership and selected profile; uncertain outcomes never retry or modify saved credentials.
+
+## 0.5.1
+
+### Patch Changes
+
+- Keep fresh-auth MCP account, workspace member, and API-key operations bound to the live user and membership of the host's named credential profile. Capture authority per invocation, refuse stale or revoked profiles without default-workspace fallback, and return safe key-operation errors without persisting JWTs or mutating global profile selection.
+- Add fresh-auth CLI workspace discovery and explicit named-profile membership enrollment. Verify the selected session and newly issued key before saving, preserve unrelated profiles, and retain the live selected workspace for subsequent fresh-auth account, member, and key operations. Reject stale metadata, unsafe or oversized profile storage, and viewer key enrollment without adding persistent JWT sessions.
+- Add SDK workspace discovery and ephemeral session selection with explicit user and membership validation. Fresh-auth account, workspace, member and key operations can preserve a selected workspace after verification without changing saved keys or profiles. Existing default-workspace callers remain compatible.
+
 ## 0.5.0
 
 ### Minor Changes

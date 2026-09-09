@@ -147,7 +147,7 @@ function startReceiver(
     0,
     "providerId" in options ? options.providerId : PROVIDER_ID,
     "webhookSecret" in options ? options.webhookSecret : WEBHOOK_SECRET,
-    { verifySns: options.verifySns ?? (async () => true) },
+    { hostname: "127.0.0.1", verifySns: options.verifySns ?? (async () => true) },
   );
   running.push(server);
   return { url: `http://127.0.0.1:${server.port}` };
@@ -1037,4 +1037,15 @@ describe("verifySnsStructure", () => {
     const result = verifySnsStructure({ Type: "RandomUnknownType" });
     expect(result).toBe(false);
   });
+});
+
+
+it("refuses an occupied explicit loopback port rather than reaching another listener", () => {
+  const occupied = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("other fixture", { status: 403 }) });
+  try {
+    expect(() => {
+      const server = createWebhookServer(occupied.port!, PROVIDER_ID, WEBHOOK_SECRET, { hostname: "127.0.0.1", verifySns: async () => true });
+      running.push(server);
+    }).toThrow();
+  } finally { occupied.stop(true); }
 });

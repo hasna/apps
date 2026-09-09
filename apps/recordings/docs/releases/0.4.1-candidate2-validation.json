@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-09-08T10:44:51.340673+00:00",
+  "package": "@hasna/recordings",
+  "version": "0.4.1",
+  "candidate": 2,
+  "distributionStatus": "prepared",
+  "sourceRevision": "490b64f360e8baa0b4d49d1e17b3140e064242e5",
+  "sourceWorktreeClean": true,
+  "candidate1Preserved": true,
+  "archiveComparison": {
+    "sourceRevision": "490b64f360e8baa0b4d49d1e17b3140e064242e5",
+    "beforeFileCount": 267,
+    "afterFileCount": 267,
+    "beforeExpandedBytes": 4014332,
+    "afterExpandedBytes": 4018024,
+    "added": [],
+    "removed": [],
+    "changed": [
+      {
+        "path": "package/src/native/Recordings/RecordingsTests/RecordingStartTimingTests.swift",
+        "before": {
+          "sha256": "5bebb8abdaf688116d349863916ca327b71be9bcabcc64fb51f43f4a2987deac",
+          "bytes": 15247,
+          "mode": 420
+        },
+        "after": {
+          "sha256": "c37c1d114effcc0160c083bfab50e0c308f6db2462ce664e8c1c2d395d84a14b",
+          "bytes": 18939,
+          "mode": 420
+        }
+      }
+    ],
+    "expectedOnlyTimingFixture": true
+  },
+  "nativeTreeSHA256": "ffbd54eec6031d89a684164454946a083fff428403558c737f223c604324e349",
+  "nativeFileCount": 112,
+  "tools": {
+    "bun": "1.3.14",
+    "npm": "11.19.0",
+    "macOS": "26.3.1",
+    "architecture": "arm64",
+    "python": "3.9.6"
+  },
+  "pack": {
+    "actualNpmPack": true,
+    "prepackLifecyclePassed": true,
+    "nativeGuardUniversalBuildPassed": true,
+    "versionCheckPassed": true,
+    "buildPassed": true,
+    "releaseGuardPassed": true,
+    "artifactScan": {
+      "passed": true,
+      "members": 267,
+      "excluded": 0,
+      "unreadable": 0
+    },
+    "environment": "Fresh owned HOME/TMP/cache; explicit empty npm user/global configurations; stripped environment",
+    "outerOsSandbox": false,
+    "deadlineSeconds": 240
+  },
+  "consumer": {
+    "passed": true,
+    "surfaceChecks": 15,
+    "mcpToolCount": 18,
+    "strictTypescript": true,
+    "skipLibCheck": false,
+    "ownedOsSandboxControlsPassed": true,
+    "loopbackOnly": true,
+    "allPackageBytesAndModesPreserved": true,
+    "harnessUnchangedFromCandidate1": true,
+    "dependenciesRecheckedAgainstCandidate1Inventory": true
+  },
+  "limits": [
+    "Prepared archive, not publication; no registry verification attempted",
+    "No broad Bun release suite repeated for the isolated Swift test-file change",
+    "No Swift/native app compile or runtime in this artifact task",
+    "No owner app, microphone, clipboard, permission, credential or provider operation",
+    "Pack build used stripped environment and owned output, not a parent OS sandbox",
+    "Consumer actual Bun processes used the unchanged macOS OS sandbox and bounded fictional own-PID maintenance lookup fixture"
+  ],
+  "files": [
+    {
+      "path": "recordings-0.4.1-candidate2-20260908/hasna-recordings-0.4.1.tgz",
+      "bytes": 950710,
+      "sha256": "a7a342c2a206e1ee2f06c957d6a654d7d54f92cdad626bc89958593f6cb73d68"
+    },
+    {
+      "path": "recordings-0.4.1-candidate2-20260908/recordings-core-0.4.1.prepared.json",
+      "bytes": 24015,
+      "sha256": "4a4afb0d9e816734a39764a71cee6eb22d1bab9425f411b4e8e3e707aed7de7b"
+    },
+    {
+      "path": "recordings-0.4.1-candidate2-20260908/consumer.json",
+      "bytes": 3817,
+      "sha256": "2eecaf867d744ea295e058d31d314fcb8e036d1000faebd061adfc56252053ff"
+    },
+    {
+      "path": "recordings-0.4.1-candidate2-validation-20260908/package-pack.log",
+      "bytes": 34914,
+      "sha256": "d92914cb6ad5bdb9e3efa52f7ecd0c726eebe30d555bcb7fd322292134a2a5b8"
+    },
+    {
+      "path": "recordings-0.4.1-candidate2-validation-20260908/packed-consumer.log",
+      "bytes": 206,
+      "sha256": "aff187cd7ffb0843d1081fd16b5a8ac9dc10ed3fe81ae7df751286c8e0dd393c"
+    },
+    {
+      "path": "recordings-0.4.1-candidate2-validation-20260908/run-step.py",
+      "bytes": 1768,
+      "sha256": "e370cdccffce4959a4bf5dc6bd2fb0a29f4f58ca902c2412ef4f19f460d31e9a"
+    },
+    {
+      "path": "recordings-0.4.1-candidate2-validation-20260908/archive-comparison.json",
+      "bytes": 693,
+      "sha256": "ae10daa4ab08014ab47013eed266f77c0e1d6f3ef5927dd81a7cd83096705229"
+    },
+    {
+      "path": "recordings-0.4.1-candidate2-validation-20260908/dependency-recheck.json",
+      "bytes": 470,
+      "sha256": "649b1f2ba2bcf3b5fe33f360851edc8017c251733f4096262ee44cc684d37306"
+    },
+    {
+      "path": "recordings-0.4.1-candidate2-validation-20260908/consumer-harness/Tests/PackageConsumer/consumer.ts",
+      "bytes": 6305,
+      "sha256": "3b6d4ff3aaf32d35be3625868f45f0304b5e55b5622c1372fbe121eedc98e93f"
+    },
+    {
+      "path": "recordings-0.4.1-candidate2-validation-20260908/consumer-harness/Tests/PackageConsumer/lease-fixture.ts",
+      "bytes": 1920,
+      "sha256": "721b32af198a054bd8cb60182586e75329dfdc114da379767099b92fa06be22e"
+    },
+    {
+      "path": "recordings-0.4.1-candidate2-validation-20260908/consumer-harness/scripts/resolve-public-core.py",
+      "bytes": 19336,
+      "sha256": "1423b23123c576eb3bf471f602af5258c6d40200b786bfd4ea6d7f8282e2ad38"
+    },
+    {
+      "path": "recordings-0.4.1-candidate2-validation-20260908/consumer-harness/scripts/verify-packed-consumer.py",
+      "bytes": 14131,
+      "sha256": "64d1b2c7411e83ed3a5329a024ac627c5c9d0e2530cf45b80d151bfc373338ad"
+    }
+  ]
+}

@@ -1,0 +1,702 @@
+{
+  "schemaVersion": 1,
+  "kind": "hasna.recordings.native-core",
+  "package": {
+    "name": "@hasna/recordings",
+    "version": "0.4.1"
+  },
+  "source": {
+    "repository": "https://github.com/hasna/apps",
+    "revision": "490b64f360e8baa0b4d49d1e17b3140e064242e5"
+  },
+  "distribution": {
+    "status": "prepared"
+  },
+  "archive": {
+    "url": "https://registry.npmjs.org/@hasna/recordings/-/recordings-0.4.1.tgz",
+    "bytes": 950710,
+    "sha256": "a7a342c2a206e1ee2f06c957d6a654d7d54f92cdad626bc89958593f6cb73d68",
+    "integrity": "sha512-FlrqgbeXysDBREKK1I74WeTMXBang1xsvmMEausVaakodEmBck2DzopnP1SGKzqbdzHjCk8o8SUeXe0LHx+sWw=="
+  },
+  "native": {
+    "packagePath": "src/native/Recordings",
+    "product": "RecordingsLib",
+    "swiftToolsVersion": "6.2",
+    "minimumMacOS": "26.0",
+    "treeSHA256": "ffbd54eec6031d89a684164454946a083fff428403558c737f223c604324e349",
+    "files": [
+      {
+        "path": "App/ContentView.swift",
+        "sha256": "d620635f872db31cc49efceb8048d9c001128cc17f7e4cb5ccbca64d82c1241c",
+        "bytes": 3172,
+        "mode": 420
+      },
+      {
+        "path": "App/MenuBarStatusView.swift",
+        "sha256": "2149ac847c79053e309d5ba842ed8af63120e4bedb6fad84d515718d9510f2b4",
+        "bytes": 12007,
+        "mode": 420
+      },
+      {
+        "path": "App/RecordWorkspaceView.swift",
+        "sha256": "bb599cc4c987dcdfa273ea5c95699ff6bd88e81409c551c76890b1e8c2b2ef5d",
+        "bytes": 3589,
+        "mode": 420
+      },
+      {
+        "path": "App/RecorderSettingsView.swift",
+        "sha256": "0f3d3cb04784d26ac888db32c8f00e53da0958dfabf9d8c2b374390236ac1a31",
+        "bytes": 3480,
+        "mode": 420
+      },
+      {
+        "path": "App/RecordingDetailView.swift",
+        "sha256": "bb430b95b8b8c4394b95a070c5d44796b6a5b7e09c85fe741e7982101a76fd37",
+        "bytes": 5541,
+        "mode": 420
+      },
+      {
+        "path": "App/RecordingsApp.swift",
+        "sha256": "0c1fa13def6374cb951b269a341afcc6006ef870cff5b7a5b269e1a5e4f07c8c",
+        "bytes": 27146,
+        "mode": 420
+      },
+      {
+        "path": "App/RecordingsListView.swift",
+        "sha256": "3859f2ffffa8e72a0d85396e8661a2ee8f15dc02094d00ee1df4ca8eb4a44298",
+        "bytes": 4915,
+        "mode": 420
+      },
+      {
+        "path": "App/RecordingsStore.swift",
+        "sha256": "c43e3606aadc2a1f5b39bdd7f620f8ea945a36ff455738892e221f2985518485",
+        "bytes": 9133,
+        "mode": 420
+      },
+      {
+        "path": "App/RuntimeSmoke.swift",
+        "sha256": "036294b88fe40f90733a183a7fd8ee64cfdb08e46799dc7bc6f39aa78718f2c5",
+        "bytes": 5348,
+        "mode": 420
+      },
+      {
+        "path": "App/Theme.swift",
+        "sha256": "b34067f8b20409a72816e5aa5b3ff84bf0c323a2af40fe64ebe874af0f6f63c0",
+        "bytes": 3988,
+        "mode": 420
+      },
+      {
+        "path": "Package.resolved",
+        "sha256": "6a11ce26243cebeb863a04058e70b481a29a4b6489a9ca727d86301799ea3672",
+        "bytes": 962,
+        "mode": 420
+      },
+      {
+        "path": "Package.swift",
+        "sha256": "1311f19786466edf680b31ce368d96a272391f93d1b82b7d00b5e61cd285e513",
+        "bytes": 5138,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/AccessibilityPromptGate.swift",
+        "sha256": "3b5b5a8eb78ed926dd56cebca83b1fb9008e43befd6f54ebab71c46c12e702d3",
+        "bytes": 3652,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/BrandAssets.swift",
+        "sha256": "949f8a628d3f87c883598bf1ab31e9924419a0f22a4782ac7f60f8df66d79fe2",
+        "bytes": 448,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/CaptureMonitor.swift",
+        "sha256": "8c3fd1f5fcd72075e136d864e6b761e7a729266a37bdd8f700386ff73abca9c6",
+        "bytes": 2264,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/ChromeSurface.swift",
+        "sha256": "5513424272195988f2c982730fc58888b8f0260858aa0e538dbdce94b5ba720f",
+        "bytes": 870,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/EnhancementScreen.swift",
+        "sha256": "c53052329cf0cfc0feb7e114117a07b0ab87e0429ad8f447c5065e26761b5fbc",
+        "bytes": 5308,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/FnKeyMonitor.swift",
+        "sha256": "b127d1f9f3e8aa98c233714158f01bfb8e3a8c04156c90ddb454212a2aba3a8e",
+        "bytes": 6334,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/Info.plist",
+        "sha256": "cfea0fa586a0c010953db3113c39ebbb61d851fcaea9ae62cec1d81cf6772325",
+        "bytes": 1192,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/MenuBarPresentation.swift",
+        "sha256": "be69059a88003e2639aac0cbdf5acd8de02a69a0fdffa372b6fb8955507fe568",
+        "bytes": 5176,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/NativeAppDiagnostics.swift",
+        "sha256": "7683a52e6f5d1e5939cba04f62640fbaa61dd684acfdb4e18ce35d1a52c17657",
+        "bytes": 3564,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/NativeMachineIdentity.swift",
+        "sha256": "d5fddc30e80e4861c42a427e1268b31ed33c814ce9cd7e1e994f121b7c0b6d48",
+        "bytes": 982,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/NativePCMRecorder.swift",
+        "sha256": "406d4d1f60811fff8bd76605f53408dbd58850629fab391c55fb3c17d3646fac",
+        "bytes": 13692,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/OpenAIAPIKeyStore.swift",
+        "sha256": "4df0e6a0c94dc1552ffdab4612bca1879c1e94ef57a2abd1c4b8036ff690d990",
+        "bytes": 13084,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/PasteDeliveryVerification.swift",
+        "sha256": "f06d2fde0254fc8647c437328d840179bd77b19ffcf2f0f855a842b12d013e49",
+        "bytes": 21024,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/PermissionRequestLaunchPlan.swift",
+        "sha256": "bc5e363ab76de1fa522ff569737f82eb443397eb7aa226956682b3444b68b470",
+        "bytes": 3489,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/ProjectStore.swift",
+        "sha256": "3196a875b0a6cfd3790f847985a99fa913bf4a5efad181641a8052b8a4b5bd6d",
+        "bytes": 15902,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/RealtimeTranscriptionClient.swift",
+        "sha256": "d03a0e1be67df37d65f459f5781cc50f982fa57d1d166b3b68362ec95a54b5fc",
+        "bytes": 38649,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/Recording.swift",
+        "sha256": "3a127475035e8b83ca07753362bd1773b3ea783afda4f77cf5ee1dc49f1b923c",
+        "bytes": 6781,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/RecordingAttemptAlert.swift",
+        "sha256": "471271639140575e8dfec108a452b7a88ad7a5d09a7a2fa36b828381581b06f4",
+        "bytes": 1950,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/RecordingEngine.swift",
+        "sha256": "aea6728d9585e538953618360035ca55cd94d1ecd274925ba0c494c77a409696",
+        "bytes": 280400,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/RecordingGlassBackground.swift",
+        "sha256": "9c7bd68da8aa35cbb2cf3b048e9425eff6cc99eb527c56507da4e07db923baa8",
+        "bytes": 1410,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/RecordingPasteTarget.swift",
+        "sha256": "fe0cb778c82150fb27309b1351b5b947b863ab5a17131975ebc53d1dcd7aa594",
+        "bytes": 5572,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/RecordingProvider.swift",
+        "sha256": "805e9a57653af7528da23a5b1a63e808918bdb776b5b6cf8f019877d48256a45",
+        "bytes": 4999,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/RecordingStartControlPresentation.swift",
+        "sha256": "d4ee1bab5e70c0610a0a3a83181045ccf96106a69e0c69eed9e833bb885cb7fe",
+        "bytes": 1032,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/Recordings.entitlements",
+        "sha256": "f1dc08c81c7a20992f594d3c26dc4e15a1ae79a1e17c958bb00500e65342cea6",
+        "bytes": 382,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/RecordingsCLI.entitlements",
+        "sha256": "25b6fc4500ac7bb2e8021a88dcbaeaeb8cc02cb14e36c88b228ba1a16749a30f",
+        "bytes": 329,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/RecordingsCLI.swift",
+        "sha256": "7a3ab2b223acd08be4fce25497ca92e52a38fc54f106ecc6bd061720a4aa59ad",
+        "bytes": 10061,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/Resources/HasnaLogo.jpg",
+        "sha256": "fc275073188701cb0b291e97da74f5c1c49984e354f58fe0deb5eeac39f8dcd8",
+        "bytes": 68026,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/ServiceAPIConfiguration.swift",
+        "sha256": "43be5a54e7f3b949a051c8c2c333562aeb5c3ab468eca7dfde0c90116beea899",
+        "bytes": 5112,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/ServiceConnectionView.swift",
+        "sha256": "28883a726367df88df047148685572917b05122cd5209018a7feed0d8d4bfcdf",
+        "bytes": 2795,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/SettingsView.swift",
+        "sha256": "5d813c40c99728d5863fd856447c7506a82ea2946567bf1929543ec435ff3723",
+        "bytes": 11037,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/SettingsWindowController.swift",
+        "sha256": "b9ec23bda1f79ee80d7bdd565127ff970ded653381c8d3ebcfef45d656c831ef",
+        "bytes": 1864,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/SpeechIntent.swift",
+        "sha256": "407b55f06c7fa86c2bdb3129be36cab857d50bb60109cdfaea19238d13a157f5",
+        "bytes": 14553,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/SpeechIntentClassifier.swift",
+        "sha256": "34a45f30c738185969936d14a1ec5cccb99db260f315d334de12f862ea7df5e1",
+        "bytes": 9915,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsLib/VoiceShortcuts.swift",
+        "sha256": "8593fe800e1c887b07a6b701a6880535065c9644d7451328eea358a39eed4ab3",
+        "bytes": 3712,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/BarOnlyLaunchPlanTests.swift",
+        "sha256": "607718b2f356ed4ccb2e412bf565d7805372d9cfd13b9a2e824493438c2cd9b2",
+        "bytes": 4540,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/CLIRunnerTests.swift",
+        "sha256": "6f02e8ac729fd7581cbbdb7c149d1b52a39191976dbe574a44b573a6bbebedf9",
+        "bytes": 63852,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/EnhancementScreenTests.swift",
+        "sha256": "3b28d97379a796ba2695d22366aa031570ba16f96b489cece93f363bfb0c9f10",
+        "bytes": 7965,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/MenuBarPresentationTests.swift",
+        "sha256": "87cd34918a5c3e60e80f4e6c5c9a444686d20793dcbc6cbf10d475f61d502044",
+        "bytes": 11075,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/NativeAppDiagnosticsTests.swift",
+        "sha256": "fe4d4a6ce9dd2cd40ffcdc90665865d416b3cba91176bcac572c22bd46a755dd",
+        "bytes": 1633,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/NativePCMRecorderTests.swift",
+        "sha256": "3f18260057635bba36fcb76dd8e08b9d79ed93d8fb5a846f82ce0d50938f07d0",
+        "bytes": 14520,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/OpenAIAPIKeyStoreTests.swift",
+        "sha256": "6b581d90725475d9bfcfaff1daaebf362b0fa6f531f6e5d66168d9d10198a246",
+        "bytes": 7375,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/PasteDeliveryVerificationTests.swift",
+        "sha256": "319834da65428c9bc5e2802a486f2206c48053ad080abf971abb9452fbd4d4ec",
+        "bytes": 19479,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/PasteTargetTests.swift",
+        "sha256": "94ba24848bb0c0750e962db69f66539cb82e731e018d41b04ef13dbcdc35e28e",
+        "bytes": 42332,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/ProjectStoreTests.swift",
+        "sha256": "e78fdc26cbdf1ca926dab88228905ff246533ccc33c58c202fab37eac1afc2c9",
+        "bytes": 21305,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RealtimeSettleBenchmark.swift",
+        "sha256": "73c8d304f5a686cf580f33fead397ff122d6ec6a91be6a8aae9f0800175d97ac",
+        "bytes": 9195,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RealtimeSettleBudgetTests.swift",
+        "sha256": "5b1a7880a4a3e136d04d1c7bcec26b771d94654d95ad0b0ec2e7d202f2da2cd8",
+        "bytes": 3510,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RealtimeTranscriptionTests.swift",
+        "sha256": "af424541b1a185f3afb5ec8a77b494bfac05ca9dc543813020c91e16af8c9107",
+        "bytes": 42546,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RecorderSurfaceTests.swift",
+        "sha256": "e36730e089cc316f9531a7a8016783873468acdaf7b05fd4d282e47d0c27dba3",
+        "bytes": 2789,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RecordingBridgeTests.swift",
+        "sha256": "3208ac54b38210d45c335303d320138d4ae65d46367406940a881a3ecad056c4",
+        "bytes": 7057,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RecordingDateTests.swift",
+        "sha256": "ef06aad143b101b38b34696b6d5ae0fc416ccfecdfa4ac182d5dfe706e7841af",
+        "bytes": 942,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RecordingEngineDeliveryTests.swift",
+        "sha256": "15af8e8145293e0c36e87cacfec3a834d6962436df8f4df1f1a90190091ed95c",
+        "bytes": 31430,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RecordingEngineHomeIsolationTests.swift",
+        "sha256": "cec37c4fcc7b65b683e9474bae19b60505fd8209421cece6b7224f3ebf7c91db",
+        "bytes": 3123,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RecordingFrozenPasteTargetTests.swift",
+        "sha256": "7d35f57e3fd8c697c2edcf94685e607564bf83115d4d2b670aa93c60a54d20cc",
+        "bytes": 4170,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RecordingPasteTargetTrackerTests.swift",
+        "sha256": "16900ee418c6dbd657160e5a4325867b445432933d1718dd75edcc79c79d4339",
+        "bytes": 2947,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RecordingProviderTests.swift",
+        "sha256": "92c671f87ce20978934d538b8c1c2ee1b42276399792c77fa1878c1fca5cf994",
+        "bytes": 12173,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RecordingStartControlPresentationTests.swift",
+        "sha256": "75aeb1c440571d3488bc09c8a6801f382f1e75ed63efa28c6f9373f3366966ac",
+        "bytes": 1409,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RecordingStartGateTests.swift",
+        "sha256": "be70184536b60c758feda143b343bc1fbba3a5dce38c45a8982c72d46877480a",
+        "bytes": 11734,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/RecordingStartTimingTests.swift",
+        "sha256": "c37c1d114effcc0160c083bfab50e0c308f6db2462ce664e8c1c2d395d84a14b",
+        "bytes": 18939,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/ServiceAPIConfigurationTests.swift",
+        "sha256": "04c5e1ca6db9f12d05b4d50db1e9fb92dccff3d81bf11eef7d366dc5690da1f3",
+        "bytes": 3998,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/SettingsWindowControllerTests.swift",
+        "sha256": "e693e3732cfc33bdda115cb269806f7ca5d749fec86d4a8e467cb8d2c2568c5a",
+        "bytes": 940,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/SpeechIntentTests.swift",
+        "sha256": "19d2f6d110a07a9ee5df383bfac3c60bd4aff98f94542c82799749563474cbaa",
+        "bytes": 28351,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/TestHomeDirectory.swift",
+        "sha256": "a9f65ae94b52692906d225a26d1ff6bf08e8d576070a824494c12d158016eecd",
+        "bytes": 1703,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/TranscriptResolutionTests.swift",
+        "sha256": "43eaed9235180ce596989eb9229dcc129d9ff382ac40235b827979f5de4c8c4f",
+        "bytes": 5848,
+        "mode": 420
+      },
+      {
+        "path": "RecordingsTests/TranscriptionResultIdentityTests.swift",
+        "sha256": "306518721f0bc8bb3be6ccb738942b1a43fb2311b99cb9257a2e5d3e1024bcca",
+        "bytes": 966,
+        "mode": 420
+      },
+      {
+        "path": "Updater/BootstrapPreflight/BootstrapPreflightMain.swift",
+        "sha256": "98076bdc174cba363504ac94b9238f8df79d6ab970c856608070b75ad026a4fa",
+        "bytes": 31087,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/ActivationRecoveryPolicy.swift",
+        "sha256": "ffdfcfa94b6029e849a697c58018df0bd9631f19fcf8f243c89d526c1bf77e92",
+        "bytes": 7992,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/ApplicationNamespace.swift",
+        "sha256": "9e3109e1aae9cd236239d03d9ca52121a9f208c5231c28ecbd8eac941c900456",
+        "bytes": 17443,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/ApplicationProcessQuiescence.swift",
+        "sha256": "b294b3f08b41ea78b27fbfdea4eeab986da388d7639e15e767dcce4c82b1228b",
+        "bytes": 2956,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/ArtifactIngest.swift",
+        "sha256": "1a481a2a3345b157e30ce981611aff0ecd4b67529b2b1e22067840f0dfbbac7e",
+        "bytes": 13680,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/AtomicActivation.swift",
+        "sha256": "163719ca5db675aa08fb592bfd9cb2939a9a0494bc12813badcb967d9442f8f7",
+        "bytes": 21106,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/BrokerMain.swift",
+        "sha256": "766e3f39d4a487054f8051c1ad4d2228683f5452028a1414f28033f8aed59b65",
+        "bytes": 28026,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/CanonicalTreeCopy.swift",
+        "sha256": "d2814d54e91ebadcaf0d8b81ac8c4817f3c040e5c6d8a881542989bb410ded8e",
+        "bytes": 2637,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/CodeValidation.swift",
+        "sha256": "1e59e49d4d561ee42a4ed2de734e79129c9c669f022faa5b23c27c2e7465c3f3",
+        "bytes": 23809,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/DarwinACLValidator.swift",
+        "sha256": "521aaf2fa301de4e3c3fc56b555dce6195a64aa51729c4b7ba03014bd7687e39",
+        "bytes": 2515,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/HostOSProductVersion.swift",
+        "sha256": "a2a6a8026d228cc9e74c3410f03335c7a5cd457a3692608e09be3169a5e17450",
+        "bytes": 1678,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/InstallJournal.swift",
+        "sha256": "e70d01456f607414465dbc1c7d328dcf05bd8c9aa4e9c22f4dba398c69c9c820",
+        "bytes": 15888,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/InstallRecovery.swift",
+        "sha256": "dec2ee6638f907ba9d404ee72f8a0ad1507fbfa4e935c50d8c645373ee435eb1",
+        "bytes": 28345,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/MonotonicState.swift",
+        "sha256": "2388681a317b94caafa6f25ce1b6a47b3d31b20e3c18b02958d88739e6554b74",
+        "bytes": 19503,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/PeerIdentity.swift",
+        "sha256": "ff49779dfa9ca69bc2eed82110f7fc138725d3c28d8c0a7922752ea2dba1dfae",
+        "bytes": 15064,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Broker/VerifierRunner.swift",
+        "sha256": "5bc8c2ddaa2e3d4dc93960800705bd601480ec9cbbea967e4abd431008c1ce53",
+        "bytes": 3245,
+        "mode": 420
+      },
+      {
+        "path": "Updater/BrokerTests/ActivationRecoveryPolicyTests.swift",
+        "sha256": "6127e7502504b3257a1ffb3d69bec366faccb8a192366b722aaa753b55bcf830",
+        "bytes": 10966,
+        "mode": 420
+      },
+      {
+        "path": "Updater/BrokerTests/CanonicalReleaseOrderTests.swift",
+        "sha256": "a466b9ddfa933b353e4468c234fd834c48b65844439bfae91de362f69b3d8e13",
+        "bytes": 930,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Client/ClientMain.swift",
+        "sha256": "aff7a2f5f7edd1fa066a553b6b2059477f80845dabb1db10249f493ed4052f24",
+        "bytes": 4677,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Protocol/BoundedProcess.swift",
+        "sha256": "5a36c282375e6fd122032b9fc25d8cfa921023b89b81948bca782a3b955786d4",
+        "bytes": 5754,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Protocol/CandidateMetadataPolicy.swift",
+        "sha256": "2a505cbcce6238d9f1b3e08a67afa3ee1d63cb43ef6f689f95c2314ec3fa8e26",
+        "bytes": 8563,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Protocol/HostOSVersionPolicy.swift",
+        "sha256": "1df88563944197f8ffd9d0b35a416ce81af29d93550a76b54af25f3ffdd90f8f",
+        "bytes": 2190,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Protocol/MonotonicReleasePolicy.swift",
+        "sha256": "4b07fd0987d37f08eb7d564ff7d50541d5c842de38cad84d9fec11d101745f67",
+        "bytes": 5271,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Protocol/ReleaseEnvelope.swift",
+        "sha256": "b5239468cb9ba1b10b9acc1235ef1d1eed696883e8d92585338940554cc6c852",
+        "bytes": 10615,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Protocol/UpdateProtocol.swift",
+        "sha256": "b32daf5bb563d243617435bc1bc9369500ee34b584b9cd69a7a74d88bf614d66",
+        "bytes": 7263,
+        "mode": 420
+      },
+      {
+        "path": "Updater/ProtocolTests/BoundedProcessRunnerTests.swift",
+        "sha256": "ca056dd16bf66aaa40f42f5bb1fe512d15562553770e2d59a68762bf87c838b1",
+        "bytes": 2043,
+        "mode": 420
+      },
+      {
+        "path": "Updater/ProtocolTests/CandidateMetadataPolicyTests.swift",
+        "sha256": "42ad8f12d75f522e4e679258f76424e500cc3aa2c27f483a60ffb3419294e4b9",
+        "bytes": 7313,
+        "mode": 420
+      },
+      {
+        "path": "Updater/ProtocolTests/ExpectationIntegrityTests.swift",
+        "sha256": "5527cee241a9f8d4e47ee046fedec7354cbff9847b4890b1657724a9e240f91f",
+        "bytes": 2754,
+        "mode": 420
+      },
+      {
+        "path": "Updater/ProtocolTests/HostOSVersionPolicyTests.swift",
+        "sha256": "c7a5c53921047f080fe81f89988ec63bdc679aa0991668e00830fa0aca2d1c69",
+        "bytes": 2152,
+        "mode": 420
+      },
+      {
+        "path": "Updater/ProtocolTests/MonotonicReleasePolicyTests.swift",
+        "sha256": "5ef41adc0bf2661501b45b1806bd342c294717d9e355ff81fc8a364549ab0092",
+        "bytes": 7041,
+        "mode": 420
+      },
+      {
+        "path": "Updater/ProtocolTests/ReleaseEnvelopeValidationTests.swift",
+        "sha256": "503c39165c252a1a0c9b710d408e8fe75fa52be14cf71b0f0cba52353decb5f8",
+        "bytes": 2812,
+        "mode": 420
+      },
+      {
+        "path": "Updater/ProtocolTests/UpdateXPCInterfaceTests.swift",
+        "sha256": "dbf824f8d37642825aa5f16078aa8831ddfff96975471de8c585abb1b93ec49d",
+        "bytes": 4937,
+        "mode": 420
+      },
+      {
+        "path": "Updater/Signer/SignerMain.swift",
+        "sha256": "2537437aa56ce8a9aa1c541dcca03969f6bdaf6aec1320c1c50f6ba4a2a5395a",
+        "bytes": 8544,
+        "mode": 420
+      },
+      {
+        "path": "Updater/VerifierLauncher/RecordingsVerifierLauncher.c",
+        "sha256": "2389707398a8c900eefa95e9dbb8efd5f7c1b6a7f74b429da40415344213c2f2",
+        "bytes": 31839,
+        "mode": 420
+      },
+      {
+        "path": "Updater/VerifierLauncher/include/RecordingsVerifierLauncher.h",
+        "sha256": "98edb2d5d939f4ed1e8cbe01e2834ff32453c1d0e76d3e35a5a30d67b3d3c0ba",
+        "bytes": 773,
+        "mode": 420
+      },
+      {
+        "path": "build.sh",
+        "sha256": "2c8d3c0e9dd7ce8ba830e57e8f7a96a11f8b9d87349bef55265a9d12c17702fe",
+        "bytes": 100389,
+        "mode": 493
+      }
+    ]
+  }
+}

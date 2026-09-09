@@ -1,3 +1,8 @@
+import { invitationInput, invitationRequest, invitationFailure, parseInvitationResult,
+  RemoteWorkspaceInvitationError, RemoteWorkspaceInvitationUnconfirmedError, RemoteWorkspaceInvitationReadError,
+  type InvitationAction, type InvitationInputs, type InvitationResults, type ListRemoteWorkspaceInvitations,
+  type IssueRemoteWorkspaceInvitation, type ResendRemoteWorkspaceInvitation, type RevokeRemoteWorkspaceInvitation, type AcceptRemoteWorkspaceInvitation } from "./remote-invitations.js";
+import { workspaceLeaveInput, workspaceLeaveFailure, parseWorkspaceLeaveResult, RemoteWorkspaceLeaveError, RemoteWorkspaceLeaveUnconfirmedError, type LeaveRemoteWorkspace, type RemoteWorkspaceLeaveResult } from "./remote-workspace-leave.js";
 import { workspaceContext, parseAccountWorkspaces, parseWorkspaceIdentity, parseWorkspaceSession,
   workspaceSelectionFailure, workspaceSelectionFailures, invalidWorkspaceResult, WorkspaceIdentityMismatchError,
   workspaceExpectedUserId, type RemoteWorkspaceIdentity, type RemoteWorkspaceContext, type RemoteAccountWorkspaces, type RemoteWorkspaceSession, type RemoteWorkspaceSelectionErrorCode } from "./remote-workspace-selection.js";
@@ -11,6 +16,8 @@ import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./
 import { creditCount, parseRemoteBillingStatus, parseRemoteCheckout, parseRemoteCreditPacks, parseRemoteRunQuote, RemoteCreditApprovalError, type RemoteCreditPack, type RemoteRunApproval, type RemoteRunQuote } from "./remote-account.js";
 import { describeRemoteFiles, readBoundedResponse, sha256, MAX_REMOTE_FILE_BYTES, type RemoteInputFile } from "./remote-files.js";
 import { customerNamePatch, parseUpdatedProfile, parseUpdatedWorkspace, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
+import { quoteUnavailableMessages, readQuoteUnavailableCode, type RemoteQuoteUnavailableCode } from "./remote-quote-errors.js";
+export type { RemoteQuoteUnavailableCode } from "./remote-quote-errors.js";
 
 /**
  * A server that predates this client's pin/tag/incremental-sync routes answered
@@ -44,6 +51,16 @@ export class RemoteRequestError extends Error {
     // Keep the optional argument for existing SDK callers without displaying it.
     super(`Remote request to ${path} failed: HTTP ${status}`);
     this.name = "RemoteRequestError";
+  }
+}
+
+/** A recognized unavailable quote; status compatibility and client-owned copy. */
+export class RemoteQuoteUnavailableError extends RemoteRequestError {
+  constructor(path: string, readonly code: RemoteQuoteUnavailableCode) {
+    super(path, 503);
+    if (!Object.hasOwn(quoteUnavailableMessages, code)) throw new Error("Unknown quote refusal code");
+    this.name = "RemoteQuoteUnavailableError";
+    this.message = quoteUnavailableMessages[code];
   }
 }
 
@@ -160,7 +177,7 @@ export class RemoteSkillsClient {
   private async requestNewRoute(
     path: string,
     options?: RequestInit,
-    opts: { domainNotFoundCodes?: string[] } = {},
+    opts: { domainNotFoundCodes?: string[]; quoteRefusal?: boolean } = {},
   ): Promise<Response> {
     const response = await this.request(path, options);
     // Route identity for the error excludes the query string — the query is
@@ -178,6 +195,10 @@ export class RemoteSkillsClient {
       throw new RemoteRouteUnsupportedError(routePath, response.status, this.apiUrl);
     }
     if (!response.ok) {
+      if (opts.quoteRefusal && options?.method === "POST" && /^\/api\/v1\/skills\/[^/?#]+\/quote$/.test(routePath) && response.status === 503) {
+        const code = await readQuoteUnavailableCode(response);
+        if (code) throw new RemoteQuoteUnavailableError(routePath, code);
+      }
       if (path === "/api/v1/billing/checkout" && options?.method === "POST" && response.status === 503 &&
         await responseBodyCarriesCode(response, ["SUBSCRIPTION_CHECKOUT_UNAVAILABLE"])) {
         throw new RemoteCapabilityUnavailableError();
@@ -242,7 +263,7 @@ export class RemoteSkillsClient {
   async quoteRun(slug: string, input: Record<string, unknown> = {}, args: string[] = []): Promise<RemoteRunQuote> {
     const response = await this.requestNewRoute(`/api/v1/skills/${encodeURIComponent(slug)}/quote`, {
       method: "POST", body: JSON.stringify({ input, args }),
-    });
+    }, { quoteRefusal: true });
     return parseRemoteRunQuote(await response.json());
   }
 
@@ -369,6 +390,69 @@ export class RemoteSkillsClient {
       throw new RemoteRequestError(path, response.status);
     }
     return value;
+  }
+  /** Leave only the explicitly confirmed current incarnation, once. No credential writes or retries. */
+  async leaveWorkspace(context: RemoteWorkspaceContext, input: LeaveRemoteWorkspace): Promise<RemoteWorkspaceLeaveResult> {
+    const captured = workspaceLeaveInput(context, input);
+    const connection = new RemoteSkillsClient(this.apiKey, this.apiUrl);
+    const value = await connection.requestWorkspaceSelection("/api/auth/whoami");
+    if (!value || typeof value !== "object" || (value as Record<string, unknown>).authMethod !== "jwt")
+      throw new RemoteWorkspaceLeaveError("INTERACTIVE_SESSION_REQUIRED");
+    const identity = parseWorkspaceIdentity(value, captured.context.userId);
+    if (identity.user.membershipId !== captured.context.membershipId) throw new WorkspaceIdentityMismatchError();
+    let response: Response, body: unknown;
+    try {
+      response = await connection.request("/api/v1/account/workspaces/leave", { method: "POST", body: JSON.stringify(captured.body) });
+      body = JSON.parse(new TextDecoder().decode(await readBoundedResponse(response, 4096)));
+    } catch { throw new RemoteWorkspaceLeaveUnconfirmedError(); }
+    if (!response.ok) {
+      const code = workspaceLeaveFailure(body, response.status);
+      if (code) throw new RemoteWorkspaceLeaveError(code);
+      throw new RemoteWorkspaceLeaveUnconfirmedError();
+    }
+    return parseWorkspaceLeaveResult(body, captured.context.membershipId, identity.organization.id);
+  }
+  listWorkspaceInvitations(context: RemoteWorkspaceContext, options: ListRemoteWorkspaceInvitations = {}) {
+    return this.requestWorkspaceInvitation(context, "list", options);
+  }
+  getWorkspaceInvitation(context: RemoteWorkspaceContext, invitationId: string) {
+    return this.requestWorkspaceInvitation(context, "get", { invitationId });
+  }
+  issueWorkspaceInvitation(context: RemoteWorkspaceContext, input: IssueRemoteWorkspaceInvitation) {
+    return this.requestWorkspaceInvitation(context, "issue", input);
+  }
+  resendWorkspaceInvitation(context: RemoteWorkspaceContext, invitationId: string, input: ResendRemoteWorkspaceInvitation) {
+    return this.requestWorkspaceInvitation(context, "resend", { ...input, invitationId });
+  }
+  revokeWorkspaceInvitation(context: RemoteWorkspaceContext, invitationId: string, input: RevokeRemoteWorkspaceInvitation) {
+    return this.requestWorkspaceInvitation(context, "revoke", { ...input, invitationId });
+  }
+  acceptWorkspaceInvitation(context: RemoteWorkspaceContext, invitationId: string, input: AcceptRemoteWorkspaceInvitation) {
+    return this.requestWorkspaceInvitation(context, "accept", { ...input, invitationId });
+  }
+  /** One bounded operation, bound to the observed current incarnation. No retries,
+   * key/session persistence or post-acceptance selection of another workspace. */
+  private async requestWorkspaceInvitation<A extends InvitationAction>(context: RemoteWorkspaceContext, action: A, input: InvitationInputs[A]): Promise<InvitationResults[A]> {
+    const target = workspaceContext(context), captured = invitationInput(action, input);
+    const connection = new RemoteSkillsClient(this.apiKey, this.apiUrl);
+    const identityValue = await connection.requestWorkspaceSelection("/api/auth/whoami");
+    if (!identityValue || typeof identityValue !== "object" || (identityValue as Record<string, unknown>).authMethod !== "jwt")
+      throw new RemoteWorkspaceInvitationError("INTERACTIVE_SESSION_REQUIRED");
+    const identity = parseWorkspaceIdentity(identityValue, target.userId);
+    if (identity.user.membershipId !== target.membershipId) throw new WorkspaceIdentityMismatchError();
+    const request = invitationRequest(action, captured), read = action === "list" || action === "get";
+    let response: Response, value: unknown;
+    try {
+      response = await connection.request(request.path, { method: request.method, ...(request.body ? { body: request.body } : {}), credentials: "omit" });
+      value = JSON.parse(new TextDecoder().decode(await readBoundedResponse(response, response.ok ? 64 * 1024 : 4096)));
+    } catch { throw read ? new RemoteWorkspaceInvitationReadError() : new RemoteWorkspaceInvitationUnconfirmedError(); }
+    if (!response.ok) {
+      const code = invitationFailure(value, response.status);
+      if (code) throw new RemoteWorkspaceInvitationError(code);
+      throw read ? new RemoteWorkspaceInvitationReadError() : new RemoteWorkspaceInvitationUnconfirmedError();
+    }
+    try { return parseInvitationResult(action, value, captured, identity.organization.id); }
+    catch { throw read ? new RemoteWorkspaceInvitationReadError() : new RemoteWorkspaceInvitationUnconfirmedError(); }
   }
   async listApiKeys(): Promise<Record<string, unknown>[]> { return this.arrayResponse("/api/auth/keys"); }
   async createApiKey(name: string, scopes?: string[]): Promise<{ key: string; [field: string]: unknown }> {

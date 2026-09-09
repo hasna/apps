@@ -172,3 +172,12 @@ export function ensureOperatorDataDir(env: NodeJS.ProcessEnv = process.env): str
   if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true, mode: 0o700 });
   return targetDir;
 }
+
+/** Client configuration may preserve its own files, but never imports vaults or keys. */
+export function ensureClientDataDir(env: NodeJS.ProcessEnv = process.env): string {
+  const targetDir = effectiveOperatorDataDir(env);
+  const legacyDir = join(operatorHome(env), ".secrets");
+  for (const name of ["aws.json", ".serve-token"]) copyOwnedFileIfMissing(legacyDir, targetDir, name);
+  if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+  return targetDir;
+}

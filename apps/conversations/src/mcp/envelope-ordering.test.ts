@@ -27,12 +27,10 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { pinStoreToDb, restoreStoreEnv } from "../lib/store/isolated-test-env.js";
-
-const TEST_DB = join(tmpdir(), `conversations-envelope-order-${Date.now()}.db`);
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../lib/store/test-support/client-environment.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+let restoreClient: () => void;
 let client: Client;
 let disposeBuiltServer: (() => Promise<void>) | undefined;
 
@@ -103,12 +101,11 @@ function setEnv(key: string, value: string | undefined): void {
 }
 
 beforeAll(async () => {
-  pinStoreToDb(TEST_DB);
+  fixture = await startLoopbackApiFixture();
+  restoreClient = activateClientEnvironment(fixture.env);
   setEnv("CONVERSATIONS_AGENT_ID", "envelope-reader");
   setEnv("CONVERSATIONS_USE_MACHINE_IDENTITY", undefined);
 
-  const { closeDb } = await import("../lib/db.js");
-  closeDb();
 
   // buildServer(), never the exported singleton: session identity is keyed by
   // McpServer instance, so a private instance cannot leak into another file.
@@ -133,13 +130,11 @@ beforeAll(async () => {
   for (let i = 1; i <= 4; i++) {
     await call("send_to_channel", { channel: "env-alpha", from: "envelope-writer", content: `env-chan-${i}` });
   }
-});
+}, 30_000);
 
 afterAll(async () => {
   await client.close();
   await disposeBuiltServer?.();
-  const { closeDb } = await import("../lib/db.js");
-  closeDb();
 
   const { _resetAutoName } = await import("../lib/identity.js");
   _resetAutoName();
@@ -147,10 +142,8 @@ afterAll(async () => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  restoreStoreEnv();
-  for (const suffix of ["", "-wal", "-shm"]) {
-    try { unlinkSync(`${TEST_DB}${suffix}`); } catch {}
-  }
+  restoreClient();
+  await fixture.stop();
 });
 
 describe("MCP envelopes disclose the ordering they actually returned", () => {
@@ -216,14 +209,12 @@ describe("MCP envelopes disclose the ordering they actually returned", () => {
       await call("pin_message", { id });
     }
 
-    const { getDb } = await import("../lib/db.js");
     const pinnedAt = new Map<number, string>([
       [pinOrder[0], "2026-08-10T00:00:01.000"],
       [pinOrder[1], "2026-08-10T00:00:01.000"],
       [pinOrder[2], "2026-08-10T00:00:00.000"],
     ]);
-    const setPinnedAt = getDb().prepare("UPDATE messages SET pinned_at = ? WHERE id = ?");
-    for (const [id, timestamp] of pinnedAt) setPinnedAt.run(timestamp, id);
+    await fixture.seed({ patchMessages: [...pinnedAt].map(([id, pinned_at]) => ({ id, pinned_at })) });
 
     const envelope = await call("get_pinned_messages", {});
     const returned = (envelope.messages as Array<{ id: number }>).map((m) => m.id);
@@ -289,14 +280,14 @@ describe("MCP envelopes disclose the ordering they actually returned", () => {
    * Deciding what `sort` should say there is a design call, not a one-liner.
    * See `35709a95`.
    */
-  test("search_messages discloses relevance desc and returns non-increasing scores", async () => {
+  test("search_messages discloses actual API chronological order", async () => {
     const envelope = await call("search_messages", { query: "env-dm", limit: 5 });
-    const results = envelope.results as Array<{ relevance_score: number }>;
+    const results = envelope.results as Array<{ created_at: string }>;
 
     expect(results.length).toBeGreaterThan(0);
-    expect(envelope.sort).toBe("relevance");
+    expect(envelope.sort).toBe("created_at");
     expect(envelope.direction).toBe("desc");
-    expectOrderedAs(envelope, results.map((r) => r.relevance_score));
+    expectOrderedAs(envelope, results.map((r) => r.created_at));
   });
 
   test("list_channels discloses name asc AND returns alphabetical names", async () => {

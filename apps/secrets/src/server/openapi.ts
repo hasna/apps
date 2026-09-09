@@ -1,3 +1,5 @@
+import { ENCRYPTION_RECEIPT_SCHEMA } from "../encryption-maintenance.js";
+import { vaultMigrationOpenApi } from "../migration/openapi.js";
 /**
  * OpenAPI 3 document for the secrets serve API. Single source of truth for the
  * `/openapi.json` route and the reference shape of the typed SDK client
@@ -178,6 +180,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     },
     security: [{ apiKey: [] }],
     paths: {
+      "/v1/migrations/vault": vaultMigrationOpenApi,
       "/health": { get: { operationId: "health", summary: "Liveness probe", security: [], responses: r("#/components/schemas/Status") } },
       "/ready": { get: { operationId: "ready", summary: "Readiness probe", security: [], responses: r("#/components/schemas/ReadyStatus") } },
       "/version": { get: { operationId: "version", summary: "Version info", security: [], responses: r("#/components/schemas/Status") } },
@@ -199,6 +202,24 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           summary: "Delete a secret by key",
           parameters: [{ name: "key", in: "query", required: true, schema: { type: "string" } }],
           responses: okResponse(),
+        },
+      },
+      ...Object.fromEntries((["status","repair"] as const).map(action=>[
+        `/v1/encryption/${action}`, {[action === "status" ? "get" : "post"]:{
+          operationId: action === "status" ? "encryptionStatus" : "repairEncryption",
+          summary: action === "status" ? "Verify tenant payload encryption; requires secrets:read" : "Atomically encrypt tenant plaintext payloads; requires secrets:migrate",
+          description:"Inspects all four payload tables with a consistent snapshot. Limits: 10,000 rows and 64 MiB. Metadata is not encrypted. KMS backing is not attested.",
+          responses:{"200":{description:"Complete tenant-scoped verification",content:{"application/json":{schema:ENCRYPTION_RECEIPT_SCHEMA}}},...Object.fromEntries([401,403,409,413,503].map(status=>[status,{description:"Verification did not complete",content:{"application/json":{schema:{type:"object",required:["error"],properties:{error:{type:"string"}}}}}}]))},
+        }}
+      ])),
+      "/v1/secrets/prune-expired": {
+        post: {
+          operationId: "pruneExpiredSecrets",
+          summary: "Atomically prune expired secrets for the authenticated tenant",
+          description: "Requires secrets:write. Uses server time; concurrent renewals are rechecked under the delete row lock. Audit records commit with deletions.",
+          responses: {
+            "200": { description: "Committed pruning count", content: { "application/json": { schema: { type: "object", required: ["pruned"], properties: { pruned: { type: "integer", minimum: 0 } } } } } },
+          },
         },
       },
       "/v1/secrets/get": {

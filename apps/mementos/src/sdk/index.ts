@@ -25,7 +25,11 @@
  * release. The SDK's own `MEMENTOS_URL` / env-key reading is GONE, and an
  * explicit `baseUrl` with no `apiKey` never attaches the ambient fleet key
  * (hasna/apps#1794): the credential is pinned to the authority it resolved
- * with.
+ * with. The AUTHORITY is pinned for the life of the client too: the key is
+ * re-resolved per request, but a mid-process authority change (a re-pointed
+ * env var, a changed Keychain `api-url` item) refuses loudly with
+ * `MEMENTOS_AUTHORITY_CHANGED` instead of silently sending the client's data
+ * to a different server.
  *
  * LOCAL MODE IS DELIBERATE, NEVER A FALLBACK FROM FAILURE. The on-box
  * `mementos-serve` at `http://localhost:19428` is reached in exactly ONE way:
@@ -978,15 +982,21 @@ export function resolveMementosSdkTransport(
 }
 
 export class MementosClient {
-  private baseUrl: string;
   private _fetch: typeof globalThis.fetch;
   private apiKey?: string;
   private prefix: string;
   private readonly _resolveOptions: ResolveMementosSdkTransportOptions;
+  /**
+   * The authority this client was created for (hasna/apps#1794): the first
+   * request pins the resolved target, and every later request must hit the
+   * SAME authority or refuse loudly. The KEY rotates freely (re-resolved per
+   * request); the AUTHORITY does not — a credential is only ever sent to the
+   * authority it resolved with.
+   */
+  private _pinnedAuthority: string | null = null;
 
   constructor(config: MementosClientConfig = {}) {
     const resolved = resolveMementosApiBase(config.baseUrl, config.prefix);
-    this.baseUrl = resolved.baseUrl;
     this._fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
     this.apiKey = config.apiKey;
     this.prefix = resolved.prefix;
@@ -1023,7 +1033,7 @@ export class MementosClient {
    */
   get apiUrl(): string {
     const transport = resolveMementosSdkTransport(this._resolveOptions);
-    const base = transport.mode === "http" ? transport.baseUrl : this.baseUrl;
+    const base = this.pinnedTarget(transport);
     return `${base}${this.prefix}`;
   }
 
@@ -1041,6 +1051,33 @@ export class MementosClient {
     return resolveMementosSdkTransport(this._resolveOptions);
   }
 
+  /** The authority a resolved transport targets; the unhosted serve in local mode. */
+  private targetOf(transport: MementosSdkTransport): string {
+    return transport.mode === "http" ? transport.baseUrl : MEMENTOS_DEFAULT_BASE_URL;
+  }
+
+  /**
+   * Fail closed on authority drift (hasna/apps#1794): the first resolution
+   * pins the authority, and a later resolution that names ANOTHER authority —
+   * a re-pointed env var, a changed Keychain `api-url` item, a rewritten
+   * credentials file, an opt-in flip — refuses loudly instead of silently
+   * sending this client's data to a different server. The KEY may rotate; the
+   * AUTHORITY is pinned for the life of the client, exactly as the shared
+   * transport's binding provider refuses authority changes mid-request.
+   */
+  private pinnedTarget(transport: MementosSdkTransport): string {
+    const target = this.targetOf(transport);
+    if (this._pinnedAuthority !== null && target !== this._pinnedAuthority) {
+      throw new MementosConfigError(
+        `MEMENTOS_AUTHORITY_CHANGED: the configured service authority changed from ${this._pinnedAuthority} to ${target}. ` +
+          "A credential is only ever sent to the authority it resolved with — construct a new client " +
+          "before sending data (hasna/apps#1794).",
+      );
+    }
+    this._pinnedAuthority = target;
+    return target;
+  }
+
   private async request<T>(
     method: string,
     path: string,
@@ -1048,7 +1085,7 @@ export class MementosClient {
     query?: Record<string, string | number | boolean | undefined>
   ): Promise<T> {
     const transport = this.currentTransport();
-    const baseUrl = transport.mode === "http" ? transport.baseUrl : this.baseUrl;
+    const baseUrl = this.pinnedTarget(transport);
     const apiKey = transport.mode === "http" ? (transport.apiKey ?? this.apiKey) : this.apiKey;
     // Route legacy `/api/...` method paths through the configured version prefix.
     const routed = path.startsWith("/api/") ? `${this.prefix}${path.slice(4)}` : path;

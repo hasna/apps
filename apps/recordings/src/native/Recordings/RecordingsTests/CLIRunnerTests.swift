@@ -336,8 +336,7 @@ struct CLIRunnerTests {
     @Test("a hung rewrite helper returns within the 10 s interactive budget, cleanup included")
     @MainActor
     func hungRewriteHelperReturnsWithinInteractiveBudget() async throws {
-        let home = FileManager.default.temporaryDirectory
-            .appendingPathComponent("recordings-rewrite-budget-\(UUID().uuidString)")
+        let home = URL(fileURLWithPath: makeIsolatedTestHome("rewrite-budget"), isDirectory: true)
         let bin = home.appendingPathComponent(".bun/bin")
         let pidFile = home.appendingPathComponent("pid")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
@@ -357,15 +356,15 @@ struct CLIRunnerTests {
         }
 
         // The production seam exactly as runCommandMode uses it: the engine's default
-        // commandCLI closure on a detached task, budgeted by commandRewriteTimeout — the
+        // commandCLI closure on the blocking queue, budgeted by commandRewriteTimeout — the
         // observable wall time must stay inside the budget even though the helper never
         // exits on its own and ignores SIGTERM.
-        let runCLI = RecordingEngine(homePath: home.path).commandCLI
+        let runCLI = RecordingEngine(homePath: home.path, installsGlobalHandlers: false).commandCLI
         let homePath = home.path
         let startedAt = ContinuousClock.now
-        let output = await Task.detached {
+        let output = await BlockingOperation.run {
             runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
-        }.value
+        }
         let elapsed = ContinuousClock.now - startedAt
 
         #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout))
@@ -376,8 +375,7 @@ struct CLIRunnerTests {
     @Test("an exhausted rewrite deadline with pipes held by an escaped descendant returns under the public ceiling")
     @MainActor
     func exhaustedRewriteDeadlineWithHeldPipesReturnsUnderCeiling() async throws {
-        let home = FileManager.default.temporaryDirectory
-            .appendingPathComponent("recordings-rewrite-exhaustion-\(UUID().uuidString)")
+        let home = URL(fileURLWithPath: makeIsolatedTestHome("rewrite-exhaustion"), isDirectory: true)
         let bin = home.appendingPathComponent(".bun/bin")
         let leaderPidFile = home.appendingPathComponent("leader-pid")
         let holderPidFile = home.appendingPathComponent("holder-pid")
@@ -454,12 +452,12 @@ struct CLIRunnerTests {
         // also runs to exhaustion. The observable wall time must still land under the
         // public ceiling — the return margin absorbs spawn, poll overshoot, capture
         // shutdown, and the task hops.
-        let runCLI = RecordingEngine(homePath: home.path).commandCLI
+        let runCLI = RecordingEngine(homePath: home.path, installsGlobalHandlers: false).commandCLI
         let homePath = home.path
         let startedAt = ContinuousClock.now
-        let output = await Task.detached {
+        let output = await BlockingOperation.run {
             runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
-        }.value
+        }
         let elapsed = ContinuousClock.now - startedAt
 
         // Upper bound is the public promise, with the ~1 s return margin left as CI
@@ -1032,8 +1030,7 @@ struct CLIRunnerTests {
     @Test("a completely silent escaped descendant cannot pin the capture readers past the ceiling")
     @MainActor
     func silentEscapedDescendantCannotPinCaptureReaders() async throws {
-        let home = FileManager.default.temporaryDirectory
-            .appendingPathComponent("recordings-rewrite-silent-holder-\(UUID().uuidString)")
+        let home = URL(fileURLWithPath: makeIsolatedTestHome("rewrite-silent-holder"), isDirectory: true)
         let bin = home.appendingPathComponent(".bun/bin")
         let leaderPidFile = home.appendingPathComponent("leader-pid")
         let holderPidFile = home.appendingPathComponent("holder-pid")
@@ -1113,12 +1110,12 @@ struct CLIRunnerTests {
         // SIGTERM and the silent holder keeps both pipes open, so every deadline in the
         // chain — execution window, termination grace, drain wait — runs to exhaustion
         // with zero bytes ever arriving to wake a reader.
-        let runCLI = RecordingEngine(homePath: home.path).commandCLI
+        let runCLI = RecordingEngine(homePath: home.path, installsGlobalHandlers: false).commandCLI
         let homePath = home.path
         let startedAt = ContinuousClock.now
-        let output = await Task.detached {
+        let output = await BlockingOperation.run {
             runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
-        }.value
+        }
         let elapsed = ContinuousClock.now - startedAt
 
         #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout))

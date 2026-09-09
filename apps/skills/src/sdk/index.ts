@@ -54,7 +54,8 @@ export * from "./events.js";
 export * from "./spend.js";
 export * from "./offline.js";
 export * from "./execution/index.js";
-export { RemoteSkillsClient, createRemoteSkillsClient, RemoteRequestError, RemoteRouteUnsupportedError, RemoteCapabilityUnavailableError, RemoteWorkspaceMemberError } from "../lib/remote-client.js";
+export { RemoteSkillsClient, createRemoteSkillsClient, RemoteRequestError, RemoteRouteUnsupportedError, RemoteCapabilityUnavailableError, RemoteQuoteUnavailableError, RemoteWorkspaceMemberError } from "../lib/remote-client.js";
+export type { RemoteQuoteUnavailableCode } from "../lib/remote-client.js";
 export { RemoteCreditApprovalError, type RemoteRunApproval, type RemoteRunQuote, type RemoteCreditPack } from "../lib/remote-account.js";
 export { type RemoteInputFile, type RemoteInputFileDescriptor } from "../lib/remote-files.js";
 
@@ -67,3 +68,16 @@ export type { RemoteWorkspaceContext, RemoteAccountWorkspace, RemoteAccountWorks
   RemoteWorkspaceSession, RemoteAccountWorkspaceDiscovery, RemoteWorkspaceSelectionErrorCode } from "../lib/remote-workspace-selection.js";
 export { WorkspaceContextInputError, WorkspaceIdentityMismatchError } from "../lib/remote-workspace-selection.js";
 export { RemoteWorkspaceSelectionError } from "../lib/remote-client.js";
+
+export type { LeaveRemoteWorkspace, RemoteWorkspaceLeaveResult, RemoteWorkspaceLeaveErrorCode } from "../lib/remote-workspace-leave.js";
+export { WorkspaceLeaveInputError, RemoteWorkspaceLeaveError, RemoteWorkspaceLeaveUnconfirmedError } from "../lib/remote-workspace-leave.js";
+
+export type { RemoteWorkspaceInvitation, RemoteWorkspaceInvitationsPage, RemoteWorkspaceInvitationResult,
+  RemoteWorkspaceInvitationAcceptance, ListRemoteWorkspaceInvitations, IssueRemoteWorkspaceInvitation,
+  ResendRemoteWorkspaceInvitation, RevokeRemoteWorkspaceInvitation, AcceptRemoteWorkspaceInvitation, RemoteWorkspaceInvitationErrorCode } from "../lib/remote-invitations.js";
+export { WorkspaceInvitationInputError, RemoteWorkspaceInvitationError, RemoteWorkspaceInvitationUnconfirmedError,
+  RemoteWorkspaceInvitationReadError } from "../lib/remote-invitations.js";
+
+export { InvitationEmailInputError, RemoteInvitationEmailError, RemoteInvitationEmailUnconfirmedError,
+  type RequestInvitationEmailChallenge, type AcceptInvitationEmailChallenge, type RemoteInvitationEmailChallenge,
+  type RemoteInvitationEmailAcceptance, type RemoteInvitationEmailErrorCode } from "../lib/remote-invitation-recovery.js";

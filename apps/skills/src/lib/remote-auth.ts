@@ -1,3 +1,7 @@
+import { requestInvitationEmail, type RequestInvitationEmailChallenge, type AcceptInvitationEmailChallenge } from "./remote-invitation-recovery.js";
+import { invitationInput, type ListRemoteWorkspaceInvitations, type IssueRemoteWorkspaceInvitation,
+  type ResendRemoteWorkspaceInvitation, type RevokeRemoteWorkspaceInvitation, type AcceptRemoteWorkspaceInvitation } from "./remote-invitations.js";
+import { workspaceLeaveInput, type LeaveRemoteWorkspace } from "./remote-workspace-leave.js";
 import { workspaceContext, workspaceExpectedUserId, parseWorkspaceLogin,
   type RemoteWorkspaceContext, type RemoteWorkspaceSession, type RemoteAccountWorkspaceDiscovery } from "./remote-workspace-selection.js";
 import { readBoundedResponse } from "./remote-files.js";
@@ -99,6 +103,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export class RemoteSkillsAuthClient {
   readonly apiOrigin: string;
   constructor(apiUrl: string) { this.apiOrigin = normalizeSkillsApiOrigin(apiUrl); }
+  requestInvitationEmailChallenge(input: RequestInvitationEmailChallenge) { return requestInvitationEmail(this.apiOrigin, "challenge", input); }
+  acceptInvitationEmailChallenge(input: AcceptInvitationEmailChallenge) { return requestInvitationEmail(this.apiOrigin, "accept", input); }
   requestCode(email: string) { return this.request("/api/auth/login", { method: "POST", body: JSON.stringify({ email }) }); }
   verifyCode(email: string, code: string) { return this.request("/api/auth/verify", { method: "POST", body: JSON.stringify({ email, code }) }); }
   startDevice() { return this.request("/api/auth/device/start", { method: "POST", body: JSON.stringify({ client: "skills-sdk" }) }); }
@@ -146,6 +152,33 @@ export class RemoteSkillsAuthClient {
     catch { throw new HostedApiError("The server returned an invalid account verification result."); }
     return { ...parseWorkspaceLogin(value, expected), apiOrigin };
   }
+  async listWorkspaceInvitations(email: string, code: string, context: RemoteWorkspaceContext, options: ListRemoteWorkspaceInvitations = {}) {
+    const target = workspaceContext(context), captured = invitationInput("list", options);
+    return (await this.sessionClient(email, code, target)).listWorkspaceInvitations(target, captured);
+  }
+  async getWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, invitationId: string) {
+    const target = workspaceContext(context), captured = invitationInput("get", { invitationId });
+    return (await this.sessionClient(email, code, target)).getWorkspaceInvitation(target, captured.invitationId);
+  }
+  async issueWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, input: IssueRemoteWorkspaceInvitation) {
+    const target = workspaceContext(context), captured = invitationInput("issue", input);
+    return (await this.sessionClient(email, code, target)).issueWorkspaceInvitation(target, captured);
+  }
+  async resendWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, invitationId: string, input: ResendRemoteWorkspaceInvitation) {
+    const target = workspaceContext(context), captured = invitationInput("resend", { ...input, invitationId });
+    const { invitationId: id, ...options } = captured;
+    return (await this.sessionClient(email, code, target)).resendWorkspaceInvitation(target, id, options);
+  }
+  async revokeWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, invitationId: string, input: RevokeRemoteWorkspaceInvitation) {
+    const target = workspaceContext(context), captured = invitationInput("revoke", { ...input, invitationId });
+    const { invitationId: id, ...options } = captured;
+    return (await this.sessionClient(email, code, target)).revokeWorkspaceInvitation(target, id, options);
+  }
+  async acceptWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, invitationId: string, input: AcceptRemoteWorkspaceInvitation) {
+    const target = workspaceContext(context), captured = invitationInput("accept", { ...input, invitationId });
+    const { invitationId: id, ...options } = captured;
+    return (await this.sessionClient(email, code, target)).acceptWorkspaceInvitation(target, id, options);
+  }
   async createApiKey(email: string, code: string, name: string, scopes?: string[], context?: RemoteWorkspaceContext) {
     const capturedScopes = scopes === undefined ? undefined : [...scopes];
     return (await this.sessionClient(email, code, context)).createApiKey(name, capturedScopes);
@@ -170,6 +203,11 @@ export class RemoteSkillsAuthClient {
   async setWorkspaceMemberRole(email: string, code: string, membershipId: string, input: SetRemoteWorkspaceMemberRole, context?: RemoteWorkspaceContext) {
     const captured = workspaceMemberRoleInput(membershipId, input);
     return (await this.sessionClient(email, code, context)).setWorkspaceMemberRole(captured.membershipId, captured.body);
+  }
+  /** Fresh verification binds the exact observed incarnation before a single confirmed leave. */
+  async leaveWorkspace(email: string, code: string, context: RemoteWorkspaceContext, input: LeaveRemoteWorkspace) {
+    const captured = workspaceLeaveInput(context, input);
+    return (await this.sessionClient(email, code, captured.context)).leaveWorkspace(captured.context, captured.input);
   }
   async removeWorkspaceMember(email: string, code: string, membershipId: string, input: RemoveRemoteWorkspaceMember, context?: RemoteWorkspaceContext) {
     const captured = workspaceMemberRemovalInput(membershipId, input);

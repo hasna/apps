@@ -674,7 +674,7 @@ skills/                      # Public skill contracts and local OSS skills
 |---|---|---|
 | Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 61 | `tools/list` against a live `buildServer()` |
+| MCP tools | 68 | `tools/list` against a live `buildServer()` |
 
 Every number in this table is re-derived from the source tree on each test run by
 `src/lib/readme-derived-counts.test.ts`, so a drifted figure fails a test rather
@@ -933,3 +933,198 @@ through a tool remains a separate follow-up.
 If enrollment reports that key issuance was attempted but not confirmed, inspect
 the selected profile and workspace keys before retrying. A lost response can
 still have created a server key; the CLI does not retry issuance automatically.
+
+### Leave a workspace
+
+Use the exact membership ID and observed role from fresh `workspace list` output.
+Leaving requires deliberate confirmation and a fresh verification code:
+
+```sh
+HASNA_PROFILE=team-b skills workspace leave <membership-id> --expected-role member --email you@example.com --code-stdin --confirm --json
+```
+
+The selected profile must authenticate the same membership. Without a named
+profile, supply `--user-id <user-id>` from discovery; this also supports viewers
+who cannot create API keys. The server refuses stale roles, the last active
+owner, and leaving your last available workspace. It decides authority atomically.
+
+The SDK offers `RemoteSkillsAuthClient.leaveWorkspace(email, code,
+{ userId, membershipId }, { expectedRole, confirm: true })`; an existing interactive
+session can use `RemoteSkillsClient.leaveWorkspace(context, input)`. MCP exposes
+`leave_workspace` with those same explicit IDs, role, confirmation and fresh code.
+All surfaces call the same HTTP method once. API keys cannot authorize the leave.
+
+Success returns `{ organizationId, membershipId, removed: true,
+signInRequired: true }`. Sign in again to an available workspace afterwards.
+Saved credentials and unrelated profiles remain unchanged; credentials for the
+left membership no longer grant access. A lost or invalid response raises
+`RemoteWorkspaceLeaveUnconfirmedError`: inspect available memberships before any
+new action. Never automatically retry or substitute another membership ID.
+
+
+## Workspace invitations
+
+The SDK, CLI and MCP use the same invitation operations on your configured API.
+A compatible hosted service must enable invitation delivery. Every operation
+requires fresh verification bound to your observed user ID and current membership
+ID; any named profile must match. Owners can invite all roles; admins manage only
+member/viewer invitations. The server enforces current authority and verified
+recipient email. Existing accounts with no available membership still need the
+separate invitation recovery flow; these commands do not bypass ordinary login.
+
+Use `skills workspace list` to observe the account and membership IDs. The
+`workspace invitations` commands are `list`, `get <invitation-id>`, `issue`,
+`resend <invitation-id>`, `revoke <invitation-id>` and `accept <invitation-id>`.
+Each requires `--email`, `--user-id` and `--membership-id`. Mutations also require
+`--confirm`. `list --after <nextCursor>` reads one additional page, at most 50
+invitations; it never automatically traverses the account.
+
+For `issue`, supply `--recipient`, `--role` and your own
+`--idempotency-key <uuid>`. `resend` requires that key and
+`--expected-generation`; `revoke` requires `--expected-generation`. Save the
+request key with its original nonsecret context and parameters before issuing or
+resending. A lost response is not proof of failure: read current invitations or
+reconcile with exactly the same key and original parameters. Never replace the
+key to retry an uncertain action. No command retries or rewrites saved profiles.
+
+Read, issue, resend and revoke can read a previously requested six-digit code via
+`--code-stdin`. Otherwise an interactive terminal requests a code and masks input.
+Acceptance takes its invitation ID as the argument and reads the fresh code on
+stdin line one and the 43-character invitation token on line two with
+`--secrets-stdin`. Interactive acceptance masks both inputs. Do not put either
+secret in arguments, environment variables, shell history, scripts or profiles.
+Obtain both from your inbox and pass them through your terminal or an approved
+secret-input mechanism. JSON/noninteractive acceptance requires `--secrets-stdin`.
+
+Acceptance returns the joined organization and membership IDs. It does not change
+the current workspace, default home, saved keys or profiles. Inspect your workspace
+list and deliberately select a membership afterward. A delivery state of
+`provider_accepted` means the provider accepted the request, not that it reached
+an inbox.
+
+Both SDK entrypoints export `RemoteSkillsClient` methods
+`listWorkspaceInvitations(context, options?)`,
+`getWorkspaceInvitation(context, invitationId)`,
+`issueWorkspaceInvitation(context, input)`,
+`resendWorkspaceInvitation(context, invitationId, input)`,
+`revokeWorkspaceInvitation(context, invitationId, input)` and
+`acceptWorkspaceInvitation(context, invitationId, { token, confirm: true })`.
+The corresponding `RemoteSkillsAuthClient` methods prepend `email, code` to those
+arguments for fresh verification. `context` is `{ userId, membershipId }`.
+Issue input is `{ email, role, idempotencyKey, confirm: true }`; resend is
+`{ expectedGeneration, idempotencyKey, confirm: true }`; revoke is
+`{ expectedGeneration, confirm: true }`. Tokens and temporary sessions are never
+returned in invitation projections or persisted by these methods.
+
+MCP exposes `list_workspace_invitations`, `get_workspace_invitation`,
+`issue_workspace_invitation`, `resend_workspace_invitation`,
+`revoke_workspace_invitation` and `accept_workspace_invitation`. Supply explicit
+`userId`, `membershipId`, `email` and fresh `code` in each tool request. Issue uses
+`recipient` for the invitation email; acceptance's `token` travels only in the
+MCP request. Treat the host's request history as sensitive; the tools never echo
+that token or save it in a profile. Other mutation fields match the SDK.
+
+Known server refusals are fixed `RemoteWorkspaceInvitationError` codes.
+`WorkspaceInvitationInputError` rejects invalid inputs before authentication.
+`RemoteWorkspaceInvitationReadError` refuses malformed, cross-workspace or
+unbounded results. `RemoteWorkspaceInvitationUnconfirmedError` requires explicit
+reconciliation of a mutation; it never triggers automatic replay. These adapters
+require service and real recipient acceptance testing before invitations can be
+offered as a live product capability.
+
+### Content identity without extraction
+
+`computeContentHashFromEntries` and `verifyContentHashFromEntries` are available
+from the root package and `@hasna/skills/sdk`. They consume regular-file entries
+such as the result of `inspectSkillBundle`, revalidate their shape and paths, and
+copy their bytes before yielding. Neither function reads a directory, extracts
+files, changes the supplied entries, or authorizes code execution.
+
+```ts
+import { inspectSkillBundle, computeContentHashFromEntries,
+  verifyContentHashFromEntries, revisionIdOf } from "@hasna/skills/sdk";
+
+const inspected = await inspectSkillBundle(uploadBytes, { signal });
+const contentHash = await computeContentHashFromEntries(inspected.entries, { signal });
+const verification = await verifyContentHashFromEntries(inspected.entries, { signal });
+```
+
+Verification reads `provenance.content_hash` from the same captured `skill.json`;
+it cannot accept a second manifest in place of those bytes. Manifest field
+validation remains a separate operation. `revisionIdOf` and `RevisionContent`
+expose the existing revision identity, whose optional fields default to null and
+whose published tag order matters. An archive SHA, canonical content hash and
+published revision ID describe different identities and are not interchangeable.
+
+The entry functions preserve the directory hash's coverage, LF normalization,
+binary handling, manifest self-hash removal, ordering and serialization. The
+archive packer has a different exclusion policy; hashing inspected entries does
+not add excluded files back into an archive. Existing directory functions remain
+synchronous and retain their previous behavior.
+
+`CONTENT_HASH_LIMITS` caps the entry count at 1,024, raw and normalized content
+at 64 MiB, each raw/normalized file at 16 MiB, paths at 100 UTF-8 bytes, and the root
+manifest at 16 KiB with nesting depth 64. The deadline is five seconds. Callers may lower
+these limits through `ContentHashOptions`; zero and values above the ceilings
+are refused. Excluded entries still count toward raw limits and path-collision
+checks. Paths must be canonical and distinct under NFC/case folding; shared
+buffers and accessor-backed entry fields are refused. This validates ordinary
+untrusted byte entries, not arbitrary JavaScript proxies or hostile host code.
+`ContentHashInputError` reports fixed invalid-input, limit, abort or timeout codes
+without including file contents or paths in its messages.
+
+## Invitation email recovery
+
+An existing account with no usable membership can explicitly recover access by
+accepting an invitation with its secret and a fresh recovery code. This separate
+flow creates no session, key, workspace, default pointer or credit grant. New
+accounts use ordinary signup. A compatible service must enable email recovery.
+
+Set `HASNA_SKILLS_API_URL` (or `SKILLS_API_URL`) explicitly for recovery. If both
+are set, they must name the same API. Recovery never consults a keychain or saved
+key to choose its server. It preserves all profiles and never treats cached
+identity metadata as proof.
+
+Generate and retain a challenge UUID **before** the first request. Keep it with
+the same invitation ID and server, without storing the token or code. Run
+`skills workspace invitations email-challenge <invitation-id>
+--challenge-id <your-uuid> --confirm` to enter the invitation token through a
+masked prompt, or add `--token-stdin` for exactly one secret input line.
+The eligibility-neutral result does not confirm that a code was sent or delivered.
+A reused challenge ID never requests a replacement code automatically.
+
+After receiving the recovery code, run
+`skills workspace invitations email-accept <invitation-id>
+--challenge-id <same-uuid> --confirm`. Interactive entry masks the token and code;
+`--secrets-stdin` reads the recovery code on line one and the invitation token on
+line two. JSON use requires the corresponding stdin option. Never put proof in
+arguments, environment variables, URLs, scripts or shell history.
+
+Acceptance returns `accepted: true`, `changed: true`, `signInRequired: true` and
+the organization/membership IDs. Use fresh ordinary sign-in afterward. If the
+acceptance response is lost, sign in to inspect available memberships before any
+further action; never retry acceptance automatically. If necessary, deliberately
+request a new recovery challenge. An uncertain challenge response requires
+retaining its original ID and checking your inbox, without automatic rotation.
+
+Both SDK entrypoints expose `RemoteSkillsAuthClient` methods
+`requestInvitationEmailChallenge({ invitationId, token, challengeId, confirm: true })`
+and `acceptInvitationEmailChallenge({ invitationId, token, challengeId, code,
+confirm: true })`. Both send one anonymous POST to the captured API origin and
+return bounded, validated projections. `InvitationEmailInputError` rejects invalid
+input, `RemoteInvitationEmailError` exposes fixed service refusal codes, and
+`RemoteInvitationEmailUnconfirmedError` requires explicit reconciliation. No
+cookie, Authorization header, credential resolution, login or profile write is
+part of these methods.
+
+For an agent host without a key, start
+`skills-mcp --invitation-recovery --stdio` with an explicit API URL. This mode
+exposes only `request_invitation_email_challenge` and
+`accept_invitation_email_challenge`, with the same SDK input fields. It rejects
+other startup flags, HTTP mode and local mode. The ordinary MCP startup and data
+access gates remain in effect outside this mode. Treat host request history as
+sensitive: tokens and codes appear only in the MCP input body and are never
+returned or saved by the tools.
+
+These clients still require deployed configuration and controlled real recipient
+email acceptance before recovery can be offered as a live product capability.

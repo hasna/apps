@@ -6,6 +6,9 @@
 import { getPackageVersion } from "../lib/package-version.js";
 import { TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 
+const atomicMigrationAuthoritySchema = {type:"object",required:["tenant_id","kid","deployment_id"],properties:{tenant_id:{type:"string"},kid:{type:"string"},deployment_id:{type:"string",format:"uuid"}}} as const;
+const atomicMigrationReceiptSchema = {type:"object",required:["schema_version","operation_id","snapshot_hash","authority","status","records"],properties:{schema_version:{type:"integer",enum:[1]},operation_id:{type:"string"},snapshot_hash:{type:"string"},authority:atomicMigrationAuthoritySchema,status:{type:"string",enum:["complete"]},records:{type:"array",items:{type:"object",required:["object_type","object_id","outcome","before_hash","after_hash","source_hash"],properties:{object_type:{type:"string"},object_id:{type:"string"},outcome:{type:"string",enum:["inserted","updated","identical","superseded","deleted","detached"]},before_hash:{type:"string",nullable:true},after_hash:{type:"string"},source_hash:{type:"string"}}}}}} as const;
+
 const taskSchema = {
   type: "object",
   properties: {
@@ -111,6 +114,9 @@ const taskManifestCapabilityResponseSchema = {
 const projectSchema = {
   type: "object",
   properties: {
+    status: {type:"string",enum:["active","completed","on_hold","archived"]},
+    short_id: {type:"string",nullable:true,maxLength:64,pattern:"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+    metadata: {type:"object",additionalProperties:true},
     id: { type: "string" },
     name: { type: "string" },
     path: { type: "string" },
@@ -619,6 +625,7 @@ const taskManifestBindingLookupResponseSchema = {
 const taskListSchema = {
   type: "object",
   properties: {
+    status: { type: "string", enum: ["active", "completed", "archived"] },
     id: { type: "string" },
     project_id: { type: "string", nullable: true },
     slug: { type: "string" },
@@ -818,7 +825,9 @@ const planSchema = {
     agent_id: { type: "string", nullable: true },
     name: { type: "string" },
     description: { type: "string", nullable: true },
-    status: { type: "string", enum: ["active", "completed", "archived"] },
+    start_date: {type:"string",format:"date",nullable:true},
+    end_date: {type:"string",format:"date",nullable:true},
+    status: { type: "string", enum: ["active", "completed", "archived", "planning", "cancelled"] },
     created_at: { type: "string", format: "date-time" },
     updated_at: { type: "string", format: "date-time" },
   },
@@ -1314,6 +1323,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           required: ["name", "path"],
           properties: {
+    status: {type:"string",enum:["active","completed","on_hold","archived"]},
+    short_id: {type:"string",nullable:true,maxLength:64,pattern:"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+    metadata: {type:"object",additionalProperties:true},
             name: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             path: { type: "string", minLength: 1 },
             description: { type: "string" },
@@ -1327,6 +1339,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           minProperties: 1,
           properties: {
+    status: {type:"string",enum:["active","completed","on_hold","archived"]},
+    short_id: {type:"string",nullable:true,maxLength:64,pattern:"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+    metadata: {type:"object",additionalProperties:true},
             name: { type: "string", minLength: 1 },
             path: { type: "string", minLength: 1 },
             description: { type: "string", nullable: true },
@@ -1391,6 +1406,15 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             expected_plan_revision: { type: "string", minLength: 1 },
           },
         },
+        PlanProjectLinkConflictResponse: {
+          type:"object",required:["error"],
+          properties:{
+            error:{type:"string"},code:{type:"string"},conflict:{type:"boolean"},
+            operation_committed:{type:"boolean",enum:[true],description:"Present only when a previously persisted accepted receipt was authoritatively read"},
+            current_state_matches_receipt:{type:"boolean",enum:[false]},
+            receipt:{$ref:"#/components/schemas/PlanProjectLinkReceipt"},
+          },
+        },
         ErrorResponse: {
           type: "object",
           required: ["error"],
@@ -1405,6 +1429,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           required: ["name"],
           properties: {
+          status: { type: "string", enum: ["active", "completed", "archived"] },
             name: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             project_id: { type: "string" },
@@ -1417,6 +1442,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           minProperties: 1,
           properties: {
+          status: { type: "string", enum: ["active", "completed", "archived"] },
             slug: { type: "string", minLength: 1, pattern: ".*[A-Za-z0-9].*" },
             name: { type: "string" },
             description: { type: "string" },
@@ -1446,7 +1472,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             project_id: { type: "string", minLength: 1 },
             task_list_id: { type: "string", minLength: 1 },
             agent_id: { type: "string", minLength: 1 },
-            status: { type: "string", enum: ["active", "completed", "archived"] },
+            start_date: {type:"string",format:"date",nullable:true},
+    end_date: {type:"string",format:"date",nullable:true},
+    status: { type: "string", enum: ["active", "completed", "archived", "planning", "cancelled"] },
           },
         },
         UpdatePlanInput: {
@@ -1459,7 +1487,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             description: { type: "string" },
             task_list_id: { type: "string", minLength: 1 },
             agent_id: { type: "string", minLength: 1 },
-            status: { type: "string", enum: ["active", "completed", "archived"] },
+            start_date: {type:"string",format:"date",nullable:true},
+    end_date: {type:"string",format:"date",nullable:true},
+    status: { type: "string", enum: ["active", "completed", "archived", "planning", "cancelled"] },
           },
         },
         CreateTemplateInput: {
@@ -1484,6 +1514,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           additionalProperties: false,
           minProperties: 1,
           properties: {
+            expected_version: { type: "integer", minimum: 1 },
             name: { type: "string", minLength: 1 },
             title_pattern: { type: "string", minLength: 1 },
             description: { type: "string", nullable: true },
@@ -2666,6 +2697,8 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             { name: "project_id", in: "query", schema: { type: "string" } },
             { name: "parent_id", in: "query", schema: { type: "string", nullable: true } },
             { name: "include_subtasks", in: "query", schema: { type: "boolean" } },
+            { name: "include_archived", in: "query", schema: { type: "boolean" }, description:"Explicit archive selection; false excludes archived rows" },
+            { name: "plan_read_contract", in: "query", schema: { type: "string", enum:["1"] }, description:"Requires plan_id and explicit include_subtasks=true/include_archived; returns a versioned selection receipt" },
             { name: "plan_id", in: "query", schema: { type: "string" } },
             { name: "task_list_id", in: "query", schema: { type: "string" } },
             { name: "assigned_to", in: "query", schema: { type: "string" } },
@@ -2696,6 +2729,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                       tasks: { type: "array", items: { $ref: "#/components/schemas/Task" } },
                       count: { type: "integer", minimum: 0 },
                       total: { type: "integer", minimum: 0 },
+                      selection:{type:"object",required:["schema_version","plan_id","include_subtasks","include_archived"],properties:{schema_version:{type:"integer",enum:[1]},plan_id:{type:"string"},include_subtasks:{type:"boolean",enum:[true]},include_archived:{type:"boolean"}}},
                     },
                   },
                 },
@@ -3059,6 +3093,23 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
         },
       },
+      "/v1/projects/{id}/delete-preserving": {
+        post: {
+          operationId:"deleteProjectPreserving",summary:"Delete project identity and atomically detach linked records without deleting their content",
+          parameters:[{name:"id",in:"path",required:true,schema:{type:"string"}}],
+          requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,properties:{force:{type:"boolean"},require_completed_tasks:{type:"boolean"}}}}}},
+          responses:{
+            "200":{content:{"application/json":{schema:{type:"object",required:["schema_version","project_id","deleted","preserved_tasks","preserved_plans","detached_task_lists","detached_child_projects"],properties:{schema_version:{type:"integer",enum:[1]},project_id:{type:"string"},deleted:{type:"boolean"},preserved_tasks:{type:"integer",minimum:0},preserved_plans:{type:"integer",minimum:0},detached_task_lists:{type:"integer",minimum:0},detached_child_projects:{type:"integer",minimum:0}}}}}},
+            "400":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "401":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "403":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "404":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "405":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "409":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "501":{content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+          },
+        },
+      },
       "/v1/projects/{id}/task-list/ensure": {
         get: {
           operationId: "planProjectTaskListEnsure",
@@ -3168,6 +3219,140 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
         },
       },
+      "/v1/plans/{id}/comments": {
+  "get": {
+    "operationId": "listPlanComments",
+    "summary": "Read complete plan comment history",
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      {
+        "name": "plan_read_contract",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "1"
+          ]
+        },
+        "description": "Require complete history support; unsupported adapters fail instead of returning empty history"
+      }
+    ],
+    "responses": {
+      "200": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "comments",
+                "count"
+              ],
+              "properties": {
+                "count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "comments": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "plan_id",
+                      "content",
+                      "created_at",
+                      "agent_id",
+                      "session_id",
+                      "type",
+                      "progress_pct"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "plan_id": {
+                        "type": "string"
+                      },
+                      "content": {
+                        "type": "string"
+                      },
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "agent_id": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "session_id": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "comment",
+                          "progress",
+                          "note"
+                        ]
+                      },
+                      "progress_pct": {
+                        "type": "number",
+                        "nullable": true,
+                        "minimum": 0,
+                        "maximum": 100
+                      }
+                    }
+                  }
+                },
+                "history_selection": {
+                  "type": "object",
+                  "required": [
+                    "schema_version",
+                    "plan_id",
+                    "complete"
+                  ],
+                  "properties": {
+                    "schema_version": {
+                      "type": "integer",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "plan_id": {
+                      "type": "string"
+                    },
+                    "complete": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+},
+      "/v1/plans/{id}/delete-preserving": {
+        post: {
+          operationId:"deletePlanPreserving",
+          summary:"Delete a plan, detaching linked records only with force and preserving their content/history",
+          parameters:[{name:"id",in:"path",required:true,schema:{type:"string"}}],
+          requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,properties:{force:{type:"boolean"}}}}}},
+          responses:{"200":{content:{"application/json":{schema:{type:"object",required:["schema_version","plan_id","deleted","detached_task_ids","detached_task_list_ids","detached_tasks","detached_task_lists"],properties:{schema_version:{type:"integer",enum:[1]},plan_id:{type:"string"},deleted:{type:"boolean"},detached_task_ids:{type:"array",items:{type:"string"}},detached_task_list_ids:{type:"array",items:{type:"string"}},detached_tasks:{type:"integer",minimum:0},detached_task_lists:{type:"integer",minimum:0}}}}}},"409":{description:"Nonempty plan requires force"},"501":{description:"Backend upgrade required"}},
+        },
+      },
       "/v1/plans/{id}/project-link": {
         get: {
           operationId: "planPlanProjectLink",
@@ -3195,7 +3380,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkResult" } } } },
             "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
             "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
-            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/PlanProjectLinkConflictResponse" } } } },
           },
         },
       },
@@ -3216,39 +3401,468 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           },
         },
       },
+      "/v1/templates/initialize": {
+        post: {
+          operationId: "initializeTemplates",
+          summary:
+            "Atomically initialize server-owned bundled definitions, retaining existing same-name templates",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: [
+                      "schema_version",
+                      "created",
+                      "skipped",
+                      "names",
+                      "records",
+                    ],
+                    properties: {
+                      schema_version: {
+                        type: "integer",
+                        enum: [1],
+                      },
+                      created: {
+                        type: "integer",
+                        minimum: 0,
+                      },
+                      skipped: {
+                        type: "integer",
+                        minimum: 0,
+                      },
+                      names: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                      },
+                      records: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          required: ["definition_index", "ids", "name", "status"],
+                          properties: {
+                            definition_index: {
+                              type: "integer",
+                              minimum: 0,
+                            },
+                            ids: {
+                              type: "array",
+                              items: {
+                                type: "string",
+                              },
+                            },
+                            name: {
+                              type: "string",
+                            },
+                            status: {
+                              type: "string",
+                              enum: ["created", "skipped"],
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            "400": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "401": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "403": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "404": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "405": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "409": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "500": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "501": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/templates/{id}/history": {
+        get: {
+          operationId: "getTemplateHistory",
+          summary:
+            "Read recorded template versions with explicit missing-version evidence",
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: {
+                type: "string",
+              },
+            },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["current_version", "versions", "selection"],
+                    properties: {
+                      current_version: {
+                        type: "integer",
+                        minimum: 1,
+                      },
+                      versions: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          required: [
+                            "id",
+                            "template_id",
+                            "version",
+                            "snapshot",
+                            "created_at",
+                          ],
+                          properties: {
+                            id: {
+                              type: "string",
+                            },
+                            template_id: {
+                              type: "string",
+                            },
+                            version: {
+                              type: "integer",
+                              minimum: 1,
+                            },
+                            snapshot: {
+                              type: "string",
+                            },
+                            created_at: {
+                              type: "string",
+                            },
+                          },
+                        },
+                      },
+                      selection: {
+                        type: "object",
+                        required: [
+                          "schema_version",
+                          "template_id",
+                          "complete",
+                          "missing_versions",
+                        ],
+                        properties: {
+                          schema_version: {
+                            type: "integer",
+                            enum: [1],
+                          },
+                          template_id: {
+                            type: "string",
+                          },
+                          complete: {
+                            type: "boolean",
+                          },
+                          missing_versions: {
+                            type: "array",
+                            items: {
+                              type: "integer",
+                              minimum: 1,
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            "400": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "401": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "403": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "404": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "405": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "409": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "500": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+            "501": {
+              content: {
+                "application/json": {
+                  schema: {
+                    $ref: "#/components/schemas/ErrorResponse",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       "/v1/templates": {
         get: {
           operationId: "listTemplates",
           summary: "List reusable task templates",
-          parameters: [{ name: "project_id", in: "query", schema: { type: "string" } }],
-          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { templates: { type: "array", items: { $ref: "#/components/schemas/Template" } }, count: { type: "number" } } } } } } },
+          parameters: [
+            { name: "project_id", in: "query", schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      templates: {
+                        type: "array",
+                        items: { $ref: "#/components/schemas/Template" },
+                      },
+                      count: { type: "number" },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
         post: {
           operationId: "createTemplate",
           summary: "Create a reusable task template",
-          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateTemplateInput" } } } },
-          responses: { "201": { content: { "application/json": { schema: { type: "object", properties: { template: { $ref: "#/components/schemas/Template" } } } } } } },
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/CreateTemplateInput" },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      template: { $ref: "#/components/schemas/Template" },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
       },
       "/v1/templates/{id}": {
         get: {
           operationId: "getTemplate",
           summary: "Get one reusable task template with its checklist steps",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { template: { $ref: "#/components/schemas/Template" } } } } } } },
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      template: { $ref: "#/components/schemas/Template" },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
         patch: {
           operationId: "updateTemplate",
           summary: "Update reusable template metadata and defaults",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateTemplateInput" } } } },
-          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { template: { $ref: "#/components/schemas/Template" } } } } } } },
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/UpdateTemplateInput" },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      template: { $ref: "#/components/schemas/Template" },
+                      history_write: {
+                        type: "object",
+                        required: [
+                          "schema_version",
+                          "template_id",
+                          "previous_version",
+                          "version",
+                          "recorded",
+                        ],
+                        properties: {
+                          schema_version: { type: "integer", enum: [1] },
+                          template_id: { type: "string" },
+                          previous_version: { type: "integer", minimum: 1 },
+                          version: { type: "integer", minimum: 1 },
+                          recorded: { type: "boolean", enum: [true] },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
         delete: {
           operationId: "deleteTemplate",
           summary: "Delete a reusable task template and its checklist steps",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { deleted: { type: "boolean" }, id: { type: "string" } } } } } } },
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      deleted: { type: "boolean" },
+                      id: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
       },
       "/v1/task-lists": {
@@ -3268,6 +3882,19 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: {
             "201": { content: { "application/json": { schema: { type: "object", properties: { task_list: { $ref: "#/components/schemas/TaskList" } } } } } },
             "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/task-lists/{id}/delete-preserving": {
+        post: {
+          operationId: "deleteTaskListPreserving",
+          summary: "Delete a task list, optionally detaching linked tasks and plans while retaining their content and history",
+          parameters: [{name:"id",in:"path",required:true,schema:{type:"string"}}],
+          requestBody: {required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,properties:{force:{type:"boolean",default:false}}}}}},
+          responses: {
+            "200": {content:{"application/json":{schema:{type:"object",additionalProperties:false,required:["schema_version","task_list_id","deleted","detached_task_ids","detached_plan_ids","detached_tasks","detached_plans"],properties:{schema_version:{type:"integer",enum:[1]},task_list_id:{type:"string"},deleted:{type:"boolean"},detached_task_ids:{type:"array",items:{type:"string"}},detached_plan_ids:{type:"array",items:{type:"string"}},detached_tasks:{type:"integer",minimum:0},detached_plans:{type:"integer",minimum:0}}}}}},
+            "409": {content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
+            "501": {content:{"application/json":{schema:{$ref:"#/components/schemas/ErrorResponse"}}}},
           },
         },
       },
@@ -3373,6 +4000,20 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           operationId: "getStats",
           summary: "Aggregate counts",
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { tasks: { type: "number" }, projects: { type: "number" } } } } } } },
+        },
+      },
+      "/v1/project-migrations": {
+        get: {
+          operationId:"getAtomicProjectMigrationCapability",
+          summary:"Inspect bounded atomic migration authority (explicit todos:migrate scope required)",
+          responses:{"200":{content:{"application/json":{schema:{type:"object",required:["schema_version","authority","supported_families","supported_tombstones","max_records","max_bytes","atomic"],properties:{schema_version:{type:"integer",enum:[1]},authority:atomicMigrationAuthoritySchema,supported_families:{type:"array",items:{type:"string"}},supported_tombstones:{type:"array",items:{type:"string"}},max_records:{type:"integer"},max_bytes:{type:"integer"},atomic:{type:"boolean",enum:[true]}}}}}}},
+        },
+        post: {
+          operationId:"importAtomicProjectSnapshot",
+          summary:"Atomically reconcile a bounded project snapshot with durable replay receipts",
+          description:"Requires todos:write plus explicit todos:migrate. Frozen deployment/tenant/key authority must match. Original manifests remain server-side. Unsupported nonempty families, ambiguous clocks, active leases and graph conflicts fail before commit. Repeat the identical operation ID and snapshot hash after uncertain completion.",
+          requestBody:{required:true,content:{"application/json":{schema:{type:"object",required:["schema_version","operation_id","expected_authority","snapshot","snapshot_hash"],properties:{schema_version:{type:"integer",enum:[1]},operation_id:{type:"string",minLength:8,maxLength:128},expected_authority:atomicMigrationAuthoritySchema,snapshot_hash:{type:"string",pattern:"^[a-f0-9]{64}$"},snapshot:{type:"object",description:"At most 1000 records / 2 MiB. Supported arrays: projects, tasks, plans, taskLists, auditHistory, project tombstones. Clocks must be canonical millisecond UTC; original tombstone payload is required.",additionalProperties:true}}}}}},
+          responses:{"200":{content:{"application/json":{schema:atomicMigrationReceiptSchema}}}},
         },
       },
       "/v1/import": {
