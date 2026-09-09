@@ -173,18 +173,21 @@ platform billing, tenant tables, deployment code, or a cloud SDK. Internal
 deployments and wrappers can provide `pg` clients, credentials, and secret
 loading from their own runtime.
 
-## Local Plan Markdown Artifacts
+## Plan Markdown Artifacts
 
-Project-scoped plans now have a local Markdown companion file. When the CLI
-creates or completes a plan with a project scope, it writes:
+Plan records are served by the authenticated shared API; a project-scoped plan
+also has an optional local Markdown companion file that this CLI writes on this
+machine. The root is always chosen by the caller with
+`--artifact-root <directory>` — a real local project directory. A path returned
+by the API is never used. The companion lives at:
 
 ```text
-<project-root>/.hasna/todos/plans/<project-id>/<plan-slug>--<id8>.md
+<artifact-root>/.hasna/todos/plans/<project-id>/<plan-slug>--<id8>.md
 ```
 
-The SQLite plan row remains the registry source of truth. The Markdown file is
-an offline-readable artifact for agents, reviews, handoffs, and branch work. It
-does not use hosted APIs or SaaS tenant state.
+The Markdown file is an offline-readable artifact for agents, reviews, handoffs,
+and branch work. It is not the registry: the shared plan record is the source of
+truth, and the file is a client-side copy.
 
 Each file uses the `hasna.todos.plan/v1` schema in frontmatter:
 
@@ -212,37 +215,36 @@ artifact_updated_at: "2026-06-30T00:00:00.000Z"
   <!-- todos: task_id=<task-id> status=pending priority=medium -->
 ```
 
-The path resolver only accepts safe project and plan path segments and resolves
-projects from local SQLite by project ID, registered path, task-list slug, or
-project-name slug. Unscoped plans keep the previous DB-only behavior because
-the artifact layout is explicitly under `<project-id>`.
+The path resolver only accepts safe project and plan path segments and requires
+a project-scoped plan; an unscoped plan has no artifact because the layout is
+explicitly under `<project-id>`.
 
-`todos plans --show <id-or-slug>` reads the companion file when present and
-includes the parsed artifact metadata and body in JSON output. The text view
-prints the artifact path. If a file is missing, the command still shows the
-SQLite plan so older local databases remain compatible.
+`todos plans --show <id-or-slug> --artifact-root <directory>` reads the
+companion file when present and includes the parsed artifact metadata and body
+in JSON output. The text view prints the artifact path. If the file is missing,
+the command still shows the shared plan record.
 
 For backwards compatibility, artifact readers also check the legacy UUID path:
 
 ```text
-<project-root>/.hasna/todos/plans/<project-id>/<plan-id>.md
+<artifact-root>/.hasna/todos/plans/<project-id>/<plan-id>.md
 ```
 
 When both files exist, the slugged `<plan-slug>--<id8>.md` artifact wins. A
-future write or `--write-artifacts` run materializes the slugged artifact while
-leaving legacy files untouched for operator review.
+later `--write-artifacts` run materializes the slugged artifact while leaving
+legacy files untouched for operator review.
 
 For migration and diagnostics:
 
 ```bash
-todos plans --write-artifacts
-todos plans --artifact <id-or-slug> --json
+todos plans --write-artifacts --artifact-root <directory>
+todos plans --artifact <id-or-slug> --artifact-root <directory> --json
 ```
 
 `--write-artifacts` materializes Markdown files for every project-scoped plan in
 the current project scope using readable slug filenames. `--artifact` reports
 the resolved file path, whether the file exists, parse errors, task references,
-and deterministic conflicts between the SQLite row and Markdown
+and deterministic conflicts between the shared plan record and Markdown
 frontmatter/task comments. The CLI does not silently treat the Markdown file as
 authoritative when conflicts exist; agents should resolve the conflict through
 the CLI or an explicit migration task.

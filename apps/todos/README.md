@@ -11,6 +11,33 @@ Universal task management for AI coding agents - CLI + MCP server + interactive 
 bun install -g @hasna/todos
 ```
 
+## Upgrading From 0.15.52
+
+0.16.0 puts every surface on one credential resolver and moves three command
+families to the shared API. Upgrading from 0.15.52 needs no data migration, but
+two things change:
+
+- **Configure a credential.** The `./sdk` client no longer reads
+  `~/.todos/config.json`, and the unprefixed `TODOS_URL` / key spellings are
+  legacy. Put the key in the macOS Keychain, in
+  `~/.hasna/todos/config/credentials` (owner-only `0400`/`0600`), or in
+  `HASNA_TODOS_API_KEY`, then confirm with `todos storage status --json`. With no
+  credential the CLI and the MCP server exit non-zero
+  (`REMOTE_API_CONFIG_MISSING`) instead of quietly serving local rows. The
+  retired locations — `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`,
+  `$XDG_CONFIG_HOME` — are not read.
+- **`todos plans`, `todos task-lists` (`lists`, `tl`) and the template commands
+  are shared-API only.** They refuse `HASNA_TODOS_DB_PATH`, `TODOS_DB_PATH`,
+  `HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup.
+  `todos template-library` is unchanged and still credential-free. The MCP plan
+  tools (`create_plan`, `list_plans`, `get_plan`, `update_plan`, `delete_plan`)
+  and task-list tools (`create_task_list`, `list_task_lists`, `get_task_list`,
+  `update_task_list`, `delete_task_list`) are shared-API only as well.
+
+Everything else still runs offline with `HASNA_TODOS_LOCAL=1`. The per-surface
+detail lives in `docs/PLAN_API.md`, `docs/TASK_LIST_API.md`,
+`docs/TEMPLATE_API.md` and `docs/TASK_QUERY_API.md`.
+
 ## Credentials and Service Authority
 
 The CLI, the MCP server and the `./sdk` client all resolve their credential
@@ -92,6 +119,14 @@ offline against an on-box SQLite store — set `HASNA_TODOS_LOCAL=1` (alias
 authority and no credential, it is answered *before* the resolver runs (so no
 Keychain item and no credential file is read), and every local run prints one
 line on stderr saying it is local.
+
+Three command families are exempt from local mode and are shared-API only:
+`todos plans`, `todos task-lists` (aliases `lists`, `tl`) and the template
+commands (`templates`, `template-init`, `template-preview`, `template-export`,
+`template-import`, `template-history`). They refuse `HASNA_TODOS_DB_PATH`,
+`TODOS_DB_PATH`, `HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup and need a
+credential. `todos template-library` is the exception on the other side: it
+renders the library bundled in the package and stays credential-free.
 
 ```bash
 todos storage status --json    # which tier supplied the key, and which URL applied
@@ -786,32 +821,46 @@ MCP clients get the same local coordination through `claim_next_task`,
 `claim_next_task` can opt into stale recovery with `steal_stale` and
 `stale_minutes`.
 
-## Local Plan Templates
+## Plan Templates
 
-Reusable plan templates live in the local SQLite database. The package also
-ships a marketplace-free local library for bug fixes, feature implementation,
-security review, releases, migrations, incidents, docs refreshes, QA, and open
-source package bootstraps. Templates can create one task or a full ordered plan
-with dependencies, variables, priorities, tags, and descriptions:
+The package ships a marketplace-free template library for bug fixes, feature
+implementation, security review, releases, migrations, incidents, docs
+refreshes, QA, and open source package bootstraps. Templates can create one
+task or a full ordered plan with dependencies, variables, priorities, tags, and
+descriptions.
 
-```bash
-todos template-library --json
-todos template-library --write .todos/templates
-todos template-init
-todos template-preview <template-id> --var name=api
-todos templates --use <template-id> --var name=api
-todos template-export <template-id> > plan-template.json
-todos template-import plan-template.json
-```
+Two surfaces are involved, and they are not the same store:
+
+- `todos template-library` renders the library bundled in the package. It is
+  credential-free and never opens a database, so it works offline:
+
+  ```bash
+  todos template-library --json
+  todos template-library --write .todos/templates
+  ```
+
+- The remaining template commands are served by the authenticated shared API.
+  `todos template-init`, `todos template-preview`, `todos templates --use`,
+  `todos template-export`, `todos template-import` and `todos template-history`
+  require `HASNA_TODOS_API_URL` and `HASNA_TODOS_API_KEY` (or saved account
+  credentials) and refuse an on-box database selection before startup:
+
+  ```bash
+  todos template-init
+  todos template-preview <template-id> --var name=api
+  todos templates --use <template-id> --var name=api
+  todos template-export <template-id> > plan-template.json
+  todos template-import plan-template.json
+  ```
 
 `todos template-library --write` writes editable JSON files that use the same
 shape as `todos template-import`, so teams can fork a built-in workflow without
 contacting any hosted marketplace. `todos templates --use` creates every task in
-a multi-task template and wires its local dependency graph, so agents can
-immediately run `todos ready`, `todos blocked`, or
-`todos deps <task-id> --graph` against the generated plan. The same local-only
-workflow is available to MCP clients through `list_template_library`,
-`write_template_library`, `init_templates`, `create_template`, `list_templates`,
+a multi-task template and wires its dependency graph in the shared account, so
+agents can immediately run `todos ready`, `todos blocked`, or
+`todos deps <task-id> --graph` against the generated plan. MCP clients reach the
+template surface through `list_template_library`, `write_template_library`,
+`init_templates`, `create_template`, `list_templates`,
 `create_task_from_template`, `preview_template`, `export_template`, and
 `import_template`.
 
@@ -834,8 +883,11 @@ todos plans --show <plan-id>                  # verify the plan's task set
 
 Plan references accept a UUID, a plan slug, a plan name, or a unique id prefix.
 An unknown or ambiguous reference exits non-zero before any task is modified.
-All of these run against whichever store the CLI is configured for: the local
-SQLite file, or the shared dataset behind a hosted `/v1` authority.
+`todos add`, `todos update` and `todos bulk` follow whichever store the CLI is
+configured for — the local SQLite file, or the shared dataset behind a hosted
+`/v1` authority. `todos plans` does not: it is served by the authenticated
+shared API only and refuses `HASNA_TODOS_DB_PATH`, `TODOS_DB_PATH`,
+`HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup.
 
 ## Local Git Traceability
 

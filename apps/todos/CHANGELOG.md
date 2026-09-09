@@ -2,6 +2,37 @@
 
 ## 0.16.0
 
+### Migrating from 0.15.52
+
+No data migration is required, but two things change under an existing install:
+
+1. **A credential is required for the hosted surface, and the retired
+   locations are no longer read.** The `./sdk` client used to read a credential
+   out of `~/.todos/config.json` and to prefer the unprefixed `TODOS_URL` and
+   key names; that chain is gone. Every surface resolves through the
+   `@hasna/contracts` client chain — the macOS Keychain item
+   `hasna.credentials.todos.api-key`, then `~/.hasna/todos/config/credentials`
+   (owner-only `0400`/`0600`), then `HASNA_TODOS_API_KEY` — and `todos storage
+   status --json` names the tier that answered. `~/.hasna/fleet-env`,
+   `~/.hasna/cloud`, `~/.config/hasna`, `$XDG_CONFIG_HOME` and
+   `~/.todos/config.json` are not read. With no credential the CLI and the MCP
+   server exit non-zero (`REMOTE_API_CONFIG_MISSING`) instead of serving local
+   rows.
+2. **`todos plans`, `todos task-lists` (aliases `lists`, `tl`) and the template
+   commands are shared-API only.** They refuse `HASNA_TODOS_DB_PATH`,
+   `TODOS_DB_PATH`, `HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup, and
+   need `HASNA_TODOS_API_URL` and `HASNA_TODOS_API_KEY` (or saved account
+   credentials). The five MCP plan tools (`create_plan`, `list_plans`,
+   `get_plan`, `update_plan`, `delete_plan`) and the five MCP task-list tools
+   (`create_task_list`, `list_task_lists`, `get_task_list`, `update_task_list`,
+   `delete_task_list`) no longer read the local store either.
+   `todos template-library` is unchanged: it renders the library bundled in the
+   package and never opens a store.
+
+Everything else still runs offline with `HASNA_TODOS_LOCAL=1`. The per-surface
+detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
+`TEMPLATE_API.md` and `TASK_QUERY_API.md`.
+
 ### Minor Changes
 
 - 96169f8: Resolve credentials through the `@hasna/contracts` client chain (hasna/apps#1720).
@@ -160,13 +191,14 @@
     the configuration table.
 
 - 49d75dd: Reject an explicitly empty `active --project` filter instead of silently returning unfiltered work.
-- 500f99d: `@hasna/todos/testing`'s `deliverTodosApiKeyViaDisk` now delivers fixture keys
-  through the PRIMARY disk tier (`$HOME/.hasna/fleet-env/todos.env`) instead of
-  the legacy `~/.hasna/cloud` fallback. Forced by @hasna/contracts 0.14.2, which
-  demotes the cloud tier to a NOISY deprecated fallback: a CLI subprocess test
-  delivering via cloud would print the DEPRECATED notice to stderr and break
-  stderr-exact assertions. Consumers of the exported helper that rely on the
-  cloud path must migrate to fleet-env.
+- 500f99d: `@hasna/todos/testing`'s `deliverTodosApiKeyViaDisk` stopped delivering fixture keys
+  through the legacy `~/.hasna/cloud` fallback: @hasna/contracts 0.14.2 demoted
+  that tier to a NOISY deprecated fallback, so a CLI subprocess test delivering
+  via cloud would print the DEPRECATED notice to stderr and break stderr-exact
+  assertions. The tier this landed on was superseded later in the same release by
+  the credential-resolver adoption (96169f8 above): the shipped helper writes
+  `$HOME/.hasna/todos/config/credentials` at 0600, and no surface reads
+  `~/.hasna/fleet-env`.
 - 6f4238c: Project and task-list slugs are no longer auto-prefixed with `todos-`. A new
   project registered from the name `apps` now derives the bare slug `apps`
   (previously `todos-apps`); task lists follow the same rule, matching the fleet
@@ -199,6 +231,80 @@ normalization.md` (runner: `apps/todos/scripts/normalize-slug-prefixes.ts`,
   written before 2026-09-05 keeps working. `todos serve` prints one line at
   startup naming which variable supplied its accepted key, flagging the
   deprecated spelling when a fallback name was used.
+- 5a20d230a: Restore the admitted-local redaction's `delete env.TODOS_API_URL;` semantics in
+  stage-a and align the public-text-boundary exemption (and its gate tests) with
+  that emitted delete shape. The #1829 blanking workaround contradicted stage-a's
+  documented delete-not-blank law (a declared-but-blank authority is refused
+  loudly downstream) and left the gate stripping a shape the source no longer
+  emitted; the release-review P1 (0d22a7aa2) requires the exemption to match the
+  delete statement exactly, with every other spelling — a read, a blanking
+  assignment, any other module — still failing the boundary. The SDK README
+  documents the canonical HASNA_TODOS_API_URL / HASNA_TODOS_API_KEY names only.
+- 17b09fae3: Route all CLI task-list aliases through authenticated shared storage, with complete task detail, status controls, preserving deletion and database-selector rejection before startup.
+
+  **Breaking for local-SQLite users** (hasna/apps#2027). `todos task-lists` —
+  and its aliases `lists` and `tl` — read and write the authenticated shared API
+  only. Selecting an on-box database (`HASNA_TODOS_DB_PATH`, `TODOS_DB_PATH`,
+  `HASNA_TODOS_LOCAL`, `TODOS_LOCAL`) is refused before startup with
+  `Task-list commands require the authenticated shared API. Unset … and configure
+  HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, or saved account credentials.`; a
+  run with no credential fails closed with `REMOTE_API_CONFIG_MISSING`. Task
+  lists carry a persisted `status` on the shared record, task detail is read in
+  full, and deletion is confirmed by a checked receipt.
+- b29183485: Route CLI plans through shared authenticated storage and preserve Markdown exports with an explicitly chosen local root, checked deletion receipts and accurate artifact-failure reporting.
+
+  **Breaking for local-SQLite users** (hasna/apps#2034). `todos plans` and every
+  action it carries — `--add`, `--show`, `--delete`, `--complete`,
+  `--link-project`, `--rollback-project-link`, `--artifact`, `--write-artifacts`
+  — read and write the authenticated shared API only. Selecting an on-box
+  database is refused before startup with `Plan commands require the
+  authenticated shared API. Unset … and configure HASNA_TODOS_API_URL and
+  HASNA_TODOS_API_KEY, or saved account credentials.`, and a run with no
+  credential fails closed with `REMOTE_API_CONFIG_MISSING`. Two option contracts
+  changed with the move: `--artifact` and `--write-artifacts` compare local
+  Markdown against shared plan data and now require an explicit
+  `--artifact-root <directory>`; `--delete` removes an empty plan, and `--force`
+  (which requires `--delete`) detaches linked tasks and lists while preserving
+  their content and history. Deletions are confirmed by a checked server receipt,
+  so a plan is never reported deleted on an unverified response.
+- aa503b7a4: Add an explicitly privileged, bounded atomic project snapshot reconciliation API with durable receipts and content-preserving historical tombstones.
+- 3e63609f9: Resolve hosted credentials through the shared `@hasna/contracts` client chain by pinning the exact `@hasna/contracts` dependency at 1.0.2: the CLI, the MCP server and the `./sdk` client all call `resolveClientTransport`, which adds the macOS Keychain tier and no longer reads the retired `~/.hasna/fleet-env` and `~/.hasna/cloud` disk tiers. The shipped 0.16.0 tarball carries this pin; this record keeps the change visible to the changeset tooling for the next version bump.
+- 3655d23f5: Preserve historical PR-group rows during SQLite lineage upgrades, stop on statement failures, and restore foreign-key settings after rollback.
+- bc5a45ce1: Keep machine command registration and help store-free while authenticating shared machine actions. Refresh API regression fixtures for machine and task coordination capabilities.
+- bc5a45ce1: Bind machine migration capability, writes and receipts to the same authenticated tenant and key identity. Reject credential changes before importing and ambiguous machine task selectors before reading tasks.
+- 206296587: Keep plan-project linkage and initial receipt readback in one membership transaction, and distinguish later state drift from an already committed operation without rewriting its receipt.
+- fca2fae5d: Create private, integrity-validated standalone SQLite backups that reopen read-only on macOS, preserving committed WAL data and existing backups on validation failure.
+- fa16b463a: Require complete bounded stdout and stderr evidence from a single command execution before the release gate accepts captured output.
+- bc5a45ce1: Preserve machine identities in storage snapshots and add authenticated shared machine registry operations for CLI and MCP. Refuse older APIs before machine imports and prevent implicit SQLite fallback on API clients.
+- 4941cff8a: Route MCP plan workflows through authenticated shared storage, persist plan schedules and additional statuses, preserve linked content on confirmed plan deletion, and enforce deployment tenant authority across V1 routes.
+
+  **Breaking for local-SQLite users** (hasna/apps#2031). The MCP plan tools
+  `create_plan`, `list_plans`, `get_plan`, `update_plan` and `delete_plan`
+  require the authenticated shared API and no longer read the local store: an MCP
+  client with no credential gets an error instead of local rows.
+- e2217600b: Route project MCP CRUD and the CLI project panel through saved shared API credentials. Preserve project metadata, count complete task pages, and atomically detach linked content when explicitly deleting a nonempty project. Reject stale project references and misleading API receipts.
+- bc5a45ce1: Route MCP task locks, priority updates and dependency operations through the saved account API. Preserve version conflicts and server force-unlock authorization, reject incomplete mutation receipts, and render complete bounded shared dependency graphs without opening SQLite.
+- 07b43db1b: Route task-list MCP operations through authenticated shared storage, persist task-list status, and preserve linked tasks and plans during explicit forced deletion.
+
+  **Breaking for local-SQLite users** (hasna/apps#2025). The MCP task-list tools
+  `create_task_list`, `list_task_lists`, `get_task_list`, `update_task_list` and
+  `delete_task_list` require the authenticated shared API and no longer read the
+  local store.
+- bc5a45ce1: Enable account-backed mine, blocked, overdue, today and yesterday CLI commands without SQLite fallback. Exhaust task pagination and fail visibly on incomplete result sets or unreadable dependency records.
+
+  On a hosted run these five commands read the shared authority and exhaust
+  pagination instead of falling back to an on-box database. An explicit local
+  selection (`HASNA_TODOS_LOCAL=1`) still serves them from the local store, as
+  before.
+- 5b2a8d857: Use shared template CLI operations with version history, atomic bundled initialization, and truthful partial application receipts. Keep bundled library files credential-free.
+
+  **Breaking for local-SQLite users** (hasna/apps#2040). `todos templates`
+  (including `--use`), `template-init`, `template-preview`, `template-export`,
+  `template-import` and `template-history` are served by the authenticated shared
+  API and refuse `HASNA_TODOS_DB_PATH`, `TODOS_DB_PATH`, `HASNA_TODOS_LOCAL` and
+  `TODOS_LOCAL` before startup. `todos template-library` is the deliberate
+  exception: it renders the library bundled in the package, opens no store, and
+  stays credential-free.
 
 ## 0.15.53
 
