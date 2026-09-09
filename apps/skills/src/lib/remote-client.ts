@@ -13,8 +13,8 @@ import { workspaceMemberRoleInput, workspaceMemberRemovalInput, parseWorkspaceMe
 import { getApiUrl } from "./auth-store.js";
 import { normalizeSkillsApiOrigin, skillsApiRequestUrl, resolveSkillsConnection } from "./fleet-credentials.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
-import { creditCount, parseRemoteBillingStatus, parseRemoteCheckout, parseRemoteCreditPacks, parseRemoteRunQuote, RemoteCreditApprovalError, type RemoteCreditPack, type RemoteRunApproval, type RemoteRunQuote } from "./remote-account.js";
-import { describeRemoteFiles, readBoundedResponse, sha256, MAX_REMOTE_FILE_BYTES, type RemoteInputFile } from "./remote-files.js";
+import { creditCount, runQuoteReceipt, parseRemoteBillingStatus, parseRemoteCheckout, parseRemoteCreditPacks, parseRemoteRunQuote, RemoteCreditApprovalError, type RemoteCreditPack, type RemoteRunApproval, type RemoteRunQuote } from "./remote-account.js";
+import { describeRemoteFiles, readBoundedResponse, sha256, MAX_REMOTE_FILE_BYTES, type RemoteInputFile, type RemoteInputFileDescriptor } from "./remote-files.js";
 import { customerNamePatch, parseUpdatedProfile, parseUpdatedWorkspace, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
 import { quoteUnavailableMessages, readQuoteUnavailableCode, type RemoteQuoteUnavailableCode } from "./remote-quote-errors.js";
 export type { RemoteQuoteUnavailableCode } from "./remote-quote-errors.js";
@@ -244,6 +244,7 @@ export class RemoteSkillsClient {
 
   /** Low-level admission transport; interactive surfaces use submitQuotedRun. */
   async submitRun(slug: string, input?: Record<string, unknown>, args?: string[], approval: RemoteRunApproval = {}): Promise<RemoteSkillRunContract> {
+    const quoteReceipt = runQuoteReceipt(approval.quoteReceipt);
     if (approval.idempotencyKey !== undefined && !/^[A-Za-z0-9._:-]{1,128}$/.test(approval.idempotencyKey)) throw new Error("Idempotency key must be 1-128 URL-safe characters");
     if (approval.maxCostCents !== undefined) creditCount(approval.maxCostCents);
     if (approval.maxCredits !== undefined) creditCount(approval.maxCredits);
@@ -255,14 +256,19 @@ export class RemoteSkillsClient {
         ...(approval.maxCostCents !== undefined ? { maxCostCents: approval.maxCostCents } : {}),
         ...(approval.idempotencyKey !== undefined ? { idempotencyKey: approval.idempotencyKey } : {}),
         ...(approval.inputFiles !== undefined ? { files: approval.inputFiles } : {}),
+        ...(quoteReceipt !== undefined ? { quoteReceipt } : {}),
       }),
     });
+    if (!res.ok) {
+      void res.body?.cancel().catch(() => {});
+      throw new RemoteRequestError(`/api/v1/runs/${encodeURIComponent(slug)}`, res.status);
+    }
     return normalizeRemoteSkillRunContract(await res.json(), slug);
   }
 
-  async quoteRun(slug: string, input: Record<string, unknown> = {}, args: string[] = []): Promise<RemoteRunQuote> {
+  async quoteRun(slug: string, input: Record<string, unknown> = {}, args: string[] = [], files?: RemoteInputFileDescriptor[]): Promise<RemoteRunQuote> {
     const response = await this.requestNewRoute(`/api/v1/skills/${encodeURIComponent(slug)}/quote`, {
-      method: "POST", body: JSON.stringify({ input, args }),
+      method: "POST", body: JSON.stringify({ input, args, ...(files === undefined ? {} : { files }) }),
     }, { quoteRefusal: true });
     return parseRemoteRunQuote(await response.json());
   }
@@ -279,15 +285,23 @@ export class RemoteSkillsClient {
 
   /** Quote first and fail closed when the caller has not approved the required credits. */
   async submitQuotedRun(slug: string, input: Record<string, unknown> = {}, args: string[] = [], approval: RemoteRunApproval = {}): Promise<RemoteSkillRunContract> {
+    runQuoteReceipt(approval.quoteReceipt);
+    // Capture the JSON wire values before any asynchronous quote or capability
+    // lookup; callers may mutate their nested input, args or approval meanwhile.
+    ({ input, args, approval } = JSON.parse(JSON.stringify({ input, args, approval })));
     const maximum = creditCount(approval.maxCredits ?? approval.maxCostCents ?? 0);
     if (approval.maxCostCents !== undefined && approval.maxCostCents !== maximum) throw new Error("Credit approval fields disagree");
-    const quote = await this.quoteRun(slug, input, args);
-    if (quote.pricing.costCents > maximum) throw new RemoteCreditApprovalError(quote.pricing.costCents, maximum);
+    // A receipt supplied after confirmation must not be replaced by a fresh
+    // quote, even when the newly selected version would have the same price.
+    const quote = approval.quoteReceipt === undefined ? await this.quoteRun(slug, input, args, approval.inputFiles?.length ? approval.inputFiles : undefined) : undefined;
+    if (quote && quote.pricing.costCents > maximum) throw new RemoteCreditApprovalError(quote.pricing.costCents, maximum);
     const capabilities = await this.getCapabilities();
     if (!capabilities.capabilities.includes("runs.submit") || capabilities.billing?.boundedRunApproval !== true || capabilities.billing.unit !== "credits") {
       throw new Error("The configured server does not support bounded credit approval; refusing remote submission");
     }
-    return this.submitRun(quote.skill, input, args, { ...approval, maxCredits: maximum, maxCostCents: maximum });
+    return this.submitRun(quote?.skill ?? slug, input, args, { ...approval, maxCredits: maximum, maxCostCents: maximum,
+      ...((quote?.quoteReceipt ?? approval.quoteReceipt) === undefined ? {} : { quoteReceipt: quote?.quoteReceipt ?? approval.quoteReceipt }),
+    });
   }
 
   async getIdentity(): Promise<Record<string, unknown>> {
@@ -544,6 +558,12 @@ export class RemoteSkillsClient {
   }
 
   async submitQuotedRunWithFiles(slug: string, input: Record<string, unknown>, args: string[], files: RemoteInputFile[], approval: RemoteRunApproval = {}) {
+    runQuoteReceipt(approval.quoteReceipt);
+    ({ input, args, approval } = JSON.parse(JSON.stringify({ input, args, approval })));
+    // Bound the caller's buffers before copying, then derive both the quote and
+    // admission descriptors from the owned bytes that will actually be PUT.
+    describeRemoteFiles(files);
+    files = files.map(file => ({ name: file.name, contentType: file.contentType, bytes: new Uint8Array(file.bytes) }));
     const inputFiles = describeRemoteFiles(files);
     if (files.length && !(await this.getCapabilities()).capabilities.includes("runs.uploads")) throw new Error("The configured server does not support input uploads");
     const run = await this.submitQuotedRun(slug, input, args, { ...approval, inputFiles });

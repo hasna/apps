@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hasna.com/notes/saas-wire-v1.json",
+  "title": "Notes SaaS wire v1",
+  "$defs": {
+    "note": {
+      "type": "object",
+      "required": ["id", "tenantId", "clientId", "slug", "title", "bodyMarkdown", "frontmatterJson", "folder", "labels", "pinned", "archived", "revision", "contentHash", "source", "agentProvenanceJson", "deletedAt", "createdAt", "updatedAt"],
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "tenantId": {"type": "string", "format": "uuid"},
+        "clientId": {"type": ["string", "null"]},
+        "slug": {"type": ["string", "null"]},
+        "title": {"type": "string"},
+        "bodyMarkdown": {"type": "string"},
+        "frontmatterJson": {"type": "object"},
+        "folder": {"type": ["string", "null"]},
+        "labels": {"type": "array", "items": {"type": "string"}},
+        "pinned": {"type": "boolean"},
+        "archived": {"type": "boolean"},
+        "revision": {"type": "integer", "minimum": 1},
+        "contentHash": {"type": "string"},
+        "source": {"enum": ["local", "hosted", "mcp", "agent"]},
+        "agentProvenanceJson": {"type": "object"},
+        "deletedAt": {"type": ["string", "null"], "format": "date-time"},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "updatedAt": {"type": "string", "format": "date-time"}
+      }
+    },
+    "page": {
+      "type": "object", "required": ["data", "nextCursor", "hasMore"],
+      "properties": {
+        "data": {"type": "array", "items": {"$ref": "#/$defs/note"}},
+        "nextCursor": {"type": ["string", "null"]},
+        "hasMore": {"type": "boolean"}
+      }
+    },
+    "change": {
+      "type": "object", "required": ["sequence", "noteId", "action", "note"],
+      "properties": {
+        "sequence": {"type": "string", "pattern": "^[0-9]+$"},
+        "noteId": {"type": "string", "format": "uuid"},
+        "action": {"enum": ["upsert", "delete"]},
+        "note": {"anyOf": [{"$ref": "#/$defs/note"}, {"type": "null"}]}
+      }
+    },
+    "changesPage": {
+      "type": "object", "required": ["changes", "cursor", "hasMore"],
+      "properties": {
+        "changes": {"type": "array", "items": {"$ref": "#/$defs/change"}},
+        "cursor": {"type": "string"}, "hasMore": {"type": "boolean"}
+      }
+    },
+    "error": {
+      "type": "object", "required": ["error"],
+      "properties": {"error": {
+        "type": "object", "required": ["code", "message"],
+        "properties": {"code": {"type": "string"}, "message": {"type": "string"}, "details": {}}
+      }}
+    }
+  }
+}
