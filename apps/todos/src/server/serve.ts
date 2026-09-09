@@ -3,6 +3,7 @@
  * Provides REST API endpoints for task management (+ MCP Streamable HTTP).
  */
 
+import { existsSync } from "node:fs";
 import { getDatabase, getDatabasePath } from "../db/database.js";
 import { hasActiveApiKeys, verifyApiKey, safeEqualStrings } from "../db/api-keys.js";
 import {
@@ -196,17 +197,26 @@ export interface StartServerOptions {
  * Whether the local store holds at least one active generated API key, without
  * letting an unreadable store abort startup before the auth posture is resolved.
  *
- * The posture must be resolvable BEFORE the store is opened: on the documented
- * default path (no credential, no explicit DB path, no local opt-in)
- * `getDatabase()` refuses with `API_DATABASE_FALLBACK_FORBIDDEN`, so opening it
- * first replaced the fail-closed auth refusal with an internal storage error.
- * A store this process cannot read holds no key it could honour, so an
- * unreadable store counts as "no generated keys" and the posture still fails
- * closed.
+ * `todos-serve` is an explicit storage handle — it IS the local server — so it
+ * must read the resolved path through the same explicit handle it opens below
+ * (`getDatabase(getDatabasePath())`), never through the ambient client singleton
+ * that the client-fallback guard refuses without the local opt-in. Reading it
+ * implicitly made a store that DOES hold a live key look empty (the guard threw
+ * `API_DATABASE_FALLBACK_FORBIDDEN` and the catch returned false), so
+ * `todos-serve` refused to start on the configuration the shipped README
+ * documents as sufficient — a regression against 0.15.52.
+ *
+ * A store that does not exist yet cannot hold a key, so it is never created just
+ * to answer this question (that keeps the unconfigured path free of store side
+ * effects). A store this process cannot read holds no key it could honour, so an
+ * unreadable store still counts as "no generated keys" and the posture fails
+ * closed with the documented refusal.
  */
 function hasGeneratedApiKeysSafely(): boolean {
   try {
-    return hasActiveApiKeys();
+    const dbPath = getDatabasePath();
+    if (!existsSync(dbPath)) return false;
+    return hasActiveApiKeys(getDatabase(dbPath));
   } catch {
     return false;
   }

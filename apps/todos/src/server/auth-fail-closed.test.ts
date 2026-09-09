@@ -108,6 +108,22 @@ function defaultPostureEnv(home: string): Record<string, string | undefined> {
   return env;
 }
 
+/**
+ * Mint a generated API key into `dbPath` through the same `createApiKey()` the
+ * `todos api-keys create` command calls, restoring the process env afterwards.
+ */
+function mintStoredKey(dbPath: string): void {
+  const previousDbPath = process.env["TODOS_DB_PATH"];
+  process.env["TODOS_DB_PATH"] = dbPath;
+  resetDatabase();
+  getDatabase();
+  createApiKey({ name: "stored-key startup probe" });
+  closeDatabase();
+  resetDatabase();
+  if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+  else process.env["TODOS_DB_PATH"] = previousDbPath;
+}
+
 /** Read a live stream until `marker` appears (or the deadline passes). */
 async function readUntil(stream: ReadableStream<Uint8Array>, marker: string, timeoutMs: number): Promise<string> {
   const reader = stream.getReader();
@@ -231,6 +247,47 @@ describe("unconfigured server fails closed", () => {
     try {
       const stdout = await readUntil(proc.stdout as ReadableStream<Uint8Array>, "Todos HTTP server running at", 15_000);
       expect(stdout).toContain("Todos HTTP server running at");
+    } finally {
+      proc.kill();
+      await proc.exited;
+    }
+  }, HOOK_TIMEOUT_MS);
+});
+
+// ── 1b. A stored generated key IS a documented credential source ──────────────
+describe("a stored generated key authorizes startup without the local opt-in", () => {
+  let tmpDir: string;
+
+  beforeAll(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "todos-stored-key-"));
+  });
+
+  afterAll(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("starts and enforces auth on a store that already holds a live generated key", async () => {
+    // Regression (0.16.0): the posture read the key through the ambient client
+    // singleton, which the client-fallback guard refuses without the local
+    // opt-in — so a store that DID hold a live key looked empty (the guard threw
+    // API_DATABASE_FALLBACK_FORBIDDEN, the catch returned false) and the server
+    // refused to start where published 0.15.52 started and enforced auth. The
+    // shipped README's auth table lists "at least one `todos api-keys create`
+    // key exists" as a credential source with no opt-in caveat.
+    const port = reserveFreePort(20100 + Math.floor(Math.random() * 100));
+    const dbPath = join(tmpDir, "stored-key.db");
+    mintStoredKey(dbPath);
+
+    const proc = spawnServer(port, {
+      ...defaultPostureEnv(tmpDir),
+      TODOS_DB_PATH: dbPath,
+    });
+    try {
+      const stdout = await readUntil(proc.stdout as ReadableStream<Uint8Array>, "Todos HTTP server running at", 15_000);
+      expect(stdout).toContain("Todos HTTP server running at");
+      expect(stdout).toContain("at least one active generated API key");
+      // The enforced plane really is up: an anonymous data read is refused.
+      expect((await fetch(localUrl(port, "/api/stats"))).status).toBe(401);
     } finally {
       proc.kill();
       await proc.exited;
