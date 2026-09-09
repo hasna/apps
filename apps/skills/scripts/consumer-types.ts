@@ -44,6 +44,18 @@ try {
   await writeFile(join(workspace, "consumer.ts"), `
 import { createRunService, runAdmissionSchema, runTerminalSchema, type SkillsProductStore, RemoteCapabilityUnavailableError, RemoteRequestError } from "@hasna/skills/sdk";
 import { RemoteSkillsClient, RemoteSkillsAuthClient, RemoteCapabilityUnavailableError as RootCapabilityError, runSkill } from "@hasna/skills";
+import { RemoteSkillsClient as SdkQuoteClient, type RemoteRunQuote, type RemoteRunApproval } from "@hasna/skills/sdk";
+import type { RemoteRunQuote as RootRunQuote, RemoteRunApproval as RootRunApproval } from "@hasna/skills";
+declare const receiptQuote: RemoteRunQuote;
+const opaqueReceipt: string | undefined = receiptQuote.quoteReceipt;
+const rootReceiptQuote: RootRunQuote = receiptQuote;
+const receiptApproval: RemoteRunApproval = { maxCredits: 3, quoteReceipt: opaqueReceipt };
+const rootReceiptApproval: RootRunApproval = receiptApproval;
+const fileQuote: Promise<RemoteRunQuote> = new SdkQuoteClient("fixture", "https://skills.example.com").quoteRun("fixture", {}, [], [{ name: "input.txt", sizeBytes: 1, sha256: "a".repeat(64), contentType: "text/plain" }]);
+// @ts-expect-error Receipts remain opaque strings, never numbers or untyped values.
+const invalidReceipt: RemoteRunApproval = { quoteReceipt: 3 };
+// @ts-expect-error Optional receipt presence does not make it a required string.
+const missingReceiptGuard: string = receiptQuote.quoteReceipt;
 import { RemoteQuoteUnavailableError, type RemoteQuoteUnavailableCode } from "@hasna/skills/sdk";
 import { RemoteQuoteUnavailableError as RootQuoteUnavailableError, type RemoteQuoteUnavailableCode as RootQuoteCode } from "@hasna/skills";
 import { SKILLS_NATIVE_STORAGE_ENV, type SkillsNativeStorageConfig } from "@hasna/skills/storage";
