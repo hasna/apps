@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.8
+
+### Patch Changes
+
+- 2e4ec23: Add a provider-neutral injected operation client with bounded immutable JSON, stable request identities, explicit status lookup, abort handling, and unknown-outcome errors without automatic retry. Credentials, authorization, IPC and provider execution remain the embedder's responsibility.
+
 ## 0.5.7
 
 ### Patch Changes
