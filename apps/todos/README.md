@@ -53,7 +53,9 @@ four things change:
   `list_task_lists`. Five more refuse caller input or local state with the typed
   `INVALID_INPUT` / `ENCRYPTION_KEY_UNAVAILABLE` / `ENCRYPTED_PAYLOAD_INVALID`,
   and five answer a readable text refusal ("Provide agent_id, id, or name.").
-  No zero-argument tool returns an opaque `UNKNOWN_ERROR`. Run the server with
+  No zero-argument tool returns an opaque `UNKNOWN_ERROR` on either posture —
+  the default one measured above, or the `HASNA_TODOS_LOCAL=1` opt-in these
+  tools are served under. Run the server with
   `HASNA_TODOS_LOCAL=1` to keep using the on-box tools; that opt-in is ignored
   when `HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL` is set, because a
   configured environment outranks it.

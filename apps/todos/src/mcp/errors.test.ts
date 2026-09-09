@@ -212,14 +212,45 @@ describe("plain-Error guard refusals get a typed, actionable payload", () => {
     expect(result.suggestion).toContain("HASNA_TODOS_LOCAL=1");
   });
 
-  test("a REMOTE_API_* resolver refusal keeps its code and names the shared-API configuration", () => {
-    for (const code of ["REMOTE_API_CONFIG_MISSING", "REMOTE_API_UNAVAILABLE", "REMOTE_API_UNAUTHORIZED"]) {
+  test("a REMOTE_API_* resolver refusal keeps its code and names the remedy for THAT code", () => {
+    // The code prefix alone does not imply one remedy: a rejected credential is
+    // not a missing URL. Each code must answer with its own fix, or a client
+    // follows the wrong advice and keeps failing.
+    const expected: Record<string, string> = {
+      REMOTE_API_CONFIG_MISSING: "HASNA_TODOS_API_URL",
+      REMOTE_API_KEY_MISSING: "HASNA_TODOS_API_KEY",
+      REMOTE_API_URL_INVALID: "HASNA_TODOS_API_URL",
+      REMOTE_API_UNAUTHORIZED: "REJECTED",
+      REMOTE_API_FORBIDDEN: "not permitted",
+      REMOTE_API_UNREACHABLE: "could not be reached",
+      REMOTE_API_TIMEOUT: "did not answer in time",
+      REMOTE_API_UNAVAILABLE: "server error",
+      REMOTE_API_REDIRECT_REJECTED: "redirected",
+      REMOTE_API_INCOMPATIBLE: "compatible shape",
+    };
+    for (const [code, needle] of Object.entries(expected)) {
       const result = JSON.parse(formatError(new Error(`${code}: the authority could not serve this route`)));
       expect(result.code).toBe(code);
       expect(result.code).not.toBe("UNKNOWN_ERROR");
       expect(result.message).toBe("the authority could not serve this route");
-      expect(result.suggestion).toContain("HASNA_TODOS_API_URL");
+      expect(result.suggestion).toContain(needle);
     }
+  });
+
+  test("a rejected credential is not answered with the configure-the-API advice", () => {
+    const result = JSON.parse(formatError(new Error("REMOTE_API_UNAUTHORIZED: authority rejected the key")));
+    expect(result.code).toBe("REMOTE_API_UNAUTHORIZED");
+    expect(result.suggestion).not.toContain("set HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY");
+    expect(result.suggestion).toContain("Re-save");
+  });
+
+  test("RemoteApiConfigMissingError carries the remedy for its own code, not always CONFIG_MISSING", () => {
+    const unauthorized = new RemoteApiConfigMissingError("Plan", "REMOTE_API_UNAUTHORIZED", "rejected");
+    expect(unauthorized.suggestion).toContain("Re-save");
+    const result = JSON.parse(formatError(unauthorized));
+    expect(result.code).toBe("REMOTE_API_UNAUTHORIZED");
+    expect(result.suggestion).toContain("Re-save");
+    expect(result.suggestion).not.toContain("set HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY");
   });
 
   test("a code that is only mentioned mid-message still sanitizes", () => {

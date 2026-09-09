@@ -327,7 +327,11 @@ posture: the documented fail-closed behaviour rather than a lost local surface.
 Five more zero-argument tools refuse caller input or local state with the typed
 `INVALID_INPUT` / `ENCRYPTION_KEY_UNAVAILABLE` / `ENCRYPTED_PAYLOAD_INVALID`,
 and five answer a readable text refusal. Measured on the same 125-tool census, no
-zero-argument tool returns an opaque `UNKNOWN_ERROR`.
+zero-argument tool returns an opaque `UNKNOWN_ERROR` — neither on this default
+posture nor under the `HASNA_TODOS_LOCAL=1` opt-in below, where
+`create_retrospective` and `finish_task_run` now answer the typed
+`INVALID_INPUT` for their missing scope / run id instead of the opaque
+`UNKNOWN_ERROR` they returned earlier in 0.16.0.
 
 Run the MCP server with `HASNA_TODOS_LOCAL=1` to serve these tools from the
 on-box store. That opt-in is honoured only when the environment configures no

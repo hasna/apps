@@ -54,7 +54,8 @@ install:
    state with `INVALID_INPUT` / `ENCRYPTION_KEY_UNAVAILABLE` /
    `ENCRYPTED_PAYLOAD_INVALID`, and five answer a readable text refusal
    ("Provide agent_id, id, or name."). No zero-argument tool returns an opaque
-   `UNKNOWN_ERROR`. Run the MCP server with
+   `UNKNOWN_ERROR` — on this default posture or under the `HASNA_TODOS_LOCAL=1`
+   opt-in below. Run the MCP server with
    `HASNA_TODOS_LOCAL=1` to keep using them. That opt-in is honoured only when
    the environment configures no authority or credential of its own — a
    configured environment outranks it, so with `HASNA_TODOS_API_KEY` (or
@@ -187,6 +188,37 @@ per-surface detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
 
 ### Patch Changes
 
+- The published tarball now carries the migration notes that were repo-only:
+  `CHANGELOG.md` and the API documents the 0.16.0 breaking changes reference
+  (`docs/PLAN_API.md`, `docs/TASK_LIST_API.md`, `docs/TEMPLATE_API.md`,
+  `docs/TASK_QUERY_API.md`, `docs/native-storage.md`). npm consumers previously
+  received only the README's Upgrading section, so the per-API breaking notes
+  were unreachable from an installed package.
+- The publish gate (`scripts/verify-public-release.ts`, publish mode) now runs
+  the package test suite before it packs, so `npm publish` can no longer ship a
+  tree whose own suite never ran — the gap left by a CI run that aborts on an
+  unrelated package before `@hasna/todos:test` executes. The `prepublishOnly`
+  command string is unchanged (the gate itself asserts it byte-for-byte).
+- Every `REMOTE_API_*` refusal now carries the remedy for its own code instead of
+  the "configure the shared Todos API" advice for all of them. A 401
+  (`REMOTE_API_UNAUTHORIZED`) means the credential is present and was rejected —
+  re-save or reissue it, which is a different fix from setting
+  `HASNA_TODOS_API_URL`; a timeout, an unreachable authority, a bad URL, a
+  rejected redirect and an incompatible route each name their own remedy. The
+  map lives in `src/mcp/remote-authority.ts` and is used by both the typed error
+  class and the formatter, so the two cannot drift.
+- The two remaining zero-argument MCP tools that still answered an opaque
+  `{"code":"UNKNOWN_ERROR"}` under the documented `HASNA_TODOS_LOCAL=1` remedy —
+  `create_retrospective` and `finish_task_run` — now return the typed
+  `INVALID_INPUT` refusal. Both refuse caller input (a missing scope; a missing
+  run id/key), so they are the same class the formatter already types; they were
+  throwing plain `Error`s. This makes the "no zero-argument tool returns an
+  opaque `UNKNOWN_ERROR`" claim true on BOTH postures: measured at 0.16.0 with
+  `TODOS_PROFILE=full`, the default posture census is unchanged
+  (68 `API_DATABASE_FALLBACK_FORBIDDEN` / 18 `REMOTE_API_CONFIG_MISSING` /
+  3 `INVALID_INPUT` / 1 `ENCRYPTION_KEY_UNAVAILABLE` /
+  1 `ENCRYPTED_PAYLOAD_INVALID` / 5 readable text / 29 ok / 2 status) and the
+  `HASNA_TODOS_LOCAL=1` census is 0 `UNKNOWN_ERROR` with 5 `INVALID_INPUT`.
 - The on-box MCP tools that were not converted to the shared API are documented
   as requiring the deliberate `HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1` opt-in,
   and every one of them now refuses with a typed payload instead of an opaque
@@ -203,7 +235,9 @@ per-surface detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
   `REMOTE_API_CONFIG_MISSING`; five more refuse caller input or local state with
   `INVALID_INPUT` / `ENCRYPTION_KEY_UNAVAILABLE` / `ENCRYPTED_PAYLOAD_INVALID`,
   and five answer a readable text refusal. That is all 125 accounted for: no
-  zero-argument tool returns `UNKNOWN_ERROR`. This is the same defect class the
+  zero-argument tool returns `UNKNOWN_ERROR` on the default posture, and the
+  `HASNA_TODOS_LOCAL=1` posture has none either (see the entry above). This is
+  the same defect class the
   ten plan/task-list tools were converted out of, now closed at the formatter
   chokepoint every handler error passes through; converting the on-box tools
   themselves to the shared API is tracked separately. On an environment that
@@ -224,7 +258,10 @@ per-surface detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
   `{"code":"REMOTE_API_CONFIG_MISSING","message":…,"suggestion":…}` naming the
   missing configuration — the same code the CLI prints — in local mode (the
   deliberate `HASNA_TODOS_LOCAL`/`TODOS_LOCAL` opt-in, which these tools do not
-  honour) and on a station with no credential. No other tool's payload changed.
+  honour) and on a station with no credential. That change touched only those ten
+  tools; the 0.16.0 Patch entry above then extended the same typed refusal to
+  every remaining on-box tool at the formatter chokepoint, so this entry's
+  "no other payload changed" scope is those ten tools, not the release.
 - 92d9dac: Stop the `./sdk` client sending the station's fleet credential to a
   caller-supplied `baseUrl` (hasna/apps#1781 review follow-up, regression from
   hasna/apps#1788).

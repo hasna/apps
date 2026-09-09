@@ -18,26 +18,76 @@ export const REMOTE_API_CONFIG_MISSING = "REMOTE_API_CONFIG_MISSING";
 
 export type RemoteAuthorityToolKind = "Plan" | "Task-list";
 
+/**
+ * The remedy for each stable `REMOTE_API_*` code.
+ *
+ * The code prefix alone does not imply one remedy: a missing credential and a
+ * credential the authority REJECTED are different failures with different
+ * fixes. Before this map every `REMOTE_API_*` refusal was answered with the
+ * "configure the shared Todos API" advice, which is wrong for a 401 (the
+ * credential is present and rejected — re-save it, do not re-configure the
+ * URL), for a bad URL, and for a slow or unreachable authority. A client that
+ * follows the wrong remedy keeps failing.
+ */
+export const REMOTE_API_SUGGESTIONS: Record<string, string> = {
+  REMOTE_API_CONFIG_MISSING:
+    "Configure the shared Todos API: set HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, " +
+    "or save account credentials, then run 'todos storage status' to confirm the resolved authority.",
+  REMOTE_API_KEY_MISSING:
+    "Configure the shared Todos API: set HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, " +
+    "or save account credentials, then run 'todos storage status' to confirm the resolved authority.",
+  REMOTE_API_CREDENTIAL_INVALID:
+    "The stored Todos credential could not be read as a valid key. Re-save it (Keychain or " +
+    "HASNA_TODOS_API_KEY) and run 'todos storage status' to confirm the resolved authority.",
+  REMOTE_API_URL_INVALID:
+    "Fix HASNA_TODOS_API_URL to the base URL of the shared Todos API, then run " +
+    "'todos storage status' to confirm the resolved authority.",
+  REMOTE_API_UNAUTHORIZED:
+    "The configured credential was REJECTED by the authority — it is present, so re-configuring " +
+    "it is not the fix. Re-save it (or issue a new key) and run 'todos storage status' to confirm " +
+    "the resolved authority.",
+  REMOTE_API_FORBIDDEN:
+    "The configured credential is not permitted on this route. Check its role/scopes for the " +
+    "project, then retry.",
+  REMOTE_API_REDIRECT_REJECTED:
+    "The authority redirected the request and redirects are not followed. Point " +
+    "HASNA_TODOS_API_URL at the final API base URL.",
+  REMOTE_API_TIMEOUT:
+    "The shared Todos API did not answer in time. Retry, and check connectivity to the resolved authority.",
+  REMOTE_API_UNREACHABLE:
+    "The shared Todos API could not be reached. Check connectivity and the resolved authority URL, then retry.",
+  REMOTE_API_UNAVAILABLE:
+    "The shared Todos API returned a server error. Retry shortly; if it persists, check " +
+    "'todos storage status'.",
+  REMOTE_API_INCOMPATIBLE:
+    "The resolved authority does not serve this route in a compatible shape. Check that " +
+    "HASNA_TODOS_API_URL points at a Todos API this client version supports.",
+};
+
+/** Remedy for one `REMOTE_API_*` code; unknown codes get the configuration remedy. */
+export function suggestionForRemoteApiCode(code: string): string {
+  return REMOTE_API_SUGGESTIONS[code] ?? RemoteApiConfigMissingError.suggestion;
+}
+
 export class RemoteApiConfigMissingError extends Error {
   static readonly code = REMOTE_API_CONFIG_MISSING;
-  static readonly suggestion =
-    "Configure the shared Todos API: set HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, " +
-    "or save account credentials, then run 'todos storage status' to confirm the resolved authority.";
+  static readonly suggestion = REMOTE_API_SUGGESTIONS[REMOTE_API_CONFIG_MISSING]!;
 
   readonly code: string;
   readonly suggestion: string;
   readonly toolKind: RemoteAuthorityToolKind;
 
   constructor(toolKind: RemoteAuthorityToolKind, code: string = REMOTE_API_CONFIG_MISSING, detail?: string) {
+    const suggestion = suggestionForRemoteApiCode(code);
     super(
       `${code}: ${toolKind} tools require the authenticated Todos API. ` +
         (detail ?? "No Todos credential resolved.") +
         " " +
-        RemoteApiConfigMissingError.suggestion,
+        suggestion,
     );
     this.name = "RemoteApiConfigMissingError";
     this.code = code;
-    this.suggestion = RemoteApiConfigMissingError.suggestion;
+    this.suggestion = suggestion;
     this.toolKind = toolKind;
   }
 }

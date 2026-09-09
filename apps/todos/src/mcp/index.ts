@@ -39,7 +39,7 @@ import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.
 import { registerWorkflowPrompts } from "./tools/workflow-prompts.js";
 import { getPackageVersion } from "../lib/package-version.js";
 import { installMcpTokenDiagnostics, shouldRegisterToolForProfile } from "./token-utils.js";
-import { RemoteApiConfigMissingError } from "./remote-authority.js";
+import { RemoteApiConfigMissingError, suggestionForRemoteApiCode } from "./remote-authority.js";
 
 function getMcpVersion(): string {
   return getPackageVersion(import.meta.url);
@@ -163,7 +163,7 @@ function guardRefusalPayload(message: string): string | undefined {
     message: detail || message,
     suggestion: code === "API_DATABASE_FALLBACK_FORBIDDEN"
       ? API_DATABASE_FALLBACK_FORBIDDEN_SUGGESTION
-      : RemoteApiConfigMissingError.suggestion,
+      : suggestionForRemoteApiCode(code),
   });
 }
 
