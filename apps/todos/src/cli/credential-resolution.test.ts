@@ -130,6 +130,23 @@ describe("tier 3 — the macOS Keychain", () => {
     expect(resolution.authority!.warning).toMatch(/disagree/);
   });
 
+  test("the disagreement warning reaches the status surface, not just the resolution", () => {
+    // The resolver computes the notice; `todos storage status` is where an
+    // operator reads it. Rendering only the resolution value meant a Keychain
+    // item silently outranked a differing `HASNA_TODOS_API_KEY`.
+    const home = tempHome("kc-warning-surface");
+    const keychain = fakeKeychain({ "hasna.credentials.todos.api-key": KEYCHAIN_KEY });
+    const status = getTodosRemoteAuthorityConfigStatus(
+      { HOME: home, HASNA_TODOS_API_KEY: ENV_KEY },
+      keychain.options,
+    );
+    expect(status.api_key_tier).toBe("keychain");
+    expect(status.warnings.join(" ")).toMatch(/disagree/);
+    // A warning names the sources; it never carries a value.
+    expect(status.warnings.join(" ")).not.toContain(KEYCHAIN_KEY);
+    expect(status.warnings.join(" ")).not.toContain(ENV_KEY);
+  });
+
   test("a missing item is an absent tier, not a failure — the next tier decides", () => {
     const home = tempHome("kc-missing");
     const keychain = fakeKeychain({});

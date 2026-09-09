@@ -40,11 +40,20 @@ three things change:
   still read it directly — the template family, tags and labels, stale/blocked
   work, `doctor`/`standup`/`status`, run ledger, handoffs, review queues,
   retrospectives, risks, knowledge records, backups, calendar, boards,
-  focus/time reports and dispatches — fail on the default posture with an
-  opaque `UNKNOWN_ERROR` (68 of the 125 zero-argument tools at 0.16.0). Run the
-  server with `HASNA_TODOS_LOCAL=1` to keep using them; that opt-in is ignored
-  when `HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL` is set, because a
-  configured environment outranks it.
+  focus/time reports and dispatches — fail on the default posture: the server
+  logs `API_DATABASE_FALLBACK_FORBIDDEN` and the call returns an opaque
+  `UNKNOWN_ERROR`. Measured at 0.16.0 with `TODOS_PROFILE=full`, that is 68 of
+  the 125 zero-required-argument tools. A further 16 shared-API tools that need
+  a credential — `list_tasks`, `list_projects`, `list_agents`, `get_next_task`,
+  `get_status`, `bootstrap`, `get_context`, `get_my_tasks`, `get_my_workload`,
+  `get_health`, `standup`, `list_my_tasks`, `machines_register`,
+  `machines_list`, `machines_heartbeat` and `machines_topology` — also return
+  an opaque `UNKNOWN_ERROR` (the server logs `REMOTE_API_CONFIG_MISSING`), so
+  84 of the 125 are opaque from those two guards alone. Only the ten
+  plan/task-list tools return the typed `REMOTE_API_CONFIG_MISSING` refusal. Run
+  the server with `HASNA_TODOS_LOCAL=1` to keep using the on-box tools; that
+  opt-in is ignored when `HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL` is set,
+  because a configured environment outranks it.
 
 Everything else still runs offline with `HASNA_TODOS_LOCAL=1` (when the
 environment configures no authority or credential of its own). The per-surface

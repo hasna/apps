@@ -39,11 +39,20 @@ install:
    blocked work, `doctor`/`standup`/`status`, the local run ledger, handoffs,
    review queues, retrospectives, risks, knowledge records, backups and
    integrity checks, calendar, boards, focus/time reports and dispatches — fails
-   on the default posture. Measured at 0.16.0 with `TODOS_PROFILE=full`, 68 of
-   the 125 zero-required-argument tools return an opaque
-   `{"code":"UNKNOWN_ERROR"}` while the server logs
-   `API_DATABASE_FALLBACK_FORBIDDEN`; only the ten plan/task-list tools return
-   the typed `REMOTE_API_CONFIG_MISSING` refusal. Run the MCP server with
+   on the default posture. Measured at 0.16.0 with `TODOS_PROFILE=full` on the
+   default (no-credential, no local opt-in) posture, 68 of the 125
+   zero-required-argument tools log `API_DATABASE_FALLBACK_FORBIDDEN` and answer
+   an opaque `{"code":"UNKNOWN_ERROR"}`. A further 16 tools served by the shared
+   API that need a credential — `list_tasks`, `list_projects`, `list_agents`,
+   `get_next_task`, `get_status`, `bootstrap`, `get_context`, `get_my_tasks`,
+   `get_my_workload`, `get_health`, `standup`, `list_my_tasks` and
+   `machines_register` / `machines_list` / `machines_heartbeat` /
+   `machines_topology` — also answer an opaque `UNKNOWN_ERROR` (the server logs
+   `REMOTE_API_CONFIG_MISSING`), so 84 of the 125 are opaque from those two
+   guards alone; a handful more fail for unrelated pre-existing reasons. Only
+   the ten plan/task-list tools return the typed `REMOTE_API_CONFIG_MISSING`
+   refusal (`list_plans` and `list_task_lists` are the two in this
+   zero-argument set). Run the MCP server with
    `HASNA_TODOS_LOCAL=1` to keep using them. That opt-in is honoured only when
    the environment configures no authority or credential of its own — a
    configured environment outranks it, so with `HASNA_TODOS_API_KEY` (or
@@ -152,13 +161,19 @@ per-surface detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
   They still read the on-box store, which is no longer opened implicitly, so on
   the default posture they answer with an opaque `{"code":"UNKNOWN_ERROR"}`
   while the server logs `API_DATABASE_FALLBACK_FORBIDDEN` — 68 of the 125
-  zero-required-argument tools at 0.16.0 with `TODOS_PROFILE=full`. This is the
-  same defect class the ten plan/task-list tools were converted out of; their
-  typed `REMOTE_API_CONFIG_MISSING` refusal is the shape the rest still need,
-  and conversion is tracked separately. On an environment that sets
-  `HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL` the opt-in is ignored, so these
-  tools are unreachable there. See the 0.16.0 Migrating section and
-  `apps/todos/docs/native-storage.md`.
+  zero-required-argument tools at 0.16.0 with `TODOS_PROFILE=full`. The 16
+  shared-API tools that need a credential (`list_tasks`, `list_projects`,
+  `list_agents`, `get_next_task`, `get_status`, `bootstrap`, `get_context`,
+  `get_my_tasks`, `get_my_workload`, `get_health`, `standup`, `list_my_tasks`,
+  `machines_register`, `machines_list`, `machines_heartbeat`,
+  `machines_topology`) answer the same opaque `UNKNOWN_ERROR` from the
+  `REMOTE_API_CONFIG_MISSING` guard, so 84 of the 125 are opaque from those two
+  guards alone. This is the same defect class the ten plan/task-list tools were
+  converted out of; their typed `REMOTE_API_CONFIG_MISSING` refusal is the shape
+  the rest still need, and conversion is tracked separately. On an environment
+  that sets `HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL` the opt-in is
+  ignored, so these tools are unreachable there. See the 0.16.0 Migrating
+  section and `apps/todos/docs/native-storage.md`.
 - 8f8e88871: Align the exact `@hasna/contracts` pin with the 1.0.2 optional secrets peer release.
 - b269abea4: Return the MCP shared-API refusal as a typed, actionable payload instead of
   `UNKNOWN_ERROR`. The plan and task-list MCP tools are served only by the
