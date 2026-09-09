@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-09-08T08:17:51.139156+00:00",
+  "archive": {
+    "sha256": "a456db766592e41be7534cc152c2222ed4286e5d9422d5c5614cd368b1413e1d",
+    "bytes": 950020,
+    "integrity": "sha512-v3Siv0pPRgWXFUlQvQUZvadJsXLVthCPFDUWT2q9cdJlXp2ztB742CVz+AVm2h7hzYoooUnHIXqRd29n4O3pcw==",
+    "fileCount": 267,
+    "expandedBytes": 4014332
+  },
+  "receiptSHA256": "83dae83d03a6cbf3d6bf38dd1c626ef8ee757df6e618a99e7f6247daaf188132",
+  "sourceRevision": "9bc43d628f9bbd0a8db01c76c0412e119dcc826f",
+  "distributionStatus": "prepared",
+  "archiveAudit": {
+    "regularFilesOnly": true,
+    "excludedPathsAbsent": [
+      "node_modules/",
+      ".git/",
+      ".env",
+      ".private/",
+      ".local/",
+      "dist/__tests__/",
+      "src/__tests__/",
+      "__pycache__",
+      ".pyc",
+      "test-recorder-fixtures.ts"
+    ],
+    "privateMarkerMatches": {
+      "privateScope": 0,
+      "privateHost": 0,
+      "awsAccountARN": 0
+    },
+    "allPackageBytesAndModesUnchangedAfterRuntime": true
+  },
+  "native": {
+    "fileCount": 112,
+    "treeSHA256": "07752428361055b0d7d6bcfdde11da311c81bca714880cd7fb46a033bbab7403",
+    "sourceBytesAndModesMatch": true,
+    "declarationsPresent": [
+      "RecordingEngine",
+      "RecordingTranscriptionProvider",
+      "inputEnded",
+      "RecordingPasteTargetTracker"
+    ],
+    "compiledOrRun": false
+  },
+  "dependencySetup": {
+    "method": "Copied existing external consumer registry dependency tree; candidate archive replaced locally",
+    "freshInstall": false,
+    "networkInstall": false,
+    "lifecycleScriptsRun": false,
+    "versions": {
+      "typescript": "5.9.3",
+      "@types/bun": "1.3.14",
+      "@types/node": "26.4.1",
+      "@hasna/contracts": "1.0.2",
+      "@hasna/events": "0.1.11",
+      "@modelcontextprotocol/sdk": "1.30.0"
+    }
+  },
+  "platform": {
+    "system": "Darwin",
+    "macOS": "26.3.1",
+    "architecture": "arm64",
+    "python": "3.9.6",
+    "bun": "1.3.14"
+  },
+  "boundaries": {
+    "ownedWriteAllowed": true,
+    "outsideWriteDenied": true,
+    "hostExecutablesDenied": 6,
+    "allowedExecutables": [
+      "Bun"
+    ],
+    "maintenanceLeaseFixture": "Only exact /bin/ps own-PID start-identity call is answered with fictional text; every other child_process operation denied",
+    "selfSignalAllowed": true,
+    "supervisorSignalDenied": true,
+    "networkPolicy": "Loopback only (runtime uses IPv4)",
+    "realUserHomeReadDenied": true,
+    "freshStrippedEnvironment": true,
+    "deadlineSeconds": 50
+  },
+  "typecheck": {
+    "strict": true,
+    "skipLibCheck": false,
+    "pass": true
+  },
+  "runtime": {
+    "checks": [
+      "sdk_missing_credential_factory_fails_closed",
+      "sdk_real_loopback_list_without_ambient_authorization",
+      "cli_binary_version",
+      "mcp_binary_version",
+      "server_binary_version",
+      "cli_explicit_local_empty_library",
+      "mcp_real_stdio_initialize",
+      "mcp_real_stdio_tool_discovery",
+      "mcp_real_stdio_local_list",
+      "serve_health_actual_http",
+      "serve_version_actual_http",
+      "serve_openapi_actual_http",
+      "serve_ready_default_sqlite_health_only",
+      "serve_v1_recordings_unconfigured_fails_closed",
+      "serve_mcp_unconfigured_fails_closed"
+    ],
+    "passCount": 15,
+    "mcpToolCount": 18,
+    "providerRequests": 0
+  },
+  "limits": [
+    "Prepared local archive; no registry publication claim",
+    "Dependencies reused rather than freshly installed",
+    "CLI/MCP maintenance process-identity lookup uses an explicit fictional fixture because macOS sandbox refuses setuid ps",
+    "No native runtime, microphone, clipboard, permissions, or installed app actions",
+    "No provider, external network, PostgreSQL backend, or hosted authentication exercised",
+    "Public declaration inventory is not Swift compilation"
+  ],
+  "harnessAdaptation": {
+    "baselineSHA256": "1a6ef62b69d6981247ea7dc057d1dc2327774d099a5bd191a8dcd8d1ac0ec1e7",
+    "verifierSHA256": "64d1b2c7411e83ed3a5329a024ac627c5c9d0e2530cf45b80d151bfc373338ad",
+    "consumerSHA256": "3b6d4ff3aaf32d35be3625868f45f0304b5e55b5622c1372fbe121eedc98e93f",
+    "changes": [
+      "Three expected-version literals changed from 0.4.0 to 0.4.1",
+      "Supervisor signals its owned process group only while the child remains live"
+    ],
+    "packageCodeChanged": false,
+    "resolverAndLeaseFixtureChanged": false,
+    "dependencyInventorySHA256": "3215fca40fb87a78b7307cd2c7a8bfde5c4c3f3ac82777153cc34e2309b5eb89"
+  }
+}

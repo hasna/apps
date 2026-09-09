@@ -6,11 +6,14 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
+  symlinkSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { signingFixtureCommand, replaceFixtureText } from "./helpers/signing-fixture";
 import { ensureNativeFsGuardAddon } from "./helpers/native-fs-guard";
 import {
   type MacOSArtifactManifest,
@@ -226,8 +229,8 @@ function developerIdLocalFixture(approvedTarget = "station03") {
   return result;
 }
 
-function requirementDigestFixture() {
-  const root = mkdtempSync(join(tmpdir(), "recordings-requirement-digest-"));
+function requirementDigestFixture(remapTools = true) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "recordings-requirement-digest-")));
   temporaryDirectories.push(root);
   const bin = join(root, "bin");
   const app = join(root, "Hasna Recordings.app");
@@ -239,6 +242,7 @@ function requirementDigestFixture() {
       "codesign",
       `#!/usr/bin/env bash
 set -euo pipefail
+printf '%s\\n' "$*" >> "$HOME/codesign.log"
 if [[ "$*" == --verify* ]]; then
   [ "\${FAIL_CODESIGN_VERIFY:-0}" = 0 ]
 elif [[ "$*" == *"--entitlements :-"* ]]; then
@@ -257,30 +261,41 @@ fi
     writeFileSync(path, contents);
     chmodSync(path, 0o755);
   }
-  return { app, bin };
+  let source = readFileSync(join(import.meta.dir, "../../scripts/macos_artifact.ts"), "utf8");
+  if (remapTools) {
+    for (const tool of ["codesign", "lipo", "plutil"]) {
+      source = replaceFixtureText(source, `"/usr/bin/${tool}"`, JSON.stringify(join(bin, tool)));
+    }
+  }
+  const entry = join(root, "macos_artifact.ts");
+  writeFileSync(entry, source);
+  writeFileSync(join(root, "native_fs_guard.ts"), readFileSync(join(import.meta.dir, "../../scripts/native_fs_guard.ts")));
+  return { root, app, bin, entry };
 }
 
 function runRequirementDigest(
   policy: "release" | "local_only",
   environment: Record<string, string> = {},
   extraArguments: string[] = [],
+  remapTools = true,
 ) {
-  const { app, bin } = requirementDigestFixture();
+  const { root, app, bin, entry } = requirementDigestFixture(remapTools);
   return Bun.spawnSync(
-    [
+    signingFixtureCommand(root, [
       process.execPath,
-      join(import.meta.dir, "../../scripts/macos_artifact.ts"),
+      entry,
       "requirement-digest",
       "--app",
       app,
       "--artifact-policy",
       policy,
       ...extraArguments,
-    ],
+    ]),
     {
+      cwd: root,
       env: {
-        ...Bun.env,
-        PATH: `${bin}:${Bun.env.PATH ?? ""}`,
+        HOME: root, TMPDIR: root,
+        PATH: `${bin}:/usr/bin:/bin`,
         SIGNING_DETAILS: strictAdHocDetails,
         ENTITLEMENTS_JSON: appEntitlements,
         ...environment,
@@ -292,6 +307,13 @@ function runRequirementDigest(
 }
 
 describe("macOS artifact manifest", () => {
+  const darwinSigningTest = process.platform === "darwin" ? test : test.skip;
+  darwinSigningTest("requirement fixture keeps Darwin pinning and blocks an unmapped real signing tool", () => {
+    const result = runRequirementDigest("local_only", {}, [], false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toMatch(/EPERM|Operation not permitted/);
+  });
+
   test.each([
     ["thin", "feedfacf"],
     ["fat", "cafebabe"],
@@ -957,6 +979,15 @@ describe("macOS install journal compatibility", () => {
     "launching",
   ] as const;
 
+  // macOS exposes /tmp and /var through symlinks. The production native guard
+  // correctly refuses symlinked home ancestors; fixtures must name their owned
+  // temporary root canonically before constructing authenticated journal paths.
+  function journalTemporaryDirectory(prefix: string): string {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+    temporaryDirectories.push(root);
+    return root;
+  }
+
   function journalWriteArguments(root: string, phase: string): string[] {
     const home = join(root, "home");
     const appParent = join(home, "Applications");
@@ -1009,8 +1040,7 @@ describe("macOS install journal compatibility", () => {
   }
 
   testOnNonDarwin("replays a pre-rename journal crash and removes only its safe stale temporary", () => {
-    const root = mkdtempSync(join(tmpdir(), "recordings-journal-pre-rename-"));
-    temporaryDirectories.push(root);
+    const root = journalTemporaryDirectory("recordings-journal-pre-rename-");
     const applications = join(root, "home", "Applications");
     const journalPath = join(applications, ".Recordings-install-transaction.json");
     mkdirSync(applications, { recursive: true, mode: 0o700 });
@@ -1052,8 +1082,7 @@ describe("macOS install journal compatibility", () => {
   });
 
   function legacyJournalFixture(schemaVersion: 2 | 3 | 4 | 5, phase: string) {
-    const root = mkdtempSync(join(tmpdir(), "recordings-legacy-recovery-journal-"));
-    temporaryDirectories.push(root);
+    const root = journalTemporaryDirectory("recordings-legacy-recovery-journal-");
     const home = join(root, "home");
     const appParent = join(home, "Applications");
     const appDestination = join(appParent, "Hasna Recordings.app");
@@ -1106,8 +1135,29 @@ describe("macOS install journal compatibility", () => {
       ...(schemaVersion >= 5 ? { prior_running_app_paths: [] } : {}),
     };
     writeFileSync(journalPath, `${JSON.stringify(journal)}\n`, { mode: 0o600 });
-    return { appDestination, dataDir, journalPath, stateBackup, transaction };
+    return { root, home, appDestination, dataDir, journalPath, stateBackup, transaction };
   }
+
+  test("rejects a symlinked journal home without changing retained state", () => {
+    const fixture = legacyJournalFixture(4, "processes-stopped");
+    const alias = join(fixture.root, "home-alias");
+    symlinkSync(fixture.home, alias);
+    const journalBefore = readFileSync(fixture.journalPath, "utf8");
+    const result = Bun.spawnSync([
+      process.execPath,
+      artifactTool,
+      "journal-recover",
+      "--journal",
+      join(alias, "Applications", ".Recordings-install-transaction.json"),
+    ]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toContain("open trusted home component failed");
+    expect(readFileSync(fixture.journalPath, "utf8")).toBe(journalBefore);
+    expect(readFileSync(join(fixture.dataDir, "recordings.db"), "utf8")).toBe("live database\n");
+    expect(readFileSync(join(fixture.appDestination, "candidate-marker"), "utf8")).toBe("candidate remains\n");
+    expect(existsSync(fixture.stateBackup)).toBeTrue();
+    expect(existsSync(fixture.transaction)).toBeTrue();
+  });
 
   test.each(legacySchemas.flatMap((schemaVersion) =>
     mutationPhases.map((phase) => [schemaVersion, phase] as const)
@@ -1174,8 +1224,7 @@ describe("macOS install journal compatibility", () => {
     [4, "777", "invalid original state mode"],
     [3, "755", "unsupported state-mode fields"],
   ])("rejects untrusted schema-%i original state mode %s", (schemaVersion, originalStateMode, message) => {
-    const root = mkdtempSync(join(tmpdir(), "recordings-state-mode-journal-"));
-    temporaryDirectories.push(root);
+    const root = journalTemporaryDirectory("recordings-state-mode-journal-");
     const home = join(root, "home");
     const appParent = join(home, "Applications");
     const transaction = join(appParent, ".Recordings-transaction.state-mode");
@@ -1222,8 +1271,7 @@ describe("macOS install journal compatibility", () => {
   });
 
   test("reads a pre-policy schema-v2 release journal as release/fleet", () => {
-    const root = mkdtempSync(join(tmpdir(), "recordings-legacy-journal-"));
-    temporaryDirectories.push(root);
+    const root = journalTemporaryDirectory("recordings-legacy-journal-");
     const home = join(root, "home");
     const appParent = join(home, "Applications");
     const transaction = join(appParent, ".Recordings-transaction.legacy");
@@ -1265,8 +1313,7 @@ describe("macOS install journal compatibility", () => {
   });
 
   test("reads an old schema-v3 local journal without an identity kind as hardware UUID", () => {
-    const root = mkdtempSync(join(tmpdir(), "recordings-legacy-local-journal-"));
-    temporaryDirectories.push(root);
+    const root = journalTemporaryDirectory("recordings-legacy-local-journal-");
     const home = join(root, "home");
     const appParent = join(home, "Applications");
     const transaction = join(appParent, ".Recordings-transaction.legacy-local");

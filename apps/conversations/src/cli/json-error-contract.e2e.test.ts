@@ -1,21 +1,26 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, unlinkSync, mkdtempSync, rmSync } from "fs";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
 
 // Regression coverage for the `--json` error contract: every error branch must
 // emit a parseable JSON error object on stdout (not plain text), so consumers
 // that JSON-parse command output do not crash on failure.
-const TEST_DB = join(tmpdir(), `conversations-json-error-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 function runCli(args: string[], agent = "tester") {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
     env: {
-      ...process.env,
-      CONVERSATIONS_DB_PATH: TEST_DB,
+      ...fixture.env,
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",
     },
@@ -43,11 +48,7 @@ function expectJsonError(args: string[]) {
 }
 
 describe("--json error contract", () => {
-  afterAll(() => {
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-    try { unlinkSync(`${TEST_DB}-shm`); } catch {}
-  });
+
 
   test("show <missing> --json emits a JSON error object", () => {
     const { parsed } = expectJsonError(["show", "999999999", "--json"]);
@@ -109,23 +110,8 @@ describe("--json error contract", () => {
  * throwaway HOME so they cannot inherit the developer's identity file.
  */
 describe("identity-unset error branch honours the --json contract", () => {
-  const HOME_DIR = mkdtempSync(join(tmpdir(), "conversations-json-noident-"));
-
-  afterAll(() => {
-    try { rmSync(HOME_DIR, { recursive: true, force: true }); } catch { /* ok */ }
-  });
-
   function runUndeclared(args: string[]) {
-    const env: Record<string, string> = { ...process.env } as Record<string, string>;
-    for (const key of Object.keys(env)) {
-      if (key === "CONVERSATIONS_AGENT_ID"
-        || key === "CONVERSATIONS_USE_MACHINE_IDENTITY"
-        || key.startsWith("HASNA_CONVERSATIONS_")) delete env[key];
-    }
-    env.HOME = HOME_DIR;
-    env.USERPROFILE = HOME_DIR;
-    env.CONVERSATIONS_DB_PATH = TEST_DB;
-    env.FORCE_COLOR = "0";
+    const env = { ...fixture.env };
     const result = Bun.spawnSync({ cmd: [...CLI, ...args], cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
     return {
       exitCode: result.exitCode,
@@ -215,8 +201,8 @@ describe("no API env fails closed under the --json contract", () => {
     expect(parsed.code).toBe("CONVERSATIONS_STORE_CONFIG");
     expect(parsed.error).toContain("HASNA_CONVERSATIONS_API_URL");
     expect(parsed.error).toContain("HASNA_CONVERSATIONS_API_KEY");
-    // The message must point at the explicit local opt-in, never offer a silent default.
-    expect(parsed.error).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    // Missing shared credentials must not advertise a local database fallback.
+    expect(parsed.error).not.toContain("HASNA_CONVERSATIONS_DB_PATH");
   });
 
   test("the same refusal without --json is human-readable on stderr and never exit 0", () => {

@@ -682,7 +682,7 @@ describe("secure-input delivery contract", () => {
     const deliveryStatus = sliceBetween(
       engineSource,
       "private func updateDeliveryStatus(",
-      "private func selectedRunningPasteTarget(",
+      "private func appendUndeliveredPaste(",
     );
     expect(deliveryStatus).toContain("setBlockedReason(nil, for: .delivery)");
     expect(deliveryStatus).toContain("setBlockedReason(nil, for: .pressConsumed)");
@@ -1017,7 +1017,7 @@ describe("secure-input delivery contract", () => {
     const startRecording = sliceBetweenUnique(
       engineSource,
       "public func startRecording(",
-      "let frontmostApp = frontmostAppSnapshot()",
+      "let frontmostApp: FrontmostAppSnapshot?",
     );
     expect(startRecording).toContain("setBlockedReason(nil, for: .pressConsumed)");
     expect(startRecording).toContain("setBlockedReason(nil, for: .delivery)");

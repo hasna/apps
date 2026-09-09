@@ -18,7 +18,7 @@ export const TASK_PRIORITIES = [
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
 // Plan statuses
-export const PLAN_STATUSES = ["active", "completed", "archived"] as const;
+export const PLAN_STATUSES = ["active", "completed", "archived", "planning", "cancelled"] as const;
 export type PlanStatus = (typeof PLAN_STATUSES)[number];
 
 // Project Source — a data source or file location associated with a project
@@ -57,6 +57,9 @@ export interface CreateProjectSourceInput {
 
 // Project
 export interface Project {
+  status?: "active" | "completed" | "on_hold" | "archived";
+  short_id?: string | null;
+  metadata?: Record<string, unknown>;
   id: string;
   name: string;
   path: string;
@@ -73,6 +76,9 @@ export interface Project {
 }
 
 export interface CreateProjectInput {
+  status?: "active" | "completed" | "on_hold" | "archived";
+  short_id?: string | null;
+  metadata?: Record<string, unknown>;
   name: string;
   path: string;
   description?: string;
@@ -83,6 +89,9 @@ export interface CreateProjectInput {
 
 /** Ordinary project metadata update. Canonical slug changes require renameProject. */
 export interface UpdateProjectInput {
+  status?: "active" | "completed" | "on_hold" | "archived";
+  short_id?: string | null;
+  metadata?: Record<string, unknown>;
   name?: string;
   path?: string;
   description?: string | null;
@@ -184,6 +193,8 @@ export interface CreateOrgInput {
 
 // Plan
 export interface Plan {
+  start_date?: string | null;
+  end_date?: string | null;
   id: string;
   slug: string | null;
   project_id: string | null;
@@ -199,6 +210,8 @@ export interface Plan {
 }
 
 export interface CreatePlanInput {
+  start_date?: string | null;
+  end_date?: string | null;
   name: string;
   slug?: string;
   project_id?: string;
@@ -209,6 +222,8 @@ export interface CreatePlanInput {
 }
 
 export interface UpdatePlanInput {
+  start_date?: string | null;
+  end_date?: string | null;
   name?: string;
   slug?: string;
   description?: string;
@@ -468,7 +483,11 @@ export interface ApiKey {
 }
 
 // Task List
+export type TaskListStatus = "active" | "completed" | "archived";
+
 export interface TaskList {
+  /** Missing historical status means active. */
+  status?: TaskListStatus;
   id: string;
   project_id: string | null;
   slug: string;
@@ -495,6 +514,7 @@ export interface TaskListRow {
 }
 
 export interface CreateTaskListInput {
+  status?: TaskListStatus;
   name: string;
   slug?: string;
   project_id?: string;
@@ -503,6 +523,7 @@ export interface CreateTaskListInput {
 }
 
 export interface UpdateTaskListInput {
+  status?: TaskListStatus;
   slug?: string;
   name?: string;
   description?: string;
@@ -1409,7 +1430,7 @@ export class ProjectNotFoundError extends Error {
 
 export class ResourceConflictError extends Error {
   constructor(
-    public readonly code: "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT" | "TASK_PARENT_CYCLE" | "PROJECT_PARENT_CYCLE" | "SNAPSHOT_DESTINATION_CONFLICT",
+    public readonly code: "TEMPLATE_VERSION_CONFLICT" | "TASK_LIST_NOT_EMPTY" | "PLAN_NOT_EMPTY" | "PROJECT_INCOMPLETE" | "PROJECT_NOT_EMPTY" | "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT" | "TASK_PARENT_CYCLE" | "PROJECT_PARENT_CYCLE" | "SNAPSHOT_DESTINATION_CONFLICT",
     message: string,
   ) {
     super(message);
@@ -1621,6 +1642,27 @@ export class DispatchNotFoundError extends Error {
   constructor(public dispatchId: string) {
     super(`Dispatch not found: ${dispatchId}`);
     this.name = "DispatchNotFoundError";
+  }
+}
+
+/**
+ * A refusal caused by the caller's input or the target's state — not by a
+ * server fault.
+ *
+ * The message is written for the caller and carries no schema, DSN or
+ * credential detail, so MCP can return it in a typed payload instead of the
+ * sanitized `UNKNOWN_ERROR` the formatter uses for anything it cannot classify.
+ * Without it, "you did not pass a backup" reached agents as "an unexpected
+ * error occurred", which reads as a server bug.
+ */
+export class InputValidationError extends Error {
+  static readonly code = "INVALID_INPUT";
+  readonly code = InputValidationError.code;
+  readonly suggestion?: string;
+  constructor(message: string, suggestion?: string) {
+    super(message);
+    this.name = "InputValidationError";
+    this.suggestion = suggestion;
   }
 }
 

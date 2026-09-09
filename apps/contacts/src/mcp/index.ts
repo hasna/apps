@@ -5,6 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerContactsTools } from "./register-tools.js";
 import { registerContactsStorageTools } from "./storage-tools.js";
+import { resolveMcpStartupGate } from "./startup-gate.js";
 import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 function getServerVersion(): string {
@@ -58,6 +59,20 @@ async function main() {
   if (early === "version") {
     console.log(getServerVersion());
     return;
+  }
+
+  // FAIL-CLOSED at startup (hasna/apps#1720 validation, round 2): with no
+  // credential resolvable through the @hasna/contracts chain there is nothing
+  // this hosted-only server could serve, so exit non-zero BEFORE the stdio
+  // transport is connected or the HTTP port is bound — an `initialize` request
+  // is never answered by an unauthenticated server. A deliberate tier that
+  // cannot be honoured (a vault pointer, a profile, an unsafe file) is refused
+  // here too, on one line, never as a stack trace. --help/--version stay ahead
+  // of the gate; every tool still re-resolves the credential per call.
+  const gate = await resolveMcpStartupGate();
+  if (!gate.ok) {
+    console.error(gate.message);
+    process.exit(1);
   }
 
   if (isHttpMode(args)) {

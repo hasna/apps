@@ -1,3 +1,4 @@
+import { inspectEncryption } from "./encryption-maintenance.js";
 /**
  * Postgres-backed secrets store for the deployed serve (PURE REMOTE, A1).
  *
@@ -186,7 +187,7 @@ export class CloudSecretsStore {
   constructor(private readonly db: TypedQueryClient) {}
 
   private async audit(
-    action: "get" | "set" | "delete" | "restore",
+    action: "get" | "set" | "delete" | "restore" | "encryption_repair",
     key: string,
     actor: string,
     tenantId: string,
@@ -391,7 +392,7 @@ export class CloudSecretsStore {
     const cutoff = new Date(Date.now() - SUPERSEDED_VERSION_AGE_DAYS * 86_400_000).toISOString();
     const result = await this.db.query(
       `DELETE FROM secret_versions
-       WHERE version < (SELECT MAX(v2.version) FROM secret_versions v2 WHERE v2.key = secret_versions.key)
+       WHERE NOT EXISTS (SELECT 1 FROM vault_migration_keys vmk WHERE vmk.key = secret_versions.key) AND version < (SELECT MAX(v2.version) FROM secret_versions v2 WHERE v2.key = secret_versions.key)
          AND (
            version NOT IN (
              SELECT v3.version FROM secret_versions v3
@@ -470,7 +471,7 @@ export class CloudSecretsStore {
     const cutoff = new Date(Date.now() - SUPERSEDED_VERSION_AGE_DAYS * 86_400_000).toISOString();
     await db.execute(
       `DELETE FROM secret_versions
-       WHERE key = $1 AND version < (SELECT MAX(v2.version) FROM secret_versions v2 WHERE v2.key = secret_versions.key)
+       WHERE key = $1 AND NOT EXISTS (SELECT 1 FROM vault_migration_keys vmk WHERE vmk.key = secret_versions.key) AND version < (SELECT MAX(v2.version) FROM secret_versions v2 WHERE v2.key = secret_versions.key)
          AND (
            version NOT IN (
              SELECT v3.version FROM secret_versions v3
@@ -516,6 +517,29 @@ export class CloudSecretsStore {
     if (rows.length === 0) return false;
     await this.audit("delete", key, actor, tenant);
     return true;
+  }
+
+  async encryptionStatus(tenantId: string) {
+    return inspectEncryption(this.db, requireTenantId(tenantId), false);
+  }
+
+  async repairEncryption(actor: string, tenantId: string) {
+    const tenant = requireTenantId(tenantId);
+    const result = await inspectEncryption(this.db, tenant, true);
+    await this.audit("encryption_repair", "tenant-payloads", actor, tenant);
+    return result;
+  }
+
+  /** Invoked through tenantStore so deletion and audit records commit together. */
+  async pruneExpired(actor: string, tenantId: string): Promise<number> {
+    const tenant = requireTenantId(tenantId);
+    // Re-evaluate expiry in the DELETE itself. A concurrent renewal that commits
+    // while PostgreSQL waits for its row lock must survive garbage collection.
+    const rows = await this.db.many<{ key: string }>(
+      "DELETE FROM secrets WHERE expires_at::timestamptz < statement_timestamp() RETURNING key",
+    );
+    for (const row of rows) await this.audit("delete", row.key, actor, tenant);
+    return rows.length;
   }
 
   async listSecretMetadata(namespace?: string): Promise<SecretMetadata[]> {

@@ -1,25 +1,20 @@
+import { startLoopbackApiFixture } from "../../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../../lib/store/test-support/client-environment.js";
+import { getStore } from "../../lib/store/index.js";
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { registerTaskTools } from "./tasks";
-import { closeDb, getDb } from "../../lib/db";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-
-const TEST_DB = join(tmpdir(), `conversations-test-task-tools-${Date.now()}.db`);
 
 describe("task MCP tools", () => {
   let client: Client;
+  let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+  let restoreClient: () => void;
 
   beforeAll(async () => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-    closeDb();
-
-    // Ensure tables exist
-    const db = getDb();
-    closeDb();
+    fixture = await startLoopbackApiFixture();
+    restoreClient = activateClientEnvironment(fixture.env);
 
     const server = new McpServer({ name: "test-tasks", version: "0.0.1" });
     registerTaskTools(server);
@@ -31,11 +26,11 @@ describe("task MCP tools", () => {
   });
 
   afterAll(async () => {
-    closeDb();
+
     await client.close();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(TEST_DB + "-wal"); } catch {}
-    try { unlinkSync(TEST_DB + "-shm"); } catch {}
+    restoreClient();
+    await fixture.stop();
+
   });
 
   function parseText(result: { content: unknown[] }): string {

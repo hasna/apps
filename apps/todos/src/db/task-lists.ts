@@ -15,6 +15,7 @@ function rowToTaskList(row: TaskListRow): TaskList {
 }
 
 export function createTaskList(input: CreateTaskListInput, db?: Database): TaskList {
+  if (input.status !== undefined) throw new Error("The explicit SQLite storage cannot retain task-list status; use the shared API");
   const d = db || getDatabase();
   return d.transaction(() => {
     const id = uuid();
@@ -66,6 +67,7 @@ export function listTaskLists(projectId?: string, db?: Database): TaskList[] {
 }
 
 export function updateTaskList(id: string, input: UpdateTaskListInput, db?: Database): TaskList {
+  if (input.status !== undefined) throw new Error("The explicit SQLite storage cannot retain task-list status; use the shared API");
   const d = db || getDatabase();
   return d.transaction(() => {
     const existing = getTaskList(id, d);

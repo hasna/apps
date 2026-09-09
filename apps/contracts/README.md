@@ -1269,4 +1269,10 @@ bun run verify:release
 `verify:release` runs typecheck, tests, example conformance, build, a smoke test
 against the packaged CLI entrypoint in `dist/cli/index.js`, and a pack dry-run.
 
-Fleet-env credential resolution: see CHANGELOG 0.14.2.
+Credential resolution: every client surface resolves through the one shared
+`@hasna/contracts` resolver — the owner-only `~/.hasna/<app>/config/credentials`
+disk file (0600, `HASNA_<APP>_API_KEY` / `HASNA_<APP>_API_URL`), the macOS
+Keychain, and the `HASNA_<APP>_*` environment, with the fleet gateway as the URL
+default (see `CONTRACT.md` §3a). The deprecated `~/.hasna/fleet-env/*.env` and
+retired `~/.hasna/cloud/*.env` locations are never read; CHANGELOG 0.14.2 is the
+historical record of the earlier disk-first chain.

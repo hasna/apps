@@ -10,13 +10,14 @@ import type { HasnaStorageClient } from "./store/client.js";
 const rootDir = join(import.meta.dir, "..");
 
 describe("secrets storage surface contract", () => {
-  it("fails closed without api env, resolves LocalStore only under the explicit local opt-in, and ApiStore with url+key", () => {
+  it("fails closed without API credentials, rejects local selectors and preserves explicit library handles", () => {
     // Owner ruling 2026-09-04: no hosted API env and no explicit local opt-in
     // is a hard error naming the required env — never a silent local read.
     expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/HASNA_SECRETS_API_URL/);
     expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/HASNA_SECRETS_API_KEY/);
 
-    const local = getStore({ HASNA_SECRETS_LOCAL_VAULT: "1" } as NodeJS.ProcessEnv);
+    expect(() => getStore({ HASNA_SECRETS_LOCAL_VAULT: "1" })).toThrow("no longer supported");
+    const local = new LocalStore();
     expect(local).toBeInstanceOf(LocalStore);
     expect(local.mode).toBe("local");
 
@@ -139,10 +140,7 @@ describe("secrets storage surface contract", () => {
     try {
       const { resetDb } = await import("./db.js");
       resetDb();
-      const store = getStore({
-        HASNA_SECRETS_DB_PATH: dbPath,
-        HASNA_SECRETS_LOCAL_VAULT: "1",
-      } as unknown as NodeJS.ProcessEnv);
+      const store = new LocalStore();
       await store.sendFeedback("upgrade migration works", undefined, "bug");
       const check = new Database(dbPath);
       const row = check.prepare("SELECT category FROM feedback").get() as { category: string };

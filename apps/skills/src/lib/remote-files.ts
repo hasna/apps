@@ -9,7 +9,11 @@ export function describeRemoteFiles(files: RemoteInputFile[]): RemoteInputFileDe
   const names = new Set<string>();
   let total = 0;
   return files.map(file => {
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(file.name) || file.name === "." || file.name === ".." || names.has(file.name)) throw new Error("Input file names must be unique safe basenames");
+    // Preserve the API's exact basename (including Unicode and punctuation).
+    // A server may impose a narrower filesystem-byte bound before admission.
+    if (typeof file.name !== "string" || file.name.length === 0 || file.name.length > 255
+      || /[/\\\x00-\x1f\x7f]/.test(file.name) || /[\ud800-\udfff]/u.test(file.name)
+      || file.name === "." || file.name === ".." || names.has(file.name)) throw new Error("Input file names must be unique safe basenames");
     names.add(file.name);
     total += file.bytes.byteLength;
     if (file.bytes.byteLength > 20 * 1024 * 1024 || total > 50 * 1024 * 1024) throw new Error("Input files exceed the supported size limit");

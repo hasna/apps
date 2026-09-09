@@ -8,13 +8,10 @@
  * the shared @hasna/contracts client chain (owner ruling 2026-09-04,
  * hasna/apps#1720) so callers never write a private copy of the chain.
  *
- * FRESH PER REQUEST: the chain resolves a key rotation on every request, so a
- * client held for hours picks up a new Keychain/disk/env credential without
- * being rebuilt. The generated client stores its `apiKey` at construction, so
- * the refresh rides in a `fetch` wrapper that overwrites `x-api-key` with the
- * key the chain resolves NOW; a re-resolution that throws or comes back empty
- * leaves the constructed key in place, so a transient unreadable Keychain
- * cannot turn a working client into a failing one mid-flight.
+ * FRESH PER REQUEST: the shared transport resolves a stable authority/key pair
+ * for every request. Rotation at the same URL works; a changed URL, removed
+ * credential or invalid configuration refuses before sending a request.
+ * No constructed credential is retained as a fallback.
  *
  * THE AUTHORITY PIN (#1794): an explicit `baseUrl` is tier 1 — the caller
  * names the authority, and the ambient fleet chain (Keychain,
@@ -25,11 +22,11 @@
  * only to a client whose HOSTED authority the chain resolved itself.
  */
 import {
-  resolveClientTransport,
-  resolveCredential,
+  createClientTransport,
+  HasnaHttpError,
   type CredentialChainOptions,
 } from "@hasna/contracts/client";
-import { LogsClient, type LogsClientOptions } from "./client.ts";
+import { ApiError, LogsClient, type LogsClientOptions } from "./client.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -84,6 +81,14 @@ function chainOptions(credentials?: LogsCredentialChainOptions): CredentialChain
   return credentials as CredentialChainOptions | undefined;
 }
 
+/** Resolver-backed client with an immutable canonical destination for receipts. */
+export type ResolvedLogsClient = LogsClient & { readonly authorityBaseUrl: string };
+
+function bindAuthority(client: LogsClient, baseUrl: string): ResolvedLogsClient {
+  Object.defineProperty(client, "authorityBaseUrl", {value: baseUrl, enumerable: true, writable: false, configurable: false});
+  return client as ResolvedLogsClient;
+}
+
 /**
  * Build the hosted `/v1` LogsClient through the @hasna/contracts resolver.
  *
@@ -95,7 +100,7 @@ function chainOptions(credentials?: LogsCredentialChainOptions): CredentialChain
 export function createLogsApiClientFromEnv(
   env: NodeJS.ProcessEnv = process.env,
   options: CreateLogsApiClientFromEnvOptions = {},
-): LogsClient {
+): ResolvedLogsClient {
   const { credentials, ...clientOptions } = options;
   const chain = chainOptions(credentials);
 
@@ -103,48 +108,53 @@ export function createLogsApiClientFromEnv(
   // it, so the ambient chain is never consulted and no fleet credential can
   // travel to it. The generated client attaches `apiKey` or nothing.
   if (clientOptions.baseUrl) {
-    return new LogsClient({
+    return bindAuthority(new LogsClient({
       baseUrl: clientOptions.baseUrl,
       apiKey: clientOptions.apiKey,
       ...(clientOptions.fetch ? { fetch: clientOptions.fetch } : {}),
       ...(clientOptions.headers ? { headers: clientOptions.headers } : {}),
-    });
+    }), new URL(clientOptions.baseUrl.replace(/\/$/, "") + "/v1").toString());
   }
 
   const clientEnv = env as Env;
 
-  // ONE pass down the chain for the authority AND the constructed credential:
-  // `resolveClientTransport` validates both and throws when the configuration
-  // is incomplete or conflicting.
-  const resolution = resolveClientTransport("logs", clientEnv, chain ? { credentials: chain } : {});
-  const baseUrl = originOf(resolution.baseUrl);
-
-  const constructed = resolveCredential("logs", clientEnv, chain)?.apiKey ?? null;
-
-  const baseFetch: FetchLike =
-    clientOptions.fetch ?? ((input, init) => fetch(input, init));
-
-  // PER-REQUEST REFRESH with the authority pin: the chain re-resolves the
-  // credential on every request and overwrites the generated `x-api-key`
-  // header; a failed re-resolution keeps the constructed key.
-  const fetchWithFreshCredential = (async (input, init) => {
-    const headers: Record<string, string> = {};
-    new Headers(init?.headers ?? {}).forEach((value, key) => {
-      headers[key] = value;
-    });
-    try {
-      const fresh = resolveCredential("logs", clientEnv, chain)?.apiKey;
-      if (fresh) headers["x-api-key"] = fresh;
-    } catch {
-      // keep the credential the client was constructed with
-    }
-    return baseFetch(input, { ...init, headers });
-  }) as typeof fetch;
-
-  return new LogsClient({
-    baseUrl,
-    apiKey: constructed ?? undefined,
-    fetch: fetchWithFreshCredential,
-    ...(clientOptions.headers ? { headers: clientOptions.headers } : {}),
+  const { client: transport } = createClientTransport("logs", clientEnv, {
+    credentials: {...chain, ...(clientOptions.apiKey !== undefined ? {apiKey: clientOptions.apiKey} : {})},
+    ...(clientOptions.fetch ? {fetchImpl: clientOptions.fetch} : {}),
+    retry: false,
   });
+  const baseUrl = originOf(transport.baseUrl);
+
+  // Adapt the generated JSON client to the shared transport. Its public methods
+  // return parsed bodies, not raw Responses. Keep ApiError for HTTP failures;
+  // configuration failures propagate without a fetch or stale credential.
+  const fetchBound: FetchLike = async (input, init) => {
+    const url = String(input);
+    if (!url.startsWith(transport.baseUrl + "/")) throw new Error("Logs request escaped its bound API path");
+    const path = url.slice(transport.baseUrl.length);
+    const headers: Record<string,string> = {};
+    new Headers(init?.headers).forEach((value,key) => {
+      if (key !== "x-api-key" && key !== "authorization") headers[key] = value;
+    });
+    const method = init?.method ?? "GET";
+    const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+    try {
+      const value = await transport.request(method, path, body, {
+        headers, signal: init?.signal ?? undefined, retry: false,
+      });
+      return new Response(value === undefined ? null : JSON.stringify(value), {
+        headers: {"Content-Type":"application/json"},
+      });
+    } catch (error) {
+      if (error instanceof HasnaHttpError) {
+        throw new ApiError(error.status, `${method} /v1${path} failed: ${error.status}`, error.body);
+      }
+      throw error;
+    }
+  };
+  return bindAuthority(new LogsClient({
+    baseUrl,
+    fetch: fetchBound as typeof fetch,
+    ...(clientOptions.headers ? { headers: clientOptions.headers } : {}),
+  }), transport.baseUrl);
 }

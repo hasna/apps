@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { knowledgeAuthPath } from '../src/auth';
 import {
   adoptResolverDataHome,
+  dataDir,
   getDataHome,
   getExactDataHome,
   getHomeDir,
@@ -152,5 +153,31 @@ describe('resolver (XDG) adoption — the legacy home must never become invisibl
     process.env[KNOWLEDGE_DATA_HOME_ENV] = raw;
     expect(getExactDataHome()).toBe(resolve(raw));
     expect(getExactDataHome()?.startsWith('/')).toBe(true);
+  });
+});
+
+describe('the in-package resolver is data-kind only (hasna/apps#1720 validation)', () => {
+  test('resolves the data home per platform and honours only HASNA_DATA_HOME', () => {
+    expect(dataDir({ app: 'knowledge', home: '/h', platform: 'linux', env: {} }))
+      .toBe(join('/h', '.local', 'share', 'hasna', 'knowledge'));
+    expect(dataDir({ app: 'knowledge', home: '/h', platform: 'darwin', env: {} }))
+      .toBe(join('/h', 'Library', 'Application Support', 'Hasna', 'knowledge'));
+    expect(dataDir({ app: 'knowledge', home: '/h', platform: 'linux', env: { HASNA_DATA_HOME: '/d' } }))
+      .toBe(join('/d', 'knowledge'));
+    // Another kind's override is not a data override.
+    expect(dataDir({ app: 'knowledge', home: '/h', platform: 'linux', env: { HASNA_CONFIG_HOME: '/c' } }))
+      .toBe(join('/h', '.local', 'share', 'hasna', 'knowledge'));
+  });
+
+  test('no retired config-root path shape and no config/state/cache branch remain in the source', () => {
+    // The credential chain lives in @hasna/contracts (which refuses the
+    // retired roots itself); nothing in this package may carry a
+    // `<home>/.config/hasna`-shaped path again.
+    const source = readFileSync(new URL('../src/paths.ts', import.meta.url), 'utf8');
+    expect(source).not.toMatch(/["'`]\.config["'`]/);
+    expect(source).not.toContain('.config/hasna');
+    for (const retiredKind of ['HASNA_CONFIG_HOME', 'HASNA_STATE_HOME', 'HASNA_CACHE_HOME']) {
+      expect(source).not.toContain(retiredKind);
+    }
   });
 });

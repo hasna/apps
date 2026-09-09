@@ -26,6 +26,7 @@ import {
   type AuthQueryClient,
 } from "@hasna/contracts/auth";
 import { getStorageConnectionString, makePool } from "../storage.js";
+import { env } from "../lib/env.js";
 import { authenticateRequest, isStateChangingMethod, json } from "./helpers.js";
 
 const APP = "mementos";
@@ -152,7 +153,11 @@ export async function checkApiKey(
     if (authError) return authError;
     // A static bearer key was configured AND matched — an explicit credential,
     // so the request is not CSRF (see isAuthenticated / checkWriteOriginOrHost).
-    if (process.env["MEMENTOS_API_KEY"]) markAuthenticated(req);
+    // The SAME alias read authenticateRequest() matched against (canonical
+    // HASNA_MEMENTOS_API_KEY first, legacy MEMENTOS_API_KEY second): a server
+    // configured only under the canonical name used to match the bearer and
+    // then leave the request unmarked, so the Host allowlist refused it.
+    if (env.apiKey()) markAuthenticated(req);
     return null;
   }
   if (_schemaReady) await _schemaReady;

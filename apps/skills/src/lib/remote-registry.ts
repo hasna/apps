@@ -10,7 +10,10 @@
 import { z } from "zod";
 import { resolveApiUrl } from "./api-url.js";
 import {
-  resolveSkillsApiKey,
+  normalizeSkillsApiOrigin,
+  skillsApiRequestUrl,
+  resolveSkillsConnection,
+  SkillsFleetCredentialError,
   SKILLS_API_KEY_ENV,
   SKILLS_API_URL_ENV,
 } from "./fleet-credentials.js";
@@ -100,7 +103,14 @@ export function getConfiguredApiUrl(
  */
 export function buildSkillsApiUrl(apiUrl: string, endpoint = "/skills"): string {
   const url = new URL(apiUrl);
+  if (url.origin === "https://api.hasna.com" && /^\/skills\/(?:api\/)?v1\/skills\/?$/.test(url.pathname)) {
+    url.pathname = "/skills";
+    apiUrl = url.toString();
+  }
   const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+  if (normalizeSkillsApiOrigin(apiUrl) === "https://api.hasna.com/skills") {
+    return skillsApiRequestUrl(apiUrl, `/api/v1${cleanEndpoint}`);
+  }
   const pathname = url.pathname.replace(/\/+$/, "");
 
   const apiBase = /\/api(?:\/v1)?\/skills$/.test(pathname)
@@ -210,13 +220,44 @@ function parseRemoteContract<T>(schema: z.ZodType<T>, payload: unknown, message:
  * is now the ONLY unauthenticated route: with nothing configured, the ladder
  * itself refuses (fail-closed ruling, hasna/apps#1720), so an implicit
  * credentialless read cannot silently pass as one the operator meant.
+ *
+ * The AMBIENT credential is bound to the origin the ladder resolved it for
+ * (`assertCredentialInstance` in fleet-credentials.ts) and is never attached
+ * to any other host. `loadRemoteRegistry({ apiUrl })` / `loadRemoteSkill()`
+ * are exported from the package entry, and a caller-supplied `apiUrl` with no
+ * `authToken` used to be sent the operator's fleet key — the hasna/apps#1794
+ * class (#1720 validation). A caller URL that is not the resolved origin now
+ * needs an explicit `authToken` (or `authToken: null`); otherwise this refuses
+ * with INSTANCE_CREDENTIAL_MISMATCH before any request is made.
  */
 async function remoteRequestHeaders(options: RemoteRegistryOptions): Promise<Headers> {
   const headers = new Headers({ Accept: "application/json" });
-  const token = options.authToken !== undefined ? options.authToken : await resolveSkillsApiKey();
+  const token = options.authToken !== undefined ? options.authToken : await ambientTokenFor(options.apiUrl);
   const trimmed = token?.trim();
   if (trimmed) headers.set("Authorization", `Bearer ${trimmed}`);
   return headers;
+}
+
+/**
+ * The ambient key, only for the origin it is bound to.
+ *
+ * Null under the explicit local opt-in (nothing to attach); the ladder's own
+ * refusal when nothing is configured; INSTANCE_CREDENTIAL_MISMATCH when the
+ * caller named a different host — the same refusal `assertCredentialInstance`
+ * raises for a credential whose instance disagrees with the selected API.
+ */
+async function ambientTokenFor(callerApiUrl: string | undefined): Promise<string | null> {
+  const connection = await resolveSkillsConnection();
+  if (!connection) return null;
+  if (callerApiUrl !== undefined && normalizeSkillsApiOrigin(callerApiUrl) !== connection.apiOrigin) {
+    throw new SkillsFleetCredentialError(
+      `The Skills credential resolved for ${connection.apiOrigin} is never sent to a caller-supplied apiUrl ` +
+        `(${normalizeSkillsApiOrigin(callerApiUrl)}). Pass an explicit authToken for that instance, or authToken: null ` +
+        `for an unauthenticated read; no credential was sent.`,
+      "INSTANCE_CREDENTIAL_MISMATCH",
+    );
+  }
+  return connection.apiKey;
 }
 
 async function fetchRemoteJson(url: string, options: RemoteRegistryOptions): Promise<unknown> {

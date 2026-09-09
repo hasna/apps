@@ -170,7 +170,7 @@ describe("Emails self-hosted client resolver", () => {
     let thrown: unknown;
     try { isSelfHostedMode(); } catch (error) { thrown = error; }
     expect(String(thrown)).toContain("HASNA_EMAILS_API_URL");
-    expect(String(thrown)).toContain("HASNA_EMAILS_DB_PATH");
+    expect(String(thrown)).toContain("HASNA_EMAILS_API_KEY");
     // Direct self-hosted resolution still fails loud on its own terms: no API settings,
     // no client.
     expect(() => resolveSelfHostedConfig()).toThrow("refusing to start");

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,7 +43,9 @@ afterEach(() => {
 /** Point $HOME at a fresh temp dir and clear every path-affecting override. */
 function isolateHome(): string {
   for (const key of ENV_KEYS) saved[key] = process.env[key];
-  const home = mkdtempSync(join(tmpdir(), "mementos-data-root-"));
+  // macOS exposes the temporary directory as /var while process.cwd() and
+  // path resolution use its canonical /private/var spelling.
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "mementos-data-root-")));
   tempHome = home;
   process.env.HOME = home;
   delete process.env.USERPROFILE;
@@ -57,7 +59,10 @@ function isolateHome(): string {
 describe("resolver (XDG) adoption — the legacy home must never become invisible", () => {
   test("resolver data dir follows @hasna/paths under a fake HOME", () => {
     const home = isolateHome();
-    expect(resolverDataRoot()).toBe(join(home, ".local", "share", "hasna", "mementos"));
+    const expected = process.platform === "darwin"
+      ? join(home, "Library", "Application Support", "Hasna", "mementos")
+      : join(home, ".local", "share", "hasna", "mementos");
+    expect(resolverDataRoot()).toBe(expected);
     expect(legacyDataRoot()).toBe(join(home, ".hasna", "mementos"));
     expect(effectiveHome()).toBe(home);
   });
@@ -78,7 +83,9 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
 
   test("an existing store at the resolver data root adopts it even without HASNA_DATA_HOME", () => {
     const home = isolateHome();
-    const xdg = join(home, ".local", "share", "hasna", "mementos");
+    const xdg = process.platform === "darwin"
+      ? join(home, "Library", "Application Support", "Hasna", "mementos")
+      : join(home, ".local", "share", "hasna", "mementos");
     mkdirSync(xdg, { recursive: true });
     writeFileSync(join(xdg, "mementos.db"), "existing-migrated-store");
     expect(adoptResolverDataRoot(resolverDataRoot())).toBe(true);
@@ -140,6 +147,9 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
     const home = isolateHome();
     getDataRoot();
     expect(existsSync(join(home, ".hasna", "mementos"))).toBe(false);
-    expect(existsSync(join(home, ".local", "share", "hasna", "mementos"))).toBe(false);
+    const resolverRoot = process.platform === "darwin"
+      ? join(home, "Library", "Application Support", "Hasna", "mementos")
+      : join(home, ".local", "share", "hasna", "mementos");
+    expect(existsSync(resolverRoot)).toBe(false);
   });
 });

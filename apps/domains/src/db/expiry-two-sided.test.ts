@@ -1,3 +1,5 @@
+import { useLocalStoreFixture } from "../test/local-store-fixture.test-support.js";
+useLocalStoreFixture();
 /**
  * Regression tests for the forward-only expiry blind spot.
  *

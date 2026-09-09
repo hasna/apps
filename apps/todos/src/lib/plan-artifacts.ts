@@ -376,7 +376,7 @@ export function inspectPlanArtifact(plan: Plan, db?: Database): PlanArtifactInsp
   }
 }
 
-function comparePlanArtifact(plan: Plan, artifact: PlanArtifactSnapshot, tasks: Task[]): PlanArtifactConflict[] {
+export function comparePlanArtifact(plan: Plan, artifact: PlanArtifactSnapshot, tasks: Task[]): PlanArtifactConflict[] {
   const conflicts: PlanArtifactConflict[] = [];
   compare("plan_id", plan.id, artifact.metadata.plan_id, conflicts);
   if (artifact.metadata.plan_slug !== null) {

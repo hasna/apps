@@ -144,12 +144,16 @@ import { createFilesClientFromEnv } from "@hasna/files/sdk";
 const files = createFilesClientFromEnv();
 const sources = await files.listSources();
 
-// A caller-pinned authority: an explicit baseUrl with an apiKey is a
-// deliberate pin; a baseUrl WITHOUT an apiKey never receives the ambient
-// fleet key (it is an unauthenticated client for that authority).
+// A caller-pinned authority: an explicit baseUrl WITH a non-blank apiKey is a
+// deliberate pin and the ambient fleet key is never attached to it. A baseUrl
+// with NO apiKey — or a blank one, e.g. a set-but-empty env var — throws
+// `FILES_CREDENTIAL_PINNED`; it never builds an unauthenticated client for
+// that authority. The key may also be passed as `credentials: { apiKey }`.
+const pinnedKey = process.env.HASNA_FILES_API_KEY;
+if (!pinnedKey) throw new Error("set HASNA_FILES_API_KEY for the self-hosted pin");
 const selfHosted = createFilesClientFromEnv(undefined, {
   baseUrl: "https://files.example.test",
-  apiKey: process.env.HASNA_FILES_API_KEY,
+  apiKey: pinnedKey,
 });
 ```
 

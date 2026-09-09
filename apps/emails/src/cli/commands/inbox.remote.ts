@@ -946,7 +946,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
   // ─── ATTACHMENTS INVENTORY ────────────────────────────────────────────────
   inboxCmd
     .command("attachments")
-    .description("List one checkpointable page of self-hosted attachment metadata")
+    .description("List one checkpointable page of attachment metadata")
     .option("-j, --json", "Print JSON output", false)
     .option("--limit <n>", `Attachments per page (1-${MAX_ATTACHMENT_INVENTORY_LIMIT})`, String(DEFAULT_ATTACHMENT_INVENTORY_LIMIT))
     .option("--cursor <cursor>", "Opaque next_cursor from a previous page")

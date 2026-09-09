@@ -6,7 +6,7 @@
 // works or not, which is exactly how an invalid manifest and a prepack that
 // always exits 1 reached a branch reporting "test: pass".
 //
-// Everything here runs the pinned `@hasna/contracts` devDependency out of
+// Everything here runs the pinned `@hasna/contracts` dependency out of
 // node_modules/.bin — never `bunx`, so the assertions do not depend on what the
 // registry serves today.
 
@@ -86,7 +86,7 @@ describe("hasna.contract.json", () => {
     expect(manifest.name).toBe("events");
     expect(manifest.contractVersion).toBe("v1");
     expect(typeof manifest.kitVersion).toBe("string");
-    expect(manifest.class).toBe("library");
+    expect(manifest.class).toBe("service");
     // The pre-alignment draft invented these; a consumer reading the published
     // manifest would find nothing the schema knows about.
     for (const invented of ["schema_version", "project", "package"]) {
@@ -94,12 +94,12 @@ describe("hasna.contract.json", () => {
     }
   });
 
-  test("pins the kit version it was written against to the installed devDependency", () => {
+  test("pins the kit version it was written against to the installed dependency", () => {
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { kitVersion: string };
     const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
-      devDependencies: Record<string, string>;
+      dependencies: Record<string, string>;
     };
-    expect(pkg.devDependencies["@hasna/contracts"]).toBe(manifest.kitVersion);
+    expect(pkg.dependencies["@hasna/contracts"]).toBe(manifest.kitVersion);
   });
 });
 

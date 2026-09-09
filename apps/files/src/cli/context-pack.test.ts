@@ -139,9 +139,22 @@ describe("context-pack CLI", () => {
       ...process.env,
       HASNA_FILES_DATA_DIR: dataDir,
       HASNA_FILES_DB_PATH: join(dataDir, "files.db"),
-      HASNA_HOME: dataDir,
       HASNA_FILES_API_URL: `http://127.0.0.1:${server.port}/v1`,
       HASNA_FILES_API_KEY: "hf_test_key",
+      // Ambient credential isolation: the fake loopback authority is pinned in
+      // the env tier, and the resolver's disk tier
+      // (`<HASNA_CONFIG_HOME|HASNA_HOME|~/.hasna>/files/config/credentials`)
+      // outranks it — a real station credentials file would be refused as
+      // written for a different authority before the fixture server is
+      // reached. Point every home-layout root at the scratch dir, where no
+      // credentials file can exist, and pin a Keychain account no item uses
+      // (the resolver reads HASNA_STATION, else the short hostname, else
+      // USER), so the child can never resolve a real credential next to the
+      // fixture authority.
+      HOME: testDir!,
+      HASNA_HOME: testDir!,
+      HASNA_CONFIG_HOME: testDir!,
+      HASNA_STATION: "files-hermetic-no-such-station",
     };
 
     try {

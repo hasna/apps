@@ -67,6 +67,9 @@ describe.skipIf(!PG_URL)("postgres tasks.update — re-parent semantics", () => 
     observer = createTodosCloudQueryClient(PG_URL!, { max: 1 });
     racingClient = createTodosCloudQueryClient(PG_URL!, { max: 1 });
     for (const sql of postgresTodosSyncSchemaSql()) await client.query(sql);
+    for (const id of [PROJECT_A, PROJECT_B]) {
+      await client.query(`INSERT INTO todos_sync_records (service, object_type, object_id, payload, updated_at) VALUES ($1, 'projects', $2, $3::jsonb, now())`, [SERVICE, id, {id, name: `Fixture ${id}`, path: `/fixture/${id}`, task_list_id: `fixture-${id}`, parent_id: null}]);
+    }
     store = createPostgresTodosStorageAdapter({ client, service: SERVICE });
     racingStore = createPostgresTodosStorageAdapter({ client: racingClient, service: SERVICE });
   });
@@ -413,9 +416,9 @@ describe.skipIf(!PG_URL)("postgres tasks.update — re-parent semantics", () => 
          SET deleted_at = now(), updated_at = now()
          WHERE service = $1
            AND object_type = 'tasks'
-           AND object_id = ANY($2::text[])
+           AND object_id IN (SELECT jsonb_array_elements_text($2::text::jsonb))
            AND deleted_at IS NULL`,
-        [SERVICE, [parent.id, child.id]],
+        [SERVICE, JSON.stringify([parent.id, child.id])],
       );
     });
 

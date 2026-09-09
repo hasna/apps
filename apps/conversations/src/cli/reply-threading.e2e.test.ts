@@ -1,8 +1,10 @@
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeEach(async () => { fixture = await startLoopbackApiFixture(); });
+afterEach(async () => { await fixture?.stop(); });
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
 
 // Regression cover for HC-00148: `conversations reply --to <id>` accepted the
 // flag, printed "Reply sent", exited 0 — and stored the row with reply_to NULL,
@@ -10,9 +12,7 @@ import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
 // concealed it, so every assertion here is a READ-BACK of the stored row
 // through a different command than the one that wrote it, never the exit code
 // or the success message alone.
-let testDbCounter = 0;
-let testDb = "";
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 setDefaultTimeout(15_000);
 
@@ -20,10 +20,10 @@ function runCli(args: string[], agent: string) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: isolatedStoreChildEnv(testDb, {
+    env: { ...fixture.env,
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",
-    }),
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -53,15 +53,7 @@ function seedRoot(channel: string): number {
 }
 
 describe("reply threading persistence (e2e)", () => {
-  beforeEach(() => {
-    testDb = join(tmpdir(), `conversations-cli-reply-threading-${Date.now()}-${process.pid}-${++testDbCounter}.db`);
-  });
 
-  afterEach(() => {
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try { unlinkSync(`${testDb}${suffix}`); } catch {}
-    }
-  });
 
   test("reply --to persists reply_to, and `show` reads the parent link back", () => {
     const rootId = seedRoot("thread-persist");
@@ -254,15 +246,7 @@ interface ThreadListEntry {
 }
 
 describe("thread collection (e2e)", () => {
-  beforeEach(() => {
-    testDb = join(tmpdir(), `conversations-cli-thread-collection-${Date.now()}-${process.pid}-${++testDbCounter}.db`);
-  });
 
-  afterEach(() => {
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try { unlinkSync(`${testDb}${suffix}`); } catch {}
-    }
-  });
 
   test("threads list groups a reply chain under its root with reply_count, last activity and thread_status", () => {
     const seeded = seedThreadedChannel("thread-list");

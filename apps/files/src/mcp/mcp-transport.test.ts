@@ -31,6 +31,25 @@ const ENV_KEYS = [
   "OPEN_FILES_MCP_ALLOW_DOWNLOADS",
   "OPEN_FILES_MCP_ALLOW_SIGNED_URLS",
   "OPEN_FILES_MCP_ALLOW_ALL",
+  // Ambient credential roots. The api-mode suites below pin a FAKE authority
+  // while driving the resolver through the live `process.env` (the MCP server
+  // reads no injected env), and the resolver's disk tier outranks the env tier
+  // — so on a station that has `~/.hasna/files/config/credentials`, the real
+  // credential would resolve and then be REFUSED as written for a different
+  // authority, drowning the guard under test in REMOTE_API_CONFIG_MISSING.
+  // Pointing every home-layout root at the scratch dir (never a credentials
+  // file inside it) keeps the whole file hermetic wherever it runs.
+  "HOME",
+  "HASNA_HOME",
+  "HASNA_CONFIG_HOME",
+  // Keychain account: the resolver's `keychainAccount()` reads HASNA_STATION,
+  // else the short hostname, else USER (apps/contracts/src/client/
+  // credentials.ts). On a macOS station whose login keychain holds real
+  // `hasna.credentials.files.*` items under its own hostname account, the
+  // ambient tier would resolve the REAL credential for the fake authority
+  // pinned below — the same refusal class as the disk tier, one tier up.
+  // Pinning a sentinel account no item uses makes the tier miss everywhere.
+  "HASNA_STATION",
 ] as const;
 
 const savedEnv = new Map<string, string | undefined>();
@@ -42,10 +61,12 @@ function setLocalMode() {
   testDir = mkdtempSync(join(tmpdir(), "files-mcp-transport-"));
   process.env.HASNA_FILES_DATA_DIR = testDir;
   process.env.HASNA_FILES_DB_PATH = join(testDir, "files.db");
-  // Isolate the credential disk tier from the station's real credentials file
-  // (~/.hasna/files/config/credentials) so fake-URL tests never trip the
-  // mixed-authority refusal.
+  // Ambient credential isolation (see ENV_KEYS): the scratch dir cannot
+  // contain `files/config/credentials`, so the disk tier consults nothing.
+  process.env.HOME = testDir;
   process.env.HASNA_HOME = testDir;
+  process.env.HASNA_CONFIG_HOME = testDir;
+  process.env.HASNA_STATION = "files-hermetic-no-such-station";
   delete process.env.HASNA_FILES_API_URL;
   delete process.env.HASNA_FILES_API_KEY;
   process.env.OPEN_FILES_MCP_ALLOW_DOWNLOADS = "1";

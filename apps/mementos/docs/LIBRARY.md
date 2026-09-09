@@ -1,15 +1,12 @@
 # Library and SDK APIs
 
-This repository ships three related TypeScript surfaces:
+This package ships two TypeScript surfaces (one npm package, `@hasna/mementos`,
+carries every surface — there is no separate `-sdk` package):
 
-| Import/package | Runtime style | Intended use |
+| Import | Runtime style | Intended use |
 | --- | --- | --- |
 | `@hasna/mementos` | Synchronous Bun domain/database API | Embedded local or server-side use |
 | `@hasna/mementos/sdk` | Zero-dependency async fetch client bundled with the main package | Authenticated `/v1` REST clients |
-| `@hasna/mementos-sdk` | Separately versioned zero-dependency fetch client in `sdk/` | Legacy/standalone `/api` clients |
-
-Do not confuse the subpath export with the separate package. Their method sets,
-environment handling, and authentication support differ.
 
 ## Direct library: `@hasna/mementos`
 
@@ -106,11 +103,16 @@ and the authority come from the one resolver in `@hasna/contracts/client`
 (`HASNA_MEMENTOS_API_KEY` and its legacy alias, the macOS Keychain item
 `hasna.credentials.mementos.api-key`, or `~/.hasna/mementos/config/credentials`),
 resolved fresh on EVERY request. A credential alone resolves to the fleet
-gateway `https://api.hasna.com/mementos`; with nothing configured the client
-talks to the unhosted `http://localhost:19428` (and says so on stderr). An
-explicit `baseUrl` is tier 1 and is used verbatim — without an explicit
-`apiKey` it never attaches an ambient fleet key. The legacy `MEMENTOS_URL`
-spelling is retired.
+gateway `https://api.hasna.com/mementos`. With nothing configured the client
+FAILS CLOSED: every request (and the `apiUrl` getter) throws
+`MementosConfigError` (`code: "MEMENTOS_STORE_CONFIG"`) naming the tiers it
+consulted, before any request is sent — it never falls back to the unhosted
+`http://localhost:19428`. The on-box `mementos-serve` is reachable only through
+the deliberate opt-in `HASNA_MEMENTOS_LOCAL=1` (or an explicit
+`HASNA_MEMENTOS_DB_PATH`) with nothing else configured, and then the client
+says so once on stderr. An explicit `baseUrl` is tier 1 and is used verbatim —
+without an explicit `apiKey` it never attaches an ambient fleet key. The legacy
+`MEMENTOS_URL` spelling is retired.
 
 ### Bundled client methods
 
@@ -128,22 +130,9 @@ spelling is retired.
 
 The bundled client currently does not expose `consolidateMemories` or `reflect`
 convenience methods even though those REST endpoints exist. Call the endpoints
-directly or use the standalone client if its other tradeoffs fit.
+directly (`POST /v1/consolidate`, `POST /v1/reflect`) with the same headers the
+client sends.
 
-## Standalone client: `@hasna/mementos-sdk`
-
-The package in `sdk/` is versioned independently and works in Node.js, Bun,
-Deno, and browsers. Its current constructor accepts only `baseUrl` and a custom
-`fetch`; it does not add an API key or versioned-prefix routing. It calls legacy
-`/api` paths directly. `fromEnv()` accepts only explicit overrides; the
-legacy `MEMENTOS_URL` env read is retired with the credential-chain adoption
-(hasna/apps#1720).
-
-It includes `consolidateMemories` and `reflect`, but it does not include the
-bundled client's readiness/version probes, task methods, namespace fields, or
-expanded procedural/resource category types. Use it against a local/open server
-or supply an authenticated custom `fetch` wrapper when the deployment requires
-headers.
-
-See [the standalone SDK README](../sdk/README.md) for its exact method table and
-examples.
+The former standalone `sdk/` directory (`@hasna/mementos-sdk`, never published)
+was removed with the hasna/apps#1720 validation: it bypassed the credential
+chain and violated the one-package-per-app rule. Import `@hasna/mementos/sdk`.

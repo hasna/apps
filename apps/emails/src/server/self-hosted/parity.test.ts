@@ -26,11 +26,15 @@ const SIGNING_SECRET = "test-signing-secret-do-not-use-in-prod";
 function tableClient(): TypedQueryClient {
   const tables = new Map<string, Record<string, unknown>[]>();
   const tableOf = (sql: string): string => sql.match(/(?:FROM|INTO|UPDATE)\s+([a-z_]+)/i)?.[1] ?? "";
-  const whereKey = (sql: string): string => sql.match(/WHERE\s+([a-z_]+)\s*=\s*\$1/i)?.[1] ?? "id";
+  // The store quotes generic-resource identifiers with double quotes so the
+  // reserved word `order` stays valid; Postgres treats `"id"` and `id` alike,
+  // so this fake strips the quotes when it parses identifiers back out.
+  const unquote = (identifier: string): string => identifier.trim().replace(/^"|"$/g, "");
+  const whereKey = (sql: string): string => unquote(sql.match(/WHERE\s+"?([a-z_]+)"?\s*=\s*\$1/i)?.[1] ?? "id");
 
   /** Parse an INSERT into a stored row (JSONB placeholders decoded). */
   const buildInsertRow = (sql: string, params: readonly unknown[]): Record<string, unknown> => {
-    const cols = (sql.match(/INSERT INTO [a-z_]+ \(([^)]+)\)/i)?.[1] ?? "").split(",").map((c) => c.trim());
+    const cols = (sql.match(/INSERT INTO [a-z_]+ \(([^)]+)\)/i)?.[1] ?? "").split(",").map(unquote);
     const valueTokens = (sql.match(/VALUES \(([^)]+)\)/i)?.[1] ?? "").split(",").map((t) => t.trim());
     const row: Record<string, unknown> = {};
     cols.forEach((c, i) => {
@@ -66,8 +70,8 @@ function tableClient(): TypedQueryClient {
       if (/^\s*INSERT/i.test(sql)) {
         // Conflict target may be composite (e.g. `(tenant_id, agent_key)`); a row
         // conflicts only when EVERY target column matches.
-        const conflictCols = (sql.match(/ON CONFLICT \(([a-z_,\s]+)\)/i)?.[1] ?? "")
-          .split(",").map((c) => c.trim()).filter(Boolean);
+        const conflictCols = (sql.match(/ON CONFLICT \(([a-z_",\s]+)\)/i)?.[1] ?? "")
+          .split(",").map(unquote).filter(Boolean);
         const row = buildInsertRow(sql, params ?? []);
         if (conflictCols.length && rows.some((r) => conflictCols.every((c) => r[c] === row[c]))) return null; // DO NOTHING
         rows.push(row);
@@ -78,7 +82,7 @@ function tableClient(): TypedQueryClient {
       const target = rows.find((r) => r[key] === (params ?? [])[0]);
       if (/^\s*UPDATE/i.test(sql)) {
         if (!target) return null;
-        for (const m of sql.matchAll(/([a-z_]+)\s*=\s*\$(\d+)(::jsonb)?/gi)) {
+        for (const m of sql.matchAll(/"?([a-z_]+)"?\s*=\s*\$(\d+)(::jsonb)?/gi)) {
           const col = m[1]!;
           if (col === "updated_at") continue;
           let v = (params ?? [])[Number(m[2]) - 1];
@@ -828,5 +832,89 @@ describe("self-hosted parity: scoped send-key mint/verify routing", () => {
     d.store.verifySendKey = async () => null;
     const res = await handleSelfHostedRequest(d, req("POST", "/v1/send-keys/verify", { token: readToken(), body: { token: "esk_x" } }));
     expect(res?.status).toBe(403);
+  });
+});
+
+describe("self-hosted parity: mailbox-filter actions, enabled/order and mutate apply (FR-0001)", () => {
+  async function makeFilter(d: ReturnType<typeof deps>, overrides: Record<string, unknown> = {}) {
+    const res = await handleSelfHostedRequest(d, req("POST", "/v1/mailbox-filters", {
+      token: writeToken(),
+      body: { name: "Billing", mailbox: "inbox", criteria: { from: "billing@x.com" }, ...overrides },
+    }));
+    expect(res?.status).toBe(201);
+    return await res!.json() as {
+      id: string;
+      actions: { add_labels: string[]; archive: boolean; mark_read: boolean };
+      enabled: boolean;
+      order: number;
+    };
+  }
+
+  test("0041 mailbox-filter actions migration appends after 0040, leaving prior ids and checksums untouched", () => {
+    const migrations = emailsSelfHostedMigrations();
+    const ids = migrations.map((m) => m.id);
+    expect(ids[ids.length - 1]).toBe("0041_mailbox_filter_actions");
+    expect(ids[ids.length - 2]).toBe("0040_message_send_tags");
+    // FR-0001 only appends; every pre-existing migration id keeps its position.
+    expect(ids.indexOf("0026_mailbox_filters")).toBeGreaterThan(-1);
+    expect(ids.indexOf("0026_mailbox_filters")).toBeLessThan(ids.indexOf("0040_message_send_tags"));
+    const actions = migrations.at(-1)!;
+    expect(actions.id).toBe("0041_mailbox_filter_actions");
+    expect(actions.sql).toContain("ADD COLUMN IF NOT EXISTS actions jsonb NOT NULL DEFAULT '{}'::jsonb");
+    expect(actions.sql).toContain("ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT false");
+    expect(actions.sql).toContain('ADD COLUMN IF NOT EXISTS "order" integer NOT NULL DEFAULT 0');
+    expect(actions.sql).toContain("mailbox_filters_enabled_order_idx");
+  });
+
+  test("self-hosted mailbox-filter CRUD round-trips actions, enabled and order, with legacy defaults", async () => {
+    const d = deps();
+    const created = await makeFilter(d, { actions: { add_labels: ["Invoices", "invoices"], archive: true }, enabled: true, order: 4 });
+    expect(created.actions).toEqual({ add_labels: ["invoices"], archive: true, mark_read: false });
+    expect(created.enabled).toBe(true);
+    expect(created.order).toBe(4);
+
+    const legacy = await makeFilter(d, { name: "Legacy", criteria: { from: "legacy@x.com" } });
+    expect(legacy.actions).toEqual({ add_labels: [], archive: false, mark_read: false });
+    expect(legacy.enabled).toBe(false);
+    expect(legacy.order).toBe(0);
+  });
+
+  test("read credentials can list-apply but cannot mutate", async () => {
+    const d = deps();
+    const created = await makeFilter(d, { enabled: true, actions: { archive: true } });
+
+    const listOnly = await handleSelfHostedRequest(d, req("POST", `/v1/mailbox-filters/${created.id}/apply`, { token: readToken(), body: {} }));
+    expect(listOnly?.status).toBe(200);
+    const listBody = await listOnly!.json() as Record<string, unknown>;
+    expect(listBody).toHaveProperty("items");
+    expect(listBody).toHaveProperty("filter");
+    expect(listBody).not.toHaveProperty("mutate");
+    expect(listBody).not.toHaveProperty("matched");
+
+    const forbidden = await handleSelfHostedRequest(d, req("POST", `/v1/mailbox-filters/${created.id}/apply`, { token: readToken(), body: { mutate: true } }));
+    expect(forbidden?.status).toBe(403);
+  });
+
+  test("write credentials dispatch the mutate summary response", async () => {
+    const d = deps();
+    const created = await makeFilter(d, { enabled: true, actions: { archive: true, mark_read: true } });
+    const res = await handleSelfHostedRequest(d, req("POST", `/v1/mailbox-filters/${created.id}/apply`, { token: writeToken(), body: { mutate: true } }));
+    expect(res?.status).toBe(200);
+    const body = await res!.json() as Record<string, unknown>;
+    expect(body.mutate).toBe(true);
+    expect(body.items).toEqual([]);
+    expect(body.offset).toBe(0);
+    expect(body.truncated).toBe(false);
+    expect(typeof body.matched).toBe("number");
+    expect(typeof body.updated).toBe("number");
+    expect(typeof body.unchanged).toBe("number");
+  });
+
+  test("mutate apply refuses a disabled filter with invalid_input", async () => {
+    const d = deps();
+    const created = await makeFilter(d, { enabled: false, actions: { archive: true } });
+    const res = await handleSelfHostedRequest(d, req("POST", `/v1/mailbox-filters/${created.id}/apply`, { token: writeToken(), body: { mutate: true } }));
+    expect(res?.status).toBe(400);
+    expect((await res!.json()).code).toBe("invalid_input");
   });
 });

@@ -51,7 +51,9 @@ describe("paths resolver adoption", () => {
   });
 
   test("resolverHome resolves the @hasna/paths data home", () => {
-    expect(resolverHome()).toBe(join(testHome, ".local", "share", "hasna", "todos"));
+    expect(resolverHome()).toBe(process.platform === "darwin"
+      ? join(testHome, "Library", "Application Support", "Hasna", "todos")
+      : join(testHome, ".local", "share", "hasna", "todos"));
   });
 
   test("HASNA_DATA_HOME opts in and redirects the effective home to the resolver data home", () => {

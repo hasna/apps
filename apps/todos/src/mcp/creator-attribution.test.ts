@@ -43,7 +43,7 @@ type CapturedTool = {
   handler: (params: Record<string, any>) => unknown | Promise<unknown>;
 };
 
-function captureTools(register: (server: any, ctx: any) => void): Map<string, CapturedTool> {
+function captureTools(register: (server: any, ctx: any) => void, focus = applyFocus): Map<string, CapturedTool> {
   const tools = new Map<string, CapturedTool>();
   const server = {
     resource() {},
@@ -64,7 +64,7 @@ function captureTools(register: (server: any, ctx: any) => void): Map<string, Ca
     formatTask: (task: Task) => `${task.id.slice(0, 8)} ${task.status} ${task.priority} ${task.title}`,
     formatTaskDetail: (task: Task) => `${task.id} ${task.title}`,
     getAgentFocus: () => undefined,
-    applyFocus,
+    applyFocus: focus,
     agentFocusMap: new Map(),
   };
   register(server, ctx);
@@ -105,8 +105,8 @@ afterEach(() => {
   rmSync(homeDir, { recursive: true, force: true });
 });
 
-function createTool() {
-  return captureTools(registerTaskCrudTools).get("create_task")!;
+function createTool(focus = applyFocus) {
+  return captureTools(registerTaskCrudTools, focus).get("create_task")!;
 }
 
 function onlyTask(title: string): Task {
@@ -201,15 +201,16 @@ describe("MCP create_task applies focus", () => {
     expect(onlyTask("mcp focused task").project_id).toBe(project.id);
   });
 
-  it("sends the caller's focus project to the HTTP authority", async () => {
+  it("sends session focus to the HTTP authority without consulting local focus", async () => {
     const project = createProject({ name: "Remote focused project", path: "/tmp/remote-focused-project" });
     const explicitProject = createProject({ name: "Explicit remote project", path: "/tmp/explicit-remote-project" });
     registerAgent({ name: "cassius", session_id: "remote-focus-session", project_id: project.id });
     process.env["TODOS_AGENT_ID"] = "cassius";
+    const fixtureDb = getDatabase();
     process.env["HASNA_TODOS_API_URL"] = "https://todos.example.test";
     process.env["HASNA_TODOS_API_KEY"] = "nonsecret-test-value";
 
-    const responseTask = createTask({ title: "remote response" });
+    const responseTask = createTask({ title: "remote response" }, fixtureDb);
     const postedBodies: Array<Record<string, unknown>> = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (_input, init = {}) => {
@@ -222,8 +223,15 @@ describe("MCP create_task applies focus", () => {
     };
 
     try {
-      await createTool().handler({ title: "remote focused task" });
-      await createTool().handler({ title: "explicit remote task", project_id: explicitProject.id });
+      const noSessionFocus: Record<string, unknown> = {};
+      applyFocus(noSessionFocus, "cassius");
+      expect(noSessionFocus).toEqual({}); // Local registry focus cannot cross into API calls.
+      const sessionFocus = (params: Record<string, any>, agentId?: string) => {
+        if (agentId === "cassius" && !params.project_id) params.project_id = project.id;
+      };
+      const tool = createTool(sessionFocus);
+      await tool.handler({ title: "remote focused task" });
+      await tool.handler({ title: "explicit remote task", project_id: explicitProject.id });
     } finally {
       globalThis.fetch = originalFetch;
     }

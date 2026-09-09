@@ -1,455 +1,136 @@
-// Tests for the macOS shell's store guard.
-//
-// Until this target existed, NOTHING in the repository could fail on the Swift:
-// .github/workflows/ci.yml runs on ubuntu-latest and never invokes `swift`, and
-// Package.swift declared no test target — so the green CI tick was green
-// regardless of what Sources/ contained, up to and including code that does not
-// compile. The fail-closed property was argued from a source read and one manual
-// build on one machine.
-//
-// The matrix below is loaded from test-fixtures/store-resolution-matrix.json,
-// which src/lib/store/store-resolution-matrix.test.ts reads as well: this file
-// asserts what the shell announces and what environment it hands the child, and
-// that TypeScript test asserts the real resolver reaches the same store from that
-// environment. One expectation, checked from both sides.
-
-import XCTest
+import Foundation
+import Testing
 @testable import HasnaConversationsCore
 
-// MARK: - Fixture model
+private let packageDirectory = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+private let receipt = "{\"version\":1,\"transport\":\"cloud-http\"}"
 
-struct MatrixArm: Decodable {
-    let name: String
-    let note: String?
-    let configFile: [String: String]?
-    let environment: [String: String]
-    let shell: String
-    /// For a `local` arm: the env-var NAME that must have chosen local. Optional
-    /// in the model because non-local arms have none — but a `local` arm that
-    /// omits it FAILS rather than skipping, in `testEveryArm`.
-    let expectedSelectedBy: String?
-    let announcedUrl: String?
-    let childStoreEnv: [String: String]?
-    let childStore: String?
-    let reasonContains: String?
-}
-
-struct Matrix: Decodable {
-    let arms: [MatrixArm]
-}
-
-/// Repo root, derived from this file's own location so the fixture is found
-/// whether the suite runs from a checkout or a CI workspace.
-let repoRoot = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent()   // HasnaConversationsCoreTests
-    .deletingLastPathComponent()   // Tests
-    .deletingLastPathComponent()   // repo root
-
-func loadMatrix() throws -> Matrix {
-    let url = repoRoot.appendingPathComponent("test-fixtures/store-resolution-matrix.json")
-    return try JSONDecoder().decode(Matrix.self, from: Data(contentsOf: url))
-}
-
-/// Write a `KEY=value` file into a fresh temporary directory and return its path.
-func writeConfigFile(_ entries: [String: String]) throws -> String {
-    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("hasna-store-resolution-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let path = dir.appendingPathComponent("conversations.env").path
-    let body = entries.keys.sorted().map { "\($0)=\(entries[$0]!)" }.joined(separator: "\n") + "\n"
-    try body.write(toFile: path, atomically: true, encoding: .utf8)
-    return path
-}
-
-/// A path inside a real temporary directory that deliberately holds no file.
-func absentConfigPath() -> String {
-    URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("hasna-store-resolution-absent-\(UUID().uuidString)")
-        .appendingPathComponent("conversations.env").path
-}
-
-// MARK: - The shared matrix
-
-final class StoreResolutionMatrixTests: XCTestCase {
-
-    func testFixtureIsNotEmpty() throws {
-        // A matrix-driven suite that silently loads zero arms passes vacuously.
-        let matrix = try loadMatrix()
-        XCTAssertGreaterThanOrEqual(matrix.arms.count, 16, "fixture lost arms")
-
-        // The arm count alone is not enough. `assertChildStoreEnv` returns early
-        // when an arm carries no `childStoreEnv`, so stripping that field from
-        // every arm would leave `testEveryArm` asserting only the classification
-        // and never the environment handed to the child — which is the half the
-        // divergence lived in. The TypeScript side guards the same floor; each
-        // suite must hold its own, because either can be run alone.
-        let started = matrix.arms.filter { $0.childStoreEnv != nil }
-        XCTAssertGreaterThanOrEqual(started.count, 12, "fixture lost its child-env expectations")
-
-        // And the fixture must not be satisfiable by a constant.
-        XCTAssertEqual(Set(matrix.arms.map(\.shell)), ["cloud", "local", "unresolved"])
+@Suite(.serialized)
+final class StoreResolutionTests {
+    private var directories: [URL] = []
+    deinit { for dir in directories { try? FileManager.default.removeItem(at: dir) } }
+    private func temporaryDirectory() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("conversations-native-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        directories.append(dir)
+        return dir
     }
 
-    /// EVERY key that can select local has an arm — stated against the contract
-    /// rather than as a count, so a third key added to `StoreEnvContract` fails
-    /// here until someone writes its arm. Local is selected by a DB path (or by
-    /// the absence of an API pair).
-    func testEveryLocalSelectingKeyHasAnArm() throws {
-        let covered = Set(try loadMatrix().arms.compactMap {
-            $0.shell == "local" ? $0.expectedSelectedBy : nil
-        })
-        let selectable = Set(StoreEnvContract.dbPathKeys)
-        XCTAssertEqual(
-            selectable.subtracting(covered), [],
-            "these keys can select local and no fixture arm exercises them"
-        )
+    private func fakePayload(_ directory: URL, script: String) throws -> (String, URL) {
+        let app = directory.appendingPathComponent("Example.app/Contents/Resources/app")
+        try FileManager.default.createDirectory(at: app.appendingPathComponent("src/lib/store"), withIntermediateDirectories: true)
+        try "// fixture".write(to: app.appendingPathComponent("src/lib/store/index.ts"), atomically: true, encoding: .utf8)
+        let executable = directory.appendingPathComponent("fixture-runtime")
+        try ("#!/bin/sh\n" + script + "\n").write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        return (executable.path, app)
     }
 
-    func testEveryArm() throws {
-        for arm in try loadMatrix().arms {
-            let configPath = try arm.configFile.map(writeConfigFile) ?? absentConfigPath()
-            let resolution = resolveStore(environment: arm.environment, configPath: configPath)
-
-            switch (arm.shell, resolution) {
-            case ("cloud", .cloud(let env, let url)):
-                if let expected = arm.announcedUrl {
-                    XCTAssertEqual(url, expected, "\(arm.name): announced URL")
-                }
-                assertChildStoreEnv(env, equals: arm.childStoreEnv, arm: arm.name)
-
-            case ("local", .explicitLocal(let env, let selectedBy)):
-                // EQUALITY, not membership. This assertion used to read
-                // `storeSelectingKeys.contains(selectedBy)` — a 10-key set that
-                // includes the URL and API-key names — so it asserted "it is some
-                // store key" while the fix claims "it is the key that ACTUALLY
-                // chose local". Measured: planting `apiUrlKeys[0]` in the DB-path
-                // branch left the whole suite green. The DB-path branch is also
-                // the commit's own motivating example, so the one case that had
-                // to be pinned was the one nothing could fail on.
-                guard let expected = arm.expectedSelectedBy else {
-                    XCTFail("\(arm.name): a local arm must state expectedSelectedBy")
-                    break
-                }
-                XCTAssertEqual(
-                    selectedBy, expected,
-                    "\(arm.name): local must name the key that actually chose it"
-                )
-                assertChildStoreEnv(env, equals: arm.childStoreEnv, arm: arm.name)
-
-            case ("unresolved", .unresolved(let reason)):
-                if let needle = arm.reasonContains {
-                    XCTAssertTrue(
-                        reason.contains(needle),
-                        "\(arm.name): reason did not name \(needle) — got: \(reason)"
-                    )
-                }
-
-            default:
-                XCTFail("\(arm.name): expected shell=\(arm.shell), got \(resolution.debugDescription)")
-            }
-        }
+    private func assertRefused(_ resolution: StoreResolution) {
+        guard case .unresolved = resolution else { Issue.record("Expected configuration refusal"); return }
     }
 
-    /// The child must receive EXACTLY the store-selecting keys the fixture names —
-    /// no more. "No more" is the half that matters: the defect was an inherited
-    /// key surviving into the child and redirecting the store behind the shell's
-    /// back, and a subset check would not have caught it.
-    private func assertChildStoreEnv(
-        _ env: [String: String],
-        equals expected: [String: String]?,
-        arm: String
-    ) {
-        guard let expected else { return }
-        var actual: [String: String] = [:]
-        for key in StoreEnvContract.storeSelectingKeys {
-            if let value = env[key] { actual[key] = value }
-        }
-        XCTAssertEqual(
-            actual.keys.sorted(), expected.keys.sorted(),
-            "\(arm): store-selecting keys handed to the child"
-        )
-        for (key, value) in expected {
-            XCTAssertEqual(actual[key], value, "\(arm): value of \(key) handed to the child")
-        }
+    @Test func testExactReceiptPreservesCredentialInputsWithoutDisplayingValues() throws {
+        let dir = try temporaryDirectory()
+        let (bun, app) = try fakePayload(dir, script: "test \"$1\" = --no-env-file || exit 3\ntest \"$2\" = --eval || exit 3\nprintf '%s\\n' '\(receipt)'")
+        let secret = UUID().uuidString
+        let env = ["HOME": dir.path, "HASNA_STATION": UUID().uuidString, "HASNA_CONVERSATIONS_API_KEY": secret, "HASNA_PROFILE": "fixture-profile"]
+        let result = resolveStore(bunPath: bun, appDirectory: app, environment: env)
+        guard case .cloud(let childEnv) = result else { Issue.record("Expected shared configuration"); return }
+        #expect(childEnv == env)
+        #expect(!(result.debugDescription.contains(secret)))
+        #expect(!(result.debugDescription.contains("fixture-profile")))
     }
-}
 
-// MARK: - The property, stated directly
-
-final class StoreGuardPropertyTests: XCTestCase {
-
-    /// Whatever the shell announces, the environment it hands the child must
-    /// contain no key that could select the other store. This is the invariant
-    /// the divergence broke, asserted independently of any single arm.
-    func testCloudChildEnvCarriesNoLocalSelectingKey() throws {
-        let hostileEnv = [
-            "HASNA_CONVERSATIONS_DB_PATH": "/tmp/should-not-survive.db",
-            "CONVERSATIONS_DB_PATH": "/tmp/should-not-survive.db",
-            "PATH": "/usr/bin",
-        ]
-        let configPath = try writeConfigFile([
-            "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
-            "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
-        ])
-
-        guard case .cloud(let env, _) = resolveStore(environment: hostileEnv, configPath: configPath) else {
-            return XCTFail("fleet config naming the hosted service must resolve to cloud")
-        }
+    @Test func testAllRetiredDatabaseSelectorsRefuseBeforeRuntimeStarts() throws {
+        let dir = try temporaryDirectory()
+        let (bun, app) = try fakePayload(dir, script: "touch '\(dir.appendingPathComponent("unexpected-start").path)'\nprintf '%s\\n' '\(receipt)'")
         for key in StoreEnvContract.dbPathKeys {
-            XCTAssertNil(env[key], "\(key) survived into the child environment")
+            let secretPath = dir.appendingPathComponent("preserved-\(UUID().uuidString).db").path
+            let result = resolveStore(bunPath: bun, appDirectory: app, environment: [key: secretPath])
+            assertRefused(result)
+            #expect(!(result.debugDescription.contains(secretPath)))
+            #expect(result.debugDescription.contains(key))
         }
-        // Unrelated inherited variables are untouched — the shell strips the
-        // store-selecting keys, not the environment.
-        XCTAssertEqual(env["PATH"], "/usr/bin")
+        #expect(!(FileManager.default.fileExists(atPath: dir.appendingPathComponent("unexpected-start").path)))
     }
 
-    /// The positive control for the test above: the same assertion must FAIL on a
-    /// child environment built the old way (inherit everything, add the URL and
-    /// key). Without this, "no local-selecting key survived" could be passing
-    /// because the check cannot see them.
-    func testTheGuardAssertionCanFail() {
-        let oldStyleChildEnv = [
-            "HASNA_CONVERSATIONS_DB_PATH": "/tmp/should-not-survive.db",
-            "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
-            "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
-        ]
-        let survivors = StoreEnvContract.dbPathKeys.filter { oldStyleChildEnv[$0] != nil }
-        XCTAssertEqual(
-            survivors, ["HASNA_CONVERSATIONS_DB_PATH"],
-            "the survivor check must detect a planted local-selecting key"
-        )
-    }
-
-    /// Explicit local is supported and announced as local — the guard refuses
-    /// ambiguity, not local storage. Local is selected by a DB path (or by the
-    /// absence of an API pair).
-    func testExplicitLocalIsAnnouncedAsLocal() throws {
-        let configPath = try writeConfigFile(["HASNA_CONVERSATIONS_DB_PATH": "/tmp/fixture.db"])
-        guard case .explicitLocal(let env, let selectedBy) =
-            resolveStore(environment: [:], configPath: configPath) else {
-            return XCTFail("explicit local must resolve to explicitLocal")
-        }
-        XCTAssertEqual(env["HASNA_CONVERSATIONS_DB_PATH"], "/tmp/fixture.db")
-        XCTAssertEqual(selectedBy, "HASNA_CONVERSATIONS_DB_PATH")
-    }
-
-    /// A debug description must never carry the API key value: XCTest prints it
-    /// on failure, and test output is persisted and served.
-    func testDebugDescriptionNeverPrintsTheApiKey() throws {
-        let configPath = try writeConfigFile([
-            "HASNA_CONVERSATIONS_API_URL": "https://conversations.hasna.xyz/v1",
-            "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
-        ])
-        let described = resolveStore(environment: [:], configPath: configPath).debugDescription
-        XCTAssertFalse(described.contains("fixture-not-a-real-credential"))
-        XCTAssertTrue(described.contains("HASNA_CONVERSATIONS_API_KEY"), "key NAMES are fine")
-    }
-}
-
-// MARK: - What the shell announces about the hosted URL
-
-/// A synthetic marker, never a real credential. It is planted into a URL and the
-/// assertions below look for its ABSENCE from what the shell would log. It has to
-/// be synthetic because a failing assertion prints the announced string, and test
-/// output is persisted and served.
-private let plantedSecret = "planted-control-not-a-real-credential"
-
-/// The host every arm points at, asserted to SURVIVE — a mask that returns the
-/// empty string, or any constant, satisfies every absence check below.
-private let announcedHost = "conversations.hasna.xyz"
-
-/// Every position the URL grammar lets an operator put a string into, other than
-/// the scheme, host and port that name the server itself.
-///
-/// Written as one property applied to a list of positions, deliberately, rather
-/// than as a case per shape. Enumerating the shapes the author happened to think
-/// of IS the defect this suite exists to close: the previous mask cleared `query`
-/// and `fragment` — the two shapes its author had in mind — and re-emitted
-/// `user:password@` verbatim into `NSLog`, while the doc comment above it claimed
-/// scheme, host, port and path were all that survived. A position nobody listed
-/// has to fail here rather than ship.
-private let secretBearingURLs: [(position: String, url: String)] = [
-    ("userinfo (user)",
-     "https://\(plantedSecret)@\(announcedHost)/v1"),
-    ("userinfo (password)",
-     "https://svc:\(plantedSecret)@\(announcedHost)/v1"),
-    ("path segment",
-     "https://\(announcedHost)/v1/\(plantedSecret)"),
-    ("query",
-     "https://\(announcedHost)/v1?access_token=\(plantedSecret)"),
-    ("fragment",
-     "https://\(announcedHost)/v1#access_token=\(plantedSecret)"),
-    ("every position at once",
-     "https://svc:\(plantedSecret)@\(announcedHost):8443"
-        + "/v1/\(plantedSecret)?access_token=\(plantedSecret)#access_token=\(plantedSecret)"),
-]
-
-final class AnnouncedUrlRedactionTests: XCTestCase {
-
-    /// POSITIVE CONTROL. The absence assertions below are only evidence if the
-    /// probe can see the marker when it IS there — otherwise "not found" means
-    /// the check is blind, not that the output is clean.
-    func testTheProbeDetectsThePlantedSecretWhenPresent() {
-        for arm in secretBearingURLs {
-            XCTAssertTrue(
-                arm.url.contains(plantedSecret),
-                "\(arm.position): the probe cannot see the marker in its own input"
-            )
+    @Test func testInvalidExtraAndOversizedReceiptsRefuse() throws {
+        for script in [
+            "printf '%s\\n' '{\"version\":1,\"transport\":\"local\"}'",
+            "printf '%s\\n' '\(receipt)' 'extra'",
+            "printf '%s\\n' '\(receipt)' '\(receipt)'",
+            "printf '%s\\n' '{\"version\":1,\"transport\":\"cloud-http\",\"key\":\"fixture\"}'",
+            "printf '%0500d' 0",
+            "exit 0",
+        ] {
+            let dir = try temporaryDirectory()
+            let (bun, app) = try fakePayload(dir, script: script)
+            assertRefused(resolveStore(bunPath: bun, appDirectory: app, environment: [:]))
         }
     }
 
-    /// THE PROPERTY: whatever an operator put in the URL, it is not in the log.
-    func testAnnouncedUrlDropsTheSecretInEveryGrammarPosition() {
-        for arm in secretBearingURLs {
-            let announced = loggableURL(arm.url)
-            XCTAssertFalse(
-                announced.contains(plantedSecret),
-                "\(arm.position): the app would NSLog a credential — announced: \(announced)"
-            )
+    @Test func testNonzeroExitAndRawErrorsRemainPrivate() throws {
+        let dir = try temporaryDirectory()
+        let syntheticSecret = UUID().uuidString
+        let (bun, app) = try fakePayload(dir, script: "printf '%s\\n' '\(receipt)'\nprintf '%s\\n' '\(syntheticSecret)' >&2\nexit 2")
+        let result = resolveStore(bunPath: bun, appDirectory: app, environment: [:])
+        assertRefused(result)
+        #expect(!(result.debugDescription.contains(syntheticSecret)))
+    }
+
+    @Test func testTimeoutTerminatesPreflightAndRefuses() throws {
+        for script in ["exec /bin/sleep 5", "printf '%s\\n' '\(receipt)'\nexec /bin/sleep 5"] {
+            let dir = try temporaryDirectory()
+            let (bun, app) = try fakePayload(dir, script: script)
+            let start = ProcessInfo.processInfo.systemUptime
+            assertRefused(resolveStore(bunPath: bun, appDirectory: app, environment: [:], timeout: 0.1))
+            #expect(ProcessInfo.processInfo.systemUptime - start < 2)
         }
     }
 
-    /// The other direction. Every assertion above is satisfied by a mask that
-    /// returns "" or a fixed string, so the announcement must still identify the
-    /// server it was written to identify.
-    func testAnnouncedUrlStillNamesTheServer() {
-        for arm in secretBearingURLs {
-            XCTAssertTrue(
-                loggableURL(arm.url).contains(announcedHost),
-                "\(arm.position): the announcement no longer names the host"
-            )
+    @Test func testMissingBundledResolverRefusesWithoutStartingRuntime() throws {
+        let dir = try temporaryDirectory()
+        let (bun, app) = try fakePayload(dir, script: "touch '\(dir.appendingPathComponent("unexpected-start").path)'")
+        try FileManager.default.removeItem(at: app.appendingPathComponent("src/lib/store/index.ts"))
+        assertRefused(resolveStore(bunPath: bun, appDirectory: app, environment: [:]))
+        #expect(!(FileManager.default.fileExists(atPath: dir.appendingPathComponent("unexpected-start").path)))
+    }
+
+    @Test func testActualBundledPayloadUsesSharedSavedCredentialsWithoutLegacyFilesOrDotenv() throws {
+        let dir = try temporaryDirectory()
+        let app = dir.appendingPathComponent("Hasna Conversations.app/Contents/Resources/app")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        // Copy the shipped source layout, so resolution is tested outside the
+        // checkout's cwd. Only dependency installation is shared with the fixture.
+        try FileManager.default.copyItem(at: packageDirectory.appendingPathComponent("src"), to: app.appendingPathComponent("src"))
+        for name in ["package.json", "tsconfig.json"] {
+            try FileManager.default.copyItem(at: packageDirectory.appendingPathComponent(name), to: app.appendingPathComponent(name))
         }
-        // Scheme, host and port are kept, exactly and only.
-        XCTAssertEqual(loggableURL("https://\(announcedHost)/v1"), "https://\(announcedHost)")
-        XCTAssertEqual(
-            loggableURL("https://\(announcedHost):8443/v1?a=1#b=2"),
-            "https://\(announcedHost):8443",
-            "a non-default port distinguishes one deployment from another and must survive"
-        )
-        XCTAssertEqual(loggableURL("http://127.0.0.1:3000/"), "http://127.0.0.1:3000")
-        XCTAssertEqual(
-            loggableURL("https://[::1]:8443/v1"), "https://[::1]:8443",
-            "an IPv6 literal must keep its brackets or the port reads as part of the address"
-        )
-        // And it is not a constant: a different server announces differently.
-        XCTAssertNotEqual(
-            loggableURL("https://\(announcedHost)/v1"),
-            loggableURL("https://someone-elses-host.example/v1")
-        )
-        // A URL the transport could never use names nothing rather than echoing
-        // an unparsed string straight back into the log.
-        XCTAssertEqual(loggableURL("not a url at all"), "(unparseable URL)")
-    }
-
-    /// END TO END, through the shipped path: the value comes out of a real config
-    /// file, through `resolveStore`, to the string `main.swift` hands to `NSLog`.
-    /// The child must STILL receive the URL in full — a mask that also breaks the
-    /// connection is a different bug.
-    func testEndToEndAnnouncementDropsTheSecretAndTheChildStillGetsTheUrl() throws {
-        for arm in secretBearingURLs {
-            let configPath = try writeConfigFile([
-                "HASNA_CONVERSATIONS_API_URL": arm.url,
-                "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
-            ])
-            guard case .cloud(let env, let announced) =
-                resolveStore(environment: [:], configPath: configPath) else {
-                XCTFail("\(arm.position): a usable https URL must still resolve to cloud")
-                continue
-            }
-            XCTAssertFalse(
-                announced.contains(plantedSecret),
-                "\(arm.position): the app would NSLog a credential — announced: \(announced)"
-            )
-            XCTAssertEqual(
-                env["HASNA_CONVERSATIONS_API_URL"], arm.url,
-                "\(arm.position): the child must still receive the configured URL in full"
-            )
-        }
-    }
-
-    /// `debugDescription` prints the same announced URL, and XCTest prints it on
-    /// any failure — so it inherits the property and is asserted directly rather
-    /// than assumed to follow.
-    func testDebugDescriptionDropsTheSecretInEveryGrammarPosition() throws {
-        for arm in secretBearingURLs {
-            let configPath = try writeConfigFile([
-                "HASNA_CONVERSATIONS_API_URL": arm.url,
-                "HASNA_CONVERSATIONS_API_KEY": "fixture-not-a-real-credential",
-            ])
-            let described = resolveStore(environment: [:], configPath: configPath).debugDescription
-            XCTAssertFalse(
-                described.contains(plantedSecret),
-                "\(arm.position): debugDescription leaked a credential — \(described)"
-            )
-        }
-    }
-}
-
-// MARK: - Config-file reading
-
-final class EnvFileTests: XCTestCase {
-
-    /// The reviewer listed every row below as a branch with no evidence behind it.
-    func testParsesExportPrefixQuotesAndComments() throws {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("hasna-envfile-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let path = dir.appendingPathComponent("conversations.env").path
-        try """
-        # a comment
-
-        export HASNA_CONVERSATIONS_API_URL="https://conversations.hasna.xyz/v1"
-        HASNA_CONVERSATIONS_AUTH='fixture-not-a-real-credential'
-        NOT_AN_ASSIGNMENT
-        """.write(toFile: path, atomically: true, encoding: .utf8)
-
-        let parsed = try parseEnvFile(at: path)
-        XCTAssertEqual(parsed["HASNA_CONVERSATIONS_API_URL"], "https://conversations.hasna.xyz/v1")
-        XCTAssertEqual(parsed["HASNA_CONVERSATIONS_AUTH"], "fixture-not-a-real-credential")
-        XCTAssertNil(parsed["NOT_AN_ASSIGNMENT"])
-    }
-
-    func testParsesCRLFLineEndings() throws {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("hasna-envfile-crlf-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let path = dir.appendingPathComponent("conversations.env").path
-        let body = "HASNA_CONVERSATIONS_API_URL=https://conversations.hasna.xyz/v1\r\n"
-            + "HASNA_CONVERSATIONS_AUTH=fixture-not-a-real-credential\r\n"
-        try body.write(toFile: path, atomically: true, encoding: .utf8)
-
-        guard case .cloud(_, let url) = resolveStore(environment: [:], configPath: path) else {
-            return XCTFail("CRLF config must still resolve to cloud")
-        }
-        XCTAssertEqual(url, "https://conversations.hasna.xyz")
-    }
-
-    func testAbsentFileIsNotAnError() throws {
-        XCTAssertEqual(try parseEnvFile(at: absentConfigPath()), [:])
-    }
-
-    /// "Present but unreadable" must not be reported as "does not define its
-    /// variables" — that sends the operator to edit a file that is already right.
-    func testUnreadableFileNamesTheReadFailure() throws {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("hasna-envfile-unreadable-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let path = dir.appendingPathComponent("conversations.env").path
-        try "HASNA_CONVERSATIONS_AUTH=fixture-not-a-real-credential\n"
-            .write(toFile: path, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path)
-
-        // Running as root defeats the permission bit, so the branch is
-        // unreachable there. Skip rather than assert a check that cannot fail.
-        try XCTSkipIf(getuid() == 0, "root bypasses the unreadable-file branch")
-
-        guard case .unresolved(let reason) = resolveStore(environment: [:], configPath: path) else {
-            return XCTFail("an unreadable config file must refuse, not fall through to local")
-        }
-        XCTAssertTrue(
-            reason.contains("could not be read"),
-            "reason must name the read failure, not a missing variable — got: \(reason)"
-        )
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        try FileManager.default.createSymbolicLink(at: app.appendingPathComponent("node_modules"), withDestinationURL: packageDirectory.appendingPathComponent("node_modules"))
+        let home = dir.appendingPathComponent("home")
+        let saved = home.appendingPathComponent(".hasna/conversations/config")
+        try FileManager.default.createDirectory(at: saved, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let token = UUID().uuidString
+        let credential = saved.appendingPathComponent("credentials")
+        try "HASNA_CONVERSATIONS_API_URL=http://127.0.0.1:1\nHASNA_CONVERSATIONS_API_KEY=\(token)\n".write(to: credential, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: credential.path)
+        let legacy = home.appendingPathComponent(".hasna/fleet-env")
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        try "CONVERSATIONS_DB_PATH=legacy.db\n".write(to: legacy.appendingPathComponent("conversations.env"), atomically: true, encoding: .utf8)
+        try "CONVERSATIONS_DB_PATH=dotenv.db\n".write(to: app.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+        let env = ["HOME": home.path, "HASNA_HOME": home.appendingPathComponent(".hasna").path, "HASNA_STATION": UUID().uuidString, "PATH": "/usr/bin:/bin"]
+        let candidates = [ProcessInfo.processInfo.environment["CONVERSATIONS_TEST_BUN"], "/opt/homebrew/bin/bun", FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".bun/bin/bun").path].compactMap { $0 }
+        guard let bun = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { Issue.record("Bun is required for the actual bundled resolver test"); return }
+        let configured = resolveStore(bunPath: bun, appDirectory: app, environment: env)
+        guard case .cloud(let childEnv) = configured else { Issue.record("Saved account configuration failed to resolve"); return }
+        #expect(childEnv == env)
+        #expect(!(configured.debugDescription.contains(token)))
+        try FileManager.default.removeItem(at: credential)
+        assertRefused(resolveStore(bunPath: bun, appDirectory: app, environment: env))
+        let enumerator = FileManager.default.enumerator(atPath: dir.path)!
+        let databases = enumerator.allObjects.compactMap { $0 as? String }.filter { $0.hasSuffix(".db") || $0.hasSuffix(".db-wal") || $0.hasSuffix(".db-shm") }
+        #expect(databases.isEmpty)
     }
 }

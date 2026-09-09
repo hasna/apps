@@ -150,7 +150,7 @@ case "${1:-}" in
   inspect)
     printf 'healthy\n'
     ;;
-  logs | rm)
+  logs | rm | network)
     ;;
   *)
     printf 'unexpected docker command: %s\n' "$*" >&2
@@ -215,7 +215,7 @@ run_case() {
   fi
 
   test "$(grep -c '^build ' "$log")" = "2"
-  test "$(grep -c '^run ' "$log")" = "4"
+  test "$(grep -c '^run ' "$log")" = "6"
   if grep -E '^(build|run) ' "$log" | grep -Fv -- "--platform $expected_platform" >/dev/null; then
     printf '%s did not propagate %s to every build and run:\n' "$case_name" "$expected_platform" >&2
     cat "$log" >&2

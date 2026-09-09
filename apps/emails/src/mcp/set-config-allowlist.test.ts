@@ -8,7 +8,7 @@
 // retired-config refusal at the next mode resolution (hasna/apps#1566), and
 // every credential-bearing key, which points an integration wherever the agent
 // likes.
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -24,6 +24,10 @@ import {
 } from "../lib/config.js";
 import { isSensitiveKey } from "../lib/redaction.js";
 import { startHttpServer } from "./http.js";
+import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
+let api: V1Stub;
+beforeAll(async () => { api = await startV1Stub(); });
+afterAll(() => api.stop());
 
 // Keys whose write would change what datastore the process talks to, or hand an
 // agent a credential. None may ever become writable through the agent surface.
@@ -66,35 +70,37 @@ let tmpHome: string;
 let originalHome: string | undefined;
 let originalMcpToken: string | undefined;
 let originalEmailsDbPath: string | undefined;
+let originalCanonicalDbPath: string | undefined;
 
 // The MCP HTTP transport requires a bearer token once #68 lands, and ignores one
 // before that. Setting it (and sending it) here keeps this file green whichever
 // order the two PRs merge in.
-const MCP_HTTP_TOKEN = "set-config-allowlist-test-token-0123456789";
+const MCP_HTTP_TOKEN = crypto.randomUUID();
 
 beforeEach(() => {
   originalHome = process.env["HOME"];
   originalMcpToken = process.env["EMAILS_MCP_HTTP_TOKEN"];
   originalEmailsDbPath = process.env["EMAILS_DB_PATH"];
+  originalCanonicalDbPath = process.env["HASNA_EMAILS_DB_PATH"];
   tmpHome = mkdtempSync(join(tmpdir(), "emails-set-config-allowlist-"));
   process.env["HOME"] = tmpHome;
   process.env["EMAILS_MCP_HTTP_TOKEN"] = MCP_HTTP_TOKEN;
-  // The HTTP server builds the MCP graph on the first authorized request, and
-  // buildServer() refuses to register against an unresolved deployment (fail-closed
-  // ruling, 2026-09-04). These cases exercise the set_config allowlist, not storage
-  // selection, so the explicit local database is selected the way the suite's
-  // local-mode cases do (an explicit database path is local-mode's documented opt-in;
-  // the mode selector itself is never spelled in a test file).
-  process.env["EMAILS_DB_PATH"] = ":memory:";
+  // Configuration tools do not need a mail database.
+  delete process.env["EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_DB_PATH"];
+  api.applyEnv();
 });
 
 afterEach(() => {
+  api.clearEnv();
   if (originalHome === undefined) delete process.env["HOME"];
   else process.env["HOME"] = originalHome;
   if (originalMcpToken === undefined) delete process.env["EMAILS_MCP_HTTP_TOKEN"];
   else process.env["EMAILS_MCP_HTTP_TOKEN"] = originalMcpToken;
   if (originalEmailsDbPath === undefined) delete process.env["EMAILS_DB_PATH"];
   else process.env["EMAILS_DB_PATH"] = originalEmailsDbPath;
+  if (originalCanonicalDbPath === undefined) delete process.env["HASNA_EMAILS_DB_PATH"];
+  else process.env["HASNA_EMAILS_DB_PATH"] = originalCanonicalDbPath;
   rmSync(tmpHome, { recursive: true, force: true });
 });
 

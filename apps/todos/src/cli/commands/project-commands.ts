@@ -15,7 +15,7 @@ import { addComment } from "../../db/comments.js";
 import { addPlanComment } from "../../db/plan-comments.js";
 import { getPlan, resolvePlanRefDetailed } from "../../db/plans.js";
 import { getTask } from "../../db/tasks.js";
-import { getTodosCloudClient, cloudAddComment, cloudAddPlanComment, cloudApplyProjectTaskListEnsure, cloudCreateProject, cloudDeleteProject, cloudListProjects, cloudListTasks, cloudPlanProjectTaskListEnsure, cloudResolvePlan, cloudResolveProject, cloudResolveProjectRef, cloudRollbackProjectTaskListEnsure, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
+import { getTodosCloudClient, cloudAddComment, cloudAddPlanComment, cloudApplyProjectTaskListEnsure, cloudCreateProject, cloudDeleteProjectPreserving, cloudListProjects, cloudListTasks, cloudPlanProjectTaskListEnsure, cloudResolvePlan, cloudResolveProject, cloudResolveProjectRef, cloudRollbackProjectTaskListEnsure, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
 import { resolveWritableIdentity } from "../../lib/creator-identity.js";
 import {
   buildProjectDependencyGraph,
@@ -1126,7 +1126,7 @@ export function registerProjectCommands(program: Command) {
       if (opts.deregister) {
         const project = cloud ? await cloudResolveProject(cloud, opts.deregister) : resolveExplicitProject(opts.deregister);
         const counts = cloud
-          ? countTasksForDeregistration(await cloudListTasks(cloud, { project_id: project.id, include_subtasks: true }))
+          ? countTasksForDeregistration(await (await import("../task-query-api.js")).cloudQueryTasks(cloud, { project_id: project.id, include_subtasks: true }))
           : countProjectTasks(project.id);
 
         if (opts.pathPrefix && !pathIsWithinPrefix(project.path, opts.pathPrefix)) {
@@ -1148,7 +1148,7 @@ export function registerProjectCommands(program: Command) {
         };
 
         if (!opts.dryRun) {
-          if (cloud) await cloudDeleteProject(cloud, project.id);
+          if (cloud) await cloudDeleteProjectPreserving(cloud, project.id, true, true);
           else deleteProject(project.id);
         }
 
@@ -1250,14 +1250,16 @@ export function registerProjectCommands(program: Command) {
     .action(async (opts: { project?: string; limit?: string; contract?: boolean; json?: boolean }) => {
       try {
         const globalOpts = program.opts();
-        const project = opts.project ? resolveExplicitProject(opts.project) : autoDetectProject(globalOpts);
+        const cloud = getTodosCloudClient();
+        const project = cloud ? await cloudResolveProject(cloud, opts.project ?? globalOpts.project ?? process.cwd()) : opts.project ? resolveExplicitProject(opts.project) : autoDetectProject(globalOpts);
         if (!project) {
           handleError(new Error("Project not found: provide --project or run inside a registered project"));
         }
 
         const { createTodosProjectPanel } = await import("../../lib/project-panel.js");
         const limit = opts.limit ? Number(opts.limit) : 20;
-        const panel = createTodosProjectPanel(project.id, { limit });
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("limit must be an integer from 1 to 100");
+        const panel = cloud ? await (await import("../project-api.js")).cloudProjectPanel(cloud,project,limit) : createTodosProjectPanel(project.id, { limit });
         if (opts.json || opts.contract || globalOpts.json) {
           output(panel, true);
           return;

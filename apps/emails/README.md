@@ -1,6 +1,6 @@
 # @hasna/emails
 
-Open-source email infrastructure for local SQLite workflows and operator-owned self-hosted deployments, with a CLI, MCP server, library, local dashboard API, Resend, AWS SES, and Cloudflare-routed inbound mail.
+Open-source email management through a shared API, with a terminal UI, CLI, MCP server, and library. Manage mailboxes, domains, providers, and messages across machines using the same account registry. Integrations include Resend, AWS SES, and Cloudflare-routed inbound mail.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
@@ -11,7 +11,7 @@ Open-source email infrastructure for local SQLite workflows and operator-owned s
 > `emails-mcp`, and `emails-serve` bins. `@hasna/mailery` on npm is the
 > abandoned 0.6.x line, and the `mailery*` bins belong to the separate cloud CLI
 > — neither is this package. The env prefix is `EMAILS_*`. This stays a
-> **cloud-free** OSS package: Mailery is a separate, unrelated product, not a
+> public OSS package: Mailery is a separate, unrelated product, not a
 > hosted version of this one.
 
 ## Install
@@ -25,52 +25,56 @@ bun install -g @hasna/emails
 
 ## Deployment
 
-The data backend is selected by `EMAILS_DATABASE_URL`: unset or blank means
-local SQLite, a PostgreSQL URL means PostgreSQL. On the client, the shared
-credential resolver (hasna/apps#1720) routes the process: the hosted Emails API is
-used whenever the resolver produces a URL and a credential — the canonical
-`HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY` environment names (or the
-one-release `EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` aliases), the
-macOS Keychain items for this app (`api-url` / `api-key`), or the
-`~/.hasna/emails/config/credentials` file. A live user session
-(`EMAILS_SESSION_TOKEN`) or agent identity token (`EMAILS_IDP_TOKEN`) wins as the
-bearer credential. Local SQLite is reachable ONLY by an explicit choice: set
-`EMAILS_DB_PATH` / `HASNA_EMAILS_DB_PATH` to a database file, and a local run
-prints `emails: local mode` on stderr. Nothing configured fails closed instead of
-serving an empty local database (owner ruling 2026-09-04, incident 715712).
-Deployment modes no longer exist (hasna/apps#1566/#1720): the deployment-mode
-environment variables and the `emails_mode` config-file key select nothing and
-are deleted. Local SQLite
-storage keeps the database,
-files, and credentials on the current machine; a PostgreSQL backend serves the
-authenticated `/v1` API from operator-owned infrastructure. Provider
-integrations always use user-supplied credentials; the package has no hosted
-account or control-plane service.
+The CLI, terminal UI, and MCP tools connect to the authenticated Emails `/v1`
+API. The selected account's PostgreSQL registry holds its providers, domains,
+addresses, sources, and mail. Signing into the same account on another machine
+exposes that registry without registering the same resources again.
 
-Local provider credentials are envelope-encrypted with a root key kept outside
-SQLite. Rotation, locked-keyring recovery, and backup rebind procedures are in
-[Provider credential storage](docs/PROVIDER_SECRETS.md).
+Configure API access through the shared credential resolver: canonical
+`HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY` settings, the macOS Keychain
+items for this app (`api-url` / `api-key`), or the
+`~/.hasna/emails/config/credentials` file. Existing
+`EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` aliases remain accepted.
+A live user session (`EMAILS_SESSION_TOKEN`) or agent identity token
+(`EMAILS_IDP_TOKEN`) takes precedence as the bearer credential. Missing or
+invalid credentials produce an error; an empty mailbox is not a substitute for
+a failed connection.
+
+Nonblank `HASNA_EMAILS_DB_PATH` or `EMAILS_DB_PATH` settings are rejected by
+ordinary CLI, terminal UI, and MCP clients. Remove those legacy settings and
+configure API access instead. Explicit storage consumers retain their separate
+compatibility contract.
+
+Provider credentials and inbound infrastructure belong to the API service.
+An operator may run that service on their own PostgreSQL and object storage;
+see [Self-Hosted Runtime](#self-hosted-runtime-postgresqls3ses). Client machines
+need account access, not independent provider registrations or mail databases.
 
 ### Client env table
 
 | Variable | Meaning |
 |---|---|
-| `HASNA_EMAILS_API_URL` | Hosted API origin (canonical). Overrides the Keychain `api-url` item and the credentials file. |
-| `HASNA_EMAILS_API_KEY` | Hosted API key (canonical). One of the five resolver tiers. |
+| `HASNA_EMAILS_API_URL` | Emails API origin (canonical). Overrides the Keychain `api-url` item and the credentials file. |
+| `HASNA_EMAILS_API_KEY` | Emails API key (canonical). One of the five resolver tiers. |
 | `EMAILS_SELF_HOSTED_URL` | Accepted alias for `HASNA_EMAILS_API_URL` for one release (one rung below canonical). |
 | `EMAILS_SELF_HOSTED_API_KEY` | Accepted alias for `HASNA_EMAILS_API_KEY` for one release (one rung below canonical). |
 | `EMAILS_SESSION_TOKEN` | The app's own user session (issued by `emails auth login`). Wins as the bearer credential. |
 | `EMAILS_IDP_TOKEN` | The app's own agent identity token (ADR-0002). Wins over the resolved key. |
 | `EMAILS_CLIENT_ENV_SECRET` | Secrets-vault pointer that persists `EMAILS_SESSION_TOKEN` / `EMAILS_IDP_TOKEN` across processes. No longer delivers the URL or API key. |
-| `HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` | Explicit local SQLite file — the ONLY way into local mode. A local run prints `emails: local mode` on stderr. |
 | `HASNA_HOME` / `HASNA_CONFIG_HOME` | Relocate `~/.hasna/emails/config/credentials` (never XDG). |
 | `HASNA_STATION` | Keychain account (falls back to `hostname -s`, then `$USER`). |
 
-The resolver tiers, in order: an explicit `--api-key` / `--profile` argument;
-`HASNA_EMAILS_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_EMAILS_API_KEY_REF`
-pointers; the macOS Keychain items for this app (`api-key`, and `api-url` for the
+The resolver tiers, in order: the deliberate `HASNA_EMAILS_API_KEY_OVERRIDE`
+(a literal key) or `HASNA_PROFILE` (reads `~/.hasna/emails/config/credentials-<profile>`)
+selections — a blank override or an absent profile REFUSES, it is never resolved
+around; the macOS Keychain items for this app (`api-key`, and `api-url` for the
 authority); the `~/.hasna/emails/config/credentials` file (0600); then
-`HASNA_EMAILS_API_KEY`. The authority follows `HASNA_EMAILS_API_URL` → Keychain
+`HASNA_EMAILS_API_KEY`. A `HASNA_EMAILS_API_KEY_REF` secrets-vault pointer is
+recognised as a deliberate selection but refused by name: this client resolves
+its credential synchronously and cannot complete a vault pointer per request.
+The `emails` CLI has no `--api-key` / `--profile` resolver flags (`--profile`
+on inbox/provisioning commands is a legacy provider selector, not an account
+credential; `--api-key` on `provider add` is the Resend key). The authority follows `HASNA_EMAILS_API_URL` → Keychain
 `api-url` → credentials file → the shared default gateway once a credential
 resolves. Nothing configured fails closed; a URL without a credential refuses
 rather than falling back to local data.
@@ -78,31 +82,28 @@ rather than falling back to local data.
 ## Quick Start
 
 ```bash
-# Add a provider (SES or Resend). Prefer an AWS profile locally or the
-# deployment IAM role in self-hosted AWS; avoid storing long-lived AWS keys.
-AWS_PROFILE=emails-operator emails provider add --name production-ses --type ses --region us-east-1
-emails provider add --name production-resend --type resend --api-key ...
+# Inspect the providers and domains already registered to your account
+emails provider list
+emails domain list
+emails address list
 
-# Register a domain you already own and have verified with the provider
-emails domain adopt example.com --provider <id>
+# Connect a domain you own through a configured server provider binding
+emails domain connect example.com --provider <provider-id> --dry-run
+emails domain connect example.com --provider <provider-id>
 
 # See the DNS records the domain must publish, then confirm what is live
 emails domain dns example.com --provider <id>
 emails domain check example.com
 
-# Buy a domain first, if you do not own one yet
-emails domain available example.com
-emails domain buy example.com --email you@example.com ...
-
-# SES send-only setup preserves existing MX, such as Google Workspace
-emails domain adopt example.com --provider <ses-id> --no-inbound
+# Review DNS publication for an owned domain; existing MX is preserved by default
+emails domain setup example.com --provider <provider-id> --dry-run
 
 # Send an email
 emails send --from you@example.com --to them@example.com --subject "Hi" --body "Hello"
 
-# Pull inbound mail from SES/S3 or Cloudflare-routed storage
-emails inbox source add-s3 --bucket <bucket> --prefix inbound/example.com/ --provider <provider-id>
-emails inbox sync-s3 --bucket <bucket> --prefix inbound/example.com/
+# Poll an existing server-bound SES/S3 ingestion source
+emails inbox sources
+emails inbox sync-s3 --source <source-id>
 
 # Inspect mailbox folders and ingestion sources
 emails inbox mailboxes
@@ -117,34 +118,26 @@ EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails db migrate
 EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails self-hosted key create
 ```
 
-## Domain Modes
+## Domains and readiness
 
-Emails is a multi-domain aggregator. Every domain is tracked independently, so
-DNS, inbound, outbound, and safety state belong to the domain, not to the app as
-a whole.
+Emails is a multi-domain aggregator. DNS, inbound routing, outbound permission,
+and readiness evidence belong to each domain in the shared account registry.
+`source_of_truth` is reported as `postgres` for API-managed domains and is not a
+client input.
 
-Use these setup paths:
+`emails domain connect` registers an already-owned domain against a server-bound
+provider and returns its DNS tasks. `emails domain setup`, `domain setup-cloudflare`,
+and `provision domain` can publish sending DNS through the configured Cloudflare
+zone binding. These operations preserve existing MX unless an explicit inbound
+change is requested. Pending DNS verification remains pending in the receipt.
+See [Domain DNS](docs/DOMAIN_DNS.md) for the required server configuration.
 
-The source of truth follows the mode; it is not a per-domain choice. A domain
-created or connected through this client is owned by the app's `/v1` database, so
-`source_of_truth` is reported as `postgres` and is not an input.
-
-| Mode | Who owns the mail source of truth |
-| --- | --- |
-| `local` | The local SQLite/files install |
-| `self_hosted` | Your PostgreSQL/S3/SES or equivalent infrastructure |
-
-The domain setup path is the same either way, because none of it is served over
-the wire: `emails domain add` (or `emails domain adopt` for a domain the
-provider has already verified), then `emails domain dns <domain>` for the
-records to publish, then `emails domain check <domain>` to confirm what is live.
-`emails domain add` provisions the SES receipt rule into the inbound S3 bucket
-by default and refuses — before registering anything — when it cannot, so a
-domain never ends up half-provisioned and silently bouncing; pass `--send-only`
-to deliberately register a domain that should not receive. `emails aws
-setup-inbound` creates the S3 bucket and SES receipt rules on its own, and
-`emails domain readiness` audits the whole inbound chain per domain (MX, SES
-receipt rule, app registration, S3 delivery evidence) to catch drift.
+`emails address provision` checks configured receiving infrastructure before
+ensuring an address in the registry. `emails provision up` composes owned-domain
+DNS, address readiness, and optional delivery probes as a durable API job.
+`provision daemon` advances existing jobs; `provision retry` reuses their saved
+intent and send identities. See [Provision up](docs/PROVISION_UP.md). Registrar
+purchases belong to the separate Domains workflow.
 
 Authentication records are required only for the capability you enable:
 
@@ -152,17 +145,14 @@ Authentication records are required only for the capability you enable:
   configured source.
 - Outbound sending needs ownership verification plus DKIM and SPF/custom MAIL
   FROM alignment for the selected provider.
-- DMARC is per sending domain. It does not block local viewing or inbound
+- DMARC is per sending domain. It does not block message viewing or inbound
   aggregation, but it should be present before production sending and monitored
   before moving from `p=none` to stricter policies.
 
-Self-hosted clients must select `self_hosted` using the
-[client mode settings](#deployment), set `EMAILS_SELF_HOSTED_URL`, and one bearer credential:
-`EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`, or
-`EMAILS_SELF_HOSTED_API_KEY` (in that precedence order). The service uses
+Clients use the API access settings above. The service uses
 `EMAILS_DATABASE_URL`, `EMAILS_API_SIGNING_KEY`,
-`EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS`, and `EMAILS_AUTH_FROM`; Postgres is authoritative
-and there is no hybrid SQLite synchronization mode.
+`EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS`, and `EMAILS_AUTH_FROM`; PostgreSQL is the
+shared source of truth.
 
 After applying migrations, issue client keys on the operator host with
 `emails self-hosted key create`. The plaintext token is displayed once and only
@@ -210,7 +200,7 @@ message-only actions and unavailable page buttons are hidden.
 Settings uses a sidebar and descriptive controls for automatic refresh, mailbox
 selection, appearance, reading preferences, priority senders, and keyboard shortcuts.
 Use Ctrl+Left/Right to switch sections, Tab to focus controls, and Enter to change
-them. View preferences apply to the current session in API-only mode; priority
+them. View preferences apply to the current session; priority
 sender rules are saved to the account. No local email database is created.
 Folders: Inbox · Priority Inbox · Unread · Starred · Sent · Archived · Spam · Trash.
 
@@ -228,17 +218,17 @@ truth.
 ```
 emails ui                # Mailbox UI - inbox, compose, domains, settings
 emails provider          # provider credentials/capabilities (ses, resend, sandbox)
-emails domain / domains  # domain records, purchase, DNS checks, warming
+emails domain / domains  # shared domain records, DNS checks, warming
 emails domain warm       # domain warming schedules: warm, warm-status, warm-list,
                          #   warm-pause, warm-resume, warm-complete, warm-delete
 emails address           # manage sender addresses (add, suspend, activate, quota)
 emails status            # redacted system status + next useful actions
 emails agent context     # agent-oriented context snapshot and workflows
-emails daemon            # background queue/realtime status and restart guidance
-emails logs tail         # local daemon/sync/inbound/scheduler log tails
+emails daemon            # worker status and configured supervisor operations
+emails logs tail         # bounded API worker lifecycle logs
 emails owner             # ownership: register human/agent owners
 emails alias             # per-domain aliases + catch-all routing
-emails forwarding        # app-level forwarding for locally received/synced mail
+emails forwarding        # forwarding for messages received in the shared registry
 emails sendkey           # scoped send keys (restrict an agent to its own addresses)
 emails send-intent       # inspect/reconcile uncertain self-hosted send outcomes
 emails send              # send an email
@@ -260,8 +250,8 @@ emails stats             # delivery statistics (--inbox for received mail)
 emails analytics         # email analytics
 emails doctor            # system diagnostics
 emails doctor delivery   # diagnose missing inbound mail for one address
-emails provision         # registered but intentionally NOT IMPLEMENTED
-emails serve             # local dashboard API or PostgreSQL /v1 service, by EMAILS_DATABASE_URL
+emails provision         # durable DNS/address jobs, up, retry, daemon, roundtrip
+emails serve             # operator HTTP service; standalone dashboard compatibility
 emails mcp               # install MCP server
 emails remove            # remove MCP configuration from supported agent clients
 ```
@@ -342,7 +332,7 @@ emails alias catch-all example.com inbox@example.com   # *@example.com -> inbox@
 emails alias global inbox@example.com                  # protected global catch-all (ALL domains)
 emails alias resolve anything@example.com              # show where it routes
 
-# App-level forwarding: forwards only mail already received or synced locally.
+# App-level forwarding: forwards only mail already received into the account.
 # Use provider-native forwarding when the mailbox provider owns root MX.
 emails forwarding explain support@example.com
 emails forwarding add support@example.com archive@example.net --provider <provider-id>
@@ -384,9 +374,8 @@ One schedule per domain: `warm` refuses to shadow an existing one. `--target` an
 the self-hosted server enforces the cap with, so `warm-status` reports the limit
 that will actually be applied regardless of your machine's timezone.
 
-Schedules live in the `warming_schedules` store, so they work the same whether
-the client is on local SQLite or pointed at a self-hosted server (where the
-server also enforces the limit on `/v1/messages/send`). The MCP twins are
+Schedules live in the shared `warming_schedules` registry. The API enforces
+the limit on `/v1/messages/send` for every client. The MCP twins are
 `create_warming_schedule`, `get_warming_status`, `list_warming_schedules`, and
 `update_warming_status`.
 
@@ -414,7 +403,7 @@ verification-code waiting.
 Terminology used by the CLI, REST API, MCP tools, and TUI:
 
 - **Provider**: credentials and capability, such as SES send rights, Resend API access, or a sandbox.
-- **Source**: an ingestion stream that brings mail into local storage, such as `provider:<id>`, `s3:<bucket>`, Cloudflare-routed inbound storage, `legacy`, or `orphaned:<id>`.
+- **Source**: an ingestion stream that brings mail into the shared registry, such as `provider:<id>`, `s3:<bucket>`, Cloudflare-routed inbound storage, `legacy`, or `orphaned:<id>`.
 - **Mailbox**: the user-visible scope being browsed, such as all mail, one address, or one domain.
 - **Folder**: a mailbox view such as `inbox`, `unread`, `sent`, `starred`, `archived`, `spam`, or `trash`.
 
@@ -425,8 +414,6 @@ emails inbox sources --json
 emails inbox mailboxes --source provider:<id> --json
 emails inbox search invoice --folder sent --source provider:<id> --json
 emails inbox attachments --limit 100 --direction inbound --json
-curl 'localhost:3900/api/sources'
-curl 'localhost:3900/api/mailboxes?source_id=legacy'
 ```
 
 The MCP tool `list_attachments` accepts `limit`, opaque `cursor`, `direction`,
@@ -441,32 +428,34 @@ emails-mcp            # stdio transport (default)
 
 ## REST API
 
-`emails serve` selects the server by its data backend, derived from
-`EMAILS_DATABASE_URL`: unset or blank means `sqlite`, and a PostgreSQL URL means
-`postgresql`. There is no separate server selector for this choice.
+The shared service exposes authenticated `/v1` routes and publishes its wire
+contract at `/openapi.json`. Operators configure `EMAILS_DATABASE_URL` for
+PostgreSQL, apply migrations, and launch `emails-serve`; the PostgreSQL service
+binds to `0.0.0.0:8080` by default. See the deployment instructions below for
+signing keys, tenant authentication, provider bindings, and HTTPS access.
 
-- With the SQLite backend it exposes the unauthenticated, loopback-oriented
-  management API under `/api/*` on `127.0.0.1:3900`.
-- With the PostgreSQL backend it exposes the authenticated `/v1` service on
-  `0.0.0.0:8080`; `/openapi.json` is the formal wire contract.
-- Scoped send keys remain part of the local send authorization model; there is
-  no separate hosted-agent API surface in this OSS server.
+### Standalone compatibility surfaces
 
-```bash
-emails serve   # local dashboard API on 127.0.0.1
-EMAILS_ALLOW_REMOTE=1 emails serve --host 0.0.0.0  # only behind an authenticating proxy/firewall
-
-curl localhost:3900/api/providers
-curl localhost:3900/api/sources
-curl 'localhost:3900/api/mailboxes?source_id=legacy'
-```
+The package still includes a legacy SQLite dashboard under `/api/*` and explicit
+storage exports for existing consumers. Running `emails-serve` without
+`EMAILS_DATABASE_URL` starts that standalone dashboard on `127.0.0.1:3900`.
+Exposing it beyond loopback requires `EMAILS_ALLOW_REMOTE=1` and an explicit
+host, with authentication supplied by the surrounding proxy/firewall. It does
+not become the shared registry used by the ordinary CLI, terminal UI, or MCP
+workflow. Existing operator AWS and registrar helper commands also remain
+separate from account mailbox operations; they can require operator-host cloud
+configuration. They are not a prerequisite for signing another client into
+the shared registry.
 
 ## Library API
 
-Import the stable API from `@hasna/emails`. The public entrypoint covers
-provider/domain/address CRUD, sending, inbound storage and listing, templates,
-contacts and suppression, sequences, exports, ownership helpers, and scoped send
-keys.
+The generated `@hasna/emails/selfhost` client describes the authenticated API.
+The public `@hasna/emails` entrypoint also exports domain, address, sending,
+provisioning, and mail helpers.
+
+Existing low-level database exports remain available for compatibility and
+isolated fixtures. The following example explicitly opens that legacy database;
+it does not configure ordinary CLI or MCP clients:
 
 ```ts
 import {
@@ -509,11 +498,9 @@ console.log(formatDnsTable(records, providerDnsPublishing(provider)));
 ## Inbound Email (AWS SES -> S3)
 
 ```bash
-# Set up S3 bucket + SES receipt rules
-emails aws setup-inbound --domain example.com --bucket my-emails
-
-# Pull received emails on demand
-emails inbox sync-s3 --bucket my-emails --prefix inbound/example.com/
+# Inspect and poll an existing server-bound S3 source
+emails inbox sources
+emails inbox sync-s3 --source <source-id>
 
 # Read-state / organize (works for SES-S3, SMTP, Cloudflare-routed, and legacy imported mail)
 emails inbox list --unread            # filters: --unread/--read/--starred/--archived/--label <l>
@@ -528,11 +515,12 @@ emails inbox star|archive|label <id>  # --undo / --remove to reverse
 
 ### Real-time inbound (no manual sync)
 
-Push delivery so mail lands automatically. `setup-realtime` wires SES → SNS → SQS
-(and attaches the topic to the receipt rule); `watch` long-polls and auto-syncs:
+`setup-realtime` configures delivery across the SES, SNS, and SQS resources
+named by the API service binding. `watch` polls that bound queue and imports
+messages into the shared registry:
 
 ```bash
-emails inbox setup-realtime example.com   # creates SNS topic + SQS queue, saves the queue URL
+emails inbox setup-realtime example.com   # wire the resources configured on the server
 emails inbox watch                        # auto-delivers new mail in real-time (--once to poll once)
 ```
 
@@ -566,8 +554,8 @@ Expose the service through an HTTPS reverse proxy or load balancer with edge
 rate limits, the 1 MiB request limit, bounded upstream timeouts, and network
 rules that keep Postgres and the container port private. The generated client
 rejects remote plaintext HTTP. Self-hosted sends require an idempotency key and
-support at most five inline attachments (10 MiB each, 20 MiB total);
-scheduled sends are not implemented by the self-hosted API. Mailbox read,
+support at most five inline attachments (10 MiB each, 20 MiB total).
+Scheduled sends use a durable API queue and stable send identities. Mailbox read,
 star, archive, label, delete, bulk-by-explicit-id, and authenticated attachment
 retrieval are supported. Outbound rows carrying a send idempotency key are a
 durable delivery ledger and return `409` on delete so their replay fence cannot
@@ -647,18 +635,21 @@ emails db migrate
 emails-serve
 ```
 
-There is no hybrid cache or bidirectional database synchronization mode.
+Clients read and write the shared API registry; no mailbox database synchronization is required between machines.
 
 ## Data
 
-Local mode stores SQLite data and attachment files in the effective data root
-resolved through the `@hasna/paths` resolver (XDG/macOS home layout): the
-legacy `~/.hasna/emails/` stays effective until the store is migrated to the
-resolver data home (`~/.local/share/hasna/emails` on Linux) or the operator
-sets the data-kind override `HASNA_DATA_HOME`; the exact-app overrides
-`HASNA_EMAILS_HOME` / `EMAILS_HOME` name an explicit root.
-Self-hosted mode uses the operator-configured PostgreSQL and object-storage
-services and never falls back to that local directory.
+Mail, addresses, domains, provider references, sources, and provisioning jobs
+belong to the account's API registry. Provider credential material is held by
+the service, and attachment content uses its configured storage. Client disks
+may hold access configuration, view preferences, and files explicitly downloaded
+by the user.
+
+Historical SQLite paths and migrations remain in the standalone compatibility
+code and storage exports. Existing files are not evidence of a current API
+mailbox, and connecting another machine does not require copying those files.
+Retirement of old data is a separate operation; see
+[Station-local retirement](docs/STATION_LOCAL_RETIREMENT.md).
 
 ## Transport
 
