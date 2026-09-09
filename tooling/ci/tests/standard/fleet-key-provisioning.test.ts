@@ -86,7 +86,7 @@ describe("per-user OAuth inventory and anonymous boundary checks", () => {
   });
 
   test("auth modes cannot silently mix shared-key and user-identity configuration", () => {
-    for (const field of ["keySecretId", "keyCheck", "probePath", "mintTarget"]) {
+    for (const field of ["keySecretId", "keyCheck", "probePath", "probeAuth", "mintTarget"]) {
       for (const value of ["configured", null, undefined]) {
         expect(() => resolveEntry({ ...raw, [field]: value })).toThrow(/cannot set/);
       }
@@ -259,6 +259,15 @@ describe("registry: the written inventory of hosted apps", () => {
     expect(notes).toContain("API_KEY_SIGNING_SECRET");
     expect(notes).toContain("hasna-ops-mint-key-messages");
     expect(fs.existsSync(path.join(ROOT, ".github", "workflows", "deploy-messages.yml"))).toBe(false);
+  });
+
+  test("Skills probes the internal gateway version contract, with commercial isolation explicit", () => {
+    const skills = registry.find((app) => app.app === "skills")!;
+    expect(probeUrlFor(skills.baseUrl, skills.probePath)).toBe("https://api.hasna.com/skills/v1/skills");
+    expect(skills.probeAuth).toBe("bearer");
+    expect(skills.keySecretId).toBe("hasna/oss/skills/api-key");
+    expect(skills.notes).toContain("independent Skills origin registration");
+    expect(skills.baseUrl).not.toContain("skills.md");
   });
 
   test("defaults are applied, and only exceptions are written down", () => {
@@ -1243,4 +1252,30 @@ describe("the lanes actually call the checker", () => {
       expect(wf).not.toMatch(/echo\s+.*SecretString/);
     }
   });
+});
+
+
+test("probe transport selects bearer explicitly and never forwards keys through redirects", async () => {
+  const calls: Array<{ authorization: string | null; apiKey: string | null }> = [];
+  let redirected = 0;
+  const target = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch() { redirected++; return new Response(null, { status: 204 }); } });
+  const origin = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request) {
+    calls.push({ authorization: request.headers.get("authorization"), apiKey: request.headers.get("x-api-key") });
+    if (new URL(request.url).pathname === "/redirect") return Response.redirect(target.url, 302);
+    return new Response(null, { status: request.headers.has("authorization") || request.headers.has("x-api-key") ? 204 : 401 });
+  } });
+  try {
+    const io = createIo({ timeoutMs: 3000 });
+    expect(await io.probe(origin.url.href, null, { auth: "bearer" })).toBe(401);
+    expect(await io.probe(origin.url.href, "fixture-key", { auth: "bearer" })).toBe(204);
+    expect(await io.probe(origin.url.href, "fixture-key")).toBe(204);
+    expect(await io.probe(new URL("/redirect", origin.url).href, "fixture-key", { auth: "bearer" })).toBeNull();
+    expect(redirected).toBe(0);
+    expect(calls.slice(0, 3)).toEqual([
+      { authorization: null, apiKey: null },
+      { authorization: "Bearer fixture-key", apiKey: null },
+      { authorization: null, apiKey: "fixture-key" },
+    ]);
+    expect(() => resolveEntry({ ...entry(), probeAuth: "cookie" } as any)).toThrow("probeAuth");
+  } finally { origin.stop(true); target.stop(true); }
 });

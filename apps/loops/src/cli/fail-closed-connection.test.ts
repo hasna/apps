@@ -28,6 +28,12 @@ function connectionEnv(extra: Record<string, string> = {}): Record<string, strin
     [API_URL_KEY]: "",
     [API_KEY_KEY]: "",
     [CONNECTION_KEY]: "",
+    // Keychain tier pin (see cli/index.test.ts): the resolver's account is
+    // HASNA_STATION, else the short hostname, else USER — a real macOS
+    // keychain item under this machine's own account would satisfy the
+    // blanked connection env. A sentinel no item uses keeps the tier a miss
+    // on every machine. Per-test overrides still win (spread last).
+    HASNA_STATION: "loops-hermetic-no-such-station",
     ...extra,
   };
 }

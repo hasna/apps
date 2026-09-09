@@ -126,7 +126,7 @@ export {
   ProjectResourceLinkLocatorSchema,
   ProjectResourceLinkSchema,
   ProjectResourceTargetKindSchema,
-} from "@hasna/contracts/schemas";
+} from "./types/project-resource-schemas.js";
 export {
   PROJECT_CONTACT_LINK_STEPS,
   PROJECT_CONTACT_RESOURCE_LINK_TYPE,

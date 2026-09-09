@@ -81,6 +81,15 @@ function cliSpawnOptions(
     HOME: dataDir,
     HASNA_HOME: dataDir,
     HASNA_CONFIG_HOME: dataDir,
+    // The Keychain tier is ambient in any env that reaches the resolver, but
+    // only on macOS: `keychainAccount()` reads HASNA_STATION, ELSE the short
+    // hostname, ELSE USER (apps/contracts/src/client/credentials.ts). A
+    // provisioned macOS station whose login keychain holds real
+    // `hasna.credentials.loops.*` items under its own hostname account would
+    // satisfy the blanked connection env below — the same ambient-red class
+    // the disk-tier anchors close, one tier up. Pinning a sentinel account no
+    // real item uses makes the tier miss identically on both kinds of machine.
+    HASNA_STATION: "loops-hermetic-no-such-station",
   };
   const autoSourceTaskEnv = maybeAutoSourceTaskEnv(dataDir, args, env);
   const merged = {
