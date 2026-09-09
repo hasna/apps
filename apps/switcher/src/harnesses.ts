@@ -1,4 +1,5 @@
 import { proxyProviderStream } from "./provider-stream";
+import { claudeContextEnvironment } from "./claude-context";
 import { compileOpenCodeModelPolicy, openCodeInvocationModel } from "./opencode-model-policy";
 import { prepareKilo, validateKiloConfiguration } from "./kilo";
 import { prepareGemini, validateGeminiConfiguration } from "./gemini-config";
@@ -532,6 +533,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   if(input.harness==="claude") {
     env.ANTHROPIC_BASE_URL=input.baseUrl.replace(/\/v1$/,"");
     Object.assign(env,input.nativePolicy?.env);
+    Object.assign(env,claudeContextEnvironment(providerBaseUrl));
     env.ANTHROPIC_MODEL=input.model;
     // The native Default picker row has separate precedence from --model.
     // Keep it and unassigned subagents on the selected provider model.

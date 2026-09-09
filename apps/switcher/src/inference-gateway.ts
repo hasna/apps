@@ -1,4 +1,5 @@
 import { proxyProviderStream } from "./provider-stream";
+import { isContextOverflow } from "./provider-error";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { authHeader } from "./auth";
 import { endpoint, Fault } from "./domain";
@@ -79,7 +80,13 @@ export function createInferenceGateway(input: GatewayInput) {
         break;
       }
       if(!response)throw new Error("provider_request_failed");
-      if(!response.ok){await response.body?.cancel();release();return fail(response.status>=300&&response.status<400?502:response.status,`upstream_http_${response.status}`);}
+      if(!response.ok){
+        const overflow=await isContextOverflow(response);
+        if(overflow)current.reason="context_length_exceeded";
+        release();
+        if(overflow)return Response.json({type:"error",error:{type:"invalid_request_error",code:"context_length_exceeded",message:"prompt is too long: the provider context window was exceeded. Compact the conversation or start a new session."}},{status:400});
+        return fail(response.status>=300&&response.status<400?502:response.status,`upstream_http_${response.status}`);
+      }
       if(!response.body){release();return new Response(null,{status:response.status});}
       const decoder=new TextDecoder();
       const sse=response.headers.get("content-type")?.includes("text/event-stream");

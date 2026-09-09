@@ -115,6 +115,40 @@ test("gateway does not retry 400, 401, or 403 and redacts unknown reported model
   } finally { await gateway.cleanup(); await upstream.stop(true); }
 });
 
+test("gateway exposes a sanitized native context-overflow error without retrying or leaking provider text", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    calls++;
+    return Response.json({ error: { type: "invalid_request_error", message: `This model's maximum context length is 1048576 tokens. ${credential} private prompt text` } }, { status: 400 });
+  } });
+  const events: any[] = [], gateway = createInferenceGateway(input("anthropic-messages", upstream.url.origin + "/v1", events) as any);
+  try {
+    const response = await fetch(gateway.baseUrl + "/messages", { method: "POST", headers: { ...auth("anthropic-messages", gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", messages: [] }) });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ type: "error", error: { type: "invalid_request_error", code: "context_length_exceeded", message: "prompt is too long: the provider context window was exceeded. Compact the conversation or start a new session." } });
+    expect(calls).toBe(1);
+    expect(events).toHaveLength(1);
+    expect(events[0].reason).toBe("context_length_exceeded");
+    expect(JSON.stringify(events)).not.toContain(credential);
+    expect(JSON.stringify(events)).not.toContain("private prompt text");
+  } finally { await gateway.cleanup(); await upstream.stop(true); }
+});
+
+test("gateway keeps unrelated upstream validation errors sanitized", async () => {
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    return Response.json({ error: { message: `Invalid tools: ${credential}` } }, { status: 400 });
+  } });
+  const events: any[] = [], gateway = createInferenceGateway(input("anthropic-messages", upstream.url.origin + "/v1", events) as any);
+  try {
+    const response = await fetch(gateway.baseUrl + "/messages", { method: "POST", headers: { ...auth("anthropic-messages", gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", messages: [] }) });
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error.code).toBe("upstream_http_400");
+    expect(JSON.stringify(body)).not.toContain(credential);
+    expect(events[0].reason).not.toBe("context_length_exceeded");
+  } finally { await gateway.cleanup(); await upstream.stop(true); }
+});
+
 test("gateway does not retry after a stream has started and reports unknown provider models safely", async () => {
   let calls = 0;
   const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch() { calls++; return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("data: {\"model\":\"outside-secret-model\"}\n\ndata: [DONE]\n\n")); controller.close(); } }), { headers: { "content-type": "text/event-stream" } }); } });
