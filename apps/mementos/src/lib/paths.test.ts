@@ -147,6 +147,9 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
     const home = isolateHome();
     getDataRoot();
     expect(existsSync(join(home, ".hasna", "mementos"))).toBe(false);
-    expect(existsSync(join(home, ".local", "share", "hasna", "mementos"))).toBe(false);
+    const resolverRoot = process.platform === "darwin"
+      ? join(home, "Library", "Application Support", "Hasna", "mementos")
+      : join(home, ".local", "share", "hasna", "mementos");
+    expect(existsSync(resolverRoot)).toBe(false);
   });
 });
