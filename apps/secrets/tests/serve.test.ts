@@ -20,6 +20,7 @@ function fakeClient() {
         const tenantId = persistedTenantByKid.get(String(params?.[0]));
         return tenantId ? { tenant_id: tenantId } : null;
       }
+      if (sql.includes("FROM pg_roles")) return {rolsuper:false,rolbypassrls:false,ownership_write:false,rls_tables:8};
       return { ok: 1 };
     },
     async many() { return []; },

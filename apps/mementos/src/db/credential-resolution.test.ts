@@ -67,6 +67,13 @@ const CLEAN_KEYS = [
   "HASNA_STATION",
   "HASNA_CONFIG_HOME",
   "HASNA_HOME",
+  // The DISK tier roots at $HOME (.hasna/<app>/config/credentials) when
+  // HASNA_HOME is unset — which is the ordinary station shape. Inheriting the
+  // operator's real HOME made these cases resolve the station's REAL
+  // credential file above the fixture env tiers (green on CI, red on a
+  // provisioned station). Cases that want the disk tier write a fixture file
+  // under an explicit HOME/HASNA_HOME of their own.
+  "HOME",
 ] as const;
 
 const saved = new Map<string, string | undefined>();

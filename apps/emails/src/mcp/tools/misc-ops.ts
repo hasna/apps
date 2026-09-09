@@ -384,18 +384,18 @@ export function registerMiscOpsTools(server: McpServer): void {
     from_address: z.string().describe("From email address"),
     provider_id: z.string().optional().describe("Provider ID (uses default if not specified)"),
     force: z.boolean().optional().describe("Send even to suppressed contacts"),
+    idempotency_key: z.string().min(1).max(200).optional().describe("Stable batch retry identity; omit to derive it from rendered content, or change it to deliberately send a new batch"),
   },
-  async () => {
-    // Batch send depends on local provider adapters (failover) and local send
-    // ledgers; there is no client-side /v1 batch-send route (single sends go
-    // through send_email's API seam). Fail loud (rule 6).
-    return {
-      content: [{
-        type: "text",
-        text: "Error: batch_send is not available in the self-hosted client; template-driven batch sending runs on the self-hosted server. Use send_email for individual sends.",
-      }],
-      isError: true,
-    };
+  async ({ recipients, template_name, from_address, provider_id, force, idempotency_key }) => {
+    try {
+      const { sendApiBatchRows } = await import("../../cli/commands/api-send-composition.js");
+      const result = await sendApiBatchRows({
+        rows: recipients.map(recipient => ({ ...recipient.vars, email: recipient.email })),
+        template: template_name, from: from_address, provider: provider_id, force, idempotencyKey: idempotency_key,
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }],
+        ...(result.failed > 0 || result.pending > 0 || result.receipts.some(receipt => receipt.warning) ? { isError: true } : {}) };
+    } catch (error) { return toolError(error); }
   },
   );
 }

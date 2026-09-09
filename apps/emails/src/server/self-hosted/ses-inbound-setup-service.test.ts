@@ -1,0 +1,33 @@
+import { expect, test } from "bun:test";
+import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
+import { handleSelfHostedRequest, type SelfHostedServiceDeps } from "./service.js";
+import { testAuthDeps, selfScopedStore } from "./auth/test-support.js";
+import type { TypedQueryClient } from "../../storage-kit/index.js";
+import { DEFAULT_TENANT_ID } from "./migrations.js";
+import { sesSetupFixture } from "./ses-inbound-setup.test.js";
+test("actual SES setup route enforces operator authority before invoking bound cloud", async () => {
+  const f = sesSetupFixture(), signing = crypto.randomUUID();
+  const client = { query: async () => ({ rows: [], rowCount: 0 }), many: async () => [], get: async () => null, one: async () => ({}), execute: async () => {} } as TypedQueryClient;
+  const store = selfScopedStore(client); Object.assign(store, { getResource: f.store.getResource, getDomainByName: f.store.getDomainByName });
+  const deps = { client, store, verifier: verifyApiKey({ app: "emails", signingSecret: signing, keyStatus: async () => "active" }), migrations: [], version: "test", ...testAuthDeps(client, signing), sesInboundSetupCloud: () => f.cloud } as SelfHostedServiceDeps;
+  deps.env = { ...deps.env, EMAILS_INGEST_BINDINGS: JSON.stringify([{ tenant_id: DEFAULT_TENANT_ID, source_id: "source", provider_id: "provider", bucket: "bound-inbound", prefix: "inbound/example.test/", region: "us-east-1", domain: "example.test", queue_url: "https://sqs.us-east-1.amazonaws.com/123456789012/bound", rule_set: "bound-rules", rule_name: "bound-example" }]) };
+  const call = (scopes?: string[], domain = "example.test") => handleSelfHostedRequest(deps, new Request("http://fixture/v1/inbox/setup-ses-inbound", { method: "POST", headers: { "Content-Type": "application/json", ...(scopes ? { Authorization: `Bearer ${mintApiKey({ app: "emails", scopes, signingSecret: signing }).token}` } : {}) }, body: JSON.stringify({ domain, bucket: "bound-inbound" }) }));
+  expect((await call())?.status).toBe(401);
+  expect((await call(["emails:read"]))?.status).toBe(403);
+  expect((await call(["emails:write"]))?.status).toBe(403);
+  expect((await call(["emails:*"], "foreign.test"))?.status).toBe(404);
+  expect(f.state.writes).toEqual([]);
+  const response = await call(["emails:*"]);
+  expect(response?.status).toBe(200); expect(await response?.json()).toMatchObject({ ok: true, verified: true, worker_started: false });
+  expect(f.state.writes).toContain("CreateReceiptRule");
+  const suspended = sesSetupFixture(), send = suspended.cloud.send.bind(suspended.cloud);
+  deps.sesInboundSetupCloud = () => suspended.cloud;
+  suspended.cloud.send = async (service, operation, input) => {
+    const result = await send(service, operation, input);
+    if (operation === "GetCallerIdentity") deps.authStore.getApiKeyTenant = async () => null;
+    return result;
+  };
+  const stopped = await call(["emails:*"]);
+  expect(stopped?.status).toBe(403);
+  expect(suspended.state.writes).toEqual([]);
+});

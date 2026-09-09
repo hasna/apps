@@ -107,6 +107,18 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
 
   return async function fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    // API-FIRST aliases delegate to the existing handlers and credential gate.
+    // The fleet gateway strips only /skills; standalone /api routes stay valid.
+    const versionedAliases: Record<string, string> = {
+      "/v1/health": "/health",
+      "/v1/auth/whoami": "/api/auth/whoami",
+    };
+    const alias = versionedAliases[url.pathname]
+      ?? (url.pathname === "/v1" || url.pathname.startsWith("/v1/") ? `/api${url.pathname}` : undefined);
+    if (alias) {
+      url.pathname = alias;
+      request = new Request(url, request);
+    }
     const segments = pathSegments(url.pathname);
 
     try {

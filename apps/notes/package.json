@@ -1,6 +1,6 @@
 {
   "name": "@hasna/notes",
-  "version": "0.5.0",
+  "version": "0.6.1",
   "description": "Authenticated HTTPS notes CLI, MCP server, SDK, and PostgreSQL-backed notes server.",
   "type": "module",
   "bin": {
@@ -11,6 +11,11 @@
   "exports": {
     ".": "./sdk/index.mjs",
     "./sdk": "./sdk/index.mjs",
+    "./sdk/browser": {
+      "types": "./sdk/browser.d.mts",
+      "import": "./sdk/browser.mjs"
+    },
+    "./wire/v1": "./sdk/wire-v1.schema.json",
     "./compat/markdown-format": "./compat/markdown-format.mjs",
     "./events": "./tools/notes-events.mjs"
   },
@@ -19,7 +24,10 @@
     "cli/notes.mjs",
     "client",
     "compat",
-    "sdk/index.mjs",
+    "sdk",
+    "swift/Package.swift",
+    "swift/Sources",
+    "swift/Tests",
     "scripts/apply-postgres-migrations.mjs",
     "scripts/pg-test-gate.mjs",
     "src/generated",
@@ -46,7 +54,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "bun test",
+    "test": "bun test && bun run test:sdk-types",
+    "test:swift-sdk": "bash scripts/test-swift-sdk.sh",
+    "test:sdk-types": "tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --moduleResolution NodeNext --lib ES2022,DOM test/browser-sdk.types.mts",
     "test:pg": "bun scripts/pg-test-gate.mjs",
     "scan:artifact": "bun scripts/scan-artifact.mjs",
     "prepack": "bun run scan:artifact",

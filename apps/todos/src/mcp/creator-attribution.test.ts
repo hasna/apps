@@ -43,7 +43,7 @@ type CapturedTool = {
   handler: (params: Record<string, any>) => unknown | Promise<unknown>;
 };
 
-function captureTools(register: (server: any, ctx: any) => void): Map<string, CapturedTool> {
+function captureTools(register: (server: any, ctx: any) => void, focus = applyFocus): Map<string, CapturedTool> {
   const tools = new Map<string, CapturedTool>();
   const server = {
     resource() {},
@@ -64,7 +64,7 @@ function captureTools(register: (server: any, ctx: any) => void): Map<string, Ca
     formatTask: (task: Task) => `${task.id.slice(0, 8)} ${task.status} ${task.priority} ${task.title}`,
     formatTaskDetail: (task: Task) => `${task.id} ${task.title}`,
     getAgentFocus: () => undefined,
-    applyFocus,
+    applyFocus: focus,
     agentFocusMap: new Map(),
   };
   register(server, ctx);
@@ -105,8 +105,8 @@ afterEach(() => {
   rmSync(homeDir, { recursive: true, force: true });
 });
 
-function createTool() {
-  return captureTools(registerTaskCrudTools).get("create_task")!;
+function createTool(focus = applyFocus) {
+  return captureTools(registerTaskCrudTools, focus).get("create_task")!;
 }
 
 function onlyTask(title: string): Task {
@@ -212,10 +212,11 @@ describe("MCP create_task applies focus", () => {
     const localOnlyProject = createProject({ name: "Local-only focus", path: "/tmp/local-only-focus" });
     registerAgent({ name: "cassius", session_id: "remote-focus-session", project_id: localOnlyProject.id });
     process.env["TODOS_AGENT_ID"] = "cassius";
+    const fixtureDb = getDatabase();
     process.env["HASNA_TODOS_API_URL"] = "https://todos.example.test";
     process.env["HASNA_TODOS_API_KEY"] = "nonsecret-test-value";
 
-    const responseTask = createTask({ title: "remote response" });
+    const responseTask = createTask({ title: "remote response" }, fixtureDb);
     const postedBodies: Array<Record<string, unknown>> = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (_input, init = {}) => {

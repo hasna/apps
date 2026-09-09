@@ -281,11 +281,12 @@ export function registerOperationTools(server: McpServer): void {
       detail: z.boolean().optional(),
       maxCostCents: z.number().int().min(0).max(2_147_483_647).optional().describe("Maximum integer credits explicitly approved by the user for a remote run; omitted permits only free runs"),
       maxCredits: z.number().int().min(0).max(2_147_483_647).optional(),
+      quoteReceipt: z.string().min(1).max(4096).refine(value => Buffer.byteLength(value, "utf8") <= 4096, "Quote receipt exceeds 4096 UTF-8 bytes").optional().describe("Opaque receipt from the approved quote; send unchanged with the same input, args and files. Never refresh after confirmation."),
       remote: z.boolean().optional().describe("Use the configured server catalog, including skills not installed locally"),
       idempotency_key: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional().describe("Reuse for the same approved submission after an interrupted response"),
       files: z.array(z.object({ name: z.string(), base64: z.string().max(1_398_104), contentType: z.string().optional() })).max(10).optional().describe("Inline remote inputs, at most 1 MiB combined; use CLI or SDK for larger files"),
     },
-  }, async ({ name, input, args, detail, maxCostCents, maxCredits, remote, idempotency_key, files }) => {
+  }, async ({ name, input, args, detail, maxCostCents, maxCredits, quoteReceipt, remote, idempotency_key, files }) => {
     const skill = remote ? { name, serverOwned: true } : getSkill(name);
     if (!skill) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
@@ -334,7 +335,7 @@ export function registerOperationTools(server: McpServer): void {
       try {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
         const client = new RemoteSkillsClient(routing.apiKey, routing.apiOrigin);
-        const run = await client.submitQuotedRunWithFiles(skillName, runInput, runArgs, inputFiles, { maxCredits, maxCostCents, idempotencyKey: idempotency_key ?? runContext.record.id });
+        const run = await client.submitQuotedRunWithFiles(skillName, runInput, runArgs, inputFiles, { maxCredits, maxCostCents, quoteReceipt, idempotencyKey: idempotency_key ?? runContext.record.id });
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");
           const localRun = completeSkillRun(runContext, { status: "failed", error: String(run.error) });

@@ -1,4 +1,4 @@
-import { type ProjectPanel } from '@hasna/contracts';
+import type { ProjectPanel } from './contracts-types.js';
 import { type KnowledgeService } from './service';
 import { type KnowledgeProjectLinksAuthority } from './project-links';
 export interface KnowledgeProjectPanelOptions {

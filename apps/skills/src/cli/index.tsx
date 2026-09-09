@@ -122,6 +122,8 @@ registerVersions(program);
 
 const { registerPublish } = await import("./commands/publish.js");
 registerPublish(program);
+const { registerPrivatePublications } = await import("./commands/private-publications.js");
+registerPrivatePublications(program);
 
 const { registerAuth } = await import("./commands/auth.js");
 registerAuth(program);

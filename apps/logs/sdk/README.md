@@ -1,8 +1,11 @@
-# @hasna/logs-sdk
+# Universal telemetry client (`@hasna/logs` root export)
 
-Zero-dependency universal telemetry client for [`@hasna/logs`](https://www.npmjs.com/package/@hasna/logs).
+Zero-dependency universal telemetry client, shipped INSIDE
+[`@hasna/logs`](https://www.npmjs.com/package/@hasna/logs) as its root export
+(`import { ... } from "@hasna/logs"`). It is not a separate package: the
+package-surfaces rule allows one npm package per app, so `@hasna/logs-sdk` is
+never published (the hosted-API client lives at `@hasna/logs/sdk`).
 
-[![npm](https://img.shields.io/npm/v/@hasna/logs-sdk)](https://www.npmjs.com/package/@hasna/logs-sdk)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](../LICENSE)
 
 Runs in the browser, in Node, and in Bun. It has no runtime dependencies — it
@@ -11,9 +14,9 @@ talks to a `@hasna/logs` collector over `fetch`.
 ## Install
 
 ```bash
-npm install @hasna/logs-sdk
+npm install @hasna/logs
 # or
-bun add @hasna/logs-sdk
+bun add @hasna/logs
 ```
 
 ## Quick start
@@ -23,7 +26,7 @@ browser instrumentation when `window` is present, process instrumentation
 otherwise.
 
 ```ts
-import { initUniversalLogs } from "@hasna/logs-sdk"
+import { initUniversalLogs } from "@hasna/logs"
 
 const controller = initUniversalLogs({
   projectId: "my-project",
@@ -58,7 +61,7 @@ token is shipped to the browser rather than a full API key.
 instrument automatically.
 
 ```ts
-import { LogsClient } from "@hasna/logs-sdk"
+import { LogsClient } from "@hasna/logs"
 
 const logs = new LogsClient({
   projectId: "my-project",
@@ -84,7 +87,7 @@ Subpath exports adapt the client to an existing structured logger.
 
 ```ts
 import pino from "pino"
-import createPinoOpenLogsTransport from "@hasna/logs-sdk/pino"
+import createPinoOpenLogsTransport from "./sdk/src/pino.ts" // source-only: not a package subpath
 
 const logger = pino(createPinoOpenLogsTransport({
   projectId: "my-project",
@@ -94,7 +97,7 @@ const logger = pino(createPinoOpenLogsTransport({
 
 ```ts
 import winston from "winston"
-import createWinstonOpenLogsTransport from "@hasna/logs-sdk/winston"
+import createWinstonOpenLogsTransport from "./sdk/src/winston.ts" // source-only: not a package subpath
 
 const logger = winston.createLogger({
   transports: [createWinstonOpenLogsTransport({ projectId: "my-project" })],
@@ -114,7 +117,7 @@ import {
   captureNodeHttpRequest,
   captureHttpRequest,
   instrumentFetchHandler,
-} from "@hasna/logs-sdk"
+} from "@hasna/logs"
 ```
 
 `createHonoTelemetryMiddleware` and the Express pair wrap a request cycle and
@@ -126,13 +129,11 @@ Fastify is supported through the exported `FastifyTelemetryHooks` shape.
 
 | Entry point | Contents |
 | --- | --- |
-| `@hasna/logs-sdk` | `LogsClient`, `initUniversalLogs`, HTTP helpers, transports |
-| `@hasna/logs-sdk/browser` | Browser build |
-| `@hasna/logs-sdk/node` | Node build |
-| `@hasna/logs-sdk/pino` | `createPinoOpenLogsTransport` |
-| `@hasna/logs-sdk/winston` | `createWinstonOpenLogsTransport` |
+| `@hasna/logs` (root export) | `LogsClient`, `initUniversalLogs`, HTTP helpers, transports — this directory's `src/index.ts` |
+| `@hasna/logs/sdk` | The typed hosted `/v1` client (`createLogsApiClientFromEnv`), resolver-backed |
+| `sdk/src/pino.ts` / `sdk/src/winston.ts` | `createPinoOpenLogsTransport` / `createWinstonOpenLogsTransport` — source-only, no package subpath |
 
-TypeScript declarations ship with every entry point.
+TypeScript declarations ship with the root export and `./sdk`.
 
 ## License
 

@@ -3,7 +3,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { buildServer, disposeServer } from "./index.js";
 import { handleMcpRequest, resolveMcpHttpPort, DEFAULT_MCP_HTTP_PORT } from "./http.js";
-import { closeDb } from "../lib/db.js";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../lib/store/test-support/client-environment.js";
 import { readPersistedIdentity, _resetAutoName } from "../lib/identity.js";
 import { mkdtempSync, rmSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -15,9 +16,10 @@ describe("conversations MCP HTTP transport", () => {
   let httpServer: ReturnType<typeof Bun.serve>;
   let port: number;
 
-  beforeAll(() => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-    closeDb();
+  let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+  let restore:()=>void;
+  beforeAll(async () => {
+    fixture=await startLoopbackApiFixture(); restore=activateClientEnvironment(fixture.env);
 
     httpServer = Bun.serve({
       hostname: "127.0.0.1",
@@ -38,14 +40,7 @@ describe("conversations MCP HTTP transport", () => {
 
   afterAll(async () => {
     httpServer.stop();
-    closeDb();
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try {
-        unlinkSync(TEST_DB + suffix);
-      } catch {
-        /* ok */
-      }
-    }
+    try { await fixture.stop(); } finally { restore(); }
   });
 
   test("default port is 8856", () => {
@@ -119,20 +114,11 @@ describe("conversations MCP HTTP transport — two agents, one daemon", () => {
     try { return JSON.parse(text); } catch { return text; }
   }
 
-  beforeAll(() => {
-    // Isolated HOME: register_agent seeds the machine identity when the box has
-    // none, and this suite must never write the developer's real agent-id file.
-    savedHome = process.env.HOME;
-    savedUserProfile = process.env.USERPROFILE;
-    savedAgentId = process.env.CONVERSATIONS_AGENT_ID;
-    tempHome = mkdtempSync(join(tmpdir(), "conversations-http-identity-"));
-    process.env.HOME = tempHome;
-    process.env.USERPROFILE = tempHome;
-    delete process.env.CONVERSATIONS_AGENT_ID;
+  let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+  let restore:()=>void;
+  beforeAll(async () => {
+    fixture=await startLoopbackApiFixture(); restore=activateClientEnvironment(fixture.env);
     _resetAutoName();
-
-    process.env.CONVERSATIONS_DB_PATH = AGENT_DB;
-    closeDb();
 
     httpServer = Bun.serve({
       hostname: "127.0.0.1",
@@ -146,20 +132,9 @@ describe("conversations MCP HTTP transport — two agents, one daemon", () => {
     port = httpServer.port!;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     httpServer.stop();
-    closeDb();
-    delete process.env.CONVERSATIONS_DB_PATH;
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try { unlinkSync(AGENT_DB + suffix); } catch { /* ok */ }
-    }
-    if (savedHome !== undefined) process.env.HOME = savedHome;
-    else delete process.env.HOME;
-    if (savedUserProfile !== undefined) process.env.USERPROFILE = savedUserProfile;
-    else delete process.env.USERPROFILE;
-    if (savedAgentId !== undefined) process.env.CONVERSATIONS_AGENT_ID = savedAgentId;
-    try { rmSync(tempHome, { recursive: true, force: true }); } catch { /* ok */ }
-    _resetAutoName();
+    try { await fixture.stop(); } finally { restore(); _resetAutoName(); }
   });
 
   test("one client's register_agent does not become another client's implicit author", async () => {

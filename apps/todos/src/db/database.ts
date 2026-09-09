@@ -1,3 +1,4 @@
+import { selectsTodosLocalStore } from "../lib/local-opt-in.js";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -194,7 +195,17 @@ export function isLocalStoreRefused(): boolean {
 }
 
 export function getDatabase(dbPath?: string): Database {
+  // A process-wide refusal installed by a hosted surface (the stdio MCP
+  // server, hasna/apps#1720 validation) outranks every other rule: once a
+  // hosted authority is being served, no call may open the on-box store at
+  // all, not even the ambient-fallback guard below.
   if (localStoreRefusal !== null) throw new Error(localStoreRefusal);
+  // The ambient singleton is a client fallback, not an explicit storage handle.
+  // Preserve intentional ./storage callers that pass a path or a Database, while
+  // preventing any missed CLI/MCP/UI branch from recreating a station database.
+  if (dbPath === undefined && !selectsTodosLocalStore()) {
+    throw new Error("API_DATABASE_FALLBACK_FORBIDDEN: this operation must use the shared Todos API; implicit SQLite access is unavailable");
+  }
   const path = dbPath || getDbPath();
   if (_db && _dbPath === path) return _db;
 

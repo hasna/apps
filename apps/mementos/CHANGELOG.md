@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.15.2
+
+### Patch Changes
+
+- 9ea1b02: `./sdk` pins the service authority for the life of the client; a mid-process
+  authority change refuses loudly instead of silently re-pointing every request
+  (hasna/apps#1794, adversarial credential-seam audit).
+
+  The key was already re-resolved fresh per request (a rotation heals), but the
+  authority was re-derived per request too: a re-pointed `HASNA_MEMENTOS_API_URL`,
+  a changed Keychain `api-url` item, or a rewritten credentials file silently
+  moved the client's target server, and the request's data went to the new
+  authority under the key that resolved for it. Now the first request pins the
+  resolved authority, every later request must resolve the SAME authority, and
+  any drift throws a `MementosConfigError` prefixed `MEMENTOS_AUTHORITY_CHANGED`
+  before anything is sent — the same rule the shared transport's binding provider
+  enforces. An explicit `baseUrl` (tier 1) remains a pin used verbatim and is
+  never re-derived from the chain.
+
+- e336abe: hasna/apps#1720 validation fixes for the @hasna/contracts credential adoption —
+  every surface now fails closed the same way, and nothing hosted can materialise
+  the on-box store.
+
+  - `./sdk` **throws instead of degrading to the local serve.** With nothing
+    resolvable — no argument, no env pointer, no Keychain item, no credentials
+    file, no `HASNA_MEMENTOS_API_KEY` — `resolveMementosSdkTransport()`, the
+    `apiUrl` getter and every request now throw the new `MementosConfigError`
+    (`code: "MEMENTOS_STORE_CONFIG"`) naming the tiers consulted, before any
+    request is built; the client no longer reads and writes
+    `http://localhost:19428` with only a stderr notice. The on-box
+    `mementos-serve` is reachable only through the deliberate opt-in
+    (`HASNA_MEMENTOS_LOCAL=1` / `HASNA_MEMENTOS_DB_PATH`), which still announces
+    itself once.
+  - `storage mode` **reports `unconfigured` and exits 1** (with the same
+    refusal every data verb prints) when no credential resolves and no local
+    opt-in is set, instead of exit 0 claiming `local-sqlite` / `default`. The
+    `StoreBackend` report gains the `unconfigured` value.
+  - The legacy `~/.mementos` → data-root auto-migration in `getDbPath()` (both
+    `src/db/database.ts` and `src/lib/config.ts`) runs **only under the explicit
+    local opt-in**, so a hosted-mode diagnostic (`storage mode`, `status`,
+    `doctor`) can never create `~/.hasna/mementos/mementos.db`.
+  - `getConfiguredApiEnv()` hands the resolver the same normalised inputs
+    `getApiConfig()` does (blank aliases stripped, Keychain gate carried), and
+    accepts the same resolve options.
+  - `mementos-serve` static bearer auth marks a matched request authenticated
+    under the canonical `HASNA_MEMENTOS_API_KEY` name as well as the legacy
+    alias (server-side only).
+  - The MCP's local-opt-in companion server logs under the app data root, never
+    `/tmp/mementos.log`; the dead `~/.config/hasna` path kind is removed from the
+    in-package paths resolver.
+  - The unpublished standalone `sdk/` scaffold (`@hasna/mementos-sdk`) is deleted
+    — one package per app; `@hasna/mementos/sdk` is the only SDK — and the
+    `model-config` test suite no longer renames or rewrites the operator's real
+    `~/.hasna/mementos`.
+
+- d5ef8e4: Keep the production deploy lane compatible with macOS Bash 3.2 and make the
+  release gate's path checks honor the platform data-root and canonical temporary
+  paths.
+
 ## 0.15.1
 
 ### Patch Changes

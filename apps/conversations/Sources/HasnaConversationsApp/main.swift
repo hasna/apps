@@ -17,6 +17,11 @@ import HasnaConversationsCore
 
 /// Resolve the bundled app payload directory (Contents/Resources/app).
 func resourcesAppDir() -> URL {
+    // An installed bundle with missing payload must fail closed, never import
+    // a different checkout merely because the process inherited its directory.
+    if Bundle.main.bundleURL.pathExtension == "app" {
+        return Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/app", isDirectory: true)
+    }
     if let res = Bundle.main.resourceURL {
         let candidate = res.appendingPathComponent("app", isDirectory: true)
         if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
@@ -99,12 +104,7 @@ final class Backend: @unchecked Sendable {
     /// The caller resolves the store first and refuses to call this at all when
     /// the store is ambiguous, so the server is never launched with an
     /// environment that would let it fall back to a local database.
-    func start(storeEnv: [String: String]) -> Bool {
-        guard let bun = findBun() else {
-            NSLog("HasnaConversations: bun not found; cannot start server")
-            return false
-        }
-        let appDir = resourcesAppDir()
+    func start(storeEnv: [String: String], bun: String, appDir: URL) -> Bool {
         let serve = appDir.appendingPathComponent("src/server/serve.ts").path
         guard FileManager.default.fileExists(atPath: serve) else {
             NSLog("HasnaConversations: server entry not found at \(serve)")
@@ -114,7 +114,7 @@ final class Backend: @unchecked Sendable {
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: bun)
-        p.arguments = ["run", serve]
+        p.arguments = ["--no-env-file", "run", serve]
         p.currentDirectoryURL = appDir
 
         var env = storeEnv
@@ -233,24 +233,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         // Resolve the store BEFORE starting anything. An unresolved store is a
         // hard stop, not a reason to fall through to whatever the server would
         // pick on its own — that fallback is the bug this guard exists to close.
-        let resolution = resolveStore()
+        let bun = findBun()
+        let appDir = resourcesAppDir()
+        let resolution = bun.map { resolveStore(bunPath: $0, appDirectory: appDir) }
+            ?? .unresolved(reason: "Bun is required to resolve shared account configuration. Install Bun, then reopen the app.")
         var unresolvedReason: String? = nil
         var started = false
         var configuredStore: String? = nil
         switch resolution {
-        case .cloud(let env, let url):
-            NSLog("HasnaConversations: configured store=hosted url=%@", url)
+        case .cloud(let env):
+            NSLog("HasnaConversations: shared API configuration resolved; checking backend readiness")
             configuredStore = "hosted"
-            started = backend.start(storeEnv: env)
-        case .explicitLocal(let env, let selectedBy):
-            // Name the variable that ACTUALLY selected local. Claiming a fixed
-            // one is the same defect class this commit's sibling fixed: an
-            // operator who chose local through HASNA_CONVERSATIONS_DB_PATH was
-            // told it came from a variable they never set, and would go looking
-            // for it.
-            NSLog("HasnaConversations: configured store=local (explicitly requested via %@)", selectedBy)
-            configuredStore = "local"
-            started = backend.start(storeEnv: env)
+            started = backend.start(storeEnv: env, bun: bun!, appDir: appDir)
         case .unresolved(let reason):
             NSLog("HasnaConversations: refusing to start — no unambiguous store. %@", reason)
             unresolvedReason = reason

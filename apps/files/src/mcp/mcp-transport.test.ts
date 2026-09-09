@@ -39,6 +39,14 @@ const ENV_KEYS = [
   "HOME",
   "HASNA_HOME",
   "HASNA_CONFIG_HOME",
+  // Keychain account: the resolver's `keychainAccount()` reads HASNA_STATION,
+  // else the short hostname, else USER (apps/contracts/src/client/
+  // credentials.ts). On a macOS station whose login keychain holds real
+  // `hasna.credentials.files.*` items under its own hostname account, the
+  // ambient tier would resolve the REAL credential for the fake authority
+  // pinned below — the same refusal class as the disk tier, one tier up.
+  // Pinning a sentinel account no item uses makes the tier miss everywhere.
+  "HASNA_STATION",
 ] as const;
 
 const savedEnv = new Map<string, string | undefined>();
@@ -55,6 +63,7 @@ function setLocalMode() {
   process.env.HOME = testDir;
   process.env.HASNA_HOME = testDir;
   process.env.HASNA_CONFIG_HOME = testDir;
+  process.env.HASNA_STATION = "files-hermetic-no-such-station";
   delete process.env.HASNA_FILES_API_URL;
   delete process.env.HASNA_FILES_API_KEY;
   process.env.OPEN_FILES_MCP_ALLOW_DOWNLOADS = "1";

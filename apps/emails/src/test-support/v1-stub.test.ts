@@ -33,6 +33,41 @@ afterEach(() => {
 });
 
 describe("v1-stub — generic resource CRUD over the synchronous curl store", () => {
+  it("refuses another fixture's loopback port instead of reporting a wildcard listener as ready", async () => {
+    let foreignRequests = 0;
+    const occupied = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+      foreignRequests++;
+      return new Response("foreign fixture", { status: 403 });
+    } });
+    const port = occupied.port!;
+    let collision: V1Stub | undefined;
+    let rejected = false;
+    try {
+      try { collision = await startV1Stub({ port }); }
+      catch { rejected = true; }
+      expect(rejected).toBe(true);
+      expect(collision).toBeUndefined();
+      expect(foreignRequests).toBe(0);
+    } finally {
+      await collision?.stop();
+      occupied.stop(true);
+    }
+    // Reusing the released port is valid, and its controls must reach this
+    // fixture. On macOS a wildcard listener can bind beside a live specific
+    // listener above, then requests to its announced URL reach the wrong one.
+    const replacement = await startV1Stub({ port, seed: { domains: [{ id: "replacement", domain: "replacement.example.test" }] } });
+    try {
+      await replacement.reset();
+      expect((await replacement.list("domains"))[0]?.domain).toBe("replacement.example.test");
+    } finally { await replacement.stop(); }
+  });
+
+  it("rejects out-of-range and non-integer fixture ports before starting a child", async () => {
+    for (const port of [-1, 65536, 1.5, NaN, Infinity]) {
+      await expect(startV1Stub({ port })).rejects.toThrow("v1-stub port must be an integer between 0 and 65535");
+    }
+  });
+
   it("exposes a loopback base URL and an api key", () => {
     expect(stub.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(stub.apiKey.length).toBeGreaterThan(0);

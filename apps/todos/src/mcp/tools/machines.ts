@@ -1,3 +1,5 @@
+import { getTodosCloudClient } from "../../cli/cloud-router.js";
+import { cloudMachineAction, cloudMachines, localMachineOptions } from "../../cli/machine-api.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
@@ -54,6 +56,8 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
         primary?: boolean;
       }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) { const result = await cloudMachineAction(cloud, { action: "register", name: params.name ?? osHostname(), options: localMachineOptions(Object.fromEntries(Object.entries(params).filter(([key]) => key !== "name"))) }); return { content: [{ type: "text" as const, text: JSON.stringify(result) }] }; }
           const db = getDb();
           const name = params.name || osHostname();
           const machine = registerMachine(name, {
@@ -76,7 +80,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
             ],
           };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
+          return { content: [{ type: "text" as const, text: error instanceof Error && error.message.startsWith("REMOTE_API_INCOMPATIBLE:") ? error.message : ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -92,6 +96,8 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
       },
       async (params: { include_archived?: boolean }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) { const rows = await cloudMachines(cloud); const result = { source: "api", filesystem_checked: false, machines: rows.filter(row => params.include_archived || !row.archived_at) }; return { content: [{ type: "text" as const, text: JSON.stringify(result) }] }; }
           const db = getDb();
           const machines = listMachines(db, params.include_archived);
           if (machines.length === 0) {
@@ -106,7 +112,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
           });
           return { content: [{ type: "text" as const, text: `Machines:\n${lines.join("\n")}` }] };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
+          return { content: [{ type: "text" as const, text: error instanceof Error && error.message.startsWith("REMOTE_API_INCOMPATIBLE:") ? error.message : ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -140,6 +146,8 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
         arch?: string;
       }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) { const result = await cloudMachineAction(cloud, { action: "heartbeat", name: params.name ?? osHostname(), options: localMachineOptions(Object.fromEntries(Object.entries(params).filter(([key]) => key !== "name"))) }); return { content: [{ type: "text" as const, text: JSON.stringify(result) }] }; }
           const machine = updateMachineHeartbeat(params.name, {
             hostname: params.hostname,
             ssh_address: params.ssh_address,
@@ -152,7 +160,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
           }, getDb());
           return { content: [{ type: "text" as const, text: `Heartbeat recorded for ${machine.name} (${machine.id.slice(0, 8)}) at ${machine.last_seen_at}` }] };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
+          return { content: [{ type: "text" as const, text: error instanceof Error && error.message.startsWith("REMOTE_API_INCOMPATIBLE:") ? error.message : ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -169,6 +177,8 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
       },
       async (params: { stale_minutes?: number; include_archived?: boolean }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) { const rows = await cloudMachines(cloud); const result = { source: "api", filesystem_checked: false, machines: rows.filter(row => params.include_archived || !row.archived_at) }; return { content: [{ type: "text" as const, text: JSON.stringify(result) }] }; }
           const diagnostics = getMachineTopologyDiagnostics({
             stale_minutes: params.stale_minutes,
             include_archived: params.include_archived,
@@ -190,7 +200,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
             }],
           };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
+          return { content: [{ type: "text" as const, text: error instanceof Error && error.message.startsWith("REMOTE_API_INCOMPATIBLE:") ? error.message : ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -206,6 +216,8 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
       },
       async (params: { name: string }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) { const result = await cloudMachineAction(cloud, { action: "set-primary", name: params.name ?? osHostname() }); return { content: [{ type: "text" as const, text: JSON.stringify(result) }] }; }
           const db = getDb();
           const machine = setPrimaryMachine(params.name, db);
           return {
@@ -214,7 +226,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
             ],
           };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
+          return { content: [{ type: "text" as const, text: error instanceof Error && error.message.startsWith("REMOTE_API_INCOMPATIBLE:") ? error.message : ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -230,6 +242,8 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
       },
       async (params: { name: string }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) { const result = await cloudMachineAction(cloud, { action: "archive", name: params.name ?? osHostname() }); return { content: [{ type: "text" as const, text: JSON.stringify(result) }] }; }
           const db = getDb();
           const machine = getMachineByName(params.name, db);
           if (!machine) {
@@ -238,7 +252,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
           archiveMachine(machine.id, db);
           return { content: [{ type: "text" as const, text: `Machine '${params.name}' archived` }] };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
+          return { content: [{ type: "text" as const, text: error instanceof Error && error.message.startsWith("REMOTE_API_INCOMPATIBLE:") ? error.message : ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -254,6 +268,8 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
       },
       async (params: { name: string }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) { const result = await cloudMachineAction(cloud, { action: "unarchive", name: params.name ?? osHostname() }); return { content: [{ type: "text" as const, text: JSON.stringify(result) }] }; }
           const db = getDb();
           const machine = getMachineByName(params.name, db);
           if (!machine) {
@@ -266,7 +282,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
             ],
           };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
+          return { content: [{ type: "text" as const, text: error instanceof Error && error.message.startsWith("REMOTE_API_INCOMPATIBLE:") ? error.message : ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -282,6 +298,8 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
       },
       async (params: { name: string }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) { const result = await cloudMachineAction(cloud, { action: "delete", name: params.name ?? osHostname() }); return { content: [{ type: "text" as const, text: JSON.stringify(result) }] }; }
           const db = getDb();
           const machine = getMachineByName(params.name, db);
           if (!machine) {
@@ -294,7 +312,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
             ],
           };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
+          return { content: [{ type: "text" as const, text: error instanceof Error && error.message.startsWith("REMOTE_API_INCOMPATIBLE:") ? error.message : ctx.formatError(error) }], isError: true };
         }
       },
     );

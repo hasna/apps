@@ -9,7 +9,7 @@ function json(data: unknown) {
 export function registerAgentTools(server: McpServer): void {
   server.tool(
     "prepare_inbox",
-    "Prepare or diagnose an inbox address. Inbox address preparation, provisioning, and ownership run on the self-hosted server.",
+    "Prepare or diagnose an inbox address. Reads shared address state; create_missing explicitly authorizes API provisioning.",
     {
       email: z.string().describe("Inbox email address to prepare"),
       provider_id: z.string().optional().describe("Provider ID or prefix to use when creating a missing address"),
@@ -18,18 +18,15 @@ export function registerAgentTools(server: McpServer): void {
       owner: z.string().optional().describe("Owner name, ID, or ID prefix to assign"),
       administrator: z.string().optional().describe("Administering agent name, ID, or ID prefix"),
       create_missing: z.boolean().optional().describe("Create address/provisioning state when no exact address exists"),
+      idempotency_key: z.string().min(1).max(200).optional().describe("Stable key for retrying a preparation request"),
     },
-    async () => {
-      // Inbox preparation orchestrates address/provisioning/ownership state that
-      // is owned by the self-hosted server; there is no local store to prepare
-      // and no client-side /v1 preparation endpoint. Fail loud (rule 6).
-      return {
-        content: [{
-          type: "text" as const,
-          text: "Error: prepare_inbox is not available in the self-hosted client; inbox address preparation, provisioning, and ownership run on the self-hosted server.",
-        }],
-        isError: true,
-      };
+    async (input) => {
+      try {
+        const { prepareInbox } = await import("../../lib/prepare-inbox-api.js");
+        return json(await prepareInbox(input));
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: `Error: ${formatError(error)}` }], isError: true };
+      }
     },
   );
 

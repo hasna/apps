@@ -4,10 +4,23 @@ title: "Switcher changelog"
 type: "release-notes"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:54:59Z"
-updated_at: "2026-09-07T06:18:57.827391+00:00"
+updated_at: "2026-09-09T14:35:00Z"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+## 0.1.6
+
+### Patch Changes
+
+- Default Claude Code launches using the official DeepSeek Messages endpoint to the documented compaction window while preserving explicit environment values. Recognize bounded provider context-overflow errors and return a sanitized native recovery message without exposing provider error text or retrying another model.
+- Add optional inclusive UTC expiry dates and additive provider models with `models add`. DeepSeek presets include the V4.1 Flash preview through September 10, 2026. Expired models remain listed for reference while launches, native selection and gateway requests reject them.
+
+## 0.1.5
+
+### Patch Changes
+
+- Finish completed provider SSE responses cleanly and distinguish native client cancellation from actual upstream stream failure.
 
 ## 0.1.4
 ### Patch Changes

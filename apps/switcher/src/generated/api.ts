@@ -294,6 +294,20 @@ export interface components {
                 name: string;
                 description?: string;
                 available?: boolean;
+                expiresOn?: string;
+                contextWindow?: number;
+                maxOutputTokens?: number;
+                inputModalities?: string[];
+                outputModalities?: string[];
+                supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
+            }[];
+            additionalModels?: {
+                id: string;
+                name: string;
+                description?: string;
+                available?: boolean;
+                expiresOn?: string;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
@@ -329,6 +343,20 @@ export interface components {
                 name: string;
                 description?: string;
                 available?: boolean;
+                expiresOn?: string;
+                contextWindow?: number;
+                maxOutputTokens?: number;
+                inputModalities?: string[];
+                outputModalities?: string[];
+                supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
+            }[];
+            additionalModels?: {
+                id: string;
+                name: string;
+                description?: string;
+                available?: boolean;
+                expiresOn?: string;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
@@ -410,6 +438,7 @@ export interface components {
             name: string;
             description?: string;
             available?: boolean;
+            expiresOn?: string;
             contextWindow?: number;
             maxOutputTokens?: number;
             inputModalities?: string[];
@@ -461,6 +490,7 @@ export interface components {
                 name: string;
                 description?: string;
                 available?: boolean;
+                expiresOn?: string;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
@@ -468,6 +498,7 @@ export interface components {
                 supportedParameters?: string[];
                 supportedGenerationMethods?: string[];
                 codingEligible: boolean;
+                expired: boolean;
             }[];
             total: number;
             limit: number;
@@ -482,6 +513,7 @@ export interface components {
                 name: string;
                 description?: string;
                 available?: boolean;
+                expiresOn?: string;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
@@ -521,6 +553,20 @@ export interface components {
                     name: string;
                     description?: string;
                     available?: boolean;
+                    expiresOn?: string;
+                    contextWindow?: number;
+                    maxOutputTokens?: number;
+                    inputModalities?: string[];
+                    outputModalities?: string[];
+                    supportedParameters?: string[];
+                    supportedGenerationMethods?: string[];
+                }[];
+                additionalModels?: {
+                    id: string;
+                    name: string;
+                    description?: string;
+                    available?: boolean;
+                    expiresOn?: string;
                     contextWindow?: number;
                     maxOutputTokens?: number;
                     inputModalities?: string[];
@@ -571,6 +617,7 @@ export interface components {
                     name: string;
                     description?: string;
                     available?: boolean;
+                    expiresOn?: string;
                     contextWindow?: number;
                     maxOutputTokens?: number;
                     inputModalities?: string[];

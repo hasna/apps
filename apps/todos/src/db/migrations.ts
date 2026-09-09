@@ -1426,16 +1426,18 @@ export const MIGRATIONS = [
   SET leaf_task_id = COALESCE(leaf_task_id, (
         SELECT attempt.leaf_task_id
         FROM pr_group_attempts AS attempt
+        JOIN pr_groups AS owner ON owner.id = attempt.group_id
         WHERE attempt.group_id = pr_groups.id
-        ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+        ORDER BY CASE WHEN attempt.id = owner.active_attempt_id THEN 0 ELSE 1 END,
                  attempt.created_at ASC, attempt.id ASC
         LIMIT 1
       )),
       branch = COALESCE(branch, (
         SELECT attempt.branch
         FROM pr_group_attempts AS attempt
+        JOIN pr_groups AS owner ON owner.id = attempt.group_id
         WHERE attempt.group_id = pr_groups.id
-        ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+        ORDER BY CASE WHEN attempt.id = owner.active_attempt_id THEN 0 ELSE 1 END,
                  attempt.created_at ASC, attempt.id ASC
         LIMIT 1
       ));
@@ -1458,16 +1460,18 @@ export const MIGRATIONS = [
   SET pr_number = COALESCE(pr_number, (
         SELECT attempt.pr_number
         FROM pr_group_attempts AS attempt
+        JOIN pr_groups AS owner ON owner.id = attempt.group_id
         WHERE attempt.group_id = pr_groups.id AND attempt.pr_number IS NOT NULL
-        ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+        ORDER BY CASE WHEN attempt.id = owner.active_attempt_id THEN 0 ELSE 1 END,
                  attempt.created_at ASC, attempt.id ASC
         LIMIT 1
       )),
       base_sha = COALESCE(base_sha, (
         SELECT attempt.base_sha
         FROM pr_group_attempts AS attempt
+        JOIN pr_groups AS owner ON owner.id = attempt.group_id
         WHERE attempt.group_id = pr_groups.id AND attempt.base_sha IS NOT NULL
-        ORDER BY CASE WHEN attempt.id = pr_groups.active_attempt_id THEN 0 ELSE 1 END,
+        ORDER BY CASE WHEN attempt.id = owner.active_attempt_id THEN 0 ELSE 1 END,
                  attempt.created_at ASC, attempt.id ASC
         LIMIT 1
       ));
@@ -1506,7 +1510,7 @@ export const MIGRATIONS = [
       ));
 
   INSERT OR IGNORE INTO _migrations (id)
-  SELECT 66
+  SELECT 67
   WHERE NOT EXISTS (
     SELECT 1 FROM pr_groups WHERE leaf_task_id IS NULL OR branch IS NULL
   )

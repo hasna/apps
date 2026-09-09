@@ -688,6 +688,7 @@ const messageSchema = {
     body_html: { type: "string", nullable: true },
     status: { type: "string" },
     provider_id: { type: "string", nullable: true, description: "Recorded provider identifier; null when historical provenance is unknown." },
+    tags: { type: "object", nullable: true, additionalProperties: { type: "string" }, description: "Persisted outbound tags; null when not recorded." },
     provider_message_id: { type: "string", nullable: true },
     message_id: { type: "string", nullable: true, description: "RFC 5322 Message-ID" },
     in_reply_to: { type: "string", nullable: true },
@@ -875,6 +876,7 @@ const messageListItemSchema = {
     snippet: { type: "string", nullable: true, description: "Short text preview (<=140 chars); full bodies are available only from GET /v1/messages/{id}." },
     status: { type: "string" },
     provider_id: { type: "string", nullable: true, description: "Recorded provider identifier; null when historical provenance is unknown." },
+    tags: { type: "object", nullable: true, additionalProperties: { type: "string" }, description: "Persisted outbound tags; null when not recorded." },
     provider_message_id: { type: "string", nullable: true },
     message_id: { type: "string", nullable: true, description: "RFC 5322 Message-ID" },
     in_reply_to: { type: "string", nullable: true },
@@ -1713,6 +1715,14 @@ for (const resource of SELF_HOSTED_RESOURCES) {
     ...(resource.requiredColumns === undefined ? {} : { required: resource.requiredColumns }),
     additionalProperties: false,
   };
+  if (resource.path === "feedback") {
+    Object.assign(bodySchema.properties, {
+      message: { type: "string", minLength: 1, maxLength: 10000 },
+      email: { type: "string", nullable: true, maxLength: 254 },
+      category: { type: "string", enum: ["bug", "feature", "general"] },
+    });
+    Object.assign(itemSchema.properties, bodySchema.properties, { status: { type: "string", enum: ["saved"] } });
+  }
   const queryParameters = [
     ...listParams,
     ...(resource.filters ?? []).map((filter) => ({
@@ -1749,6 +1759,11 @@ for (const resource of SELF_HOSTED_RESOURCES) {
       responses: { "201": { content: { "application/json": { schema: itemSchema } } } },
     },
   };
+  if (resource.path === "feedback") {
+    const post = genericResourcePaths["/v1/feedback"]!.post as { responses: Record<string, unknown> };
+    post.responses["404"] = errorResponse("This API version does not expose feedback storage.");
+    post.responses["405"] = errorResponse("This API version does not accept feedback submissions.");
+  }
   const resourceItemPath: Record<string, unknown> = {
     get: {
       operationId: `getResource${name}`,
@@ -1778,14 +1793,14 @@ for (const resource of SELF_HOSTED_RESOURCES) {
       operationId: `updateResource${name}`,
       summary: `Update a tenant-scoped ${resource.path} row`,
       parameters: idParam,
-      requestBody: { required: true, content: { "application/json": { schema: bodySchema } } },
+      requestBody: { required: true, content: { "application/json": { schema: resource.path === "feedback" ? { ...bodySchema, required: [] } : bodySchema } } },
       responses: { "200": { content: { "application/json": { schema: itemSchema } } } },
     };
     resourceItemPath.put = {
       operationId: `replaceResource${name}`,
       summary: `Replace mutable fields on a tenant-scoped ${resource.path} row`,
       parameters: idParam,
-      requestBody: { required: true, content: { "application/json": { schema: bodySchema } } },
+      requestBody: { required: true, content: { "application/json": { schema: resource.path === "feedback" ? { ...bodySchema, required: [] } : bodySchema } } },
       responses: { "200": { content: { "application/json": { schema: itemSchema } } } },
     };
   }
@@ -3500,6 +3515,17 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
         responses: { "200": { description: "Server provider health", content: { "application/json": { schema: { type: "object", additionalProperties: true, required: ["provider_id", "checked", "status", "message"], properties: { provider_id: { type: "string" }, checked: { type: "boolean" }, status: { type: "string" }, message: { type: "string" } } } } } }, "404": errorResponse("Provider not found in this tenant.") },
       },
     },
+    "/v1/domains/{id}/dns-records": {
+      get: {
+        operationId: "getDomainDnsRecords",
+        summary: "Read fresh DNS records from the tenant-bound provider without changing domain state",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }, { name: "provider_id", in: "query", schema: { type: "string" } }],
+        responses: { "200": { description: "Fresh provider records and recommended DMARC", content: { "application/json": { schema: { type: "object", required: ["domain", "domain_id", "provider_id", "source", "verified_for_sending", "checked_at", "records"], properties: {
+          domain: { type: "string" }, domain_id: { type: "string" }, provider_id: { type: "string" }, source: { type: "string", enum: ["live_provider"] }, verified_for_sending: { type: "boolean" }, checked_at: { type: "string" },
+          records: { type: "array", items: { type: "object", required: ["type", "name", "value", "purpose"], properties: { type: { type: "string", enum: ["TXT", "CNAME", "MX"] }, name: { type: "string" }, value: { type: "string" }, purpose: { type: "string" }, status: { type: "string" }, priority: { type: "integer" } } } }
+        } } } } }, "400": errorResponse("Invalid selector"), "404": errorResponse("Domain not found"), "409": errorResponse("Provider registration or binding changed"), "502": errorResponse("Provider DNS read failed"), "503": errorResponse("Server binding unavailable") },
+      },
+    },
     "/v1/domains/{id}/verify": {
       post: {
         operationId: "domainVerify",
@@ -3761,6 +3787,8 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                   track_clicks: {type:"boolean",description:"Observe unique message click requests using configured server tracking."},
                   tracking_url: {type:"string",format:"uri",description:"Exact tenant-approved HTTPS tracking base; requires a tracking switch."},
                   unsubscribe_url: { type: "string", format: "uri", description: "HTTP(S) unsubscribe URL emitted as List-Unsubscribe headers." },
+                  headers: { type: "object", maxProperties: 20, additionalProperties: { type: "string", minLength: 1, maxLength: 900 }, description: "Nonreserved X-* extension headers only; printable ASCII values, no controls, authentication, transport, forwarding or tracking overrides. Total at most 8192 bytes." },
+                  tags: { type: "object", maxProperties: 50, additionalProperties: { type: "string", minLength: 1, maxLength: 256, pattern: "^[A-Za-z0-9_-]+$" }, description: "Names and values contain 1–256 ASCII letters, digits, underscores or hyphens. Persisted and passed to the selected provider." },
                   from: { type: "string" },
                   to: { type: "array", items: { type: "string" } },
                   cc: { type: "array", items: { type: "string" } },
@@ -4084,7 +4112,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
       patch: {
         operationId: "updateMessage",
         parameters: [...idParam],
-        requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: { status: { type: "string" }, provider_message_id: { type: "string", nullable: true }, is_read: { type: "boolean" }, is_starred: { type: "boolean" }, archived: { type: "boolean" }, add_label: { type: "string" }, remove_label: { type: "string" }, body_text: { type: "string", nullable: true }, body_html: { type: "string", nullable: true }, headers: { type: "object", additionalProperties: true } } } } } },
+        requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: { status: { type: "string" }, provider_message_id: { type: "string", nullable: true }, is_read: { type: "boolean" }, is_starred: { type: "boolean" }, archived: { type: "boolean", description: "Move the message into (true) or out of (false) the archived folder. Equivalent to adding or removing the reserved folder label \"archived\"." }, is_spam: { type: "boolean", description: "Move the message into (true) or out of (false) the spam folder (quarantine / un-quarantine). True adds the reserved folder label \"spam\", which is what makes the message appear under the spam folder." }, is_trash: { type: "boolean", description: "Move the message into (true) or out of (false) the trash folder (delete to trash / restore). True adds the reserved folder label \"trash\", which is what makes the message appear under the trash folder." }, add_label: { type: "string", description: "Add a label. The folder labels archived, spam and trash are RESERVED folder moves: add_label naming one of them moves the message INTO that folder (it sets the same state as archived / is_spam / is_trash), it is not stored as a plain label." }, remove_label: { type: "string", description: "Remove a label. The folder labels archived, spam and trash are RESERVED folder moves: remove_label naming one of them moves the message OUT of that folder." }, body_text: { type: "string", nullable: true }, body_html: { type: "string", nullable: true }, headers: { type: "object", additionalProperties: true } } } } } },
         responses: {
           "200": {
             content: {
@@ -4103,7 +4131,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
       put: {
         operationId: "replaceMessage",
         parameters: [...idParam],
-        requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: { status: { type: "string" }, provider_message_id: { type: "string", nullable: true }, is_read: { type: "boolean" }, is_starred: { type: "boolean" }, archived: { type: "boolean" }, add_label: { type: "string" }, remove_label: { type: "string" }, body_text: { type: "string", nullable: true }, body_html: { type: "string", nullable: true }, headers: { type: "object", additionalProperties: true } } } } } },
+        requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: { status: { type: "string" }, provider_message_id: { type: "string", nullable: true }, is_read: { type: "boolean" }, is_starred: { type: "boolean" }, archived: { type: "boolean", description: "Move the message into (true) or out of (false) the archived folder. Equivalent to adding or removing the reserved folder label \"archived\"." }, is_spam: { type: "boolean", description: "Move the message into (true) or out of (false) the spam folder (quarantine / un-quarantine). True adds the reserved folder label \"spam\", which is what makes the message appear under the spam folder." }, is_trash: { type: "boolean", description: "Move the message into (true) or out of (false) the trash folder (delete to trash / restore). True adds the reserved folder label \"trash\", which is what makes the message appear under the trash folder." }, add_label: { type: "string", description: "Add a label. The folder labels archived, spam and trash are RESERVED folder moves: add_label naming one of them moves the message INTO that folder (it sets the same state as archived / is_spam / is_trash), it is not stored as a plain label." }, remove_label: { type: "string", description: "Remove a label. The folder labels archived, spam and trash are RESERVED folder moves: remove_label naming one of them moves the message OUT of that folder." }, body_text: { type: "string", nullable: true }, body_html: { type: "string", nullable: true }, headers: { type: "object", additionalProperties: true } } } } } },
         responses: {
           "200": {
             content: {
@@ -4864,7 +4892,936 @@ emailsSelfHostedOpenApi.paths!["/v1/providers/secrets/status"]={get:{operationId
     source:{type:"string"},complete:{type:"boolean",enum:[true]},checked:{type:"boolean",enum:[false]},activeKeyId:{type:"string",nullable:true},availableKeyIds:{type:"array",items:{type:"string"}},referencedKeyIds:{type:"array",items:{type:"string"}},managed_envelopes:{type:"integer",minimum:0},lifecycle_requirement:{type:"string"},
     capabilities:{type:"object",required:["status","rewrap","rotate_root","revoke_root"],properties:{status:{type:"boolean"},rewrap:{type:"boolean"},rotate_root:{type:"boolean"},revoke_root:{type:"boolean"}}},
     default_sender:{type:"object",nullable:true,properties:{type:{type:"string"},credential_source:{type:"string"},externally_managed:{type:"boolean"}}},
-    providers:{type:"array",items:{type:"object",required:["provider_id","name","type","active","configured","credential_source","externally_managed"],properties:{provider_id:{type:"string"},name:{type:"string"},type:{type:"string"},active:{type:"boolean"},configured:{type:"boolean"},credential_source:{type:"string"},externally_managed:{type:"boolean"}}}}
+    providers:{type:"array",items:{type:"object",required:["provider_id","name","type","active","configured","credential_source","externally_managed"],properties:{provider_id:{type:"string"},name:{type:"string"},type:{type:"string"},active:{type:"boolean"},configured:{type:"boolean"},credential_source:{type:"string"},externally_managed:{type:"boolean"},revision:{type:"integer",minimum:1}}}}
   }}}}},"405":errorResponse("Only GET is supported for provider credential status.")
 }}};
+const providerSecretJobSchema = {type:"object",required:["id","operation","status","root_id","processed","remaining"],properties:{id:{type:"string",format:"uuid"},operation:{type:"string",enum:["rewrap","rotate-root","revoke-root"]},status:{type:"string",enum:["pending","complete"]},root_id:{type:"string",format:"uuid"},processed:{type:"integer",minimum:0},remaining:{type:"integer",minimum:0}}};
+const providerSecretJobResponses = {"200":{description:"Completed tenant credential job",content:{"application/json":{schema:providerSecretJobSchema}}},"202":{description:"Durable pending job; explicitly advance to continue",content:{"application/json":{schema:providerSecretJobSchema}}},"400":errorResponse("Invalid credential operation input."),"403":errorResponse("Tenant operator access required."),"404":errorResponse("Tenant job or root not found."),"409":errorResponse("Credential lifecycle conflict or retention policy."),"503":errorResponse("Operation unavailable; inspect status and reuse the same idempotency key.")};
+for(const [suffix,operationId] of [["rewrap","rewrapProviderSecrets"],["rotate-root","rotateProviderSecretRoot"],["revoke-root","revokeProviderSecretRoot"]] as const){
+ emailsSelfHostedOpenApi.paths![`/v1/providers/secrets/${suffix}`]={post:{operationId,summary:"Begin an idempotent tenant credential root operation",security:[{apiKeyAuth:[]},{bearerAuth:[]}],requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,required:suffix==="revoke-root"?["idempotency_key","key_id"]:["idempotency_key"],properties:{idempotency_key:{type:"string",format:"uuid"},...(suffix==="revoke-root"?{key_id:{type:"string",format:"uuid"}}:{})}}}}},responses:providerSecretJobResponses}};
+}
+emailsSelfHostedOpenApi.paths!["/v1/providers/secrets/jobs/{id}"]={get:{operationId:"getProviderSecretJob",summary:"Read a durable tenant credential job",security:[{apiKeyAuth:[]},{bearerAuth:[]}],parameters:[{name:"id",in:"path",required:true,schema:{type:"string",format:"uuid"}}],responses:providerSecretJobResponses}};
+emailsSelfHostedOpenApi.paths!["/v1/providers/secrets/jobs/{id}/advance"]={post:{operationId:"advanceProviderSecretJob",summary:"Advance at most twenty provider data keys atomically",security:[{apiKeyAuth:[]},{bearerAuth:[]}],parameters:[{name:"id",in:"path",required:true,schema:{type:"string",format:"uuid"}}],requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,properties:{limit:{type:"integer",minimum:1,maximum:20}}}}}},responses:providerSecretJobResponses}};
+emailsSelfHostedOpenApi.paths!["/v1/providers/{id}/credentials"]={put:{operationId:"installProviderCredentials",summary:"Install encrypted tenant provider credentials with a revision fence",security:[{apiKeyAuth:[]},{bearerAuth:[]}],parameters:[{name:"id",in:"path",required:true,schema:{type:"string"}}],requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,required:["credentials","expected_revision"],properties:{expected_revision:{type:"integer",minimum:1,nullable:true},credentials:{type:"object",additionalProperties:false,required:["type"],properties:{type:{type:"string",enum:["ses","resend"]},api_key:{type:"string",writeOnly:true},access_key:{type:"string",writeOnly:true},secret_key:{type:"string",writeOnly:true}}}}}}}},responses:{"200":{description:"Stored encrypted credential revision; provider validity has not been probed",content:{"application/json":{schema:{type:"object",required:["provider_id","revision","root_id","status","checked"],properties:{provider_id:{type:"string"},revision:{type:"integer",minimum:1},root_id:{type:"string",format:"uuid"},status:{type:"string",enum:["complete"]},checked:{type:"boolean",enum:[false]}}}}}},"400":errorResponse("Invalid credentials or expected revision."),"404":errorResponse("Active tenant provider not found."),"409":errorResponse("Credential revision changed; inspect status before updating."),"503":errorResponse("Credential installation could not be confirmed; inspect status.")}}};
+emailsSelfHostedOpenApi.paths!["/v1/providers/{id}/managed"]={put:{operationId:"writeManagedProvider",summary:"Atomically write provider metadata and encrypted credentials after server validation",security:[{apiKeyAuth:[]},{bearerAuth:[]}],parameters:[{name:"id",in:"path",required:true,schema:{type:"string",format:"uuid"}}],requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,required:["credentials","expected_revision"],properties:{create:{type:"boolean"},name:{type:"string"},type:{type:"string",enum:["ses","resend"]},region:{type:"string",nullable:true},skip_validation:{type:"boolean"},expected_revision:{type:"integer",minimum:1,nullable:true},credentials:{type:"object",additionalProperties:false,properties:{api_key:{type:"string",writeOnly:true},access_key:{type:"string",writeOnly:true},secret_key:{type:"string",writeOnly:true}}}}}}}},responses:{"200":{description:"Atomic provider and credential write confirmed",content:{"application/json":{schema:{type:"object",required:["provider_id","revision","root_id","status","checked"],properties:{provider_id:{type:"string"},revision:{type:"integer",minimum:1},root_id:{type:"string",format:"uuid"},status:{type:"string",enum:["complete"]},checked:{type:"boolean"}}}}}},"400":errorResponse("Invalid provider fields."),"404":errorResponse("Active provider not found in this tenant."),"409":errorResponse("Provider already exists or credential revision changed."),"422":errorResponse("Server credential validation failed; nothing was saved."),"503":errorResponse("Provider write could not be confirmed; inspect its ID and credential revision before retrying.")}}};
+const domainDnsRecordSchema = {
+  type: "object",
+  required: ["type", "name", "content"],
+  properties: {
+    id: { type: "string" },
+    type: { type: "string" },
+    name: { type: "string" },
+    content: { type: "string" },
+    priority: { type: "integer" },
+    proxied: { type: "boolean" },
+    ttl: { type: "integer" },
+  },
+};
+const domainDnsResultSchema = {
+  type: "object",
+  required: ["dry_run", "job"],
+  properties: {
+    dry_run: { type: "boolean" },
+    job: {
+      type: "object",
+      required: [
+        "id",
+        "domain",
+        "provider_id",
+        "zone_id",
+        "status",
+        "phase",
+        "dns_published",
+        "verified_for_sending",
+        "requires_reconciliation",
+        "plan",
+        "message",
+      ],
+      properties: {
+        id: { type: "string", nullable: true },
+        domain: { type: "string" },
+        provider_id: { type: "string" },
+        zone_id: { type: "string" },
+        status: {
+          type: "string",
+          enum: [
+            "planned",
+            "processing",
+            "blocked",
+            "pending_verification",
+            "verified",
+          ],
+        },
+        phase: { type: "string" },
+        dns_published: { type: "boolean" },
+        verified_for_sending: { type: "boolean" },
+        requires_reconciliation: { type: "boolean" },
+        message: { type: "string" },
+        plan: {
+          type: "object",
+          nullable: true,
+          required: ["creates", "deletes", "existing"],
+          properties: {
+            creates: { type: "array", items: domainDnsRecordSchema },
+            deletes: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["id"],
+                properties: { id: { type: "string" } },
+              },
+            },
+            existing: { type: "array", items: domainDnsRecordSchema },
+          },
+        },
+      },
+    },
+  },
+};
+const domainDnsResponses = {
+  "200": {
+    description:
+      "Durable DNS publication receipt or a plan without provider calls",
+    content: { "application/json": { schema: domainDnsResultSchema } },
+  },
+  "400": errorResponse("Invalid DNS options"),
+  "401": errorResponse("Authentication required"),
+  "403": errorResponse("Tenant operator required"),
+  "404": errorResponse("Tenant reference or job not found"),
+  "405": errorResponse("Unsupported method or older server route"),
+  "409": errorResponse("DNS plan or binding conflict"),
+  "502": errorResponse("DNS provider did not confirm the request"),
+  "503": errorResponse("Server binding or service unavailable"),
+};
+for (const [path, operationId] of [
+  ["/v1/domains/setup", "setupOwnedDomain"],
+  ["/v1/domains/setup-cloudflare", "setupDomainCloudflare"],
+  ["/v1/domains/provision", "provisionSendingDomain"],
+])
+  emailsSelfHostedOpenApi.paths![path!] = {
+    post: {
+      operationId,
+      summary:
+        "Publish sending DNS using an explicit tenant/provider/zone server binding",
+      security: [{ apiKeyAuth: [] }, { bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["domain", "provider_id"],
+              properties: {
+                domain: { type: "string" },
+                provider_id: { type: "string" },
+                dry_run: { type: "boolean" },
+                ...(path === "/v1/domains/setup" ? {} : {register_provider: { type: "boolean" }}),
+                add_mx: { type: "boolean" },
+                force_mx_switch: { type: "boolean" },
+                ...(path === "/v1/domains/setup" ? {} : {mail_from: { type: "string" }, send: { type: "string", enum: ["ses"] }}),
+                mx_server: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+      responses: domainDnsResponses,
+    },
+  };
+emailsSelfHostedOpenApi.paths!["/v1/domain-dns-jobs/{id}"] = {
+  get: {
+    operationId: "getDomainDnsJob",
+    summary: "Inspect a tenant operator's durable DNS publication receipt",
+    security: [{ apiKeyAuth: [] }, { bearerAuth: [] }],
+    parameters: [
+      { name: "id", in: "path", required: true, schema: { type: "string" } },
+    ],
+    responses: domainDnsResponses,
+  },
+};
+const provisionUpInputSchema = {
+  type: "object",
+  required: [
+    "domain",
+    "provider_id",
+    "addresses",
+    "test_count",
+    "add_mx",
+    "force_mx_switch",
+  ],
+  properties: {
+    domain: { type: "string" },
+    provider_id: { type: "string" },
+    addresses: { type: "array", items: { type: "string" } },
+    test_count: { type: "integer" },
+    add_mx: { type: "boolean" },
+    force_mx_switch: { type: "boolean" },
+    bucket: { type: "string" },
+    source_id: { type: "string" },
+  },
+};
+const provisionUpItemSchema = {
+  type: "object",
+  required: ["from", "to", "subject", "token", "send_key", "state"],
+  properties: {
+    from: { type: "string" },
+    to: { type: "string" },
+    subject: { type: "string" },
+    token: { type: "string" },
+    send_key: { type: "string" },
+    state: {
+      type: "string",
+      enum: ["not_attempted", "uncertain", "failed", "sent", "received"],
+    },
+    outbound_id: { type: "string" },
+    inbound_id: { type: "string" },
+    received_at: { type: "string" },
+    replayed: { type: "boolean" },
+    error: { type: "string" },
+  },
+};
+const provisionUpJobSchema = {
+  type: "object",
+  required: ["id", "status", "input", "receipt", "created_at", "updated_at"],
+  properties: {
+    id: { type: "string" },
+    status: {
+      type: "string",
+      enum: ["pending", "processing", "blocked", "ready"],
+    },
+    input: provisionUpInputSchema,
+    created_at: { type: "string" },
+    updated_at: { type: "string" },
+    receipt: {
+      type: "object",
+      nullable: true,
+      required: [
+        "phase",
+        "address_cursor",
+        "dns",
+        "addresses",
+        "roundtrip",
+        "next_attempt_ms",
+        "complete",
+        "delivery_tested",
+        "errors",
+      ],
+      properties: {
+        phase: {
+          type: "string",
+          enum: ["dns", "addresses", "roundtrip", "complete"],
+        },
+        binding_generation: { type: "string", nullable: true },
+        binding_history: { type: "array", items: { type: "string" } },
+        address_cursor: { type: "integer" },
+        dns: { ...domainDnsResultSchema, nullable: true },
+        addresses: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            required: ["id", "status", "receipt"],
+            properties: {
+              id: { type: "string" },
+              status: { type: "string" },
+              receipt: {
+                type: "object",
+                nullable: true,
+                additionalProperties: true,
+              },
+            },
+          },
+        },
+        roundtrip: {
+          type: "object",
+          required: [
+            "run_id",
+            "items",
+            "poll_cursor",
+            "poll_pass",
+            "preflight",
+          ],
+          properties: {
+            run_id: { type: "string" },
+            items: { type: "array", items: provisionUpItemSchema },
+            poll_cursor: { type: "integer" },
+            poll_pass: { type: "integer" },
+            preflight: { type: "boolean" },
+            sync_cursor: { type: "string", nullable: true },
+          },
+        },
+        next_attempt_ms: { type: "integer" },
+        complete: { type: "boolean" },
+        delivery_tested: { type: "boolean" },
+        errors: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["code", "at"],
+            properties: { code: { type: "string" }, at: { type: "string" } },
+          },
+        },
+      },
+    },
+  },
+};
+const provisionUpResponse = {
+  type: "object",
+  required: ["job"],
+  properties: {
+    dry_run: { type: "boolean" },
+    job: { ...provisionUpJobSchema, nullable: true },
+    plan: { type: "object", additionalProperties: true },
+  },
+};
+const provisionUpResponses = (schema: unknown) => ({
+  "200": {
+    description:
+      "Durable authorized run checkpoint; pending does not imply readiness",
+    content: { "application/json": { schema } },
+  },
+  "400": errorResponse("Invalid inputs"),
+  "401": errorResponse("Authentication required"),
+  "403": errorResponse("Tenant operator required"),
+  "404": errorResponse("Run or reference not found"),
+  "405": errorResponse("Method not allowed"),
+  "409": errorResponse("Saved intent or binding conflict"),
+  "503": errorResponse("Step completion not confirmed"),
+});
+for (const [path, operationId, required, properties] of [
+  [
+    "/v1/provision/up",
+    "startProvisionUp",
+    ["domain", "provider_id"],
+    {
+      domain: { type: "string" },
+      provider_id: { type: "string" },
+      addresses: { type: "string" },
+      count: { type: "integer", minimum: 0, maximum: 100 },
+      test: { type: "boolean" },
+      bucket: { type: "string" },
+      source_id: { type: "string" },
+      add_mx: { type: "boolean" },
+      force_mx_switch: { type: "boolean" },
+      dry_run: { type: "boolean" },
+      idempotency_key: { type: "string" },
+    },
+  ],
+  [
+    "/v1/provision/retry",
+    "retryProvisionUp",
+    ["domain"],
+    {
+      domain: { type: "string" },
+      provider_id: { type: "string" },
+      job_id: { type: "string" },
+    },
+  ],
+  [
+    "/v1/provision/tick",
+    "tickProvisionUp",
+    ["provider_id"],
+    {
+      provider_id: { type: "string" },
+      bucket: { type: "string" },
+      add_mx: { type: "boolean" },
+      force_mx_switch: { type: "boolean" },
+    },
+  ],
+] as const)
+  emailsSelfHostedOpenApi.paths![path] = {
+    post: {
+      operationId,
+      summary:
+        "Advance operator-authorized provisioning with frozen inputs and durable evidence",
+      security: [{ apiKeyAuth: [] }, { bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: [...required],
+              properties,
+            },
+          },
+        },
+      },
+      responses: provisionUpResponses(
+        path.endsWith("/tick")
+          ? {
+              type: "object",
+              required: ["jobs", "advanced"],
+              properties: {
+                jobs: { type: "array", items: provisionUpJobSchema },
+                advanced: { type: "integer" },
+              },
+            }
+          : provisionUpResponse,
+      ),
+    },
+  };
+for (const [path, method, operationId] of [
+  ["/v1/provision/runs/{id}", "get", "getProvisionUp"],
+  ["/v1/provision/runs/{id}/run", "post", "runProvisionUp"],
+] as const)
+  emailsSelfHostedOpenApi.paths![path] = {
+    [method]: {
+      operationId,
+      summary: "Read or advance one saved provisioning step",
+      security: [{ apiKeyAuth: [] }, { bearerAuth: [] }],
+      parameters: [
+        { name: "id", in: "path", required: true, schema: { type: "string" } },
+      ],
+      ...(method === "post"
+        ? {
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {},
+                  },
+                },
+              },
+            },
+          }
+        : {}),
+      responses: provisionUpResponses(provisionUpResponse),
+    },
+  };
 addRoutineErrorParity(emailsSelfHostedOpenApi);
+
+
+emailsSelfHostedOpenApi.paths!["/v1/runtime/logs"] = {
+  "get": {
+    "operationId": "tailRuntimeLogs",
+    "summary": "Read tenant API worker lifecycle logs (operator only; not container stdout or worker liveness)",
+    "security": [
+      {
+        "apiKeyAuth": []
+      },
+      {
+        "bearerAuth": []
+      }
+    ],
+    "parameters": [
+      {
+        "name": "component",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "daemon",
+            "sync",
+            "inbound",
+            "scheduler",
+            "nightly"
+          ]
+        }
+      },
+      {
+        "name": "lines",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        }
+      }
+    ],
+    "responses": {
+      "200": {
+        "description": "Persisted runtime events, newest first",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "scope",
+                "component",
+                "items",
+                "container_stdout",
+                "worker_liveness"
+              ],
+              "properties": {
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "tenant_api_operations"
+                  ]
+                },
+                "component": {
+                  "type": "string"
+                },
+                "container_stdout": {
+                  "type": "boolean",
+                  "enum": [
+                    false
+                  ]
+                },
+                "worker_liveness": {
+                  "type": "string",
+                  "enum": [
+                    "not_measured"
+                  ]
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "request_id",
+                      "component",
+                      "operation",
+                      "event",
+                      "created_at",
+                      "http_status"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "request_id": {
+                        "type": "string"
+                      },
+                      "component": {
+                        "type": "string"
+                      },
+                      "operation": {
+                        "type": "string"
+                      },
+                      "event": {
+                        "type": "string",
+                        "enum": [
+                          "started",
+                          "returned",
+                          "threw"
+                        ]
+                      },
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "http_status": {
+                        "type": "integer",
+                        "nullable": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+};
+for (const code of ["400", "401", "403", "404", "405", "503"]) (emailsSelfHostedOpenApi.paths!["/v1/runtime/logs"]!.get as { responses: Record<string, unknown> }).responses[code] = errorResponse("Runtime log request failed");
+
+emailsSelfHostedOpenApi.paths!["/v1/workers"] = {
+  "get": {
+    "operationId": "listWorkers",
+    "summary": "List real tenant worker generations and lease freshness (operator only)",
+    "security": [
+      {
+        "apiKeyAuth": []
+      },
+      {
+        "bearerAuth": []
+      }
+    ],
+    "responses": {
+      "200": {
+        "description": "Worker registry, not an inferred process count",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "items",
+                "complete"
+              ],
+              "properties": {
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "component",
+                      "generation",
+                      "state",
+                      "desired",
+                      "lease_until",
+                      "heartbeat_at",
+                      "lease_fresh",
+                      "restart_id",
+                      "interval_ms"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "component": {
+                        "type": "string"
+                      },
+                      "state": {
+                        "type": "string"
+                      },
+                      "desired": {
+                        "type": "string"
+                      },
+                      "lease_until": {
+                        "type": "string"
+                      },
+                      "heartbeat_at": {
+                        "type": "string"
+                      },
+                      "generation": {
+                        "type": "integer"
+                      },
+                      "interval_ms": {
+                        "type": "integer"
+                      },
+                      "lease_fresh": {
+                        "type": "boolean"
+                      },
+                      "restart_id": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  }
+                },
+                "complete": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+};
+emailsSelfHostedOpenApi.paths!["/v1/workers/{id}/control"] = {
+  "post": {
+    "operationId": "controlWorker",
+    "summary": "Control a tenant foreground worker through cooperative ownership and durable operation receipts",
+    "security": [
+      {
+        "apiKeyAuth": []
+      },
+      {
+        "bearerAuth": []
+      }
+    ],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    ],
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "register",
+                  "heartbeat",
+                  "started",
+                  "restart",
+                  "restart-status",
+                  "drain",
+                  "stop-request",
+                  "stop",
+                  "tick",
+                  "operation"
+                ]
+              },
+              "owner_token": {
+                "type": "string"
+              },
+              "generation": {
+                "type": "integer"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "component": {
+                "type": "string",
+                "enum": [
+                  "scheduler"
+                ]
+              },
+              "interval_ms": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 3600000
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Worker control receipt",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "worker": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "component",
+                    "generation",
+                    "state",
+                    "desired",
+                    "lease_until",
+                    "heartbeat_at",
+                    "lease_fresh",
+                    "restart_id",
+                    "interval_ms"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "component": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "desired": {
+                      "type": "string"
+                    },
+                    "lease_until": {
+                      "type": "string"
+                    },
+                    "heartbeat_at": {
+                      "type": "string"
+                    },
+                    "generation": {
+                      "type": "integer"
+                    },
+                    "interval_ms": {
+                      "type": "integer"
+                    },
+                    "lease_fresh": {
+                      "type": "boolean"
+                    },
+                    "restart_id": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                },
+                "operation": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "status",
+                    "result",
+                    "generation"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "generation": {
+                      "type": "integer"
+                    },
+                    "result": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "nullable": true
+                    }
+                  }
+                },
+                "restart": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "worker_id",
+                    "status",
+                    "old_generation",
+                    "new_generation"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "worker_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "old_generation": {
+                      "type": "integer"
+                    },
+                    "new_generation": {
+                      "type": "integer",
+                      "nullable": true
+                    }
+                  }
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "202": {
+        "description": "Worker control receipt",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "worker": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "component",
+                    "generation",
+                    "state",
+                    "desired",
+                    "lease_until",
+                    "heartbeat_at",
+                    "lease_fresh",
+                    "restart_id",
+                    "interval_ms"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "component": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "desired": {
+                      "type": "string"
+                    },
+                    "lease_until": {
+                      "type": "string"
+                    },
+                    "heartbeat_at": {
+                      "type": "string"
+                    },
+                    "generation": {
+                      "type": "integer"
+                    },
+                    "interval_ms": {
+                      "type": "integer"
+                    },
+                    "lease_fresh": {
+                      "type": "boolean"
+                    },
+                    "restart_id": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                },
+                "operation": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "status",
+                    "result",
+                    "generation"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "generation": {
+                      "type": "integer"
+                    },
+                    "result": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "nullable": true
+                    }
+                  }
+                },
+                "restart": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "worker_id",
+                    "status",
+                    "old_generation",
+                    "new_generation"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "worker_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "old_generation": {
+                      "type": "integer"
+                    },
+                    "new_generation": {
+                      "type": "integer",
+                      "nullable": true
+                    }
+                  }
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      }
+    }
+  }
+};
+for (const path of ["/v1/workers", "/v1/workers/{id}/control"]) { const item = emailsSelfHostedOpenApi.paths![path]!; const operation = (item.get ?? item.post) as { responses: Record<string,unknown> }; for (const code of ["400","401","403","404","405","409","422","429","500","503"]) operation.responses[code]=errorResponse("Worker control failed"); }
+
+const sesInboundSetupReceipt = { type: "object", required: ["ok","verified","domain","source_id","bucket","prefix","region","changed","attempted","changes_may_have_applied","worker_started","delivery_tested"], properties: {
+  ok:{type:"boolean"}, verified:{type:"boolean"}, domain:{type:"string"}, source_id:{type:"string"}, bucket:{type:"string"}, prefix:{type:"string"}, region:{type:"string"},
+  changed:{type:"array",items:{type:"string"}}, attempted:{type:"array",items:{type:"string"}}, changes_may_have_applied:{type:"boolean"}, worker_started:{type:"boolean",enum:[false]}, delivery_tested:{type:"boolean",enum:[false]}, message:{type:"string"}
+} };
+emailsSelfHostedOpenApi.paths!["/v1/inbox/setup-ses-inbound"] = { post: {
+  operationId: "setupSesInbound", summary: "Configure and verify the exact server-bound SES bucket and receipt rule (operator only)", tags: ["inbox"],
+  requestBody: { required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,required:["domain","bucket"],properties:{domain:{type:"string"},bucket:{type:"string"},region:{type:"string"},prefix:{type:"string"},catch_all:{type:"boolean"}}}}}},
+  responses: { "200":{description:"Completed setup attempt with explicit verified or partial result",content:{"application/json":{schema:sesInboundSetupReceipt}}}, ...Object.fromEntries(["400","401","403","404","405","409","422","429","500","502","503"].map(code=>[code,errorResponse("SES inbound setup failed")])) }
+} };

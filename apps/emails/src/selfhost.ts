@@ -40,9 +40,9 @@ export interface Address { "id": string; "email": string; "domain"?: string | nu
 
 export interface SendKey { "id": string; "owner_id": string | null; "prefix": string | null; "label": string | null; "last_used_at": string | null; "revoked_at": string | null; "created_at": string; "updated_at": string }
 
-export interface MessageListItem { "id": string; "direction": string; "from_addr": string; "to_addrs": Array<string>; "cc_addrs": Array<string>; "subject": string | null; "snippet": string | null; "status": string; "provider_id"?: string | null; "provider_message_id": string | null; "message_id": string | null; "in_reply_to": string | null; "received_at": string | null; "is_read": boolean; "is_starred": boolean; "labels": Array<string>; "attachment_count": number; "source_id": string | null; "send_state": string; "policy_denial"?: string | null; "send_started_at": string | null; "created_at": string; "updated_at": string }
+export interface MessageListItem { "id": string; "direction": string; "from_addr": string; "to_addrs": Array<string>; "cc_addrs": Array<string>; "subject": string | null; "snippet": string | null; "status": string; "provider_id"?: string | null; "tags"?: Record<string, string> | null; "provider_message_id": string | null; "message_id": string | null; "in_reply_to": string | null; "received_at": string | null; "is_read": boolean; "is_starred": boolean; "labels": Array<string>; "attachment_count": number; "source_id": string | null; "send_state": string; "policy_denial"?: string | null; "send_started_at": string | null; "created_at": string; "updated_at": string }
 
-export interface Message { "id": string; "direction": string; "from_addr": string; "to_addrs": Array<string>; "cc_addrs": Array<string>; "subject": string | null; "body_text": string | null; "body_html": string | null; "status": string; "provider_id"?: string | null; "provider_message_id": string | null; "message_id": string | null; "in_reply_to": string | null; "received_at": string | null; "is_read": boolean; "is_starred": boolean; "labels": Array<string>; "headers": Record<string, unknown>; "attachments": Array<AttachmentMeta | null>; "source_id": string | null; "send_state": string; "send_started_at": string | null; "created_at": string; "updated_at": string }
+export interface Message { "id": string; "direction": string; "from_addr": string; "to_addrs": Array<string>; "cc_addrs": Array<string>; "subject": string | null; "body_text": string | null; "body_html": string | null; "status": string; "provider_id"?: string | null; "tags"?: Record<string, string> | null; "provider_message_id": string | null; "message_id": string | null; "in_reply_to": string | null; "received_at": string | null; "is_read": boolean; "is_starred": boolean; "labels": Array<string>; "headers": Record<string, unknown>; "attachments": Array<AttachmentMeta | null>; "source_id": string | null; "send_state": string; "send_started_at": string | null; "created_at": string; "updated_at": string }
 
 export interface MessageCounts { "inbox": number; "unread": number; "priority"?: number; "starred": number; "sent": number; "archived": number; "spam": number; "trash": number; "total": number; "latest_received_at": string | null }
 
@@ -634,6 +634,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Inspect a tenant operator's durable DNS publication receipt */
+    async getDomainDnsJob(id: string, init?: RequestInit): Promise<{ "dry_run": boolean; "job": { "id": string | null; "domain": string; "provider_id": string; "zone_id": string; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "phase": string; "dns_published": boolean; "verified_for_sending": boolean; "requires_reconciliation": boolean; "message": string; "plan": { "creates": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }>; "deletes": Array<{ "id": string }>; "existing": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }> } | null } }> {
+      return this.request("GET", `/v1/domain-dns-jobs/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List sending domains */
     async listDomains(query?: { "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "domains": Array<Domain> }> {
       return this.request("GET", `/v1/domains`, {
@@ -655,6 +664,33 @@ export class EmailsSelfHostClient {
     /** Connect an already-owned domain using the server provider binding and record DNS tasks */
     async connectDomain(body: { "domain": string; "provider_id": string; "dns_provider"?: "manual" | "cloudflare" | "route53"; "register_provider"?: boolean; "dry_run"?: boolean }, init?: RequestInit): Promise<{ "dry_run": boolean; "connection": { "id": string | null; "domain_id": string | null; "domain": string; "provider_id": string; "dns_provider": "manual" | "cloudflare" | "route53"; "register_provider": boolean; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "provider_registered": boolean | null; "checked_at": string; "message": string; "dns_tasks": Array<{ "type": "TXT" | "CNAME" | "MX"; "name": string; "value": string; "purpose": "DKIM" | "SPF" | "MAIL_FROM"; "status": "pending" | "verified"; "priority"?: number }> } }> {
       return this.request("POST", `/v1/domains/connect`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Publish sending DNS using an explicit tenant/provider/zone server binding */
+    async provisionSendingDomain(body: { "domain": string; "provider_id": string; "dry_run"?: boolean; "register_provider"?: boolean; "add_mx"?: boolean; "force_mx_switch"?: boolean; "mail_from"?: string; "send"?: "ses"; "mx_server"?: string }, init?: RequestInit): Promise<{ "dry_run": boolean; "job": { "id": string | null; "domain": string; "provider_id": string; "zone_id": string; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "phase": string; "dns_published": boolean; "verified_for_sending": boolean; "requires_reconciliation": boolean; "message": string; "plan": { "creates": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }>; "deletes": Array<{ "id": string }>; "existing": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }> } | null } }> {
+      return this.request("POST", `/v1/domains/provision`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Publish sending DNS using an explicit tenant/provider/zone server binding */
+    async setupOwnedDomain(body: { "domain": string; "provider_id": string; "dry_run"?: boolean; "add_mx"?: boolean; "force_mx_switch"?: boolean; "mx_server"?: string }, init?: RequestInit): Promise<{ "dry_run": boolean; "job": { "id": string | null; "domain": string; "provider_id": string; "zone_id": string; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "phase": string; "dns_published": boolean; "verified_for_sending": boolean; "requires_reconciliation": boolean; "message": string; "plan": { "creates": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }>; "deletes": Array<{ "id": string }>; "existing": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }> } | null } }> {
+      return this.request("POST", `/v1/domains/setup`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Publish sending DNS using an explicit tenant/provider/zone server binding */
+    async setupDomainCloudflare(body: { "domain": string; "provider_id": string; "dry_run"?: boolean; "register_provider"?: boolean; "add_mx"?: boolean; "force_mx_switch"?: boolean; "mail_from"?: string; "send"?: "ses"; "mx_server"?: string }, init?: RequestInit): Promise<{ "dry_run": boolean; "job": { "id": string | null; "domain": string; "provider_id": string; "zone_id": string; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "phase": string; "dns_published": boolean; "verified_for_sending": boolean; "requires_reconciliation": boolean; "message": string; "plan": { "creates": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }>; "deletes": Array<{ "id": string }>; "existing": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }> } | null } }> {
+      return this.request("POST", `/v1/domains/setup-cloudflare`, {
         body,
         query: undefined,
         init,
@@ -697,6 +733,15 @@ export class EmailsSelfHostClient {
       return this.request("POST", `/v1/domains/${encodeURIComponent(String(id))}/disable-outbound`, {
         body,
         query: undefined,
+        init,
+      });
+    }
+
+    /** Read fresh DNS records from the tenant-bound provider without changing domain state */
+    async getDomainDnsRecords(id: string, query?: { "provider_id"?: string }, init?: RequestInit): Promise<{ "domain": string; "domain_id": string; "provider_id": string; "source": "live_provider"; "verified_for_sending": boolean; "checked_at": string; "records": Array<{ "type": "TXT" | "CNAME" | "MX"; "name": string; "value": string; "purpose": string; "status"?: string; "priority"?: number }> }> {
+      return this.request("GET", `/v1/domains/${encodeURIComponent(String(id))}/dns-records`, {
+        body: undefined,
+        query,
         init,
       });
     }
@@ -941,6 +986,60 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** List tenant-scoped feedback */
+    async listResourceFeedback(query?: { "limit"?: number; "offset"?: number; "category"?: string | null }, init?: RequestInit): Promise<{ "items": Array<{ "message": string; "email": string | null; "category": "bug" | "feature" | "general"; "status": "saved"; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> }> {
+      return this.request("GET", `/v1/feedback`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Create a tenant-scoped feedback row */
+    async createResourceFeedback(body: { "message": string; "email"?: string | null; "category"?: "bug" | "feature" | "general" }, init?: RequestInit): Promise<{ "message": string; "email": string | null; "category": "bug" | "feature" | "general"; "status": "saved"; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("POST", `/v1/feedback`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get a tenant-scoped feedback row */
+    async getResourceFeedback(id: string, init?: RequestInit): Promise<{ "message": string; "email": string | null; "category": "bug" | "feature" | "general"; "status": "saved"; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("GET", `/v1/feedback/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Replace mutable fields on a tenant-scoped feedback row */
+    async replaceResourceFeedback(id: string, body: { "message"?: string; "email"?: string | null; "category"?: "bug" | "feature" | "general" }, init?: RequestInit): Promise<{ "message": string; "email": string | null; "category": "bug" | "feature" | "general"; "status": "saved"; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("PUT", `/v1/feedback/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete a tenant-scoped feedback row */
+    async deleteResourceFeedback(id: string, init?: RequestInit): Promise<{ "deleted": true; "id": string }> {
+      return this.request("DELETE", `/v1/feedback/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Update a tenant-scoped feedback row */
+    async updateResourceFeedback(id: string, body: { "message"?: string; "email"?: string | null; "category"?: "bug" | "feature" | "general" }, init?: RequestInit): Promise<{ "message": string; "email": string | null; "category": "bug" | "feature" | "general"; "status": "saved"; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("PATCH", `/v1/feedback/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List tenant-scoped forwarding */
     async listResourceForwarding(query?: { "limit"?: number; "offset"?: number; "source_address"?: string | null; "target_address"?: string | null; "mode"?: string | null }, init?: RequestInit): Promise<{ "items": Array<{ "source_address": string | null; "target_address": string | null; "mode": string | null; "provider_id": string | null; "from_address": string | null; "enabled": boolean; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> }> {
       return this.request("GET", `/v1/forwarding`, {
@@ -1160,6 +1259,15 @@ export class EmailsSelfHostClient {
     /** Configure and read back a tenant-bound SES/SNS/SQS notification path (operator only) */
     async setupInboxRealtime(body: { "domain": string; "source_id"?: string; "rule_set"?: string; "rule_name"?: string; "region"?: string; "profile"?: string }, init?: RequestInit): Promise<{ "ok": boolean; "verified": boolean; "source_id": string; "changed": Array<string>; "worker_started": boolean; "delivery_tested": boolean }> {
       return this.request("POST", `/v1/inbox/setup-realtime`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Configure and verify the exact server-bound SES bucket and receipt rule (operator only) */
+    async setupSesInbound(body: { "domain": string; "bucket": string; "region"?: string; "prefix"?: string; "catch_all"?: boolean }, init?: RequestInit): Promise<{ "ok": boolean; "verified": boolean; "domain": string; "source_id": string; "bucket": string; "prefix": string; "region": string; "changed": Array<string>; "attempted": Array<string>; "changes_may_have_applied": boolean; "worker_started": false; "delivery_tested": false; "message"?: string }> {
+      return this.request("POST", `/v1/inbox/setup-ses-inbound`, {
         body,
         query: undefined,
         init,
@@ -1436,7 +1544,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Send through the configured SES or Resend provider and persist the resulting ledger row */
-    async sendMessage(body: { "provider_id"?: string; "track_opens"?: boolean; "track_clicks"?: boolean; "tracking_url"?: string; "unsubscribe_url"?: string; "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "send_key"?: string; "allow_suppressed_recipients"?: boolean; "idempotency_key": string }, init?: RequestInit): Promise<{ "message": Message; "provider": string; "idempotent_replay": true; "sent": true; "provider_message_id": string } | { "message": Message; "provider": string; "in_progress": true } | { "message": Message; "provider": string; "sent": true; "provider_message_id": string; "warning"?: string; "retry_safe"?: false }> {
+    async sendMessage(body: { "provider_id"?: string; "track_opens"?: boolean; "track_clicks"?: boolean; "tracking_url"?: string; "unsubscribe_url"?: string; "headers"?: Record<string, string>; "tags"?: Record<string, string>; "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "send_key"?: string; "allow_suppressed_recipients"?: boolean; "idempotency_key": string }, init?: RequestInit): Promise<{ "message": Message; "provider": string; "idempotent_replay": true; "sent": true; "provider_message_id": string } | { "message": Message; "provider": string; "in_progress": true } | { "message": Message; "provider": string; "sent": true; "provider_message_id": string; "warning"?: string; "retry_safe"?: false }> {
       return this.request("POST", `/v1/messages/send`, {
         body,
         query: undefined,
@@ -1506,7 +1614,7 @@ export class EmailsSelfHostClient {
       });
     }
 
-    async replaceMessage(id: string, body: { "status"?: string; "provider_message_id"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "archived"?: boolean; "add_label"?: string; "remove_label"?: string; "body_text"?: string | null; "body_html"?: string | null; "headers"?: Record<string, unknown> }, init?: RequestInit): Promise<{ "message": Message }> {
+    async replaceMessage(id: string, body: { "status"?: string; "provider_message_id"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "archived"?: boolean; "is_spam"?: boolean; "is_trash"?: boolean; "add_label"?: string; "remove_label"?: string; "body_text"?: string | null; "body_html"?: string | null; "headers"?: Record<string, unknown> }, init?: RequestInit): Promise<{ "message": Message }> {
       return this.request("PUT", `/v1/messages/${encodeURIComponent(String(id))}`, {
         body,
         query: undefined,
@@ -1522,7 +1630,7 @@ export class EmailsSelfHostClient {
       });
     }
 
-    async updateMessage(id: string, body: { "status"?: string; "provider_message_id"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "archived"?: boolean; "add_label"?: string; "remove_label"?: string; "body_text"?: string | null; "body_html"?: string | null; "headers"?: Record<string, unknown> }, init?: RequestInit): Promise<{ "message": Message }> {
+    async updateMessage(id: string, body: { "status"?: string; "provider_message_id"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "archived"?: boolean; "is_spam"?: boolean; "is_trash"?: boolean; "add_label"?: string; "remove_label"?: string; "body_text"?: string | null; "body_html"?: string | null; "headers"?: Record<string, unknown> }, init?: RequestInit): Promise<{ "message": Message }> {
       return this.request("PATCH", `/v1/messages/${encodeURIComponent(String(id))}`, {
         body,
         query: undefined,
@@ -1664,8 +1772,53 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Read a durable tenant credential job */
+    async getProviderSecretJob(id: string, init?: RequestInit): Promise<{ "id": string; "operation": "rewrap" | "rotate-root" | "revoke-root"; "status": "pending" | "complete"; "root_id": string; "processed": number; "remaining": number }> {
+      return this.request("GET", `/v1/providers/secrets/jobs/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Advance at most twenty provider data keys atomically */
+    async advanceProviderSecretJob(id: string, body: { "limit"?: number }, init?: RequestInit): Promise<{ "id": string; "operation": "rewrap" | "rotate-root" | "revoke-root"; "status": "pending" | "complete"; "root_id": string; "processed": number; "remaining": number }> {
+      return this.request("POST", `/v1/providers/secrets/jobs/${encodeURIComponent(String(id))}/advance`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Begin an idempotent tenant credential root operation */
+    async revokeProviderSecretRoot(body: { "idempotency_key": string; "key_id": string }, init?: RequestInit): Promise<{ "id": string; "operation": "rewrap" | "rotate-root" | "revoke-root"; "status": "pending" | "complete"; "root_id": string; "processed": number; "remaining": number }> {
+      return this.request("POST", `/v1/providers/secrets/revoke-root`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Begin an idempotent tenant credential root operation */
+    async rewrapProviderSecrets(body: { "idempotency_key": string }, init?: RequestInit): Promise<{ "id": string; "operation": "rewrap" | "rotate-root" | "revoke-root"; "status": "pending" | "complete"; "root_id": string; "processed": number; "remaining": number }> {
+      return this.request("POST", `/v1/providers/secrets/rewrap`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Begin an idempotent tenant credential root operation */
+    async rotateProviderSecretRoot(body: { "idempotency_key": string }, init?: RequestInit): Promise<{ "id": string; "operation": "rewrap" | "rotate-root" | "revoke-root"; "status": "pending" | "complete"; "root_id": string; "processed": number; "remaining": number }> {
+      return this.request("POST", `/v1/providers/secrets/rotate-root`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Inspect server credential bindings without reading values */
-    async getProviderSecretStatus(init?: RequestInit): Promise<{ "source": string; "complete": true; "checked": false; "activeKeyId": string | null; "availableKeyIds": Array<string>; "referencedKeyIds": Array<string>; "managed_envelopes": number; "lifecycle_requirement": string; "capabilities": { "status": boolean; "rewrap": boolean; "rotate_root": boolean; "revoke_root": boolean }; "default_sender": { "type"?: string; "credential_source"?: string; "externally_managed"?: boolean } | null; "providers": Array<{ "provider_id": string; "name": string; "type": string; "active": boolean; "configured": boolean; "credential_source": string; "externally_managed": boolean }> }> {
+    async getProviderSecretStatus(init?: RequestInit): Promise<{ "source": string; "complete": true; "checked": false; "activeKeyId": string | null; "availableKeyIds": Array<string>; "referencedKeyIds": Array<string>; "managed_envelopes": number; "lifecycle_requirement": string; "capabilities": { "status": boolean; "rewrap": boolean; "rotate_root": boolean; "revoke_root": boolean }; "default_sender": { "type"?: string; "credential_source"?: string; "externally_managed"?: boolean } | null; "providers": Array<{ "provider_id": string; "name": string; "type": string; "active": boolean; "configured": boolean; "credential_source": string; "externally_managed": boolean; "revision"?: number }> }> {
       return this.request("GET", `/v1/providers/secrets/status`, {
         body: undefined,
         query: undefined,
@@ -1709,11 +1862,29 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Install encrypted tenant provider credentials with a revision fence */
+    async installProviderCredentials(id: string, body: { "expected_revision": number | null; "credentials": { "type": "ses" | "resend"; "api_key"?: string; "access_key"?: string; "secret_key"?: string } }, init?: RequestInit): Promise<{ "provider_id": string; "revision": number; "root_id": string; "status": "complete"; "checked": false }> {
+      return this.request("PUT", `/v1/providers/${encodeURIComponent(String(id))}/credentials`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Read server binding metadata or probe provider credentials */
     async getProviderHealth(id: string, query?: { "live"?: boolean }, init?: RequestInit): Promise<{ "provider_id": string; "checked": boolean; "status": string; "message": string }> {
       return this.request("GET", `/v1/providers/${encodeURIComponent(String(id))}/health`, {
         body: undefined,
         query,
+        init,
+      });
+    }
+
+    /** Atomically write provider metadata and encrypted credentials after server validation */
+    async writeManagedProvider(id: string, body: { "create"?: boolean; "name"?: string; "type"?: "ses" | "resend"; "region"?: string | null; "skip_validation"?: boolean; "expected_revision": number | null; "credentials": { "api_key"?: string; "access_key"?: string; "secret_key"?: string } }, init?: RequestInit): Promise<{ "provider_id": string; "revision": number; "root_id": string; "status": "complete"; "checked": boolean }> {
+      return this.request("PUT", `/v1/providers/${encodeURIComponent(String(id))}/managed`, {
+        body,
+        query: undefined,
         init,
       });
     }
@@ -1748,6 +1919,51 @@ export class EmailsSelfHostClient {
     /** Retry readiness checks for one immutable provisioning job */
     async runProvisioningJob(id: string, body: Record<string, unknown>, init?: RequestInit): Promise<{ "job": { "id": string; "kind": "address"; "status": "pending" | "processing" | "blocked" | "ready"; "input": { "email": string; "provider_id": string; "domain_id"?: string; "receive_strategy"?: "ses-s3" | "cf-routing" | "resend-webhook"; "forward_to"?: string; "owner"?: string; "administrator"?: string; "inbound_bucket"?: string }; "receipt": { "ready": boolean; "code": string; "message": string; "checked_at": string; "address_id"?: string; "checks"?: { "provider_verified": boolean; "mx_verified": boolean; "receipt_route_verified": boolean; "queue_route_verified": boolean } } | null; "created_at": string; "updated_at": string } }> {
       return this.request("POST", `/v1/provision/jobs/${encodeURIComponent(String(id))}/run`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Advance operator-authorized provisioning with frozen inputs and durable evidence */
+    async retryProvisionUp(body: { "domain": string; "provider_id"?: string; "job_id"?: string }, init?: RequestInit): Promise<{ "dry_run"?: boolean; "job": ({ "id": string; "status": "pending" | "processing" | "blocked" | "ready"; "input": { "domain": string; "provider_id": string; "addresses": Array<string>; "test_count": number; "add_mx": boolean; "force_mx_switch": boolean; "bucket"?: string; "source_id"?: string }; "created_at": string; "updated_at": string; "receipt": ({ "phase": "dns" | "addresses" | "roundtrip" | "complete"; "binding_generation"?: string | null; "binding_history"?: Array<string>; "address_cursor": number; "dns": ({ "dry_run": boolean; "job": { "id": string | null; "domain": string; "provider_id": string; "zone_id": string; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "phase": string; "dns_published": boolean; "verified_for_sending": boolean; "requires_reconciliation": boolean; "message": string; "plan": { "creates": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }>; "deletes": Array<{ "id": string }>; "existing": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }> } | null } }) | null; "addresses": Record<string, { "id": string; "status": string; "receipt": Record<string, unknown> | null }>; "roundtrip": { "run_id": string; "items": Array<{ "from": string; "to": string; "subject": string; "token": string; "send_key": string; "state": "not_attempted" | "uncertain" | "failed" | "sent" | "received"; "outbound_id"?: string; "inbound_id"?: string; "received_at"?: string; "replayed"?: boolean; "error"?: string }>; "poll_cursor": number; "poll_pass": number; "preflight": boolean; "sync_cursor"?: string | null }; "next_attempt_ms": number; "complete": boolean; "delivery_tested": boolean; "errors": Array<{ "code": string; "at": string }> }) | null }) | null; "plan"?: Record<string, unknown> }> {
+      return this.request("POST", `/v1/provision/retry`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read or advance one saved provisioning step */
+    async getProvisionUp(id: string, init?: RequestInit): Promise<{ "dry_run"?: boolean; "job": ({ "id": string; "status": "pending" | "processing" | "blocked" | "ready"; "input": { "domain": string; "provider_id": string; "addresses": Array<string>; "test_count": number; "add_mx": boolean; "force_mx_switch": boolean; "bucket"?: string; "source_id"?: string }; "created_at": string; "updated_at": string; "receipt": ({ "phase": "dns" | "addresses" | "roundtrip" | "complete"; "binding_generation"?: string | null; "binding_history"?: Array<string>; "address_cursor": number; "dns": ({ "dry_run": boolean; "job": { "id": string | null; "domain": string; "provider_id": string; "zone_id": string; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "phase": string; "dns_published": boolean; "verified_for_sending": boolean; "requires_reconciliation": boolean; "message": string; "plan": { "creates": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }>; "deletes": Array<{ "id": string }>; "existing": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }> } | null } }) | null; "addresses": Record<string, { "id": string; "status": string; "receipt": Record<string, unknown> | null }>; "roundtrip": { "run_id": string; "items": Array<{ "from": string; "to": string; "subject": string; "token": string; "send_key": string; "state": "not_attempted" | "uncertain" | "failed" | "sent" | "received"; "outbound_id"?: string; "inbound_id"?: string; "received_at"?: string; "replayed"?: boolean; "error"?: string }>; "poll_cursor": number; "poll_pass": number; "preflight": boolean; "sync_cursor"?: string | null }; "next_attempt_ms": number; "complete": boolean; "delivery_tested": boolean; "errors": Array<{ "code": string; "at": string }> }) | null }) | null; "plan"?: Record<string, unknown> }> {
+      return this.request("GET", `/v1/provision/runs/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read or advance one saved provisioning step */
+    async runProvisionUp(id: string, body: Record<string, unknown>, init?: RequestInit): Promise<{ "dry_run"?: boolean; "job": ({ "id": string; "status": "pending" | "processing" | "blocked" | "ready"; "input": { "domain": string; "provider_id": string; "addresses": Array<string>; "test_count": number; "add_mx": boolean; "force_mx_switch": boolean; "bucket"?: string; "source_id"?: string }; "created_at": string; "updated_at": string; "receipt": ({ "phase": "dns" | "addresses" | "roundtrip" | "complete"; "binding_generation"?: string | null; "binding_history"?: Array<string>; "address_cursor": number; "dns": ({ "dry_run": boolean; "job": { "id": string | null; "domain": string; "provider_id": string; "zone_id": string; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "phase": string; "dns_published": boolean; "verified_for_sending": boolean; "requires_reconciliation": boolean; "message": string; "plan": { "creates": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }>; "deletes": Array<{ "id": string }>; "existing": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }> } | null } }) | null; "addresses": Record<string, { "id": string; "status": string; "receipt": Record<string, unknown> | null }>; "roundtrip": { "run_id": string; "items": Array<{ "from": string; "to": string; "subject": string; "token": string; "send_key": string; "state": "not_attempted" | "uncertain" | "failed" | "sent" | "received"; "outbound_id"?: string; "inbound_id"?: string; "received_at"?: string; "replayed"?: boolean; "error"?: string }>; "poll_cursor": number; "poll_pass": number; "preflight": boolean; "sync_cursor"?: string | null }; "next_attempt_ms": number; "complete": boolean; "delivery_tested": boolean; "errors": Array<{ "code": string; "at": string }> }) | null }) | null; "plan"?: Record<string, unknown> }> {
+      return this.request("POST", `/v1/provision/runs/${encodeURIComponent(String(id))}/run`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Advance operator-authorized provisioning with frozen inputs and durable evidence */
+    async tickProvisionUp(body: { "provider_id": string; "bucket"?: string; "add_mx"?: boolean; "force_mx_switch"?: boolean }, init?: RequestInit): Promise<{ "jobs": Array<{ "id": string; "status": "pending" | "processing" | "blocked" | "ready"; "input": { "domain": string; "provider_id": string; "addresses": Array<string>; "test_count": number; "add_mx": boolean; "force_mx_switch": boolean; "bucket"?: string; "source_id"?: string }; "created_at": string; "updated_at": string; "receipt": ({ "phase": "dns" | "addresses" | "roundtrip" | "complete"; "binding_generation"?: string | null; "binding_history"?: Array<string>; "address_cursor": number; "dns": ({ "dry_run": boolean; "job": { "id": string | null; "domain": string; "provider_id": string; "zone_id": string; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "phase": string; "dns_published": boolean; "verified_for_sending": boolean; "requires_reconciliation": boolean; "message": string; "plan": { "creates": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }>; "deletes": Array<{ "id": string }>; "existing": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }> } | null } }) | null; "addresses": Record<string, { "id": string; "status": string; "receipt": Record<string, unknown> | null }>; "roundtrip": { "run_id": string; "items": Array<{ "from": string; "to": string; "subject": string; "token": string; "send_key": string; "state": "not_attempted" | "uncertain" | "failed" | "sent" | "received"; "outbound_id"?: string; "inbound_id"?: string; "received_at"?: string; "replayed"?: boolean; "error"?: string }>; "poll_cursor": number; "poll_pass": number; "preflight": boolean; "sync_cursor"?: string | null }; "next_attempt_ms": number; "complete": boolean; "delivery_tested": boolean; "errors": Array<{ "code": string; "at": string }> }) | null }>; "advanced": number }> {
+      return this.request("POST", `/v1/provision/tick`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Advance operator-authorized provisioning with frozen inputs and durable evidence */
+    async startProvisionUp(body: { "domain": string; "provider_id": string; "addresses"?: string; "count"?: number; "test"?: boolean; "bucket"?: string; "source_id"?: string; "add_mx"?: boolean; "force_mx_switch"?: boolean; "dry_run"?: boolean; "idempotency_key"?: string }, init?: RequestInit): Promise<{ "dry_run"?: boolean; "job": ({ "id": string; "status": "pending" | "processing" | "blocked" | "ready"; "input": { "domain": string; "provider_id": string; "addresses": Array<string>; "test_count": number; "add_mx": boolean; "force_mx_switch": boolean; "bucket"?: string; "source_id"?: string }; "created_at": string; "updated_at": string; "receipt": ({ "phase": "dns" | "addresses" | "roundtrip" | "complete"; "binding_generation"?: string | null; "binding_history"?: Array<string>; "address_cursor": number; "dns": ({ "dry_run": boolean; "job": { "id": string | null; "domain": string; "provider_id": string; "zone_id": string; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "phase": string; "dns_published": boolean; "verified_for_sending": boolean; "requires_reconciliation": boolean; "message": string; "plan": { "creates": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }>; "deletes": Array<{ "id": string }>; "existing": Array<{ "id"?: string; "type": string; "name": string; "content": string; "priority"?: number; "proxied"?: boolean; "ttl"?: number }> } | null } }) | null; "addresses": Record<string, { "id": string; "status": string; "receipt": Record<string, unknown> | null }>; "roundtrip": { "run_id": string; "items": Array<{ "from": string; "to": string; "subject": string; "token": string; "send_key": string; "state": "not_attempted" | "uncertain" | "failed" | "sent" | "received"; "outbound_id"?: string; "inbound_id"?: string; "received_at"?: string; "replayed"?: boolean; "error"?: string }>; "poll_cursor": number; "poll_pass": number; "preflight": boolean; "sync_cursor"?: string | null }; "next_attempt_ms": number; "complete": boolean; "delivery_tested": boolean; "errors": Array<{ "code": string; "at": string }> }) | null }) | null; "plan"?: Record<string, unknown> }> {
+      return this.request("POST", `/v1/provision/up`, {
         body,
         query: undefined,
         init,
@@ -1804,6 +2020,15 @@ export class EmailsSelfHostClient {
       return this.request("PATCH", `/v1/provisioning/${encodeURIComponent(String(id))}`, {
         body,
         query: undefined,
+        init,
+      });
+    }
+
+    /** Read tenant API worker lifecycle logs (operator only; not container stdout or worker liveness) */
+    async tailRuntimeLogs(query?: { "component"?: "daemon" | "sync" | "inbound" | "scheduler" | "nightly"; "lines"?: number }, init?: RequestInit): Promise<{ "scope": "tenant_api_operations"; "component": string; "container_stdout": false; "worker_liveness": "not_measured"; "items": Array<{ "id": string; "request_id": string; "component": string; "operation": string; "event": "started" | "returned" | "threw"; "created_at": string; "http_status": number | null }> }> {
+      return this.request("GET", `/v1/runtime/logs`, {
+        body: undefined,
+        query,
         init,
       });
     }
@@ -1881,7 +2106,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Validate and enqueue an idempotent scheduled send */
-    async enqueueScheduledSend(body: { "provider_id"?: string; "track_opens"?: boolean; "track_clicks"?: boolean; "tracking_url"?: string; "unsubscribe_url"?: string; "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "allow_suppressed_recipients"?: boolean; "idempotency_key": string; "scheduled_at": string }, init?: RequestInit): Promise<{ "enqueued": true; "idempotent_replay": boolean; "scheduled": { "id": string; "status": "pending" | "processing" | "sent" | "failed" | "cancelled"; "scheduled_at": string } }> {
+    async enqueueScheduledSend(body: { "provider_id"?: string; "track_opens"?: boolean; "track_clicks"?: boolean; "tracking_url"?: string; "unsubscribe_url"?: string; "headers"?: Record<string, string>; "tags"?: Record<string, string>; "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "allow_suppressed_recipients"?: boolean; "idempotency_key": string; "scheduled_at": string }, init?: RequestInit): Promise<{ "enqueued": true; "idempotent_replay": boolean; "scheduled": { "id": string; "status": "pending" | "processing" | "sent" | "failed" | "cancelled"; "scheduled_at": string } }> {
       return this.request("POST", `/v1/scheduled/enqueue`, {
         body,
         query: undefined,
@@ -2565,6 +2790,24 @@ export class EmailsSelfHostClient {
     /** Receive an AWS SNS notification for SES inbound mail and delivery outcomes */
     async receiveSesInboundWebhook(body: SnsNotification, init?: RequestInit): Promise<WebhookReceipt> {
       return this.request("POST", `/v1/webhooks/ses-inbound`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List real tenant worker generations and lease freshness (operator only) */
+    async listWorkers(init?: RequestInit): Promise<{ "items": Array<{ "id": string; "component": string; "state": string; "desired": string; "lease_until": string; "heartbeat_at": string; "generation": number; "interval_ms": number; "lease_fresh": boolean; "restart_id": string | null }>; "complete": boolean }> {
+      return this.request("GET", `/v1/workers`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Control a tenant foreground worker through cooperative ownership and durable operation receipts */
+    async controlWorker(id: string, body: { "action": "register" | "heartbeat" | "started" | "restart" | "restart-status" | "drain" | "stop-request" | "stop" | "tick" | "operation"; "owner_token"?: string; "generation"?: number; "request_id"?: string; "component"?: "scheduler"; "interval_ms"?: number }, init?: RequestInit): Promise<{ "worker"?: { "id": string; "component": string; "state": string; "desired": string; "lease_until": string; "heartbeat_at": string; "generation": number; "interval_ms": number; "lease_fresh": boolean; "restart_id": string | null }; "operation"?: { "id": string; "status": string; "generation": number; "result": Record<string, unknown> | null }; "restart"?: { "id": string; "worker_id": string; "status": string; "old_generation": number; "new_generation": number | null } }> {
+      return this.request("POST", `/v1/workers/${encodeURIComponent(String(id))}/control`, {
         body,
         query: undefined,
         init,

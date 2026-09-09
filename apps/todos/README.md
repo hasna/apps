@@ -1630,6 +1630,38 @@ Always-on / hosted deployments should use the versioned `/v1` API, which
 authenticates independently against the cloud key store. `/health`, `/ready`,
 `/version` and `/openapi.json` are the only routes that are public by design.
 
+### Hosted `/v1` writes need a neutral `User-Agent`
+
+The hosted `/v1` plane is served through a Cloudflare-protected gateway that
+rejects automation-library default User-Agents. Python's `urllib` sends
+`Python-urllib/3.x` and `requests` sends `python-requests/x.y`; the gateway
+answers those with HTTP 403 (Cloudflare error 1010, browser-signature rule)
+even though the identical request from `curl` succeeds with the same headers
+and key. The origin is never reached, so no code change on the API server can
+help — the caller must present a non-python `User-Agent` on every request
+through the gateway:
+
+```python
+import json
+import urllib.request
+
+req = urllib.request.Request(
+    "https://api.hasna.com/todos/v1/tasks",
+    data=json.dumps({"title": "ship the parser"}).encode(),
+    method="POST",
+    headers={
+        "x-api-key": "<your-key>",          # or Authorization: Bearer <your-key>
+        "content-type": "application/json",
+        "user-agent": "hasna-todos/1.0",    # never the urllib default
+    },
+)
+urllib.request.urlopen(req)                  # 201, not 403 Cloudflare 1010
+```
+
+The `requests` equivalent sets the same `user-agent` header on the request or
+session; a fixed neutral product string works for both reads and writes. Do not
+rely on the library default User-Agent.
+
 Agent callers can trim REST responses with field selectors:
 
 ```bash

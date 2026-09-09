@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { getTodosCloudClient as machineStartupCloudClient } from "../cli/cloud-router.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { getAgent, getAgentByName } from "../db/agents.js";
@@ -105,13 +106,13 @@ function getAgentFocus(agentId: string): AgentFocus | undefined {
   // Session focus takes priority
   const sessionFocus = agentFocusMap.get(agentId);
   if (sessionFocus) return sessionFocus;
-  // The persisted fallback is a read of the LOCAL agents table. On a hosted
-  // route — the stdio server's refusal, or an HTTP server whose environment
-  // configures a Todos authority — focus is answered from the session map
-  // alone: the local row is a different dataset from the one the tools are
-  // routing to, and reading it here was a silent local read on the hosted
-  // route (hasna/apps#1720 validation).
-  if (isLocalStoreRefused() || hasTodosEnvAuthorityIntent(process.env)) return undefined;
+  // The persisted fallback is a read of the LOCAL agents table. On any hosted
+  // route — the stdio server's refusal, an environment that configures a Todos
+  // authority, or a startup-resolved cloud client — focus is answered from the
+  // session map alone: the local row is a different dataset from the one the
+  // tools are routing to, and reading it here was a silent local read on the
+  // hosted route (hasna/apps#1720 validation).
+  if (isLocalStoreRefused() || hasTodosEnvAuthorityIntent(process.env) || machineStartupCloudClient()) return undefined;
   // Fall back to DB active_project_id
   try {
     const agent = getAgentByName(agentId) || getAgent(agentId);
@@ -185,7 +186,7 @@ function formatError(error: unknown): string {
       return JSON.stringify({ code: refusal[1], message: msg });
     }
     // Wrap SQLite constraint errors with agent-friendly messages
-    if (msg.includes("UNIQUE constraint failed: projects.path")) {
+    if (msg.includes("UNIQUE constraint failed: projects.path") && !machineStartupCloudClient()) {
       const db = getDatabase();
       const existing = db.prepare("SELECT id, name FROM projects WHERE path = ?").get(msg.match(/'([^']+)'$/)?.[1] ?? "") as any;
       return JSON.stringify({ code: "DUPLICATE_PROJECT", message: `Project already exists at this path${existing ? ` (id: ${existing.id}, name: ${existing.name})` : ""}. Use list_projects to find it.`, suggestion: "Use list_projects or get_project to retrieve the existing project." });
@@ -211,6 +212,7 @@ function formatError(error: unknown): string {
 }
 
 function resolveId(partialId: string, table = "tasks"): string {
+  if (machineStartupCloudClient()) throw new Error("API operations must resolve identifiers against the shared API");
   const db = getDatabase();
   const id = resolvePartialId(db, table, partialId);
   if (!id) {
@@ -408,7 +410,8 @@ async function main() {
       process.stderr.write(`${authority.notice}\n`);
       // Durable dual-write shadow: long-running stdio MCP drains the outbox.
       // The ONLY place the stdio server opens the store, and only under the
-      // explicit local opt-in.
+      // explicit local opt-in (where the startup cloud client is null by
+      // construction, which is the condition main's per-call gate guarded on).
       try {
         const { startRuntimeShadowDrain } = await import("../storage/shadow-runtime.js");
         startRuntimeShadowDrain(getDatabase());

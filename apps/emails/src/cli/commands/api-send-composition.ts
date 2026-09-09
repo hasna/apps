@@ -89,8 +89,22 @@ export async function sendApiBatch(
   opts: ApiBatchOptions,
   ds: Pick<MailDataSource, "send"> = resolveMailDataSource(),
 ) {
+  return sendApiBatchRows({ ...opts, rows: parseBatchCsv(readFileSync(opts.csv, "utf8")) }, ds);
+}
+
+export async function sendApiBatchRows(
+  opts: Omit<ApiBatchOptions, "csv"> & { rows: Record<string, string>[] },
+  ds: Pick<MailDataSource, "send"> = resolveMailDataSource(),
+) {
   const from = email(opts.from, "sender");
-  const rows = parseBatchCsv(readFileSync(opts.csv, "utf8"));
+  if (!Array.isArray(opts.rows) || opts.rows.length === 0 || opts.rows.length > 10000)
+    throw new Error("A batch requires 1–10000 recipients");
+  const rows = opts.rows.map((row, index) => {
+    if (!row || typeof row !== "object" || Array.isArray(row) || Object.values(row).some(value => typeof value !== "string"))
+      throw new Error(`Invalid template variables for recipient ${index + 1}`);
+    return { ...row, email: email(row.email ?? "", `recipient ${index + 1}`) };
+  });
+  if (opts.provider !== undefined && !opts.provider.trim()) throw new Error("Provider must not be blank");
   const template = await getTemplate(opts.template);
   if (!template) throw new Error(`Template not found: ${opts.template}`);
   const providerId = opts.provider

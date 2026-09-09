@@ -125,13 +125,14 @@ describe("emails send — dry-run previews without sending", () => {
   // --dry-run exists to PREDICT the send. It had no mode branch, so in LOCAL
   // mode it announced "(self-hosted)", quoted the server's attachment caps and
   // predicted a scheduling failure that does not happen locally.
-  it("labels the preview with the mode that would actually run the send", async () => {
+  it("labels the preview without a storage mode", async () => {
     const result = await runSendCommand([
       "send", "--from", "agent@acme.com", "--to", "dest@ext.com", "--subject", "Hi", "--body", "x", "--dry-run",
     ]);
 
-    expect(result.consoleOutput).toContain("[DRY RUN] Would send (self-hosted):");
+    expect(result.consoleOutput).toContain("[DRY RUN] Would send:");
     expect(result.consoleOutput).not.toContain("Would send (local)");
+    expect(result.consoleOutput).not.toContain("self-hosted");
   });
 });
 

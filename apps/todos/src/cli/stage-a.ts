@@ -1,3 +1,6 @@
+import { assertTemplateApiEnvironment } from "../lib/template-client-boundary.js";
+import {assertPlanApiEnvironment} from "../lib/plan-client-boundary.js";
+import {assertTaskListApiEnvironment} from "../lib/task-list-client-boundary.js";
 import { Command, Help } from "commander";
 import {
   getTodosCloudClient,
@@ -62,7 +65,7 @@ export function applyTodosCliAuthorityEnvironment(
   if (authority.route !== "local" || authority.selected_by !== "local-only-command") return;
   delete env.HASNA_TODOS_API_URL;
   delete env.HASNA_TODOS_API_KEY;
-  env.TODOS_API_URL = "";
+  delete env.TODOS_API_URL;
   delete env.TODOS_API_KEY;
   delete env.HASNA_TODOS_API_KEY_OVERRIDE;
   delete env.HASNA_TODOS_API_KEY_REF;
@@ -174,6 +177,8 @@ const DIAGNOSTIC_COMMANDS = new Set([
   ...Object.keys(BUNDLED_STATIC_COMMANDS),
 ]);
 const REMOTE_COMMANDS = new Set([
+  "mine", "blocked", "overdue", "today", "yesterday",
+  "machines",
   // `delegate` MUST be here as well as in the canonical list above. Membership
   // of the canonical list alone leaves a verb defaulted to `local-only`, which
   // on the /v1 route is refused outright — the state `dispatch` is in today.
@@ -181,9 +186,9 @@ const REMOTE_COMMANDS = new Set([
   // dead on exactly the fleet it was built for. Covered by delegate-routing.test.ts.
   "active", "add", "agent", "agents", "ai", "approve", "assign", "bulk", "claim", "comment", "count", "delegate", "delete", "deps", "fail",
   "doctor", "done", "find-commit", "find-ref", "health", "heartbeat", "history", "init", "inspect", "link-commit",
-  "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-registration", "project-rename", "project-resources", "projects", "recap",
+  "link-ref", "list", "lists", "lock", "log-progress", "move", "next", "plans", "project-registration", "project-rename", "project-resources", "projects", "project-panel", "recap",
   "record-verification", "release", "remove", "show", "standup", "start", "status", "tag", "task", "task-lists",
-  "stale-lock-handoff", "task-manifest", "task-subtree-transfer", "template-export", "template-import", "template-preview", "templates", "timeline", "tl", "unlock", "unassign", "untag", "update",
+  "stale-lock-handoff", "task-manifest", "task-subtree-transfer", "template-export", "template-import", "template-preview", "template-init", "template-history", "templates", "timeline", "tl", "unlock", "unassign", "untag", "update",
 ]);
 const REMOTE_COMMAND_CAPABILITIES =
   new Map<string, TodosRemoteCommandCapability>([
@@ -418,6 +423,10 @@ function isMetadataInvocation(args: string[], invocation: ParsedInvocation): boo
     return isReadOnlyConfigInvocation(invocation) ||
       (invocation.commandArgs.length === 1 && HELP_FLAGS.has(invocation.commandArgs[0]!));
   }
+  // A bare machine subcommand followed by help has no option value that could
+  // be mistaken for a metadata flag; Commander exits before its action runs.
+  if (invocation.command === "machines" && invocation.commandArgs.length === 2 &&
+      !invocation.commandArgs[0]!.startsWith("-") && HELP_FLAGS.has(invocation.commandArgs[1]!)) return true;
   if (invocation.command === "storage") {
     return invocation.commandArgs.length === 1 &&
       (invocation.commandArgs[0] === "status" || HELP_FLAGS.has(invocation.commandArgs[0]!));
@@ -475,7 +484,7 @@ function disqualifyingArgument(invocation: ParsedInvocation): Disqualification |
       if (hasOption(args, "--deregister")) return null;
       return firstPresentOption(args, ["--path-prefix", "--dry-run"]);
     case "plans":
-      return firstPresentOption(args, ["--artifact", "--write-artifacts"]);
+      return null;
     // `list --tags/--tag` is serviced remotely: the /v1 list route filters by
     // tag server-side and the cloud router preflights the capability against
     // the authority's OpenAPI contract (task 90c0b178).
@@ -668,10 +677,32 @@ export function initializeTodosCliAuthority(
   args: string[] = process.argv.slice(2),
   env: Env = process.env as Env,
 ): TodosCliAuthorityInitialization {
+  const requested = parseInvocation(args);
+  const templateCommands = new Set(["templates", "template-init", "templates-init", "template-preview", "templates-preview", "template-export", "templates-export", "template-import", "templates-import", "template-history", "templates-history"]);
+  if (templateCommands.has(requested.command ?? "")) {
+    if (isMetadataInvocation(args, requested)) return {route:"remote-diagnostic",v1_base_url:null};
+    assertTemplateApiEnvironment(env);
+  }
+
+  if (requested.command === "plans") {
+    if (isMetadataInvocation(args, requested)) return {route:"remote-diagnostic",v1_base_url:null};
+    assertPlanApiEnvironment(env);
+  }
+  if (["lists", "task-lists", "tl"].includes(requested.command ?? "")) {
+    if (isMetadataInvocation(args, requested)) return {route:"remote-diagnostic",v1_base_url:null};
+    assertTaskListApiEnvironment(env);
+  }
   let resolution: TodosCliTransportResolution;
   try {
     resolution = resolveTodosCliTransport(env);
   } catch (error) {
+    if (error instanceof Error && error.message.startsWith("REMOTE_API_CONFIG_MISSING")) {
+      if (templateCommands.has(requested.command ?? "")) throw new Error("REMOTE_API_CONFIG_MISSING: Templates require HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, or saved account credentials.");
+      if (requested.command === "plans") throw new Error("REMOTE_API_CONFIG_MISSING: Plan commands require HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, or saved account credentials.");
+      if (["lists", "task-lists", "tl"].includes(requested.command ?? "")) {
+        throw new Error("REMOTE_API_CONFIG_MISSING: Task-list commands require HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, or saved account credentials. Configure the authenticated shared API.");
+      }
+    }
     // A partial API pair (URL without KEY, or KEY without URL) — or a fully
     // absent pair without the explicit local opt-in (fail closed, hasna/apps#1613)
     // — is a hard error for real commands, but DIAGNOSTIC commands must still

@@ -369,7 +369,7 @@ export function createWebhookServer(
   port: number,
   providerId?: string,
   webhookSecret?: string,
-  deps: { verifySns?: (body: Record<string, unknown>) => Promise<boolean> } = {},
+  deps: { hostname?: string; verifySns?: (body: Record<string, unknown>) => Promise<boolean> } = {},
 ) {
   // BEFORE the port is bound, and before anything is read. See the header: an installation
   // that cannot store the event must not accept the provider's delivery attempt.
@@ -380,6 +380,7 @@ export function createWebhookServer(
 
   const server = Bun.serve({
     port,
+    ...(deps.hostname === undefined ? {} : { hostname: deps.hostname }),
     async fetch(req) {
       const url = new URL(req.url);
 

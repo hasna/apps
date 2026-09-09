@@ -176,7 +176,13 @@ jobs:
     name: build + scan + migrate + deploy
     needs: gate
     if: ${{ needs.gate.outputs.proceed == 'true' }}
-    runs-on: ubuntu-24.04-arm
+    # projects-prod is an X86_64 Fargate service, so the shipped image is
+    # linux/amd64 (see the Dockerfile's --platform=linux/amd64 base pins and the
+    # fleet arch rule X86_64 -> linux/amd64). The verify step below executes the
+    # built image's bun ON this runner, so the runner arch must match the image
+    # arch: an amd64 image cannot exec on an arm64 runner ("exec format error",
+    # BUG-0038). Use a native x86_64 runner.
+    runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 60
     defaults:
@@ -211,11 +217,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Build native ARM64 image locally
+      # projects-prod is X86_64, and the Dockerfile runtime stage is pinned to
+      # the linux/amd64 oven/bun base, so build the native linux/amd64 image the
+      # ECS service runs. --load must hand the local daemon an image this job can
+      # execute: a linux/arm64 image (or an amd64 base built under an arm64
+      # runner) fails the verify step below with "exec /usr/local/bin/bun: exec
+      # format error" (BUG-0038).
+      - name: Build native AMD64 image locally
         run: |
           set -Eeuo pipefail
           docker buildx build \
-            --platform linux/arm64 \
+            --platform linux/amd64 \
             --target runtime \
             --load \
             --label "org.opencontainers.image.revision=${SOURCE_SHA}" \

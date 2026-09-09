@@ -1,6 +1,5 @@
-import { getDbPath } from "../db.js";
 import { loggableUrl } from "../loggable-url.js";
-import { cloudApiUrl, isCloudStore } from "./index.js";
+import { cloudApiUrl } from "./index.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -16,7 +15,7 @@ type Env = Record<string, string | undefined>;
  *
  * Normalization is intentionally limited to the gateway form. Legacy origins
  * (`https://<app>.hasna.xyz`, allowed for todos until hasna/apps#1512 ships)
- * and self-hosted/custom endpoints keep the caller's existing display behavior
+ * and custom endpoints keep the caller's existing display behavior
  * (`loggableUrl`, which redacts down to scheme/host/port): this returns `null`
  * for anything that is not `https://api.hasna.com/<app>` or the
  * already-resolved `https://api.hasna.com/<app>/v1`.
@@ -78,10 +77,6 @@ export type StoreStatusLocation =
  * enforces that.
  */
 export function storeStatusLocation(env: Env = process.env): StoreStatusLocation {
-  // `env` reaches BOTH branches. It previously reached only the cloud one, while
-  // `getDbPath()` read `process.env` directly — so a caller (or a test) that
-  // injected a DB path got an answer the injection had not influenced.
-  if (!isCloudStore(env)) return { db_path: getDbPath(env) };
   const raw = cloudApiUrl(env);
   // Gateway-form URLs are safe to show as their resolved `/v1` root. Everything
   // else goes through `loggableUrl`, whose scheme/host/port allow-list keeps the

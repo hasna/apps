@@ -27,7 +27,7 @@ export async function runDomainOperation(
   const provider = await store.getResource(resourceSpecForPath("providers")!, providerId);
   if (!provider) throw new DomainOperationError("Provider not found in this tenant.", 404);
   if (provider.active === false) throw new DomainOperationError("The domain provider is inactive.");
-  const sender = options.resolveSender?.(tenantId, providerId);
+  const sender = await options.resolveSender?.(tenantId, providerId);
   if (!sender?.verifyDomain) throw new DomainOperationError("Configure EMAILS_SENDER_BINDINGS for this tenant/provider so the server can verify its domain.", 503);
   if (provider.type !== sender.provider) throw new DomainOperationError("Provider type does not match its server binding.");
   const dns = await sender.verifyDomain(domain.domain);

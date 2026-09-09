@@ -4,7 +4,7 @@
   "class": "service",
   "contractVersion": "v1",
   "kitVersion": "1.0.2",
-  "description": "Emails stores in the local SQLite file by default, or in operator-owned PostgreSQL when EMAILS_DATABASE_URL is set. Provider credentials stay with the operator.",
+  "description": "Ordinary Emails CLI, TUI, MCP and library clients use the authenticated shared API, with account access resolved through @hasna/contracts. The service stores shared state in operator-owned PostgreSQL. Client DB-path settings are rejected; SQLite remains available only through explicit storage-library and standalone-server compatibility surfaces. Provider credentials stay with the operator.",
   "bins": [
     "emails",
     "emails-mcp",

@@ -245,7 +245,7 @@ describe("todos-mcp fails closed with no credential", () => {
 });
 
 describe("todos-mcp on the hosted route never opens the local store", () => {
-  test("local-only resources and tools refuse with REMOTE_COMMAND_UNSUPPORTED; hosted refusals keep their code", async () => {
+  test("local-only resources and tools refuse with REMOTE_COMMAND_UNSUPPORTED; API-routed tools and hosted refusals keep their code", async () => {
     const port = closedLoopbackPort();
     const run = hermetic("hosted", {
       HASNA_TODOS_API_URL: `http://127.0.0.1:${port}/todos`,
@@ -277,8 +277,11 @@ describe("todos-mcp on the hosted route never opens the local store", () => {
     expect(resource?.error?.message).toContain("REMOTE_COMMAND_UNSUPPORTED");
     expect(resource?.error?.message).toContain("HASNA_TODOS_LOCAL=1");
 
-    // Each local-only tool family: isError with the same stable code, passed through by formatError.
-    for (const id of [3, 4, 5, 6]) {
+    // Each still-local-only tool family (templates, handoffs, dispatches):
+    // isError with the same stable code, passed through by formatError. The
+    // machine families are API-routed on the merged tree (hasna/apps#1966) and
+    // are asserted with the hosted tools below.
+    for (const id of [4, 5, 6]) {
       const { text, isError } = toolText(byId.get(id));
       expect(isError).toBe(true);
       const parsed = JSON.parse(text) as { code: string; message: string };
@@ -287,14 +290,17 @@ describe("todos-mcp on the hosted route never opens the local store", () => {
       expect(parsed.message).toContain(`127.0.0.1:${port}`);
     }
 
-    // A hosted tool reached for the authority (refused at the closed port) and
-    // its REMOTE_API_* refusal reaches the client under its own code.
-    const hosted = toolText(byId.get(7));
-    expect(hosted.isError).toBe(true);
-    const hostedError = JSON.parse(hosted.text) as { code: string; message: string };
-    expect(hostedError.code).toMatch(/^REMOTE_API_/);
-    expect(hostedError.code).not.toBe("UNKNOWN_ERROR");
-    expect(hostedError.message).toContain("local SQLite fallback is disabled");
+    // API-routed tools (machines_list since hasna/apps#1966, and list_tasks)
+    // reached for the authority (refused at the closed port) and their
+    // REMOTE_API_* refusal reaches the client under its own code.
+    for (const id of [3, 7]) {
+      const hosted = toolText(byId.get(id));
+      expect(hosted.isError).toBe(true);
+      const hostedError = JSON.parse(hosted.text) as { code: string; message: string };
+      expect(hostedError.code).toMatch(/^REMOTE_API_/);
+      expect(hostedError.code).not.toBe("UNKNOWN_ERROR");
+      expect(hostedError.message).toContain("local SQLite fallback is disabled");
+    }
 
     // And through all of it: no SQLite file under either root, no fallback event.
     expect(sqliteFilesUnder(run.root)).toEqual([]);

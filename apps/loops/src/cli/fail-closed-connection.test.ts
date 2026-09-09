@@ -28,16 +28,39 @@ function connectionEnv(extra: Record<string, string> = {}): Record<string, strin
     [API_URL_KEY]: "",
     [API_KEY_KEY]: "",
     [CONNECTION_KEY]: "",
+    // Keychain tier pin (see cli/index.test.ts): the resolver's account is
+    // HASNA_STATION, else the short hostname, else USER — a real macOS
+    // keychain item under this machine's own account would satisfy the
+    // blanked connection env. A sentinel no item uses keeps the tier a miss
+    // on every machine. Per-test overrides still win (spread last).
+    HASNA_STATION: "loops-hermetic-no-such-station",
     ...extra,
   };
 }
 
 function runCli(args: string[], extraEnv: Record<string, string> = {}) {
-  return spawnSync(process.execPath, [cliPath, ...args], {
-    env: connectionEnv(extraEnv),
-    encoding: "utf8",
-    timeout: 30_000,
-  });
+  // Ambient credential isolation: the child env is a scrubbed copy of the
+  // live process.env, so a provisioned station's real
+  // ~/.hasna/loops/config/credentials outranks the blanked connection env and
+  // REFUSES the fail-closed assertions as "different service authorities"
+  // (green on CI, red on the station). Anchor the home-layout roots at a
+  // scratch dir — no credentials file can exist there — so the disk tier
+  // consults nothing on both kinds of machine.
+  const scratch = mkdtempSync(join(tmpdir(), "loops-fail-closed-home-"));
+  try {
+    return spawnSync(process.execPath, [cliPath, ...args], {
+      env: connectionEnv({
+        ...extraEnv,
+        HOME: scratch,
+        HASNA_HOME: scratch,
+        HASNA_CONFIG_HOME: scratch,
+      }),
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 function output(result: { stdout: string; stderr: string }): string {

@@ -204,17 +204,21 @@ test("nonoperators cannot create, edit, delete, or run automatic forwarding thro
 });
 test("external send fields cannot inject the internal forwarding headers", async () => {
   const f = fixture();
-  const response = await handleSelfHostedRequest(
-    f.deps,
-    request("messages/send", {
-      from: "source@example.com",
-      to: ["target@example.com"],
-      subject: "Fixture",
-      text: "Body",
-      idempotency_key: "external",
-      headers: { "X-Hasna-Forwarded-For": "forged", Bcc: "hidden@example.com" },
-    }),
-  );
-  expect(response!.status).toBe(202);
-  expect(f.calls[0].headers).toBeUndefined();
+  for (const headers of [{ "X-Hasna-Forwarded-For": "forged" }, { Bcc: "hidden@example.com" }]) {
+    const response = await handleSelfHostedRequest(
+      f.deps,
+      request("messages/send", {
+        from: "source@example.com",
+        to: ["target@example.com"],
+        subject: "Fixture",
+        text: "Body",
+        idempotency_key: "external",
+        headers,
+      }),
+    );
+    expect(response!.status).toBe(400);
+    expect(await response!.json()).toMatchObject({ reason: "invalid_send_metadata" });
+  }
+  expect(f.calls).toEqual([]);
+  expect(f.reservations).toEqual([]);
 });
