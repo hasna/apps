@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { useDefaultTestTimeout } from "../../../test-preload.js";
+useDefaultTestTimeout();
 import { RunTaskCommand, ListTasksCommand, DescribeTasksCommand, StopTaskCommand } from "@aws-sdk/client-ecs";
 import { createAwsEcsClient, type EcsCommandTransport, type EcsRunTaskInput } from "./ecs.js";
 const input: EcsRunTaskInput = { cluster: "owned-cluster", taskDefinition: "owned-definition", containerName: "runner", clientToken: "owned-token", startedBy: "owned-start", launchType: "FARGATE", cpu: "256", memory: "512", subnets: ["owned-subnet"], securityGroups: ["owned-group"], environment: [] };
