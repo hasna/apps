@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import { randomUUID } from "node:crypto";
 import * as index from "./index";
 
 // The public SDK surface is the Store abstraction + domain types (see the module
@@ -32,9 +33,9 @@ describe("public API exports", () => {
     expect((index as Record<string, unknown>).startPolling).toBeUndefined();
   });
 
-  test("every read/write goes through a Store instance under an explicit store env", () => {
-    const store = index.getStore({ HASNA_CONVERSATIONS_DB_PATH: "/tmp/conversations-index-test.db" });
-    expect(store.transport).toBe("local");
+  test("every ordinary read/write uses the shared API Store", () => {
+    const store = index.getStore({ HASNA_CONVERSATIONS_API_URL: "http://127.0.0.1:9", HASNA_CONVERSATIONS_API_KEY: randomUUID() });
+    expect(store.transport).toBe("cloud-http");
     expect(typeof store.sendMessage).toBe("function");
     expect(typeof store.readMessages).toBe("function");
     expect(typeof store.countMessages).toBe("function");

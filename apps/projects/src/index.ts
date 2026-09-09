@@ -126,7 +126,7 @@ export {
   ProjectResourceLinkLocatorSchema,
   ProjectResourceLinkSchema,
   ProjectResourceTargetKindSchema,
-} from "@hasna/contracts/schemas";
+} from "./types/project-resource-schemas.js";
 export {
   PROJECT_CONTACT_LINK_STEPS,
   PROJECT_CONTACT_RESOURCE_LINK_TYPE,
@@ -293,7 +293,7 @@ export type {
   WorkspaceTmuxResult as ProjectTmuxResult,
   WorkspaceTmuxWindowSpec as ProjectTmuxWindowSpec,
 } from "./lib/workspace-runtime.js";
-export { doctorWorkspace as doctorProject, doctorWorkspaces as doctorProjects } from "./lib/workspace-doctor.js";
+export { doctorWorkspace as doctorProject, doctorWorkspaces as doctorProjects, doctorWorkspaceWithStore as doctorProjectWithStore } from "./lib/workspace-doctor.js";
 export { builtInWorkspaceRecipes as builtInProjectRecipes, ensureBuiltInWorkspaceRecipes as ensureBuiltInProjectRecipes } from "./lib/workspace-defaults.js";
 export {
   importWorkspaceFromGitHub as importProjectFromGitHub,

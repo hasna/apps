@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "baseRevision": "f9227e694f7c5c0a61a3bd227c71bd8694069cdb",
+  "finalTestSourceSHA256": "01c53aa4b827f545cf3943fd900bca5663a9f3d37225105ab324acf248bd6256",
+  "productionTreeUnchanged": true,
+  "productionGitTree": "ae0e616c837fd1cb520f6abfe5a07d2ced79f67e",
+  "productionAdapterSHA256": "b196b3ff43f13876a951d5a54556926c57f5320dcf3a5fe337d1c40fe92954bf",
+  "runs": [
+    {
+      "label": "red",
+      "source": "f9227e694f7c5c0a61a3bd227c71bd8694069cdb+owned-fixture-diff",
+      "selection": "BlockingOperationTests",
+      "exitCode": 1,
+      "elapsedSeconds": 4.062,
+      "testBundleSHA256": "f0ca5ed0baf255a4407c3f7a5f32642efc6586fb05db53ab87a86f5650c77f83",
+      "networkDenied": true,
+      "outsideWritesDenied": true,
+      "hostToolsDenied": true,
+      "phase": "oldPhaseDelayedSubmission",
+      "logSHA256": "0d618e7772b3c61c4c5f0252a36a65bed688fbc9f61b2559ead4889509fb995d",
+      "profileSHA256": "d93274f2e30db905b16ae3b904e0d15565473fa8b811141123da01aaca5d0805",
+      "rawReceiptSHA256": "88bee30f1dc6923ca8e3aa99eef6dc1c86d84b8785b6ea3ba7c499f9ad095aeb"
+    },
+    {
+      "label": "green",
+      "source": "f9227e694f7c5c0a61a3bd227c71bd8694069cdb+owned-fixture-diff",
+      "selection": "BlockingOperationTests",
+      "exitCode": 0,
+      "elapsedSeconds": 3.557,
+      "testBundleSHA256": "a525bf29b41e8ae53d073b93bb0d841a538c1325c8c5b233ba06b72961af6e41",
+      "networkDenied": true,
+      "outsideWritesDenied": true,
+      "hostToolsDenied": true,
+      "phase": "correctedFixture",
+      "logSHA256": "7117b2c8200b2f7b602e4110a02fdcb5dd7faa1f4f54d1bd52ed0c962860f060",
+      "profileSHA256": "eeee55c108e8d2a3136ace5121df701204c598c7eac739aa6b7da10d6be3ed0d",
+      "rawReceiptSHA256": "9b848bb7ecffa436dc084eff485e3fc6098cc858c44f341d132bf4c34f3f3d1b"
+    },
+    {
+      "label": "control",
+      "source": "f9227e694f7c5c0a61a3bd227c71bd8694069cdb+owned-fixture-diff",
+      "selection": "BlockingOperationTests",
+      "exitCode": 1,
+      "elapsedSeconds": 5.457,
+      "testBundleSHA256": "bad01e6faf2da0b89bb50a428e0e8ef00dd94a8e83e388ef4f565bc42999592e",
+      "networkDenied": true,
+      "outsideWritesDenied": true,
+      "hostToolsDenied": true,
+      "phase": "detachedBehaviorControl",
+      "logSHA256": "2cfd105393c688a2169952230c5fbd54bb1cd9e44d32f864c3e03019485e88da",
+      "profileSHA256": "3cff299200624aca8275c9b4d79130937e59e7623258751d0a2fa6dee9945995",
+      "rawReceiptSHA256": "92860bfa954d4c668e3ebbb933f432081eb84ca7d2fe0d90bfbf1a5e2c8658de"
+    },
+    {
+      "label": "interaction",
+      "source": "f9227e694f7c5c0a61a3bd227c71bd8694069cdb+owned-fixture-diff",
+      "selection": "BlockingOperationTests|RecordingStartTimingTests|RecordingCaptureWarmUpTests|CommandRouteTests/cancelWhileRewriting|NativePCMRecorderTests|ProjectStoreTests|CLIRunnerTests/(hungRewriteHelperReturnsWithinInteractiveBudget|exhaustedRewriteDeadlineWithHeldPipesReturnsUnderCeiling|silentEscapedDescendantCannotPinCaptureReaders)",
+      "strictPool": "unset",
+      "exitCode": 0,
+      "elapsedSeconds": 9.658,
+      "testBundleSHA256": "75fc0ecfd0922afc9519db7b48e26aa38e872c07f5125560e9455c42b82c5bde",
+      "networkDenied": true,
+      "outsideWritesDenied": true,
+      "hostToolsDenied": true,
+      "phase": "finalNormalInteraction",
+      "logSHA256": "93124655e3816a237115b6bee2dc457daa2d3781ba314f7ed2293a9c8e27a3b5",
+      "profileSHA256": "fd3b183e558bccace2051eaeb3807e787d2b736018ffd355d67bca1dcf83a247",
+      "rawReceiptSHA256": "bb0ebf1a07df7c160db90db6b6a13ad361c077518c1dc58fb33b4c8811d0f36b"
+    },
+    {
+      "label": "strict-interaction",
+      "source": "f9227e694f7c5c0a61a3bd227c71bd8694069cdb+owned-fixture-diff",
+      "selection": "BlockingOperationTests|RecordingStartTimingTests|RecordingCaptureWarmUpTests|CommandRouteTests/cancelWhileRewriting|NativePCMRecorderTests|ProjectStoreTests|CLIRunnerTests/(hungRewriteHelperReturnsWithinInteractiveBudget|exhaustedRewriteDeadlineWithHeldPipesReturnsUnderCeiling|silentEscapedDescendantCannotPinCaptureReaders)",
+      "strictPool": "1",
+      "exitCode": 0,
+      "elapsedSeconds": 9.557,
+      "testBundleSHA256": "75fc0ecfd0922afc9519db7b48e26aa38e872c07f5125560e9455c42b82c5bde",
+      "networkDenied": true,
+      "outsideWritesDenied": true,
+      "hostToolsDenied": true,
+      "phase": "finalStrictInteraction",
+      "logSHA256": "bc14ecd32900f4c6a5a9d93e7cacecc4ccad431230ac02e487a6df41e37fb0dc",
+      "profileSHA256": "05867b038571900692d704b2c61340e784eda9abe390fa05a1bf579535a99bb9",
+      "rawReceiptSHA256": "07705344464730ac04342181e738df80c4362ecd8ff4f755eff37c4520b01e34"
+    }
+  ],
+  "retainedControlsSHA256": {
+    "phase-error-BlockingOperationTests.swift": "51b93b3bbfd90dd636b50fb18b1e9d4cd9ada1cc20d4dc6eead409a6c3787636",
+    "phase-corrected-BlockingOperationTests.swift": "01c53aa4b827f545cf3943fd900bca5663a9f3d37225105ab324acf248bd6256",
+    "detached-control-BlockingOperation.swift": "548fecb04e87f576606231190f1166fd23555aad32fd1f6c441ea747a0a27d1b",
+    "production-BlockingOperation.swift": "b196b3ff43f13876a951d5a54556926c57f5320dcf3a5fe337d1c40fe92954bf"
+  },
+  "buildsSHA256": {
+    "red-build.log": "81e9552b3a726585498b122b762417a9387b38d136be9933861cb9bb066aa089",
+    "green-build.log": "a87beccd0dec00383ce79ed168131ea728374b497d313683c6abb6778c4047ff",
+    "control-build.log": "4fa6849a8464d383e45e71c1dada1e9b3967725ef22522f46b3860af5a59436b",
+    "interaction-build.log": "ab08bccf4699280d8c804aa81262323c01f8c637f8b5e5ca11f271ace7efc75a"
+  },
+  "supervisorsSHA256": {
+    "build.py": "664b9ff4fe5480e63b62ac94989ac8dd3637eed36601e4724ed0d47814884d4c",
+    "build.sb": "1f2b3d40fecf10daa785cd03ebacf361b80bf5583315d2c90a89721ce816be23",
+    "test-adapter.py": "ffc8e81031404ff1b3bdfa69c892054c7236a26488a9201b2ce92b99399a8c5c",
+    "test-interaction.py": "39caa6b36de66ad3f8ecb84a722f3e95781c015be2c87c591d3451138a2ab325"
+  },
+  "ciObserved": {
+    "head": "f9227e694f7c5c0a61a3bd227c71bd8694069cdb",
+    "run": 34234288941,
+    "job": 102087899675,
+    "artifact": 10059226015,
+    "swiftLogSHA256": "780b74afc0b98acd55b465c4ba3d2bed3dcd8af7d3b19435cbcc3933f6af6d9a",
+    "registrations": 417,
+    "suites": 60,
+    "passedCompletionLines": 415,
+    "failedCompletionLines": 1,
+    "existingSkipped": 1,
+    "unexpectedIssues": 4,
+    "knownIssues": 3,
+    "completed": true,
+    "passed": false
+  },
+  "limits": [
+    "Test-only change; no production, CLI budget, concurrency, workflow or selection-policy change.",
+    "Full suite at corrected revision awaits CI.",
+    "Runtime checks confined to owned fixtures; no owner app/data/device/provider execution.",
+    "Original candidates remain immutable; packaged native-test bytes require a fresh candidate."
+  ]
+}

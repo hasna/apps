@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import * as fs from "node:fs";
+import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, linkSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
@@ -76,4 +77,77 @@ describe("db backup", () => {
     const result = compactDatabase(dbPath);
     expect(result.bytes_after).toBeGreaterThan(0);
   });
+});
+
+
+describe("standalone WAL backup safety", () => {
+  it("includes committed uncheckpointed WAL rows and reopens read-only without sidecars", () => {
+    const sourcePath = join(tempDir, "active-wal.db");
+    const source = new Database(sourcePath);
+    try {
+      source.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE fixture(id INTEGER PRIMARY KEY, value TEXT);");
+      source.query("INSERT INTO fixture VALUES(?,?)").run(1,"committed fixture");
+      expect(statSync(`${sourcePath}-wal`).size).toBeGreaterThan(0);
+      const output = join(tempDir,"private snapshot #1.db");
+      const result = backupDatabase(output,sourcePath);
+      expect(result.method).toBe("sqlite_vacuum");
+      expect(statSync(output).mode & 0o777).toBe(0o600);
+      const check = new Database(output,{readonly:true});
+      try {
+        expect(check.query("SELECT * FROM fixture").all()).toEqual([{id:1,value:"committed fixture"}]);
+        expect(check.query("PRAGMA quick_check").get()).toEqual({quick_check:"ok"});
+      } finally { check.close(); }
+      expect(existsSync(`${output}-wal`)).toBe(false);
+      expect(existsSync(`${output}-shm`)).toBe(false);
+      expect(source.query("SELECT count(*) AS n FROM fixture").get()).toEqual({n:1});
+    } finally {source.close();}
+  });
+
+  it("rejects invalid foreign keys without replacing an existing backup or leaving staging files", () => {
+    const invalidPath = join(tempDir,"invalid-reference.db");
+    const source = new Database(invalidPath);
+    source.exec("PRAGMA foreign_keys=OFF; CREATE TABLE parents(id INTEGER PRIMARY KEY); CREATE TABLE children(parent_id INTEGER REFERENCES parents(id)); INSERT INTO children VALUES(99);");
+    source.close();
+    const output = join(tempDir,"existing-backup.db");
+    writeFileSync(output,"prior backup bytes",{mode:0o600});
+    const before = readdirSync(tempDir).sort();
+    expect(()=>backupDatabase(output,invalidPath)).toThrow("foreign_key_check");
+    expect(readFileSync(output,"utf8")).toBe("prior backup bytes");
+    expect(readdirSync(tempDir).sort()).toEqual(before);
+    expect(checkDatabaseIntegrity(invalidPath).foreign_keys).toBe(false);
+  });
+});
+
+
+it("refuses the source path and inode aliases without changing live WAL bytes", () => {
+  const sourcePath=join(tempDir,"preserved-wal.db");const source=new Database(sourcePath);
+  try {
+    source.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE fixture(id); INSERT INTO fixture VALUES(1);");
+    expect(backupDatabase(join(tempDir,"safe.db"),sourcePath).bytes).toBeGreaterThan(0);
+    expect(source.query("SELECT count(*) AS n FROM fixture").get()).toEqual({n:1});
+    const hard=join(tempDir,"hard.db"),sym=join(tempDir,"symbolic.db");linkSync(sourcePath,hard);symlinkSync(sourcePath,sym);
+    const before=readFileSync(sourcePath),wal=readFileSync(`${sourcePath}-wal`);
+    for(const output of [sourcePath,join(tempDir,".","preserved-wal.db"),hard,sym]) expect(()=>backupDatabase(output,sourcePath)).toThrow("same database");
+    expect(readFileSync(sourcePath)).toEqual(before);expect(readFileSync(`${sourcePath}-wal`)).toEqual(wal);
+    // macOS SQLite reports SQLITE_IOERR_VNODE after hard-link manipulation;
+    // SQL usability was verified before constructing that synthetic alias.
+  } finally {source.close();}
+});
+
+
+it("preserves the old backup on pre-rename fsync failure and reports post-rename uncertainty",()=>{
+ const output=join(tempDir,"durable.db");writeFileSync(output,"old backup");
+ const realSync=fs.fsyncSync;let calls=0;
+ const sync=spyOn(fs,"fsyncSync").mockImplementation(()=>{throw new Error("fixture file sync failed");});
+ const cleanup=spyOn(fs,"rmdirSync").mockImplementation(()=>{throw new Error("fixture cleanup failed");});
+ try {
+  expect(()=>backupDatabase(output,dbPath)).toThrow("fixture file sync failed");
+  expect(readFileSync(output,"utf8")).toBe("old backup");
+ } finally {sync.mockRestore();cleanup.mockRestore();}
+ const directorySync=spyOn(fs,"fsyncSync").mockImplementation(fd=>{calls++;if(calls===2)throw new Error("fixture directory sync failed");realSync(fd);});
+ try {
+  expect(()=>backupDatabase(output,dbPath)).toThrow("replacement may have completed");
+  expect(calls).toBe(2);
+  expect(checkDatabaseIntegrity(output).ok).toBe(true);
+ } finally {directorySync.mockRestore();}
 });

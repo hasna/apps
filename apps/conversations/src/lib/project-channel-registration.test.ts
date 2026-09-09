@@ -16,6 +16,7 @@ import {
   type ProjectChannelRegistrationRequest,
   validateProjectChannelRegistrationLookup,
 } from "./project-channel-registration.js";
+import { LocalStore } from "./store/index.js";
 import { sendMessage } from "./messages.js";
 import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 
@@ -46,7 +47,7 @@ const targetHandle = {
 async function forwardRequest(
   overrides: Partial<ProjectChannelRegistrationRequest> = {},
 ): Promise<ProjectChannelRegistrationRequest> {
-  const capability = await createProjectChannelRegistrationAuthority().capability();
+  const capability = await createProjectChannelRegistrationAuthority(new LocalStore()).capability();
   const projectSlug = String(overrides.project_slug ?? "fleet-resources");
   const projectId = String(overrides.project_id ?? PROJECT_ID);
   const desired = overrides.desired ?? {
@@ -418,7 +419,7 @@ describe("project channel registration authority", () => {
   });
 
   test("advertises the package-owned conditional authority with stable identity", async () => {
-    const authority = createProjectChannelRegistrationAuthority();
+    const authority = createProjectChannelRegistrationAuthority(new LocalStore());
     const first = await authority.capability();
     const second = await authority.capability();
 
@@ -441,7 +442,7 @@ describe("project channel registration authority", () => {
   });
 
   test("atomically creates an absent channel and returns exact immutable readback", async () => {
-    const authority = createProjectChannelRegistrationAuthority();
+    const authority = createProjectChannelRegistrationAuthority(new LocalStore());
     const request = await forwardRequest({ operation_intent: undefined });
     expect(() => registerProjectChannel({
       ...request,
@@ -493,7 +494,7 @@ describe("project channel registration authority", () => {
   });
 
   test("returns one deterministic duplicate receipt and rejects changed step inputs without clobbering", async () => {
-    const authority = createProjectChannelRegistrationAuthority();
+    const authority = createProjectChannelRegistrationAuthority(new LocalStore());
     const request = await forwardRequest();
     const accepted = await authority.create(request);
     const lookupRequest = {
@@ -559,7 +560,7 @@ describe("project channel registration authority", () => {
   });
 
   test("finds an exact historical receipt after the advertised corpus identity changes", async () => {
-    const authority = createProjectChannelRegistrationAuthority();
+    const authority = createProjectChannelRegistrationAuthority(new LocalStore());
     const request = await forwardRequest();
     const accepted = await authority.create(request);
     const lookupRequest = {
@@ -839,7 +840,7 @@ describe("project channel registration authority", () => {
     expect(transition.before_digest).toBeString();
     expect(transition.after_digest).toBeString();
     expect(transition.preserved_digest).toBeString();
-    expect(await createProjectChannelRegistrationAuthority().readExact({
+    expect(await createProjectChannelRegistrationAuthority(new LocalStore()).readExact({
       resource_kind: "channel",
       target_id: channel.id,
       target_selector: channel.name,
@@ -874,7 +875,7 @@ describe("project channel registration authority", () => {
       time_budget_ms: 5_000,
       call_limit: 1 as const,
     };
-    expect((await createProjectChannelRegistrationAuthority().lookupReceipt(
+    expect((await createProjectChannelRegistrationAuthority(new LocalStore()).lookupReceipt(
       lookupRequest,
     )).receipt.receipt_id).toBe(accepted.receipt_id);
 
@@ -939,7 +940,7 @@ describe("project channel registration authority", () => {
       "SELECT prior_state FROM project_channel_registration_receipts WHERE receipt_id = ?",
     ).get(accepted.receipt_id) as { prior_state: string };
     expect(JSON.parse(storedAccepted.prior_state)).toEqual(accepted.prior_state);
-    expect((await createProjectChannelRegistrationAuthority().lookupReceipt(
+    expect((await createProjectChannelRegistrationAuthority(new LocalStore()).lookupReceipt(
       lookupRequest,
     )).receipt.receipt_id).toBe(duplicate.receipt_id);
 
@@ -976,7 +977,7 @@ describe("project channel registration authority", () => {
       "SELECT count(*) AS n FROM project_channel_registration_receipts",
     ).get()).toEqual({ n: 3 });
 
-    const restored = await createProjectChannelRegistrationAuthority().compensate(inverse);
+    const restored = await createProjectChannelRegistrationAuthority(new LocalStore()).compensate(inverse);
     expect(restored).toMatchObject({
       outcome: "accepted",
       direction: "inverse",
@@ -996,7 +997,7 @@ describe("project channel registration authority", () => {
     expect(getDb().prepare(
       "SELECT * FROM messages WHERE channel = ? ORDER BY id",
     ).all(channel.name)).toEqual(beforeMessages);
-    expect(await createProjectChannelRegistrationAuthority().verifyInverse(inverse)).toEqual({
+    expect(await createProjectChannelRegistrationAuthority(new LocalStore()).verifyInverse(inverse)).toEqual({
       target_id: channel.id,
       accepted_receipt_id: accepted.receipt_id,
       absent: false,
@@ -1120,7 +1121,7 @@ describe("project channel registration authority", () => {
       target_selector: channel.id,
       project_slug: channel.name,
     });
-    const restored = await createProjectChannelRegistrationAuthority().compensate(inverse);
+    const restored = await createProjectChannelRegistrationAuthority(new LocalStore()).compensate(inverse);
     expect(restored).toMatchObject({
       outcome: "accepted",
       direction: "inverse",
@@ -1130,7 +1131,7 @@ describe("project channel registration authority", () => {
     });
     expect(db.prepare("SELECT * FROM channels WHERE id = ?").get(channel.id)).toEqual(beforeChannel);
     expect(db.prepare("SELECT * FROM messages WHERE channel = ? ORDER BY id").all(channel.name)).toEqual(beforeMessages);
-    expect(await createProjectChannelRegistrationAuthority().verifyInverse(inverse)).toEqual({
+    expect(await createProjectChannelRegistrationAuthority(new LocalStore()).verifyInverse(inverse)).toEqual({
       target_id: channel.id,
       accepted_receipt_id: accepted.receipt_id,
       absent: false,
@@ -1405,7 +1406,7 @@ describe("project channel registration authority", () => {
   });
 
   test("conditionally inverses only the accepted attempt-created channel", async () => {
-    const authority = createProjectChannelRegistrationAuthority();
+    const authority = createProjectChannelRegistrationAuthority(new LocalStore());
     const accepted = await authority.create(await forwardRequest());
     const legacyAccepted = { ...accepted } as Partial<typeof accepted>;
     delete legacyAccepted.prior_state;
@@ -1440,7 +1441,7 @@ describe("project channel registration authority", () => {
   });
 
   test("validates the inverse envelope before persisting missing-receipt evidence", async () => {
-    const authority = createProjectChannelRegistrationAuthority();
+    const authority = createProjectChannelRegistrationAuthority(new LocalStore());
     const forward = await forwardRequest();
 
     await expect(authority.compensate({
@@ -1453,7 +1454,7 @@ describe("project channel registration authority", () => {
   });
 
   test("refuses inverse for drifted, referenced, or preexisting channels", async () => {
-    const authority = createProjectChannelRegistrationAuthority();
+    const authority = createProjectChannelRegistrationAuthority(new LocalStore());
     const drifted = await authority.create(await forwardRequest());
     getDb().prepare("UPDATE channels SET topic = 'changed' WHERE id = ?").run(drifted.target_id!);
     const driftReceipt = await authority.compensate(inverseRequest(drifted));
@@ -1499,7 +1500,7 @@ describe("project channel registration authority", () => {
   });
 
   test("rejects ambiguous exact receipt populations and preserves ordinary create compatibility", async () => {
-    const authority = createProjectChannelRegistrationAuthority();
+    const authority = createProjectChannelRegistrationAuthority(new LocalStore());
     const request = await forwardRequest();
     const accepted = await authority.create(request);
     getDb().exec("DROP TRIGGER project_channel_registration_receipts_no_update");

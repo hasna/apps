@@ -444,6 +444,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   }
   let client: RemoteSkillsClient | undefined;
   let approvedCredits = 0;
+  let quoteReceipt: string | undefined;
   let inputFiles: RemoteInputFile[] = [];
   if (routing.route === "remote") {
     try {
@@ -456,8 +457,10 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       });
       describeRemoteFiles(inputFiles);
       client = new RemoteSkillsClient(routing.apiKey, routing.apiOrigin);
-      const quote = await client.quoteRun(skill.name, {}, args);
+      const descriptors = describeRemoteFiles(inputFiles);
+      const quote = await client.quoteRun(skill.name, {}, args, descriptors.length ? descriptors : undefined);
       approvedCredits = quote.pricing.costCents;
+      quoteReceipt = quote.quoteReceipt;
       if (approvedCredits > 0 && !options.yes) {
         if (options.json || !process.stdin.isTTY || !process.stdout.isTTY) {
           throw new Error(`CREDIT_APPROVAL_REQUIRED: This run costs ${approvedCredits} credits. Review skills quote, then rerun with --yes before the skill name.`);
@@ -497,6 +500,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       try {
         const run = await client!.submitQuotedRunWithFiles(skill.name, {}, args, inputFiles, {
           maxCredits: approvedCredits,
+          quoteReceipt,
           idempotencyKey: options.idempotencyKey ?? runContext.record.id,
         });
         if (run.error) {

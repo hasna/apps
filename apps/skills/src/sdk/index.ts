@@ -54,7 +54,8 @@ export * from "./events.js";
 export * from "./spend.js";
 export * from "./offline.js";
 export * from "./execution/index.js";
-export { RemoteSkillsClient, createRemoteSkillsClient, RemoteRequestError, RemoteRouteUnsupportedError, RemoteCapabilityUnavailableError, RemoteWorkspaceMemberError } from "../lib/remote-client.js";
+export { RemoteSkillsClient, createRemoteSkillsClient, RemoteRequestError, RemoteRouteUnsupportedError, RemoteCapabilityUnavailableError, RemoteQuoteUnavailableError, RemoteWorkspaceMemberError } from "../lib/remote-client.js";
+export type { RemoteQuoteUnavailableCode } from "../lib/remote-client.js";
 export { RemoteCreditApprovalError, type RemoteRunApproval, type RemoteRunQuote, type RemoteCreditPack } from "../lib/remote-account.js";
 export { type RemoteInputFile, type RemoteInputFileDescriptor } from "../lib/remote-files.js";
 
@@ -62,3 +63,28 @@ export { RemoteSkillsAuthClient, HostedApiError } from "../lib/remote-auth.js";
 export type { RemoteWorkspaceMember, RemoteWorkspaceMembersPage, RemoteWorkspaceMembersOptions } from "../lib/remote-workspace.js";
 export type { SetRemoteWorkspaceMemberRole, RemoveRemoteWorkspaceMember, RemoteWorkspaceMemberRoleResult, RemoteWorkspaceMemberRemovalResult, RemoteWorkspaceMemberErrorCode } from "../lib/remote-workspace.js";
 export type { RemoteCustomerRole, RemoteCustomerProfile, RemoteCurrentWorkspace, UpdateRemoteProfile, UpdateRemoteWorkspace } from "../lib/remote-profile.js";
+
+export type { RemoteWorkspaceContext, RemoteAccountWorkspace, RemoteAccountWorkspaces, RemoteWorkspaceIdentity,
+  RemoteWorkspaceSession, RemoteAccountWorkspaceDiscovery, RemoteWorkspaceSelectionErrorCode } from "../lib/remote-workspace-selection.js";
+export { WorkspaceContextInputError, WorkspaceIdentityMismatchError } from "../lib/remote-workspace-selection.js";
+export { RemoteWorkspaceSelectionError } from "../lib/remote-client.js";
+
+export type { LeaveRemoteWorkspace, RemoteWorkspaceLeaveResult, RemoteWorkspaceLeaveErrorCode } from "../lib/remote-workspace-leave.js";
+export { WorkspaceLeaveInputError, RemoteWorkspaceLeaveError, RemoteWorkspaceLeaveUnconfirmedError } from "../lib/remote-workspace-leave.js";
+
+export type { RemoteWorkspaceInvitation, RemoteWorkspaceInvitationsPage, RemoteWorkspaceInvitationResult,
+  RemoteWorkspaceInvitationAcceptance, ListRemoteWorkspaceInvitations, IssueRemoteWorkspaceInvitation,
+  ResendRemoteWorkspaceInvitation, RevokeRemoteWorkspaceInvitation, AcceptRemoteWorkspaceInvitation, RemoteWorkspaceInvitationErrorCode } from "../lib/remote-invitations.js";
+export { WorkspaceInvitationInputError, RemoteWorkspaceInvitationError, RemoteWorkspaceInvitationUnconfirmedError,
+  RemoteWorkspaceInvitationReadError } from "../lib/remote-invitations.js";
+
+export { InvitationEmailInputError, RemoteInvitationEmailError, RemoteInvitationEmailUnconfirmedError,
+  type RequestInvitationEmailChallenge, type AcceptInvitationEmailChallenge, type RemoteInvitationEmailChallenge,
+  type RemoteInvitationEmailAcceptance, type RemoteInvitationEmailErrorCode } from "../lib/remote-invitation-recovery.js";
+export { RemotePrivatePublicationsClient, PrivatePublicationError, PRIVATE_PUBLICATION_MAX_BYTES,
+  type PrivatePublicationDeclaration, type PrivatePublicationView, type PrivatePublicationState, type PrivatePublishingCapability } from "../lib/remote-private-publications.js";
+export { preparePrivatePublication, readPrivatePublicationRecovery, continuePrivatePublication, inspectPrivatePublication,
+  type PrivatePublicationRecovery, type PrivatePublicationResult } from "../lib/private-publication-recovery.js";
+export { createSkillOperationClient, SkillOperationClientError, SKILL_OPERATION_LIMITS,
+  type SkillOperationClient, type SkillOperationTransport, type SkillOperationRequest, type SkillOperationResult,
+  type SkillOperationJson, type SkillOperationRefusal, type SkillOperationClientErrorCode } from "./operations.js";

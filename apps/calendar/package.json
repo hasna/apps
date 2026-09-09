@@ -1,13 +1,13 @@
 {
   "name": "@hasna/calendar",
-  "version": "0.3.9",
+  "version": "0.4.1",
   "description": "Universal calendar management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
     "calendar": "dist/cli/index.js",
-    "calendar-mcp": "dist/mcp/bin.js",
+    "calendar-mcp": "dist/mcp/index.js",
     "calendar-serve": "dist/server/bin.js"
   },
   "exports": {
@@ -27,8 +27,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --splitting && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/mcp/bin.js && chmod +x dist/mcp/bin.js && bun build src/server/index.ts --outdir dist/server --target bun --external zod && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/server/bin.js && chmod +x dist/server/bin.js && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
-    "build:server": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --splitting && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/mcp/bin.js && chmod +x dist/mcp/bin.js && bun build src/server/index.ts --outdir dist/server --target bun --external zod && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/server/bin.js && chmod +x dist/server/bin.js && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun",
+    "build": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --splitting && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external zod && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/server/bin.js && chmod +x dist/server/bin.js && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build:server": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --splitting && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external zod && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/server/bin.js && chmod +x dist/server/bin.js && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun",
     "migrate": "bun run src/server/index.ts migrate",
     "generate:sdk": "bun run scripts/generate-sdk.ts",
     "typecheck": "tsc --noEmit",

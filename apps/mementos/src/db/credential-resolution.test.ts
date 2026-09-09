@@ -44,6 +44,7 @@ import {
   MementosStoreConfigError,
   assertClientStoreConfigured,
   getApiConfig,
+  getConfiguredApiEnv,
   getResolvedApiModeReport,
 } from "./api-mode.js";
 
@@ -66,6 +67,13 @@ const CLEAN_KEYS = [
   "HASNA_STATION",
   "HASNA_CONFIG_HOME",
   "HASNA_HOME",
+  // The DISK tier roots at $HOME (.hasna/<app>/config/credentials) when
+  // HASNA_HOME is unset — which is the ordinary station shape. Inheriting the
+  // operator's real HOME made these cases resolve the station's REAL
+  // credential file above the fixture env tiers (green on CI, red on a
+  // provisioned station). Cases that want the disk tier write a fixture file
+  // under an explicit HOME/HASNA_HOME of their own.
+  "HOME",
 ] as const;
 
 const saved = new Map<string, string | undefined>();
@@ -377,5 +385,35 @@ describe("blank normalisation never hands the resolver a silent copy (hasna/apps
     const env = hermeticEnv({ HASNA_MEMENTOS_API_URL: "" });
     const inputs = mementosResolverInputs(env, { keychain: { enabled: false } });
     expect(inputs.credentials.keychain?.enabled).toBe(false);
+  });
+});
+
+// ============================================================================
+// getConfiguredApiEnv — the presence report (`status`, `storage mode`) must
+// hand the resolver the SAME normalised inputs getApiConfig() does. It used to
+// pass the RAW env with only the carried options, so a declared-but-blank
+// legacy alias — the shape a scrubbed-then-overridden fixture leaves — was a
+// refusal here ("MEMENTOS_API_KEY is set but blank") while the transport one
+// call away had resolved the Keychain item.
+// ============================================================================
+
+describe("getConfiguredApiEnv — normalised resolver inputs (hasna/apps#1720 validation)", () => {
+  test("FAILING INPUT: a blank legacy alias beside an injected Keychain item reports the key as PRESENT, as getApiConfig() does", () => {
+    const keychain = fakeKeychain({ [KEYCHAIN_SERVICE]: KEYCHAIN_KEY });
+    const env = hermeticEnv({ HOME: tempHome(), HASNA_STATION: KEYCHAIN_ACCOUNT, MEMENTOS_API_KEY: "" });
+
+    const configured = getConfiguredApiEnv(env, { credentials: keychain.credentials });
+    const transport = getApiConfig(env, { credentials: keychain.credentials });
+
+    expect(configured.apiKeyPresent).toBe(true);
+    expect(transport).not.toBeNull();
+    expect(configured.baseUrl).toBeNull(); // nothing configured an authority in the env
+  });
+
+  test("a blank canonical key with nothing else resolvable reports absent, and refuses nothing", () => {
+    const env = hermeticEnv({ HOME: tempHome(), HASNA_MEMENTOS_API_KEY: "" });
+    const configured = getConfiguredApiEnv(env, { credentials: { keychain: { enabled: false } } });
+    expect(configured.apiKeyPresent).toBe(false);
+    expect(getApiConfig(env, { credentials: { keychain: { enabled: false } } })).toBeNull();
   });
 });

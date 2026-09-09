@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertClientStoreConfigured, DB_PATH_ENV_KEYS } from "../db/api-mode.js";
+import { resolveStoreBackend } from "../db/store-backend.js";
 import {
   MEMENTOS_LOCAL_OPT_IN_ENV_KEYS,
   hasMementosEnvAuthorityIntent,
@@ -36,6 +37,12 @@ const ENV_KEYS_TO_CLEAR: readonly string[] = Array.from(
     "MEMENTOS_DB_SCOPE",
     "HASNA_DATA_HOME",
     "HASNA_CONFIG_HOME",
+    // The DISK tier roots at $HOME (.hasna/mementos/config/credentials) when
+    // HASNA_HOME is unset — the ordinary station shape. A provisioned
+    // station's real credential file outranks these cases' env fixtures
+    // (green on CI, red on the station), so both roots are scrubbed here.
+    "HOME",
+    "HASNA_HOME",
   ]),
 );
 
@@ -145,6 +152,21 @@ describe("assertClientStoreConfigured — fail-closed store gate", () => {
     expect(message).toContain("HASNA_MEMENTOS_API_KEY");
   });
 
+  test("resolveStoreBackend() answers `unconfigured` — never local-sqlite / default — when nothing resolves", () => {
+    // The probe an operator runs to find out which store they are on used to
+    // say `local-sqlite` selected by `default` while every data verb refused.
+    const report = resolveStoreBackend();
+    expect(report.backend).toBe("unconfigured");
+    expect(report.api_mode).toBe(false);
+    expect(report.api_key_present).toBe(false);
+    expect(report.selected_by).toContain("fail closed");
+  });
+
+  test("resolveStoreBackend() answers local-sqlite ONLY under the explicit opt-in", () => {
+    process.env["HASNA_MEMENTOS_LOCAL"] = "1";
+    expect(resolveStoreBackend().backend).toBe("local-sqlite");
+  });
+
   test("a retired storage-mode variable is INERT — it neither throws nor selects anything", () => {
     // The *_MODE / *_STORAGE_MODE switches were stripped with the resolver
     // adoption (hasna/apps#1720): nothing reads them, a full API pair still
@@ -252,14 +274,35 @@ describe("mementos CLI without store configuration fails closed", () => {
     expect(help.stdout).toContain("Usage");
   });
 
-  test("`storage mode` (the diagnostic probe) still runs without configuration", async () => {
+  test("`storage mode` (the diagnostic probe) still answers without configuration — and the answer is NONE, exit 1", async () => {
     const scratch = mkdtempSync(join(tmpdir(), "mementos-failclosed-mode-"));
-    const env = scrubbedCliEnv();
+    const dataHome = join(scratch, "data");
+    const env = scrubbedCliEnv({ HASNA_DATA_HOME: dataHome });
+
+    const { stdout, stderr, exitCode } = await runCli(["storage", "mode", "--json"], env, scratch);
+    // The report is still printed (this command never inherits the preAction
+    // gate) but it must not claim the on-box file "by default" while every
+    // data verb refuses it: the backend is `unconfigured`, the exit is 1, and
+    // stderr carries the same refusal the data verbs print.
+    const report = JSON.parse(stdout) as { schema?: string; backend?: string; selected_by?: string };
+    expect(report.schema).toBe("mementos.store_backend.v1");
+    expect(report.backend).toBe("unconfigured");
+    expect(report.selected_by).toContain("fail closed");
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("will NOT fall back");
+    expect(stderr).toContain("hasna.credentials.mementos.api-key");
+    expect(stderr).toContain("HASNA_MEMENTOS_API_KEY");
+    // A probe creates nothing.
+    expect(existsSync(dataHome)).toBe(false);
+  });
+
+  test("`storage mode` under the explicit opt-in still answers local-sqlite with exit 0", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "mementos-failclosed-mode-optin-"));
+    const env = scrubbedCliEnv({ HASNA_MEMENTOS_LOCAL: "1", HASNA_DATA_HOME: join(scratch, "data") });
 
     const { stdout, exitCode } = await runCli(["storage", "mode", "--json"], env, scratch);
     expect(exitCode).toBe(0);
-    const report = JSON.parse(stdout) as { schema?: string };
-    expect(report.schema).toBe("mementos.store_backend.v1");
+    expect((JSON.parse(stdout) as { backend?: string }).backend).toBe("local-sqlite");
   });
 
   test("control: a full API pair passes the gate (transport failures stay separate)", async () => {

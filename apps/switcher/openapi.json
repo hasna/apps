@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Switcher API",
-    "version": "0.1.4",
+    "version": "0.1.6",
     "description": "Authenticated provider/profile/catalog control plane. Launches run locally; the API never returns provider credentials."
   },
   "security": [
@@ -1403,6 +1403,10 @@
                 "available": {
                   "type": "boolean"
                 },
+                "expiresOn": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
                 "contextWindow": {
                   "type": "integer",
                   "exclusiveMinimum": true,
@@ -1455,6 +1459,84 @@
             },
             "maxItems": 10000,
             "default": []
+          },
+          "additionalModels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "description": {
+                  "type": "string",
+                  "maxLength": 8000
+                },
+                "available": {
+                  "type": "boolean"
+                },
+                "expiresOn": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "contextWindow": {
+                  "type": "integer",
+                  "exclusiveMinimum": true,
+                  "minimum": 0
+                },
+                "maxOutputTokens": {
+                  "type": "integer",
+                  "exclusiveMinimum": true,
+                  "minimum": 0
+                },
+                "inputModalities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 50
+                  },
+                  "maxItems": 20
+                },
+                "outputModalities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 50
+                  },
+                  "maxItems": 20
+                },
+                "supportedParameters": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "maxItems": 100
+                },
+                "supportedGenerationMethods": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "maxItems": 100
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 10000
           }
         },
         "required": [
@@ -1565,6 +1647,10 @@
                 "available": {
                   "type": "boolean"
                 },
+                "expiresOn": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
                 "contextWindow": {
                   "type": "integer",
                   "exclusiveMinimum": true,
@@ -1617,6 +1703,84 @@
             },
             "maxItems": 10000,
             "default": []
+          },
+          "additionalModels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "description": {
+                  "type": "string",
+                  "maxLength": 8000
+                },
+                "available": {
+                  "type": "boolean"
+                },
+                "expiresOn": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "contextWindow": {
+                  "type": "integer",
+                  "exclusiveMinimum": true,
+                  "minimum": 0
+                },
+                "maxOutputTokens": {
+                  "type": "integer",
+                  "exclusiveMinimum": true,
+                  "minimum": 0
+                },
+                "inputModalities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 50
+                  },
+                  "maxItems": 20
+                },
+                "outputModalities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 50
+                  },
+                  "maxItems": 20
+                },
+                "supportedParameters": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "maxItems": 100
+                },
+                "supportedGenerationMethods": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "maxItems": 100
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 10000
           },
           "version": {
             "type": "integer",
@@ -1965,6 +2129,10 @@
           "available": {
             "type": "boolean"
           },
+          "expiresOn": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
           "contextWindow": {
             "type": "integer",
             "exclusiveMinimum": true,
@@ -2209,6 +2377,10 @@
                 "available": {
                   "type": "boolean"
                 },
+                "expiresOn": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
                 "contextWindow": {
                   "type": "integer",
                   "exclusiveMinimum": true,
@@ -2254,12 +2426,16 @@
                 },
                 "codingEligible": {
                   "type": "boolean"
+                },
+                "expired": {
+                  "type": "boolean"
                 }
               },
               "required": [
                 "id",
                 "name",
-                "codingEligible"
+                "codingEligible",
+                "expired"
               ],
               "additionalProperties": false
             }
@@ -2318,6 +2494,10 @@
                 },
                 "available": {
                   "type": "boolean"
+                },
+                "expiresOn": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                 },
                 "contextWindow": {
                   "type": "integer",
@@ -2491,6 +2671,10 @@
                     "available": {
                       "type": "boolean"
                     },
+                    "expiresOn": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
                     "contextWindow": {
                       "type": "integer",
                       "exclusiveMinimum": true,
@@ -2543,6 +2727,84 @@
                 },
                 "maxItems": 10000,
                 "default": []
+              },
+              "additionalModels": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 300
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "description": {
+                      "type": "string",
+                      "maxLength": 8000
+                    },
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "expiresOn": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    "contextWindow": {
+                      "type": "integer",
+                      "exclusiveMinimum": true,
+                      "minimum": 0
+                    },
+                    "maxOutputTokens": {
+                      "type": "integer",
+                      "exclusiveMinimum": true,
+                      "minimum": 0
+                    },
+                    "inputModalities": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 50
+                      },
+                      "maxItems": 20
+                    },
+                    "outputModalities": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 50
+                      },
+                      "maxItems": 20
+                    },
+                    "supportedParameters": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 100
+                      },
+                      "maxItems": 100
+                    },
+                    "supportedGenerationMethods": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "maxItems": 100
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 10000
               },
               "version": {
                 "type": "integer",
@@ -2746,6 +3008,10 @@
                     },
                     "available": {
                       "type": "boolean"
+                    },
+                    "expiresOn": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                     },
                     "contextWindow": {
                       "type": "integer",

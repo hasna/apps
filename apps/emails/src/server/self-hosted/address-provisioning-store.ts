@@ -219,11 +219,12 @@ export async function claimProvisioningJob(
   client: TypedQueryClient,
   tenant: string,
   id: string,
+  recheckReady = false,
 ): Promise<ProvisioningJob | null> {
   return client.get<ProvisioningJob>(
     `UPDATE provisioning_jobs SET status='processing',lease=$3::uuid,updated_at=now()
-    WHERE tenant_id=$1 AND id=$2 AND kind='address' AND (status IN ('pending','blocked') OR (status='processing' AND updated_at<now()-interval '2 minutes')) RETURNING *`,
-    [tenant, id, randomUUID()],
+    WHERE tenant_id=$1 AND id=$2 AND kind='address' AND (status IN ('pending','blocked') OR ($4::boolean AND status='ready') OR (status='processing' AND updated_at<now()-interval '2 minutes')) RETURNING *`,
+    [tenant, id, randomUUID(), recheckReady],
   );
 }
 export async function blockProvisioningJob(
@@ -246,6 +247,7 @@ export async function completeAddressProvisioning(
   job: ProvisioningJob,
   refs: AddressProvisioningRefs,
   receipt: ProvisioningReceipt,
+  beforeCommit?: (tx: TypedQueryClient) => Promise<void>,
 ): Promise<ProvisioningJob | null> {
   const current = await client.get<{ actor: string }>(
     "SELECT actor FROM provisioning_jobs WHERE tenant_id=$1 AND id=$2 AND lease=$3::uuid AND status='processing' FOR UPDATE",
@@ -278,6 +280,7 @@ export async function completeAddressProvisioning(
       409,
       "provider_mismatch",
     );
+  await beforeCommit?.(client);
   const domainStatus = [
     "active",
     "verified",

@@ -210,7 +210,7 @@ describe("resolveClientModeSelection — the storage-plan mapping", () => {
     expect(message.toLowerCase()).toContain("refusing");
   });
 
-  it("fails closed when nothing is configured, naming both storage rows", () => {
+  it("fails closed when nothing is configured, naming API configuration", () => {
     // Incident 715712's shape, now a hard refusal (fail-closed ruling, 2026-09-04):
     // with no API configuration and no explicit local choice there is no safe
     // default, so resolution throws and names what it needs instead of serving an
@@ -227,9 +227,9 @@ describe("resolveClientModeSelection — the storage-plan mapping", () => {
       expect(message).toContain("HASNA_EMAILS_API_URL");
       expect(message).toContain("HASNA_EMAILS_API_KEY");
       expect(message).toContain("EMAILS_SELF_HOSTED_API_KEY");
-      // ...and the explicit ways back to local.
-      expect(message).toContain("HASNA_EMAILS_DB_PATH");
-      expect(message).toContain("EMAILS_DB_PATH");
+      // Ordinary clients must never be advised to select SQLite.
+      expect(message).not.toContain("HASNA_EMAILS_DB_PATH");
+      expect(message).not.toContain("EMAILS_DB_PATH");
     }
   });
 

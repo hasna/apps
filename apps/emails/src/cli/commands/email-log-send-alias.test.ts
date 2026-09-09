@@ -10,46 +10,39 @@
 // to the real `send` command, so it sends, refuses, and drifts exactly as
 // `emails send` does — including options added to the real command later.
 //
-// WHY A SUBPROCESS. `handleError` (src/cli/utils.ts) ends in `process.exit(1)`,
-// so the refusal half of the contract cannot be observed in-process without
-// killing the test runner. Same harness as email-log-provider-filter.test.ts:
-// temp HOME, temp SQLite, scrubbed environment.
+// The real CLI runs against an authenticated, out-of-process API fixture.
+// No provider adapters or local mail database participate in these tests.
 
-import { afterAll, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildPrepublishTestEnv } from "../../../scripts/prepublish-local-test.mjs";
+import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
 
-// Anything that could point the process at a real endpoint, account or second
-// store. Scrubbed BY PREFIX rather than by an enumerated key list: an operator
-// shell may export this package's whole client configuration (endpoint, credential,
-// and the deployment variable this repo is deleting), and an enumerated list
-// that named each one would both go stale and re-introduce the very identifiers
-// the mode-axis ratchet counts.
-const SCRUBBED_ENV_PREFIXES = ["EMAILS_", "HASNA_EMAILS_", "MAILERY_", "HASNA_MAILERY_"] as const;
-const SCRUBBED_ENV_KEYS = [
-  "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
-  "RESEND_API_KEY",
-] as const;
-
-function scrubbedBaseEnv(): NodeJS.ProcessEnv {
-  const base = { ...process.env };
-  for (const key of Object.keys(base)) {
-    if (SCRUBBED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) delete base[key];
-  }
-  for (const key of SCRUBBED_ENV_KEYS) delete base[key];
-  return base;
-}
-
+let stub: V1Stub;
 const tempDirs: string[] = [];
+beforeAll(async () => { stub = await startV1Stub({ apiKey: crypto.randomUUID() }); });
+beforeEach(async () => { await stub.reset(); });
 
-/** A fresh local CLI environment: temp HOME, temp SQLite, no credentials, no endpoint. */
-function localEnv(): NodeJS.ProcessEnv {
+function apiEnv(): NodeJS.ProcessEnv {
   const dir = mkdtempSync(join(tmpdir(), "emails-send-alias-"));
   tempDirs.push(dir);
-  const homePath = join(dir, "home");
-  mkdirSync(homePath, { recursive: true, mode: 0o700 });
-  return { ...scrubbedBaseEnv(), EMAILS_DB_PATH: join(dir, "emails.db"), HOME: homePath, NO_COLOR: "1" };
+  mkdirSync(join(dir, "tmp"), { mode: 0o700 });
+  return {
+    ...buildPrepublishTestEnv(process.env, dir),
+    HASNA_STATION: `emails-send-alias-${crypto.randomUUID()}`,
+    HASNA_EMAILS_API_URL: stub.baseUrl,
+    HASNA_EMAILS_API_KEY: stub.apiKey,
+    EMAILS_CLIENT_ENV_LOADED: "1",
+    NO_COLOR: "1",
+  };
+}
+
+function expectNoLocalMailStore(): void {
+  for (const dir of tempDirs) {
+    expect(readdirSync(dir, { recursive: true }).filter(name => /\.(?:db|sqlite)(?:-|$)/.test(String(name)))).toEqual([]);
+  }
 }
 
 interface CliRun {
@@ -60,7 +53,7 @@ interface CliRun {
 
 function runCli(args: string[], env: NodeJS.ProcessEnv): CliRun {
   const result = Bun.spawnSync({
-    cmd: ["bun", "src/cli/index.tsx", ...args],
+    cmd: [process.execPath, "src/cli/index.tsx", ...args],
     cwd: process.cwd(),
     env,
     stdout: "pipe",
@@ -74,16 +67,6 @@ function runCli(args: string[], env: NodeJS.ProcessEnv): CliRun {
   };
 }
 
-/** A sandbox provider created through the CLI, asserted present so the send cases cannot pass vacuously. */
-function seedProvider(env: NodeJS.ProcessEnv): void {
-  const created = runCli(["--json", "provider", "add", "--name", "alias-sandbox", "--type", "sandbox"], env);
-  expect(created.exitCode, `provider add failed: ${created.stderr}`).toBe(0);
-  const listed = runCli(["--json", "provider", "list"], env);
-  expect(listed.exitCode, `provider list failed: ${listed.stderr}`).toBe(0);
-  const providers = JSON.parse(listed.stdout) as Array<{ name: string }>;
-  expect(providers.some((row) => row.name === "alias-sandbox"), `seed provider missing from ${listed.stdout}`).toBe(true);
-}
-
 /** Subjects the ledger currently holds, read back through the CLI itself. */
 function ledgerSubjects(env: NodeJS.ProcessEnv): string[] {
   const logged = runCli(["--json", "email", "list"], env);
@@ -93,15 +76,15 @@ function ledgerSubjects(env: NodeJS.ProcessEnv): string[] {
 }
 
 afterAll(() => {
+  stub?.stop();
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
 });
 
 describe("`emails email send` forwards to the real send command", () => {
   // STRONG: the alias must actually SEND. The email lands in the sent ledger,
   // observable through the CLI's own `email list --json`.
-  it("delivers a fully-specified send to the sent ledger", () => {
-    const env = localEnv();
-    seedProvider(env);
+  it("delivers a fully-specified send to the sent ledger", async () => {
+    const env = apiEnv();
 
     const sent = runCli([
       "email", "send",
@@ -113,13 +96,17 @@ describe("`emails email send` forwards to the real send command", () => {
 
     expect(sent.exitCode, `alias send failed: ${sent.stderr}\n${sent.stdout}`).toBe(0);
     expect(ledgerSubjects(env)).toContain("alias must really send");
+    const messages = await stub.list("messages");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ direction: "outbound", from_addr: "agent@alias.example", to_addrs: ["person@alias.example"], subject: "alias must really send", body_text: "delivered through the alias", send_state: "sent" });
+    expect(sent.stdout).toContain("Email sent to person@alias.example");
+    expectNoLocalMailStore();
   }, 120_000);
 
   // STRONG: an incomplete send must REFUSE, not exit 0. Before the fix, every
   // invocation — complete or not — exited 0 having done nothing.
-  it("refuses a send with no recipients instead of exiting 0", () => {
-    const env = localEnv();
-    seedProvider(env);
+  it("refuses a send with no recipients instead of exiting 0", async () => {
+    const env = apiEnv();
 
     const run = runCli([
       "email", "send",
@@ -131,14 +118,15 @@ describe("`emails email send` forwards to the real send command", () => {
     expect(run.exitCode, `expected a refusal, got exit 0: ${run.stdout}`).not.toBe(0);
     expect(`${run.stderr}${run.stdout}`.toLowerCase()).toContain("recipient");
     expect(ledgerSubjects(env)).not.toContain("no recipient");
+    expect(await stub.list("messages")).toEqual([]);
+    expectNoLocalMailStore();
   }, 120_000);
 
   // STRONG: the forwarded surface is the REAL one, not the five options the stub
   // used to declare. --dry-run only exists on the real command; it must preview
   // and write nothing.
-  it("honours the real command's --dry-run: previews, records nothing", () => {
-    const env = localEnv();
-    seedProvider(env);
+  it("honours the real command's --dry-run: previews, records nothing", async () => {
+    const env = apiEnv();
 
     const run = runCli([
       "email", "send",
@@ -152,20 +140,17 @@ describe("`emails email send` forwards to the real send command", () => {
     expect(run.exitCode, `dry-run failed: ${run.stderr}\n${run.stdout}`).toBe(0);
     expect(run.stdout.toLowerCase()).toContain("dry run");
     expect(ledgerSubjects(env)).not.toContain("alias dry run");
+    expect(await stub.list("messages")).toEqual([]);
+    expect(run.stdout).toContain("[NOT SENT]");
+    expectNoLocalMailStore();
   }, 120_000);
 });
 
-describe("both arms register the forwarding alias, not a re-declared surface", () => {
-  // WEAK detectors, deliberately: the API-backed arm cannot be exercised
-  // end-to-end from this suite without configuring the deployment variable the
-  // mode-axis ratchet counts at zero slack, so its `email send` is pinned
-  // STRUCTURALLY instead. What is asserted is the exact shape the old stub did
-  // not have — a variadic passthrough argument and NO re-declared options —
-  // which is also the shape a divergent re-implementation would break first.
-  // The local arm's behaviour is already pinned above; these prove the two arms
-  // share it.
+describe("API and explicit compatibility registration preserve the forwarding alias", () => {
+  // Actual API-backed CLI behavior is exercised above; both registrations must
+  // preserve the variadic passthrough rather than duplicate send options.
   const armModules = [
-    { arm: "local", path: "./email-log.local.js" },
+    { arm: "local", path: "./email-log.local.test-support.js" },
     { arm: "api-backed", path: "./email-log.remote.js" },
   ] as const;
 

@@ -3,20 +3,18 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerChannelTools } from "./channels";
-import { closeDb } from "../../lib/db";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-
-const TEST_DB = join(tmpdir(), `conversations-test-channels-mcp-${Date.now()}.db`);
+import { startLoopbackApiFixture } from "../../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../../lib/store/test-support/client-environment.js";
+import { getStore } from "../../lib/store/index.js";
 
 describe("channels MCP tools", () => {
   let client: Client;
+  let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+  let restore: () => void;
 
   beforeAll(async () => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-    process.env.CONVERSATIONS_AGENT_ID = "channels-test-agent";
-    closeDb();
+    fixture = await startLoopbackApiFixture();
+    restore = activateClientEnvironment({ ...fixture.env, CONVERSATIONS_AGENT_ID: "channels-test-agent" });
 
     const server = new McpServer({ name: "test-channels-mcp", version: "0.0.1" });
     registerChannelTools(server);
@@ -28,13 +26,9 @@ describe("channels MCP tools", () => {
   });
 
   afterAll(async () => {
-    delete process.env.CONVERSATIONS_DB_PATH;
-    delete process.env.CONVERSATIONS_AGENT_ID;
-    closeDb();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(TEST_DB + "-wal"); } catch {}
-    try { unlinkSync(TEST_DB + "-shm"); } catch {}
     await client.close();
+    restore?.();
+    await fixture?.stop();
   });
 
   function parseResult(result: { content: unknown[] }): unknown {
@@ -67,7 +61,7 @@ describe("channels MCP tools", () => {
     test("creates with description and project_id", async () => {
       // First create a project so the project_id FK is valid (need the UUID id)
       const uniqueProj = `proj-${Date.now()}`;
-      const proj = (await import("../../lib/projects.js")).createProject({ name: uniqueProj, created_by: "creator" });
+      const proj = await getStore().createProject({ name: uniqueProj, created_by: "creator" });
       const channelName = `desc-channel-${Date.now()}`;
       const result = parseResult(await client.callTool({
         name: "create_channel",

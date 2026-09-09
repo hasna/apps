@@ -110,6 +110,11 @@
  * DELETED — apps/router left the public tree entirely (npm registry 404 for
  * @hasna/router), so the member no longer exists here and its recorded
  * exceptions are stale under the two-sided contract.
+ * 2026-09-07 (hasna/apps#1720 validation, telephony fix lane): telephony's
+ * SDK exception entry DELETED — the member now exports ./sdk
+ * (package.json exports + manifest exportSubpath), so the recorded
+ * exception that passes was a stale-entry failure under the two-sided
+ * contract.
  * The exception registry is DATA, not prose: every entry
  * is keyed to a measured violation class and carries the reason and the
  * tracked remediation task. When a violation is fixed, DELETE its exception
@@ -293,7 +298,6 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "contracts", reason: "Library-shaped (manifest validator kit); ships `contracts` + `contracts-cli` bins only." },
   { member: "docs", reason: "Docs/instruction renderer; library-shaped, no MCP surface." },
   { member: "draw", reason: "Library-shaped (canvas/design tokens); no MCP surface." },
-  { member: "events", reason: "Library-shaped (embedded event envelopes/channels); MCP execution belongs to the consumer applications — manifest declares the mcp waiver." },
   { member: "guardrails", reason: "Library-shaped (guardrail policies); no MCP surface." },
   { member: "hooks", reason: "CLI+serve member (hooks registry/serve); no MCP surface yet." },
   { member: "models", reason: "Library-shaped (model metadata); no MCP surface." },
@@ -314,7 +318,6 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "dispatch", reason: "Dispatch daemon surface only; no HTTP serve bin." },
   { member: "docs", reason: "Docs renderer; no server surface." },
   { member: "draw", reason: "Library-shaped; no server surface." },
-  { member: "events", reason: "Library-shaped (embedded event envelopes/channels); no server surface — manifest declares the api waiver, ships no serve bin." },
   { member: "guardrails", reason: "Library-shaped; no server surface." },
   { member: "models", reason: "Library-shaped; no server surface." },
   { member: "orgs", reason: "Registry-shaped; no server surface." },
@@ -345,7 +348,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "draw", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "emails", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "logs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "models", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -355,7 +357,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "snapshots", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "statusline", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "tables", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "telephony", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "terminal", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #88 after the original census." },
   { member: "test-guard", reason: "SDK lane (c7ce8b75); bash-only guard ships no importable Node SDK export (see the member's CONTRACTS_EXCEPTIONS entry)." },
   { member: "tickets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." }
@@ -428,7 +429,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "logs",
-    cause: "surface_matrix: missing supported sdk surface (no ./sdk export; SDK deferred truthfully); storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required. Manifest schema-valid at kit 0.11.1.",
+    cause: "storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required. Manifest schema-valid at kit 0.11.1. (The surface_matrix sdk cause no longer fires: the #1720 validation fix ships ./sdk and declares the logs-sdk surface supported.)",
     task: "todos d166125e (contracts task — logs)",
   },
   {

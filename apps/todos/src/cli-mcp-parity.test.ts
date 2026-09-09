@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -10,6 +10,9 @@ import { getJsonContract, validateJsonContract } from "./json-contracts.js";
 import { getMcpToolNames } from "./mcp.js";
 import { withNoNetwork } from "./test/no-network.js";
 import { localRoutingTestEnv } from "./test/local-routing-env.fixture.test.js";
+
+// Spawns the built CLI; bun's 5s default is too tight for a cold start on a loaded host.
+setDefaultTimeout(60_000);
 
 const expectedDomains = [
   "tasks",

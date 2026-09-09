@@ -140,7 +140,7 @@ describe("self-hosted OpenAPI routine error-status parity", () => {
         400,
         401,
         403,
-        ...(resource.foreignKeys?.length ? [404] : []),
+        ...(resource.path === "feedback" ? [404, 405] : resource.foreignKeys?.length ? [404] : []),
         413,
         500,
       ]);

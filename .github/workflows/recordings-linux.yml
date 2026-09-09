@@ -1,0 +1,142 @@
+# Independent visibility for the complete Recordings package suite. This does
+# not replace aggregate CI or relax any of its other package gates.
+name: recordings-linux
+
+on:
+  pull_request:
+    paths:
+      - apps/recordings/**
+      - apps/contracts/**
+      - apps/events/**
+      - package.json
+      - bun.lock
+      - bunfig.toml
+      - turbo.json
+      - tsconfig.json
+      - .github/workflows/recordings-linux.yml
+      - tooling/ci/collect-recordings-diagnostics.py
+      - tooling/ci/tests/recordings-diagnostics.test.py
+      - tooling/ci/tests/standard/recordings-linux-workflow.test.ts
+  push:
+    branches: [main]
+    paths:
+      - apps/recordings/**
+      - apps/contracts/**
+      - apps/events/**
+      - package.json
+      - bun.lock
+      - bunfig.toml
+      - turbo.json
+      - tsconfig.json
+      - .github/workflows/recordings-linux.yml
+      - tooling/ci/collect-recordings-diagnostics.py
+      - tooling/ci/tests/recordings-diagnostics.test.py
+      - tooling/ci/tests/standard/recordings-linux-workflow.test.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  package:
+    name: Recordings package (Linux)
+    runs-on: ubuntu-24.04
+    # The sum of step deadlines is 72 minutes, including diagnostics/upload.
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        timeout-minutes: 3
+        with:
+          persist-credentials: false
+
+      - name: Allocate private release report storage
+        id: reports
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          report_root="$(mktemp -d "${RUNNER_TEMP}/recordings-linux-reports.XXXXXX")"
+          echo "root=$report_root" >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        timeout-minutes: 3
+        with:
+          bun-version: 1.3.14
+
+      # npm 10 may run nested prepare hooks despite --ignore-scripts. Keep the
+      # same tested npm as aggregate CI, in an ephemeral runner-owned prefix.
+      - name: Install npm for artifact fixtures
+        id: npm
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          npm_prefix="$(mktemp -d "${RUNNER_TEMP}/npm-toolchain.XXXXXX")"
+          npm install --global --prefix "$npm_prefix" npm@11.19.0 --ignore-scripts
+          test "$("$npm_prefix/bin/npm" --version)" = "11.19.0"
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
+
+      - name: Verify package fixture tools
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          test "$(bun --version)" = "1.3.14"
+          test "$(npm --version)" = "11.19.0"
+          for tool in python3 cc git zip unzip; do command -v "$tool"; done
+
+      - name: Install frozen workspace dependencies without lifecycle hooks
+        id: install
+        timeout-minutes: 10
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # Build only Recordings and its public dependency graph. Unrelated member
+      # prepare/build/test failures must not hide this package's result.
+      - name: Build Recordings and its dependencies in dependency order
+        id: build
+        timeout-minutes: 8
+        run: bunx turbo run build --filter=@hasna/recordings... --concurrency=1
+
+      - name: Typecheck Recordings
+        id: typecheck
+        timeout-minutes: 3
+        working-directory: apps/recordings
+        run: bun run typecheck
+
+      # --all preserves the package test contract: every tracked test file,
+      # including future quarantined files, through the existing supervisor.
+      # Linux runs recorder in its own process and the complete ordinary group;
+      # native Darwin-only skips stay explicit. No model/provider credentials.
+      # The supervisor's 1 + 30 minute group limits fit inside this step bound,
+      # leaving time in the job to collect diagnostics after a failure/timeout.
+      - name: Run the complete Recordings release suite
+        id: suite
+        timeout-minutes: 35
+        working-directory: apps/recordings
+        env:
+          TMPDIR: ${{ steps.reports.outputs.root }}/
+        run: bun scripts/release-suite-gate.ts --all
+
+      # Never upload fixture HOME, nested artifacts, audio, archives or caches.
+      # The collector accepts only owned regular top-level log/XML files, with
+      # no symlinks/hardlinks and 32 MiB/file, 96 MiB/16 files total limits.
+      - name: Collect bounded release diagnostics
+        id: collect
+        if: always() && steps.reports.outcome == 'success'
+        timeout-minutes: 2
+        run: python3 -I -B tooling/ci/collect-recordings-diagnostics.py "${{ steps.reports.outputs.root }}" "${{ runner.temp }}/recordings-linux-diagnostics"
+
+      - name: Retain release diagnostics
+        if: always() && steps.reports.outcome == 'success'
+        timeout-minutes: 3
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: recordings-linux-release-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/recordings-linux-diagnostics/
+          if-no-files-found: ignore
+          include-hidden-files: false
+          retention-days: 7

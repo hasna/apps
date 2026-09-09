@@ -33,6 +33,8 @@ import {
   hookExists,
   getHookPath,
   getSettingsPath,
+  scanStaleRegistrations,
+  pruneStaleRegistrations,
   type ConcreteTarget,
   type Scope,
   type Target,
@@ -1025,13 +1027,29 @@ program
   .command("doctor")
   .option("-g, --global", "Check global settings", false)
   .option("-p, --project", "Check project settings", false)
+  .option("-f, --fix", "Remove stale registrations (a .bak is written beside each settings file)", false)
   .option("-j, --json", "Output as JSON", false)
-  .description("Check health of installed hooks")
-  .action((options: { global?: boolean; project?: boolean; json: boolean }) => {
+  .description("Check health of installed hooks; --fix removes registrations whose hook cannot resolve")
+  .action((options: { global?: boolean; project?: boolean; json: boolean; fix?: boolean }) => {
     const scope = resolveScope(options);
     const settingsPath = getSettingsPath(scope);
     const issues: { hook: string; issue: string; severity: "error" | "warning" }[] = [];
     const healthy: string[] = [];
+
+    // Stale registrations: a settings entry wiring `hooks run <name>` whose
+    // name cannot resolve fails on EVERY tool call it is wired to, and
+    // install/remove never re-check a name already written. Repair first when
+    // asked, so the verdict describes the post-fix state.
+    const fixed = options.fix ? pruneStaleRegistrations(scope) : [];
+    const stale = scanStaleRegistrations(scope);
+    for (const finding of stale) {
+      issues.push({
+        hook: finding.hook,
+        issue: `Stale registration in ${finding.file} (${finding.event}): \`${finding.command}\` does not resolve to a hook`,
+        severity: "error",
+      });
+    }
+    const staleNames = new Set(stale.map((finding) => finding.hook));
 
     const settingsExist = existsSync(settingsPath);
     if (!settingsExist) {
@@ -1050,6 +1068,8 @@ program
     }
 
     for (const name of registered) {
+      // Reported above, with the settings file that carries the entry.
+      if (staleNames.has(name)) continue;
       const custom = readCustomManifest(name);
       const meta = custom ? resolveHookMeta(name) : getHook(name);
       let hookHealthy = true;
@@ -1095,11 +1115,36 @@ program
     }
 
     if (options.json) {
-      console.log(JSON.stringify({ healthy: issues.length === 0, healthy_hooks: healthy, issues, registered, wiring_count: wiringCount, scope }));
+      console.log(JSON.stringify({
+        healthy: issues.length === 0,
+        healthy_hooks: healthy,
+        issues,
+        stale,
+        fixed: fixed.flatMap((result) => result.removed),
+        backups: fixed.map((result) => result.backupPath),
+        registered,
+        wiring_count: wiringCount,
+        scope,
+      }));
+      // A stale registration is an error-class finding, so the JSON path must
+      // gate like the plain path does — a machine consumer that only reads the
+      // exit code must not see a broken settings file as healthy.
+      if (issues.some((issue) => issue.severity === "error")) process.exitCode = 1;
       return;
     }
 
     console.log(chalk.bold(`\nHook Health Check (${scope})\n`));
+
+    if (fixed.length > 0) {
+      for (const result of fixed) {
+        console.log(chalk.green(`  ✓ removed ${result.removed.length} stale registration(s) from ${result.file}`));
+        for (const finding of result.removed) {
+          console.log(chalk.dim(`      ${finding.hook} (${finding.event}: ${finding.command})`));
+        }
+        console.log(chalk.dim(`      backup: ${result.backupPath}`));
+      }
+      console.log();
+    }
 
     if (registered.length === 0) {
       console.log(chalk.dim("  No hooks registered."));
@@ -1109,6 +1154,13 @@ program
       // "checked 0 of N wiring entries" a meaningful statement instead of a
       // bare "No hooks registered".
       console.log(chalk.dim(`  (checked 0 registered \`hooks run\` entries of ${wiringCount} settings wiring entries; direct-path wiring outside the registered surface is not covered by this check)`));
+      if (issues.length > 0) {
+        console.log();
+        for (const issue of issues) {
+          const icon = issue.severity === "error" ? chalk.red("✗") : chalk.yellow("!");
+          console.log(`  ${icon} ${chalk.cyan(issue.hook)}: ${issue.issue}`);
+        }
+      }
       if (issues.length > 0) process.exitCode = 1;
       return;
     }

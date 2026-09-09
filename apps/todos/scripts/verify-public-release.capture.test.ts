@@ -5,9 +5,12 @@
 // (status null, SIGTERM, stdout truncated mid-record), and the release gate
 // failed "release-tracked-proof: could not enumerate HEAD", blocking all
 // @hasna/todos publishes.
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
+// Spawns child processes (CLI/server/scripts); bun's 5s default is too tight on a loaded host.
+setDefaultTimeout(60_000);
+
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCapture, runCaptureBuffer, verifyTrackedWorktreeAgainstHead } from "./verify-public-release";
@@ -16,6 +19,21 @@ const HEAD_TREE_ARGS = ["ls-tree", "-r", "--full-tree", "-z", "HEAD"];
 const RECORD_PATTERN = /^(\d+) (\w+) ([0-9a-f]+)\t([\s\S]+)$/;
 // Fixture generation (30k writes + git add + commit) exceeds bun's 5s default.
 const FIXTURE_TEST_TIMEOUT_MS = 60_000;
+
+// Unlinking the 30k-file fixture can take seconds on a loaded host, and an
+// unbounded recursive rm in an afterAll hook can outlive the file's budget and
+// fail the run. Bound the cleanup with an explicit deadline; a timed-out or
+// failed removal is swallowed because temp cleanup is best-effort, never a
+// test result.
+const FIXTURE_CLEANUP_TIMEOUT_MS = 30_000;
+
+function removeFixtureDir(dir: string): void {
+  try {
+    execFileSync("rm", ["-rf", dir], { timeout: FIXTURE_CLEANUP_TIMEOUT_MS, stdio: "ignore" });
+  } catch {
+    // Best-effort temp cleanup; never fail the suite on it.
+  }
+}
 
 // Independent reference capture: same command, explicit 256MB maxBuffer. This
 // is a control for COMPLETENESS, not a re-implementation of the fix.
@@ -57,7 +75,7 @@ describe("verify-public-release capture helpers (OPE2-00174)", () => {
   }
 
   afterAll(() => {
-    for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true });
+    for (const dir of fixtureDirs) removeFixtureDir(dir);
   });
 
   test("runCaptureBuffer captures a >1MB HEAD tree without killing the child", () => {
@@ -125,7 +143,7 @@ describe("verify-public-release tracked-worktree path resolution (b631c46a)", ()
   const fixtureDirs: string[] = [];
 
   afterAll(() => {
-    for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true });
+    for (const dir of fixtureDirs) removeFixtureDir(dir);
   });
 
   // Fixture: a monorepo-shaped git repo. Tracked files live under a package

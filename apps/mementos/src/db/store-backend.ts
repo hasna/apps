@@ -39,15 +39,22 @@ import {
   isApiMode,
 } from "./api-mode.js";
 import { getStorageBackend } from "../storage.js";
+import { selectsMementosLocalStore } from "../lib/local-opt-in.js";
 
 /**
  * The transport that reads and writes will actually use.
  *
- * - `local-sqlite`   — the on-disk SQLite file at `db_path` is authoritative.
+ * - `local-sqlite`   — the on-disk SQLite file at `db_path` is authoritative
+ *                      (reached ONLY through the explicit local opt-in).
  * - `cloud-api`      — authed HTTPS to the server (the shared store).
  * - `cloud-postgres` — a direct Postgres DSN; server-only, never a client.
+ * - `unconfigured`   — nothing resolves and nothing opted in: every data verb
+ *                      REFUSES (fail closed, owner ruling 2026-09-04). Reported
+ *                      as its own answer so the probe an operator runs to find
+ *                      out which store they are on never claims the on-box
+ *                      file "by default" while every read and write refuses it.
  */
-export type StoreBackend = "local-sqlite" | "cloud-api" | "cloud-postgres";
+export type StoreBackend = "local-sqlite" | "cloud-api" | "cloud-postgres" | "unconfigured";
 
 export interface StoreBackendReport {
   /** Machine-readable contract for scripts and test guards. */
@@ -101,14 +108,22 @@ export function resolveStoreBackend(): StoreBackendReport {
   // from the resolver, and never conflates the two.
   const configured = getConfiguredApiEnv();
 
+  // The on-box SQLite file is never a default: with no credential resolved and
+  // no explicit opt-in (HASNA_MEMENTOS_DB_PATH / HASNA_MEMENTOS_LOCAL) the
+  // answer is "no store" — the same answer assertClientStoreConfigured() gives
+  // every data verb — not "local-sqlite / default".
   const backend: StoreBackend = apiMode
     ? "cloud-api"
     : serverBackend === "postgresql"
       ? "cloud-postgres"
-      : "local-sqlite";
+      : selectsMementosLocalStore()
+        ? "local-sqlite"
+        : "unconfigured";
 
   let selectedBy = "default";
-  if (apiMode) {
+  if (backend === "unconfigured") {
+    selectedBy = "none — no credential resolved and no local opt-in (fail closed)";
+  } else if (apiMode) {
     // Name where the transport came from — resolver sources, never values: the
     // fleets of env keys are listed for the env-configured shape (the operator
     // needs to see their exact names), and the Keychain item / credentials-file

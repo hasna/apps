@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "apiBases": ["https://notes.example.com/api/v1/", "https://notes.example.com/v1/"],
+  "note": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "tenantId": "22222222-2222-4222-8222-222222222222",
+    "clientId": "fictional-client-1", "slug": null,
+    "title": "Café ideas 📝", "bodyMarkdown": "# Café ideas\n\n- [ ] 日本語\n\n```swift\nlet greeting = \"Olá\"\n```\n",
+    "frontmatterJson": {"nested": {"value": [true, null, 3.5]}},
+    "folder": "historical/folder", "labels": ["ideas", "日本語"],
+    "pinned": true, "archived": false, "revision": 7,
+    "contentHash": "fixture-content-hash", "source": "hosted",
+    "agentProvenanceJson": {}, "deletedAt": null,
+    "createdAt": "2026-09-01T10:20:30.123Z", "updatedAt": "2026-09-02T11:21:31Z"
+  },
+  "listCursor": "list-v1.fixture",
+  "changeCursor": "changes-v1.fixture",
+  "largeSequence": "9007199254740993",
+  "errors": [
+    {"status": 401, "error": {"code": "unauthorized", "message": "Sign in again"}},
+    {"status": 403, "error": {"code": "forbidden", "message": "Scope required"}},
+    {"status": 409, "error": {"code": "revision_conflict", "message": "Note changed"}},
+    {"status": 409, "error": {"code": "idempotency_conflict", "message": "Request changed"}},
+    {"status": 429, "error": {"code": "rate_limited", "message": "Try later"}}
+  ]
+}

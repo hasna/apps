@@ -45,7 +45,7 @@ import {
   type GitHubRemoteProtocol,
   type GitHubVisibility,
 } from "./workspace-github.js";
-import { doctorWorkspace } from "./workspace-doctor.js";
+import { doctorWorkspaceWithStore } from "./workspace-doctor.js";
 import { resolveProjectStore, type ProjectStore } from "../store/project-store.js";
 import { importRegisteredRoots, importWorkspace, importWorkspaceBulk, planWorkspaceImport } from "./workspace-import.js";
 import {
@@ -1577,10 +1577,14 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
       execute: async (input) => {
         const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
-        const doctor = () => doctorWorkspace(workspace, { fix: Boolean(input.fix && approve), dryRun: !approve, transport: store.transport });
-        return projectPayload(input.fix && approve && store.transport === "local"
+        // Through the Store: a hosted project resolves its root/recipe against
+        // the shared registry and never opens the on-box SQLite (#1720). The
+        // local path completes synchronously, so the synchronous lock below
+        // still covers the whole run.
+        const doctor = () => doctorWorkspaceWithStore(store, workspace, { fix: Boolean(input.fix && approve), dryRun: !approve });
+        return projectPayload(await (input.fix && approve && store.transport === "local"
           ? withAgentWorkspaceLock(workspace, actorAgent.id, "project doctor fix", doctor)
-          : doctor());
+          : doctor()));
       },
     }),
     projects_update: tool({

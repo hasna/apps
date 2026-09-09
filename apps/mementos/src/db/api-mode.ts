@@ -192,7 +192,10 @@ function assertCleanResolvedBase(baseUrl: string): string {
  * must fail closed, exactly like a half-configured credential pair does), with
  * the resolver's own message and never the raw value.
  */
-export function getConfiguredApiEnv(env: Env = process.env): {
+export function getConfiguredApiEnv(
+  env: Env = process.env,
+  options: MementosClientResolveOptions = {},
+): {
   baseUrl: string | null;
   apiKeyPresent: boolean;
   dbPathKey: string | null;
@@ -204,9 +207,17 @@ export function getConfiguredApiEnv(env: Env = process.env): {
     assertCleanResolvedBase(normalized);
     baseUrl = normalized;
   }
+  // The SAME inputs getApiConfig() / getResolvedApiModeReport() hand the
+  // resolver: the env with every declared-but-blank authority variable removed
+  // AND the Keychain gate carried across the copy. Passing the raw env here
+  // with only the carried options made a blank legacy alias (the shape a
+  // scrubbed-then-overridden fixture leaves) a disagreement the resolver
+  // refuses, so this presence report could say "no key" while the transport
+  // one line away had resolved one.
+  const inputs = mementosResolverInputs(env, options.credentials);
   return {
     baseUrl,
-    apiKeyPresent: resolveCredential("mementos", env, mementosResolverInputs(env).credentials) !== null,
+    apiKeyPresent: resolveCredential("mementos", inputs.env, inputs.credentials) !== null,
     dbPathKey: firstEnvKey(DB_PATH_ENV_KEYS, env),
   };
 }
@@ -535,17 +546,27 @@ export function assertClientStoreConfigured(
   // resolves NOTHING is the refusal below — never a local default.
   const config = getApiConfig(env, options);
   if (config !== null) return; // fleet API mode — credential + authority resolved
-  throw new MementosStoreConfigError(
+  throw new MementosStoreConfigError(unconfiguredStoreMessage());
+}
+
+/**
+ * The one-line refusal every surface prints when NOTHING resolves — the tiers
+ * consulted and the explicit opt-ins, names only, never a value. Shared with
+ * the `storage mode` probe so its `unconfigured` answer and the data verbs'
+ * refusal read as one message.
+ */
+export function unconfiguredStoreMessage(): string {
+  return (
     "mementos is not configured to reach any memory store, and will NOT fall back to the " +
-      "on-box SQLite store (~/.hasna/mementos/mementos.db). " +
-      "No credential could be resolved from the Keychain item hasna.credentials.mementos.api-key " +
-      "(macOS only), ~/.hasna/mementos/config/credentials, or " +
-      `${API_KEY_ENV_KEYS[0]}; the authority would be the fleet gateway ${"https://api.hasna.com/mementos"} ` +
-      `(or ${API_URL_ENV_KEYS[0]} if set). ` +
-      `Set ${API_URL_ENV_KEYS[0]} and ${API_KEY_ENV_KEYS[0]} (the resolver also accepts the legacy ` +
-      `${API_URL_ENV_KEYS[1]} / ${API_KEY_ENV_KEYS[1]} aliases for one release) to use the fleet memory ` +
-      `API, or opt into an explicit local SQLite file with ${DB_PATH_ENV_KEYS[0]} / ` +
-      `${DB_PATH_ENV_KEYS[1]} (or ${MEMENTOS_LOCAL_OPT_IN_ENV_KEYS[0]}=1).`,
+    "on-box SQLite store (~/.hasna/mementos/mementos.db). " +
+    "No credential could be resolved from the Keychain item hasna.credentials.mementos.api-key " +
+    "(macOS only), ~/.hasna/mementos/config/credentials, or " +
+    `${API_KEY_ENV_KEYS[0]}; the authority would be the fleet gateway ${"https://api.hasna.com/mementos"} ` +
+    `(or ${API_URL_ENV_KEYS[0]} if set). ` +
+    `Set ${API_URL_ENV_KEYS[0]} and ${API_KEY_ENV_KEYS[0]} (the resolver also accepts the legacy ` +
+    `${API_URL_ENV_KEYS[1]} / ${API_KEY_ENV_KEYS[1]} aliases for one release) to use the fleet memory ` +
+    `API, or opt into an explicit local SQLite file with ${DB_PATH_ENV_KEYS[0]} / ` +
+    `${DB_PATH_ENV_KEYS[1]} (or ${MEMENTOS_LOCAL_OPT_IN_ENV_KEYS[0]}=1).`
   );
 }
 

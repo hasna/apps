@@ -24,7 +24,7 @@ import {
   API_CREDENTIAL_SETTINGS,
   DATABASE_PATH_SETTINGS,
 } from "../../store-resolution.js";
-import { registerEmailLogCommands } from "./email-log.local.js";
+import { registerEmailLogCommands } from "./email-log.local.test-support.js";
 
 // Cleared by SHAPE, not by name, so this file adds no fresh spelling of the
 // deployment-word variable the axis ratchet is retiring (same rule as

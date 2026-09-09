@@ -146,7 +146,8 @@ async function handleAuthStatus() {
       error: `E_AUTH: the secrets CLI could not open the vault (${firstLine(r.stderr) || "exit " + r.code})`,
     };
   }
-  const mode = process.env.HASNA_SECRETS_API_URL ? "api" : "local";
+  // Ordinary CLI access always uses the shared API, including saved credentials.
+  const mode = "api";
   return { ok: true, data: { authenticated: true, mode } };
 }
 

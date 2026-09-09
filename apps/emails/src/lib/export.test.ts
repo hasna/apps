@@ -188,19 +188,12 @@ describe("email exports, over the store seam", () => {
     expect(csv).not.toContain("Other");
   });
 
-  // THE FILTER THAT IS GONE, in both directions. An export that quietly ignored `--provider`
-  // would write every provider's mail into a file the operator believes is one provider's, and
-  // an export that refused unconditionally would take the whole feature down.
-  it("REFUSES a provider-filtered export rather than writing every provider's mail", async () => {
+  it("exports only the selected provider's recorded messages", async () => {
     seedLedger("only-msg", "2026-02-01T00:00:00.000Z");
-
-    for (const run of [
-      () => exportEmailsJson({ provider_id: PROVIDER }),
-      () => exportEmailsCsv({ provider_id: PROVIDER }),
-    ]) {
-      const error = await rejection(run());
-      expect(error.message).toContain("filtered by provider");
-    }
+    expect(JSON.parse(await exportEmailsJson({ provider_id: PROVIDER }))).toEqual([expect.objectContaining({ id: "only-msg" })]);
+    expect(await exportEmailsCsv({ provider_id: PROVIDER })).toContain("only-msg");
+    expect(JSON.parse(await exportEmailsJson({ provider_id: "other-provider" }))).toEqual([]);
+    expect(await exportEmailsCsv({ provider_id: "other-provider" })).not.toContain("only-msg");
   });
 
   it("still exports when no provider filter is named", async () => {

@@ -1,18 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Box, Text, useInput } from "ink";
 import SelectInput from "ink-select-input";
-import { listSessions } from "../../lib/sessions.js";
-import { listChannels } from "../../lib/channels.js";
-import { getDb } from "../../lib/db.js";
+import { getStore } from "../../lib/store/index.js";
 import type { Session, ChannelInfo } from "../../types.js";
-
-function getChannelUnreadCount(channelName: string, agent: string): number {
-  const db = getDb();
-  const row = db.prepare(
-    "SELECT COUNT(*) as count FROM messages WHERE channel = ? AND from_agent != ? AND read_at IS NULL"
-  ).get(channelName, agent) as { count: number };
-  return row.count;
-}
 
 interface SessionListProps {
   agent: string;
@@ -22,16 +12,59 @@ interface SessionListProps {
 }
 
 export function SessionList({ agent, onSelect, onSelectChannel, onNew }: SessionListProps) {
-  const [sessions, setSessions] = useState(() => listSessions(agent));
-  const [channels, setChannels] = useState(() => listChannels());
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [channels, setChannels] = useState<ChannelInfo[]>([]);
+  const [channelUnread, setChannelUnread] = useState<Record<string, number>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Poll for new sessions/channels
+  // Resolve current credentials for each refresh, without tying the effect
+  // lifecycle to a newly constructed client on every render.
   useEffect(() => {
-    const timer = setInterval(() => {
-      setSessions(listSessions(agent));
-      setChannels(listChannels());
-    }, 1000);
-    return () => clearInterval(timer);
+    let cancelled = false;
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing || cancelled) return;
+      refreshing = true;
+      try {
+        const store = getStore();
+        const results = await Promise.allSettled([
+          store.listSessions(agent),
+          store.listChannels(),
+          store.listUnreadCounts(agent),
+        ]);
+        if (cancelled) return;
+        // A fast failure must not release the refresh gate while sibling
+        // requests are still running.
+        const [sessionResult, channelResult, unreadResult] = results;
+        if (sessionResult.status === "rejected") throw sessionResult.reason;
+        if (channelResult.status === "rejected") throw channelResult.reason;
+        if (unreadResult.status === "rejected") throw unreadResult.reason;
+        const sessionList = sessionResult.value;
+        const channelList = channelResult.value;
+        const unreadRows = unreadResult.value;
+        setSessions(sessionList);
+        setChannels(channelList);
+        const byChannel: Record<string, number> = {};
+        for (const row of unreadRows) {
+          if (!row.channel) continue;
+          byChannel[row.channel] = Number(row.unread_count) || 0;
+        }
+        setChannelUnread(byChannel);
+        setError(null);
+      } catch (error) {
+        if (!cancelled) setError(error instanceof Error ? error.message : "Unable to load conversations.");
+      } finally {
+        refreshing = false;
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void refresh();
+    const timer = setInterval(refresh, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [agent]);
 
   useInput((input) => {
@@ -39,7 +72,7 @@ export function SessionList({ agent, onSelect, onSelectChannel, onNew }: Session
   });
 
   const channelItems = channels.map((sp) => {
-    const unread = getChannelUnreadCount(sp.name, agent);
+    const unread = channelUnread[sp.name] ?? 0;
     const unreadBadge = unread > 0 ? ` (${unread} unread)` : "";
     return {
       label: `#${sp.name}${sp.description ? ` — ${sp.description}` : ""}  ${sp.message_count} msgs${unreadBadge}`,
@@ -60,6 +93,26 @@ export function SessionList({ agent, onSelect, onSelectChannel, onNew }: Session
   });
 
   const allItems = [...channelItems, ...sessionItems];
+
+  if (error && allItems.length === 0) {
+    return <Box flexDirection="column" padding={1}>
+      <Text bold color="cyan">Conversations</Text>
+      <Text color="red">Unable to load conversations: {error}</Text>
+      <Text dimColor>Retrying… Press q to quit.</Text>
+    </Box>;
+  }
+
+  if (loading && allItems.length === 0) {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Text bold color="cyan">Conversations</Text>
+        <Text dimColor>  as <Text color="yellow">{agent}</Text></Text>
+        <Box marginTop={1}>
+          <Text dimColor>Loading…</Text>
+        </Box>
+      </Box>
+    );
+  }
 
   if (allItems.length === 0) {
     return (
@@ -83,6 +136,7 @@ export function SessionList({ agent, onSelect, onSelectChannel, onNew }: Session
         <Text bold color="cyan">Conversations</Text>
         <Text dimColor>  as <Text color="yellow">{agent}</Text>  (n: new, q: quit)</Text>
       </Box>
+      {error && <Text color="red">Refresh failed: {error} — retrying…</Text>}
       <SelectInput
         items={allItems}
         onSelect={(item) => {
