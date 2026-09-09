@@ -37,6 +37,7 @@ import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.
 import { registerWorkflowPrompts } from "./tools/workflow-prompts.js";
 import { getPackageVersion } from "../lib/package-version.js";
 import { installMcpTokenDiagnostics, shouldRegisterToolForProfile } from "./token-utils.js";
+import { RemoteApiConfigMissingError } from "./remote-authority.js";
 
 function getMcpVersion(): string {
   return getPackageVersion(import.meta.url);
@@ -121,7 +122,10 @@ export function applyFocus(params: Record<string, any>, agentId?: string): void 
   }
 }
 
-function formatError(error: unknown): string {
+export function formatError(error: unknown): string {
+  if (error instanceof RemoteApiConfigMissingError) {
+    return JSON.stringify({ code: error.code, message: error.message, suggestion: error.suggestion });
+  }
   if (error instanceof VersionConflictError) {
     return JSON.stringify({ code: VersionConflictError.code, message: error.message, suggestion: VersionConflictError.suggestion });
   }
