@@ -4,7 +4,6 @@
 
 ### Patch Changes
 
-- c2a7bbb: 1720-contacts-validate-fix-r2 — pointer-ref startup gate (completePointerCredential) ships in this release (changeset consumed post-cut)
 - a55b941: Fail-closed delivery hardening (hasna/apps#1720): `contacts-mcp` refuses to RUN
   unauthenticated — it resolves the API key and authority through the one
   `@hasna/contracts` client chain BEFORE the stdio transport is connected or the
