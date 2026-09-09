@@ -5,10 +5,12 @@ import { join } from "node:path";
 
 let tempDir = "";
 
-// Every test in this file boots the CLI in one or more subprocesses. Keep the
-// parent test deadline above the webhook's own 5s execution budget so a slow
-// runner does not terminate otherwise-valid child work first.
-setDefaultTimeout(15_000);
+// Every test in this file boots the CLI in one or more subprocesses, and a
+// single cold `bun run src/cli/index.tsx` measured 7.8s at load 73-80. Keep the
+// parent test deadline well above both that cold start and the webhook's own 5s
+// execution budget so a slow runner does not terminate otherwise-valid child
+// work first.
+setDefaultTimeout(60_000);
 
 /**
  * Explicit-opt-in local runs emit no fallback notice: the legacy

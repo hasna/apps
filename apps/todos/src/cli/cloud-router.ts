@@ -183,6 +183,13 @@ export interface TodosRemoteAuthorityConfigStatus {
   api_key_tier: string | null;
   v1_base_url: string | null;
   issues: string[];
+  /**
+   * Non-fatal resolver diagnostics — currently the "credential sources
+   * disagree" notice when a higher tier outranks a differing lower one, so a
+   * half-finished rotation is visible instead of surfacing later as an
+   * unexplained 401. Never contains a credential value.
+   */
+  warnings: string[];
   local_fallback: false;
 }
 
@@ -332,6 +339,7 @@ export function getTodosRemoteAuthorityConfigStatus(
       api_key_tier: null,
       v1_base_url: null,
       issues: [issue],
+      warnings: [],
       local_fallback: false,
     };
   }
@@ -347,6 +355,7 @@ export function getTodosRemoteAuthorityConfigStatus(
       api_key_tier: null,
       v1_base_url: null,
       issues: [],
+      warnings: [],
       local_fallback: false,
     };
   }
@@ -366,6 +375,10 @@ export function getTodosRemoteAuthorityConfigStatus(
     api_key_tier: authority.apiKeyTier,
     v1_base_url: authority.baseUrl,
     issues: [],
+    // The resolver's non-fatal diagnostics (a higher tier outranking a
+    // differing lower one) belong on the surface an operator reads, not only in
+    // the resolver's return value.
+    warnings: authority.warning ? [authority.warning] : [],
     local_fallback: false,
   };
 }

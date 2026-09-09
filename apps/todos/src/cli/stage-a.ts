@@ -36,9 +36,12 @@ export type TodosCliCommandOwner = "diagnostic" | "remote-http" | "local-only";
  * actually holds the decision; the variables are cleared alongside it so a
  * child process inherits an environment that says the same thing.
  *
- * DELETED, not blanked: the resolver refuses a declared-but-blank
- * `HASNA_TODOS_API_URL` / `HASNA_TODOS_API_KEY` loudly instead of reading it as
- * absent, so blanking would convert "no cloud client" into a hard error.
+ * DELETED, not blanked: a declared-but-blank authority variable is normalised
+ * to absent by this package's own resolver seam, but the inherited environment
+ * is read by other consumers too, and @hasna/contracts refuses a
+ * declared-but-blank variable loudly. Deleting is the one spelling that means
+ * "absent" everywhere, so a blank can never turn "no cloud client" into a hard
+ * error.
  */
 // The notice text itself lives in the leaf module `lib/local-opt-in.ts` so the
 // MCP server prints the identical line without importing stage A (and, with

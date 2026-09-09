@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,9 @@ import { createTask } from "../db/task-crud.js";
 import { generateReleaseNotes, renderReleaseNotesMarkdown } from "./release-notes.js";
 import { validateJsonContract } from "../json-contracts.js";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+
+// Spawns child processes; bun's 5s default is too tight for a cold start on a loaded host.
+setDefaultTimeout(60_000);
 
 function createCliDatabaseFixture(): { root: string; dbPath: string } {
   const root = mkdtempSync(join(tmpdir(), "todos-release-notes-cli-"));

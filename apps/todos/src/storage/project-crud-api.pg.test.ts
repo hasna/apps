@@ -1,5 +1,7 @@
-import {test,expect} from "bun:test";
+import {test,expect,setDefaultTimeout} from "bun:test";
 import {randomUUID} from "node:crypto";
+// Spawns the CLI against a Postgres-backed fixture; bun's 5s default is too tight.
+setDefaultTimeout(60_000);
 import {createTodosCloudQueryClient} from "./cloud-client.js";
 import {createPostgresTodosStorageAdapter} from "./postgres-adapter.js";
 import {handleV1Request,type V1RequestDependencies} from "../server/v1.js";
