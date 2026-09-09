@@ -311,16 +311,22 @@ function pruneOwnership(dir: string): { marker: SyncMarker; identity: string } |
   try {
     const directory = lstatSync(dir);
     if (!directory.isDirectory()) return;
-    descriptor = openSync(join(dir, SYNC_MARKER_FILE), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const markerPath = join(dir, SYNC_MARKER_FILE), markerPathBefore = lstatSync(markerPath);
+    if (!markerPathBefore.isFile()) return;
+    descriptor = openSync(markerPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const before = fstatSync(descriptor);
-    if (!before.isFile() || before.size < 1 || before.size > 65536) return;
+    if (!before.isFile() || before.dev !== markerPathBefore.dev || before.ino !== markerPathBefore.ino
+      || before.size !== markerPathBefore.size || before.mtimeMs !== markerPathBefore.mtimeMs || before.ctimeMs !== markerPathBefore.ctimeMs
+      || before.size < 1 || before.size > 65536) return;
     const bytes = Buffer.alloc(before.size + 1); let length = 0;
     while (length < bytes.length) {
       const count = readSync(descriptor, bytes, length, bytes.length - length, length);
       if (!count) break; length += count;
     }
-    const after = fstatSync(descriptor), current = lstatSync(dir);
-    if (length !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs
+    const after = fstatSync(descriptor), current = lstatSync(dir), markerPathAfter = lstatSync(markerPath);
+    if (!markerPathAfter.isFile() || markerPathAfter.dev !== before.dev || markerPathAfter.ino !== before.ino
+      || markerPathAfter.size !== before.size || markerPathAfter.mtimeMs !== before.mtimeMs || markerPathAfter.ctimeMs !== before.ctimeMs
+      || length !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs
       || !current.isDirectory() || current.dev !== directory.dev || current.ino !== directory.ino) return;
     const text = bytes.subarray(0, length).toString("utf8"), marker: unknown = JSON.parse(text);
     if (!isSkillsOwnershipMarker(marker)) return;

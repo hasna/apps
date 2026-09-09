@@ -305,3 +305,14 @@ for(const replacement of ["linked","foreign","malformed","removed","same-bytes-n
   try {const result=pruneStrayHomes({homeDir:home,agents:["codex"],apply:true});expect(changed).toBe(true);expect(result.pruned).toBe(0);expect(readFileSync(join(dir,"user.bin"))).toEqual(before);expect(readFileSync(join(dir,"SKILL.md"),"utf8")).toBe(SKILL_CONTENT("stale"));}
   finally{hook.mockRestore();}
 });
+
+
+test("prune refuses a linked marker even when the opener operates without no-follow",()=>{
+  const home=tempHome(),external=join(home,"external-marker.json"),linked=join(home,".codex/skills/linked"),owned=join(home,".codex/skills/owned");
+  const marker=JSON.stringify({managedBy:SYNC_MARKER_MANAGED_BY,skill:"owned",source:"source",syncedAt:"2026-09-09T00:00:00.000Z"});
+  writeFileSync(external,marker);writeSkillMd(linked,SKILL_CONTENT("linked"));writeFileSync(join(linked,"user.txt"),"Keep user data");symlinkSync(external,join(linked,SYNC_MARKER_FILE));
+  writeSkillMd(owned,SKILL_CONTENT("owned"));writeFileSync(join(owned,SYNC_MARKER_FILE),marker);
+  const original=fs.openSync;const hook=spyOn(fs,"openSync").mockImplementation(((path:any,flags:any,...args:any[])=>(original as any)(path,typeof flags==="number"?flags & ~fs.constants.O_NOFOLLOW:flags,...args)) as typeof fs.openSync);
+  try{const result=pruneStrayHomes({homeDir:home,agents:["codex"],apply:true});expect(result.pruned).toBe(1);expect(existsSync(owned)).toBe(false);expect(readFileSync(join(linked,"user.txt"),"utf8")).toBe("Keep user data");expect(lstatSync(join(linked,SYNC_MARKER_FILE)).isSymbolicLink()).toBe(true);}
+  finally{hook.mockRestore();}
+});
