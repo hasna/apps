@@ -450,7 +450,7 @@ resolved deterministically with suffixes.
 ## Data Directory
 
 Per-install configuration, agent identity and explicit export/download paths use
-`@hasna/paths`. Ordinary clients do not move, copy or open legacy SQLite files.
+the in-package resolver. Ordinary clients do not move, copy or open legacy SQLite files.
 Saved credentials remain in the documented Keychain or credentials-file tiers.
 Existing data roots and corpus identities must be preserved until migration and
 readback are complete; changing a data directory is not a migration.
