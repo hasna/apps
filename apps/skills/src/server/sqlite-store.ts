@@ -507,12 +507,15 @@ export class SqliteSkillsStore implements SkillsProductStore {
       // Read the outgoing digest before overwriting it, so the bundle it pointed at can
       // be collected if this republish leaves it referenced by nothing.
       const previous = this.get(
-        "SELECT revision_id, revision_number, bundle_sha256, bundle_byte_size, skill_md, tombstoned_at FROM skills_registry WHERE org_id = ? AND slug = ?",
+        "SELECT revision_id, revision_number, bundle_sha256, bundle_byte_size, skill_md, tombstoned_at, source FROM skills_registry WHERE org_id = ? AND slug = ?",
         [orgId, input.slug],
       );
       const previousSha = typeof previous?.bundle_sha256 === "string" ? previous.bundle_sha256 : null;
       const previousRevisionId = typeof previous?.revision_id === "string" && previous.revision_id ? previous.revision_id : null;
       const tombstoned = previous?.tombstoned_at != null;
+      if (input.seedBundledOnly && previous && (tombstoned || previous.source !== "bundled")) {
+        throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, previousRevisionId);
+      }
       // The document travels with the row the way the bundle does: a publish that omits
       // skillMd is a metadata update, not an instruction to discard the published
       // document. The effective document enters BOTH the stored row and the revision
@@ -611,8 +614,9 @@ export class SqliteSkillsStore implements SkillsProductStore {
            tombstoned_at = NULL,
            tombstone_purge_after = NULL,
            updated_at = excluded.updated_at
-         WHERE skills_registry.tombstoned_at IS NOT NULL
-            OR skills_registry.revision_id = ?
+         WHERE (skills_registry.tombstoned_at IS NOT NULL OR skills_registry.revision_id = ?)
+           AND (? = 0 OR (skills_registry.tombstoned_at IS NULL AND skills_registry.source = 'bundled'
+             AND skills_registry.revision_id = ?))
          RETURNING *`,
         [
           orgId,
@@ -631,6 +635,8 @@ export class SqliteSkillsStore implements SkillsProductStore {
           revisionId,
           now,
           now,
+          input.expectedRevisionId ?? NO_REVISION_SENTINEL,
+          input.seedBundledOnly ? 1 : 0,
           input.expectedRevisionId ?? NO_REVISION_SENTINEL,
         ],
       );

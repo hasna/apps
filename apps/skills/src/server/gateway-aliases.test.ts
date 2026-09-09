@@ -2,6 +2,9 @@ import { expect, test } from "bun:test";
 import { createSkillsFetchHandler } from "./app.js";
 import { resolveStoreBackends, storeBackendNotices } from "./store-fixtures.js";
 import { skillsApiRequestUrl } from "../lib/fleet-credentials.js";
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 const backends = await resolveStoreBackends();
 for (const notice of storeBackendNotices()) console.log(`[gateway-aliases] ${notice}`);

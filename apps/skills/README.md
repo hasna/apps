@@ -122,8 +122,8 @@ per-user, never per-project.
 
 The internal gateway resource contract is `/skills/v1/...`; commercial and custom
 instances retain their `/api/v1/...` routes. A full gateway `/skills/v1` base is
-accepted and normalizes to the same credential-bound instance. Select the
-commercial service explicitly with `HASNA_SKILLS_API_URL=https://skills.md` and
+accepted and normalizes to the same credential-bound instance. Select a
+customer-owned instance explicitly with `HASNA_SKILLS_API_URL=https://skills.example` and
 its own profile/credential; configuring one instance does not select the other.
 The OSS server accepts `/v1/...` aliases through the same handlers as its
 `/api/v1/...` routes, plus `/v1/auth/whoami` for existing API-key identity and

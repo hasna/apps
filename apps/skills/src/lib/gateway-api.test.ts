@@ -3,6 +3,9 @@ import { normalizeSkillsApiOrigin, skillsApiRequestUrl } from "./fleet-credentia
 import { RemoteSkillsClient } from "./remote-client.js";
 import { RemoteSkillsAuthClient } from "./remote-auth.js";
 import { buildSkillsApiUrl } from "./remote-registry.js";
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });

@@ -265,6 +265,9 @@ export class MemorySkillsStore implements SkillsProductStore {
     const key = skillKey(input.principal.orgId, input.slug);
     const now = nowIso();
     const previous = this.skills.get(key);
+    if (input.seedBundledOnly && previous && (previous.tombstonedAt || previous.source !== "bundled")) {
+      throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, previous.revisionId);
+    }
     // Optimistic concurrency, matching the SQL backends: a live existing row requires
     // If-Match naming its current revision. The memory store is single-threaded, so the
     // read-then-check is atomic by construction (same property the run claims rely on);
@@ -884,13 +887,16 @@ export class PostgresSkillsStore implements SkillsProductStore {
     const orgId = input.principal.orgId;
     return await this.sql.begin(async (tx) => {
       const previousRows = await tx`
-        SELECT revision_id, revision_number, bundle_sha256, bundle_byte_size, skill_md, tombstoned_at
+        SELECT revision_id, revision_number, bundle_sha256, bundle_byte_size, skill_md, tombstoned_at, source
         FROM skills_registry WHERE org_id = ${orgId} AND slug = ${input.slug} LIMIT 1
       `;
       const previous = previousRows[0] as Record<string, unknown> | undefined;
       const previousSha = typeof previous?.bundle_sha256 === "string" ? String(previous.bundle_sha256) : null;
       const previousRevisionId = typeof previous?.revision_id === "string" && previous.revision_id ? String(previous.revision_id) : null;
       const tombstoned = previous?.tombstoned_at != null;
+      if (input.seedBundledOnly && previous && (tombstoned || previous.source !== "bundled")) {
+        throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, previousRevisionId);
+      }
       // The document travels with the row the way the bundle does: a publish that omits
       // skillMd is a metadata update, not an instruction to discard the published
       // document. The effective document enters BOTH the stored row and the revision
@@ -977,8 +983,11 @@ export class PostgresSkillsStore implements SkillsProductStore {
           tombstoned_at = NULL,
           tombstone_purge_after = NULL,
           updated_at = EXCLUDED.updated_at
-        WHERE skills_registry.tombstoned_at IS NOT NULL
-           OR skills_registry.revision_id = ${input.expectedRevisionId ?? NO_REVISION_SENTINEL}
+        WHERE (skills_registry.tombstoned_at IS NOT NULL
+           OR skills_registry.revision_id = ${input.expectedRevisionId ?? NO_REVISION_SENTINEL})
+          AND (NOT ${Boolean(input.seedBundledOnly)} OR
+            (skills_registry.tombstoned_at IS NULL AND skills_registry.source = 'bundled'
+             AND skills_registry.revision_id = ${input.expectedRevisionId ?? NO_REVISION_SENTINEL}))
         RETURNING *
       `;
       if (!rows[0]) {
