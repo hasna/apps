@@ -1,10 +1,16 @@
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, setDefaultTimeout } from "bun:test";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+
+// Every test here boots the real CLI/MCP entrypoint in a cold subprocess (one
+// measured 7.8s at load 73-80), and the beforeAll/afterAll hooks touch the
+// filesystem. bun's 5s default is under a single cold start on a loaded host,
+// so pin the file's deadline the way the rest of the spawning suites do.
+setDefaultTimeout(60_000);
 
 const CWD = join(import.meta.dir, "../..");
 
@@ -56,7 +62,7 @@ describe("C1: `todos mcp` starts a stdio MCP server", () => {
     expect(tools.length).toBeGreaterThan(0);
     // minimal (default) profile core tool
     expect(tools).toContain("bootstrap");
-  }, 30000);
+  }, 60_000);
 });
 
 describe("C2: bare `todos-mcp` defaults to stdio (not HTTP)", () => {
@@ -64,10 +70,10 @@ describe("C2: bare `todos-mcp` defaults to stdio (not HTTP)", () => {
     const tools = await connectAndListTools("bun", ["run", "src/mcp/index.ts"]);
     expect(tools.length).toBeGreaterThan(0);
     expect(tools).toContain("bootstrap");
-  }, 30000);
+  }, 60_000);
 
   it("still speaks stdio with an explicit --stdio flag (register-writer form)", async () => {
     const tools = await connectAndListTools("bun", ["run", "src/mcp/index.ts", "--stdio"]);
     expect(tools).toContain("bootstrap");
-  }, 30000);
+  }, 60_000);
 });

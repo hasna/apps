@@ -12,6 +12,12 @@ The manifest is local-only and does not need network access. Each entry maps a
 supported workflow domain to CLI commands, MCP tools, stable JSON contracts, and
 structured error contracts.
 
+Parity describes the surface, not the routing. Since 0.16.0 the plan, task-list
+and template command families are served by the authenticated shared API rather
+than local SQLite, and the MCP tools that still read the on-box store require the
+deliberate `HASNA_TODOS_LOCAL=1` opt-in — see `docs/native-storage.md` and the
+0.16.0 Migrating section in `CHANGELOG.md`.
+
 ## Covered Domains
 
 - `tasks`: create, list, read, update, lifecycle, assignment, queue, lock
@@ -38,6 +44,8 @@ structured error contracts.
 - `projects`: project bootstrap, project registration, project updates, task
   lists, path resolution, and focus.
 - `plans`: plan create, list, read, update, complete, and delete workflows.
+  Shared-API only since 0.16.0 — the CLI `todos plans` and the five MCP plan
+  tools need a credential and refuse an on-box database selector.
 - `roadmaps`: local roadmap, milestone, release grouping, progress summary,
   dependency readiness, Markdown/JSON export, and import workflows.
 - `capacity`: local agent capacity profiles and planning forecasts from task
@@ -54,9 +62,14 @@ structured error contracts.
 - `scale-hardening`: local performance benchmarks, archive-readiness counts,
   SQLite compaction previews, and integrity/index checks through
   `todos scale report` and `todos scale compact`.
-- `templates`: bundled marketplace-free local template library, editable JSON
-  template files, template import/export, preview, version history, and task
-  creation from templates.
+- `templates`: bundled marketplace-free template library, editable JSON template
+  files, template import/export, preview, version history, and task creation from
+  templates. The library read/write surface (`todos template-library`,
+  `list_template_library`, `write_template_library`) is local and
+  credential-free. Since 0.16.0 the stateful template commands (`todos templates`
+  and the `template-*` commands) are served by the authenticated shared API. The
+  MCP template tools still read the on-box store and require
+  `HASNA_TODOS_LOCAL=1`.
 - `workspace-trust`: local trusted roots, permission presets, command checks,
   write scopes, env redaction declarations, and prompt-required decisions.
 - `secret-safety`: local secret redaction config and scans that return finding
@@ -356,7 +369,7 @@ CLI template library:
 ```bash
 todos template-library --json
 todos template-library --write .todos/templates --json
-todos template-init --json
+todos template-init --json                    # shared API: credential required
 ```
 
 Matching MCP tools:

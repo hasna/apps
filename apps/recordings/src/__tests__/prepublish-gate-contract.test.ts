@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import packageJson from "../../package.json";
+import { groupCommand } from "../../scripts/release-suite-gate";
 
 /**
  * Contract tests for the publish gate (prepublishOnly / prepack).
@@ -8,18 +9,17 @@ import packageJson from "../../package.json";
  * `bun test` — the full suite under Bun's default 5000ms per-test timeout, with no partition
  * check and no `RECORDINGS_TEST_TIMEOUT_MS` — so `npm publish` was blocked on a normal local
  * station, off-CI, on environmental/timeout failures the CI workflow already compensates for.
- * The CI workflow (`.github/workflows/ci.yml`) runs the GATED partition
- * (`bun scripts/ci-linux-suite.ts --gated`) under `RECORDINGS_TEST_TIMEOUT_MS=120000`, and the
- * lifecycle suite resolves that same variable for its internal FIFO deadline. The publish gate
- * must run the same suite partition as CI, or the gate verifies something CI never runs and a
- * green local publish proves nothing about what the runner will see.
+ * CI now invokes package `test`, which includes the complete tracked inventory, even future
+ * quarantined files. `test:gated` and publication retain the narrower gated inventory. Both
+ * use the same fixture process boundaries and explicit 120000ms ordinary-test timeout; the
+ * lifecycle suite receives that same budget for its internal FIFO deadline.
  *
  * The gate is a static contract here rather than an executed `bun run prepublishOnly`:
  * executing it inside the suite would re-run the whole suite (recursion) and it is the shape
  * of the invocation that regressed, not the exit code of a one-off run.
  */
 
-function script(name: string): string {
+function script(name: keyof typeof packageJson.scripts): string {
   const value = packageJson.scripts?.[name];
   expect(value, `package.json must define the "${name}" script`).toBeDefined();
   return value as string;
@@ -59,18 +59,20 @@ describe("prepublishOnly", () => {
 });
 
 describe("test:gated", () => {
-  test("proves the partition before running it", () => {
-    // The quarantine file is the documented, non-silent skip: an entry requires its own
-    // `# reason:` line and must still fail to run; `--check` refuses a stale entry. If the
-    // partition check is dropped from the gated script, skips can rot silently again.
-    expect(script("test:gated")).toContain("ci-linux-suite.ts --check");
+  test("CI test includes quarantined tests while the gated command retains its narrower selection", () => {
+    expect(script("test")).toBe("bun scripts/release-suite-gate.ts --all");
+    expect(script("test:gated")).toBe("bun scripts/release-suite-gate.ts");
+  });
+  test("uses the same validated partition supervisor as publication", () => {
+    expect(script("test:gated")).toContain("scripts/release-suite-gate.ts");
+    expect(script("release-suite-gate")).toContain("scripts/release-suite-gate.ts");
+    expect(script("test:gated")).not.toContain("--all");
   });
 
   test("raises the test timeout the way CI does", () => {
-    // CI sets RECORDINGS_TEST_TIMEOUT_MS=120000 and macos-app-lifecycle resolves the same
-    // variable for its internal FIFO deadline. Without the raise, subprocess-spawning tests
-    // trip Bun's 5000ms default and report as `Received: ""`.
-    expect(script("test:gated")).toContain("RECORDINGS_TEST_TIMEOUT_MS");
+    const command = groupCommand({ id: "ordinary", runner: "bun", files: ["src/fixture.test.ts"] }, "/fixture-report.xml");
+    expect(command).toContain("--timeout");
+    expect(Number(command[command.indexOf("--timeout") + 1])).toBe(120000);
   });
 
   test("delivers a non-empty value to --timeout", () => {
@@ -82,10 +84,10 @@ describe("test:gated", () => {
     // failure the CI workflow comment warns about. Measured: 1359-test gated run failed
     // `database.test.ts > closeDatabase > closes the database and allows reset` at 5000ms
     // (6035ms elapsed) while the guard log recorded `argv=test --timeout  src/...` (empty).
-    // The argument must carry its own `:-120000` default so it cannot expand empty.
-    const gated = script("test:gated");
-    expect(gated).not.toContain('--timeout "$RECORDINGS_TEST_TIMEOUT_MS"');
-    expect(gated).toContain('--timeout "${RECORDINGS_TEST_TIMEOUT_MS:-120000}"');
+    // The supervisor now passes an argv array; ambient shell expansion cannot erase it.
+    const command = groupCommand({ id: "lifecycle", runner: "bun", files: ["src/fixture.test.ts"], pattern: "^fixture" }, "/fixture-report.xml");
+    expect(command[command.indexOf("--timeout") + 1]).toMatch(/^[1-9]\d*$/);
+    expect(command.some(arg => arg.includes("$"))).toBeFalse();
   });
 });
 

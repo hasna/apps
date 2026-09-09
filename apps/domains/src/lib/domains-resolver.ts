@@ -59,12 +59,12 @@ import type {
   HasnaStorageClient,
   ResolvedCredential,
 } from "./client-types.js";
-import { domainsAuthorityEnvKeys } from "./local-opt-in.js";
+import { assertDomainsClientStorage, domainsAuthorityEnvKeys } from "./client-storage-policy.js";
 
 /** The app slug the shared client seam resolves credentials and authority for. */
 export const DOMAINS_APP_NAME = "domains" as const;
 
-export { domainsAuthorityEnvKeys } from "./local-opt-in.js";
+export { domainsAuthorityEnvKeys } from "./client-storage-policy.js";
 
 /**
  * @hasna/contracts marks the LIVE process environment with this symbol so its
@@ -138,6 +138,7 @@ export function domainsResolverInputs<T extends ClientEnv>(
   env: T,
   credentials: CredentialChainOptions = {},
 ): DomainsResolverInputs<T> {
+  assertDomainsClientStorage(env);
   const normalised = domainsResolverEnv(env);
   if (normalised === env) return { env: normalised, credentials };
   const keychain = { ...credentials.keychain };

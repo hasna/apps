@@ -480,7 +480,10 @@ describe("native app companion contract", () => {
     expect(intent).toContain("literalRawTranscript: true");
     expect(engine).toContain("literalRawTranscript ? rawTranscript : text");
     expect(engine).toContain("commandRewriteTimeout: TimeInterval = 10");
-    expect(engine).toContain("runCLI(rewriteArguments, homePath, Self.commandRewriteTimeout)");
+    const rewriteOperation = engine.indexOf("let rewriteOperation = Self.makeCommandRewriteOperation(");
+    expect(rewriteOperation).toBeGreaterThan(-1);
+    expect(engine.indexOf("await BlockingOperation.run(rewriteOperation)", rewriteOperation))
+      .toBeGreaterThan(rewriteOperation);
 
     // The 10 s rewrite ceiling is *observable* wall time: the production closure reserves
     // a return margin (spawn setup, waitid poll granularity, capture shutdown, task hop)

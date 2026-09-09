@@ -20,16 +20,42 @@ useDefaultTestTimeout();
  * ignored.
  */
 
-function cliEnv(home: string): Record<string, string> {
+function cliEnv(home: string, extra: Record<string, string> = {}): Record<string, string> {
   return {
     ...withoutDataDirOverrideEnv({ ...process.env }),
     HOME: home,
     NO_COLOR: "1",
     SKILLS_TEST_MODE: "1",
+    // `skills mcp` shares the MCP startup gate (src/mcp/index.ts): with no
+    // credential and no opt-in it exits 1 before answering initialize. The
+    // scrubbed env above has neither, so the server-starts case opts in
+    // explicitly — the same explicit-over-ambient rule the McpClient and
+    // runCli harnesses follow — and the fail-closed case below passes nothing.
+    HASNA_SKILLS_LOCAL: "1",
+    ...extra,
   };
 }
 
 describe("skills mcp argument handling (e3997558)", () => {
+  test("bare `skills mcp` without a credential or the opt-in exits non-zero before answering initialize", async () => {
+    const home = mkdtempSync(join(tmpdir(), "skills-cli-mcp-closed-"));
+    const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "mcp"], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: cliEnv(home, { HASNA_SKILLS_LOCAL: "" }),
+    });
+    const stdin = proc.stdin as import("bun").FileSink;
+    stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t", version: "1.0" } } }) + "\n");
+    stdin.end();
+    const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    const exitCode = await proc.exited;
+    expect(exitCode).not.toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("failing closed");
+    expect(stderr).toContain("hasna.credentials.skills.api-key");
+  });
+
   test("an unrecognised positional argument exits non-zero with valid forms on stderr", async () => {
     const { stdout, stderr, exitCode } = await runCli(["mcp", "connect"]);
     expect(exitCode).not.toBe(0);

@@ -1,3 +1,4 @@
+import type { TypedQueryClient } from "../../storage-kit/index.js";
 import { canonicalSender } from "../../lib/email-address.js";
 import {
   DomainOperationError,
@@ -63,7 +64,10 @@ export interface AddressProvisioningStore {
     actor: string,
   ): Promise<ProvisioningJob>;
   getProvisioningJob(id: string): Promise<ProvisioningJob | null>;
-  claimProvisioningJob(id: string): Promise<ProvisioningJob | null>;
+  claimProvisioningJob(
+    id: string,
+    recheckReady?: boolean,
+  ): Promise<ProvisioningJob | null>;
   blockProvisioningJob(
     job: ProvisioningJob,
     receipt: ProvisioningReceipt,
@@ -72,6 +76,7 @@ export interface AddressProvisioningStore {
     job: ProvisioningJob,
     refs: AddressProvisioningRefs,
     receipt: ProvisioningReceipt,
+    beforeCommit?: (tx: TypedQueryClient) => Promise<void>,
   ): Promise<ProvisioningJob | null>;
 }
 export class AddressProvisioningError extends Error {
@@ -179,6 +184,11 @@ export function normalizeAddressProvisioning(
   };
 }
 export interface AddressProvisioningDeps {
+  recheckReady?: boolean;
+  /** Fresh binding resolution before opening the completion transaction. */
+  beforeComplete?: () => Promise<void>;
+  /** Metadata-only guard inside the locked completion transaction; no provider I/O. */
+  beforeCommit?: (tx: TypedQueryClient) => Promise<void>;
   resolveSender?: SenderResolver;
   env?: NodeJS.ProcessEnv;
   mx?: typeof resolveMx;
@@ -212,7 +222,7 @@ async function checkReadiness(
       409,
       "bucket_mismatch",
     );
-  const sender = deps.resolveSender?.(tenantId, refs.provider_id);
+  const sender = await deps.resolveSender?.(tenantId, refs.provider_id);
   if (!sender || sender.provider !== "ses" || !sender.checkInboundQueue)
     throw new AddressProvisioningError(
       "Configure an SES provider binding with inbound queue verification capability.",
@@ -306,7 +316,7 @@ export async function runAddressProvisioningJob(
   id: string,
   deps: AddressProvisioningDeps,
 ): Promise<ProvisioningJob> {
-  const job = await store.claimProvisioningJob(id);
+  const job = await store.claimProvisioningJob(id, deps.recheckReady);
   if (!job) {
     const current = await store.getProvisioningJob(id);
     if (!current)
@@ -320,10 +330,12 @@ export async function runAddressProvisioningJob(
   try {
     const refs = await store.resolveAddressProvisioning(job.input);
     const receipt = await checkReadiness(store, tenantId, refs, deps);
+    await deps.beforeComplete?.();
     const completed = await store.completeAddressProvisioning(
       job,
       refs,
       receipt,
+      deps.beforeCommit,
     );
     if (completed) return completed;
   } catch (error) {

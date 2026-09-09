@@ -5,7 +5,7 @@ const store = { getResource: async (_spec: unknown, id: string) => id === "provi
 it("distinguishes unconfigured, configured, restricted and healthy using the bound sender", async () => {
   expect((await readProviderHealth(store, "tenant", "provider", true))?.status).toBe("unconfigured");
   let calls = 0;
-  const resolve = () => ({ provider: "ses" as const, send: async () => "never", probe: async () => { calls++; return { sendingEnabled: false, productionAccessEnabled: false }; } });
+  const resolve = async () => ({ provider: "ses" as const, send: async () => "never", probe: async () => { calls++; return { sendingEnabled: false, productionAccessEnabled: false }; } });
   expect((await readProviderHealth(store, "tenant", "provider", false, resolve))?.status).toBe("configured");
   expect(calls).toBe(0);
   expect((await readProviderHealth(store, "tenant", "provider", true, resolve))?.status).toBe("restricted");

@@ -14,9 +14,9 @@
  * request that somehow resolves under `NODE_ENV=test` is refused at the socket
  * boundary instead of reaching the live store.
  */
+import type { HasnaStorageClient } from './contracts-types.js';
 import {
   createHasnaStorageClient,
-  type HasnaStorageClient,
 } from '@hasna/contracts/client/storage';
 import {
   createClientTransport,

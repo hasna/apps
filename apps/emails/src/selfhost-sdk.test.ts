@@ -613,3 +613,39 @@ describe("generated self-hosted SDK identity contract", () => {
     }
   });
 });
+
+describe("mailbox-filter apply SDK body handling (FR-0001)", () => {
+  it("legacy three-argument apply still sends no request body", async () => {
+    let request: Request | null = null;
+    const client = new EmailsSelfHostClient({
+      baseUrl: "https://emails.example.test",
+      apiKey: "api-key-placeholder",
+      fetch: okFetch((value) => { request = value; }),
+    });
+    const result = await client.applyMailboxFilter("filter-1", { limit: 10, offset: 0 });
+    expect(request?.method).toBe("POST");
+    expect(request?.url).toBe("https://emails.example.test/v1/mailbox-filters/filter-1/apply?limit=10&offset=0");
+    expect(request?.body).toBeNull();
+    expect(request?.headers.has("content-type")).toBe(false);
+    expect(result.offset).toBe(0);
+    expect(result.truncated).toBe(false);
+  });
+
+  it("mutate apply sends the mutate body as the optional fourth argument", async () => {
+    let request: Request | null = null;
+    const client = new EmailsSelfHostClient({
+      baseUrl: "https://emails.example.test",
+      apiKey: "api-key-placeholder",
+      fetch: okFetch((value) => { request = value; }),
+    });
+    const result = await client.applyMailboxFilter("filter-1", {}, undefined, { mutate: true });
+    expect(request?.method).toBe("POST");
+    expect(new URL(request!.url).search).toBe("");
+    expect(await request?.json()).toEqual({ mutate: true });
+    expect(request?.headers.get("content-type")).toBe("application/json");
+    // The 200 fixture carries the unchanged list-only shape; the mutate summary
+    // members are additive and optional on the generated response union.
+    expect(typeof result.truncated).toBe("boolean");
+    expect(result.mutate).toBeUndefined();
+  });
+});

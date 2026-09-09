@@ -139,7 +139,7 @@ describe("MCP startup contract", () => {
       "../../db/contacts.js",
       "../../db/providers.js",
       "../../db/scheduled.js",
-      "../../lib/sync.js",
+      "../../lib/provider-sync-api.js",
       "../../lib/stats.js",
       "../helpers.js",
     ];

@@ -59,6 +59,7 @@ export interface TodosStorageAdapter {
   readonly kind: TodosStorageKind;
   readonly capabilities: TodosStorageCapabilities;
   readonly tasks: TodosTaskStore;
+  readonly machines?: import("./machine-registry.js").MachineRegistryStore;
   readonly projects: TodosProjectStore;
   readonly plans: TodosPlanStore;
   /** Atomic guarded linkage for one existing plan and every current member task. */
@@ -68,6 +69,7 @@ export interface TodosStorageAdapter {
   readonly templates: TodosTemplateStore;
   readonly audit: TodosAuditStore;
   readonly sync: TodosSyncStore;
+  readonly atomicProjectMigration?: { apply(request: import("./atomic-project-migration.js").AtomicMigrationRequest): Promise<import("./atomic-project-migration.js").AtomicMigrationReceipt> };
   /**
    * Task dependency edges. Optional because only the cloud/remote adapters expose
    * it through the `/v1` API — the local CLI/MCP paths call the sqlite `db/*`
@@ -272,7 +274,18 @@ export interface TodosTaskStore {
   getByFingerprint?(fingerprint: string, context?: TodosStorageContext): MaybePromise<Task | null>;
 }
 
+export interface TodosProjectDeleteReceipt {
+  schema_version: 1;
+  project_id: string;
+  deleted: boolean;
+  preserved_tasks: number;
+  preserved_plans: number;
+  detached_task_lists: number;
+  detached_child_projects: number;
+}
+
 export interface TodosProjectStore {
+  deletePreserving?(id: string, force: boolean, context?: TodosStorageContext, requireCompletedTasks?: boolean): MaybePromise<TodosProjectDeleteReceipt>;
   create(input: CreateProjectInput, context?: TodosStorageContext): MaybePromise<Project>;
   get(id: string, context?: TodosStorageContext): MaybePromise<Project | null>;
   getByPath(path: string, context?: TodosStorageContext): MaybePromise<Project | null>;
@@ -282,7 +295,17 @@ export interface TodosProjectStore {
   delete(id: string, context?: TodosStorageContext): MaybePromise<boolean>;
 }
 
+export interface TodosPlanDeleteReceipt {
+  schema_version: 1;
+  plan_id: string;
+  deleted: boolean;
+  detached_task_ids: string[];
+  detached_task_list_ids: string[];
+  detached_tasks: number;
+  detached_task_lists: number;
+}
 export interface TodosPlanStore {
+  deletePreserving?(id:string, force:boolean, context?:TodosStorageContext): MaybePromise<TodosPlanDeleteReceipt>;
   create(input: CreatePlanInput, context?: TodosStorageContext): MaybePromise<Plan>;
   get(id: string, context?: TodosStorageContext): MaybePromise<Plan | null>;
   list(projectId?: string, context?: TodosStorageContext): MaybePromise<Plan[]>;
@@ -386,7 +409,17 @@ export interface TodosAgentUpdateInput {
   metadata?: Record<string, unknown>;
 }
 
+export interface TodosTaskListDeleteReceipt {
+  schema_version:1;
+  task_list_id:string;
+  deleted:boolean;
+  detached_task_ids:string[];
+  detached_plan_ids:string[];
+  detached_tasks:number;
+  detached_plans:number;
+}
 export interface TodosTaskListStore {
+  deletePreserving?(id:string,force:boolean,context?:TodosStorageContext):MaybePromise<TodosTaskListDeleteReceipt>;
   create(input: CreateTaskListInput, context?: TodosStorageContext): MaybePromise<TaskList>;
   get(id: string, context?: TodosStorageContext): MaybePromise<TaskList | null>;
   getBySlug(slug: string, projectId?: string, context?: TodosStorageContext): MaybePromise<TaskList | null>;
@@ -410,7 +443,22 @@ export interface TodosTaskListStore {
   }>;
 }
 
+export interface TodosTemplateHistory {
+  current_version: number;
+  versions: import("../types/index.js").TemplateVersion[];
+  selection: { schema_version: 1; template_id: string; complete: boolean; missing_versions: number[] };
+}
+export interface TodosTemplateInitialization {
+  schema_version: 1;
+  created: number;
+  skipped: number;
+  names: string[];
+  records: Array<{ definition_index: number; ids: string[]; name: string; status: "created" | "skipped" }>;
+}
 export interface TodosTemplateStore {
+  updateWithHistory?(id: string, input: UpdateTemplateInput, context?: TodosStorageContext): MaybePromise<TemplateWithTasks | null>;
+  history?(id: string, context?: TodosStorageContext): MaybePromise<TodosTemplateHistory | null>;
+  initialize?(context?: TodosStorageContext): MaybePromise<TodosTemplateInitialization>;
   create(input: CreateTemplateInput, context?: TodosStorageContext): MaybePromise<TaskTemplate>;
   get(id: string, context?: TodosStorageContext): MaybePromise<TaskTemplate | null>;
   list(context?: TodosStorageContext): MaybePromise<TaskTemplate[]>;
@@ -420,6 +468,7 @@ export interface TodosTemplateStore {
 }
 
 export interface UpdateTemplateInput {
+  expected_version?: number;
   name?: string;
   title_pattern?: string;
   description?: string | null;
@@ -483,6 +532,7 @@ export interface TodosStorageSnapshot {
   tasks: Task[];
   projects: Project[];
   projectMachinePaths?: TodosProjectMachinePath[];
+  machines?: import("../types/index.js").Machine[];
   plans: Plan[];
   agents: Agent[];
   taskLists: TaskList[];

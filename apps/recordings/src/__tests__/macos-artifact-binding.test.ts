@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   closeSync,
   constants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
@@ -34,6 +36,10 @@ import {
   writeManifestAtomically,
 } from "../../scripts/macos_artifact";
 import { expectOrder, sliceBetweenUnique } from "./helpers/source-assertions";
+import { ensureNativeFsGuardAddon } from "./helpers/native-fs-guard";
+import { nativeFsGuard } from "../../scripts/native_fs_guard";
+
+ensureNativeFsGuardAddon();
 
 const temporaryDirectories: string[] = [];
 
@@ -245,6 +251,21 @@ ${mutation}
 }
 
 describe("macOS release artifact binding", () => {
+  test("native descriptor adoption rejects invalid descriptors without closing the caller's file", () => {
+    const guard = nativeFsGuard();
+    for (const descriptor of [-1, 1.5, Number.NaN, 2 ** 32]) {
+      expect(() => guard.duplicateDirectoryDescriptor(descriptor)).toThrow("non-negative integer");
+    }
+    const { archivePath } = archiveFixture();
+    const descriptor = openSync(archivePath, constants.O_RDONLY);
+    try {
+      expect(() => guard.duplicateDirectoryDescriptor(descriptor)).toThrow("must reference a directory");
+      expect(fstatSync(descriptor).isFile()).toBe(true);
+    } finally {
+      closeSync(descriptor);
+    }
+  });
+
   test("verifies and extracts through inherited archive/output descriptors without spawning tools", () => {
     const { archivePath } = archiveFixture();
     const output = mkdtempSync(join(tmpdir(), "recordings-verifier-output-"));
@@ -263,6 +284,85 @@ describe("macOS release artifact binding", () => {
       closeSync(archiveDescriptor);
     }
     expect(readFileSync(join(output, "Hasna Recordings.app", "Contents", "payload"), "utf8")).toBe("payload");
+  });
+
+  test("descriptor extraction retains the opened directory after its original path is replaced", () => {
+    const { archivePath } = archiveFixture();
+    const root = mkdtempSync(join(tmpdir(), "recordings-descriptor-binding-"));
+    temporaryDirectories.push(root);
+    const output = join(root, "output");
+    const retained = join(root, "retained");
+    const decoy = join(root, "decoy");
+    mkdirSync(output, { mode: 0o700 });
+    mkdirSync(decoy, { mode: 0o700 });
+    const archiveDescriptor = openSync(archivePath, constants.O_RDONLY);
+    const outputDescriptor = openSync(output, constants.O_RDONLY | constants.O_DIRECTORY);
+    renameSync(output, retained);
+    symlinkSync(decoy, output);
+    const previousMask = process.umask(0o077);
+    try {
+      verifyAndExtractArchiveDescriptors(archiveDescriptor, outputDescriptor, sha256File(archivePath));
+      // Extraction borrows the descriptors; the caller still owns both.
+      expect(fstatSync(archiveDescriptor).isFile()).toBe(true);
+      expect(fstatSync(outputDescriptor).isDirectory()).toBe(true);
+    } finally {
+      process.umask(previousMask);
+      closeSync(outputDescriptor);
+      closeSync(archiveDescriptor);
+    }
+    const payload = join(retained, "Hasna Recordings.app", "Contents", "payload");
+    expect(readFileSync(payload, "utf8")).toBe("payload");
+    expect(lstatSync(payload).mode & 0o777).toBe(0o644);
+    expect(readdirSync(decoy)).toEqual([]);
+  });
+
+  test("artifact CLI verifies the inherited descriptors after the archive path is replaced", () => {
+    const { archivePath } = archiveFixture();
+    const expected = sha256File(archivePath);
+    const output = mkdtempSync(join(tmpdir(), "recordings-cli-descriptors-"));
+    temporaryDirectories.push(output);
+    chmodSync(output, 0o700);
+    const archiveDescriptor = openSync(archivePath, constants.O_RDONLY);
+    const outputDescriptor = openSync(output, constants.O_RDONLY | constants.O_DIRECTORY);
+    renameSync(archivePath, `${archivePath}.retained`);
+    writeFileSync(archivePath, "untrusted replacement");
+    try {
+      const result = spawnSync(process.execPath, [
+        join(import.meta.dir, "../../scripts/macos_artifact.ts"), "verify",
+        "--archive-fd", "3", "--output-dir-fd", "4", "--expected-sha256", expected,
+      ], {
+        stdio: ["ignore", "pipe", "pipe", archiveDescriptor, outputDescriptor],
+        env: { PATH: "/usr/bin:/bin" }, encoding: "utf8", timeout: 10_000,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(fstatSync(archiveDescriptor).isFile()).toBe(true);
+      expect(fstatSync(outputDescriptor).isDirectory()).toBe(true);
+    } finally {
+      closeSync(outputDescriptor);
+      closeSync(archiveDescriptor);
+    }
+    expect(readFileSync(join(output, "Hasna Recordings.app", "Contents", "payload"), "utf8")).toBe("payload");
+  });
+
+  test.each(["digest", "nonempty", "public-mode"])("descriptor extraction refuses %s before writing", (failure) => {
+    const { archivePath } = archiveFixture();
+    const output = mkdtempSync(join(tmpdir(), "recordings-invalid-descriptors-"));
+    temporaryDirectories.push(output);
+    chmodSync(output, failure === "public-mode" ? 0o755 : 0o700);
+    if (failure === "nonempty") writeFileSync(join(output, "keep"), "retained");
+    const archiveDescriptor = openSync(archivePath, constants.O_RDONLY);
+    const outputDescriptor = openSync(output, constants.O_RDONLY | constants.O_DIRECTORY);
+    try {
+      expect(() => verifyAndExtractArchiveDescriptors(
+        archiveDescriptor, outputDescriptor,
+        failure === "digest" ? "0".repeat(64) : sha256File(archivePath),
+      )).toThrow(failure === "digest" ? "digest mismatch" : failure === "nonempty" ? "must be empty" : "output descriptor is unsafe");
+    } finally {
+      closeSync(outputDescriptor);
+      closeSync(archiveDescriptor);
+    }
+    expect(readdirSync(output)).toEqual(failure === "nonempty" ? ["keep"] : []);
+    if (failure === "nonempty") expect(readFileSync(join(output, "keep"), "utf8")).toBe("retained");
   });
 
   test("rejects an over-limit sparse ZIP before allocating or reading its contents", () => {

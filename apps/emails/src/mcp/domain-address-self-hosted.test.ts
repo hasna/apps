@@ -270,36 +270,13 @@ describe("MCP domain/address self_hosted API-only guards", () => {
     expect(body).not.toContain("self_hosted API-only mode");
   });
 
-  it("refuses the provider-scoped DNS path in self_hosted mode with the recorded credential reason", async () => {
-    // Strong-reason record, not a port: a provider-backed lookup needs provider API
-    // credentials. On the hosted path the /v1 providers resource carries no
-    // credential columns (the server owns them) and the /v1 service exposes no
-    // domain DNS-records route; a client-side adapter call would fall back to the
-    // caller's ambient AWS/Cloudflare credentials. The refusal must say so and
-    // name the workable route.
-    const result = await runDomainTool("get_dns_records", { domain: "example.com" });
-    expect(result.isError).toBe(true);
-    const body = result.content[0]?.text ?? "";
-    expect(body).toContain("self_hosted API-only mode");
-    expect(body).toContain("credentials");
-    expect(body).toContain("emails domain dns");
-  });
-
-  it("fails the one provider-adapter tool that no mode can serve", async () => {
-    // `verify_domain` is the last domain/address tool behind a mode guard, and the
-    // guard is honest: it calls `getAdapter(provider).verifyDomain` and the
-    // `/v1/providers` row carries no credential columns, so removing this refusal
-    // would replace it with a client-credentialed AWS/Cloudflare call. Unlike
-    // `get_dns_records` it has no credential-free half, so the whole tool stays
-    // refused on the hosted path.
-    //
-    // NOT because its CLI twin also refuses — this comment used to say that and it
-    // is false of `emails domain dns`, which runs in both configurations. The twins
-    // are deliberately asymmetric: an MCP client's ambient environment is not the
-    // operator's shell.
-    const result = await runDomainTool("verify_domain", { domain: "example.com" });
-    expect(result.isError).toBe(true);
-    expect(result.content[0]?.text ?? "").toContain("self_hosted API-only mode");
+  it("provider DNS and verification reach the authenticated API on older servers", async () => {
+    for (const name of ["get_dns_records", "verify_domain"]) {
+      const result = await runDomainTool(name, { domain: "example.com" });
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text ?? "").not.toContain("self_hosted API-only mode");
+      expect(result.content[0]?.text ?? "").toMatch(/404|405/);
+    }
   });
 
   it("no longer refuses the repository-backed domain/address tools — they reach the wire", async () => {
@@ -390,10 +367,9 @@ describe("MCP domain/address self_hosted API-only guards", () => {
     }
   });
 
-  it("proves the wire-reaching assertion above can fail (guard wording is really absent)", async () => {
-    // Negative control for the loop: the one tool that KEEPS its guard must trip
-    // the very check the loop applies, or the loop is asserting over nothing.
-    const body = (await runDomainTool("verify_domain", { domain: "example.com" })).content[0]?.text ?? "";
-    expect(body).toContain("self_hosted API-only mode");
+  it("refuses an unknown domain before pretending verification succeeded", async () => {
+    const result = await runDomainTool("verify_domain", { domain: "missing.example.com" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text ?? "").toContain("Domain not found");
   });
 });

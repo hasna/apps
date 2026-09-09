@@ -49,7 +49,7 @@
  * app's behalf. `~/.hasna/knowledge/auth.json` is no longer consulted by the
  * credential chain at all (see src/auth.ts).
  */
-import { type CredentialTier, type KeychainTierOptions } from '@hasna/contracts/client';
+import type { CredentialTier, KeychainTierOptions } from './contracts-types.js';
 export declare const KNOWLEDGE_APP_SLUG = "knowledge";
 /**
  * Canonical client variables. The unprefixed `KNOWLEDGE_API_URL` /

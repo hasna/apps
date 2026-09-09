@@ -1,3 +1,4 @@
+import { proxyProviderStream } from "./provider-stream";
 import {compileHermesModelPolicy} from "./hermes-model-policy";
 import { authHeader } from "./auth";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -118,32 +119,8 @@ export function createHermesBridge(input: Pick<HarnessLaunchInput, "baseUrl" | "
           return Response.json({ error: { message: `Provider returned HTTP ${upstream.status}` } }, { status: upstream.status });
         }
         if (!upstream.body) { release(); return new Response(null, { status: upstream.status }); }
-        const reader = upstream.body.getReader();
-        let ended = false;
-        const end = () => {
-          if (ended) return;
-          ended = true;
-          release();
-        };
-        const stream = new ReadableStream<Uint8Array>({
-          async pull(controller) {
-            try {
-              const chunk = await reader.read();
-              if (chunk.done) { end(); controller.close(); }
-              else controller.enqueue(chunk.value);
-            } catch { end(); controller.error(new Error("Provider stream ended unexpectedly")); }
-          },
-          async cancel() {
-            ended = true;
-            abortController.abort();
-            try { await reader.cancel(); } finally { release(); }
-          },
-        });
-        record.cancel = async () => {
-          abortController.abort();
-          try { await reader.cancel(); } catch { /* already closed */ }
-          end();
-        };
+        const {stream, cancel} = proxyProviderStream({response: upstream, protocol: input.protocol, requestSignal: request.signal, abort: abortController, closing: () => closing, release});
+        record.cancel = cancel;
         return new Response(stream, {
           status: upstream.status,
           headers: {

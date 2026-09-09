@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -16,16 +16,6 @@ import { spawnSync } from "node:child_process";
 
 const REGISTRY = "https://registry.npmjs.org";
 const PACKAGE_NAME = "@hasna/emails";
-// The deployment-mode variable name is assembled from its prefix rather than spelled
-// as a literal. The mode axis is being deleted tree-wide and its ratchet counts every
-// occurrence of that variable's name anywhere in the corpus, but the shipped CLI still
-// reads it to select the self-hosted client while a poison local-store path is present
-// (the safe-fixture boundary this gate asserts). Assembling the key sets the variable
-// for the probed subprocess without adding a source occurrence — the same prefix
-// convention the test suite uses to avoid nudging the same ratchet.
-const CLI_ENV_PREFIX = "EMAILS_";
-const SELF_HOSTED_MODE_KEY = `${CLI_ENV_PREFIX}MODE`;
-const SELF_HOSTED_MODE_VALUE = "self_hosted";
 const SHA256 = /^[0-9a-f]{64}$/;
 const SOURCE_SHA = /^[0-9a-f]{40}$/;
 const INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
@@ -302,6 +292,8 @@ function cleanInstall(binding, parent, label) {
   const env = {
     PATH: process.env.PATH ?? "",
     HOME: home,
+    // Keychain accounts are global to a macOS login; a fresh HOME alone is insufficient.
+    HASNA_STATION: `emails-deployment-gate-${randomUUID()}`,
     XDG_CONFIG_HOME: join(home, "config"),
     XDG_CACHE_HOME: join(home, "cache"),
     npm_config_userconfig: join(home, "missing-npmrc"),
@@ -339,18 +331,18 @@ function inspectImage(binding, label) {
   if (labels["org.opencontainers.image.version"] !== binding.version) fail(`${label} OCI version mismatch`);
 }
 
-function runtimeEnv(home, baseUrl, apiKey, poisonDb) {
+export function runtimeEnv(home, baseUrl, apiKey, localDataRoot) {
   const env = {
     PATH: process.env.PATH ?? "",
     HOME: home,
+    // Keychain accounts are global to a macOS login; a fresh HOME alone is insufficient.
+    HASNA_STATION: `emails-deployment-gate-${randomUUID()}`,
     XDG_CONFIG_HOME: join(home, "config"),
     XDG_CACHE_HOME: join(home, "cache"),
     NO_COLOR: "1",
-    [SELF_HOSTED_MODE_KEY]: SELF_HOSTED_MODE_VALUE,
-    EMAILS_SELF_HOSTED_URL: baseUrl,
-    EMAILS_SELF_HOSTED_API_KEY: apiKey,
-    EMAILS_DB_PATH: poisonDb,
-    HASNA_EMAILS_DB_PATH: poisonDb,
+    HASNA_EMAILS_API_URL: baseUrl,
+    HASNA_EMAILS_API_KEY: apiKey,
+    HASNA_EMAILS_HOME: localDataRoot,
   };
   for (const name of ["SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"]) {
     if (process.env[name]) env[name] = process.env[name];
@@ -415,14 +407,15 @@ function attachmentKey(item) {
   return `${String(item?.message_id ?? "")}:${String(item?.attachment_index ?? "")}`;
 }
 
-function databaseEnv(home, databaseUrl) {
+export function databaseEnv(home, databaseUrl) {
   return {
     PATH: process.env.PATH ?? "",
     HOME: home,
+    // Keychain accounts are global to a macOS login; a fresh HOME alone is insufficient.
+    HASNA_STATION: `emails-deployment-gate-${randomUUID()}`,
     XDG_CONFIG_HOME: join(home, "config"),
     XDG_CACHE_HOME: join(home, "cache"),
     NO_COLOR: "1",
-    [SELF_HOSTED_MODE_KEY]: SELF_HOSTED_MODE_VALUE,
     EMAILS_DATABASE_URL: databaseUrl,
     EMAILS_API_SIGNING_KEY: "deployment-gate-non-production-signing-key",
   };
@@ -556,7 +549,7 @@ async function runGate(configPath, evidencePath) {
     await versionProbe(config.baseUrl, config.candidate.version, probes);
     const status = cliJson(candidateInstall.cli, ["status"], cliEnv, probes, "self-hosted-status");
     if (status?.mode?.current !== "self_hosted" || status?.database?.data_dir !== null || status?.mode?.warning) {
-      fail("CLI status did not prove the explicit self-hosted store");
+      fail("CLI status did not prove API-backed storage without a local database");
     }
 
     const firstPage = cliJson(candidateInstall.cli, ["inbox", "list", "--search", config.fixture.searchToken, "--limit", "1", "--offset", "0"], cliEnv, probes, "mailbox-list-page-1");
@@ -627,6 +620,23 @@ async function runGate(configPath, evidencePath) {
       }),
     });
 
+    // An explicit SQLite path conflicts with API transport; it must never be
+    // smuggled into successful probes under a deleted deployment selector.
+    for (const setting of ["HASNA_EMAILS_DB_PATH", "EMAILS_DB_PATH"]) {
+      probes.push({ name: `local-database-conflict-${setting.toLowerCase()}`,
+        duration_ms: runProgramExpectFailure(candidateInstall.cli, ["--json", "inbox", "list", "--limit", "1"], {
+          env: { ...cliEnv, [setting]: poisonDb }, label: "conflicting local database refusal",
+        }),
+      });
+    }
+    const noApiEnv = { ...cliEnv };
+    delete noApiEnv.HASNA_EMAILS_API_URL;
+    delete noApiEnv.HASNA_EMAILS_API_KEY;
+    probes.push({ name: "missing-api-local-database-refusal",
+      duration_ms: runProgramExpectFailure(candidateInstall.cli, ["--json", "inbox", "list", "--limit", "1"], {
+        env: noApiEnv, label: "missing API local database refusal",
+      }),
+    });
     if (readdirSync(poisonDb).length !== 0) fail("CLI touched the ambient local database fallback trap");
     const maxLatency = Math.max(...probes.map((probe) => probe.duration_ms));
     if (maxLatency > config.maxProbeMs) fail(`latency budget exceeded (${maxLatency}ms > ${config.maxProbeMs}ms)`);

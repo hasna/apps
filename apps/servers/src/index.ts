@@ -146,3 +146,6 @@ export type {
   ServerRuntimeMode,
   ServerRuntimeProcessOwner,
 } from "./runtime/runtime-conventions.js";
+
+// Stable development preview lifecycle, shared by CLI and MCP.
+export * from "./preview/index.js";

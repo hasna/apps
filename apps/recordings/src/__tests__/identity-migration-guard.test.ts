@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { benignShellExecutables, confinedShellCommand } from "./helpers/confined-shell-fixture";
 import {
   IDENTITY_GUARD_RELATIVE_PATH,
   readRepositoryFile,
@@ -46,12 +47,27 @@ type GuardInputs = {
 
 const OLD_DIGEST = "1".repeat(64);
 const NEW_DIGEST = "2".repeat(64);
+const BROKER_REFUSAL = "Release installation requires the root-owned Recordings updater broker";
+
+function spawnGuardFixture(command: string[], environment: Record<string, string> = {}, fixtureRoot?: string) {
+  const root = fixtureRoot ?? realpathSync(mkdtempSync(join(tmpdir(), "recordings-pure-guard-")));
+  const resolved = command[0] === "bun" ? process.execPath : Bun.which(command[0]!);
+  if (!resolved) throw new Error("Missing fixture executable");
+  const executable = realpathSync(resolved);
+  try {
+    return Bun.spawnSync(confinedShellCommand(root, [executable, ...command.slice(1)], [...benignShellExecutables, "/bin/cat", executable]), {
+      cwd: root, timeout: 15_000,
+      env: { HOME: root, TMPDIR: root, PATH: "/usr/bin:/bin", ...environment },
+    });
+  } finally { if (!fixtureRoot) rmSync(root, { recursive: true, force: true }); }
+}
 
 /// Runs the real sourced guard exactly as install_macos_app.sh runs it — same `set -euo
 /// pipefail`, same argument order — so the decision table below is the shipped decision
 /// table and not a restatement of it.
 function guardVerdict(
   inputs: GuardInputs,
+  fixtureRoot?: string,
 ): { exitCode: number; stderr: string } {
   const argumentValues = [
     inputs.artifactPolicy,
@@ -65,32 +81,34 @@ function guardVerdict(
   ];
   return runGuardScript(
     `recordings_enforce_identity_migration ${argumentValues.map(shellQuote).join(" ")}`,
+    undefined, fixtureRoot,
   );
 }
 
 function runGuardScript(
   invocation: string,
   environment?: Record<string, string>,
+  fixtureRoot?: string,
 ): { exitCode: number; stderr: string } {
-  const result = Bun.spawnSync(
+  const result = spawnGuardFixture(
     [
       "bash",
       "-c",
       `set -euo pipefail\n. ${JSON.stringify(guardPath)}\n${invocation}\n`,
     ],
-    environment ? { env: { ...process.env, ...environment } } : {},
+    environment, fixtureRoot,
   );
   return { exitCode: result.exitCode ?? 1, stderr: result.stderr.toString() };
 }
 
-const allowed = (inputs: GuardInputs): void => {
-  const verdict = guardVerdict(inputs);
+const allowed = (inputs: GuardInputs, fixtureRoot?: string): void => {
+  const verdict = guardVerdict(inputs, fixtureRoot);
   expect(verdict.exitCode, verdict.stderr).toBe(0);
   expect(verdict.stderr).toBe("");
 };
 
-const denied = (inputs: GuardInputs, expectedMessage: string): void => {
-  const verdict = guardVerdict(inputs);
+const denied = (inputs: GuardInputs, expectedMessage: string, fixtureRoot?: string): void => {
+  const verdict = guardVerdict(inputs, fixtureRoot);
   expect(verdict.exitCode, verdict.stderr).not.toBe(0);
   expect(verdict.stderr).toContain(expectedMessage);
 };
@@ -297,11 +315,11 @@ describe("designated-requirement identity-migration guard", () => {
   });
 
   test("guard inputs are never evaluated as shell", () => {
-    const directory = mkdtempSync(join(tmpdir(), "recordings-guard-injection-"));
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "recordings-guard-injection-")));
     try {
       const marker = join(directory, "executed");
-      const injection = `$(touch ${marker})`;
-      // Denied because "$(touch …)" is not a recognised policy, and the marker proves the
+      const injection = `$(printf injected > ${shellQuote(marker)})`;
+      // Denied because "$(printf …)" is not a recognised policy, and the marker proves the
       // value was compared as a string rather than run.
       denied(
         {
@@ -310,7 +328,7 @@ describe("designated-requirement identity-migration guard", () => {
           allowReleaseMigration: "0",
           allowAdhocMigration: "1",
         },
-        "does not recognise the artifact policy",
+        "does not recognise the artifact policy", directory,
       );
       allowed({
         artifactPolicy: "local_only",
@@ -319,8 +337,11 @@ describe("designated-requirement identity-migration guard", () => {
         allowAdhocMigration: "1",
         previousIdentity: injection,
         candidateIdentity: injection,
-      });
+      }, directory);
       expect(existsSync(marker)).toBeFalse();
+      // The same sandbox permits this owned target when execution is explicit.
+      expect(runGuardScript(`printf control > ${shellQuote(marker)}`, undefined, directory).exitCode).toBe(0);
+      expect(existsSync(marker)).toBeTrue();
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -571,12 +592,12 @@ describe("designated-requirement identity-migration guard", () => {
     const flag = "--allow-adhoc-identity-migration";
 
     test("the installer prints usage naming the flag, and exits 0", () => {
-      const result = Bun.spawnSync([
+      const result = spawnGuardFixture([
         "bash",
         join(repositoryRoot, "scripts/install_macos_app.sh"),
         "--help",
       ]);
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
       const usage = result.stdout.toString();
       expect(usage).toContain("Usage: install_macos_app.sh");
       expect(usage).toContain(flag);
@@ -589,7 +610,7 @@ describe("designated-requirement identity-migration guard", () => {
     test("an unrecognized argument points at the usage output", () => {
       // Pinned because the pre-existing negative test elsewhere asserts only the
       // "Unknown argument" prefix, which a rewrite could satisfy while dropping the hint.
-      const result = Bun.spawnSync([
+      const result = spawnGuardFixture([
         "bash",
         join(repositoryRoot, "scripts/install_macos_app.sh"),
         "--not-a-real-flag",
@@ -626,39 +647,21 @@ describe("designated-requirement identity-migration guard", () => {
       // Asserted behaviourally rather than as text: commander's generated help is the
       // artifact an operator actually reads, and it exists only if the option is declared.
       // That is also reformat-proof, which `.option(\n  "<flag>",` is not.
-      const home = mkdtempSync(join(tmpdir(), "rec-adhoc-help-"));
-      try {
-        const result = Bun.spawnSync(
-          ["bun", "run", join(repositoryRoot, "src/cli/index.ts"), "app", "install", "--help"],
-          {
-            cwd: repositoryRoot,
-            // `--help` exits before any command action runs, so nothing here reaches the
-            // network. Sandboxed anyway because HOME alone does NOT sandbox this CLI: the
-            // API URL and key come from the process environment, and a review demo that
-            // assumed otherwise made an authenticated call to production.
-            env: {
-              ...process.env,
-              HOME: home,
-              HASNA_RECORDINGS_API_URL: "",
-              HASNA_RECORDINGS_API_KEY: "",
-            },
-          },
-        );
-        expect(result.exitCode).toBe(0);
-        const help = result.stdout.toString();
-        expect(help).toContain("Usage: recordings app install");
-        expect(help).toContain(flag);
-        // The consequence, in the operator-facing surface: the help has to say what
-        // approving costs, not merely that a flag exists.
-        expect(help).toContain("Microphone");
-        expect(help).toContain("Accessibility");
-        // Positive control on the absence claim. A help output that lost EVERY option would
-        // otherwise satisfy nothing above by simply being empty; the sibling flag's
-        // declaration is untouched by any mutation of this one.
-        expect(help).toContain("--allow-signing-identity-migration");
-      } finally {
-        rmSync(home, { recursive: true, force: true });
-      }
+      const result = spawnGuardFixture(
+        ["bun", "run", join(repositoryRoot, "src/cli/index.ts"), "app", "install", "--help"],
+      );
+      expect(result.exitCode).toBe(0);
+      const help = result.stdout.toString();
+      expect(help).toContain("Usage: recordings app install");
+      expect(help).toContain(flag);
+      // The consequence, in the operator-facing surface: the help has to say what
+      // approving costs, not merely that a flag exists.
+      expect(help).toContain("Microphone");
+      expect(help).toContain("Accessibility");
+      // Positive control on the absence claim. A help output that lost EVERY option would
+      // otherwise satisfy nothing above by simply being empty; the sibling flag's
+      // declaration is untouched by any mutation of this one.
+      expect(help).toContain("--allow-signing-identity-migration");
     });
 
     test("the README documents the flag on the local-only install path", () => {
@@ -701,9 +704,9 @@ describe("designated-requirement identity-migration guard", () => {
     };
     // bash 5 imports BASH_FUNC_name%% from the environment; assert the injection really
     // does take effect, or the check below would pass for the wrong reason.
-    const unguarded = Bun.spawnSync(
+    const unguarded = spawnGuardFixture(
       ["bash", "-c", "recordings_enforce_identity_migration && echo INJECTED_WON"],
-      { env: { ...process.env, ...injection } },
+      injection,
     );
     expect(unguarded.stdout.toString()).toContain("INJECTED_WON");
 
@@ -716,13 +719,15 @@ describe("designated-requirement identity-migration guard", () => {
     expect(verdict.exitCode).not.toBe(0);
     expect(verdict.stderr).toContain("not mutually compatible");
 
-    const installed = runInstallerPreflight({
+    const installed = runInstallerToIdentityGuard({
+      identityMigration: true,
       artifactPolicy: "release",
       extraArguments: ["--allow-adhoc-identity-migration"],
       environment: injection,
     });
-    expect(installed.exitCode).toBe(2);
-    expect(installed.stderr).toContain("not valid for a release artifact");
+    expect(installed.exitCode).toBe(process.platform === "darwin" ? 1 : 2);
+    expect(installed.stderr).toContain(process.platform === "darwin" ? BROKER_REFUSAL : "not valid for a release artifact");
+    expect(installed.reachedTransaction).toBeFalse();
   });
 
   testOnNonDarwin("the installer refuses the ad-hoc approval for a release artifact", () => {
@@ -795,7 +800,9 @@ describe("designated-requirement identity-migration guard", () => {
   // for every RELEASE artifact. Inverting the condition to `= "release"` (false under a
   // local-only fixture) proved it is not cosmetic: 122 pass / 1 fail, the guard never fires
   // and the install crosses into the transaction. That shape is closed below by varying the
-  // policy, which is why the cases come in local-only AND release pairs.
+  // policy. Darwin now refuses shell release requests before this comparison; those
+  // cases assert broker-required refusal, while direct guard tests preserve release
+  // approval decisions and non-Darwin fixtures retain the historical shell path.
   //
   // What remains open, stated rather than implied: an env-var backdoor
   // (`if [ -z "${RECORDINGS_SKIP_...}" ]`), a `uname`- or hostname-conditioned wrapper, or a
@@ -892,21 +899,24 @@ describe("designated-requirement identity-migration guard", () => {
       expect(run.reachedTransaction).toBeTrue();
     });
 
-    // The SECOND input vector, and the reason it exists. Every case above runs
-    // `--artifact-policy local-only`, so a wrapper conditioned on the policy --
-    // `if [ "$ARTIFACT_POLICY" = "local_only" ]; then ... fi` around the comparison loop and
-    // the call -- keeps all of them green while the gate stops existing for release
-    // artifacts. That is not sabotage-shaped; it is the exact regression
-    // scripts/enforce_identity_migration.sh:8-13 says this design exists to prevent, and it
-    // reads as a plausible "the ad-hoc case is the only one that matters" refactor.
-    //
-    // These cases are also the only execution of the guard's release arm: :85 and the
-    // exact-pair pinning at :102-108 are reached by no other test that RUNS the installer.
-    test("a real release run over an incompatible installed identity is refused by the guard", () => {
+    // Darwin release installation now belongs exclusively to the root-owned broker.
+    // These shell requests must refuse before signing checks or a transaction, even
+    // with an approved pair. The sourced guard's release decisions remain covered
+    // above; non-Darwin CI retains the earlier shell fixture branch below.
+    test("a release shell request refuses before Darwin broker-only installation", () => {
       const run = runInstallerToIdentityGuard({
         identityMigration: true,
         artifactPolicy: "release",
       });
+
+      if (process.platform === "darwin") {
+        expect(run.stderr).toContain(BROKER_REFUSAL);
+        expect(run.exitCode).toBe(1);
+        expect(run.codesignInvocations).toEqual([]);
+        expect(run.bunInvocations).toEqual([]);
+        expect(run.reachedTransaction).toBeFalse();
+        return;
+      }
 
       expect(
         run.codesignInvocations.filter((invocation) => invocation.includes(" -R ")),
@@ -929,10 +939,8 @@ describe("designated-requirement identity-migration guard", () => {
       ).toBeFalse();
     });
 
-    // The control for the case above, and the only execution of the guard's exact-pair
-    // pinning. A release migration is approved by BOTH the flag and the precise old/new
-    // digests, so this crosses only when all three agree.
-    test("a release run crosses the guard only with the flag and the exact approved identity pair", () => {
+    // Approval cannot turn a Darwin shell request into a broker-authorized install.
+    test("an approved release identity pair cannot bypass the Darwin broker boundary", () => {
       const approvedPair = [
         "--allow-signing-identity-migration",
         "--expected-old-identity-sha256", EXISTING_IDENTITY_SHA256,
@@ -943,11 +951,16 @@ describe("designated-requirement identity-migration guard", () => {
         artifactPolicy: "release",
         extraArguments: approvedPair,
       });
-      expect(approved.stderr, `exit ${approved.exitCode}`).not.toContain(REFUSAL);
-      expect(
-        approved.reachedTransaction,
-        "the approved release run never reached the transaction, so the release refusal test above proves nothing",
-      ).toBeTrue();
+      if (process.platform === "darwin") {
+        expect(approved.stderr).toContain(BROKER_REFUSAL);
+        expect(approved.exitCode).toBe(1);
+        expect(approved.codesignInvocations).toEqual([]);
+        expect(approved.bunInvocations).toEqual([]);
+        expect(approved.reachedTransaction).toBeFalse();
+      } else {
+        expect(approved.stderr, `exit ${approved.exitCode}`).not.toContain(REFUSAL);
+        expect(approved.reachedTransaction).toBeTrue();
+      }
 
       // The pinning at scripts/enforce_identity_migration.sh:102-108: the flag alone is not
       // consent for an arbitrary pair. Swapping the two digests is the strongest form of this
@@ -963,7 +976,7 @@ describe("designated-requirement identity-migration guard", () => {
         ],
       });
       expect(swapped.stderr, `exit ${swapped.exitCode}`).toContain(
-        "Signing identity migration does not match",
+        process.platform === "darwin" ? BROKER_REFUSAL : "Signing identity migration does not match",
       );
       expect(
         swapped.reachedTransaction,
@@ -994,7 +1007,7 @@ describe("designated-requirement identity-migration guard", () => {
           extraArguments: [...approval],
         });
         expect(run.stderr, `${policy}: exit ${run.exitCode}`).toContain(
-          "approval was supplied but no identity migration is required",
+          process.platform === "darwin" && policy === "release" ? BROKER_REFUSAL : "approval was supplied but no identity migration is required",
         );
         expect(run.exitCode, policy).not.toBe(0);
         expect(
@@ -1064,8 +1077,14 @@ describe("designated-requirement identity-migration guard", () => {
         expect(run.unstubbedInvocations, label).toEqual([]);
         // ... and the stubs really were driven, so the emptiness above is not the emptiness of a
         // run that never invoked them.
-        expect(run.bunInvocations.length, label).toBeGreaterThan(0);
-        expect(run.codesignInvocations.length, label).toBeGreaterThan(0);
+        if (process.platform === "darwin" && label === "release deny") {
+          expect(run.stderr).toContain(BROKER_REFUSAL);
+          expect(run.bunInvocations).toEqual([]);
+          expect(run.codesignInvocations).toEqual([]);
+        } else {
+          expect(run.bunInvocations.length, label).toBeGreaterThan(0);
+          expect(run.codesignInvocations.length, label).toBeGreaterThan(0);
+        }
       }
     });
 

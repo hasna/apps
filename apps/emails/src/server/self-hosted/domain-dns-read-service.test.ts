@@ -1,0 +1,23 @@
+import { expect, test } from "bun:test";
+import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
+import { handleSelfHostedRequest, type SelfHostedServiceDeps } from "./service.js";
+import { testAuthDeps, selfScopedStore } from "./auth/test-support.js";
+import type { TypedQueryClient } from "../../storage-kit/index.js";
+test("actual DNS read route requires account read scope and invokes only bound read capability", async () => {
+  const signing = crypto.randomUUID();
+  const client = { query: async () => ({ rows: [], rowCount: 0 }), many: async () => [], get: async () => null, one: async () => ({}), execute: async () => {} } as TypedQueryClient;
+  const store = selfScopedStore(client);
+  let reads = 0;
+  Object.assign(store, { getDomain: async (id: string) => id === "owned" ? { id, domain: "example.test", provider: "provider" } : null, getResource: async () => ({ type: "ses" }) });
+  const sender = { provider: "ses" as const, send: async () => { throw Error("never send"); }, readDomainConnection: async () => { reads++; return { registered: true, verified_for_sending: false, dns_tasks: [{ type: "CNAME" as const, name: "key._domainkey.example.test", value: "key.provider.test", purpose: "DKIM" as const, status: "pending" as const }] }; } };
+  const deps = { client, store, sender, resolveSender: async () => sender, verifier: verifyApiKey({ app: "emails", signingSecret: signing, keyStatus: async () => "active" }), migrations: [], version: "test", ...testAuthDeps(client, signing) } as SelfHostedServiceDeps;
+  const call = (id: string, credential?: string, method = "GET") => handleSelfHostedRequest(deps, new Request(`http://fixture/v1/domains/${id}/dns-records`, { method, headers: credential ? { Authorization: `Bearer ${credential}` } : {} }));
+  expect((await call("owned"))?.status).toBe(401);
+  const reader = mintApiKey({ app: "emails", scopes: ["emails:read"], signingSecret: signing }).token;
+  const response = await call("owned", reader);
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({ source: "live_provider", domain: "example.test" });
+  expect((await call("foreign", reader))?.status).toBe(404);
+  expect((await call("owned", reader, "POST"))?.status).toBe(405);
+  expect(reads).toBe(1);
+});

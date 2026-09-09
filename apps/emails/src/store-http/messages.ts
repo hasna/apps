@@ -331,6 +331,8 @@ export function createMessagesRepository(transport: Transport): MessagesReposito
         ["is_read", patch.is_read],
         ["is_starred", patch.is_starred],
         ["archived", patch.archived],
+        ["is_spam", patch.is_spam],
+        ["is_trash", patch.is_trash],
         ["add_label", patch.add_label],
         ["remove_label", patch.remove_label],
       ];

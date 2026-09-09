@@ -2,10 +2,10 @@ import {
   parseContract,
   SCHEMA_IDS,
   UriSchema,
-  type ProjectPanel,
   type ProjectPanelInput,
   type ResourceKind,
 } from '@hasna/contracts';
+import type { ProjectPanel } from './contracts-types.js';
 import { createKnowledgeService, type KnowledgeInventoryResult, type KnowledgeService } from './service';
 import {
   KnowledgeProjectLinksError,

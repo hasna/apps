@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createProjectsClientFromEnv } from "./index.js";
+import { createProjectsClientFromEnv, PROJECTS_SDK_AUTHORITY_PIN_MESSAGE } from "./index.js";
 
 // Every case builds the client from a CALLER-BUILT env, which is hermetic in
 // the shared @hasna/contracts seam: it reaches neither the machine's Keychain
@@ -142,24 +142,57 @@ describe("createProjectsClientFromEnv", () => {
     expect(() => createProjectsClientFromEnv({ HASNA_HOME: home })).toThrow(/0400 or 0600/);
   });
 
-  test("an explicit base URL with no apiKey still throws — the ambient fleet key is never attached to a named authority", () => {
-    // #1794: a caller that names the authority but provides no credential must
-    // not get a client that silently attaches the machine's fleet key. With a
-    // caller-built env the Keychain/disk tiers are out of scope, so the only
-    // thing that could authenticate this client is nothing — it throws.
+  test("an explicit base URL with no apiKey throws even when a LIVE tier holds a key — the ambient fleet key is never attached to a named authority (#1794)", () => {
+    // Every ambient tier is populated: the env tier AND an injected Keychain
+    // (tier 3), which is what a station carries. None of them may be attached
+    // to an authority the caller named; the SDK refuses before reading any.
+    const security = { calls: 0 };
+    const run = keychainRunner({
+      "hasna.credentials.projects.api-key": "keychain-key",
+      "hasna.credentials.projects.api-url": "https://projects.keychain.test",
+    });
     expect(() =>
-      createProjectsClientFromEnv({}, { baseUrl: "https://projects.override.test" }),
-    ).toThrow(/no API key could be resolved/i);
+      createProjectsClientFromEnv(
+        { HASNA_STATION: "station-fixture", HASNA_PROJECTS_API_KEY: "ambient-env-key" },
+        {
+          baseUrl: "https://projects.override.test",
+          keychain: { platform: "darwin", enabled: true, run: (argv) => { security.calls += 1; return run(argv); } },
+        },
+      ),
+    ).toThrow(PROJECTS_SDK_AUTHORITY_PIN_MESSAGE);
+    expect(security.calls).toBe(0);
   });
 
-  test("an explicit base URL still wins, and /v1 is appended by the generated routes", async () => {
+  test("an explicit base URL with no apiKey throws with an empty env too — never an anonymous client", () => {
+    expect(() =>
+      createProjectsClientFromEnv({}, { baseUrl: "https://projects.override.test" }),
+    ).toThrow(/caller-supplied baseUrl requires an explicit apiKey/);
+  });
+
+  test("an explicit base URL + explicit apiKey is a pin: used verbatim, the ambient chain is never consulted, /v1 is appended by the generated routes", async () => {
     const { calls, fetchImpl } = captureFetch();
+    const security = { calls: 0 };
+    const home = credentialsHome(
+      "HASNA_PROJECTS_API_URL=https://projects.disk.test\nHASNA_PROJECTS_API_KEY=disk-key\n",
+    );
     const client = createProjectsClientFromEnv(
-      { HASNA_PROJECTS_API_KEY: "env-key" },
-      { baseUrl: "https://projects.override.test", fetch: fetchImpl },
+      { HASNA_HOME: home, HASNA_STATION: "station-fixture", HASNA_PROJECTS_API_KEY: "ambient-env-key" },
+      {
+        baseUrl: "https://projects.override.test",
+        apiKey: "explicit-caller-key",
+        fetch: fetchImpl,
+        keychain: {
+          platform: "darwin",
+          enabled: true,
+          run: (argv) => { security.calls += 1; return keychainRunner({ "hasna.credentials.projects.api-key": "keychain-key" })(argv); },
+        },
+      },
     );
     await client.listProjects();
+    expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe("https://projects.override.test/v1/projects");
+    expect(calls[0]!.apiKey).toBe("explicit-caller-key");
+    expect(security.calls).toBe(0);
   });
 
   test("retired locations are never inputs", () => {

@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import type { LogRow } from "../types/index.ts";
+import { resolveLogsDataDir } from "./data-dir.ts";
 import { upsertIssue } from "./issues.ts";
 import {
   sanitizeSourceMapArtifactRecord,
@@ -201,10 +202,9 @@ export function getEventStoreDataDir(db: Database): string {
   const mapped = dbDataDirs.get(db);
   if (mapped) return mapped;
 
-  const explicit = process.env.HASNA_LOGS_DATA_DIR ?? process.env.LOGS_DATA_DIR;
-  if (explicit) return explicit;
-
-  return join(process.env.HOME ?? "~", ".hasna", "logs");
+  // Same resolver as the SQLite store: explicit env, else $HASNA_HOME/logs,
+  // else ~/.hasna/logs — read fresh per call (src/lib/data-dir.ts).
+  return resolveLogsDataDir();
 }
 
 export function appendRawEvent(

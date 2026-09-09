@@ -13,7 +13,7 @@
 // the point of the freshness case.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -225,4 +225,31 @@ describe("credential resolution — the shared chain, reached through the app se
     expect(sentKeys.at(-1)).toBe("rotated_after_rotation_key");
     expect(sentKeys.length).toBe(2);
   });
+});
+
+
+test("saved credentials reach an authenticated loopback API and a revoked key fails closed", async () => {
+  const home = sandboxHome();
+  const key = crypto.randomUUID();
+  const requests: string[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    requests.push(new URL(request.url).pathname);
+    if (request.headers.get("x-api-key") !== key) return Response.json({ error: "Unauthorized" }, { status: 401 });
+    return Response.json({ ok: true });
+  }});
+  try {
+    const path = writeCredentialFile(home, key);
+    writeFileSync(path, `HASNA_CONVERSATIONS_API_KEY=${key}\nHASNA_CONVERSATIONS_API_URL=${server.url.origin}\n`);
+    const env = { HOME: home, HASNA_STATION: `fixture-${crypto.randomUUID()}` };
+    const client = resolveConversationsCloud(env, { transport: { retry: false } });
+    expect(new URL(client.baseUrl).origin).toBe(server.url.origin);
+    expect(new URL(client.baseUrl).pathname).toBe("/v1");
+    expect(await client.transport.get<{ ok: boolean }>("/health")).toEqual({ ok: true });
+    writeFileSync(path, `HASNA_CONVERSATIONS_API_KEY=${crypto.randomUUID()}\nHASNA_CONVERSATIONS_API_URL=${server.url.origin}\n`);
+    await expect(client.transport.get("/health")).rejects.toThrow();
+    expect(requests).toEqual(["/v1/health", "/v1/health"]);
+    expect(existsSync(join(home, ".hasna", "conversations", "messages.db"))).toBe(false);
+  } finally {
+    server.stop(true);
+  }
 });

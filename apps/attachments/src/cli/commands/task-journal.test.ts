@@ -1,5 +1,17 @@
 import { beforeEach as configureIntegrationFixture } from "bun:test";
+import { mkdtempSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 configureIntegrationFixture(() => {
+  // Hermetic: the shared credential seam's disk tier anchors to this scratch
+  // root, so a station's real ~/.hasna/attachments|todos|sessions/config/credentials
+  // cannot leak into integration fixtures (or turn the fixture URL into an
+  // authority-conflict refusal). The Keychain account is pinned too: on macOS
+  // the resolver reads HASNA_STATION, else this machine's short hostname, and
+  // a real item under the hostname would resolve next to the fixture URL.
+  process.env.HASNA_HOME = mkdtempSync(join(tmpdir(), "attachments-integration-"));
+  process.env.HASNA_CONFIG_HOME = process.env.HASNA_HOME;
+  process.env.HASNA_STATION = "attachments-hermetic-test";
   process.env.HASNA_ATTACHMENTS_API_URL = "https://attachments.example.test";
   process.env.HASNA_ATTACHMENTS_API_KEY = "test-attachment-key";
   process.env.HASNA_TODOS_API_URL = "https://todos.example.test";
