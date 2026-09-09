@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.6
+
+### Patch Changes
+
+- 1a35248: Fix AWS SigV4 query encoding and bytewise ordering so S3 requests support Unicode filenames and reserved punctuation. Preserve repeated query parameters and empty values when signing.
+- 791e0cf: Preserve valid Unicode and punctuation input filenames through quoted SDK, CLI, and MCP submissions. Match the API's 255-character basename contract while refusing separators, controls, malformed Unicode, dot paths, and duplicate names before network requests.
+
 ## 0.5.5
 
 ### Patch Changes
