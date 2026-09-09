@@ -16,7 +16,7 @@ describe("release compatibility checks", () => {
       generated_at: "2026-01-02T03:04:05.000Z",
       package: {
         name: "@hasna/todos",
-        repository: "https://github.com/hasna/todos.git",
+        repository: "https://github.com/hasna/apps.git",
         public: true,
       },
       install_plan: {

@@ -74,9 +74,9 @@ const rootPackage: PackageJson = {
   files: ["dist", "LICENSE", "README.md"],
   workspaces: ["ai"],
   publishConfig: { registry: "https://registry.npmjs.org", access: "public" },
-  repository: { type: "git", url: "https://github.com/hasna/todos.git" },
-  homepage: "https://github.com/hasna/todos",
-  bugs: { url: "https://github.com/hasna/todos/issues" },
+  repository: { type: "git", url: "https://github.com/hasna/apps.git" },
+  homepage: "https://github.com/hasna/apps",
+  bugs: { url: "https://github.com/hasna/apps/issues" },
   dependencies: { chalk: "^5.4.1" },
   packageManager: "bun@1.3.14",
   scripts: {
@@ -145,11 +145,25 @@ describe("public release gate", () => {
       validateSdkPackageMetadata({
         name: "@hasna/todos-sdk",
         publishConfig: { access: "public" },
-        repository: { type: "git", url: "https://github.com/hasna/todos.git", directory: "sdk" },
-        homepage: "https://github.com/hasna/todos",
-        bugs: { url: "https://github.com/hasna/todos/issues" },
+        repository: { type: "git", url: "https://github.com/hasna/apps.git", directory: "apps/todos/sdk" },
+        homepage: "https://github.com/hasna/apps",
+        bugs: { url: "https://github.com/hasna/apps/issues" },
       }),
     ).toEqual([]);
+  });
+
+  test("rejects repository metadata outside the publishing repository", () => {
+    const wrongRepository = { type: "git", url: "https://github.com/hasna/other.git" };
+    expect(validateRootPackageMetadata({
+      ...rootPackage, repository: wrongRepository,
+    }).map((failure) => failure.check)).toContain("repository-url");
+    expect(validateSdkPackageMetadata({
+      name: "@hasna/todos-sdk",
+      publishConfig: { access: "public" },
+      repository: wrongRepository,
+      homepage: rootPackage.homepage,
+      bugs: rootPackage.bugs,
+    }).map((failure) => failure.check)).toContain("sdk-repository-url");
   });
 
   test("rejects private package names, hosted bins, and cloud dependencies", () => {
@@ -551,7 +565,7 @@ describe("public release gate", () => {
     expect(validateReleaseProvenanceMetadata({
       packageName: "@hasna/todos",
       packageVersion: "0.11.41",
-      repository: "https://github.com/hasna/todos.git",
+      repository: "https://github.com/hasna/apps.git",
       gitCommit: "0123456789abcdef0123456789abcdef01234567",
       gitTree: "89abcdef0123456789abcdef0123456789abcdef",
       sourceTreeSha256: "a".repeat(64),
@@ -792,7 +806,7 @@ describe("public release gate", () => {
     const provenance = {
       packageName: "@hasna/todos",
       packageVersion: rootPackage.version,
-      repository: "https://github.com/hasna/todos.git",
+      repository: "https://github.com/hasna/apps.git",
       gitCommit: "0".repeat(40),
       gitTree: "1".repeat(40),
       sourceTreeSha256: "2".repeat(64),
