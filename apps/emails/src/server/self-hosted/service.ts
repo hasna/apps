@@ -68,6 +68,7 @@ import {
   MailboxFilterConflictError,
   MailboxFilterInputError,
   MailboxFilterNotFoundError,
+  normalizeMailboxFilterApplyBody,
 } from "../../lib/mailbox-filters.js";
 import {
   humanLimitBytes,
@@ -2706,12 +2707,32 @@ export async function handleSelfHostedRequest(
       const isApply = path.endsWith("/apply");
       if (isApply) {
         if (method !== "POST") return json(405, { error: "method not allowed" });
-        const auth = await authenticate(deps, req, url, read);
+        // An absent/empty body or `{"mutate":false}` keeps the existing
+        // list-only apply (read authorization). `{"mutate":true}` performs a
+        // write and is therefore checked against write authorization BEFORE any
+        // message changes. Malformed non-object bodies and non-boolean `mutate`
+        // values are refused by the body reader / normalizer (400 invalid_input).
+        const { mutate } = normalizeMailboxFilterApplyBody(await readJsonBody(req));
+        const auth = await authenticate(deps, req, url, mutate ? write : read);
         if (!auth.ok) return auth.response;
         const result = await auth.store.applyMailboxFilter(identifier, {
           limit: queryInt(url, "limit"),
           offset: queryInt(url, "offset"),
+          mutate,
         });
+        if (result.mutate === true) {
+          return json(200, {
+            filter: result.filter,
+            items: [],
+            limit: result.limit,
+            offset: 0,
+            truncated: false,
+            mutate: true,
+            matched: result.matched ?? 0,
+            updated: result.updated ?? 0,
+            unchanged: result.unchanged ?? 0,
+          });
+        }
         return json(200, {
           filter: result.filter,
           items: result.page.items.slice(0, result.limit).map(publicMessageListItem),
