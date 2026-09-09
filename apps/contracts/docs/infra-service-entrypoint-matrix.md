@@ -22,7 +22,7 @@ bin.
 | `bridge` | `@hasna/bridge@0.2.1` | `bridge`, `bridge-mcp` | `deferred` | Define bridge auth scopes, connector secret refs, event replay boundaries, and no-secret output gates before `bridge-serve`. |
 | `domains` | `@hasna/domains@0.0.27` | `domains`, `domains-mcp`, `domains-serve` | `supported` | Add/refresh `hasna.contract.json` service surface with `/health`, `/ready`, `/version`, `/v1`, provider-credential readiness gates, dry-run DNS mutation gates, and redaction tests. Keep concrete secret refs in private deployment config. |
 | `hooks` | `@hasna/hooks@0.2.20` | `hooks` | `deferred` | Decide whether hooks is CLI-only, MCP-capable, or service-capable; service mode needs webhook signature/replay gates and operator-visible DLQ before `hooks-serve`. |
-| `machines` | `@hasna/machines@0.0.63` | `machines`, `machines-mcp`, `machines-agent`, `machines-serve` | `supported` | Add/refresh service surface with lease/claim auth scopes, private metadata redaction, `/v1` ownership boundaries, and fleet dry-run fixture gates. |
+| `machines` | retired 2026-09-03 (public `@hasna/machines` deleted from the registry, issue #1603) | none (no npm bins) | `not-applicable` (no npm service surface) | The npm package is deleted and not republished; remote machine resolution now lives in the owning apps (e.g. `@hasna/dispatch` resolves remote routes with plain SSH and an injectable resolver). |
 | `releases` | `@hasna/releases@0.1.0` | `releases`, `releases-mcp` | `deferred` | Promote release evidence schema and append-only ledger first; then add `releases-serve` with package/version/gate/evidence APIs and unauthorized mutation denial. |
 | `secrets` | `@hasna/secrets@0.1.33` | `secrets`, `secrets-mcp`, `secrets-serve` | `deferred` for hosted raw-value access | Hosted service surfaces must declare secret-reference and lease semantics, local-only reveal exclusions, audit gates, and tests proving HTTP/MCP never returns raw secret values. |
 | `servers` | `@hasna/servers@0.1.21` | `servers`, `servers-mcp` | `deferred` | Define lifecycle locks, operation ids, job-scoped auth, command/env redaction, and registered-server boundaries before `servers-serve`. |
@@ -54,7 +54,7 @@ Use `hasna.service_contract.v1` with:
 
 ## First implementation tasks
 
-1. Apply this contract to `domains`, `machines`, and `monitor`
+1. Apply this contract to `domains` and `monitor`
    first because they already expose service/server bins.
 2. The `gateway` row is retired (2026-09-03): the public package was deleted
    and the edge gateway is a Cloudflare Worker — no `gateway-serve` will be

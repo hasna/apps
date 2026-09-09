@@ -112,7 +112,7 @@ The top-level SDK also exposes `knowledge.sync.status()`,
 The SDK uses the same canonical project workspace as the CLI:
 `~/.hasna/knowledge/projects/<key>` (project scope). By
 default it writes the SQLite catalog and generated artifacts under that path.
-The local store home resolves through the `@hasna/paths` resolver (XDG/macOS
+The local store home resolves via the in-package resolver (XDG/macOS
 home layout): the legacy `~/.hasna/knowledge` stays the effective home until the
 store is migrated to the XDG data home or `HASNA_DATA_HOME` is set, and
 `HASNA_KNOWLEDGE_HOME` is the exact-app override.

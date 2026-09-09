@@ -8,12 +8,12 @@ This package is local-first. By default it stores JSON files under `~/.hasna/eve
 - `events.json`
 - `deliveries.json`
 
-The data home is resolved through the shared `@hasna/paths` resolver, in this order:
+The data home is resolved by the in-package resolver, in this order:
 
 1. The CLI `--dir` flag (highest precedence);
 2. the exact-app `HASNA_EVENTS_DIR` override, then the legacy
    `HASNA_EVENTS_HOME` fallback;
-3. the `@hasna/paths`-resolved XDG data home (`HASNA_DATA_HOME`/`~/.local/share/hasna/events`),
+3. the in-package-resolved XDG data home (`HASNA_DATA_HOME`/`~/.local/share/hasna/events`),
    adopted once `HASNA_DATA_HOME` is set or the store has been physically migrated there
    (`events.json` exists at that home);
 4. the legacy `~/.hasna/events` default.

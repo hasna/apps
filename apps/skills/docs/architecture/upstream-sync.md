@@ -5,7 +5,9 @@ generic engine change that should land in `hasna/skills`.
 
 ## Principles
 
-- Do not use git worktrees.
+- Use a task worktree created with `repos worktree add` (the repo worktree
+  law, `.claude/rules/worktree-and-pr.md`); never mutate the shared checkout
+  and never push to `main` directly.
 - Move only reusable skill engine changes into the public repo.
 - Keep private product code, deployment config, billing, database, account
   state, and hosted execution code out of public commits.
@@ -31,12 +33,11 @@ commands, payment env names, tenants, billing, and production deploy wording.
 
 ## Prepare A Branch
 
-Create a clean public branch from the current public base:
+Create a clean public branch from the current public base in a task worktree:
 
 ```bash
-git fetch origin
-git switch -c public/<topic> origin/main
-git cherry-pick <generic-commit-sha>
+repos worktree add skills --name public-<topic> --branch public/<topic> --base origin/main
+git -C "$HOME/.hasna/repos/worktrees/skills/public-<topic>" cherry-pick <generic-commit-sha>
 ```
 
 Cherry-pick one logical generic commit at a time. Resolve conflicts as public

@@ -33,7 +33,7 @@ releases reconcile
 releases reconcile @hasna/todos @hasna/events
 ```
 
-All commands print JSON. Data lives in the effective data dir, resolved through the `@hasna/paths` resolver (XDG/macOS home layout): the legacy `~/.hasna/releases` stays the effective home until the store is migrated to the XDG data home or `HASNA_DATA_HOME` is set; the exact-app overrides `HASNA_RELEASES_HOME`, `RELEASES_HOME`, and the long-documented `RELEASES_DATA_DIR` win unconditionally.
+All commands print JSON. Data lives in the effective data dir, resolved by the in-package resolver (XDG/macOS home layout): the legacy `~/.hasna/releases` stays the effective home until the store is migrated to the XDG data home or `HASNA_DATA_HOME` is set; the exact-app overrides `HASNA_RELEASES_HOME`, `RELEASES_HOME`, and the long-documented `RELEASES_DATA_DIR` win unconditionally.
 
 ## Selective Changesets candidates
 
