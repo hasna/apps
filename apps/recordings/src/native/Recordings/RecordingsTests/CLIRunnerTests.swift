@@ -1088,8 +1088,12 @@ struct CLIRunnerTests {
             try? FileManager.default.removeItem(at: root)
         }
 
+        // On failure, identify only descriptors that share these two fixture pipes.
+        // Bounded numeric diagnostics contain no process names, file paths or contents.
         try """
         #include <errno.h>
+        #include <libproc.h>
+        #include <sys/proc_info.h>
         #include <signal.h>
         #include <stdio.h>
         #include <stdlib.h>
@@ -1099,6 +1103,35 @@ struct CLIRunnerTests {
 
         static volatile sig_atomic_t probeRequested = 0;
         static void requestProbe(int signo) { (void)signo; probeRequested = 1; }
+
+        static void reportPipeOwners(FILE *file, int stream) {
+            struct pipe_fdinfo target = {0};
+            int inspected = proc_pidfdinfo(getpid(), stream, PROC_PIDFDPIPEINFO, &target, sizeof(target));
+            fprintf(file, "; target fd=%d result=%d handle=%llx peer=%llx", stream, inspected,
+                (unsigned long long)target.pipeinfo.pipe_handle, (unsigned long long)target.pipeinfo.pipe_peerhandle);
+            if (inspected != sizeof(target)) return;
+            pid_t pids[4096];
+            int pidBytes = proc_listpids(PROC_UID_ONLY, getuid(), pids, sizeof(pids));
+            if (pidBytes > (int)sizeof(pids)) pidBytes = (int)sizeof(pids);
+            int matches = 0;
+            for (int i = 0; i < pidBytes / (int)sizeof(pid_t) && matches < 64; i++) {
+                struct proc_fdinfo descriptors[2048];
+                int fdBytes = proc_pidinfo(pids[i], PROC_PIDLISTFDS, 0, descriptors, sizeof(descriptors));
+                if (fdBytes > (int)sizeof(descriptors)) fdBytes = (int)sizeof(descriptors);
+                for (int j = 0; j < fdBytes / (int)sizeof(struct proc_fdinfo) && matches < 64; j++) {
+                    if (descriptors[j].proc_fdtype != PROX_FDTYPE_PIPE) continue;
+                    struct pipe_fdinfo candidate = {0};
+                    if (proc_pidfdinfo(pids[i], descriptors[j].proc_fd, PROC_PIDFDPIPEINFO, &candidate, sizeof(candidate)) != sizeof(candidate)) continue;
+                    if ((target.pipeinfo.pipe_handle && candidate.pipeinfo.pipe_handle == target.pipeinfo.pipe_handle) ||
+                        (target.pipeinfo.pipe_peerhandle && candidate.pipeinfo.pipe_handle == target.pipeinfo.pipe_peerhandle)) {
+                        fprintf(file, "; owner pid=%d fd=%d flags=%u status=%u handle=%llx peer=%llx", pids[i], descriptors[j].proc_fd,
+                            candidate.pfi.fi_openflags, candidate.pfi.fi_status,
+                            (unsigned long long)candidate.pipeinfo.pipe_handle, (unsigned long long)candidate.pipeinfo.pipe_peerhandle);
+                        matches++;
+                    }
+                }
+            }
+        }
 
         int main(int argc, char **argv) {
             if (argc < 3) return 64;
@@ -1134,6 +1167,10 @@ struct CLIRunnerTests {
             if (details) {
                 fprintf(details, "stdout=%ld,errno=%d; stderr=%ld,errno=%d",
                     (long)outResult, outError, (long)errResult, errError);
+                if (!outBroken || !errBroken) {
+                    reportPipeOwners(details, STDOUT_FILENO);
+                    reportPipeOwners(details, STDERR_FILENO);
+                }
                 fclose(details);
             }
             FILE *marker = fopen(argv[2], "w");
