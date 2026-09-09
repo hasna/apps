@@ -2,7 +2,7 @@
 import { assertHarnessArguments } from "./harness-arguments";
 import { parseArgs } from "node:util";
 import { SwitcherError } from "./sdk";
-import { VERSION, Fault, CommandInterrupted, parse, harnessSchema, protocolSchema, providerInputSchema, profileInputSchema, modelPolicySchema, harnessEligible, validateHarnessProvider, type ModelPolicy } from "./domain";
+import { VERSION, Fault, CommandInterrupted, parse, harnessSchema, protocolSchema, providerInputSchema, profileInputSchema, modelSchema, modelPolicySchema, modelExpired, harnessEligible, validateHarnessProvider, type ModelPolicy } from "./domain";
 import { detectHarness, validateHarnessConfiguration } from "./harnesses";
 import { launch, validateOriForPlan, type LaunchBackend } from "./launcher";
 import { openCliRuntime } from "./runtime";
@@ -19,6 +19,7 @@ const HELP = `switcher — launch a coding harness with a provider and its model
   switcher providers update ID --file provider.json --version N
   switcher providers delete ID --version N
   switcher models PROVIDER [--refresh] [--search TEXT] [--limit N]
+  switcher models add PROVIDER MODEL [--name NAME] [--expires-on YYYY-MM-DD]
   switcher profiles list|get [ID]
   switcher profiles add ID --provider ID --harness HARNESS --model MODEL [--model-policy-file FILE] [--role-model ROLE=MODEL]
   switcher profiles update ID --file profile.json --version N
@@ -80,7 +81,7 @@ export async function main(args = process.argv.slice(2)) {
     "catalog-url":{type:"string"},"catalog-format":{type:"string"},"catalog-auth-style":{type:"string"},
     "catalog-credential-env":{type:"string"},"catalog-account-id":{type:"string"},"models-path":{type:"string"},"dry-run":{type:"boolean"},provider:{type:"string"},
     harness:{type:"string"},model:{type:"string"},search:{type:"string"},limit:{type:"string"},offset:{type:"string"},
-    "model-policy-file":{type:"string"},"role-model":{type:"string",multiple:true},
+    "model-policy-file":{type:"string"},"role-model":{type:"string",multiple:true},"expires-on":{type:"string"},
     refresh:{type:"boolean"},backend:{type:"string"},cwd:{type:"string"},executable:{type:"string"},"ori-executable":{type:"string"},"state-dir":{type:"string"},timeout:{type:"string"},
     "vault-key":{type:"string"},"vault-url":{type:"string"},"vault-cli":{type:"string"},"vault-account":{type:"string"},"vault-operator":{type:"string"},
     "keychain-service":{type:"string"},"keychain-account":{type:"string"},origin:{type:"string",multiple:true},
@@ -92,6 +93,11 @@ export async function main(args = process.argv.slice(2)) {
     throw new Error("Unknown command. Run switcher --help.");
   const providerFlags = ["url", "protocol", "preset", "credential-env", "auth-style", "catalog-url", "catalog-format", "catalog-auth-style", "catalog-credential-env", "catalog-account-id", "models-path"] as const;
   const provided = (names: readonly (keyof typeof values)[]) => names.some(name => values[name] !== undefined);
+  const addingModel = command === "models" && action === "add";
+  if (values["expires-on"] !== undefined && !addingModel) throw new Fault(400,"conflicting_options","--expires-on belongs to models add.");
+  if (addingModel && (positionals.length !== 4 || nativeArgs.length || Object.keys(values).some(name=>!["name","expires-on","json"].includes(name))))
+    throw new Fault(400,"invalid_request","Use models add PROVIDER MODEL with optional --name and --expires-on.");
+  const modelAddition = addingModel ? parse(modelSchema,{id:positionals[3],name:values.name??positionals[3],expiresOn:values["expires-on"]}) : undefined;
   const credentialFlags = ["vault-key","vault-url","vault-cli","vault-account","vault-operator","keychain-service","keychain-account","origin"] as const;
   const credentials = new CredentialResolver();
   if (command === "credentials") {
@@ -174,6 +180,7 @@ export async function main(args = process.argv.slice(2)) {
       const model = values.model ?? await selectModel(catalog.models, values.search,harness);
       const selected = catalog.models.find(m => m.id === model);
       if (!selected) throw new Fault(422, "model_missing", "Selected model is not in the provider catalog.");
+      if (modelExpired(selected)) throw new Fault(422,"model_expired","Selected model has passed its configured expiry date. Select an unexpired model.");
       if (!harnessEligible(selected,harness)) throw new Fault(422, "model_ineligible", "Selected model explicitly lacks text output or tool support.");
       profileId = (await ensureLaunchProfile(client, provider, harness, model, modelPolicy)).id;
     } else {
@@ -195,6 +202,15 @@ export async function main(args = process.argv.slice(2)) {
       return;
     }
     process.exitCode = await launch(client, profileId, {backend: backend as LaunchBackend, oriExecutable: values["ori-executable"], cwd: values.cwd, executable: values.executable, stateDir: values["state-dir"], args: nativeArgs, timeoutMs, refresh: false, resolveCredential: provider=>credentials.resolve(provider)});
+    return;
+  }
+  if (modelAddition) {
+    const provider = await client.getProvider(id);
+    const {version,updatedAt,...input} = provider;
+    if ((provider.additionalModels??[]).some(model=>model.id===modelAddition.id))
+      throw new Fault(409,"model_exists","This additional model already exists. Use providers update --file to edit its metadata.");
+    await client.updateProvider({...input,additionalModels:[...(provider.additionalModels??[]),modelAddition]},version);
+    output({providerId:provider.id,model:modelAddition,expired:modelExpired(modelAddition)});
     return;
   }
   if (command === "models" && action) {
