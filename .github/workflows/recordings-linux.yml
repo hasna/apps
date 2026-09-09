@@ -1,8 +1,8 @@
 # Temporary diagnostic branch only: do not merge this workflow replacement.
 # Reuses the registered path for an explicit dispatch at this branch ref.
 # Default/release workflows and the required failed aggregate remain unchanged.
-name: Emails enumeration diagnostic (temporary branch)
-run-name: Emails enumeration capture / ${{ github.sha }}
+name: Emails shared-process diagnostic (temporary branch)
+run-name: Emails shared-process capture / ${{ github.sha }}
 
 on:
   workflow_dispatch:
@@ -12,10 +12,10 @@ permissions:
 
 jobs:
   fixture:
-    name: Emails enumeration capture diagnostic
+    name: Emails shared-process capture diagnostic
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diag/emails-enumeration-20260909'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         timeout-minutes: 2
@@ -32,6 +32,14 @@ jobs:
         timeout-minutes: 2
         with:
           bun-version: 1.3.14
+      - name: Install the original npm artifact-check toolchain
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          npm_prefix="$(mktemp -d "${RUNNER_TEMP}/npm-toolchain.XXXXXX")"
+          npm install --global --prefix "$npm_prefix" npm@11.19.0 --ignore-scripts
+          test "$("$npm_prefix/bin/npm" --version)" = "11.19.0"
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
       - name: Install frozen dependencies without lifecycle hooks
         timeout-minutes: 5
         working-directory: fixture
@@ -49,8 +57,8 @@ jobs:
         run: |
           report_root="$(mktemp -d "${RUNNER_TEMP}/emails-enumeration.XXXXXX")"
           echo "root=$report_root" >> "$GITHUB_OUTPUT"
-      - name: Run exactly one fixture in a disposable loopback-only PID namespace
-        timeout-minutes: 6
+      - name: Run the shared Emails process with only target-fixture capture
+        timeout-minutes: 9
         env:
           REPORT_ROOT: ${{ steps.reports.outputs.root }}
         run: |
@@ -63,6 +71,8 @@ jobs:
             --source "$GITHUB_WORKSPACE/fixture" --reports "$REPORT_ROOT" \
             --bun "$(command -v bun)" --curl "$(command -v curl)" \
             --uid "$(id -u)" --gid "$(id -g)" \
+            --shared-order "$GITHUB_WORKSPACE/diagnostic/tooling/ci/emails-enumeration-shared-order.json" \
+            --node "$(command -v node)" --npm "$(command -v npm)" \
             --image-version "${ImageVersion:-unrecorded}"
       - name: Upload only allowlisted counts, hashes and identities
         if: always() && steps.reports.outputs.root != ''

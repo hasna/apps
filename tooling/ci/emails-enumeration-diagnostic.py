@@ -39,7 +39,7 @@ def replace_once(text, before, after):
     return text.replace(before, after, 1)
 
 
-def instrument(package, reports):
+def instrument(package, reports, shared=False, curl_identity=None):
     originals = {name: (package / name).read_text() for name in HASHES}
     for name, expected in HASHES.items():
         if digest((package / name).read_bytes()) != expected:
@@ -47,6 +47,7 @@ def instrument(package, reports):
     capture_path = json.dumps(str(reports / "capture.jsonl"))
     response_path = json.dumps(str(reports / "response.jsonl"))
     mailbox_path = json.dumps(str(reports / "mailbox.jsonl"))
+    marker_path = json.dumps(str(reports / "target-active"))
     capture = originals["src/db/self-hosted-store.ts"]
     capture = replace_once(capture, 'import { spawnSync } from "node:child_process";', '''import { spawnSync } from "node:child_process";
 import { appendFileSync as diagnosticAppend } from "node:fs";
@@ -115,6 +116,53 @@ import { startV1Stub, type V1Stub }''')
       diagnosticAppend(MAILBOX_PATH, JSON.stringify({ seeded: scanBudget + 1, remaining: -1, read_error: 1 }) + "\\n", { mode: 0o600 });
     }
     expect(String(refusal)).toMatch(/enumeration budget ran out/);'''.replace("MAILBOX_PATH", mailbox_path))
+    if shared:
+        if curl_identity is None or not re.fullmatch("[a-f0-9]{64}", curl_identity["sha256"]):
+            raise ValueError("curl_identity_required")
+        capture = replace_once(capture, 'import { appendFileSync as diagnosticAppend } from "node:fs";',
+                               'import { appendFileSync as diagnosticAppend, existsSync as diagnosticExists } from "node:fs";')
+        capture = replace_once(capture, '  // Numeric/hash observations only; no stdout, stderr, headers or config retained.\n  {',
+                               '  // Numerical observation is active only during the named fixture.\n  if (diagnosticExists(' + marker_path + ')) {')
+        stub = replace_once(stub, 'import { appendFileSync as diagnosticAppend } from "node:fs";',
+                            'import { appendFileSync as diagnosticAppend, existsSync as diagnosticExists } from "node:fs";')
+        stub = replace_once(stub, '      diagnosticRequest = {\n        ordinal: ++diagnosticOrdinal,',
+                            '      diagnosticRequest = diagnosticExists(' + marker_path + ') ? {\n        server_pid: process.pid, ordinal: ++diagnosticOrdinal,')
+        stub = replace_once(stub, '''        limit: Number(url.searchParams.get("limit") ?? -1),
+      };
+      const page = listMessages(url.searchParams);''', '''        limit: Number(url.searchParams.get("limit") ?? -1),
+      } : null;
+      const page = listMessages(url.searchParams);''')
+        fixture = replace_once(fixture, 'import { appendFileSync as diagnosticAppend } from "node:fs";',
+                               'import { appendFileSync as diagnosticAppend, writeFileSync as diagnosticWrite, unlinkSync as diagnosticUnlink, realpathSync as diagnosticRealpath, statSync as diagnosticStat, readFileSync as diagnosticRead } from "node:fs";\nimport { createHash as diagnosticHash } from "node:crypto";')
+        begin = '  it("' + NAME + '", async () => {'
+        start = fixture.index(begin)
+        end = fixture.index('  }, 240_000);', start)
+        selected = fixture[start:end]
+        selected = replace_once(selected, '    let refusal: unknown;',
+                                '''    // Observe the target-time executable after preceding shared-process tests.
+    let diagnosticPathMatch = 0, diagnosticBinaryMatch = 0, diagnosticProbeError = 0;
+    try {
+      const located = Bun.which("curl");
+      if (!located) throw new Error("missing fixture executable");
+      const resolved = diagnosticRealpath(located);
+      diagnosticPathMatch = Number(resolved === EXPECTED_CURL_PATH);
+      const info = diagnosticStat(resolved);
+      if (!info.isFile() || info.size > 1024 * 1024) throw new Error("fixture executable size");
+      diagnosticBinaryMatch = Number(diagnosticHash("sha256").update(diagnosticRead(resolved)).digest("hex") === EXPECTED_CURL_HASH);
+    } catch { diagnosticProbeError = 1; }
+    diagnosticAppend(PROVENANCE_PATH, JSON.stringify({
+      curl_path_matches: diagnosticPathMatch, curl_binary_matches: diagnosticBinaryMatch,
+      probe_error: diagnosticProbeError,
+      path_sha256: diagnosticHash("sha256").update(process.env.PATH ?? "").digest("hex"),
+    }) + "\\n", { mode: 0o600 });
+    diagnosticWrite(MARKER_PATH, "", { flag: "wx", mode: 0o600 });
+    try {
+    let refusal: unknown;'''.replace("EXPECTED_CURL_PATH", json.dumps(curl_identity["path"]))
+                                .replace("EXPECTED_CURL_HASH", json.dumps(curl_identity["sha256"]))
+                                .replace("PROVENANCE_PATH", json.dumps(str(reports / "target-provenance.jsonl")))
+                                .replace("MARKER_PATH", marker_path))
+        selected += '    } finally { diagnosticUnlink(' + marker_path + '); }\n'
+        fixture = fixture[:start] + selected + fixture[end:]
     # Preserve every existing expectation and explicit timeout line, byte-for-byte.
     protected = lambda text: [line for line in text.splitlines() if "expect(" in line or "240_000" in line]
     if protected(fixture) != protected(originals["src/db/inbound.test.ts"]):
@@ -231,10 +279,26 @@ def normalize_known_bin_mode(source, changes, receipt):
     receipt["clean"] = 1
 
 
-def identity(path, version_arg):
+def identity(path, version_arg, interpreter=None):
     real = Path(path).resolve(strict=True)
+    command = ([interpreter] if interpreter is not None else []) + [str(real), version_arg]
     return {"path": str(real), "sha256": digest(real.read_bytes()),
-            "version": fixed_output([str(real), version_arg]).decode().splitlines()[0]}
+            "version": fixed_output(command).decode().splitlines()[0]}
+
+
+def shared_order(path, source):
+    raw = Path(path).read_bytes()
+    if digest(raw) != "dc620e1741065e3ea7e5ed785357ce39d5995630e8260dd31b42074e00315395":
+        raise ValueError("shared_order_identity")
+    document = json.loads(raw)
+    order = document["file_order"]
+    tracked = fixed_output(["git", "ls-tree", "-r", "--name-only", SOURCE, "--", "apps/emails"], source).decode().splitlines()
+    census = {name.removeprefix("apps/emails/") for name in tracked
+              if re.search(r"(?:\.test|_test|\.spec|_spec)\.[jt]sx?$", name)
+              and "/dist/" not in name and "/node_modules/" not in name}
+    if document["source"] != SOURCE or len(order) != 404 or len(set(order)) != 404 or set(order) != census:
+        raise ValueError("shared_order_census")
+    return order
 
 
 def numeric_rows(path, keys):
@@ -257,13 +321,13 @@ def numeric_rows(path, keys):
     return rows
 
 
-def run_once(argv, cwd, env):
+def run_once(argv, cwd, env, expected_order=None):
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, start_new_session=True)
     output = bytearray()
     selector = selectors.DefaultSelector()
     selector.register(proc.stdout, selectors.EVENT_READ)
-    deadline = time.monotonic() + 300
+    deadline = time.monotonic() + (480 if expected_order is not None else 300)
     exceeded = 0
     try:
         while selector.get_map():
@@ -302,11 +366,31 @@ def run_once(argv, cwd, env):
                     continue
             except ChildProcessError:
                 break
+    result = summarize_output(output, expected_order)
+    result.update(exit=proc.returncode, outer_limit=exceeded)
+    return result
+
+
+def summarize_output(output, expected_order=None):
+    """Parse only reviewed names and numerical summaries; retain no child payloads."""
     text = bytes(output).decode("utf-8", "replace")
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
     selected_pass = len(re.findall(r"^\(pass\).*" + re.escape(NAME), text, re.M))
     selected_fail = len(re.findall(r"^\(fail\).*" + re.escape(NAME), text, re.M))
-    return {"exit": proc.returncode, "outer_limit": exceeded, "output_bytes": len(output),
-            "output_sha256": digest(output), "selected_pass": selected_pass, "selected_fail": selected_fail}
+    result = {"output_bytes": len(output), "output_sha256": digest(output),
+              "selected_pass": selected_pass, "selected_fail": selected_fail}
+    if expected_order is not None:
+        discovered = re.findall(r"^([A-Za-z0-9_./-]+(?:\.test|_test|\.spec|_spec)\.[jt]sx?):$", text, re.M)
+        observed = [name for name in discovered if name in set(expected_order)]
+        # Do not publish unknown names or more than the reviewed file census.
+        result["file_order"] = observed[:404]
+        result["file_headers"] = len(discovered)
+        result["unknown_file_headers"] = len(discovered) - len(observed)
+        result["file_order_matches_original"] = int(discovered == expected_order)
+        summaries = re.findall(r"^Ran (\d+) tests across (\d+) files\. \[(\d+(?:\.\d+)?)s\]$", text, re.M)
+        result["suite_summary"] = ({"tests": int(summaries[-1][0]), "files": int(summaries[-1][1]),
+                                   "seconds": float(summaries[-1][2])} if summaries else {})
+    return result
 
 
 def main():
@@ -315,6 +399,8 @@ def main():
         parser.add_argument("--" + name, required=True)
     for name in ("uid", "gid"):
         parser.add_argument("--" + name, type=int, required=True)
+    for name in ("shared-order", "node", "npm"):
+        parser.add_argument("--" + name)
     args = parser.parse_args()
     if sys.platform != "linux" or os.getpid() != 1 or os.geteuid() != 0:
         raise ValueError("namespace_required")
@@ -350,6 +436,12 @@ def main():
         # Mandatory after normalization as well as for an initially clean checkout.
         if fixed_output(["git", "status", "--porcelain", "--untracked-files=no"], source):
             raise ValueError("source_dirty")
+        expected_order = shared_order(args.shared_order, source) if args.shared_order else None
+        if expected_order is not None:
+            result["shared_context"] = {"expected_files": 404, "expected_tests": 5244,
+                                       "original_suite_seconds": 261.44, "outer_seconds": 480,
+                                       "original_node_version": None, "original_node_version_recorded": 0,
+                                       "order_sha256": digest(Path(args.shared_order).read_bytes())}
         result["imported_artifacts"] = {
             name: digest((source / name).read_bytes()) for name in (
                 "apps/contracts/dist/client/transport.js", "apps/contracts/dist/client/storage.js",
@@ -361,27 +453,52 @@ def main():
             raise ValueError("bun_version")
         tools = reports / "tools"
         tools.mkdir()
-        for name in ("bun", "curl"):
+        tool_names = ["bun", "curl"]
+        if expected_order is not None:
+            result["node"] = identity(args.node, "--version")
+            result["npm"] = identity(args.npm, "--version", result["node"]["path"])
+            result["npm"]["node_sha256"] = result["node"]["sha256"]
+            if result["npm"]["version"] != "11.19.0":
+                raise ValueError("npm_version")
+            tool_names.extend(("node", "npm"))
+        for name in tool_names:
             (tools / name).symlink_to(result[name]["path"])
-        result["files"] = instrument(source / "apps/emails", reports)
+        result["files"] = instrument(source / "apps/emails", reports, shared=expected_order is not None,
+                                     curl_identity=result["curl"])
         env = {"PATH": str(tools) + ":/usr/bin:/bin", "HOME": str(reports), "TMPDIR": str(reports),
                "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "NO_COLOR": "1", "FORCE_COLOR": "0"}
-        result["test"] = run_once([str(tools / "bun"), "--no-env-file", "scripts/prepublish-local-test.mjs",
-                                   "--max-concurrency", "1", "src/db/inbound.test.ts", "--test-name-pattern", NAME],
-                                  source / "apps/emails", env)
+        command = [str(tools / "bun"), "--no-env-file", "scripts/prepublish-local-test.mjs", "--max-concurrency", "1"]
+        if expected_order is None:
+            command.extend(("src/db/inbound.test.ts", "--test-name-pattern", NAME))
+        else:
+            env["CI"] = "true"
+        result["test"] = run_once(command, source / "apps/emails", env, expected_order)
         result["capture"] = numeric_rows(reports / "capture.jsonl", ["ordinal", "limit", "offset", "elapsed_ms", "status", "pid", "signal", "error", "stdout_bytes", "stderr_bytes", "last_newline_char", "parsed_status", "stdout_sha256"])
-        result["response"] = numeric_rows(reports / "response.jsonl", ["ordinal", "offset", "limit", "status", "constructed", "body_bytes", "body_sha256", "expected_stdout_sha256"])
+        response_keys = ["ordinal", "offset", "limit", "status", "constructed", "body_bytes", "body_sha256", "expected_stdout_sha256"]
+        if expected_order is not None:
+            response_keys.append("server_pid")
+        result["response"] = numeric_rows(reports / "response.jsonl", response_keys)
         result["mailbox"] = numeric_rows(reports / "mailbox.jsonl", ["seeded", "remaining", "read_error"])
         # Count remaining processes numerically; never inspect argv/environment.
         result["remaining_processes"] = len([p for p in Path("/proc").iterdir() if p.name.isdigit() and int(p.name) != os.getpid()])
         test = result["test"]
         result["valid"] = int(test["selected_pass"] + test["selected_fail"] == 1 and test["outer_limit"] == 0
                               and result["remaining_processes"] == 0 and len(result["mailbox"]) == 1)
+        if expected_order is not None:
+            result["shared_context"]["target_marker_removed"] = int(not (reports / "target-active").exists())
+            result["target_provenance"] = numeric_rows(reports / "target-provenance.jsonl",
+                                                       ["curl_path_matches", "curl_binary_matches", "probe_error", "path_sha256"])
+            result["valid"] = int(result["valid"] and test["file_order_matches_original"]
+                                  and test["suite_summary"].get("tests") == 5244
+                                  and test["suite_summary"].get("files") == 404
+                                  and result["shared_context"]["target_marker_removed"]
+                                  and len(result["target_provenance"]) == 1)
     except Exception as exc:
         # No arbitrary exceptions or child output: fixed classification plus hashes only.
         allowed = {"patch_anchor", "source_hash", "assertion_change", "metadata_size", "metadata_count",
                    "metadata_keys", "metadata_hash", "metadata_number", "source_identity", "source_dirty", "bun_version",
-                   "source_normalization_readback"}
+                   "source_normalization_readback", "shared_order_identity", "shared_order_census", "npm_version",
+                   "curl_identity_required"}
         code = str(exc)
         result["preparation_error"] = code if code in allowed else type(exc).__name__
     (reports / "result.json").write_text(json.dumps(result, indent=2) + "\n")
