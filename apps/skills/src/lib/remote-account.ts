@@ -2,11 +2,15 @@ import type { RemoteInputFileDescriptor } from "./remote-files.js";
 /** Optional account APIs supplied by a configured Skills server. No local prices or provider policy. */
 export interface RemoteRunQuote {
   skill: string;
+  /** Opaque server binding for this exact quote; retain verbatim for approval. */
+  quoteReceipt?: string;
   pricing: { costCents: number; formattedCost: string; [key: string]: unknown };
   [key: string]: unknown;
 }
 
 export interface RemoteRunApproval {
+  /** A previously quoted server binding. Never refresh it after user approval. */
+  quoteReceipt?: string;
   /** Preferred public spelling: maximum integer credits approved by the caller. */
   maxCredits?: number;
   /** Maximum integer credits approved by the caller (legacy wire spelling). */
@@ -36,8 +40,17 @@ export function creditCount(value: unknown): number {
   return value;
 }
 
+export function runQuoteReceipt(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !value.length || Buffer.byteLength(value, "utf8") > 4096) {
+    throw new Error("Invalid quote receipt");
+  }
+  return value;
+}
+
 export function parseRemoteRunQuote(value: unknown): RemoteRunQuote {
   const quote = object(value);
+  runQuoteReceipt(quote.quoteReceipt);
   const pricing = object(quote.pricing);
   if (typeof quote.skill !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(quote.skill)) throw new Error("Invalid quoted skill");
   const costCents = creditCount(pricing.costCredits ?? pricing.costCents);

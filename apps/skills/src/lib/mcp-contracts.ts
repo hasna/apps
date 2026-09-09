@@ -16,6 +16,7 @@ export interface JsonSchemaObject {
   pattern?: string;
   maxItems?: number;
   maxLength?: number;
+  minLength?: number;
   items?: JsonSchemaObject;
   properties?: Record<string, JsonSchemaObject>;
   required?: string[];
@@ -575,7 +576,7 @@ const toolContracts: McpToolContract[] = [
     name: "run_skill",
     title: "Run Skill",
     description: "Run a skill locally or through a configured remote runner. Returns compact stdout/stderr previews and run summaries by default; pass detail:true for full records.",
-    params: ["name", "input?", "args?", "detail?", "remote?", "maxCredits?", "maxCostCents?", "idempotency_key?", "files?"],
+    params: ["name", "input?", "args?", "detail?", "remote?", "maxCredits?", "maxCostCents?", "quoteReceipt?", "idempotency_key?", "files?"],
     category: "execution",
     sideEffects: "local-process-or-remote-run",
     stable: true,
@@ -587,6 +588,7 @@ const toolContracts: McpToolContract[] = [
       remote: { type: "boolean", description: "Use the configured server catalog." },
       maxCredits: { type: "integer", minimum: 0, description: "Maximum explicitly approved integer credits; omitted permits only free remote runs." },
       maxCostCents: { type: "integer", minimum: 0, description: "Legacy alias for maxCredits; both must agree." },
+      quoteReceipt: { type: "string", minLength: 1, maxLength: 4096, description: "Opaque approved quote receipt, at most 4096 UTF-8 bytes. Preserve it and the quoted input/args unchanged; never refresh after confirmation." },
       idempotency_key: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$", description: "Stable retry key for the same remote submission." },
       files: { type: "array", maxItems: 10, items: objectSchema({ name: stringSchema("Safe basename"), base64: { type: "string", maxLength: 1398104 }, contentType: stringSchema("MIME type") }, ["name", "base64"]), description: "Inline remote inputs, at most 1 MiB combined." },
     }, ["name"]),
@@ -866,9 +868,11 @@ const remoteCustomerContracts: McpToolContract[] = REMOTE_CUSTOMER_OPERATIONS.ma
 }));
 remoteCustomerContracts.push({
   name: "quote_skill", title: "Quote Remote Skill", description: "Get a server credit quote without submitting a run.",
-  params: ["name", "input?", "args?"], category: "execution", sideEffects: "none", stable: true,
-  inputSchema: objectSchema({ name: skillNameInput, input: runInputSchema, args: runArgsSchema }, ["name"]),
-  outputSchema: objectSchema({ skill: stringSchema("Canonical server skill."), pricing: objectSchema({}, [], "Quoted integer credits.", true) }, ["skill", "pricing"], undefined, true),
+  params: ["name", "input?", "args?", "files?"], category: "execution", sideEffects: "none", stable: true,
+  inputSchema: objectSchema({ name: skillNameInput, input: runInputSchema, args: runArgsSchema,
+    files: { type: "array", maxItems: 10, items: objectSchema({ name: stringSchema("Safe basename"), base64: { type: "string", maxLength: 1398104 }, contentType: stringSchema("MIME type") }, ["name", "base64"]), description: "Same inline files to submit after approval, at most 1 MiB combined." },
+  }, ["name"]),
+  outputSchema: objectSchema({ skill: stringSchema("Canonical server skill."), pricing: objectSchema({}, [], "Quoted integer credits.", true), quoteReceipt: { type: "string", minLength: 1, maxLength: 4096, description: "Opaque server quote binding, at most 4096 UTF-8 bytes; preserve verbatim for approval." } }, ["skill", "pricing"], undefined, true),
 });
 remoteCustomerContracts.push({
   name: "download_run_artifact", title: "Download Verified Run Artifact", description: "Return verified artifact bytes as base64, bounded to 1 MiB.",
