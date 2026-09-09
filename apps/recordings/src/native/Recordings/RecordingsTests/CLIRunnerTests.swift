@@ -4,6 +4,109 @@ import Testing
 @testable import RecordingsLib
 
 struct CLIRunnerTests {
+    private final class DeadlineClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var nanoseconds: UInt64 = 1_000_000_000
+
+        func now() -> UInt64 {
+            lock.lock()
+            defer { lock.unlock() }
+            return nanoseconds
+        }
+
+        func advance(seconds: UInt64) {
+            lock.lock()
+            defer { lock.unlock() }
+            nanoseconds += seconds * 1_000_000_000
+        }
+    }
+
+    @Test("a fractional supplied deadline respects its original budget with a nonadvancing clock")
+    func fractionalDeadlineDoesNotExceedOriginalBudget() throws {
+        let clock = DeadlineClock()
+        let budget = 3.0000000001
+        let result = try CLIRunner.runExecutable(
+            "/usr/bin/true", arguments: [], environment: [:],
+            totalWallClockBudget: budget,
+            wallClockDeadline: .init(after: budget, now: { clock.now() })
+        )
+        #expect(result.terminationStatus == 0)
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.isEmpty)
+    }
+
+    @Test("rewrite admission consumes its original budget before the blocking worker starts")
+    func rewriteAdmissionConsumesOriginalBudget() async {
+        let clock = DeadlineClock()
+        let operation = RecordingEngine.makeCommandRewriteOperation(
+            args: ["rewrite-selection"], home: "/fictional-test-home",
+            runCLI: { args, home, budget in
+                #expect(args == ["rewrite-selection"])
+                #expect(home == "/fictional-test-home")
+                #expect(budget == 7)
+                return "fictional rewrite"
+            },
+            deadline: .init(after: 10, now: { clock.now() })
+        )
+        clock.advance(seconds: 3)
+        #expect(await BlockingOperation.run(operation) == "fictional rewrite")
+    }
+
+    @Test("expired and cleanup-only rewrite admission never calls the command seam", arguments: [8, 10, 11])
+    func expiredRewriteAdmissionAvoidsCommand(seconds: UInt64) async {
+        let clock = DeadlineClock()
+        let operation = RecordingEngine.makeCommandRewriteOperation(
+            args: ["rewrite-selection"], home: "/fictional-test-home",
+            runCLI: { _, _, _ in
+                Issue.record("An exhausted queued rewrite invoked its command seam")
+                return "unexpected command"
+            },
+            deadline: .init(after: 10, now: { clock.now() })
+        )
+        clock.advance(seconds: seconds)
+        let output = await BlockingOperation.run(operation)
+        #expect(output.hasPrefix("ERROR:"))
+        #expect(output.contains("timed out"))
+    }
+
+    @Test("command preparation consumes the original deadline and cannot spawn after exhaustion", arguments: [false, true], [0, 2, 3])
+    func preparationDeadlineAvoidsExpiredSpawn(expiredBeforePreparation: Bool, spentSeconds: UInt64) throws {
+        let home = URL(fileURLWithPath: makeIsolatedTestHome("rewrite-preparation-deadline"), isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let executable = home.appendingPathComponent(".bun/bin/recordings")
+        let marker = home.appendingPathComponent("spawned")
+        try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        #!/bin/sh
+        printf spawned > "$1"
+        printf complete
+        """.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let clock = DeadlineClock()
+        let deadline = CLIRunner.WallClockDeadline(after: 3, now: { clock.now() })
+        if expiredBeforePreparation { clock.advance(seconds: spentSeconds) }
+        var preparations = 0
+        let output = CLIRunner.run(
+            [marker.path], home: home.path, timeout: 3, totalWallClockBudget: 3,
+            wallClockDeadline: deadline,
+            environmentProvider: {
+                preparations += 1
+                if !expiredBeforePreparation { clock.advance(seconds: spentSeconds) }
+                return [:]
+            }
+        )
+        if spentSeconds == 0 {
+            #expect(preparations == 1)
+            #expect(output == "complete")
+            #expect(try String(contentsOf: marker, encoding: .utf8) == "spawned")
+        } else {
+            #expect(preparations == (expiredBeforePreparation ? 0 : 1))
+            #expect(output.hasPrefix("ERROR:"))
+            #expect(output.contains("timed out"))
+            #expect(!FileManager.default.fileExists(atPath: marker.path))
+        }
+    }
+
     @Test("bundled CLI takes precedence over a stale user installation")
     func bundledCLIIsPreferred() throws {
         let root = FileManager.default.temporaryDirectory
@@ -64,6 +167,74 @@ struct CLIRunnerTests {
         #expect(result.stderr.utf8.count == 2 * 1_048_576)
         #expect(result.stdout.first == "o")
         #expect(result.stderr.first == "e")
+    }
+
+    @Test("command spawn inherits only its standard streams, never another capture pipe")
+    func commandSpawnDoesNotInheritUnrelatedPipe() throws {
+        // Keep an unrelated pipe deliberately not close-on-exec. This is the exact
+        // state another reader can expose between pipe() and its FD_CLOEXEC setup.
+        var unrelated: [Int32] = [0, 0]
+        try #require(Darwin.pipe(&unrelated) == 0)
+        defer { for descriptor in unrelated { Darwin.close(descriptor) } }
+        // Do not turn a previously closed standard stream into this probe pipe.
+        for index in unrelated.indices where unrelated[index] < 3 {
+            let moved = Darwin.fcntl(unrelated[index], F_DUPFD, 3)
+            try #require(moved >= 3)
+            Darwin.close(unrelated[index])
+            unrelated[index] = moved
+        }
+        try #require(Darwin.fcntl(unrelated[0], F_GETFD) & FD_CLOEXEC == 0)
+
+        let home = URL(fileURLWithPath: makeIsolatedTestHome("spawn-inheritance"), isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let source = home.appendingPathComponent("probe.c")
+        let executable = home.appendingPathComponent("probe")
+        try """
+        #include <sys/stat.h>
+        #include <unistd.h>
+        #include <errno.h>
+        #include <fcntl.h>
+        #include <stdio.h>
+        #include <stdlib.h>
+        int main(int argc, char **argv) {
+            if (argc != 5) return 64;
+            struct stat input;
+            int inputResult = fstat(STDIN_FILENO, &input);
+            if (atoi(argv[2])) {
+                if (inputResult != 0 ||
+                    (unsigned long long)input.st_dev != strtoull(argv[3], 0, 10) ||
+                    (unsigned long long)input.st_ino != strtoull(argv[4], 0, 10)) return 66;
+            } else if (inputResult == 0) return 67;
+            fputs("stdout-preserved", stdout);
+            fputs("stderr-preserved", stderr);
+            errno = 0;
+            if (fcntl(atoi(argv[1]), F_GETFD) != -1 || errno != EBADF) return 65;
+            return 0;
+        }
+        """.write(to: source, atomically: true, encoding: .utf8)
+        let compiled = try CLIRunner.runExecutable(
+            "/usr/bin/cc", arguments: ["-o", executable.path, source.path],
+            environment: ["TMPDIR": home.path]
+        )
+        try #require(compiled.terminationStatus == 0)
+
+        // Inspect only stdin metadata; never read or print the caller's input.
+        var input = stat()
+        let inputFlags = Darwin.fcntl(STDIN_FILENO, F_GETFD)
+        let inheritsInput = inputFlags >= 0 && inputFlags & FD_CLOEXEC == 0
+            && !unrelated.contains(STDIN_FILENO)
+        if inheritsInput { try #require(Darwin.fstat(STDIN_FILENO, &input) == 0) }
+        let result = try CLIRunner.runExecutable(
+            executable.path,
+            arguments: [
+                String(unrelated[0]), inheritsInput ? "1" : "0",
+                String(UInt64(bitPattern: Int64(input.st_dev))), String(input.st_ino),
+            ],
+            environment: [:]
+        )
+        #expect(result.terminationStatus == 0)
+        #expect(result.stdout == "stdout-preserved")
+        #expect(result.stderr == "stderr-preserved")
     }
 
     @Test("process runner observes immediate exits without false timeouts")
@@ -362,12 +533,21 @@ struct CLIRunnerTests {
         let runCLI = RecordingEngine(homePath: home.path, installsGlobalHandlers: false).commandCLI
         let homePath = home.path
         let startedAt = ContinuousClock.now
-        let output = await BlockingOperation.run {
-            runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
+        let operation = RecordingEngine.makeCommandRewriteOperation(
+            args: ["rewrite-selection"], home: homePath, runCLI: runCLI
+        )
+        let (output, workerStartedAt, workerFinishedAt) = await BlockingOperation.run {
+            let workerStartedAt = ContinuousClock.now
+            let output = operation()
+            return (output, workerStartedAt, ContinuousClock.now)
         }
-        let elapsed = ContinuousClock.now - startedAt
+        let resumedAt = ContinuousClock.now
+        let elapsed = resumedAt - startedAt
+        // Report only on a failed elapsed assertion. Admission includes the executor
+        // and dispatch queue hops; the worker interval includes CLI preparation/cleanup.
+        let timing: Comment = "CLI phases: admission=\(workerStartedAt - startedAt), worker=\(workerFinishedAt - workerStartedAt), resume=\(resumedAt - workerFinishedAt)"
 
-        #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout))
+        #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout), timing)
         #expect(output.hasPrefix("ERROR:"))
         #expect(output.contains("timed out"))
     }
@@ -455,16 +635,25 @@ struct CLIRunnerTests {
         let runCLI = RecordingEngine(homePath: home.path, installsGlobalHandlers: false).commandCLI
         let homePath = home.path
         let startedAt = ContinuousClock.now
-        let output = await BlockingOperation.run {
-            runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
+        let operation = RecordingEngine.makeCommandRewriteOperation(
+            args: ["rewrite-selection"], home: homePath, runCLI: runCLI
+        )
+        let (output, workerStartedAt, workerFinishedAt) = await BlockingOperation.run {
+            let workerStartedAt = ContinuousClock.now
+            let output = operation()
+            return (output, workerStartedAt, ContinuousClock.now)
         }
-        let elapsed = ContinuousClock.now - startedAt
+        let resumedAt = ContinuousClock.now
+        let elapsed = resumedAt - startedAt
+        // Report only on a failed elapsed assertion. Admission includes the executor
+        // and dispatch queue hops; the worker interval includes CLI preparation/cleanup.
+        let timing: Comment = "CLI phases: admission=\(workerStartedAt - startedAt), worker=\(workerFinishedAt - workerStartedAt), resume=\(resumedAt - workerFinishedAt)"
 
         // Upper bound is the public promise, with the ~1 s return margin left as CI
         // tolerance above the internal deadline; the lower bound proves the deadline chain
         // really ran to exhaustion instead of the helper exiting early.
-        #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout))
-        #expect(elapsed > .seconds(8.4))
+        #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout), timing)
+        #expect(elapsed > .seconds(8.4), timing)
         #expect(output.hasPrefix("ERROR:"))
         #expect(output.contains("timed out"))
 
@@ -882,6 +1071,7 @@ struct CLIRunnerTests {
         let failureGate = NSLock()
         var shouldFailCapture = false
         var injectedFailures = 0
+        var closeObservations: [String] = []
 
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("recordings-reap-failure-\(UUID().uuidString)")
@@ -889,6 +1079,7 @@ struct CLIRunnerTests {
         let executable = root.appendingPathComponent("silent-holder")
         let holderPidFile = root.appendingPathComponent("holder-pid")
         let markerFile = root.appendingPathComponent("holder-probe")
+        let detailsFile = root.appendingPathComponent("holder-probe-details")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer {
             if let holderPid = Self.readPID(from: holderPidFile) {
@@ -931,8 +1122,20 @@ struct CLIRunnerTests {
                 struct timespec delay = {0, 20000000};
                 nanosleep(&delay, 0);
             }
-            int outBroken = (write(STDOUT_FILENO, "x", 1) == -1 && errno == EPIPE);
-            int errBroken = (write(STDERR_FILENO, "y", 1) == -1 && errno == EPIPE);
+            errno = 0;
+            ssize_t outResult = write(STDOUT_FILENO, "x", 1);
+            int outError = errno;
+            errno = 0;
+            ssize_t errResult = write(STDERR_FILENO, "y", 1);
+            int errError = errno;
+            int outBroken = (outResult == -1 && outError == EPIPE);
+            int errBroken = (errResult == -1 && errError == EPIPE);
+            FILE *details = argc > 3 ? fopen(argv[3], "w") : NULL;
+            if (details) {
+                fprintf(details, "stdout=%ld,errno=%d; stderr=%ld,errno=%d",
+                    (long)outResult, outError, (long)errResult, errError);
+                fclose(details);
+            }
             FILE *marker = fopen(argv[2], "w");
             if (!marker) _exit(68);
             fputs(outBroken && errBroken ? "both-epipe" : "still-connected", marker);
@@ -951,7 +1154,7 @@ struct CLIRunnerTests {
         #expect(throws: InjectedReapFailure.self) {
             _ = try CLIRunner.runExecutable(
                 executable.path,
-                arguments: [holderPidFile.path, markerFile.path],
+                arguments: [holderPidFile.path, markerFile.path, detailsFile.path],
                 pipeDrainTimeout: 0.1,
                 leaderReaper: { processIdentifier, _ in
                     failureGate.lock()
@@ -967,7 +1170,15 @@ struct CLIRunnerTests {
                     }
                     throw InjectedReapFailure()
                 },
-                captureSystemCalls: .init(read: { descriptor, buffer, count in
+                captureSystemCalls: .init(close: { descriptor in
+                    let result = Darwin.close(descriptor)
+                    let closeError = errno
+                    failureGate.lock()
+                    closeObservations.append("fd=\(descriptor),result=\(result),errno=\(closeError)")
+                    failureGate.unlock()
+                    errno = closeError
+                    return result
+                }, read: { descriptor, buffer, count in
                     failureGate.lock()
                     let shouldFail = shouldFailCapture
                     if shouldFail { injectedFailures += 1 }
@@ -998,7 +1209,13 @@ struct CLIRunnerTests {
             }
             Thread.sleep(forTimeInterval: 0.05)
         }
-        #expect(marker == "both-epipe")
+        let writeObservations = (try? String(contentsOf: detailsFile, encoding: .utf8)) ?? "unavailable"
+        failureGate.lock()
+        let closeSnapshot = closeObservations
+        failureGate.unlock()
+        // Numeric fixture diagnostics only; close errno is meaningful only on failure.
+        let diagnostics: Comment = "pipe writes: \(writeObservations); closes: \(closeSnapshot)"
+        #expect(marker == "both-epipe", diagnostics)
         expectProcessIsGone(holderPid)
     }
 
@@ -1113,13 +1330,22 @@ struct CLIRunnerTests {
         let runCLI = RecordingEngine(homePath: home.path, installsGlobalHandlers: false).commandCLI
         let homePath = home.path
         let startedAt = ContinuousClock.now
-        let output = await BlockingOperation.run {
-            runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
+        let operation = RecordingEngine.makeCommandRewriteOperation(
+            args: ["rewrite-selection"], home: homePath, runCLI: runCLI
+        )
+        let (output, workerStartedAt, workerFinishedAt) = await BlockingOperation.run {
+            let workerStartedAt = ContinuousClock.now
+            let output = operation()
+            return (output, workerStartedAt, ContinuousClock.now)
         }
-        let elapsed = ContinuousClock.now - startedAt
+        let resumedAt = ContinuousClock.now
+        let elapsed = resumedAt - startedAt
+        // Report only on a failed elapsed assertion. Admission includes the executor
+        // and dispatch queue hops; the worker interval includes CLI preparation/cleanup.
+        let timing: Comment = "CLI phases: admission=\(workerStartedAt - startedAt), worker=\(workerFinishedAt - workerStartedAt), resume=\(resumedAt - workerFinishedAt)"
 
-        #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout))
-        #expect(elapsed > .seconds(8.4))
+        #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout), timing)
+        #expect(elapsed > .seconds(8.4), timing)
         #expect(output.hasPrefix("ERROR:"))
         #expect(output.contains("timed out"))
 
