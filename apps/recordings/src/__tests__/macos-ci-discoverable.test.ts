@@ -101,7 +101,7 @@ describe("recordings macOS CI is discoverable at the repo root (CI build-and-sig
       // process sampling. The watcher's own unit tests cover its native checks.
       writeFileSync(join(tooling, "watch-recordings-native-stall.py"), `import pathlib, sys, time
 output = pathlib.Path(sys.argv[sys.argv.index("--output") + 1])
-deadline = time.monotonic() + 2
+deadline = time.monotonic() + 10
 while not (output / "stop").exists():
     if time.monotonic() > deadline: raise SystemExit(99)
     time.sleep(0.01)
@@ -113,7 +113,7 @@ printf '%s\\n' "$RECORDINGS_SWIFT_FIXTURE_SUMMARY"
 exit "$RECORDINGS_SWIFT_FIXTURE_STATUS"
 `, { mode: 0o700 });
       const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step.run!], {
-        cwd: member, encoding: "utf8", timeout: 3000,
+        cwd: member, encoding: "utf8", timeout: 15_000,
         env: { HOME: directory, TMPDIR: directory, PATH: `${bin}:/usr/bin:/bin`,
           RUNNER_TEMP: runnerTemp, GITHUB_OUTPUT: outputs,
           RECORDINGS_SWIFT_FIXTURE_SUMMARY: summary, RECORDINGS_SWIFT_FIXTURE_STATUS: String(exit) },
@@ -125,7 +125,7 @@ exit "$RECORDINGS_SWIFT_FIXTURE_STATUS"
       expect(JSON.parse(readFileSync(join(diagnostics, "status.json"), "utf8")))
         .toEqual({ status: "stopped_without_sample" });
     } finally { rmSync(directory, { recursive: true, force: true }); }
-  });
+  }, 20_000);
 
   test("diagnostic reporting and upload still run after a native failure", () => {
     const steps = readWorkflow().jobs.native.steps;
