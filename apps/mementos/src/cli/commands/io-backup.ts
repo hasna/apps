@@ -20,6 +20,12 @@ import {
  * The table is intentionally created with the full column set the restore
  * path maps by name; fields the API does not carry are left NULL and the
  * restore path falls back to its documented defaults.
+ *
+ * The file is a MEMORIES-ONLY CARRIER: it holds this one bespoke table and no
+ * `_migrations` history or other mementos tables, so it is self-identifying
+ * through the `_backup_carrier` marker table. `mementos restore` in API mode
+ * re-ships its rows into the hosted store; the LOCAL restore arm refuses it —
+ * a single-table file can never replace the full on-box database.
  */
 function writeMemoriesBackupFile(
   dest: string,
@@ -35,6 +41,12 @@ function writeMemoriesBackupFile(
   }
   const backupDb = new Database(dest);
   try {
+    backupDb.run(`
+      CREATE TABLE IF NOT EXISTS _backup_carrier (
+        format INTEGER NOT NULL
+      )
+    `);
+    backupDb.run(`INSERT INTO _backup_carrier (format) VALUES (1)`);
     backupDb.run(`
       CREATE TABLE IF NOT EXISTS memories (
         id TEXT PRIMARY KEY,
