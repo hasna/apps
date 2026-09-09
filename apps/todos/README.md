@@ -35,25 +35,28 @@ four things change:
   tools (`create_plan`, `list_plans`, `get_plan`, `update_plan`, `delete_plan`)
   and task-list tools (`create_task_list`, `list_task_lists`, `get_task_list`,
   `update_task_list`, `delete_task_list`) are shared-API only as well.
-- **Most MCP tools that read the on-box store need `HASNA_TODOS_LOCAL=1`.** The
-  MCP server no longer opens the on-box SQLite store implicitly, so tools that
-  still read it directly — the template family, tags and labels, stale/blocked
-  work, `doctor`/`standup`/`status`, run ledger, handoffs, review queues,
-  retrospectives, risks, knowledge records, backups, calendar, boards,
-  focus/time reports and dispatches — fail on the default posture: the server
-  logs `API_DATABASE_FALLBACK_FORBIDDEN` and the call returns an opaque
-  `UNKNOWN_ERROR`. Measured at 0.16.0 with `TODOS_PROFILE=full`, that is 68 of
-  the 125 zero-required-argument tools. A further 16 shared-API tools that need
-  a credential — `list_tasks`, `list_projects`, `list_agents`, `get_next_task`,
-  `get_status`, `bootstrap`, `get_context`, `get_my_tasks`, `get_my_workload`,
-  `get_health`, `standup`, `list_my_tasks`, `machines_register`,
-  `machines_list`, `machines_heartbeat` and `machines_topology` — also return
-  an opaque `UNKNOWN_ERROR` (the server logs `REMOTE_API_CONFIG_MISSING`), so
-  84 of the 125 are opaque from those two guards alone. Only the ten
-  plan/task-list tools return the typed `REMOTE_API_CONFIG_MISSING` refusal. Run
-  the server with `HASNA_TODOS_LOCAL=1` to keep using the on-box tools; that
-  opt-in is ignored when `HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL` is set,
-  because a configured environment outranks it.
+- **Most MCP tools that read the on-box store need `HASNA_TODOS_LOCAL=1`, and
+  every refusal is typed.** The MCP server no longer opens the on-box SQLite
+  store implicitly, so tools that still read it directly — the template family,
+  tags and labels, stale/blocked work, `doctor`/`standup`/`status`, run ledger,
+  handoffs, review queues, retrospectives, risks, knowledge records, backups,
+  calendar, boards, focus/time reports and dispatches — fail on the default
+  posture with the typed `{"code":"API_DATABASE_FALLBACK_FORBIDDEN"}` payload,
+  whose `suggestion` names the opt-in; the server also logs the same code.
+  Measured at 0.16.0 with `TODOS_PROFILE=full`, that is 68 of the 125
+  zero-required-argument tools. A further 18 return the typed
+  `REMOTE_API_CONFIG_MISSING` — the 16 shared-API tools that need a credential
+  (`list_tasks`, `list_projects`, `list_agents`, `get_next_task`, `get_status`,
+  `bootstrap`, `get_context`, `get_my_tasks`, `get_my_workload`, `get_health`,
+  `standup`, `list_my_tasks`, `machines_register`, `machines_list`,
+  `machines_heartbeat`, `machines_topology`) plus `list_plans` and
+  `list_task_lists`. Five more refuse caller input or local state with the typed
+  `INVALID_INPUT` / `ENCRYPTION_KEY_UNAVAILABLE` / `ENCRYPTED_PAYLOAD_INVALID`,
+  and five answer a readable text refusal ("Provide agent_id, id, or name.").
+  No zero-argument tool returns an opaque `UNKNOWN_ERROR`. Run the server with
+  `HASNA_TODOS_LOCAL=1` to keep using the on-box tools; that opt-in is ignored
+  when `HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL` is set, because a
+  configured environment outranks it.
 - **The advertised command list is route-dependent.** 0.15.52 listed all 166
   commands to every caller because the local fallback was implicit. 0.16.0
   lists only what the resolved route exposes: 76 root commands on the hosted
@@ -138,9 +141,9 @@ chmod 600 ~/.hasna/todos/config/credentials
 **Hosted mode fails closed.** With no credential the CLI exits non-zero
 (`REMOTE_API_CONFIG_MISSING`) and names the tiers it consulted. The MCP server
 stays up so a client can read the refusal, and each call fails instead of serving
-local rows — the ten plan/task-list tools with the typed
-`REMOTE_API_CONFIG_MISSING`, the other credential-gated and on-box tools with the
-opaque `UNKNOWN_ERROR` described under
+local rows — the credential-gated tools with the typed
+`REMOTE_API_CONFIG_MISSING` and the on-box tools with the typed
+`API_DATABASE_FALLBACK_FORBIDDEN`, both described under
 [Upgrading From 0.15.52](#upgrading-from-01552). Neither surface falls back to
 the local SQLite store, because serving local rows while authentication is broken
 prints healthy output for a broken system.
@@ -882,7 +885,8 @@ MCP clients get the same local coordination through `claim_next_task`,
 
 `get_stale_tasks` (and the other MCP tools that read the on-box store) require
 the deliberate local opt-in: start the MCP server with `HASNA_TODOS_LOCAL=1`, or
-the call fails on the default posture with an opaque `UNKNOWN_ERROR`. See
+the call fails on the default posture with the typed
+`API_DATABASE_FALLBACK_FORBIDDEN` refusal. See
 [Upgrading From 0.15.52](#upgrading-from-01552) for the affected families and
 the one case where the opt-in is ignored.
 

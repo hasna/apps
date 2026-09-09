@@ -275,11 +275,11 @@ credential of its own).
 
 Tools that read the store through the shared API or read no store at all are
 unaffected. Tools that still call into the local data layer directly answer with
-an opaque `{"code":"UNKNOWN_ERROR"}` on the default posture, and the server logs
-`API_DATABASE_FALLBACK_FORBIDDEN`; the reason never reaches the MCP client. Only
-the ten plan/task-list tools (`create_plan`, `list_plans`, `get_plan`,
-`update_plan`, `delete_plan`, `create_task_list`, `list_task_lists`,
-`get_task_list`, `update_task_list`, `delete_task_list`) return the typed
+the typed `{"code":"API_DATABASE_FALLBACK_FORBIDDEN"}` payload on the default
+posture, whose `suggestion` names the opt-in; the server logs the same code. The
+ten plan/task-list tools (`create_plan`, `list_plans`, `get_plan`, `update_plan`,
+`delete_plan`, `create_task_list`, `list_task_lists`, `get_task_list`,
+`update_task_list`, `delete_task_list`) return the typed
 `REMOTE_API_CONFIG_MISSING` refusal that names the missing configuration.
 
 Measured at 0.16.0 with `TODOS_PROFILE=full` on the default (no-credential)
@@ -322,9 +322,12 @@ returned `API_DATABASE_FALLBACK_FORBIDDEN`:
 
 The shared-API MCP tools that need a credential — `list_tasks`, `list_projects`,
 `get_status`, `get_my_tasks`, `get_health`, `standup`, `list_agents`,
-`machines_*` — also answer `UNKNOWN_ERROR` on the default posture. That refusal
-is the documented fail-closed behaviour rather than a lost local surface, but it
-is not typed either; the same conversion work covers it.
+`machines_*` — answer the typed `REMOTE_API_CONFIG_MISSING` on the default
+posture: the documented fail-closed behaviour rather than a lost local surface.
+Five more zero-argument tools refuse caller input or local state with the typed
+`INVALID_INPUT` / `ENCRYPTION_KEY_UNAVAILABLE` / `ENCRYPTED_PAYLOAD_INVALID`,
+and five answer a readable text refusal. Measured on the same 125-tool census, no
+zero-argument tool returns an opaque `UNKNOWN_ERROR`.
 
 Run the MCP server with `HASNA_TODOS_LOCAL=1` to serve these tools from the
 on-box store. That opt-in is honoured only when the environment configures no

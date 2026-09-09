@@ -10,7 +10,9 @@ import {
   TaskListNotFoundError,
   DependencyCycleError,
   CompletionGuardError,
+  InputValidationError,
 } from "../types/index.js";
+import { EncryptedPayloadError, EncryptionKeyUnavailableError } from "../lib/local-encryption.js";
 // The REAL formatter, not a local copy: a re-implementation silently drifts
 // from the shipped one whenever a branch is added (the 0.16.0 typed
 // REMOTE_API_* refusal was exactly such a branch, and a copied formatter
@@ -188,5 +190,60 @@ describe("formatError returns structured JSON", () => {
     expect(result.code).not.toBe("UNKNOWN_ERROR");
     expect(result.message).toContain("Plan tools require the authenticated Todos API");
     expect(result.suggestion).toContain("HASNA_TODOS_API_URL");
+  });
+});
+
+/**
+ * The storage and shared-API guards throw PLAIN `Error`s whose message begins
+ * with the CLI's stable code. Before this mapping those reached MCP clients as
+ * `UNKNOWN_ERROR` (measured: 89 of the 125 zero-required-argument tools on the
+ * default posture), so a configuration requirement read as a server bug. These
+ * tests pin the typed shape at the formatter — the single chokepoint every
+ * tool's handler error passes through.
+ */
+describe("plain-Error guard refusals get a typed, actionable payload", () => {
+  test("API_DATABASE_FALLBACK_FORBIDDEN keeps its code and names the local opt-in", () => {
+    const result = JSON.parse(formatError(new Error(
+      "API_DATABASE_FALLBACK_FORBIDDEN: this operation must use the shared Todos API; implicit SQLite access is unavailable",
+    )));
+    expect(result.code).toBe("API_DATABASE_FALLBACK_FORBIDDEN");
+    expect(result.code).not.toBe("UNKNOWN_ERROR");
+    expect(result.message).toContain("implicit SQLite access is unavailable");
+    expect(result.suggestion).toContain("HASNA_TODOS_LOCAL=1");
+  });
+
+  test("a REMOTE_API_* resolver refusal keeps its code and names the shared-API configuration", () => {
+    for (const code of ["REMOTE_API_CONFIG_MISSING", "REMOTE_API_UNAVAILABLE", "REMOTE_API_UNAUTHORIZED"]) {
+      const result = JSON.parse(formatError(new Error(`${code}: the authority could not serve this route`)));
+      expect(result.code).toBe(code);
+      expect(result.code).not.toBe("UNKNOWN_ERROR");
+      expect(result.message).toBe("the authority could not serve this route");
+      expect(result.suggestion).toContain("HASNA_TODOS_API_URL");
+    }
+  });
+
+  test("a code that is only mentioned mid-message still sanitizes", () => {
+    // The mapping is anchored to the message PREFIX, so an unclassified error
+    // that merely quotes a guard code keeps the sanitized payload.
+    const result = JSON.parse(formatError(new Error("wrapped: REMOTE_API_CONFIG_MISSING: detail")));
+    expect(result.code).toBe("UNKNOWN_ERROR");
+    expect(result.suggestion).toBeUndefined();
+  });
+
+  test("caller-input and local-state refusals are typed, not UNKNOWN_ERROR", () => {
+    const input = JSON.parse(formatError(new InputValidationError("path or backup is required", "Pass path or backup.")));
+    expect(input.code).toBe("INVALID_INPUT");
+    expect(input.message).toBe("path or backup is required");
+    expect(input.suggestion).toBe("Pass path or backup.");
+
+    const key = JSON.parse(formatError(new EncryptionKeyUnavailableError("TODOS_ENCRYPTION_KEY", "default")));
+    expect(key.code).toBe("ENCRYPTION_KEY_UNAVAILABLE");
+    expect(key.message).toContain("TODOS_ENCRYPTION_KEY");
+    expect(key.suggestion).toContain("TODOS_ENCRYPTION_KEY");
+
+    const payload = JSON.parse(formatError(new EncryptedPayloadError("value is not a hasna/todos encrypted envelope")));
+    expect(payload.code).toBe("ENCRYPTED_PAYLOAD_INVALID");
+    expect(payload.message).toBe("value is not a hasna/todos encrypted envelope");
+    expect(payload.suggestion).toContain("encrypt_local_value");
   });
 });
