@@ -14,6 +14,7 @@ import platform
 import re
 import selectors
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -129,6 +130,52 @@ def fixed_output(argv, cwd=None):
     return subprocess.check_output(argv, cwd=cwd, stderr=subprocess.DEVNULL, timeout=10)
 
 
+def source_change_metadata(source, status):
+    """Read-only dirty-tree detail. Only pinned tracked names and hashes leave here."""
+    raw = fixed_output(["git", "diff", "--raw", "-z", "--no-abbrev", "--no-renames",
+                        "--no-ext-diff", "HEAD", "--"], source)
+    parts = raw.split(b"\0")
+    if parts[-1] != b"" or len(parts) > 129 or (len(parts) - 1) % 2:
+        raise ValueError("source_metadata_shape")
+    rows = []
+    for meta, name in zip(parts[0:-1:2], parts[1:-1:2]):
+        match = re.fullmatch(rb":([0-7]{6}) ([0-7]{6}) ([a-f0-9]{40}) [a-f0-9]{40} ([AMDT])", meta)
+        if match is None:
+            raise ValueError("source_metadata_shape")
+        path = name.decode("utf-8")
+        if not re.fullmatch(r"[A-Za-z0-9_.@/+ -]+", path) or path.startswith("/") or ".." in Path(path).parts:
+            raise ValueError("source_metadata_path")
+        # A path can be printed only when this exact name exists at the pinned source.
+        tree = fixed_output(["git", "ls-tree", "-z", SOURCE, "--", path], source)
+        expected = match[1] + b" blob " + match[3] + b"\t" + name + b"\0"
+        if tree != expected or match[1] not in (b"100644", b"100755"):
+            raise ValueError("source_metadata_unlisted")
+        oid = match[3].decode("ascii")
+        if int(fixed_output(["git", "cat-file", "-s", oid], source)) > 16 * 1024 * 1024:
+            raise ValueError("source_metadata_size")
+        before = fixed_output(["git", "cat-file", "blob", oid], source)
+        row = {"path": path, "change": match[4].decode("ascii"),
+               "before_mode": int(match[1], 8), "after_git_mode": int(match[2], 8),
+               "before_bytes": len(before), "before_sha256": digest(before)}
+        target = source / path
+        if target.parent.resolve(strict=True).is_relative_to(source):
+            try:
+                observed = target.lstat()
+            except FileNotFoundError:
+                observed = None
+            if observed is not None:
+                row["after_mode"] = observed.st_mode
+                if stat.S_ISREG(observed.st_mode) and observed.st_size <= 16 * 1024 * 1024:
+                    fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    with os.fdopen(fd, "rb") as handle:
+                        after = handle.read(16 * 1024 * 1024 + 1)
+                    if len(after) > 16 * 1024 * 1024:
+                        raise ValueError("source_metadata_size")
+                    row.update(after_bytes=len(after), after_sha256=digest(after))
+        rows.append(row)
+    return {"status_bytes": len(status), "status_sha256": digest(status), "changes": rows}
+
+
 def identity(path, version_arg):
     real = Path(path).resolve(strict=True)
     return {"path": str(real), "sha256": digest(real.read_bytes()),
@@ -235,7 +282,13 @@ def main():
     try:
         if fixed_output(["git", "rev-parse", "HEAD"], source).decode().strip() != SOURCE:
             raise ValueError("source_identity")
-        if fixed_output(["git", "status", "--porcelain", "--untracked-files=no"], source):
+        status = fixed_output(["git", "status", "--porcelain", "--untracked-files=no"], source)
+        if status:
+            try:
+                result["source_changes"] = source_change_metadata(source, status)
+            except Exception as exc:
+                # Detail collection must never replace or suppress the original refusal.
+                result["source_metadata_error"] = type(exc).__name__
             raise ValueError("source_dirty")
         result["imported_artifacts"] = {
             name: digest((source / name).read_bytes()) for name in (
