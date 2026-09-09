@@ -4,6 +4,109 @@ import Testing
 @testable import RecordingsLib
 
 struct CLIRunnerTests {
+    private final class DeadlineClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var nanoseconds: UInt64 = 1_000_000_000
+
+        func now() -> UInt64 {
+            lock.lock()
+            defer { lock.unlock() }
+            return nanoseconds
+        }
+
+        func advance(seconds: UInt64) {
+            lock.lock()
+            defer { lock.unlock() }
+            nanoseconds += seconds * 1_000_000_000
+        }
+    }
+
+    @Test("a fractional supplied deadline respects its original budget with a nonadvancing clock")
+    func fractionalDeadlineDoesNotExceedOriginalBudget() throws {
+        let clock = DeadlineClock()
+        let budget = 3.0000000001
+        let result = try CLIRunner.runExecutable(
+            "/usr/bin/true", arguments: [], environment: [:],
+            totalWallClockBudget: budget,
+            wallClockDeadline: .init(after: budget, now: { clock.now() })
+        )
+        #expect(result.terminationStatus == 0)
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.isEmpty)
+    }
+
+    @Test("rewrite admission consumes its original budget before the blocking worker starts")
+    func rewriteAdmissionConsumesOriginalBudget() async {
+        let clock = DeadlineClock()
+        let operation = RecordingEngine.makeCommandRewriteOperation(
+            args: ["rewrite-selection"], home: "/fictional-test-home",
+            runCLI: { args, home, budget in
+                #expect(args == ["rewrite-selection"])
+                #expect(home == "/fictional-test-home")
+                #expect(budget == 7)
+                return "fictional rewrite"
+            },
+            deadline: .init(after: 10, now: { clock.now() })
+        )
+        clock.advance(seconds: 3)
+        #expect(await BlockingOperation.run(operation) == "fictional rewrite")
+    }
+
+    @Test("expired and cleanup-only rewrite admission never calls the command seam", arguments: [8, 10, 11])
+    func expiredRewriteAdmissionAvoidsCommand(seconds: UInt64) async {
+        let clock = DeadlineClock()
+        let operation = RecordingEngine.makeCommandRewriteOperation(
+            args: ["rewrite-selection"], home: "/fictional-test-home",
+            runCLI: { _, _, _ in
+                Issue.record("An exhausted queued rewrite invoked its command seam")
+                return "unexpected command"
+            },
+            deadline: .init(after: 10, now: { clock.now() })
+        )
+        clock.advance(seconds: seconds)
+        let output = await BlockingOperation.run(operation)
+        #expect(output.hasPrefix("ERROR:"))
+        #expect(output.contains("timed out"))
+    }
+
+    @Test("command preparation consumes the original deadline and cannot spawn after exhaustion", arguments: [false, true], [0, 2, 3])
+    func preparationDeadlineAvoidsExpiredSpawn(expiredBeforePreparation: Bool, spentSeconds: UInt64) throws {
+        let home = URL(fileURLWithPath: makeIsolatedTestHome("rewrite-preparation-deadline"), isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let executable = home.appendingPathComponent(".bun/bin/recordings")
+        let marker = home.appendingPathComponent("spawned")
+        try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        #!/bin/sh
+        printf spawned > "$1"
+        printf complete
+        """.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let clock = DeadlineClock()
+        let deadline = CLIRunner.WallClockDeadline(after: 3, now: { clock.now() })
+        if expiredBeforePreparation { clock.advance(seconds: spentSeconds) }
+        var preparations = 0
+        let output = CLIRunner.run(
+            [marker.path], home: home.path, timeout: 3, totalWallClockBudget: 3,
+            wallClockDeadline: deadline,
+            environmentProvider: {
+                preparations += 1
+                if !expiredBeforePreparation { clock.advance(seconds: spentSeconds) }
+                return [:]
+            }
+        )
+        if spentSeconds == 0 {
+            #expect(preparations == 1)
+            #expect(output == "complete")
+            #expect(try String(contentsOf: marker, encoding: .utf8) == "spawned")
+        } else {
+            #expect(preparations == (expiredBeforePreparation ? 0 : 1))
+            #expect(output.hasPrefix("ERROR:"))
+            #expect(output.contains("timed out"))
+            #expect(!FileManager.default.fileExists(atPath: marker.path))
+        }
+    }
+
     @Test("bundled CLI takes precedence over a stale user installation")
     func bundledCLIIsPreferred() throws {
         let root = FileManager.default.temporaryDirectory
@@ -430,9 +533,12 @@ struct CLIRunnerTests {
         let runCLI = RecordingEngine(homePath: home.path, installsGlobalHandlers: false).commandCLI
         let homePath = home.path
         let startedAt = ContinuousClock.now
+        let operation = RecordingEngine.makeCommandRewriteOperation(
+            args: ["rewrite-selection"], home: homePath, runCLI: runCLI
+        )
         let (output, workerStartedAt, workerFinishedAt) = await BlockingOperation.run {
             let workerStartedAt = ContinuousClock.now
-            let output = runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
+            let output = operation()
             return (output, workerStartedAt, ContinuousClock.now)
         }
         let resumedAt = ContinuousClock.now
@@ -529,9 +635,12 @@ struct CLIRunnerTests {
         let runCLI = RecordingEngine(homePath: home.path, installsGlobalHandlers: false).commandCLI
         let homePath = home.path
         let startedAt = ContinuousClock.now
+        let operation = RecordingEngine.makeCommandRewriteOperation(
+            args: ["rewrite-selection"], home: homePath, runCLI: runCLI
+        )
         let (output, workerStartedAt, workerFinishedAt) = await BlockingOperation.run {
             let workerStartedAt = ContinuousClock.now
-            let output = runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
+            let output = operation()
             return (output, workerStartedAt, ContinuousClock.now)
         }
         let resumedAt = ContinuousClock.now
@@ -1221,9 +1330,12 @@ struct CLIRunnerTests {
         let runCLI = RecordingEngine(homePath: home.path, installsGlobalHandlers: false).commandCLI
         let homePath = home.path
         let startedAt = ContinuousClock.now
+        let operation = RecordingEngine.makeCommandRewriteOperation(
+            args: ["rewrite-selection"], home: homePath, runCLI: runCLI
+        )
         let (output, workerStartedAt, workerFinishedAt) = await BlockingOperation.run {
             let workerStartedAt = ContinuousClock.now
-            let output = runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
+            let output = operation()
             return (output, workerStartedAt, ContinuousClock.now)
         }
         let resumedAt = ContinuousClock.now
