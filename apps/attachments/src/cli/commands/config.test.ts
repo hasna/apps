@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, test, expect, spyOn } from "bun:test";
-import { mkdtempSync, rmSync, existsSync } from "fs";
+import { mkdtempSync, rmSync, existsSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { configCommand } from "./config";
@@ -39,6 +39,14 @@ test("show reports preferences without creating state or leaking historical S3 c
  expect(await run(["show"])).toContain("defaults"); expect(existsSync(join(dir, "config.json"))).toBe(false);
  setConfig({ s3: { secretAccessKey: "sensitive-fixture", accessKeyId: "fixture-id" } });
  const output = await run(["show"]); expect(output).not.toContain("sensitive-fixture"); expect(output).not.toContain("fixture-id");
+});
+test("config writes holding S3 credentials land owner-only (0o600)", () => {
+  // The config file became secret-bearing (`config set --access-key/--secret-key`,
+  // MCP configure_s3), so the write must be owner-only — on creation AND when
+  // normalizing a file a pre-0o600 release created umask-default.
+  setConfig({ s3: { secretAccessKey: "owner-only-fixture", accessKeyId: "fixture-id" } });
+  expect(existsSync(join(dir, "config.json"))).toBe(true);
+  expect(statSync(join(dir, "config.json")).mode & 0o777).toBe(0o600);
 });
 test("set changes only supported preferences", async () => { await run(["set", "--expiry", "1h", "--link-type", "server"]); expect(getConfig().defaults).toEqual({ expiry: "1h", linkType: "server" }); });
 for (const args of [["set", "--expiry", "nonsense"], ["set", "--link-type", "local"], ["set", "--storage-backend", "local"], ["set", "--secret-key", "fixture"]]) test("rejects unsupported or invalid config " + args[1], async () => { await expect(run(args)).rejects.toThrow(); expect(existsSync(join(dir, "config.json"))).toBe(false); });

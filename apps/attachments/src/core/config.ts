@@ -1,5 +1,5 @@
 import { join } from "path";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { ensureAttachmentsDataDir } from "./paths";
 
 export interface AttachmentsConfig {
@@ -154,7 +154,13 @@ function loadRawConfig(): DeepPartial<AttachmentsConfig> {
 function saveRawConfig(config: DeepPartial<AttachmentsConfig>): void {
   const dir = join(CONFIG_PATH, "..");
   mkdirSync(dir, { recursive: true });
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+  // The config file can carry S3 access-key/secret values (`config set
+  // --access-key/--secret-key`, MCP configure_s3), so it must be owner-only:
+  // write with 0o600 AND normalize a pre-existing file an older release may
+  // have created umask-default (0644) — writeFileSync's mode applies only at
+  // creation.
+  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { encoding: "utf-8", mode: 0o600 });
+  chmodSync(CONFIG_PATH, 0o600);
 }
 
 export function getConfig(): AttachmentsConfig {
