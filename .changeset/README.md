@@ -32,9 +32,11 @@ the 0.16.0 section (`3e3c645cd`) were all declared `patch` while carrying the
 change. 0.16.0 — a minor — is the class that covers them; they were hand-consumed
 into the already-cut 0.16.0 section rather than run through `changeset version` at
 0.15.52, which would have produced a 0.15.53 `patch` bump for a breaking change.
-See `release-review-todos.md` §1. (Consumption is committed at the released HEAD
+See `release-review-todos.md` §1. (Consumption is committed at the pushed PR head
 `8648bb0d88` — `release/todos-0.16.0` == PR #2055 head — so the disposition is
-unconditional there: 0 `@hasna/todos` changesets remain pending.)
+unconditional there: 0 `@hasna/todos` changesets remain pending. Round-5 re-measurement:
+the worktree is 2 commits ahead of that ref and unpushed, but the only `.changeset/**`
+difference is this file, so the disposition holds at the worktree too.)
 
 ## Naming a package that is not in the workspace
 

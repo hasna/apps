@@ -1,6 +1,56 @@
 [REVIEW] STATUS — @hasna/todos@0.16.0 — branch `release/todos-0.16.0`, PR #2055 (OPEN) — registry npmjs
 
-# Current candidate (round 4, 2026-09-09) — PUSHED HEAD `8648bb0d88`; CI RED
+# Current candidate (round 5, 2026-09-09) — worktree HEAD `4ee5a7be9` (UNPUSHED, 2 ahead of the PR head); CI RED at the PR head `8648bb0d88`
+
+- Package: `@hasna/todos@0.16.0` (`apps/todos/package.json` version 0.16.0).
+- Release vehicle: PR #2055, `release/todos-0.16.0`, state OPEN, `mergeStateStatus` UNSTABLE.
+  `gh pr view 2055 --json headRefOid,state,mergeStateStatus` →
+  `8648bb0d88ba26dc39c55c3fdb26a0d2e9f82693` / OPEN / `UNSTABLE`.
+- **Worktree HEAD is NOT the PR head.** `git rev-parse HEAD` →
+  `4ee5a7be958e83c461810a617d8eb02a88f6e0ef`;
+  `git rev-parse origin/release/todos-0.16.0` and
+  `git ls-remote origin refs/heads/release/todos-0.16.0` → `8648bb0d88…`;
+  `git rev-list --left-right --count HEAD...origin/release/todos-0.16.0` → `2	0`.
+  The two commits are unpushed and on no remote ref:
+  `4ee5a7be9 fix(todos): return typed, actionable MCP refusals instead of UNKNOWN_ERROR`
+  and `2b27306db fix(infra): record the round-4 candidate status (pushed HEAD, CI red)`.
+  The round-1 breaking-change MAJOR (89 of 125 zero-argument MCP tools answering opaque
+  `UNKNOWN_ERROR`) is fixed **only in the unpushed commit**; the PR head still ships the
+  opaque posture. The round-4 block below is superseded: it asserts
+  `git rev-list --left-right --count HEAD...origin/release/todos-0.16.0` → `0 0`, which is
+  now `2	0`.
+- **CI at the PR head `8648bb0d88` is RED.** `gh run list --commit 8648bb0d88…` →
+  `ci` run `34348350710` `conclusion=failure`, `recordings-linux` run `34348350676`
+  `success`. `gh pr checks 2055` → `build + test (affected)  fail  22m34s`; the other five
+  checks pass. **`@hasna/todos:test` did not run there**: in the 12,209-line failed-job log
+  (`gh run view 34348350710 --log-failed`), `grep -c 'todos:test'` → `0`,
+  `grep -c 'todos#test'` → `0`, `grep -c 'todos:build'` → `1`; turbo aborted on
+  `Failed: @hasna/knowledge#test` (`Tasks: 59 successful, 68 total`). The only green `ci`
+  run on this branch (`34293796916`) is at the ancestor `3e63609f9`. **The task premise
+  "CI IS GREEN at the current HEAD 8648bb0d88" is FALSE** and is recorded here as false.
+- **The CI failure is deterministic and outside this branch.** Reproduced here:
+  `cd apps/knowledge && bun test tests/project-panel.test.ts` → `4 pass / 2 fail`,
+  `Expected: "ready" / Received: "stale"` at `apps/knowledge/tests/project-panel.test.ts:381`.
+  `apps/knowledge/**` is untouched by this branch, so a re-run does not clear it.
+- Registry negative control: `npm view @hasna/todos version` → `0.15.52`;
+  `npm view @hasna/todos@0.16.0 version` → npm 404. 0.16.0 is still publishable.
+- Gate: **CLOSED**. Nothing published. No publish command has been run in any round.
+
+## Round-5 lens verdicts (2026-09-09)
+
+| Lens | Verdict | Why |
+| --- | --- | --- |
+| breaking-change | NO_GO (30) | pass-1 documentation findings FIXED and re-measured at worktree HEAD (0 opaque of 125 zero-arg tools); NO_GO is provenance — the fix is unpushed and the PR head is CI-red |
+| test-green | NO_GO (38) | local suite GREEN at worktree HEAD (4383 pass / 168 skip / 0 fail; 4551 tests / 377 files; exit 0); the required `build + test (affected)` check is FAILURE at the PR head and never ran `@hasna/todos:test` |
+| credential-path | NO_GO (32) | credential chain demonstrated end to end at worktree HEAD and from the installed tarball; NO_GO rests on the same red-CI/unpushed precondition |
+| release | NO_GO (12) | artifact checks all pass (pack/version/license/deps/secrets/no-GO); CI red at the release HEAD, the released suite never ran there, and the PR head is 2 commits behind the worktree |
+
+**Blocking (process, not a code defect, outside this lane):** push `4ee5a7be9` +
+`2b27306db` to `release/todos-0.16.0` (updates PR #2055 — never a second PR), repair or
+exclude the `apps/knowledge` date-triggered fixture, then obtain a green
+`build + test (affected)` at the new SHA that actually executes `@hasna/todos:test`.
+
+# Superseded round-4 record (2026-09-09) — PUSHED HEAD `8648bb0d88`; CI RED
 
 - Package: `@hasna/todos@0.16.0` (`apps/todos/package.json` version 0.16.0).
 - Release vehicle: PR #2055, `release/todos-0.16.0`, state OPEN.
@@ -12,6 +62,13 @@
   The remediation is pushed: the 18 consumed changesets and the
   `### Migrating from 0.15.52` block are on the release ref, and `0` `@hasna/todos`
   changesets remain pending (`grep -l '"@hasna/todos"' .changeset/*.md` → 0).
+  **[SUPERSEDED IN ROUND 5 — this is no longer true of the worktree.]** Re-measured
+  2026-09-09 round 5: `git rev-parse HEAD` → `4ee5a7be9…`,
+  `git rev-list --left-right --count HEAD...origin/release/todos-0.16.0` → `2	0`. The
+  divergence is back (two unpushed commits, one of which is the round-1 MCP fix), so
+  "worktree HEAD = PR head" holds only for the round-4 snapshot, not for the tree that
+  would be packed now. The pushed-ref facts in this block (the push of `3e3c645cd`'s
+  consumption, `0` pending todos changesets) remain true of `8648bb0d88`.
 - **CI at this exact SHA is RED, not green.** `gh run list --commit 8648bb0d88…` →
   `ci` run `34348350710` `conclusion=failure` (22m38s) and `recordings-linux` run
   `34348350676` `success`. `gh pr checks 2055` → `build + test (affected)  fail  22m34s`
@@ -141,9 +198,25 @@ only red is a direct branch-tree run of the gate, which is not what CI does.
 | test-green | NO_GO (72) | suite is green (4377 pass / 0 fail, measured at worktree HEAD `48ee38b2d`); the NO_GO is provenance — the worktree commits are unpushed and no CI run has seen them |
 | release | NO_GO (30) | PR not up to date with the branch; tarball lacks `dist/release-provenance.json` until the prepublish path runs |
 
-# Release mechanics (lane fix-infra, rounds 1-4)
+# Release mechanics (lane fix-infra, rounds 1-5)
 
 ## 1. Bump class of the 18 `@hasna/todos` changesets
+
+**Round-5 independent re-measurement (fix-infra, 2026-09-09), fifth time, from the git
+objects themselves:** `git show --name-only --format= 3e3c645cd` → the 18
+`.changeset/todos-*.md` / `1720-todos-public-gate-delete-alignment.md` deletions;
+`git show 3e3c645cd^:<file>` frontmatter for each → **18/18 `"@hasna/todos": patch`**
+(none `minor`, none `major`). Consumption is committed at the pushed PR head `8648bb0d88`
+(`git merge-base --is-ancestor 3e3c645cd origin/release/todos-0.16.0` → exit 0); `0`
+`@hasna/todos` changesets remain pending (`grep -l '"@hasna/todos"' .changeset/*.md` → 0).
+Every distinctive word (length ≥ 6) of each of the 18 bodies resolves inside the
+`awk '/^## 0.16.0/,/^## 0.15.52/'` section — 18/18 files at **100 % word coverage**
+(33/33, 16/16, 16/16, 13/13, 23/23, 12/12, 11/11, 16/16, 13/13, 13/13, 14/14, 17/17,
+20/20, 18/18, 24/24, 13/13, 18/18, 14/14). The section carries `### Migrating from
+0.15.52` and **5** `**Breaking` markers. Disposition unchanged: **0.16.0 (a minor) covers
+the breaking class; no further bump is owed**, and the authoring rule (`minor`, never
+`patch`, for a consumer-breaking change to a 0.x member) is written into
+`.changeset/README.md`.
 
 The 18 changesets deleted by `3e3c645cd` were all declared `"@hasna/todos": patch`
 while several carry breaking changes (CLI `plans`/`task-lists`/`templates` → authenticated
@@ -194,6 +267,22 @@ for the next bump stands and is written into `.changeset/README.md`: a consumer-
 change to a 0.x member is declared `minor` at authoring time, never `patch`.
 
 ## 2. Changesets naming packages absent from the workspace — NOT REPRODUCED
+
+**Round-5 independent re-measurement (fix-infra, 2026-09-09), fifth time, at the worktree
+HEAD `4ee5a7be9`:** still **NOT REPRODUCED**. Frontmatter census over all 118
+`.changeset/*.md` (plus `README.md`) against the 45 workspace member names (`apps/*` +
+`apps/notes/server`) → **0** names that are not members, at the worktree HEAD **and** at the
+PR head `8648bb0d88` (`git archive 8648bb0d88 .changeset` → 119 files, 0 unknown). Prose
+census → **23** references across **22** files to four packages absent from the workspace
+(`@hasna/paths` 20 files, `@hasna/configs`, `@hasna/machines`, `@hasna/mementos-sdk`).
+`changeset version` in a fresh replica (root `package.json` + `.changeset` + every tracked
+`apps/*/package.json` + `apps/notes/server`, the repo's own `@changesets/cli` 2.27.9) →
+**exit 0**, `🦋  All files have been updated. Review them and commit at your leisure`;
+dead-frontmatter negative control (one added changeset naming `@hasna/does-not-exist`) →
+**exit 1**, `🦋  error Error: Found changeset zz-probe-dead-pkg for package
+@hasna/does-not-exist which is not in the workspace`. The probe fires, so the exit-0 result
+is not vacuous. The finding's figure of **6** files still matches no measured set; the
+22 prose files are listed below with a recommendation and **none was deleted**.
 
 **Round-4 re-measurement (fix-infra, 2026-09-09), fourth time, at the released HEAD
 `8648bb0d88`:** the finding is still **NOT REPRODUCED**. Census over the 118
@@ -300,6 +389,22 @@ unpublished (`npm view` → E404).
 
 ## 3. `turbo.json` `tasks.test.env`
 
+**Round-5 independent re-verification (fix-infra, 2026-09-09), no edit needed:** the
+regeneration grep over **all** file types
+(`grep -rhoE 'HASNA_TODOS_[A-Z0-9_]+' apps/todos --exclude-dir=node_modules --exclude-dir=dist | sort -u`,
+not just the `*.ts/*.js/*.json` subset) finds **51** names; `turbo.json` `tasks.test.env`
+lists **51**; found-not-listed **0**, listed-not-found **0**; the `*.test.ts` subset is
+**46/46**. No dynamic construction (`HASNA_TODOS_${…}`, a prefix constant, or a computed
+key) exists anywhere in `apps/todos` — the only non-name match is the `//` note's own
+`HASNA_TODOS_*` wildcard text, and the sole prefix-shaped string is
+`hasna.contract.json`'s `"envPrefix": "HASNA_TODOS_"`. `bunx turbo run test
+--filter=@hasna/todos --dry=json` → exit 0, `envMode: strict`, `@hasna/todos#test`
+specified env = **51**. Two-sided live probe re-run this round against a **verbatim copy of
+this `turbo.json`** plus a probe member (turbo 2.5.4, `--force`): with the three
+`HASNA_TODOS_*` names set to non-secret probe strings in the parent environment, the task
+printed all three values back (`[probe string]`, `[1]`, `[probe corpus]`); with the same
+vars unset the task printed `[] [] []`. The list is load-bearing, not cosmetic.
+
 **Round-4 re-verification (fix-infra, 2026-09-09), no edit needed:** the regeneration grep
 finds **51** `HASNA_TODOS_*` names; `turbo.json` `tasks.test.env` lists **51**;
 found-not-listed **0**, listed-not-found **0**; the `*.test.ts` subset is **46/46**;
@@ -342,25 +447,38 @@ probe member (turbo 2.5.4): real list → `PROBE=[probe-value] LOCAL=[1]
 CORPUS=[probe-corpus]`; `tasks.test.env: []` → `PROBE=[] LOCAL=[] CORPUS=[]`. The list is
 load-bearing, not cosmetic. No edit was needed this round.
 
-**Residual (outside this finding's scope, recommend a follow-up):** the same strict-mode
-filtering applies to the `TODOS_*` family the package also reads — **220** distinct
-non-`HASNA_TODOS_` names (`grep -rhoE '\bTODOS_[A-Z0-9_]+' … apps/todos | sort -u`), with
-`TODOS_DB_PATH` alone at **536** references. If the owner wants full local/CI parity, extend
-the same `env` list (or add `"TODOS_*"`) — not changed here because the finding scopes the fix
-to `HASNA_TODOS_*`.
+**Residual (outside this finding's scope, recommend a follow-up — re-measured round 5):** the
+same strict-mode filtering applies to the `TODOS_*` alias family the package also reads
+(`hasna.contract.json`: `"aliasEnvPrefix": "TODOS_"`). Measured this round as the names
+actually read from the environment — `grep -rhoE '(process\.env(\.|\[")|env\()"?TODOS_[A-Z0-9_]+'`
+over `apps/todos` → **42** alias names. Live probe proof (verbatim copy of this `turbo.json`):
+with `TODOS_API_URL` and `TODOS_TEST_PG_URL` set in the parent environment,
+`turbo run test` printed `ALIAS_TODOS_API_URL=[] ALIAS_TODOS_TEST_PG_URL=[]` — strict mode
+filters them, exactly as it filters an undeclared `HASNA_TODOS_*`. Consequence: the
+Postgres-gated suites keyed on `TODOS_TEST_PG_URL` (13 `*.pg.test.ts` files use
+`process.env.TODOS_TEST_PG_URL ? test : test.skip`) and the `TODOS_RACE_DB` /
+`TODOS_RACE_INPUT` lanes can never be enabled through `turbo run test` — they are reachable
+only by invoking `bun test` directly, which is how the files' own comments document them.
+For the routing aliases the filtering is the SAFE direction (`test/setup.ts` deliberately
+blanks `TODOS_API_URL` / `TODOS_API_KEY` / `TODOS_DATABASE_URL` at preload). Not changed
+here: the finding scopes the fix to `HASNA_TODOS_*`, and adding 42 ambient alias names to
+the allowlist would widen the test task's inherited environment — a hermeticity decision
+for the owner, not a fix-infra edit. Recommendation: if parity is wanted, add the four
+test-gate names (`TODOS_TEST_PG_URL`, `TODOS_RACE_DB`, `TODOS_RACE_INPUT`,
+`TODOS_EXPECTED_VERSION`) rather than the whole alias family, or use `passThroughEnv`.
 
 ## 4. This artifact's prior verdict — and the current status it must not be confused with
 
-**Current status (round 4, 2026-09-09), stated truthfully:** this file's live verdict is
-**NO_GO for `@hasna/todos@0.16.0` at the pushed candidate `8648bb0d88`** (see "Round-4 lens
-verdicts"). The gate is **CLOSED**, nothing is published (`npm view @hasna/todos version` →
-`0.15.52`; `@hasna/todos@0.16.0` → 404), and the blocking item is CI: the `ci` workflow at
-this exact SHA concluded `failure`, and its `build + test (affected)` job never ran
-`@hasna/todos:test` (aborted on `@hasna/knowledge#test`). The round-3 vehicle mismatch is
-resolved — worktree HEAD `8648bb0d88` == `origin/release/todos-0.16.0` == PR #2055 head
-(`git rev-list --left-right --count HEAD...origin/release/todos-0.16.0` → `0 0`). The
-0.15.44 NO_GO below is **historical and superseded** — it is NOT a blocker for 0.16.0, and
-it must not be read as the current verdict.
+**Current status (round 5, 2026-09-09), stated truthfully:** this file's live verdict is
+**NO_GO for `@hasna/todos@0.16.0`** — at the pushed PR head `8648bb0d88` the required `ci`
+check is a FAILURE and `@hasna/todos:test` never ran there, while the worktree that would be
+packed (`4ee5a7be9`) is **2 commits ahead of the PR head and unpushed**, so no CI run covers
+it. The gate is **CLOSED** and nothing is published (`npm view @hasna/todos version` →
+`0.15.52`; `@hasna/todos@0.16.0` → 404). The round-4 claim that the worktree equals the PR
+head (`0 0`) no longer holds: re-measured `2	0`. The 0.15.44 NO_GO below is **historical and
+superseded** — it is NOT a blocker for 0.16.0, and it must not be read as the current
+verdict. (Superseded round-4 text, kept for provenance: the round-4 verdict was NO_GO for
+`0.16.0` at the pushed candidate `8648bb0d88` with the worktree equal to the PR head.)
 
 The previous content of this file was a NO_GO for `@hasna/todos@0.15.44` @
 `f780567980d7cdba7eb79356c2f7b735de8adbab`. That verdict is **historical and superseded**
@@ -373,7 +491,118 @@ forward: the two Postgres paths are exercised by a unit suite, not against a liv
 (every `*.pg.test.ts` is skipped without one — 168 skips in CI and locally alike). Original
 text retained below verbatim for provenance.
 
-## Gates re-run in round 4 (exact output)
+## Gates re-run in round 5 (exact output)
+
+Re-run 2026-09-09 by fix-infra from the repo root at worktree HEAD
+`4ee5a7be958e83c461810a617d8eb02a88f6e0ef` (`bun` 1.3.14, `turbo` 2.5.4). Every line below
+is this round's own output:
+
+- `bun run test:versioning` → **exit 0**, `22 pass / 1 skip / 0 fail`, 655 expect() calls,
+  `Ran 23 tests across 5 files. [1073.00ms]` (includes the member-scoped pending-changeset
+  assertion — §2).
+- `bun run test:standard` → **exit 0**, `152 pass / 0 fail`, 634 expect() calls,
+  `Ran 152 tests across 22 files. [52.97s]` (includes `turbo-graph`, which parses
+  `turbo.json`).
+- `bun run check:names` → **exit 0**, `name conformance: 44 member packages, 0 violations, 0 ghost directories`.
+- `bun run check:dep-direction` → **exit 0**, `dependency direction: 44 member packages, 0 private-scope dependencies`.
+- `bun run check:secrets` → **exit 0**, `secrets scan (staged added lines): 0 findings, 0 added lines checked`.
+- `bun run check:manifests` → **exit 0**, `[check-manifests] 33/44 publishable members conform (11 recorded exceptions); 0 refusal(s)`.
+- `bun run check:frozen-locks` → **exit 1**, `FROZEN-LOCK VIOLATIONS (1): - @hasna/skills
+  (apps/skills): manifest 0.5.4 — behind published @hasna/skills@0.5.6; land the bump on
+  main before deploying`. Branch-local (main carries the published version) and not a CI
+  blocker — see "Estate gate drift". **Round-5 drift update:** the published version moved
+  from `0.5.5` (round 4) to `0.5.6`, so the branch-local red now names `0.5.6`.
+- `bunx changeset status` (real worktree) → **exit 0** (`🦋  info Packages to be bumped at
+  patch: …`).
+- `changeset version` (fresh replica: root `package.json` + `.changeset` + every tracked
+  member manifest, the repo's own `@changesets/cli` 2.27.9) → **exit 0**,
+  `🦋  All files have been updated. Review them and commit at your leisure`; dead-frontmatter
+  negative control → **exit 1**, `🦋  error Error: Found changeset zz-probe-dead-pkg for
+  package @hasna/does-not-exist which is not in the workspace` (§2).
+- Dead-name census (§2): unknown **frontmatter** names **0** of 118 changesets at the
+  worktree HEAD and **0** of 119 at the PR head `8648bb0d88`; **22** changeset bodies (23
+  references) name a package absent from the workspace (`@hasna/paths` 20 files,
+  `@hasna/configs`, `@hasna/machines`, `@hasna/mementos-sdk`) — prose only, never parsed.
+- `HASNA_TODOS_*` census (§3): the all-file-types regeneration grep finds **51**;
+  `turbo.json` `tasks.test.env` lists **51**; found-not-listed **0**, listed-not-found **0**;
+  `*.test.ts` subset **46/46**.
+- `bunx turbo run test --filter=@hasna/todos --dry=json` → **exit 0**, `envMode: strict`,
+  `@hasna/todos#test` `environmentVariables.specified.env` = **51** entries including
+  `HASNA_TODOS_API_KEY` and `HASNA_TODOS_LOCAL`.
+- Two-sided live turbo probe (verbatim copy of this `turbo.json` + a probe member, turbo
+  2.5.4): with the three `HASNA_TODOS_*` names set to non-secret probe strings the task
+  printed all three back (`[probe string]`, `[1]`, `[probe corpus]`); with the vars unset it
+  printed `[] [] []`; alias names `TODOS_API_URL` / `TODOS_TEST_PG_URL` set in the parent →
+  `[]` (filtered — §3 residual).
+- 18-changeset bump-class re-measurement (§1): `git show 3e3c645cd^:<file>` frontmatter →
+  **18/18 `patch`**; 18/18 map into the 0.16.0 section at 100 % word coverage; `0` todos
+  changesets pending; `git merge-base --is-ancestor 3e3c645cd origin/release/todos-0.16.0`
+  → exit 0.
+- Provenance: `git rev-parse HEAD` → `4ee5a7be9…`;
+  `git rev-list --left-right --count HEAD...origin/release/todos-0.16.0` → `2	0`;
+  `git ls-remote origin refs/heads/release/todos-0.16.0` → `8648bb0d88…`;
+  `gh pr view 2055 --json headRefOid,state,mergeStateStatus` → `8648bb0d88…` / OPEN /
+  UNSTABLE.
+- CI: `gh run list --commit 8648bb0d88…` → `ci` `34348350710` **failure**,
+  `recordings-linux` `34348350676` success; `gh run view 34348350710 --log-failed`
+  (12,209 lines) → `grep -c 'todos:test'` **0**, `grep -c 'todos#test'` **0**,
+  `grep -c 'todos:build'` **1**, `Failed: @hasna/knowledge#test`,
+  `Tasks: 59 successful, 68 total`, `Cached: 43 cached, 68 total`; `gh pr checks 2055` →
+  `build + test (affected)  fail  22m34s`, five other checks pass.
+- Knowledge date bomb reproduced locally (outside this lane):
+  `cd apps/knowledge && bun test tests/project-panel.test.ts` → `4 pass / 2 fail`,
+  `Expected: "ready" / Received: "stale"` at `tests/project-panel.test.ts:381`.
+- Registry controls: `npm view @hasna/todos version` → `0.15.52`; `dist-tags` →
+  `{"latest":"0.15.52"}`; `npm view @hasna/todos@0.16.0 version` → npm 404.
+- NOT re-run here (not affected by this lane's files, owned by other lenses): the
+  `apps/todos` `bun test` suite (test-green measured 4383 pass / 168 skip / 0 fail at
+  worktree HEAD), tarball/pack/provenance gates (release), hosted live-path behaviour
+  (credential-path), `check:publish-guard`.
+
+## 5. fix-infra round-5 disposition of the four assigned findings (current)
+
+| # | Finding | Disposition |
+| --- | --- | --- |
+| 1 | 18 consumed changesets declared `patch` while carrying breaking changes | **RECORDED; 0.16.0 covers the class.** 18/18 re-verified `patch` from the git objects at `3e3c645cd^`; 18/18 map into the 0.16.0 section at 100 % word coverage; `0` todos changesets pending; the section carries `### Migrating from 0.15.52` + 5 `**Breaking` markers; the authoring rule is in `.changeset/README.md`. §1. |
+| 2 | 6 changeset files name packages absent from the workspace, breaking `changeset version` repo-wide | **NOT REPRODUCED (fifth measurement).** `0` unknown frontmatter names at the worktree HEAD and at the PR head; `changeset version` exit 0; dead-frontmatter negative control exit 1; the 22 prose files are listed with a recommendation and **none deleted**. §2. |
+| 3 | `turbo.json` `tasks.test.env` must carry every `HASNA_TODOS_*` the tests read | **FIXED (landed at `f700da072`); re-verified, no edit needed** (§3): 51/51 across all file types, 46/46 test subset, no dynamic construction, `envMode: strict`, dry-run lists 51, two-sided live probe passes. |
+| 4 | release-review artifact on disk is a NO_GO for 0.15.44 | **UPDATED — now states the round-5 candidate truthfully.** New "Current candidate (round 5)" block: worktree HEAD `4ee5a7be9` is 2 commits ahead of the PR head `8648bb0d88` and unpushed; the `ci` run at the PR head is a FAILURE and never ran `@hasna/todos:test`; the round-1 MCP fix exists only in the unpushed commit; gate CLOSED; nothing published; round-5 lens verdicts. The round-4 block is marked superseded and its `0 0` divergence claim is corrected inline; the 0.15.44 NO_GO is marked historical. §4. |
+
+**Unresolved in this lane (needs a file or action outside it) — round 5:**
+
+1. **Push `4ee5a7be9` + `2b27306db` to `release/todos-0.16.0`.** Until then the PR head
+   (`8648bb0d88`) lacks the round-1 MCP fix and no CI run covers the tree that would be
+   packed. An orchestrator action, not a file change.
+2. **A green `build + test (affected)` that executes `@hasna/todos:test`.** The failing task
+   is `@hasna/knowledge#test` (`apps/knowledge/tests/project-panel.test.ts`, date-triggered
+   fixture, `expected "ready" / received "stale"`, reproduced 4 pass / 2 fail here);
+   `apps/knowledge/**` is untouched by this branch and outside this lane. Deterministic — a
+   re-run does not clear it.
+3. **CI aborts before `@hasna/todos:test` (`turbo run test --affected` has no `--continue`).**
+   `.github/workflows/ci.yml` is in this lane, but adding `--continue` would NOT reopen the
+   gate (the `ci` job would still fail on `@hasna/knowledge#test`); it would only guarantee
+   the release package's own suite runs and is visible. Deliberately NOT changed
+   unilaterally: it alters the shared gate semantics for all 44 members, which is an owner
+   decision. Recommendation: either repair the knowledge fixture (preferred) or add
+   `--continue` so one red member cannot hide the rest.
+4. **`HASNA_TODOS_EXPECTED_COMMIT` is not exported by any release record** — publish mode
+   hard-requires it (`apps/todos/scripts/verify-public-release.ts`). The owner of the release
+   run must export the released SHA. Outside this lane's files.
+5. **`prepublishOnly` runs no test** (`apps/todos/package.json`:
+   `bun run scripts/verify-public-release.ts --mode=publish`, no `bun test`) — a publish
+   ships the suite unrun. `apps/todos/package.json` is outside this lane.
+6. **Branch-local frozen-locks red** — fixed by a rebase onto main (`apps/skills` 0.5.4 vs
+   published `0.5.6`); `apps/skills/**` is not in this lane. Re-measured this round: exit 1,
+   one violation.
+7. **PR #2055 body is stale** — it asserts "It is green on CI for this exact head commit"
+   and a 775-file tarball, while `gh pr checks 2055` shows `build + test (affected) fail` at
+   `headRefOid` `8648bb0d88`. The PR body is a GitHub object, not a file in this lane; the
+   push that updates the branch should refresh it.
+8. **The pushed copy of this artifact remains stale until that push.** Everything in this
+   round-5 block is on the worktree only; at `8648bb0d88` the committed artifact still names
+   the round-3 vehicle and records neither the red run nor the MCP fix.
+
+## Gates re-run in round 4 (exact output; superseded by the round-5 block above)
 
 Re-run 2026-09-09 by fix-infra from the repo root at worktree HEAD
 `8648bb0d88ba26dc39c55c3fdb26a0d2e9f82693` (`bun` 1.3.14, `turbo` 2.5.4). Every line below
@@ -525,7 +754,7 @@ Re-run 2026-09-09 by fix-infra from the repo root at worktree HEAD (`bun` 1.3.14
 "exit 1 at ANY sha". The current, re-derived value is: exit 1 on a direct branch-tree run,
 green in PR CI (merge commit). See the correction above.
 
-## 5. fix-infra round-4 disposition of the four assigned findings
+## 5a. fix-infra round-4 disposition of the four assigned findings (superseded by §5)
 
 | # | Finding | Disposition |
 | --- | --- | --- |
@@ -534,7 +763,8 @@ green in PR CI (merge commit). See the correction above.
 | 3 | `turbo.json` `tasks.test.env` must carry every `HASNA_TODOS_*` the tests read | **FIXED (landed in the branch at `f700da072`); re-verified, no edit needed this round** (§3): 51/51, 46/46 test-subset, `envMode: strict`, dry-run lists 51. |
 | 4 | release-review artifact on disk is a NO_GO for 0.15.44 | **UPDATED.** New round-4 "Current candidate" block records the pushed HEAD `8648bb0d88`, the RED `ci` run `34348350710` (and that `@hasna/todos:test` never ran there), the CLOSED gate, nothing published, and the round-4 lens verdicts; the 0.15.44 NO_GO is marked historical. §4. |
 
-**Unresolved in this lane (needs a file or action outside it) — round 4:**
+**Unresolved in this lane (needs a file or action outside it) — round 4 (superseded by the
+round-5 list in §5):**
 
 1. **A green CI at `8648bb0d88` that executes `@hasna/todos:test`.** The failing task is
    `@hasna/knowledge#test` in `apps/knowledge/tests/project-panel.test.ts` (a date-triggered
@@ -549,7 +779,7 @@ green in PR CI (merge commit). See the correction above.
 4. **Round-3 documentation findings in `apps/todos/**` (fix-docs lane)** — see the
    round-3 list below; reproduced by the lenses, NOT fixed here.
 
-## 5b. fix-infra round-3 disposition of the four assigned findings (superseded by round 4)
+## 5b. fix-infra round-3 disposition of the four assigned findings (superseded by §5a)
 
 | # | Finding | Disposition |
 | --- | --- | --- |
