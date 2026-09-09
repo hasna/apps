@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -32,6 +32,10 @@ import {
   validateSdkPackageMetadata,
   type PackageJson,
 } from "./public-release-gate";
+
+// Spawns the package build, npm pack and an isolated install; bun's 5s default
+// is far too tight for those on any host.
+setDefaultTimeout(60_000);
 
 const releaseArtifactTest = process.env.HASNA_TODOS_RELEASE_ARTIFACT_TEST === "1" ? test : test.skip;
 

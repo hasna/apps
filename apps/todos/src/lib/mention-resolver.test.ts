@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,9 @@ import { createPlan } from "../db/plans.js";
 import { startTaskRun } from "../db/task-runs.js";
 import { createTask } from "../db/tasks.js";
 import { resolveMentions } from "./mention-resolver.js";
+
+// Spawns git; bun's 5s default is too tight for a cold start on a loaded host.
+setDefaultTimeout(60_000);
 
 function git(root: string, args: string[]): string {
   const result = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
