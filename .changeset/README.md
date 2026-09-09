@@ -32,9 +32,9 @@ the 0.16.0 section (`3e3c645cd`) were all declared `patch` while carrying the
 change. 0.16.0 — a minor — is the class that covers them; they were hand-consumed
 into the already-cut 0.16.0 section rather than run through `changeset version` at
 0.15.52, which would have produced a 0.15.53 `patch` bump for a breaking change.
-See `release-review-todos.md` §1. (Consumption is committed at worktree HEAD
-`85e3a8287`; at the `release/todos-0.16.0` vehicle `3e63609f9` all 18 are still
-pending — the disposition is conditional on that push, per §1's round-3 note.)
+See `release-review-todos.md` §1. (Consumption is committed at the released HEAD
+`8648bb0d88` — `release/todos-0.16.0` == PR #2055 head — so the disposition is
+unconditional there: 0 `@hasna/todos` changesets remain pending.)
 
 ## Naming a package that is not in the workspace
 
