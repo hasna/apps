@@ -876,7 +876,30 @@ remoteCustomerContracts.push({
   inputSchema: objectSchema({ run_id: stringSchema("Run identifier."), artifact_id: stringSchema("Artifact identifier.") }, ["run_id", "artifact_id"]),
   outputSchema: objectSchema({ id: stringSchema("Artifact identifier."), fileName: stringSchema("Artifact file name."), base64: stringSchema("Verified bytes."), sha256: stringSchema("SHA256 digest."), byteSize: { type: "integer", minimum: 0 } }, ["id", "fileName", "base64", "sha256", "byteSize"]),
 });
-const contracts: McpToolContract[] = [...toolContracts, ...remoteCustomerContracts].sort((a, b) => a.name.localeCompare(b.name));
+const publicationUuidSchema: JsonSchemaObject = { type: "string", pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$" };
+const publicationVerification: Record<string, JsonSchemaObject> = {
+  email: { type: "string", format: "email", maxLength: 254 }, code: { type: "string", pattern: "^\\d{6}$" },
+  userId: publicationUuidSchema, membershipId: publicationUuidSchema,
+  recoveryDirectory: { type: "string", maxLength: 4096, description: "Absolute host-local recovery directory without symbolic links." },
+};
+const privatePublicationContracts: McpToolContract[] = [
+  { name: "publish_private_skill", title: "Publish private skill", extras: {
+    directory: { type: "string", maxLength: 4096, description: "Absolute local skill source directory." }, skillId: publicationUuidSchema,
+    expectedCurrentVersionId: { oneOf: [publicationUuidSchema, { type: "null" }] }, idempotencyKey: publicationUuidSchema,
+    confirm: { const: true }, waitMs: { type: "integer", minimum: 0, maximum: 300000 },
+  }, required: ["directory", "skillId", "expectedCurrentVersionId", "confirm"] },
+  { name: "get_private_publication", title: "Get private publication", extras: {}, required: [] },
+  { name: "resume_private_publication", title: "Resume private publication", extras: { confirm: { const: true }, waitMs: { type: "integer", minimum: 0, maximum: 300000 } }, required: ["confirm"] },
+  { name: "cancel_private_publication", title: "Cancel private publication", extras: { confirm: { const: true } }, required: ["confirm"] },
+].map(operation => ({
+  name: operation.name, title: operation.title, description: "Manage private source publication with fresh workspace verification and durable host-local recovery. Upload consent and current version comparison are explicit; private execution remains unavailable.",
+  params: [...Object.keys(publicationVerification), ...Object.keys(operation.extras)], category: "storage", sideEffects: "filesystem", stable: true,
+  inputSchema: objectSchema({ ...publicationVerification, ...operation.extras } as Record<string, JsonSchemaObject>, [...Object.keys(publicationVerification), ...operation.required]),
+  outputSchema: objectSchema({ recoveryDirectory: { type: "string" }, skillId: publicationUuidSchema, intentId: { oneOf: [publicationUuidSchema, { type: "null" }] },
+    state: { type: "string" }, versionId: { oneOf: [publicationUuidSchema, { type: "null" }] }, committed: { type: "boolean" }, executionEnabled: { const: false }, nextAction: { type: "string" },
+  }, ["recoveryDirectory", "skillId", "intentId", "state", "versionId", "committed", "executionEnabled", "nextAction"]),
+}));
+const contracts: McpToolContract[] = [...toolContracts, ...remoteCustomerContracts, ...privatePublicationContracts].sort((a, b) => a.name.localeCompare(b.name));
 
 const resourceContracts: McpResourceContract[] = [
   {
