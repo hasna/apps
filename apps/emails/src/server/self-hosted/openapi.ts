@@ -1545,10 +1545,33 @@ const mailboxFilterApplyPath = {
   post: {
     operationId: "applyMailboxFilter",
     summary: "Apply a saved mailbox filter",
+    description:
+      "List-only apply (read scope): no body, `{}`, or `{\"mutate\":false}` returns the matching mailbox page exactly as before. " +
+      "Mutate apply (write scope): `{\"mutate\":true}` transactionally applies the filter's actions (add_labels / archive / mark_read) " +
+      "to the COMPLETE matching set — `offset` must be 0, the filter must be `enabled:true`, and the response reports " +
+      "`matched`/`updated`/`unchanged` counts with an empty `items` list (`updated` counts messages that actually changed; " +
+      "already-satisfied actions are no-ops). Malformed JSON and non-boolean `mutate` values are refused (400 invalid_input).",
     parameters: [
       ...idParam,
       ...listParams,
     ],
+    requestBody: {
+      required: false,
+      content: {
+        "application/json": {
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              mutate: {
+                type: "boolean",
+                description: "true performs a transactional backfill applying the filter's actions; false (or absent) lists matching messages.",
+              },
+            },
+          },
+        },
+      },
+    },
     responses: {
       "200": {
         content: {
@@ -1561,12 +1584,22 @@ const mailboxFilterApplyPath = {
                 limit: { type: "integer" },
                 offset: { type: "integer" },
                 truncated: { type: "boolean" },
+                // Present only in mutate mode, where `items` is empty and the
+                // counts describe the backfilled matching set.
+                mutate: { type: "boolean", enum: [true] },
+                matched: { type: "integer", minimum: 0 },
+                updated: { type: "integer", minimum: 0 },
+                unchanged: { type: "integer", minimum: 0 },
               },
               required: ["filter", "items", "limit", "offset", "truncated"],
             },
           },
         },
       },
+      "400": errorResponse("Filter is disabled, offset must be 0, or the apply body is malformed"),
+      "401": errorResponse("Authentication required"),
+      "403": errorResponse("Mutate apply requires write scope"),
+      "404": errorResponse("Mailbox filter not found"),
     },
   },
 } as const;

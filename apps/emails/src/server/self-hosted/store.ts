@@ -30,9 +30,12 @@ import {
 } from "../../lib/attachment-download.js";
 import {
   MailboxFilterConflictError,
+  MailboxFilterInputError,
   MailboxFilterNotFoundError,
+  mergeMailboxFilterActions,
   normalizeMailboxFilterInput,
   type MailboxFilter,
+  type MailboxFilterActions,
   type MailboxFilterInput,
 } from "../../lib/mailbox-filters.js";
 
@@ -1563,6 +1566,18 @@ function warmingLimit(target: number, startDate: string | null, now = new Date()
   return Math.min(limit, target);
 }
 
+/**
+ * Quote a trusted identifier for generic-resource SQL.
+ *
+ * Identifiers here come from the SELF_HOSTED_RESOURCES registry (never from a
+ * caller), so quoting is not an injection concern — it is what keeps the
+ * reserved word `order` valid after FR-0001 adds an `order` column to
+ * `mailbox_filters` and the resource registry begins to expose it.
+ */
+function quotedColumn(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
+}
+
 /** Coerce/encode a request value for a generic-resource column per its kind. */
 function encodeColumn(col: ResourceColumn, value: unknown): unknown {
   if (value === undefined) return null;
@@ -2538,6 +2553,9 @@ export class TenantScopedStore {
       const inserted = await tx.get<{ id: string }>(`INSERT INTO messages(${MESSAGE_INSERT_COLS},tenant_id) VALUES(${MESSAGE_INSERT_VALUES},$26) ON CONFLICT(tenant_id,source_id) WHERE source_id IS NOT NULL DO NOTHING RETURNING id`, [...params, this.tenantId]);
       const message = inserted ?? await tx.one<{ id: string }>(`SELECT id FROM messages WHERE tenant_id=$1 AND source_id=$2 AND provider_id=$3`, [this.tenantId, input.source_id, input.provider_id]);
       await tx.execute(`INSERT INTO webhook_receipts(id,tenant_id,provider,event_id,resource_id) VALUES($1,$2,$3,$4,$5)`, [randomUUID(), this.tenantId, provider, eventId, message.id]);
+      // `inserted` is non-null only for a genuinely new message; a replayed
+      // webhook event that matched an existing source row keeps its state.
+      if (inserted) await this.applyEnabledMailboxFiltersToMessage(tx, message.id);
       return { id: message.id, receiptRecorded: true as const };
     });
   }
@@ -3051,7 +3069,15 @@ export class TenantScopedStore {
   //
   // Ordering is by original receipt time when known, else insertion time, so an
   // imported inbox reads in true chronological order rather than import order.
-  async listMessages(opts: ListMessagesOptions = {}): Promise<MessageListPage> {
+  /**
+   * Fold a ListMessagesOptions set into tenant-scoped `messages` selection
+   * predicates. Shared by listMessages (paged mailbox reads) and the
+   * mailbox-filter action engine (exact-ID and whole-set matching) so automatic
+   * actions can never drift from what the same filter returns in list-only
+   * apply. Parameter numbering is relative to the returned `params`; the first
+   * entry is always the tenant id.
+   */
+  private buildMessageSelection(opts: ListMessagesOptions): { where: string[]; params: unknown[] } {
     const where: string[] = ["tenant_id = $1"];
     const params: unknown[] = [this.tenantId];
     if (opts.provider_id) { params.push(opts.provider_id); where.push(`provider_id = $${params.length}`); }
@@ -3133,6 +3159,14 @@ export class TenantScopedStore {
           OR EXISTS (SELECT 1 FROM message_recipients r WHERE r.tenant_id = messages.tenant_id AND r.message_id = messages.id AND r.domain = ANY($${params.length})))`,
       );
     }
+    return { where, params };
+  }
+
+  async listMessages(opts: ListMessagesOptions = {}): Promise<MessageListPage> {
+    // The tenant-scoped selection predicates are shared with the mailbox-filter
+    // action engine (buildMessageSelection), so filter actions can never drift
+    // from what the same filter's list-only apply returns.
+    const { where, params } = this.buildMessageSelection(opts);
     // Keyset cursor: strictly-before in (ts DESC, id DESC) order, served by
     // messages_tenant_ts_id_idx so a deep page costs the same as page one
     // (measured 0.3ms / 19 buffers at 60% depth under RLS). Two clauses on
@@ -3181,6 +3215,9 @@ export class TenantScopedStore {
     const criteria = typeof row["criteria"] === "string"
       ? JSON.parse(row["criteria"] as string)
       : row["criteria"];
+    const actions = typeof row["actions"] === "string"
+      ? JSON.parse(row["actions"] as string)
+      : row["actions"];
     return {
       id: String(row["id"] ?? ""),
       tenant_id: String(row["tenant_id"] ?? this.tenantId),
@@ -3188,6 +3225,15 @@ export class TenantScopedStore {
       normalized_name: String(row["normalized_name"] ?? ""),
       mailbox: String(row["mailbox"] ?? "inbox") as MailboxFilter["mailbox"],
       criteria: criteria as MailboxFilter["criteria"],
+      actions: {
+        add_labels: Array.isArray((actions as { add_labels?: unknown } | undefined)?.add_labels)
+          ? (actions as { add_labels: string[] }).add_labels
+          : [],
+        archive: (actions as { archive?: unknown } | undefined)?.archive === true,
+        mark_read: (actions as { mark_read?: unknown } | undefined)?.mark_read === true,
+      },
+      enabled: row["enabled"] === true || row["enabled"] === 1,
+      order: typeof row["order"] === "number" ? row["order"] : Number(row["order"] ?? 0) || 0,
       created_at: toIso(row["created_at"]) ?? "",
       updated_at: toIso(row["updated_at"]) ?? "",
     };
@@ -3210,7 +3256,7 @@ export class TenantScopedStore {
     const limitIndex = params.push(clampLimit(opts.limit));
     const offsetIndex = params.push(clampOffset(opts.offset));
     const rows = await this.client.many<Record<string, unknown>>(
-      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at
+      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order", created_at, updated_at
          FROM mailbox_filters WHERE ${where.join(" AND ")}
         ORDER BY updated_at DESC, id ASC LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
       params,
@@ -3229,7 +3275,7 @@ export class TenantScopedStore {
     // only and compared via `id::text`, which can never throw; names resolve
     // through normalized_name and a missing name is a plain not-found.
     const row = await this.client.get<Record<string, unknown>>(
-      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at
+      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order", created_at, updated_at
          FROM mailbox_filters
         WHERE tenant_id = $1
           AND (($2 ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' AND id::text = $2)
@@ -3244,9 +3290,9 @@ export class TenantScopedStore {
     const normalized = normalizeMailboxFilterInput(input);
     try {
       const row = await this.client.one<Record<string, unknown>>(
-        `INSERT INTO mailbox_filters (id, tenant_id, name, normalized_name, mailbox, criteria)
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at`,
-        [randomUUID(), this.tenantId, normalized.name, normalized.normalized_name, normalized.mailbox, JSON.stringify(normalized.criteria)],
+        `INSERT INTO mailbox_filters (id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order")
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9) RETURNING id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order", created_at, updated_at`,
+        [randomUUID(), this.tenantId, normalized.name, normalized.normalized_name, normalized.mailbox, JSON.stringify(normalized.criteria), JSON.stringify(normalized.actions), normalized.enabled, normalized.order],
       );
       return this.mailboxFilterFromRow(row);
     } catch (error) {
@@ -3262,20 +3308,31 @@ export class TenantScopedStore {
   ): Promise<MailboxFilter> {
     const current = await this.getMailboxFilter(identifier);
     if (!current) throw new MailboxFilterNotFoundError(identifier);
+    // PUT replaces criteria wholesale; PATCH merges the criteria objects. New
+    // fields are preserved when omitted from either verb. PATCH merges a
+    // supplied actions object over the current one; PUT replaces a supplied
+    // actions object, normalizing omitted action members to their defaults.
+    const criteria = options.replaceCriteria
+      ? (input.criteria ?? {})
+      : { ...current.criteria, ...(input.criteria ?? {}) };
+    const actions = options.replaceCriteria
+      ? (input.actions === undefined ? current.actions : input.actions)
+      : mergeMailboxFilterActions(current.actions, input.actions);
     const normalized = normalizeMailboxFilterInput({
       name: input.name ?? current.name,
       mailbox: input.mailbox ?? input.folder ?? current.mailbox,
-      criteria: options.replaceCriteria
-        ? (input.criteria ?? {})
-        : { ...current.criteria, ...(input.criteria ?? {}) },
+      criteria,
+      actions,
+      enabled: input.enabled ?? current.enabled,
+      order: input.order ?? current.order,
     });
     try {
       const row = await this.client.get<Record<string, unknown>>(
         `UPDATE mailbox_filters
-            SET name = $1, normalized_name = $2, mailbox = $3, criteria = $4::jsonb, updated_at = now()
-          WHERE tenant_id = $5 AND id = $6
-        RETURNING id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at`,
-        [normalized.name, normalized.normalized_name, normalized.mailbox, JSON.stringify(normalized.criteria), this.tenantId, current.id],
+            SET name = $1, normalized_name = $2, mailbox = $3, criteria = $4::jsonb, actions = $5::jsonb, enabled = $6, "order" = $7, updated_at = now()
+          WHERE tenant_id = $8 AND id = $9
+        RETURNING id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order", created_at, updated_at`,
+        [normalized.name, normalized.normalized_name, normalized.mailbox, JSON.stringify(normalized.criteria), JSON.stringify(normalized.actions), normalized.enabled, normalized.order, this.tenantId, current.id],
       );
       if (!row) throw new MailboxFilterNotFoundError(identifier);
       return this.mailboxFilterFromRow(row);
@@ -3295,22 +3352,10 @@ export class TenantScopedStore {
     return rows.length > 0;
   }
 
-  async applyMailboxFilter(identifier: string, opts: ListOptions = {}): Promise<{
-    filter: Pick<MailboxFilter, "name" | "criteria">;
-    page: MessageListPage;
-    limit: number;
-    offset: number;
-  }> {
-    const filter = await this.getMailboxFilter(identifier);
-    if (!filter) throw new MailboxFilterNotFoundError(identifier);
-    const limit = Math.min(1000, Math.max(1, Math.floor(opts.limit ?? 100)));
-    const offset = clampOffset(opts.offset);
-    const folder = filter.mailbox === "unread" ? "inbox" : filter.mailbox as MessageFolder;
-    const page = await this.listMessages({
-      limit: limit + 1,
-      maxLimit: 1001,
-      offset,
-      folder,
+  /** The filter's mailbox + criteria as a message selection (same mapping list-only apply uses). */
+  private mailboxFilterListOptions(filter: MailboxFilter): ListMessagesOptions {
+    return {
+      folder: filter.mailbox === "unread" ? "inbox" : filter.mailbox as MessageFolder,
       search: filter.criteria.search,
       from: filter.criteria.from,
       to: filter.criteria.to,
@@ -3324,6 +3369,172 @@ export class TenantScopedStore {
       unread: filter.criteria.unread || filter.mailbox === "unread",
       starred: filter.criteria.starred,
       archived: filter.criteria.archived,
+    };
+  }
+
+  /** Enabled filters for this tenant in automatic execution order (`"order" ASC, id ASC`). */
+  private async enabledMailboxFilters(client: TypedQueryClient): Promise<MailboxFilter[]> {
+    const rows = await client.many<Record<string, unknown>>(
+      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order", created_at, updated_at
+         FROM mailbox_filters
+        WHERE tenant_id = $1 AND enabled = true
+        ORDER BY "order" ASC, id ASC`,
+      [this.tenantId],
+    );
+    return rows.map((row) => this.mailboxFilterFromRow(row));
+  }
+
+  /** Does the message's CURRENT row satisfy the filter's mailbox + criteria (run on `client`)? */
+  private async messageMatchesMailboxFilter(
+    client: TypedQueryClient,
+    messageId: string,
+    filter: MailboxFilter,
+  ): Promise<boolean> {
+    const { where, params } = this.buildMessageSelection(this.mailboxFilterListOptions(filter));
+    params.push(messageId);
+    const hit = await client.get<{ id: string }>(
+      `SELECT id FROM messages WHERE ${where.join(" AND ")} AND id = $${params.length} LIMIT 1`,
+      params,
+    );
+    return hit !== null;
+  }
+
+  /**
+   * Apply one filter's ACTIONS to a single message, on `client` (the insert or
+   * backfill transaction's client — never this.client, whose per-operation
+   * transactions would commit a status write that an enclosing rollback could
+   * not undo). Mirrors updateMessageStatus's label semantics (folder moves are
+   * the reserved "archived"/"spam"/"trash" labels; existing labels are kept);
+   * already-satisfied actions are skipped and count as unchanged. Returns
+   * whether the row actually changed.
+   */
+  private async applyMailboxFilterActionsToMessage(
+    client: TypedQueryClient,
+    messageId: string,
+    actions: MailboxFilterActions,
+  ): Promise<boolean> {
+    if (!actions.add_labels.length && actions.archive !== true && actions.mark_read !== true) return false;
+    const row = await client.get<Record<string, unknown>>(
+      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+      [messageId, this.tenantId],
+    );
+    if (!row) return false;
+    const current = mapMessageRow(row);
+    const labels = new Map(current.labels.map((label) => [label.toLowerCase(), label]));
+    let changed = false;
+    for (const raw of actions.add_labels) {
+      const key = raw.trim().toLowerCase();
+      if (!key || labels.has(key)) continue;
+      labels.set(key, raw.trim());
+      changed = true;
+    }
+    if (actions.archive === true && !labels.has("archived")) {
+      labels.set("archived", "archived");
+      changed = true;
+    }
+    const markRead = actions.mark_read === true;
+    if (markRead && current.is_read !== true) changed = true;
+    if (!changed) return false;
+    const updated = await client.get<Record<string, unknown>>(
+      `UPDATE messages
+          SET is_read = $2, labels = $3::jsonb, updated_at = now()
+        WHERE id = $1 AND tenant_id = $4
+       RETURNING ${MESSAGE_COLUMNS}`,
+      [messageId, markRead ? true : current.is_read, JSON.stringify([...labels.values()]), this.tenantId],
+    );
+    return updated !== null;
+  }
+
+  /**
+   * Automatic INGEST hook. Runs every ENABLED filter, in execution order,
+   * against a freshly inserted message. Each filter is evaluated against the
+   * message's current row state (after any earlier filter's actions), so one
+   * filter can legitimately gate the next (e.g. archive first, then a filter
+   * scoped to archived matches). Executes entirely on the caller's client so a
+   * hook inside an atomic transaction stays inside it.
+   */
+  private async applyEnabledMailboxFiltersToMessage(client: TypedQueryClient, messageId: string): Promise<void> {
+    for (const filter of await this.enabledMailboxFilters(client)) {
+      if (await this.messageMatchesMailboxFilter(client, messageId, filter)) {
+        await this.applyMailboxFilterActionsToMessage(client, messageId, filter.actions);
+      }
+    }
+  }
+
+  /**
+   * Backfill one ENABLED filter's actions over its COMPLETE matching set. The
+   * set is snapshotted before any write; actions then run per row on the same
+   * client. `updated` counts messages whose state actually changed; an action
+   * that a message already satisfies is a no-op counted in `unchanged`, so
+   * `matched = updated + unchanged`.
+   */
+  private async backfillMailboxFilter(
+    client: TypedQueryClient,
+    filter: MailboxFilter,
+  ): Promise<{ matched: number; updated: number; unchanged: number }> {
+    const { where, params } = this.buildMessageSelection(this.mailboxFilterListOptions(filter));
+    const rows = await client.many<{ id: string }>(
+      `SELECT id FROM messages WHERE ${where.join(" AND ")}`,
+      params,
+    );
+    let updated = 0;
+    for (const row of rows) {
+      if (await this.applyMailboxFilterActionsToMessage(client, String(row["id"]), filter.actions)) updated += 1;
+    }
+    return { matched: rows.length, updated, unchanged: rows.length - updated };
+  }
+
+  async applyMailboxFilter(
+    identifier: string,
+    opts: { limit?: number; offset?: number; mutate?: boolean } = {},
+  ): Promise<{
+    filter: Pick<MailboxFilter, "name" | "criteria">;
+    page: MessageListPage;
+    limit: number;
+    offset: number;
+    mutate?: true;
+    matched?: number;
+    updated?: number;
+    unchanged?: number;
+  }> {
+    const filter = await this.getMailboxFilter(identifier);
+    if (!filter) throw new MailboxFilterNotFoundError(identifier);
+    const limit = Math.min(1000, Math.max(1, Math.floor(opts.limit ?? 100)));
+
+    if (opts.mutate === true) {
+      if (!filter.enabled) {
+        throw new MailboxFilterInputError(`filter "${filter.name}" is disabled; enable it before applying its actions`);
+      }
+      if (clampOffset(opts.offset) !== 0) {
+        throw new MailboxFilterInputError("mutate apply does not paginate; offset must be 0");
+      }
+      // Tenant-bound transaction: snapshot the complete matching set, then apply
+      // actions to that fixed set before any concurrent page can shift under us.
+      const run = this.atomicClient
+        ? this.atomicClient.transaction(async (tx) => {
+            await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
+            return this.backfillMailboxFilter(tx, filter);
+          })
+        : this.backfillMailboxFilter(this.client, filter);
+      const { matched, updated, unchanged } = await run;
+      return {
+        filter: { name: filter.name, criteria: filter.criteria },
+        page: { items: [], next_cursor: null },
+        limit,
+        offset: 0,
+        mutate: true,
+        matched,
+        updated,
+        unchanged,
+      };
+    }
+
+    const offset = clampOffset(opts.offset);
+    const page = await this.listMessages({
+      ...this.mailboxFilterListOptions(filter),
+      limit: limit + 1,
+      maxLimit: 1001,
+      offset,
     });
     return { filter: { name: filter.name, criteria: filter.criteria }, page, limit, offset };
   }
@@ -4673,6 +4884,7 @@ export class TenantScopedStore {
       );
       if (inserted) {
         await tx.execute(`INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id) VALUES (${MESSAGE_INSERT_VALUES}, $26)`, [...params, this.tenantId]);
+        await this.applyEnabledMailboxFiltersToMessage(tx, inserted.message_id);
         return { stored: true as const, id: inserted.message_id, duplicate: false };
       }
       const existing = await tx.get<{ message_id: string; payload_hash: string }>(
@@ -4690,7 +4902,9 @@ export class TenantScopedStore {
        RETURNING ${MESSAGE_COLUMNS}`,
       [...messageInsertParams(input), this.tenantId],
     );
-    return mapMessageRow(row);
+    const record = mapMessageRow(row);
+    await this.applyEnabledMailboxFiltersToMessage(this.client, record.id);
+    return record;
   }
 
   /**
@@ -4766,6 +4980,9 @@ export class TenantScopedStore {
         }
         sourceState = "existing_match";
       }
+      // Only a genuinely NEW insert auto-applies filters; a duplicate delivery
+      // that observed an existing exact-source row keeps its prior state.
+      if (insertedRow) await this.applyEnabledMailboxFiltersToMessage(tx, messageId);
       return {
         record: mapMessageRow(row),
         inserted: Boolean(insertedRow),
@@ -5298,7 +5515,11 @@ export class TenantScopedStore {
       [...messageInsertParams(input), this.tenantId],
     );
     const inserted = Boolean(row["inserted"]);
-    return { record: mapMessageRow(row), inserted };
+    const record = mapMessageRow(row);
+    // Filters auto-apply only when the row was actually INSERTED; an existing
+    // source-id row replayed through upsert keeps its prior state.
+    if (inserted) await this.applyEnabledMailboxFiltersToMessage(this.client, record.id);
+    return { record, inserted };
   }
 
   async updateMessageStatus(
@@ -5510,7 +5731,7 @@ export class TenantScopedStore {
       if (raw === undefined) continue;
       const col = spec.columns.find((c) => c.name === key);
       params.push(encodeColumn(col ?? { name: key }, raw));
-      where.push(`${key} = $${params.length}`);
+      where.push(`${quotedColumn(key)} = $${params.length}`);
     }
     const whereSql = `WHERE ${where.join(" AND ")}`;
     params.push(clampLimit(opts.limit), clampOffset(opts.offset));
@@ -5524,7 +5745,7 @@ export class TenantScopedStore {
   async getResource(spec: SelfHostedResourceSpec, id: string): Promise<Record<string, unknown> | null> {
     const key = keyColumn(spec);
     const row = await this.client.get<Record<string, unknown>>(
-      `SELECT * FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2`,
+      `SELECT * FROM ${spec.table} WHERE ${quotedColumn(key)} = $1 AND ${quotedColumn("tenant_id")} = $2`,
       [id, this.tenantId],
     );
     return redactResourceRow(spec, row);
@@ -5543,18 +5764,18 @@ export class TenantScopedStore {
     // set) takes the key value from the body — it is not server-generated.
     if (spec.idColumn === undefined) {
       params.push(randomUUID());
-      cols.push("id");
+      cols.push(quotedColumn("id"));
       placeholders.push("$1");
     }
     // tenant_id is always stamped from the caller's scope, never from the body.
     params.push(this.tenantId);
-    cols.push("tenant_id");
+    cols.push(quotedColumn("tenant_id"));
     placeholders.push(`$${params.length}`);
     for (const col of spec.columns) {
       if (col.readOnly) continue;
       if (!(col.name in body)) continue;
       params.push(encodeColumn(col, body[col.name]));
-      cols.push(col.name);
+      cols.push(quotedColumn(col.name));
       placeholders.push(col.json ? `$${params.length}::jsonb` : `$${params.length}`);
     }
     const insertHead = `INSERT INTO ${spec.table} (${cols.join(", ")}) VALUES (${placeholders.join(", ")})`;
@@ -5565,7 +5786,7 @@ export class TenantScopedStore {
     // Natural-key: upsert-on-conflict so create is an idempotent "ensure". DO
     // NOTHING can return zero rows, so read (not one()) and fall back to select.
     // A tenant-scoped natural key (email-agents) conflicts on (tenant_id, key).
-    const conflictTarget = spec.compositeKey ? `tenant_id, ${key}` : key;
+    const conflictTarget = spec.compositeKey ? `${quotedColumn("tenant_id")}, ${quotedColumn(key)}` : quotedColumn(key);
     const inserted = await this.client.get<Record<string, unknown>>(
       `${insertHead} ON CONFLICT (${conflictTarget}) DO NOTHING RETURNING *`,
       params,
@@ -5589,7 +5810,7 @@ export class TenantScopedStore {
       if (!(col.name in body)) continue;
       if (col.name === key) continue; // never rewrite the primary key
       params.push(encodeColumn(col, body[col.name]));
-      sets.push(col.json ? `${col.name} = $${params.length}::jsonb` : `${col.name} = $${params.length}`);
+      sets.push(col.json ? `${quotedColumn(col.name)} = $${params.length}::jsonb` : `${quotedColumn(col.name)} = $${params.length}`);
     }
     const sequenceEdit = spec.path === "sequence-enrollments";
     const sequenceGuard = sequenceEdit ? " AND (execution_lease IS NULL OR execution_lease < now()-interval '5 minutes')" + (Object.keys(body).some(field => field !== "status") ? " AND execution_started=false" : "") : "";
@@ -5603,7 +5824,7 @@ export class TenantScopedStore {
     return redactResourceRow(
       spec,
       await this.client.get<Record<string, unknown>>(
-        `UPDATE ${spec.table} SET ${sets.join(", ")} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing'" : ""}${scheduledContentEdit ? " AND enqueue_key IS NULL" : ""}${spec.path === "forwarding" && !forwardingToggleOnly ? " AND NOT EXISTS (SELECT 1 FROM forwarding_delivery_jobs WHERE tenant_id=$2 AND rule_id=$1 AND status='processing')" : ""}${sequenceGuard} RETURNING *`,
+        `UPDATE ${spec.table} SET ${sets.join(", ")} WHERE ${quotedColumn(key)} = $1 AND ${quotedColumn("tenant_id")} = $2${spec.path === "scheduled" ? " AND status <> 'processing'" : ""}${scheduledContentEdit ? " AND enqueue_key IS NULL" : ""}${spec.path === "forwarding" && !forwardingToggleOnly ? " AND NOT EXISTS (SELECT 1 FROM forwarding_delivery_jobs WHERE tenant_id=$2 AND rule_id=$1 AND status='processing')" : ""}${sequenceGuard} RETURNING *`,
         params,
       ),
     );
@@ -5612,7 +5833,7 @@ export class TenantScopedStore {
   async deleteResource(spec: SelfHostedResourceSpec, id: string): Promise<boolean> {
     const key = keyColumn(spec);
     const rows = await this.client.many<{ id: string }>(
-      `DELETE FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing' AND enqueue_key IS NULL" : ""}${spec.path === "forwarding" ? " AND NOT EXISTS (SELECT 1 FROM forwarding_delivery_jobs WHERE tenant_id=$2 AND rule_id=$1 AND status='processing')" : ""}${spec.path === "sequence-enrollments" ? " AND execution_started=false AND execution_lease IS NULL" : ""} RETURNING ${key} AS id`,
+      `DELETE FROM ${spec.table} WHERE ${quotedColumn(key)} = $1 AND ${quotedColumn("tenant_id")} = $2${spec.path === "scheduled" ? " AND status <> 'processing' AND enqueue_key IS NULL" : ""}${spec.path === "forwarding" ? " AND NOT EXISTS (SELECT 1 FROM forwarding_delivery_jobs WHERE tenant_id=$2 AND rule_id=$1 AND status='processing')" : ""}${spec.path === "sequence-enrollments" ? " AND execution_started=false AND execution_lease IS NULL" : ""} RETURNING ${quotedColumn(key)} AS id`,
       [id, this.tenantId],
     );
     return rows.length > 0;

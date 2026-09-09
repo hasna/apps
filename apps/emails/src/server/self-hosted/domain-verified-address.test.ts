@@ -29,10 +29,13 @@ const SIGNING_SECRET = "test-signing-secret-do-not-use-in-prod";
 function tableClient(): TypedQueryClient {
   const tables = new Map<string, Record<string, unknown>[]>();
   const tableOf = (sql: string): string => sql.match(/(?:FROM|INTO|UPDATE)\s+([a-z_]+)/i)?.[1] ?? "";
-  const whereKey = (sql: string): string => sql.match(/WHERE\s+([a-z_]+)\s*=\s*\$1/i)?.[1] ?? "id";
+  // Identifiers may be double-quoted (generic-resource columns are quoted to keep
+  // `order` valid on mailbox_filters); tolerate the quotes in both the WHERE key
+  // and the INSERT column list so rows carry the keys Postgres would return.
+  const whereKey = (sql: string): string => sql.match(/WHERE\s+"?([a-z_]+)"?\s*=\s*\$1/i)?.[1] ?? "id";
 
   const buildInsertRow = (sql: string, params: readonly unknown[]): Record<string, unknown> => {
-    const cols = (sql.match(/INSERT INTO [a-z_]+ \(([^)]+)\)/i)?.[1] ?? "").split(",").map((c) => c.trim());
+    const cols = (sql.match(/INSERT INTO [a-z_]+ \(([^)]+)\)/i)?.[1] ?? "").split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
     const valueTokens = (sql.match(/VALUES \(([^)]+)\)/i)?.[1] ?? "").split(",").map((t) => t.trim());
     const row: Record<string, unknown> = {};
     cols.forEach((c, i) => {
