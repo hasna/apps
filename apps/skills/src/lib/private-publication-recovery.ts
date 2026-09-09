@@ -15,7 +15,9 @@ export interface PrivatePublicationRecovery {
 }
 export interface PrivatePublicationResult {
   recoveryDirectory: string; skillId: string; intentId: string | null; state: string;
-  versionId: string | null; committed: boolean; executionEnabled: false; nextAction: string;
+  versionId: string | null; committed: boolean;
+  /** Null when this recovery receipt contains no directly observed server capability. Publication alone never proves execution availability. */
+  executionEnabled: boolean | null; nextAction: string;
 }
 const fail = (): never => { throw new PrivatePublicationError("PUBLICATION_RECOVERY_INVALID", "The recovery directory is invalid or changed. Preserve it and inspect the existing intent; do not start a replacement automatically."); };
 function safeDirectory(directory: string) {
@@ -121,14 +123,14 @@ export async function preparePrivatePublication(client: RemotePrivatePublication
 }
 export function privatePublicationResult(directory: string, receipt: PrivatePublicationRecovery): PrivatePublicationResult {
   const state = receipt.intent?.state ?? receipt.phase, committed = state === "committed";
-  const nextAction = committed ? "The version is published. Private execution remains unavailable."
+  const nextAction = committed ? "Published; execution requires a separate server quote and approval."
     : ["rejected", "cancelled", "expired"].includes(state) ? "This intent is terminal. Inspect the result before explicitly preparing another version."
     : state === "needs_attention" ? "Keep this intent and contact the service operator; do not create a replacement or upload again."
     : receipt.phase === "upload_uncertain" ? "Run publication resume with this recovery directory to finalize the same intent without another upload."
     : receipt.intent ? "Run publication status or resume with this recovery directory; cancel explicitly if you want to stop."
     : "Run publication resume with this recovery directory to reconcile the identical request key and declaration.";
   return { recoveryDirectory: directory, skillId: receipt.skillId, intentId: receipt.intent?.id ?? null, state,
-    versionId: receipt.intent?.versionId ?? null, committed, executionEnabled: false, nextAction };
+    versionId: receipt.intent?.versionId ?? null, committed, executionEnabled: null, nextAction };
 }
 /** Each write-ahead phase is durable before its network mutation. A resumed
  * uncertain PUT is finalized for server verification, never uploaded again. */

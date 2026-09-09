@@ -522,7 +522,10 @@ the same declaration, and an uncertain upload is never sent twice. If a process
 crashes while holding `operation.lock`, confirm it has stopped before removing
 that lock explicitly. Status and cancellation remain available when new
 publishing is disabled. Exit 2 means publication is still pending; `committed`
-means source was published. Private execution remains unavailable.
+means source was published. Execution requires a separate server quote and approval.
+Publication recovery results report `executionEnabled: null` because their durable
+receipts contain no server capability observation. Use `getCapability()` for the
+server's current boolean capability; it does not authorize an individual run.
 
 The SDK exports `RemotePrivatePublicationsClient` through both the root and
 `./sdk`; `RemoteSkillsAuthClient.openPrivatePublications` creates one from fresh
