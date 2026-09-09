@@ -29,15 +29,16 @@ export function registerProviderTools(server: McpServer): void {
 
   server.tool(
   "add_provider",
-  "Add a new email provider (resend, ses, or sandbox)",
+  "Register a provider; supplied credentials are encrypted and validated atomically by the account API",
   {
+    id: z.string().uuid().optional().describe("Reusable provider UUID for credentialed creation; inspect and reuse after an uncertain response"),
     name: z.string().describe("Provider name"),
     type: z.enum(["resend", "ses", "sandbox"]).describe("Provider type"),
     api_key: z.string().optional().describe("Resend API key"),
     region: z.string().optional().describe("SES region (e.g. us-east-1)"),
     access_key: z.string().optional().describe("SES access key ID"),
     secret_key: z.string().optional().describe("SES secret access key"),
-    skip_validation: z.boolean().optional().describe("Skip credential validation after adding (default: false)"),
+    skip_validation: z.boolean().optional().describe("Skip server credential validation (receipt reports checked: false)"),
   },
   async (input) => {
     return runProviderTool("add_provider", input);
@@ -54,6 +55,7 @@ export function registerProviderTools(server: McpServer): void {
     region: z.string().optional().describe("SES region"),
     access_key: z.string().optional().describe("SES access key ID"),
     secret_key: z.string().optional().describe("SES secret access key"),
+    skip_validation: z.boolean().optional().describe("Skip server credential validation (receipt reports checked: false)"),
   },
   async (input) => {
     return runProviderTool("update_provider", input);

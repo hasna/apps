@@ -1,6 +1,8 @@
+import { proxyProviderStream } from "./provider-stream";
+import { isContextOverflow } from "./provider-error";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { authHeader } from "./auth";
-import { endpoint, Fault } from "./domain";
+import { endpoint, Fault, modelExpired } from "./domain";
 import type { HarnessLaunchInput } from "./harness-types";
 import { injectModelGuidance, renderModelGuidance, resolvePolicyModel, type CompiledModelPolicy } from "./model-policy";
 
@@ -23,7 +25,7 @@ export function createInferenceGateway(input: GatewayInput) {
     const credential=request.headers.get("x-goog-api-key")??request.headers.get("x-api-key")??request.headers.get("authorization")?.replace(/^Bearer /,"")??"";
     if(!timingSafeEqual(expected,digest(credential)))return fail(401,"unauthorized");
     const url=new URL(request.url);
-    if(request.method==="GET"&&url.pathname==="/v1/models"&&!url.search)return Response.json({object:"list",data:input.models.map(m=>({...m,object:"model"}))});
+    if(request.method==="GET"&&url.pathname==="/v1/models"&&!url.search)return Response.json({object:"list",data:input.models.filter(m=>!modelExpired(m)).map(m=>({...m,object:"model"}))});
     const gemini=input.protocol==="gemini-generate-content";
     const match=gemini?/^\/v1beta\/models\/([^/]+):(generateContent|streamGenerateContent|countTokens)$/.exec(url.pathname):null;
     const prefix=input.protocol==="anthropic-messages"?"/messages":input.protocol==="openai-responses"?"/responses":"/chat/completions";
@@ -45,6 +47,7 @@ export function createInferenceGateway(input: GatewayInput) {
       for(const part of [body,...(gemini&&body.generateContentRequest?[body.generateContentRequest]:[])])if(routingFields.some(k=>Object.hasOwn(part,k)))throw new Fault(403,"routing_override","Unmanaged model routing is disabled.");
       if(typeof requested!=="string")throw new Fault(400,"model_required","A model is required.");
       resolved=resolvePolicyModel(policy,requested);
+      if(input.models.some(model=>model.id===resolved&&modelExpired(model)))throw new Fault(422,"model_expired","Selected model has expired.");
       if(gemini)for(const declared of [body.model,body.generateContentRequest?.model])if(declared!==undefined&&declared!==requested&&declared!==`models/${requested}`)throw new Fault(403,"conflicting_model","Conflicting model identity.");
     } catch(error) {event.reason=error instanceof Fault?error.code:"invalid_model";emit();return fail(error instanceof Fault?error.status:400,event.reason);}
     event.resolvedModel=resolved;event.decision=resolved===requested?"allow":"alias";
@@ -64,6 +67,7 @@ export function createInferenceGateway(input: GatewayInput) {
       for(let attempt=0;attempt<candidates.length;attempt++) {
         if(signal.aborted)throw new Error("aborted");
         const model=candidates[attempt];
+        if(input.models.some(entry=>entry.id===model&&modelExpired(entry)))throw new Fault(422,"model_expired","Selected model has expired.");
         if(attempt){flush();current={at:new Date().toISOString(),requestId,requestedModel:safeModel(requested),resolvedModel:model,decision:"fallback",reason:"explicit_transient_fallback"};}
         const payload=structuredClone(body);
         if(gemini) {if(payload.model!==undefined)payload.model=`models/${model}`;if(payload.generateContentRequest?.model!==undefined)payload.generateContentRequest.model=`models/${model}`;}
@@ -78,11 +82,17 @@ export function createInferenceGateway(input: GatewayInput) {
         break;
       }
       if(!response)throw new Error("provider_request_failed");
-      if(!response.ok){await response.body?.cancel();release();return fail(response.status>=300&&response.status<400?502:response.status,`upstream_http_${response.status}`);}
+      if(!response.ok){
+        const overflow=await isContextOverflow(response);
+        if(overflow)current.reason="context_length_exceeded";
+        release();
+        if(overflow)return Response.json({type:"error",error:{type:"invalid_request_error",code:"context_length_exceeded",message:"prompt is too long: the provider context window was exceeded. Compact the conversation or start a new session."}},{status:400});
+        return fail(response.status>=300&&response.status<400?502:response.status,`upstream_http_${response.status}`);
+      }
       if(!response.body){release();return new Response(null,{status:response.status});}
-      const reader=response.body.getReader(), decoder=new TextDecoder();
+      const decoder=new TextDecoder();
       const sse=response.headers.get("content-type")?.includes("text/event-stream");
-      let buffer="",ended=false,output:ReadableStreamDefaultController<Uint8Array>;
+      let buffer="";
       const observe=(text:string)=>{try{const value=JSON.parse(text);const reported=value.model??value.message?.model??value.response?.model??value.modelVersion;if(typeof reported==="string"){current.reportedModel=safeModel(reported);if(reported!==current.resolvedModel)current.reason="provider_reported_different_model";}}catch{}};
       const inspect=(chunk:Uint8Array,done=false)=>{
         buffer+=decoder.decode(chunk,{stream:!done});
@@ -90,9 +100,8 @@ export function createInferenceGateway(input: GatewayInput) {
         else if(buffer.length>131072)buffer="";
         if(done&&buffer)observe(buffer);
       };
-      const end=(error?:Error)=>{if(ended)return;ended=true;try{if(error&&!closing)output.error(error);else output.close();}catch{}release();};
-      const stream=new ReadableStream<Uint8Array>({start(controller){output=controller;},async pull(controller){try{const chunk=await reader.read();if(ended)return;if(chunk.done){inspect(new Uint8Array(),true);end();}else{inspect(chunk.value);controller.enqueue(chunk.value);}}catch{current.reason="stream_interrupted";end(new Error("Provider stream ended unexpectedly"));}},async cancel(){ended=true;abort.abort();try{await reader.cancel();}finally{release();}}});
-      record.cancel=async()=>{abort.abort();try{await reader.cancel();}catch{}finally{end();}};
+      const {stream,cancel}=proxyProviderStream({response,protocol:input.protocol,requestSignal:request.signal,abort,closing:()=>closing,release,inspect,interrupted:()=>{current.reason="stream_interrupted";}});
+      record.cancel=cancel;
       return new Response(stream,{status:response.status,headers:{"content-type":response.headers.get("content-type")??"application/json","cache-control":"no-store"}});
     }catch(error) {if(error instanceof Fault)current.reason=error.code;release();return fail(error instanceof Fault?error.status:502,error instanceof Fault?error.code:"provider_request_failed");}
   }});

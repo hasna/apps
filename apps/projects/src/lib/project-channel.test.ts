@@ -8,6 +8,9 @@ import { runMigrations } from "../db/schema.js";
 import type { Workspace, WorkspaceKind } from "../types/workspace.js";
 import { WORKSPACE_KINDS } from "../types/workspace.js";
 import {
+  conversationsChannelExistence,
+  conversationsChannelListResult,
+  conversationsChannelProbe,
   deriveProjectChannel,
   ensureProjectChannel,
   ensureProjectChannelViaStore,
@@ -20,6 +23,7 @@ import {
   resolveProjectChannelForProject,
   shouldEnsureProjectChannel,
   shouldNotifyProjectAgentOnline,
+  shouldProbeConversationsChannel,
   type ConversationsChannelRunner,
   type ConversationsRunResult,
   type ProjectChannelStore,
@@ -745,5 +749,59 @@ describe("ensureProjectChannelViaStore (the hosted backend)", () => {
       integration_linked: false,
       event_recorded: true,
     });
+  });
+});
+
+describe("conversations channel existence probe", () => {
+  test("parses a bare JSON channel-list array on stdout into names", () => {
+    const result = conversationsChannelListResult({
+      ok: true,
+      stdout: JSON.stringify([
+        { id: "chn_1", name: "package-arrivals" },
+        { id: "chn_2", name: "Work Management" },
+      ]),
+      stderr: "",
+    });
+    expect(result).toEqual({ ok: true, names: ["package-arrivals", "Work Management"] });
+  });
+
+  test("a failing or malformed channel list is unknown, never a fabricated name set", () => {
+    expect(conversationsChannelListResult({ ok: false, stdout: "", stderr: "Error: no such command" }))
+      .toEqual({ ok: false, detail: "Error: no such command" });
+    expect(conversationsChannelListResult({ ok: true, stdout: "not json", stderr: "" })).toMatchObject({ ok: false });
+    expect(conversationsChannelListResult({ ok: true, stdout: JSON.stringify({ channels: [] }), stderr: "" }))
+      .toMatchObject({ ok: false });
+  });
+
+  test("existence membership normalizes both sides before comparing", () => {
+    expect(conversationsChannelExistence(["package-arrivals", "work-management"], "work_management"))
+      .toEqual({ verdict: "exists" });
+    expect(conversationsChannelExistence(["package-arrivals"], "work-management")).toEqual({ verdict: "missing" });
+  });
+
+  test("lists channels once and reuses the cached set across probe calls", () => {
+    const { calls, runner } = recordingRunner(() => ({
+      ok: true,
+      stdout: JSON.stringify([{ name: "package-arrivals" }, { name: "work-management" }]),
+      stderr: "",
+    }));
+    const probe = conversationsChannelProbe(runner);
+    expect(probe("package-arrivals")).toEqual({ verdict: "exists" });
+    expect(probe("work-management")).toEqual({ verdict: "exists" });
+    expect(probe("absent-channel")).toEqual({ verdict: "missing" });
+    expect(calls).toEqual([["channel", "list", "-j"]]);
+  });
+
+  test("reports unknown when the listing cannot run", () => {
+    const probe = conversationsChannelProbe(() => ({ ok: false, stdout: "", stderr: "conversations: command not found" }));
+    expect(probe("work-management")).toEqual({ verdict: "unknown", detail: "conversations: command not found" });
+  });
+
+  test("shouldProbeConversationsChannel honors the env flag and test mode", () => {
+    expect(shouldProbeConversationsChannel({ NODE_ENV: "test" })).toBe(false);
+    expect(shouldProbeConversationsChannel({ HASNA_PROJECTS_CHANNEL_VERIFY: "0", NODE_ENV: "test" })).toBe(false);
+    expect(shouldProbeConversationsChannel({ HASNA_PROJECTS_CHANNEL_VERIFY: "1", NODE_ENV: "test" })).toBe(true);
+    expect(shouldProbeConversationsChannel({ PROJECTS_CHANNEL_VERIFY: "true" })).toBe(true);
+    expect(shouldProbeConversationsChannel({})).toBe(true);
   });
 });

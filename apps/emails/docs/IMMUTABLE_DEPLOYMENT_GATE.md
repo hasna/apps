@@ -111,9 +111,27 @@ The clean-installed candidate CLI must then pass self-hosted status, list,
 search, exact read and body hash, offset pagination, cursor-based attachment
 inventory, authenticated attachment download and byte hash, unauthenticated
 denial, cross-tenant HTTP and CLI denial, and the configured per-probe latency
-budget. The process receives an empty HOME plus a poison `EMAILS_DB_PATH`; status
-must say `self_hosted`, expose no local data directory, and leave the poison
-directory untouched. This makes a silent ambient SQLite fallback a hard failure.
+budget. Successful probes receive an empty HOME, canonical API URL/key settings,
+a random temporary Keychain account, and an empty private data-root trap; they
+do not set a deployment selector or
+an explicit SQLite path. Status must retain its compatibility value `self_hosted`
+and expose no local data directory. Separate negative probes add each supported
+SQLite-path setting alongside the API transport, then remove API configuration
+entirely. Every negative probe must fail and the local trap must remain empty.
+The evidence IDs `self-hosted-cli-status` and `ambient-local-db-refusal` remain
+stable compatibility labels, not runtime selectors.
+
+The image healthcheck requires a configured PostgreSQL DSN and successful
+`/ready`; dashboard availability cannot make a production image healthy.
+`scripts/container-runtime-smoke.sh` builds an isolated PostgreSQL fixture on an
+internal Docker network, applies migrations as a non-superuser/non-bypass owner,
+and starts the read-only non-root image with synthetic auth settings. It checks
+readiness, unauthenticated denial, authenticated tenant-bound API and CLI reads,
+and revocation
+without exposing a host port or sending mail. The synthetic token remains in the
+container process memory.
+The generic server entrypoint still supports the legacy dashboard outside this
+production health contract; a missing DSN is not proof of a working operator API.
 
 For database compatibility, the gate takes a private custom-format backup,
 hashes it, restores it into the dedicated prefixed database, compares aggregate

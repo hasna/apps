@@ -19,13 +19,14 @@ const root = join(import.meta.dir, "..");
 // These assertions pin the package identity independently of release-version
 // history or the separate cloud CLI.
 const CANONICAL_PACKAGE = "@hasna/emails";
-const CANONICAL_REPOSITORY = "git+https://github.com/hasna/emails.git";
+const CANONICAL_REPOSITORY = "git+https://github.com/hasna/apps.git";
 const CANONICAL_BINS = ["emails", "emails-mcp", "emails-serve"];
 
 describe("published package identity", () => {
-  it("publishes as @hasna/emails from the hasna/emails repository", () => {
+  it("publishes as @hasna/emails from the apps/emails monorepo directory", () => {
     expect(pkg.name).toBe(CANONICAL_PACKAGE);
     expect(pkg.repository.url).toBe(CANONICAL_REPOSITORY);
+    expect(pkg.repository.directory).toBe("apps/emails");
   });
 
   it("ships only the emails* bins and leaves mailery* free for the cloud CLI", () => {
@@ -63,6 +64,7 @@ describe("published package identity", () => {
     const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
     expect(ci).toContain(`pkg.name !== "${CANONICAL_PACKAGE}"`);
     expect(ci).toContain(`pkg.repository?.url !== "${CANONICAL_REPOSITORY}"`);
+    expect(ci).toContain('pkg.repository?.directory !== "apps/emails"');
     expect(ci).not.toContain("@hasna/mailery");
   });
 

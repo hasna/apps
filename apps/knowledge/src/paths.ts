@@ -8,19 +8,20 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 // --- Local path resolver -------------------------------------------------
 // @hasna/paths was deleted (hasna/apps#1535, 2026-09-03); this in-package
-// implementation preserves the resolver contract (XDG / macOS home layout
-// honoring HASNA_{CONFIG,DATA,STATE,CACHE}_HOME, with the same env-override
-// and home-override semantics the deleted package had).
+// implementation preserves the resolver contract for the ONE kind knowledge
+// uses — the DATA home (XDG / macOS home layout honoring HASNA_DATA_HOME, with
+// the same env-override and home-override semantics the deleted package had).
+// The config/state/cache kinds were dropped (hasna/apps#1720 validation): no
+// caller ever asked for them, and their Linux branch carried the retired XDG
+// config-root path shape, which must not ship in a client bundle — the
+// credential chain lives in @hasna/contracts and refuses that root itself.
 import { homedir as pathsResolverHomedir } from "node:os";
 import { join as pathsResolverJoin } from "node:path";
 
-export type PathKind = "config" | "data" | "state" | "cache";
+export type PathKind = "data";
 
 const PATHS_RESOLVER_KIND_ENV: Record<PathKind, string> = {
-  config: "HASNA_CONFIG_HOME",
   data: "HASNA_DATA_HOME",
-  state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME",
 };
 
 export interface PathsResolverOptions {
@@ -60,26 +61,9 @@ function pathsResolverBaseDir(kind: PathKind, options: PathsResolverOptions): st
   const home = options.home ?? pathsResolverHomedir();
   const platform = options.platform ?? process.platform;
   if (platform === "darwin") {
-    switch (kind) {
-      case "config":
-      case "data":
-        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
-      case "state":
-        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
-    }
+    return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
   }
-  switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
-    case "data":
-      return pathsResolverJoin(home, ".local", "share", "hasna");
-    case "state":
-      return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
-  }
+  return pathsResolverJoin(home, ".local", "share", "hasna");
 }
 
 function pathsResolverResolve(kind: PathKind, options: PathsResolverOptions): string {

@@ -1385,41 +1385,48 @@ export function verifyAndExtractArchiveDescriptors(
     throw new Error("artifact verifier archive digest mismatch");
   }
   const entries = inspectZipArchiveBytes(archive);
-  const outputRoot = `/dev/fd/${outputDirectoryDescriptor}`;
-  if (readdirSync(outputRoot).length !== 0) {
-    throw new Error("artifact verifier output directory must be empty");
-  }
-  const ordered = [...entries].sort((left, right) => {
-    const depth = left.name.split("/").length - right.name.split("/").length;
-    if (depth !== 0) return depth;
-    if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1;
-    return compareUnsignedUtf8(left.name, right.name);
-  });
-  for (const entry of ordered) {
-    const leaf = entry.isDirectory ? entry.name.slice(0, -1) : entry.name;
-    const target = join(outputRoot, ...leaf.split("/"));
-    const mode = entry.unixMode & 0o777;
-    if (entry.isDirectory) {
-      mkdirSync(target, { mode });
-      chmodSync(target, mode);
-      continue;
+  // /dev/fd/<directory>/child is not traversable on Darwin. Keep all
+  // extraction relative to the borrowed capability, including every ancestor.
+  const guard = nativeFsGuard();
+  const outputRoot = guard.duplicateDirectoryDescriptor(outputDirectoryDescriptor);
+  try {
+    if (guard.readDir(outputRoot).length !== 0) {
+      throw new Error("artifact verifier output directory must be empty");
     }
-    const descriptor = openSync(
-      target,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-      mode,
-    );
-    try {
-      const payload = zipEntryPayload(archive, entry);
-      let offset = 0;
-      while (offset < payload.length) offset += writeSync(descriptor, payload, offset);
-      fchmodSync(descriptor, mode);
-      fsyncSync(descriptor);
-    } finally {
-      closeSync(descriptor);
+    const ordered = [...entries].sort((left, right) => {
+      const depth = left.name.split("/").length - right.name.split("/").length;
+      if (depth !== 0) return depth;
+      if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1;
+      return compareUnsignedUtf8(left.name, right.name);
+    });
+    for (const entry of ordered) {
+      const parts = (entry.isDirectory ? entry.name.slice(0, -1) : entry.name).split("/");
+      const leaf = parts.pop()!;
+      let parent = outputRoot;
+      try {
+        // Close each ancestor as we descend; even a large ZIP keeps only a
+        // bounded number of descriptors open. openDirAt refuses symlinks.
+        for (const component of parts) {
+          const ancestor = parent;
+          parent = guard.openDirAt(ancestor, component);
+          if (ancestor !== outputRoot) guard.close(ancestor);
+        }
+        const mode = entry.unixMode & 0o777;
+        if (entry.isDirectory) {
+          const directory = guard.mkdirAt(parent, leaf, mode);
+          guard.close(directory);
+        } else {
+          guard.writeFileAt(parent, leaf, zipEntryPayload(archive, entry), mode);
+        }
+        guard.fsyncHandle(parent);
+      } finally {
+        if (parent !== outputRoot) guard.close(parent);
+      }
     }
+    guard.fsyncHandle(outputRoot);
+  } finally {
+    guard.close(outputRoot);
   }
-  fsyncSync(outputDirectoryDescriptor);
 }
 
 export function withPrivatelyExtractedArchiveApp<T>(

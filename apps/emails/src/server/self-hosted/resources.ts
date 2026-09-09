@@ -105,6 +105,14 @@ export interface SelfHostedResourceSpec {
 
 export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   {
+    path: "feedback",
+    table: "service_feedback",
+    orderBy: "created_at DESC",
+    filters: ["category"],
+    columns: [{ name: "message" }, { name: "email" }, { name: "category" }, { name: "status", readOnly: true }],
+    requiredColumns: ["message"],
+  },
+  {
     path: "mailbox-filters",
     table: "mailbox_filters",
     orderBy: "updated_at DESC",
@@ -114,6 +122,9 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
       { name: "normalized_name", readOnly: true },
       { name: "mailbox" },
       { name: "criteria", json: true },
+      { name: "actions", json: true },
+      { name: "enabled", bool: true },
+      { name: "order", int: true },
     ],
     requiredColumns: ["name", "mailbox", "criteria"],
   },

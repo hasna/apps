@@ -6,15 +6,16 @@ import type { ProviderAdapter, RemoteAddress, RemoteDomain, RemoteEvent } from "
 
 class LazyProviderAdapter implements ProviderAdapter {
   private adapter: ProviderAdapter | null = null;
-  setMailFrom?: (domain: string, mailFromDomain?: string) => Promise<string>;
+  setMailFrom?: (domain: string, mailFromDomain?: string, signal?: AbortSignal) => Promise<string>;
   reinitiateDomainVerification?: (domain: string) => Promise<DnsRecord[]>;
 
   constructor(private readonly loader: () => Promise<ProviderAdapter>, opts: { supportsMailFrom?: boolean; supportsDomainVerification?: boolean } = {}) {
     if (opts.supportsMailFrom) {
-      this.setMailFrom = async (domain: string, mailFromDomain?: string) => {
+      this.setMailFrom = async (domain: string, mailFromDomain?: string, signal?: AbortSignal) => {
+        signal?.throwIfAborted();
         const adapter = await this.load();
         if (!adapter.setMailFrom) throw new ProviderConfigError("Provider does not support custom MAIL FROM domains");
-        return adapter.setMailFrom(domain, mailFromDomain);
+        return adapter.setMailFrom(domain, mailFromDomain, signal);
       };
     }
     if (opts.supportsDomainVerification) {
@@ -45,8 +46,9 @@ class LazyProviderAdapter implements ProviderAdapter {
     return (await this.load()).verifyDomain(domain);
   }
 
-  async addDomain(domain: string): Promise<void> {
-    return (await this.load()).addDomain(domain);
+  async addDomain(domain: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    return (await this.load()).addDomain(domain, signal);
   }
 
   async listAddresses(): Promise<RemoteAddress[]> {
@@ -61,8 +63,9 @@ class LazyProviderAdapter implements ProviderAdapter {
     return (await this.load()).verifyAddress(email);
   }
 
-  async sendEmail(opts: SendEmailOptions): Promise<string> {
-    return (await this.load()).sendEmail(opts);
+  async sendEmail(opts: SendEmailOptions, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
+    return (await this.load()).sendEmail(opts, signal);
   }
 
   async pullEvents(since?: string): Promise<RemoteEvent[]> {

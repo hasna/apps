@@ -8,6 +8,7 @@ import {
 } from "../../storage.js";
 import { getStorageSyncStatus, pullStorageChanges, pushStorageChanges } from "../../lib/storage-sync.js";
 import { resolveStoreBackend } from "../../db/store-backend.js";
+import { unconfiguredStoreMessage } from "../../db/api-mode.js";
 import { withoutStartupDbAccess } from "../startup-side-effects.js";
 
 function parseTables(raw?: string): string[] | undefined {
@@ -78,31 +79,41 @@ function installStorageSubcommands(storage: Command, program: Command): void {
         }
         if (useJson) {
           outputJson(true, report);
-          return;
-        }
-
-        const label =
-          report.backend === "local-sqlite"
-            ? chalk.green(report.backend)
-            : chalk.yellow(report.backend);
-        console.log(`Backend: ${label}`);
-        console.log(`Selected by: ${report.selected_by}`);
-        console.log(`API mode: ${report.api_mode ? "yes" : "no"}`);
-        console.log(`Server backend: ${report.server_backend}`);
-        if (report.backend === "local-sqlite") {
-          console.log(`Database: ${report.db_path}`);
-          // Say out loud that live credentials were outranked. Staying silent
-          // here is the shape of the defect this reporting exists to prevent,
-          // pointed the other way: an operator who exported an API key and is
-          // being served local SQLite should not have to infer that from an
-          // absence. `selected_by` already names the key that won.
-          if (report.api_key_present && report.api_endpoint) {
-            console.log(`API endpoint (configured, OUTRANKED): ${report.api_endpoint}`);
-          }
         } else {
-          console.log(`API endpoint: ${report.api_endpoint ?? "(none)"}`);
-          console.log(`API key: ${report.api_key_present ? "configured" : "not configured"}`);
-          console.log(`Local SQLite (not authoritative): ${report.db_path}`);
+          const label =
+            report.backend === "local-sqlite"
+              ? chalk.green(report.backend)
+              : report.backend === "unconfigured"
+                ? chalk.red(report.backend)
+                : chalk.yellow(report.backend);
+          console.log(`Backend: ${label}`);
+          console.log(`Selected by: ${report.selected_by}`);
+          console.log(`API mode: ${report.api_mode ? "yes" : "no"}`);
+          console.log(`Server backend: ${report.server_backend}`);
+          if (report.backend === "local-sqlite") {
+            console.log(`Database: ${report.db_path}`);
+            // Say out loud that live credentials were outranked. Staying silent
+            // here is the shape of the defect this reporting exists to prevent,
+            // pointed the other way: an operator who exported an API key and is
+            // being served local SQLite should not have to infer that from an
+            // absence. `selected_by` already names the key that won.
+            if (report.api_key_present && report.api_endpoint) {
+              console.log(`API endpoint (configured, OUTRANKED): ${report.api_endpoint}`);
+            }
+          } else {
+            console.log(`API endpoint: ${report.api_endpoint ?? "(none)"}`);
+            console.log(`API key: ${report.api_key_present ? "configured" : "not configured"}`);
+            console.log(`Local SQLite (not authoritative): ${report.db_path}`);
+          }
+        }
+        if (report.backend === "unconfigured") {
+          // The report is still printed — this is the one command an operator
+          // runs to find out which store they are on — but the answer is NONE:
+          // say so with the same refusal every data verb gives, on stderr, and
+          // exit 1, so a script cannot read "local-sqlite / default" here and
+          // believe the on-box file is about to be served (fail-closed wave).
+          console.error(chalk.red(unconfiguredStoreMessage()));
+          process.exitCode = 1;
         }
       }),
   );

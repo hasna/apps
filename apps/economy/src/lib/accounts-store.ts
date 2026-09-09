@@ -388,24 +388,106 @@ class ApiStore implements AccountsStore {
  * else the local JSON registry. Stale `*_STORAGE_MODE` / `*_MODE` variables
  * are ignored — they never select a store and never error (owner directive
  * 2026-08-15).
+ *
+ * FAIL CLOSED ON MISCONFIGURATION (hasna/apps#1720): the local registry is
+ * selected ONLY by "no credential AND no authority configure the API". A
+ * configured-but-unusable accounts API — a URL with no key, blank or
+ * disagreeing aliases, an unsafe or unreadable credentials file, a Keychain
+ * item that exists but cannot be read, a deliberate override that cannot be
+ * honoured — THROWS instead of silently degrading: the old catch-all fell
+ * back to local attribution on any error, which is exactly the false green
+ * the fail-closed ruling ends (attribution that quietly read an empty local
+ * registry while the fleet API was half configured). A local selection
+ * announces itself once on stderr, so a run can never be mistaken for a
+ * hosted one.
  */
 export function resolveStore(
   env: NodeJS.ProcessEnv = process.env,
   options: ResolveAccountsStoreOptions = {},
 ): AccountsStore {
   const clientEnv = env as Record<string, string | undefined>
-  try {
-    const credential = resolveCredential(ACCOUNTS_APP, clientEnv, options.credentials)
-    if (credential === null) return new LocalStore()
-    const resolution = resolveClientTransport(ACCOUNTS_APP, clientEnv, {
-      credentials: credential ? { ...options.credentials, apiKey: credential.apiKey } : options.credentials,
-    })
-    return new ApiStore(resolution.baseUrl, credential.apiKey)
-  } catch (err) {
-    // Same degradation as @hasna/accounts: an unusable accounts API
-    // configuration falls back to the local registry rather than crashing
-    // attribution.
-    console.warn(`accounts: API configuration unusable (${err instanceof Error ? err.message : String(err)}); using local store`)
+  // ONE pass down the chain, proven by the transport: the credential is read
+  // once and handed back as its tier-1 argument, so the authority pass never
+  // re-reads the tiers — and the key that validated the authority is the key
+  // the store sends (no TOCTOU between two reads).
+  const credential = resolveCredential(ACCOUNTS_APP, clientEnv, options.credentials)
+  if (credential === null) {
+    // Nothing configured anywhere is the documented local answer — but a URL
+    // configured without a key is a MISCONFIGURATION, and the transport's
+    // refusal carries exactly that distinction ("…is not set and no API key
+    // could be resolved" only when nothing at all is configured).
+    try {
+      resolveClientTransport(ACCOUNTS_APP, clientEnv, options.credentials ? { credentials: options.credentials } : {})
+    } catch (err) {
+      if (isNoAccountsCredentialConfigurationError(err)) {
+        announceAccountsLocalMode()
+        return new LocalStore()
+      }
+      throw err
+    }
+    // Unreachable: the transport throws whenever no credential resolves.
+    announceAccountsLocalMode()
     return new LocalStore()
   }
+  if (credential.tier === 'pointer') {
+    // The API store resolves its credential synchronously at construction and
+    // cannot complete a secrets-vault pointer per request. A deliberate tier
+    // that cannot produce a key REFUSES here — it is never resolved around to
+    // the local registry.
+    throw new Error(
+      `accounts: ${credential.source} names a secrets-vault item, and the local accounts API store resolves ` +
+        'credentials synchronously, so it cannot complete the pointer per request. It is a deliberate ' +
+        'selection and is not resolved around. Use a literal tier instead — the Keychain item ' +
+        'hasna.credentials.accounts.api-key, ~/.hasna/accounts/config/credentials, or HASNA_ACCOUNTS_API_KEY.',
+    )
+  }
+  const resolution = resolveClientTransport(ACCOUNTS_APP, clientEnv, {
+    credentials: { ...options.credentials, apiKey: credential.apiKey },
+  })
+  return new ApiStore(resolution.baseUrl, credential.apiKey)
+}
+
+/**
+ * True when the error is the resolver's "nothing configured a credential at
+ * all" refusal — the only hosted-resolution outcome that may fall through to
+ * the local registry. Every other refusal (URL set but no key, blank or
+ * disagreeing variables, an unreadable credentials file, a failing Keychain
+ * item) is a misconfiguration that MUST surface.
+ *
+ * The check is shape-based (error `name` + message), not `instanceof`: the
+ * published @hasna/contracts package builds `./client` and `./client/storage`
+ * as separate bundles, each carrying its own copy of the error class.
+ */
+function isNoAccountsCredentialConfigurationError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const candidate = error as { name?: unknown; message?: unknown }
+  return (
+    candidate.name === 'ClientTransportConfigurationError' &&
+    typeof candidate.message === 'string' &&
+    candidate.message.includes('is not set and no API key could be resolved')
+  )
+}
+
+/** The one line a local run prints, so attribution from the local registry is never silent. */
+function accountsLocalModeNotice(): string {
+  return (
+    'accounts: local mode — no Hasna Accounts credential resolved, so attribution reads the on-box JSON ' +
+    'registry (~/.hasna/accounts/accounts.json) instead of accounts-serve. To go hosted, put the fleet key ' +
+    'in the Keychain item hasna.credentials.accounts.api-key, write ~/.hasna/accounts/config/credentials, ' +
+    'or set HASNA_ACCOUNTS_API_KEY.'
+  )
+}
+
+let accountsLocalNoticePrinted = false
+
+/** Test seam: forget that the local-mode line was printed. */
+export function __resetAccountsLocalNotice(): void {
+  accountsLocalNoticePrinted = false
+}
+
+/** Say — once per process, on stderr — that this install reads the local registry. */
+function announceAccountsLocalMode(): void {
+  if (accountsLocalNoticePrinted) return
+  accountsLocalNoticePrinted = true
+  process.stderr.write(`${accountsLocalModeNotice()}\n`)
 }

@@ -1,6 +1,6 @@
 # @hasna/domains
 
-Domain portfolio, registrar, marketplace, and DNS management for AI agents. The package ships a CLI, MCP server, authenticated HTTP API, generated SDK, and library exports. Every client surface resolves its credential and authority through the one shared `@hasna/contracts` resolver (macOS Keychain, `~/.hasna/domains/config/credentials`, or `HASNA_DOMAINS_API_KEY`, with the fleet gateway `https://api.hasna.com/domains` as the default authority), and data commands fail closed when no credential resolves: local SQLite is reachable only through an explicit path opt-in — never as a silent default; `domains-serve` connects directly to cloud Postgres.
+Domain portfolio, registrar, marketplace, and DNS management for AI agents. The package ships a CLI, MCP server, authenticated HTTP API, generated SDK, and library exports. Every client surface resolves its credential and authority through the one shared `@hasna/contracts` resolver (macOS Keychain, `~/.hasna/domains/config/credentials`, or `HASNA_DOMAINS_API_KEY`, with the fleet gateway `https://api.hasna.com/domains` as the default authority), and data commands fail closed when no credential resolves: local SQLite path settings are rejected; `domains-serve` connects directly to cloud Postgres.
 
 ## Features
 
@@ -33,7 +33,7 @@ Domain portfolio, registrar, marketplace, and DNS management for AI agents. The 
 npm install -g @hasna/domains
 ```
 
-Data is stored in the local domains data directory when the local store is opted into. The default home is `~/.hasna/domains` and follows `HASNA_HOME` (the shared root override) when set; `HASNA_DOMAINS_HOME` / `HASNA_DOMAINS_DIR` (and the legacy `DOMAINS_HOME` / `DOMAINS_DIR` aliases) are exact-app overrides that win unconditionally; override the db file itself with `HASNA_DOMAINS_DB_PATH` / `DOMAINS_DB_PATH`. The XDG layout and `~/.config/hasna` are never consulted (hasna/apps#1720).
+All normal clients use the shared account API. Saved credentials live in the macOS Keychain or `~/.hasna/domains/config/credentials`; `HASNA_HOME` and `HASNA_CONFIG_HOME` can select the credential root. Existing SQLite files are preserved for verified migration and are never opened by the CLI, MCP or SDK factory.
 
 ## Optional Command Groups
 
@@ -244,9 +244,9 @@ The authority follows the same ladder — `HASNA_DOMAINS_API_URL`, the Keychain 
 
 **Fail closed.** A hosted run with no credential exits non-zero naming the canonical env pair — never a silent fallback to SQLite, never a `*-local-fallback` event. A database DSN is never exposed to clients.
 
-**Local SQLite is available only as an explicit opt-in**: set one of `HASNA_DOMAINS_DB_PATH`, `DOMAINS_DB_PATH`, `HASNA_DOMAINS_DIR`, `DOMAINS_DIR` or `HASNA_DOMAINS_HOME` to name the database you mean, and only when the environment configures no authority and no credential. Every local run prints one line on stderr saying it is local. Without a resolvable credential and without such an opt-in, `getStore()` throws and CLI data commands fail — `~/.hasna/domains/domains.db` is never opened implicitly.
+**SQLite client selection is retired.** Unset `HASNA_DOMAINS_DB_PATH`, `DOMAINS_DB_PATH`, `HASNA_DOMAINS_DIR` and `DOMAINS_DIR` before using normal clients. These settings are rejected even when no API key is configured. Preserve existing databases until all records have been reconciled and verified in the shared account; removing a path setting does not migrate data.
 
-The standalone `domains-serve` process is the server side: it connects directly to PostgreSQL using `HASNA_DOMAINS_DATABASE_URL` (SQLite when unset) and requires `HASNA_DOMAINS_API_SIGNING_KEY`. Apply owner-role migrations first with `domains db migrate`.
+`domains serve` and `domains-serve` start the same authenticated PostgreSQL service. Both require a server database DSN (`HASNA_DOMAINS_DATABASE_URL`) and signing key (`HASNA_DOMAINS_API_SIGNING_KEY`); a client API key cannot authorize a listener. Data routes use `/v1` and validate each caller's key and revocation state. Apply owner-role migrations first with `domains db migrate`.
 
 ## MCP Server
 
@@ -322,7 +322,7 @@ An explicit `baseUrl` with no `apiKey` builds a client pinned to that authority
 that never picks up an ambient fleet key; without a resolvable credential the
 SDK throws — it never degrades to an anonymous client or to local data.
 
-`domains serve` is a separate, unauthenticated local-development server over the local store. Use `domains-serve` for the cloud Postgres API.
+`domains serve` is an alias for the authenticated server runtime, preserving its CLI host/port defaults. Its account data routes are `/v1/*`; the former unauthenticated `/domains` proxy has been removed.
 
 ## Environment Variables
 
@@ -335,17 +335,17 @@ SDK throws — it never degrades to an anonymous client or to local data.
 | `HASNA_PROFILE` | Global identity profile pointer (`credentials-<profile>` beside the credential file) |
 | `HASNA_HOME` | Shared root override — `<HASNA_HOME>/domains/` for local data, `<HASNA_HOME>/domains/config/credentials` for the credential file |
 | `HASNA_CONFIG_HOME` | Config-root override for the resolver's credential file |
-| `HASNA_DOMAINS_DB_PATH` | Explicit local-sqlite opt-in: override database file path |
-| `DOMAINS_DB_PATH` | Legacy alias for `HASNA_DOMAINS_DB_PATH` (explicit local-sqlite opt-in) |
-| `HASNA_DOMAINS_DIR` | Explicit local-sqlite opt-in: override database directory |
-| `DOMAINS_DIR` | Legacy alias for `HASNA_DOMAINS_DIR` (explicit local-sqlite opt-in) |
+| `HASNA_DOMAINS_DB_PATH` | Retired client setting; migrate and verify existing data before removal |
+| `DOMAINS_DB_PATH` | Retired legacy client setting; rejected |
+| `HASNA_DOMAINS_DIR` | Retired client setting; rejected |
+| `DOMAINS_DIR` | Retired legacy client setting; rejected |
 | `HASNA_DOMAINS_HOME`, `DOMAINS_HOME` | Exact-app home overrides (canonical name wins over the alias) |
 | `HASNA_DOMAINS_CONFIG_PATH`, `DOMAINS_CONFIG_PATH` | Override the settings config file path |
 | `DOMAINS_CONFIG_DIR` | Override the settings config directory |
 | `DOMAINS_COMMAND_GROUPS` | Comma-separated optional command groups to load, or `all` |
 | `DOMAINS_ENABLE_EXTRAS` | Set to `1` to load all optional command groups |
 | `DOMAINS_MCP_SAFE_MODE` | Set to `1` to expose only read-only MCP tools |
-| `HASNA_DOMAINS_DATABASE_URL` | Server-side PostgreSQL DSN used by `domains-serve` and DB migrations; SQLite backend when unset |
+| `HASNA_DOMAINS_DATABASE_URL` | Server-side PostgreSQL DSN used by `domains-serve` and DB migrations; required for server storage |
 | `HASNA_DOMAINS_API_SIGNING_KEY` | HMAC signing secret used by `domains-serve` to verify API keys |
 | `AWS_PROFILE` | AWS profile for Route 53 Domains and hosted zones |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | AWS credential fallback |

@@ -211,7 +211,7 @@ describe("release bin artifacts", () => {
     }
   });
 
-  test("calendar-mcp bin starts through its shebang and exits cleanly on stdin EOF", () => {
+  test("calendar-mcp bin starts through its shebang and fails closed without a credential", () => {
     const pkg = readPackageJson();
     const mcpBin = pkg.bin?.["calendar-mcp"];
     expect(mcpBin).toBeDefined();
@@ -230,6 +230,41 @@ describe("release bin artifacts", () => {
         },
       });
 
+      // Fail-closed startup (hasna/apps#1720): with no resolvable credential
+      // the bin refuses BEFORE the stdio transport connects — non-zero exit
+      // and the refusal as the first stderr line, never a Bun source frame.
+      expect(result.status).not.toBe(0);
+      expect(result.stderr.split("\n")[0]).toMatch(/^calendar-mcp: refusing to start/);
+      expect(result.stderr).not.toContain("//: Is a directory");
+      expect(result.stdout).toBe("");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("calendar-mcp bin with a configured credential starts and exits cleanly on stdin EOF", () => {
+    const pkg = readPackageJson();
+    const mcpBin = pkg.bin?.["calendar-mcp"];
+    expect(mcpBin).toBeDefined();
+
+    const home = mkdtempSync(join(tmpdir(), "calendar-mcp-home-configured-"));
+    try {
+      const result = spawnSync(join(repoRoot, mcpBin!), [], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        input: "",
+        env: {
+          ...process.env,
+          HOME: home,
+          BUN_TEST: "1",
+          CALENDAR_DB_PATH: join(home, "calendar.db"),
+          HASNA_CALENDAR_API_URL: "https://calendar.example.test",
+          HASNA_CALENDAR_API_KEY: "bin-smoke-key",
+        },
+      });
+
+      // The gate passes, the stdio transport connects, and stdin EOF closes
+      // cleanly with rc=0: the configured bin's lifecycle is unchanged.
       requireSuccess(result, "calendar-mcp");
       expect(result.stderr).not.toContain("//: Is a directory");
     } finally {

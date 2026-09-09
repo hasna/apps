@@ -4288,10 +4288,7 @@ import { join as join2, resolve } from "path";
 import { homedir as pathsResolverHomedir } from "os";
 import { join as pathsResolverJoin } from "path";
 var PATHS_RESOLVER_KIND_ENV = {
-  config: "HASNA_CONFIG_HOME",
-  data: "HASNA_DATA_HOME",
-  state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME"
+  data: "HASNA_DATA_HOME"
 };
 var PATHS_RESOLVER_APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 function pathsResolverAssertApp(app) {
@@ -4316,26 +4313,9 @@ function pathsResolverBaseDir(kind, options) {
   const home = options.home ?? pathsResolverHomedir();
   const platform = options.platform ?? process.platform;
   if (platform === "darwin") {
-    switch (kind) {
-      case "config":
-      case "data":
-        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
-      case "state":
-        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
-    }
+    return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
   }
-  switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
-    case "data":
-      return pathsResolverJoin(home, ".local", "share", "hasna");
-    case "state":
-      return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
-  }
+  return pathsResolverJoin(home, ".local", "share", "hasna");
 }
 function pathsResolverResolve(kind, options) {
   pathsResolverAssertApp(options.app);
@@ -19646,7 +19626,7 @@ function createKnowledgeProjectLinksHttpClient(options) {
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.3.1",
+  version: "0.3.2",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -19709,7 +19689,8 @@ var package_default = {
     serve: "bun src/serve-entry.ts",
     "verify:generated": "bun scripts/verify-generated-artifacts.mjs",
     "contracts:conformance": "contracts conformance fixtures",
-    build: "bun scripts/check-bun-version.mjs && rm -rf dist && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts ./src/sdk.ts --outdir ./dist --external @hasna/contracts --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bun run tsc -p tsconfig.build.json",
+    "typecheck:conformance": "tsc -p tsconfig.conformance.json",
+    build: "bun scripts/check-bun-version.mjs && rm -rf dist && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts ./src/sdk.ts --outdir ./dist --external @hasna/contracts --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bun run tsc -p tsconfig.build.json && bun run typecheck:conformance",
     prepublishOnly: "bun run contracts:conformance && contracts no-cloud-scan . && bun run build && node scripts/validate-public-package.mjs",
     prepack: "bun run build && bun run scan:artifact",
     "scan:artifact": 'bun pm pack --ignore-scripts --quiet --filename "$PWD/knowledge-artifact-scan.tgz" && contracts artifact-scan knowledge-artifact-scan.tgz; rc=$?; rm -f "$PWD/knowledge-artifact-scan.tgz"; exit $rc'
@@ -20783,11 +20764,13 @@ class KnowledgeService {
     return this.ensureWorkspace().jsonStorePath;
   }
   itemStore() {
-    const workspace = this.ensureWorkspace();
-    return resolveItemStore({
-      storePath: workspace.jsonStorePath,
+    const store = resolveItemStore({
+      storePath: this.workspace.jsonStorePath,
       storePathOverridden: false
     });
+    if (store.kind === "local")
+      this.ensureWorkspace();
+    return store;
   }
   projectLinksAuthority() {
     if (this.options.projectLinksAuthority)

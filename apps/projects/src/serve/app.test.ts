@@ -725,7 +725,7 @@ describe("projects-serve auth", () => {
   });
 
   test("typed resource-link projection updates return an actionable HTTP 400 on direct and guarded routes", async () => {
-    const message = "integration 'conversations_channel' is a typed resource-link compatibility projection and must be changed through resource-links";
+    const message = "integration 'conversations_channel' is a typed resource-link compatibility projection and conflicts with the existing resource link ('a-real-channel'); change it through resource-links";
     const store = {
       async updateWorkspace() {
         throw new ValidationError(message);

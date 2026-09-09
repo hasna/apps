@@ -79,7 +79,14 @@ export function resolvePlanRef(ref: string, db?: Database, projectId?: string | 
   return resolvePlanRefDetailed(ref, db, projectId).id;
 }
 
+function assertLegacyPlanInput(input: CreatePlanInput | UpdatePlanInput): void {
+  if (input.start_date !== undefined || input.end_date !== undefined || input.status === "planning" || input.status === "cancelled") {
+    throw new Error("Plan calendar dates and planning/cancelled statuses require the shared Todos API; explicit SQLite storage cannot retain them");
+  }
+}
+
 export function createPlan(input: CreatePlanInput, db?: Database): Plan {
+  assertLegacyPlanInput(input);
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
@@ -184,6 +191,7 @@ export function updatePlan(
   input: UpdatePlanInput,
   db?: Database,
 ): Plan {
+  assertLegacyPlanInput(input);
   const d = db || getDatabase();
   return d.transaction(() => {
     guardPlanRowsSqlite([id], d);

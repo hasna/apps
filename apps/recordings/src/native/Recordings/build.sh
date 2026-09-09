@@ -505,7 +505,8 @@ generate_and_verify_native_fs_guard() {
       import { createRequire } from "node:module";
       const addon = createRequire(import.meta.url)(process.argv[1]);
       const expected = [
-        "chmodHandle", "close", "copyRegularNoReplaceAt", "fsyncHandle",
+        "chmodHandle", "close", "copyRegularNoReplaceAt", "duplicateDirectoryDescriptor",
+        "fsyncHandle", "handleHasNoExtendedAcl",
         "linkNoReplaceAt", "mkdirAt", "openDirAt", "openRegularAt", "openTrustedHome",
         "readDir", "readRegularAt", "removeTreeAt", "removeTreeHandleAt",
         "renameHandleNoReplaceAt", "renameNoReplaceAt", "renameReplaceAt",

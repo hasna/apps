@@ -1,23 +1,7 @@
 /**
- * Routed data facade for @hasna/domains.
- *
- * Every data operation below routes through the single {@link DomainsStore}
- * resolved by {@link getStore}. Resolution FAILS CLOSED when no credential
- * resolves through the shared @hasna/contracts chain (HASNA_DOMAINS_API_KEY,
- * the Keychain, or ~/.hasna/domains/config/credentials; a key alone selects
- * the fleet gateway) and no explicit local opt-in (one of the local path
- * variables) is present — there is no silent default to the on-box sqlite.
- * ApiStore (HTTPS `/v1` + bearer key) backs the hosted transport; LocalStore
- * backs an explicitly opted-in local store. There is NO per-command local
- * fallback and NO direct sqlite access here — the transport is chosen once,
- * centrally, by the resolver, fresh per request. This is the module CLI
- * commands, MCP tools, and the SDK import; none of them touch sqlite or fetch
- * directly.
- *
- * Types and enum constants are re-exported from the underlying record modules
- * (they carry no storage behaviour). The sqlite-backed record modules
- * (domain-records, dns-records, alerts, ...) are the LocalStore backing and are
- * reached ONLY through the store, never imported directly by callers.
+ * Routed account-data facade. Every operation resolves the shared HTTP store
+ * afresh; no CLI, MCP or SDK operation selects a local SQLite database.
+ * Record modules supply shared types/constants and explicit storage fixtures.
  */
 
 import { getStore } from "./store.js";

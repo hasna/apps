@@ -14,7 +14,7 @@ import {
   API_CREDENTIAL_SETTINGS,
   DATABASE_PATH_SETTINGS,
 } from "../../store-resolution.js";
-import { registerEmailLogCommands } from "./email-log.local.js";
+import { registerEmailLogCommands } from "./email-log.local.test-support.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 function captureInheritedProcessEnv(): void {

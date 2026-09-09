@@ -46,7 +46,7 @@ const ALLOWED_UNREACHABLE: Array<{ path: string; reason: string }> = [
 const RESOLVE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts"];
 
 function isTestFile(path: string): boolean {
-  return /\.test\.(ts|tsx)$/.test(path);
+  return /\.test(?:-support)?\.(ts|tsx)$/.test(path);
 }
 
 /** Entrypoints the published package actually builds. */
@@ -145,6 +145,14 @@ describe("shipped entrypoint reachability", () => {
       .sort();
 
     expect(unreachable).toEqual([]);
+  });
+
+  it("never ships tests or test-support implementations through a production entrypoint", () => {
+    expect([...reachableFiles()].filter((file) => /\.test(?:-support)?\.(ts|tsx)$/.test(file))).toEqual([]);
+    const config = JSON.parse(readFileSync(join(REPO_ROOT, "tsconfig.json"), "utf8"));
+    expect(config.exclude).toContain("**/*.test-support.ts");
+    const dockerExclusions = readFileSync(join(REPO_ROOT, ".dockerignore"), "utf8").split(/\r?\n/);
+    for (const pattern of ["**/*.test-support.ts", "**/*.test.ts", "**/*.test.tsx"]) expect(dockerExclusions).toContain(pattern);
   });
 
   it("keeps the unreachable allowlist honest (no stale entries)", () => {

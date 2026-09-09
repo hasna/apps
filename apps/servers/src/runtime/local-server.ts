@@ -26,6 +26,7 @@ import { createTrace } from "../db/traces.js";
 import {
   discoverServerPids,
   findListenerPids,
+  hasOwnedListener,
   isAlive,
   isGroupAlive,
   killTree,
@@ -87,6 +88,10 @@ export interface LocalLifecycleOptions {
   healthUrl?: string;
   readinessUrl?: string;
   env?: Record<string, string>;
+  /** Process-only variables (for resolved vault/environment references). Never persisted. */
+  transientEnv?: Record<string, string>;
+  /** Variables removed from the inherited process environment before spawning. */
+  omitEnv?: string[];
   wait?: boolean;
   waitForLock?: boolean;
   lockTimeoutMs?: number;
@@ -111,6 +116,9 @@ interface ResolvedLifecycleConfig {
   healthUrl?: string;
   readinessUrl?: string;
   env: Record<string, string>;
+  transientEnv?: Record<string, string>;
+  omitEnv?: string[];
+  processScope?: "owned";
   logFile: string;
   readyTimeoutMs: number;
   stopTimeoutMs: number;
@@ -338,6 +346,9 @@ function resolveLifecycleConfig(server: Server, opts: LocalLifecycleOptions = {}
     healthUrl,
     readinessUrl,
     env,
+    transientEnv: opts.transientEnv,
+    omitEnv: opts.omitEnv,
+    processScope: server.metadata.runtime_process_scope === "owned" ? "owned" : undefined,
     logFile,
     readyTimeoutMs: opts.readyTimeoutMs ?? numberValue(server.metadata.ready_timeout_ms) ?? DEFAULT_READY_TIMEOUT_MS,
     stopTimeoutMs: opts.stopTimeoutMs ?? numberValue(server.metadata.stop_timeout_ms) ?? DEFAULT_STOP_TIMEOUT_MS,
@@ -419,7 +430,8 @@ export async function getLocalServerSnapshot(
     ?? runtime.readinessUrl
     ?? healthUrl
     ?? null;
-  const running = isProcessRunning(pid);
+  const ownedScope = server.metadata.runtime_process_scope === "owned";
+  const running = ownedScope ? discoverServerPids({ pid, processScope: "owned" }).length > 0 : isProcessRunning(pid);
   let ready = false;
 
   if (readinessUrl) {
@@ -431,6 +443,7 @@ export async function getLocalServerSnapshot(
   } else {
     ready = running;
   }
+  if (ownedScope) ready = ready && running && (!port || hasOwnedListener(pid, port));
 
   return {
     pid,
@@ -453,6 +466,7 @@ interface ServerProcessTarget {
   port: number | null;
   command: string | null;
   cwd: string | null;
+  processScope?: "owned";
 }
 
 /** Build the discovery descriptor used to find and kill a server's process tree. */
@@ -469,20 +483,21 @@ function serverProcessTarget(server: Server, opts: LocalLifecycleOptions = {}): 
       ?? stringValue(server.metadata.command)
       ?? null,
     cwd: opts.cwd ?? stringValue(server.metadata.cwd) ?? server.path ?? null,
+    processScope: server.metadata.runtime_process_scope === "owned" ? "owned" : undefined,
   };
 }
 
 async function waitForReadiness(
   getServerSnapshot: () => Promise<LocalServerSnapshot>,
   timeoutMs: number,
-  options: { spawnedPid?: number; logFile?: string } = {},
+  options: { spawnedPid?: number; logFile?: string; redactValues?: string[] } = {},
 ): Promise<LocalServerSnapshot> {
   const deadline = Date.now() + timeoutMs;
   let last = await getServerSnapshot();
   while (Date.now() < deadline) {
     if (last.ready) return last;
     if (options.spawnedPid && !isProcessRunning(options.spawnedPid)) {
-      const logTail = options.logFile ? readLogTail(options.logFile) : null;
+      const logTail = options.logFile ? readLogTail(options.logFile, 4000, options.redactValues) : null;
       const suffix = logTail?.trim()
         ? ` Last log output:\n${logTail.trim()}`
         : "";
@@ -538,6 +553,7 @@ async function cleanupSpawnedProcessAfterFailure(
     port: config.port ?? null,
     command: config.command,
     cwd: config.cwd,
+    processScope: config.processScope,
     gracePeriodMs: timeoutMs,
   });
 
@@ -572,7 +588,11 @@ function spawnDetached(config: ResolvedLifecycleConfig): number {
   try {
     const child = spawn("bash", ["-lc", config.command], {
       cwd: config.cwd,
-      env: { ...process.env, ...config.env },
+      env: {
+        ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !config.omitEnv?.includes(key))),
+        ...config.env,
+        ...config.transientEnv,
+      },
       detached: true,
       stdio: ["ignore", out, out],
     });
@@ -584,10 +604,14 @@ function spawnDetached(config: ResolvedLifecycleConfig): number {
   }
 }
 
-function readLogTail(logFile: string, maxBytes = 4000): string | null {
+function readLogTail(logFile: string, maxBytes = 4000, redactValues: string[] = []): string | null {
   try {
     if (!existsSync(logFile)) return null;
-    const content = readFileSync(logFile, "utf-8");
+    let content = readFileSync(logFile, "utf-8");
+    // Redact before truncating so a tail boundary cannot expose a secret suffix.
+    for (const value of [...new Set(redactValues)].filter(Boolean).sort((a, b) => b.length - a.length)) {
+      content = content.replaceAll(value, "[REDACTED]");
+    }
     return content.length > maxBytes ? content.slice(-maxBytes) : content;
   } catch {
     return null;
@@ -702,7 +726,7 @@ export async function startLocalServer(
       ? await waitForReadiness(
         () => getLocalServerSnapshot(getServer(server.id, db)!),
         config.readyTimeoutMs,
-        { spawnedPid: pid, logFile: config.logFile },
+        { spawnedPid: pid, logFile: config.logFile, redactValues: Object.values(config.transientEnv ?? {}) },
       )
       : await getLocalServerSnapshot(updated);
 
@@ -809,6 +833,7 @@ export async function stopLocalServer(
       port: target.port,
       command: target.command,
       cwd: target.cwd,
+      processScope: target.processScope,
       gracePeriodMs: stopTimeoutMs,
     });
 
@@ -883,12 +908,13 @@ export async function restartLocalServer(
     // tree when --force is set, so we never replace a process we could not stop
     // cleanly. The whole-tree discovery is always used so escaped workers and
     // port holders are stopped, not just the recorded group leader.
-    if (discoverServerPids(target).length > 0 || findListenerPids(target.port).length > 0) {
+    if (discoverServerPids(target).length > 0 || (target.processScope !== "owned" && findListenerPids(target.port).length > 0)) {
       const result = await killTree({
         pid,
         port: target.port,
         command: target.command,
         cwd: target.cwd,
+        processScope: target.processScope,
         gracePeriodMs: stopTimeoutMs,
         escalate: opts.force === true,
       });
@@ -930,7 +956,7 @@ export async function restartLocalServer(
       : await waitForReadiness(
         () => getLocalServerSnapshot(getServer(server.id, db)!),
         config.readyTimeoutMs,
-        { spawnedPid: newPid, logFile: config.logFile },
+        { spawnedPid: newPid, logFile: config.logFile, redactValues: Object.values(config.transientEnv ?? {}) },
       );
 
     updated = updateServer(server.id, {

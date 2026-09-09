@@ -258,7 +258,7 @@ backend and are not the fleet cutover mechanism.
 | `MEMENTOS_API_KEY` | REST auth | Static-key fallback when signing is disabled |
 | `MCP_STDIO=1` | MCP server | Select stdio instead of default HTTP |
 | `MCP_HTTP_PORT` | MCP server | HTTP port; default 8867 |
-| `MEMENTOS_URL` | hooks/standalone SDK | REST base URL; default `http://localhost:19428` |
+| `MEMENTOS_URL` | hooks/connectors | REST base URL for the on-box hooks; default `http://localhost:19428` (the `./sdk` client does NOT read it) |
 | `MEMENTOS_AGENT` | hooks/connectors | Default agent identifier |
 | `MEMENTOS_AUTO_INJECT=true` | auto-inject | Enable automatic channel injection |
 | `MEMENTOS_AUTO_WHEN_TO_USE=true` | activation generation | Generate `when_to_use` guidance |

@@ -138,4 +138,45 @@ describe.skipIf(!PG_URL)("postgres guarded plan/project linkage", () => {
     expect(persistedTasks).toHaveLength(30);
     expect(persistedTasks.every((task) => task.project_id === priorProject.id)).toBe(true);
   });
+  test("later membership drift retains the exact committed receipt in authenticated HTTP conflicts", async () => {
+    const project=await store.projects.create({name:"drift target",path:"/drift-target"});
+    const plan=await store.plans.create({name:"drift plan"});
+    const input={expected_plan_revision:plan.updated_at,expected_project_revision:project.updated_at,idempotency_key:`drift-${Date.now()}`};
+    const accepted=await applyPlanProjectLink(store,plan.id,project.id,input);
+    const before=await store.planProjectLinks!.getReceipt(accepted.receipt!.receipt_id);
+    await store.tasks.create({title:"later legitimate member",plan_id:plan.id});
+    const {handleV1Request}=await import("../server/v1.js");
+    const url=new URL(`http://fixture.test/v1/plans/${plan.id}/project-link`);
+    const response=await handleV1Request(new Request(url,{method:"POST",body:JSON.stringify({project_id:project.id,...input})}),url,{
+      ensureSchema:async()=>{},getStorageAdapter:()=>store,getMachineRegistryTenantId:()=>"fixture",
+      getVerifier:()=>({authenticate:async()=>({ok:true,principal:{kid:"fixture",tid:"fixture",agent:"fixture",scopes:["todos:read","todos:write"]}})}) as any,
+    });
+    expect(response!.status).toBe(409);
+    expect(await response!.json()).toMatchObject({code:"PLAN_PROJECT_LINK_RESULT_DRIFT",operation_committed:true,current_state_matches_receipt:false,receipt:before});
+    expect(await store.planProjectLinks!.getReceipt(accepted.receipt!.receipt_id)).toEqual(before);
+  });
+
+  test("failure before transaction commit rolls back linkage and never reports a committed receipt",async()=>{
+    const project=await store.projects.create({name:"rollback acknowledgment",path:"/rollback-ack"});
+    const plan=await store.plans.create({name:"rollback acknowledgment"});
+    const key=`rollback-ack-${Date.now()}`;
+    const wrapped={...client,transaction:async(fn:any)=>client.transaction(async tx=>{await fn(tx);throw new Error("fixture rejected before commit");})} as typeof client;
+    const failing=createPostgresTodosStorageAdapter({client:wrapped,service:SERVICE});
+    await expect(applyPlanProjectLink(failing,plan.id,project.id,{expected_plan_revision:plan.updated_at,expected_project_revision:project.updated_at,idempotency_key:key})).rejects.toThrow("fixture rejected before commit");
+    expect(await store.plans.get(plan.id)).toEqual(plan);
+    expect(await store.planProjectLinks!.getReceiptByIdempotencyKey(key)).toBeNull();
+  });
+
+  test("lost commit acknowledgment is an error; explicit retry discovers the durable immutable receipt",async()=>{
+    const project=await store.projects.create({name:"unknown acknowledgment",path:"/unknown-ack"});
+    const plan=await store.plans.create({name:"unknown acknowledgment"});
+    const input={expected_plan_revision:plan.updated_at,expected_project_revision:project.updated_at,idempotency_key:`unknown-ack-${Date.now()}`};
+    const wrapped={...client,transaction:async(fn:any)=>{await client.transaction(fn);throw new Error("fixture lost commit acknowledgment");}} as typeof client;
+    const uncertain=createPostgresTodosStorageAdapter({client:wrapped,service:SERVICE});
+    await expect(applyPlanProjectLink(uncertain,plan.id,project.id,input)).rejects.toThrow("fixture lost commit acknowledgment");
+    const durable=await store.planProjectLinks!.getReceiptByIdempotencyKey(input.idempotency_key);expect(durable).not.toBeNull();
+    const replay=await applyPlanProjectLink(store,plan.id,project.id,input);
+    expect(replay.action).toBe("already_linked");expect(replay.receipt).toEqual(durable);
+  });
+
 });
