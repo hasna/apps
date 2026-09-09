@@ -962,6 +962,7 @@ struct CLIRunnerTests {
         let failureGate = NSLock()
         var shouldFailCapture = false
         var injectedFailures = 0
+        var closeObservations: [String] = []
 
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("recordings-reap-failure-\(UUID().uuidString)")
@@ -969,6 +970,7 @@ struct CLIRunnerTests {
         let executable = root.appendingPathComponent("silent-holder")
         let holderPidFile = root.appendingPathComponent("holder-pid")
         let markerFile = root.appendingPathComponent("holder-probe")
+        let detailsFile = root.appendingPathComponent("holder-probe-details")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer {
             if let holderPid = Self.readPID(from: holderPidFile) {
@@ -1011,8 +1013,20 @@ struct CLIRunnerTests {
                 struct timespec delay = {0, 20000000};
                 nanosleep(&delay, 0);
             }
-            int outBroken = (write(STDOUT_FILENO, "x", 1) == -1 && errno == EPIPE);
-            int errBroken = (write(STDERR_FILENO, "y", 1) == -1 && errno == EPIPE);
+            errno = 0;
+            ssize_t outResult = write(STDOUT_FILENO, "x", 1);
+            int outError = errno;
+            errno = 0;
+            ssize_t errResult = write(STDERR_FILENO, "y", 1);
+            int errError = errno;
+            int outBroken = (outResult == -1 && outError == EPIPE);
+            int errBroken = (errResult == -1 && errError == EPIPE);
+            FILE *details = argc > 3 ? fopen(argv[3], "w") : NULL;
+            if (details) {
+                fprintf(details, "stdout=%ld,errno=%d; stderr=%ld,errno=%d",
+                    (long)outResult, outError, (long)errResult, errError);
+                fclose(details);
+            }
             FILE *marker = fopen(argv[2], "w");
             if (!marker) _exit(68);
             fputs(outBroken && errBroken ? "both-epipe" : "still-connected", marker);
@@ -1031,7 +1045,7 @@ struct CLIRunnerTests {
         #expect(throws: InjectedReapFailure.self) {
             _ = try CLIRunner.runExecutable(
                 executable.path,
-                arguments: [holderPidFile.path, markerFile.path],
+                arguments: [holderPidFile.path, markerFile.path, detailsFile.path],
                 pipeDrainTimeout: 0.1,
                 leaderReaper: { processIdentifier, _ in
                     failureGate.lock()
@@ -1047,7 +1061,15 @@ struct CLIRunnerTests {
                     }
                     throw InjectedReapFailure()
                 },
-                captureSystemCalls: .init(read: { descriptor, buffer, count in
+                captureSystemCalls: .init(close: { descriptor in
+                    let result = Darwin.close(descriptor)
+                    let closeError = errno
+                    failureGate.lock()
+                    closeObservations.append("fd=\(descriptor),result=\(result),errno=\(closeError)")
+                    failureGate.unlock()
+                    errno = closeError
+                    return result
+                }, read: { descriptor, buffer, count in
                     failureGate.lock()
                     let shouldFail = shouldFailCapture
                     if shouldFail { injectedFailures += 1 }
@@ -1078,7 +1100,13 @@ struct CLIRunnerTests {
             }
             Thread.sleep(forTimeInterval: 0.05)
         }
-        #expect(marker == "both-epipe")
+        let writeObservations = (try? String(contentsOf: detailsFile, encoding: .utf8)) ?? "unavailable"
+        failureGate.lock()
+        let closeSnapshot = closeObservations
+        failureGate.unlock()
+        // Numeric fixture diagnostics only; close errno is meaningful only on failure.
+        let diagnostics: Comment = "pipe writes: \(writeObservations); closes: \(closeSnapshot)"
+        #expect(marker == "both-epipe", diagnostics)
         expectProcessIsGone(holderPid)
     }
 
