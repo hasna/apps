@@ -67,10 +67,16 @@ export function createSubmitRunService(options: SubmitRunServiceOptions): Submit
   return {
     async submit(input) {
       if (!input.idempotencyKey.trim()) throw new Error("admission: idempotencyKey is required");
-      const byKey = await store.getRunByKey(input.tenantId, input.idempotencyKey);
-      if (byKey) return { run: byKey.admission, created: false };
-
+      // Own every admission field before a store lookup can yield to the caller.
+      // Raw input is represented only by its canonical digest in the admission.
+      const policy = { ...DEFAULT_RUN_POLICY, ...input.policy };
+      input = { ...input, systemDeps: [...(input.systemDeps ?? [])],
+        policy: { ...policy, egressAllowlist: [...policy.egressAllowlist] },
+        limits: { ...DEFAULT_RUN_LIMITS, ...input.limits } };
       const inputDigest = digestInput(input.input);
+      const byKey = await store.getRunByKey(input.tenantId, input.idempotencyKey);
+      if (byKey) return { run: ownedAdmission(byKey.admission), created: false };
+
       const byDigests = await store.getRunByDigests({
         tenantId: input.tenantId,
         skillId: input.skillId,
@@ -78,7 +84,7 @@ export function createSubmitRunService(options: SubmitRunServiceOptions): Submit
         bundleDigest: input.bundleDigest,
         inputDigest: inputDigest,
       });
-      if (byDigests) return { run: byDigests.admission, created: false };
+      if (byDigests) return { run: ownedAdmission(byDigests.admission), created: false };
 
       const image = resolveImageProfile(imageProfiles, {
         runtime: input.runtime,
@@ -103,9 +109,16 @@ export function createSubmitRunService(options: SubmitRunServiceOptions): Submit
       };
 
       const row = await store.admit(admission);
-      return { run: row.admission, created: true };
+      return { run: ownedAdmission(row.admission), created: true };
     },
   };
+}
+
+/** The service does not expose a store-owned record. Raw in-memory store
+ * instances remain trusted embedding interfaces with their own reference semantics. */
+function ownedAdmission(admission: FrozenAdmission): FrozenAdmission {
+  return { ...admission, policy: { ...admission.policy, egressAllowlist: [...admission.policy.egressAllowlist] },
+    limits: { ...admission.limits } };
 }
 
 /** Canonical digest of a run input: stable serialization, sha256. */
