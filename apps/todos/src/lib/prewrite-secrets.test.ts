@@ -54,13 +54,17 @@ describe("pre-write secret scanner", () => {
   });
 });
 
-describe("BUG-0004 regression: dollar amounts and $<digit> sequences survive pre-write sanitization", () => {
+describe("currency text survives pre-write sanitization (BUG-0004 in-repo guard)", () => {
   // BUG-0004 (hosted todos, 2026-09-07): POST /v1/tasks create silently stripped
   // `$<digit>` sequences (a $27,658.51 payoff amount and a $300 payment came back
   // empty) while PATCH preserved them — the classic signature of a text pass that
-  // treats `$N` in a replacement string as a capture-group reference. This
-  // sanitizer is the only transform task title/description pass through on the
-  // create AND update lanes, so it must never consume or rewrite currency text.
+  // treats `$N` in a replacement string as a capture-group reference. That strip is
+  // NOT reproducible in this source tree: the hosted Postgres create path
+  // (server/v1.ts -> storage/postgres-adapter.ts createTask) copies title/description
+  // verbatim and applies no text transform. This sanitizer is the only text transform
+  // on the in-repo SQLite create/update lanes (db/task-crud.ts), so these cases pin
+  // that in-repo sanitizer only — BUG-0004's deployed-layer cause remains open. It
+  // must never consume or rewrite currency text.
   const samples = [
     "Pay the $27,658.51 payoff amount",
     "Send $300 payment today",
