@@ -362,12 +362,18 @@ struct CLIRunnerTests {
         let runCLI = RecordingEngine(homePath: home.path, installsGlobalHandlers: false).commandCLI
         let homePath = home.path
         let startedAt = ContinuousClock.now
-        let output = await BlockingOperation.run {
-            runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
+        let (output, workerStartedAt, workerFinishedAt) = await BlockingOperation.run {
+            let workerStartedAt = ContinuousClock.now
+            let output = runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
+            return (output, workerStartedAt, ContinuousClock.now)
         }
-        let elapsed = ContinuousClock.now - startedAt
+        let resumedAt = ContinuousClock.now
+        let elapsed = resumedAt - startedAt
+        // Report only on a failed elapsed assertion. Admission includes the executor
+        // and dispatch queue hops; the worker interval includes CLI preparation/cleanup.
+        let timing: Comment = "CLI phases: admission=\(workerStartedAt - startedAt), worker=\(workerFinishedAt - workerStartedAt), resume=\(resumedAt - workerFinishedAt)"
 
-        #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout))
+        #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout), timing)
         #expect(output.hasPrefix("ERROR:"))
         #expect(output.contains("timed out"))
     }
@@ -455,16 +461,22 @@ struct CLIRunnerTests {
         let runCLI = RecordingEngine(homePath: home.path, installsGlobalHandlers: false).commandCLI
         let homePath = home.path
         let startedAt = ContinuousClock.now
-        let output = await BlockingOperation.run {
-            runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
+        let (output, workerStartedAt, workerFinishedAt) = await BlockingOperation.run {
+            let workerStartedAt = ContinuousClock.now
+            let output = runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
+            return (output, workerStartedAt, ContinuousClock.now)
         }
-        let elapsed = ContinuousClock.now - startedAt
+        let resumedAt = ContinuousClock.now
+        let elapsed = resumedAt - startedAt
+        // Report only on a failed elapsed assertion. Admission includes the executor
+        // and dispatch queue hops; the worker interval includes CLI preparation/cleanup.
+        let timing: Comment = "CLI phases: admission=\(workerStartedAt - startedAt), worker=\(workerFinishedAt - workerStartedAt), resume=\(resumedAt - workerFinishedAt)"
 
         // Upper bound is the public promise, with the ~1 s return margin left as CI
         // tolerance above the internal deadline; the lower bound proves the deadline chain
         // really ran to exhaustion instead of the helper exiting early.
-        #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout))
-        #expect(elapsed > .seconds(8.4))
+        #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout), timing)
+        #expect(elapsed > .seconds(8.4), timing)
         #expect(output.hasPrefix("ERROR:"))
         #expect(output.contains("timed out"))
 
@@ -1113,13 +1125,19 @@ struct CLIRunnerTests {
         let runCLI = RecordingEngine(homePath: home.path, installsGlobalHandlers: false).commandCLI
         let homePath = home.path
         let startedAt = ContinuousClock.now
-        let output = await BlockingOperation.run {
-            runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
+        let (output, workerStartedAt, workerFinishedAt) = await BlockingOperation.run {
+            let workerStartedAt = ContinuousClock.now
+            let output = runCLI(["rewrite-selection"], homePath, RecordingEngine.commandRewriteTimeout)
+            return (output, workerStartedAt, ContinuousClock.now)
         }
-        let elapsed = ContinuousClock.now - startedAt
+        let resumedAt = ContinuousClock.now
+        let elapsed = resumedAt - startedAt
+        // Report only on a failed elapsed assertion. Admission includes the executor
+        // and dispatch queue hops; the worker interval includes CLI preparation/cleanup.
+        let timing: Comment = "CLI phases: admission=\(workerStartedAt - startedAt), worker=\(workerFinishedAt - workerStartedAt), resume=\(resumedAt - workerFinishedAt)"
 
-        #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout))
-        #expect(elapsed > .seconds(8.4))
+        #expect(elapsed < .seconds(RecordingEngine.commandRewriteTimeout), timing)
+        #expect(elapsed > .seconds(8.4), timing)
         #expect(output.hasPrefix("ERROR:"))
         #expect(output.contains("timed out"))
 
