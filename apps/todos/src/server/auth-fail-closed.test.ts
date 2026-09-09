@@ -86,6 +86,50 @@ async function waitForExit(proc: ReturnType<typeof Bun.spawn>, timeoutMs: number
   return Promise.race([exited, timeout]);
 }
 
+/**
+ * The documented DEFAULT posture: no credential, no explicit DB path, no local
+ * opt-in — what a fresh install has.
+ *
+ * `localRoutingTestEnv` deliberately turns the local opt-in ON, so the refusal
+ * tests above exercise a store the process CAN open. That is exactly why they
+ * could not catch the regression these two tests pin: with no local opt-in the
+ * store's client-fallback guard fired before the auth posture was resolved, and
+ * the documented refusal was replaced by an internal storage error.
+ */
+function defaultPostureEnv(home: string): Record<string, string | undefined> {
+  const env = localRoutingTestEnv({
+    HOME: home,
+    HASNA_TODOS_DB_PATH: undefined,
+    TODOS_DB_PATH: undefined,
+    TODOS_AUTO_PROJECT: "false",
+  });
+  delete env["HASNA_TODOS_LOCAL"];
+  delete env["TODOS_LOCAL"];
+  return env;
+}
+
+/** Read a live stream until `marker` appears (or the deadline passes). */
+async function readUntil(stream: ReadableStream<Uint8Array>, marker: string, timeoutMs: number): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  const deadline = Date.now() + timeoutMs;
+  let text = "";
+  try {
+    while (!text.includes(marker) && Date.now() < deadline) {
+      const remaining = Math.max(1, deadline - Date.now());
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise<{ done: true; value: undefined }>((resolve) => setTimeout(() => resolve({ done: true, value: undefined }), remaining)),
+      ]);
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value as Uint8Array, { stream: true });
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* stream already closed */ }
+  }
+  return text;
+}
+
 // ── 1. Unconfigured => refuse to start (this is the fail-open regression) ─────
 describe("unconfigured server fails closed", () => {
   let tmpDir: string;
@@ -145,6 +189,48 @@ describe("unconfigured server fails closed", () => {
       expect(exitCode).not.toBeNull();
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("--allow-anonymous is refused");
+    } finally {
+      proc.kill();
+      await proc.exited;
+    }
+  }, HOOK_TIMEOUT_MS);
+
+  it("refuses in the documented DEFAULT posture with the auth refusal, not the store's internal fallback error", async () => {
+    // Regression: `getDatabase()` ran before `resolveAuthPosture()`, and the
+    // store refuses to open implicitly without the local opt-in — so the
+    // default path (no credential, no DB path, no opt-in) died with
+    // API_DATABASE_FALLBACK_FORBIDDEN and the documented refusal never printed.
+    // `bun run verify:release` / `prepublishOnly` install-smoke asserts exactly
+    // this output.
+    const port = reserveFreePort(19800 + Math.floor(Math.random() * 100));
+    const proc = spawnServer(port, defaultPostureEnv(tmpDir));
+
+    try {
+      const exitCode = await waitForExit(proc, 15_000);
+      const stderr = await new Response(proc.stderr as ReadableStream).text();
+      expect(exitCode).not.toBeNull();
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("HASNA_TODOS_SERVER_API_KEY");
+      expect(stderr).toContain("refusing to start");
+      expect(stderr).not.toContain("API_DATABASE_FALLBACK_FORBIDDEN");
+      expect(stderr).not.toContain("Todos HTTP server running at");
+    } finally {
+      proc.kill();
+      await proc.exited;
+    }
+  }, HOOK_TIMEOUT_MS);
+
+  it("still starts for the documented --allow-anonymous local-dev path without the local opt-in", async () => {
+    // The other half of the same contract: the server IS an explicit storage
+    // handle, so it must open the local store even when the client-fallback
+    // guard would refuse an implicit open. The gate's install-smoke requires
+    // this startup line.
+    const port = reserveFreePort(19850 + Math.floor(Math.random() * 100));
+    const proc = spawnServer(port, defaultPostureEnv(tmpDir), ["--allow-anonymous"]);
+
+    try {
+      const stdout = await readUntil(proc.stdout as ReadableStream<Uint8Array>, "Todos HTTP server running at", 15_000);
+      expect(stdout).toContain("Todos HTTP server running at");
     } finally {
       proc.kill();
       await proc.exited;

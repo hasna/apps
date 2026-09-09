@@ -3,7 +3,7 @@
  * Provides REST API endpoints for task management (+ MCP Streamable HTTP).
  */
 
-import { getDatabase } from "../db/database.js";
+import { getDatabase, getDatabasePath } from "../db/database.js";
 import { hasActiveApiKeys, verifyApiKey, safeEqualStrings } from "../db/api-keys.js";
 import {
   ALLOW_ANONYMOUS_ENV_VAR,
@@ -192,6 +192,26 @@ export interface StartServerOptions {
   allowAnonymous?: boolean;
 }
 
+/**
+ * Whether the local store holds at least one active generated API key, without
+ * letting an unreadable store abort startup before the auth posture is resolved.
+ *
+ * The posture must be resolvable BEFORE the store is opened: on the documented
+ * default path (no credential, no explicit DB path, no local opt-in)
+ * `getDatabase()` refuses with `API_DATABASE_FALLBACK_FORBIDDEN`, so opening it
+ * first replaced the fail-closed auth refusal with an internal storage error.
+ * A store this process cannot read holds no key it could honour, so an
+ * unreadable store counts as "no generated keys" and the posture still fails
+ * closed.
+ */
+function hasGeneratedApiKeysSafely(): boolean {
+  try {
+    return hasActiveApiKeys();
+  } catch {
+    return false;
+  }
+}
+
 export async function startServer(port: number, options?: StartServerOptions): Promise<void> {
   // Accepted-key source, highest first: an explicit --api-key, then the server
   // credential env var (HASNA_TODOS_SERVER_API_KEY), then — for one release —
@@ -202,17 +222,19 @@ export async function startServer(port: number, options?: StartServerOptions): P
   const cliApiKey = options?.apiKey || null;
   const apiKey = cliApiKey || envServerKey?.value || null;
 
-  // Initialize database
-  const db = getDatabase();
-
   // ── Auth posture (fail closed) ───────────────────────────────────────────────
-  // Resolved BEFORE the socket is bound so an unconfigured server never accepts a
-  // single anonymous data request. `resolveAuthPosture` throws when the only
-  // remaining option would be to expose /api/* + /mcp off-box.
+  // Resolved BEFORE the store is opened and before the socket is bound, so an
+  // unconfigured server never accepts a single anonymous data request AND the
+  // documented refusal is what it prints. Resolving it after `getDatabase()`
+  // made the default path (no credential, no explicit DB path, no local opt-in)
+  // die with the store's internal `API_DATABASE_FALLBACK_FORBIDDEN` instead of
+  // the refusal this function's contract — and the README — promise.
+  // `resolveAuthPosture` throws when the only remaining option would be to
+  // expose /api/* + /mcp off-box.
   const authPosture = resolveAuthPosture({
     apiKey,
     apiKeySourceLabel: cliApiKey ? "--api-key" : envServerKey?.label,
-    hasGeneratedKeys: hasActiveApiKeys(),
+    hasGeneratedKeys: hasGeneratedApiKeysSafely(),
     host: options?.host,
     allowAnonymous: options?.allowAnonymous === true || isAnonymousOptInEnv(),
   });
@@ -226,6 +248,14 @@ export async function startServer(port: number, options?: StartServerOptions): P
   } else {
     console.log(describeAuthPosture(authPosture));
   }
+
+  // Initialize the store. `todos-serve` is an explicit storage handle — it IS
+  // the local server — so it opens the resolved path instead of letting the
+  // ambient singleton open implicitly, which the client-fallback guard refuses
+  // without the local opt-in. The path is the same one the implicit call would
+  // have resolved; passing it explicitly only records that this caller intends
+  // to serve the local store (getDatabase's own contract for explicit handles).
+  const db = getDatabase(getDatabasePath());
 
   // Durable dual-write shadow: capture triggers are installed at getDatabase();
   // this long-running server also drains the outbox to cloud Postgres.
