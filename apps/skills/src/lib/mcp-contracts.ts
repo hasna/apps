@@ -896,11 +896,11 @@ const privatePublicationContracts: McpToolContract[] = [
   { name: "resume_private_publication", title: "Resume private publication", extras: { confirm: { const: true }, waitMs: { type: "integer", minimum: 0, maximum: 300000 } }, required: ["confirm"] },
   { name: "cancel_private_publication", title: "Cancel private publication", extras: { confirm: { const: true } }, required: ["confirm"] },
 ].map(operation => ({
-  name: operation.name, title: operation.title, description: "Manage private source publication with fresh workspace verification and durable host-local recovery. Upload consent and current version comparison are explicit; private execution remains unavailable.",
+  name: operation.name, title: operation.title, description: "Manage private source publication with fresh workspace verification and durable host-local recovery. Upload consent and current version comparison are explicit; execution requires a separate server quote and approval.",
   params: [...Object.keys(publicationVerification), ...Object.keys(operation.extras)], category: "storage", sideEffects: "filesystem", stable: true,
   inputSchema: objectSchema({ ...publicationVerification, ...operation.extras } as Record<string, JsonSchemaObject>, [...Object.keys(publicationVerification), ...operation.required]),
   outputSchema: objectSchema({ recoveryDirectory: { type: "string" }, skillId: publicationUuidSchema, intentId: { oneOf: [publicationUuidSchema, { type: "null" }] },
-    state: { type: "string" }, versionId: { oneOf: [publicationUuidSchema, { type: "null" }] }, committed: { type: "boolean" }, executionEnabled: { const: false }, nextAction: { type: "string" },
+    state: { type: "string" }, versionId: { oneOf: [publicationUuidSchema, { type: "null" }] }, committed: { type: "boolean" }, executionEnabled: { oneOf: [{ type: "boolean" }, { type: "null" }] }, nextAction: { type: "string" },
   }, ["recoveryDirectory", "skillId", "intentId", "state", "versionId", "committed", "executionEnabled", "nextAction"]),
 }));
 const contracts: McpToolContract[] = [...toolContracts, ...remoteCustomerContracts, ...privatePublicationContracts].sort((a, b) => a.name.localeCompare(b.name));

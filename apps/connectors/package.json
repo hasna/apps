@@ -92,10 +92,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/connectors.git"
+    "url": "git+https://github.com/hasna/apps.git"
   },
-  "homepage": "https://github.com/hasna/connectors#readme",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/connectors#readme",
   "bugs": {
-    "url": "https://github.com/hasna/connectors/issues"
+    "url": "https://github.com/hasna/apps/issues"
   }
 }
