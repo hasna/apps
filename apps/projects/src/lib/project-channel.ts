@@ -370,6 +370,108 @@ export function conversationsCliRunner(binary?: string): ConversationsChannelRun
   };
 }
 
+/**
+ * A synchronous read-only probe of whether one conversations channel exists.
+ *
+ * Doctor and link surfaces use this to validate the channel a project ADVERTISES
+ * through `integrations.conversations_channel` against the real conversations
+ * app. Verdicts are deliberately tri-state: only a channel observed in a
+ * successfully listed channel set is "missing"; anything that prevented the
+ * listing (no CLI, auth, a parse failure) is "unknown" and never a false error.
+ */
+export type ProjectChannelExistenceVerdict = "exists" | "missing" | "unknown";
+
+export interface ProjectChannelExistenceResult {
+  verdict: ProjectChannelExistenceVerdict;
+  /** Why an "unknown" verdict was reached (CLI failure, parse failure). */
+  detail?: string;
+}
+
+export type ProjectChannelExistenceProbe = (channel: string) => ProjectChannelExistenceResult;
+
+/** The channel-list surface the CLI prints as a bare JSON array on stdout (compact.ts). */
+export function conversationsChannelListResult(result: ConversationsRunResult): { ok: true; names: string[] } | { ok: false; detail: string } {
+  if (!result.ok) {
+    return { ok: false, detail: result.stderr.trim() || result.stdout.trim() || "conversations channel list failed" };
+  }
+  let rows: unknown;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch {
+    return { ok: false, detail: "could not parse conversations channel list JSON output" };
+  }
+  if (!Array.isArray(rows)) {
+    return { ok: false, detail: "conversations channel list JSON output was not an array" };
+  }
+  const names = rows
+    .map((row) => (row && typeof row === "object" && typeof (row as { name?: unknown }).name === "string" ? (row as { name: string }).name : ""))
+    .filter((name) => name.length > 0);
+  return { ok: true, names };
+}
+
+/** Exact (normalized) membership of one channel in a channel-name set. */
+export function conversationsChannelExistence(
+  names: readonly string[],
+  channel: string,
+): { verdict: "exists" } | { verdict: "missing" } {
+  const target = normalizeProjectChannelName(channel);
+  const exists = names.some((name) => normalizeProjectChannelName(name) === target);
+  return exists ? { verdict: "exists" } : { verdict: "missing" };
+}
+
+/**
+ * An existence probe built from any {@link ConversationsChannelRunner}. The
+ * channel listing is fetched once and cached for the lifetime of the probe, so
+ * a multi-project doctor run performs one listing, not one per project.
+ */
+export function conversationsChannelProbe(runner: ConversationsChannelRunner): ProjectChannelExistenceProbe {
+  let cached: { ok: true; names: string[] } | { ok: false; detail: string } | null = null;
+  return (channel) => {
+    if (cached === null) cached = conversationsChannelListResult(runner(["channel", "list", "-j"]));
+    if (!cached.ok) return { verdict: "unknown", detail: cached.detail };
+    return conversationsChannelExistence(cached.names, channel);
+  };
+}
+
+/**
+ * Process-scoped channel-name cache shared across probe instances, so repeated
+ * doctor entry points (CLI per-project calls, MCP/agent tool calls) perform one
+ * `conversations channel list` per process instead of one per project.
+ */
+const channelNameListCache = new Map<string, { ok: true; names: string[] } | { ok: false; detail: string }>();
+
+export function conversationsCliChannelProbe(binary?: string): ProjectChannelExistenceProbe {
+  const executable = binary?.trim() || env.conversationsBin()?.trim() || "conversations";
+  return (channel) => {
+    if (!channelNameListCache.has(executable)) {
+      channelNameListCache.set(
+        executable,
+        conversationsChannelListResult(conversationsCliRunner(executable)(["channel", "list", "-j"])),
+      );
+    }
+    const cached = channelNameListCache.get(executable)!;
+    if (!cached.ok) return { verdict: "unknown", detail: cached.detail };
+    return conversationsChannelExistence(cached.names, channel);
+  };
+}
+
+/**
+ * Whether doctor/link surfaces should validate advertised conversations
+ * channels against the conversations app on this box. Off in tests (a probe
+ * would spawn a CLI that is not there); on by default where the conversations
+ * CLI is expected (the fleet). Set HASNA_PROJECTS_CHANNEL_VERIFY (or
+ * PROJECTS_CHANNEL_VERIFY) to force on/off.
+ */
+export function shouldProbeConversationsChannel(envValue: Record<string, string | undefined> = process.env): boolean {
+  const flag = (envValue["HASNA_PROJECTS_CHANNEL_VERIFY"] ?? envValue["PROJECTS_CHANNEL_VERIFY"])?.trim().toLowerCase();
+  if (flag) {
+    if (["1", "true", "on", "yes"].includes(flag)) return true;
+    if (["0", "false", "off", "no"].includes(flag)) return false;
+  }
+  if (envValue["NODE_ENV"] === "test") return false;
+  return true;
+}
+
 function projectAgentOnlineMessage(project: Workspace, agentTool: string, sessionName: string): string {
   const label = project.name.trim() || project.slug;
   return `A ${agentTool} agent is online for ${label} (tmux session: ${sessionName}).`;

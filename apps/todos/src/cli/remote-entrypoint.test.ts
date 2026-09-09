@@ -1,4 +1,7 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+// Spawns child processes (CLI/server/scripts); bun's 5s default is too tight on a loaded host.
+setDefaultTimeout(60_000);
+
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

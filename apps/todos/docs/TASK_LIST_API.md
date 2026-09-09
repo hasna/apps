@@ -1,5 +1,9 @@
 # Shared task-list workflow
 
+Applies to `@hasna/todos` 0.16.0 (CLI + MCP). This is a breaking change from
+0.15.52, where `todos task-lists` (`lists`, `tl`) and these MCP tools read local
+SQLite.
+
 The MCP `create_task_list`, `list_task_lists`, `get_task_list`,
 `update_task_list`, and `delete_task_list` tools use the authenticated Todos API
 and shared server storage. Saved account credentials work in a fresh process;

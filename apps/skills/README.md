@@ -522,7 +522,10 @@ the same declaration, and an uncertain upload is never sent twice. If a process
 crashes while holding `operation.lock`, confirm it has stopped before removing
 that lock explicitly. Status and cancellation remain available when new
 publishing is disabled. Exit 2 means publication is still pending; `committed`
-means source was published. Private execution remains unavailable.
+means source was published. Execution requires a separate server quote and approval.
+Publication recovery results report `executionEnabled: null` because their durable
+receipts contain no server capability observation. Use `getCapability()` for the
+server's current boolean capability; it does not authorize an individual run.
 
 The SDK exports `RemotePrivatePublicationsClient` through both the root and
 `./sdk`; `RemoteSkillsAuthClient.openPrivatePublications` creates one from fresh
@@ -1193,3 +1196,46 @@ returned or saved by the tools.
 
 These clients still require deployed configuration and controlled real recipient
 email acceptance before recovery can be offered as a live product capability.
+
+### Injected operation transport
+
+`@hasna/skills/sdk` exports `createSkillOperationClient` for an embedder-supplied
+`SkillOperationTransport`. It provides a bounded JSON envelope, immutable
+snapshots and explicit status lookup. It does not connect to a provider, discover
+an endpoint, read credentials, or provide guest IPC or authorization.
+
+```ts
+import { createSkillOperationClient, type SkillOperationTransport } from "@hasna/skills/sdk";
+
+function operationsForCapturedRun(transport: SkillOperationTransport) {
+  return createSkillOperationClient(transport, { timeoutMs: 30_000 });
+}
+// The embedder supplies invoke(request, { signal }) and get(requestId, { signal }).
+// invoke accepts { contractVersion: 1, requestId: UUID, operation: "text.generate",
+//                  input: { prompt: "..." } }.
+```
+
+Create one client per captured authority scope. The transport must enforce that
+scope, bind the request ID to the exact payload durably, and enforce approval,
+budget and execution policy. The client remembers up to 256 request identities
+and 1 MiB of canonical requests. It refuses capacity before transport and never
+evicts an old identity. An explicit repeat with the same payload makes one new
+transport call; a changed payload under a remembered ID is refused locally.
+This local check does not replace server deduplication.
+
+Requests are limited to 64 KiB and responses to 1 MiB of serialized UTF-8 JSON,
+with depth and node limits exported in `SKILL_OPERATION_LIMITS`. Plain JSON data
+is copied and deeply frozen; cycles, accessors, `toJSON` functions, unsupported
+values and extra envelope fields are refused. Ordinary data inside `input` and
+`output` is preserved. Request IDs use canonical lowercase UUID strings;
+operation names use lowercase letters, digits and dot or hyphen separators.
+
+Responses preserve `contractVersion` and `requestId`. A status of `succeeded`
+includes `output`; `refused` includes a fixed `SkillOperationRefusal` code.
+`pending`, `unknown` and authoritative `not-executed` have no additional fields.
+Transport failure, in-flight abort and timeout produce a safe
+`SkillOperationClientError` with an unknown outcome. They never prove that an
+operation did not execute. The client does not retry or issue a status read
+automatically: explicitly call `get` with the same request ID to reconcile.
+Aborting locally does not establish server cancellation. An already-aborted
+signal refuses before calling the transport.

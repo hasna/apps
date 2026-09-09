@@ -2,13 +2,90 @@
 
 ## 0.16.0
 
+### Migrating from 0.15.52
+
+No data migration is required, but four things change under an existing
+install:
+
+1. **A credential is required for the hosted surface, and the retired
+   locations are no longer read.** The `./sdk` client used to read a credential
+   out of `~/.todos/config.json` and to prefer the unprefixed `TODOS_URL` and
+   key names; that chain is gone. Every surface resolves through the
+   `@hasna/contracts` client chain — the macOS Keychain item
+   `hasna.credentials.todos.api-key`, then `~/.hasna/todos/config/credentials`
+   (owner-only `0400`/`0600`), then `HASNA_TODOS_API_KEY` — and `todos storage
+   status --json` names the tier that answered. `~/.hasna/fleet-env`,
+   `~/.hasna/cloud`, `~/.config/hasna`, `$XDG_CONFIG_HOME` and
+   `~/.todos/config.json` are not read. With no credential the CLI exits
+   non-zero (`REMOTE_API_CONFIG_MISSING`) instead of serving local rows; the MCP
+   server keeps serving and refuses each credential-gated call with a typed
+   payload — `REMOTE_API_CONFIG_MISSING` for the shared-API tools,
+   `API_DATABASE_FALLBACK_FORBIDDEN` for the on-box ones (item 3).
+2. **`todos plans`, `todos task-lists` (aliases `lists`, `tl`) and the template
+   commands are shared-API only.** They refuse `HASNA_TODOS_DB_PATH`,
+   `TODOS_DB_PATH`, `HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup — any
+   one of them set is enough to refuse the command — and need
+   `HASNA_TODOS_API_URL` and `HASNA_TODOS_API_KEY` (or saved account
+   credentials). The five MCP plan tools (`create_plan`, `list_plans`,
+   `get_plan`, `update_plan`, `delete_plan`) and the five MCP task-list tools
+   (`create_task_list`, `list_task_lists`, `get_task_list`, `update_task_list`,
+   `delete_task_list`) no longer read the local store either.
+   `todos template-library` is unchanged: it renders the library bundled in the
+   package and never opens a store.
+3. **Most MCP tools that read the on-box store now need the local opt-in.**
+   The MCP server no longer opens the on-box SQLite store implicitly, so every
+   tool that still reads it directly — the template family (`create_template`,
+   `list_templates`, `init_templates`, `preview_template`, `export_template`,
+   `import_template`, `create_task_from_template`), tags and labels, stale and
+   blocked work, `doctor`, the local run ledger, handoffs,
+   review queues, retrospectives, risks, knowledge records, backups and
+   integrity checks, calendar, boards, focus/time reports and dispatches — fails
+   on the default posture. Measured at 0.16.0 with `TODOS_PROFILE=full` on the
+   default (no-credential, no local opt-in) posture, 68 of the 125
+   zero-required-argument tools log `API_DATABASE_FALLBACK_FORBIDDEN` and answer
+   the typed `{"code":"API_DATABASE_FALLBACK_FORBIDDEN"}` payload, whose
+   `suggestion` names the opt-in. A further 18 return the typed
+   `REMOTE_API_CONFIG_MISSING`: the 16 tools served by the shared API that need
+   a credential — `list_tasks`, `list_projects`, `list_agents`, `get_next_task`,
+   `get_status`, `bootstrap`, `get_context`, `get_my_tasks`, `get_my_workload`,
+   `get_health`, `standup`, `list_my_tasks` and `machines_register` /
+   `machines_list` / `machines_heartbeat` / `machines_topology` — plus
+   `list_plans` and `list_task_lists`. Five more refuse caller input or local
+   state with `INVALID_INPUT` / `ENCRYPTION_KEY_UNAVAILABLE` /
+   `ENCRYPTED_PAYLOAD_INVALID`, and five answer a readable text refusal
+   ("Provide agent_id, id, or name."). No zero-argument tool returns an opaque
+   `UNKNOWN_ERROR` — on this default posture or under the `HASNA_TODOS_LOCAL=1`
+   opt-in below. Run the MCP server with
+   `HASNA_TODOS_LOCAL=1` to keep using them. That opt-in is honoured only when
+   the environment configures no authority or credential of its own — a
+   configured environment outranks it, so with `HASNA_TODOS_API_KEY` (or
+   `HASNA_TODOS_API_URL`) set, `HASNA_TODOS_LOCAL=1` is ignored and the on-box
+   MCP tools are unreachable in 0.16.0. Converting them to the shared API is
+   tracked separately; the current boundary is recorded in
+   `apps/todos/docs/native-storage.md`.
+4. **The advertised command list depends on the resolved route.** `todos --help`,
+   `todos manual` and the generated completions list what the route exposes: 76
+   root commands on the hosted route once a credential resolves, 75 with none
+   configured (`stale-lock-handoff` is advertised only when the shared-API
+   authority is), and the full 166 with `HASNA_TODOS_LOCAL=1`. No command was
+   removed; every verb still resolves once its posture is configured. The
+   per-posture counts are in `apps/todos/docs/cli-help.md`.
+
+Everything else still runs offline with `HASNA_TODOS_LOCAL=1` (again, only when
+the environment configures no authority or credential of its own). The
+per-surface detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
+`TEMPLATE_API.md`, `TASK_QUERY_API.md` and `native-storage.md`.
+
 ### Minor Changes
 
 - 96169f8: Resolve credentials through the `@hasna/contracts` client chain (hasna/apps#1720).
 
   The CLI, the MCP server and the `./sdk` client no longer carry a credential
   chain of their own. All three call the one resolver in `@hasna/contracts`
-  (bumped to 1.0.1), which reads, per call: an explicit `--api-key`/`--profile`,
+  (bumped to 1.0.2), which reads, per call: an explicit `apiKey` argument — the
+  resolver's own `--api-key`/`--profile` flag spellings belong to its other
+  consumers; the `todos` CLI exposes no hosted-credential flag of its own, so
+  tier 1 is reachable only through the SDK/client option —
   then `HASNA_TODOS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
   `HASNA_TODOS_API_KEY_REF`, then the macOS Keychain item
   `hasna.credentials.todos.api-key`, then `~/.hasna/todos/config/credentials`
@@ -58,12 +135,14 @@
 
   Behaviour worth knowing about:
 
-  - Hosted mode with no credential still fails closed — non-zero exit, no SQLite
+  - Hosted mode with no credential fails closed — non-zero exit, no SQLite
     fallback, no local-fallback event — and the message now names every tier it
-    consulted, so the remedy is in the error. The `./sdk` surface differs for that
-    ONE case by design: `new TodosClient()` falls to the local `todos-serve` with
-    a stderr line, `createTodosV1Client()` throws. Every other refusal throws on
-    every surface.
+    consulted, so the remedy is in the error. This is a change from 0.15.52 for
+    the nothing-configured case, which served the on-box store behind a
+    local-fallback notice: 0.16.0 requires the deliberate `HASNA_TODOS_LOCAL=1`
+    opt-in to serve it. The `./sdk` surface differs for that ONE case by design:
+    `new TodosClient()` falls to the local `todos-serve` with a stderr line,
+    `createTodosV1Client()` throws. Every other refusal throws on every surface.
   - The bundled `@hasna/todos-sdk` package (`apps/todos/sdk`, published separately
     and NOT a workspace member, so it carries no changeset of its own — see
     hasna/apps#1787) now documents the environment variables it reads and prints
@@ -83,6 +162,25 @@
     stderr saying it is local.
   - A credential with no URL used to be refused as a half-configured pair; it now
     resolves the fleet gateway.
+  - The command list `todos --help`, `todos manual` and the generated
+    completions print is now route-dependent. 0.15.52 advertised all 166
+    commands to every caller because the local fallback was implicit; 0.16.0
+    advertises the 76 commands the hosted route exposes once a credential
+    resolves (75 with none configured — `stale-lock-handoff` is advertised only
+    when the shared-API authority is) and the full 166 only
+    once the local opt-in is set, because the on-box commands fail closed on the
+    default posture. No command was removed —
+    every verb still resolves when its posture is configured; run
+    `HASNA_TODOS_LOCAL=1 todos --help` to see the on-box families. The
+    curation mechanism itself is unchanged from 0.15.52; only its trigger moved
+    with the removal of the implicit local fallback. See
+    `apps/todos/docs/cli-help.md`.
+  - `todos storage status` now reports the resolver's credential-source
+    disagreement as a `warnings` array in `--json` (the field already existed
+    and was always `[]` on the hosted branch) and prints each entry as a yellow
+    stderr line in human mode. The entries name the sources and env key names
+    that disagree — never a credential value — and the array is additive, so no
+    consumer contract breaks.
   - A 401/403 from the authority no longer echoes the server's response body: the
     transport cancels it unread, because that body is the one place a rejected
     request can reflect credential material back into logs. The refusal still
@@ -90,6 +188,104 @@
 
 ### Patch Changes
 
+- The published tarball now carries the migration notes that were repo-only:
+  `CHANGELOG.md` and the API documents the 0.16.0 breaking changes reference
+  (`docs/PLAN_API.md`, `docs/TASK_LIST_API.md`, `docs/TEMPLATE_API.md`,
+  `docs/TASK_QUERY_API.md`, `docs/native-storage.md`). npm consumers previously
+  received only the README's Upgrading section, so the per-API breaking notes
+  were unreachable from an installed package.
+- The publish gate's reviewed-file allowlist now admits the six documentation
+  paths 0.16.0 packs (`CHANGELOG.md` and the five `docs/*.md` files), so
+  `npm publish` no longer aborts at `prepublishOnly` with `package-files-extra`
+  for the very files this release added. `src/lib/public-release-gate.test.ts`
+  now validates the real `package.json`, not only a fixture, so a `files[]`
+  change the allowlist has not reviewed fails in tests instead of at publish
+  time.
+- `todos config --set` warns when the key looks like a credential or an
+  authority (`apiKey`, `api_url`, `*_token`, …) and no longer echoes the value.
+  0.16.0 removed the last reader of a credential from `config.json`, so a silent
+  `Set apiKey = …` told a migrating operator the write took effect while nothing
+  would ever consult it — and printed it to the terminal. The value is still
+  stored for a caller that reads the file itself; the warning names the tiers
+  that are read.
+- The README's account of the published tarball is corrected: the package ships
+  `CHANGELOG.md` and the five API documents alongside `dist/`, rather than
+  "this README and `dist/` only". The zero-argument MCP census in these 0.16.0
+  notes is corrected to sum to 125 (27 typed ok plus two `{"allowed":…}` policy
+  verdicts, which are not coded error envelopes) and no longer lists `standup`
+  or `status` among the `API_DATABASE_FALLBACK_FORBIDDEN` tools — both answer
+  `REMOTE_API_CONFIG_MISSING`, as the same entry already said.
+- The publish gate (`scripts/verify-public-release.ts`, publish mode) now runs
+  the package test suite before it packs, so `npm publish` can no longer ship a
+  tree whose own suite never ran — the gap left by a CI run that aborts on an
+  unrelated package before `@hasna/todos:test` executes. The `prepublishOnly`
+  command string is unchanged (the gate itself asserts it byte-for-byte).
+- Every `REMOTE_API_*` refusal now carries the remedy for its own code instead of
+  the "configure the shared Todos API" advice for all of them. A 401
+  (`REMOTE_API_UNAUTHORIZED`) means the credential is present and was rejected —
+  re-save or reissue it, which is a different fix from setting
+  `HASNA_TODOS_API_URL`; a timeout, an unreachable authority, a bad URL, a
+  rejected redirect and an incompatible route each name their own remedy. The
+  map lives in `src/mcp/remote-authority.ts` and is used by both the typed error
+  class and the formatter, so the two cannot drift.
+- The two remaining zero-argument MCP tools that still answered an opaque
+  `{"code":"UNKNOWN_ERROR"}` under the documented `HASNA_TODOS_LOCAL=1` remedy —
+  `create_retrospective` and `finish_task_run` — now return the typed
+  `INVALID_INPUT` refusal. Both refuse caller input (a missing scope; a missing
+  run id/key), so they are the same class the formatter already types; they were
+  throwing plain `Error`s. This makes the "no zero-argument tool returns an
+  opaque `UNKNOWN_ERROR`" claim true on BOTH postures: measured at 0.16.0 with
+  `TODOS_PROFILE=full`, the default posture census is unchanged
+  (68 `API_DATABASE_FALLBACK_FORBIDDEN` / 18 `REMOTE_API_CONFIG_MISSING` /
+  3 `INVALID_INPUT` / 1 `ENCRYPTION_KEY_UNAVAILABLE` /
+  1 `ENCRYPTED_PAYLOAD_INVALID` / 5 readable text / 27 typed ok / 2 policy
+  verdicts — `check_workspace_permission` and `check_runner_sandbox` answer a
+  `{"allowed":…}` body, not a coded error envelope — which is all 125) and the
+  `HASNA_TODOS_LOCAL=1` census is 0 `UNKNOWN_ERROR` with 5 `INVALID_INPUT`.
+- The on-box MCP tools that were not converted to the shared API are documented
+  as requiring the deliberate `HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1` opt-in,
+  and every one of them now refuses with a typed payload instead of an opaque
+  `UNKNOWN_ERROR`. They still read the on-box store, which is no longer opened
+  implicitly, so on the default posture 68 of the 125 zero-required-argument
+  tools at 0.16.0 with `TODOS_PROFILE=full` answer the typed
+  `{"code":"API_DATABASE_FALLBACK_FORBIDDEN"}` payload (whose `suggestion` names
+  the opt-in) while the server logs the same code. The 16 shared-API tools that
+  need a credential (`list_tasks`, `list_projects`, `list_agents`,
+  `get_next_task`, `get_status`, `bootstrap`, `get_context`, `get_my_tasks`,
+  `get_my_workload`, `get_health`, `standup`, `list_my_tasks`,
+  `machines_register`, `machines_list`, `machines_heartbeat`,
+  `machines_topology`) plus `list_plans` and `list_task_lists` return the typed
+  `REMOTE_API_CONFIG_MISSING`; five more refuse caller input or local state with
+  `INVALID_INPUT` / `ENCRYPTION_KEY_UNAVAILABLE` / `ENCRYPTED_PAYLOAD_INVALID`,
+  and five answer a readable text refusal; the remaining 29 answer data (27) or
+  a `{"allowed":…}` policy verdict (2). That is all 125 accounted for: no
+  zero-argument tool returns `UNKNOWN_ERROR` on the default posture, and the
+  `HASNA_TODOS_LOCAL=1` posture has none either (see the entry above). This is
+  the same defect class the
+  ten plan/task-list tools were converted out of, now closed at the formatter
+  chokepoint every handler error passes through; converting the on-box tools
+  themselves to the shared API is tracked separately. On an environment that
+  sets `HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL` the opt-in is ignored, so
+  these tools are unreachable there. See the 0.16.0 Migrating section and
+  `apps/todos/docs/native-storage.md`.
+- 8f8e88871: Align the exact `@hasna/contracts` pin with the 1.0.2 optional secrets peer release.
+- b269abea4: Return the MCP shared-API refusal as a typed, actionable payload instead of
+  `UNKNOWN_ERROR`. The plan and task-list MCP tools are served only by the
+  authenticated shared API, but the guard threw a plain `Error`, which the MCP
+  error formatter sanitizes to `UNKNOWN_ERROR` ("An unexpected error occurred.
+  Check server logs for details.") — so a configuration requirement reached
+  clients as an opaque server fault and the reason ("Plan tools require the
+  authenticated Todos API") was visible only on stderr. The ten tools
+  `create_plan`, `list_plans`, `get_plan`, `update_plan`, `delete_plan`,
+  `create_task_list`, `list_task_lists`, `get_task_list`, `update_task_list` and
+  `delete_task_list` now return
+  `{"code":"REMOTE_API_CONFIG_MISSING","message":…,"suggestion":…}` naming the
+  missing configuration — the same code the CLI prints — in local mode (the
+  deliberate `HASNA_TODOS_LOCAL`/`TODOS_LOCAL` opt-in, which these tools do not
+  honour) and on a station with no credential. That change touched only those ten
+  tools; the 0.16.0 Patch entry above then extended the same typed refusal to
+  every remaining on-box tool at the formatter chokepoint, so this entry's
+  "no other payload changed" scope is those ten tools, not the release.
 - 92d9dac: Stop the `./sdk` client sending the station's fleet credential to a
   caller-supplied `baseUrl` (hasna/apps#1781 review follow-up, regression from
   hasna/apps#1788).
@@ -160,13 +356,14 @@
     the configuration table.
 
 - 49d75dd: Reject an explicitly empty `active --project` filter instead of silently returning unfiltered work.
-- 500f99d: `@hasna/todos/testing`'s `deliverTodosApiKeyViaDisk` now delivers fixture keys
-  through the PRIMARY disk tier (`$HOME/.hasna/fleet-env/todos.env`) instead of
-  the legacy `~/.hasna/cloud` fallback. Forced by @hasna/contracts 0.14.2, which
-  demotes the cloud tier to a NOISY deprecated fallback: a CLI subprocess test
-  delivering via cloud would print the DEPRECATED notice to stderr and break
-  stderr-exact assertions. Consumers of the exported helper that rely on the
-  cloud path must migrate to fleet-env.
+- 500f99d: `@hasna/todos/testing`'s `deliverTodosApiKeyViaDisk` stopped delivering fixture keys
+  through the legacy `~/.hasna/cloud` fallback: @hasna/contracts 0.14.2 demoted
+  that tier to a NOISY deprecated fallback, so a CLI subprocess test delivering
+  via cloud would print the DEPRECATED notice to stderr and break stderr-exact
+  assertions. The tier this landed on was superseded later in the same release by
+  the credential-resolver adoption (96169f8 above): the shipped helper writes
+  `$HOME/.hasna/todos/config/credentials` at 0600, and no surface reads
+  `~/.hasna/fleet-env`.
 - 6f4238c: Project and task-list slugs are no longer auto-prefixed with `todos-`. A new
   project registered from the name `apps` now derives the bare slug `apps`
   (previously `todos-apps`); task lists follow the same rule, matching the fleet
@@ -199,12 +396,85 @@ normalization.md` (runner: `apps/todos/scripts/normalize-slug-prefixes.ts`,
   written before 2026-09-05 keeps working. `todos serve` prints one line at
   startup naming which variable supplied its accepted key, flagging the
   deprecated spelling when a fallback name was used.
+- 5a20d230a: Restore the admitted-local redaction's delete-not-blank semantics in
+  stage-a — the emitted statement deletes the legacy unprefixed authority variable
+  from the environment — and align the public-text-boundary exemption (and its
+  gate tests) with that emitted delete shape. The #1829 blanking workaround
+  contradicted stage-a's documented delete-not-blank law (a declared-but-blank
+  authority is refused loudly downstream) and left the gate stripping a shape the
+  source no longer emitted; the release-review P1 (0d22a7aa2) requires the
+  exemption to match the delete statement exactly, with every other spelling — a
+  read, a blanking assignment, any other module — still failing the boundary. The
+  SDK README documents the canonical HASNA_TODOS_API_URL / HASNA_TODOS_API_KEY
+  names only.
+- 17b09fae3: Route all CLI task-list aliases through authenticated shared storage, with complete task detail, status controls, preserving deletion and database-selector rejection before startup.
 
-## 0.15.53
+  **Breaking for local-SQLite users** (hasna/apps#2027). `todos task-lists` —
+  and its aliases `lists` and `tl` — read and write the authenticated shared API
+  only. Selecting an on-box database (`HASNA_TODOS_DB_PATH`, `TODOS_DB_PATH`,
+  `HASNA_TODOS_LOCAL`, `TODOS_LOCAL`) is refused before startup with
+  `Task-list commands require the authenticated shared API. Unset … and configure
+  HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY, or saved account credentials.`; a
+  run with no credential fails closed with `REMOTE_API_CONFIG_MISSING`. Task
+  lists carry a persisted `status` on the shared record, task detail is read in
+  full, and deletion is confirmed by a checked receipt. As with plans, the
+  deletion option contract changed with the move: `--delete` removes an empty
+  task list, and `--force` (which requires `--delete`) detaches linked tasks and
+  plans while preserving their content and history.
+- b29183485: Route CLI plans through shared authenticated storage and preserve Markdown exports with an explicitly chosen local root, checked deletion receipts and accurate artifact-failure reporting.
 
-### Patch Changes
+  **Breaking for local-SQLite users** (hasna/apps#2034). `todos plans` and every
+  action it carries — `--add`, `--show`, `--delete`, `--complete`,
+  `--link-project`, `--rollback-project-link`, `--artifact`, `--write-artifacts`
+  — read and write the authenticated shared API only. Selecting an on-box
+  database is refused before startup with `Plan commands require the
+  authenticated shared API. Unset … and configure HASNA_TODOS_API_URL and
+  HASNA_TODOS_API_KEY, or saved account credentials.`, and a run with no
+  credential fails closed with `REMOTE_API_CONFIG_MISSING`. Two option contracts
+  changed with the move: `--artifact` and `--write-artifacts` compare local
+  Markdown against shared plan data and now require an explicit
+  `--artifact-root <directory>`; `--delete` removes an empty plan, and `--force`
+  (which requires `--delete`) detaches linked tasks and lists while preserving
+  their content and history. Deletions are confirmed by a checked server receipt,
+  so a plan is never reported deleted on an unverified response.
+- aa503b7a4: Add an explicitly privileged, bounded atomic project snapshot reconciliation API with durable receipts and content-preserving historical tombstones.
+- 3e63609f9: Resolve hosted credentials through the shared `@hasna/contracts` client chain by pinning the exact `@hasna/contracts` dependency at 1.0.2: the CLI, the MCP server and the `./sdk` client all call `resolveClientTransport`, which adds the macOS Keychain tier and no longer reads the retired `~/.hasna/fleet-env` and `~/.hasna/cloud` disk tiers. The shipped 0.16.0 tarball carries this pin; this record keeps the change visible to the changeset tooling for the next version bump.
+- 3655d23f5: Preserve historical PR-group rows during SQLite lineage upgrades, stop on statement failures, and restore foreign-key settings after rollback.
+- bc5a45ce1: Keep machine command registration and help store-free while authenticating shared machine actions. Refresh API regression fixtures for machine and task coordination capabilities.
+- bc5a45ce1: Bind machine migration capability, writes and receipts to the same authenticated tenant and key identity. Reject credential changes before importing and ambiguous machine task selectors before reading tasks.
+- 206296587: Keep plan-project linkage and initial receipt readback in one membership transaction, and distinguish later state drift from an already committed operation without rewriting its receipt.
+- fca2fae5d: Create private, integrity-validated standalone SQLite backups that reopen read-only on macOS, preserving committed WAL data and existing backups on validation failure.
+- fa16b463a: Require complete bounded stdout and stderr evidence from a single command execution before the release gate accepts captured output.
+- bc5a45ce1: Preserve machine identities in storage snapshots and add authenticated shared machine registry operations for CLI and MCP. Refuse older APIs before machine imports and prevent implicit SQLite fallback on API clients.
+- 4941cff8a: Route MCP plan workflows through authenticated shared storage, persist plan schedules and additional statuses, preserve linked content on confirmed plan deletion, and enforce deployment tenant authority across V1 routes.
 
-- Align the exact `@hasna/contracts` pin with the 1.0.2 optional secrets peer release.
+  **Breaking for local-SQLite users** (hasna/apps#2031). The MCP plan tools
+  `create_plan`, `list_plans`, `get_plan`, `update_plan` and `delete_plan`
+  require the authenticated shared API and no longer read the local store: an MCP
+  client with no credential gets an error instead of local rows.
+- e2217600b: Route project MCP CRUD and the CLI project panel through saved shared API credentials. Preserve project metadata, count complete task pages, and atomically detach linked content when explicitly deleting a nonempty project. Reject stale project references and misleading API receipts.
+- bc5a45ce1: Route MCP task locks, priority updates and dependency operations through the saved account API. Preserve version conflicts and server force-unlock authorization, reject incomplete mutation receipts, and render complete bounded shared dependency graphs without opening SQLite.
+- 07b43db1b: Route task-list MCP operations through authenticated shared storage, persist task-list status, and preserve linked tasks and plans during explicit forced deletion.
+
+  **Breaking for local-SQLite users** (hasna/apps#2025). The MCP task-list tools
+  `create_task_list`, `list_task_lists`, `get_task_list`, `update_task_list` and
+  `delete_task_list` require the authenticated shared API and no longer read the
+  local store.
+- bc5a45ce1: Enable account-backed mine, blocked, overdue, today and yesterday CLI commands without SQLite fallback. Exhaust task pagination and fail visibly on incomplete result sets or unreadable dependency records.
+
+  On a hosted run these five commands read the shared authority and exhaust
+  pagination instead of falling back to an on-box database. An explicit local
+  selection (`HASNA_TODOS_LOCAL=1`) still serves them from the local store, as
+  before.
+- 5b2a8d857: Use shared template CLI operations with version history, atomic bundled initialization, and truthful partial application receipts. Keep bundled library files credential-free.
+
+  **Breaking for local-SQLite users** (hasna/apps#2040). `todos templates`
+  (including `--use`), `template-init`, `template-preview`, `template-export`,
+  `template-import` and `template-history` are served by the authenticated shared
+  API and refuse `HASNA_TODOS_DB_PATH`, `TODOS_DB_PATH`, `HASNA_TODOS_LOCAL` and
+  `TODOS_LOCAL` before startup. `todos template-library` is the deliberate
+  exception: it renders the library bundled in the package, opens no store, and
+  stays credential-free.
 
 ## 0.15.52
 

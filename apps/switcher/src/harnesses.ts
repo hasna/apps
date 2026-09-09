@@ -1,4 +1,5 @@
 import { proxyProviderStream } from "./provider-stream";
+import { claudeContextEnvironment } from "./claude-context";
 import { compileOpenCodeModelPolicy, openCodeInvocationModel } from "./opencode-model-policy";
 import { prepareKilo, validateKiloConfiguration } from "./kilo";
 import { prepareGemini, validateGeminiConfiguration } from "./gemini-config";
@@ -14,7 +15,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createConnection } from "node:net";
-import { compatible, endpoint, harnessEligible } from "./domain";
+import { compatible, endpoint, harnessEligible, modelExpired } from "./domain";
 import { prepareAider, validateAiderConfiguration } from "./aider-config";
 import { childEnvironment } from "./harness-environment";
 import { privateDirectory, switcherHome } from "./runtime";
@@ -532,6 +533,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   if(input.harness==="claude") {
     env.ANTHROPIC_BASE_URL=input.baseUrl.replace(/\/v1$/,"");
     Object.assign(env,input.nativePolicy?.env);
+    Object.assign(env,claudeContextEnvironment(providerBaseUrl));
     env.ANTHROPIC_MODEL=input.model;
     // The native Default picker row has separate precedence from --model.
     // Keep it and unassigned subagents on the selected provider model.
@@ -818,6 +820,7 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
   if(!compatible(input.harness,input.protocol))throw new Error("Harness and provider protocol are incompatible.");
   if(!isAbsolute(input.stateDir)||!isAbsolute(input.cwd))throw new Error("Launch state and working directories must be absolute.");
   const compiledPolicy=compileModelPolicy(input.model,input.models,input.modelPolicy);
+  input={...input,models:input.models.filter(model=>!modelExpired(model))};
   const nativePolicy=compileNativeModelPolicy({harness:input.harness,mainModel:input.model,roles:compiledPolicy.roles,version:input.version});
   const specialized=new Set(["opencode","opencode2","gemini","hermes"]);
   const unsupported=specialized.has(input.harness)?[]:nativePolicy.unsupportedRoles.filter(role=>role!=="main"&&compiledPolicy.roles[role]!==input.model);

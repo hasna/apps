@@ -359,9 +359,20 @@ export function assertProjectResourceLinkIntegrationMutation(
   const canonical = projectResourceLinkIntegrationProjection({}, [], links);
   for (const key of PROJECT_RESOURCE_LINK_INTEGRATION_KEYS) {
     if (beforeIntegrations[key] === proposedIntegrations[key]) continue;
-    if (canonical[key] !== proposedIntegrations[key]) {
+    // A resource link is authoritative for the scalar it projects: a direct
+    // write that contradicts it is rejected so the integrations row can never
+    // drift from the collection. When NO link projects the key yet (the common
+    // case for a registry project that keeps its todos/mementos/channel mapping
+    // directly in integrations), the write is accepted — that is what lets the
+    // fleet seed and correct these mappings via a plain integrations PATCH
+    // (e.g. backfilling todos_task_list_id from .todos-link.json or replacing a
+    // name-token with a real id) instead of being forced into a 400. A later
+    // resource-link add projects over the stored value and becomes
+    // authoritative from then on.
+    const authoritative = canonical[key];
+    if (authoritative !== undefined && authoritative !== proposedIntegrations[key]) {
       throw new Error(
-        `integration '${key}' is a typed resource-link compatibility projection and must be changed through resource-links`,
+        `integration '${key}' is a typed resource-link compatibility projection and conflicts with the existing resource link ('${authoritative}'); change it through resource-links`,
       );
     }
   }

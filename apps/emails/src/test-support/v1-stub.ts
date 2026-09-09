@@ -1624,15 +1624,18 @@ const server = Bun.serve({
       const patch = await req.json().catch(function () { return {}; });
       if (resource === "messages") {
         // Mirror the real server updateMessageStatus: a raw labels array is
-        // IGNORED; the labels column is rebuilt from add_label/remove_label and
-        // the archived flag (guards the client label-write contract in tests).
+        // IGNORED; the labels column is rebuilt from add_label/remove_label and the
+        // folder flags (archived/is_spam/is_trash — the reserved folder labels),
+        // which guards the client label-write contract in tests.
         var labels = Array.isArray(e.labels) ? e.labels.slice() : [];
         var norm = function (v) { return String(v).trim().toLowerCase(); };
         if (typeof patch.add_label === "string" && !labels.some(function (l) { return norm(l) === norm(patch.add_label); })) labels.push(patch.add_label);
         if (typeof patch.remove_label === "string") labels = labels.filter(function (l) { return norm(l) !== norm(patch.remove_label); });
         if (typeof patch.archived === "boolean") { labels = labels.filter(function (l) { return norm(l) !== "archived"; }); if (patch.archived) labels.push("archived"); }
+        if (typeof patch.is_spam === "boolean") { labels = labels.filter(function (l) { return norm(l) !== "spam"; }); if (patch.is_spam) labels.push("spam"); }
+        if (typeof patch.is_trash === "boolean") { labels = labels.filter(function (l) { return norm(l) !== "trash"; }); if (patch.is_trash) labels.push("trash"); }
         var rest = Object.assign({}, patch);
-        delete rest.add_label; delete rest.remove_label; delete rest.labels;
+        delete rest.add_label; delete rest.remove_label; delete rest.is_spam; delete rest.is_trash; delete rest.labels;
         Object.assign(e, rest, { labels: labels, updated_at: new Date().toISOString() });
       } else {
         Object.assign(e, patch, { updated_at: new Date().toISOString() });
