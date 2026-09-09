@@ -3445,43 +3445,81 @@ export class TenantScopedStore {
     return updated !== null;
   }
 
+  /** Re-read a message row on the given `client` (used to return POST-apply
+   *  state after the automatic ingest hook mutated a just-inserted row). */
+  private async loadMessageRecord(client: TypedQueryClient, messageId: string): Promise<MessageRecord | null> {
+    const row = await client.get<Record<string, unknown>>(
+      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = $1 AND tenant_id = $2`,
+      [messageId, this.tenantId],
+    );
+    return row ? mapMessageRow(row) : null;
+  }
+
   /**
    * Automatic INGEST hook. Runs every ENABLED filter, in execution order,
    * against a freshly inserted message. Each filter is evaluated against the
    * message's current row state (after any earlier filter's actions), so one
    * filter can legitimately gate the next (e.g. archive first, then a filter
    * scoped to archived matches). Executes entirely on the caller's client so a
-   * hook inside an atomic transaction stays inside it.
+   * hook inside an atomic transaction stays inside it. Returns whether any
+   * filter action actually changed the row, so callers can re-read and return
+   * the post-apply record rather than the pre-apply insert snapshot.
    */
-  private async applyEnabledMailboxFiltersToMessage(client: TypedQueryClient, messageId: string): Promise<void> {
+  private async applyEnabledMailboxFiltersToMessage(client: TypedQueryClient, messageId: string): Promise<boolean> {
+    let changed = false;
     for (const filter of await this.enabledMailboxFilters(client)) {
       if (await this.messageMatchesMailboxFilter(client, messageId, filter)) {
-        await this.applyMailboxFilterActionsToMessage(client, messageId, filter.actions);
+        if (await this.applyMailboxFilterActionsToMessage(client, messageId, filter.actions)) changed = true;
       }
     }
+    return changed;
   }
 
   /**
    * Backfill one ENABLED filter's actions over its COMPLETE matching set. The
-   * set is snapshotted before any write; actions then run per row on the same
-   * client. `updated` counts messages whose state actually changed; an action
+   * matching set is scanned in BOUNDED keyset batches (id ASC, at most
+   * `batchSize` rows per SELECT — the apply route's clamped `limit` controls
+   * the write-batch size), so an unbounded mailbox is never loaded at once and
+   * every statement stays small; all writes still run on the same
+   * `client`/transaction, so the whole backfill commits or rolls back
+   * atomically. Progress is keyed on the stable primary key — never increasing
+   * offsets over the criteria result — so an action that removes a row from the
+   * set (mark_read / archive) can neither skip nor duplicate a row across
+   * batches. `updated` counts messages whose state actually changed; an action
    * that a message already satisfies is a no-op counted in `unchanged`, so
    * `matched = updated + unchanged`.
    */
   private async backfillMailboxFilter(
     client: TypedQueryClient,
     filter: MailboxFilter,
+    batchSize: number,
   ): Promise<{ matched: number; updated: number; unchanged: number }> {
     const { where, params } = this.buildMessageSelection(this.mailboxFilterListOptions(filter));
-    const rows = await client.many<{ id: string }>(
-      `SELECT id FROM messages WHERE ${where.join(" AND ")}`,
-      params,
-    );
+    let matched = 0;
     let updated = 0;
-    for (const row of rows) {
-      if (await this.applyMailboxFilterActionsToMessage(client, String(row["id"]), filter.actions)) updated += 1;
+    let after: string | null = null;
+    for (;;) {
+      const pageParams = [...params];
+      const pageWhere = [...where];
+      if (after !== null) {
+        pageParams.push(after);
+        pageWhere.push(`id > $${pageParams.length}`);
+      }
+      pageParams.push(batchSize);
+      const rows = await client.many<{ id: string }>(
+        `SELECT id FROM messages WHERE ${pageWhere.join(" AND ")} ORDER BY id ASC LIMIT $${pageParams.length}`,
+        pageParams,
+      );
+      for (const row of rows) {
+        if (await this.applyMailboxFilterActionsToMessage(client, String(row["id"]), filter.actions)) updated += 1;
+      }
+      matched += rows.length;
+      if (rows.length < batchSize) break;
+      const lastRow = rows[rows.length - 1];
+      if (!lastRow) break;
+      after = String(lastRow["id"]);
     }
-    return { matched: rows.length, updated, unchanged: rows.length - updated };
+    return { matched, updated, unchanged: matched - updated };
   }
 
   async applyMailboxFilter(
@@ -3508,14 +3546,16 @@ export class TenantScopedStore {
       if (clampOffset(opts.offset) !== 0) {
         throw new MailboxFilterInputError("mutate apply does not paginate; offset must be 0");
       }
-      // Tenant-bound transaction: snapshot the complete matching set, then apply
-      // actions to that fixed set before any concurrent page can shift under us.
+      // Tenant-bound transaction: the complete matching set is scanned in bounded
+      // id-keyset batches (`limit` controls each batch's write size) on the same
+      // transaction client, so an unbounded mailbox is never loaded at once and
+      // the whole backfill commits or rolls back atomically.
       const run = this.atomicClient
         ? this.atomicClient.transaction(async (tx) => {
             await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
-            return this.backfillMailboxFilter(tx, filter);
+            return this.backfillMailboxFilter(tx, filter, limit);
           })
-        : this.backfillMailboxFilter(this.client, filter);
+        : this.backfillMailboxFilter(this.client, filter, limit);
       const { matched, updated, unchanged } = await run;
       return {
         filter: { name: filter.name, criteria: filter.criteria },
@@ -4903,7 +4943,12 @@ export class TenantScopedStore {
       [...messageInsertParams(input), this.tenantId],
     );
     const record = mapMessageRow(row);
-    await this.applyEnabledMailboxFiltersToMessage(this.client, record.id);
+    // Re-read after auto-applying filters so callers receive the POST-apply
+    // state: an enabled filter may just have auto-archived, marked-read or
+    // labelled this freshly inserted row.
+    if (await this.applyEnabledMailboxFiltersToMessage(this.client, record.id)) {
+      return (await this.loadMessageRecord(this.client, record.id)) ?? record;
+    }
     return record;
   }
 
@@ -4981,10 +5026,15 @@ export class TenantScopedStore {
         sourceState = "existing_match";
       }
       // Only a genuinely NEW insert auto-applies filters; a duplicate delivery
-      // that observed an existing exact-source row keeps its prior state.
-      if (insertedRow) await this.applyEnabledMailboxFiltersToMessage(tx, messageId);
+      // that observed an existing exact-source row keeps its prior state. On an
+      // inserted winner, re-read the row afterwards so the returned record
+      // reflects any auto-applied actions (archive / mark-read / labels).
+      let record = mapMessageRow(row);
+      if (insertedRow && (await this.applyEnabledMailboxFiltersToMessage(tx, messageId))) {
+        record = (await this.loadMessageRecord(tx, messageId)) ?? record;
+      }
       return {
-        record: mapMessageRow(row),
+        record,
         inserted: Boolean(insertedRow),
         provenance: sourceState,
       };
@@ -5515,11 +5565,15 @@ export class TenantScopedStore {
       [...messageInsertParams(input), this.tenantId],
     );
     const inserted = Boolean(row["inserted"]);
-    const record = mapMessageRow(row);
+    const messageId = String(row["id"]);
     // Filters auto-apply only when the row was actually INSERTED; an existing
-    // source-id row replayed through upsert keeps its prior state.
-    if (inserted) await this.applyEnabledMailboxFiltersToMessage(this.client, record.id);
-    return { record, inserted };
+    // source-id row replayed through upsert keeps its prior state. Re-read on a
+    // changed insert so the returned record reflects any auto-applied actions.
+    if (inserted && (await this.applyEnabledMailboxFiltersToMessage(this.client, messageId))) {
+      const applied = await this.loadMessageRecord(this.client, messageId);
+      if (applied) return { record: applied, inserted };
+    }
+    return { record: mapMessageRow(row), inserted };
   }
 
   async updateMessageStatus(
