@@ -15,7 +15,7 @@ bun install -g @hasna/todos
 
 0.16.0 puts every surface on one credential resolver and moves three command
 families to the shared API. Upgrading from 0.15.52 needs no data migration, but
-two things change:
+three things change:
 
 - **Configure a credential.** The `./sdk` client no longer reads
   `~/.todos/config.json`, and the unprefixed `TODOS_URL` / key spellings are
@@ -34,11 +34,23 @@ two things change:
   tools (`create_plan`, `list_plans`, `get_plan`, `update_plan`, `delete_plan`)
   and task-list tools (`create_task_list`, `list_task_lists`, `get_task_list`,
   `update_task_list`, `delete_task_list`) are shared-API only as well.
+- **Most MCP tools that read the on-box store need `HASNA_TODOS_LOCAL=1`.** The
+  MCP server no longer opens the on-box SQLite store implicitly, so tools that
+  still read it directly — the template family, tags and labels, stale/blocked
+  work, `doctor`/`standup`/`status`, run ledger, handoffs, review queues,
+  retrospectives, risks, knowledge records, backups, calendar, boards,
+  focus/time reports and dispatches — fail on the default posture with an
+  opaque `UNKNOWN_ERROR` (68 of the 125 zero-argument tools at 0.16.0). Run the
+  server with `HASNA_TODOS_LOCAL=1` to keep using them; that opt-in is ignored
+  when `HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL` is set, because a
+  configured environment outranks it.
 
-Everything else still runs offline with `HASNA_TODOS_LOCAL=1`. The per-surface
+Everything else still runs offline with `HASNA_TODOS_LOCAL=1` (when the
+environment configures no authority or credential of its own). The per-surface
 detail lives in the repository under `apps/todos/docs/` (`PLAN_API.md`,
-`TASK_LIST_API.md`, `TEMPLATE_API.md`, `TASK_QUERY_API.md`); the npm tarball
-ships this README and `dist/` only, so read those files from the repo.
+`TASK_LIST_API.md`, `TEMPLATE_API.md`, `TASK_QUERY_API.md`,
+`native-storage.md`); the npm tarball ships this README and `dist/` only, so
+read those files from the repo.
 
 ## Credentials and Service Authority
 
@@ -823,6 +835,12 @@ MCP clients get the same local coordination through `claim_next_task`,
 `claim_next_task` can opt into stale recovery with `steal_stale` and
 `stale_minutes`.
 
+`get_stale_tasks` (and the other MCP tools that read the on-box store) require
+the deliberate local opt-in: start the MCP server with `HASNA_TODOS_LOCAL=1`, or
+the call fails on the default posture with an opaque `UNKNOWN_ERROR`. See
+[Upgrading From 0.15.52](#upgrading-from-01552) for the affected families and
+the one case where the opt-in is ignored.
+
 ## Plan Templates
 
 The package ships a marketplace-free template library for bug fixes, feature
@@ -861,10 +879,13 @@ contacting any hosted marketplace. `todos templates --use` creates every task in
 a multi-task template and wires its dependency graph in the shared account, so
 agents can immediately run `todos ready`, `todos blocked`, or
 `todos deps <task-id> --graph` against the generated plan. MCP clients reach the
-template surface through `list_template_library`, `write_template_library`,
+bundled library through `list_template_library` and `write_template_library`,
+which are credential-free and open no store. The remaining MCP template tools —
 `init_templates`, `create_template`, `list_templates`,
 `create_task_from_template`, `preview_template`, `export_template`, and
-`import_template`.
+`import_template` — read the on-box SQLite store and are not served on the
+default posture: start the MCP server with `HASNA_TODOS_LOCAL=1` to use them (see
+[Upgrading From 0.15.52](#upgrading-from-01552)).
 
 ## Moving Tasks Between Plans
 
@@ -890,6 +911,16 @@ configured for — the local SQLite file, or the shared dataset behind a hosted
 `/v1` authority. `todos plans` does not: it is served by the authenticated
 shared API only and refuses `HASNA_TODOS_DB_PATH`, `TODOS_DB_PATH`,
 `HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup.
+
+`todos plans --artifact <id-or-slug>` and `--write-artifacts` compare local
+Markdown against the shared plan record and therefore require an explicit
+`--artifact-root <directory>` — a trusted local project directory the caller
+chooses. Before 0.16.0 both options defaulted to the project path recorded in
+local SQLite, so the older form `todos plans --artifact <id-or-slug> --json`
+still appears in notes from that release; it now exits non-zero with
+`--artifact-root is required`. The files stay under
+`<artifact-root>/.hasna/todos/plans/<project-id>/`, and a path returned by the
+API is never used.
 
 ## Local Git Traceability
 
@@ -1693,9 +1724,11 @@ Data is stored in `~/.hasna/todos/`.
 
 ## Local-Only Security Boundary
 
-`@hasna/todos` is an open source, local-first package. The CLI, MCP server, and
-SDK read and write local state by default and do not require a
-hosted API, cloud account, billing provider, or remote model provider.
+`@hasna/todos` is an open source package with a local-first storage boundary.
+The CLI, MCP server, and SDK read and write on-box state under the explicit
+local opt-in (`HASNA_TODOS_LOCAL=1`) and otherwise talk only to the Todos `/v1`
+authority the operator configured. They never require a billing provider, a
+SaaS account, or a remote model provider.
 
 Release checks enforce that boundary before publishing:
 

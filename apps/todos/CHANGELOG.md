@@ -4,7 +4,8 @@
 
 ### Migrating from 0.15.52
 
-No data migration is required, but two things change under an existing install:
+No data migration is required, but three things change under an existing
+install:
 
 1. **A credential is required for the hosted surface, and the retired
    locations are no longer read.** The `./sdk` client used to read a credential
@@ -29,10 +30,31 @@ No data migration is required, but two things change under an existing install:
    `delete_task_list`) no longer read the local store either.
    `todos template-library` is unchanged: it renders the library bundled in the
    package and never opens a store.
+3. **Most MCP tools that read the on-box store now need the local opt-in.**
+   The MCP server no longer opens the on-box SQLite store implicitly, so every
+   tool that still reads it directly — the template family (`create_template`,
+   `list_templates`, `init_templates`, `preview_template`, `export_template`,
+   `import_template`, `create_task_from_template`), tags and labels, stale and
+   blocked work, `doctor`/`standup`/`status`, the local run ledger, handoffs,
+   review queues, retrospectives, risks, knowledge records, backups and
+   integrity checks, calendar, boards, focus/time reports and dispatches — fails
+   on the default posture. Measured at 0.16.0 with `TODOS_PROFILE=full`, 68 of
+   the 125 zero-required-argument tools return an opaque
+   `{"code":"UNKNOWN_ERROR"}` while the server logs
+   `API_DATABASE_FALLBACK_FORBIDDEN`; only the ten plan/task-list tools return
+   the typed `REMOTE_API_CONFIG_MISSING` refusal. Run the MCP server with
+   `HASNA_TODOS_LOCAL=1` to keep using them. That opt-in is honoured only when
+   the environment configures no authority or credential of its own — a
+   configured environment outranks it, so with `HASNA_TODOS_API_KEY` (or
+   `HASNA_TODOS_API_URL`) set, `HASNA_TODOS_LOCAL=1` is ignored and the on-box
+   MCP tools are unreachable in 0.16.0. Converting them to the shared API is
+   tracked separately; the current boundary is recorded in
+   `apps/todos/docs/native-storage.md`.
 
-Everything else still runs offline with `HASNA_TODOS_LOCAL=1`. The per-surface
-detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
-`TEMPLATE_API.md` and `TASK_QUERY_API.md`.
+Everything else still runs offline with `HASNA_TODOS_LOCAL=1` (again, only when
+the environment configures no authority or credential of its own). The
+per-surface detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
+`TEMPLATE_API.md`, `TASK_QUERY_API.md` and `native-storage.md`.
 
 ### Minor Changes
 
@@ -122,6 +144,19 @@ detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
 
 ### Patch Changes
 
+- The on-box MCP tools that were not converted to the shared API are documented
+  as requiring the deliberate `HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1` opt-in.
+  They still read the on-box store, which is no longer opened implicitly, so on
+  the default posture they answer with an opaque `{"code":"UNKNOWN_ERROR"}`
+  while the server logs `API_DATABASE_FALLBACK_FORBIDDEN` — 68 of the 125
+  zero-required-argument tools at 0.16.0 with `TODOS_PROFILE=full`. This is the
+  same defect class the ten plan/task-list tools were converted out of; their
+  typed `REMOTE_API_CONFIG_MISSING` refusal is the shape the rest still need,
+  and conversion is tracked separately. On an environment that sets
+  `HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL` the opt-in is ignored, so these
+  tools are unreachable there. See the 0.16.0 Migrating section and
+  `apps/todos/docs/native-storage.md`.
+- 8f8e88871: Align the exact `@hasna/contracts` pin with the 1.0.2 optional secrets peer release.
 - b269abea4: Return the MCP shared-API refusal as a typed, actionable payload instead of
   `UNKNOWN_ERROR`. The plan and task-list MCP tools are served only by the
   authenticated shared API, but the guard threw a plain `Error`, which the MCP
@@ -325,12 +360,6 @@ normalization.md` (runner: `apps/todos/scripts/normalize-slug-prefixes.ts`,
   `TODOS_LOCAL` before startup. `todos template-library` is the deliberate
   exception: it renders the library bundled in the package, opens no store, and
   stays credential-free.
-
-## 0.15.53
-
-### Patch Changes
-
-- Align the exact `@hasna/contracts` pin with the 1.0.2 optional secrets peer release.
 
 ## 0.15.52
 
