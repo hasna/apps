@@ -4,7 +4,7 @@
 
 ### Migrating from 0.15.52
 
-No data migration is required, but three things change under an existing
+No data migration is required, but four things change under an existing
 install:
 
 1. **A credential is required for the hosted surface, and the retired
@@ -60,6 +60,13 @@ install:
    MCP tools are unreachable in 0.16.0. Converting them to the shared API is
    tracked separately; the current boundary is recorded in
    `apps/todos/docs/native-storage.md`.
+4. **The advertised command list depends on the resolved route.** `todos --help`,
+   `todos manual` and the generated completions list what the route exposes: 76
+   root commands on the hosted route once a credential resolves, 75 with none
+   configured (`stale-lock-handoff` is advertised only when the shared-API
+   authority is), and the full 166 with `HASNA_TODOS_LOCAL=1`. No command was
+   removed; every verb still resolves once its posture is configured. The
+   per-posture counts are in `apps/todos/docs/cli-help.md`.
 
 Everything else still runs offline with `HASNA_TODOS_LOCAL=1` (again, only when
 the environment configures no authority or credential of its own). The
@@ -155,7 +162,9 @@ per-surface detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
   - The command list `todos --help`, `todos manual` and the generated
     completions print is now route-dependent. 0.15.52 advertised all 166
     commands to every caller because the local fallback was implicit; 0.16.0
-    advertises the 75 commands the hosted route exposes and the full 166 only
+    advertises the 76 commands the hosted route exposes once a credential
+    resolves (75 with none configured — `stale-lock-handoff` is advertised only
+    when the shared-API authority is) and the full 166 only
     once the local opt-in is set, because the on-box commands fail closed on the
     default posture. No command was removed —
     every verb still resolves when its posture is configured; run

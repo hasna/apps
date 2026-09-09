@@ -56,9 +56,12 @@ four things change:
   because a configured environment outranks it.
 - **The advertised command list is route-dependent.** 0.15.52 listed all 166
   commands to every caller because the local fallback was implicit. 0.16.0
-  lists the 75 the hosted route exposes and shows the full 166 only with
-  `HASNA_TODOS_LOCAL=1` set, because the on-box families fail closed on the
-  default posture. No command was removed — `todos --help`, `todos manual` and
+  lists only what the resolved route exposes: 76 root commands on the hosted
+  route once a credential resolves, 75 with none configured (the extra verb,
+  `stale-lock-handoff`, is advertised only when the shared-API authority is),
+  and the full 166 only with `HASNA_TODOS_LOCAL=1` set, because the on-box
+  families fail closed on the default posture. No command was removed —
+  `todos --help`, `todos manual` and
   the generated completions all honour the same rule, and every verb still
   resolves once its posture is configured. `todos storage status` also reports
   credential-source disagreements as a `warnings` array (`--json`) and a yellow
@@ -99,7 +102,7 @@ resolved its own hosted authority, which is where rotation matters.
 
 | # | Tier | Where |
 | --- | --- | --- |
-| 1 | explicit argument | `--api-key` / `--profile` (and `apiKey` on `new TodosClient({...})`) |
+| 1 | explicit argument | `apiKey` on `new TodosClient({...})` — the `todos` CLI exposes no hosted-credential flag of its own (`todos ai --profile` is a runtime profile, not a credential tier) |
 | 2 | deliberate env pointer | `HASNA_TODOS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_TODOS_API_KEY_REF` (a secrets-vault item key, never a value) |
 | 3 | macOS Keychain | generic password `hasna.credentials.todos.api-key`, account `HASNA_STATION` → `hostname -s` → `USER` |
 | 4 | disk | `~/.hasna/todos/config/credentials`, owner-only `0400`/`0600` |
@@ -148,9 +151,19 @@ and only for that one case: `new TodosClient()` targets the on-box
 that client speaks the same `/api/*` plane a workstation serve exposes and local
 is a real mode for it. `createTodosV1Client()` is hosted-only and throws
 (`TODOS_CREDENTIAL_MISSING`). Every *other* refusal is a throw on all three
-surfaces — a blank variable, aliases that disagree, an unreadable credential
-file, a URL with no key — because those are misconfigurations, not an absence of
-configuration.
+surfaces — aliases that disagree, an unreadable credential file, a URL with no
+key — because those are misconfigurations, not an absence of configuration.
+
+A **declared-but-blank** authority variable is deliberately *not* one of those
+refusals. At the Todos seam a blank has always meant "unset" — helpers in the
+wild blank rather than delete — so every authority variable that is declared
+but empty is removed before the resolver runs. `HASNA_TODOS_API_KEY=` therefore
+resolves the machine's ambient Keychain item exactly as an unset variable does:
+it neither configures a credential nor withholds one. To force the on-box store
+from a wrapper, set `HASNA_TODOS_LOCAL=1` — a blank authority variable counts as
+absent for the opt-in too, so the opt-in is still honoured when
+`HASNA_TODOS_API_KEY` is present but empty — instead of blanking a credential
+variable.
 
 **Local mode is deliberate, and it says so.** `@hasna/todos` is usable entirely
 offline against an on-box SQLite store — set `HASNA_TODOS_LOCAL=1` (alias

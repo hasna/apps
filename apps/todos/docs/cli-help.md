@@ -34,12 +34,20 @@ tree, and that tree is filtered by the resolved route:
 
 | Posture | `--help` root commands | `manual --json` `commands` | `completions zsh` lines |
 | --- | --- | --- | --- |
-| default (hosted surface) | 75 | 121 | 24 |
+| hosted route, credential resolved (the documented default) | 76 | 122 | 24 |
+| hosted route, no credential configured | 75 | 121 | 24 |
 | `HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1` | 166 | 413 | 71 |
 
 The three columns count different things (root commands, the manual's nested
 catalog, completion script lines), so compare each column with itself, not
 across columns.
+
+The two hosted rows differ by exactly one verb, `stale-lock-handoff`: it is a
+shared-API command, so it is advertised only once the resolver has a credential
+(a key alone is enough — the fleet gateway is the default authority). The
+credential-gated row is the posture a README-following install reaches after
+step 1 ("Configure a credential"); the 75/121 row is what a fresh, unconfigured
+install prints.
 
 0.15.52 advertised all 166 to every caller because the local fallback was
 implicit. 0.16.0 advertises only the commands the resolved route exposes,
