@@ -555,3 +555,51 @@ describe("the conformance suite can fail", () => {
     expect(conformanceFailures(report)).toEqual([]);
   }, SUITE_TIMEOUT_MS);
 });
+
+describe("SqliteEmailStore explicit spam/trash folder moves", () => {
+  it("is_spam / is_trash move folder counts and surface the folder label, and false moves back to inbox", async () => {
+    // BUG-0028 regression: quarantine/un-quarantine was not expressible through
+    // updateMessageStatus — the patch had no is_spam/is_trash and only add_label
+    // "spam"/"trash" (reserved folder moves) reached the columns. The explicit
+    // flags are the documented spelling and must behave exactly like them.
+    const subject = store();
+    const created = await subject.messages.createMessage({
+      direction: "inbound",
+      from_addr: `spam-${uuid()}@example.test`,
+      to_addrs: ["me@example.test"],
+      subject: "quarantine me",
+      received_at: now(),
+    });
+    if (!created.ok) throw new Error("createMessage failed");
+    const id = created.value.id;
+
+    const before = await subject.messages.messageCounts();
+    if (!before.ok) throw new Error("messageCounts failed");
+    expect(before.value.inbox).toBeGreaterThan(0);
+
+    const quarantined = await subject.messages.updateMessageStatus(id, { is_spam: true });
+    if (!quarantined.ok || quarantined.value === null) throw new Error("is_spam write failed");
+    expect(quarantined.value.labels).toContain("spam");
+    const inSpam = await subject.messages.messageCounts();
+    if (!inSpam.ok) throw new Error("messageCounts (spam) failed");
+    expect(inSpam.value.inbox).toBe(before.value.inbox - 1);
+    expect(inSpam.value.spam).toBe(before.value.spam + 1);
+
+    const trashed = await subject.messages.updateMessageStatus(id, { is_trash: true });
+    if (!trashed.ok || trashed.value === null) throw new Error("is_trash write failed");
+    expect(trashed.value.labels).toContain("trash");
+    const inTrash = await subject.messages.messageCounts();
+    if (!inTrash.ok) throw new Error("messageCounts (trash) failed");
+    expect(inTrash.value.trash).toBe(before.value.trash + 1);
+
+    const restored = await subject.messages.updateMessageStatus(id, { is_spam: false, is_trash: false });
+    if (!restored.ok || restored.value === null) throw new Error("restore write failed");
+    expect(restored.value.labels).not.toContain("spam");
+    expect(restored.value.labels).not.toContain("trash");
+    const back = await subject.messages.messageCounts();
+    if (!back.ok) throw new Error("messageCounts (restored) failed");
+    expect(back.value.inbox).toBe(before.value.inbox);
+    expect(back.value.spam).toBe(before.value.spam);
+    expect(back.value.trash).toBe(before.value.trash);
+  });
+});

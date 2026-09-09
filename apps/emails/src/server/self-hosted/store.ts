@@ -5289,6 +5289,8 @@ export class TenantScopedStore {
       is_read?: boolean;
       is_starred?: boolean;
       archived?: boolean;
+      is_spam?: boolean;
+      is_trash?: boolean;
       add_label?: string;
       remove_label?: string;
     },
@@ -5298,6 +5300,19 @@ export class TenantScopedStore {
     const labels = new Map(current.labels.map((label) => [label.toLowerCase(), label]));
     if (patch.archived === true) labels.set("archived", "archived");
     if (patch.archived === false) labels.delete("archived");
+    // Explicit folder moves, parallel to `archived`. Folder membership on this store is
+    // label-backed (SPAM_SQL/TRASH_SQL above read `labels @> '["spam"]'` / `@> '["trash"]'`),
+    // so quarantining a message is adding its "spam"/"trash" label and un-quarantining is
+    // removing it. These fields are the documented spelling of that move — the same labels
+    // `add_label: "spam"` / `add_label: "trash"` would add (those folder-label values are
+    // reserved folder moves, not plain labels). A message that additionally carries
+    // `status` = "spam" remains in the spam folder via the status arm of SPAM_SQL until its
+    // status is also changed; callers clearing a provider-imposed spam status should pass
+    // `status` alongside `is_spam: false`.
+    if (patch.is_spam === true) labels.set("spam", "spam");
+    if (patch.is_spam === false) labels.delete("spam");
+    if (patch.is_trash === true) labels.set("trash", "trash");
+    if (patch.is_trash === false) labels.delete("trash");
     if (patch.add_label?.trim()) labels.set(patch.add_label.trim().toLowerCase(), patch.add_label.trim());
     if (patch.remove_label?.trim()) labels.delete(patch.remove_label.trim().toLowerCase());
     const row = await this.client.get<Record<string, unknown>>(
