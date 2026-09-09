@@ -282,8 +282,9 @@ the ten plan/task-list tools (`create_plan`, `list_plans`, `get_plan`,
 `get_task_list`, `update_task_list`, `delete_task_list`) return the typed
 `REMOTE_API_CONFIG_MISSING` refusal that names the missing configuration.
 
-Measured at 0.16.0 with `TODOS_PROFILE=full` (361 tools, 125 of them taking no
-required arguments), 68 of the 125 returned `API_DATABASE_FALLBACK_FORBIDDEN`:
+Measured at 0.16.0 with `TODOS_PROFILE=full` on the default (no-credential)
+posture (361 tools, 125 of them taking no required arguments), 68 of the 125
+returned `API_DATABASE_FALLBACK_FORBIDDEN`:
 
 - templates: `list_templates`, `init_templates` (the rest of the family —
   `create_template`, `preview_template`, `export_template`, `import_template`,

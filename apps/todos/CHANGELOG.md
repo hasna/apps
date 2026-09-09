@@ -16,9 +16,10 @@ install:
    (owner-only `0400`/`0600`), then `HASNA_TODOS_API_KEY` — and `todos storage
    status --json` names the tier that answered. `~/.hasna/fleet-env`,
    `~/.hasna/cloud`, `~/.config/hasna`, `$XDG_CONFIG_HOME` and
-   `~/.todos/config.json` are not read. With no credential the CLI and the MCP
-   server exit non-zero (`REMOTE_API_CONFIG_MISSING`) instead of serving local
-   rows.
+   `~/.todos/config.json` are not read. With no credential the CLI exits
+   non-zero (`REMOTE_API_CONFIG_MISSING`) instead of serving local rows; the MCP
+   server keeps serving and refuses each credential-gated call — typed for the
+   ten plan/task-list tools, opaque `UNKNOWN_ERROR` for the rest (item 3).
 2. **`todos plans`, `todos task-lists` (aliases `lists`, `tl`) and the template
    commands are shared-API only.** They refuse `HASNA_TODOS_DB_PATH`,
    `TODOS_DB_PATH`, `HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup — any
@@ -112,12 +113,14 @@ per-surface detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
 
   Behaviour worth knowing about:
 
-  - Hosted mode with no credential still fails closed — non-zero exit, no SQLite
+  - Hosted mode with no credential fails closed — non-zero exit, no SQLite
     fallback, no local-fallback event — and the message now names every tier it
-    consulted, so the remedy is in the error. The `./sdk` surface differs for that
-    ONE case by design: `new TodosClient()` falls to the local `todos-serve` with
-    a stderr line, `createTodosV1Client()` throws. Every other refusal throws on
-    every surface.
+    consulted, so the remedy is in the error. This is a change from 0.15.52 for
+    the nothing-configured case, which served the on-box store behind a
+    local-fallback notice: 0.16.0 requires the deliberate `HASNA_TODOS_LOCAL=1`
+    opt-in to serve it. The `./sdk` surface differs for that ONE case by design:
+    `new TodosClient()` falls to the local `todos-serve` with a stderr line,
+    `createTodosV1Client()` throws. Every other refusal throws on every surface.
   - The bundled `@hasna/todos-sdk` package (`apps/todos/sdk`, published separately
     and NOT a workspace member, so it carries no changeset of its own — see
     hasna/apps#1787) now documents the environment variables it reads and prints

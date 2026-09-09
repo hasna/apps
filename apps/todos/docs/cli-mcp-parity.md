@@ -369,7 +369,7 @@ CLI template library:
 ```bash
 todos template-library --json
 todos template-library --write .todos/templates --json
-todos template-init --json
+todos template-init --json                    # shared API: credential required
 ```
 
 Matching MCP tools:

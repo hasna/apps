@@ -22,8 +22,9 @@ three things change:
   legacy. Put the key in the macOS Keychain, in
   `~/.hasna/todos/config/credentials` (owner-only `0400`/`0600`), or in
   `HASNA_TODOS_API_KEY`, then confirm with `todos storage status --json`. With no
-  credential the CLI and the MCP server exit non-zero
-  (`REMOTE_API_CONFIG_MISSING`) instead of quietly serving local rows. The
+  credential the CLI exits non-zero (`REMOTE_API_CONFIG_MISSING`) instead of
+  quietly serving local rows, and MCP tool calls fail closed rather than falling
+  back to the on-box store (see the third bullet below). The
   retired locations — `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`,
   `$XDG_CONFIG_HOME` — are not read.
 - **`todos plans`, `todos task-lists` (`lists`, `tl`) and the template commands
@@ -112,10 +113,15 @@ printf 'HASNA_TODOS_API_KEY=%s\n' "$KEY" > ~/.hasna/todos/config/credentials
 chmod 600 ~/.hasna/todos/config/credentials
 ```
 
-**Hosted mode fails closed.** With no credential the CLI and the MCP server exit
-non-zero (`REMOTE_API_CONFIG_MISSING`) and say which tiers they consulted. They
-never fall back to the local SQLite store, because serving local rows while
-authentication is broken prints healthy output for a broken system.
+**Hosted mode fails closed.** With no credential the CLI exits non-zero
+(`REMOTE_API_CONFIG_MISSING`) and names the tiers it consulted. The MCP server
+stays up so a client can read the refusal, and each call fails instead of serving
+local rows — the ten plan/task-list tools with the typed
+`REMOTE_API_CONFIG_MISSING`, the other credential-gated and on-box tools with the
+opaque `UNKNOWN_ERROR` described under
+[Upgrading From 0.15.52](#upgrading-from-01552). Neither surface falls back to
+the local SQLite store, because serving local rows while authentication is broken
+prints healthy output for a broken system.
 
 The `./sdk` surface answers "nothing is configured" differently *on purpose*,
 and only for that one case: `new TodosClient()` targets the on-box
@@ -599,7 +605,7 @@ OpenLoops updates those pointers after admission or evaluator progress:
 todos task workflow-pointers <task-id> \
   --invocation <workflow-invocation-id> \
   --run <workflow-run-id> \
-  --manifest /home/hasna/.hasna/loops/runs/<project>/<subject>/<run>/manifest.json \
+  --manifest ~/.hasna/loops/runs/<project>/<subject>/<run>/manifest.json \
   --state working \
   --json
 ```
@@ -884,7 +890,9 @@ which are credential-free and open no store. The remaining MCP template tools �
 `init_templates`, `create_template`, `list_templates`,
 `create_task_from_template`, `preview_template`, `export_template`, and
 `import_template` — read the on-box SQLite store and are not served on the
-default posture: start the MCP server with `HASNA_TODOS_LOCAL=1` to use them (see
+default posture: start the MCP server with `HASNA_TODOS_LOCAL=1` to use them.
+That opt-in is ignored when the environment sets `HASNA_TODOS_API_KEY` or
+`HASNA_TODOS_API_URL`, which leaves these tools unreachable (see
 [Upgrading From 0.15.52](#upgrading-from-01552)).
 
 ## Moving Tasks Between Plans
