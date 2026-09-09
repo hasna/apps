@@ -14,8 +14,7 @@ import { getInstallMeta, getInstalledSkills, getSkillPath, getAgentSkillsDir, AG
 import { censusHomeDrift } from "../../lib/home-census.js";
 import { EnvAssignmentError, setEnvAssignment } from "../env-assignment.js";
 import { resolveCorpusRoot } from "../../lib/home-migration.js";
-import { credentialFileMode, getAuthFilePath } from "../../lib/auth-store.js";
-import { resolveSkillsFleet } from "../../lib/fleet-credentials.js";
+import { describeCredentialState } from "../../lib/credential-state.js";
 
 export function registerDiagnostic(parent: Command) {
   // Doctor
@@ -192,6 +191,10 @@ function handleWhoami(options: { json: boolean }) {
   // node_modules folder, which is what this line reported before (hasna/apps#1632).
   const skillsDir = resolveCorpusRoot();
   const credential = describeCredentialState();
+  // A misconfigured ladder is reported as data in the payload AND as exit 1, so
+  // a script keyed on the exit status sees the loud refusal too — the same
+  // shape every read verb takes (#1720 validation). The payload keeps its shape.
+  if (credential.mode === "misconfigured") process.exitCode = 1;
   if (options.json) {
     console.log(JSON.stringify({ version: pkg.version, installedCount: installed.length, installed, agents: agentConfigs, skillsDir, cwd: process.cwd(), credential }, null, 2));
     return;
@@ -211,71 +214,8 @@ function handleWhoami(options: { json: boolean }) {
   for (const cfg of agentConfigs) console.log(cfg.exists ? `  ${chalk.green("\u2713")} ${cfg.agent} \u2014 ${cfg.skillCount} skill(s) at ${cfg.path}` : `  ${chalk.dim("\u2717")} ${cfg.agent} \u2014 not configured`);
 }
 
-/**
- * Where this install stands on the fleet credential ladder — the SOURCES only.
- *
- * Never a key value: an env key NAME, a Keychain item reference or an absolute
- * path is what an operator needs to tell a stale export from a rotated file, and
- * it is the most this may print. `credentialFileMode` is reported so a file the
- * shared resolver would REFUSE (anything but 0400/0600) is visible here rather
- * than only at the moment a command fails.
- */
-function describeCredentialState(): {
-  mode: "hosted" | "local" | "misconfigured";
-  apiUrl: string | null;
-  apiUrlSource: string | null;
-  apiKeySource: string | null;
-  apiKeyTier: string | null;
-  credentialsFile: string | null;
-  credentialsFileMode: string | null;
-  error: string | null;
-} {
-  let credentialsFile: string | null = null;
-  let mode: string | null = null;
-  try {
-    credentialsFile = getAuthFilePath();
-    const bits = credentialFileMode();
-    mode = bits === null ? null : `0${bits.toString(8).padStart(3, "0")}`;
-  } catch {
-    // No HOME: there is no credentials file to describe.
-  }
-  try {
-    const fleet = resolveSkillsFleet();
-    if (fleet.mode === "hosted") {
-      return {
-        mode: "hosted",
-        apiUrl: fleet.apiOrigin,
-        apiUrlSource: fleet.apiUrlSource,
-        apiKeySource: fleet.apiKeySource,
-        apiKeyTier: fleet.apiKeyTier,
-        credentialsFile,
-        credentialsFileMode: mode,
-        error: null,
-      };
-    }
-    return {
-      mode: "local",
-      apiUrl: null,
-      apiUrlSource: null,
-      apiKeySource: null,
-      apiKeyTier: null,
-      credentialsFile,
-      credentialsFileMode: mode,
-      error: null,
-    };
-  } catch (error) {
-    return {
-      mode: "misconfigured",
-      apiUrl: null,
-      apiUrlSource: null,
-      apiKeySource: null,
-      apiKeyTier: null,
-      credentialsFile,
-      credentialsFileMode: mode,
-      error: (error as Error).message,
-    };
-  }
-}
+// describeCredentialState() lives in lib/credential-state.ts, shared with the
+// MCP `whoami` tool so both surfaces report the same sources (never values).
 
 function handleOutdated(options: { json: boolean }) {
   // The pin comparison remains, as a subset of the home/corpus comparison.

@@ -28,6 +28,22 @@ test("Claude and Codex configurations preserve model IDs, endpoint prefixes and 
     expect(JSON.stringify(catalog)).not.toContain(input.credential);await codex.cleanup?.();
   } finally {await rm(input.stateDir,{recursive:true,force:true});}
 });
+test("Claude uses the original DeepSeek provider for compaction defaults behind the gateway", async () => {
+  const input = await fixture();
+  const prepared = await prepareHarnessLaunch({ ...input, harness: "claude", protocol: "anthropic-messages", baseUrl: "https://api.deepseek.com/anthropic/v1", providerId: "renamed-provider", version: "2.1.261" });
+  try {
+    expect(prepared.env.ANTHROPIC_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(prepared.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW ?? "786432");
+  } finally { await prepared.cleanup?.(); await rm(input.stateDir, { recursive: true, force: true }); }
+});
+test("expired catalog entries stay out of Claude's native picker", async () => {
+  const input=await fixture();
+  const prepared=await prepareHarnessLaunch({...input,harness:"claude",protocol:"anthropic-messages",version:"2.1.261",models:[...input.models,{id:"expired-preview",name:"Expired",expiresOn:"2000-01-01"}]});
+  try {
+    const settings=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
+    expect(settings.modelPicker.options.map((model:any)=>model.model)).toEqual([input.model]);
+  } finally {await prepared.cleanup?.();await rm(input.stateDir,{recursive:true,force:true});}
+});
 test("Codex uses an ephemeral gateway credential for providers with literal api-key authentication",async()=>{
   const input=await fixture();
   try {

@@ -1690,11 +1690,17 @@ export class KnowledgeService {
    * HTTP client directly.
    */
   itemStore(): ItemStore {
-    const workspace = this.ensureWorkspace();
-    return resolveItemStore({
-      storePath: workspace.jsonStorePath,
+    // Resolve the transport BEFORE touching the workspace. A hosted read — and
+    // a read that fails closed with no credential — must not leave config.json
+    // and the eight workspace directories under ~/.hasna/knowledge behind as a
+    // side effect (hasna/apps#1720 acceptance (c)/(f)); only the on-box store
+    // needs the skeleton, and it is created right here for that case.
+    const store = resolveItemStore({
+      storePath: this.workspace.jsonStorePath,
       storePathOverridden: false,
     });
+    if (store.kind === 'local') this.ensureWorkspace();
+    return store;
   }
 
   /**

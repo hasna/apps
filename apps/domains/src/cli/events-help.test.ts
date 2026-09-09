@@ -10,7 +10,7 @@ function runDomains(args: string[], env: Record<string, string | undefined> = {}
       cmd: ["bun", "run", "src/cli/index.ts", ...args],
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, ...env, HASNA_EVENTS_DIR: eventsDir, NO_COLOR: "1" },
+      env: { PATH: process.env.PATH, HOME: eventsDir, HASNA_STATION: "domains-events-fixture", ...env, HASNA_EVENTS_DIR: eventsDir, NO_COLOR: "1" },
     });
   } finally {
     rmSync(eventsDir, { recursive: true, force: true });
@@ -33,6 +33,7 @@ describe("domains events CLI", () => {
 
   test("extras advertises events as an optional command group", () => {
     const result = runDomains(["extras", "--json"]);
+    expect(result.exitCode).toBe(0);
     const body = JSON.parse(text(result.stdout)) as { available: string[] };
 
     expect(result.exitCode).toBe(0);

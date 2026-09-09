@@ -196,3 +196,45 @@ describe("future deployment workflow policy", () => {
     expect(deploymentWorkflowFindings("ci.yml", ci)).toEqual([]);
   });
 });
+
+describe("deployment gate runtime environments", () => {
+  it("runs the actual CLI through canonical API transport and refuses conflicting or missing configuration", async () => {
+    const { runtimeEnv, databaseEnv } = await import("../scripts/immutable-deployment-gate.mjs");
+    const { startV1Stub } = await import("./test-support/v1-stub.js");
+    const { mkdtempSync, mkdirSync, readdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = mkdtempSync(join(tmpdir(), "emails-gate-runtime-"));
+    const home = join(root, "home"), trap = join(root, "local-trap");
+    mkdirSync(home); mkdirSync(trap);
+    const stub = await startV1Stub();
+    try {
+      const env = runtimeEnv(home, stub.baseUrl, stub.apiKey, trap);
+      expect(Object.keys(env).some(key => key.endsWith("_MODE") || key.endsWith("_DB_PATH"))).toBe(false);
+      expect(env.HASNA_EMAILS_API_URL).toBe(stub.baseUrl);
+      expect(env.HASNA_STATION).toMatch(/^emails-deployment-gate-[0-9a-f-]{36}$/);
+      expect(runtimeEnv(home, stub.baseUrl, stub.apiKey, trap).HASNA_STATION).not.toBe(env.HASNA_STATION);
+      const run = (input: Record<string, string>) => Bun.spawnSync({ cmd: [process.execPath, "src/cli/index.tsx", "--json", "inbox", "list", "--limit", "1"], env: input, stdout: "pipe", stderr: "pipe" });
+      const success = run(env);
+      expect(success.exitCode).toBe(0);
+      expect(JSON.parse(success.stdout.toString())).toEqual([]);
+      expect((await stub.listQueries("messages")).length).toBeGreaterThan(0);
+      for (const setting of ["HASNA_EMAILS_DB_PATH", "EMAILS_DB_PATH"]) {
+        const result = run({ ...env, [setting]: trap });
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stderr.toString()).toContain(setting);
+        expect(result.stderr.toString()).toContain("HASNA_EMAILS_API_URL");
+      }
+      const noApi = { ...env }; delete noApi.HASNA_EMAILS_API_URL; delete noApi.HASNA_EMAILS_API_KEY;
+      const missing = run(noApi);
+      expect(missing.exitCode).not.toBe(0);
+      expect(missing.stderr.toString()).toContain("HASNA_EMAILS_API_URL");
+      expect(missing.stderr.toString()).toContain("HASNA_EMAILS_API_KEY");
+      expect(missing.stderr.toString()).not.toContain("To use the local database instead");
+      expect(readdirSync(trap)).toEqual([]);
+      const operator = databaseEnv(home, "postgresql://fixture.invalid/emails");
+      expect(operator.EMAILS_DATABASE_URL).toBe("postgresql://fixture.invalid/emails");
+      expect(Object.keys(operator).some(key => key.endsWith("_MODE") || key.endsWith("_DB_PATH") || key === "HASNA_EMAILS_API_URL")).toBe(false);
+    } finally { stub.stop(); rmSync(root, { recursive: true, force: true }); }
+  }, 20000);
+});

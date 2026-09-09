@@ -50,7 +50,7 @@ export interface VaultItemInput {
 
 export interface AuditEntry {
   id: number;
-  action: "get" | "set" | "delete" | "restore";
+  action: "get" | "set" | "delete" | "restore" | "encryption_repair";
   key: string;
   agent: string;
   timestamp: string;

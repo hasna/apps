@@ -9,7 +9,7 @@ import {
   API_CREDENTIAL_SETTINGS,
   DATABASE_PATH_SETTINGS,
 } from "../../store-resolution.js";
-import { registerInboxCommands } from "./inbox.local.js";
+import { registerInboxCommands } from "./inbox.local.test-support.js";
 
 // Any inherited store selector — a deployment-word variable, the client-env
 // vault pointer, or a configured API endpoint/credential — would route the

@@ -41,10 +41,11 @@
     {
       "name": "logs-sdk",
       "kind": "sdk",
-      "status": "deferred",
+      "status": "supported",
       "authMode": "api-key",
-      "exportSubpath": ".",
-      "deferReason": "The generated SDK ships, but the service contract requires a supported service SDK to declare an exportSubpath that exists in package.json exports with a generatedFrom pointing at the served OpenAPI document; logs exports only '.', './storage', and './api', and no ./sdk export exists yet."
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/openapi.json",
+      "clientClassName": "LogsClient"
     },
     {
       "name": "mcp",

@@ -4,7 +4,7 @@ export { modelPolicySchema, routingEventSchema, routingEventsSchema } from "./mo
 export type { ModelPolicy, RoutingEvent } from "./model-policy-schema";
 export type { AuthStyle } from "./auth";
 
-export const VERSION = "0.1.4";
+export const VERSION = "0.1.6";
 export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode", "opencode2", "pi", "omp", "dsh", "cline", "hermes", "prime-agent", "gemini", "aider", "kilo"]);
 export const protocolSchema = z.enum(["anthropic-messages", "openai-responses", "openai-chat", "gemini-generate-content"]);
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
@@ -21,9 +21,14 @@ export function endpoint(value: string): string {
 const urlSchema = z.string().max(2000).superRefine((v, ctx) => {
   try { endpoint(v); } catch { ctx.addIssue({code: "custom", message: "Invalid endpoint URL"}); }
 }).transform(endpoint);
+export const expiresOnSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
+  const day = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(day.getTime()) && day.toISOString().slice(0, 10) === value;
+}, "Use a real calendar date in YYYY-MM-DD format.");
 export const modelSchema = z.object({
   id: z.string().min(1).max(300), name: label, description: z.string().max(8000).optional(),
   available: z.boolean().optional(),
+  expiresOn: expiresOnSchema.optional(),
   contextWindow: z.number().int().positive().optional(), maxOutputTokens: z.number().int().positive().optional(),
   inputModalities: z.array(z.string().max(50)).max(20).optional(),
   outputModalities: z.array(z.string().max(50)).max(20).optional(),
@@ -41,6 +46,7 @@ export const providerInputSchema = z.object({
   catalogAccountId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/).optional(),
   modelsPath: z.string().regex(/^[a-zA-Z0-9_/-]+$/).max(200).default("models"),
   manualModels: z.array(modelSchema).max(10000).default([]),
+  additionalModels: z.array(modelSchema).max(10000).optional(),
 }).strict().refine(p => !p.modelsPath.split("/").includes("..") && !p.modelsPath.startsWith("/"), "modelsPath must be relative");
 export const providerPresetSchema = z.object({
   id: idSchema, name: label, credentialEnv: envRef.optional(),
@@ -100,10 +106,14 @@ export function validateHarnessProvider(harness: Profile["harness"], provider: P
   if (harness === "gemini" && provider.authStyle !== "x-api-key")
     throw new Fault(422, "auth_mismatch", "Gemini CLI requires x-api-key authentication for its native generateContent protocol.");
 }
+/** Operator expiry dates are inclusive in UTC; they do not promise provider uptime. */
+export function modelExpired(model: Model, now = new Date()): boolean {
+  return model.expiresOn !== undefined && now.toISOString().slice(0, 10) > model.expiresOn;
+}
 export function codingEligible(model: Model): boolean {
-  return model.available !== false && (!model.supportedGenerationMethods || model.supportedGenerationMethods.includes("generateContent")) && (!model.outputModalities || model.outputModalities.includes("text")) &&
+  return !modelExpired(model) && model.available !== false && (!model.supportedGenerationMethods || model.supportedGenerationMethods.includes("generateContent")) && (!model.outputModalities || model.outputModalities.includes("text")) &&
     (!model.supportedParameters || model.supportedParameters.includes("tools"));
 }
 export function harnessEligible(model:Model,harness:Profile["harness"]):boolean {
-  return harness==="aider"?model.available!==false&&(!model.supportedGenerationMethods||model.supportedGenerationMethods.includes("generateContent"))&&(!model.inputModalities||model.inputModalities.includes("text"))&&(!model.outputModalities||model.outputModalities.includes("text")):codingEligible(model);
+  return !modelExpired(model) && (harness==="aider"?model.available!==false&&(!model.supportedGenerationMethods||model.supportedGenerationMethods.includes("generateContent"))&&(!model.inputModalities||model.inputModalities.includes("text"))&&(!model.outputModalities||model.outputModalities.includes("text")):codingEligible(model));
 }

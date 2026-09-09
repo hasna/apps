@@ -1,48 +1,41 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sendMessage } from "../lib/messages";
+import { getStore } from "../lib/store/index.js";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../lib/store/test-support/client-environment.js";
 import { closeDb } from "../lib/db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 
 const TEST_DB = join(tmpdir(), `conversations-test-blocker-hook-${Date.now()}.db`);
 
 describe("blocker-hook", () => {
-  beforeEach(() => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-    closeDb();
-  });
+  let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+  let restore: () => void;
+  beforeEach(async () => { fixture=await startLoopbackApiFixture(); restore=activateClientEnvironment(fixture.env); });
+  afterEach(async () => { try { await fixture.stop(); } finally { restore(); } });
 
-  afterEach(() => {
-    delete process.env.CONVERSATIONS_DB_PATH;
-    delete process.env.CONVERSATIONS_AGENT_ID;
-    closeDb();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(TEST_DB + "-wal"); } catch {}
-    try { unlinkSync(TEST_DB + "-shm"); } catch {}
-  });
-
-  test("exits 0 with no blockers", () => {
+  test("exits 0 with no blockers", async () => {
     process.env.CONVERSATIONS_AGENT_ID = "hook-test-no-blockers";
-    const output = execSync(`bun run src/hooks/blocker-hook.ts`, {
+    const output = execFileSync(process.execPath, ["--no-env-file", "run", "src/hooks/blocker-hook.ts"], {
       env: { ...process.env },
       encoding: "utf-8",
     });
     expect(output).toBe("");
   });
 
-  test("outputs blocking messages when they exist", () => {
+  test("outputs blocking messages when they exist", async () => {
     process.env.CONVERSATIONS_AGENT_ID = "hook-test-blockers";
     // Send a blocking message to our agent
-    sendMessage({
+    await getStore().sendMessage({
       from: "hook-test-sender",
       to: "hook-test-blockers",
       content: "Fix this urgently!",
       blocking: true,
     });
 
-    const output = execSync(`bun run src/hooks/blocker-hook.ts`, {
+    const output = execFileSync(process.execPath, ["--no-env-file", "run", "src/hooks/blocker-hook.ts"], {
       env: { ...process.env },
       encoding: "utf-8",
     });
@@ -51,9 +44,9 @@ describe("blocker-hook", () => {
     expect(output).toContain("hook-test-sender");
   });
 
-  test("exits 0 even when blockers found (non-blocking exit)", () => {
+  test("exits 0 even when blockers found (non-blocking exit)", async () => {
     process.env.CONVERSATIONS_AGENT_ID = "hook-test-exit-zero";
-    sendMessage({
+    await getStore().sendMessage({
       from: "hook-sender-2",
       to: "hook-test-exit-zero",
       content: "Block me",
@@ -62,7 +55,7 @@ describe("blocker-hook", () => {
 
     // Should exit 0, not 2
     try {
-      execSync(`bun run src/hooks/blocker-hook.ts`, {
+      execFileSync(process.execPath, ["--no-env-file", "run", "src/hooks/blocker-hook.ts"], {
         env: { ...process.env },
         encoding: "utf-8",
       });
@@ -75,7 +68,7 @@ describe("blocker-hook", () => {
 
   test("skips messages already read", async () => {
     process.env.CONVERSATIONS_AGENT_ID = "hook-test-read";
-    const msg = sendMessage({
+    const msg = await getStore().sendMessage({
       from: "hook-reader",
       to: "hook-test-read",
       content: "Already read blocker",
@@ -83,10 +76,9 @@ describe("blocker-hook", () => {
     });
 
     // Mark the message as read
-    const { markRead } = await import("../lib/messages");
-    markRead([msg.id], "hook-test-read");
+    await getStore().markRead([msg.id], "hook-test-read");
 
-    const output = execSync(`bun run src/hooks/blocker-hook.ts`, {
+    const output = execFileSync(process.execPath, ["--no-env-file", "run", "src/hooks/blocker-hook.ts"], {
       env: { ...process.env },
       encoding: "utf-8",
     });
@@ -94,7 +86,7 @@ describe("blocker-hook", () => {
   });
 
   test("shows --help output", () => {
-    const output = execSync(`bun run src/hooks/blocker-hook.ts --help`, {
+    const output = execFileSync(process.execPath, ["--no-env-file", "run", "src/hooks/blocker-hook.ts", "--help"], {
       env: { ...process.env },
       encoding: "utf-8",
     });

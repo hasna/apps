@@ -1,56 +1,21 @@
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { adaptShellFixtureTools, benignShellExecutables, confinedShellCommand } from "./confined-shell-fixture";
 import { IDENTITY_GUARD_RELATIVE_PATH, POLICY_RELATIVE_PATH, READER_RELATIVE_PATH, readRepositoryFile } from "./installer-preflight";
 
 // Resolved from this module, not the working directory, so callers pass from any cwd.
 const repositoryRoot = resolve(import.meta.dir, "../../..");
 
-/// Runs `scripts/install_macos_app.sh` far enough to EXECUTE the identity-migration guard
-/// call at its real call site, on Linux, hermetically.
-///
-/// Why this exists, and why it is not another assertion over the installer's text:
-/// every text-level check of that call site is blind to REACHABILITY. The strongest text
-/// check available -- "the call sits between the flag's initialization and the loop's
-/// `done`" -- cannot see the opening brace of a construct that encloses BOTH markers,
-/// because such an opener is by definition outside the slice. Two adversarial rounds
-/// measured six survivors that each disable the guard while the whole suite stays green:
-/// a never-invoked wrapper function, `function _gate() {`, a `_gate() (` subshell body,
-/// `if false; then ... fi` around the loop and the call, a never-taken `case` arm, and one
-/// that SHOULD survive because it really does execute -- a bare `{ ... }` group.
-/// Reachability is a property of running, so this runs it.
-///
-/// The fixture root lives under the real `$HOME`, never under `/tmp`. WITHDRAWN 2026-07-28:
-/// this comment used to explain that as `/tmp` being mode 1777 while
-/// `verify_secure_parent` / `verify_safe_home_ancestor` refuse a world-writable ancestor,
-/// and to call it "that single detail is why the full `macos-app-lifecycle.test.ts`
-/// fixtures are red here". BOTH HALVES WERE FALSE. Neither function inspects an ancestor —
-/// each `stat`s exactly the one path it is handed (`install_macos_app.sh:558-581`, `:600-622`),
-/// the sole call is `verify_safe_home_ancestor "$HOME"` at `:648`, and `/tmp`'s mode is never
-/// examined by the installer at all. The lifecycle fixture also hardcodes every `%Lp` answer in
-/// its `stat` stub, so no mode check can fail there under any root. For what does make that
-/// suite red on this station — `FORCE_COLOR` and /tmp contention, measured — see the block at
-/// the top of `helpers/source-assertions.ts`; it is not a property of the file.
-///
-/// Keeping the root under `$HOME` used to be load-bearing for a second reason, disclosed by
-/// #54: the `mktemp` stub rewrote EVERY `/tmp/…` template into the work root, not only the
-/// installer's one template, so re-rooting under `/tmp` produced a doubled path and failed.
-/// FIXED below — the rewrite is now keyed on the FIXTURE ROOT rather than on the `/tmp` prefix,
-/// so templates the installer places inside the root pass through untouched and the stub no
-/// longer depends on where the root lives. The root stays under `$HOME` because that is where
-/// a canonical, 700, single-owner directory is cheap to guarantee, not because the stub needs it.
-///
-/// The macOS-only tool set is stubbed and every tool whose OUTPUT the installer consumes
-/// stays real. Nothing outside the fixture root is read or written, and the guard is
-/// reached BEFORE the installer's first user-data mutation (the `mv` of an installed app),
-/// so a denied run never touches an app bundle at all.
-///
-/// One execution sees only the input vector it fixes. `artifactPolicy` is varied for exactly
-/// that reason: a wrapper conditioned on `$ARTIFACT_POLICY` around the comparison loop and the
-/// call was measured surviving the whole installer battery unchanged while unenforcing the gate
-/// for release artifacts. Every OTHER input this fixture holds constant -- the environment, the
-/// stubbed-tool overrides, `uname`, the hostname -- remains a condition a wrapper could hide
-/// behind. See the BOUND note in src/__tests__/identity-migration-guard.test.ts.
+/** Executes the real installer comparison and sourced migration guard against owned
+ * fixture apps. Darwin still selects its pinned tools and uses native BSD filesystem
+ * checks; only copied-script external evidence bindings change. Each Darwin child has
+ * a private OS sandbox, no network, and no host-app or credential capabilities.
+ * Approved local-only runs stop at the deliberately inert copy tool after the guard.
+ * Release requests on Darwin must stop earlier and require the root-owned broker.
+ * Archive verification and signer evidence are fixture inputs, not coverage of their
+ * separate production implementations. This helper proves guard reachability.
+ */
 
 /// Distinct so the guard's refusal names two different identities, and so a swap of the
 /// two digest arguments is visible in its message rather than symmetric.
@@ -196,7 +161,8 @@ export type GuardExecutionOptions = {
   /// src/__tests__/identity-migration-guard.test.ts.
   artifactPolicy?: ArtifactPolicy;
   /// Appended after the base arguments, so a case can supply the ad-hoc approval.
-  extraArguments?: string[];
+  extraArguments?: readonly string[];
+  environment?: Record<string, string>;
 };
 
 export type GuardExecutionResult = {
@@ -227,9 +193,9 @@ export function runInstallerToIdentityGuard(
 ): GuardExecutionResult {
   const target = approvedTarget();
   const targetIdentitySha256 = Bun.CryptoHasher.hash("sha256", platformIdentity, "hex");
-  // Under the real HOME, and canonical: the installer requires `$HOME` to equal its own
+  // Canonical private scratch space: the installer requires `$HOME` to equal its own
   // `pwd -P`, so a symlinked home would abort before any gate.
-  const root = mkdtempSync(join(realpathSync(process.env["HOME"] ?? tmpdir()), ".rec-guard-exec-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "recordings-identity-guard-")));
   try {
     const bin = join(root, "bin");
     const logs = join(root, "logs");
@@ -467,6 +433,7 @@ export function runInstallerToIdentityGuard(
     const environment: Record<string, string> = {
       PATH: process.env["PATH"] ?? "",
       HOME: home,
+      TMPDIR: work,
       RECORDINGS_BUN_EXECUTABLE: join(bin, "bun"),
       RECORDINGS_FIXTURE_REAL_BUN: process.execPath,
       RECORDINGS_FIXTURE_LOG_DIR: logs,
@@ -489,6 +456,8 @@ export function runInstallerToIdentityGuard(
       environment[`RECORDINGS_TEST_INSTALL_${tool}_EXECUTABLE`] = join(bin, tool.toLowerCase());
     }
 
+    Object.assign(environment, options.environment ?? {});
+
     const argumentList = [
       "--artifact", artifact,
       "--manifest", manifest,
@@ -499,9 +468,35 @@ export function runInstallerToIdentityGuard(
       ...(options.extraArguments ?? []),
     ];
 
+    const installerPath = join(scripts, "install_macos_app.sh");
+    if (process.platform === "darwin") {
+      // Keep the real Darwin branch and native BSD filesystem checks. Only
+      // external fixture evidence is substituted, after pinned tool selection.
+      // Maintenance needs stable identity evidence for its own installer PID.
+      // Keep host process inspection outside this fixture's capabilities.
+      const psCopy = join(bin, "ps-owned");
+      writeExecutable(psCopy, ["#!/bin/bash", "set -euo pipefail",
+        ...unstubbedRefusal,
+        'if [ "$#" = 4 ] && [ "$1" = -o ] && [ "$2" = lstart= ] && [ "$3" = -p ] && [[ "$4" =~ ^[1-9][0-9]*$ ]]; then',
+        '  kill -0 "$4" || exit 1',
+        "  printf 'Mon Sep 7 12:00:00 2026\\n'", "  exit 0", "fi",
+        'unstubbed "ps: $*"',
+      ]);
+      const tools: Record<string, string> = { PS_EXECUTABLE: psCopy };
+      for (const tool of [...inertTools, "BUN", "CODESIGN", "HOSTNAME", "IOREG", "MDFIND", "MKTEMP", "SW_VERS"]) {
+        tools[`${tool}_EXECUTABLE`] = join(bin, tool.toLowerCase());
+      }
+      writeFileSync(installerPath, adaptShellFixtureTools(readFileSync(installerPath, "utf8"), "test_fault_hooks_enabled() {", tools));
+    }
+    const actualTools = [
+      ...benignShellExecutables, "/bin/chmod", "/bin/cp", "/bin/date", "/bin/dd", "/bin/df",
+      "/usr/bin/awk", "/usr/bin/diff", "/usr/bin/du", "/usr/bin/grep", "/usr/bin/head",
+      "/usr/bin/id", "/bin/ls", "/bin/mkdir", "/bin/rmdir", "/usr/bin/shasum", "/usr/bin/stat",
+      "/usr/bin/tail", "/usr/bin/perl", "/usr/bin/sort", "/bin/cat",
+    ];
     const result = Bun.spawnSync(
-      ["bash", join(scripts, "install_macos_app.sh"), ...argumentList],
-      { env: environment },
+      confinedShellCommand(root, ["/bin/bash", installerPath, ...argumentList], actualTools),
+      { env: environment, cwd: root, timeout: 15_000 },
     );
     // An absent log means the tool was never invoked, which is itself an assertable fact
     // rather than an error.

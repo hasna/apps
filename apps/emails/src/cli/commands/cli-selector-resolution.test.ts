@@ -17,34 +17,29 @@
 //
 // A CLI that prints a handle must accept that handle back.
 //
-// Subprocess harness (temp HOME/SQLite, env scrubbed BY PREFIX — enumerating
+// Subprocess harness (temp HOME/API, env scrubbed BY PREFIX — enumerating
 // this package's env keys here would add references the mode-axis ratchet
 // counts).
 
-import { afterAll, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SCRUBBED_ENV_PREFIXES = ["EMAILS_", "HASNA_EMAILS_", "MAILERY_", "HASNA_MAILERY_"] as const;
-const SCRUBBED_ENV_KEYS = [
-  "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
-  "RESEND_API_KEY",
-] as const;
-
+import { buildPrepublishTestEnv } from "../../../scripts/prepublish-local-test.mjs";
+import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
+let api: V1Stub;
 const tempDirs: string[] = [];
-
-function localEnv(): NodeJS.ProcessEnv {
+beforeAll(async () => { api = await startV1Stub({ openapi: true, resourceFilters: true, apiKey: crypto.randomUUID() }); });
+beforeEach(async () => { await api.reset(); });
+afterEach(() => {
+  for (const dir of tempDirs) expect(readdirSync(dir, { recursive: true }).filter(name => /\.(?:db|sqlite)(?:-|$)/.test(String(name)))).toEqual([]);
+});
+function apiEnv(): NodeJS.ProcessEnv {
   const dir = mkdtempSync(join(tmpdir(), "emails-selector-"));
   tempDirs.push(dir);
-  const homePath = join(dir, "home");
-  mkdirSync(homePath, { recursive: true, mode: 0o700 });
-  const base = { ...process.env };
-  for (const key of Object.keys(base)) {
-    if (SCRUBBED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) delete base[key];
-  }
-  for (const key of SCRUBBED_ENV_KEYS) delete base[key];
-  return { ...base, EMAILS_DB_PATH: join(dir, "emails.db"), HOME: homePath, NO_COLOR: "1" };
+  mkdirSync(join(dir, "tmp"), { mode: 0o700 });
+  return { ...buildPrepublishTestEnv(process.env, dir), HASNA_STATION: `emails-selector-${crypto.randomUUID()}`, HASNA_EMAILS_API_URL: api.baseUrl, HASNA_EMAILS_API_KEY: api.apiKey, EMAILS_CLIENT_ENV_LOADED: "1", NO_COLOR: "1" };
 }
 
 interface CliRun {
@@ -55,7 +50,7 @@ interface CliRun {
 
 function runCli(args: string[], env: NodeJS.ProcessEnv): CliRun {
   const result = Bun.spawnSync({
-    cmd: ["bun", "src/cli/index.tsx", ...args],
+    cmd: [process.execPath, "src/cli/index.tsx", ...args],
     cwd: process.cwd(),
     env,
     stdout: "pipe",
@@ -87,6 +82,7 @@ function seedProvider(env: NodeJS.ProcessEnv): string {
 }
 
 afterAll(() => {
+  api.stop();
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -99,7 +95,7 @@ describe("alias remove accepts what alias list prints", () => {
   }
 
   it("removes by 8-char id prefix", () => {
-    const env = localEnv();
+    const env = apiEnv();
     ok(runCli(["alias", "add", "hello@acme.example", "ops@acme.example"], env), "alias add");
     const added = aliasRow(env, "hello");
     expect(added, "the added alias is not in alias list").toBeDefined();
@@ -110,7 +106,7 @@ describe("alias remove accepts what alias list prints", () => {
   }, 120_000);
 
   it("removes by the alias address", () => {
-    const env = localEnv();
+    const env = apiEnv();
     ok(runCli(["alias", "add", "hola@acme.example", "ops@acme.example"], env), "alias add");
     expect(aliasRow(env, "hola"), "the added alias is not in alias list").toBeDefined();
 
@@ -121,7 +117,7 @@ describe("alias remove accepts what alias list prints", () => {
 
 describe("sendkey revoke accepts the short id sendkey list prints", () => {
   it("revokes by 8-char id prefix", () => {
-    const env = localEnv();
+    const env = apiEnv();
     ok(runCli(["owner", "register", "robot", "--type", "agent"], env), "owner register");
     ok(runCli(["sendkey", "create", "robot"], env), "sendkey create");
     const keys = rows(runCli(["--json", "sendkey", "list"], env), "sendkey list");
@@ -135,7 +131,7 @@ describe("sendkey revoke accepts the short id sendkey list prints", () => {
 
 describe("sequence step remove is usable from the CLI", () => {
   it("step list --json emits rows, and step remove accepts the printed short id", () => {
-    const env = localEnv();
+    const env = apiEnv();
     ok(runCli(["template", "add", "step-tpl", "--subject", "s", "--text", "b"], env), "template add");
     ok(runCli(["sequence", "create", "drip"], env), "sequence create");
     ok(runCli(["sequence", "step", "add", "drip", "--step", "1", "--delay", "24", "--template", "step-tpl"], env), "step add");
@@ -152,7 +148,7 @@ describe("sequence step remove is usable from the CLI", () => {
 
 describe("domain remove accepts the domain name like its sibling verbs", () => {
   it("removes by name", () => {
-    const env = localEnv();
+    const env = apiEnv();
     const providerId = seedProvider(env);
     // --send-only ON PURPOSE: this test covers the remove-by-name selector, not
     // inbound provisioning. Default `domain add` now provisions the SES receipt
@@ -172,7 +168,7 @@ describe("address verbs accept the email like their siblings", () => {
   }
 
   it("address remove <email>", () => {
-    const env = localEnv();
+    const env = apiEnv();
     const providerId = seedProvider(env);
     seedAddress(env, providerId);
 
@@ -182,7 +178,7 @@ describe("address verbs accept the email like their siblings", () => {
   }, 120_000);
 
   it("address quota <email> and activate <email>", () => {
-    const env = localEnv();
+    const env = apiEnv();
     const providerId = seedProvider(env);
     seedAddress(env, providerId);
 
@@ -195,7 +191,7 @@ describe("address verbs accept the email like their siblings", () => {
 
   // The complement: an ambiguous or unknown selector must refuse, not guess.
   it("refuses an unknown selector with a resolvable error", () => {
-    const env = localEnv();
+    const env = apiEnv();
     seedProvider(env);
 
     const run = runCli(["--json", "address", "remove", "nobody@acme.example", "--yes"], env);

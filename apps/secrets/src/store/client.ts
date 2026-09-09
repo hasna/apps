@@ -71,6 +71,7 @@ export {
   ClientTransportConfigurationError,
   clientTransportEnvKeys,
   createHasnaHttpTransport,
+  createClientTransport,
   credentialDiskSources,
   credentialOverrideEnvKey,
   credentialPointerEnvKey,

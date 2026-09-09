@@ -1,3 +1,5 @@
+import { proxyProviderStream } from "./provider-stream";
+import { claudeContextEnvironment } from "./claude-context";
 import { compileOpenCodeModelPolicy, openCodeInvocationModel } from "./opencode-model-policy";
 import { prepareKilo, validateKiloConfiguration } from "./kilo";
 import { prepareGemini, validateGeminiConfiguration } from "./gemini-config";
@@ -13,7 +15,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createConnection } from "node:net";
-import { compatible, endpoint, harnessEligible } from "./domain";
+import { compatible, endpoint, harnessEligible, modelExpired } from "./domain";
 import { prepareAider, validateAiderConfiguration } from "./aider-config";
 import { childEnvironment } from "./harness-environment";
 import { privateDirectory, switcherHome } from "./runtime";
@@ -324,29 +326,8 @@ function grokBridge(input: HarnessLaunchInput) {
       const response=await fetch(`${input.baseUrl}${apiPath}`,{method:"POST",headers,body:JSON.stringify(body),redirect:"manual",signal:AbortSignal.any([record.abort.signal,request.signal,AbortSignal.timeout(240000)])});
       if(!response.ok){await response.body?.cancel();release();return Response.json({error:{message:`Provider returned HTTP ${response.status}`}},{status:response.status>=300&&response.status<400?502:response.status});}
       if(!response.body){release();return new Response(null,{status:response.status});}
-      const reader=response.body.getReader();
-      let ended=false;
-      let output:ReadableStreamDefaultController<Uint8Array>;
-      const end=(error?:Error)=>{
-        if(ended)return;ended=true;
-        try{if(error&&!closing)output.error(error);else output.close();}catch{}
-        release();
-      };
-      const stream=new ReadableStream<Uint8Array>({
-        start(controller){output=controller;},
-        async pull(controller){
-          try{const chunk=await reader.read();if(ended)return;if(chunk.done)end();else controller.enqueue(chunk.value);}
-          catch{end(new Error("Provider stream ended unexpectedly"));}
-        },
-        async cancel(){
-          ended=true;record.abort.abort();
-          try{await reader.cancel();}finally{release();}
-        },
-      });
-      record.cancel=async()=>{
-        record.abort.abort();
-        try{await reader.cancel();}catch{}finally{end();}
-      };
+      const {stream,cancel}=proxyProviderStream({response,protocol:input.protocol,requestSignal:request.signal,abort:record.abort,closing:()=>closing,release});
+      record.cancel=cancel;
       return new Response(stream,{status:response.status,headers:{"content-type":response.headers.get("content-type")??"application/json","cache-control":"no-store"}});
     }catch{release();return Response.json({error:{message:"Provider request failed"}},{status:502});}
   }});
@@ -552,6 +533,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   if(input.harness==="claude") {
     env.ANTHROPIC_BASE_URL=input.baseUrl.replace(/\/v1$/,"");
     Object.assign(env,input.nativePolicy?.env);
+    Object.assign(env,claudeContextEnvironment(providerBaseUrl));
     env.ANTHROPIC_MODEL=input.model;
     // The native Default picker row has separate precedence from --model.
     // Keep it and unassigned subagents on the selected provider model.
@@ -838,6 +820,7 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
   if(!compatible(input.harness,input.protocol))throw new Error("Harness and provider protocol are incompatible.");
   if(!isAbsolute(input.stateDir)||!isAbsolute(input.cwd))throw new Error("Launch state and working directories must be absolute.");
   const compiledPolicy=compileModelPolicy(input.model,input.models,input.modelPolicy);
+  input={...input,models:input.models.filter(model=>!modelExpired(model))};
   const nativePolicy=compileNativeModelPolicy({harness:input.harness,mainModel:input.model,roles:compiledPolicy.roles,version:input.version});
   const specialized=new Set(["opencode","opencode2","gemini","hermes"]);
   const unsupported=specialized.has(input.harness)?[]:nativePolicy.unsupportedRoles.filter(role=>role!=="main"&&compiledPolicy.roles[role]!==input.model);

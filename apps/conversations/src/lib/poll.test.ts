@@ -3,7 +3,7 @@ import { startPolling } from "./poll";
 import { sendMessage } from "./messages";
 import { createChannel } from "./channels";
 import { closeDb } from "./db";
-import { ENV_KEYS, getStore, type ConversationsStore } from "./store/index";
+import { ENV_KEYS, getStore, LocalStore, type ConversationsStore } from "./store/index";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -28,6 +28,7 @@ afterEach(() => {
 describe("startPolling", () => {
   test("returns stop function", () => {
     const { stop } = startPolling({
+      store: new LocalStore(),
       interval_ms: 1000,
       on_messages: () => {},
     });
@@ -38,18 +39,20 @@ describe("startPolling", () => {
   test("detects new messages", async () => {
     const received: Message[] = [];
 
-    const { stop } = startPolling({
+    const { stop, ready } = startPolling({
+      store: new LocalStore(),
       to_agent: "bob",
       interval_ms: 50,
       on_messages: (msgs) => received.push(...msgs),
     });
 
-    // Send after polling starts
+    await ready;
+    // Send after the initial history boundary is established.
     sendMessage({ from: "alice", to: "bob", content: "hello" });
 
     // Wait for poll cycle
     await new Promise((r) => setTimeout(r, 200));
-    stop();
+    await stop();
 
     expect(received.length).toBeGreaterThanOrEqual(1);
     expect(received[0].content).toBe("hello");
@@ -58,18 +61,21 @@ describe("startPolling", () => {
   test("filters by session_id", async () => {
     const received: Message[] = [];
 
-    const { stop } = startPolling({
+    const { stop, ready } = startPolling({
+      store: new LocalStore(),
       session_id: "target-session",
       interval_ms: 50,
       on_messages: (msgs) => received.push(...msgs),
     });
 
+    await ready;
     sendMessage({ from: "a", to: "b", content: "match", session_id: "target-session" });
     sendMessage({ from: "a", to: "b", content: "no-match", session_id: "other" });
 
     await new Promise((r) => setTimeout(r, 200));
-    stop();
+    await stop();
 
+    expect(received.length).toBeGreaterThan(0);
     expect(received.every((m) => m.session_id === "target-session")).toBe(true);
   });
 
@@ -79,29 +85,34 @@ describe("startPolling", () => {
     // that `channel list` cannot see (todos 4cc80a4d).
     createChannel("general", "fixture");
 
-    const { stop } = startPolling({
+    const { stop, ready } = startPolling({
+      store: new LocalStore(),
       channel: "general",
       interval_ms: 50,
       on_messages: (msgs) => received.push(...msgs),
     });
 
+    await ready;
     sendMessage({ from: "a", to: "general", content: "sp-msg", channel: "general" });
     sendMessage({ from: "a", to: "b", content: "dm-msg" });
 
     await new Promise((r) => setTimeout(r, 200));
-    stop();
+    await stop();
 
+    expect(received.length).toBeGreaterThan(0);
     expect(received.every((m) => m.channel === "general")).toBe(true);
   });
 
   test("handles callback errors gracefully", async () => {
-    const { stop } = startPolling({
+    const { stop, ready } = startPolling({
+      store: new LocalStore(),
       interval_ms: 50,
       on_messages: () => { throw new Error("callback error"); },
     });
+    await ready;
     sendMessage({ from: "a", to: "b", content: "trigger" });
     await new Promise((r) => setTimeout(r, 200));
-    stop();
+    await stop();
     // Should not throw — error is caught internally
   });
 
@@ -109,6 +120,7 @@ describe("startPolling", () => {
     let callCount = 0;
 
     const { stop } = startPolling({
+      store: new LocalStore(),
       interval_ms: 30,
       on_messages: () => { callCount++; },
     });

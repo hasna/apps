@@ -1,4 +1,8 @@
-import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
+import { beforeAll, afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   chmodSync,
   mkdirSync,
@@ -11,13 +15,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { MAX_ATTACHMENT_BYTES } from "../lib/attachments.js";
-import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
 
 const TEST_ROOT = join(tmpdir(), `conversations-cli-send-attachments-${Date.now()}`);
-const TEST_DB = join(TEST_ROOT, "conversations.db");
 const ATTACHMENTS_DIR = join(TEST_ROOT, "attachments");
 const SOURCE_DIR = join(TEST_ROOT, "source");
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 setDefaultTimeout(30_000);
 
@@ -27,11 +29,11 @@ function runCli(args: string[], agent: string) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: isolatedStoreChildEnv(TEST_DB, {
+    env: { ...fixture.env,
       CONVERSATIONS_AGENT_ID: agent,
       CONVERSATIONS_ATTACHMENTS_DIR: ATTACHMENTS_DIR,
       FORCE_COLOR: "0",
-    }),
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -129,8 +131,8 @@ describe("send attachment and reply compatibility (e2e)", () => {
         mime_type: "application/pdf",
       },
     ]);
-    expect(readFileSync(message.attachments[0].path, "utf8")).toBe("synthetic attachment evidence\n");
-    expect(readFileSync(message.attachments[1].path, "utf8")).toBe("synthetic PDF placeholder\n");
+    expect(runCli(["attachments","get",String(message.id),message.attachments[0].name,"--stdout"],"alice").stdout).toBe("synthetic attachment evidence\n");
+    expect(runCli(["attachments","get",String(message.id),message.attachments[1].name,"--stdout"],"alice").stdout).toBe("synthetic PDF placeholder\n");
 
     const shown = runCli(["show", String(message.id), "--json"], "alice");
     expect(shown.exitCode, shown.stderr).toBe(0);

@@ -1,7 +1,7 @@
 process.env.MEMENTOS_DB_PATH = ":memory:";
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { resetDatabase, getDatabase } from "../db/database.js";
@@ -239,7 +239,7 @@ describe("getDbPath", () => {
     const originalHome = process.env["HOME"];
     const originalUserProfile = process.env["USERPROFILE"];
     const originalCwd = process.cwd();
-    const tempHome = mkdtempSync(join(tmpdir(), "mementos-config-home-"));
+    const tempHome = realpathSync(mkdtempSync(join(tmpdir(), "mementos-config-home-")));
     try {
       process.env["HOME"] = tempHome;
       delete process.env["USERPROFILE"];

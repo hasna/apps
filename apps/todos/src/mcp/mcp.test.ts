@@ -1,4 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
+// In-memory SQLite and cheap hooks, but the file is CPU-bound: on a contended
+// host bun's 5s default can expire inside the shared beforeEach/afterEach hook
+// before the test body runs (observed: hook-timeout failures on two different
+// tests in the same run). Give the file the same explicit budget the spawning
+// suites use.
+setDefaultTimeout(60_000);
 import { getDatabase, closeDatabase, resetDatabase, resolvePartialId } from "../db/database.js";
 import { addDependency, createTask, getTask, listTasks, completeTask, startTask } from "../db/tasks.js";
 import { createProject } from "../db/projects.js";

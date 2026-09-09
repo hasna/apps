@@ -1,182 +1,41 @@
 import type { Command } from "commander";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import chalk from "../../lib/chalk-lite.js";
-import { getEmailsDataDir } from "../../lib/config.js";
-import { renderStatusCount, renderStatusUnavailable } from "../../lib/status-availability.js";
 import { handleError } from "../utils.js";
-
-type LogComponent = "daemon" | "sync" | "inbound" | "scheduler" | "nightly";
-
-const LOG_FILES: Record<LogComponent, string[]> = {
-  daemon: ["daemon.log", "provision-daemon.log"],
-  sync: ["sync.log", "nightly-sync.log"],
-  inbound: ["inbound.log", "watch.log"],
-  scheduler: ["scheduler.log"],
-  nightly: ["nightly-sync.log"],
-};
-
-function isLogComponent(value: string): value is LogComponent {
-  return Object.hasOwn(LOG_FILES, value);
-}
-
-/**
- * The provisioning queue, taken from the SAME status facts `emails status` reports.
- *
- * This used to call `getProvisioningWorkSummary()` through the deleted HTTP arm of the
- * provisioning family, which was a single `list({ limit: 1000 })` against `/v1/domains`
- * and `/v1/addresses` — not `/v1/provisioning`, which holds only the audit trail. The
- * server clamps every list to 500 rows, so those four counts were computed over at
- * most the first 500 rows of each resource and printed as bare integers: 600 due
- * domains rendered as `Due work: 500 domain(s)`. That family has since collapsed onto
- * the store seam and `getProvisioningWorkSummary` now carries a `StatusAvailability`
- * of its own, so the local sibling renders the same way this one does; the fields here
- * still measure something different, which is why they keep their own names.
- *
- * The honest answer was already in hand and thrown away.
- * `getEmailSystemStatusForRuntime()` is awaited here anyway, and its `provisioning`
- * block is built by `enumerateSelfHostedRows` and carries
- * `availability.complete === false` with the reason "counts are lower bounds, not
- * totals" whenever it cannot walk the table.
- *
- * Two consequences, both deliberate:
- *  - the counts render through `renderStatusCount`, so an incomplete read prints
- *    `≥N` exactly as `emails status` does, and `availability` is carried in the JSON
- *    so `scanStatusAvailability` can see it;
- *  - the fields are named for what they MEASURE. `pending` is not `due`: a
- *    schedule-aware "due now" count needs `next_check_at <= now` over the WHOLE
- *    table, which this client cannot establish completely over `/v1`. Reporting
- *    pending under the old `due_*` keys would have kept the label and quietly
- *    changed the question.
- */
-async function daemonStatus() {
-  const { getEmailSystemStatusForRuntime } = await import("../../lib/agent-context.js");
-  const now = new Date().toISOString();
-  const system = await getEmailSystemStatusForRuntime();
-  return {
-    generated_at: now,
-    queue: {
-      availability: system.provisioning.availability,
-      domains_pending: system.provisioning.domains_pending,
-      domains_failed: system.provisioning.domains_failed,
-      addresses_pending: system.provisioning.addresses_pending,
-      addresses_failed: system.provisioning.addresses_failed,
-      // A schedule-aware "due now" count is NOT derivable here; see the note above.
-      due_derivable: false,
-      drainable: false,
-    },
-    realtime: system.inbox.realtime,
-    // Watch is a foreground API polling client, not evidence of a running daemon.
-    start_commands: { inbound: "emails inbox watch --source <source-id>" },
-    start_requirements: "Requires an operator credential and a registered API server ingest binding with a dedicated queue.",
-  };
-}
-
-function formatDaemonStatus(status: Awaited<ReturnType<typeof daemonStatus>>): string {
-  const lines = [chalk.bold("\nDaemon status:")];
-  const queue = status.queue;
-  if (!queue.availability.available) {
-    lines.push(`  Provisioning: ${renderStatusUnavailable(queue.availability)}`);
-  } else {
-    const count = (value: number | null) => renderStatusCount(value, queue.availability);
-    lines.push(`  Pending:    ${count(queue.domains_pending)} domain(s), ${count(queue.addresses_pending)} address(es)`);
-    lines.push(`  Failed:     ${count(queue.domains_failed)} domain(s), ${count(queue.addresses_failed)} address(es)`);
-    if (queue.availability.complete === false) {
-      lines.push(chalk.yellow(`  Counts are LOWER BOUNDS: ${queue.availability.reason ?? "the enumeration could not be completed"}`));
-    }
-  }
-  // Status facts do not poll SQS or prove that a watcher process is running.
-  // Preserve their availability instead of inferring a worker heartbeat.
-  lines.push(`  Realtime:   ${renderStatusUnavailable(status.realtime.availability)}`);
-  lines.push("");
-  lines.push(chalk.dim("  No schedule-aware 'due now' count is derivable over /v1; pending/failed are shown instead."));
-  lines.push(chalk.dim("  No provisioning reconciler ships in this build; the queue above is not drained automatically."));
-  lines.push(chalk.dim(`  Foreground inbox polling: ${status.start_commands.inbound}`));
-  lines.push(chalk.dim(`  ${status.start_requirements}`));
-  lines.push(chalk.dim("  Watch polls the API; this status does not establish a separate worker heartbeat."));
-  return lines.join("\n");
-}
-
-function readTail(component: LogComponent, lines: number): { component: LogComponent; files: Array<{ path: string; exists: boolean; text: string }> } {
-  const dir = getEmailsDataDir();
-  return {
-    component,
-    files: LOG_FILES[component].map((name) => {
-      const path = join(dir, name);
-      if (!existsSync(path)) return { path, exists: false, text: "" };
-      const text = readFileSync(path, "utf-8").split(/\r?\n/).slice(-Math.max(1, lines)).join("\n");
-      return { path, exists: true, text };
-    }),
-  };
-}
-
+import { createWorkerApi } from "../../lib/worker-supervisor-api.js";
+import { runWorkerSupervisor, restartWorker } from "../../lib/worker-supervisor.js";
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function seconds(value: string, max: number) { if (!/^[1-9][0-9]*$/.test(value) || Number(value) > max) throw Error(`Use an integer from 1 to ${max} seconds`); return Number(value) * 1000; }
 export function registerDaemonCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
-  const daemon = program.command("daemon").description("Inspect email daemon and background worker health");
-
-  daemon
-    .command("status")
-    .description("Show provisioning/realtime daemon queue status")
-    .action(async () => {
-      try {
-        const status = await daemonStatus();
-        output(status, formatDaemonStatus(status));
-      } catch (e) {
-        handleError(e);
-      }
+  const daemon = program.command("daemon").description("Supervise real foreground API workers");
+  daemon.command("status").description("Read worker generations, observed states and lease freshness").action(async () => { try { const result = await createWorkerApi().list(); output(result, result.items.length ? result.items.map(worker => `${worker.id}  ${worker.component}  generation ${worker.generation}  ${worker.state}  ${worker.lease_fresh ? "lease fresh" : "lease expired"}`).join("\n") : "No registered workers. Start one explicitly with emails daemon start."); } catch (error) { handleError(error); } });
+  daemon.command("start").description("Own a foreground scheduler and sequence worker; Ctrl-C drains before stopping")
+    .option("--worker <uuid>", "Reusable worker UUID for registration retries")
+    .option("--interval <seconds>", "Seconds between scheduler batches", "60")
+    .option("--once", "Run one batch and stop after confirmed completion")
+    .option("--drain-timeout <seconds>", "Bound for reconciling an uncertain in-flight operation", "60")
+    .action(async (opts: { worker?: string; interval: string; once?: boolean; drainTimeout: string }) => {
+      const id = opts.worker ?? crypto.randomUUID(), stop = new AbortController(); const onStop = () => stop.abort();
+      try { if (!uuid.test(id)) throw Error("--worker must be a full UUID"); const intervalMs = seconds(opts.interval, 3600), drainTimeoutMs = seconds(opts.drainTimeout, 3600); process.on("SIGINT", onStop); process.on("SIGTERM", onStop); await runWorkerSupervisor(createWorkerApi(), { id, intervalMs, once: opts.once, drainTimeoutMs }, stop.signal, event => output(event, `Worker ${id}: ${event.phase}, generation ${event.worker.generation}`)); }
+      catch (error) { handleError(new Error(`Worker ${id}: ${error instanceof Error ? error.message : "operation unconfirmed"}`)); }
+      finally { process.off("SIGINT", onStop); process.off("SIGTERM", onStop); }
     });
-
-  daemon
-    .command("restart")
-    .description("Show restart guidance for configured email background workers")
-    .action(() => {
-      try {
-        // Every field below is a constant. This used to `await daemonStatus()` first,
-        // which cost four `/v1` enumerations and turned a fixed answer into one that
-        // failed with a transport error whenever the service was unreachable — the
-        // question "is a supervisor configured in THIS process?" does not depend on
-        // the server being up.
-        const result = {
-          managed_process: false,
-          reason: "No built-in supervisor or PID file is configured for this package; no process was restarted.",
-          start_commands: { inbound: "emails inbox watch --source <source-id>" },
-          start_requirements: "Requires an operator credential and a registered API server ingest binding with a dedicated queue.",
-          cli_equivalent: "emails daemon status --json",
-        };
-        output(result, chalk.yellow("No managed email daemon process is configured in this client."));
-      } catch (e) {
-        handleError(e);
-      }
-    });
-
-  // Log tailing is PROCESS-LOCAL: it reads whatever this machine's `emails`
-  // processes wrote under the data directory. It opens no database and makes no
-  // request, which is why it does not belong behind a mode guard — but it is also
-  // NOT the server's log. Nothing in this package writes these files today, and the
-  // operator's service logs are not published over /v1, so an empty result states
-  // both of those things rather than implying the deployment produced no output.
-  const logs = program.command("logs").description("Inspect emails logs written by this machine's own processes");
-  logs
-    .command("tail")
-    .description("Tail emails logs written by this machine's processes (NOT the self-hosted server's)")
+  daemon.command("restart").description("Request cooperative drain and confirm the replacement worker generation")
+    .option("--worker <uuid>", "Exact worker; optional only for a single-worker registry")
+    .option("--idempotency-key <uuid>", "Reusable restart request identity")
+    .option("--timeout <seconds>", "How long to wait for confirmed restart", "60")
+    .action(async (opts: { worker?: string; idempotencyKey?: string; timeout: string }) => { try { const key = opts.idempotencyKey ?? crypto.randomUUID(); if (!uuid.test(key) || opts.worker && !uuid.test(opts.worker)) throw Error("Worker and restart identities must be full UUIDs"); const result = await restartWorker(createWorkerApi(), opts.worker, key, seconds(opts.timeout, 3600)); output(result, result.restarted ? `Worker ${result.worker_id} restarted: generation ${result.restart.old_generation} -> ${result.restart.new_generation}` : `Restart ${result.request_id} remains ${result.restart.status}; no restart success is claimed.`); if (!result.restarted) process.exitCode = 1; } catch (error) { handleError(error); } });
+  const logs = program.command("logs").description("Inspect tenant API worker lifecycle logs");
+  logs.command("tail")
+    .description("Read persisted API operation logs; not container stdout or a worker heartbeat")
     .option("--component <name>", "daemon | sync | inbound | scheduler | nightly", "daemon")
-    .option("--lines <n>", "Lines to show from each file", "80")
-    .action((opts: { component: string; lines: string }) => {
+    .option("--lines <n>", "Newest log records to show (1-500)", "80")
+    .action(async (opts: { component: string; lines: string }) => {
       try {
-        if (!isLogComponent(opts.component)) handleError(new Error(`Unknown log component: ${opts.component}`));
-        const component = opts.component;
-        const result = readTail(component, parseInt(opts.lines, 10) || 80);
-        const existing = result.files.filter((file) => file.exists);
-        const formatted = existing.length
-          ? existing.map((file) => `${chalk.bold(file.path)}\n${file.text}`).join("\n\n")
-          : [
-            chalk.dim(`No ${component} log files found in ${getEmailsDataDir()}.`),
-            chalk.dim("This reads THIS machine's files only, and no process in this package writes them"),
-            chalk.dim("today. The self-hosted server's logs are not published over /v1 — read them where"),
-            chalk.dim("the service runs (for example its container logs)."),
-          ].join("\n");
-        output({ ...result, scope: "this_machine", server_logs_available: false }, formatted);
-      } catch (e) {
-        handleError(e);
-      }
+        const { tailApiRuntimeLogs } = await import("../../lib/runtime-log-api.js");
+        const result = await tailApiRuntimeLogs(opts.component, opts.lines);
+        const formatted = result.items.length
+          ? result.items.map(item => `${item.created_at}  ${item.operation}  ${item.event}${item.http_status === null ? "" : ` HTTP ${item.http_status}`}  ${item.request_id}`).join("\n")
+          : `No recorded ${result.component} API worker events. Older activity and uninstrumented workers are not reconstructed; this is not evidence that a worker is stopped.`;
+        output(result, `${formatted}\nAPI operation logs only; container stdout and worker liveness are not measured.`);
+      } catch (error) { handleError(error); }
     });
 }

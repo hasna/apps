@@ -209,7 +209,10 @@ describe("telephony client transport — fail closed", () => {
   test("nothing configured anywhere and no opt-in throws the actionable fail-closed error", () => {
     const errSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
-      expect(() => resolveTelephonyClientTransport({})).toThrow(telephonyStoreMisconfiguredError().message);
+      // A caller-built env never reaches the Keychain tier; the message says so.
+      expect(() => resolveTelephonyClientTransport({})).toThrow(
+        telephonyStoreMisconfiguredError({}, { keychainTierEnabled: false }).message,
+      );
       expect(() => resolveTelephonyClientTransport({})).toThrow(/HASNA_TELEPHONY_API_URL/);
       expect(() => resolveTelephonyClientTransport({})).toThrow(/HASNA_TELEPHONY_API_KEY/);
       expect(() => resolveTelephonyClientTransport({})).toThrow(/HASNA_TELEPHONY_LOCAL=1/);
@@ -217,6 +220,53 @@ describe("telephony client transport — fail closed", () => {
     } finally {
       errSpy.mockRestore();
     }
+  });
+
+  test("the fail-closed error names every credential location on one line, never a value", () => {
+    // The Keychain tier is driven by a fake `security` holding nothing, so the
+    // resolution really consulted it (account = HASNA_STATION) and found no
+    // item; the disk tier reads under HASNA_HOME; the env tier is empty.
+    const keychain = fakeKeychain({});
+    const hasnaHome = mkdtempSync(join(tmpdir(), "ok-telephony-hasna-home-"));
+    homes.push(hasnaHome);
+    const env = { HASNA_STATION: "station-test", HASNA_HOME: hasnaHome };
+    let thrown: Error | null = null;
+    try {
+      resolveTelephonyClientTransport(env, { keychain: { platform: "darwin", run: keychain.run } });
+    } catch (error) {
+      thrown = error as Error;
+    }
+    expect(thrown).not.toBeNull();
+    const message = thrown!.message;
+    // One line: the first stderr line is what an operator or a probe reads.
+    expect(message).not.toContain("\n");
+    expect(message).toContain("fails closed");
+    // Tier 3: the Keychain item AND the account it was looked up under.
+    expect(message).toContain(KEYCHAIN_KEY_SERVICE);
+    expect(message).toContain('account "station-test"');
+    expect(message).toContain("HASNA_STATION");
+    expect(message).not.toContain("not consulted"); // the tier WAS live for this resolution
+    expect(keychain.calls.some((argv) => argv.includes(KEYCHAIN_KEY_SERVICE))).toBe(true);
+    // Tier 4: the exact credentials file path under HASNA_HOME.
+    expect(message).toContain(join(hasnaHome, "telephony", "config", "credentials"));
+    // Tier 5 + authority + the explicit opt-in.
+    expect(message).toContain(TELEPHONY_API_KEY_ENV);
+    expect(message).toContain(TELEPHONY_API_URL_ENV);
+    expect(message).toContain(`${TELEPHONY_LOCAL_MODE_ENV}=1`);
+    // The ladder is listed in resolution order: Keychain, then disk, then env.
+    expect(message.indexOf(KEYCHAIN_KEY_SERVICE)).toBeLessThan(message.indexOf(hasnaHome));
+    expect(message.indexOf(hasnaHome)).toBeLessThan(message.indexOf(`then ${TELEPHONY_API_KEY_ENV}`));
+  });
+
+  test("the fail-closed error says when the Keychain tier was not live for a caller-built env", () => {
+    let thrown: Error | null = null;
+    try {
+      resolveTelephonyClientTransport({ HASNA_STATION: "station-test" });
+    } catch (error) {
+      thrown = error as Error;
+    }
+    expect(thrown!.message).toContain(KEYCHAIN_KEY_SERVICE);
+    expect(thrown!.message).toContain("not consulted here");
   });
 
   test("a declared-but-blank credential variable is normalised to 'unset' at the telephony seam", () => {

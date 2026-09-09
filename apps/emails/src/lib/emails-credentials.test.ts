@@ -20,14 +20,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   EMAILS_API_KEY_ENV,
+  EMAILS_API_KEY_OVERRIDE_ENV,
+  EMAILS_API_KEY_REF_ENV,
   EMAILS_API_URL_ENV,
+  EMAILS_PROFILE_ENV,
   EMAILS_SELF_HOSTED_API_KEY_ENV,
   EMAILS_SELF_HOSTED_URL_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   configuredEmailsApiUrl,
   emailsCredentialFiles,
   hostedEmailsAuthorityConfigured,
+  isEmailsCredentialResolutionError,
+  isEmailsTransportConfigurationError,
   resolveEmailsHostedTransport,
+  snapshotEmailsEnvironment,
 } from "./emails-credentials.js";
 import { planEmailStore } from "../store-resolution.js";
 
@@ -79,6 +85,9 @@ function fakeSecurity(items: Record<string, string>): (argv: readonly string[]) 
 const SCRUB_KEYS = [
   EMAILS_API_URL_ENV,
   EMAILS_API_KEY_ENV,
+  EMAILS_API_KEY_OVERRIDE_ENV,
+  EMAILS_API_KEY_REF_ENV,
+  EMAILS_PROFILE_ENV,
   EMAILS_SELF_HOSTED_URL_ENV,
   EMAILS_SELF_HOSTED_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
@@ -95,6 +104,14 @@ let inheritedEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
   inheritedEnv = Object.fromEntries(SCRUB_KEYS.map((key) => [key, process.env[key]]));
+  // Hermetic against the machine: no inherited hosted/credential setting, and the
+  // Keychain account pinned to one that exists in no Keychain, so a populated
+  // station Keychain (which outranks the env tier) never resolves in a test that
+  // drives `process.env` (the #1720 validation controls' HASNA_STATION sentinel).
+  for (const key of SCRUB_KEYS) delete process.env[key];
+  if (inheritedEnv.HOME !== undefined) process.env.HOME = inheritedEnv.HOME;
+  if (inheritedEnv.USER !== undefined) process.env.USER = inheritedEnv.USER;
+  process.env.HASNA_STATION = "no-such-station";
 });
 
 afterEach(() => {
@@ -251,7 +268,7 @@ describe("fail-closed resolution (owner ruling 2026-09-04)", () => {
       }
       const message = String(thrown);
       expect(message).toContain("no API credential resolved");
-      expect(message).toContain("refusing to run locally");
+      expect(message).toContain("refusing to start");
       // The plan throws the same refusal rather than serving SQLite.
       expect(() => planEmailStore(env)).toThrow("refusing");
     } finally {
@@ -352,6 +369,201 @@ describe("credentials file paths (HASNA_HOME / fake HOME)", () => {
       expect(files).toEqual([join(altHome, "emails", "config", "credentials")]);
     } finally {
       cleanupHome(home);
+    }
+  });
+});
+
+// The release review of 1.5.0 (hasna/apps#1720 validation, P1) measured that the
+// environment snapshot copied only a fixed key set, so HASNA_EMAILS_API_KEY_OVERRIDE,
+// HASNA_EMAILS_API_KEY_REF and HASNA_PROFILE never reached the resolver: a blank
+// override, an absent profile and a bogus vault pointer each served the station's
+// Keychain rows. Every test here holds a Keychain key (injected runner) AND a disk
+// credential the ambient tiers WOULD produce, and asserts the deliberate tier wins —
+// resolving to its own key, or refusing — and that no ambient key is ever used.
+describe("deliberate tiers survive the environment snapshot (#1720 validation P1)", () => {
+  const AMBIENT_KEYCHAIN_KEY = "ambient-keychain-key";
+  const AMBIENT_DISK_KEY = "ambient-disk-key";
+
+  /** A fake HOME holding an ambient disk credential, plus a Keychain runner that has one too. */
+  function ambientStation(): {
+    home: string;
+    env: Record<string, string>;
+    options: Parameters<typeof resolveEmailsHostedTransport>[1];
+    securityCalls: number;
+  } {
+    const { home } = fakeHome();
+    writeCredentialsFile(home, [`${EMAILS_API_KEY_ENV}=${AMBIENT_DISK_KEY}`]);
+    const security = fakeSecurity({ [keychainItem("api-key") + "@station-01"]: AMBIENT_KEYCHAIN_KEY });
+    const station = {
+      home,
+      env: { HOME: home, HASNA_STATION: "station-01" } as Record<string, string>,
+      options: {} as Parameters<typeof resolveEmailsHostedTransport>[1],
+      securityCalls: 0,
+    };
+    station.options = {
+      credentials: {
+        keychain: {
+          enabled: true,
+          platform: "darwin",
+          // Count only lookups of the api-KEY item: the authority tier may still
+          // ask for the api-url item after a deliberate credential resolved.
+          run: (argv: readonly string[]) => {
+            if (argv.includes(keychainItem("api-key"))) station.securityCalls += 1;
+            return security(argv);
+          },
+        },
+      },
+    };
+    return station;
+  }
+
+  function refusal(fn: () => unknown): unknown {
+    try {
+      fn();
+    } catch (error) {
+      return error;
+    }
+    throw new Error("expected a refusal, but the call returned");
+  }
+
+  it("carries the deliberate tier keys in the snapshot handed to the resolver", () => {
+    const snapshot = snapshotEmailsEnvironment({
+      [EMAILS_API_KEY_OVERRIDE_ENV]: "",
+      [EMAILS_API_KEY_REF_ENV]: "ops/emails/live/api_key",
+      [EMAILS_PROFILE_ENV]: "ops",
+      HOME: "/nonexistent",
+    });
+    expect(snapshot[EMAILS_API_KEY_OVERRIDE_ENV]).toBe("");
+    expect(snapshot[EMAILS_API_KEY_REF_ENV]).toBe("ops/emails/live/api_key");
+    expect(snapshot[EMAILS_PROFILE_ENV]).toBe("ops");
+    // The spellings are the resolver's own, for the app slug `emails`.
+    expect(EMAILS_API_KEY_OVERRIDE_ENV).toBe("HASNA_EMAILS_API_KEY_OVERRIDE");
+    expect(EMAILS_API_KEY_REF_ENV).toBe("HASNA_EMAILS_API_KEY_REF");
+    expect(EMAILS_PROFILE_ENV).toBe("HASNA_PROFILE");
+  });
+
+  it("a BLANK override refuses — it never falls through to the Keychain or the disk", () => {
+    const station = ambientStation();
+    try {
+      const env = { ...station.env, [EMAILS_API_KEY_OVERRIDE_ENV]: "" };
+      const thrown = refusal(() => resolveEmailsHostedTransport(env, station.options));
+      expect(isEmailsCredentialResolutionError(thrown)).toBe(true);
+      const message = String((thrown as Error).message);
+      expect(message).toContain(EMAILS_API_KEY_OVERRIDE_ENV);
+      expect(message).not.toContain(AMBIENT_KEYCHAIN_KEY);
+      expect(message).not.toContain(AMBIENT_DISK_KEY);
+      expect(station.securityCalls).toBe(0);
+      // The store plan is the same refusal: no SQLite, no local-fallback event.
+      const planError = refusal(() => planEmailStore(env));
+      expect((planError as Error).name).toBe("StoreConfigurationError");
+      expect(String((planError as Error).message)).toContain(EMAILS_API_KEY_OVERRIDE_ENV);
+      expect(String((planError as Error).message)).not.toContain("local-fallback");
+    } finally {
+      cleanupHome(station.home);
+    }
+  });
+
+  it("a real override WINS over the Keychain and the disk, and is reported by name", () => {
+    const station = ambientStation();
+    try {
+      const env = { ...station.env, [EMAILS_API_KEY_OVERRIDE_ENV]: "deliberate-override-key" };
+      const resolved = resolveEmailsHostedTransport(env, station.options);
+      expect(resolved.credential).toBe("deliberate-override-key");
+      expect(resolved.credentialSetting).toBe(EMAILS_API_KEY_OVERRIDE_ENV);
+      expect(resolved.resolution.apiKeyTier).toBe("override");
+      expect(resolved.resolution.apiKeySource).toBe(EMAILS_API_KEY_OVERRIDE_ENV);
+      expect(resolved.baseUrl).toBe(defaultGatewayBase);
+      const plan = planEmailStore(env);
+      expect(plan.store).toBe("api");
+    } finally {
+      cleanupHome(station.home);
+    }
+  });
+
+  it("a profile with no credential file refuses, naming the profile file — never the default file or the Keychain", () => {
+    const station = ambientStation();
+    try {
+      const env = { ...station.env, [EMAILS_PROFILE_ENV]: "no-such-profile" };
+      const thrown = refusal(() => resolveEmailsHostedTransport(env, station.options));
+      expect(isEmailsCredentialResolutionError(thrown)).toBe(true);
+      const message = String((thrown as Error).message);
+      expect(message).toContain("no-such-profile");
+      expect(message).toContain(EMAILS_PROFILE_ENV);
+      expect(message).toContain("credentials-no-such-profile");
+      expect(message).not.toContain(AMBIENT_KEYCHAIN_KEY);
+      expect(message).not.toContain(AMBIENT_DISK_KEY);
+      expect(station.securityCalls).toBe(0);
+      const planError = refusal(() => planEmailStore(env));
+      expect((planError as Error).name).toBe("StoreConfigurationError");
+      expect(String((planError as Error).message)).toContain(EMAILS_PROFILE_ENV);
+    } finally {
+      cleanupHome(station.home);
+    }
+  });
+
+  it("a profile WITH a credential file resolves that identity, above the Keychain and the default file", () => {
+    const station = ambientStation();
+    try {
+      const profileDir = join(station.home, ".hasna", "emails", "config");
+      const profileFile = join(profileDir, "credentials-ops");
+      writeFileSync(profileFile, `${EMAILS_API_KEY_ENV}=profile-ops-key\n`);
+      chmodSync(profileFile, 0o600);
+      const env = { ...station.env, [EMAILS_PROFILE_ENV]: "ops" };
+      const resolved = resolveEmailsHostedTransport(env, station.options);
+      expect(resolved.credential).toBe("profile-ops-key");
+      expect(resolved.resolution.apiKeyTier).toBe("profile");
+      expect(resolved.resolution.apiKeySource).toBe(profileFile);
+      expect(station.securityCalls).toBe(0);
+    } finally {
+      cleanupHome(station.home);
+    }
+  });
+
+  it("a vault POINTER refuses loudly: this client cannot complete it, and never sends the empty placeholder", () => {
+    const station = ambientStation();
+    try {
+      const env = { ...station.env, [EMAILS_API_KEY_REF_ENV]: "no/such/vault/item" };
+      const thrown = refusal(() => resolveEmailsHostedTransport(env, station.options));
+      expect(isEmailsTransportConfigurationError(thrown)).toBe(true);
+      const message = String((thrown as Error).message);
+      expect(message).toContain(EMAILS_API_KEY_REF_ENV);
+      expect(message).toContain(keychainItem("api-key"));
+      expect(message).not.toContain(AMBIENT_KEYCHAIN_KEY);
+      expect(message).not.toContain(AMBIENT_DISK_KEY);
+      // The pointer outranks the ambient tiers, so the Keychain is never even asked.
+      expect(station.securityCalls).toBe(0);
+      const planError = refusal(() => planEmailStore(env));
+      expect((planError as Error).name).toBe("StoreConfigurationError");
+      expect(String((planError as Error).message)).toContain(EMAILS_API_KEY_REF_ENV);
+    } finally {
+      cleanupHome(station.home);
+    }
+  });
+
+  it("a pointer that carries a literal, or is blank, is the resolver's own refusal", () => {
+    const station = ambientStation();
+    try {
+      for (const value of ["", "not-a-vault-path"]) {
+        const env = { ...station.env, [EMAILS_API_KEY_REF_ENV]: value };
+        const thrown = refusal(() => resolveEmailsHostedTransport(env, station.options));
+        expect(isEmailsCredentialResolutionError(thrown)).toBe(true);
+        expect(String((thrown as Error).message)).toContain(EMAILS_API_KEY_REF_ENV);
+      }
+      expect(station.securityCalls).toBe(0);
+    } finally {
+      cleanupHome(station.home);
+    }
+  });
+
+  it("with NO deliberate tier set, the ambient Keychain still resolves (the fix narrows nothing)", () => {
+    const station = ambientStation();
+    try {
+      const resolved = resolveEmailsHostedTransport(station.env, station.options);
+      expect(resolved.credential).toBe(AMBIENT_KEYCHAIN_KEY);
+      expect(resolved.resolution.apiKeyTier).toBe("keychain");
+      expect(station.securityCalls).toBeGreaterThan(0);
+    } finally {
+      cleanupHome(station.home);
     }
   });
 });

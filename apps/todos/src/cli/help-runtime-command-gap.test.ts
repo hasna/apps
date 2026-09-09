@@ -14,9 +14,9 @@ import {
 // and completions rendered for the remote authority.
 
 const NAMED_REPRO_COMMANDS = [
-  "ready", "blocked", "overdue", "sla", "priorities", "today", "yesterday",
+  "ready", "sla", "priorities",
   "week", "burndown", "stale", "summary", "report", "sprint", "log",
-  "org", "machines", "context", "search", "export", "board", "runs",
+  "org", "context", "search", "export", "board", "runs",
   "knowledge", "risks", "roadmaps", "reviews", "findings", "views", "calendar",
   "events", "usage", "backup", "scale", "audit-ledger", "policies",
   "extensions", "api-keys", "verify-providers",
@@ -51,7 +51,7 @@ describe("remote help/runtime command gap", () => {
     }
 
     // Remote-executable commands remain advertised.
-    for (const name of ["status", "list", "add", "show", "start", "done", "fail"]) {
+    for (const name of ["status", "list", "add", "show", "start", "done", "fail", "machines", "mine", "blocked", "overdue", "today", "yesterday"]) {
       expect(advertised).toContain(name);
     }
     expect(advertised).not.toContain("block");

@@ -139,6 +139,7 @@ function printHelp(options: RunEventsCliOptions = {}): void {
   console.log(`${name} ${version()}
 
 Usage:
+  ${name} intake capability|accept|receipt --help
   ${name} [--dir <path>] [--json] channels add <url|command> [options]
   ${name} [--dir <path>] [--json] channels list
   ${name} [--dir <path>] [--json] channels remove <id>
@@ -310,6 +311,13 @@ export async function runEventsCli(argv = process.argv.slice(2), options: RunEve
     } finally {
       broker.close();
     }
+    return;
+  }
+
+  if (group === "intake") {
+    if (parsed.dir !== undefined) throw new Error("intake does not accept a local directory selector");
+    const { runIntakeCli } = await import("../intake/cli.js");
+    await runIntakeCli(command ? [command, ...tail] : ["--help"]);
     return;
   }
 

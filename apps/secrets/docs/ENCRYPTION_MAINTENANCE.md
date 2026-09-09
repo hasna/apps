@@ -1,0 +1,13 @@
+# Verified encryption maintenance
+
+`secrets key` authenticates to the configured API and verifies its runtime AES key with an in-memory encryption/decryption roundtrip. The service inspects `secrets.value`, `vault_items.data`, `secret_versions.value_blob` (including orphan history), and `vault_migrations.manifest` in one tenant-scoped repeatable-read transaction. It authenticates ciphertext, rather than treating a format prefix or metadata count as proof. Status requires `secrets:read` and returns only per-table counts, tenant identity, inspection time, and runtime mechanism.
+
+`secrets encrypt-vault` calls `POST /v1/encryption/repair`, requiring `secrets:migrate`. The operation locks payload rows, verifies all existing ciphertext, encrypts legacy plaintext, reads back its writes, and commits the maintenance audit together with the changes. Corrupt, unknown-version, or unreadable ciphertext aborts the entire repair. Row identity, timestamps, history, and fingerprints are preserved. Ciphertext readable using a configured previous key is reported separately and is not rotated. Repeating a completed repair changes no payloads.
+
+Both operations reject more than 10,000 payload rows or 64 MiB of stored payloads. A limit error is not partial verification. Concurrent writes that invalidate the repair snapshot cause a visible retryable failure; they are not overwritten. Each SQL statement has a 15-second timeout and lock waits are limited to five seconds. Verification describes the transaction's snapshot; subsequent writes may change state.
+
+This scope excludes intentionally queryable metadata: labels, titles, domains, tags, user/feedback fields and audit identifiers. API credential verifiers remain hashes. No API response contains stored payloads, ciphertext, key material, or fingerprints.
+
+`key exists` verifies that the service has an operational runtime key. `key init` verifies an existing key and reports `created: false`; it does not create a local file or claim to bootstrap a server missing its key. Such a server cannot start until an operator configures the deployment. `key path` reports verified service ownership, not a guessed server filesystem path.
+
+`key kms` reports the observed injected-master-key mechanism and that KMS backing is not attested. `key kms setup` fails before any write: this service has no operator-managed KMS binding/setup capability. Implementing that requires a separate shared key lifecycle and deployment design. This change does not configure AWS, rotate master keys, migrate a real vault, delete a database, or complete that remaining capability.

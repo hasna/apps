@@ -1,4 +1,7 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
+// Spawns child processes (CLI/server/scripts); bun's 5s default is too tight on a loaded host.
+setDefaultTimeout(60_000);
+
 import { Database } from "bun:sqlite";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

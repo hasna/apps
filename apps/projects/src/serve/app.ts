@@ -6,10 +6,9 @@
 
 import {
   verifyApiKey,
-  type ApiKeyStatus,
   type ApiKeyVerifier,
-  type AuthAuditHook,
 } from "@hasna/contracts/auth";
+import type { ApiKeyStatus, AuthAuditHook } from "../types/client-types.js";
 import {
   NotFoundError,
   ProjectsPgStore,

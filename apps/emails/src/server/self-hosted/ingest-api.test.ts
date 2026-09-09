@@ -95,3 +95,25 @@ describe("tenant-bound inbox ingestion", () => {
     for (const other of [{ ...binding, tenant_id: "tenant-b" }, { ...binding, tenant_id: "tenant-b", prefix: "another/" }]) expect(() => ingestBindings({ EMAILS_INGEST_BINDINGS: JSON.stringify([binding, other]) })).toThrow();
   });
 });
+
+it("propagates the parent deadline to actual S3 I/O and stops the page after cancellation", async () => {
+  const f = fixture(), controller = new AbortController();
+  let cloudSignal: AbortSignal | undefined;
+  f.cloud.list = async () => {
+    controller.abort(new DOMException("fixture interrupted", "AbortError"));
+    return { keys: [binding.prefix + "one"] };
+  };
+  const report = await executeIngestBatch(f.store, f.scoped, "tenant-a", "sync-s3", {}, env, (_binding, signal) => { cloudSignal = signal; return f.cloud; }, controller.signal);
+  expect(cloudSignal?.aborted).toBe(true);
+  expect(report.ok).toBe(false);
+  expect(f.fetched).toEqual([]);
+  expect(f.writes).toEqual([]);
+  expect(f.updates()).toBe(0);
+});
+it("refuses an already cancelled parent before opening a cloud adapter", async () => {
+  const f = fixture(), controller = new AbortController();
+  controller.abort(new DOMException("fixture interrupted", "AbortError"));
+  let opened = false;
+  await expect(executeIngestBatch(f.store, f.scoped, "tenant-a", "sync-s3", {}, env, () => { opened = true; return f.cloud; }, controller.signal)).rejects.toThrow();
+  expect(opened).toBe(false);
+});

@@ -26,6 +26,7 @@ import {
   cloudApiUrl,
   ConversationsStoreConfigError,
   getStore,
+  LocalStore,
   isCloudStore,
 } from "./index.js";
 
@@ -84,40 +85,33 @@ describe("store resolution — API expected but unbuildable must ERROR, not fall
   });
 });
 
-describe("store resolution — explicit, unambiguous local configuration keeps working", () => {
-  // (c) Single-operator local SQLite is legitimate and documented. The bug is the
-  // SILENT DOWNGRADE from an expected API store, not local storage itself.
-  test("an explicit local DB path => local store, no error", () => {
+describe("store resolution — retired client selectors refuse", () => {
+  // Retired client selectors never construct the explicit compatibility store.
+  test("an explicit local DB path refuses before storage is opened", () => {
     const env = { [DB_VAR]: "/tmp/conversations-store-resolution.db" };
 
-    expect(getStore(env).transport).toBe("local");
+    expect(() => getStore(env)).toThrow(/no longer supported/);
   });
 
-  test("an explicit local DB path still overrides ambient API credentials", () => {
-    // Deliberate, documented precedence: a command-level SQLite path is a narrower,
-    // more specific signal than globally-exported API credentials, so local dev
-    // and test commands cannot accidentally write to the fleet's API store.
+  test("an explicit local DB path refuses even beside API credentials", () => {
+    // Contradictory DB/API configuration fails before either transport is used.
     const env = {
       [DB_VAR]: "/tmp/conversations-store-resolution.db",
       [URL_VAR]: API_URL,
       [KEY_VAR]: FAKE_KEY,
     };
 
-    expect(getStore(env).transport).toBe("local");
+    expect(() => getStore(env)).toThrow(/no longer supported/);
   });
 
-  // THE 2026-09-04 FAIL-CLOSED FLIP. Local was previously the "documented
-  // default" for an empty env — a CLI run without its API env (e.g. outside the
-  // station wrapper) answered from ~/.hasna/conversations SQLite with exit 0,
-  // presenting a different, stale dataset as the fleet's. Local is now reachable
-  // ONLY through the explicit store path asserted above.
+  // Missing account configuration never silently opens a local dataset.
   test("nothing configured at all => refuses, naming both required env vars", () => {
     expect(() => getStore({})).toThrow(ConversationsStoreConfigError);
     // Actionable: the error names BOTH variables the operator must set...
     expect(() => getStore({})).toThrow(new RegExp(URL_VAR));
     expect(() => getStore({})).toThrow(new RegExp(KEY_VAR));
-    // ...and the explicit local opt-in, never a silent default.
-    expect(() => getStore({})).toThrow(new RegExp(DB_VAR));
+    // Missing credentials never suggest a retired local selector.
+    try { getStore({}); } catch (error) { expect((error as Error).message).not.toContain(DB_VAR); }
 
     // The precise regression: an empty env must not hand back a local store.
     let transport: string | null = null;
@@ -167,7 +161,7 @@ describe("store resolution — explicit, unambiguous local configuration keeps w
     test(`${label} API variables do not mask an explicit local DB path`, () => {
       const env = { [URL_VAR]: blank, [KEY_VAR]: blank, [DB_VAR]: "/tmp/conversations-store-resolution.db" };
 
-      expect(getStore(env).transport).toBe("local");
+      expect(() => getStore(env)).toThrow(/no longer supported/);
     });
 
     test(`an ${label} API key alongside a real URL is still a missing key`, () => {
@@ -218,7 +212,7 @@ describe("store resolution — errors are actionable and leak nothing", () => {
     expect(message).not.toContain(FAKE_KEY);
   });
 
-  test("the error tells the operator how to resolve the ambiguity both ways", () => {
+  test("the error recommends shared credentials without a local escape hatch", () => {
     let message = "";
     try {
       getStore({ [URL_VAR]: API_URL });
@@ -228,9 +222,9 @@ describe("store resolution — errors are actionable and leak nothing", () => {
 
     // Name the missing piece...
     expect(message).toContain(KEY_VAR);
-    // ...and the escape hatch for someone who genuinely wants local.
-    expect(message).toContain(DB_VAR);
-    expect(message).toContain("local");
+    // No unsupported database selector is recommended.
+    expect(message).not.toContain(DB_VAR);
+    expect(message).toContain("saved account credentials");
   });
 
   test("the error does not claim it fell back to the local store", () => {
@@ -246,8 +240,8 @@ describe("store resolution — errors are actionable and leak nothing", () => {
 });
 
 describe("store resolution — the ambiguity guard also protects the reporting helpers", () => {
-  // `isCloudStore()` is what `doctor`, `analytics --json` and admin redaction branch
-  // on. Answering "false" for an ambiguous config is exactly how an operator ends up
+  // `isCloudStore()` is what `status`/`doctor`/`analytics --json` branch on.
+  // Answering "false" for an ambiguous config is exactly how an operator ends up
   // believing they are reading cloud data while reading local data.
   test("isCloudStore refuses to answer for a partial API configuration", () => {
     expect(() => isCloudStore({ [URL_VAR]: API_URL })).toThrow(ConversationsStoreConfigError);
@@ -256,4 +250,10 @@ describe("store resolution — the ambiguity guard also protects the reporting h
   test("cloudApiUrl refuses to answer for a partial API configuration", () => {
     expect(() => cloudApiUrl({ [URL_VAR]: API_URL })).toThrow(ConversationsStoreConfigError);
   });
+});
+
+// Explicit library construction is separate from ordinary client selection.
+test("LocalStore remains a deliberate library handle", () => {
+  expect(new LocalStore().transport).toBe("local");
+  expect(() => getStore({ [DB_VAR]: "/tmp/retired-selector.db" })).toThrow(/no longer supported/);
 });

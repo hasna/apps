@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import {runPlanApiFixture} from "./test-support/plan-cli-api.js";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+// Spawns child processes (CLI/server/scripts); bun's 5s default is too tight on a loaded host.
+setDefaultTimeout(60_000);
+
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +35,7 @@ afterEach(() => {
 type CliResult = { stdout: string; stderr: string; exitCode: number };
 
 async function runLocalCli(args: string[], dbPath: string, homeRoot: string): Promise<CliResult> {
+  if(args.includes("plans")) return runPlanApiFixture(args,dbPath,join(homeRoot,"plan-api-home"));
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: REPO_ROOT,
     env: localRoutingTestEnv({
@@ -54,15 +59,15 @@ async function runLocalCli(args: string[], dbPath: string, homeRoot: string): Pr
 async function runCloudCli(args: string[], root: string, baseUrl: string): Promise<CliResult> {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: REPO_ROOT,
-    env: localRoutingTestEnv({
+    env: ({...localRoutingTestEnv({
       HOME: root,
       TMPDIR: root,
       LANG: "C.UTF-8",
-      TODOS_DB_PATH: join(root, "todos.db"),
+
       TODOS_AUTO_PROJECT: "false",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: "throwaway",
-    }),
+    }),HASNA_TODOS_LOCAL:"",TODOS_LOCAL:"",HASNA_TODOS_DB_PATH:"",TODOS_DB_PATH:""}),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -94,7 +99,7 @@ describe("todos comment on a plan (local)", () => {
     expect(commented.stdout).toContain("Comment added.");
 
     const shown = await runLocalCli(["plans", "--show", planId, "--json"], dbPath, root);
-    expect(shown.exitCode).toBe(0);
+    expect(shown.exitCode,shown.stderr).toBe(0);
     const body = JSON.parse(shown.stdout) as {
       plan: { id: string };
       comments: Array<{ plan_id: string; content: string; agent_id: string | null }>;
@@ -142,7 +147,7 @@ describe("todos comment on a plan (local)", () => {
     expect(commented.stdout).toContain("Comment added.");
 
     const shown = await runLocalCli(["show", taskId, "--json"], dbPath, root);
-    expect(shown.exitCode).toBe(0);
+    expect(shown.exitCode,shown.stderr).toBe(0);
     const body = JSON.parse(shown.stdout) as { comments: Array<{ content: string }> };
     expect(body.comments.map((c) => c.content)).toContain("task-level note");
   }, 30000);
@@ -206,10 +211,10 @@ describe("todos comment on a plan (cloud /v1)", () => {
           return Response.json({ comment }, { status: 201 });
         }
         if (url.pathname === `/v1/plans/${PLAN_ID}/comments` && request.method === "GET") {
-          return Response.json({ comments: planComments, count: planComments.length });
+          return Response.json({ comments: planComments, count: planComments.length, history_selection:{schema_version:1,plan_id:PLAN_ID,complete:true} });
         }
         if (url.pathname === "/v1/tasks" && request.method === "GET") {
-          return Response.json({ tasks: [], count: 0, total: 0 });
+          return Response.json({ tasks: [], count: 0, total: 0, selection:{schema_version:1,plan_id:url.searchParams.get("plan_id"),include_subtasks:url.searchParams.get("include_subtasks")==="true",include_archived:url.searchParams.get("include_archived")==="true"} });
         }
         if (url.pathname === `/v1/tasks/${TASK_ID}` && request.method === "GET") {
           return Response.json({
@@ -256,7 +261,7 @@ describe("todos comment on a plan (cloud /v1)", () => {
 
       // The plan comment surface is readable over the cloud API too.
       const shown = await runCloudCli(["plans", "--show", PLAN_ID, "--json"], root, baseUrl);
-      expect(shown.exitCode).toBe(0);
+      expect(shown.exitCode,shown.stderr).toBe(0);
       const body = JSON.parse(shown.stdout) as { plan: { id: string }; comments: Array<{ content: string }> };
       expect(body.plan.id).toBe(PLAN_ID);
       expect(body.comments.map((c) => c.content)).toContain("cloud plan outcome");

@@ -81,6 +81,17 @@ async function main(): Promise<void> {
     return;
   }
 
+  await startDomainsServer({
+    port: Number(parseArg("--port", process.env["PORT"]) ?? DEFAULT_PORT),
+    host: parseArg("--host", process.env["HOST"]) ?? "0.0.0.0",
+  });
+}
+
+/** Shared authenticated server for both domains serve and domains-serve. */
+export async function startDomainsServer(options: { port: number; host: string }): Promise<void> {
+  const { port, host } = options;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Port must be an integer from 1 to 65535.");
+  if (!host.trim()) throw new Error("Host must not be blank.");
   normalizeEnv();
   const version = getPackageVersion();
   const signingSecret = resolveSigningSecret();
@@ -107,9 +118,6 @@ async function main(): Promise<void> {
       }
     },
   });
-
-  const port = Number(parseArg("--port", process.env["PORT"]) ?? DEFAULT_PORT) || DEFAULT_PORT;
-  const host = parseArg("--host", process.env["HOST"]) ?? "0.0.0.0";
 
   Bun.serve({
     port,

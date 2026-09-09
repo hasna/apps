@@ -1,4 +1,29 @@
 import { getMcpToolDescriptions } from "../lib/mcp-contracts.js";
+import { isSkillsFleetCredentialError } from "../lib/fleet-credentials.js";
+
+/** The shape every tool handler returns; kept structural so registrars need no SDK type import. */
+type McpToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
+
+/**
+ * Run a DATA tool behind the fleet ladder's refusal.
+ *
+ * The body is expected to go through `requireSkillsReadAccess()` /
+ * `getBrowseRegistry()` (lib/read-access.ts) before it reads the bundled
+ * catalog or the on-machine corpus. When the ladder refuses — no credential, no
+ * authority, no `HASNA_SKILLS_LOCAL=1` opt-in; an authority with no key; a
+ * deliberate selection that cannot be honoured — the refusal comes back as the
+ * same `AUTH_REQUIRED` result `get_run_status` already gives, never as the
+ * local answer. Any other failure propagates unchanged (the SDK reports it as
+ * a tool error with its message).
+ */
+export async function readSurface(body: () => Promise<McpToolResult>): Promise<McpToolResult> {
+  try {
+    return await body();
+  } catch (error) {
+    if (isSkillsFleetCredentialError(error)) return mcpError("AUTH_REQUIRED", error.message, ["skills auth login"]);
+    throw error;
+  }
+}
 
 export function stripNulls(obj: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(

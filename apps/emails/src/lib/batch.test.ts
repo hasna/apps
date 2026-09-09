@@ -167,9 +167,21 @@ describe("the batch family has one implementation", () => {
   });
 
   it("no longer reaches into an arm from the CLI command that runs a batch", () => {
-    const source = readFileSync(join(repoRoot, "src", "cli", "commands", "misc.local.ts"), "utf8");
-    expect(source).toContain('import("../../lib/batch.js")');
-    expect(source).not.toContain("lib/batch.local.js");
+    const commandsDir = join(repoRoot, "src", "cli", "commands");
+    const facade = readFileSync(join(commandsDir, "misc.ts"), "utf8");
+    expect(facade).toContain('from "./misc.remote.js"');
+    expect(facade).not.toMatch(/misc\.local|test-support/);
+    const shipped = readFileSync(join(commandsDir, "misc.remote.ts"), "utf8");
+    expect(shipped).toContain('.command("batch")');
+    expect(shipped).toContain('import("./api-send-composition.js")');
+    expect(shipped).toContain("await sendApiBatch(opts)");
+
+    // Keep the old facade-import regression on its explicit historical fixture.
+    const fixture = readFileSync(join(commandsDir, "misc.local.test-support.ts"), "utf8");
+    expect(fixture).toContain('import("../../lib/batch.js")');
+    for (const source of [facade, shipped, fixture]) {
+      expect(source).not.toMatch(/lib\/batch\.(local|remote)\.js/);
+    }
   });
 });
 

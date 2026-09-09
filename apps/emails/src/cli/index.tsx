@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { commandModulesFor, routeRootPromptArgs, shouldPrintVersionEarly, type CommandModule } from "./router.js";
+import { requestedCommand, commandModulesFor, routeRootPromptArgs, shouldPrintVersionEarly, type CommandModule } from "./router.js";
 
 function getPackageVersion(): string {
   try {
@@ -91,7 +91,7 @@ async function main(): Promise<void> {
 
   program
     .name("emails")
-    .description("Emails email management CLI - send, receive, sync, and manage email locally or in your AWS account")
+    .description("Send, receive, sync, and manage email through your authenticated Emails API")
     .version(version)
     .option("--json", "Output JSON instead of formatted text")
     .option("-q, --quiet", "Suppress info output")
@@ -112,6 +112,12 @@ async function main(): Promise<void> {
   }
 
   try {
+    // Schema/key administration runs on the service host and does not open a client mailbox.
+    const modules = commandModulesFor(cliArgs);
+    if (requestedCommand(cliArgs) !== "serve" && !modules.every((module) => module === "db" || module === "self-hosted")) {
+      const { assertApiClientStorage } = await import("../lib/client-storage-policy.js");
+      assertApiClientStorage();
+    }
     await registerCommandsForArgs(program, output, cliArgs);
 
     if (jsonRequested && !cliArgs.includes("--help") && !cliArgs.includes("-h")) {

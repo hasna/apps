@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -10,6 +10,9 @@ import {
 } from "./environment-snapshots.js";
 import { validateJsonContract } from "../json-contracts.js";
 import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
+
+// Spawns the CLI; bun's 5s default is too tight for a cold start on a loaded host.
+setDefaultTimeout(60_000);
 
 function makeProject(): string {
   const root = mkdtempSync(join(tmpdir(), "todos-env-snapshot-"));

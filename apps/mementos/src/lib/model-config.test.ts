@@ -1,13 +1,28 @@
 process.env["MEMENTOS_DB_PATH"] = ":memory:";
 
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
+import { describe, test, expect, beforeEach, afterEach, afterAll } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, unlinkSync, renameSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getActiveModel, setActiveModel, clearActiveModel, DEFAULT_MODEL } from "./model-config.js";
 
-const CONFIG_DIR = join(homedir(), ".hasna", "mementos");
+// Isolate the config home BEFORE the module under test computes CONFIG_DIR (a
+// module-level constant read from getDataRoot() at import time — hence the
+// dynamic import). Every test here writes config.json and the mkdirSync-branch
+// test RENAMES the config directory away; run against the operator's real
+// ~/.hasna/mementos that rewrote the live config.json to `{}` and moved
+// agents/ and profiles/ aside. A scratch HASNA_MEMENTOS_HOME is the exact-app
+// override, so nothing under the real home is read or written.
+const SCRATCH_HOME = mkdtempSync(join(tmpdir(), "mementos-model-config-"));
+process.env["HASNA_MEMENTOS_HOME"] = SCRATCH_HOME;
+const { getActiveModel, setActiveModel, clearActiveModel, DEFAULT_MODEL } = await import("./model-config.js");
+
+const CONFIG_DIR = SCRATCH_HOME;
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+
+afterAll(() => {
+  rmSync(SCRATCH_HOME, { recursive: true, force: true });
+  rmSync(`${SCRATCH_HOME}.test-backup`, { recursive: true, force: true });
+});
 
 let savedConfig: string | null = null;
 
@@ -185,8 +200,9 @@ describe("roundtrip", () => {
 });
 
 describe("writeConfig - mkdirSync branch (line 30)", () => {
-  // Covers the branch where CONFIG_DIR does not exist and mkdirSync is called
-  const backupDir = join(homedir(), ".hasna", "mementos.test-backup");
+  // Covers the branch where CONFIG_DIR does not exist and mkdirSync is called.
+  // The rename stays inside the scratch home — never the operator's ~/.hasna.
+  const backupDir = `${SCRATCH_HOME}.test-backup`;
 
   test("creates CONFIG_DIR via mkdirSync when it does not exist (line 30)", () => {
     // Rename CONFIG_DIR so it temporarily doesn't exist

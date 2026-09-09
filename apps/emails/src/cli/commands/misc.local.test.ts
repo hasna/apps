@@ -7,7 +7,7 @@ import { listSandboxEmails } from "../../db/sandbox.js";
 import { createSqliteEmailStore } from "../../store-sqlite/index.js";
 import { createTemplate } from "../../db/templates.js";
 import { addStep, createSequence, enroll, listEnrollments } from "../../db/sequences.js";
-import { registerMiscCommands, runSchedulerTick } from "./misc.local.js";
+import { registerMiscCommands, runSchedulerTick } from "./misc.local.test-support.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 function captureInheritedProcessEnv(): void {
