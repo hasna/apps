@@ -1,0 +1,24 @@
+name: Notes SDK conformance
+
+on:
+  pull_request:
+    paths: ['apps/notes/**', '.github/workflows/notes-sdk.yml']
+  push:
+    branches: [main]
+    paths: ['apps/notes/**', '.github/workflows/notes-sdk.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  swift-http:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Swift SDK against real HTTP and shared fixtures
+        working-directory: apps/notes
+        run: bun run test:swift-sdk

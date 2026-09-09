@@ -75,6 +75,10 @@ async function scan(files, needles) {
     const lines = (await readFile(file, 'utf8')).split('\n');
     for (const needle of needles) {
       lines.forEach((line, i) => {
+        // The new Foundation-only SDK companion has its own manifest. This
+        // exact packaged file is not the removed desktop app's root manifest.
+        if (needle === 'Package.swift' && relative(repoRoot, file) === 'package.json'
+          && line.trim().replace(/,$/, '') === '"swift/Package.swift"') return;
         if (line.includes(needle)) hits.push(`${relative(repoRoot, file)}:${i + 1} [${needle}]`);
       });
     }
@@ -105,7 +109,7 @@ describe('macOS app removal', () => {
 
   test('the docs directory documents only the headless package', async () => {
     const docs = (await readdir(join(repoRoot, 'docs'))).sort();
-    expect(docs).toEqual(['cli.md', 'notes-vs-personalnotes.md', 'storage.md', 'sync.md']);
+    expect(docs).toEqual(['cli.md', 'notes-vs-personalnotes.md', 'saas-wire-v1.md', 'storage.md', 'sync.md']);
   });
 
   test('no shipped code or build config references a removed app surface', async () => {
@@ -114,5 +118,13 @@ describe('macOS app removal', () => {
     // cannot be an artefact of an empty file set or an unread file.
     expect((await scan(files, ['@hasna/notes'])).length).toBeGreaterThan(0);
     expect(await scan(files, DANGLING_REFERENCES)).toEqual([]);
+  });
+
+  test('the public Swift companion is headless and the desktop manifest stays absent', async () => {
+    const sources = await readTree(join(repoRoot, 'swift', 'Sources'));
+    expect(sources.length).toBeGreaterThan(0);
+    expect((await scan(sources, ['import Foundation'])).length).toBeGreaterThan(0);
+    expect(await scan(sources, ['import AppKit', 'import SwiftUI', 'WKWebView', 'ProcessInfo.processInfo.environment'])).toEqual([]);
+    expect(await stat(join(repoRoot, 'Package.swift')).then(() => true, () => false)).toBe(false);
   });
 });
