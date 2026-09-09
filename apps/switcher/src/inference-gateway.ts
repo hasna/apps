@@ -2,7 +2,7 @@ import { proxyProviderStream } from "./provider-stream";
 import { isContextOverflow } from "./provider-error";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { authHeader } from "./auth";
-import { endpoint, Fault } from "./domain";
+import { endpoint, Fault, modelExpired } from "./domain";
 import type { HarnessLaunchInput } from "./harness-types";
 import { injectModelGuidance, renderModelGuidance, resolvePolicyModel, type CompiledModelPolicy } from "./model-policy";
 
@@ -25,7 +25,7 @@ export function createInferenceGateway(input: GatewayInput) {
     const credential=request.headers.get("x-goog-api-key")??request.headers.get("x-api-key")??request.headers.get("authorization")?.replace(/^Bearer /,"")??"";
     if(!timingSafeEqual(expected,digest(credential)))return fail(401,"unauthorized");
     const url=new URL(request.url);
-    if(request.method==="GET"&&url.pathname==="/v1/models"&&!url.search)return Response.json({object:"list",data:input.models.map(m=>({...m,object:"model"}))});
+    if(request.method==="GET"&&url.pathname==="/v1/models"&&!url.search)return Response.json({object:"list",data:input.models.filter(m=>!modelExpired(m)).map(m=>({...m,object:"model"}))});
     const gemini=input.protocol==="gemini-generate-content";
     const match=gemini?/^\/v1beta\/models\/([^/]+):(generateContent|streamGenerateContent|countTokens)$/.exec(url.pathname):null;
     const prefix=input.protocol==="anthropic-messages"?"/messages":input.protocol==="openai-responses"?"/responses":"/chat/completions";
@@ -47,6 +47,7 @@ export function createInferenceGateway(input: GatewayInput) {
       for(const part of [body,...(gemini&&body.generateContentRequest?[body.generateContentRequest]:[])])if(routingFields.some(k=>Object.hasOwn(part,k)))throw new Fault(403,"routing_override","Unmanaged model routing is disabled.");
       if(typeof requested!=="string")throw new Fault(400,"model_required","A model is required.");
       resolved=resolvePolicyModel(policy,requested);
+      if(input.models.some(model=>model.id===resolved&&modelExpired(model)))throw new Fault(422,"model_expired","Selected model has expired.");
       if(gemini)for(const declared of [body.model,body.generateContentRequest?.model])if(declared!==undefined&&declared!==requested&&declared!==`models/${requested}`)throw new Fault(403,"conflicting_model","Conflicting model identity.");
     } catch(error) {event.reason=error instanceof Fault?error.code:"invalid_model";emit();return fail(error instanceof Fault?error.status:400,event.reason);}
     event.resolvedModel=resolved;event.decision=resolved===requested?"allow":"alias";
@@ -66,6 +67,7 @@ export function createInferenceGateway(input: GatewayInput) {
       for(let attempt=0;attempt<candidates.length;attempt++) {
         if(signal.aborted)throw new Error("aborted");
         const model=candidates[attempt];
+        if(input.models.some(entry=>entry.id===model&&modelExpired(entry)))throw new Fault(422,"model_expired","Selected model has expired.");
         if(attempt){flush();current={at:new Date().toISOString(),requestId,requestedModel:safeModel(requested),resolvedModel:model,decision:"fallback",reason:"explicit_transient_fallback"};}
         const payload=structuredClone(body);
         if(gemini) {if(payload.model!==undefined)payload.model=`models/${model}`;if(payload.generateContentRequest?.model!==undefined)payload.generateContentRequest.model=`models/${model}`;}

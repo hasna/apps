@@ -149,6 +149,22 @@ test("gateway keeps unrelated upstream validation errors sanitized", async () =>
   } finally { await gateway.cleanup(); await upstream.stop(true); }
 });
 
+test("gateway rechecks expiry at request time without sending expired models upstream", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>{calls++;return Response.json({model:"main"});}});
+  const events: any[] = [], launchInput = {...input("anthropic-messages",upstream.url.origin+"/v1",events),models:structuredClone(models)};
+  const gateway = createInferenceGateway(launchInput as any);
+  try {
+    // The model expires after the gateway was prepared, as in a long-lived launch.
+    launchInput.models[0].expiresOn="2000-01-01";
+    const response=await fetch(gateway.baseUrl+"/messages",{method:"POST",headers:{authorization:`Bearer ${gateway.token}`,"content-type":"application/json"},body:JSON.stringify({model:"main",messages:[]})});
+    expect(response.status).toBe(422);
+    expect((await response.json()).error.code).toBe("model_expired");
+    expect(calls).toBe(0);
+    expect(events[0].reason).toBe("model_expired");
+  } finally {await gateway.cleanup();await upstream.stop(true);}
+});
+
 test("gateway does not retry after a stream has started and reports unknown provider models safely", async () => {
   let calls = 0;
   const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch() { calls++; return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("data: {\"model\":\"outside-secret-model\"}\n\ndata: [DONE]\n\n")); controller.close(); } }), { headers: { "content-type": "text/event-stream" } }); } });

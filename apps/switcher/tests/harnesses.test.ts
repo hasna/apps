@@ -36,6 +36,14 @@ test("Claude uses the original DeepSeek provider for compaction defaults behind 
     expect(prepared.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW ?? "786432");
   } finally { await prepared.cleanup?.(); await rm(input.stateDir, { recursive: true, force: true }); }
 });
+test("expired catalog entries stay out of Claude's native picker", async () => {
+  const input=await fixture();
+  const prepared=await prepareHarnessLaunch({...input,harness:"claude",protocol:"anthropic-messages",version:"2.1.261",models:[...input.models,{id:"expired-preview",name:"Expired",expiresOn:"2000-01-01"}]});
+  try {
+    const settings=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
+    expect(settings.modelPicker.options.map((model:any)=>model.model)).toEqual([input.model]);
+  } finally {await prepared.cleanup?.();await rm(input.stateDir,{recursive:true,force:true});}
+});
 test("Codex uses an ephemeral gateway credential for providers with literal api-key authentication",async()=>{
   const input=await fixture();
   try {
