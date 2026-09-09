@@ -3,6 +3,7 @@ import { generateKeyPairSync, sign } from "node:crypto";
 import {
   NPM_RELEASE_AGENT_REVIEW_SCHEMA,
   deriveNpmReleaseAgentReviewKeyId,
+  isReleaseReviewAgentId,
   issueSignedNpmReleaseAgentReviewReceipt,
   parsePublisherAgentTrailer,
   validateNpmReleaseAgentReviewReceipt,
@@ -27,10 +28,10 @@ const expected: ExpectedNpmReleaseAgentReview = {
     procedurePath: "apps/todos/scripts/verify-public-release.ts",
   procedureRevision: "2".repeat(40),
   registry: "https://registry.npmjs.org",
-  reviewerAgentId: "/root/review_todos_release_01522",
+  reviewerAgentId: "review-todos-release-0160",
   reviewerKeyId,
   reviewerPublicKey,
-  publisherAgentId: "nausicaa",
+  publisherAgentId: "release-todos-0160",
 };
 
 const companionExpected: ExpectedNpmReleaseAgentReview = {
@@ -199,7 +200,7 @@ describe("npm release independent-agent review receipt", () => {
   test("rejects self-review, reviewer drift, and publisher identity drift", () => {
     expect(validate(signedReceipt({
       ...acceptedPayload,
-      reviewer: { type: "coding-agent", agent: "NAUSICAA" },
+      reviewer: { type: "coding-agent", agent: "RELEASE-TODOS-0160" },
     })).failures.map((failure) => failure.check)).toContain("release-agent-review-independence");
     expect(validate(signedReceipt({
       ...acceptedPayload,
@@ -211,27 +212,64 @@ describe("npm release independent-agent review receipt", () => {
     })).failures.map((failure) => failure.check)).toContain("release-agent-review-publisher");
   });
 
-  test("rejects Fable-attributed and malformed reviewer identities even when configuration matches", () => {
+  test("accepts canonical registered reviewer names and rejects non-identifier shapes", () => {
     for (const reviewerAgentId of [
+      "review-todos-release-0160",
+      "release-todos-0160",
       "Anscombe",
       "independent-reviewer",
+      "agent_01",
+      "a".repeat(128),
+    ]) {
+      expect(isReleaseReviewAgentId(reviewerAgentId)).toBe(true);
+    }
+    for (const reviewerAgentId of [
       "/root",
-      "/root/Review_todos_release_01522",
-      "/root/review.todos.release",
-      "/other/review_todos_release_01522",
+      "/root/review_todos_release_0160",
+      "/root/x/y",
+      "/other/review_todos_release_0160",
+      " review-todos-release-0160",
+      "review-todos-release-0160 ",
+      "review todos release 0160",
+      "",
+      "a".repeat(129),
+    ]) {
+      expect(isReleaseReviewAgentId(reviewerAgentId)).toBe(false);
+    }
+  });
+
+  test("accepts registered-name reviewer identities and rejects unregistered shapes when configuration matches", () => {
+    for (const reviewerAgentId of ["review-todos-release-0160", "Anscombe", "independent-reviewer"]) {
+      const payload = {
+        ...acceptedPayload,
+        reviewer: { type: "coding-agent" as const, agent: reviewerAgentId },
+      };
+      expect(validateNpmReleaseAgentReviewReceipt(
+        JSON.stringify(signedReceipt(payload)),
+        { ...expected, reviewerAgentId },
+      ).failures).toEqual([]);
+    }
+    for (const reviewerAgentId of [
+      "/root",
+      "/root/review_todos_release_0160",
+      "/root/x/y",
+      "/other/review_todos_release_0160",
+      "review todos release 0160",
+      "a".repeat(129),
     ]) {
       const payload = {
         ...acceptedPayload,
         reviewer: { type: "coding-agent" as const, agent: reviewerAgentId },
       };
-      const result = validateNpmReleaseAgentReviewReceipt(
+      expect(validateNpmReleaseAgentReviewReceipt(
         JSON.stringify(signedReceipt(payload)),
         { ...expected, reviewerAgentId },
-      );
-      expect(result.failures.map((failure) => failure.check)).toContain(
-        "release-agent-review-reviewer-runtime",
-      );
+      ).failures.map((failure) => failure.check)).toContain("release-agent-review-reviewer-runtime");
     }
+    expect(validateNpmReleaseAgentReviewReceipt(
+      JSON.stringify(signedReceipt(acceptedPayload)),
+      { ...expected, reviewerAgentId: "/root/review_todos_release_0160" },
+    ).failures.map((failure) => failure.check)).toContain("release-agent-review-reviewer-config");
   });
 
   test("rejects every exact release binding mismatch", () => {
