@@ -19,7 +19,8 @@
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target bun && bun build src/schemas.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build"
   },
   "keywords": ["todos", "tasks", "ai", "agent", "sdk", "claude", "codex", "gemini", "mcp"],
   "publishConfig": { "access": "public" },

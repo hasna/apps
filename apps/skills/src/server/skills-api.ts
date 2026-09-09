@@ -345,7 +345,9 @@ export async function getMergedSkill(
   if (resolved.kind === "tombstone") return resolved.payload;
   if (resolved.kind === "published") return publishedPayload(resolved.record);
   const bundled = getServerSkill(slug);
-  return bundled ? (bundled as unknown as Record<string, unknown>) : null;
+  // This is an explicit absence statement about this organization's published
+  // row, not an inference a client should make from catalogue provenance.
+  return bundled ? { ...bundled, publicationState: "catalogue-only", revisionId: null } : null;
 }
 
 /**
@@ -486,6 +488,12 @@ export async function storePublishedSkill(
     // row's current revision. First publishes and revives over a tombstone need no guard.
     ...(expectedRevisionId ? { expectedRevisionId } : {}),
   };
+  if (input.seedBundledOnly && expectedRevisionId && !current) {
+    throw new SkillRevisionConflictError(input.slug, expectedRevisionId, null);
+  }
+  if (input.seedBundledOnly && current && (current.tombstonedAt || current.source !== "bundled")) {
+    throw new SkillRevisionConflictError(input.slug, expectedRevisionId, current.revisionId);
+  }
   // The optimistic-concurrency guard is answered first, the way the stores answer it: a
   // writer that has not read the live row (no or stale If-Match) gets REVISION_CONFLICT
   // before anything is said about versions, so the two refusals keep their existing order.

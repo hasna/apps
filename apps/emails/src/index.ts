@@ -1,3 +1,6 @@
+export { runProvisionUp, inspectProvisionUp, retryProvisionUp, runProvisionDaemon, provisionUpBody, formatProvisionUp, provisionUpSucceeded, type ProvisionUpOptions, type ProvisionUpResult, type ProvisionUpTick } from "./lib/provision-up-api.js";
+export { setupDomainCloudflare, provisionSendingDomain, inspectDomainDnsJob, formatDomainDns, domainDnsSucceeded } from "./lib/domain-dns-api.js";
+export type { DomainDnsOptions, DomainDnsReceipt } from "./lib/domain-dns-api.js";
 // Public API — types
 export type {
   Provider,
@@ -668,3 +671,6 @@ export async function verifyEmailAddress(...args: Parameters<EmailVerifyModule["
   const { verifyEmailAddress } = await import("./lib/email-verify.js");
   return verifyEmailAddress(...args);
 }
+
+export { provisionAddress, type ProvisionAddressOptions, type ProvisionAddressResult } from "./lib/address-provisioning-api.js";
+export { connectDomain, inspectDomainConnection, type ConnectDomainOptions, type ConnectDomainResult } from "./lib/domain-connect-api.js";

@@ -49,15 +49,31 @@ export interface UpsertEncryptionProfileInput {
   salt?: string;
 }
 
+/**
+ * Both encryption refusals carry a stable `code` and a `suggestion` so the MCP
+ * formatter returns a typed, actionable payload instead of the sanitized
+ * `UNKNOWN_ERROR` — "you did not set the key" is a configuration requirement,
+ * not a server fault.
+ */
 export class EncryptionKeyUnavailableError extends Error {
+  static readonly code = "ENCRYPTION_KEY_UNAVAILABLE";
+  readonly code = EncryptionKeyUnavailableError.code;
+  readonly suggestion: string;
   constructor(readonly keyEnv: string, readonly profile: string) {
     super(`Encryption key is locked: set ${keyEnv} to use profile ${profile}`);
+    this.name = "EncryptionKeyUnavailableError";
+    this.suggestion = `Set ${keyEnv} in the environment of the process serving this store, then retry.`;
   }
 }
 
 export class EncryptedPayloadError extends Error {
+  static readonly code = "ENCRYPTED_PAYLOAD_INVALID";
+  readonly code = EncryptedPayloadError.code;
+  static readonly suggestion =
+    "Pass a value produced by encrypt_local_value for this profile; a plain value is not an encrypted envelope.";
   constructor(message: string) {
     super(message);
+    this.name = "EncryptedPayloadError";
   }
 }
 

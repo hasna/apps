@@ -37,7 +37,7 @@ export function registerForwardingCommands(program: Command, output: (data: unkn
         });
         output(rule, [
           chalk.green(`✓ forwarding rule ${rule.source_address} -> ${rule.target_address}`),
-          chalk.dim("  App-level forwarding only processes mail already synced into the local inbox."),
+          chalk.dim("  App-level forwarding processes inbound mail stored by the configured service."),
           chalk.dim("  Run: emails forwarding run --provider <provider>"),
         ].join("\n"));
       } catch (e) {
@@ -134,10 +134,10 @@ export function registerForwardingCommands(program: Command, output: (data: unkn
         const result = await processForwardingRules({
           providerId,
           fromAddress: opts.from,
-          limit: parseInt(opts.limit ?? "100", 10) || 100,
+          limit: Number(opts.limit ?? "100"),
           backfill: !!opts.backfill,
         });
-        output(result, chalk.green(`forwarding: ${result.sent} sent, ${result.failed} failed, ${result.skipped} skipped (${result.attempted} attempted)`));
+        output(result, chalk.green(`forwarding: ${result.sent} sent, ${result.failed} failed, ${result.skipped} skipped, ${result.pending ?? 0} processing (${result.attempted} attempted)`));
       } catch (e) {
         handleError(e);
       }

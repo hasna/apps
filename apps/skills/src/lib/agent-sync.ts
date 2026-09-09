@@ -14,6 +14,7 @@
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -53,9 +54,9 @@ export const SYNC_AGENTS: readonly SyncAgent[] = ["claude", "codewith", "codex",
 export const SKILLS_SOURCE_ENV = "SKILLS_SOURCE";
 
 /**
- * Ownership marker written beside every SKILL.md this tool syncs. Its presence is how a
- * re-sync tells "a skill I wrote, safe to update" from "a skill the user hand-authored,
- * do not touch". A hidden sidecar rather than a frontmatter field so the SKILL.md the
+ * Ownership marker written beside every SKILL.md this tool syncs. Its exact managedBy
+ * value tells a re-sync which directories this tool owns; a foreign or malformed
+ * marker grants no authority. A hidden sidecar rather than a frontmatter field so the SKILL.md the
  * agent loads stays exactly the adapted document and nothing else.
  */
 export const SYNC_MARKER_FILE = ".hasna-skills.json";
@@ -66,6 +67,25 @@ export interface SyncMarker {
   skill: string;
   source: string;
   syncedAt: string;
+}
+
+/** Internal shared ownership predicate; not exported by the public package entrypoint. */
+export function isSkillsOwnershipMarker(marker: unknown): marker is Record<string, unknown> {
+  return typeof marker === "object" && marker !== null && Object.hasOwn(marker, "managedBy")
+    && (marker as { managedBy: unknown }).managedBy === SYNC_MARKER_MANAGED_BY;
+}
+
+/** Read only a regular ownership sidecar. */
+export function hasSkillsOwnershipMarker(dir: string): boolean {
+  const path = join(dir, SYNC_MARKER_FILE);
+  try {
+    // Only parse a regular sidecar, rather than reading a directory or a pipe.
+    if (!lstatSync(path).isFile()) return false;
+    const marker: unknown = JSON.parse(readFileSync(path, "utf8"));
+    return isSkillsOwnershipMarker(marker);
+  } catch {
+    return false;
+  }
 }
 
 export function isSyncAgent(value: string): value is SyncAgent {
@@ -364,12 +384,12 @@ export interface WriteManagedAgentSkillParams {
 /**
  * Write one skill into one agent's global folder, non-clobbering.
  *
- * A directory this tool has written before carries the marker file and is replaced with
+ * A directory this tool has written before carries our exact ownership marker and is replaced with
  * an exact mirror — except that a managed home holding full content is never silently
  * replaced with an executable pointer stub (that would be data loss; it is refused
- * unless `force` is passed). A directory with a SKILL.md but no marker is the user's
- * own skill and is skipped unless `force` explicitly adopts it. Any other pre-existing
- * unmarked directory is always left untouched. A fresh directory is created.
+ * unless `force` is passed). A directory with a SKILL.md but no valid Skills marker is
+ * skipped unless `force` explicitly adopts it. Any other pre-existing unmanaged
+ * directory is always left untouched. A fresh directory is created.
  */
 export function writeManagedAgentSkill(params: WriteManagedAgentSkillParams): AgentSyncAction {
   const homeDir = params.homeDir ?? homedir();
@@ -420,7 +440,7 @@ export function writeManagedSkillDir(
   const skillMdPath = join(dir, "SKILL.md");
   const markerPath = join(dir, SYNC_MARKER_FILE);
   const dirExists = existsSync(dir);
-  const managed = existsSync(markerPath);
+  const managed = hasSkillsOwnershipMarker(dir);
   const hasSkillMd = existsSync(skillMdPath);
 
   if (dirExists && !managed && !hasSkillMd) {
@@ -435,7 +455,9 @@ export function writeManagedSkillDir(
     return {
       action: "skip",
       path: skillMdPath,
-      reason: "an unmanaged SKILL.md already exists here (hand-authored); pass --force to overwrite",
+      reason: existsSync(markerPath)
+        ? "an unmanaged SKILL.md already exists here (invalid or foreign ownership marker); pass --force to overwrite"
+        : "an unmanaged SKILL.md already exists here (hand-authored); pass --force to overwrite",
     };
   }
 
@@ -525,11 +547,12 @@ export function writeManagedSkillDir(
 
 /**
  * Remove a skill this tool synced from an agent folder. Refuses to delete a directory it
- * did not write (no marker), so it can never remove a user's hand-authored skill.
+ * did not write (no valid Skills ownership marker). Foreign or malformed markers
+ * grant no deletion authority, and removal has no force override.
  */
 export function removeManagedAgentSkill(skill: string, agent: SyncAgent, homeDir: string = homedir()): boolean {
   const dir = join(agentGlobalSkillsDir(agent, homeDir), skill);
-  if (!existsSync(join(dir, SYNC_MARKER_FILE))) return false;
+  if (!hasSkillsOwnershipMarker(dir)) return false;
   rmSync(dir, { recursive: true, force: true });
   return true;
 }

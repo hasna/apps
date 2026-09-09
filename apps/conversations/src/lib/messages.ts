@@ -2136,7 +2136,7 @@ function searchMessagesFullRowsInternal(opts: SearchMessagesOptions): SearchResu
       return { ...msg, snippet: buildSearchSnippet(msg), relevance_score };
     });
   } catch {
-    // Fallback to LIKE if FTS not available
+    // Fallback to LIKE when the FTS index cannot answer
   }
 
   // LIKE fallback

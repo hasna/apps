@@ -86,7 +86,8 @@ struct OpenAIAPIKeyStoreTests {
             .appendingPathComponent("hasnaxyz")
             .appendingPathComponent("openai")
         try FileManager.default.createDirectory(at: secretDir, withIntermediateDirectories: true)
-        try "export OPENAI_API_KEY='secret-key'\n".write(
+        let fixture = "secret-key"
+        try "export OPENAI_API_KEY='\(fixture)'\n".write(
             to: secretDir.appendingPathComponent("live.env"),
             atomically: true,
             encoding: .utf8
@@ -100,53 +101,57 @@ struct OpenAIAPIKeyStoreTests {
         #expect(key == "secret-key")
     }
 
-    @Test("Saving a key writes it to config.json so the CLI uses the same key")
-    func saveWritesConfig() throws {
+    @Test("Keychain key precedes legacy preferences and config")
+    func keychainPrecedence() throws {
         let home = try makeHome()
-
-        try OpenAIAPIKeyStore.save(key: "sk-new-key", homePath: home.path)
-
-        let key = OpenAIAPIKeyStore.load(
-            homePath: home.path,
-            environment: [:],
-            userDefaultKey: nil
-        )
-        #expect(key == "sk-new-key")
+        try writeConfig(home: home, ["openai_api_key": "old-config"])
+        #expect(OpenAIAPIKeyStore.load(homePath: home.path, environment: [:],
+            userDefaultKey: "old-default", keychainLoader: { "keychain-fixture" }) == "keychain-fixture")
     }
 
-    @Test("Saving a key preserves unrelated config.json fields")
-    func savePreservesOtherFields() throws {
+    @Test("Save writes only Keychain and removes legacy plaintext while preserving settings")
+    func secureSave() throws {
         let home = try makeHome()
-        try writeConfig(home: home, [
-            "openai_api_key": "old-key",
-            "transcription_model": "gpt-4o-transcribe",
-        ])
-
-        try OpenAIAPIKeyStore.save(key: "sk-rotated", homePath: home.path)
-
-        let configURL = home
-            .appendingPathComponent(".hasna")
-            .appendingPathComponent("recordings")
-            .appendingPathComponent("config.json")
-        let data = try Data(contentsOf: configURL)
+        let suite = "provider-test-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("old-default", forKey: "openAIAPIKey")
+        try writeConfig(home: home, ["openai_api_key": "old-key", "api_key": "older-key",
+            "transcription_model": "gpt-4o-transcribe"])
+        var stored = ""
+        try OpenAIAPIKeyStore.save(key: "  keychain-fixture  ", homePath: home.path,
+            defaults: defaults, keychainWriter: { stored = $0 })
+        #expect(stored == "keychain-fixture")
+        #expect(defaults.string(forKey: "openAIAPIKey") == nil)
+        let data = try Data(contentsOf: home.appendingPathComponent(".hasna/recordings/config.json"))
         let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        #expect(json["openai_api_key"] as? String == "sk-rotated")
+        #expect(json["openai_api_key"] == nil)
+        #expect(json["api_key"] == nil)
         #expect(json["transcription_model"] as? String == "gpt-4o-transcribe")
+        #expect(String(data: data, encoding: .utf8)?.contains(stored) == false)
     }
 
-    @Test("Saving an empty key removes it from config.json")
-    func saveEmptyRemovesKey() throws {
+    @Test("Keychain failure preserves existing configuration")
+    func failedSave() throws {
         let home = try makeHome()
-        try writeConfig(home: home, ["openai_api_key": "old-key"])
+        try writeConfig(home: home, ["openai_api_key": "legacy-fixture"])
+        #expect(throws: OpenAIAPIKeyStore.KeychainFailure.self) {
+            try OpenAIAPIKeyStore.save(key: "new-fixture", homePath: home.path,
+                keychainWriter: { _ in throw OpenAIAPIKeyStore.KeychainFailure(status: -50) })
+        }
+        #expect(OpenAIAPIKeyStore.load(homePath: home.path, environment: [:], userDefaultKey: nil) == "legacy-fixture")
+    }
 
-        try OpenAIAPIKeyStore.save(key: "   ", homePath: home.path)
-
-        let key = OpenAIAPIKeyStore.load(
-            homePath: home.path,
-            environment: [:],
-            userDefaultKey: nil
-        )
-        #expect(key == "")
+    @Test("Provider key reaches the helper without becoming service authentication")
+    func separateProviderEnvironment() {
+        let result = OpenAIAPIKeyStore.childEnvironment(base: [
+            "RECORDINGS_API_KEY": "provider-fixture",
+            "HASNA_RECORDINGS_API_KEY_OVERRIDE": "service-fixture",
+        ], homePath: "/tmp/test-home", keyLoader: { "provider-fixture" })
+        #expect(result["RECORDINGS_API_KEY"] == nil)
+        #expect(result["OPENAI_API_KEY"] == "provider-fixture")
+        #expect(result["RECORDINGS_OPENAI_API_KEY"] == "provider-fixture")
+        #expect(result["HASNA_RECORDINGS_API_KEY_OVERRIDE"] == "service-fixture")
     }
 
     private func makeHome() throws -> URL {

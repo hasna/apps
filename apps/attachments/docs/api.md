@@ -31,8 +31,8 @@ The package root exports resolveStore, ApiStore and resolveAttachmentsV1.
 They adapt command/MCP workflows to the authenticated service; file input and
 explicit download output are not a local application-data backend.
 
-@hasna/attachments/sdk and the standalone @hasna/attachments-sdk expose the
-generated AttachmentsApiClient. Construct it with baseUrl and apiKey.
+@hasna/attachments/sdk (the only SDK surface; there is no separate
+@hasna/attachments-sdk package) exposes the generated AttachmentsApiClient. Construct it with baseUrl and apiKey.
 The generated JSON client has twelve operations from src/serve/openapi.ts;
 it does not claim a generated binary-download or multipart-upload interface.
 Use the root Store adapter for those workflows. Generated sources are kept

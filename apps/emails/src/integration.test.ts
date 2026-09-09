@@ -125,9 +125,16 @@ describe("analytics", () => {
     expect(data.events_read.answered, data.events_read.reason ?? "").toBe(true);
   });
 
-  it("still refuses a provider-scoped report, because the seam cannot scope messages", async () => {
-    const provider = createProvider({ name: "dev", type: "sandbox" });
-    await expect(getAnalytics(provider.id, "30d")).rejects.toThrow(/cannot be produced from the store seam/);
+  it("scopes reports to recorded providers over the API contract", async () => {
+    const { getDatabase, closeDatabase } = await import("./db/database.js");
+    const { createSqliteEmailStore } = await import("./store-sqlite/index.js");
+    const { createHttpEmailStore } = await import("./store-http/index.js");
+    const { startV1StoreApi } = await import("./test-support/v1-store-api.js");
+    const { checkProviderStatistics } = await import("./test-support/provider-stats-check.js");
+    const api = await startV1StoreApi({ store: createSqliteEmailStore({ database: getDatabase(":memory:"), detail: "provider API fixture" }) });
+    try {
+      await checkProviderStatistics(createHttpEmailStore({ baseUrl: api.baseUrl, credential: api.apiKey }));
+    } finally { api.stop(); closeDatabase(); }
   });
 });
 

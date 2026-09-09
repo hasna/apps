@@ -1,3 +1,5 @@
+import { loadTuiPreferences, saveTuiPreference } from "../../../lib/tui-preferences.js";
+import { loadAttachmentAction, saveAttachmentAction, type AttachmentAction } from "../../../lib/attachment-preferences.js";
 import { createContext, createEffect, createMemo, createResource, onCleanup, onMount, useContext, type ParentProps } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import {
@@ -90,12 +92,13 @@ export interface EmailsState {
   readerScroll: number;
   compose: ComposeState | null;
   settings: TuiSettings;
-  viewPreferences: { autoRefresh: boolean; expandCode: boolean; expandQuotes: boolean };
+  viewPreferences: { autoRefresh: boolean; expandCode: boolean; expandQuotes: boolean; attachmentAction: AttachmentAction };
   mailboxError: string | null;
   readerError: string | null;
   now: number;
   loading: boolean;
   lastError: string | null;
+  preferenceError: string | null;
 }
 
 const PAGE_SIZE = 50;
@@ -158,11 +161,12 @@ function messageIndex(state: Pick<EmailsState, "messages" | "selectedMessageId">
 }
 
 function loadAddresses(search?: string): InboxAddressChoice[] {
-  return listInboxAddresses({ limit: 200, search: search || undefined });
+  return listInboxAddresses(search ? { search } : undefined);
 }
 
 function createEmailsStore(initialMailbox?: Mailbox) {
   const settings = getSettings();
+  const view = loadTuiPreferences();
   // Resolve only the persisted default address at startup (one indexed lookup) instead of
   // scanning the whole observed-address list (which can take >200ms on a large mailbox) —
   // the full list loads in the post-mount reload, so first paint isn't blocked on it.
@@ -210,12 +214,13 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     readerScroll: 0,
     compose: null,
     settings,
-    viewPreferences: { autoRefresh: true, expandCode: false, expandQuotes: false },
+    viewPreferences: { autoRefresh: view.autoRefresh, expandCode: view.expandCode, expandQuotes: view.expandQuotes, attachmentAction: loadAttachmentAction() },
     mailboxError: null,
     readerError: null,
     now: Date.now(),
     loading: false,
     lastError: null,
+    preferenceError: null,
   });
 
   const currentAddress = createMemo(() => selectedAddress(state));
@@ -482,6 +487,15 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     setState("labels", await ds.listLabelSummaries({ limit: 80, search: state.labelSearch || undefined }));
   };
 
+  const failedPreferenceSaves = new Set<string>();
+  function savePreference(key: string, save: () => void) {
+    try { save(); failedPreferenceSaves.delete(key); }
+    catch { failedPreferenceSaves.add(key); }
+    setState("preferenceError", failedPreferenceSaves.size
+      ? "Could not save your preference. It applies now; check the device config directory permissions before restarting Emails."
+      : null);
+  }
+
   const actions = {
     reload,
     reloadWorkspace,
@@ -501,8 +515,13 @@ function createEmailsStore(initialMailbox?: Mailbox) {
         addressSearchTimer = undefined;
         setState("addressSearch", "");
         const selected = resolveAddressChoice(state.selectedAddressId, state.addresses);
-        const addresses = loadAddresses();
-        setState("addresses", addresses.some((item) => item.id === selected.id) ? addresses : [ALL_ADDRESSES, selected, ...addresses.filter((item) => item.id !== ALL_ADDRESSES.id)]);
+        try {
+          const addresses = loadAddresses();
+          setState("addresses", addresses.some((item) => item.id === selected.id) ? addresses : [ALL_ADDRESSES, selected, ...addresses.filter((item) => item.id !== ALL_ADDRESSES.id)]);
+          setState("lastError", null);
+        } catch (error) {
+          setState("lastError", error instanceof Error ? error.message : String(error));
+        }
       }
       if (dialog === "filter" || dialog === "search") setState("searchDraft", state.search);
       if (dialog === "saved-filters" || dialog === "save-filter") void loadSavedFilters();
@@ -575,20 +594,9 @@ function createEmailsStore(initialMailbox?: Mailbox) {
 	    setAddress(id: string) {
 	      setState({ selectedAddressId: id, page: 0, selectedMessageId: null, route: "mailbox", readerScroll: 0 });
 	      const address = state.addresses.find((item) => item.id === id);
-	      // REMEMBERING the choice is a convenience; MAKING it is the action. Self-hosted
-	      // mode has no settings store at all — getSettings() returns the defaults and
-	      // setSetting() throws — and that throw used to land AFTER selectedAddressId had
-	      // already been committed on the line above. So the inbox stayed scoped while the
-	      // reload below never ran: the user was pinned to one inbox by an action that had
-	      // visibly failed, and every 30s tick from then on paid for a scoped counts walk.
-	      // Selecting an inbox is a view action, so a persistence failure must not abort it.
-	      try {
-	        persistSetting("defaultAddress", address?.address ?? null);
-	        setState("settings", "defaultAddress", address?.address ?? null);
-	      } catch {
-	        // No settings store in this mode. The selection still applies for this session.
-	      }
-	      reload({ preserveSelection: false });
+          setState("settings", "defaultAddress", address?.address ?? null);
+          savePreference("defaultAddress", () => persistSetting("defaultAddress", address?.address ?? null));
+          reload({ preserveSelection: false });
 	    },
 	    setSource(id: string) {
 	      setState({ selectedSourceId: id || "all", activeFilterId: null, page: 0, selectedMessageId: null });
@@ -662,13 +670,17 @@ function createEmailsStore(initialMailbox?: Mailbox) {
 	    setAddressSearch(value: string) {
 	      setState("addressSearch", value);
       // Keep typing responsive: the dialog filters the already-loaded list client-side
-      // instantly; debounce the DB re-query (a recipient scan that can take >300ms on a
-      // large mailbox) so it runs once after the user pauses.
+      // instantly; debounce the registry refresh so it runs once after the user pauses.
       if (addressSearchTimer) clearTimeout(addressSearchTimer);
       addressSearchTimer = setTimeout(() => {
         addressSearchTimer = undefined;
         if (state.dialog !== "address" || state.addressSearch !== value) return;
-        setState("addresses", loadAddresses(value));
+        try {
+          setState("addresses", loadAddresses(value));
+          setState("lastError", null);
+        } catch (error) {
+          setState("lastError", error instanceof Error ? error.message : String(error));
+        }
 	      }, 160);
 	    },
 	    setSourceSearch(value: string) {
@@ -729,13 +741,15 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     },
     sendCompose,
     setSetting<K extends keyof TuiSettings>(key: K, value: TuiSettings[K]) {
-      // API-only installations deliberately have no local settings store. View
-      // preferences still work in memory; the settings screen states their lifetime.
-      if (ds.mode !== "self_hosted") persistSetting(key, value);
       setState("settings", key, value);
+      savePreference(key, () => persistSetting(key, value));
     },
     setViewPreference<K extends keyof EmailsState["viewPreferences"]>(key: K, value: EmailsState["viewPreferences"][K]) {
       setState("viewPreferences", key, value);
+      savePreference(key, () => {
+        if (key === "attachmentAction") saveAttachmentAction(value as AttachmentAction);
+        else saveTuiPreference(key, value as boolean);
+      });
     },
     retryBody() {
       void refetchBody();

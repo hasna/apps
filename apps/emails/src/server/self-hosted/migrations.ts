@@ -2949,6 +2949,248 @@ const LEGACY_GMAIL_REPLAY_PROVENANCE = defineMigration(
   `,
 );
 
+// Provider provenance is nullable: unknown historical sources must remain unknown.
+const MESSAGE_PROVIDER_PROVENANCE = defineMigration(
+  "0027_message_provider_provenance",
+  `ALTER TABLE messages ADD COLUMN IF NOT EXISTS provider_id TEXT;
+   -- Only one unambiguous provider recorded on events for this exact tenant/message
+   -- is evidence. Conflicting or absent historical provenance stays NULL.
+   UPDATE messages m SET provider_id = evidence.provider_id
+   FROM (
+     SELECT tenant_id, email_id, min(provider_id) AS provider_id
+     FROM events WHERE provider_id IS NOT NULL AND provider_id <> '' AND email_id IS NOT NULL
+     GROUP BY tenant_id, email_id HAVING count(DISTINCT provider_id) = 1
+   ) evidence
+   WHERE m.tenant_id = evidence.tenant_id AND m.id = evidence.email_id AND m.provider_id IS NULL;
+   CREATE INDEX IF NOT EXISTS messages_tenant_provider_ts_idx
+   ON messages (tenant_id, provider_id, sort_ts DESC, id DESC);`,
+);
+
+const SCHEDULED_ENQUEUE_IDENTITY = defineMigration(
+  "0028_scheduled_enqueue_identity",
+  `ALTER TABLE scheduled_emails ADD COLUMN IF NOT EXISTS enqueue_key TEXT;
+   ALTER TABLE scheduled_emails ADD COLUMN IF NOT EXISTS enqueue_hash TEXT;
+   ALTER TABLE scheduled_emails ADD COLUMN IF NOT EXISTS send_options JSONB NOT NULL DEFAULT '{}'::jsonb;
+   CREATE UNIQUE INDEX IF NOT EXISTS scheduled_emails_tenant_enqueue_key
+   ON scheduled_emails(tenant_id, enqueue_key) WHERE enqueue_key IS NOT NULL;`,
+);
+
+const SEQUENCE_EXECUTION_LEASE = defineMigration("0029_sequence_execution_lease", `
+  ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS execution_lease TIMESTAMPTZ;
+  ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS execution_payload JSONB;
+  ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS execution_error TEXT;
+  ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS execution_started BOOLEAN NOT NULL DEFAULT false;
+  CREATE INDEX IF NOT EXISTS sequence_execution_due ON sequence_enrollments(tenant_id,next_send_at) WHERE status='active';
+`);
+
+/** Current provider snapshots have observation times, not historical event times. */
+const PROVIDER_STATUS_OBSERVATIONS = defineMigration(
+  "0031_provider_status_observations",
+  `ALTER TABLE events DROP CONSTRAINT IF EXISTS events_type_enum_check;
+   ALTER TABLE events ADD CONSTRAINT events_type_enum_check
+   CHECK (type IN ('delivered','bounced','complained','opened','clicked','unsubscribed','status_observed')) NOT VALID;`,
+);
+
+const FORWARDING_DELIVERY_JOBS = defineMigration(
+  "0030_forwarding_delivery_jobs",
+  `CREATE TABLE IF NOT EXISTS forwarding_delivery_jobs (
+     tenant_id UUID NOT NULL, rule_id TEXT NOT NULL, message_id TEXT NOT NULL,
+     snapshot JSONB NOT NULL, status TEXT NOT NULL CHECK(status IN ('processing','sent','failed','skipped')),
+     lease UUID NOT NULL, sent_email_id TEXT, error TEXT,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     PRIMARY KEY(tenant_id,rule_id,message_id)
+   );
+   CREATE INDEX IF NOT EXISTS forwarding_delivery_jobs_pending ON forwarding_delivery_jobs(tenant_id,status,updated_at);
+   ALTER TABLE forwarding_delivery_jobs ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE forwarding_delivery_jobs FORCE ROW LEVEL SECURITY;
+   DROP POLICY IF EXISTS forwarding_delivery_jobs_tenant_policy ON forwarding_delivery_jobs;
+   CREATE POLICY forwarding_delivery_jobs_tenant_policy ON forwarding_delivery_jobs
+     USING (tenant_id = NULLIF(current_setting('app.current_tenant',true),'')::uuid)
+     WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant',true),'')::uuid);`,
+);
+
+const PROVISIONING_JOBS = defineMigration(
+  "0033_provisioning_jobs",
+  `CREATE TABLE IF NOT EXISTS provisioning_jobs (
+    id TEXT PRIMARY KEY, tenant_id UUID NOT NULL, kind TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL, input_hash TEXT NOT NULL, input JSONB NOT NULL, actor TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','processing','blocked','ready')), receipt JSONB, lease UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(tenant_id,kind,idempotency_key)
+  );
+  CREATE INDEX IF NOT EXISTS provisioning_jobs_tenant_status ON provisioning_jobs(tenant_id,status,updated_at);
+  ALTER TABLE provisioning_jobs ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE provisioning_jobs FORCE ROW LEVEL SECURITY;
+  DROP POLICY IF EXISTS provisioning_jobs_tenant_policy ON provisioning_jobs;
+  CREATE POLICY provisioning_jobs_tenant_policy ON provisioning_jobs
+    USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid)
+    WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);`,
+);
+
+const SMTP_SUBMISSION_RECEIPTS = defineMigration("0034_smtp_submission_receipts", `
+CREATE TABLE smtp_submission_receipts (
+  tenant_id UUID NOT NULL, transaction_id UUID NOT NULL, payload_hash TEXT NOT NULL,
+  message_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, transaction_id), CHECK (payload_hash ~ '^[0-9a-f]{64}$')
+);
+ALTER TABLE smtp_submission_receipts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE smtp_submission_receipts FORCE ROW LEVEL SECURITY;
+CREATE POLICY smtp_submission_receipts_tenant_policy ON smtp_submission_receipts
+  USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
+`);
+
+const MESSAGE_TRACKING = defineMigration("0035_message_tracking", `
+CREATE TABLE IF NOT EXISTS message_tracking (
+  tenant_id UUID NOT NULL, message_id TEXT NOT NULL, document JSONB NOT NULL,
+  PRIMARY KEY(tenant_id,message_id),
+  FOREIGN KEY(tenant_id,message_id) REFERENCES messages(tenant_id,id) ON DELETE CASCADE
+);
+ALTER TABLE message_tracking ENABLE ROW LEVEL SECURITY;
+ALTER TABLE message_tracking FORCE ROW LEVEL SECURITY;
+CREATE POLICY message_tracking_tenant ON message_tracking
+  USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid)
+  WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+`);
+
+const MANAGED_PROVIDER_CREDENTIALS = defineMigration("0036_managed_provider_credentials", `
+CREATE UNIQUE INDEX IF NOT EXISTS providers_tenant_id_id_unique ON self_hosted_providers(tenant_id,id);
+CREATE TABLE provider_secret_roots (
+ tenant_id UUID NOT NULL REFERENCES tenants(id), id UUID NOT NULL, wrapped_root TEXT,
+ state TEXT NOT NULL CHECK(state IN ('active','available','revoked')), created_at TIMESTAMPTZ NOT NULL DEFAULT now(), revoke_after TIMESTAMPTZ,
+ PRIMARY KEY(tenant_id,id), CHECK((state='revoked')=(wrapped_root IS NULL))
+);
+CREATE UNIQUE INDEX provider_secret_one_active_root ON provider_secret_roots(tenant_id) WHERE state='active';
+CREATE TABLE provider_secret_state (
+ tenant_id UUID PRIMARY KEY REFERENCES tenants(id), active_root_id UUID, generation BIGINT NOT NULL DEFAULT 0,
+ FOREIGN KEY(tenant_id,active_root_id) REFERENCES provider_secret_roots(tenant_id,id)
+);
+CREATE TABLE provider_credential_envelopes (
+ tenant_id UUID NOT NULL, provider_id TEXT NOT NULL, root_id UUID NOT NULL, revision INTEGER NOT NULL CHECK(revision>0),
+ payload JSONB NOT NULL, wrapped_dek JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ PRIMARY KEY(tenant_id,provider_id),
+ FOREIGN KEY(tenant_id,provider_id) REFERENCES self_hosted_providers(tenant_id,id) ON DELETE CASCADE,
+ FOREIGN KEY(tenant_id,root_id) REFERENCES provider_secret_roots(tenant_id,id)
+);
+CREATE TABLE provider_secret_jobs (
+ tenant_id UUID NOT NULL, id UUID NOT NULL, idempotency_key UUID NOT NULL, input_hash TEXT NOT NULL,
+ operation TEXT NOT NULL CHECK(operation IN ('rewrap','rotate-root','revoke-root')),
+ status TEXT NOT NULL CHECK(status IN ('pending','complete')), root_id UUID NOT NULL, processed INTEGER NOT NULL DEFAULT 0, actor TEXT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ PRIMARY KEY(tenant_id,id),UNIQUE(tenant_id,idempotency_key),FOREIGN KEY(tenant_id,root_id) REFERENCES provider_secret_roots(tenant_id,id)
+);
+CREATE TABLE provider_credential_audit(tenant_id UUID NOT NULL REFERENCES tenants(id),id UUID NOT NULL,provider_id TEXT NOT NULL,root_id UUID NOT NULL,revision INTEGER NOT NULL,actor TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(tenant_id,id));
+CREATE UNIQUE INDEX provider_secret_one_pending_job ON provider_secret_jobs(tenant_id) WHERE status='pending';
+DO $$ DECLARE tab TEXT; BEGIN
+ FOREACH tab IN ARRAY ARRAY['provider_secret_roots','provider_secret_state','provider_credential_envelopes','provider_secret_jobs','provider_credential_audit'] LOOP
+  EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',tab);
+  EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',tab);
+  EXECUTE format($policy$CREATE POLICY provider_secret_tenant ON %I USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid) WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid)$policy$,tab);
+ END LOOP;
+END $$;
+`);
+
+const RUNTIME_LOGS = defineMigration("0037_runtime_logs", `
+CREATE TABLE runtime_logs (
+ id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES tenants(id), request_id UUID NOT NULL,
+ component TEXT NOT NULL CHECK(component IN ('daemon','sync','inbound','scheduler','nightly')),
+ operation TEXT NOT NULL CHECK(operation IN ('scheduled_run','forwarding_run','sync_s3','watch','provider_sync','smtp_import','webhook_relay','provision_address','provision_job')),
+ event TEXT NOT NULL CHECK(event IN ('started','returned','threw')),
+ http_status INTEGER CHECK(http_status BETWEEN 100 AND 599),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+ CHECK ((event='returned')=(http_status IS NOT NULL))
+);
+CREATE INDEX runtime_logs_tenant_component_tail ON runtime_logs(tenant_id,component,created_at DESC,id DESC);
+ALTER TABLE runtime_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE runtime_logs FORCE ROW LEVEL SECURITY;
+CREATE POLICY runtime_logs_read ON runtime_logs FOR SELECT USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+CREATE POLICY runtime_logs_append ON runtime_logs FOR INSERT WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+CREATE FUNCTION reject_runtime_log_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'Runtime logs are append-only'; END;
+$$;
+CREATE TRIGGER runtime_logs_append_only BEFORE UPDATE OR DELETE ON runtime_logs FOR EACH ROW EXECUTE FUNCTION reject_runtime_log_mutation();
+`);
+
+const WORKER_SUPERVISOR = defineMigration("0038_worker_supervisor", `
+CREATE TABLE runtime_workers (
+ tenant_id UUID NOT NULL REFERENCES tenants(id), id UUID NOT NULL, component TEXT NOT NULL CHECK(component='scheduler'),
+ generation INTEGER NOT NULL DEFAULT 1 CHECK(generation>0), owner_hash TEXT NOT NULL CHECK(owner_hash ~ '^[0-9a-f]{64}$'),
+ state TEXT NOT NULL DEFAULT 'starting' CHECK(state IN ('starting','running','draining','stopped')),
+ desired TEXT NOT NULL DEFAULT 'running' CHECK(desired IN ('running','restart','stopped')),
+ interval_ms INTEGER NOT NULL CHECK(interval_ms BETWEEN 1000 AND 3600000), restart_id UUID,
+ lease_until TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()+interval '30 seconds', heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+ PRIMARY KEY(tenant_id,id)
+);
+CREATE TABLE worker_restart_requests (
+ tenant_id UUID NOT NULL, id UUID NOT NULL, worker_id UUID NOT NULL, old_generation INTEGER NOT NULL, new_generation INTEGER,
+ status TEXT NOT NULL CHECK(status IN ('draining','starting','complete')), CHECK((status='complete')=(new_generation IS NOT NULL)), CHECK(new_generation IS NULL OR new_generation=old_generation+1), created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), completed_at TIMESTAMPTZ,
+ PRIMARY KEY(tenant_id,id), FOREIGN KEY(tenant_id,worker_id) REFERENCES runtime_workers(tenant_id,id)
+);
+CREATE TABLE worker_operations (
+ tenant_id UUID NOT NULL, id UUID NOT NULL, worker_id UUID NOT NULL, generation INTEGER NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('running','complete')), result JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), completed_at TIMESTAMPTZ,
+ PRIMARY KEY(tenant_id,worker_id,id), FOREIGN KEY(tenant_id,worker_id) REFERENCES runtime_workers(tenant_id,id)
+);
+CREATE UNIQUE INDEX worker_single_inflight ON worker_operations(tenant_id,worker_id) WHERE status='running';
+ALTER TABLE runtime_workers ENABLE ROW LEVEL SECURITY; ALTER TABLE runtime_workers FORCE ROW LEVEL SECURITY;
+CREATE POLICY runtime_workers_tenant ON runtime_workers USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid) WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+ALTER TABLE worker_restart_requests ENABLE ROW LEVEL SECURITY; ALTER TABLE worker_restart_requests FORCE ROW LEVEL SECURITY;
+CREATE POLICY worker_restarts_tenant ON worker_restart_requests USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid) WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+ALTER TABLE worker_operations ENABLE ROW LEVEL SECURITY; ALTER TABLE worker_operations FORCE ROW LEVEL SECURITY;
+CREATE POLICY worker_operations_tenant ON worker_operations USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid) WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+`);
+
+const SERVICE_FEEDBACK = defineMigration("0039_service_feedback", `
+CREATE TABLE service_feedback (
+  id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  message TEXT NOT NULL CHECK (char_length(btrim(message)) BETWEEN 1 AND 10000),
+  email TEXT CHECK (email IS NULL OR char_length(email) BETWEEN 3 AND 254),
+  category TEXT NOT NULL DEFAULT 'general' CHECK (category IN ('bug','feature','general')),
+  status TEXT NOT NULL DEFAULT 'saved' CHECK (status = 'saved'),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX service_feedback_tenant_created ON service_feedback(tenant_id,created_at DESC,id DESC);
+ALTER TABLE service_feedback ENABLE ROW LEVEL SECURITY;
+ALTER TABLE service_feedback FORCE ROW LEVEL SECURITY;
+CREATE POLICY service_feedback_tenant ON service_feedback
+  USING (tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid)
+  WITH CHECK (tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+`);
+
+const MESSAGE_SEND_TAGS = defineMigration("0040_message_send_tags", `
+ALTER TABLE messages ADD COLUMN tags JSONB;
+ALTER TABLE messages ADD CONSTRAINT message_send_tags_object CHECK (tags IS NULL OR jsonb_typeof(tags) = 'object');
+`);
+
+/**
+ * 0041 — mailbox filter ACTIONS, enabled flag and execution order (FR-0001).
+ *
+ * Filters gain an `actions` block (add_labels / archive / mark_read), an
+ * `enabled` flag gating automatic application to newly imported messages, and
+ * an integer `order` used to sequence enabled filters. All three columns are
+ * additive with defaults so existing filters (enabled=false, order=0, no
+ * actions) never auto-act on ingest. RLS policies from 0026 continue covering
+ * the table; the partial index serves enabled-filter evaluation ordered by
+ * `order, id`.
+ */
+const MAILBOX_FILTER_ACTIONS = defineMigration(
+  "0041_mailbox_filter_actions",
+  `
+  ALTER TABLE mailbox_filters
+    ADD COLUMN IF NOT EXISTS actions jsonb NOT NULL DEFAULT '{}'::jsonb;
+  ALTER TABLE mailbox_filters
+    ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT false;
+  ALTER TABLE mailbox_filters
+    ADD COLUMN IF NOT EXISTS "order" integer NOT NULL DEFAULT 0;
+
+  CREATE INDEX IF NOT EXISTS mailbox_filters_enabled_order_idx
+    ON mailbox_filters (tenant_id, "order", id)
+    WHERE enabled = true;
+  `,
+);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -2984,5 +3226,19 @@ export function emailsSelfHostedMigrations(): Migration[] {
     MAILBOX_FILTERS,
     PRIORITY_SENDER_RULES,
     LEGACY_GMAIL_REPLAY_PROVENANCE,
+    MESSAGE_PROVIDER_PROVENANCE,
+    SCHEDULED_ENQUEUE_IDENTITY,
+    SEQUENCE_EXECUTION_LEASE,
+    FORWARDING_DELIVERY_JOBS,
+    PROVIDER_STATUS_OBSERVATIONS,
+    PROVISIONING_JOBS,
+    SMTP_SUBMISSION_RECEIPTS,
+    MESSAGE_TRACKING,
+    MANAGED_PROVIDER_CREDENTIALS,
+    RUNTIME_LOGS,
+    WORKER_SUPERVISOR,
+    SERVICE_FEEDBACK,
+    MESSAGE_SEND_TAGS,
+    MAILBOX_FILTER_ACTIONS,
   ];
 }

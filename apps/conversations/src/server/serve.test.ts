@@ -1,30 +1,21 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { startDashboardServer } from "./serve";
-import { sendMessage } from "../lib/messages";
-import { createChannel, joinChannel } from "../lib/channels";
-import { createProject } from "../lib/projects";
-import { closeDb } from "../lib/db";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { pinStoreToDb, restoreStoreEnv } from "../lib/store/isolated-test-env.js";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../lib/store/test-support/client-environment.js";
+import { getStore } from "../lib/store/index.js";
 
-const TEST_DB = join(tmpdir(), `conversations-test-server-${Date.now()}.db`);
 let server: ReturnType<typeof startDashboardServer>;
-
-beforeAll(() => {
-  pinStoreToDb(TEST_DB);
-  closeDb();
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+let restore: () => void;
+beforeAll(async () => {
+  fixture = await startLoopbackApiFixture();
+  restore = activateClientEnvironment(fixture.env);
   server = startDashboardServer(0);
 });
-
-afterAll(() => {
+afterAll(async () => {
   server?.stop();
-  closeDb();
-  restoreStoreEnv();
-  try { unlinkSync(TEST_DB); } catch {}
-  try { unlinkSync(TEST_DB + "-wal"); } catch {}
-  try { unlinkSync(TEST_DB + "-shm"); } catch {}
+  restore?.();
+  await fixture?.stop();
 });
 
 const base = () => `http://localhost:${server.port}`;
@@ -34,7 +25,8 @@ describe("API /api/status", () => {
     const res = await fetch(`${base()}/api/status`);
     expect(res.status).toBe(200);
     const data = await res.json() as any;
-    expect(data.db_path).toBeTruthy();
+    expect(data.api_url).toBe(fixture.url);
+    expect(data).not.toHaveProperty("db_path");
     expect(typeof data.total_messages).toBe("number");
     expect(typeof data.total_sessions).toBe("number");
     expect(typeof data.total_channels).toBe("number");
@@ -45,7 +37,7 @@ describe("API /api/status", () => {
 
 describe("API /api/messages", () => {
   test("GET returns a preview page envelope", async () => {
-    sendMessage({ from: "a", to: "b", content: "test-msg" });
+    await getStore().sendMessage({ from: "a", to: "b", content: "test-msg" });
     const res = await fetch(`${base()}/api/messages`);
     expect(res.status).toBe(200);
     const data = await res.json() as { messages: Array<{ preview: string }>; count: number };
@@ -54,15 +46,15 @@ describe("API /api/messages", () => {
   });
 
   test("GET respects limit param", async () => {
-    sendMessage({ from: "a", to: "b", content: "1" });
-    sendMessage({ from: "a", to: "b", content: "2" });
+    await getStore().sendMessage({ from: "a", to: "b", content: "1" });
+    await getStore().sendMessage({ from: "a", to: "b", content: "2" });
     const res = await fetch(`${base()}/api/messages?limit=1`);
     const data = await res.json() as { messages: any[] };
     expect(data.messages).toHaveLength(1);
   });
 
   test("GET filters by from param", async () => {
-    sendMessage({ from: "special-sender", to: "b", content: "from-filter" });
+    await getStore().sendMessage({ from: "special-sender", to: "b", content: "from-filter" });
     const res = await fetch(`${base()}/api/messages?from=special-sender`);
     const data = await res.json() as { messages: any[] };
     expect(data.messages.every((m: any) => m.from_agent === "special-sender")).toBe(true);
@@ -102,7 +94,7 @@ describe("API /api/sessions", () => {
   });
 
   test("filters by agent param", async () => {
-    sendMessage({ from: "sess-agent", to: "other", content: "hi", session_id: "unique-sess" });
+    await getStore().sendMessage({ from: "sess-agent", to: "other", content: "hi", session_id: "unique-sess" });
     const res = await fetch(`${base()}/api/sessions?agent=sess-agent`);
     const data = await res.json() as any[];
     expect(data.some((s: any) => s.session_id === "unique-sess")).toBe(true);
@@ -111,7 +103,7 @@ describe("API /api/sessions", () => {
 
 describe("API /api/channels", () => {
   test("GET returns channels array", async () => {
-    createChannel("api-test-sp", "tester", { description: "Test channel" });
+    await getStore().createChannel("api-test-sp", "tester", { description: "Test channel" });
     const res = await fetch(`${base()}/api/channels`);
     expect(res.status).toBe(200);
     const data = await res.json() as any[];
@@ -130,7 +122,7 @@ describe("API /api/channels", () => {
   });
 
   test("POST returns 400 on duplicate", async () => {
-    createChannel("dup-sp", "tester");
+    await getStore().createChannel("dup-sp", "tester");
     const res = await fetch(`${base()}/api/channels`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -142,7 +134,7 @@ describe("API /api/channels", () => {
 
 describe("API /api/projects", () => {
   test("GET returns projects array", async () => {
-    createProject({ name: "api-test-proj", created_by: "tester" });
+    await getStore().createProject({ name: "api-test-proj", created_by: "tester" });
     const res = await fetch(`${base()}/api/projects`);
     expect(res.status).toBe(200);
     const data = await res.json() as any[];
@@ -164,8 +156,8 @@ describe("API /api/projects", () => {
 
 describe("API /api/messages/search", () => {
   test("returns matching messages", async () => {
-    sendMessage({ from: "search-agent", to: "other", content: "unique-search-term-xyz" });
-    sendMessage({ from: "search-agent", to: "other", content: "no match here" });
+    await getStore().sendMessage({ from: "search-agent", to: "other", content: "unique-search-term-xyz" });
+    await getStore().sendMessage({ from: "search-agent", to: "other", content: "no match here" });
     const res = await fetch(`${base()}/api/messages/search?q=unique-search-term-xyz`);
     expect(res.status).toBe(200);
     const data = await res.json() as { messages: Array<{ preview: string }> };
@@ -188,17 +180,17 @@ describe("API /api/messages/search", () => {
   });
 
   test("respects limit param", async () => {
-    sendMessage({ from: "a", to: "b", content: "searchlimit-item-1" });
-    sendMessage({ from: "a", to: "b", content: "searchlimit-item-2" });
-    sendMessage({ from: "a", to: "b", content: "searchlimit-item-3" });
+    await getStore().sendMessage({ from: "a", to: "b", content: "searchlimit-item-1" });
+    await getStore().sendMessage({ from: "a", to: "b", content: "searchlimit-item-2" });
+    await getStore().sendMessage({ from: "a", to: "b", content: "searchlimit-item-3" });
     const res = await fetch(`${base()}/api/messages/search?q=searchlimit-item&limit=2`);
     const data = await res.json() as { messages: unknown[] };
     expect(data.messages).toHaveLength(2);
   });
 
   test("filters by from param", async () => {
-    sendMessage({ from: "search-sender-a", to: "b", content: "searchfrom-test" });
-    sendMessage({ from: "search-sender-b", to: "b", content: "searchfrom-test" });
+    await getStore().sendMessage({ from: "search-sender-a", to: "b", content: "searchfrom-test" });
+    await getStore().sendMessage({ from: "search-sender-b", to: "b", content: "searchfrom-test" });
     const res = await fetch(`${base()}/api/messages/search?q=searchfrom-test&from=search-sender-a`);
     const data = await res.json() as { messages: Array<{ from_agent: string }> };
     expect(data.messages).toHaveLength(1);
@@ -209,9 +201,9 @@ describe("API /api/messages/search", () => {
     // sendMessage refuses a channel with no row rather than writing an orphan
     // that `channel list` cannot see and `channel archive` cannot remove
     // (todos 4cc80a4d).
-    createChannel("search-sp", "fixture");
-    sendMessage({ from: "a", to: "search-sp", content: "searchchannel-test", channel: "search-sp" });
-    sendMessage({ from: "a", to: "b", content: "searchchannel-test" });
+    await getStore().createChannel("search-sp", "fixture");
+    await getStore().sendMessage({ from: "a", to: "search-sp", content: "searchchannel-test", channel: "search-sp" });
+    await getStore().sendMessage({ from: "a", to: "b", content: "searchchannel-test" });
     const res = await fetch(`${base()}/api/messages/search?q=searchchannel-test&channel=search-sp`);
     const data = await res.json() as { messages: Array<{ channel: string }> };
     expect(data.messages).toHaveLength(1);
@@ -230,7 +222,7 @@ describe("API /api/messages/search", () => {
 
 describe("API /api/messages/pinned", () => {
   test("GET returns pinned messages", async () => {
-    const msg = sendMessage({ from: "pin-user", to: "other", content: "pin-me-msg" });
+    const msg = await getStore().sendMessage({ from: "pin-user", to: "other", content: "pin-me-msg" });
     // Pin the message first via the pin endpoint
     await fetch(`${base()}/api/messages/${msg.id}/pin`, { method: "POST" });
     const res = await fetch(`${base()}/api/messages/pinned`);
@@ -240,8 +232,8 @@ describe("API /api/messages/pinned", () => {
   });
 
   test("GET filters by channel", async () => {
-    createChannel("pin-sp", "tester");
-    const msg = sendMessage({ from: "a", to: "pin-sp", content: "pinned-in-channel", channel: "pin-sp" });
+    await getStore().createChannel("pin-sp", "tester");
+    const msg = await getStore().sendMessage({ from: "a", to: "pin-sp", content: "pinned-in-channel", channel: "pin-sp" });
     await fetch(`${base()}/api/messages/${msg.id}/pin`, { method: "POST" });
     const res = await fetch(`${base()}/api/messages/pinned?channel=pin-sp`);
     expect(res.status).toBe(200);
@@ -250,8 +242,8 @@ describe("API /api/messages/pinned", () => {
   });
 
   test("GET respects limit param", async () => {
-    const m1 = sendMessage({ from: "a", to: "b", content: "pinlimit-1" });
-    const m2 = sendMessage({ from: "a", to: "b", content: "pinlimit-2" });
+    const m1 = await getStore().sendMessage({ from: "a", to: "b", content: "pinlimit-1" });
+    const m2 = await getStore().sendMessage({ from: "a", to: "b", content: "pinlimit-2" });
     await fetch(`${base()}/api/messages/${m1.id}/pin`, { method: "POST" });
     await fetch(`${base()}/api/messages/${m2.id}/pin`, { method: "POST" });
     const res = await fetch(`${base()}/api/messages/pinned?limit=1`);
@@ -263,7 +255,7 @@ describe("API /api/messages/pinned", () => {
 
 describe("API /api/messages/:id/pin", () => {
   test("POST pins a message", async () => {
-    const msg = sendMessage({ from: "a", to: "b", content: "to-pin" });
+    const msg = await getStore().sendMessage({ from: "a", to: "b", content: "to-pin" });
     const res = await fetch(`${base()}/api/messages/${msg.id}/pin`, { method: "POST" });
     expect(res.status).toBe(200);
     const data = await res.json() as any;
@@ -278,7 +270,7 @@ describe("API /api/messages/:id/pin", () => {
   });
 
   test("DELETE unpins a message", async () => {
-    const msg = sendMessage({ from: "a", to: "b", content: "to-unpin" });
+    const msg = await getStore().sendMessage({ from: "a", to: "b", content: "to-unpin" });
     await fetch(`${base()}/api/messages/${msg.id}/pin`, { method: "POST" });
     const res = await fetch(`${base()}/api/messages/${msg.id}/pin`, { method: "DELETE" });
     expect(res.status).toBe(200);
@@ -296,7 +288,7 @@ describe("API /api/messages/:id/pin", () => {
 
 describe("API /api/messages/:id (DELETE)", () => {
   test("DELETE deletes a message", async () => {
-    const msg = sendMessage({ from: "del-user", to: "b", content: "delete-me" });
+    const msg = await getStore().sendMessage({ from: "del-user", to: "b", content: "delete-me" });
     const res = await fetch(`${base()}/api/messages/${msg.id}?from=del-user`, { method: "DELETE" });
     expect(res.status).toBe(200);
     const data = await res.json() as any;
@@ -305,7 +297,7 @@ describe("API /api/messages/:id (DELETE)", () => {
   });
 
   test("DELETE returns 400 when from param is missing", async () => {
-    const msg = sendMessage({ from: "a", to: "b", content: "del-no-from" });
+    const msg = await getStore().sendMessage({ from: "a", to: "b", content: "del-no-from" });
     const res = await fetch(`${base()}/api/messages/${msg.id}`, { method: "DELETE" });
     expect(res.status).toBe(400);
     const data = await res.json() as any;
@@ -313,7 +305,7 @@ describe("API /api/messages/:id (DELETE)", () => {
   });
 
   test("DELETE returns 404 for wrong sender", async () => {
-    const msg = sendMessage({ from: "real-sender", to: "b", content: "not-yours" });
+    const msg = await getStore().sendMessage({ from: "real-sender", to: "b", content: "not-yours" });
     const res = await fetch(`${base()}/api/messages/${msg.id}?from=wrong-sender`, { method: "DELETE" });
     expect(res.status).toBe(404);
     const data = await res.json() as any;
@@ -328,7 +320,7 @@ describe("API /api/messages/:id (DELETE)", () => {
 
 describe("API /api/messages/:id (PUT)", () => {
   test("PUT edits a message", async () => {
-    const msg = sendMessage({ from: "edit-user", to: "b", content: "original-content" });
+    const msg = await getStore().sendMessage({ from: "edit-user", to: "b", content: "original-content" });
     const res = await fetch(`${base()}/api/messages/${msg.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -340,7 +332,7 @@ describe("API /api/messages/:id (PUT)", () => {
   });
 
   test("PUT returns 400 when content is missing", async () => {
-    const msg = sendMessage({ from: "a", to: "b", content: "edit-no-content" });
+    const msg = await getStore().sendMessage({ from: "a", to: "b", content: "edit-no-content" });
     const res = await fetch(`${base()}/api/messages/${msg.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -352,7 +344,7 @@ describe("API /api/messages/:id (PUT)", () => {
   });
 
   test("PUT returns 400 when from is missing", async () => {
-    const msg = sendMessage({ from: "a", to: "b", content: "edit-no-from" });
+    const msg = await getStore().sendMessage({ from: "a", to: "b", content: "edit-no-from" });
     const res = await fetch(`${base()}/api/messages/${msg.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -364,7 +356,7 @@ describe("API /api/messages/:id (PUT)", () => {
   });
 
   test("PUT returns 404 for wrong sender", async () => {
-    const msg = sendMessage({ from: "real-owner", to: "b", content: "cant-edit" });
+    const msg = await getStore().sendMessage({ from: "real-owner", to: "b", content: "cant-edit" });
     const res = await fetch(`${base()}/api/messages/${msg.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -376,7 +368,7 @@ describe("API /api/messages/:id (PUT)", () => {
   });
 
   test("PUT returns 400 on invalid JSON", async () => {
-    const msg = sendMessage({ from: "a", to: "b", content: "edit-bad-json" });
+    const msg = await getStore().sendMessage({ from: "a", to: "b", content: "edit-bad-json" });
     const res = await fetch(`${base()}/api/messages/${msg.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -388,7 +380,7 @@ describe("API /api/messages/:id (PUT)", () => {
 
 describe("API /api/channels/:name (GET)", () => {
   test("GET returns a single channel", async () => {
-    createChannel("get-single-sp", "tester", { description: "A test channel" });
+    await getStore().createChannel("get-single-sp", "tester", { description: "A test channel" });
     const res = await fetch(`${base()}/api/channels/get-single-sp`);
     expect(res.status).toBe(200);
     const data = await res.json() as any;
@@ -406,8 +398,8 @@ describe("API /api/channels/:name (GET)", () => {
 
 describe("API /api/channels/:name/members (GET)", () => {
   test("GET returns members for an existing channel", async () => {
-    createChannel("members-dashboard-sp", "alice");
-    joinChannel("members-dashboard-sp", "bob");
+    await getStore().createChannel("members-dashboard-sp", "alice");
+    await getStore().joinChannel("members-dashboard-sp", "bob");
 
     const res = await fetch(`${base()}/api/channels/members-dashboard-sp/members`);
     expect(res.status).toBe(200);
@@ -428,7 +420,7 @@ describe("API /api/channels/:name/members (GET)", () => {
 
 describe("API /api/channels/:name (PUT)", () => {
   test("PUT updates a channel description", async () => {
-    createChannel("update-sp", "tester", { description: "old desc" });
+    await getStore().createChannel("update-sp", "tester", { description: "old desc" });
     const res = await fetch(`${base()}/api/channels/update-sp`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -453,7 +445,7 @@ describe("API /api/channels/:name (PUT)", () => {
 
 describe("API /api/channels/:name/archive", () => {
   test("POST archives a channel", async () => {
-    createChannel("archive-sp", "tester");
+    await getStore().createChannel("archive-sp", "tester");
     const res = await fetch(`${base()}/api/channels/archive-sp/archive`, { method: "POST" });
     expect(res.status).toBe(200);
     const data = await res.json() as any;
@@ -470,7 +462,7 @@ describe("API /api/channels/:name/archive", () => {
 
 describe("API /api/channels/:name/unarchive", () => {
   test("POST unarchives a channel", async () => {
-    createChannel("unarchive-sp", "tester");
+    await getStore().createChannel("unarchive-sp", "tester");
     // Archive first
     await fetch(`${base()}/api/channels/unarchive-sp/archive`, { method: "POST" });
     const res = await fetch(`${base()}/api/channels/unarchive-sp/unarchive`, { method: "POST" });
@@ -489,7 +481,7 @@ describe("API /api/channels/:name/unarchive", () => {
 
 describe("API /api/projects/:id (GET)", () => {
   test("GET returns a project by ID", async () => {
-    const proj = createProject({ name: "get-proj-byid", created_by: "tester" });
+    const proj = await getStore().createProject({ name: "get-proj-byid", created_by: "tester" });
     const res = await fetch(`${base()}/api/projects/${proj.id}`);
     expect(res.status).toBe(200);
     const data = await res.json() as any;
@@ -498,7 +490,7 @@ describe("API /api/projects/:id (GET)", () => {
   });
 
   test("GET returns a project by name", async () => {
-    createProject({ name: "get-proj-byname", created_by: "tester" });
+    await getStore().createProject({ name: "get-proj-byname", created_by: "tester" });
     const res = await fetch(`${base()}/api/projects/get-proj-byname`);
     expect(res.status).toBe(200);
     const data = await res.json() as any;
@@ -515,7 +507,7 @@ describe("API /api/projects/:id (GET)", () => {
 
 describe("API /api/projects/:id (PUT)", () => {
   test("PUT updates a project", async () => {
-    const proj = createProject({ name: "update-proj", created_by: "tester" });
+    const proj = await getStore().createProject({ name: "update-proj", created_by: "tester" });
     const res = await fetch(`${base()}/api/projects/${proj.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -540,7 +532,7 @@ describe("API /api/projects/:id (PUT)", () => {
 
 describe("API /api/projects/:id (DELETE)", () => {
   test("DELETE deletes a project", async () => {
-    const proj = createProject({ name: "delete-proj", created_by: "tester" });
+    const proj = await getStore().createProject({ name: "delete-proj", created_by: "tester" });
     const res = await fetch(`${base()}/api/projects/${proj.id}`, { method: "DELETE" });
     expect(res.status).toBe(200);
     const data = await res.json() as any;
@@ -556,8 +548,8 @@ describe("API /api/projects/:id (DELETE)", () => {
   });
 
   test("DELETE returns 400 when channels reference the project", async () => {
-    const proj = createProject({ name: "nodelete-proj", created_by: "tester" });
-    createChannel("proj-ref-sp", "tester", { project_id: proj.id });
+    const proj = await getStore().createProject({ name: "nodelete-proj", created_by: "tester" });
+    await getStore().createChannel("proj-ref-sp", "tester", { project_id: proj.id });
     const res = await fetch(`${base()}/api/projects/${proj.id}`, { method: "DELETE" });
     expect(res.status).toBe(400);
     const data = await res.json() as any;
@@ -583,7 +575,7 @@ describe("API /api/agents", () => {
 
 describe("API /api/export", () => {
   test("GET creates a bounded preview-only JSON artifact by default", async () => {
-    sendMessage({ from: "export-user", to: "other", content: "export-test-msg" });
+    await getStore().sendMessage({ from: "export-user", to: "other", content: "export-test-msg" });
     const res = await fetch(`${base()}/api/export`);
     expect(res.status).toBe(200);
     const ct = res.headers.get("content-type") || "";
@@ -595,7 +587,7 @@ describe("API /api/export", () => {
   });
 
   test("GET creates CSV artifact metadata without streaming bodies", async () => {
-    sendMessage({ from: "csv-user", to: "other", content: "csv-export-msg" });
+    await getStore().sendMessage({ from: "csv-user", to: "other", content: "csv-export-msg" });
     const res = await fetch(`${base()}/api/export?format=csv`);
     expect(res.status).toBe(200);
     const ct = res.headers.get("content-type") || "";
@@ -606,8 +598,8 @@ describe("API /api/export", () => {
   });
 
   test("GET filters by channel", async () => {
-    createChannel("export-sp", "tester");
-    sendMessage({ from: "a", to: "export-sp", content: "export-sp-msg", channel: "export-sp" });
+    await getStore().createChannel("export-sp", "tester");
+    await getStore().sendMessage({ from: "a", to: "export-sp", content: "export-sp-msg", channel: "export-sp" });
     const res = await fetch(`${base()}/api/export?channel=export-sp`);
     expect(res.status).toBe(200);
     const data = await res.json() as { artifact: Record<string, unknown> };
@@ -616,7 +608,7 @@ describe("API /api/export", () => {
   });
 
   test("GET filters by from", async () => {
-    sendMessage({ from: "export-sender", to: "b", content: "export-from-msg" });
+    await getStore().sendMessage({ from: "export-sender", to: "b", content: "export-from-msg" });
     const res = await fetch(`${base()}/api/export?from=export-sender`);
     expect(res.status).toBe(200);
     const data = await res.json() as { artifact: Record<string, unknown> };
@@ -632,7 +624,7 @@ describe("API /api/reactions", () => {
   });
 
   test("GET returns reactions array for message", async () => {
-    const msg = sendMessage({ from: "reactor", to: "other", content: "reaction test" });
+    const msg = await getStore().sendMessage({ from: "reactor", to: "other", content: "reaction test" });
     const res = await fetch(`${base()}/api/reactions?message_id=${msg.id}`);
     expect(res.status).toBe(200);
     const data = await res.json() as any[];
@@ -640,7 +632,7 @@ describe("API /api/reactions", () => {
   });
 
   test("GET with summary=true returns summary", async () => {
-    const msg = sendMessage({ from: "reactor", to: "other", content: "summary test" });
+    const msg = await getStore().sendMessage({ from: "reactor", to: "other", content: "summary test" });
     const res = await fetch(`${base()}/api/reactions?message_id=${msg.id}&summary=true`);
     expect(res.status).toBe(200);
     const data = await res.json() as any[];
@@ -784,7 +776,7 @@ describe("G2 dashboard collection filters fail closed", () => {
 
   // The instrument can pass: well-formed values still return a page.
   test("well-formed filters are accepted", async () => {
-    sendMessage({ from: "strict-a", to: "strict-b", content: "strict accepted" });
+    await getStore().sendMessage({ from: "strict-a", to: "strict-b", content: "strict accepted" });
     const res = await fetch(`${base()}/api/messages?limit=5&from=strict-a`);
     expect(res.status).toBe(200);
     const body = await res.json() as { messages: unknown[] };
@@ -803,7 +795,7 @@ describe("G3 dashboard collection routes preserve the page envelope", () => {
   const CONTRACT_FIELDS = ["messages", "count", "limit", "cursor", "next_cursor", "has_more", "skipped_count", "byte_length", "max_bytes", "timeout_ms"];
 
   test("GET /api/messages returns the envelope, not a bare array", async () => {
-    sendMessage({ from: "env-a", to: "env-b", content: "envelope probe" });
+    await getStore().sendMessage({ from: "env-a", to: "env-b", content: "envelope probe" });
     const res = await fetch(`${base()}/api/messages?limit=5`);
     expect(res.status).toBe(200);
     const body = await res.json() as Record<string, unknown>;
@@ -820,7 +812,7 @@ describe("G3 dashboard collection routes preserve the page envelope", () => {
   });
 
   test("GET /api/messages/search returns the envelope, not a bare array", async () => {
-    sendMessage({ from: "search-env-a", to: "search-env-b", content: "dashboard envelope search probe" });
+    await getStore().sendMessage({ from: "search-env-a", to: "search-env-b", content: "dashboard envelope search probe" });
     const res = await fetch(`${base()}/api/messages/search?q=envelope&limit=5`);
     expect(res.status).toBe(200);
     const body = await res.json() as Record<string, unknown>;
@@ -830,7 +822,7 @@ describe("G3 dashboard collection routes preserve the page envelope", () => {
 
   test("a byte-capped page never claims to be complete", async () => {
     for (let i = 0; i < 8; i++) {
-      sendMessage({ from: "cap-a", to: "cap-b", content: `cap probe ${i} ${"z".repeat(400)}` });
+      await getStore().sendMessage({ from: "cap-a", to: "cap-b", content: `cap probe ${i} ${"z".repeat(400)}` });
     }
     const res = await fetch(`${base()}/api/messages?to=cap-b&limit=8&max_bytes=1024`);
     expect(res.status).toBe(200);

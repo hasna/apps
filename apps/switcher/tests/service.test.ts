@@ -40,7 +40,8 @@ for (const engine of ["sqlite","postgresql"] as const) {
       await expect(client.createProvider({...input,id:"invalid",apiKey:"not-accepted"} as any)).rejects.toMatchObject({status:400});
       await expect(client.createProfile({id:"bad-protocol",name:"Bad",providerId:p.id,harness:"claude",model:"test-model"})).rejects.toMatchObject({code:"protocol_mismatch"});
       expect((await client.listProfiles()).total).toBe(0);
-      const profile=await client.createProfile({id:"profile",name:"Native test",providerId:p.id,harness:"codex",model:"test-model"});
+      const modelPolicy={version:1 as const,roles:{subagent:"test-model",summary:"test-model"},allowedModels:["test-model"],aliases:{fast:"test-model"},fallbacks:{}};
+      const profile=await client.createProfile({id:"profile",name:"Native test",providerId:p.id,harness:"codex",model:"test-model",modelPolicy});
       await expect(client.launchPlan(profile.id)).rejects.toMatchObject({code:"catalog_missing"});
       await client.refreshModels(p.id);
       let plan=await client.launchPlan(profile.id);
@@ -50,10 +51,19 @@ for (const engine of ["sqlite","postgresql"] as const) {
       await client.updateProfile({...profileInput,name:"Changed before launch"},profileVersion);
       await expect(client.createRun({profileId:profile.id,harness:profile.harness,model:profile.model,planToken:plan.planToken})).rejects.toMatchObject({code:"plan_changed"});
       plan=await client.launchPlan(profile.id);
+      const policyChanged={...profileInput,modelPolicy:{...modelPolicy,roles:{...modelPolicy.roles,review:"test-model"}}};
+      const currentProfile=await client.getProfile(profile.id);
+      await client.updateProfile(policyChanged,currentProfile.version);
+      await expect(client.createRun({profileId:profile.id,harness:profile.harness,model:profile.model,planToken:plan.planToken})).rejects.toMatchObject({code:"plan_changed"});
+      plan=await client.launchPlan(profile.id);
       await client.refreshModels(p.id); // Identical catalog refresh must not invalidate concurrent launches.
-      const run=await client.createRun({profileId:profile.id,harness:profile.harness,model:profile.model,planToken:plan.planToken});
-      const finished=await client.finishRun(run.id,run.version,{status:"exited",exitCode:0});
+      const oldLauncher=await handle(new Request("http://localhost/v1/runs",{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json","idempotency-key":crypto.randomUUID()},body:JSON.stringify({profileId:profile.id,harness:profile.harness,model:profile.model,planToken:plan.planToken})}));
+      expect(oldLauncher.status).toBe(409);expect((await oldLauncher.json() as any).error.code).toBe("launcher_upgrade_required");
+      const run=await client.createRun({modelPolicyVersion:undefined,profileId:profile.id,harness:profile.harness,model:profile.model,planToken:plan.planToken,modelPolicy:{...policyChanged.modelPolicy,roles:{review:"test-model",summary:"test-model",subagent:"test-model"}}});
+      expect(run.modelPolicy).toEqual(policyChanged.modelPolicy);
+      const finished=await client.finishRun(run.id,run.version,{status:"exited",exitCode:0,routingEvents:[{at:"2026-09-06T19:00:00.000Z",requestId:"req-1",requestedModel:"test-model",resolvedModel:"test-model",decision:"allow",role:"main",reason:"policy_allow",upstreamStatus:200}],routingEventsDropped:2});
       expect(finished.endedAt).toBeDefined();
+      expect(finished.routingEvents).toHaveLength(1); expect(finished.routingEventsDropped).toBe(2);
       await expect(client.finishRun(run.id,finished.version,{status:"failed",exitCode:1})).rejects.toMatchObject({code:"run_finished"});
       await expect(client.deleteProvider(p.id,p.version)).rejects.toMatchObject({status:409});
       await expect(client.updateProvider(input,99)).rejects.toMatchObject({code:"version_conflict"});
@@ -65,6 +75,18 @@ for (const engine of ["sqlite","postgresql"] as const) {
       expect((await client.getProvider(p.id)).catalogAuthStyle).toBe("none");
       expect(await client.createProvider(input,"stable-request-001")).toEqual(p);
       expect((await client.getRun(run.id)).exitCode).toBe(0);
+    });
+    test("expired models remain listed but cannot form launch plans or policy roles",async()=>{
+      const provider=await client.createProvider({id:"expiry-provider",name:"Expiry provider",baseUrl:"https://example.com/v1",protocol:"anthropic-messages",manualModels:[{id:"live",name:"Live"},{id:"expired",name:"Expired",expiresOn:"2000-01-01"}]});
+      await client.refreshModels(provider.id);
+      expect((await client.listModels(provider.id)).data).toEqual([
+        expect.objectContaining({id:"live",expired:false,codingEligible:true}),
+        expect.objectContaining({id:"expired",expired:true,codingEligible:false}),
+      ]);
+      const expired=await client.createProfile({id:"expired-profile",name:"Expired",providerId:provider.id,harness:"claude",model:"expired"});
+      await expect(client.launchPlan(expired.id)).rejects.toMatchObject({code:"model_expired"});
+      const role=await client.createProfile({id:"expired-role-profile",name:"Expired role",providerId:provider.id,harness:"claude",model:"live",modelPolicy:{roles:{subagent:"expired"}}});
+      await expect(client.launchPlan(role.id)).rejects.toMatchObject({code:"model_expired"});
     });
     test("transaction rolls back partial writes and concurrent idempotency is stable",async()=>{
       await expect(store.mutate("rollback-transaction","hash-1",async db=>{
@@ -91,7 +113,7 @@ for (const engine of ["sqlite","postgresql"] as const) {
   });
 }
 test("clients reject missing credentials, cleartext remote URLs and redirects",async()=>{
-  expect(()=>clientFromEnv({})).toThrow("no local database fallback");
+  expect(()=>clientFromEnv({})).toThrow("no API key could be resolved");
   expect(()=>new SwitcherClient({baseUrl:"http://example.com",apiKey:token})).toThrow();
   expect(()=>new SwitcherClient({baseUrl:"https://user:password@example.com",apiKey:token})).toThrow();
   let redirected=0;

@@ -4,12 +4,54 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T17:11:49.882018+00:00"
-status: "active"
+updated_at: "2026-09-07T08:13:43.858234+00:00"
+status: "release-accepted"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
-# Current delivery
+# Completed canonical credential release: 0.1.4
+
+Switcher **0.1.4 is published, installed and live-tested on station03**. [PR #1913](https://github.com/hasna/apps/pull/1913) merged reviewed source `cc01ba5dfbee7d7bf871e20906d5d5743a05fad2` as `79e72e7a89ef55ee46745029d058e78bc70b3ab1` after all nine required checks passed. npm published at `2026-09-07T08:07:11.878Z` with SHA-1 `0875b4da0b15267d191f7d8f0eee6cc1fc7fe0bf`. All **60 installed package files** match the reviewed archive; the normal CLI, server and MCP binaries report 0.1.4. The previous installation and Bun quarantine policy are preserved.
+
+Switcher now uses Contracts for canonical API URL/key resolution, transport and fresh vault operator credentials, following the shared conventions also used by Conversations. It supports canonical `config/credentials`, Keychain, environment aliases, overrides and shared roots. Configured remote credentials no longer silently select local data. Explicit account selections remain terminal on failure; new vault bindings use canonical Secrets resolution. The station's DeepSeek, Gemini and OpenRouter bindings were migrated through the installed CLI, retaining the same vault references and provider origins. Actual Mac credential values remain in Keychain and the secrets vault; no real credentials file was created.
+
+The exact ordinary-shell command opened Claude Code 2.1.263 with `deepseek-v4-flash` selected, without injected API keys or a Switcher home override:
+
+```sh
+switcher launch claude --provider deepseek --model deepseek-v4-flash
+```
+
+That interactive session exited normally through `/exit`. A separate registry-installed Claude task performed a real Read and returned its random proof exactly: three routing events requested, resolved and reported `deepseek-v4-flash`, all allowed with HTTP 200 and zero dropped events. Node 26.8.1 and Bun 1.3.14 CLI/API/SDK/server/standalone MCP checks passed on SQLite and PostgreSQL 16.15, including wrong-key rejection and recovery on the same client. No Hasna MCP server was registered. Temporary sessions, child processes, database schemas and the owned PostgreSQL server were stopped; the original user `switcher-deepseek` session remains alive.
+
+Current-head Linux CI passed **221 package tests / 2,109 assertions**, with ten optional checks skipped, **43 affected builds** and **88 affected build/test tasks**. The final test-fixture correction also passed **22 targeted tests / 244 assertions** locally with PostgreSQL. The preceding full macOS verification on `e1482891` passed **225 tests / 2,151 assertions**, with four optional native checks skipped; its only subsequent changes permit Linux Bun's `.bun` cache in empty-home test assertions. Repository gates, 147 standard tests, generated files, lockfiles, artifact checks and independent source/registry review passed. Prior failed CI attempts remain recorded: the Linux cache fixture was corrected; an unchanged Automations timing test passed on the single requested failed-job rerun.
+
+The original transient Keychain error did not recur on the old installation, so its operating-system cause is unproven. The canonical integration defects were reproduced and fixed. Synthetic canonical-file fixtures establish portable path behavior; the live station test establishes Keychain-backed vault resolution. Earlier all-harness/provider matrices remain historical, not a new 0.1.4 live replay. See the [verification evidence index](docs/verification-evidence.json) for artifact identities, independent audits and scope boundaries.
+
+Tracking task: `c3194755-e8e2-4467-a0c8-0c09c1f42f49`. Evidence worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/canonical-credentials`; branch `codex/fixer/2026-09-07-switcher-canonical-credentials-evidence`; base `79e72e7a89ef55ee46745029d058e78bc70b3ab1`; owner `codex-fixer`. This follow-up changes only files excluded from the npm package. Terminal task/goal closure follows this documentation PR's required CI and merge.
+
+# Completed model-policy release: 0.1.3
+
+Switcher **0.1.3 is published, installed and live-tested**. [PR #1877](https://github.com/hasna/apps/pull/1877) merged reviewed source `13b629927bbdf84254ae42e6e03bb69f75794903` as `77164e16126d49503cb4aff2a96fb493bf3cf2bf` after all nine required checks passed. npm published at `2026-09-07T05:26:05.569Z` with SHA-1 `44d296e0e8ee1b2ec3b312e517c69b1cb3cbf678`. All **60 installed package files** match the reviewed archive. The normal `switcher`, `switcher-serve` and `switcher-mcp` commands report 0.1.3; the previous install and quarantine policy are preserved.
+
+Every managed launch automatically supplies model guidance and pins verified native child/utility slots. A per-launch authenticated loopback gateway keeps the real provider credential in the launcher and enforces exact approved model IDs. The default permitted set contains the selected main model; explicit role assignments, allowed alternatives, aliases and ordered transient fallbacks are available. The complete compatible catalog remains visible, while model use follows the policy. See [automatic model guidance](docs/MODEL-POLICY.md) for supported native roles and boundaries.
+
+A dry-run of the following installed-CLI launch passed with the station’s existing credential binding, saved profile and three discovered DeepSeek IDs:
+
+```sh
+switcher launch claude --provider deepseek --model deepseek-v4-flash
+```
+
+The installed release passed **14 direct native paths and both Ori paths**, each with a fresh task and a resumed process after proof-file deletion. Aider verified its native file-context/edit/history interface. An additional actual Claude custom agent declared as `opus` returned its read proof through DeepSeek, while the parent made no direct Read call. All accepted runs retained policy-version-1 routing evidence with zero dropped events and no foreign-model resolution. Prompt compliance remains probabilistic; the managed gateway supplies the enforceable model boundary.
+
+The published source passed **215 package tests / 2,091 assertions**, **147 root tests / 560 assertions**, **43 affected builds**, real PostgreSQL/native opt-ins and generated/type/manifest/secret/artifact/frozen-lock checks. Registry-installed Node 26.8.1 and Bun 1.3.14 CLI/API/SDK/server/standalone MCP tests passed. No Hasna MCP server was registered. Both host storage backends passed 0.1.2→0.1.3→0.1.2→0.1.3; old launchers are rejected by the upgraded API and historical runs receive no fabricated model-policy evidence.
+
+The exact candidate archive separately passed four Linux container scenarios and fourteen API starts on SQLite/PostgreSQL 17, including recreation, rollback and reupgrade. Container routing records were synthetic storage inputs, not observed provider inference. Its 55 copied runtime files matched the archive; owned container resources were removed. The candidate image was `sha256:1a11fd00abed8c1124970e2c41de5f42010f5b63e28351d02b719a6fccbc5ae1`.
+
+The [evidence index](docs/verification-evidence.json) retains independent reviews, actual registry receipts, candidate-only checks and prior release identities. Local evidence lives under `~/Workspace/scratch/universal-harness-switcher`. The original user `switcher-deepseek` tmux session remains preserved.
+
+Worktree owner: `codex-fixer`, task `01a07181-ca8d-70c1-99a2-b276dc5770f3`. Evidence branch: `codex/fixer/2026-09-07-switcher-model-policy-evidence`, based on merged `77164e16126d49503cb4aff2a96fb493bf3cf2bf`, in the owned `worktrees/model-policy` directory. This follow-up changes only files excluded from the published package. Final documentation CI/merge and terminal task status are tracked in task `61cf6e30-abe9-4fbc-a840-fb0cf8827896`.
+
+# Previous delivery: 0.1.2
 
 Switcher **0.1.2 is published and installed**. [PR #1836](https://github.com/hasna/apps/pull/1836) merged reviewed source `61c0ca1b241043567bd7349a2810012db9c41b46` as `24681fa7552584c39c6bbcf7107faa6dd2f885e3` after all nine checks passed (the optional external review was skipped). npm publication at `2026-09-06T16:47:17.965Z` has SHA-1 `3952926c933700c8e5a56130bc3cb3c56bb01969`. All **50 installed package files** match the reviewed archive. The normal station `switcher`, `switcher-serve` and `switcher-mcp` commands resolve to 0.1.2; the previous installation and quarantine policy are preserved.
 

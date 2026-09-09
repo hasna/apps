@@ -372,7 +372,22 @@ test('a non-JSON error body still fails (no silent success) and never leaks the 
   await assert.rejects(store.health(), (err) => {
     assert.ok(err instanceof NotesHttpStoreError);
     assert.equal(err.code, 'invalid_json');
+    assert.equal(err.status, 500);
+    // The CLI and MCP print only the message: it names the HTTP status, so a
+    // non-JSON 500 reads differently from a non-JSON 404.
+    assert.match(err.message, /GET \/health returned HTTP 500 with a non-JSON body/);
     assert.ok(!String(err.message).includes(API_KEY), 'non-JSON failures must not leak the key');
+    return true;
+  });
+});
+
+test('a text/plain 404 (an origin that does not serve /v1) names the status, not "invalid JSON"', async () => {
+  const store = storeWith(async () => new Response('404 page not found', { status: 404, headers: { 'content-type': 'text/plain' } }));
+  await assert.rejects(store.listNotes({ limit: 1 }), (err) => {
+    assert.ok(err instanceof NotesHttpStoreError);
+    assert.equal(err.code, 'invalid_json');
+    assert.equal(err.status, 404);
+    assert.match(err.message, /GET \/notes returned HTTP 404 with a non-JSON body/);
     return true;
   });
 });

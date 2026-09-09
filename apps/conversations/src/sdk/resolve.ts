@@ -23,8 +23,8 @@
  * `https://api.hasna.com/conversations` — URLs never need configuring. A
  * credential that cannot be used, a declared-but-blank variable, an unreadable
  * credential file, an authority that is set but malformed — every one of those
- * THROWS. The SDK is hosted-only (the generated `/v1` client has no local
- * store), so a missing credential is a hard error, never a fallback.
+ * THROWS. The generated `/v1` client speaks HTTP; there is no local-store
+ * transport for it, so a missing credential is a hard error, never a fallback.
  *
  * THE LOCAL OPT-IN IS NOT THIS CLIENT'S TO SERVE. `HASNA_CONVERSATIONS_DB_PATH`
  * selects the on-box SQLite store for the CLI, the MCP server and `getStore()`.
@@ -66,7 +66,7 @@ type SdkEnv = Record<string, string | undefined>;
 
 /** The resolved SDK transport: authority, credential, and WHERE each came from. */
 export interface ConversationsSdkTransport {
-  /** The SDK is hosted-only: every resolved transport talks HTTP to the `/v1` API. */
+  /** Every resolved SDK transport talks HTTP to the `/v1` API (this client has no local-store transport). */
   mode: "http";
   /**
    * Origin (plus any gateway path prefix) WITHOUT the `/v1` suffix, so the
@@ -97,7 +97,7 @@ export interface ResolveConversationsSdkTransportOptions {
   headers?: Record<string, string>;
 }
 
-/** A resolution the hosted-only SDK cannot honour. The code names which rule refused. */
+/** A resolution the SDK's HTTP transport cannot honour. The code names which rule refused. */
 export class ConversationsSdkResolutionError extends Error {
   readonly code: "CONVERSATIONS_CREDENTIAL_MISSING" | "CONVERSATIONS_LOCAL_STORE_SELECTED";
   constructor(code: ConversationsSdkResolutionError["code"], message: string) {
@@ -116,38 +116,31 @@ const TIERS_CONSULTED =
   "the Keychain item hasna.credentials.conversations.api-key, ~/.hasna/conversations/config/credentials, " +
   "then HASNA_CONVERSATIONS_API_KEY.";
 
+function sdkEnv(options: ResolveConversationsSdkTransportOptions): SdkEnv {
+  return options.env ?? (typeof process !== "undefined" ? (process.env as SdkEnv) : {});
+}
+
 /**
- * Resolve the SDK's authority and credential, fresh, through the one
- * @hasna/contracts client chain. An explicit `baseUrl` pins the credential
- * (tier 1 only — the ambient fleet key is never attached to a caller-chosen
- * authority, #1794); otherwise the chain decides, and a missing credential
- * throws — the SDK is hosted-only and never degrades.
+ * ONE pass down the credential chain for the ambient (no explicit `baseUrl`)
+ * case: the resolver inputs and the credential they resolve to, or `null`
+ * when no tier answers. The local opt-in is refused here — this client cannot
+ * serve the on-box store, and going hosted beside it would split the shell
+ * across two datasets.
+ *
+ * Shared by the transport resolution and the per-request refresh, so the
+ * refresh spends exactly one Keychain read (the api-key item) per request
+ * rather than re-deciding the authority the constructed client already
+ * holds (round-2 validator note: two `security` spawns per request).
  */
-export function resolveConversationsSdkTransport(
-  options: ResolveConversationsSdkTransportOptions = {},
-): ConversationsSdkTransport {
-  const rawEnv: SdkEnv = options.env ?? (typeof process !== "undefined" ? (process.env as SdkEnv) : {});
-
-  // Tier 1, and the only way to reach an arbitrary authority: an explicit
-  // argument is a deliberate selection, so it is never resolved around and the
-  // ambient chain is never consulted for it (#1794).
-  if (options.baseUrl) {
-    return {
-      mode: "http",
-      baseUrl: stripV1(options.baseUrl),
-      apiKey: options.apiKey ?? null,
-      apiKeySource: options.apiKey ? "explicit apiKey argument" : null,
-      apiUrlSource: "explicit baseUrl argument",
-    };
-  }
-
-  // The on-box store was asked for by name. This client cannot serve it, and
-  // going hosted beside it would split the shell across two datasets.
+function resolveSdkCredentialInputs(
+  rawEnv: SdkEnv,
+  options: ResolveConversationsSdkTransportOptions,
+): { env: SdkEnv; credentials: CredentialChainOptions; credential: ResolvedCredential | null } {
   if (isConversationsLocalOptIn(rawEnv)) {
     throw new ConversationsSdkResolutionError(
       "CONVERSATIONS_LOCAL_STORE_SELECTED",
-      `${DB_PATH_KEYS[0]} / ${DB_PATH_KEYS[1]} selects the on-box SQLite store, which the hosted-only ` +
-        "./sdk client cannot talk to. Use getStore() from @hasna/conversations for the local store, or " +
+      `${DB_PATH_KEYS[0]} / ${DB_PATH_KEYS[1]} selects the on-box SQLite store, which the /v1 HTTP ` +
+        "./sdk client cannot talk to. Use getStore() from @hasna/conversations for the on-box store, or " +
         "unset the store path and provide a hosted credential. " + TIERS_CONSULTED,
     );
   }
@@ -163,19 +156,59 @@ export function resolveConversationsSdkTransport(
     ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
   };
   const { env, credentials } = conversationsResolverInputs(rawEnv, requestedCredentials);
+  return { env, credentials, credential: resolveCredential(APP, env, credentials) };
+}
 
-  // ONE pass down the chain, not two. `resolveClientTransport` resolves the
-  // credential internally but deliberately returns only its SOURCE, while the
-  // generated client needs the credential VALUE. Resolving here and handing
-  // the value down as the chain's tier-1 argument makes the transport's second
-  // pass a no-op (tier 1 returns immediately): the chain consults the Keychain
-  // once and the transport decides the authority exactly as before.
-  const credential: ResolvedCredential | null = resolveCredential(APP, env, credentials);
+/**
+ * The credential a request should carry RIGHT NOW: the explicit argument
+ * when the caller pinned an authority (#1794 — the ambient chain is never
+ * consulted for a caller-chosen `baseUrl`), else one fresh pass down the
+ * chain. `null` when nothing resolves; throws exactly where the transport
+ * resolution would (the local opt-in, an unreadable credential file).
+ */
+function freshSdkCredential(options: ResolveConversationsSdkTransportOptions): string | null {
+  if (options.baseUrl) return options.apiKey ?? null;
+  return resolveSdkCredentialInputs(sdkEnv(options), options).credential?.apiKey ?? null;
+}
+
+/**
+ * Resolve the SDK's authority and credential, fresh, through the one
+ * @hasna/contracts client chain. An explicit `baseUrl` pins the credential
+ * (tier 1 only — the ambient fleet key is never attached to a caller-chosen
+ * authority, #1794); otherwise the chain decides, and a missing credential
+ * throws — the SDK never degrades into a store it cannot address.
+ */
+export function resolveConversationsSdkTransport(
+  options: ResolveConversationsSdkTransportOptions = {},
+): ConversationsSdkTransport {
+  const rawEnv = sdkEnv(options);
+
+  // Tier 1, and the only way to reach an arbitrary authority: an explicit
+  // argument is a deliberate selection, so it is never resolved around and the
+  // ambient chain is never consulted for it (#1794).
+  if (options.baseUrl) {
+    return {
+      mode: "http",
+      baseUrl: stripV1(options.baseUrl),
+      apiKey: options.apiKey ?? null,
+      apiKeySource: options.apiKey ? "explicit apiKey argument" : null,
+      apiUrlSource: "explicit baseUrl argument",
+    };
+  }
+
+  // ONE pass down the credential chain, not two. `resolveClientTransport`
+  // resolves the credential internally but deliberately returns only its
+  // SOURCE, while the generated client needs the credential VALUE. Resolving
+  // here (the local opt-in refused on the way) and handing the value down as
+  // the chain's tier-1 argument makes the transport's second pass a no-op
+  // (tier 1 returns immediately): the chain consults the Keychain once for
+  // the credential and the transport decides the authority exactly as before.
+  const { env, credentials, credential } = resolveSdkCredentialInputs(rawEnv, options);
   if (!credential) {
     throw new ConversationsSdkResolutionError(
       "CONVERSATIONS_CREDENTIAL_MISSING",
-      "the /v1 SDK client is hosted-only and no Hasna Conversations credential resolved. " + TIERS_CONSULTED +
-        ` (The on-box store is reachable only through getStore() with ${DB_PATH_KEYS[0]} set — local mode is opt-in, never a fallback.)`,
+      "the /v1 SDK client needs a hosted credential and none resolved. " + TIERS_CONSULTED +
+        ` (The on-box store is reachable only through getStore() with ${DB_PATH_KEYS[0]} set — the on-box store is used only when named, never by default.)`,
     );
   }
   const resolution: ClientTransportResolution = resolveClientTransport(APP, env, {
@@ -195,7 +228,7 @@ export function resolveConversationsSdkTransport(
 }
 
 /**
- * Build the hosted `/v1` client with the fleet resolver behind it.
+ * Build the `/v1` HTTP client with the fleet resolver behind it.
  *
  * The credential is refreshed PER REQUEST, not per client: the generated
  * client stores whatever key it is handed, so a client built once and held
@@ -205,18 +238,19 @@ export function resolveConversationsSdkTransport(
  * transient unreadable Keychain cannot turn a working client into a failing
  * one mid-flight.
  *
- * Throws when no credential resolves: this client speaks only to the hosted
- * authority, so there is no local mode to degrade to. An explicit `baseUrl`
- * without an `apiKey` builds an UNAUTHENTICATED client on purpose (#1794).
+ * Throws when no credential resolves: this client speaks HTTP to the `/v1`
+ * authority only — there is no other transport to degrade to. An explicit
+ * `baseUrl` without an `apiKey` builds an UNAUTHENTICATED client on purpose (#1794).
  */
 export function createConversationsClient(
   options: ResolveConversationsSdkTransportOptions = {},
 ): ConversationsClient {
   const resolved = resolveConversationsSdkTransport(options);
   const baseFetch = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
-  // The per-request re-resolution re-runs the same resolution that already
-  // succeeded above against the same options. The refreshed credential is
-  // used; nothing else about the result matters.
+  // The per-request refresh re-runs only the CREDENTIAL half of the
+  // resolution that already succeeded above, against the same options: the
+  // authority is fixed in the constructed client, so re-deciding it per
+  // request bought nothing and cost a second Keychain read.
   const fetchWithFreshCredential = ((input: RequestInfo | URL, init?: RequestInit) => {
     // Normalise whatever shape the init carries. The generated client hands us
     // a plain record today, but an object spread over a `Headers` instance or
@@ -228,7 +262,7 @@ export function createConversationsClient(
       headers[key] = value;
     });
     try {
-      const fresh = resolveConversationsSdkTransport(options).apiKey;
+      const fresh = freshSdkCredential(options);
       if (fresh) headers["x-api-key"] = fresh;
     } catch {
       // keep the credential the client was constructed with

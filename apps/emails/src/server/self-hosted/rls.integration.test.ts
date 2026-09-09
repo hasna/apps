@@ -65,6 +65,7 @@ async function countAsProbe(tenantId: string | null, table: string): Promise<num
   return asProbe(tenantId, async (tx) => (await tx.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)).n);
 }
 
+// Run the complete migration ledger before assertions; CI can exceed the default 5s hook limit.
 beforeAll(async () => {
   if (!pg) return;
   // Fresh schema (drops any table a crashed prior run left owned by the probe),
@@ -169,7 +170,7 @@ beforeAll(async () => {
   for (const t of [...TABLES, ...ROLLUP_TABLES, ...REPAIR_TABLES, ...REPAIR_ALIAS_TABLES]) {
     await pg.execute(`ALTER TABLE ${t} OWNER TO ${PROBE}`);
   }
-});
+}, 60_000);
 
 afterAll(async () => {
   if (!pg) return;
@@ -533,5 +534,84 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
     const aCount = (await pg!.one<{ n: number }>(`SELECT count(*)::int AS n FROM domains WHERE tenant_id = $1`, [TENANT_A])).n;
     expect(await countAsProbe(TENANT_A, "domains")).toBe(aCount);
     expect(aCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("FR-0001 filter evaluation and mutate backfill cannot read or mutate another tenant's messages under the NOBYPASSRLS probe", async () => {
+    // Two IDENTICAL rows (one per tenant) share a sender, so only tenant_id
+    // separates them. Tenant A also owns an ENABLED filter (with actions/enabled/
+    // "order" — migration 0041 columns) that matches that sender.
+    const rlsMsgA = "fr-rls-msg-a";
+    const rlsMsgB = "fr-rls-msg-b";
+    const filterId = crypto.randomUUID();
+    await pg!.execute(
+      `INSERT INTO messages (id, from_addr, direction, status, labels, is_read, tenant_id) VALUES
+         ($1, 'shared@example.test', 'inbound', 'received', '[]'::jsonb, false, $3),
+         ($2, 'shared@example.test', 'inbound', 'received', '[]'::jsonb, false, $4)`,
+      [rlsMsgA, rlsMsgB, TENANT_A, TENANT_B],
+    );
+    await pg!.execute(
+      `INSERT INTO mailbox_filters
+         (id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order")
+       VALUES ($1, $2, 'Rls Sweep', 'rls-sweep', 'inbox', $3::jsonb, $4::jsonb, true, 0)`,
+      [filterId, TENANT_A,
+        JSON.stringify({ from: "shared@example.test" }),
+        JSON.stringify({ add_labels: ["swept"], mark_read: true })],
+    );
+    try {
+      // Fail-closed control: the probe under GUC=A sees exactly A's shared-sender
+      // row; under GUC=B exactly B's. RLS (not Layer 1) is doing the hiding here.
+      const aVisible = await asProbe(TENANT_A, (tx) =>
+        tx.many<{ id: string }>(`SELECT id FROM messages WHERE from_addr = 'shared@example.test' ORDER BY id`));
+      expect(aVisible.map((r) => r.id)).toEqual([rlsMsgA]);
+      const bVisible = await asProbe(TENANT_B, (tx) =>
+        tx.many<{ id: string }>(`SELECT id FROM messages WHERE from_addr = 'shared@example.test' ORDER BY id`));
+      expect(bVisible.map((r) => r.id)).toEqual([rlsMsgB]);
+
+      // The store running under the probe (NOBYPASSRLS + FORCE RLS, GUC set per
+      // operation exactly as production sets it) backfills A's filter and can
+      // ONLY reach A's row — B's byte-identical row is invisible and untouched.
+      const probeClient: PoolQueryClient = {
+        ...pg!,
+        async transaction<T>(fn: (tx: TypedQueryClient) => Promise<T>): Promise<T> {
+          return pg!.transaction(async (tx) => {
+            await tx.execute(`SET LOCAL ROLE ${PROBE}`);
+            return fn(tx);
+          });
+        },
+      };
+      const storeA = new EmailsSelfHostedStore(probeClient).forTenant(TENANT_A);
+      const swept = await storeA.applyMailboxFilter("Rls Sweep", { mutate: true });
+      expect(swept.mutate).toBe(true);
+      expect(swept.matched).toBe(1);
+      expect(swept.updated).toBe(1);
+      expect(swept.unchanged).toBe(0);
+      const aRow = await pg!.one<{ labels: string[]; is_read: boolean }>(
+        `SELECT labels, is_read FROM messages WHERE id = $1`, [rlsMsgA]);
+      expect(aRow.labels).toEqual(["swept"]);
+      expect(aRow.is_read).toBe(true);
+      const bRow = await pg!.one<{ labels: string[]; is_read: boolean }>(
+        `SELECT labels, is_read FROM messages WHERE id = $1`, [rlsMsgB]);
+      expect(bRow.labels).toEqual([]);
+      expect(bRow.is_read).toBe(false);
+
+      // Tenant B cannot even resolve A's filter (RLS hides the row), so a wrong-
+      // tenant mutate is a plain not-found, never a leak of A's definition.
+      const storeB = new EmailsSelfHostedStore(probeClient).forTenant(TENANT_B);
+      await expect(storeB.applyMailboxFilter("Rls Sweep", { mutate: true })).rejects.toThrow(/not found/i);
+
+      // Direct UPDATE that would mutate B's row while scoped to A matches nothing.
+      const update = await asProbe(TENANT_A, (tx) =>
+        tx.query(`UPDATE messages SET labels = '["x"]'::jsonb, updated_at = now() WHERE id = $1`, [rlsMsgB]));
+      expect(update.rowCount).toBe(0);
+      // Cross-tenant INSERT is rejected by the policy's WITH CHECK.
+      await expect(
+        asProbe(TENANT_A, (tx) =>
+          tx.execute(`INSERT INTO messages (id, from_addr, tenant_id) VALUES ('fr-rls-x', 'x@example.test', $1)`, [TENANT_B]),
+        ),
+      ).rejects.toThrow(/row-level security policy/i);
+    } finally {
+      await pg!.execute(`DELETE FROM messages WHERE id = ANY($1)`, [[rlsMsgA, rlsMsgB, "fr-rls-x"]]);
+      await pg!.execute(`DELETE FROM mailbox_filters WHERE id = $1`, [filterId]);
+    }
   });
 });

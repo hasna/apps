@@ -2,7 +2,7 @@
 import { assertHarnessArguments } from "./harness-arguments";
 import { parseArgs } from "node:util";
 import { SwitcherError } from "./sdk";
-import { VERSION, Fault, CommandInterrupted, parse, harnessSchema, protocolSchema, providerInputSchema, profileInputSchema, harnessEligible, validateHarnessProvider } from "./domain";
+import { VERSION, Fault, CommandInterrupted, parse, harnessSchema, protocolSchema, providerInputSchema, profileInputSchema, modelSchema, modelPolicySchema, modelExpired, harnessEligible, validateHarnessProvider, type ModelPolicy } from "./domain";
 import { detectHarness, validateHarnessConfiguration } from "./harnesses";
 import { launch, validateOriForPlan, type LaunchBackend } from "./launcher";
 import { openCliRuntime } from "./runtime";
@@ -19,8 +19,9 @@ const HELP = `switcher — launch a coding harness with a provider and its model
   switcher providers update ID --file provider.json --version N
   switcher providers delete ID --version N
   switcher models PROVIDER [--refresh] [--search TEXT] [--limit N]
+  switcher models add PROVIDER MODEL [--name NAME] [--expires-on YYYY-MM-DD]
   switcher profiles list|get [ID]
-  switcher profiles add ID --provider ID --harness HARNESS --model MODEL
+  switcher profiles add ID --provider ID --harness HARNESS --model MODEL [--model-policy-file FILE] [--role-model ROLE=MODEL]
   switcher profiles update ID --file profile.json --version N
   switcher profiles delete ID --version N
   switcher launch HARNESS --provider PROVIDER [--model MODEL] [--dry-run]
@@ -28,8 +29,8 @@ const HELP = `switcher — launch a coding harness with a provider and its model
                           [--ori-executable PATH] [--state-dir DIR]
                           [--timeout SECONDS] -- [native harness arguments]
   switcher runs list|get [ID]
-  switcher credentials bind PRESET --vault-key KEY --vault-url URL
-                            [--vault-cli PATH] [--vault-account ACCOUNT]
+  switcher credentials bind PRESET --vault-key KEY [--vault-url URL]
+                            [--vault-cli PATH] [--vault-account ACCOUNT | --vault-operator env]
   switcher credentials bind PRESET --keychain-service SERVICE --keychain-account ACCOUNT
   switcher credentials list|check|remove [PRESET_OR_REFERENCE]
   switcher doctor
@@ -38,12 +39,14 @@ HARNESS: claude, codex, grok, opencode, opencode2, pi, omp, dsh, cline, hermes, 
 PROTOCOL: anthropic-messages, openai-responses, openai-chat, gemini-generate-content
 Without remote API configuration, the CLI owns a local authenticated API and
 stores data in ~/.hasna/switcher (override HASNA_SWITCHER_HOME).
-Set HASNA_SWITCHER_API_URL + HASNA_SWITCHER_API_KEY for a remote API.
+Remote API URL/key resolve through @hasna/contracts: overrides, Keychain,
+~/.hasna/switcher/config/credentials, then environment. A key alone uses the gateway.
 A configured remote API never falls back to local data.
 Provider credential references must start SWITCHER_PROVIDER_.
 Credential bindings contain references only. Custom destinations require --origin URL.
-Vault bindings use the installed secrets CLI; --vault-account reads its operator
-from macOS Keychain, otherwise HASNA_SECRETS_API_KEY must be injected per process.
+Vault bindings use the installed secrets CLI and its canonical Contracts URL/key
+by default. --vault-account pins a Keychain account; --vault-operator env requires
+per-process HASNA_SECRETS_API_KEY. Explicit operators also require --vault-url.
   --file accepts a JSON object including id; raw credentials are never accepted.
 Fireworks discovery requires --catalog-account-id (or an explicit --catalog-url).
 --json outputs machine-readable records (also the default for data commands).
@@ -51,6 +54,22 @@ switcher --version | --help
 `;
 async function readInput(path: string): Promise<unknown> {
   try { return await Bun.file(path).json(); } catch { throw new Error("Input file must be readable, valid JSON."); }
+}
+export async function readModelPolicy(file: string | undefined, roleValues: string[] | undefined): Promise<ModelPolicy | undefined> {
+  if (file && roleValues?.length) throw new Fault(400, "conflicting_options", "Use either --model-policy-file or --role-model, not both.");
+  if (file) return parse(modelPolicySchema, await readInput(file));
+  if (!roleValues?.length) return undefined;
+  const roles: Record<string, string> = {};
+  const valid = new Set(["subagent", "fast", "planning", "review", "summary", "compaction", "weak", "editor"]);
+  for (const item of roleValues) {
+    const split = item.indexOf("=");
+    if (split <= 0 || split === item.length - 1) throw new Fault(400, "invalid_request", "Each --role-model must use ROLE=MODEL.");
+    const role = item.slice(0, split); const model = item.slice(split + 1);
+    if (!valid.has(role)) throw new Fault(400, "invalid_request", `Unknown model policy role: ${role}.`);
+    if (roles[role] !== undefined) throw new Fault(400, "conflicting_options", `Duplicate model policy role: ${role}.`);
+    roles[role] = model;
+  }
+  return parse(modelPolicySchema, {version: 1, roles});
 }
 export async function main(args = process.argv.slice(2)) {
   if (args.length === 1 && args[0] === "__credential-delivery") return deliverVaultCredential();
@@ -62,8 +81,9 @@ export async function main(args = process.argv.slice(2)) {
     "catalog-url":{type:"string"},"catalog-format":{type:"string"},"catalog-auth-style":{type:"string"},
     "catalog-credential-env":{type:"string"},"catalog-account-id":{type:"string"},"models-path":{type:"string"},"dry-run":{type:"boolean"},provider:{type:"string"},
     harness:{type:"string"},model:{type:"string"},search:{type:"string"},limit:{type:"string"},offset:{type:"string"},
+    "model-policy-file":{type:"string"},"role-model":{type:"string",multiple:true},"expires-on":{type:"string"},
     refresh:{type:"boolean"},backend:{type:"string"},cwd:{type:"string"},executable:{type:"string"},"ori-executable":{type:"string"},"state-dir":{type:"string"},timeout:{type:"string"},
-    "vault-key":{type:"string"},"vault-url":{type:"string"},"vault-cli":{type:"string"},"vault-account":{type:"string"},
+    "vault-key":{type:"string"},"vault-url":{type:"string"},"vault-cli":{type:"string"},"vault-account":{type:"string"},"vault-operator":{type:"string"},
     "keychain-service":{type:"string"},"keychain-account":{type:"string"},origin:{type:"string",multiple:true},
   }});
   if (values.help || !positionals.length) { console.log(HELP); return; }
@@ -73,7 +93,12 @@ export async function main(args = process.argv.slice(2)) {
     throw new Error("Unknown command. Run switcher --help.");
   const providerFlags = ["url", "protocol", "preset", "credential-env", "auth-style", "catalog-url", "catalog-format", "catalog-auth-style", "catalog-credential-env", "catalog-account-id", "models-path"] as const;
   const provided = (names: readonly (keyof typeof values)[]) => names.some(name => values[name] !== undefined);
-  const credentialFlags = ["vault-key","vault-url","vault-cli","vault-account","keychain-service","keychain-account","origin"] as const;
+  const addingModel = command === "models" && action === "add";
+  if (values["expires-on"] !== undefined && !addingModel) throw new Fault(400,"conflicting_options","--expires-on belongs to models add.");
+  if (addingModel && (positionals.length !== 4 || nativeArgs.length || Object.keys(values).some(name=>!["name","expires-on","json"].includes(name))))
+    throw new Fault(400,"invalid_request","Use models add PROVIDER MODEL with optional --name and --expires-on.");
+  const modelAddition = addingModel ? parse(modelSchema,{id:positionals[3],name:values.name??positionals[3],expiresOn:values["expires-on"]}) : undefined;
+  const credentialFlags = ["vault-key","vault-url","vault-cli","vault-account","vault-operator","keychain-service","keychain-account","origin"] as const;
   const credentials = new CredentialResolver();
   if (command === "credentials") {
     const bindingFlags = [...credentialFlags,"credential-env"] as const;
@@ -84,12 +109,14 @@ export async function main(args = process.argv.slice(2)) {
     if (action === "remove" && id) { output(await credentials.bindings.remove(credentialReference(id))); return; }
     if (action === "check" && id) { output(await credentials.check(credentialReference(id))); return; }
     if (action !== "bind" || !id) throw new Fault(400,"invalid_request","Use credentials bind PRESET, list, check PRESET_OR_REFERENCE, or remove PRESET_OR_REFERENCE.");
-    const hasVault = provided(["vault-key","vault-url","vault-cli","vault-account"]);
+    const hasVault = provided(["vault-key","vault-url","vault-cli","vault-account","vault-operator"]);
     const hasKeychain = provided(["keychain-service","keychain-account"]);
     if (hasVault === hasKeychain) throw new Fault(400,"conflicting_options","Choose one credential source: vault or Keychain.");
+    if (values["vault-operator"] !== undefined && !["contracts","env"].includes(values["vault-operator"])) throw new Fault(400,"invalid_request","Use --vault-operator contracts or env.");
+    if (values["vault-account"] !== undefined && values["vault-operator"] !== undefined) throw new Fault(400,"conflicting_options","Use either --vault-account or --vault-operator.");
     const source = hasVault ? {
       kind:"vault",key:values["vault-key"],url:values["vault-url"],executable:values["vault-cli"] ?? Bun.which("secrets"),
-      operator:values["vault-account"] ? {kind:"keychain",account:values["vault-account"]} : {kind:"env"},
+      operator:values["vault-account"] !== undefined ? {kind:"keychain",account:values["vault-account"]} : {kind:values["vault-operator"] ?? "contracts"},
     } : {kind:"keychain",service:values["keychain-service"],account:values["keychain-account"]};
     output(await credentials.bindings.bind(parse(credentialBindingSchema,{schema:1,...bindingTarget(id,values["credential-env"],values.origin),source})));
     return;
@@ -104,9 +131,9 @@ export async function main(args = process.argv.slice(2)) {
   if (command === "launch" && backend === "direct" && values["ori-executable"] !== undefined)
     throw new Fault(400, "conflicting_options", "--ori-executable requires --backend ori.");
   const mutation = (command === "providers" || command === "profiles") && ["add", "update"].includes(action);
-  if (values.file && (!mutation || provided([...providerFlags, "name", "provider", "harness", "model"])))
+  if (values.file && (!mutation || provided([...providerFlags, "name", "provider", "harness", "model", "model-policy-file", "role-model"])))
     throw new Fault(400, "conflicting_options", "Use --file by itself for provider/profile settings; inline settings cannot override an input file.");
-  if (command === "launch" && !values.provider && provided([...providerFlags, "name", "harness", "model", "search"]))
+  if (command === "launch" && !values.provider && provided([...providerFlags, "name", "harness", "model", "search", "model-policy-file", "role-model"]))
     throw new Fault(400, "conflicting_options", "Use --provider PROVIDER for direct launch settings, or update the saved profile explicitly.");
   if (values.preset && !(command === "providers" && mutation))
     throw new Fault(400, "conflicting_options", "--preset belongs to providers add/update. For direct launches use --provider PRESET.");
@@ -146,16 +173,18 @@ export async function main(args = process.argv.slice(2)) {
     let profileId = action;
     if (values.provider) {
       const harness = parse(harnessSchema, action);
+      const modelPolicy = await readModelPolicy(values["model-policy-file"], values["role-model"]);
       const provider = await resolveLaunchProvider(client, values.provider, {...presetOptions(), harness});
       validateHarnessProvider(harness, provider);
       const catalog = await client.refreshModels(provider.id);
       const model = values.model ?? await selectModel(catalog.models, values.search,harness);
       const selected = catalog.models.find(m => m.id === model);
       if (!selected) throw new Fault(422, "model_missing", "Selected model is not in the provider catalog.");
+      if (modelExpired(selected)) throw new Fault(422,"model_expired","Selected model has passed its configured expiry date. Select an unexpired model.");
       if (!harnessEligible(selected,harness)) throw new Fault(422, "model_ineligible", "Selected model explicitly lacks text output or tool support.");
-      profileId = (await ensureLaunchProfile(client, provider, harness, model)).id;
+      profileId = (await ensureLaunchProfile(client, provider, harness, model, modelPolicy)).id;
     } else {
-      if (values.model || values.protocol || values.url || values["credential-env"])
+      if (values.model || values.protocol || values.url || values["credential-env"] || values["model-policy-file"] || values["role-model"])
         throw new Error("Use --provider PROVIDER for a direct launch, or update the saved profile explicitly.");
       const profile = await client.getProfile(profileId);
       if (profile.harness === "gemini") validateHarnessProvider(profile.harness, await client.getProvider(profile.providerId));
@@ -173,6 +202,15 @@ export async function main(args = process.argv.slice(2)) {
       return;
     }
     process.exitCode = await launch(client, profileId, {backend: backend as LaunchBackend, oriExecutable: values["ori-executable"], cwd: values.cwd, executable: values.executable, stateDir: values["state-dir"], args: nativeArgs, timeoutMs, refresh: false, resolveCredential: provider=>credentials.resolve(provider)});
+    return;
+  }
+  if (modelAddition) {
+    const provider = await client.getProvider(id);
+    const {version,updatedAt,...input} = provider;
+    if ((provider.additionalModels??[]).some(model=>model.id===modelAddition.id))
+      throw new Fault(409,"model_exists","This additional model already exists. Use providers update --file to edit its metadata.");
+    await client.updateProvider({...input,additionalModels:[...(provider.additionalModels??[]),modelAddition]},version);
+    output({providerId:provider.id,model:modelAddition,expired:modelExpired(modelAddition)});
     return;
   }
   if (command === "models" && action) {
@@ -209,7 +247,8 @@ export async function main(args = process.argv.slice(2)) {
     if(action==="get"&&id) {output(await client.getProfile(id));return;}
     if(action==="delete"&&id) {output(await client.deleteProfile(id,currentVersion()));return;}
     if(["add","update"].includes(action)&&id) {
-      const input = parse(profileInputSchema,values.file?await readInput(values.file):{id,name:values.name??id,providerId:values.provider,harness:values.harness,model:values.model});
+      const modelPolicy = await readModelPolicy(values["model-policy-file"], values["role-model"]);
+      const input = parse(profileInputSchema,values.file?await readInput(values.file):{id,name:values.name??id,providerId:values.provider,harness:values.harness,model:values.model,...(modelPolicy ? {modelPolicy} : {})});
       if(input.id!==id) throw new Error("File id must match the command id.");
       output(action==="add"?await client.createProfile(input):await client.updateProfile(input,currentVersion()));return;
     }

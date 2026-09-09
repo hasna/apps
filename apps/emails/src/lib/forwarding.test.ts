@@ -1,40 +1,4 @@
-// The app-level forwarding pipeline, driven for real against a local SQLite database.
-//
-// WHAT THIS FILE USED TO BE. Two cases against the DELETED HTTP arm, asserting that it threw.
-// That arm is gone, so those two assertions are replaced by the thing they were standing in
-// for: THE REFUSAL IS STILL A REFUSAL on an installation that reads its mail through an Emails
-// API, and it is now derived from STORAGE CONFIGURATION rather than from the deployment word.
-// The comfortable wrong answer it must never become is `{ attempted: 0, sent: 0, failed: 0,
-// skipped: 0 }` — the shape of a healthy run over an already-forwarded inbox.
-//
-// EVERY STORAGE SETTING IS NAMED THROUGH THE RESOLUTION'S OWN EXPORTED CONSTANTS
-// (`src/store-resolution.ts`), never as a literal, so this suite configures storage without
-// naming the deployment word. Two absences are deliberate and are NOT gaps:
-//
-//   * there is no case that SETS the deployment word to prove it no longer decides. Writing it
-//     here — in any form, including through an exported constant, because the ratchet's env
-//     metric is a substring match — would RAISE `emailsModeEnvReferences`, a counter that may
-//     only fall. The absence of that read is enforced by the ratchet
-//     (`src/mode-axis-ratchet.test.ts`) with zero slack, which is the guard designed for it.
-//   * for the same reason there is no assertion that the module text no longer contains the
-//     dispatch helper or the mode read: naming either identifier here would raise its own
-//     counter. The ratchet counts them tree-wide, this file included.
-//
-// AND FOR THE SAME REASON THIS SUITE CANNOT SCRUB THE DEPLOYMENT WORD FROM ITS ENVIRONMENT,
-// which has one measured consequence worth recording rather than discovering. Every storage
-// setting IS scrubbed by name, but an ambient deployment word still reaches the `*.local.*`
-// modules this pipeline calls into, and one of them refuses when it is set — so running this file
-// in the SAME process as another file that leaves that variable behind turns the two pinned-defect
-// cases red for a reason that is not in either file. Measured: all cases pass standalone, and
-// pass under the hermetic runner (`bun run test`, `--max-concurrency 1`) which isolates per file,
-// which is also how CI runs them. Naming the variable to defend against it would raise a counter
-// that may only fall, so the isolation is the defence and this paragraph is the record.
-//
-// `HOME` IS REDIRECTED IN EVERY CASE, and that is a safety property rather than tidiness. When
-// no database path is configured, the database layer resolves `~/.hasna/emails/emails.db` and
-// CREATES it. A case that asserts a refusal for an API-configured installation must not be
-// able to touch a developer's real mailbox on the way to failing.
-
+// Explicit local database behavior remains covered here; API failure never falls back to it.
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -49,12 +13,14 @@ import {
   DATABASE_PATH_SETTINGS,
 } from "../store-resolution.js";
 import { processForwardingRules, type ForwardingRunOptions } from "./forwarding.js";
+import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
 
 const root = join(import.meta.dir, "..", "..");
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 let home: string;
 let db: Database;
+let apiServer: ReturnType<typeof Bun.serve> | undefined;
 
 /**
  * Every storage setting cleared, BY NAME FROM THE RESOLVER, plus the pointer that stands in for
@@ -92,6 +58,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  apiServer?.stop(true); apiServer = undefined;
+  resetSelfHostedConfigCache();
   closeDatabase();
   for (const key of Object.keys(process.env)) {
     if (!Object.prototype.hasOwnProperty.call(INHERITED_PROCESS_ENV, key)) delete process.env[key];
@@ -197,15 +165,13 @@ function ledgerRows(): LedgerRow[] {
 // ── the storage-configuration gate ──────────────────────────────────────────────────────
 
 describe("processForwardingRules storage gate", () => {
-  it("REFUSES on an API-configured installation instead of reporting an empty run", async () => {
-    // THE DETECTOR. On the two-arm tree this call reaches the local arm, opens a local database
-    // that has nothing in it, and answers `{ attempted: 0, sent: 0, failed: 0, skipped: 0 }` —
-    // indistinguishable from "your mail is fully forwarded". A refusal is never an answer.
-    closeDatabase();
-    configureApiStore();
-
-    await expect(processForwardingRules()).rejects.toThrow(/reads its mail through an Emails API/);
-    await expect(processForwardingRules()).rejects.toThrow(/exist only in a local database/);
+  it("an unavailable API cannot report an empty run or create a local database", async () => {
+    closeDatabase(); configureApiStore();
+    apiServer = Bun.serve({hostname: "127.0.0.1", port: 0, fetch: () => Response.json({error:"fixture forwarding unavailable"}, {status:503})});
+    process.env[API_BASE_URL_SETTING] = apiServer.url.origin;
+    resetSelfHostedConfigCache();
+    await expect(processForwardingRules()).rejects.toThrow("HTTP 503");
+    expect(existsSync(join(home, ".hasna", "emails", "emails.db"))).toBe(false);
   });
 
   it("REFUSES a contradictory storage configuration instead of silently picking one", async () => {
@@ -224,13 +190,10 @@ describe("processForwardingRules storage gate", () => {
     await expect(processForwardingRules()).rejects.toThrow(new RegExp(DATABASE_PATH_SETTINGS[1]));
   });
 
-  it("names the setting to unset in the API refusal, so an operator can act on it", async () => {
-    // A refusal an operator cannot act on is a dead end. NONE of the four shipped consumers can
-    // pass a `Database`, so "supply local storage" is advice for library embedders only; the
-    // thing an operator can actually change is the setting that put the mail behind an API.
-    closeDatabase();
-    configureApiStore();
-    await expect(processForwardingRules()).rejects.toThrow(new RegExp(`Unset ${API_BASE_URL_SETTING}`));
+  it("an API client cannot substitute an in-process provider callback", async () => {
+    closeDatabase(); configureApiStore();
+    await expect(processForwardingRules({send: async () => "must-not-send"})).rejects.toThrow("cannot use a local provider callback");
+    expect(existsSync(join(home, ".hasna", "emails", "emails.db"))).toBe(false);
   });
 
   it("REFUSES on an ALL-UNSET configuration instead of defaulting to the local database", async () => {

@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -12,30 +13,43 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { sliceBetween, sliceBetweenUnique } from "./helpers/source-assertions";
-// Gated to non-Darwin hosts with a recorded reason. This suite drives the real
-// install_macos_app.sh / build.sh / macos_artifact.ts fixture seams (tool overrides,
-// recovery/transition/crash hooks, Tailscale overrides) that the production code
-// deliberately refuses on a real Darwin host — documented in the installer header
-// ("The test overrides are accepted only when the real host kernel is not Darwin"),
-// test_fault_hooks_enabled (false on Darwin), installTransitionTestPoint (early return
-// on darwin), and resolve_tailscale_cli.sh ("structurally unreachable on Darwin").
-// These tests are the Linux CI gate's coverage; on macOS the seams they depend on are
-// closed by documented design, so they skip there. Pure source assertions run everywhere.
-const testOnNonDarwin = process.platform === "darwin" ? test.skip : test;
-
-
+import { signingFixtureCommand } from "./helpers/signing-fixture";
+// Darwin fixtures remap only copied tool capabilities and use OS confinement.
 const repositoryRoot = resolve(import.meta.dir, "../..");
 const resolver = join(repositoryRoot, "scripts", "resolve_tailscale_cli.sh");
 const temporaryPaths: string[] = [];
+let sandboxRoot: string | undefined;
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 afterEach(() => {
   for (const path of temporaryPaths.splice(0)) rmSync(path, { recursive: true, force: true });
+  sandboxRoot = undefined;
 });
 
 function temporaryDirectory(): string {
-  const directory = mkdtempSync(join(tmpdir(), "recordings-tailscale-resolver-"));
-  temporaryPaths.push(directory);
+  if (!sandboxRoot) {
+    sandboxRoot = realpathSync(mkdtempSync(join(tmpdir(), "recordings-tailscale-resolver-")));
+    chmodSync(sandboxRoot, 0o700);
+    temporaryPaths.push(sandboxRoot);
+  }
+  const directory = mkdtempSync(join(sandboxRoot, "case-"));
+  chmodSync(directory, 0o700);
   return directory;
+}
+
+async function confinedShell(root: string, source: string, environment: Record<string, string> = {}) {
+  const wrapper = join(root, "canonical-probe.sh");
+  writeFileSync(wrapper, `set -euo pipefail\nsource "$RESOLVER"\n${source}\n`);
+  const child = Bun.spawn(signingFixtureCommand(sandboxRoot!, ["/bin/bash", wrapper]), {
+    cwd: root,
+    env: { HOME: sandboxRoot!, TMPDIR: sandboxRoot!, PATH: "/usr/bin:/bin", RESOLVER: resolver, ...environment },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const timer = setTimeout(() => child.kill("SIGKILL"), 5000);
+  try {
+    const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    return { exitCode, stdout, stderr };
+  } finally { clearTimeout(timer); }
 }
 
 function writeExecutable(path: string, body = "printf '%s\\n' '{\"Self\":{}}'\n"): void {
@@ -50,7 +64,7 @@ function createTrustedApp(root: string, body?: string): { app: string; cli: stri
   writeExecutable(
     cli,
     body ??
-      `printf '%s\\n' "$0" >> "$MARKER_DIRECTORY/status-path.log"\nprintf '%s\\n' '{"Self":{"Online":true,"HostName":"station06","ID":"node-1"}}'\n`,
+      `printf '%s\\n' "$0" >> ${shellQuote(join(root, "markers", "status-path.log"))}\nprintf '%s\\n' '{"Self":{"Online":true,"HostName":"station06","ID":"node-1"}}'\n`,
   );
   writeFileSync(join(app, "signature-team"), "W5364U7YZB\n");
   writeFileSync(join(app, "signature-identifier"), "io.tailscale.ipn.macsys\n");
@@ -61,7 +75,22 @@ function createCodesignStub(root: string): string {
   const executable = join(root, "tools", "codesign");
   writeExecutable(
     executable,
-    `app="\${@: -1}"
+    `subject="\${@: -1}"
+case "$subject" in ${shellQuote(root)}/*) ;; *) exit 90;; esac
+expected='anchor apple generic and certificate leaf[subject.OU] = "W5364U7YZB" and identifier "io.tailscale.ipn.macsys"'
+if [ "$1" = --verify ]; then
+  [ "$2 $3 $4" = '--strict --all-architectures --verbose=2' ] || exit 90
+  if [ -d "$subject" ]; then
+    [ "$#" = 8 ] && [ "$5 $6" = '--deep -R' ] && [ "$7" = "$expected" ] || exit 90
+  else
+    [ "$#" = 7 ] && [ "$5" = -R ] && [ "$6" = "$expected" ] || exit 90
+  fi
+elif [ "$1" = -d ]; then
+  [ "$#" = 3 ] && [ "$2" = --verbose=4 ] || exit 90
+else exit 90
+fi
+printf '%s\\n' "$*" >> ${shellQuote(join(root, "codesign-arguments.log"))}
+app="$subject"
 case "$app" in
   */Contents/MacOS/Tailscale) app="\${app%/Contents/MacOS/Tailscale}" ;;
 esac
@@ -96,6 +125,7 @@ async function trustedSnapshotWith(options: {
   identifier?: string;
   mutateSnapshot?: boolean;
   replaceSourceBeforeStatus?: boolean;
+  unmappedCodesign?: boolean;
 }) {
   const root = temporaryDirectory();
   const markerDirectory = join(root, "markers");
@@ -109,6 +139,21 @@ async function trustedSnapshotWith(options: {
   }
   const codesign = createCodesignStub(root);
   const ditto = createDittoStub(root, options.mutateSnapshot);
+  let fixtureResolver = resolver;
+  if (process.platform === "darwin") {
+    fixtureResolver = join(root, "resolver.sh");
+    let contents = readFileSync(resolver, "utf8");
+    const replacements: [string, string, number][] = [
+      ["source_app='/Applications/Tailscale.app'", `source_app=${shellQuote(source.app)}`, 1],
+      ["ditto_executable='/usr/bin/ditto'", `ditto_executable=${shellQuote(ditto)}`, 1],
+    ];
+    if (!options.unmappedCodesign) replacements.push(["codesign_executable='/usr/bin/codesign'", `codesign_executable=${shellQuote(codesign)}`, 2]);
+    for (const [before, after, count] of replacements) {
+      if (contents.split(before).length !== count + 1) throw new Error("Tailscale fixture capability boundary changed");
+      contents = contents.replaceAll(before, after);
+    }
+    writeFileSync(fixtureResolver, contents);
+  }
   const wrapper = join(root, "snapshot.sh");
   writeFileSync(
     wrapper,
@@ -126,9 +171,10 @@ recordings_run_trusted_tailscale_status "$snapshot_cli" "$SNAPSHOT_PARENT"
 `,
   );
   chmodSync(wrapper, 0o755);
-  const process = Bun.spawn(["/bin/bash", wrapper], {
+  const child = Bun.spawn(signingFixtureCommand(sandboxRoot!, ["/bin/bash", wrapper]), {
+    cwd: root,
     env: resolverChildEnvironment(Bun.env, {
-      RESOLVER: resolver,
+      RESOLVER: fixtureResolver,
       SNAPSHOT_PARENT: snapshotParent,
       SOURCE_CLI: source.cli,
       MARKER_DIRECTORY: markerDirectory,
@@ -140,9 +186,9 @@ recordings_run_trusted_tailscale_status "$snapshot_cli" "$SNAPSHOT_PARENT"
     stderr: "pipe",
   });
   const [exitCode, stdout, stderr] = await Promise.all([
-    process.exited,
-    new Response(process.stdout).text(),
-    new Response(process.stderr).text(),
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
   ]);
   return { root, markerDirectory, snapshotParent, source, exitCode, stdout, stderr };
 }
@@ -151,7 +197,14 @@ function resolverChildEnvironment(
   inheritedEnvironment: Record<string, string | undefined>,
   overrides: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
-  const environment = { ...inheritedEnvironment, ...overrides };
+  const environment: Record<string, string | undefined> = {
+    HOME: sandboxRoot!, TMPDIR: sandboxRoot!, PATH: "/usr/bin:/bin",
+    // Only the startup-injection negative control needs inherited fixture input.
+    BASH_ENV: inheritedEnvironment.BASH_ENV, ENV: inheritedEnvironment.ENV,
+    STARTUP_MARKER: inheritedEnvironment.STARTUP_MARKER,
+    STARTUP_BIN: inheritedEnvironment.STARTUP_BIN,
+    ...overrides,
+  };
   delete environment.BASH_ENV;
   delete environment.ENV;
   return environment;
@@ -181,7 +234,8 @@ ${options.invoke ? '"$resolved" status --json' : ""}
 `,
   );
   chmodSync(wrapper, 0o755);
-  const process = Bun.spawn(["/bin/bash", wrapper], {
+  const child = Bun.spawn(signingFixtureCommand(sandboxRoot!, ["/bin/bash", wrapper]), {
+    cwd: root,
     env: resolverChildEnvironment(options.inheritedEnvironment ?? Bun.env, {
       PATH: options.path,
       RESOLVER: resolver,
@@ -191,14 +245,57 @@ ${options.invoke ? '"$resolved" status --json' : ""}
     stderr: "pipe",
   });
   const [exitCode, stdout, stderr] = await Promise.all([
-    process.exited,
-    new Response(process.stdout).text(),
-    new Response(process.stderr).text(),
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
   ]);
   return { root, exitCode, stdout, stderr };
 }
 
 describe("Tailscale CLI resolution", () => {
+  test("validates a canonical private snapshot parent using supported host tools", async () => {
+    const root = temporaryDirectory();
+    const result = await confinedShell(root, 'recordings_validate_private_tailscale_snapshot_parent "$FIXTURE_ROOT" "$(recordings_real_host_kernel)"', { FIXTURE_ROOT: root });
+    expect(result.exitCode, result.stderr).toBe(0);
+  });
+
+  test.each(["leaf", "ancestor"])("rejects a snapshot parent with a symlinked %s", async (kind) => {
+    const root = temporaryDirectory();
+    const physical = join(root, "physical");
+    mkdirSync(physical, { mode: 0o700 });
+    const alias = join(root, "alias");
+    symlinkSync(physical, alias);
+    if (kind === "ancestor") mkdirSync(join(physical, "private"), { mode: 0o700 });
+    const candidate = kind === "leaf" ? alias : join(alias, "private");
+    const result = await confinedShell(root, 'recordings_validate_private_tailscale_snapshot_parent "$CANDIDATE" "$(recordings_real_host_kernel)"', { CANDIDATE: candidate });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/existing private directory|canonical non-symlink directory/);
+  });
+
+  test("physical path validation ignores hostile PATH and CDPATH programs", async () => {
+    const root = temporaryDirectory();
+    const marker = join(root, "hostile-executed");
+    for (const name of ["realpath", "pwd", "dirname", "basename", "cd"]) {
+      writeExecutable(join(root, "bin", name), `printf hostile > ${shellQuote(marker)}\nexit 91\n`);
+    }
+    const cli = join(root, "bin", "tailscale");
+    writeExecutable(cli);
+    const result = await confinedShell(root, 'recordings_validate_trusted_tailscale_app_cli "$CANDIDATE" "$(recordings_real_host_kernel)"', {
+      CANDIDATE: cli, PATH: join(root, "bin"), CDPATH: join(root, "bin"),
+    });
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(existsSync(marker)).toBeFalse();
+  });
+
+  (process.platform === "darwin" ? test : test.skip)("OS confinement refuses an unmapped real codesign tool", async () => {
+    const result = await trustedSnapshotWith({ unmappedCodesign: true });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("codesign verifier is missing or is not executable");
+    expect(existsSync(join(result.markerDirectory, "status-path.log"))).toBeFalse();
+    const direct = await confinedShell(result.root, "/usr/bin/codesign --help");
+    expect(direct.exitCode).not.toBe(0);
+    expect(direct.stderr).toContain("Operation not permitted");
+  });
   test("pins the production fallback to the standard Tailscale app CLI", () => {
     const source = readFileSync(resolver, "utf8");
     expect(source).toContain("'/Applications/Tailscale.app/Contents/MacOS/Tailscale'");
@@ -350,7 +447,7 @@ describe("Tailscale CLI resolution", () => {
     },
   );
 
-  testOnNonDarwin("snapshots the complete authenticated official app and executes only the verified copy", async () => {
+  test("snapshots the complete authenticated official app and executes only the verified copy", async () => {
     const result = await trustedSnapshotWith({ replaceSourceBeforeStatus: true });
     expect(result.exitCode, result.stderr).toBe(0);
     const snapshotCli = join(
@@ -367,6 +464,9 @@ describe("Tailscale CLI resolution", () => {
       snapshotCli,
     );
     expect(result.stdout).not.toContain("attacker");
+    const signingCalls = readFileSync(join(result.root, "codesign-arguments.log"), "utf8").trim().split("\n");
+    expect(signingCalls.filter(line => line.startsWith("--verify"))).toHaveLength(6);
+    expect(signingCalls.filter(line => line.startsWith("-d"))).toHaveLength(6);
   });
 
   test.each([

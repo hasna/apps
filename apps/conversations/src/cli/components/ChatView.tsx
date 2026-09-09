@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Box, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
-import { sendMessage } from "../../lib/messages.js";
 import { previewAsCompatibilityMessage } from "../../lib/message-previews.js";
 import { getStore } from "../../lib/store/index.js";
-import { SensitiveContentError } from "../../lib/content-safety.js";
+import { SensitiveContentError, scanSensitiveContent } from "../../lib/content-safety.js";
 import { startPolling } from "../../lib/poll.js";
 import { MessageBubble } from "./MessageBubble.js";
 import type { Message } from "../../types.js";
@@ -28,27 +27,28 @@ interface ChatViewSubmitOptions {
 
 export type ChatViewSubmitResult =
   | { ok: true; message: Message }
-  | { ok: false; error: string };
+  | { ok: false; error: string; blocked?: boolean };
 
-function chatViewSendError(error: unknown): string {
-  if (error instanceof SensitiveContentError) {
+function chatViewSendError(blocked: boolean): string {
+  if (blocked) {
     return "Message blocked by sensitive-content controls.";
   }
-  return "Unable to send message.";
+  return "Unable to confirm message send. Check the conversation before retrying.";
 }
 
-export function submitChatViewMessage(
+export async function submitChatViewMessage(
   { agent, sessionId, recipient, channelName }: ChatViewSubmitOptions,
   value: string
-): ChatViewSubmitResult {
+): Promise<ChatViewSubmitResult> {
   const content = value.trim();
   if (!content) return { ok: false, error: "" };
 
   try {
+    const store = getStore();
     if (channelName) {
       return {
         ok: true,
-        message: sendMessage({
+        message: await store.sendMessage({
           from: agent,
           to: channelName,
           content,
@@ -60,7 +60,7 @@ export function submitChatViewMessage(
 
     return {
       ok: true,
-      message: sendMessage({
+      message: await store.sendMessage({
         from: agent,
         to: recipient || agent,
         content,
@@ -68,23 +68,36 @@ export function submitChatViewMessage(
       }),
     };
   } catch (error) {
-    return { ok: false, error: chatViewSendError(error) };
+    const blocked = error instanceof SensitiveContentError || scanSensitiveContent(content).length > 0;
+    return { ok: false, error: chatViewSendError(blocked), blocked };
   }
 }
 
 export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient, channelName }: ChatViewProps) {
-  const store = useMemo(() => getStore(), []);
+  const store = useMemo(() => { try { return getStore(); } catch { return null; } }, []);
   const [messages, setMessages] = useState<Message[]>([]);
   const [detail, setDetail] = useState<Message | null>(null);
   const [input, setInput] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const [loading, setLoading] = useState(!!initialSessionId || !!channelName);
+  const mounted = useRef(true);
+  const sendingRef = useRef(false);
+  const inputRevision = useRef(0);
+  const detailRequest = useRef(0);
+  const marking = useRef(false);
+  const changeInput = (value: string) => { inputRevision.current++; setInput(value); };
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; detailRequest.current++; }; }, []);
   const [sessionId, setSessionId] = useState(initialSessionId);
+  const sessionIdRef = useRef(initialSessionId);
   const isChannel = !!channelName;
   const seenIds = useRef<Set<number>>(new Set());
 
   // Load existing messages + poll for new ones
   useEffect(() => {
     let cancelled = false;
+    if (!store) { setReadError("Unable to connect to conversations. Check account configuration."); setLoading(false); return; }
     seenIds.current = new Set();
     const opts = isChannel
       ? { channel: channelName }
@@ -92,17 +105,27 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
         ? { session_id: sessionId }
         : {};
 
-    // Only load if we have something to query
-    if (isChannel || sessionId) {
+    let historyLoaded = !isChannel && !sessionId;
+    let loadRetry: ReturnType<typeof setTimeout> | undefined;
+    // Retry initial history separately: a watch cursor intentionally skips old
+    // rows and cannot replace a failed history read.
+    const loadHistory = () => {
       void store.readMessagePreviews(opts).then((page) => {
         if (cancelled) return;
         const existing = page.messages.map(previewAsCompatibilityMessage);
         for (const msg of existing) seenIds.current.add(msg.id);
-        setMessages(existing);
-      });
-    } else {
-      setMessages([]);
-    }
+        setMessages(current => [...existing, ...current.filter(message => !existing.some(row => row.id === message.id))]);
+        historyLoaded = true;
+        setReadError(null);
+      }).catch(() => {
+        if (!cancelled) {
+          setReadError("Unable to load messages. Retrying…");
+          loadRetry = setTimeout(loadHistory, 1000);
+        }
+      }).finally(() => { if (!cancelled) setLoading(false); });
+    };
+    if (isChannel || sessionId) loadHistory();
+    else setMessages([]);
 
     const pollOpts = isChannel
       ? { channel: channelName }
@@ -115,7 +138,13 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
     const { stop } = startPolling({
       ...pollOpts,
       interval_ms: 200,
+      store,
+      on_poll_error: (line) => {
+        if (!cancelled && (!line.includes("RECOVERED") || historyLoaded)) setReadError(line.includes("RECOVERED") ? null : "Unable to refresh messages. Retrying…");
+      },
       on_messages: (newMsgs) => {
+        if (cancelled) return;
+        if (historyLoaded) setReadError(null);
         const unseen = newMsgs.filter((msg) => !seenIds.current.has(msg.id));
         if (unseen.length === 0) return;
         for (const msg of unseen) {
@@ -130,50 +159,72 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
     // here deliberately. Unmounting does not need to block on a final read.
     return () => {
       cancelled = true;
+      if (loadRetry) clearTimeout(loadRetry);
       void stop();
     };
   }, [store, sessionId, channelName, isChannel]);
 
   useInput((keyInput, key) => {
     if (key.escape) {
+      detailRequest.current++;
       if (detail) setDetail(null);
       else onBack();
       return;
     }
     const selected = messages[messages.length - 1];
     if (!selected || input.length > 0) return;
+    if (!store) return;
     if (keyInput === "v") {
-      void store.getMessageById(selected.id).then(setDetail);
+      const request = ++detailRequest.current;
+      void store.getMessageById(selected.id).then(message => {
+        if (!mounted.current || detailRequest.current !== request) return;
+        if (!message) { setReadError("Message detail is unavailable."); return; }
+        setDetail(message); setReadError(null);
+      }).catch(() => { if (mounted.current && detailRequest.current === request) setReadError("Unable to load message detail."); });
     }
-    if (keyInput === "m") {
-      void store.markReadByIds([selected.id], agent).then(() => {
+    if (keyInput === "m" && !marking.current) {
+      marking.current = true;
+      void store.markReadByIds([selected.id], agent).then((count) => {
+        if (!mounted.current) return;
+        if (count !== 1) { setReadError("Read acknowledgement was not confirmed."); return; }
+        setReadError(null);
         setMessages((current) => current.map((message) => (
           message.id === selected.id ? { ...message, read_at: new Date().toISOString() } : message
         )));
-      });
+      }).catch(() => { if (mounted.current) setReadError("Unable to mark message read."); })
+        .finally(() => { marking.current = false; });
     }
   });
 
   const handleSubmit = (value: string) => {
-    if (!value.trim()) return;
-
-    const result = submitChatViewMessage({ agent, sessionId, recipient, channelName }, value);
-    if (!result.ok) {
-      setSendError(result.error || "Unable to send message.");
-      setInput("");
-      return;
-    }
-
-    const msg = result.message;
-    seenIds.current.add(msg.id);
-    setMessages((prev) => [...prev, msg]);
+    if (!value.trim() || sendingRef.current) return;
+    // The ref closes the same-tick Enter race before React commits state.
+    sendingRef.current = true;
+    setSending(true);
     setSendError(null);
-    // For new conversations, capture the real session ID from the first message
-    if (!isChannel && !sessionId) {
-      setSessionId(msg.session_id);
-    }
+    changeInput("");
+    const clearedRevision = inputRevision.current;
 
-    setInput("");
+    void submitChatViewMessage({ agent, sessionId: sessionIdRef.current, recipient, channelName }, value).then((result) => {
+      if (!mounted.current) return;
+      if (!result.ok) {
+        setSendError(result.error || "Unable to send message.");
+        // Keep a newer draft untouched. Never restore content rejected by the
+        // sensitive-content guard, and never retry an ambiguous send automatically.
+        if (!result.blocked && inputRevision.current === clearedRevision) changeInput(value);
+        return;
+      }
+      const msg = result.message;
+      seenIds.current.add(msg.id);
+      setMessages((prev) => prev.some(message => message.id === msg.id) ? prev : [...prev, msg]);
+      if (!isChannel && !sessionIdRef.current) {
+        sessionIdRef.current = msg.session_id;
+        setSessionId(msg.session_id);
+      }
+    }).finally(() => {
+      sendingRef.current = false;
+      if (mounted.current) setSending(false);
+    });
   };
 
   const title = isChannel
@@ -198,7 +249,7 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
             <Text>{detail.content}</Text>
           </Box>
         ) : messages.length === 0 ? (
-          <Text dimColor>No messages yet. Type below and press Enter.</Text>
+          <Text dimColor>{loading ? "Loading messages…" : readError ? "Messages unavailable." : "No messages yet. Type below and press Enter."}</Text>
         ) : (
           messages.map((msg) => (
             <MessageBubble
@@ -210,6 +261,8 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
         )}
       </Box>
 
+      {readError && <Text color="red">{readError}</Text>}
+      {sending && <Text dimColor>Sending… You can draft the next message.</Text>}
       {sendError ? (
         <Box marginTop={1}>
           <Text color="red">{sendError}</Text>
@@ -220,7 +273,7 @@ export function ChatView({ agent, onBack, sessionId: initialSessionId, recipient
         <Text color={isChannel ? "magenta" : "cyan"}>{prompt}: </Text>
         <TextInput
           value={input}
-          onChange={setInput}
+          onChange={changeInput}
           onSubmit={handleSubmit}
           placeholder="Type a message..."
         />

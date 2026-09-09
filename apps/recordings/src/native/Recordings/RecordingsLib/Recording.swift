@@ -100,12 +100,24 @@ public struct Recording: Identifiable, Codable, Sendable, Equatable {
 
     public static func parseDate(_ value: String) -> Date? {
         guard !value.isEmpty else { return nil }
+        // PostgreSQL NOW()::text uses a space and may abbreviate the UTC offset
+        // to hours, for example "2026-09-06 10:52:42.523193+00".
+        var internetDate = value
+        if value.range(of: #"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,6})?[+-]\d{2}(?::?\d{2})?$"#,
+                       options: .regularExpression) != nil {
+            guard value.range(of: #"[+-](?:[01]\d|2[0-3])(?::?[0-5]\d)?$"#,
+                              options: .regularExpression) != nil else { return nil }
+            internetDate = value.replacingOccurrences(of: " ", with: "T")
+            if internetDate.range(of: #"[+-]\d{2}$"#, options: .regularExpression) != nil {
+                internetDate += ":00"
+            }
+        }
         let withFrac = ISO8601DateFormatter()
         withFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = withFrac.date(from: value) { return d }
+        if let d = withFrac.date(from: internetDate) { return d }
         let plain = ISO8601DateFormatter()
         plain.formatOptions = [.withInternetDateTime]
-        if let d = plain.date(from: value) { return d }
+        if let d = plain.date(from: internetDate) { return d }
         // SQLite "YYYY-MM-DD HH:MM:SS" fallback.
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")

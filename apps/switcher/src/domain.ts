@@ -1,7 +1,10 @@
 import { z } from "zod";
+import { modelPolicySchema, routingEventsSchema, type ModelPolicy, type RoutingEvent } from "./model-policy-schema";
+export { modelPolicySchema, routingEventSchema, routingEventsSchema } from "./model-policy-schema";
+export type { ModelPolicy, RoutingEvent } from "./model-policy-schema";
 export type { AuthStyle } from "./auth";
 
-export const VERSION = "0.1.2";
+export const VERSION = "0.1.6";
 export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode", "opencode2", "pi", "omp", "dsh", "cline", "hermes", "prime-agent", "gemini", "aider", "kilo"]);
 export const protocolSchema = z.enum(["anthropic-messages", "openai-responses", "openai-chat", "gemini-generate-content"]);
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
@@ -18,9 +21,14 @@ export function endpoint(value: string): string {
 const urlSchema = z.string().max(2000).superRefine((v, ctx) => {
   try { endpoint(v); } catch { ctx.addIssue({code: "custom", message: "Invalid endpoint URL"}); }
 }).transform(endpoint);
+export const expiresOnSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
+  const day = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(day.getTime()) && day.toISOString().slice(0, 10) === value;
+}, "Use a real calendar date in YYYY-MM-DD format.");
 export const modelSchema = z.object({
   id: z.string().min(1).max(300), name: label, description: z.string().max(8000).optional(),
   available: z.boolean().optional(),
+  expiresOn: expiresOnSchema.optional(),
   contextWindow: z.number().int().positive().optional(), maxOutputTokens: z.number().int().positive().optional(),
   inputModalities: z.array(z.string().max(50)).max(20).optional(),
   outputModalities: z.array(z.string().max(50)).max(20).optional(),
@@ -38,6 +46,7 @@ export const providerInputSchema = z.object({
   catalogAccountId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/).optional(),
   modelsPath: z.string().regex(/^[a-zA-Z0-9_/-]+$/).max(200).default("models"),
   manualModels: z.array(modelSchema).max(10000).default([]),
+  additionalModels: z.array(modelSchema).max(10000).optional(),
 }).strict().refine(p => !p.modelsPath.split("/").includes("..") && !p.modelsPath.startsWith("/"), "modelsPath must be relative");
 export const providerPresetSchema = z.object({
   id: idSchema, name: label, credentialEnv: envRef.optional(),
@@ -54,21 +63,23 @@ export const providerPresetSchema = z.object({
 export type ProviderPreset = z.infer<typeof providerPresetSchema>;
 export const profileInputSchema = z.object({
   id: idSchema, name: label, providerId: idSchema, harness: harnessSchema,
-  model: z.string().min(1).max(300),
+  model: z.string().min(1).max(300), modelPolicy: modelPolicySchema.optional(),
 }).strict();
 export const runInputSchema = z.object({
-  profileId: idSchema, harness: harnessSchema, model: z.string().min(1).max(300), planToken:z.string().regex(/^[a-f0-9]{64}$/),
+  modelPolicyVersion:z.literal(1),
+  profileId: idSchema, harness: harnessSchema, model: z.string().min(1).max(300), modelPolicy: modelPolicySchema.optional(), planToken:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 export const runUpdateSchema = z.object({
   status: z.enum(["exited", "failed", "interrupted"]),
   exitCode: z.number().int().min(0).max(255),
+  routingEvents: routingEventsSchema.optional(), routingEventsDropped: z.number().int().min(0).max(1000000).optional(),
 }).strict();
 export type ProviderInput = z.input<typeof providerInputSchema>;
 export type Provider = z.output<typeof providerInputSchema> & {version: number; updatedAt: string};
 export type ProfileInput = z.infer<typeof profileInputSchema>;
 export type Profile = ProfileInput & {version: number; updatedAt: string};
 export type Model = z.infer<typeof modelSchema>;
-export type Run = z.infer<typeof runInputSchema> & {providerId:string;providerVersion:number;profileVersion:number;id: string; status: "running"|"exited"|"failed"|"interrupted"; startedAt: string; endedAt?: string; exitCode?: number; version: number; updatedAt: string};
+export type Run = Omit<z.infer<typeof runInputSchema>,"modelPolicyVersion"> & {modelPolicyVersion?:1;providerId:string;providerVersion:number;profileVersion:number;id: string; status: "running"|"exited"|"failed"|"interrupted"; startedAt: string; endedAt?: string; exitCode?: number; routingEvents?:RoutingEvent[];routingEventsDropped?:number;version: number; updatedAt: string};
 export type Catalog = {models: Model[]; refreshedAt: string; source: "remote"|"manual"};
 export type LaunchPlan = {planToken:string; profile: Profile; provider: Provider; catalog: Catalog; warnings: string[]};
 export class Fault extends Error {
@@ -95,10 +106,14 @@ export function validateHarnessProvider(harness: Profile["harness"], provider: P
   if (harness === "gemini" && provider.authStyle !== "x-api-key")
     throw new Fault(422, "auth_mismatch", "Gemini CLI requires x-api-key authentication for its native generateContent protocol.");
 }
+/** Operator expiry dates are inclusive in UTC; they do not promise provider uptime. */
+export function modelExpired(model: Model, now = new Date()): boolean {
+  return model.expiresOn !== undefined && now.toISOString().slice(0, 10) > model.expiresOn;
+}
 export function codingEligible(model: Model): boolean {
-  return model.available !== false && (!model.supportedGenerationMethods || model.supportedGenerationMethods.includes("generateContent")) && (!model.outputModalities || model.outputModalities.includes("text")) &&
+  return !modelExpired(model) && model.available !== false && (!model.supportedGenerationMethods || model.supportedGenerationMethods.includes("generateContent")) && (!model.outputModalities || model.outputModalities.includes("text")) &&
     (!model.supportedParameters || model.supportedParameters.includes("tools"));
 }
 export function harnessEligible(model:Model,harness:Profile["harness"]):boolean {
-  return harness==="aider"?model.available!==false&&(!model.supportedGenerationMethods||model.supportedGenerationMethods.includes("generateContent"))&&(!model.inputModalities||model.inputModalities.includes("text"))&&(!model.outputModalities||model.outputModalities.includes("text")):codingEligible(model);
+  return !modelExpired(model) && (harness==="aider"?model.available!==false&&(!model.supportedGenerationMethods||model.supportedGenerationMethods.includes("generateContent"))&&(!model.inputModalities||model.inputModalities.includes("text"))&&(!model.outputModalities||model.outputModalities.includes("text")):codingEligible(model));
 }

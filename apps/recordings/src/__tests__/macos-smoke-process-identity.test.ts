@@ -6,31 +6,25 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { sliceBetweenUnique } from "./helpers/source-assertions";
+import { adaptShellFixtureTools, benignShellExecutables, confinedShellCommand } from "./helpers/confined-shell-fixture";
 
 const repositoryRoot = resolve(import.meta.dir, "../..");
 const bunExecutable = process.execPath;
 const temporaryPaths: string[] = [];
-const fixturePidFiles: string[][] = [];
+const fixtureSupervisors: Array<() => Promise<void>> = [];
 
 setDefaultTimeout(15_000);
 
-afterEach(() => {
-  for (const pidFiles of fixturePidFiles.splice(0)) {
-    for (const pidFile of pidFiles) {
-      if (!existsSync(pidFile)) continue;
-      const pid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
-      if (!Number.isSafeInteger(pid) || pid <= 0) continue;
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {}
-    }
-  }
+afterEach(async () => {
+  for (const cleanup of fixtureSupervisors.splice(0)) await cleanup();
   for (const path of temporaryPaths.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
@@ -91,12 +85,13 @@ function createSmokeFixture(
     wrapperExitsBeforeAppCompletion?: boolean;
     appIdentityChangesAfterCalls?: number;
     wrapperExitCode?: number;
+    startupDelaySeconds?: number;
   } = {},
 ) {
-  const root = mkdtempSync(join(tmpdir(), "recordings-smoke-identity-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "recordings-smoke-identity-")));
   temporaryPaths.push(root);
   const bin = join(root, "bin");
-  const app = join(root, "HasnaRecordings.app");
+  const app = join(root, "Hasna Recordings.app");
   const executable = join(app, "Contents", "MacOS", "Recordings");
   const appAcknowledgementPath = join(root, "app-acknowledgement.path");
   const preexistingAppPid = join(root, "preexisting-app.pid");
@@ -112,7 +107,7 @@ function createSmokeFixture(
   const wrapperExitMarker = join(root, "wrapper.exited");
   const wrapperPid = join(root, "wrapper.pid");
   const workdirMode = join(root, "workdir.mode");
-  fixturePidFiles.push([appPid, preexistingAppPid, wrapperPid]);
+
   mkdirSync(dirname(executable), { recursive: true });
   cpSync(join(repositoryRoot, "scripts", "smoke_macos_app.sh"), smokeScript);
   let smokeSource = readFileSync(smokeScript, "utf8");
@@ -121,7 +116,9 @@ function createSmokeFixture(
   expect(smokeSource).toContain('"$KILL_EXECUTABLE" -KILL "$pid"');
   expect(smokeSource).toContain("run_smoke normal\nrun_smoke permission-helper\nrun_smoke resolver");
   smokeSource = smokeSource
-    .replace("SMOKE_MAX_ATTEMPTS=100", "SMOKE_MAX_ATTEMPTS=3")
+    // Keep the production readiness window: a confined subprocess can take
+    // several seconds to launch on a busy Darwin host. Only completion and
+    // cleanup waits are shortened for these behavioral fixtures.
     .replace("SMOKE_COMPLETION_ATTEMPTS=200", "SMOKE_COMPLETION_ATTEMPTS=3")
     .replace("SMOKE_CLEANUP_ATTEMPTS=20", "SMOKE_CLEANUP_ATTEMPTS=3")
     .replace(
@@ -163,6 +160,7 @@ while [ "$#" -gt 0 ]; do
   if [ "$1" = --runtime-smoke-completion ]; then completion="$2"; shift 2; continue; fi
   shift
 done
+${options.startupDelaySeconds ? `/bin/sleep ${options.startupDelaySeconds}` : ":"}
 printf '%s\\n' "$acknowledgement" > "${appAcknowledgementPath}"
 printf '%s\\n' "$$" > "${appPid}"
 while [ ! -s "${appPid}" ]; do /bin/sleep 0.01; done
@@ -296,13 +294,25 @@ fi
 `,
   );
 
-  if (options.preexistingExactApp) {
-    const process = Bun.spawn(["/bin/sleep", "60"], { stderr: "ignore", stdout: "ignore" });
-    writeFileSync(preexistingAppPid, `${process.pid}\n`);
-  }
+  const mktempExecutable = join(bin, "mktemp");
+  mkdirSync(join(root, "work"));
+  writeExecutable(mktempExecutable, `#!/bin/bash
+set -euo pipefail
+[ "$#" -eq 2 ] && [ "$1" = -d ] || exit 90
+exec /usr/bin/mktemp -d '${root}/work/'"\${2##*/}"
+`);
+  smokeSource = adaptShellFixtureTools(smokeSource, "for executable_spec in ", {
+    OPEN_EXECUTABLE: openExecutable,
+    KILL_EXECUTABLE: killExecutable,
+    LSOF_EXECUTABLE: join(bin, "lsof"),
+    PS_EXECUTABLE: join(bin, "ps"),
+    MKTEMP_EXECUTABLE: mktempExecutable,
+  });
+  writeFileSync(smokeScript, smokeSource);
 
   return {
     app,
+    preexistingExactApp: options.preexistingExactApp ?? false,
     appExitMarker,
     appPid,
     completionWriterPid,
@@ -322,33 +332,178 @@ fi
   };
 }
 
+function smokeFixtureEnvironment(root: string): Record<string, string> {
+  return { HOME: root, TMPDIR: root, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", SSH_CONNECTION: "fixture-authenticated-ssh", RECORDINGS_TEST_SMOKE_ALLOW_NON_DARWIN: "1" };
+}
+
 async function runSmoke(fixture: ReturnType<typeof createSmokeFixture>) {
-  const smoke = Bun.spawn(
-    ["/bin/bash", fixture.smokeScript, fixture.app, bunExecutable],
-    {
-      env: {
-        ...Bun.env,
-        HOME: fixture.root,
-        SSH_CONNECTION: "fixture-authenticated-ssh",
-        RECORDINGS_TEST_SMOKE_ALLOW_NON_DARWIN: "1",
-        RECORDINGS_TEST_SMOKE_LSOF_EXECUTABLE: fixture.lsofExecutable,
-        RECORDINGS_TEST_SMOKE_KILL_EXECUTABLE: fixture.killExecutable,
-        RECORDINGS_TEST_SMOKE_OPEN_EXECUTABLE: fixture.openExecutable,
-        RECORDINGS_TEST_SMOKE_PS_EXECUTABLE: fixture.psExecutable,
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
-  const [exitCode, stdout, stderr] = await Promise.all([
-    smoke.exited,
-    new Response(smoke.stdout).text(),
-    new Response(smoke.stderr).text(),
-  ]);
-  return { exitCode, stderr, stdout };
+  const supervisorPath = join(fixture.root, "supervisor.sh");
+  const receipt = join(fixture.root, "smoke.status");
+  const stdout = join(fixture.root, "smoke.stdout");
+  const stderr = join(fixture.root, "smoke.stderr");
+  const smokePid = join(fixture.root, "smoke.pid");
+  const ownedPidFiles = [fixture.appPid, fixture.preexistingAppPid, fixture.wrapperPid, smokePid];
+  writeExecutable(supervisorPath, `#!/bin/bash
+set -euo pipefail
+cleanup() {
+  trap - EXIT TERM INT HUP
+  for file in ${ownedPidFiles.map((file) => `'${file}'`).join(" ")}; do
+    [ -s "$file" ] || continue
+    IFS= read -r pid < "$file"
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] && [ "$pid" != "$$" ] || continue
+    # Kernel sandbox additionally restricts signals to this sandbox's cohort.
+    /bin/kill -KILL "$pid" 2>/dev/null || true
+  done
+  wait 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 93' TERM INT HUP
+if [ '${fixture.preexistingExactApp ? "yes" : "no"}' = yes ]; then
+  /bin/sleep 60 &
+  printf '%s\n' "$!" > '${fixture.preexistingAppPid}'
+fi
+/bin/bash '${fixture.smokeScript}' '${fixture.app}' '${bunExecutable}' > '${stdout}' 2> '${stderr}' &
+printf '%s\n' "$!" > '${smokePid}'
+if wait "$!"; then status=0; else status=$?; fi
+printf '%s\n' "$status" > '${receipt}.tmp'
+/bin/mv '${receipt}.tmp' '${receipt}'
+IFS= read -r cleanup_request || true
+`);
+  const supervisor = Bun.spawn(confinedShellCommand(fixture.root, ["/bin/bash", supervisorPath], benignShellExecutables), {
+    env: smokeFixtureEnvironment(fixture.root),
+    cwd: fixture.root,
+    stdin: "pipe", stdout: "ignore", stderr: "pipe", detached: true,
+  });
+  const supervisorErrors = new Response(supervisor.stderr).text();
+  fixtureSupervisors.push(async () => {
+    if (supervisor.exitCode === null) {
+      supervisor.stdin.write("cleanup\n");
+      supervisor.stdin.end();
+    }
+    const timer = setTimeout(() => supervisor.kill("SIGTERM"), 3_000);
+    try { await supervisor.exited; } finally { clearTimeout(timer); }
+    const errors = await supervisorErrors;
+    expect(supervisor.exitCode, errors).toBe(0);
+  });
+  const deadline = Date.now() + 12_000;
+  while (!existsSync(receipt)) {
+    if (supervisor.exitCode !== null) throw new Error(`fixture supervisor exited: ${await supervisorErrors}`);
+    if (Date.now() >= deadline) throw new Error("fixture smoke deadline exceeded");
+    await Bun.sleep(20);
+  }
+  return { exitCode: Number(readFileSync(receipt, "utf8").trim()), stdout: readFileSync(stdout, "utf8"), stderr: readFileSync(stderr, "utf8") };
 }
 
 describe("macOS runtime smoke process identity", () => {
+  test("fixture environment retains the explicit non-Darwin smoke opt-in", () => {
+    const fixture = createSmokeFixture();
+    // Exercise the production guard as a pure decision, without impersonating
+    // uname or changing the actual Darwin branch used by runtime fixtures.
+    const guard = sliceBetweenUnique(readFileSync(join(repositoryRoot, "scripts", "smoke_macos_app.sh"), "utf8"),
+      'if [ "$HOST_PLATFORM" != "Darwin" ]', 'select_executable() {');
+    const command = ["/bin/bash", "-c", guard + "printf fixture-platform-accepted"];
+    const run = (platform: string, enabled: boolean) => {
+      const env: Record<string, string> = { ...smokeFixtureEnvironment(fixture.root), HOST_PLATFORM: platform };
+      if (!enabled) delete env.RECORDINGS_TEST_SMOKE_ALLOW_NON_DARWIN;
+      return Bun.spawnSync(confinedShellCommand(fixture.root, command, benignShellExecutables), { cwd: fixture.root, env });
+    };
+    const accepted = run("Linux", true);
+    expect(accepted.exitCode).toBe(0);
+    expect(accepted.stdout.toString()).toBe("fixture-platform-accepted");
+    const refused = run("Linux", false);
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr.toString()).toContain("only supported on macOS");
+    expect(run("Darwin", false).stdout.toString()).toBe("fixture-platform-accepted");
+    expect(existsSync(fixture.appPid)).toBeFalse();
+  });
+
+  test("fixture tool adaptation refuses ambiguous boundaries and unsafe executables", () => {
+    const fixture = createSmokeFixture();
+    const tools = { OPEN_EXECUTABLE: fixture.openExecutable };
+    expect(() => adaptShellFixtureTools("no boundary", "boundary!", tools)).toThrow("missing or ambiguous");
+    expect(() => adaptShellFixtureTools("boundary!boundary!", "boundary!", tools)).toThrow("missing or ambiguous");
+    expect(() => adaptShellFixtureTools("boundary!", "boundary!", { "BAD;_EXECUTABLE": fixture.openExecutable })).toThrow("invalid fixture tool binding");
+    const link = join(fixture.root, "linked-tool");
+    symlinkSync(fixture.openExecutable, link);
+    expect(() => adaptShellFixtureTools("boundary!", "boundary!", { OPEN_EXECUTABLE: link })).toThrow("owned regular executable");
+    chmodSync(fixture.openExecutable, 0o777);
+    expect(() => adaptShellFixtureTools("boundary!", "boundary!", tools)).toThrow("owned regular executable");
+    chmodSync(fixture.openExecutable, 0o600);
+    expect(() => adaptShellFixtureTools("boundary!", "boundary!", tools)).toThrow("owned regular executable");
+    chmodSync(fixture.openExecutable, 0o700);
+    const bound = adaptShellFixtureTools("Darwin-selection\nboundary!", "boundary!", tools);
+    expect(bound.indexOf("OPEN_EXECUTABLE=")).toBeGreaterThan(bound.indexOf("Darwin-selection"));
+    chmodSync(fixture.root, 0o755);
+    try {
+      expect(() => confinedShellCommand(fixture.root, [bunExecutable])).toThrow("owned canonical private root");
+    } finally { chmodSync(fixture.root, 0o700); }
+  });
+
+  test("unadapted Darwin smoke ignores inherited tools and fails closed inside the fixture", () => {
+    if (process.platform !== "darwin") return;
+    const fixture = createSmokeFixture();
+    cpSync(join(repositoryRoot, "scripts", "smoke_macos_app.sh"), fixture.smokeScript);
+    const result = Bun.spawnSync(confinedShellCommand(fixture.root, ["/bin/bash", fixture.smokeScript, fixture.app, bunExecutable], benignShellExecutables), {
+      cwd: fixture.root,
+      env: {
+        HOME: fixture.root, TMPDIR: fixture.root, PATH: "/usr/bin:/bin",
+        RECORDINGS_TEST_SMOKE_OPEN_EXECUTABLE: fixture.openExecutable,
+        RECORDINGS_TEST_SMOKE_LSOF_EXECUTABLE: fixture.lsofExecutable,
+        RECORDINGS_TEST_SMOKE_PS_EXECUTABLE: fixture.psExecutable,
+      },
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toContain("LSOF_EXECUTABLE");
+    expect(result.stderr.toString()).toContain("/usr/sbin/lsof");
+    expect(existsSync(fixture.appPid)).toBeFalse();
+    expect(existsSync(fixture.wrapperPid)).toBeFalse();
+  });
+
+  test("Darwin fixture confinement rejects host tools, outside writes, and foreign signals", async () => {
+    if (process.platform !== "darwin") return;
+    const fixture = createSmokeFixture();
+    const run = (command: string[]) => Bun.spawnSync(confinedShellCommand(fixture.root, command, benignShellExecutables), {
+      cwd: fixture.root,
+      env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: "/usr/bin:/bin" },
+    });
+    for (const tool of ["/usr/bin/open", "/usr/bin/defaults", "/usr/bin/codesign", "/usr/bin/security", "/usr/bin/tccutil"]) {
+      const denied = run([tool, "--help"]);
+      expect(denied.exitCode).not.toBe(0);
+      expect(denied.stderr.toString()).toContain("Operation not permitted");
+    }
+    const inside = join(fixture.root, "allowed-write");
+    expect(run([bunExecutable, "-e", `require("node:fs").writeFileSync(${JSON.stringify(inside)}, "fixture")`]).exitCode).toBe(0);
+    expect(readFileSync(inside, "utf8")).toBe("fixture");
+    const outsideRoot = realpathSync(mkdtempSync(join(tmpdir(), "recordings-foreign-write-")));
+    temporaryPaths.push(outsideRoot);
+    const outside = join(outsideRoot, "must-not-exist");
+    run([bunExecutable, "-e", `require("node:fs").writeFileSync(${JSON.stringify(outside)}, "forbidden")`]);
+    // Bun can exit zero on sandbox-denied writes. Inspect the independent
+    // target, not only an exit code or a swallowed exception.
+    expect(existsSync(outside)).toBe(false);
+    const foreign = Bun.spawn(["/bin/sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+    try {
+      const denied = run([bunExecutable, "-e", `
+        try { process.kill(${foreign.pid}, "SIGTERM"); console.log("escaped"); }
+        catch (error) { console.log(error.code); }
+      `]);
+      expect(denied.stdout.toString().trim()).toBe("EPERM");
+      await Bun.sleep(20);
+      expect(foreign.exitCode).toBeNull();
+      const allowed = run([bunExecutable, "-e", `
+        const child = Bun.spawn(["/bin/sleep", "30"]);
+        process.kill(child.pid, "SIGTERM");
+        await child.exited;
+        console.log("owned child stopped");
+      `]);
+      expect(allowed.exitCode, allowed.stderr.toString()).toBe(0);
+      expect(allowed.stdout.toString().trim()).toBe("owned child stopped");
+    } finally {
+      foreign.kill();
+      await foreign.exited;
+    }
+  });
+
   test("uses challenge-bound completion with identity-verified failure cleanup", () => {
     const smokeSource = readFileSync(
       join(repositoryRoot, "scripts", "smoke_macos_app.sh"),
@@ -474,22 +629,25 @@ describe("macOS runtime smoke process identity", () => {
     expect(processIsRunning(fixture.wrapperPid)).toBeFalse();
   });
 
-  test("terminates the exact live app when PID evidence is malformed", async () => {
-    const fixture = createSmokeFixture({
-      malformedPidEvidence: true,
-      preexistingExactApp: true,
-      stayAliveUntilSignaled: true,
+  for (const startupDelaySeconds of [0, 3]) {
+    test(`terminates the exact live app when PID evidence is malformed (launch delay ${startupDelaySeconds} seconds)`, async () => {
+      const fixture = createSmokeFixture({
+        malformedPidEvidence: true,
+        preexistingExactApp: true,
+        stayAliveUntilSignaled: true,
+        startupDelaySeconds,
+      });
+      const result = await runSmoke(fixture);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("reported a process that is not running");
+      expect(existsSync(fixture.signalMarker)).toBeTrue();
+      expect(existsSync(fixture.appExitMarker)).toBeTrue();
+      expect(existsSync(fixture.wrapperExitMarker)).toBeTrue();
+      expect(processIsRunning(fixture.appPid)).toBeFalse();
+      expect(processIsRunning(fixture.preexistingAppPid)).toBeTrue();
+      expect(processIsRunning(fixture.wrapperPid)).toBeFalse();
     });
-    const result = await runSmoke(fixture);
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain("reported a process that is not running");
-    expect(existsSync(fixture.signalMarker)).toBeTrue();
-    expect(existsSync(fixture.appExitMarker)).toBeTrue();
-    expect(existsSync(fixture.wrapperExitMarker)).toBeTrue();
-    expect(processIsRunning(fixture.appPid)).toBeFalse();
-    expect(processIsRunning(fixture.preexistingAppPid)).toBeTrue();
-    expect(processIsRunning(fixture.wrapperPid)).toBeFalse();
-  });
+  }
 
   test("fails when the app ignores the completion challenge", async () => {
     const fixture = createSmokeFixture({ completionBehavior: "ignore" });
@@ -515,7 +673,7 @@ describe("macOS runtime smoke process identity", () => {
     const result = await runSmoke(fixture);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("completion handshake timed out");
-    expect(result.stderr).toContain("Refusing to signal HasnaRecordings.app");
+    expect(result.stderr).toContain("Refusing to signal Hasna Recordings.app");
     expect(existsSync(fixture.signalMarker)).toBeFalse();
   });
 

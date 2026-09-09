@@ -1,16 +1,16 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import openapiTS, { astToString } from "openapi-typescript";
-import { providerInputSchema, providerPresetSchema, profileInputSchema, modelSchema, runInputSchema, runUpdateSchema, idSchema, VERSION } from "../src/domain";
+import { providerInputSchema, providerPresetSchema, profileInputSchema, modelSchema, runInputSchema, runUpdateSchema, modelPolicySchema, routingEventSchema, idSchema, VERSION } from "../src/domain";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 const meta = {version: z.number().int().positive(), updatedAt: z.string()};
 const provider = providerInputSchema.innerType().required({authStyle: true, modelsPath: true, manualModels: true}).extend(meta);
 const profile = profileInputSchema.extend(meta);
 const catalog = z.object({models: z.array(modelSchema), refreshedAt: z.string(), source: z.enum(["remote", "manual"])});
-const run = runInputSchema.extend({...meta, providerId:idSchema,providerVersion:z.number().int().positive(),profileVersion:z.number().int().positive(), id: idSchema, status: z.enum(["running","exited","failed","interrupted"]), startedAt: z.string(), endedAt: z.string().optional(), exitCode: z.number().int().optional()});
+const run = runInputSchema.extend({...meta, modelPolicyVersion:z.literal(1).optional(), providerId:idSchema,providerVersion:z.number().int().positive(),profileVersion:z.number().int().positive(), id: idSchema, status: z.enum(["running","exited","failed","interrupted"]), startedAt: z.string(), endedAt: z.string().optional(), exitCode: z.number().int().optional(),routingEvents:runUpdateSchema.shape.routingEvents,routingEventsDropped:runUpdateSchema.shape.routingEventsDropped});
 const definitions = {
   ProviderPreset: providerPresetSchema, ProviderInput: providerInputSchema, Provider: provider, ProfileInput: profileInputSchema, Profile: profile,
-  Model: modelSchema, ModelPage:z.object({data:z.array(modelSchema.extend({codingEligible:z.boolean()})),total:z.number().int(),limit:z.number().int(),offset:z.number().int(),refreshedAt:z.string(),source:z.enum(["remote","manual"])}),Catalog: catalog, LaunchPlan: z.object({provider, profile, catalog, planToken:z.string(),warnings: z.array(z.string())}),
+  Model: modelSchema, ModelPolicy: modelPolicySchema, RoutingEvent: routingEventSchema, ModelPage:z.object({data:z.array(modelSchema.extend({codingEligible:z.boolean(),expired:z.boolean()})),total:z.number().int(),limit:z.number().int(),offset:z.number().int(),refreshedAt:z.string(),source:z.enum(["remote","manual"])}),Catalog: catalog, LaunchPlan: z.object({provider, profile, catalog, planToken:z.string(),warnings: z.array(z.string())}),
   RunInput: runInputSchema, RunUpdate: runUpdateSchema, Run: run,
   Health: z.object({status:z.enum(["ok","degraded","unavailable"]),version:z.string(),backend:z.enum(["sqlite","postgresql"])}), Ready:z.object({ready:z.boolean(),reason:z.string().optional()}), Version:z.object({version:z.string()}),
   LaunchInput: z.object({profileId: idSchema}), Empty: z.object({}).strict(),

@@ -34,6 +34,7 @@
 // This is the ONE transport resolver for the CLI, MCP server, and SDK.
 
 import {
+  DEFAULT_AUTHORITY_SOURCE,
   createClientTransport,
   createHasnaHttpTransport,
   resolveClientTransport,
@@ -144,7 +145,10 @@ export function resolveNotesClientTransport(env = process.env, credentials = {})
     apiUrlSource: resolution.apiUrlSource,
     apiKeySource: resolution.apiKeySource,
     apiKeyTier: resolution.apiKeyTier,
-    api_url_present: resolution.apiKeyPresent,
+    // True when an operator configured the authority (HASNA_NOTES_API_URL,
+    // the Keychain api-url item, or the credentials file); false when the
+    // default fleet gateway applied. Never a copy of the key flag.
+    api_url_present: resolution.apiUrlSource !== DEFAULT_AUTHORITY_SOURCE,
     api_key_present: resolution.apiKeyPresent,
     scheme: protocol === 'https:' ? 'https' : protocol.slice(0, -1),
     localFallback: false,

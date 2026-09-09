@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { STORE_SELECTING_KEYS } from "../lib/store/isolated-test-env.js";
+import { STORE_SELECTING_KEYS, diskTierSandboxEnv } from "../lib/store/isolated-test-env.js";
 import { HERMETIC_STATION } from "../test/hermetic.js";
 
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
@@ -35,6 +35,11 @@ function cloudChildEnv(url: string): Record<string, string> {
   // account to one no real item uses, or the operator's real key and api-url
   // items win over the fixture pair below.
   env.HASNA_STATION = HERMETIC_STATION;
+  // The disk tier (`~/.hasna/<app>/config/credentials`) is an ambient input: point
+  // the child's HOME at a scratch root so the station credential cannot answer
+  // beside the synthetic API URL of the fixture.
+  Object.assign(env, diskTierSandboxEnv());
+
   env.HASNA_CONVERSATIONS_API_URL = url;
   env.HASNA_CONVERSATIONS_API_KEY = ["fixture", "not", "a", "credential"].join("-");
   env.CONVERSATIONS_AGENT_ID = "bob";

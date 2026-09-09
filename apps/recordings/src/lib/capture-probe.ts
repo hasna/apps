@@ -313,7 +313,7 @@ export function probeMicrophoneCapture(
     }
     if (peak.peak <= SILENCE_PEAK_THRESHOLD) {
       // Name the subject. The grant this probe needs belongs to whatever is
-      // responsible for THIS process, not to HasnaRecordings.app, and conflating the
+      // responsible for THIS process, not to Hasna Recordings.app, and conflating the
       // two sends the reader to a pane that will not fix anything.
       const subject = captureProbeSubject();
       return {
@@ -371,7 +371,7 @@ export interface CaptureProbeSubject {
  * Name whose Microphone grant this probe actually exercises.
  *
  * macOS attributes microphone access to the RESPONSIBLE process — for a CLI that
- * is the terminal application (or sshd), never HasnaRecordings.app. So a silent probe
+ * is the terminal application (or sshd), never Hasna Recordings.app. So a silent probe
  * means "the thing running this command has no grant", which is a different
  * finding, with a different fix, from "the app has no grant". Reporting the one
  * as the other is how a diagnostic sends someone to the wrong settings pane.
@@ -406,7 +406,7 @@ export function captureProbeSubject(
   const hasTty = options.hasTty ?? Boolean(process.stdin.isTTY || process.stdout.isTTY);
 
   if (overSsh) {
-    const subject = "the SSH session (sshd), not HasnaRecordings.app";
+    const subject = "the SSH session (sshd), not Hasna Recordings.app";
     return {
       headless: true,
       subject_known: true,
@@ -414,12 +414,12 @@ export function captureProbeSubject(
       note:
         "Running over SSH: macOS cannot display a consent prompt to a session with no GUI, " +
         "so Microphone stays not_determined and a silent capture here says NOTHING about " +
-        "whether HasnaRecordings.app can record. Judge the app by its own TCC entry and its log.",
+        "whether Hasna Recordings.app can record. Judge the app by its own TCC entry and its log.",
     };
   }
 
   if (inTmux) {
-    const subject = "the tmux server, not HasnaRecordings.app and not this pane's shell";
+    const subject = "the tmux server, not Hasna Recordings.app and not this pane's shell";
     return {
       headless: false,
       subject_known: true,
@@ -428,7 +428,7 @@ export function captureProbeSubject(
         "Running inside tmux: TCC attributes this capture to the tmux binary, which holds its " +
         "own grant. tmux also snapshots the environment at pane creation, so SSH variables may " +
         "be missing even in a remote session — treat a silent result as inconclusive about both " +
-        "HasnaRecordings.app and about whether anyone could have been prompted.",
+        "Hasna Recordings.app and about whether anyone could have been prompted.",
     };
   }
 
@@ -436,15 +436,15 @@ export function captureProbeSubject(
     return {
       headless: true,
       subject_known: false,
-      subject: "an unidentified responsible process (not HasnaRecordings.app)",
+      subject: "an unidentified responsible process (not Hasna Recordings.app)",
       note:
         "The responsible process could not be identified: no SSH variables, no TERM_PROGRAM and " +
         "no tty, which is what launchd, cron, CI and sudo look like. Whatever holds the grant, it " +
-        "is not HasnaRecordings.app, and nothing here can be shown a consent prompt. Inconclusive.",
+        "is not Hasna Recordings.app, and nothing here can be shown a consent prompt. Inconclusive.",
     };
   }
 
-  const subject = `${termProgram || "the terminal application running this command"}, not HasnaRecordings.app`;
+  const subject = `${termProgram || "the terminal application running this command"}, not Hasna Recordings.app`;
   return {
     headless: false,
     subject_known: Boolean(termProgram),
@@ -452,7 +452,7 @@ export function captureProbeSubject(
     note:
       `Grants are per responsible process: this probe exercises ${subject}. ` +
       "A pass proves the microphone hardware and the input device work; it does not " +
-      "transfer to HasnaRecordings.app, which needs its own grant.",
+      "transfer to Hasna Recordings.app, which needs its own grant.",
   };
 }
 
@@ -460,7 +460,7 @@ export interface MicrophoneGrantInstruction {
   /** The bundle that must receive the grant, or null when none was found. */
   bundle_path: string | null;
   bundle_identifier: string;
-  /** Every HasnaRecordings.app on disk — more than one makes the grant ambiguous. */
+  /** Every Hasna Recordings.app on disk — more than one makes the grant ambiguous. */
   candidate_bundle_paths: string[];
   /** Ordered steps, already naming the pane, the section and the bundle. */
   steps: string[];
@@ -568,7 +568,7 @@ export function classifyPermissionState(permissionState: string): PermissionRequ
 export function microphoneGrantInstruction(options: {
   /** Path the installer treats as canonical. */
   installedAppPath?: string | null;
-  /** Other HasnaRecordings.app bundles found on disk (e.g. legacy install sites). */
+  /** Other Hasna Recordings.app bundles found on disk (e.g. legacy install sites). */
   otherAppPaths?: string[];
   /**
    * Whether the app has ever prompted. `unknown` means the TCC state could not
@@ -586,7 +586,7 @@ export function microphoneGrantInstruction(options: {
 
   if (!bundlePath) {
     steps.push(
-      "No HasnaRecordings.app bundle was found on disk, so there is nothing to grant Microphone to yet. " +
+      "No Hasna Recordings.app bundle was found on disk, so there is nothing to grant Microphone to yet. " +
         "Install the app first ('recordings app install')."
     );
     return {
@@ -599,7 +599,7 @@ export function microphoneGrantInstruction(options: {
 
   if (candidates.length > 1) {
     steps.push(
-      `AMBIGUOUS: ${candidates.length} HasnaRecordings.app bundles exist (${candidates.join(", ")}). ` +
+      `AMBIGUOUS: ${candidates.length} Hasna Recordings.app bundles exist (${candidates.join(", ")}). ` +
         "A TCC grant is bound to the bundle's code signature, so granting one does not grant the " +
         "other, and the toggle in Settings does not say which is which. Remove the bundles you are " +
         "not running before granting, or the grant may attach to the wrong one."

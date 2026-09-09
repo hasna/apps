@@ -8,8 +8,8 @@
  *
  * The public surface is the Store abstraction plus the shared domain types.
  * EVERY SDK consumer reads and writes conversations DATA through `getStore()`,
- * which returns a `ConversationsStore` bound to on-box SQLite (LocalStore) or the
- * HTTP API (ApiStore) resolved from the client-flip env — the
+ * which returns a `ConversationsStore` bound to the shared HTTP API using
+ * saved account credentials — the
  * SAME one interface the CLI and MCP use. The raw on-box SQLite domain helpers
  * (sendMessage/readMessages/markRead/…) and the `getDb()` handle are NOT public
  * API: re-exporting them meant SDK callers silently bypassed the Store and always
@@ -42,8 +42,6 @@ export {
 export {
   PROJECT_CHANNEL_REGISTRATION_ROUTE,
   createProjectChannelRegistrationAuthority,
-  listProjectChannelMessagePage,
-  listProjectChannelRegistrationPage,
   projectChannelRegistrationDigest,
 } from "./lib/project-channel-registration.js";
 export type {
@@ -74,8 +72,8 @@ export type {
   ProjectChannelRegistrationResponseControl,
 } from "./lib/project-channel-registration.js";
 
-// Audited admin redaction tooling (local SQLite maintenance; CLI: `conversations admin redact-messages`).
-export { redactMessagesById } from "./lib/admin-redaction.js";
+// Public convenience functions follow the same shared API as getStore().
+export { listProjectChannelMessagePage, listProjectChannelRegistrationPage, redactMessagesById } from "./lib/store/public-operations.js";
 export type {
   RedactMessagesOptions,
   RedactMessagesResult,

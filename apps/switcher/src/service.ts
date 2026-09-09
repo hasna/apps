@@ -1,9 +1,11 @@
+import { canonicalPolicyJSON } from "./model-policy-schema";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { Store } from "./store";
 import { discover, type CatalogCredentialResolver } from "./catalog";
 import { boundedJson } from "./http";
-import { Fault, VERSION, parse, idSchema, providerInputSchema, profileInputSchema, runInputSchema, runUpdateSchema, validateHarnessProvider, codingEligible, harnessEligible, type Provider, type Profile, type Run, type Catalog, type LaunchPlan } from "./domain";
+import { Fault, VERSION, parse, idSchema, providerInputSchema, profileInputSchema, runInputSchema, runUpdateSchema, validateHarnessProvider, codingEligible, harnessEligible, modelExpired, type Provider, type Profile, type Run, type Catalog, type LaunchPlan } from "./domain";
+import { compileModelPolicy } from "./model-policy";
 import { providerPresets, getProviderPreset } from "./presets";
 import openapi from "../openapi.json";
 const snapshot=(profile:Profile,provider:Provider,catalog:Catalog)=>createHash("sha256").update(JSON.stringify([profile,provider,{models:catalog.models,source:catalog.source}])).digest("hex");
@@ -42,7 +44,7 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
         if (resource === "providers" && id && parts[3] === "models" && parts.length === 4) {
           const catalog = await store.get<Catalog>("catalogs", id); const p = page();
           const filtered = catalog.models.filter(m => [m.id, m.name].some(s => s.toLowerCase().includes(p.search.toLowerCase())));
-          return json({...catalog, models: undefined, data: filtered.slice(p.offset, p.offset + p.limit).map(m => ({...m, codingEligible: codingEligible(m)})), total: filtered.length, ...p});
+          return json({...catalog, models: undefined, data: filtered.slice(p.offset, p.offset + p.limit).map(m => ({...m, codingEligible: codingEligible(m), expired: modelExpired(m)})), total: filtered.length, ...p});
         }
         throw new Fault(404, "not_found", "Route was not found.");
       }
@@ -103,7 +105,9 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
           catch (e) { if (e instanceof Fault && e.status === 404) throw new Fault(422, "catalog_missing", "Refresh the provider catalog before launching."); throw e; }
           const selected = catalog.models.find(m => m.id === profile.model);
           if (!selected) throw new Fault(422, "model_missing", "Selected model is not in the provider catalog.");
+          if (modelExpired(selected)) throw new Fault(422, "model_expired", "Selected model has passed its configured expiry date. Select an unexpired model.");
           if (!harnessEligible(selected,profile.harness)) throw new Fault(422, "model_ineligible", "Selected model is unavailable or explicitly lacks a required generation method, text output or tool support.");
+          compileModelPolicy(profile.model,catalog.models.filter(model=>modelExpired(model)||harnessEligible(model,profile.harness)),profile.modelPolicy);
           const warnings: string[] = [];
           if (profile.harness!=="aider"&&!selected.supportedParameters) warnings.push("Provider does not declare tool capabilities; execution compatibility is unverified.");
           if (profile.harness === "claude" && !/claude/i.test(profile.model)) warnings.push("Anthropic does not support non-Claude models in Claude Code; this combination is experimental.");
@@ -111,6 +115,7 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
           return {profile, provider, catalog, warnings,planToken:snapshot(profile,provider,catalog)} satisfies LaunchPlan;
         }
         if (resource === "runs" && !id && request.method === "POST") {
+          if((body as {modelPolicyVersion?:unknown})?.modelPolicyVersion!==1)throw new Fault(409,"launcher_upgrade_required","This API requires a launcher with automatic model policy version 1; upgrade the Switcher CLI/SDK.");
           const input = parse(runInputSchema, body);
           if(store.engine === "postgresql") await db.unsafe("SELECT id FROM switcher_profiles WHERE id = $1 FOR SHARE",[input.profileId]);
           const profile=await store.get<Profile>("profiles",input.profileId,db);
@@ -121,8 +126,9 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
           const provider=await store.get<Provider>("providers",profile.providerId,db);
           let catalog:Catalog;
           try{catalog=await store.get<Catalog>("catalogs",profile.providerId,db);}catch(error){if(error instanceof Fault&&error.status===404)throw new Fault(409,"plan_changed","Catalog changed; request a fresh launch plan.");throw error;}
-          if (profile.harness !== input.harness || profile.model !== input.model || snapshot(profile,provider,catalog)!==input.planToken) throw new Fault(409, "plan_changed", "Provider, profile or catalog changed; request a fresh launch plan.");
-          return store.put("runs", {...input,providerId:provider.id,providerVersion:provider.version,profileVersion:profile.version,id: crypto.randomUUID(), status: "running", startedAt: new Date().toISOString()}, undefined, db);
+          if (profile.harness !== input.harness || profile.model !== input.model || canonicalPolicyJSON(profile.modelPolicy ?? null) !== canonicalPolicyJSON(input.modelPolicy ?? profile.modelPolicy ?? null) || snapshot(profile,provider,catalog)!==input.planToken) throw new Fault(409, "plan_changed", "Provider, profile, model policy or catalog changed; request a fresh launch plan.");
+          compileModelPolicy(profile.model,catalog.models.filter(model=>modelExpired(model)||harnessEligible(model,profile.harness)),profile.modelPolicy);
+          return store.put("runs", {...input,modelPolicy:profile.modelPolicy,providerId:provider.id,providerVersion:provider.version,profileVersion:profile.version,id: crypto.randomUUID(), status: "running", startedAt: new Date().toISOString()}, undefined, db);
         }
         if (resource === "runs" && id && request.method === "PATCH" && parts.length === 3) {
           const input = parse(runUpdateSchema, body); const run = await store.get<Run>("runs", id, db);

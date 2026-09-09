@@ -26,15 +26,15 @@ export interface ProviderAdapter {
   listDomains(): Promise<RemoteDomain[]>;
   getDnsRecords(domain: string): Promise<DnsRecord[]>;
   verifyDomain(domain: string): Promise<{ dkim: DnsStatus; spf: DnsStatus; dmarc: DnsStatus }>;
-  addDomain(domain: string): Promise<void>;
+  addDomain(domain: string, signal?: AbortSignal): Promise<void>;
   /** Optional: re-initiate domain identity/DKIM verification and return DNS records to publish. */
   reinitiateDomainVerification?(domain: string): Promise<DnsRecord[]>;
   /** Optional: set a custom MAIL FROM domain (SES). Returns the mail-from domain used. */
-  setMailFrom?(domain: string, mailFromDomain?: string): Promise<string>;
+  setMailFrom?(domain: string, mailFromDomain?: string, signal?: AbortSignal): Promise<string>;
   listAddresses(): Promise<RemoteAddress[]>;
   addAddress(email: string): Promise<void>;
   verifyAddress(email: string): Promise<boolean>;
-  sendEmail(opts: SendEmailOptions): Promise<string>;
+  sendEmail(opts: SendEmailOptions, signal?: AbortSignal): Promise<string>;
   pullEvents(since?: string): Promise<RemoteEvent[]>;
   getStats(period?: string): Promise<Stats>;
 }

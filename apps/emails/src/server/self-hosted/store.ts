@@ -1,9 +1,22 @@
+import { WorkerSupervisorStore, WORKER_CLAIM_CTE, type WorkerFence } from "./worker-supervisor.js";
+import type { RuntimeLogEntry, RuntimeComponent } from "./runtime-log.js";
+import { ProvisionUpJobs } from "./provision-up-store.js";
+import { DomainDnsJobs } from "./domain-dns-store.js";
+import * as domainConnectStore from "./domain-connect-store.js";
+import type { DomainConnectInput, DomainConnectClaim, DomainConnectResult } from "./domain-connect.js";
+import type { TrackingDocument } from "./tracking.js";
+import * as addressProvisioningStore from "./address-provisioning-store.js";
+import type { AddressProvisioningInput, AddressProvisioningRefs, ProvisioningJob, ProvisioningReceipt } from "./address-provisioning.js";
+import { SequenceWorkerStore } from "./sequence-worker.js";
+import type { ProviderDeliveryRead } from "./provider-delivery.js";
 // Postgres repository for the Emails self-hosted service.
 //
 // Amendment A1 (PURE REMOTE): every method reads/writes the self_hosted Postgres
 // directly through the product-owned storage utilities' typed query client. No cache, no
 // local mirror.
 
+import { claimForwarding, finishForwarding } from "./forwarding-store.js";
+import type { ForwardingBatchOptions, ForwardingClaim } from "./forwarding.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { QueryResult, TypedQueryClient, PoolQueryClient } from "../../storage-kit/index.js";
 import type { QueryResultRow } from "pg";
@@ -17,9 +30,12 @@ import {
 } from "../../lib/attachment-download.js";
 import {
   MailboxFilterConflictError,
+  MailboxFilterInputError,
   MailboxFilterNotFoundError,
+  mergeMailboxFilterActions,
   normalizeMailboxFilterInput,
   type MailboxFilter,
+  type MailboxFilterActions,
   type MailboxFilterInput,
 } from "../../lib/mailbox-filters.js";
 
@@ -214,6 +230,8 @@ export interface MessageRecord {
   body_text: string | null;
   body_html: string | null;
   status: string;
+  provider_id?: string | null;
+  tags?: Record<string, string> | null;
   provider_message_id: string | null;
   message_id: string | null;
   in_reply_to: string | null;
@@ -510,6 +528,15 @@ export class AttachmentRepairQuotaExceededError extends Error {
   }
 }
 
+/** Server-verified receive binding revalidated atomically at persistence. */
+export interface InboundPersistenceFence {
+  recipients: string[];
+  providerId?: string;
+  providerType?: string;
+  sourceId?: string;
+  sourceSnapshot?: { type: string; status: string; providerId: string | null; watch: boolean };
+}
+
 /** Fields a caller may supply when writing a message (outbound or inbound). */
 export interface MessageInput {
   from_addr: string;
@@ -519,6 +546,8 @@ export interface MessageInput {
   body_text?: string | null;
   body_html?: string | null;
   status?: string;
+  provider_id?: string | null;
+  tags?: Record<string, string> | null;
   provider_message_id?: string | null;
   direction?: string;
   message_id?: string | null;
@@ -555,7 +584,7 @@ export interface WebhookDeliveryEventInput {
 /** Columns selected for a message row (explicit so new columns are intentional). */
 const MESSAGE_COLUMNS =
   "id, direction, from_addr, to_addrs, cc_addrs, subject, body_text, body_html, status, " +
-  "provider_message_id, message_id, in_reply_to, received_at, is_read, is_starred, labels, " +
+  "provider_id, tags, provider_message_id, message_id, in_reply_to, received_at, is_read, is_starred, labels, " +
   "headers, attachments, source_id, idempotency_key, send_payload_hash, send_state, send_started_at, " +
   "created_at, updated_at";
 
@@ -569,7 +598,7 @@ const MESSAGE_SNIPPET_CHARS = 140;
 // they were ~73% of a 459KB page payload; the detail read keeps them.
 const MESSAGE_LIST_COLUMNS =
   "m.id, m.direction, m.from_addr, m.to_addrs, m.cc_addrs, m.subject, m.status, " +
-  "m.provider_message_id, m.message_id, m.in_reply_to, m.received_at, m.is_read, m.is_starred, m.labels, " +
+  "m.provider_id, m.tags, m.provider_message_id, m.message_id, m.in_reply_to, m.received_at, m.is_read, m.is_starred, m.labels, " +
   "m.source_id, m.send_state, m.send_started_at, m.created_at, m.updated_at, " +
   `NULLIF(left(regexp_replace(COALESCE(m.body_text, ''), '\\s+', ' ', 'g'), ${MESSAGE_SNIPPET_CHARS}), '') AS snippet, ` +
   "CASE WHEN jsonb_typeof(m.attachments) = 'array' THEN jsonb_array_length(m.attachments) ELSE 0 END AS attachment_count, " +
@@ -706,6 +735,7 @@ export const MESSAGE_FOLDERS: readonly MessageFolder[] = [
 ];
 
 export interface ListMessagesOptions extends ListOptions {
+  provider_id?: string;
   direction?: "inbound" | "outbound";
   to?: string;
   from?: string;
@@ -1471,17 +1501,17 @@ async function reconcileAttachmentRepairRun(
 // Extracted from the store classes so the unscoped base and the TenantScopedStore
 // share ONE implementation of encoding/SQL-shaping (no duplication drift).
 
-/** 23-column message insert list (tenant_id is appended by the scoped variant). */
+/** 25-column message insert list (tenant_id is appended by the scoped variant). */
 const MESSAGE_INSERT_COLS =
   "id, direction, from_addr, to_addrs, cc_addrs, subject, body_text, body_html, status, " +
   "provider_message_id, message_id, in_reply_to, received_at, is_read, is_starred, labels, " +
-  "headers, attachments, source_id, idempotency_key, send_payload_hash, send_state, send_started_at";
+  "headers, attachments, source_id, idempotency_key, send_payload_hash, send_state, send_started_at, provider_id, tags";
 
 const MESSAGE_INSERT_VALUES =
   "$1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, " +
-  "$16::jsonb, $17::jsonb, $18::jsonb, $19, $20, $21, $22, $23";
+  "$16::jsonb, $17::jsonb, $18::jsonb, $19, $20, $21, $22, $23, $24, $25::jsonb";
 
-/** Positional insert params (23) shared by createMessage/upsertMessage/reserveSendIntent. */
+/** Positional insert params (25) shared by createMessage/upsertMessage/reserveSendIntent. */
 function messageInsertParams(input: MessageInput): unknown[] {
   return [
     randomUUID(),
@@ -1507,6 +1537,8 @@ function messageInsertParams(input: MessageInput): unknown[] {
     input.send_payload_hash ?? null,
     input.send_state ?? "none",
     input.send_started_at ?? null,
+    input.provider_id?.trim() || null,
+    input.tags == null ? null : JSON.stringify(input.tags),
   ];
 }
 
@@ -1532,6 +1564,18 @@ function warmingLimit(target: number, startDate: string | null, now = new Date()
     if (currentDay % 2 === 0) limit = Math.round(limit * 2);
   }
   return Math.min(limit, target);
+}
+
+/**
+ * Quote a trusted identifier for generic-resource SQL.
+ *
+ * Identifiers here come from the SELF_HOSTED_RESOURCES registry (never from a
+ * caller), so quoting is not an injection concern — it is what keeps the
+ * reserved word `order` valid after FR-0001 adds an `order` column to
+ * `mailbox_filters` and the resource registry begins to expose it.
+ */
+function quotedColumn(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
 }
 
 /** Coerce/encode a request value for a generic-resource column per its kind. */
@@ -2188,6 +2232,7 @@ function messageUpsertAssignments(input: MessageInput): string {
     ["body_text", input.body_text],
     ["body_html", input.body_html],
     ["status", input.status],
+    ["provider_id", input.provider_id],
     ["provider_message_id", input.provider_message_id],
     ["message_id", input.message_id],
     ["in_reply_to", input.in_reply_to],
@@ -2228,7 +2273,155 @@ export class TenantScopedStore {
     private readonly atomicClient?: PoolQueryClient,
     private readonly allowUnsafeTestTransactions = false,
     private readonly repairPolicy: AttachmentRepairPolicy = attachmentRepairPolicy(undefined),
+    private readonly workerFence?: WorkerFence,
   ) {}
+
+  workerSupervisor(): WorkerSupervisorStore {
+    if (!this.atomicClient) throw new Error("Worker supervision requires a transactional store");
+    return new WorkerSupervisorStore(this.atomicClient, this.tenantId);
+  }
+  withWorkerFence(fence: WorkerFence): TenantScopedStore {
+    return new TenantScopedStore(this.client, this.tenantId, this.atomicClient, this.allowUnsafeTestTransactions, this.repairPolicy, fence);
+  }
+
+  async appendRuntimeLog(entry: Omit<RuntimeLogEntry, "id" | "created_at">): Promise<void> {
+    await this.client.execute("INSERT INTO runtime_logs(id,tenant_id,request_id,component,operation,event,http_status) VALUES($1,$2,$3,$4,$5,$6,$7)", [crypto.randomUUID(), this.tenantId, entry.request_id, entry.component, entry.operation, entry.event, entry.http_status]);
+  }
+  async tailRuntimeLogs(component: RuntimeComponent, limit: number): Promise<RuntimeLogEntry[]> {
+    const rows = await this.client.many<RuntimeLogEntry>("SELECT id,request_id,component,operation,event,http_status,created_at FROM runtime_logs WHERE tenant_id=$1 AND component=$2 ORDER BY created_at DESC,id DESC LIMIT $3", [this.tenantId, component, limit]);
+    return rows.map(row => ({ ...row, created_at: new Date(row.created_at).toISOString() }));
+  }
+
+  resolveDomainConnect(input: DomainConnectInput) {
+    return domainConnectStore.resolveDomainConnect(
+      this.client,
+      this.tenantId,
+      input,
+    );
+  }
+  provisionUpJobs() { return new ProvisionUpJobs(this.client, this.tenantId, this.atomicClient); }
+  domainDnsJobs() { return new DomainDnsJobs(this.client, this.tenantId, this.atomicClient); }
+  claimDomainConnect(
+    input: DomainConnectInput,
+    providerType: "ses" | "resend",
+    actor: string,
+  ) {
+    return domainConnectStore.claimDomainConnect(
+      this.client,
+      this.tenantId,
+      input,
+      providerType,
+      actor,
+    );
+  }
+  domainConnectLeaseCurrent(claim: DomainConnectClaim) {
+    return domainConnectStore.domainConnectLeaseCurrent(
+      this.client,
+      this.tenantId,
+      claim,
+    );
+  }
+  blockDomainConnect(claim: DomainConnectClaim, result: DomainConnectResult) {
+    return domainConnectStore.blockDomainConnect(
+      this.client,
+      this.tenantId,
+      claim,
+      result,
+    );
+  }
+  getDomainConnection(id: string) {
+    return domainConnectStore.getDomainConnection(
+      this.client,
+      this.tenantId,
+      id,
+    );
+  }
+  async completeDomainConnect(
+    claim: DomainConnectClaim,
+    result: DomainConnectResult,
+  ) {
+    if (!this.atomicClient)
+      throw new Error("Domain connection requires a transactional store");
+    return this.atomicClient.transaction(async (tx) => {
+      await tx.execute("SELECT set_config('app.current_tenant',$1,true)", [
+        this.tenantId,
+      ]);
+      return domainConnectStore.completeDomainConnect(
+        tx,
+        new TenantScopedStore(tx, this.tenantId),
+        this.tenantId,
+        claim,
+        result,
+      );
+    });
+  }
+
+  resolveAddressProvisioning(input: AddressProvisioningInput) {
+    return addressProvisioningStore.resolveAddressProvisioning(
+      this.client,
+      this.tenantId,
+      input,
+    );
+  }
+  startProvisioningJob(
+    input: AddressProvisioningInput,
+    key: string,
+    actor: string,
+  ) {
+    return addressProvisioningStore.startProvisioningJob(
+      this.client,
+      this.tenantId,
+      input,
+      key,
+      actor,
+    );
+  }
+  getProvisioningJob(id: string) {
+    return addressProvisioningStore.getProvisioningJob(
+      this.client,
+      this.tenantId,
+      id,
+    );
+  }
+  claimProvisioningJob(id: string, recheckReady = false) {
+    return addressProvisioningStore.claimProvisioningJob(
+      this.client,
+      this.tenantId,
+      id,
+      recheckReady,
+    );
+  }
+  blockProvisioningJob(job: ProvisioningJob, receipt: ProvisioningReceipt) {
+    return addressProvisioningStore.blockProvisioningJob(
+      this.client,
+      this.tenantId,
+      job,
+      receipt,
+    );
+  }
+  async completeAddressProvisioning(
+    job: ProvisioningJob,
+    refs: AddressProvisioningRefs,
+    receipt: ProvisioningReceipt,
+    beforeCommit?: (tx: TypedQueryClient) => Promise<void>,
+  ) {
+    if (!this.atomicClient)
+      throw new Error("Address provisioning requires a transactional store");
+    return this.atomicClient.transaction(async (tx) => {
+      await tx.execute("SELECT set_config('app.current_tenant',$1,true)", [
+        this.tenantId,
+      ]);
+      return addressProvisioningStore.completeAddressProvisioning(
+        tx,
+        new TenantScopedStore(tx, this.tenantId),
+        this.tenantId,
+        job,
+        refs,
+        receipt,
+        beforeCommit,
+      );
+    });
+  }
 
   private sendIntentKeyDigest(key: string): string {
     return createHash("sha256")
@@ -2285,6 +2478,101 @@ export class TenantScopedStore {
    * the same transaction. A receipt can therefore never acknowledge a missing
    * event, and a committed event can never be left without its receipt.
    */
+  private async lockRelayRecipients(tx: TypedQueryClient, addresses: string[]): Promise<void> {
+    const domains = [...new Set(addresses.map(address => address.slice(address.lastIndexOf("@") + 1).toLowerCase()))];
+    const routes = await tx.many<{ tenant_id: string }>(`SELECT r.tenant_id FROM inbound_domain_routes r JOIN tenants t ON t.id=r.tenant_id WHERE r.domain=ANY($1::text[]) AND t.status='active' FOR SHARE OF r,t`, [domains]);
+    if (!domains.length || routes.length !== domains.length || routes.some(route => route.tenant_id !== this.tenantId)) throw new Error("Webhook recipient routing changed before durable acceptance");
+  }
+  async authorizeRelayDelivery(providerId: string, upstreamId: string, sender: string): Promise<boolean> {
+    const message = await this.client.get<{ from_addr: string }>(`SELECT from_addr FROM messages WHERE tenant_id=$1 AND provider_id=$2 AND provider_message_id=$3 AND direction='outbound'`, [this.tenantId, providerId, upstreamId]);
+    return Boolean(message && canonicalSender(sender) && canonicalSender(sender) === canonicalSender(message.from_addr));
+  }
+  private async lockInboundPersistenceFence(tx: TypedQueryClient, fence: InboundPersistenceFence): Promise<void> {
+    await this.lockRelayRecipients(tx, fence.recipients);
+    if (fence.providerId) {
+      const provider = await tx.get<{ type: string }>(`SELECT type FROM self_hosted_providers WHERE tenant_id=$1 AND id=$2 FOR SHARE`, [this.tenantId, fence.providerId]);
+      if (!fence.providerType || provider?.type !== fence.providerType) throw new Error("Ingest provider type changed before durable acceptance");
+    }
+    if (fence.sourceId) {
+      const source = await tx.get<{ type: string; status: string; provider_id: string | null; settings_json: Record<string, unknown> }>(`SELECT type,status,provider_id,settings_json FROM mailbox_sources WHERE tenant_id=$1 AND id=$2 FOR SHARE`, [this.tenantId, fence.sourceId]);
+      if (!source || !["s3", "ses_s3"].includes(source.type)) throw new Error("Ingest source changed before durable acceptance");
+      if (fence.sourceSnapshot) {
+        const expected = fence.sourceSnapshot;
+        if (source.type !== expected.type || source.status !== expected.status || source.provider_id !== expected.providerId || (expected.watch && source.settings_json?.live_sync_enabled === false)) throw new Error("Ingest source lifecycle changed before durable acceptance");
+      } else if (source.status !== "active" || (source.provider_id !== null && source.provider_id !== fence.providerId)) throw new Error("Webhook source changed before durable acceptance");
+    }
+  }
+  /** Reusable bounded ingest adapter: the lifecycle check and each write share one SQL transaction. */
+  withInboundPersistenceFence(fence: InboundPersistenceFence) {
+    return {
+      validateInboundAcceptance: async () => {
+        if (!this.atomicClient) throw new Error("Fenced ingestion requires a transactional store");
+        await this.atomicClient.transaction(async tx => {
+          await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
+          await this.lockInboundPersistenceFence(tx, fence);
+        });
+      },
+      findMessageIdByKey: (key: string) => this.findMessageIdByKey(key),
+      getInboundSourceProvenance: (id: string) => this.getInboundSourceProvenance(id),
+      createInboundMessageWithProvenance: (input: MessageInput, provenance: Parameters<TenantScopedStore["createInboundMessageWithProvenance"]>[1]) => this.createInboundMessageWithProvenance(input, provenance, fence),
+      recordInboundSourceProvenance: async (input: Parameters<TenantScopedStore["recordInboundSourceProvenance"]>[0]) => {
+        if (!this.atomicClient) throw new Error("Fenced ingestion requires a transactional store");
+        return this.atomicClient.transaction(async tx => {
+          await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
+          await this.lockInboundPersistenceFence(tx, fence);
+          return new TenantScopedStore(tx, this.tenantId).recordInboundSourceProvenance(input);
+        });
+      },
+    };
+  }
+  async recordFencedRelayReceipt(provider: string, eventId: string, resourceId: string | null, fence: InboundPersistenceFence): Promise<void> {
+    if (!this.atomicClient) throw new Error("Fenced ingestion requires a transactional store");
+    await this.atomicClient.transaction(async tx => {
+      await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
+      await this.lockInboundPersistenceFence(tx, fence);
+      await new TenantScopedStore(tx, this.tenantId).recordRelayReceipt(provider, eventId, resourceId);
+    });
+  }
+  async findRelayReceipt(provider: string, eventId: string): Promise<{ resourceId: string | null } | null> {
+    const row = await this.client.get<{ resource_id: string | null }>(`SELECT resource_id FROM webhook_receipts WHERE tenant_id=$1 AND provider=$2 AND event_id=$3`, [this.tenantId, provider, eventId]);
+    return row ? { resourceId: row.resource_id } : null;
+  }
+  async recordRelayReceipt(provider: string, eventId: string, resourceId: string | null): Promise<void> {
+    await this.client.execute(`INSERT INTO webhook_receipts(id,tenant_id,provider,event_id,resource_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT(tenant_id,provider,event_id) DO NOTHING`, [randomUUID(), this.tenantId, provider, eventId, resourceId]);
+  }
+  /** First provider copy is immutable; receipt survives a user deleting the message. */
+  async createRelayInbound(provider: string, eventId: string, input: MessageInput): Promise<{ id: string; receiptRecorded: true }> {
+    if (!this.atomicClient || !input.source_id || !input.provider_id) throw new Error("Webhook import requires transactional provider provenance");
+    return this.atomicClient.transaction(async tx => {
+      await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
+      await tx.execute(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [`webhook:${this.tenantId}:${provider}:${eventId}`]);
+      const receipt = await tx.get<{ resource_id: string }>(`SELECT resource_id FROM webhook_receipts WHERE tenant_id=$1 AND provider=$2 AND event_id=$3`, [this.tenantId, provider, eventId]);
+      if (receipt?.resource_id) return { id: receipt.resource_id, receiptRecorded: true as const };
+      await this.lockInboundPersistenceFence(tx, { recipients: input.to_addrs, providerId: input.provider_id!, providerType: "resend" });
+      const params = messageInsertParams(input);
+      const inserted = await tx.get<{ id: string }>(`INSERT INTO messages(${MESSAGE_INSERT_COLS},tenant_id) VALUES(${MESSAGE_INSERT_VALUES},$26) ON CONFLICT(tenant_id,source_id) WHERE source_id IS NOT NULL DO NOTHING RETURNING id`, [...params, this.tenantId]);
+      const message = inserted ?? await tx.one<{ id: string }>(`SELECT id FROM messages WHERE tenant_id=$1 AND source_id=$2 AND provider_id=$3`, [this.tenantId, input.source_id, input.provider_id]);
+      await tx.execute(`INSERT INTO webhook_receipts(id,tenant_id,provider,event_id,resource_id) VALUES($1,$2,$3,$4,$5)`, [randomUUID(), this.tenantId, provider, eventId, message.id]);
+      // `inserted` is non-null only for a genuinely new message; a replayed
+      // webhook event that matched an existing source row keeps its state.
+      if (inserted) await this.applyEnabledMailboxFiltersToMessage(tx, message.id);
+      return { id: message.id, receiptRecorded: true as const };
+    });
+  }
+  async createRelayDelivery(provider: string, eventId: string, providerId: string, upstreamId: string, input: WebhookDeliveryEventInput): Promise<{ id: string; receiptRecorded: true }> {
+    if (!this.atomicClient) throw new Error("Webhook delivery requires a transactional store");
+    return this.atomicClient.transaction(async tx => {
+      await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
+      const message = await tx.get<{ id: string }>(`SELECT id FROM messages WHERE tenant_id=$1 AND provider_id=$2 AND provider_message_id=$3 AND direction='outbound' FOR SHARE`, [this.tenantId, providerId, upstreamId]);
+      if (!message) throw new Error("Webhook delivery has no message in the selected tenant/provider");
+      const identity = `${provider}:${eventId}`;
+      const inserted = await tx.get<{ id: string }>(`INSERT INTO events(id,tenant_id,email_id,provider_id,provider_event_id,type,recipient,metadata,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9) ON CONFLICT(tenant_id,provider_event_id) WHERE provider_event_id IS NOT NULL DO NOTHING RETURNING id`, [randomUUID(), this.tenantId, message.id, providerId, identity, input.type, input.recipient, JSON.stringify(input.metadata), input.occurred_at]);
+      const event = inserted ?? await tx.one<{ id: string }>(`SELECT id FROM events WHERE tenant_id=$1 AND provider_event_id=$2`, [this.tenantId, identity]);
+      await tx.execute(`INSERT INTO webhook_receipts(id,tenant_id,provider,event_id,resource_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT(tenant_id,provider,event_id) DO NOTHING`, [randomUUID(), this.tenantId, provider, eventId, event.id]);
+      return { id: event.id, receiptRecorded: true as const };
+    });
+  }
+
   async createWebhookDeliveryEvent(
     provider: string,
     eventId: string,
@@ -2325,6 +2613,91 @@ export class TenantScopedStore {
         [randomUUID(), this.tenantId, provider, eventId, event.id],
       );
       return event;
+    });
+  }
+
+  async prepareTracking(message: string, candidate: TrackingDocument): Promise<TrackingDocument> {
+    await this.client.execute(`INSERT INTO message_tracking(tenant_id,message_id,document)
+      SELECT $1,$2,$3::jsonb FROM messages WHERE tenant_id=$1 AND id=$2 AND direction='outbound'
+      ON CONFLICT(tenant_id,message_id) DO NOTHING`, [this.tenantId,message,JSON.stringify(candidate)]);
+    const row = await this.client.get<{document: TrackingDocument}>(`SELECT document FROM message_tracking WHERE tenant_id=$1 AND message_id=$2`, [this.tenantId,message]);
+    if (!row) throw new Error("Tracking message does not exist in this tenant");
+    return row.document;
+  }
+
+  async observeTracking(message: string, link: string, token: string): Promise<{kind: "opened" | "clicked"; target: string | null} | null> {
+    if (!this.atomicClient) throw new Error("Tracking observations require a transactional store");
+    return this.atomicClient.transaction(async tx => {
+      await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
+      const row = await tx.get<{document: TrackingDocument; provider_id: string | null}>(`SELECT t.document,m.provider_id FROM message_tracking t JOIN messages m ON m.tenant_id=t.tenant_id AND m.id=t.message_id
+        WHERE t.tenant_id=$1 AND t.message_id=$2 AND m.send_state IN ('sending','sent')`, [this.tenantId,message]);
+      const item = row?.document.links[link];
+      if (!item || item.token !== token || row!.document.expires <= Date.now()) return null;
+      if (item.kind === 'clicked') {
+        let url: URL; try { url = new URL(item.target!); } catch { return null; }
+        if (!['http:','https:'].includes(url.protocol) || url.username || url.password) return null;
+      }
+      await tx.execute(`INSERT INTO events(id,tenant_id,email_id,provider_id,provider_event_id,type,recipient,metadata,occurred_at)
+        VALUES($1,$2,$3,$4,$5,$6,NULL,$7::jsonb,now())
+        ON CONFLICT(tenant_id,provider_event_id) WHERE provider_event_id IS NOT NULL DO NOTHING`,
+        [randomUUID(),this.tenantId,message,row!.provider_id,`first-party:${message}:${item.kind}`,item.kind,JSON.stringify({source:'first_party_tracking',evidence:'request_observed',link_id:link,unique_message_event:true})]);
+      return {kind:item.kind,target:item.target};
+    });
+  }
+
+  async listDeliverySyncMessages(providerId: string, after: string | undefined, limit: number): Promise<Array<Pick<MessageRecord, "id" | "provider_message_id">>> {
+    return this.client.many(`SELECT id, provider_message_id FROM messages WHERE tenant_id = $1 AND provider_id = $2 AND direction = 'outbound' AND provider_message_id IS NOT NULL AND send_state = 'sent' AND ($3::text IS NULL OR id > $3) ORDER BY id ASC LIMIT $4`, [this.tenantId, providerId, after ?? null, limit]);
+  }
+
+  async applyDeliveryObservations(providerId: string, messageId: string, read: ProviderDeliveryRead): Promise<{ inserted: number; contacts_updated: number; unattributed: number }> {
+    if (!this.atomicClient) throw new Error("Provider sync requires a transactional store");
+    return this.atomicClient.transaction(async (tx) => {
+      await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
+      const message = await tx.get<{ id: string; to_addrs: string[]; cc_addrs: string[]; status: string }>(`SELECT id, to_addrs, cc_addrs, status FROM messages WHERE tenant_id = $1 AND provider_id = $2 AND id = $3 AND direction = 'outbound' FOR UPDATE`, [this.tenantId, providerId, messageId]);
+      if (!message) throw new Error("Message is not owned by this tenant/provider");
+      let inserted = 0, contacts_updated = 0, unattributed = 0;
+      const recipients = new Set([...message.to_addrs, ...message.cc_addrs].map(canonicalAddress));
+      for (const observation of read.observations) {
+        const recipient = observation.recipient ? canonicalAddress(observation.recipient) : null;
+        if (recipient && !recipients.has(recipient)) {
+          // The stored envelope currently has To/CC only. SES insights may also
+          // include BCC: do not invent ownership or discard other valid events.
+          unattributed++;
+          continue;
+        }
+        const eventId = `sync:${providerId}:${messageId}:${observation.type}:${recipient ?? "all"}:${observation.occurredAt ?? "snapshot"}`;
+        const eventType = read.evidence === "current_status" || ["sent", "failed"].includes(observation.type) ? "status_observed" : observation.type;
+        const counterType = observation.type === "bounced" || observation.type === "complained";
+        if (counterType && !recipient) unattributed++;
+        const prior = counterType && recipient ? await tx.get<{ id: string }>(`SELECT id FROM events WHERE tenant_id = $1 AND email_id = $2 AND (type = $3 OR (type = 'status_observed' AND metadata->>'observed_status' = $3)) AND recipient = $4 AND metadata->>'sync_contact_effect' = 'true' LIMIT 1`, [this.tenantId, messageId, observation.type, recipient]) : null;
+        const appliesCounter = counterType && recipient !== null && !prior;
+        const existing = read.evidence === "event_history" && eventType !== "status_observed" && observation.occurredAt
+          ? await tx.get<{ id: string }>(`SELECT id FROM events WHERE tenant_id = $1 AND email_id = $2 AND type = $3 AND recipient IS NOT DISTINCT FROM $4::text AND occurred_at = $5::timestamptz LIMIT 1 FOR UPDATE`, [this.tenantId, messageId, eventType, recipient, observation.occurredAt]) : null;
+        const row = existing ?? await tx.get<{ id: string }>(`INSERT INTO events (id,tenant_id,email_id,provider_id,provider_event_id,type,recipient,metadata,occurred_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::timestamptz) ON CONFLICT (tenant_id,provider_event_id) WHERE provider_event_id IS NOT NULL DO NOTHING RETURNING id`, [randomUUID(), this.tenantId, messageId, providerId, eventId, eventType, recipient, JSON.stringify({ source: "provider_sync", observed_status: observation.type, evidence: read.evidence, observed_at: new Date().toISOString(), event_time_known: !!observation.occurredAt, sync_contact_effect: appliesCounter }), observation.occurredAt ?? new Date().toISOString()]);
+        if (!row) continue;
+        if (!existing) inserted++;
+        else if (appliesCounter) await tx.execute(`UPDATE events SET metadata = metadata || '{"sync_contact_effect":true}'::jsonb WHERE tenant_id = $1 AND id = $2`, [this.tenantId, existing.id]);
+        if (["delivered", "bounced", "complained"].includes(observation.type)) {
+          const rank: Record<string, number> = { delivered: 1, bounced: 2, complained: 3 };
+          if ((rank[observation.type] ?? 0) > (rank[message.status] ?? 0)) {
+            await tx.execute(`UPDATE messages SET status = $3, updated_at = now() WHERE tenant_id = $1 AND id = $2`, [this.tenantId, messageId, observation.type]);
+            message.status = observation.type;
+          }
+        }
+        if (counterType && recipient) {
+          const counter = observation.type === "bounced" ? "bounce_count" : "complaint_count";
+          const suppress = observation.type === "complained" || observation.permanentBounce === true;
+          // Serialize different messages affecting the same canonical contact.
+          await tx.execute(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`${this.tenantId}:${recipient}`]);
+          let contact = await tx.get<{ id: string }>(`SELECT id FROM contacts WHERE tenant_id = $1 AND lower(email) = $2 ORDER BY id LIMIT 1 FOR UPDATE`, [this.tenantId, recipient]);
+          if (!contact && appliesCounter) contact = await tx.get<{ id: string }>(`INSERT INTO contacts (id,tenant_id,email) VALUES ($1,$2,$3) RETURNING id`, [randomUUID(), this.tenantId, recipient]);
+          if (contact && (appliesCounter || suppress)) {
+            const changed = await tx.get<{ id: string }>(`UPDATE contacts SET ${counter} = ${counter} + $4, suppressed = suppressed OR $3::boolean OR ($5::boolean AND bounce_count + $4 >= 3), updated_at = now() WHERE tenant_id = $1 AND id = $2 AND ($4 > 0 OR (NOT suppressed AND $3::boolean)) RETURNING id`, [this.tenantId, contact.id, suppress, appliesCounter ? 1 : 0, observation.type === "bounced"]);
+            if (changed) contacts_updated++;
+          }
+        }
+      }
+      return { inserted, contacts_updated, unattributed };
     });
   }
 
@@ -2409,14 +2782,14 @@ export class TenantScopedStore {
       `WITH route_claim AS (
          INSERT INTO inbound_domain_routes (domain, tenant_id)
          SELECT $2, $7::uuid
-          WHERE $5::boolean = true AND $3::text IN ('active','verified','ready','inbound_ready')
+          WHERE $5::boolean = true AND $3::text IN ('active','verified','ready','inbound_ready','outbound_disabled')
          ON CONFLICT (domain) DO UPDATE SET domain = EXCLUDED.domain
            WHERE inbound_domain_routes.tenant_id = EXCLUDED.tenant_id
          RETURNING domain
        )
        INSERT INTO domains (id, domain, status, provider, verified, notes, tenant_id)
        SELECT $1, $2, $3, $4, $5, $6, $7::uuid
-        WHERE NOT ($5::boolean = true AND $3::text IN ('active','verified','ready','inbound_ready'))
+        WHERE NOT ($5::boolean = true AND $3::text IN ('active','verified','ready','inbound_ready','outbound_disabled'))
            OR EXISTS (SELECT 1 FROM route_claim)
        RETURNING *`,
       [id, domain, status, input.provider ?? null, verified, input.notes ?? null, this.tenantId],
@@ -2441,14 +2814,14 @@ export class TenantScopedStore {
        ), route_claim AS (
          INSERT INTO inbound_domain_routes (domain, tenant_id)
          SELECT domain, tenant_id FROM target
-          WHERE next_verified = true AND next_status IN ('active','verified','ready','inbound_ready')
+          WHERE next_verified = true AND next_status IN ('active','verified','ready','inbound_ready','outbound_disabled')
          ON CONFLICT (domain) DO UPDATE SET domain = EXCLUDED.domain
            WHERE inbound_domain_routes.tenant_id = EXCLUDED.tenant_id
          RETURNING domain
        ), route_release AS (
          DELETE FROM inbound_domain_routes r USING target t
           WHERE r.domain = t.domain AND r.tenant_id = t.tenant_id
-            AND NOT (t.next_verified = true AND t.next_status IN ('active','verified','ready','inbound_ready'))
+            AND NOT (t.next_verified = true AND t.next_status IN ('active','verified','ready','inbound_ready','outbound_disabled'))
          RETURNING r.domain
        ), updated AS (
          UPDATE domains d SET
@@ -2459,7 +2832,7 @@ export class TenantScopedStore {
            updated_at = now()
           FROM target t
           WHERE d.id = t.id AND d.tenant_id = t.tenant_id
-            AND (NOT (t.next_verified = true AND t.next_status IN ('active','verified','ready','inbound_ready'))
+            AND (NOT (t.next_verified = true AND t.next_status IN ('active','verified','ready','inbound_ready','outbound_disabled'))
                  OR EXISTS (SELECT 1 FROM route_claim))
           RETURNING d.*
        )
@@ -2467,7 +2840,7 @@ export class TenantScopedStore {
          (SELECT to_jsonb(updated) FROM updated) AS record,
          EXISTS (
            SELECT 1 FROM target
-            WHERE next_verified = true AND next_status IN ('active','verified','ready','inbound_ready')
+            WHERE next_verified = true AND next_status IN ('active','verified','ready','inbound_ready','outbound_disabled')
               AND NOT EXISTS (SELECT 1 FROM route_claim)
          ) AS route_conflict`,
       [
@@ -2696,9 +3069,18 @@ export class TenantScopedStore {
   //
   // Ordering is by original receipt time when known, else insertion time, so an
   // imported inbox reads in true chronological order rather than import order.
-  async listMessages(opts: ListMessagesOptions = {}): Promise<MessageListPage> {
+  /**
+   * Fold a ListMessagesOptions set into tenant-scoped `messages` selection
+   * predicates. Shared by listMessages (paged mailbox reads) and the
+   * mailbox-filter action engine (exact-ID and whole-set matching) so automatic
+   * actions can never drift from what the same filter returns in list-only
+   * apply. Parameter numbering is relative to the returned `params`; the first
+   * entry is always the tenant id.
+   */
+  private buildMessageSelection(opts: ListMessagesOptions): { where: string[]; params: unknown[] } {
     const where: string[] = ["tenant_id = $1"];
     const params: unknown[] = [this.tenantId];
+    if (opts.provider_id) { params.push(opts.provider_id); where.push(`provider_id = $${params.length}`); }
     if (opts.direction === "inbound") where.push(NOT_OUTBOUND_SQL);
     if (opts.direction === "outbound") where.push(OUTBOUND_SQL);
     if (opts.folder) for (const predicate of FOLDER_PREDICATES[opts.folder]) where.push(predicate);
@@ -2777,6 +3159,14 @@ export class TenantScopedStore {
           OR EXISTS (SELECT 1 FROM message_recipients r WHERE r.tenant_id = messages.tenant_id AND r.message_id = messages.id AND r.domain = ANY($${params.length})))`,
       );
     }
+    return { where, params };
+  }
+
+  async listMessages(opts: ListMessagesOptions = {}): Promise<MessageListPage> {
+    // The tenant-scoped selection predicates are shared with the mailbox-filter
+    // action engine (buildMessageSelection), so filter actions can never drift
+    // from what the same filter's list-only apply returns.
+    const { where, params } = this.buildMessageSelection(opts);
     // Keyset cursor: strictly-before in (ts DESC, id DESC) order, served by
     // messages_tenant_ts_id_idx so a deep page costs the same as page one
     // (measured 0.3ms / 19 buffers at 60% depth under RLS). Two clauses on
@@ -2825,6 +3215,9 @@ export class TenantScopedStore {
     const criteria = typeof row["criteria"] === "string"
       ? JSON.parse(row["criteria"] as string)
       : row["criteria"];
+    const actions = typeof row["actions"] === "string"
+      ? JSON.parse(row["actions"] as string)
+      : row["actions"];
     return {
       id: String(row["id"] ?? ""),
       tenant_id: String(row["tenant_id"] ?? this.tenantId),
@@ -2832,6 +3225,15 @@ export class TenantScopedStore {
       normalized_name: String(row["normalized_name"] ?? ""),
       mailbox: String(row["mailbox"] ?? "inbox") as MailboxFilter["mailbox"],
       criteria: criteria as MailboxFilter["criteria"],
+      actions: {
+        add_labels: Array.isArray((actions as { add_labels?: unknown } | undefined)?.add_labels)
+          ? (actions as { add_labels: string[] }).add_labels
+          : [],
+        archive: (actions as { archive?: unknown } | undefined)?.archive === true,
+        mark_read: (actions as { mark_read?: unknown } | undefined)?.mark_read === true,
+      },
+      enabled: row["enabled"] === true || row["enabled"] === 1,
+      order: typeof row["order"] === "number" ? row["order"] : Number(row["order"] ?? 0) || 0,
       created_at: toIso(row["created_at"]) ?? "",
       updated_at: toIso(row["updated_at"]) ?? "",
     };
@@ -2854,7 +3256,7 @@ export class TenantScopedStore {
     const limitIndex = params.push(clampLimit(opts.limit));
     const offsetIndex = params.push(clampOffset(opts.offset));
     const rows = await this.client.many<Record<string, unknown>>(
-      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at
+      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order", created_at, updated_at
          FROM mailbox_filters WHERE ${where.join(" AND ")}
         ORDER BY updated_at DESC, id ASC LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
       params,
@@ -2873,7 +3275,7 @@ export class TenantScopedStore {
     // only and compared via `id::text`, which can never throw; names resolve
     // through normalized_name and a missing name is a plain not-found.
     const row = await this.client.get<Record<string, unknown>>(
-      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at
+      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order", created_at, updated_at
          FROM mailbox_filters
         WHERE tenant_id = $1
           AND (($2 ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' AND id::text = $2)
@@ -2888,9 +3290,9 @@ export class TenantScopedStore {
     const normalized = normalizeMailboxFilterInput(input);
     try {
       const row = await this.client.one<Record<string, unknown>>(
-        `INSERT INTO mailbox_filters (id, tenant_id, name, normalized_name, mailbox, criteria)
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at`,
-        [randomUUID(), this.tenantId, normalized.name, normalized.normalized_name, normalized.mailbox, JSON.stringify(normalized.criteria)],
+        `INSERT INTO mailbox_filters (id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order")
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9) RETURNING id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order", created_at, updated_at`,
+        [randomUUID(), this.tenantId, normalized.name, normalized.normalized_name, normalized.mailbox, JSON.stringify(normalized.criteria), JSON.stringify(normalized.actions), normalized.enabled, normalized.order],
       );
       return this.mailboxFilterFromRow(row);
     } catch (error) {
@@ -2906,20 +3308,31 @@ export class TenantScopedStore {
   ): Promise<MailboxFilter> {
     const current = await this.getMailboxFilter(identifier);
     if (!current) throw new MailboxFilterNotFoundError(identifier);
+    // PUT replaces criteria wholesale; PATCH merges the criteria objects. New
+    // fields are preserved when omitted from either verb. PATCH merges a
+    // supplied actions object over the current one; PUT replaces a supplied
+    // actions object, normalizing omitted action members to their defaults.
+    const criteria = options.replaceCriteria
+      ? (input.criteria ?? {})
+      : { ...current.criteria, ...(input.criteria ?? {}) };
+    const actions = options.replaceCriteria
+      ? (input.actions === undefined ? current.actions : input.actions)
+      : mergeMailboxFilterActions(current.actions, input.actions);
     const normalized = normalizeMailboxFilterInput({
       name: input.name ?? current.name,
       mailbox: input.mailbox ?? input.folder ?? current.mailbox,
-      criteria: options.replaceCriteria
-        ? (input.criteria ?? {})
-        : { ...current.criteria, ...(input.criteria ?? {}) },
+      criteria,
+      actions,
+      enabled: input.enabled ?? current.enabled,
+      order: input.order ?? current.order,
     });
     try {
       const row = await this.client.get<Record<string, unknown>>(
         `UPDATE mailbox_filters
-            SET name = $1, normalized_name = $2, mailbox = $3, criteria = $4::jsonb, updated_at = now()
-          WHERE tenant_id = $5 AND id = $6
-        RETURNING id, tenant_id, name, normalized_name, mailbox, criteria, created_at, updated_at`,
-        [normalized.name, normalized.normalized_name, normalized.mailbox, JSON.stringify(normalized.criteria), this.tenantId, current.id],
+            SET name = $1, normalized_name = $2, mailbox = $3, criteria = $4::jsonb, actions = $5::jsonb, enabled = $6, "order" = $7, updated_at = now()
+          WHERE tenant_id = $8 AND id = $9
+        RETURNING id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order", created_at, updated_at`,
+        [normalized.name, normalized.normalized_name, normalized.mailbox, JSON.stringify(normalized.criteria), JSON.stringify(normalized.actions), normalized.enabled, normalized.order, this.tenantId, current.id],
       );
       if (!row) throw new MailboxFilterNotFoundError(identifier);
       return this.mailboxFilterFromRow(row);
@@ -2939,22 +3352,10 @@ export class TenantScopedStore {
     return rows.length > 0;
   }
 
-  async applyMailboxFilter(identifier: string, opts: ListOptions = {}): Promise<{
-    filter: Pick<MailboxFilter, "name" | "criteria">;
-    page: MessageListPage;
-    limit: number;
-    offset: number;
-  }> {
-    const filter = await this.getMailboxFilter(identifier);
-    if (!filter) throw new MailboxFilterNotFoundError(identifier);
-    const limit = Math.min(1000, Math.max(1, Math.floor(opts.limit ?? 100)));
-    const offset = clampOffset(opts.offset);
-    const folder = filter.mailbox === "unread" ? "inbox" : filter.mailbox as MessageFolder;
-    const page = await this.listMessages({
-      limit: limit + 1,
-      maxLimit: 1001,
-      offset,
-      folder,
+  /** The filter's mailbox + criteria as a message selection (same mapping list-only apply uses). */
+  private mailboxFilterListOptions(filter: MailboxFilter): ListMessagesOptions {
+    return {
+      folder: filter.mailbox === "unread" ? "inbox" : filter.mailbox as MessageFolder,
       search: filter.criteria.search,
       from: filter.criteria.from,
       to: filter.criteria.to,
@@ -2968,6 +3369,172 @@ export class TenantScopedStore {
       unread: filter.criteria.unread || filter.mailbox === "unread",
       starred: filter.criteria.starred,
       archived: filter.criteria.archived,
+    };
+  }
+
+  /** Enabled filters for this tenant in automatic execution order (`"order" ASC, id ASC`). */
+  private async enabledMailboxFilters(client: TypedQueryClient): Promise<MailboxFilter[]> {
+    const rows = await client.many<Record<string, unknown>>(
+      `SELECT id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order", created_at, updated_at
+         FROM mailbox_filters
+        WHERE tenant_id = $1 AND enabled = true
+        ORDER BY "order" ASC, id ASC`,
+      [this.tenantId],
+    );
+    return rows.map((row) => this.mailboxFilterFromRow(row));
+  }
+
+  /** Does the message's CURRENT row satisfy the filter's mailbox + criteria (run on `client`)? */
+  private async messageMatchesMailboxFilter(
+    client: TypedQueryClient,
+    messageId: string,
+    filter: MailboxFilter,
+  ): Promise<boolean> {
+    const { where, params } = this.buildMessageSelection(this.mailboxFilterListOptions(filter));
+    params.push(messageId);
+    const hit = await client.get<{ id: string }>(
+      `SELECT id FROM messages WHERE ${where.join(" AND ")} AND id = $${params.length} LIMIT 1`,
+      params,
+    );
+    return hit !== null;
+  }
+
+  /**
+   * Apply one filter's ACTIONS to a single message, on `client` (the insert or
+   * backfill transaction's client — never this.client, whose per-operation
+   * transactions would commit a status write that an enclosing rollback could
+   * not undo). Mirrors updateMessageStatus's label semantics (folder moves are
+   * the reserved "archived"/"spam"/"trash" labels; existing labels are kept);
+   * already-satisfied actions are skipped and count as unchanged. Returns
+   * whether the row actually changed.
+   */
+  private async applyMailboxFilterActionsToMessage(
+    client: TypedQueryClient,
+    messageId: string,
+    actions: MailboxFilterActions,
+  ): Promise<boolean> {
+    if (!actions.add_labels.length && actions.archive !== true && actions.mark_read !== true) return false;
+    const row = await client.get<Record<string, unknown>>(
+      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+      [messageId, this.tenantId],
+    );
+    if (!row) return false;
+    const current = mapMessageRow(row);
+    const labels = new Map(current.labels.map((label) => [label.toLowerCase(), label]));
+    let changed = false;
+    for (const raw of actions.add_labels) {
+      const key = raw.trim().toLowerCase();
+      if (!key || labels.has(key)) continue;
+      labels.set(key, raw.trim());
+      changed = true;
+    }
+    if (actions.archive === true && !labels.has("archived")) {
+      labels.set("archived", "archived");
+      changed = true;
+    }
+    const markRead = actions.mark_read === true;
+    if (markRead && current.is_read !== true) changed = true;
+    if (!changed) return false;
+    const updated = await client.get<Record<string, unknown>>(
+      `UPDATE messages
+          SET is_read = $2, labels = $3::jsonb, updated_at = now()
+        WHERE id = $1 AND tenant_id = $4
+       RETURNING ${MESSAGE_COLUMNS}`,
+      [messageId, markRead ? true : current.is_read, JSON.stringify([...labels.values()]), this.tenantId],
+    );
+    return updated !== null;
+  }
+
+  /**
+   * Automatic INGEST hook. Runs every ENABLED filter, in execution order,
+   * against a freshly inserted message. Each filter is evaluated against the
+   * message's current row state (after any earlier filter's actions), so one
+   * filter can legitimately gate the next (e.g. archive first, then a filter
+   * scoped to archived matches). Executes entirely on the caller's client so a
+   * hook inside an atomic transaction stays inside it.
+   */
+  private async applyEnabledMailboxFiltersToMessage(client: TypedQueryClient, messageId: string): Promise<void> {
+    for (const filter of await this.enabledMailboxFilters(client)) {
+      if (await this.messageMatchesMailboxFilter(client, messageId, filter)) {
+        await this.applyMailboxFilterActionsToMessage(client, messageId, filter.actions);
+      }
+    }
+  }
+
+  /**
+   * Backfill one ENABLED filter's actions over its COMPLETE matching set. The
+   * set is snapshotted before any write; actions then run per row on the same
+   * client. `updated` counts messages whose state actually changed; an action
+   * that a message already satisfies is a no-op counted in `unchanged`, so
+   * `matched = updated + unchanged`.
+   */
+  private async backfillMailboxFilter(
+    client: TypedQueryClient,
+    filter: MailboxFilter,
+  ): Promise<{ matched: number; updated: number; unchanged: number }> {
+    const { where, params } = this.buildMessageSelection(this.mailboxFilterListOptions(filter));
+    const rows = await client.many<{ id: string }>(
+      `SELECT id FROM messages WHERE ${where.join(" AND ")}`,
+      params,
+    );
+    let updated = 0;
+    for (const row of rows) {
+      if (await this.applyMailboxFilterActionsToMessage(client, String(row["id"]), filter.actions)) updated += 1;
+    }
+    return { matched: rows.length, updated, unchanged: rows.length - updated };
+  }
+
+  async applyMailboxFilter(
+    identifier: string,
+    opts: { limit?: number; offset?: number; mutate?: boolean } = {},
+  ): Promise<{
+    filter: Pick<MailboxFilter, "name" | "criteria">;
+    page: MessageListPage;
+    limit: number;
+    offset: number;
+    mutate?: true;
+    matched?: number;
+    updated?: number;
+    unchanged?: number;
+  }> {
+    const filter = await this.getMailboxFilter(identifier);
+    if (!filter) throw new MailboxFilterNotFoundError(identifier);
+    const limit = Math.min(1000, Math.max(1, Math.floor(opts.limit ?? 100)));
+
+    if (opts.mutate === true) {
+      if (!filter.enabled) {
+        throw new MailboxFilterInputError(`filter "${filter.name}" is disabled; enable it before applying its actions`);
+      }
+      if (clampOffset(opts.offset) !== 0) {
+        throw new MailboxFilterInputError("mutate apply does not paginate; offset must be 0");
+      }
+      // Tenant-bound transaction: snapshot the complete matching set, then apply
+      // actions to that fixed set before any concurrent page can shift under us.
+      const run = this.atomicClient
+        ? this.atomicClient.transaction(async (tx) => {
+            await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
+            return this.backfillMailboxFilter(tx, filter);
+          })
+        : this.backfillMailboxFilter(this.client, filter);
+      const { matched, updated, unchanged } = await run;
+      return {
+        filter: { name: filter.name, criteria: filter.criteria },
+        page: { items: [], next_cursor: null },
+        limit,
+        offset: 0,
+        mutate: true,
+        matched,
+        updated,
+        unchanged,
+      };
+    }
+
+    const offset = clampOffset(opts.offset);
+    const page = await this.listMessages({
+      ...this.mailboxFilterListOptions(filter),
+      limit: limit + 1,
+      maxLimit: 1001,
+      offset,
     });
     return { filter: { name: filter.name, criteria: filter.criteria }, page, limit, offset };
   }
@@ -4076,7 +4643,27 @@ export class TenantScopedStore {
       `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = $1 AND tenant_id = $2`,
       [id, this.tenantId],
     );
-    return row ? mapMessageRow(row) : null;
+    if (row) return mapMessageRow(row);
+    // A bare canonical uuid addresses a legacy row only through its prefixed row id
+    // (migration 0007 stores bridged legacy inbound/sent mail as
+    // `legacy-inbound:<old uuid>` / `legacy-sent:<old uuid>`). A caller that knows
+    // only the pre-unification canonical uuid would otherwise 404 on every detail
+    // read of legacy mail, because resolveMessageId returns a full UUID verbatim
+    // with no DB round-trip. Accept those two prefixed ids as aliases so the bare
+    // canonical uuid reaches the row. Current rows are unaffected: their id IS the
+    // bare uuid, so the exact match above already won and no alias probe runs. The
+    // probe is kept here rather than in resolveMessageId so exact-id fetches (the
+    // hot path) never pay an extra query — only a full-id miss does.
+    if (!FULL_MESSAGE_ID_RE.test(id)) return null;
+    const canonical = id.toLowerCase();
+    for (const alias of [`legacy-inbound:${canonical}`, `legacy-sent:${canonical}`]) {
+      const aliased = await this.client.get<Record<string, unknown>>(
+        `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = $1 AND tenant_id = $2`,
+        [alias, this.tenantId],
+      );
+      if (aliased) return mapMessageRow(aliased);
+    }
+    return null;
   }
 
   async getMessageAttachment(id: string, index: number, maxBytes = MAX_ATTACHMENT_DOWNLOAD_BYTES): Promise<StoredAttachmentLookup | null> {
@@ -4278,14 +4865,46 @@ export class TenantScopedStore {
     return row ? row.id : null;
   }
 
+  /** Atomic SMTP acceptance. The receipt survives message edits/deletion and never recreates mail on replay. */
+  async submitSmtpMessage(input: MessageInput, transactionId: string, payloadHash: string): Promise<{ stored: true; id: string; duplicate: boolean }> {
+    if (!this.atomicClient || !/^[0-9a-f-]{36}$/i.test(transactionId) || !/^[0-9a-f]{64}$/.test(payloadHash)) throw new Error("SMTP persistence requires a valid identity and transactional store");
+    return this.atomicClient.transaction(async tx => {
+      await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
+      // Lock the route and active tenant through commit so reassignment cannot race acceptance.
+      const domains = [...new Set(input.to_addrs.map(address => address.slice(address.lastIndexOf("@") + 1).toLowerCase()))];
+      const routes = await tx.many<{ domain: string; tenant_id: string }>(
+        `SELECT r.domain, r.tenant_id FROM inbound_domain_routes r JOIN tenants t ON t.id = r.tenant_id
+         WHERE r.domain = ANY($1::text[]) AND t.status = 'active' FOR SHARE OF r, t`, [domains]);
+      if (!domains.length || routes.length !== domains.length || routes.some(route => route.tenant_id !== this.tenantId)) throw new Error("SMTP recipient routing changed before durable acceptance");
+      const params = messageInsertParams(input);
+      const inserted = await tx.get<{ message_id: string }>(
+        `INSERT INTO smtp_submission_receipts (tenant_id, transaction_id, payload_hash, message_id)
+         VALUES ($1::uuid, $2::uuid, $3, $4) ON CONFLICT DO NOTHING RETURNING message_id`,
+        [this.tenantId, transactionId, payloadHash, params[0]],
+      );
+      if (inserted) {
+        await tx.execute(`INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id) VALUES (${MESSAGE_INSERT_VALUES}, $26)`, [...params, this.tenantId]);
+        await this.applyEnabledMailboxFiltersToMessage(tx, inserted.message_id);
+        return { stored: true as const, id: inserted.message_id, duplicate: false };
+      }
+      const existing = await tx.get<{ message_id: string; payload_hash: string }>(
+        `SELECT message_id, payload_hash FROM smtp_submission_receipts WHERE tenant_id = $1::uuid AND transaction_id = $2::uuid`, [this.tenantId, transactionId]);
+      if (!existing) throw new Error("SMTP receipt could not be read");
+      if (existing.payload_hash !== payloadHash) throw new Error("SMTP transaction identity conflicts with the original content");
+      return { stored: true as const, id: existing.message_id, duplicate: true };
+    });
+  }
+
   async createMessage(input: MessageInput): Promise<MessageRecord> {
     const row = await this.client.one<Record<string, unknown>>(
       `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
-       VALUES (${MESSAGE_INSERT_VALUES}, $24)
+       VALUES (${MESSAGE_INSERT_VALUES}, $26)
        RETURNING ${MESSAGE_COLUMNS}`,
       [...messageInsertParams(input), this.tenantId],
     );
-    return mapMessageRow(row);
+    const record = mapMessageRow(row);
+    await this.applyEnabledMailboxFiltersToMessage(this.client, record.id);
+    return record;
   }
 
   /**
@@ -4301,6 +4920,7 @@ export class TenantScopedStore {
       rawSha256: string;
       establishedVia: "normal_ingest";
     },
+    fence?: InboundPersistenceFence,
   ): Promise<{
     record: MessageRecord;
     inserted: boolean;
@@ -4313,9 +4933,10 @@ export class TenantScopedStore {
     }
     return this.atomicClient.transaction(async (tx) => {
       await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
+      if (fence) await this.lockInboundPersistenceFence(tx, fence);
       const insertedRow = await tx.get<Record<string, unknown>>(
         `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
-         VALUES (${MESSAGE_INSERT_VALUES}, $24)
+         VALUES (${MESSAGE_INSERT_VALUES}, $26)
          ON CONFLICT (tenant_id, source_id) WHERE source_id IS NOT NULL DO NOTHING
          RETURNING ${MESSAGE_COLUMNS}`,
         [...messageInsertParams(input), this.tenantId],
@@ -4359,6 +4980,9 @@ export class TenantScopedStore {
         }
         sourceState = "existing_match";
       }
+      // Only a genuinely NEW insert auto-applies filters; a duplicate delivery
+      // that observed an existing exact-source row keeps its prior state.
+      if (insertedRow) await this.applyEnabledMailboxFiltersToMessage(tx, messageId);
       return {
         record: mapMessageRow(row),
         inserted: Boolean(insertedRow),
@@ -4447,6 +5071,23 @@ export class TenantScopedStore {
     });
   }
 
+  /** Authority-only check for both new sends and receipt replays; no quota or recipient policy. */
+  async evaluateSendAuthority(input: {
+    from: string;
+    sendKeyToken?: string | null;
+    allowTenantWideSend?: boolean;
+  }): Promise<OutboundPolicyDecision> {
+    if (!input.sendKeyToken) return input.allowTenantWideSend
+      ? { allowed: true }
+      : { allowed: false, code: "send_key_required", message: "a sender-scoped send key is required", status: 403 };
+    const key = await this.verifySendKey(input.sendKeyToken);
+    if (!key) return { allowed: false, code: "send_key_invalid", message: "send key is invalid or revoked", status: 403 };
+    if (!key.owner_id || !await this.isOwnerAuthorizedFrom(key.owner_id, input.from)) {
+      return { allowed: false, code: "send_key_forbidden", message: "send key is not authorized for this sender", status: 403 };
+    }
+    return { allowed: true };
+  }
+
   /**
    * Central outbound policy gate. It runs after the durable pending intent is
    * reserved, so that denials are auditable and quota counts include the current
@@ -4514,9 +5155,12 @@ export class TenantScopedStore {
     if (!address.verified) {
       return { allowed: false, code: "sender_unverified", message: "sender address is not verified", status: 403 };
     }
+    if (address.domain_status === "outbound_disabled") {
+      return { allowed: false, code: "sender_not_ready", message: "outbound sending is disabled for this domain", status: 403 };
+    }
     const addressReady = ["ready", "active", "verified"].includes(address.provisioning_status ?? "");
     const domainReady = address.domain_verified === true && ["active", "verified", "ready"].includes(address.domain_status ?? "");
-    const domainProvisioned = ["ready", "active", "verified"].includes(address.domain_provisioning_status ?? "");
+    const domainProvisioned = ["ready", "active", "verified", "verified_inbound_ready"].includes(address.domain_provisioning_status ?? "");
     if (!addressReady && !domainReady && !domainProvisioned) {
       return { allowed: false, code: "sender_not_ready", message: "sender domain is not ready for outbound mail", status: 403 };
     }
@@ -4614,7 +5258,7 @@ export class TenantScopedStore {
       }
       const inserted = await client.get<Record<string, unknown>>(
         `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
-         VALUES (${MESSAGE_INSERT_VALUES}, $24)
+         VALUES (${MESSAGE_INSERT_VALUES}, $26)
          ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
          RETURNING ${MESSAGE_COLUMNS}`,
         [...messageInsertParams({ ...input, direction: "outbound", status: "queued", send_state: "pending" }), this.tenantId],
@@ -4864,14 +5508,18 @@ export class TenantScopedStore {
     }
     const row = await this.client.one<Record<string, unknown>>(
       `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
-       VALUES (${MESSAGE_INSERT_VALUES}, $24)
+       VALUES (${MESSAGE_INSERT_VALUES}, $26)
        ON CONFLICT (tenant_id, source_id) WHERE source_id IS NOT NULL DO UPDATE SET
          ${messageUpsertAssignments(input)}
        RETURNING ${MESSAGE_COLUMNS}, (xmax = 0) AS inserted`,
       [...messageInsertParams(input), this.tenantId],
     );
     const inserted = Boolean(row["inserted"]);
-    return { record: mapMessageRow(row), inserted };
+    const record = mapMessageRow(row);
+    // Filters auto-apply only when the row was actually INSERTED; an existing
+    // source-id row replayed through upsert keeps its prior state.
+    if (inserted) await this.applyEnabledMailboxFiltersToMessage(this.client, record.id);
+    return { record, inserted };
   }
 
   async updateMessageStatus(
@@ -4882,6 +5530,8 @@ export class TenantScopedStore {
       is_read?: boolean;
       is_starred?: boolean;
       archived?: boolean;
+      is_spam?: boolean;
+      is_trash?: boolean;
       add_label?: string;
       remove_label?: string;
     },
@@ -4891,6 +5541,19 @@ export class TenantScopedStore {
     const labels = new Map(current.labels.map((label) => [label.toLowerCase(), label]));
     if (patch.archived === true) labels.set("archived", "archived");
     if (patch.archived === false) labels.delete("archived");
+    // Explicit folder moves, parallel to `archived`. Folder membership on this store is
+    // label-backed (SPAM_SQL/TRASH_SQL above read `labels @> '["spam"]'` / `@> '["trash"]'`),
+    // so quarantining a message is adding its "spam"/"trash" label and un-quarantining is
+    // removing it. These fields are the documented spelling of that move — the same labels
+    // `add_label: "spam"` / `add_label: "trash"` would add (those folder-label values are
+    // reserved folder moves, not plain labels). A message that additionally carries
+    // `status` = "spam" remains in the spam folder via the status arm of SPAM_SQL until its
+    // status is also changed; callers clearing a provider-imposed spam status should pass
+    // `status` alongside `is_spam: false`.
+    if (patch.is_spam === true) labels.set("spam", "spam");
+    if (patch.is_spam === false) labels.delete("spam");
+    if (patch.is_trash === true) labels.set("trash", "trash");
+    if (patch.is_trash === false) labels.delete("trash");
     if (patch.add_label?.trim()) labels.set(patch.add_label.trim().toLowerCase(), patch.add_label.trim());
     if (patch.remove_label?.trim()) labels.delete(patch.remove_label.trim().toLowerCase());
     const row = await this.client.get<Record<string, unknown>>(
@@ -5068,7 +5731,7 @@ export class TenantScopedStore {
       if (raw === undefined) continue;
       const col = spec.columns.find((c) => c.name === key);
       params.push(encodeColumn(col ?? { name: key }, raw));
-      where.push(`${key} = $${params.length}`);
+      where.push(`${quotedColumn(key)} = $${params.length}`);
     }
     const whereSql = `WHERE ${where.join(" AND ")}`;
     params.push(clampLimit(opts.limit), clampOffset(opts.offset));
@@ -5082,7 +5745,7 @@ export class TenantScopedStore {
   async getResource(spec: SelfHostedResourceSpec, id: string): Promise<Record<string, unknown> | null> {
     const key = keyColumn(spec);
     const row = await this.client.get<Record<string, unknown>>(
-      `SELECT * FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2`,
+      `SELECT * FROM ${spec.table} WHERE ${quotedColumn(key)} = $1 AND ${quotedColumn("tenant_id")} = $2`,
       [id, this.tenantId],
     );
     return redactResourceRow(spec, row);
@@ -5101,18 +5764,18 @@ export class TenantScopedStore {
     // set) takes the key value from the body — it is not server-generated.
     if (spec.idColumn === undefined) {
       params.push(randomUUID());
-      cols.push("id");
+      cols.push(quotedColumn("id"));
       placeholders.push("$1");
     }
     // tenant_id is always stamped from the caller's scope, never from the body.
     params.push(this.tenantId);
-    cols.push("tenant_id");
+    cols.push(quotedColumn("tenant_id"));
     placeholders.push(`$${params.length}`);
     for (const col of spec.columns) {
       if (col.readOnly) continue;
       if (!(col.name in body)) continue;
       params.push(encodeColumn(col, body[col.name]));
-      cols.push(col.name);
+      cols.push(quotedColumn(col.name));
       placeholders.push(col.json ? `$${params.length}::jsonb` : `$${params.length}`);
     }
     const insertHead = `INSERT INTO ${spec.table} (${cols.join(", ")}) VALUES (${placeholders.join(", ")})`;
@@ -5123,7 +5786,7 @@ export class TenantScopedStore {
     // Natural-key: upsert-on-conflict so create is an idempotent "ensure". DO
     // NOTHING can return zero rows, so read (not one()) and fall back to select.
     // A tenant-scoped natural key (email-agents) conflicts on (tenant_id, key).
-    const conflictTarget = spec.compositeKey ? `tenant_id, ${key}` : key;
+    const conflictTarget = spec.compositeKey ? `${quotedColumn("tenant_id")}, ${quotedColumn(key)}` : quotedColumn(key);
     const inserted = await this.client.get<Record<string, unknown>>(
       `${insertHead} ON CONFLICT (${conflictTarget}) DO NOTHING RETURNING *`,
       params,
@@ -5147,14 +5810,21 @@ export class TenantScopedStore {
       if (!(col.name in body)) continue;
       if (col.name === key) continue; // never rewrite the primary key
       params.push(encodeColumn(col, body[col.name]));
-      sets.push(col.json ? `${col.name} = $${params.length}::jsonb` : `${col.name} = $${params.length}`);
+      sets.push(col.json ? `${quotedColumn(col.name)} = $${params.length}::jsonb` : `${quotedColumn(col.name)} = $${params.length}`);
     }
+    const sequenceEdit = spec.path === "sequence-enrollments";
+    const sequenceGuard = sequenceEdit ? " AND (execution_lease IS NULL OR execution_lease < now()-interval '5 minutes')" + (Object.keys(body).some(field => field !== "status") ? " AND execution_started=false" : "") : "";
+    // Enqueued content is bound to its retry hash. Only lifecycle status may change.
+    const scheduledContentEdit = spec.path === "scheduled" && Object.keys(body).some(field => field !== "status");
+    // Disable always fences later claims/retries. Already admitted copies may finish;
+    // changing their payload or deleting their rule is blocked until reconciled.
+    const forwardingToggleOnly = typeof body.enabled === "boolean" && Object.keys(body).every(field => field === "enabled");
     if (sets.length === 0) return this.getResource(spec, id);
     sets.push("updated_at = now()");
     return redactResourceRow(
       spec,
       await this.client.get<Record<string, unknown>>(
-        `UPDATE ${spec.table} SET ${sets.join(", ")} WHERE ${key} = $1 AND tenant_id = $2 RETURNING *`,
+        `UPDATE ${spec.table} SET ${sets.join(", ")} WHERE ${quotedColumn(key)} = $1 AND ${quotedColumn("tenant_id")} = $2${spec.path === "scheduled" ? " AND status <> 'processing'" : ""}${scheduledContentEdit ? " AND enqueue_key IS NULL" : ""}${spec.path === "forwarding" && !forwardingToggleOnly ? " AND NOT EXISTS (SELECT 1 FROM forwarding_delivery_jobs WHERE tenant_id=$2 AND rule_id=$1 AND status='processing')" : ""}${sequenceGuard} RETURNING *`,
         params,
       ),
     );
@@ -5163,10 +5833,75 @@ export class TenantScopedStore {
   async deleteResource(spec: SelfHostedResourceSpec, id: string): Promise<boolean> {
     const key = keyColumn(spec);
     const rows = await this.client.many<{ id: string }>(
-      `DELETE FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2 RETURNING ${key} AS id`,
+      `DELETE FROM ${spec.table} WHERE ${quotedColumn(key)} = $1 AND ${quotedColumn("tenant_id")} = $2${spec.path === "scheduled" ? " AND status <> 'processing' AND enqueue_key IS NULL" : ""}${spec.path === "forwarding" ? " AND NOT EXISTS (SELECT 1 FROM forwarding_delivery_jobs WHERE tenant_id=$2 AND rule_id=$1 AND status='processing')" : ""}${spec.path === "sequence-enrollments" ? " AND execution_started=false AND execution_lease IS NULL" : ""} RETURNING ${quotedColumn(key)} AS id`,
       [id, this.tenantId],
     );
     return rows.length > 0;
+  }
+
+  async enqueueScheduled(input: { key: string; hash: string; scheduledAt: string; payload: Record<string, unknown> }): Promise<{ id: string; status: string; scheduled_at: string; created: boolean }> {
+    const p = input.payload;
+    const params = [randomUUID(), this.tenantId, input.key, input.hash, input.scheduledAt,
+      p.provider_id ?? null, p.from, JSON.stringify(p.to), JSON.stringify(p.cc ?? []), JSON.stringify(p.bcc ?? []),
+      p.reply_to ?? null, p.subject, p.text ?? null, p.html ?? null, JSON.stringify(p.attachments ?? []),
+      JSON.stringify({ headers: p.headers, tags: p.tags, track_opens: p.track_opens, track_clicks: p.track_clicks, tracking_url: p.tracking_url, unsubscribe_url: p.unsubscribe_url, allow_suppressed_recipients: p.allow_suppressed_recipients === true })];
+    const row = await this.client.get<Record<string, unknown>>(
+      `INSERT INTO scheduled_emails(id,tenant_id,enqueue_key,enqueue_hash,scheduled_at,provider_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,text_body,html,attachments_json,send_options,status)
+       SELECT $1,$2,$3,$4,$5::timestamptz,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15::jsonb,$16::jsonb,'pending' WHERE $5::timestamptz > now()
+       ON CONFLICT(tenant_id,enqueue_key) WHERE enqueue_key IS NOT NULL DO NOTHING
+       RETURNING id,status,scheduled_at`, params,
+    );
+    const existing = row ?? await this.client.get<Record<string, unknown>>(
+      `SELECT id,status,scheduled_at,enqueue_hash FROM scheduled_emails WHERE tenant_id=$1 AND enqueue_key=$2`, [this.tenantId,input.key],
+    );
+    if (!existing) throw new RangeError("Scheduled time must be in the future");
+    if (!row && existing.enqueue_hash !== input.hash) throw new IdempotencyKeyConflictError();
+    const date = existing.scheduled_at instanceof Date ? existing.scheduled_at.toISOString() : String(existing.scheduled_at);
+    return {id:String(existing.id),status:String(existing.status),scheduled_at:date,created:row !== null};
+  }
+
+  claimForwarding(options: ForwardingBatchOptions): Promise<ForwardingClaim[]> {
+    return claimForwarding(this.client, this.tenantId, options);
+  }
+
+  finishForwarding(claim: ForwardingClaim, status: "sent" | "failed" | "skipped", sentId: string | null, error: string | null): Promise<boolean> {
+    return finishForwarding(this.client, this.tenantId, claim, status, sentId, error);
+  }
+
+  /** Atomically claim due work. The timestamp is a lease fence, not a send identity. */
+  async claimDueScheduled(limit: number): Promise<Record<string, unknown>[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new RangeError("Scheduler limit must be 1–100");
+    return this.client.many<Record<string, unknown>>(
+      `${this.workerFence ? WORKER_CLAIM_CTE : "WITH"} due AS (
+         SELECT id FROM scheduled_emails
+         WHERE tenant_id = $1 AND scheduled_at <= now()
+           ${this.workerFence ? "AND EXISTS(SELECT 1 FROM worker_guard)" : ""}
+           AND (status = 'pending' OR (status = 'processing' AND updated_at < now() - interval '5 minutes'))
+         ORDER BY scheduled_at, id FOR UPDATE SKIP LOCKED LIMIT $2
+       )
+       UPDATE scheduled_emails s SET status = 'processing', error = NULL,
+         updated_at = date_trunc('milliseconds', clock_timestamp())
+       FROM due WHERE s.id = due.id AND s.tenant_id = $1 RETURNING s.*`,
+      [this.tenantId, limit, ...(this.workerFence ? [this.workerFence.id,this.workerFence.generation,this.workerFence.ownerHash] : [])],
+    );
+  }
+
+  async finishScheduled(id: string, lease: string, status: "sent" | "failed", error: string | null): Promise<boolean> {
+    const row = await this.client.get<{ id: string }>(
+      `UPDATE scheduled_emails SET status = $4, error = $5, updated_at = now()
+       WHERE id = $1 AND tenant_id = $2 AND status = 'processing' AND updated_at = $3::timestamptz
+       RETURNING id`, [id, this.tenantId, lease, status, error],
+    );
+    return row !== null;
+  }
+
+  sequenceWorker(): SequenceWorkerStore { return new SequenceWorkerStore(this.client, this.tenantId, this.workerFence); }
+
+  async getScheduledTemplate(name: string): Promise<Record<string, unknown> | null> {
+    return this.client.get<Record<string, unknown>>(
+      `SELECT subject_template, html_template, text_template FROM templates WHERE tenant_id = $1 AND name = $2 LIMIT 1`,
+      [this.tenantId, name],
+    );
   }
 
   // ---- scoped send keys (mint / verify / authorization) -------------------
@@ -5231,11 +5966,13 @@ export class TenantScopedStore {
     if (!key || key.revoked_at) return null;
     const stamped = await this.client.get<SendKeyRecord>(
       `UPDATE send_keys SET last_used_at = now(), updated_at = now()
-       WHERE id = $1 AND tenant_id = $2
+       WHERE id = $1 AND tenant_id = $2 AND revoked_at IS NULL
        RETURNING id, owner_id, prefix, label, last_used_at, revoked_at, created_at, updated_at`,
       [key.id, this.tenantId],
     );
-    return stamped ?? key;
+    // A concurrent revocation/deletion between lookup and stamp must not
+    // resurrect the stale authorization snapshot.
+    return stamped;
   }
 
   /** Whether `ownerId` may send from `fromEmail` (owns or administers a tenant address). */

@@ -412,15 +412,11 @@ describe("a truncated read is reported as a lower bound, never as a total", () =
 });
 
 describe("a request the seam cannot express is refused, not approximated", () => {
-  it("rejects a provider-scoped report and names the missing contract field", async () => {
+  it("scopes the report to the recorded provider", async () => {
     const { store, providerId } = await seed();
-    // The seam has no provider column on the message list record and no provider filter
-    // on the list options, so three of the four sections would silently cover EVERY
-    // provider. A report that looks provider-specific and is not is worse than none.
-    await expect(getAnalytics(providerId, windowDays(), { store })).rejects.toThrow(
-      /provider-scoped analytics cannot be produced from the store seam/,
-    );
-    await expect(getAnalytics(providerId, windowDays(), { store })).rejects.toThrow(/no provider filter/);
+    const report = await getAnalytics(providerId, windowDays(), { store });
+    expect(report.sent_read.answered).toBe(true);
+    expect(report.dailyVolume?.reduce((sum, day) => sum + day.count, 0)).toBe(3);
   });
 
   it("treats a blank provider filter as absent rather than as a refusal", async () => {

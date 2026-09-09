@@ -1,3 +1,4 @@
+import { requirePublicationFixtureConfinement } from "./helpers/publication-fixture-confinement";
 import { describe, expect, test } from "bun:test";
 import {
   existsSync,
@@ -6,6 +7,8 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
+  symlinkSync,
   rmSync,
   unlinkSync,
   writeFileSync,
@@ -25,6 +28,13 @@ import {
   snapshotRegularFile,
 } from "../../scripts/macos_artifact";
 import { expectOrder } from "./helpers/source-assertions";
+
+function publicationRoot(prefix: string): string {
+  requirePublicationFixtureConfinement();
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  chmodSync(root, 0o700);
+  return root;
+}
 
 const build = readFileSync("src/native/Recordings/build.sh", "utf8");
 const pkg = readFileSync("packaging/macos/build_release_pkg.sh", "utf8");
@@ -97,8 +107,27 @@ describe("release output publication contract", () => {
     ).toThrow("does not match the submitted archive");
   });
 
+  test("rejects a symlinked publication ancestor before mutating either directory", () => {
+    const root = publicationRoot("recordings-release-symlink-");
+    try {
+      const realParent = join(root, "real");
+      const alias = join(root, "alias");
+      mkdirSync(realParent, { mode: 0o700 });
+      symlinkSync(realParent, alias);
+      const staging = join(realParent, ".staging");
+      mkdirSync(staging, { mode: 0o700 });
+      writeFileSync(join(staging, "artifact.zip"), "authenticated");
+      expect(() => publishReleaseDirectory(join(alias, ".staging"), join(alias, "release")))
+        .toThrow("trusted home component");
+      expect(readFileSync(join(staging, "artifact.zip"), "utf8")).toBe("authenticated");
+      expect(existsSync(join(realParent, "release"))).toBeFalse();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("kernel no-replace publication cannot replace a destination created after precheck", () => {
-    const root = mkdtempSync(join(tmpdir(), "recordings-release-race-"));
+    const root = publicationRoot("recordings-release-race-");
     try {
       const staging = join(root, ".Recordings-1.2.4.staging");
       const destination = join(root, "Recordings-1.2.4.release");
@@ -116,7 +145,7 @@ describe("release output publication contract", () => {
   });
 
   test("recovers missing aliases idempotently and rejects substituted destinations", () => {
-    const root = mkdtempSync(join(tmpdir(), "recordings-release-recovery-"));
+    const root = publicationRoot("recordings-release-recovery-");
     try {
       const publicationIdentity = releasePublicationIdentity([
         "release_kind=app-update",
@@ -191,7 +220,7 @@ describe("release output publication contract", () => {
   });
 
   test("outer recovery authenticates the canonical nested updater publication", () => {
-    const root = mkdtempSync(join(tmpdir(), "recordings-nested-release-recovery-"));
+    const root = publicationRoot("recordings-nested-release-recovery-");
     try {
       const outerIdentity = releasePublicationIdentity([
         "release_kind=initial-bootstrap",
@@ -280,7 +309,7 @@ describe("release output publication contract", () => {
   });
 
   test("pins mutable release inputs into one exclusive authenticated snapshot", () => {
-    const root = mkdtempSync(join(tmpdir(), "recordings-release-input-snapshot-"));
+    const root = publicationRoot("recordings-release-input-snapshot-");
     try {
       const source = join(root, "source.raw");
       const snapshot = join(root, "snapshot.raw");
@@ -325,7 +354,7 @@ describe("release output publication contract", () => {
   });
 
   test("publishes a durable sibling directory without replacing an existing release", () => {
-    const root = mkdtempSync(join(tmpdir(), "recordings-release-publication-"));
+    const root = publicationRoot("recordings-release-publication-");
     try {
       const staging = join(root, ".Recordings-1.2.3.staging.first");
       const destination = join(root, "Recordings-1.2.3.release");
@@ -385,7 +414,7 @@ describe("release output publication contract", () => {
   test("separates same-version bootstrap and app-update publication identities", () => {
     // The release-set basename embeds the release subtype (bootstrap and app-update
     // must separate) and is derived from the bundle naming rule's APP_BASENAME, so the
-    // bar variant names its release sets HasnaRecordings-<v>-macos-<subtype>.
+    // bar variant names its release sets Hasna Recordings-<v>-macos-<subtype>.
     expect(build).toContain(
       'release_set_basename="${APP_BASENAME}-${VERSION}-macos-${RELEASE_SUBTYPE}"',
     );

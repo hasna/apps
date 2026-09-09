@@ -1,14 +1,21 @@
+import { proxyProviderStream } from "./provider-stream";
+import { claudeContextEnvironment } from "./claude-context";
+import { compileOpenCodeModelPolicy, openCodeInvocationModel } from "./opencode-model-policy";
 import { prepareKilo, validateKiloConfiguration } from "./kilo";
 import { prepareGemini, validateGeminiConfiguration } from "./gemini-config";
 import { geminiBridge } from "./gemini-bridge";
-import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { compileModelPolicy } from "./model-policy";
+import { compileNativeModelPolicy } from "./native-model-policy";
+import { createInferenceGateway } from "./inference-gateway";
+import { prepareCodexModelPolicy } from "./codex-model-policy";
+import { access, mkdir, readFile, readdir, writeFile, rm } from "node:fs/promises";
 import { basename, dirname, join, isAbsolute, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createConnection } from "node:net";
-import { compatible, endpoint, harnessEligible } from "./domain";
+import { compatible, endpoint, harnessEligible, modelExpired } from "./domain";
 import { prepareAider, validateAiderConfiguration } from "./aider-config";
 import { childEnvironment } from "./harness-environment";
 import { privateDirectory, switcherHome } from "./runtime";
@@ -49,7 +56,7 @@ export function validateHarnessVersion(harness: HarnessId, version: string | und
   if(harness==="omp"&&!versionAtLeast(version,[18,1,11])) throw new Error("OMP >=18.1.11 is required for the native catalog and persistent session adapter.");
   if(harness==="dsh"&&(!versionAtLeast(version,[0,1,2])||(/\b0\.1\.2-/.test(version??"")&&!/\b0\.1\.2-rc\.[1-9]\d*(?:\b|$)/.test(version??"")))) throw new Error("DeepSeek Harness (dsh) >=0.1.2-rc.1 is required for the native profile adapter.");
   if(harness==="aider"&&!/^(?:aider\s+)?0\.86\.2(?:\s|$)/i.test(version??""))throw new Error("Aider 0.86.2 is required by the verified native configuration adapter.");
-  if(harness==="claude"&&!versionAtLeast(version,[2,1,242])) throw new Error("Claude Code >=2.1.242 is required for a full native modelPicker.");
+  if(harness==="claude"&&!versionAtLeast(version,[2,1,257])) throw new Error("Claude Code >=2.1.257 is required for a full native modelPicker.");
   if(harness==="pi"&&!versionAtLeast(version,[0,85,1])) throw new Error("Pi >=0.85.1 is required by this catalog adapter.");
   if(harness==="codex"&&!versionAtLeast(version,[0,153,0])) throw new Error("Codex >=0.153.0 is required by this catalog adapter.");
   if(harness==="grok"&&!versionAtLeast(version,[1,0,13])) throw new Error("Grok Build >=1.0.13 is required by this remote catalog adapter.");
@@ -78,7 +85,13 @@ async function projectInstructionPaths(cwd:string):Promise<string[]> {
     dir=parent;
   }
 }
-type ScopedOpenCodePolicy = {permission?:unknown};
+type ScopedOpenCodePolicy = {permission?:unknown;mode?:"subagent"|"primary"|"all";prompt?:string;description?:string};
+function nativeAgentFields(entry:Record<string,unknown>|undefined,path:string):ScopedOpenCodePolicy {
+  const fields:ScopedOpenCodePolicy={};
+  if(entry?.mode!==undefined){if(!["subagent","primary","all"].includes(String(entry.mode)))throw new Error(`OpenCode agent mode at ${path} is invalid.`);fields.mode=entry.mode as ScopedOpenCodePolicy["mode"];}
+  for(const key of ["prompt","description"] as const)if(entry?.[key]!==undefined){if(typeof entry[key]!=="string")throw new Error(`OpenCode agent ${key} at ${path} must be text.`);fields[key]=entry[key];}
+  return fields;
+}
 type OpenCodePolicy = {permission?:unknown;tools?:Record<string,boolean>;agent?:Record<string,ScopedOpenCodePolicy>;mode?:Record<string,ScopedOpenCodePolicy>};
 function policyRecord(value:unknown,path:string):Record<string,unknown>|undefined {
   if(value===undefined) return undefined;
@@ -150,7 +163,7 @@ function decodePolicy(text:string,file:string):OpenCodePolicy {
     const entryPermission=policyWithExpandedPatterns(policyValue(entry?.permission,`${file}:agent.${name}.permission`));
     const entryTools=toolsPermission(entry?.tools,`${file}:agent.${name}.tools`);
     const merged=mergePolicyValue(entryTools,entryPermission);
-    if(merged!==undefined) agent[name]={permission:merged};
+    agent[name]={...nativeAgentFields(entry,`${file}:agent.${name}`),...(merged!==undefined?{permission:merged}:{})};
   }
   const mode:OpenCodePolicy["mode"]={};
   for(const [name,value] of Object.entries(modeValue??{})) {
@@ -186,7 +199,7 @@ async function agentPolicyFiles(dir:string,kind:"agent"|"mode"):Promise<Array<{f
   for(const rootName of [kind,`${kind}s`]) await visit(join(dir,rootName),join(dir,rootName));
   return result.sort((a,b)=>a.file.localeCompare(b.file));
 }
-async function readAgentPolicyFile(file:string,kind:"agent"|"mode",root:string):Promise<{name:string;permission:unknown}|undefined> {
+async function readAgentPolicyFile(file:string,kind:"agent"|"mode",root:string):Promise<({name:string}&ScopedOpenCodePolicy)|undefined> {
   const text=await readFile(file,"utf8");
   const match=text.match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
   if(!match) return undefined;
@@ -197,17 +210,18 @@ async function readAgentPolicyFile(file:string,kind:"agent"|"mode",root:string):
   const permission=policyWithExpandedPatterns(policyValue(frontmatter?.permission,`${file}:permission`));
   const toolPermission=toolsPermission(frontmatter?.tools,`${file}:tools`);
   const merged=mergePolicyValue(toolPermission,permission);
-  if(merged===undefined) return undefined;
+  const fields=nativeAgentFields(frontmatter,file);
+  fields.prompt=text.slice(match[0].length).trim();
   const relative=file.slice(root.length+1).replaceAll("\\","/").replace(/\.md$/i,"");
-  return {name:relative||basename(file,".md"),permission:merged};
+  return {name:relative||basename(file,".md"),...fields,...(merged!==undefined?{permission:merged}:{})};
 }
-async function preservedOpenCodePolicy(cwd:string):Promise<{permission?:unknown;tools?:Record<string,boolean>;agent?:Record<string,{permission:unknown}>;mode?:Record<string,{permission:unknown}>}> {
-  const result:{permission?:unknown;tools?:Record<string,boolean>;agent?:Record<string,{permission:unknown}>;mode?:Record<string,{permission:unknown}>}={};
+async function preservedOpenCodePolicy(cwd:string):Promise<OpenCodePolicy> {
+  const result:OpenCodePolicy={};
   const applyLayer=(layer:OpenCodePolicy)=>{
     if(layer.permission!==undefined) result.permission=mergePolicyValue(result.permission,layer.permission);
     if(layer.tools) result.tools={...(result.tools??{}),...layer.tools};
-    for(const [name,value] of Object.entries(layer.agent??{})) if(value.permission!==undefined)
-      result.agent={...(result.agent??{}),[name]:{permission:mergePolicyValue(result.agent?.[name]?.permission,value.permission)}};
+    for(const [name,value] of Object.entries(layer.agent??{}))
+      result.agent={...(result.agent??{}),[name]:{...result.agent?.[name],...value,permission:mergePolicyValue(result.agent?.[name]?.permission,value.permission)}};
     for(const [name,value] of Object.entries(layer.mode??{})) if(value.permission!==undefined)
       result.mode={...(result.mode??{}),[name]:{permission:mergePolicyValue(result.mode?.[name]?.permission,value.permission)}};
   };
@@ -218,7 +232,7 @@ async function preservedOpenCodePolicy(cwd:string):Promise<{permission?:unknown;
       const policy=await readAgentPolicyFile(entry.file,kind,entry.root); if(!policy) continue;
       const target=kind==="agent"?result.agent:result.mode;
       const merged=mergePolicyValue(target?.[policy.name]?.permission,policy.permission);
-      if(kind==="agent") result.agent={...(result.agent??{}),[policy.name]:{permission:merged}};
+      if(kind==="agent") {const {name,...fields}=policy;result.agent={...(result.agent??{}),[name]:{...target?.[name],...fields,permission:merged}};}
       else result.mode={...(result.mode??{}),[policy.name]:{permission:merged}};
     }
   };
@@ -312,29 +326,8 @@ function grokBridge(input: HarnessLaunchInput) {
       const response=await fetch(`${input.baseUrl}${apiPath}`,{method:"POST",headers,body:JSON.stringify(body),redirect:"manual",signal:AbortSignal.any([record.abort.signal,request.signal,AbortSignal.timeout(240000)])});
       if(!response.ok){await response.body?.cancel();release();return Response.json({error:{message:`Provider returned HTTP ${response.status}`}},{status:response.status>=300&&response.status<400?502:response.status});}
       if(!response.body){release();return new Response(null,{status:response.status});}
-      const reader=response.body.getReader();
-      let ended=false;
-      let output:ReadableStreamDefaultController<Uint8Array>;
-      const end=(error?:Error)=>{
-        if(ended)return;ended=true;
-        try{if(error&&!closing)output.error(error);else output.close();}catch{}
-        release();
-      };
-      const stream=new ReadableStream<Uint8Array>({
-        start(controller){output=controller;},
-        async pull(controller){
-          try{const chunk=await reader.read();if(ended)return;if(chunk.done)end();else controller.enqueue(chunk.value);}
-          catch{end(new Error("Provider stream ended unexpectedly"));}
-        },
-        async cancel(){
-          ended=true;record.abort.abort();
-          try{await reader.cancel();}finally{release();}
-        },
-      });
-      record.cancel=async()=>{
-        record.abort.abort();
-        try{await reader.cancel();}catch{}finally{end();}
-      };
+      const {stream,cancel}=proxyProviderStream({response,protocol:input.protocol,requestSignal:request.signal,abort:record.abort,closing:()=>closing,release});
+      record.cancel=cancel;
       return new Response(stream,{status:response.status,headers:{"content-type":response.headers.get("content-type")??"application/json","cache-control":"no-store"}});
     }catch{release();return Response.json({error:{message:"Provider request failed"}},{status:502});}
   }});
@@ -350,7 +343,7 @@ function grokBridge(input: HarnessLaunchInput) {
   })()};
 }
 function grokAlias(input: HarnessLaunchInput, model: string) {
-  return "switcher-" + createHash("sha256").update(JSON.stringify([input.baseUrl,input.protocol])).digest("hex").slice(0,12) + "/" + model;
+  return "switcher-" + createHash("sha256").update(JSON.stringify([input.providerBaseUrl??input.baseUrl,input.protocol])).digest("hex").slice(0,12) + "/" + model;
 }
 function piProviderId(input: HarnessLaunchInput, providerBaseUrl: string) {
   return "switcher-" + createHash("sha256").update(JSON.stringify([endpoint(providerBaseUrl),input.protocol])).digest("hex").slice(0,12);
@@ -520,7 +513,7 @@ function primeModel(input: HarnessLaunchInput, api: string) {
     ...(model.maxOutputTokens ? {maxTokens:model.maxOutputTokens} : {}),
   }));
 }
-async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = input.baseUrl): Promise<PreparedLaunch> {
+async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = input.providerBaseUrl??input.baseUrl): Promise<PreparedLaunch> {
   input={...input,baseUrl:endpoint(input.baseUrl)};
   if(!compatible(input.harness,input.protocol)) throw new Error("Harness and provider protocol are incompatible.");
   validateHarnessVersion(input.harness,input.version);
@@ -539,11 +532,13 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   if(input.harness==="aider")return prepareAider(input);
   if(input.harness==="claude") {
     env.ANTHROPIC_BASE_URL=input.baseUrl.replace(/\/v1$/,"");
+    Object.assign(env,input.nativePolicy?.env);
+    Object.assign(env,claudeContextEnvironment(providerBaseUrl));
     env.ANTHROPIC_MODEL=input.model;
     // The native Default picker row has separate precedence from --model.
     // Keep it and unassigned subagents on the selected provider model.
     env.ANTHROPIC_DEFAULT_MODEL=input.model;
-    env.CLAUDE_CODE_SUBAGENT_MODEL=input.model;
+    env.CLAUDE_CODE_SUBAGENT_MODEL=input.compiledPolicy?.roles.subagent??input.model;
     env[input.authStyle==="x-api-key"?"ANTHROPIC_API_KEY":"ANTHROPIC_AUTH_TOKEN"]=input.credential??"switcher-local-no-auth";
     const file=await jsonFile(input.stateDir,"claude-settings.json",{modelPicker:{replaceBuiltInOptions:true,options:input.models.map(m=>({model:m.id,label:m.name,description:m.description?.slice(0,300)}))}});
     configPaths.push(file);
@@ -551,8 +546,10 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     return {executable,args:["--settings",file,"--model",input.model,...args],env,configPaths,warnings};
   }
   if(input.harness==="codex") {
+    const rolePolicy=await prepareCodexModelPolicy({cwd:input.cwd,stateDir:input.stateDir,model:input.model,policy:input.modelPolicy?{version:1,...input.modelPolicy}:undefined,switcherProvider:"switcher",switcherBaseUrl:input.baseUrl});
     const file=await jsonFile(input.stateDir,"codex-models.json",{models:input.models.map(codexModel)});
     configPaths.push(file);
+    configPaths.push(...Object.values(rolePolicy.agentConfigPaths));
     env[KEY]=input.credential??"switcher-local-no-auth";
     const provider:Record<string,unknown>={name:"Switcher",base_url:input.baseUrl,wire_api:"responses",requires_openai_auth:false};
     {
@@ -560,13 +557,18 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
       else provider.env_key=KEY;
     }
     const toml=Object.entries(provider).map(([k,v])=>`${k} = ${typeof v==="object"?"{ "+Object.entries(v as object).map(([key,value])=>`${quote(key)} = ${quote(value)}`).join(", ")+" }":quote(v)}`).join(", ");
-    const overrides=["-c",`model_provider="switcher"`,"-c",`model_providers.switcher={ ${toml} }`,"-c",`model_catalog_json=${quote(file)}`,"-c",`model=${quote(input.model)}`];
+    const overrides=["-c",`model_provider="switcher"`,"-c",`model_providers.switcher={ ${toml} }`,"-c",`model_catalog_json=${quote(file)}`,"-c",`model=${quote(input.model)}`,"-c",`review_model=${quote(input.compiledPolicy?.roles.review??input.model)}`,"-c",`agents.default_subagent_model=${quote(input.compiledPolicy?.roles.subagent??input.model)}`];
+    for(const [name,path] of Object.entries(rolePolicy.agentConfigPaths)){
+      if(!/^[A-Za-z0-9_-]+$/.test(name))throw new Error("Codex role names containing punctuation beyond hyphens/underscores cannot be safely overridden by this native CLI.");
+      overrides.push("-c",`agents.${name}.config_file=${quote(path)}`);
+    }
+    overrides.push("-c",`memories.extract_model=${quote(input.model)}`,"-c",`memories.consolidation_model=${quote(input.model)}`);
     warnings.push("Codex catalog uses conservative generic tool metadata and a model-neutral coding prompt; provider-specific reasoning is not advertised.");
     return {executable,args:[...overrides,...args],env,configPaths,warnings};
   }
   if(input.harness==="grok") {
     validateGrokResume(args);
-    const file=await jsonFile(input.stateDir,"grok-overlay.json",{models:{default:grokAlias(input,input.model),session_summary:grokAlias(input,input.model),allowed_models:input.models.map(m=>grokAlias(input,m.id))}});
+    const file=await jsonFile(input.stateDir,"grok-overlay.json",{models:{default:grokAlias(input,input.model),session_summary:grokAlias(input,input.compiledPolicy?.roles.summary??input.model),allowed_models:input.models.map(m=>grokAlias(input,m.id))}});
     configPaths.push(file);
     const bridge=grokBridge(input);
     env.GROK_MODELS_BASE_URL=bridge.baseUrl;env.GROK_MODELS_LIST_URL=bridge.baseUrl+"/models";
@@ -711,13 +713,14 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     }]));
     const instructions=await projectInstructionPaths(input.cwd);
     const policy=await preservedOpenCodePolicy(input.cwd);
+    const rolePolicy=compileOpenCodeModelPolicy({providerId:providerID,mainModel:input.model,roles:input.compiledPolicy?.roles,format:"legacy",preservedAgents:Object.entries(policy.agent??{}).map(([name,agent])=>({...agent as Record<string,unknown>,name}))});
     const config={
       $schema:"https://opencode.ai/config.json",
-      model:`${providerID}/${input.model}`,
+      small_model:`${providerID}/${input.compiledPolicy?.roles.fast??input.model}`,
       enabled_providers:[providerID],
       ...(instructions.length?{instructions}:{}),
       ...(policy.permission?{permission:policy.permission}:{}),
-      ...(policy.agent?{agent:policy.agent}:{}),
+      ...rolePolicy.config,
       ...(policy.mode?{mode:policy.mode}:{}),
       provider:{[providerID]:{
         npm:packageName,name:"Switcher",
@@ -742,7 +745,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     env.OPENCODE_DISABLE_PROJECT_CONFIG="true";
     env.OPENCODE_CONFIG_CONTENT=JSON.stringify(config);
     env[KEY]=input.credential??"switcher-local-no-auth";
-    const modelRef=`${providerID}/${input.model}`;
+    const modelRef=openCodeInvocationModel(args,rolePolicy);
     const native=args[0]==="run"?["run","--model",modelRef,...args.slice(1)]:args[0]==="models"?["models",...args.slice(1)]:["--model",modelRef,...args];
     warnings.push("Legacy OpenCode uses the documented singular provider configuration and an isolated XDG data root for durable sessions; it is separate from OpenCode 2.");
     return {executable,args:native,env,configPaths,warnings};
@@ -761,20 +764,22 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   const settings:Record<string,string>={baseURL:input.baseUrl};
   env[KEY]=input.credential??"switcher-local-no-auth";settings.apiKey=`{env:${KEY}}`;
   const isolated=await isolateOpenCode2(input.cwd,input.stateDir,providerID);
-  const config={...isolated.config,model:`${providerID}/${input.model}`,providers:{[providerID]:{name:"Switcher",env:[KEY],package:`@opencode-ai/ai/providers/${packageName}`,settings,models}}};
+  const rolePolicy=compileOpenCodeModelPolicy({providerId:providerID,mainModel:input.model,roles:input.compiledPolicy?.roles,preservedAgents:Object.entries((isolated.config.agents??{}) as Record<string,Record<string,unknown>>).map(([name,agent])=>({...agent,name}))});
+  const modelRef=openCodeInvocationModel(args,rolePolicy,(isolated.config as {default_agent?:string}).default_agent);
+  const config={...isolated.config,...rolePolicy.config,providers:{[providerID]:{name:"Switcher",env:[KEY],package:`@opencode-ai/ai/providers/${packageName}`,settings,models}}};
   const file=join(input.stateDir,"opencode.json");
   await writeFile(file,openCode2ConfigText(config,providerID,KEY),{mode:0o600,flag:"wx"});
   configPaths.push(file,isolated.instructionFile);
   Object.assign(env,isolated.env);
   env.OPENCODE_CONFIG=file;
   env.OPENCODE_CONFIG_CONTENT="{}";
-  const native=args[0]==="run"?["run","--standalone","--model",`${providerID}/${input.model}`,...args.slice(1)]:args[0]==="models"?["models","--standalone",...args.slice(1)]:["--standalone",...args];
+  const native=args[0]==="run"?["run","--standalone","--model",modelRef,...args.slice(1)]:args[0]==="models"?["models","--standalone",...args.slice(1)]:["--standalone",...args];
   warnings.push("OpenCode 2 uses a standalone server so concurrent launch profiles cannot share provider configuration.");
   warnings.push("OpenCode 2 snapshots native permissions, agent prompts and AGENTS.md for this launch; provider overrides, plugins and live configuration reloads are isolated. Native session data remains in its original XDG data directory.");
   if(input.models.some(m=>!m.supportedParameters||!m.inputModalities||!m.outputModalities)) warnings.push("OpenCode requires complete capabilities; unknown fields use text-only/tool-enabled native defaults, not verified provider capabilities.");
   return {executable,args:native,env,configPaths,warnings};
 }
-export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<PreparedLaunch> {
+async function prepareTransportLaunch(input: HarnessLaunchInput): Promise<PreparedLaunch> {
   assertHarnessArguments(input.harness,input.args ?? []);
   if(input.harness==="kilo") {
     await validateKiloConfiguration(input.cwd,[...input.args??[]]);
@@ -803,7 +808,29 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
   // synthetic token. Authenticate only to this loopback hop, then strip auth.
   const bridge=grokBridge({...input,baseUrl:endpoint(input.baseUrl)});
   try{
-    const prepared=await prepareNativeLaunch({...input,baseUrl:bridge.baseUrl,credential:bridge.token,authStyle:(input.harness==="opencode"||input.harness==="opencode2"||input.harness==="cline"||input.harness==="prime-agent")?nativeAuth:"bearer"},input.baseUrl);
+    const prepared=await prepareNativeLaunch({...input,baseUrl:bridge.baseUrl,credential:bridge.token,authStyle:(input.harness==="opencode"||input.harness==="opencode2"||input.harness==="cline"||input.harness==="prime-agent")?nativeAuth:"bearer"},input.providerBaseUrl??input.baseUrl);
     return {...prepared,cleanup:async()=>{try{await prepared.cleanup?.();}finally{await bridge.cleanup();}}};
   }catch(error){await bridge.cleanup();throw error;}
+}
+
+export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<PreparedLaunch> {
+  assertHarnessArguments(input.harness,input.args??[]);
+  if(input.harness==="gemini"&&input.authStyle!=="x-api-key")throw new Error("Gemini CLI requires x-api-key authentication.");
+  validateHarnessVersion(input.harness,input.version);
+  if(!compatible(input.harness,input.protocol))throw new Error("Harness and provider protocol are incompatible.");
+  if(!isAbsolute(input.stateDir)||!isAbsolute(input.cwd))throw new Error("Launch state and working directories must be absolute.");
+  const compiledPolicy=compileModelPolicy(input.model,input.models,input.modelPolicy);
+  input={...input,models:input.models.filter(model=>!modelExpired(model))};
+  const nativePolicy=compileNativeModelPolicy({harness:input.harness,mainModel:input.model,roles:compiledPolicy.roles,version:input.version});
+  const specialized=new Set(["opencode","opencode2","gemini","hermes"]);
+  const unsupported=specialized.has(input.harness)?[]:nativePolicy.unsupportedRoles.filter(role=>role!=="main"&&compiledPolicy.roles[role]!==input.model);
+  if(unsupported.length)throw new Error(`${input.harness} does not expose native model controls for: ${unsupported.join(", ")}.`);
+  await mkdir(input.stateDir,{recursive:true,mode:0o700});
+  const catalogPath=await jsonFile(input.stateDir,`switcher-model-policy-${randomUUID()}.json`,{policy:compiledPolicy,models:input.models});
+  const bridge=createInferenceGateway({...input,compiledPolicy,catalogPath});
+  try {
+    const nativeAuth=input.protocol==="gemini-generate-content"?"x-api-key":input.harness==="claude"?(input.authStyle==="x-api-key"?"x-api-key":"bearer"):input.protocol==="anthropic-messages"?"x-api-key":"bearer";
+    const prepared=await prepareTransportLaunch({...input,providerBaseUrl:input.baseUrl,baseUrl:bridge.baseUrl,credential:bridge.token,authStyle:nativeAuth,compiledPolicy,nativePolicy});
+    return {...prepared,configPaths:[...prepared.configPaths,catalogPath],warnings:[...prepared.warnings,"Switcher injects model guidance into every managed inference request and permits only the selected model plus explicitly configured role, allowed, and fallback models. The gateway translates the selected credential to the provider authentication header. The full catalog remains discoverable."],cleanup:async()=>{try{await prepared.cleanup?.();}finally{await bridge.cleanup();await rm(catalogPath,{force:true});}}};
+  }catch(error){await bridge.cleanup();await rm(catalogPath,{force:true});throw error;}
 }

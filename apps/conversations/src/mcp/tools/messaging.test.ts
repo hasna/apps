@@ -1,17 +1,16 @@
+import { startLoopbackApiFixture } from "../../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../../lib/store/test-support/client-environment.js";
+import { getStore } from "../../lib/store/index.js";
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerMessagingTools } from "./messaging";
-import { createChannel } from "../../lib/channels";
-import { sendMessage } from "../../lib/messages";
-import { closeDb } from "../../lib/db";
 import { resetStoreForTests } from "../../lib/store/index";
-import { mkdtempSync, rmSync, unlinkSync } from "fs";
+import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-const TEST_DB = join(tmpdir(), `conversations-test-messaging-mcp-${Date.now()}.db`);
 const TEST_EXPORT_DIR = mkdtempSync(join(tmpdir(), "conversations-test-messaging-export-"));
 
 async function resolveProjectId(explicit: string | undefined, _agent: string): Promise<string | undefined> {
@@ -20,13 +19,16 @@ async function resolveProjectId(explicit: string | undefined, _agent: string): P
 
 describe("messaging MCP tools", () => {
   let client: Client;
+  let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+  let restoreClient: () => void;
 
   beforeAll(async () => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+    fixture = await startLoopbackApiFixture();
+    restoreClient = activateClientEnvironment(fixture.env);
     process.env.HASNA_CONVERSATIONS_EXPORT_DIR = TEST_EXPORT_DIR;
     process.env.CONVERSATIONS_EXPORT_DIR = TEST_EXPORT_DIR;
     process.env.CONVERSATIONS_AGENT_ID = "messaging-test-agent";
-    closeDb();
+
     resetStoreForTests();
 
     const server = new McpServer({ name: "test-messaging-mcp", version: "0.0.1" });
@@ -43,13 +45,13 @@ describe("messaging MCP tools", () => {
     delete process.env.HASNA_CONVERSATIONS_EXPORT_DIR;
     delete process.env.CONVERSATIONS_EXPORT_DIR;
     delete process.env.CONVERSATIONS_AGENT_ID;
-    closeDb();
+
     resetStoreForTests();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(TEST_DB + "-wal"); } catch {}
-    try { unlinkSync(TEST_DB + "-shm"); } catch {}
+
     try { rmSync(TEST_EXPORT_DIR, { recursive: true, force: true }); } catch {}
     await client.close();
+    restoreClient();
+    await fixture.stop();
   });
 
   function parseResult(result: { content: unknown[] }): unknown {
@@ -162,7 +164,7 @@ describe("messaging MCP tools", () => {
     });
 
     test("fetches a message by immutable UUID", async () => {
-      const message = sendMessage({ from: "alice", to: "bob", content: "uuid lookup" });
+      const message = await getStore().sendMessage({ from: "alice", to: "bob", content: "uuid lookup" });
       const result = parseResult(await client.callTool({
         name: "get_message",
         arguments: { uuid: message.uuid },
@@ -192,8 +194,8 @@ describe("messaging MCP tools", () => {
     });
 
     test("replies by immutable UUID and persists the numeric parent id", async () => {
-      createChannel("mcp-reply-uuid", "messaging-test-agent");
-      const parent = sendMessage({
+      await getStore().createChannel("mcp-reply-uuid", "messaging-test-agent");
+      const parent = await getStore().sendMessage({
         from: "alice",
         to: "mcp-reply-uuid",
         channel: "mcp-reply-uuid",
@@ -209,8 +211,8 @@ describe("messaging MCP tools", () => {
     });
 
     test("rejects bare numeric reply target before writing", async () => {
-      createChannel("mcp-reply-numeric", "messaging-test-agent");
-      const parent = sendMessage({
+      await getStore().createChannel("mcp-reply-numeric", "messaging-test-agent");
+      const parent = await getStore().sendMessage({
         from: "alice",
         to: "mcp-reply-numeric",
         channel: "mcp-reply-numeric",
@@ -256,7 +258,7 @@ describe("messaging MCP tools", () => {
 
   describe("mark_channel_read", () => {
     test("marks channel messages read", async () => {
-      createChannel("messaging-channel", "messaging-test-agent");
+      await getStore().createChannel("messaging-channel", "messaging-test-agent");
       const result = parseResult(await client.callTool({
         name: "mark_channel_read",
         arguments: { channel: "messaging-channel" },
@@ -305,8 +307,8 @@ describe("messaging MCP tools", () => {
       await server.connect(focusedServerTransport);
       await focusedClient.connect(focusedClientTransport);
 
-      const included = sendMessage({ from: "alice", to: "focused-reader", content: "included", project_id: "focused-project" });
-      sendMessage({ from: "alice", to: "focused-reader", content: "excluded", project_id: "other-project" });
+      const included = await getStore().sendMessage({ from: "alice", to: "focused-reader", content: "included", project_id: "focused-project" });
+      await getStore().sendMessage({ from: "alice", to: "focused-reader", content: "excluded", project_id: "other-project" });
 
       const result = parseResult(await focusedClient.callTool({
         name: "read_digest",
@@ -319,9 +321,9 @@ describe("messaging MCP tools", () => {
     });
 
     test("returns cursored byte-capped digest", async () => {
-      createChannel("digest-mcp-channel", "messaging-test-agent");
-      const first = sendMessage({ from: "alice", to: "digest-mcp-channel", channel: "digest-mcp-channel", content: "first digest evidence" });
-      const second = sendMessage({ from: "bob", to: "digest-mcp-channel", channel: "digest-mcp-channel", content: `second digest evidence ${"x".repeat(500)}` });
+      await getStore().createChannel("digest-mcp-channel", "messaging-test-agent");
+      const first = await getStore().sendMessage({ from: "alice", to: "digest-mcp-channel", channel: "digest-mcp-channel", content: "first digest evidence" });
+      const second = await getStore().sendMessage({ from: "bob", to: "digest-mcp-channel", channel: "digest-mcp-channel", content: `second digest evidence ${"x".repeat(500)}` });
       const result = parseResult(await client.callTool({
         name: "read_digest",
         arguments: { channel: "digest-mcp-channel", cursor: first.id, max_bytes: 900 },
@@ -389,8 +391,8 @@ describe("messaging MCP tools", () => {
 
   describe("broadcast", () => {
     test("sends to multiple channels", async () => {
-      createChannel("bc-channel-1", "messaging-test-agent");
-      createChannel("bc-channel-2", "messaging-test-agent");
+      await getStore().createChannel("bc-channel-1", "messaging-test-agent");
+      await getStore().createChannel("bc-channel-2", "messaging-test-agent");
       const result = parseResult(await client.callTool({
         name: "broadcast",
         arguments: { channels: ["bc-channel-1", "bc-channel-2"], content: "broadcast msg" },

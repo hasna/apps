@@ -1,24 +1,10 @@
 // The single secrets Store abstraction.
 //
-// ONE interface, TWO transports. Every CLI command, MCP tool, and SDK caller
-// that reads or writes vault DATA goes through `Store`. There are exactly two
-// implementations:
-//
-//   • LocalStore — the on-box encrypted SQLite vault (resolved through
-//     @hasna/paths dataDir({app:"secrets"}) with gated legacy adoption —
-//     ~/.hasna/secrets/vault.db until the store is migrated to the XDG data
-//     home; see src/data-dir.ts).
-//   • ApiStore   — the HTTP API at `<API_URL>/v1` with a bearer key. Delegates
-//     to the vendored @hasna/contracts storage client.
-//
-// `getStore()` (./index.ts) resolves which transport to use from the client-flip
-// env (HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY). Callers NEVER branch on
-// mode themselves and NEVER touch sqlite or fetch directly — that was the
-// split-brain bug this module eliminates.
-//
-// Retired storage-mode variables (HASNA_SECRETS_STORAGE_MODE and friends) are a
-// hard error, never a selector: deployment modes no longer exist, and the
-// transport follows the URL + key pair alone.
+// Ordinary CLI/MCP/default library access resolves ApiStore through canonical
+// saved credentials. Explicit LocalStore construction is a separate compatibility
+// handle for library fixtures and migration tooling, never an ambient selector.
+// Retired local/database selectors are rejected before ordinary store access.
+// Deprecated mode variables remain inert and cannot select SQLite.
 //
 // SAFETY: the API key never leaves the transport; it is never logged, returned,
 // or embedded in any value produced by an implementation.
@@ -140,8 +126,10 @@ export interface Store {
   /** Describe the transport and its (key-free) location. */
   describe(): StoreDescriptor;
   /**
-   * Encrypt any plaintext rows in the local vault. Local-only maintenance; in
-   * api mode the server owns encryption, so this throws instead of pretending.
+   * Encrypt any plaintext rows in the ACTIVE vault. Local: encrypts plaintext rows.
+   * API: atomically verifies all four tenant payload tables and encrypts legacy
+   * plaintext under secrets:migrate; unreadable ciphertext fails closed.
    */
+  encryptionStatus?(): Promise<import("../encryption-maintenance.js").EncryptionReceipt>;
   encryptVault(): Promise<EncryptVaultResult>;
 }

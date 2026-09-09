@@ -70,6 +70,29 @@ The package root exports the same authenticated remote client as `./sdk`.
 Pure Markdown/frontmatter formatting helpers are available only at
 `@hasna/notes/compat/markdown-format`; that subpath exports no local CRUD.
 
+### Browser and Swift applications
+
+Applications that own their account sessions use the explicit, browser-safe
+`@hasna/notes/sdk/browser` entrypoint or the public `NotesLib` library in
+`swift/Package.swift` from the same npm archive. Both accept a complete API base
+and a credential provider, and read no ambient machine credentials. They support
+revision-aware edits, trash restore, labels and paged changes when the configured
+service implements the [SaaS wire contract](docs/saas-wire-v1.md).
+
+```js
+import { NotesClient } from '@hasna/notes/sdk/browser';
+const notes = new NotesClient({
+  apiBase: 'https://notes.example.com/api/v1/',
+  credential: () => currentSession.accessToken,
+});
+const page = await notes.list({ limit: 200 });
+```
+
+Swift consumers link the `NotesLib` library product from the verified archive.
+The public package contains no desktop UI; a customer app need not install the
+independent CLI or MCP commands. Run `bun run test:swift-sdk` for real HTTP
+conformance on macOS with Swift Command Line Tools.
+
 ## Data paths and explicit migration
 
 Maintenance data paths resolve through the in-package XDG resolver (the
@@ -77,7 +100,8 @@ former `@hasna/paths` contract, kept in-package after that package was
 retired). Without an exact app override, the destination is the platform XDG
 data location, for example `$XDG_DATA_HOME/hasna/notes` on Linux or
 `~/Library/Application Support/Hasna/notes` on macOS. Exact overrides retain
-their precedence: `HASNA_NOTES_HOME`, `HASNA_NOTES_ROOT`, then `NOTES_HOME`.
+their precedence: `HASNA_NOTES_HOME`, then `HASNA_NOTES_ROOT` (the unprefixed
+`NOTES_HOME` is not read).
 
 Legacy roots are never selected or copied implicitly. Review a copy-only plan,
 then apply it explicitly:

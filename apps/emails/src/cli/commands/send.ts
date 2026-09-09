@@ -123,14 +123,14 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
     .option("--provider <id>", "Provider ID (uses first active if not specified)")
     .option("--template <name>", "Use a template by name")
     .option("--vars <json>", "Template variables as JSON string")
-    .option("--force", "Send to recipients marked suppressed (self-hosted mode: honored only with tenant-level send authority — the same authority that can unsuppress a contact)")
+    .option("--force", "Send to suppressed recipients (requires tenant-level send authority)")
     .option("--dry-run", "Preview what would be sent without actually sending")
     .option("--schedule <datetime>", "Schedule email for later (ISO 8601 datetime)")
     .option("--unsubscribe-url <url>", "Inject List-Unsubscribe headers (RFC 8058 one-click)")
     .option("--idempotency-key <key>", "Prevent duplicate sends — returns existing email if key was used before")
-    .option("--track-opens", "Open tracking — not supported in this build; refuses rather than silently sending untracked mail")
-    .option("--track-clicks", "Click tracking — not supported in this build; refuses rather than silently sending untracked mail")
-    .option("--tracking-url <url>", "Tracking base URL — not supported in this build; refuses rather than silently sending untracked mail")
+    .option("--track-opens", "Track unique open requests through the configured API tracking host")
+    .option("--track-clicks", "Track unique click requests through the configured API tracking host")
+    .option("--tracking-url <url>", "Approved server HTTPS tracking base; requires an open or click tracking flag")
     .option("--in-reply-to <id>", "Reply to an existing sent email — sets In-Reply-To/References headers for threading")
     .action(async (opts: {
       from: string;
@@ -156,26 +156,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
       trackingUrl?: string;
     }) => {
       try {
-        // The tracking flags are a TYPED REFUSAL, not a capability. They used to be
-        // parsed and never read: the mail left untracked and the command printed
-        // success — an operator relying on open/click analytics believed they
-        // existed. No send path in this build applies tracking (the tracking
-        // utilities in src/lib/tracking.ts have no production caller, and the
-        // rewritten URLs would need the ledger row id, which the local path only
-        // mints after the provider call), so the honest answer is to refuse before
-        // anything is sent.
-        const requestedTracking = [
-          opts.trackOpens ? "--track-opens" : null,
-          opts.trackClicks ? "--track-clicks" : null,
-          opts.trackingUrl ? "--tracking-url" : null,
-        ].filter((flag): flag is string => flag !== null);
-        if (requestedTracking.length > 0) {
-          handleError(new Error(
-            `${requestedTracking.join(", ")}: open/click tracking is not supported in this build — `
-            + "no send path applies a tracking pixel or rewrites links, so the flag would be accepted "
-            + "and silently ignored. Remove the tracking flag(s) to send without tracking.",
-          ));
-        }
+        if (opts.trackingUrl !== undefined && (!opts.trackingUrl.trim() || (!opts.trackOpens && !opts.trackClicks))) throw new Error("--tracking-url requires a nonempty URL and --track-opens or --track-clicks");
 
         const ds = resolveMailDataSource();
 
@@ -263,15 +244,11 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
         // apply — the server owns sending.
         const attachments = readSendAttachments(opts.attachment);
         if (opts.dryRun) {
-          // --dry-run PREDICTS the send, so every claim below must be true for the
-          // mode that would actually run it. This block had no mode branch: in
-          // local mode it announced "(self-hosted)", quoted the server's
-          // attachment caps, and predicted that scheduling would fail — none of
-          // which applies to a local send, which does support scheduling.
+          // Keep preview limits consistent with the selected data source.
           const mode = getClientMode();
           const selfHosted = mode === "self_hosted";
           const limits = selfHosted ? SELF_HOSTED_SEND_ATTACHMENT_LIMITS : LOCAL_SEND_ATTACHMENT_LIMITS;
-          console.log(chalk.bold(`\n[DRY RUN] Would send (${selfHosted ? "self-hosted" : "local"}):`));
+          console.log(chalk.bold("\n[DRY RUN] Would send:"));
           console.log(`  ${chalk.dim("From:")}    ${opts.from}`);
           console.log(`  ${chalk.dim("To:")}      ${toAddresses.join(", ")}`);
           // A group expands into ONE message addressed to every member, so the
@@ -285,7 +262,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           if (htmlBody) console.log(`  ${chalk.dim("Body:")}    HTML (${htmlBody.length} chars)`);
           else if (textBody) console.log(`  ${chalk.dim("Body:")}    ${textBody.slice(0, 100)}${textBody.length > 100 ? "..." : ""}`);
           if (attachments.length) {
-            console.log(chalk.dim(`  Attachments: ${attachments.length} inline file(s); ${mode} caps are ${describeSendAttachmentLimits(limits)}`));
+            console.log(chalk.dim(`  Attachments: ${attachments.length} inline file(s); limits are ${describeSendAttachmentLimits(limits)}`));
           }
 
           // ── the part that makes this a PRECHECK rather than an echo ──────────
@@ -341,11 +318,10 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
 
           // Say what this did NOT prove. A preview that stops at its own green lines
           // is read as a guarantee it never made.
+          if (opts.trackOpens || opts.trackClicks) console.log(chalk.dim("  Tracking requested; this preview does not verify server tracking configuration."));
           console.log(chalk.dim(`  Note:    ${describeUncheckedSendPolicy(selfHosted)}`));
           if (opts.schedule) {
-            console.log(selfHosted
-              ? chalk.yellow(`  Schedule:    ${opts.schedule} — the self-hosted server does not accept a scheduled send (a real send would fail)`)
-              : chalk.dim(`  Schedule:    ${opts.schedule} — a real send enqueues this locally; use \`emails schedule list\` to inspect the queue`));
+            console.log(chalk.dim(`  Schedule: ${opts.schedule} — queues on the API; use emails schedule list to inspect it.`));
           }
           console.log(chalk.yellow("\n  [NOT SENT] Use without --dry-run to send.\n"));
           return;
@@ -360,18 +336,9 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           html: htmlBody,
           markdown: false,
           replyTo: opts.replyTo,
-          // `--provider` used to be parsed and then dropped on the floor in BOTH
-          // modes. Thread it through: local honours it, self_hosted refuses it
-          // explicitly (the server chooses the sender), so it is never silently
-          // ignored again.
           providerId: opts.provider,
-          // `--unsubscribe-url` was in the same parsed-and-dropped class: declared,
-          // typed, and never read, so bulk mail left WITHOUT the RFC 8058 one-click
-          // headers the operator relied on for compliance. Local sends inject the
-          // List-Unsubscribe / List-Unsubscribe-Post pair at the provider; the serve
-          // API's send contract cannot carry the field, so that path refuses loudly
-          // instead of mailing without the headers.
           unsubscribeUrl: opts.unsubscribeUrl,
+          trackOpens: opts.trackOpens, trackClicks: opts.trackClicks, trackingUrl: opts.trackingUrl,
           replyToId: (opts as Record<string, unknown>).inReplyTo as string | undefined,
           attachments: attachments.length > 0 ? attachments : undefined,
           scheduledAt: opts.schedule,
@@ -381,7 +348,11 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           // checks suppression above and ignores this field.
           allowSuppressedRecipients: opts.force,
         });
-        if (result.inProgress) {
+        if (result.scheduled) {
+          const job = result.scheduled;
+          console.log(chalk.green(`Schedule ${job.id}: ${job.status} at ${job.scheduled_at}${result.idempotentReplay ? " (existing request)" : ""}`));
+          if (job.status === "failed" || job.status === "cancelled") process.exitCode = 1;
+        } else if (result.inProgress) {
           console.log(chalk.yellow(`Send already in progress for ${toAddresses.join(", ")}; do not retry.`));
         } else {
           console.log(chalk.green(`✓ Email sent to ${toAddresses.join(", ")}`));

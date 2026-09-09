@@ -10,7 +10,7 @@ import { openCliRuntime } from "../src/runtime";
 const cli = fileURLToPath(new URL("../src/cli.ts",import.meta.url));
 const scratch = process.env.SWITCHER_TEST_ROOT ?? join(homedir(),"Workspace/scratch/switcher-tests");
 async function directory() { await mkdir(scratch,{recursive:true}); return mkdtemp(join(scratch,"credentials-")); }
-const envFor = (dir: string, extra: NodeJS.ProcessEnv = {}) => ({PATH:process.env.PATH,HOME:process.env.HOME,USER:process.env.USER,HASNA_SWITCHER_HOME:join(dir,"data"),...extra});
+const envFor = (dir: string, extra: NodeJS.ProcessEnv = {}) => ({PATH:process.env.PATH,HOME:dir,USER:"fixture",HASNA_STATION:"switcher-credential-fixture",HASNA_SWITCHER_HOME:join(dir,"data"),...extra});
 async function command(dir: string, args: string[], extra: NodeJS.ProcessEnv = {}) {
   const child = Bun.spawn([process.execPath,cli,...args],{cwd:dir,env:envFor(dir,extra),stdin:"ignore",stdout:"pipe",stderr:"pipe"});
   const timeout = setTimeout(()=>child.kill("SIGKILL"),25_000);
@@ -94,10 +94,10 @@ test("binding CLI validates metadata/source flags before creating data or openin
       const result = credentialBindingSchema.safeParse({schema:1,...bindingTarget("deepseek"),source:{kind:"vault",key,url:"https://vault.example",executable:process.execPath,operator:{kind:"env"}}});
       expect(result.success).toBe(false);
     }
-    for (const args of [["credentials","bind","deepseek","--vault-key","fixture/key"],["credentials","list","--vault-key","fixture/key"],["launch","claude","--vault-account","fixture"],["credentials","bind","deepseek","--keychain-service","fixture","--keychain-account","fixture","--vault-key","fixture/key"]]) {
+    for (const args of [["credentials","bind","deepseek","--vault-key","fixture/key","--vault-operator","env"],["credentials","list","--vault-key","fixture/key"],["launch","claude","--vault-account","fixture"],["credentials","bind","deepseek","--keychain-service","fixture","--keychain-account","fixture","--vault-key","fixture/key"]]) {
       expect((await command(dir,args)).code).toBe(1);
     }
-    expect(await readdir(dir)).toEqual([]);
+    expect((await readdir(dir)).filter(name=>!["Library",".bun"].includes(name))).toEqual([]); // Bun caches under Library on macOS and .bun on Linux; app data must remain absent.
     const bind = await command(dir,["credentials","bind","deepseek","--keychain-service","fixture-provider","--keychain-account","fixture-account"]);
     expect(bind.code,bind.stderr).toBe(0);
     expect(await readdir(join(dir,"data"))).toEqual(["config"]);
@@ -123,7 +123,7 @@ const code=await child.exited;
 if((await fetch(url,{method:'POST',headers:{authorization:'Bearer '+nonce},body:JSON.stringify('fixture-provider-key')})).status!==404) process.exit(12);
 process.exit(code);
 `,{mode:0o700});
-  const bind = await command(dir,["credentials","bind","SWITCHER_PROVIDER_FIXTURE","--origin",origin,"--vault-key",key,"--vault-url","https://vault.example","--vault-cli",executable]);
+  const bind = await command(dir,["credentials","bind","SWITCHER_PROVIDER_FIXTURE","--origin",origin,"--vault-key",key,"--vault-operator","env","--vault-url","https://vault.example","--vault-cli",executable]);
   expect(bind.code,bind.stderr).toBe(0);
   return executable;
 }
@@ -136,10 +136,10 @@ test("actual CLI resolves its vault binding, launches directly, preserves exit c
     const executable = join(dir,"claude-fixture");
     await writeFile(executable,`#!${process.execPath}
 if(process.argv.includes('--version')) console.log('2.1.263 (Claude Code)');
-else { console.log(JSON.stringify({auth:process.env.ANTHROPIC_AUTH_TOKEN==='fixture-provider-key',model:process.env.ANTHROPIC_DEFAULT_MODEL,subagent:process.env.CLAUDE_CODE_SUBAGENT_MODEL,leaked:Object.keys(process.env).filter(n=>/^(HASNA_|SWITCHER_CREDENTIAL_)/.test(n))})); process.exit(7); }
+else { console.log(JSON.stringify({auth:!!process.env.ANTHROPIC_AUTH_TOKEN&&process.env.ANTHROPIC_AUTH_TOKEN!=='fixture-provider-key',model:process.env.ANTHROPIC_DEFAULT_MODEL,subagent:process.env.CLAUDE_CODE_SUBAGENT_MODEL,leaked:Object.keys(process.env).filter(n=>/^(HASNA_|SWITCHER_CREDENTIAL_)/.test(n))})); process.exit(7); }
 `,{mode:0o700});
     const args = ["launch","claude","--provider","generic-anthropic-messages","--url",upstream.url.origin,"--credential-env","SWITCHER_PROVIDER_FIXTURE","--model","fixture-pro","--executable",executable];
-    const poisoned = {HASNA_SECRETS_API_KEY:"fixture-operator",HASNA_SECRETS_API_KEY_OVERRIDE:"fixture-wrong",HASNA_SECRETS_API_KEY_REF:"fixture/wrong",HASNA_PROFILE:"wrong",SECRETS_API_URL:"https://wrong.example",SECRETS_API_KEY:"fixture-wrong",UNRELATED_API_KEY:"fixture-unrelated"};
+    const poisoned = {HASNA_SECRETS_API_KEY:"fixture-operator",HASNA_SECRETS_API_KEY_OVERRIDE:"fixture-wrong",HASNA_SECRETS_API_KEY_REF:"fixture/wrong",SECRETS_API_URL:"https://wrong.example",SECRETS_API_KEY:"fixture-wrong",UNRELATED_API_KEY:"fixture-unrelated"};
     const result = await command(dir,args,poisoned);
     expect(result.code,result.stderr).toBe(7);
     expect(JSON.parse(result.stdout)).toEqual({auth:true,model:"fixture-pro",subagent:"fixture-pro",leaked:[]});

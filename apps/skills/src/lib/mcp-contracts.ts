@@ -16,6 +16,7 @@ export interface JsonSchemaObject {
   pattern?: string;
   maxItems?: number;
   maxLength?: number;
+  minLength?: number;
   items?: JsonSchemaObject;
   properties?: Record<string, JsonSchemaObject>;
   required?: string[];
@@ -523,6 +524,37 @@ const toolContracts: McpToolContract[] = [
     outputSchema: objectSchema({ organization: objectSchema({ id: stringSchema("Workspace identifier."), slug: stringSchema("Stable workspace slug."), name: stringSchema("Workspace name.") }, ["id", "slug", "name"]) }, ["organization"]),
   },
   {
+    name: "set_workspace_member_role", title: "Set Current Workspace Member Role", description: "Set an exact membership incarnation's role with its observed expectedRole and fresh verification; no automatic retry.",
+    params: ["membershipId", "role", "expectedRole", "email", "code"], category: "execution", sideEffects: "local-process-or-remote-run", stable: true,
+    inputSchema: objectSchema({ membershipId: { type: "string", pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$" },
+      role: { type: "string", enum: ["owner", "admin", "member", "viewer"] }, expectedRole: { type: "string", enum: ["owner", "admin", "member", "viewer"] },
+      email: { type: "string", format: "email" }, code: { type: "string", pattern: "^\\d{6}$" } }, ["membershipId", "role", "expectedRole", "email", "code"]),
+    outputSchema: objectSchema({ organizationId: stringSchema("Current workspace identifier."), changed: { type: "boolean" },
+      member: objectSchema({ membershipId: stringSchema("Membership incarnation."), userId: stringSchema("Account identifier."), email: stringSchema("Member email."),
+        displayName: { oneOf: [{ type: "string" }, { type: "null" }] }, role: { type: "string", enum: ["owner", "admin", "member", "viewer"] }, createdAt: stringSchema("Exact server timestamp including microseconds.") },
+        ["membershipId", "userId", "email", "displayName", "role", "createdAt"]) }, ["organizationId", "member", "changed"]),
+  },
+  {
+    name: "remove_workspace_member", title: "Remove Current Workspace Member", description: "Remove exactly this membership incarnation using its observed expectedRole and fresh verification; self-removal is unavailable.",
+    params: ["membershipId", "expectedRole", "email", "code"], category: "execution", sideEffects: "local-process-or-remote-run", stable: true,
+    inputSchema: objectSchema({ membershipId: { type: "string", pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$" },
+      expectedRole: { type: "string", enum: ["owner", "admin", "member", "viewer"] }, email: { type: "string", format: "email" }, code: { type: "string", pattern: "^\\d{6}$" } },
+      ["membershipId", "expectedRole", "email", "code"]),
+    outputSchema: objectSchema({ organizationId: stringSchema("Current workspace identifier."), membershipId: stringSchema("Removed membership incarnation."),
+      removed: { type: "boolean", const: true }, alreadyRemoved: { type: "boolean" } }, ["organizationId", "membershipId", "removed", "alreadyRemoved"]),
+  },
+  {
+    name: "list_workspace_members", title: "List Current Workspace Members", description: "Read one current-workspace roster page with fresh owner/admin email verification; saved credentials stay unchanged.",
+    params: ["email", "code", "limit?", "cursor?"], category: "execution", sideEffects: "local-process-or-remote-run", stable: true,
+    inputSchema: objectSchema({ email: { type: "string", format: "email" }, code: { type: "string", pattern: "^\\d{6}$" },
+      limit: { type: "integer", minimum: 1, maximum: 100 }, cursor: { type: "string", pattern: "^[A-Za-z0-9_-]{1,512}$" } }, ["email", "code"]),
+    outputSchema: objectSchema({ organizationId: stringSchema("Current workspace identifier."),
+      members: arraySchema(objectSchema({ membershipId: stringSchema("Membership incarnation."), userId: stringSchema("Account identifier."), email: stringSchema("Member email."),
+        displayName: { oneOf: [{ type: "string" }, { type: "null" }] }, role: { type: "string", enum: ["owner", "admin", "member", "viewer"] }, createdAt: stringSchema("Exact server timestamp including microseconds.") },
+        ["membershipId", "userId", "email", "displayName", "role", "createdAt"])),
+      nextCursor: { oneOf: [{ type: "string" }, { type: "null" }] } }, ["organizationId", "members", "nextCursor"]),
+  },
+  {
     name: "list_api_keys", title: "List API Keys", description: "List keys using fresh email OTP reauthentication.",
     params: ["email", "code"], category: "execution", sideEffects: "local-process-or-remote-run", stable: true,
     inputSchema: objectSchema({ email: { type: "string", format: "email" }, code: { type: "string", pattern: "^\\d{6}$" } }, ["email", "code"]),
@@ -544,7 +576,7 @@ const toolContracts: McpToolContract[] = [
     name: "run_skill",
     title: "Run Skill",
     description: "Run a skill locally or through a configured remote runner. Returns compact stdout/stderr previews and run summaries by default; pass detail:true for full records.",
-    params: ["name", "input?", "args?", "detail?", "remote?", "maxCredits?", "maxCostCents?", "idempotency_key?", "files?"],
+    params: ["name", "input?", "args?", "detail?", "remote?", "maxCredits?", "maxCostCents?", "quoteReceipt?", "idempotency_key?", "files?"],
     category: "execution",
     sideEffects: "local-process-or-remote-run",
     stable: true,
@@ -556,6 +588,7 @@ const toolContracts: McpToolContract[] = [
       remote: { type: "boolean", description: "Use the configured server catalog." },
       maxCredits: { type: "integer", minimum: 0, description: "Maximum explicitly approved integer credits; omitted permits only free remote runs." },
       maxCostCents: { type: "integer", minimum: 0, description: "Legacy alias for maxCredits; both must agree." },
+      quoteReceipt: { type: "string", minLength: 1, maxLength: 4096, description: "Opaque approved quote receipt, at most 4096 UTF-8 bytes. Preserve it and the quoted input/args unchanged; never refresh after confirmation." },
       idempotency_key: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$", description: "Stable retry key for the same remote submission." },
       files: { type: "array", maxItems: 10, items: objectSchema({ name: stringSchema("Safe basename"), base64: { type: "string", maxLength: 1398104 }, contentType: stringSchema("MIME type") }, ["name", "base64"]), description: "Inline remote inputs, at most 1 MiB combined." },
     }, ["name"]),
@@ -835,9 +868,11 @@ const remoteCustomerContracts: McpToolContract[] = REMOTE_CUSTOMER_OPERATIONS.ma
 }));
 remoteCustomerContracts.push({
   name: "quote_skill", title: "Quote Remote Skill", description: "Get a server credit quote without submitting a run.",
-  params: ["name", "input?", "args?"], category: "execution", sideEffects: "none", stable: true,
-  inputSchema: objectSchema({ name: skillNameInput, input: runInputSchema, args: runArgsSchema }, ["name"]),
-  outputSchema: objectSchema({ skill: stringSchema("Canonical server skill."), pricing: objectSchema({}, [], "Quoted integer credits.", true) }, ["skill", "pricing"], undefined, true),
+  params: ["name", "input?", "args?", "files?"], category: "execution", sideEffects: "none", stable: true,
+  inputSchema: objectSchema({ name: skillNameInput, input: runInputSchema, args: runArgsSchema,
+    files: { type: "array", maxItems: 10, items: objectSchema({ name: stringSchema("Safe basename"), base64: { type: "string", maxLength: 1398104 }, contentType: stringSchema("MIME type") }, ["name", "base64"]), description: "Same inline files to submit after approval, at most 1 MiB combined." },
+  }, ["name"]),
+  outputSchema: objectSchema({ skill: stringSchema("Canonical server skill."), pricing: objectSchema({}, [], "Quoted integer credits.", true), quoteReceipt: { type: "string", minLength: 1, maxLength: 4096, description: "Opaque server quote binding, at most 4096 UTF-8 bytes; preserve verbatim for approval." } }, ["skill", "pricing"], undefined, true),
 });
 remoteCustomerContracts.push({
   name: "download_run_artifact", title: "Download Verified Run Artifact", description: "Return verified artifact bytes as base64, bounded to 1 MiB.",
@@ -845,7 +880,30 @@ remoteCustomerContracts.push({
   inputSchema: objectSchema({ run_id: stringSchema("Run identifier."), artifact_id: stringSchema("Artifact identifier.") }, ["run_id", "artifact_id"]),
   outputSchema: objectSchema({ id: stringSchema("Artifact identifier."), fileName: stringSchema("Artifact file name."), base64: stringSchema("Verified bytes."), sha256: stringSchema("SHA256 digest."), byteSize: { type: "integer", minimum: 0 } }, ["id", "fileName", "base64", "sha256", "byteSize"]),
 });
-const contracts: McpToolContract[] = [...toolContracts, ...remoteCustomerContracts].sort((a, b) => a.name.localeCompare(b.name));
+const publicationUuidSchema: JsonSchemaObject = { type: "string", pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$" };
+const publicationVerification: Record<string, JsonSchemaObject> = {
+  email: { type: "string", format: "email", maxLength: 254 }, code: { type: "string", pattern: "^\\d{6}$" },
+  userId: publicationUuidSchema, membershipId: publicationUuidSchema,
+  recoveryDirectory: { type: "string", maxLength: 4096, description: "Absolute host-local recovery directory without symbolic links." },
+};
+const privatePublicationContracts: McpToolContract[] = [
+  { name: "publish_private_skill", title: "Publish private skill", extras: {
+    directory: { type: "string", maxLength: 4096, description: "Absolute local skill source directory." }, skillId: publicationUuidSchema,
+    expectedCurrentVersionId: { oneOf: [publicationUuidSchema, { type: "null" }] }, idempotencyKey: publicationUuidSchema,
+    confirm: { const: true }, waitMs: { type: "integer", minimum: 0, maximum: 300000 },
+  }, required: ["directory", "skillId", "expectedCurrentVersionId", "confirm"] },
+  { name: "get_private_publication", title: "Get private publication", extras: {}, required: [] },
+  { name: "resume_private_publication", title: "Resume private publication", extras: { confirm: { const: true }, waitMs: { type: "integer", minimum: 0, maximum: 300000 } }, required: ["confirm"] },
+  { name: "cancel_private_publication", title: "Cancel private publication", extras: { confirm: { const: true } }, required: ["confirm"] },
+].map(operation => ({
+  name: operation.name, title: operation.title, description: "Manage private source publication with fresh workspace verification and durable host-local recovery. Upload consent and current version comparison are explicit; execution requires a separate server quote and approval.",
+  params: [...Object.keys(publicationVerification), ...Object.keys(operation.extras)], category: "storage", sideEffects: "filesystem", stable: true,
+  inputSchema: objectSchema({ ...publicationVerification, ...operation.extras } as Record<string, JsonSchemaObject>, [...Object.keys(publicationVerification), ...operation.required]),
+  outputSchema: objectSchema({ recoveryDirectory: { type: "string" }, skillId: publicationUuidSchema, intentId: { oneOf: [publicationUuidSchema, { type: "null" }] },
+    state: { type: "string" }, versionId: { oneOf: [publicationUuidSchema, { type: "null" }] }, committed: { type: "boolean" }, executionEnabled: { oneOf: [{ type: "boolean" }, { type: "null" }] }, nextAction: { type: "string" },
+  }, ["recoveryDirectory", "skillId", "intentId", "state", "versionId", "committed", "executionEnabled", "nextAction"]),
+}));
+const contracts: McpToolContract[] = [...toolContracts, ...remoteCustomerContracts, ...privatePublicationContracts].sort((a, b) => a.name.localeCompare(b.name));
 
 const resourceContracts: McpResourceContract[] = [
   {

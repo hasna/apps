@@ -143,6 +143,7 @@ function messageBody(input: MessageInput): Record<string, unknown> {
     ["body_text", input.body_text],
     ["body_html", input.body_html],
     ["status", input.status],
+    ["provider_id", input.provider_id],
     ["provider_message_id", input.provider_message_id],
     ["direction", input.direction],
     ["message_id", input.message_id],
@@ -186,6 +187,7 @@ function messagesQuery(opts: ListMessagesOptions | undefined): Record<string, Qu
     ...(opts?.cursor === undefined ? { offset: opts?.offset } : {}),
     cursor: opts?.cursor,
     direction: opts?.direction,
+    provider_id: opts?.provider_id,
     to: opts?.to,
     from: opts?.from,
     subject: opts?.subject,
@@ -197,11 +199,25 @@ function messagesQuery(opts: ListMessagesOptions | undefined): Record<string, Qu
   };
 }
 
+const providerFilterContracts = new WeakSet<Transport>();
+
+async function requireProviderFilter(transport: Transport): Promise<void> {
+  if (providerFilterContracts.has(transport)) return;
+  const answer = await transport.request("GET", "/openapi.json");
+  const document = answer.body as { paths?: Record<string, { get?: { parameters?: Array<{ name?: string; in?: string }> } }> };
+  const parameters = document?.paths?.["/v1/messages"]?.get?.parameters;
+  if (answer.status !== 200 || !parameters?.some((item) => item.name === "provider_id" && item.in === "query")) {
+    throw new Error("The Emails API needs an update before provider-scoped message statistics can be read.");
+  }
+  providerFilterContracts.add(transport);
+}
+
 async function readMessagePage(
   transport: Transport,
   query: Record<string, QueryValue>,
   what: string,
 ): Promise<Outcome<Page<MessageListRecord>>> {
+  if (query["provider_id"]) await requireProviderFilter(transport);
   const answer = await transport.request("GET", "/messages", { query });
   if (answer.status !== 200) return refusalForStatus(answer.status, answer.body, what);
   const body = asRecord(answer.body, what);
@@ -210,7 +226,11 @@ async function readMessagePage(
   if (cursor !== null && typeof cursor !== "string") {
     return refusalForStatus(answer.status, answer.body, `${what}: next_cursor is neither a string nor null`);
   }
-  return ok({ items: rows.map((row) => messageListRecord(row, what)), next_cursor: cursor });
+  const items = rows.map((row) => messageListRecord(row, what));
+  if (query["provider_id"] && items.some((row) => row.provider_id !== query["provider_id"])) {
+    throw new Error("The Emails API returned messages outside the requested provider filter.");
+  }
+  return ok({ items, next_cursor: cursor });
 }
 
 export function createMessagesRepository(transport: Transport): MessagesRepository {
@@ -311,6 +331,8 @@ export function createMessagesRepository(transport: Transport): MessagesReposito
         ["is_read", patch.is_read],
         ["is_starred", patch.is_starred],
         ["archived", patch.archived],
+        ["is_spam", patch.is_spam],
+        ["is_trash", patch.is_trash],
         ["add_label", patch.add_label],
         ["remove_label", patch.remove_label],
       ];

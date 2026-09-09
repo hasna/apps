@@ -22,7 +22,7 @@ import { resetMailDataSource } from "../../lib/mail-data-source.js";
 import { PDFDocument } from "pdf-lib";
 import { filterAttachmentDetails } from "./inbox.remote.js";
 import { registerInboxCommands } from "./inbox.js";
-import { registerInboxCommands as registerLocalInboxCommands } from "./inbox.local.js";
+import { registerInboxCommands as registerLocalInboxCommands } from "./inbox.local.test-support.js";
 import { registerInboxCommands as registerRemoteInboxCommands } from "./inbox.remote.js";
 
 let stub: V1Stub;
@@ -193,7 +193,7 @@ function useAttachmentInventoryPages(
 ): void {
   attachmentInventoryPages = new Map(pages);
   process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
+  process.env.EMAILS_SELF_HOSTED_API_KEY = crypto.randomUUID(); // Per-run synthetic fixture credential.
   resetSelfHostedConfigCache();
 }
 
@@ -774,12 +774,11 @@ describe("inbox source scoping", () => {
     expect(counts.sent).toBe(1);
   });
 
-  it("refuses a provider scope with an actionable message instead of printing `No mail found`", async () => {
+  it("refuses provider-scoped reads when an older API cannot advertise the filter", async () => {
     await stub.seed({ messages: [msgRow({})] });
 
     const { stderr } = await runInboxCommandExpectingExit(["inbox", "list", "--provider", "cred-1"]);
-    expect(stderr).toContain("no ingestion-source or provider provenance");
-    expect(stderr).toContain("--address <email> or --domain <domain>");
+    expect(stderr).toContain("/openapi.json");
     expect(stderr).not.toContain("No mail found");
   });
 
@@ -1023,13 +1022,13 @@ describe("inbox attachments", () => {
       delete process.env.EMAILS_CLIENT_ENV_SECRET;
       delete process.env.EMAILS_SESSION_TOKEN;
       process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-      process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
+      process.env.EMAILS_SELF_HOSTED_API_KEY = crypto.randomUUID(); // Per-run synthetic fixture credential.
       process.env.EMAILS_DB_PATH = poisonDbDir;
       resetSelfHostedConfigCache();
 
-      await expect(runInboxCommand(["--json", "inbox", "attachments"])).rejects.toThrow(
-        "two configured places to keep its mail",
-      );
+      const rejection = await runInboxCommandExpectingExit(["--json", "inbox", "attachments"]);
+      expect(rejection.error).toBe("process.exit:1");
+      expect(rejection.stderr).toContain("two configured places to keep its mail");
       expect(attachmentInventoryRequests).toHaveLength(0);
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
@@ -1104,9 +1103,9 @@ describe("inbox attachments", () => {
     const previousDbPath = process.env.EMAILS_DB_PATH;
     process.env.EMAILS_DB_PATH = poisonDbDir;
     try {
-      await expect(runInboxCommand(["--json", "inbox", "attachments"])).rejects.toThrow(
-        /two configured places[\s\S]*UNSET ONE/,
-      );
+      const rejection = await runInboxCommandExpectingExit(["--json", "inbox", "attachments"]);
+      expect(rejection.error).toBe("process.exit:1");
+      expect(rejection.stderr).toMatch(/two configured places[\s\S]*UNSET ONE/);
       expect(attachmentInventoryRequests).toHaveLength(0);
     } finally {
       if (previousDbPath === undefined) delete process.env.EMAILS_DB_PATH;
@@ -1467,7 +1466,7 @@ describe("inbox attachment", () => {
 
     try {
       process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${legacyServer.port}`;
-      process.env.EMAILS_SELF_HOSTED_API_KEY = "legacy-attachment-test-key";
+      process.env.EMAILS_SELF_HOSTED_API_KEY = crypto.randomUUID(); // Per-run synthetic fixture credential.
       resetSelfHostedConfigCache();
       resetMailDataSource();
 
@@ -1735,40 +1734,24 @@ describe("inbox unread-count --by-address", () => {
   });
 });
 
-describe("server-only ingestion/diagnostic subcommands", () => {
-  const cases: Array<{ label: string; args: string[]; command: string }> = [
-    { label: "explain", args: ["inbox", "explain", "31f40200"], command: "emails inbox explain" },
-    { label: "sync-s3", args: ["inbox", "sync-s3", "--bucket", "mail-bucket", "--limit", "1"], command: "emails inbox sync-s3" },
-    { label: "setup-realtime", args: ["inbox", "setup-realtime", "example.com"], command: "emails inbox setup-realtime" },
-    { label: "realtime-status", args: ["inbox", "realtime-status"], command: "emails inbox realtime-status" },
-    { label: "watch", args: ["inbox", "watch", "--once"], command: "emails inbox watch" },
-    { label: "listen", args: ["inbox", "listen", "--port", "2526"], command: "emails inbox listen" },
-  ];
-
-  for (const { label, args, command } of cases) {
-    it(`${label} fails closed with a server-only message`, async () => {
-      const result = await runInboxCommandExpectingExit(args);
+describe("SMTP API capability preflight", () => {
+  it("fails before binding when the configured API does not implement SMTP import", async () => {
+    const result = await runInboxCommandExpectingExit(["inbox", "listen", "--port", "2526"]);
+    expect(result.error).toBe("process.exit:1");
+    expect(result.stderr).toContain("SMTP API");
+    expect(result.stderr).not.toContain("self-hosted client");
+  });
+  it("rejects malformed port and blank provider before starting a listener", async () => {
+    for (const args of [["--port", "2525junk"], ["--provider", ""]]) {
+      const result = await runInboxCommandExpectingExit(["inbox", "listen", ...args]);
       expect(result.error).toBe("process.exit:1");
-      expect(result.stderr).toContain(command);
-      expect(result.stderr).toContain("is not available in the self-hosted client");
-      expect(result.stderr).toContain("it runs on the self-hosted server");
-    });
-  }
+      expect(result.stderr).toMatch(/SMTP (port|provider)/);
+    }
+  });
 });
 
-// ─── inbox source lifecycle (previously refused; client-side registry) ────────
-//
-// `inbox source list/add-s3/retire` used to refuse in this mode while
-// `inbox sources` — one word apart — worked, an intra-file contradiction. The
-// registry is client config: src/lib/s3-sync.ts implements all three functions as
-// ONE collapsed implementation (this used to name a second copy inside the now-
-// reduced src/lib/s3-sync.remote.ts), and src/cli/tui/data.remote.ts already READS the same registry to
-// resolve a `--source` ref. Only the INGESTION half (`sync-s3`) is server-owned,
-// and it still refuses (asserted above).
-//
-// Every test here runs under a temporary HOME so the registry writes land in a
-// throwaway config file, never the operator's.
-describe("inbox source lifecycle is a client-side registry", () => {
+// Source registry persists through the authenticated API.
+describe("inbox source lifecycle uses the API registry", () => {
   let sourceHome: string;
   let priorSourceHome: string | undefined;
 
@@ -1800,7 +1783,7 @@ describe("inbox source lifecycle is a client-side registry", () => {
       "--name", "Primary inbound",
     ]);
     expect(added.data).toMatchObject({
-      id: "s3-inbound-mail-raw-",
+      id: expect.any(String),
       type: "s3",
       bucket: "inbound-mail",
       prefix: "raw/",
@@ -1810,13 +1793,13 @@ describe("inbox source lifecycle is a client-side registry", () => {
     });
     // No capability claim: this client performs no ingestion, so the message says
     // what it actually did (recorded provenance) and where ingestion is configured.
-    expect(added.out).toContain("Recorded S3 source s3-inbound-mail-raw-");
+    expect(added.out).toContain("Registered S3 source");
     expect(added.out).not.toContain("live sync enabled");
-    expect(added.out).toContain("performs no S3 ingestion");
+    expect(added.out).toContain("server ingest binding");
 
     const listed = await runInboxCommand(["inbox", "source", "list"]);
     expect(listed.data as Array<{ id: string; bucket: string }>).toEqual([
-      expect.objectContaining({ id: "s3-inbound-mail-raw-", bucket: "inbound-mail" }),
+      expect.objectContaining({ id: expect.any(String), bucket: "inbound-mail" }),
     ]);
     expect(listed.out).toContain("s3://inbound-mail/raw/ eu-west-1");
   });
@@ -1855,15 +1838,23 @@ describe("inbox source lifecycle is a client-side registry", () => {
   it("retires a registered source and keeps it listed as retired", async () => {
     await runInboxCommand(["inbox", "source", "add-s3", "--bucket", "retire-me"]);
 
-    const retired = await runInboxCommand(["inbox", "source", "retire", "s3-retire-me"]);
-    expect(retired.data).toMatchObject({ id: "s3-retire-me", status: "retired", live_sync_enabled: false });
-    expect(retired.out).toContain("Retired S3 source s3-retire-me");
+    const retired = await runInboxCommand(["inbox", "source", "retire", "retire-me"]);
+    expect(retired.data).toMatchObject({ id: expect.any(String), status: "retired", live_sync_enabled: false });
+    expect(retired.out).toContain("Retired S3 source");
 
     const listed = await runInboxCommand(["inbox", "source", "list"]);
     expect(listed.data as Array<{ status: string }>).toEqual([
       expect.objectContaining({ status: "retired" }),
     ]);
     expect(listed.out).toContain("retired");
+  });
+
+  it("rejects ambiguous bucket retirement and blank provider selectors", async () => {
+    for (const prefix of ["one/", "two/"]) await runInboxCommand(["inbox", "source", "add-s3", "--bucket", "shared-bucket", "--prefix", prefix]);
+    const ambiguous = await runInboxCommandExpectingExit(["inbox", "source", "retire", "shared-bucket"]);
+    expect(ambiguous.stderr).toContain("Ambiguous S3 source");
+    const blank = await runInboxCommandExpectingExit(["inbox", "source", "add-s3", "--bucket", "valid-bucket", "--provider", " "]);
+    expect(blank.stderr).toContain("Provider ID must not be blank");
   });
 
   it("fails retire for an unknown source rather than reporting success", async () => {

@@ -52,6 +52,7 @@ function env(extra: Record<string, string> = {}): Record<string, string> {
     "SECRETS_STORAGE_MODE",
     "SECRETS_MODE",
     "HASNA_SECRETS_DB_PATH",
+    "OPEN_SECRETS_DB",
     "HASNA_SECRETS_LOCAL_VAULT",
     "HASNA_SECRETS_API_KEY_OVERRIDE",
     "HASNA_SECRETS_API_KEY_REF",
@@ -61,7 +62,7 @@ function env(extra: Record<string, string> = {}): Record<string, string> {
   }
   return {
     ...base,
-    OPEN_SECRETS_DB: join(testDir, "vault.db"),
+    HOME: testDir,
     HASNA_SECRETS_KEY_DIR: join(testDir, "keys"),
     // The two ambient tiers, aimed at nothing: an empty ~/.hasna root and a
     // Keychain ACCOUNT no item is stored under (a missing item is an absent
@@ -92,7 +93,7 @@ describe("CLI fail-closed default (owner ruling 2026-09-04)", () => {
     // Point the local vault at a file we own; if the CLI so much as opened it,
     // the test sees the file. Fail-closed must precede any local file I/O.
     const localDb = join(testDir, "must-not-exist.db");
-    const res = runSecrets(["list"], { HASNA_SECRETS_DB_PATH: localDb });
+    const res = runSecrets(["list"]);
 
     expect(res.exitCode).not.toBe(0);
     // Actionable error naming every tier that was consulted.
@@ -101,7 +102,7 @@ describe("CLI fail-closed default (owner ruling 2026-09-04)", () => {
     expect(res.stderr).toContain("Keychain");
     expect(res.stderr).toContain("credentials");
     // The explicit opt-in is named, so a local-only operator knows the way out.
-    expect(res.stderr).toContain("HASNA_SECRETS_LOCAL_VAULT");
+    expect(res.stderr).toContain("No local vault is opened");
     // The old false-green shapes are gone.
     expect(res.stderr).not.toContain("secrets-local-fallback");
     expect(res.stdout).not.toContain("Vault is empty.");
@@ -116,31 +117,18 @@ describe("CLI fail-closed default (owner ruling 2026-09-04)", () => {
     expect(res.exitCode).not.toBe(0);
     expect(res.stderr).toContain("HASNA_SECRETS_API_URL");
     expect(res.stderr).toContain("HASNA_SECRETS_API_KEY");
-    expect(res.stderr).toContain("HASNA_SECRETS_LOCAL_VAULT");
+    expect(res.stderr).toContain("No local vault is opened");
     expect(res.stderr).not.toContain("secrets-local-fallback");
     expect(existsSync(join(testDir, "vault.db"))).toBe(false);
   });
 
-  it("explicit HASNA_SECRETS_LOCAL_VAULT=1 opts into the local vault: set/list work at exit 0 with no fallback event", () => {
-    const set = runSecrets(["set", "svc/token", "val-1", "--type", "token"], {
-      HASNA_SECRETS_LOCAL_VAULT: "1",
-    });
-    expect(set.exitCode).toBe(0);
-    expect(set.stderr).not.toContain("secrets-local-fallback");
-
-    const res = runSecrets(["list"], { HASNA_SECRETS_LOCAL_VAULT: "1" });
-    expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain("1 secret(s)");
-    // An opted-in local run says, in ONE line on stderr, that it is local — the
-    // ruling's replacement for the old silent fallback. stdout stays clean, so
-    // `--json` consumers are unaffected. Assert that on the run this block is
-    // about (`res`, the read) as well as on the write above it: the assertion
-    // used to name `set` under this comment, so `res`'s own stdout — the one
-    // the comment is describing — was never checked.
-    expect(res.stderr).toContain("local vault mode");
-    expect(res.stderr).not.toContain("secrets-local-fallback");
-    expect(res.stdout).not.toContain("local vault mode");
-    expect(set.stdout).not.toContain("local vault mode");
+  it("rejects legacy local selection on real CLI reads and writes", () => {
+    for(const args of [["set","svc/token","fixture-value"],["list"]]) {
+      const result=runSecrets(args,{HASNA_SECRETS_LOCAL_VAULT:"1"});
+      expect(result.exitCode).toBe(1);expect(result.stderr).toContain("no longer supported");
+      expect(result.stdout).not.toContain("Vault is empty");
+      expect(existsSync(join(testDir,"vault.db"))).toBe(false);
+    }
   });
 
   it("fails closed on API URL + local opt-in with no key — the opt-in is not an override", () => {
@@ -162,8 +150,30 @@ describe("CLI fail-closed default (owner ruling 2026-09-04)", () => {
     // The error does not advise the opt-in here: with an authority configured
     // it is not the way out, and naming it would send an operator to a
     // different vault instead of to the missing credential.
-    expect(res.stderr).toContain("does not apply");
+    expect(res.stderr).toContain("no longer supported");
     expect(existsSync(join(testDir, "vault.db"))).toBe(false);
+  });
+
+  it("`status` fails closed with the same one-line message — never a stack dump", () => {
+    // `status` did not route through the CLI's store() accessor, so a missing
+    // credential surfaced as an uncaught throw whose FIRST stderr line was a
+    // bundle snippet (`4054 | }`), with the actionable message buried below.
+    const res = runSecrets(["status"]);
+
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stdout).toBe("");
+    const lines = res.stderr.split("\n").filter((line) => line.trim().length > 0);
+    expect(lines[0]).toMatch(/^HASNA_SECRETS_API_URL is not set and no API key could be resolved/);
+    expect(res.stderr).toContain("Keychain");
+    expect(res.stderr).toContain("No local vault is opened");
+    expect(res.stderr).not.toMatch(/^\s*\d+ \|/m);
+    expect(res.stderr).not.toContain("    at ");
+    expect(existsSync(join(testDir, "vault.db"))).toBe(false);
+
+    const json = runSecrets(["status", "--json"]);
+    expect(json.exitCode).not.toBe(0);
+    expect(json.stdout).toBe("");
+    expect(json.stderr.split("\n")[0]).toMatch(/^HASNA_SECRETS_API_URL is not set and no API key could be resolved/);
   });
 
   it("leaves utility surfaces available without any env", () => {
@@ -198,7 +208,7 @@ describe("CLI fail-closed default (owner ruling 2026-09-04)", () => {
     });
 
     expect(res.exitCode).not.toBe(0);
-    expect(res.stderr).toContain("HASNA_SECRETS_LOCAL_VAULT");
+    expect(res.stderr).toContain("No local vault is opened");
     expect(res.stderr).not.toContain("secrets-local-fallback");
     expect(existsSync(join(testDir, "vault.db"))).toBe(false);
   });

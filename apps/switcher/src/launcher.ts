@@ -1,8 +1,10 @@
+import { prepareOriModelPolicy } from "./ori-model-policy";
+import type {PreparedLaunch} from "./harness-types";
 import { assertHarnessArguments } from "./harness-arguments";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { SwitcherClient } from "./sdk";
-import { CommandInterrupted, codingEligible, harnessEligible, validateHarnessProvider, type LaunchPlan, type ProviderInput } from "./domain";
+import { CommandInterrupted, codingEligible, harnessEligible, modelExpired, validateHarnessProvider, type LaunchPlan, type ProviderInput } from "./domain";
 import { providerCredential } from "./presets";
 import { privateDirectory, switcherHome } from "./runtime";
 import { prepareHarnessLaunch, detectHarness, codexModel, validateHarnessVersion, validateHarnessConfiguration } from "./harnesses";
@@ -11,6 +13,7 @@ import { runHarnessProcess } from "./harness-process";
 import { oriLaunchWarnings, assertOriLoginAllowed, inspectOri, prepareOriLaunch, requireOriHarness, validateOriLaunchRequest, type OriContract, type OriLaunchPlan } from "./ori-backend";
 
 import { childEnvironment } from "./harness-environment";
+import type { RoutingEvent } from "./inference-gateway";
 export { childEnvironment } from "./harness-environment";
 export type LaunchBackend = "direct" | "ori";
 export type LaunchOptions = {backend?: LaunchBackend; oriExecutable?: string; cwd?: string; executable?: string; stateDir?: string; args?: string[]; timeoutMs?: number; refresh?: boolean; credentialEnv?: NodeJS.ProcessEnv; resolveCredential?: (provider: ProviderInput)=>Promise<string | undefined>};
@@ -23,7 +26,7 @@ async function writeOriCodexCatalog(stateDir: string, models: LaunchPlan["catalo
   return path;
 }
 
-type OriPreparationOptions = Pick<LaunchOptions, "oriExecutable" | "args" | "resolveCredential" | "credentialEnv"> & {stateDir?: string; cwd?: string};
+type OriPreparationOptions = Pick<LaunchOptions, "oriExecutable" | "args" | "resolveCredential" | "credentialEnv"> & {stateDir?: string; cwd?: string; onRoutingEvent?:(event:RoutingEvent)=>void};
 type OriSupportedHarness = Exclude<LaunchPlan["profile"]["harness"], "omp" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "opencode" | "kilo">;
 
 function oriTarget(harness: LaunchPlan["profile"]["harness"]): OriSupportedHarness {
@@ -58,7 +61,7 @@ async function oriRequestForPlan(plan: LaunchPlan, options: OriPreparationOption
   const catalogPath = target === "codex" && options.stateDir ? await writeOriCodexCatalog(options.stateDir, plan.catalog.models) : undefined;
   const request = buildOriRequest(plan, target, catalogPath, options.args ?? []);
   validateOriLaunchRequest(request);
-  return {contract, request};
+  return {contract, request, detection};
 }
 
 export async function validateOriForPlan(plan: LaunchPlan, options: Pick<OriPreparationOptions, "oriExecutable" | "args" | "credentialEnv" | "cwd"> = {}): Promise<{contract: OriContract; request: ReturnType<typeof buildOriRequest>; warnings: string[]}> {
@@ -74,14 +77,22 @@ function buildOriRequest(plan: LaunchPlan, target: OriSupportedHarness, catalogP
   } as const;
 }
 
-export async function prepareOriForPlan(plan: LaunchPlan, options: OriPreparationOptions = {}): Promise<{contract: OriContract; prepared: OriLaunchPlan}> {
-  const {contract, request} = await oriRequestForPlan(plan, options);
-  // Provider authority, login policy and unsupported target checks run before
-  // this resolver call. A key is only placed in the child environment later.
+export async function prepareOriForPlan(plan: LaunchPlan, options: OriPreparationOptions & {stateDir:string}): Promise<{contract: OriContract; prepared: PreparedLaunch}> {
+  const {contract, request,detection} = await oriRequestForPlan(plan, options);
   const credential = options.resolveCredential ? await options.resolveCredential(plan.provider) : providerCredential(plan.provider, options.credentialEnv);
   if (!credential) throw new Error("OpenRouter credential is required for an Ori launch; configure a Switcher credential binding.");
-  const prepared = prepareOriLaunch({...request, executable: contract.executable, environment: {...process.env, ...options.credentialEnv, OPENROUTER_API_KEY: credential}});
-  return {contract, prepared};
+  const ori = prepareOriLaunch({...request, executable: contract.executable, environment: {...process.env, ...options.credentialEnv, OPENROUTER_API_KEY: credential}});
+  const native=await prepareHarnessLaunch({harness:plan.profile.harness,baseUrl:plan.provider.baseUrl,protocol:plan.provider.protocol,authStyle:plan.provider.authStyle,
+    model:plan.profile.model,models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),modelPolicy:plan.profile.modelPolicy,
+    providerId:plan.provider.id,onRoutingEvent:options.onRoutingEvent,credential,executable:detection.executable,version:detection.version,
+    stateDir:options.stateDir,cwd:resolve(options.cwd??process.cwd()),args:options.args??[]});
+  try {
+    const shim=prepareOriModelPolicy(request.target as "codex"|"grok",native);
+    const dir=join(options.stateDir,"ori-bin"),path=join(dir,shim.name);
+    await mkdir(dir,{mode:0o700}); await writeFile(path,shim.script,{mode:0o700,flag:"wx"});
+    return {contract,prepared:{...ori,env:{...ori.env,...shim.env,PATH:`${dir}:${ori.env.PATH??process.env.PATH??""}`},configPaths:[...native.configPaths,path],
+      beforeLaunch:native.beforeLaunch,cleanup:native.cleanup,warnings:[...native.warnings,"Ori performs its own OpenRouter catalog/auth checks; its native child uses Switcher's prepared model policy and gateway."]}};
+  }catch(error){await native.cleanup?.();throw error;}
 }
 
 export async function launch(client: SwitcherClient, profileId: string, options: LaunchOptions = {}): Promise<number> {
@@ -113,12 +124,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   await privateDirectory(root);
   const stateDir = await mkdtemp(join(root,"launch-"));
   let credential: string | undefined;
-  let ori: Awaited<ReturnType<typeof prepareOriForPlan>> | undefined;
-  if (backend === "ori") {
-    try { ori = await prepareOriForPlan(plan, {...options, stateDir}); }
-    catch (error) { await rm(stateDir, {recursive: true, force: true}); throw error; }
-    credential = ori.prepared.env.OPENROUTER_API_KEY;
-  } else {
+  if (backend === "direct") {
     try {
       credential = options.resolveCredential ? await options.resolveCredential(plan.provider) : providerCredential(plan.provider, options.credentialEnv);
       if (plan.provider.credentialEnv && !credential) throw new Error("Provider credential environment reference is not available in this local launcher process.");
@@ -132,10 +138,13 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   let lateCreateRunFinalization: Promise<void> | undefined;
   let createRunCancelled = false;
   let runFinalized = false;
+  const routingEvents:RoutingEvent[]=[];
+  let routingEventsDropped=0,routingBytes=0;
+  const onRoutingEvent=(event:RoutingEvent)=>{const bytes=Buffer.byteLength(JSON.stringify(event));if(routingEvents.length<1000&&routingBytes+bytes<=512*1024){routingEvents.push(event);routingBytes+=bytes;}else routingEventsDropped=Math.min(1000000,routingEventsDropped+1);};
   const finishRunOnce = async (candidate: Awaited<ReturnType<SwitcherClient["createRun"]>>, body: {status: "interrupted" | "exited" | "failed"; exitCode: number}, message: string) => {
     if (runFinalized) return;
     runFinalized = true;
-    await client.finishRun(candidate.id, candidate.version, body, crypto.randomUUID())
+    await client.finishRun(candidate.id, candidate.version, {...body,routingEvents,routingEventsDropped}, crypto.randomUUID())
       .catch(() => console.error(message));
   };
   let cancelPreparation!: (error: CommandInterrupted) => void;
@@ -144,9 +153,10 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   // keep the cancellation promise handled in that synchronous path too.
   void preparationCancellation.catch(() => undefined);
   try {
-    const prepared = ori?.prepared ? {...ori.prepared, configPaths: []} : await prepareHarnessLaunch({
+    const prepared = backend === "ori" ? (await prepareOriForPlan(plan,{...options,stateDir,onRoutingEvent})).prepared : await prepareHarnessLaunch({
       harness:plan.profile.harness, baseUrl:plan.provider.baseUrl, protocol:plan.provider.protocol,
-      model:plan.profile.model, models:plan.catalog.models.filter(m=>harnessEligible(m,plan.profile.harness)),
+      model:plan.profile.model, models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),
+      modelPolicy:plan.profile.modelPolicy,providerId:plan.provider.id,onRoutingEvent,
       credential, authStyle:plan.provider.authStyle, executable:options.executable ?? detection?.executable, args:options.args ?? [], stateDir,
       cwd:resolve(options.cwd ?? process.cwd()), version:detection?.version,
       ...(["pi","omp","dsh","cline","hermes","prime-agent","gemini","aider","opencode","kilo"].includes(plan.profile.harness) ? {sessionDir:join(root,"sessions",plan.profile.harness,profileId)} : {}),
@@ -213,9 +223,15 @@ export async function launch(client: SwitcherClient, profileId: string, options:
       throw preparationSignal;
     }
     const {code,interrupted} = await runHarnessProcess({executable:prepared.executable,args:prepared.args,cwd:resolve(options.cwd ?? process.cwd()),env:{...childEnvironment(),...prepared.env},timeoutMs:remainingRuntime});
+    // Close native background traffic before persisting the final routing log.
+    await cleanup?.(); cleanup=undefined;
     await finishRunOnce(run,{status:interrupted?"interrupted":code===0?"exited":"failed",exitCode:code},`switcher: Harness exited ${code}; final metadata could not be saved for run ${run!.id}.`);
     return code;
   } catch (error) {
+    // Flush gateway observations before recording failures, including cancelled
+    // native background requests. Cleanup errors must not hide the launch error.
+    await preparationCleanup;
+    try { await cleanup?.(); cleanup=undefined; } catch { /* retried in finally */ }
     if (run) await finishRunOnce(run,{status:preparationSignal ? "interrupted" : "failed",exitCode:preparationSignal?.exitCode ?? 1},"switcher: Could not persist final run status; inspect the run through the API.");
     throw error;
   } finally {

@@ -66,3 +66,19 @@ AES-GCM AAD binding (`provider id`, `revision`, and purpose), root-key separatio
 locked-keyring failure paths, DTO projections, rotation crash points, restore
 rebind instructions, and tenant isolation in the self-hosted store. This
 document records the review surface; it is not itself an independent sign-off.
+
+## API credential status
+
+`emails provider secrets status` reads the authenticated server's provider
+registry and bound sender metadata. It requires a tenant owner, admin or operator
+API key. The result never contains secret values, does not probe credentials, and
+does not initialize a local database or keyring. The default sender and explicit
+tenant/provider bindings report their credential source separately.
+
+Injected values and workload roles are externally managed: the status response
+reports zero managed envelopes and no application-owned provider root IDs.
+`rewrap`, `rotate-root` and `revoke-root` check the API's actual lifecycle
+capabilities before proceeding. They no longer modify a machine-local keyring.
+These three operations remain incomplete until the server-managed tenant
+credential envelope backend and sender consumption are implemented; this status
+change does not rotate external credentials or deployment KMS keys.

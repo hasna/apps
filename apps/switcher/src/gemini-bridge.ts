@@ -1,3 +1,4 @@
+import { proxyProviderStream } from "./provider-stream";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { endpoint } from "./domain";
 import type { HarnessLaunchInput } from "./harness-types";
@@ -33,14 +34,8 @@ export function geminiBridge(input: HarnessLaunchInput) {
       const response = await fetch(endpoint(input.baseUrl) + path, {method: "POST", headers, body: JSON.stringify(body), redirect: "manual", signal: AbortSignal.any([request.signal, record.abort.signal, AbortSignal.timeout(240000)])});
       if (!response.ok) {await response.body?.cancel(); release(); return fail(response.status >= 300 && response.status < 400 ? 502 : response.status, `Provider returned HTTP ${response.status}`);}
       if (!response.body) {release(); return new Response(null, {status: response.status});}
-      const reader = response.body.getReader(); let ended = false, output: ReadableStreamDefaultController<Uint8Array>;
-      const end = (error?: Error) => {if (ended) return; ended = true; try {if (error && !closing) output.error(error); else output.close();} catch {} release();};
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {output = controller;},
-        async pull(controller) {try {const chunk = await reader.read(); if (ended) return; if (chunk.done) end(); else controller.enqueue(chunk.value);} catch {end(new Error("Provider stream ended unexpectedly"));}},
-        async cancel() {ended = true; record.abort.abort(); try {await reader.cancel();} finally {release();}},
-      });
-      record.cancel = async () => {record.abort.abort(); try {await reader.cancel();} catch {} finally {end();}};
+      const {stream, cancel} = proxyProviderStream({response, protocol: input.protocol, requestSignal: request.signal, abort: record.abort, closing: () => closing, release});
+      record.cancel = cancel;
       return new Response(stream, {status: response.status, headers: {"content-type": response.headers.get("content-type") ?? "application/json", "cache-control": "no-store"}});
     } catch {release(); return fail(502, "Provider request failed");}
   }});

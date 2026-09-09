@@ -1,22 +1,25 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
-// --- Local path resolver -------------------------------------------------
+// --- Local data-home resolver ------------------------------------------
 // @hasna/paths was deleted (hasna/apps#1535, 2026-09-03); this in-package
-// implementation preserves the resolver contract (XDG / macOS home layout
-// honoring HASNA_{CONFIG,DATA,STATE,CACHE}_HOME, with the same env-override
-// and home-override semantics the deleted package had).
+// implementation preserves the DATA-kind resolver contract only (XDG / macOS
+// home layout honouring HASNA_DATA_HOME, with the same env-override and
+// home-override semantics the deleted package had). The config/state/cache
+// kinds were dead code here and are gone: nothing in this package composes a
+// `~/.config/hasna` (or any other retired) location any more — the credential
+// file lives under `~/.hasna/secrets/config/` and is read by @hasna/contracts.
+//
+// HASNA_HOME (which replaces `~/.hasna` for the @hasna/contracts credential
+// tier) is deliberately NOT consulted for the opt-in local vault: its home is
+// the legacy `~/.hasna/secrets` (or the XDG data home once adopted), the same
+// directory the HC-00304 test-isolation guard protects. The two variables that
+// move the vault are `HASNA_DATA_HOME` (the whole data root) and the file-level
+// `HASNA_SECRETS_DB_PATH` / `HASNA_SECRETS_KEY_DIR` overrides.
 import { homedir as pathsResolverHomedir } from "node:os";
 import { join as pathsResolverJoin } from "node:path";
 
-export type PathKind = "config" | "data" | "state" | "cache";
-
-const PATHS_RESOLVER_KIND_ENV: Record<PathKind, string> = {
-  config: "HASNA_CONFIG_HOME",
-  data: "HASNA_DATA_HOME",
-  state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME",
-};
+const PATHS_RESOLVER_DATA_ENV = "HASNA_DATA_HOME";
 
 export interface PathsResolverOptions {
   app: string;
@@ -39,51 +42,27 @@ function pathsResolverAssertApp(app: string): void {
   }
 }
 
-function pathsResolverAssertKind(kind: PathKind): void {
-  if (!(Object.keys(PATHS_RESOLVER_KIND_ENV) as string[]).includes(kind)) {
-    throw new TypeError(
-      `paths: invalid path kind "${kind}" — expected one of ${Object.keys(PATHS_RESOLVER_KIND_ENV).join(", ")}`,
-    );
-  }
-}
-
-function pathsResolverBaseDir(kind: PathKind, options: PathsResolverOptions): string {
-  pathsResolverAssertKind(kind);
+/**
+ * The hasna-level DATA root: `HASNA_DATA_HOME` when set, else
+ * `~/Library/Application Support/Hasna` on darwin and `~/.local/share/hasna`
+ * elsewhere.
+ */
+function pathsResolverDataBaseDir(options: PathsResolverOptions): string {
   const env: Record<string, string | undefined> = options.env ?? process.env;
-  const override = env[PATHS_RESOLVER_KIND_ENV[kind]];
+  const override = env[PATHS_RESOLVER_DATA_ENV];
   if (typeof override === "string" && override.length > 0) return override;
   const home = options.home ?? pathsResolverHomedir();
   const platform = options.platform ?? process.platform;
   if (platform === "darwin") {
-    switch (kind) {
-      case "config":
-      case "data":
-        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
-      case "state":
-        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
-    }
+    return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
   }
-  switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
-    case "data":
-      return pathsResolverJoin(home, ".local", "share", "hasna");
-    case "state":
-      return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
-  }
+  return pathsResolverJoin(home, ".local", "share", "hasna");
 }
 
-function pathsResolverResolve(kind: PathKind, options: PathsResolverOptions): string {
+export function dataDir(options: PathsResolverOptions): string {
   pathsResolverAssertApp(options.app);
   const appSegment = options.internal === true ? pathsResolverJoin("internal", options.app) : options.app;
-  return pathsResolverJoin(pathsResolverBaseDir(kind, options), appSegment);
-}
-export function dataDir(options: PathsResolverOptions): string {
-  return pathsResolverResolve("data", options);
+  return pathsResolverJoin(pathsResolverDataBaseDir(options), appSegment);
 }
 
 const SQLITE_DB_FILE = "vault.db";
@@ -190,6 +169,15 @@ export function ensureOperatorDataDir(env: NodeJS.ProcessEnv = process.env): str
     }
   }
 
+  if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+  return targetDir;
+}
+
+/** Client configuration may preserve its own files, but never imports vaults or keys. */
+export function ensureClientDataDir(env: NodeJS.ProcessEnv = process.env): string {
+  const targetDir = effectiveOperatorDataDir(env);
+  const legacyDir = join(operatorHome(env), ".secrets");
+  for (const name of ["aws.json", ".serve-token"]) copyOwnedFileIfMissing(legacyDir, targetDir, name);
   if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true, mode: 0o700 });
   return targetDir;
 }

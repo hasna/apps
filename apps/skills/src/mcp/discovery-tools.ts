@@ -2,14 +2,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import {
-  SKILLS,
   getSkill,
   findSimilarSkills,
-  loadRegistry,
-  loadRegistryProfile,
   searchSkills,
   type SkillRegistryProfile,
 } from "../lib/registry.js";
+import { getBrowseRegistry, requireSkillsReadAccess } from "../lib/read-access.js";
 import { getInstalledSkills } from "../lib/installer.js";
 import { getSkillBestDoc, getSkillRequirements } from "../lib/skillinfo.js";
 import { createSkillMcpMetadata } from "../lib/mcp-contracts.js";
@@ -31,8 +29,15 @@ import {
   parsePageLimit,
   parsePageOffset,
 } from "../lib/compact-output.js";
-import { cacheGet, cacheSet, mcpError, mcpJson, stripNulls } from "./helpers.js";
+import { mcpError, mcpJson, readSurface, stripNulls } from "./helpers.js";
 
+// Every tool here that answers with skill DATA runs the same fail-closed
+// preamble as the CLI's browsing and introspection verbs (lib/read-access.ts):
+// with no credential, no authority and no HASNA_SKILLS_LOCAL=1 opt-in it
+// answers AUTH_REQUIRED instead of the bundled catalog and the on-machine corpus
+// (#1720 validation). The listing tools share getBrowseRegistry() with
+// `skills list` / `search`, so a hosted install sees the same folder UNION cloud
+// registry on both surfaces.
 export function registerDiscoveryTools(server: McpServer): void {
   server.registerTool("list_skills", {
     title: "List Skills",
@@ -44,11 +49,10 @@ export function registerDiscoveryTools(server: McpServer): void {
       limit: z.number().optional(),
       offset: z.number().optional(),
     },
-  }, async ({ category, profile, detail, limit, offset }) => {
+  }, async ({ category, profile, detail, limit, offset }) => readSurface(async () => {
     const selectedProfile = (profile || "basic") as SkillRegistryProfile;
-    const skills = category
-      ? loadRegistryProfile(selectedProfile).filter((s) => s.category === category)
-      : loadRegistryProfile(selectedProfile);
+    const registry = await getBrowseRegistry({ all: selectedProfile === "all" });
+    const skills = category ? registry.filter((s) => s.category === category) : registry;
 
     const mapped = detail
       ? skills.map(getPublicSkillDiscovery)
@@ -68,7 +72,7 @@ export function registerDiscoveryTools(server: McpServer): void {
       nextArguments: page.hasMore ? { profile: selectedProfile, category, detail: Boolean(detail), limit: page.limit, offset: page.nextOffset } : null,
       detailHint: detail ? undefined : "Set detail:true for full public skill objects, or call get_skill_info for one skill.",
     });
-  });
+  }));
 
   server.registerTool("list_pinned_skills", {
     title: "List Pinned Skills",
@@ -94,12 +98,11 @@ export function registerDiscoveryTools(server: McpServer): void {
       limit: z.number().optional(),
       offset: z.number().optional(),
     },
-  }, async ({ query, profile, detail, limit, offset }) => {
+  }, async ({ query, profile, detail, limit, offset }) => readSurface(async () => {
     const selectedProfile = (profile || "basic") as SkillRegistryProfile;
-    const cacheKey = `${selectedProfile}:${query}:${detail ?? false}`;
-    const cached = cacheGet(cacheKey);
-    const results = cached ? cached as typeof SKILLS : searchSkills(query, loadRegistryProfile(selectedProfile));
-    if (!cached) cacheSet(cacheKey, results);
+    // No result cache any more: the registry is resolved through the ladder on
+    // every call, and a cached hit would answer a later call the ladder refuses.
+    const results = searchSkills(query, await getBrowseRegistry({ all: selectedProfile === "all" }));
     const out = detail
       ? results.map(getPublicSkillDiscovery)
       : results.map(getCompactSkillDiscovery);
@@ -118,7 +121,7 @@ export function registerDiscoveryTools(server: McpServer): void {
       nextArguments: page.hasMore ? { query, profile: selectedProfile, detail: Boolean(detail), limit: page.limit, offset: page.nextOffset } : null,
       detailHint: detail ? undefined : "Set detail:true for full public skill objects, or call get_skill_info for one skill.",
     });
-  });
+  }));
 
   server.registerTool("get_skill_info", {
     title: "Get Skill Info",
@@ -126,7 +129,8 @@ export function registerDiscoveryTools(server: McpServer): void {
     inputSchema: {
       name: z.string(),
     },
-  }, async ({ name }) => {
+  }, async ({ name }) => readSurface(async () => {
+    await requireSkillsReadAccess();
     const skill = getSkill(name);
     if (!skill) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
@@ -144,9 +148,9 @@ export function registerDiscoveryTools(server: McpServer): void {
       mcp: createSkillMcpMetadata(publicSkill),
     });
     return {
-      content: [{ type: "text", text: JSON.stringify(result) }],
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
-  });
+  }));
 
   server.registerTool("get_skill_docs", {
     title: "Get Skill Docs",
@@ -154,13 +158,14 @@ export function registerDiscoveryTools(server: McpServer): void {
     inputSchema: {
       name: z.string(),
     },
-  }, async ({ name }) => {
+  }, async ({ name }) => readSurface(async () => {
+    await requireSkillsReadAccess();
     const doc = getSkillBestDoc(name);
     if (!doc) {
       return mcpError("NO_DOCS", `No documentation found for '${name}'`);
     }
-    return { content: [{ type: "text", text: doc }] };
-  });
+    return { content: [{ type: "text" as const, text: doc }] };
+  }));
 
   server.registerTool("list_tool_primitives", {
     title: "List Tool Primitives",

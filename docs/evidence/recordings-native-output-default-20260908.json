@@ -1,0 +1,46 @@
+{
+  "label": "default",
+  "exitCode": 0,
+  "timedOut": false,
+  "pausedSnapshot": {
+    "elapsedSeconds": 4.533,
+    "forwardedBytes": 197696,
+    "vBytes": 196483,
+    "tailVisible": false,
+    "writerMarker": "writer-completed",
+    "childAlive": true
+  },
+  "fullForwardedBytes": 198005,
+  "fullVBytes": 196629,
+  "tailVisibleAtExit": true,
+  "summary": [
+    "\u2714 Test run with 1 test in 0 suites passed after 2.067 seconds."
+  ],
+  "elapsedSeconds": 4.549,
+  "schemaVersion": 1,
+  "evidenceKind": "fictional-swiftpm-output-probe",
+  "measuredDate": "2026-09-08",
+  "compiler": "Apple Swift 6.3.3 (swiftlang-6.3.3.1.3)",
+  "swiftTestingRevision": "3fdabe5392108d874abae1c1e58e1328ab46f681",
+  "redactions": [
+    "absolute runtime path"
+  ],
+  "originalReceiptSHA256": "b57326464a6eb6ec94ff20f786b13e2f2bd4e35ddb2aa4a720c744e3c5bfd961",
+  "fixtureSourceSHA256": "b7df3b73006181d1f30587a8c0c02e3e63317a7ffe366169d6aca8ad040516b4",
+  "fixtureManifestSHA256": "a72e41d5316db7ec4178f9acab914a5e393bd3b3149b19211f1247e5bd683dda",
+  "supervisorSHA256": "a6952770fa26439ff56de29fdf7f0baec1dbc27fbedd4b071e615715601f35e3",
+  "pausedLogSHA256": "41496639f0f729e043036405044606ca5700251ecdb6ca1c05117bf41312362b",
+  "fullLogSHA256": "4c7c24c3bf9b08aa79d541c89cb415b68cb9f4651a971e2ddee4daa0c1e7b6e6",
+  "profileSHA256": "3ae60262611ef41a6e677f5c4f030d5c3bc6663b88664b48a900849e8f450752",
+  "planningPreludeBytes": 1088,
+  "pausedTestOutputBytes": 196608,
+  "stdoutPayloadVBytes": 196625,
+  "networkDeniedProbe": true,
+  "hostToolDeniedProbe": true,
+  "recordingsExecuted": false,
+  "limitations": [
+    "vBytes/fullVBytes count all literal V bytes including test framework output, not only the payload",
+    "No full Recordings suite or CI timeout reproduction",
+    "Local paths omitted; original receipt and unabridged logs retained by the investigation"
+  ]
+}

@@ -1,7 +1,7 @@
 // The `./sdk` bundle must be self-contained: node builtins only (package-surfaces
 // rule; hasna/apps#1720 validation).
 //
-// `dist/sdk/index.js` is the hosted-only HTTP client a consumer imports as
+// `dist/sdk/index.js` is the HTTP /v1 client a consumer imports as
 // `@hasna/conversations/sdk`. `bun build --target bun` inlines every package
 // dependency, so the only specifiers that survive in the output are the ones
 // the bundler treats as external: node builtins and `bun:*` modules. Before

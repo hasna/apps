@@ -29,12 +29,25 @@ export LANG="en_US.UTF-8"
 export LC_ALL="en_US.UTF-8"
 MACHINE="$(hostname 2>/dev/null | sed -E 's/[^A-Za-z0-9-]/_/g' || echo unknown)"
 export CONVERSATIONS_AGENT_ID="${CONVERSATIONS_AGENT_ID:-${MACHINE}-snapshot-freshness}"
-CONV_ENV="$HOME/.hasna/fleet-env/conversations.env"
-if [ -r "$CONV_ENV" ]; then set -a; . "$CONV_ENV"; set +a
-elif [ -r "$HOME/.hasna/cloud/conversations.env" ]; then set -a; . "$HOME/.hasna/cloud/conversations.env"; set +a; fi
 BIN="${SNAPSHOTS_BIN:-$(command -v snapshots)}"
 LOG="$HOME/.hasna/logs/snapshots-freshness.log"
 mkdir -p "$(dirname "$LOG")"
+
+# Credentials (live tier): ~/.hasna/conversations/config/credentials is the
+# owner-only 0600 disk file holding HASNA_CONVERSATIONS_API_KEY and
+# HASNA_CONVERSATIONS_API_URL. The deprecated ~/.hasna/fleet-env/*.env and the
+# retired ~/.hasna/cloud/*.env locations are never sourced and never read.
+# Fail closed (exit 2, "could not determine") when neither the file nor the env
+# override supplies the key: an unauthenticated run must not look healthy, and a
+# silent no-credential run would suppress the [INCIDENT] this script exists for.
+CONV_CRED="$HOME/.hasna/conversations/config/credentials"
+if [ -r "$CONV_CRED" ]; then set -a; . "$CONV_CRED"; set +a
+elif [ -n "${HASNA_CONVERSATIONS_API_KEY:-}" ]; then :
+else
+  echo "$(date -u +%FT%TZ) FATAL no conversations credential — consulted env HASNA_CONVERSATIONS_API_KEY and $CONV_CRED; ~/.hasna/fleet-env and ~/.hasna/cloud are retired and never read" >> "$LOG"
+  echo "FATAL: no conversations credential — consulted env HASNA_CONVERSATIONS_API_KEY and $CONV_CRED; ~/.hasna/fleet-env and ~/.hasna/cloud are retired and never read" >&2
+  exit 2
+fi
 THRESHOLD="${SNAPSHOTS_FRESHNESS_THRESHOLD:-900}"
 
 # Capture-path discipline: redirect, never pipe a large CLI read.

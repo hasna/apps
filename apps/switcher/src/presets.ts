@@ -118,6 +118,9 @@ export function providerFromPreset(presetId: string, options: PresetOptions = {}
     catalogAuthStyle: options.catalogAuthStyle ?? selected.catalogAuthStyle,
     catalogFormat: options.catalogFormat ?? selected.catalogFormat, catalogAccountId: options.catalogAccountId,
     modelsPath: options.modelsPath ?? selected.modelsPath,
+    additionalModels: presetId === "deepseek" && new URL(baseUrl).origin === "https://api.deepseek.com" ? [{
+      id: "deepseek-v4.1-flash-expires-on-0910", name: "DeepSeek V4.1 Flash preview", expiresOn: "2026-09-10",
+    }] : [],
   });
 }
 

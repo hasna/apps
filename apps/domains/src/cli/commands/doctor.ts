@@ -49,29 +49,22 @@ export function registerDoctorCommand(program: Command): void {
       try {
         const { getStoreResolution } = await import("../../db/store.js");
         const resolution = getStoreResolution(process.env);
-        if (resolution.transport === "local") {
-          ok(`Resolved store: local sqlite${resolution.localPathVar ? ` (opted in via ${resolution.localPathVar})` : ""}`);
-        } else {
-          ok(`Resolved store: http — reads and writes go to the REMOTE portfolio`);
-          if (resolution.apiUrlSource) ok(`API URL from ${resolution.apiUrlSource}`);
-          if (resolution.apiKeySource) ok(`API key from ${resolution.apiKeySource} (tier: ${resolution.apiKeyTier})`);
-        }
+        ok("Resolved store: http — shared account portfolio");
+        if (resolution.apiUrlSource) ok(`API URL from ${resolution.apiUrlSource}`);
+        if (resolution.apiKeySource) ok(`API key from ${resolution.apiKeySource} (tier: ${resolution.apiKeyTier})`);
       } catch (error) {
         fail(
           `Store not resolvable: ${error instanceof Error ? error.message.split(". ")[0] : String(error)}`,
-          "Set a hosted credential (HASNA_DOMAINS_API_KEY, or the Keychain item / credential file), or opt into the local store with a local path variable",
+          "Configure HASNA_DOMAINS_API_KEY or saved Keychain/file credentials, and unset retired local database path variables",
         );
       }
 
       section("Database");
       try {
         const count = await countDomains();
-        ok(`Portfolio accessible (${count} domain${count !== 1 ? "s" : ""})`);
+        ok(`Shared API accessible (${count} domain${count !== 1 ? "s" : ""})`);
       } catch {
-        fail(
-          "Portfolio not accessible",
-          "Check HASNA_DOMAINS_API_KEY / HASNA_DOMAINS_API_URL (or the Keychain item / credential file), or the local store opt-in DOMAINS_DB_PATH / DOMAINS_DIR",
-        );
+        fail("Shared API not accessible", "Check the account API URL, credentials and service availability");
       }
 
       section("Config");

@@ -4,7 +4,7 @@ title: "Switcher"
 type: "package-documentation"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:50:21.698672Z"
-updated_at: "2026-09-06T15:23:09.568156+00:00"
+updated_at: "2026-09-07T06:18:32.384233+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -22,7 +22,7 @@ installation guidance for every adapter. If a harness is installed outside
 
 | Harness | Executable and verified version | Install target | Official instructions |
 | --- | --- | --- | --- |
-| Claude Code | `claude`, >=2.1.242 | Claude Code official distribution | [Quickstart](https://code.claude.com/docs/en/quickstart) |
+| Claude Code | `claude`, >=2.1.257 | Claude Code official distribution | [Quickstart](https://code.claude.com/docs/en/quickstart) |
 | Codex CLI | `codex`, >=0.153.0 | OpenAI Codex official distribution | [Project](https://github.com/openai/codex) |
 | Grok Build | `grok`, >=1.0.13 | xAI Grok Build official project | [Project](https://github.com/xai-org/grok-build) |
 | OpenCode (legacy) | `opencode`, >=1.18.0 | `opencode-ai` | [CLI guide](https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/cli.mdx) |
@@ -51,6 +51,9 @@ switcher doctor
 
 The direct launch flow is available from 0.1.1. The additional OMP, DeepSeek Harness, Cline, Hermes, Prime Agent, legacy OpenCode, Kilo, Gemini CLI and Aider adapters are introduced in 0.1.2. Version 0.1.0 requires explicit API/provider/profile setup.
 
+Version 0.1.3 automatically injects model guidance and enforces allowed model IDs through a per-launch gateway. Native child and utility models default to your selected provider model. Use `--role-model ROLE=ID` or `--model-policy-file FILE` for explicit assignments, aliases and fallbacks. The full catalog stays visible; using another catalog entry requires an allowed assignment or a new launch. See [model policy](docs/MODEL-POLICY.md) for native role support, routing traces and enforcement scope.
+
+
 Supply the provider key through environment injection (`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, or an explicit `SWITCHER_PROVIDER_*` reference), or configure a local credential binding below. Switcher never saves the value.
 
 ```sh
@@ -66,18 +69,27 @@ An interactive terminal can choose or search the catalog when `--model` is omitt
 
 When no remote API configuration is present, each CLI invocation starts an authenticated loopback API on an allocated port, stores SQLite data in `~/.hasna/switcher`, and closes its own listener on completion. Its random operator key remains in memory. Use `HASNA_SWITCHER_HOME` to choose another owner-only home, `HASNA_SWITCHER_SQLITE_PATH` for an explicit database, or `HASNA_SWITCHER_DATABASE_URL` for PostgreSQL. API and SDK data access remains HTTP.
 
-If either remote API variable is configured, both `HASNA_SWITCHER_API_URL` and `HASNA_SWITCHER_API_KEY` are required. An unreachable or misconfigured remote API fails; it never selects a local database instead. The SDK always requires an explicitly configured API.
+Remote API configuration is resolved through Contracts, including canonical credential stores and the default gateway URL. Invalid, unavailable or unauthorized remote services fail without opening local SQLite.
 
 The registry contains DeepSeek, OpenRouter, Anthropic, OpenAI, xAI, Ollama, LM Studio, Groq, Cerebras, Mistral, Together AI, Fireworks, Moonshot/Kimi, DashScope, Z.AI, MiniMax, SiliconFlow, and generic protocol entries. `switcher providers presets ID` exposes documented routes, aliases and limitations; this is not a claim that every combination has passed live tests. Remaining adapters and acceptance gates are tracked in [TODOS.md](TODOS.md).
 
+## Canonical API configuration
+
+The CLI, `clientFromEnv()` SDK helper and standalone MCP client resolve Switcher API URL/key through `@hasna/contracts/client`, following the same shared convention as Conversations. A key alone selects `https://api.hasna.com/switcher`; `HASNA_SWITCHER_API_URL` selects a self-hosted endpoint. The `SWITCHER_API_URL` and `SWITCHER_API_KEY` aliases are supported. Deliberate overrides/profile selections take precedence; otherwise the resolver reads macOS Keychain, canonical disk configuration and then environment. A live client rereads credentials before each request and refuses an authority change until rebuilt.
+
+The canonical file is `~/.hasna/switcher/config/credentials` (owner-only mode 0600), using assignments named `HASNA_SWITCHER_API_URL` and `HASNA_SWITCHER_API_KEY`. Provision actual values through your approved secret manager. macOS Keychain uses service `hasna.credentials.switcher.api-key` and optional `api-url`, with account `HASNA_STATION` or the short hostname. Provider keys remain in the provider's vault or secure store; this file authenticates the Switcher API only.
+
+`HASNA_HOME` replaces `~/.hasna`; `HASNA_CONFIG_HOME` places credentials at `<root>/switcher/credentials` and `<root>/secrets/credentials`. These shared overrides must be absolute and nonblank. `HASNA_PROFILE` selects `credentials-<profile>`; API authority stays in the common credentials file. `HASNA_SWITCHER_HOME` changes Switcher's local database, bindings and launch state only, and does not relocate shared credentials. `HOME` is respected by both paths.
+
+Configured but missing, unsafe, conflicting or inaccessible remote credentials fail before local data is opened. Only complete absence of Switcher remote configuration retains the user-authorized automatic local API. The owned local API uses a random in-memory key. Server-side authentication remains configured separately through `HASNA_SWITCHER_API_KEY` on `switcher-serve`.
+
 ## Credential bindings
 
-Bind an existing vault key once, then launch without an external wrapper. Use your vault's URL and the installed `secrets` CLI. On macOS, `--vault-account` selects the operator's `hasna.credentials.secrets.api-key` Keychain item. Without that option, inject `HASNA_SECRETS_API_KEY` for each process.
+Bind an existing vault key once, then launch without an external wrapper. New bindings use the installed `secrets` CLI and resolve its operator key and API URL through `@hasna/contracts/client`. A configured Keychain item or canonical `~/.hasna/secrets/config/credentials` supplies the operator without shell exports. The default Secrets API URL is `https://api.hasna.com/secrets`; `--vault-url` can select a custom vault but must agree with any configured Secrets authority.
 
 ```sh
 switcher credentials bind deepseek \
-  --vault-key providers/deepseek/live/api_key --vault-url https://vault.example \
-  --vault-account my-station
+  --vault-key providers/deepseek/live/api_key
 switcher credentials check deepseek
 switcher launch claude --provider deepseek --model deepseek-v4-pro
 ```
@@ -88,7 +100,7 @@ For provider keys already stored in macOS Keychain, use `--keychain-service SERV
 
 `credentials list` displays bindings; `credentials remove PRESET_OR_REFERENCE` removes only the locator. Replacement requires explicit removal. Custom credential references require `--origin URL` (repeatable); preset bindings authorize their documented origins by default. `credentials check` reports availability, length and hash, not successful provider authentication. Provider credentials needed by a remote API's catalog discovery must still be configured on that server independently.
 
-On Linux, use a vault binding without `--vault-account` and have your approved secret manager inject `HASNA_SECRETS_API_KEY` into each Switcher process. The binding records the vault URL and key locator; it stores no credential value. Alternatively, let the authenticated `secrets` CLI inject a provider credential for one command:
+Explicit `--vault-account ACCOUNT` pins one macOS Keychain account and requires `--vault-url`; it never falls back when that account is missing or locked. `--vault-operator env` preserves the per-process `HASNA_SECRETS_API_KEY` mode and also requires `--vault-url`. Existing bindings keep their original operator mode. To adopt canonical resolution for an old binding, explicitly remove and rebind its same provider key reference. A Secrets operator cannot bootstrap itself through `HASNA_SECRETS_API_KEY_REF`; use a literal operator from its canonical store or explicit override. On Linux the shared resolver reads the owner-only canonical credentials file or process environment. The binding stores only the locator and optional vault authority. Alternatively, let the authenticated `secrets` CLI inject a provider credential for one command:
 
 ```sh
 secrets exec providers/deepseek/live/api_key --as DEEPSEEK_API_KEY -- \
@@ -244,7 +256,7 @@ Discovery allows at most two retries per page for network failures and HTTP 408,
 
 | Harness | Required wire protocol | Native catalog |
 | --- | --- | --- |
-| Claude Code ≥2.1.242 | Anthropic Messages | Per-launch `modelPicker` on compatible Claude versions |
+| Claude Code ≥2.1.257 | Anthropic Messages | Per-launch `modelPicker` on compatible Claude versions |
 | Codex ≥0.153.0 | OpenAI Responses | Startup `model_catalog_json` |
 | Grok Build ≥1.0.13 | Chat Completions, Responses or Messages | Authenticated loopback remote catalog with upstream model IDs |
 | OpenCode 2 (tested beta-19157) | Chat Completions, Responses or Messages | Version 2 provider/model configuration and standalone server |
@@ -264,6 +276,17 @@ The CLI catalog includes all provider output modalities. Native coding pickers e
 The Claude adapter sets `ANTHROPIC_DEFAULT_MODEL` and the default subagent model to the selected provider model. Explicit subagent definitions and managed model restrictions still apply. These follow the [native model precedence rules](https://code.claude.com/docs/en/model-config).
 
 Claude Code with a non-Claude model is experimental and unsupported by Anthropic. Codex requires Responses, not Chat Completions. Upstream reasoning, tool schemas, context limits and stateless Responses behavior still need provider-specific validation. Switcher never silently falls back to a different provider.
+
+For Claude Code using the official DeepSeek Messages endpoint, Switcher defaults `CLAUDE_CODE_AUTO_COMPACT_WINDOW` to `786432`, following [DeepSeek's integration guidance](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code/). An explicitly set environment value takes precedence. Recognized provider context-overflow errors become a sanitized `prompt is too long` error so the native client can compact or guide recovery; unrelated errors retain the sanitized upstream status. Existing launches must pick up the compaction setting or start a new launch to use this default.
+
+New DeepSeek presets include `deepseek-v4.1-flash-expires-on-0910` as an additional preview model with `expiresOn: "2026-09-10"`. The provider's normal model discovery stays active. To register an unlisted model on an existing provider:
+
+```sh
+switcher models add my-provider vendor/preview --name "Preview" --expires-on 2026-09-10
+switcher models my-provider --refresh
+```
+
+`--expires-on` is optional and accepts a real `YYYY-MM-DD` date. Dates are inclusive in UTC: `2026-09-10` becomes expired at `2026-09-11T00:00:00Z`. This is operator metadata, not a guarantee of provider uptime. Expired models remain visible in `switcher models` with `expired: true` and `codingEligible: false`; new launches, policy roles, native picker catalogs and subsequent gateway requests reject them. Existing processes are not stopped. `models add` appends to the provider's optional `additionalModels` array; entries merge by model ID with discovered or manual models and override only supplied metadata. A duplicate additional entry is rejected; use a versioned `providers update --file` to edit it. Remote catalogs can also supply `expiresOn` or `expires_on`. `manualModels` continues to replace discovery when explicitly configured.
 
 For a provider without discovery, use `providers add ID --file provider.json` with `manualModels`. Each model needs `id` and `name`; optional fields are `contextWindow`, `maxOutputTokens`, `inputModalities`, `outputModalities`, `supportedParameters`, and `available`. Use `catalogBaseUrl` and `modelsPath` for a separate discovery root/path; CLI equivalents are `--catalog-url` and `--models-path`. Use `catalogFormat: "ollama"` for `/api/tags`. Mistral presets select a capability-aware parser, including archived status. Together presets select its native bare-array parser. Fireworks requires `--catalog-account-id ID` or an explicit catalog URL and retains count evidence across its paginated account catalog. DashScope requires an explicit region/workspace `--catalog-url` with `--catalog-format dashscope`. Z.AI currently requires an explicit catalog or manual models because its documented API has no model-list contract. MiniMax defaults to its `.cn` Open Platform endpoints; use an explicit authority and credential reference for another product or region. A different authenticated catalog origin requires an explicit `catalogCredentialEnv`; a public catalog can declare `catalogAuthStyle: "none"`. Standard credential aliases are resolved only for the matching built-in provider origin. The default parser follows Anthropic-style `has_more/last_id` pagination and otherwise expects an OpenAI-style `data` array. HTTP redirects are rejected.
 

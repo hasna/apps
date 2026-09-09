@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { resolveAttachmentsV1 } from "./cloud-v1";
 import { resolveServerDatabase } from "../serve/database";
-import { AttachmentsApiClient } from "../../sdk/src/generated";
+import { AttachmentsApiClient } from "../sdk/generated";
 import * as publicApi from "../index";
 
 const valid = { HASNA_ATTACHMENTS_API_URL: "https://attachments.example.test", HASNA_ATTACHMENTS_API_KEY: "test-only-key" };

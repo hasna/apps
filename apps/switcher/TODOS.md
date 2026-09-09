@@ -4,12 +4,50 @@ title: "Switcher full adapter and installed CLI delivery checklist"
 type: "task-checklist"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T17:11:49.882018+00:00"
-status: "active"
+updated_at: "2026-09-07T08:13:43.858234+00:00"
+status: "release-accepted"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
-# Active goal: complete adapters and installed CLI delivery
+# Completed canonical credential fix: 0.1.4
+
+Task: `c3194755-e8e2-4467-a0c8-0c09c1f42f49`; new user directive 2026-09-07 after ordinary-shell `vault_operator_unavailable`.
+
+- [x] C01 Fetch latest GitHub main and create an isolated worktree; preserve canonical untracked files and user sessions.
+- [x] C02 Compare Contracts and Conversations; capture failing canonical credential regressions.
+- [x] C03 Use the shared API transport, fresh credentials, URL defaults/aliases and authority binding; preserve bounded redacted errors.
+- [x] C04 Add canonical Secrets operator bindings; preserve explicit env/account semantics and give useful failure diagnostics.
+- [x] C05 Cover canonical files, Keychain, roots, rotation, conflicts, locked-account recovery and ordinary CLI launch with no API-key env.
+- [x] C06 Complete package/type/generated/artifact checks and fresh-candidate Node/Bun surface checks on SQLite/PostgreSQL. Repeat against registry bytes under C08–C09.
+- [x] C07 Independent review against the final source commit; resolve every blocking finding.
+- [x] C08 Merge through PR after required CI; publish/install the next patch with registry byte verification.
+- [x] C09 Live-test the exact installed command from an ordinary shell without manually injected credentials; preserve failures and report limits honestly.
+- [x] C10 Record registry acceptance, independent review and owned-resource cleanup in the release evidence. Terminal task/goal closure follows documentation CI and merge.
+
+Published `2026-09-07T08:07:11.878Z`; [PR #1913](https://github.com/hasna/apps/pull/1913), SHA-1 `0875b4da0b15267d191f7d8f0eee6cc1fc7fe0bf`. All 60 installed files match. The exact interactive command and a real Claude/DeepSeek Read passed without injected credentials; all four Node/Bun × SQLite/PostgreSQL surface checks passed. Three existing vault bindings now use Contracts. The original user tmux session and previous installation are preserved. See [PLAN.md](PLAN.md) and the [evidence index](docs/verification-evidence.json) for review records, test counts and the unreproduced transient-error boundary.
+
+# Completed model-policy delivery: 0.1.3
+
+Switcher **0.1.3 is published, installed and live-tested**. [PR #1877](https://github.com/hasna/apps/pull/1877) merged reviewed source `13b629927bbdf84254ae42e6e03bb69f75794903` as `77164e16126d49503cb4aff2a96fb493bf3cf2bf` after all nine required checks passed. npm published at `2026-09-07T05:26:05.569Z` with SHA-1 `44d296e0e8ee1b2ec3b312e517c69b1cb3cbf678`. All **60 installed package files** match the reviewed archive. The normal `switcher`, `switcher-serve` and `switcher-mcp` commands report 0.1.3; the previous install and quarantine policy are preserved.
+
+Every managed launch automatically supplies model guidance and pins verified native child/utility slots. A per-launch authenticated loopback gateway keeps the real provider credential in the launcher and enforces exact approved model IDs. The default permitted set contains the selected main model; explicit role assignments, allowed alternatives, aliases and ordered transient fallbacks are available. The complete compatible catalog remains visible, while model use follows the policy. See [automatic model guidance](docs/MODEL-POLICY.md) for supported native roles and boundaries.
+
+A dry-run of the following installed-CLI launch passed with the station’s existing credential binding, saved profile and three discovered DeepSeek IDs:
+
+```sh
+switcher launch claude --provider deepseek --model deepseek-v4-flash
+```
+
+The installed release passed **14 direct native paths and both Ori paths**, each with a fresh task and a resumed process after proof-file deletion. Aider verified its native file-context/edit/history interface. An additional actual Claude custom agent declared as `opus` returned its read proof through DeepSeek, while the parent made no direct Read call. All accepted runs retained policy-version-1 routing evidence with zero dropped events and no foreign-model resolution. Prompt compliance remains probabilistic; the managed gateway supplies the enforceable model boundary.
+
+The published source passed **215 package tests / 2,091 assertions**, **147 root tests / 560 assertions**, **43 affected builds**, real PostgreSQL/native opt-ins and generated/type/manifest/secret/artifact/frozen-lock checks. Registry-installed Node 26.8.1 and Bun 1.3.14 CLI/API/SDK/server/standalone MCP tests passed. No Hasna MCP server was registered. Both host storage backends passed 0.1.2→0.1.3→0.1.2→0.1.3; old launchers are rejected by the upgraded API and historical runs receive no fabricated model-policy evidence.
+
+The exact candidate archive separately passed four Linux container scenarios and fourteen API starts on SQLite/PostgreSQL 17, including recreation, rollback and reupgrade. Container routing records were synthetic storage inputs, not observed provider inference. Its 55 copied runtime files matched the archive; owned container resources were removed. The candidate image was `sha256:1a11fd00abed8c1124970e2c41de5f42010f5b63e28351d02b719a6fccbc5ae1`.
+
+The [evidence index](docs/verification-evidence.json) retains independent reviews, actual registry receipts, candidate-only checks and prior release identities. Local evidence lives under `~/Workspace/scratch/universal-harness-switcher`. The original user `switcher-deepseek` tmux session remains preserved.
+
+
+# Completed adapter release: 0.1.2
 
 User directive, 2026-09-05: “create TODOS.md and let's add full todos for all the missing adapters everything must be built in full and start a goal to ship and test live”. Tracking task: `1fb71b94-93b1-466f-a44b-0bcdaa710804`. Owner: `01a07181-ca8d-70c1-99a2-b276dc5770f3`. Canonical directive: `~/Workspace/scratch/universal-harness-switcher/directives/2026-09-05-01a07181-complete-switcher-adapters.md`.
 
@@ -22,6 +60,19 @@ The published source passed **167 package tests / 1,799 assertions**, including 
 Registry live acceptance and native catalog observations are recorded in [COMPATIBILITY.md](COMPATIBILITY.md). The [evidence index](docs/verification-evidence.json) distinguishes published bytes from historical candidates and provider access limits. Evidence files live under `~/Workspace/scratch/universal-harness-switcher`; these are local provenance locators, not files included in the npm archive. The user's original `switcher-deepseek` session on `deepseek.sock` remains preserved.
 
 The rejected archive `453bc3d6180a523286ab10f0a0154316cbf75672` was never published. Its SDK error reflection finding was corrected and independently rechecked before this release. Earlier baseline and 0.1.1 reports retain their original artifact identities; their provider observations are not relabeled as 0.1.2 registry tests.
+
+# Model-policy acceptance checklist: 0.1.3
+
+- [x] M01 Capture the shipping directive, verify the previous release, and establish isolated ownership from fetched main.
+- [x] M02 Add typed profile policy, CLI flags, SDK/OpenAPI contracts, catalog validation, plan binding, and older-launcher upgrade rejection.
+- [x] M03 Inject idempotent model guidance in all four protocol families; preserve native instructions and content metadata.
+- [x] M04 Enforce allowed models/aliases and explicit pre-stream transient fallbacks through a credential-isolating loopback gateway; reject unmanaged routing overrides.
+- [x] M05 Verify and wire native child/utility roles for every supported harness; handle Ori's hardcoded child endpoints through verified prepared native launches.
+- [x] M06 Persist bounded, secret-safe requested/resolved/provider-reported model traces on success, failure, cancellation and fallback.
+- [x] M07 Pass real native role fixtures, full package tests, SQLite/PostgreSQL, generated contracts, affected builds and repository gates.
+- [x] M08 Complete docs/versioning and independent exact-commit review; merge a passing PR.
+- [x] M09 Publish the reviewed npm artifact, verify registry bytes, install the normal station CLI and repeat surface/upgrade checks.
+- [x] M10 Run the installed 14-native/two-Ori live matrix and targeted child-model tests in owned ephemeral tmux; preserve evidence and finish the task only after acceptance.
 
 ## Completion contract
 
@@ -196,7 +247,7 @@ Published 0.1.2 completed the source/publication gates. Final registry and docum
 - [x] K07 All 14 native adapters plus two Ori paths passed task/deleted-file fresh-process continuation on registry archive 3952926c, using the actual installed CLI and owned tmux. Full package identity and native catalog/selection boundaries are recorded in COMPATIBILITY and the evidence index.
 - [x] K08 Reconcile PLAN/TODOS/COMPATIBILITY/evidence and add the adapter contribution contract. Independent documentation review and package allowlist/50-file identity checks are recorded; this documentation PR supplies the final CI/merge record.
 - [x] K09 Confirm publication and the final 16-path registry matrix in the required thread/task; verify owned native acceptance resources are gone and preserve the original user DeepSeek session.
-- [ ] K10 Terminal handoff: close the external task/goal after this documentation PR merges. Source, publication and installed matrix gates have passed; the terminal status is recorded in task 1fb71b94-93b1-466f-a44b-0bcdaa710804 and the goal, without rewriting immutable release evidence.
+- [x] K10 Previous 0.1.2 terminal handoff completed after documentation PR #1857 merged. Task `1fb71b94-93b1-466f-a44b-0bcdaa710804` and its goal were closed; their immutable release evidence remains preserved.
 
 ## External acceptance prerequisites
 

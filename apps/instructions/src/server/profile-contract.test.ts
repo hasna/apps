@@ -290,7 +290,7 @@ describe("profile OpenAPI and generated SDK contract", () => {
   });
 
   test("tracked generated SDK exposes bounded profile list, show, and resolve methods", () => {
-    const generated = readFileSync(join(import.meta.dir, "../../sdk/src/v1.generated.ts"), "utf8");
+    const generated = readFileSync(join(import.meta.dir, "../sdk/v1.generated.ts"), "utf8");
 
     expect(generated).toContain("export interface BoundedProfilePage");
     expect(generated).toContain("export interface BoundedConfigPage");
@@ -304,7 +304,7 @@ describe("profile OpenAPI and generated SDK contract", () => {
   });
 
   test("tracked generated SDK exposes the implemented profile membership and binding operations", () => {
-    const generated = readFileSync(join(import.meta.dir, "../../sdk/src/v1.generated.ts"), "utf8");
+    const generated = readFileSync(join(import.meta.dir, "../sdk/v1.generated.ts"), "utf8");
 
     expect(generated).toContain("export interface AddProfileConfigInput");
     expect(generated).toContain("export interface ProfileConfigAddedResponse");
@@ -331,7 +331,7 @@ describe("profile OpenAPI and generated SDK contract", () => {
     expect(spec.paths["/v1/profiles/{id}/assets/{assetKey}"].put.operationId).toBe("setProfileAssetBinding");
     expect(spec.paths["/v1/profiles/{id}/assets/{assetKey}"].delete.operationId).toBe("removeAssetFromProfile");
 
-    const generated = readFileSync(join(import.meta.dir, "../../sdk/src/v1.generated.ts"), "utf8");
+    const generated = readFileSync(join(import.meta.dir, "../sdk/v1.generated.ts"), "utf8");
     expect(generated).toContain("export interface ProfileAssetBindingSpec");
     expect(generated).toContain("export interface ProfileAssetBinding");
     expect(generated).toContain("async getProfileAssetBindings(id: string");

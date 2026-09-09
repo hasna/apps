@@ -2,9 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 import { buildServer } from "./server.js";
 
-// Self-hosted-ONLY: there is no local SQLite. These guards prove that send routes
-// through the /v1 stub and that local-state tools fail fast with the API-only guard
-// message (the guards still live in src/mcp/tools/{email-ops,misc-ops}.ts).
+// Actual MCP wrappers route operations through the authenticated API; no local mail database.
 
 let stub: V1Stub;
 
@@ -67,7 +65,7 @@ describe("MCP self_hosted guards", () => {
     });
   });
 
-  it("refuses a provider selector the send contract has no room for, and sends nothing", async () => {
+  it("refuses a provider selector when the API cannot advertise its send contract, and sends nothing", async () => {
     // This assertion inverted when the email-ops family collapsed to one
     // implementation. It used to check a guard in the deleted arm module whose
     // refusal text told the caller which deployment word to set to reach the other
@@ -82,20 +80,14 @@ describe("MCP self_hosted guards", () => {
       provider_id: "provider-1",
     });
     expect(result.isError).toBe(true);
-    expect(resultText(result)).toContain("--provider is not supported");
+    expect(resultText(result)).toContain("/openapi.json");
     // The discriminating half: refused BEFORE dispatch, so no mail and no row.
     expect(await stub.list("messages")).toHaveLength(0);
   });
 
-  it("refuses the send options this build cannot carry instead of ignoring them", async () => {
-    // Four options are declared on send_email's schema but cannot be carried by
-    // the single send path. The failure being prevented is not a refusal that is
-    // too strict — it is a send that LOOKS successful while an option was dropped.
-    // `auth_token` makes that concrete: it selects the scoped send-key check, so a
-    // silently-ignored one is an authorization decision that never happened.
+  it("refuses metadata sends when API capability cannot be verified", async () => {
+    // Accepted schema fields must either cross the API intact or refuse explicitly.
     const cases: Array<[string, unknown]> = [
-      ["auth_token", "esk_example"],
-      ["unsubscribe_url", "https://example.com/u/1"],
       ["headers", { "X-Thing": "1" }],
       ["tags", { campaign: "spring" }],
     ];
@@ -110,10 +102,8 @@ describe("MCP self_hosted guards", () => {
       });
       expect(result.isError, `${option} must be refused`).toBe(true);
       const text = resultText(result);
-      expect(text).toContain("option_not_carried");
-      expect(text).toContain(option);
-      // A refusal must not teach the caller how to defeat it. No setting, no
-      // variable, no "run it the other way" — only the option to remove.
+      expect(text).toMatch(/openapi|API needs an update/);
+      // A missing capability document must not cause a fallback to client adapters.
       expect(text).not.toMatch(/[A-Z][A-Z0-9]*_[A-Z0-9_]*=/);
       // ...and nothing may have been sent on the way to the refusal.
       expect(await stub.list("messages"), `${option} must not send`).toHaveLength(0);
@@ -173,39 +163,14 @@ describe("MCP self_hosted guards", () => {
     });
   });
 
-  it("fails self-hosted-client-only tools without touching a local DB", async () => {
-    // These read/write server-owned state; the self-hosted client refuses them.
-    //
-    // `get_stats` USED TO BE IN THIS LIST and has moved to its own case below, because
-    // the refusal it asserted is no longer true rather than no longer checked. Delivery
-    // statistics collapsed to one implementation that measures them by enumerating the
-    // store the operator configured (src/lib/stats.ts), and every operation it needs —
-    // the delivery-event list and the outbound message stream — is served over `/v1`. A
-    // refusal here would now be a refusal of something this client demonstrably can do,
-    // which is what the case below demonstrates.
-    const cases: Array<[string, Record<string, unknown>]> = [
-      ["batch_send", { recipients: [], template_name: "welcome", from_address: "ops@example.com" }],
-      ["sync_s3_inbox", { bucket: "inbound-bucket" }],
-    ];
-
-    for (const [name, args] of cases) {
+  it("requires an updated API for S3 and provider sync before submitting work", async () => {
+    await stub.seed({ providers: [{ id: "provider-one", name: "One", type: "ses", active: true }] });
+    for (const [name, args] of [["sync_s3_inbox", { bucket: "inbound-bucket" }], ["pull_events", {}]] as const) {
       const result = await callTool(name, args);
       expect(result.isError).toBe(true);
-      expect(resultText(result)).toContain("not available in the self-hosted client");
+      expect(resultText(result)).toContain("needs an update");
     }
-  });
-
-  it("REFUSES pull_events in the ingestion pipeline's own storage-derived words", async () => {
-    // `pull_events` USED TO BE IN THE LIST ABOVE. It still refuses — provider
-    // delivery-event ingestion writes ledgers that exist only beside a local database,
-    // and pulls with credentials this client does not hold — but the refusal is no
-    // longer the deleted client stub's sentence: the collapsed family derives it from
-    // STORAGE configuration (src/lib/sync.ts) and names the setting to change, which
-    // is strictly more actionable than "not available".
-    const result = await callTool("pull_events", {});
-    expect(result.isError).toBe(true);
-    expect(resultText(result)).toContain("ingestion belongs to that service");
-    expect(resultText(result)).toContain("Unset HASNA_EMAILS_API_URL");
+    expect(await stub.list("sync-requests")).toHaveLength(0);
   });
 
   it("MEASURES delivery statistics over /v1 instead of refusing them", async () => {
@@ -275,58 +240,35 @@ describe("MCP self_hosted guards", () => {
     expect(payload.gaps).toEqual({});
   });
 
-  it("tells the truth about provisioning tools that no mode implements", async () => {
-    // The local provisioning orchestrator was unreachable dead code and is gone;
-    // the self-hosted server exposes no /v1 provisioning route. Claiming these
-    // "run on the self-hosted server" sent operators looking for a service that
-    // does not exist, so the error names the real, runnable alternative instead.
-    const cases: Array<[string, Record<string, unknown>, string]> = [
-      ["provision_address", { email: "ops@example.com", provider_id: "provider-1" }, "emails address add"],
-      ["provision_status", {}, "emails domain list --json"],
-      ["provision_domain", { domain: "example.com", provider_id: "provider-1" }, "emails domain adopt"],
-    ];
-
-    for (const [name, args, alternative] of cases) {
-      const result = await callTool(name, args);
-      expect(result.isError).toBe(true);
-      const text = resultText(result);
-      expect(text).toContain("is not implemented in this build");
-      expect(text).toContain(alternative);
-      expect(text).not.toContain("runs on the self-hosted server");
-      expect(text).not.toContain("not available in the self-hosted client");
-    }
+  it("reports address provisioning API incompatibility without using client cloud credentials", async () => {
+    const result=await callTool("provision_address",{email:"ops@example.com",provider_id:"provider-1"});
+    expect(result.isError).toBe(true);expect(resultText(result)).toContain("POST /v1/provision/address");expect(resultText(result)).toContain("HTTP 405");
   });
 
-  it("refuses infrastructure-mutating provisioning tools instead of using client cloud credentials", async () => {
-    // In self_hosted mode `getProvider` returns a row whose secrets are nulled by
-    // policy, so the SES adapter would resolve credentials from the CLIENT's
-    // ambient AWS_* environment and Cloudflare from the client's token — while
-    // `createDomain` writes into the OPERATOR's shared domain state. That lets a
-    // tenant member stand up a SES identity in their own AWS account and record a
-    // domain the operator's SES cannot send from, so these refuse outright.
-    const cases: Array<[string, Record<string, unknown>]> = [
-      ["setup_domain_for_email", { domain: "attacker.example.com", provider_id: "provider-1", add_mx: true }],
-      ["setup_cloudflare_dns", { domain: "attacker.example.com", provider_id: "provider-1", register_domain: true }],
-      ["setup_ses_inbound", { domain: "attacker.example.com", bucket: "attacker-inbound" }],
-    ];
+  it("reports domain provisioning API incompatibility without using client cloud credentials", async () => {
+    const result = await callTool("provision_domain", { domain: "example.com", provider_id: "provider-1" });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain("POST /v1/domains/provision failed: 405");
+  });
 
-    for (const [name, args] of cases) {
-      const result = await callTool(name, args);
-      expect(result.isError).toBe(true);
-      const text = resultText(result);
-      // This is the assertion that discriminates: with the guard removed these
-      // tools instead fail later, at provider resolution or at the first AWS
-      // call, so the refusal text cannot appear by accident.
-      expect(text).toContain(`MCP tool ${name} is disabled in self_hosted mode`);
-      expect(text).toContain("local-database configuration");
-      // The refusal must not repeat the false claim that a server route exists.
-      expect(text).not.toContain("runs on the self-hosted server");
-      // ...nor mention credentials: mcp/contracts.ts classifies by regex over the
-      // message and would mislabel a mode refusal as an auth_error whose
-      // fix_commands point at provider credentials.
-      expect(text.toLowerCase()).not.toContain("credential");
-      expect((JSON.parse(text) as { error?: { code?: string } }).error?.code).not.toBe("auth_error");
-    }
+  it("reads shared provisioning status and preserves empty and missing-domain semantics", async () => {
+    const empty = await callTool("provision_status", {});
+    expect(empty.isError).not.toBe(true);
+    expect(JSON.parse(resultText(empty))).toMatchObject({ items: [] });
+    await stub.seed({ domains: [{ id: "00000000-0000-4000-8000-000000000071", domain: "example.test", provider_id: null, provisioning_status: "ready" }], addresses: [{ id: "00000000-0000-4000-8000-000000000072", domain_id: "00000000-0000-4000-8000-000000000071", email: "ops@example.test", provisioning_status: "pending" }] });
+    const result = await callTool("provision_status", { domain: "EXAMPLE.TEST", limit: 1 });
+    expect(result.isError, resultText(result)).not.toBe(true);
+    expect(JSON.parse(resultText(result)).cli_equivalent).toContain("emails provision status EXAMPLE.TEST --limit 1 --json");
+    expect(JSON.parse(resultText(result))).toMatchObject({ items: [{ domain: "example.test", provisioning: { provisioning_status: "ready" }, addresses: [{ email: "ops@example.test", provisioning: { provisioning_status: "pending" } }] }] });
+    expect((await callTool("provision_status", { domain: "missing.test" })).isError).toBe(true);
+    expect((await callTool("provision_status", { domain: " " })).isError).toBe(true);
+  });
+
+  it("reports missing SES API capability without falling back to client cloud credentials", async () => {
+    const result = await callTool("setup_ses_inbound", { domain: "example.test", bucket: "bound-inbound" });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain("API needs an update");
+    expect(resultText(result)).not.toContain("local-database configuration");
   });
 
   it("routes read tools through /v1 (empty store yields empty lists, no local DB)", async () => {
