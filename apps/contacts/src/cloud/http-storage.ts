@@ -264,7 +264,7 @@ export function resolveContactsStorageClient(
   // fresh credential, but a changed authority requires a new client, not a key
   // intended for the new server sent to the previous server. The send guard
   // also runs after asynchronous vault resolution and before every retry.
-  const request: HasnaHttpTransport["request"] = async (method, path, body, opts) => {
+  const authenticatedTransport = (): HasnaHttpTransport => {
     const stamp = clientConfigurationStamp(env);
     const snapshot = { ...env };
     const current = resolveContactsClientTransport(name, snapshot, chainOptions);
@@ -274,7 +274,7 @@ export function resolveContactsStorageClient(
     const credential = resolveCredential(name, snapshot, chainOptions);
     if (!credential) throw new ContactsClientConfigurationError("CONTACTS_API_NOT_CONFIGURED", "No credential is available.");
     assertConfigurationUnchanged(env, stamp);
-    const transport = createHasnaHttpTransport({
+    return createHasnaHttpTransport({
       name,
       baseUrl,
       apiKey: () => credential,
@@ -283,15 +283,19 @@ export function resolveContactsStorageClient(
         return globalThis.fetch(input, init);
       },
     });
-    return transport.request(method, path, body, opts);
   };
+  const request: HasnaHttpTransport["request"] = (method, path, body, opts) =>
+    authenticatedTransport().request(method, path, body, opts);
   const transport: HasnaHttpTransport = {
-    baseUrl, request,
+    baseUrl,
+    request,
+    fetch: (input, init) => authenticatedTransport().fetch(input, init),
     get: (path, opts) => request("GET", path, undefined, opts),
     post: (path, body, opts) => request("POST", path, body, opts),
     put: (path, body, opts) => request("PUT", path, body, opts),
     patch: (path, body, opts) => request("PATCH", path, body, opts),
     del: (path, body, opts) => request("DELETE", path, body, opts),
   };
+
   return { transport: "https", client: createStorageClient(name, transport), resolution };
 }
