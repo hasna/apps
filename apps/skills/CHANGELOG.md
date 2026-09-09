@@ -4,6 +4,10 @@
 
 ### Patch Changes
 
+- 3751ba8: Accept boolean private execution capability reports while keeping publication and separately approved execution independent.
+
+  Widen publication recovery `executionEnabled` from literal false to `boolean | null`: existing recovery receipts report null because they do not contain a server capability observation. Align CLI/MCP output and guidance so publication is not confused with execution authorization.
+
 - 2e4ec23: Add a provider-neutral injected operation client with bounded immutable JSON, stable request identities, explicit status lookup, abort handling, and unknown-outcome errors without automatic retry. Credentials, authorization, IPC and provider execution remain the embedder's responsibility.
 
 ## 0.5.7
