@@ -277,14 +277,15 @@ export function deliverTodosApiKeyViaDisk(env: TodosTestEnv): TodosTestEnv {
  * override it (opt-in `""`, or the API pair) because overrides are applied
  * last.
  *
- * DELETED, never blanked. Blanking used to be the spelling for "absent", and it
- * stopped being safe when the chain moved into @hasna/contracts: a DECLARED but
- * blank `HASNA_TODOS_API_URL`, `HASNA_TODOS_API_KEY` or `HASNA_PROFILE` is a
- * misconfiguration the resolver refuses LOUDLY rather than treating as unset —
- * deliberately, because a blank credential that silently fell through to
- * another tier would authenticate as a different principal. So a blank is
- * normalised to an absent key here, including one a caller passes in
- * `overrides` (`{ HASNA_TODOS_API_URL: "" }` still spells "not configured").
+ * DELETED, never blanked. Blanking used to be the spelling for "absent", but a
+ * declared-but-blank authority variable is only inert where the caller
+ * normalises it: the Todos seam removes it before its resolver runs
+ * (src/lib/local-opt-in.ts), so it configures no credential and refuses
+ * nothing there, while a consumer that hands this dictionary straight to
+ * @hasna/contracts gets the resolver's loud "set but blank" refusal. Deleting
+ * is the one spelling that means "absent" on every path. A blank a caller
+ * passes in `overrides` (`{ HASNA_TODOS_API_URL: "" }`) is normalised to an
+ * absent key for the same reason.
  */
 export function localTodosTestEnv(overrides: TodosTestEnv = {}): TodosTestEnv {
   const env: TodosTestEnv = { ...process.env };

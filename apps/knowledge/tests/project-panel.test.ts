@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -21,7 +21,13 @@ const CLI = join(__dirname, '..', 'src', 'cli.ts');
 
 const panelTempRoots: string[] = [];
 const panelLocalAuthorities: KnowledgeProjectLinksAuthority[] = [];
-const panelFixedNow = () => '2026-08-10T12:00:00.000Z';
+// Fixture time is anchored to the run rather than frozen. A hard-coded
+// timestamp ages past the panel's 30-day staleness rule (freshnessFor), which
+// flipped the legacy-inventory test to state 'stale' on 2026-09-09T12:00Z and
+// reddened CI on a calendar boundary. One minute behind "now" keeps the
+// fixtures fresh and stable for the lifetime of a run.
+const PANEL_FIXTURE_NOW = Date.now();
+const panelFixedNow = () => new Date(PANEL_FIXTURE_NOW - 60_000).toISOString();
 
 afterAll(async () => {
   for (const authority of panelLocalAuthorities.splice(0)) await authority.close();
@@ -266,7 +272,11 @@ describe('knowledge project panel provider', () => {
   });
 
   test('CLI prints project-panel contract JSON for project scope', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'knowledge-project-panel-cli-'));
+    // Realpath the fixture root: the child CLI process resolves its cwd (and so
+    // its project-scoped knowledge home key) through /private/var on macOS,
+    // while the parent seeds the literal /var path. Without the realpath the
+    // child reads a different, empty home and reports zero active items.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'knowledge-project-panel-cli-')));
     seedStore(dir);
 
     const result = spawnSync('bun', [CLI, 'project-panel', '--project', 'Swiss Bank Account', '--json', '--contract'], {

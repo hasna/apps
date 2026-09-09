@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -8,6 +8,9 @@ import { closeDatabase, getDatabase, resetDatabase } from "./db/database.js";
 import { createMcpManifest } from "./mcp.js";
 import { withNoNetwork } from "./test/no-network.js";
 import { cliSpawnBudgetMs } from "./test/spawn-budget.js";
+
+// Spawns the CLI; bun's 5s default is too tight for a cold start on a loaded host.
+setDefaultTimeout(60_000);
 
 const CWD = join(import.meta.dir, "..");
 const cloudPackage = "@hasna" + "/cloud";

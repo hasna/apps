@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,9 @@ import {
   createBunPackageIsolatedTempDir,
   projectExternalBunDuplicatePackageWarning,
 } from "./bun-fixture-isolation.js";
+
+// Spawns child processes; bun's 5s default is too tight for a cold start on a loaded host.
+setDefaultTimeout(60_000);
 
 function runBunEval(cwd: string, source: string): { exitCode: number | null; stderr: string; stdout: string } {
   const proc = Bun.spawnSync([process.execPath, "--eval", source], {

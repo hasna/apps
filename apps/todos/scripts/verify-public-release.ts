@@ -92,6 +92,21 @@ function main(): void {
     const expectedCommitFailures = validateExpectedReleaseCommit(authority.expectedCommit!, sourceIdentity.gitCommit);
     if (expectedCommitFailures.length > 0) failReleaseGate(expectedCommitFailures);
     runOrExit("bun", ["run", "scripts/verify-npm-release-agent-review.ts"]);
+    // Test safety net. `package.json`'s prepublishOnly string is asserted
+    // byte-for-byte by validateRootPackageMetadata (and release-workflow.test.ts),
+    // so the suite is run HERE rather than by editing the command. Without it a
+    // publish can ship a tree whose own tests never ran — the exact gap a red
+    // CI run leaves, where `@hasna/todos:test` was never reached. `bun test`
+    // runs the package suite from the package root and exits non-zero on any
+    // failure, which fails the gate before anything is packed.
+    const suite = run("bun", ["test"]);
+    if (suite.status !== 0) {
+      failReleaseGate([{
+        check: "release-test-suite",
+        message: "the package test suite must pass before publish "
+          + `(bun test exited ${suite.status ?? "on a signal"}); run \`bun test\` to see the failures`,
+      }]);
+    }
   }
   const commitEpochResult = runCapture("git", ["show", "-s", "--format=%ct", "HEAD"]);
   if (commitEpochResult.status !== 0) failReleaseGate([{ check: "release-commit-time", message: commitEpochResult.stderr || "could not read commit timestamp" }]);
