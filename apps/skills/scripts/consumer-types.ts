@@ -35,7 +35,7 @@ try {
   }
   await writeFile(join(workspace, "package.json"), JSON.stringify({ private: true, type: "module",
     dependencies: { "@hasna/skills": `file:${join(workspace, filename)}` },
-    devDependencies: { typescript: "5.9.3", "@types/bun": metadata.devDependencies["@types/bun"] },
+    devDependencies: { typescript: "5.9.3", "@types/bun": metadata.devDependencies["@types/bun"], "@types/node": metadata.devDependencies["@types/node"] },
   }));
   await writeFile(join(workspace, "tsconfig.json"), JSON.stringify({ compilerOptions: {
     target: "ES2022", module: "ESNext", moduleResolution: "Bundler", strict: true,
@@ -56,6 +56,24 @@ const fileQuote: Promise<RemoteRunQuote> = new SdkQuoteClient("fixture", "https:
 const invalidReceipt: RemoteRunApproval = { quoteReceipt: 3 };
 // @ts-expect-error Optional receipt presence does not make it a required string.
 const missingReceiptGuard: string = receiptQuote.quoteReceipt;
+import type { PrivatePublishingCapability as SdkPublicationCapability } from "@hasna/skills/sdk";
+import type { PrivatePublishingCapability as RootPublicationCapability } from "@hasna/skills";
+declare const observedPublicationCapability: SdkPublicationCapability;
+const enabledPublicationCapability: SdkPublicationCapability = { ...observedPublicationCapability, executionEnabled: true };
+const disabledPublicationCapability: RootPublicationCapability = { ...enabledPublicationCapability, executionEnabled: false };
+const serverExecutionEnabled: boolean = disabledPublicationCapability.executionEnabled;
+import type { PrivatePublicationResult as SdkPublicationResult } from "@hasna/skills/sdk";
+import type { PrivatePublicationResult as RootPublicationResult } from "@hasna/skills";
+declare const publicationResult: SdkPublicationResult;
+const unknownPublicationExecution: RootPublicationResult = { ...publicationResult, executionEnabled: null };
+const observedPublicationExecution: SdkPublicationResult = { ...publicationResult, executionEnabled: true };
+const recoveryExecution: boolean | null = publicationResult.executionEnabled;
+// @ts-expect-error Recovery capability requires a null guard before treating it as boolean.
+const unguardedRecoveryExecution: boolean = publicationResult.executionEnabled;
+// @ts-expect-error Execution capability must be a boolean, not a truthy string.
+const malformedPublicationCapability: SdkPublicationCapability = { ...observedPublicationCapability, executionEnabled: "true" };
+// @ts-expect-error Server execution capability is no longer fixed to false.
+const falseOnlyPublicationCapability: false = observedPublicationCapability.executionEnabled;
 import { RemoteQuoteUnavailableError, type RemoteQuoteUnavailableCode } from "@hasna/skills/sdk";
 import { RemoteQuoteUnavailableError as RootQuoteUnavailableError, type RemoteQuoteUnavailableCode as RootQuoteCode } from "@hasna/skills";
 import { SKILLS_NATIVE_STORAGE_ENV, type SkillsNativeStorageConfig } from "@hasna/skills/storage";

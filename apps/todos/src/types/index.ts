@@ -1645,6 +1645,27 @@ export class DispatchNotFoundError extends Error {
   }
 }
 
+/**
+ * A refusal caused by the caller's input or the target's state — not by a
+ * server fault.
+ *
+ * The message is written for the caller and carries no schema, DSN or
+ * credential detail, so MCP can return it in a typed payload instead of the
+ * sanitized `UNKNOWN_ERROR` the formatter uses for anything it cannot classify.
+ * Without it, "you did not pass a backup" reached agents as "an unexpected
+ * error occurred", which reads as a server bug.
+ */
+export class InputValidationError extends Error {
+  static readonly code = "INVALID_INPUT";
+  readonly code = InputValidationError.code;
+  readonly suggestion?: string;
+  constructor(message: string, suggestion?: string) {
+    super(message);
+    this.name = "InputValidationError";
+    this.suggestion = suggestion;
+  }
+}
+
 // ── SDK types (formerly in src/sdk.ts) ──────────────────────────────────────
 
 /** Compact task representation returned by list endpoints */

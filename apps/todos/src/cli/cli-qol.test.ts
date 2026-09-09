@@ -74,6 +74,45 @@ describe("CLI QoL commands", () => {
     expect(existsSync(legacyConfigPath)).toBe(false);
   });
 
+  it("config --set warns about a credential-shaped key and never echoes its value", async () => {
+    // 0.16.0 removed the last reader of a credential from config.json, so a
+    // silent "Set apiKey = ..." told a migrating operator their credential was
+    // accepted when nothing would ever read it (and printed it to the terminal).
+    const secret = "SENTINEL_CONFIG_SECRET_42";
+    async function setAndCapture(extraArgs: string[]): Promise<{ code: number | null; text: string }> {
+      const child = Bun.spawn(
+        [process.execPath, "--no-env-file", "src/cli/index.tsx", ...extraArgs, "config", "--set", `apiKey=${secret}`],
+        {
+          cwd: CWD,
+          env: localRoutingTestEnv({ HOME: fakeHome, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" }),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      return { code, text: `${stdout}\n${stderr}` };
+    }
+
+    const human = await setAndCapture([]);
+    expect(human.code).toBe(0);
+    expect(human.text).not.toContain(secret);
+    expect(human.text).toContain("reads no credential or authority");
+
+    const json = await setAndCapture(["--json"]);
+    expect(json.code).toBe(0);
+    expect(json.text).not.toContain(secret);
+    expect(json.text).toContain("not read by 0.16.0");
+
+    // Backwards compatible: the value is still written for a caller that reads
+    // the file itself, only the reporting changed.
+    const config = JSON.parse(readFileSync(join(fakeHome, ".hasna", "todos", "config.json"), "utf-8"));
+    expect(config.apiKey).toBe(secret);
+  });
+
   // ── count ──────────────────────────────────────────────────────
 
   it("count should return stats text", () => {

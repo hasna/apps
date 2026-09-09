@@ -552,6 +552,19 @@ function resourceLinkMutationClient() {
         });
         return;
       }
+      if (sql.startsWith("UPDATE workspaces SET ") && /WHERE id = \$(\d+)/.test(sql)) {
+        // Direct updateWorkspace commits through a plain id-keyed UPDATE
+        // (the guarded path is revision-keyed and handled via get).
+        const id = params.at(-1);
+        if (workspace.id !== id) throw new Error(`workspace not found for update: ${String(id)}`);
+        const setClause = sql.match(/UPDATE workspaces SET ([\s\S]+?)\s+WHERE/)?.[1] ?? "";
+        const updated = { ...workspace } as Record<string, unknown>;
+        for (const match of setClause.matchAll(/([a-z_]+) = \$(\d+)/g)) {
+          updated[match[1]!] = params[Number(match[2]) - 1];
+        }
+        workspace = updated as unknown as WorkspaceRow;
+        return;
+      }
       throw new Error(`Unexpected execute query: ${sql}`);
     },
     async one() {
@@ -722,9 +735,67 @@ describe("pg-store typed resource-link transaction model", () => {
     labels: { name: "Existing contact" },
   };
 
-  test("classifies a direct typed-integration update as validation before any hosted write", async () => {
+  test("accepts a direct typed-integration update on a linkless project (the BUG-0029 PATCH 400)", async () => {
     const harness = resourceLinkMutationClient();
+    const store = new ProjectsPgStore(harness.client);
+    // No resource link projects a value for these keys, so a plain integrations
+    // PATCH that used to 400 must now commit (BUG-0029: relaxed to conflict-only).
     const before = harness.workspace();
+
+    const updated = await store.updateWorkspace(
+      harness.workspace().id,
+      {
+        integrations: {
+          conversations_channel: "moved-outside-resource-links",
+          todos_task_list_id: "td_task_list_backlog",
+        },
+      },
+    );
+
+    expect(JSON.parse(harness.workspace().integrations)).toEqual({
+      conversations_channel: "moved-outside-resource-links",
+      todos_task_list_id: "td_task_list_backlog",
+    });
+    // The store returns the parsed object projection.
+    expect(updated.integrations).toEqual({
+      conversations_channel: "moved-outside-resource-links",
+      todos_task_list_id: "td_task_list_backlog",
+    });
+    expect(harness.workspace().updated_at).not.toBe(before.updated_at);
+    // Clearing keys is allowed too: nothing authoritative projects them.
+    await store.updateWorkspace(harness.workspace().id, {
+      integrations: { conversations_channel: "moved-outside-resource-links" },
+    });
+    expect(JSON.parse(harness.workspace().integrations)).toEqual({
+      conversations_channel: "moved-outside-resource-links",
+    });
+  });
+
+  test("classifies a direct typed-integration update contradicting a resource link as validation before any hosted write", async () => {
+    const harness = resourceLinkMutationClient();
+    const store = new ProjectsPgStore(harness.client);
+    // channelLink projects conversations_channel = labels.channel_name.
+    const seeded = await store.mutateProjectResourceLinks({
+      project_id: harness.workspace().id,
+      operation_id: "pg-conflict-seed",
+      step_id: "add-channel-link",
+      mode: "add",
+      expected_revision: harness.workspace().updated_at,
+      links: [channelLink],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+    expect(seeded.outcome).toBe("accepted");
+    expect(JSON.parse(harness.workspace().integrations)).toMatchObject({
+      conversations_channel: "pg-resource",
+    });
+    const before = {
+      workspace: harness.workspace(),
+      links: harness.links(),
+      receipts: harness.receipts(),
+      events: harness.events(),
+    };
 
     await expect(new ProjectsPgStore(harness.client).updateWorkspace(
       harness.workspace().id,
@@ -735,14 +806,35 @@ describe("pg-store typed resource-link transaction model", () => {
       },
     )).rejects.toBeInstanceOf(ValidationError);
 
-    expect(harness.workspace()).toEqual(before);
-    expect(harness.receipts()).toEqual([]);
-    expect(harness.events()).toEqual([]);
+    expect({
+      workspace: harness.workspace(),
+      links: harness.links(),
+      receipts: harness.receipts(),
+      events: harness.events(),
+    }).toEqual(before);
   });
 
-  test("classifies a guarded typed-integration dry run as validation before any hosted write", async () => {
+  test("classifies a guarded typed-integration dry run contradicting a resource link as validation before any hosted write", async () => {
     const harness = resourceLinkMutationClient();
-    const before = harness.workspace();
+    const store = new ProjectsPgStore(harness.client);
+    const seeded = await store.mutateProjectResourceLinks({
+      project_id: harness.workspace().id,
+      operation_id: "pg-conflict-seed-guarded",
+      step_id: "add-channel-link",
+      mode: "add",
+      expected_revision: harness.workspace().updated_at,
+      links: [channelLink],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    });
+    expect(seeded.outcome).toBe("accepted");
+    const before = {
+      workspace: harness.workspace(),
+      links: harness.links(),
+      receipts: harness.receipts(),
+      events: harness.events(),
+    };
 
     await expect(new ProjectsPgStore(harness.client).guardedUpdateWorkspace({
       project_id: harness.workspace().id,
@@ -759,9 +851,12 @@ describe("pg-store typed resource-link transaction model", () => {
       time_budget_ms: 5_000,
     })).rejects.toBeInstanceOf(ValidationError);
 
-    expect(harness.workspace()).toEqual(before);
-    expect(harness.receipts()).toEqual([]);
-    expect(harness.events()).toEqual([]);
+    expect({
+      workspace: harness.workspace(),
+      links: harness.links(),
+      receipts: harness.receipts(),
+      events: harness.events(),
+    }).toEqual(before);
   });
 
   test("rejects non-string integration values before any hosted write", async () => {

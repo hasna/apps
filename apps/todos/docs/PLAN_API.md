@@ -1,5 +1,8 @@
 # Shared plan tools
 
+Applies to `@hasna/todos` 0.16.0 (CLI + MCP). This is a breaking change from
+0.15.52, where `todos plans` and these MCP tools read local SQLite.
+
 The five MCP tools `create_plan`, `list_plans`, `get_plan`, `update_plan`, and
 `delete_plan` use the authenticated shared API. Saved account credentials work
 in fresh MCP processes; none of these callbacks opens SQLite or falls back to

@@ -94,7 +94,7 @@ test("built terminal publish and lost-upload resume use exact bytes and fresh au
   expect(first.exitCode).toBe(1); expect(first.result, JSON.stringify({ requests: f.calls, puts: f.puts(), recoveryPhase: existsSync(join(recovery, "receipt.json")) ? JSON.parse(readFileSync(join(recovery, "receipt.json"), "utf8")).phase : "absent" })).toMatchObject({ uncertain: true, code: "PUBLICATION_UPLOAD_UNCONFIRMED" }); expect(f.puts()).toBe(1);
   const saved = JSON.parse(readFileSync(join(recovery, "receipt.json"), "utf8")); expect(saved.phase).toBe("upload_uncertain");
   const second = await cli(f.origin, work, ["resume", "--recovery-dir", recovery, "--confirm", "--wait-seconds", "0"]);
-  expect(second.exitCode).toBe(0); expect(second.result).toMatchObject({ committed: true, executionEnabled: false, state: "committed" }); expect(f.puts()).toBe(1);
+  expect(second.exitCode).toBe(0); expect(second.result).toMatchObject({ committed: true, executionEnabled: null, state: "committed" }); expect(f.puts()).toBe(1);
   f.disabled(); const status = await cli(f.origin, work, ["status", "--recovery-dir", recovery]); expect(status.exitCode).toBe(0); expect(status.result.intentId).toBe(saved.intent.id);
   expect(f.calls.filter(c => c.path === `/api/v1/skills/${skillId}/publication-uploads`)).toHaveLength(1);
   expect(f.calls.filter(c => c.path === "/api/auth/verify")).toHaveLength(3);
@@ -128,7 +128,7 @@ test("real stdio MCP exposes the same publication, reconciliation and cancellati
     for (const name of ["publish_private_skill", "get_private_publication", "resume_private_publication", "cancel_private_publication"]) expect(names).toContain(name);
     const auth = { email: "publisher@example.test", code, userId, membershipId, recoveryDirectory: recovery };
     const published = await client.callTool({ name: "publish_private_skill", arguments: { ...auth, directory: source, skillId, expectedCurrentVersionId: null, confirm: true, waitMs: 0 } });
-    expect(published.isError).not.toBe(true); expect(JSON.parse((published.content as Array<{ type: string; text: string }>)[0]!.text)).toMatchObject({ committed: true, executionEnabled: false });
+    expect(published.isError).not.toBe(true); expect(JSON.parse((published.content as Array<{ type: string; text: string }>)[0]!.text)).toMatchObject({ committed: true, executionEnabled: null });
     for (const [name, extras] of [["get_private_publication", {}], ["resume_private_publication", { confirm: true, waitMs: 0 }], ["cancel_private_publication", { confirm: true }]] as const) {
       const result = await client.callTool({ name, arguments: { ...auth, ...extras } }); expect(result.isError).not.toBe(true); expect(JSON.stringify(result)).not.toContain(token); expect(JSON.stringify(result)).not.toContain("X-Amz-");
     }

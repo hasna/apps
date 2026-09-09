@@ -4,9 +4,9 @@ OpenAI API connector CLI - Chat, embeddings, and images
 
 ## Installation
 
-```bash
-bun install -g @hasna/connect-openai
-```
+This connector is not published as a standalone npm package — it ships inside
+the single-product [`@hasna/connectors`](https://www.npmjs.com/package/@hasna/connectors)
+runtime (see `connectors install openai`, `connectors run openai`).
 
 ## Quick Start
 

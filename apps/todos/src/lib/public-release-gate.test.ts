@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -32,6 +32,10 @@ import {
   validateSdkPackageMetadata,
   type PackageJson,
 } from "./public-release-gate";
+
+// Spawns the package build, npm pack and an isolated install; bun's 5s default
+// is far too tight for those on any host.
+setDefaultTimeout(60_000);
 
 const releaseArtifactTest = process.env.HASNA_TODOS_RELEASE_ARTIFACT_TEST === "1" ? test : test.skip;
 
@@ -83,6 +87,58 @@ const rootPackage: PackageJson = {
 };
 
 describe("public release gate", () => {
+  test("accepts the real shipped manifest, not just the fixture", () => {
+    // The fixture above never carried the docs this release ships, so the gate
+    // could reject the real package.json while this file stayed green (0.16.0
+    // round 3: `bun run verify:release` failed on six package-files-extra
+    // entries). Validate the manifest that would actually be published, so a
+    // files[] addition that the allowlist does not know about fails here too.
+    const shipped = JSON.parse(
+      readFileSync(resolve(import.meta.dir, "../../package.json"), "utf8"),
+    ) as PackageJson;
+
+    expect(shipped.files).toEqual([
+      "dist",
+      "postinstall.js",
+      "LICENSE",
+      "README.md",
+      "CHANGELOG.md",
+      "docs/PLAN_API.md",
+      "docs/TASK_LIST_API.md",
+      "docs/TEMPLATE_API.md",
+      "docs/TASK_QUERY_API.md",
+      "docs/native-storage.md",
+    ]);
+    expect(validateRootPackageMetadata(shipped)).toEqual([]);
+  });
+
+  test("rejects a files[] entry the allowlist has not reviewed", () => {
+    const failures = validateRootPackageMetadata({
+      ...rootPackage,
+      files: [...(rootPackage.files ?? []), "docs/INTERNAL_NOTES.md"],
+    });
+
+    expect(failures.map((failure) => failure.check)).toContain("package-files-extra");
+  });
+
+  test("the README's account of what the tarball ships matches files[]", () => {
+    // Regression (0.16.0 round 3): package.json started packing CHANGELOG.md
+    // and docs/, and the CHANGELOG said so, but the README still told readers
+    // "the npm tarball ships this README and `dist/` only". A shipped document
+    // that misdescribes the shipped artifact is a doc-vs-behaviour break, so
+    // pin the two together.
+    const readme = readFileSync(resolve(import.meta.dir, "../../README.md"), "utf8").replace(/\s+/g, " ");
+    const shipped = JSON.parse(
+      readFileSync(resolve(import.meta.dir, "../../package.json"), "utf8"),
+    ) as PackageJson;
+
+    expect(readme).not.toContain("ships this README and `dist/` only");
+    expect(readme).toContain("`CHANGELOG.md`");
+    for (const entry of (shipped.files ?? []).filter((file) => file.startsWith("docs/"))) {
+      expect(readme).toContain(`\`${entry.slice("docs/".length)}\``);
+    }
+  });
+
   test("accepts the expected public package metadata", () => {
     expect(validateRootPackageMetadata(rootPackage)).toEqual([]);
     expect(

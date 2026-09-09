@@ -4432,7 +4432,27 @@ export class TenantScopedStore {
       `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = $1 AND tenant_id = $2`,
       [id, this.tenantId],
     );
-    return row ? mapMessageRow(row) : null;
+    if (row) return mapMessageRow(row);
+    // A bare canonical uuid addresses a legacy row only through its prefixed row id
+    // (migration 0007 stores bridged legacy inbound/sent mail as
+    // `legacy-inbound:<old uuid>` / `legacy-sent:<old uuid>`). A caller that knows
+    // only the pre-unification canonical uuid would otherwise 404 on every detail
+    // read of legacy mail, because resolveMessageId returns a full UUID verbatim
+    // with no DB round-trip. Accept those two prefixed ids as aliases so the bare
+    // canonical uuid reaches the row. Current rows are unaffected: their id IS the
+    // bare uuid, so the exact match above already won and no alias probe runs. The
+    // probe is kept here rather than in resolveMessageId so exact-id fetches (the
+    // hot path) never pay an extra query — only a full-id miss does.
+    if (!FULL_MESSAGE_ID_RE.test(id)) return null;
+    const canonical = id.toLowerCase();
+    for (const alias of [`legacy-inbound:${canonical}`, `legacy-sent:${canonical}`]) {
+      const aliased = await this.client.get<Record<string, unknown>>(
+        `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = $1 AND tenant_id = $2`,
+        [alias, this.tenantId],
+      );
+      if (aliased) return mapMessageRow(aliased);
+    }
+    return null;
   }
 
   async getMessageAttachment(id: string, index: number, maxBytes = MAX_ATTACHMENT_DOWNLOAD_BYTES): Promise<StoredAttachmentLookup | null> {
@@ -5289,6 +5309,8 @@ export class TenantScopedStore {
       is_read?: boolean;
       is_starred?: boolean;
       archived?: boolean;
+      is_spam?: boolean;
+      is_trash?: boolean;
       add_label?: string;
       remove_label?: string;
     },
@@ -5298,6 +5320,19 @@ export class TenantScopedStore {
     const labels = new Map(current.labels.map((label) => [label.toLowerCase(), label]));
     if (patch.archived === true) labels.set("archived", "archived");
     if (patch.archived === false) labels.delete("archived");
+    // Explicit folder moves, parallel to `archived`. Folder membership on this store is
+    // label-backed (SPAM_SQL/TRASH_SQL above read `labels @> '["spam"]'` / `@> '["trash"]'`),
+    // so quarantining a message is adding its "spam"/"trash" label and un-quarantining is
+    // removing it. These fields are the documented spelling of that move — the same labels
+    // `add_label: "spam"` / `add_label: "trash"` would add (those folder-label values are
+    // reserved folder moves, not plain labels). A message that additionally carries
+    // `status` = "spam" remains in the spam folder via the status arm of SPAM_SQL until its
+    // status is also changed; callers clearing a provider-imposed spam status should pass
+    // `status` alongside `is_spam: false`.
+    if (patch.is_spam === true) labels.set("spam", "spam");
+    if (patch.is_spam === false) labels.delete("spam");
+    if (patch.is_trash === true) labels.set("trash", "trash");
+    if (patch.is_trash === false) labels.delete("trash");
     if (patch.add_label?.trim()) labels.set(patch.add_label.trim().toLowerCase(), patch.add_label.trim());
     if (patch.remove_label?.trim()) labels.delete(patch.remove_label.trim().toLowerCase());
     const row = await this.client.get<Record<string, unknown>>(

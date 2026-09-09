@@ -771,6 +771,8 @@ async function handleMessageById(context: RouteContext, id: string): Promise<Res
       ...(typeof body["is_read"] === "boolean" ? { is_read: body["is_read"] } : {}),
       ...(typeof body["is_starred"] === "boolean" ? { is_starred: body["is_starred"] } : {}),
       ...(typeof body["archived"] === "boolean" ? { archived: body["archived"] } : {}),
+      ...(typeof body["is_spam"] === "boolean" ? { is_spam: body["is_spam"] } : {}),
+      ...(typeof body["is_trash"] === "boolean" ? { is_trash: body["is_trash"] } : {}),
       ...(body["add_label"] === undefined ? {} : { add_label: String(body["add_label"]) }),
       ...(body["remove_label"] === undefined ? {} : { remove_label: String(body["remove_label"]) }),
     };

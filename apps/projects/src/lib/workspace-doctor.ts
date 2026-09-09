@@ -12,6 +12,12 @@ import {
 } from "../db/workspaces.js";
 import { workspaceMarkerPath, writeWorkspaceMarker } from "./workspace-runtime.js";
 import { inspectLegacyProjectLayout, migrateLegacyProjectLayout } from "./project-layout-migration.js";
+import {
+  PROJECT_CHANNEL_INTEGRATION_KEY,
+  conversationsCliChannelProbe,
+  shouldProbeConversationsChannel,
+  type ProjectChannelExistenceProbe,
+} from "./project-channel.js";
 import type { ProjectStore } from "../store/project-store.js";
 import type { Workspace } from "../types/workspace.js";
 
@@ -59,6 +65,14 @@ export interface WorkspaceDoctorOptions {
   dryRun?: boolean;
   transport?: WorkspaceDoctorTransport;
   references?: WorkspaceDoctorReferences;
+  /**
+   * Optional probe that verifies the project's advertised
+   * `integrations.conversations_channel` exists in the conversations app.
+   * When absent, the check is a self-contained verdict only when the project
+   * pins no channel; a pinned channel that cannot be probed reports
+   * "not verified" (never a fabricated error).
+   */
+  channelProbe?: ProjectChannelExistenceProbe;
 }
 
 /** The hosted transport never reads the on-box registry: every check that would is answered here. */
@@ -235,6 +249,64 @@ function checkMigrationMap(workspace: Workspace, transport: WorkspaceDoctorTrans
 }
 
 /**
+ * The conversations-channel check: when a project advertises a channel through
+ * `integrations.conversations_channel`, validate that the channel actually
+ * exists in the conversations app. A project with no pinned channel is ok; a
+ * pinned channel with no probe is a warn (this process could not verify it);
+ * a probe that does not find the channel is an error (the fleet is advertising
+ * a channel that does not exist — the defect that let general-work-management
+ * point at a nonexistent "work-management" channel).
+ */
+function checkConversationsChannel(
+  workspace: Workspace,
+  probe: ProjectChannelExistenceProbe | undefined,
+): WorkspaceDoctorCheck {
+  const channel = workspace.integrations?.[PROJECT_CHANNEL_INTEGRATION_KEY]?.trim();
+  if (!channel) {
+    return {
+      code: "WORKSPACE_CHANNEL_NONE",
+      name: "conversations_channel",
+      status: "ok",
+      message: "no conversations channel advertised",
+    };
+  }
+  if (!probe) {
+    return {
+      code: "WORKSPACE_CHANNEL_NOT_VERIFIED",
+      name: "conversations_channel",
+      status: "warn",
+      message: `advertised conversations channel '${channel}' was not verified against the conversations app (no probe supplied; run where the conversations CLI is available)`,
+      fixable: false,
+    };
+  }
+  const result = probe(channel);
+  if (result.verdict === "exists") {
+    return {
+      code: "WORKSPACE_CHANNEL_OK",
+      name: "conversations_channel",
+      status: "ok",
+      message: `conversations channel '${channel}' exists`,
+    };
+  }
+  if (result.verdict === "missing") {
+    return {
+      code: "WORKSPACE_CHANNEL_MISSING",
+      name: "conversations_channel",
+      status: "error",
+      message: `advertised conversations channel '${channel}' does not exist in the conversations app`,
+      fixable: false,
+    };
+  }
+  return {
+    code: "WORKSPACE_CHANNEL_UNVERIFIED",
+    name: "conversations_channel",
+    status: "warn",
+    message: `advertised conversations channel '${channel}' could not be verified (${result.detail ?? "unknown error"})`,
+    fixable: false,
+  };
+}
+
+/**
  * Synchronous doctor. On the hosted transport (`transport: "http"`) NOTHING
  * here reaches the on-box registry: references come from `options.references`,
  * and the location, agent-run and migration-map checks answer "local only".
@@ -250,6 +322,7 @@ export function doctorWorkspace(workspace: Workspace, options: WorkspaceDoctorOp
     checkLocations(workspace, transport, db),
     checkAgentRuns(workspace, transport, db),
     checkMigrationMap(workspace, transport, db),
+    checkConversationsChannel(workspace, options.channelProbe),
   ];
   const fixes: WorkspaceDoctorFix[] = [];
   const dryRun = options.dryRun === true;
@@ -307,8 +380,13 @@ export async function doctorWorkspaceWithStore(
   workspace: Workspace,
   options: Omit<WorkspaceDoctorOptions, "transport" | "references"> = {},
 ): Promise<WorkspaceDoctorResult> {
+  // Validate advertised conversations channels against the conversations app
+  // when this box can reach it (the fleet). Probe construction is lazy (nothing
+  // spawns until a pinned channel needs checking) and its listing is cached
+  // process-wide, so a multi-project run stays one listing. Off in tests.
+  const channelProbe = options.channelProbe ?? (shouldProbeConversationsChannel() ? conversationsCliChannelProbe() : undefined);
   if (store.transport !== "http") {
-    return doctorWorkspace(workspace, { ...options, transport: "local" });
+    return doctorWorkspace(workspace, { ...options, transport: "local", channelProbe });
   }
   const [root, recipe] = await Promise.all([
     workspace.root_id ? store.getRoot(workspace.root_id) : Promise.resolve(null),
@@ -318,6 +396,7 @@ export async function doctorWorkspaceWithStore(
     ...options,
     transport: "http",
     references: { root: Boolean(root), recipe: Boolean(recipe) },
+    channelProbe,
   });
 }
 
