@@ -5418,6 +5418,30 @@ enum CLIRunner: Sendable {
             )
         }
 
+        // CLOEXEC_DEFAULT also closes stdin unless it is explicitly inherited. Keep
+        // the existing stdin behavior, including an already closed/CLOEXEC stream;
+        // a capture pipe that reused fd 0 must still be closed by the actions above.
+        if !inheritedDescriptors.contains(STDIN_FILENO) {
+            var inputFlags: Int32
+            repeat {
+                inputFlags = Darwin.fcntl(STDIN_FILENO, F_GETFD)
+            } while inputFlags == -1 && errno == EINTR
+            let inputError = errno
+            if inputFlags == -1 && inputError != EBADF {
+                throw NSError(
+                    domain: NSPOSIXErrorDomain,
+                    code: Int(inputError),
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to inspect command standard input"]
+                )
+            }
+            if inputFlags >= 0 && inputFlags & FD_CLOEXEC == 0 {
+                try checkPOSIX(
+                    posix_spawn_file_actions_addinherit_np(&fileActions, STDIN_FILENO),
+                    operation: "inherit command standard input"
+                )
+            }
+        }
+
         var attributes: posix_spawnattr_t?
         try checkPOSIX(posix_spawnattr_init(&attributes), operation: "initialize spawn attributes")
         defer { posix_spawnattr_destroy(&attributes) }
@@ -5434,7 +5458,10 @@ enum CLIRunner: Sendable {
             posix_spawnattr_setsigmask(&attributes, &unblockedSignals),
             operation: "unblock command signals"
         )
-        let spawnFlags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK
+        // A different reader may still be between pipe() and FD_CLOEXEC setup.
+        // Inherit only our explicit standard streams, never that unrelated pipe.
+        let spawnFlags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF
+            | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT
         try checkPOSIX(
             posix_spawnattr_setflags(&attributes, Int16(spawnFlags)),
             operation: "configure command process group"

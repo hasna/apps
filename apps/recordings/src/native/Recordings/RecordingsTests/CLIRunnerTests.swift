@@ -66,6 +66,74 @@ struct CLIRunnerTests {
         #expect(result.stderr.first == "e")
     }
 
+    @Test("command spawn inherits only its standard streams, never another capture pipe")
+    func commandSpawnDoesNotInheritUnrelatedPipe() throws {
+        // Keep an unrelated pipe deliberately not close-on-exec. This is the exact
+        // state another reader can expose between pipe() and its FD_CLOEXEC setup.
+        var unrelated: [Int32] = [0, 0]
+        try #require(Darwin.pipe(&unrelated) == 0)
+        defer { for descriptor in unrelated { Darwin.close(descriptor) } }
+        // Do not turn a previously closed standard stream into this probe pipe.
+        for index in unrelated.indices where unrelated[index] < 3 {
+            let moved = Darwin.fcntl(unrelated[index], F_DUPFD, 3)
+            try #require(moved >= 3)
+            Darwin.close(unrelated[index])
+            unrelated[index] = moved
+        }
+        try #require(Darwin.fcntl(unrelated[0], F_GETFD) & FD_CLOEXEC == 0)
+
+        let home = URL(fileURLWithPath: makeIsolatedTestHome("spawn-inheritance"), isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let source = home.appendingPathComponent("probe.c")
+        let executable = home.appendingPathComponent("probe")
+        try """
+        #include <sys/stat.h>
+        #include <unistd.h>
+        #include <errno.h>
+        #include <fcntl.h>
+        #include <stdio.h>
+        #include <stdlib.h>
+        int main(int argc, char **argv) {
+            if (argc != 5) return 64;
+            struct stat input;
+            int inputResult = fstat(STDIN_FILENO, &input);
+            if (atoi(argv[2])) {
+                if (inputResult != 0 ||
+                    (unsigned long long)input.st_dev != strtoull(argv[3], 0, 10) ||
+                    (unsigned long long)input.st_ino != strtoull(argv[4], 0, 10)) return 66;
+            } else if (inputResult == 0) return 67;
+            fputs("stdout-preserved", stdout);
+            fputs("stderr-preserved", stderr);
+            errno = 0;
+            if (fcntl(atoi(argv[1]), F_GETFD) != -1 || errno != EBADF) return 65;
+            return 0;
+        }
+        """.write(to: source, atomically: true, encoding: .utf8)
+        let compiled = try CLIRunner.runExecutable(
+            "/usr/bin/cc", arguments: ["-o", executable.path, source.path],
+            environment: ["TMPDIR": home.path]
+        )
+        try #require(compiled.terminationStatus == 0)
+
+        // Inspect only stdin metadata; never read or print the caller's input.
+        var input = stat()
+        let inputFlags = Darwin.fcntl(STDIN_FILENO, F_GETFD)
+        let inheritsInput = inputFlags >= 0 && inputFlags & FD_CLOEXEC == 0
+            && !unrelated.contains(STDIN_FILENO)
+        if inheritsInput { try #require(Darwin.fstat(STDIN_FILENO, &input) == 0) }
+        let result = try CLIRunner.runExecutable(
+            executable.path,
+            arguments: [
+                String(unrelated[0]), inheritsInput ? "1" : "0",
+                String(UInt64(bitPattern: Int64(input.st_dev))), String(input.st_ino),
+            ],
+            environment: [:]
+        )
+        #expect(result.terminationStatus == 0)
+        #expect(result.stdout == "stdout-preserved")
+        #expect(result.stderr == "stderr-preserved")
+    }
+
     @Test("process runner observes immediate exits without false timeouts")
     func observesImmediateExits() throws {
         for _ in 0..<25 {
