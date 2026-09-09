@@ -555,3 +555,99 @@ describe("closeDatabase and resetDatabase", () => {
     expect(db2).toBeDefined();
   });
 });
+
+describe("mailbox_filters FR-0001 columns", () => {
+  it("creates actions_json, enabled, and order with safe defaults on a fresh database", () => {
+    const db = getDatabase();
+    const cols = (db.query("PRAGMA table_info(mailbox_filters)").all() as Array<{ name: string; dflt_value: string | null; notnull: number }>)
+      .filter((c) => ["actions_json", "enabled", "order"].includes(c.name));
+    expect(cols.map((c) => c.name).sort()).toEqual(["actions_json", "enabled", "order"]);
+    const actions = cols.find((c) => c.name === "actions_json");
+    const enabled = cols.find((c) => c.name === "enabled");
+    const order = cols.find((c) => c.name === "order");
+    expect(actions?.dflt_value).toContain("{}");
+    expect(enabled?.dflt_value).toContain("0");
+    expect(enabled?.notnull).toBe(1);
+    expect(order?.dflt_value).toContain("0");
+  });
+
+  it("defaults actions, enabled, and order for rows inserted without the new columns", () => {
+    const db = getDatabase();
+    const id = uuid();
+    db.run(
+      "INSERT INTO mailbox_filters (id, tenant_id, name, normalized_name, mailbox, criteria_json) VALUES (?, 'local', ?, ?, 'inbox', '{}')",
+      [id, "Legacy row", "legacy-row"],
+    );
+    const row = db.query(
+      "SELECT actions_json, enabled, \"order\" FROM mailbox_filters WHERE id = ?",
+    ).get(id) as { actions_json: string; enabled: number; order: number };
+    expect(row).toEqual({ actions_json: "{}", enabled: 0, order: 0 });
+  });
+
+  it("preserves actions, enabled, and order across a close and reopen of a file-backed database", () => {
+    const root = mkdtempSync(join(tmpdir(), "emails-db-filter-reopen-"));
+    const path = join(root, "emails.db");
+    let id: string;
+    try {
+      closeDatabase();
+      resetDatabase();
+      process.env["EMAILS_DB_PATH"] = path;
+      id = uuid();
+      const first = getDatabase();
+      first.run(
+        `INSERT INTO mailbox_filters (id, tenant_id, name, normalized_name, mailbox, criteria_json, actions_json, enabled, "order")
+         VALUES (?, 'local', 'Persisted', 'persisted', 'inbox', '{}', ?, ?, ?)`,
+        [id, JSON.stringify({ add_labels: ["invoices"], archive: true, mark_read: true }), 1, 7],
+      );
+      closeDatabase();
+      resetDatabase();
+      const second = getDatabase();
+      const row = second.query(
+        "SELECT actions_json, enabled, \"order\" FROM mailbox_filters WHERE id = ?",
+      ).get(id) as { actions_json: string; enabled: number; order: number };
+      expect(JSON.parse(row.actions_json)).toEqual({ add_labels: ["invoices"], archive: true, mark_read: true });
+      expect(row.enabled).toBe(1);
+      expect(row.order).toBe(7);
+    } finally {
+      closeDatabase();
+      resetDatabase();
+      delete process.env["EMAILS_DB_PATH"];
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("adds the three columns to a database whose mailbox_filters predates them", () => {
+    const root = mkdtempSync(join(tmpdir(), "emails-db-filter-upgrade-"));
+    const path = join(root, "emails.db");
+    try {
+      // Build an OLD mailbox_filters table by hand before the schema runner sees it.
+      const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+      const pre = new Database(path);
+      pre.run(`CREATE TABLE mailbox_filters (
+        id TEXT PRIMARY KEY NOT NULL,
+        tenant_id TEXT NOT NULL DEFAULT 'local',
+        name TEXT NOT NULL,
+        normalized_name TEXT NOT NULL,
+        mailbox TEXT NOT NULL,
+        criteria_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`);
+      pre.close();
+
+      closeDatabase();
+      resetDatabase();
+      process.env["EMAILS_DB_PATH"] = path;
+      const db = getDatabase();
+      const cols = (db.query("PRAGMA table_info(mailbox_filters)").all() as Array<{ name: string }>).map((c) => c.name);
+      expect(cols).toContain("actions_json");
+      expect(cols).toContain("enabled");
+      expect(cols).toContain("order");
+    } finally {
+      closeDatabase();
+      resetDatabase();
+      delete process.env["EMAILS_DB_PATH"];
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

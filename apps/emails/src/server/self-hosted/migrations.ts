@@ -3164,6 +3164,33 @@ ALTER TABLE messages ADD COLUMN tags JSONB;
 ALTER TABLE messages ADD CONSTRAINT message_send_tags_object CHECK (tags IS NULL OR jsonb_typeof(tags) = 'object');
 `);
 
+/**
+ * 0041 — mailbox filter ACTIONS, enabled flag and execution order (FR-0001).
+ *
+ * Filters gain an `actions` block (add_labels / archive / mark_read), an
+ * `enabled` flag gating automatic application to newly imported messages, and
+ * an integer `order` used to sequence enabled filters. All three columns are
+ * additive with defaults so existing filters (enabled=false, order=0, no
+ * actions) never auto-act on ingest. RLS policies from 0026 continue covering
+ * the table; the partial index serves enabled-filter evaluation ordered by
+ * `order, id`.
+ */
+const MAILBOX_FILTER_ACTIONS = defineMigration(
+  "0041_mailbox_filter_actions",
+  `
+  ALTER TABLE mailbox_filters
+    ADD COLUMN IF NOT EXISTS actions jsonb NOT NULL DEFAULT '{}'::jsonb;
+  ALTER TABLE mailbox_filters
+    ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT false;
+  ALTER TABLE mailbox_filters
+    ADD COLUMN IF NOT EXISTS "order" integer NOT NULL DEFAULT 0;
+
+  CREATE INDEX IF NOT EXISTS mailbox_filters_enabled_order_idx
+    ON mailbox_filters (tenant_id, "order", id)
+    WHERE enabled = true;
+  `,
+);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3212,5 +3239,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     WORKER_SUPERVISOR,
     SERVICE_FEEDBACK,
     MESSAGE_SEND_TAGS,
+    MAILBOX_FILTER_ACTIONS,
   ];
 }
