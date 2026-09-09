@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.5
+
+### Patch Changes
+
+- 31d4b67: Preserve ambiguous ECS launch and stop states until the exact task is observed. Missing or partial task listings no longer permit replacement launches, and cancellation receipts require confirmed STOPPED state.
+
+  Bind every AWS ECS operation to one explicit cluster, collect bounded complete task-list pagination, and reject partial AWS responses. The optional cluster setting supports reconciliation after a client restart. Historical cancelled runs also require fresh stop proof before idempotent acceptance.
+
+- 0fae2f6: Use the gateway's /skills/v1 resource path while preserving separately selected commercial and custom instances. Add OSS server /v1 resource, health, and API-key identity aliases that delegate existing handlers. Reject unsupported interactive internal gateway login before transmitting account input; the independent internal origin and auth adapter remain integration requirements.
+- 3425e26: Add an explicit capability-gated private source publication SDK, CLI and MCP lifecycle with fresh workspace sessions, exact version UUID comparison, immutable recovery bundles and lost-response reconciliation. Existing registry publishing and private execution semantics remain unchanged.
+- 4b83999: Require a regular, bounded ownership marker before pruning a stale skill directory. Preserve directories when their marker or directory identity changes before removal, including symlink, malformed and foreign replacements.
+
 ## 0.5.4
 
 ### Patch Changes
