@@ -72,7 +72,10 @@ per-surface detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
 
   The CLI, the MCP server and the `./sdk` client no longer carry a credential
   chain of their own. All three call the one resolver in `@hasna/contracts`
-  (bumped to 1.0.2), which reads, per call: an explicit `--api-key`/`--profile`,
+  (bumped to 1.0.2), which reads, per call: an explicit `apiKey` argument — the
+  resolver's own `--api-key`/`--profile` flag spellings belong to its other
+  consumers; the `todos` CLI exposes no hosted-credential flag of its own, so
+  tier 1 is reachable only through the SDK/client option —
   then `HASNA_TODOS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
   `HASNA_TODOS_API_KEY_REF`, then the macOS Keychain item
   `hasna.credentials.todos.api-key`, then `~/.hasna/todos/config/credentials`
@@ -149,6 +152,23 @@ per-surface detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
     stderr saying it is local.
   - A credential with no URL used to be refused as a half-configured pair; it now
     resolves the fleet gateway.
+  - The command list `todos --help`, `todos manual` and the generated
+    completions print is now route-dependent. 0.15.52 advertised all 166
+    commands to every caller because the local fallback was implicit; 0.16.0
+    advertises the 75 commands the hosted route exposes and the full 166 only
+    once the local opt-in is set, because the on-box commands fail closed on the
+    default posture. No command was removed —
+    every verb still resolves when its posture is configured; run
+    `HASNA_TODOS_LOCAL=1 todos --help` to see the on-box families. The
+    curation mechanism itself is unchanged from 0.15.52; only its trigger moved
+    with the removal of the implicit local fallback. See
+    `apps/todos/docs/cli-help.md`.
+  - `todos storage status` now reports the resolver's credential-source
+    disagreement as a `warnings` array in `--json` (the field already existed
+    and was always `[]` on the hosted branch) and prints each entry as a yellow
+    stderr line in human mode. The entries name the sources and env key names
+    that disagree — never a credential value — and the array is additive, so no
+    consumer contract breaks.
   - A 401/403 from the authority no longer echoes the server's response body: the
     transport cancels it unread, because that body is the one place a rejected
     request can reflect credential material back into logs. The refusal still

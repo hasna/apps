@@ -15,7 +15,7 @@ bun install -g @hasna/todos
 
 0.16.0 puts every surface on one credential resolver and moves three command
 families to the shared API. Upgrading from 0.15.52 needs no data migration, but
-three things change:
+four things change:
 
 - **Configure a credential.** The `./sdk` client no longer reads
   `~/.todos/config.json`, and the unprefixed `TODOS_URL` / key spellings are
@@ -54,6 +54,16 @@ three things change:
   the server with `HASNA_TODOS_LOCAL=1` to keep using the on-box tools; that
   opt-in is ignored when `HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL` is set,
   because a configured environment outranks it.
+- **The advertised command list is route-dependent.** 0.15.52 listed all 166
+  commands to every caller because the local fallback was implicit. 0.16.0
+  lists the 75 the hosted route exposes and shows the full 166 only with
+  `HASNA_TODOS_LOCAL=1` set, because the on-box families fail closed on the
+  default posture. No command was removed — `todos --help`, `todos manual` and
+  the generated completions all honour the same rule, and every verb still
+  resolves once its posture is configured. `todos storage status` also reports
+  credential-source disagreements as a `warnings` array (`--json`) and a yellow
+  stderr line (human mode); the entries name sources and env key names, never a
+  value.
 
 Everything else still runs offline with `HASNA_TODOS_LOCAL=1` (when the
 environment configures no authority or credential of its own). The per-surface
@@ -174,6 +184,13 @@ todos completions bash > ~/.local/share/bash-completion/completions/todos
 todos completions zsh > ~/.zsh/completions/_todos
 todos completions fish > ~/.config/fish/completions/todos.fish
 ```
+
+`--help`, `manual` and the completions all derive from the same tree, and that
+tree is filtered by the resolved route: the default posture advertises the
+commands that can run against the hosted surface, and `HASNA_TODOS_LOCAL=1`
+advertises the full on-box set. See
+[Upgrading From 0.15.52](#upgrading-from-01552) and
+`apps/todos/docs/cli-help.md`.
 
 Print the local CLI manual when you need install/update commands, examples,
 JSON output contracts, error behavior, and the command catalog:
