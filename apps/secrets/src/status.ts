@@ -13,7 +13,7 @@ const FALLBACK_PACKAGE_VERSION = VERSION;
 
 /**
  * WHERE the hosted transport was resolved from — names only, never values.
- * `null` for a local-vault run. Sources are an env key NAME, a Keychain item
+ * Legacy types permit `null`; ordinary resolution always uses the API. Sources are an env key NAME, a Keychain item
  * reference (`keychain:<service>@<account>`), a file PATH with the home
  * prefix folded to `~`, or `"default"` (the fleet gateway).
  */
@@ -30,7 +30,7 @@ export interface SecretReferenceStatus {
     name: typeof PACKAGE_NAME;
     version: string;
   };
-  /** `local` (on-box sqlite) or `api` (cloud HTTP API). */
+  /** Ordinary status returns `api`; `local` is retained in the published legacy type. */
   mode: "local" | "api";
   /** Vault file path (local) or API origin (api). Never contains a key. */
   location: string;
@@ -60,7 +60,7 @@ export interface SecretReferenceStatus {
 }
 
 /**
- * Metadata-only status of the active vault (local sqlite or the cloud API).
+ * Metadata-only status of the shared API vault. Local selectors are rejected.
  * Routes through the Store; never touches sqlite or the network directly and
  * never emits secret values or key names.
  */

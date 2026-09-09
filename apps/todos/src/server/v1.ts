@@ -1,3 +1,5 @@
+import {validatePlanSchedule} from "../lib/plan-schedule.js";
+import { AtomicMigrationError, type AtomicMigrationRequest } from "../storage/atomic-project-migration.js";
 import { MachineRegistryError, validateMachines } from "../storage/machine-registry.js";
 /**
  * Versioned `/v1` HTTP API for `todos-serve` (A1 pure-remote).
@@ -8,7 +10,7 @@ import { MachineRegistryError, validateMachines } from "../storage/machine-regis
  * require `todos:write` (a `todos:*` key satisfies both). This is a real wrapper
  * over the core storage lib — there are NO stubs; unimplemented routes 404.
  */
-import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, StaleLockHandoffError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, VersionConflictError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
+import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, StaleLockHandoffError, TaskNotFoundError, TaskListNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, VersionConflictError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 import { collapseEnumValues, resolveEnumVocabulary } from "../lib/enum-vocabulary.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, PlanComment, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
 import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
@@ -53,6 +55,7 @@ export interface V1RequestDependencies {
   ensureSchema?: typeof ensureCloudSchema;
   getStorageAdapter?: typeof getCloudStorageAdapter;
   getMachineRegistryTenantId?: typeof getCloudTenantId;
+  getAtomicMigrationDeploymentId?: () => string | undefined;
   getPrGroupLedger?: typeof getCloudPrGroupLedger;
   getProjectRegistrationAuthority?: typeof getCloudProjectRegistrationAuthority;
   getTaskManifestAuthority?: typeof getCloudTaskManifestAuthority;
@@ -272,12 +275,28 @@ function validateTaskPatchVocabulary(value: unknown):
   return { ok: true, patch: body as Partial<UpdateTaskInput> };
 }
 
+function projectMetadataError(body: Record<string, unknown>): string | null {
+  if (body.status !== undefined && (typeof body.status !== "string" || !["active", "completed", "on_hold", "archived"].includes(body.status))) return "invalid project status";
+  if (body.short_id !== undefined && body.short_id !== null && (typeof body.short_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(body.short_id))) return "short_id must be a bounded identifier or null";
+  if (body.metadata !== undefined && (!body.metadata || typeof body.metadata !== "object" || Array.isArray(body.metadata) || Buffer.byteLength(JSON.stringify(body.metadata)) > 65536)) return "metadata must be an object of at most 64 KiB";
+  if (body.metadata !== undefined) {
+    const pending: unknown[] = [body.metadata];
+    let visited = 0;
+    while (pending.length) {
+      const value = pending.pop();
+      if (++visited > 65536 || (typeof value === "number" && !Number.isFinite(value))) return "metadata must contain finite bounded JSON values";
+      if (value && typeof value === "object") pending.push(...Object.values(value));
+    }
+  }
+  return null;
+}
+
 function validateProjectPatch(value: unknown):
-  | { ok: true; patch: Partial<Pick<CreateProjectInput, "name" | "path" | "description" | "parent_id">> }
+  | { ok: true; patch: Partial<import("../types/index.js").UpdateProjectInput> }
   | { ok: false; message: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "project patch must be an object" };
   const body = value as Record<string, unknown>;
-  const allowed = new Set(["name", "path", "description", "parent_id"]);
+  const allowed = new Set(["name", "path", "description", "parent_id", "status", "short_id", "metadata"]);
   const unknown = Object.keys(body).find((key) => !allowed.has(key));
   if (unknown) return { ok: false, message: `unknown project field: ${unknown}` };
   if (Object.keys(body).length === 0) return { ok: false, message: "project patch must not be empty" };
@@ -285,15 +304,17 @@ function validateProjectPatch(value: unknown):
   if (body["path"] !== undefined && (typeof body["path"] !== "string" || !body["path"].trim())) return { ok: false, message: "path must be a non-empty string" };
   if (body["description"] !== undefined && body["description"] !== null && typeof body["description"] !== "string") return { ok: false, message: "description must be a string or null" };
   if (body["parent_id"] !== undefined && body["parent_id"] !== null && (typeof body["parent_id"] !== "string" || !body["parent_id"].trim())) return { ok: false, message: "parent_id must be a string or null" };
+  const metadataError = projectMetadataError(body);
+  if (metadataError) return {ok:false,message:metadataError};
   return { ok: true, patch: body as never };
 }
 
 function validateProjectCreate(value: unknown):
-  | { ok: true; input: Pick<CreateProjectInput, "name" | "path" | "description" | "task_list_id" | "task_prefix" | "parent_id"> }
+  | { ok: true; input: CreateProjectInput }
   | { ok: false; message: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "project body must be an object" };
   const body = value as Record<string, unknown>;
-  const allowed = new Set(["name", "path", "description", "task_list_id", "task_prefix", "parent_id"]);
+  const allowed = new Set(["name", "path", "description", "task_list_id", "task_prefix", "parent_id", "status", "short_id", "metadata"]);
   const unknown = Object.keys(body).find((key) => !allowed.has(key));
   if (unknown) return { ok: false, message: `unknown project field: ${unknown}` };
   if (typeof body["name"] !== "string" || !body["name"].trim()) return { ok: false, message: "name must be a non-empty string" };
@@ -309,6 +330,8 @@ function validateProjectCreate(value: unknown):
   if (body["parent_id"] !== undefined && (typeof body["parent_id"] !== "string" || !body["parent_id"].trim())) {
     return { ok: false, message: "parent_id must be a non-empty string" };
   }
+  const metadataError = projectMetadataError(body);
+  if (metadataError) return {ok:false,message:metadataError};
   return { ok: true, input: body as never };
 }
 
@@ -317,7 +340,7 @@ function validatePlanCreate(value: unknown):
   | { ok: false; message: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "plan body must be an object" };
   const body = value as Record<string, unknown>;
-  const allowed = new Set(["title", "name", "slug", "description", "project_id", "task_list_id", "agent_id", "status"]);
+  const allowed = new Set(["title", "name", "slug", "description", "project_id", "task_list_id", "agent_id", "status", "start_date", "end_date"]);
   const unknown = Object.keys(body).find((key) => !allowed.has(key));
   if (unknown) return { ok: false, message: `unknown plan field: ${unknown}` };
   if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim())) return { ok: false, message: "name must be a non-empty string" };
@@ -336,13 +359,17 @@ function validatePlanCreate(value: unknown):
   if (body.slug !== undefined && !slug) return { ok: false, message: "slug must produce a non-empty canonical slug" };
   if (body.description !== undefined && typeof body.description !== "string") return { ok: false, message: "description must be a string" };
   if (body.status !== undefined &&
-      (typeof body.status !== "string" || !["active", "completed", "archived"].includes(body.status))) {
-    return { ok: false, message: "status must be active, completed, or archived" };
+      (typeof body.status !== "string" || !["active", "completed", "archived", "planning", "cancelled"].includes(body.status))) {
+    return { ok: false, message: "unsupported plan status" };
   }
+  const scheduleError = validatePlanSchedule(body);
+  if (scheduleError) return {ok:false,message:scheduleError};
   return {
     ok: true,
     input: {
       name,
+      ...(body.start_date !== undefined ? {start_date:body.start_date as string | null} : {}),
+      ...(body.end_date !== undefined ? {end_date:body.end_date as string | null} : {}),
       ...(slug ? { slug } : {}),
       ...(typeof body.description === "string" ? { description: body.description } : {}),
       ...(typeof body.project_id === "string" ? { project_id: body.project_id } : {}),
@@ -437,15 +464,19 @@ function validateTemplatePatch(value: unknown):
   | { ok: false; message: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "template patch must be an object" };
   const body = value as Record<string, unknown>;
-  const allowed = new Set(["name", "title_pattern", "description", "priority", "tags", "variables", "project_id", "plan_id", "metadata"]);
+  const allowed = new Set(["name", "title_pattern", "description", "priority", "tags", "variables", "project_id", "plan_id", "metadata", "expected_version"]);
   const unknown = Object.keys(body).find((key) => !allowed.has(key));
   if (unknown) return { ok: false, message: `unknown template field: ${unknown}` };
   if (Object.keys(body).length === 0) return { ok: false, message: "template patch must not be empty" };
-  const templateLike = { name: body.name ?? "template", title_pattern: body.title_pattern ?? "template", ...body };
+  if (body.expected_version !== undefined && (!Number.isSafeInteger(body.expected_version) || (body.expected_version as number) < 1)) return {ok:false,message:"expected_version must be a positive integer"};
+  const { expected_version, ...fields } = body;
+  if (!Object.keys(fields).length) return {ok:false,message:"Template patch requires changed fields"};
+  const templateLike = { name: body.name ?? "template", title_pattern: body.title_pattern ?? "template", ...fields };
   const validated = validateTemplateCreate(templateLike);
   if (!validated.ok) return validated;
   const { name: _name, title_pattern: _title, tasks: _tasks, ...patch } = validated.input;
   return { ok: true, patch: {
+    ...(expected_version !== undefined ? { expected_version: expected_version as number } : {}),
     ...(body.name !== undefined ? { name: validated.input.name } : {}),
     ...(body.title_pattern !== undefined ? { title_pattern: validated.input.title_pattern } : {}),
     ...patch,
@@ -642,6 +673,14 @@ export async function handleV1Request(
     return error(decision.status, decision.message, { reason: decision.reason });
   }
   const principal = decision.principal;
+  // Every route below uses this deployment's single configured corpus, including
+  // specialized handlers. Authenticate first, then fence tenant before schema or
+  // storage work. A legacy untenanted key is valid only for the default corpus.
+  const registryTenant = (dependencies.getMachineRegistryTenantId ?? getCloudTenantId)();
+  if (typeof registryTenant !== "string" || !registryTenant.trim()) return error(503,"Todos deployment tenant is not configured");
+  if (principal.tid !== registryTenant && !(principal.tid == null && registryTenant === "default")) {
+    return error(403,"API key does not belong to this deployment tenant");
+  }
 
   // Schema is idempotently ensured on the first authenticated request.
   await (dependencies.ensureSchema ?? ensureCloudSchema)();
@@ -688,7 +727,6 @@ export async function handleV1Request(
   const subId = segments[4];
   // This deployment has one configured corpus. A tenant-bearing key must match
   // it; an untenanted legacy key is only valid for the default corpus.
-  const registryTenant = (dependencies.getMachineRegistryTenantId ?? getCloudTenantId)();
   const machineAuthority = () => ({ tenant_id: registryTenant, kid: principal.kid });
   const machineAuthorityMatches = (expected: unknown) => {
     if (!expected || typeof expected !== "object" || Array.isArray(expected)) return false;
@@ -703,6 +741,25 @@ export async function handleV1Request(
 
 
   try {
+    if (resource === "project-migrations") {
+      if (!principal.scopes.includes("todos:migrate")) return error(403,"Explicit todos:migrate scope is required");
+      const deploymentId=(dependencies.getAtomicMigrationDeploymentId ?? (()=>process.env.HASNA_TODOS_MIGRATION_DEPLOYMENT_ID))();
+      if(!deploymentId||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(deploymentId))return error(503,"Atomic migration deployment identity is not configured");
+      const migrationAuthority={...machineAuthority(),deployment_id:deploymentId};
+      if (!machineTenantAllowed()) return error(403, "Migration key does not belong to this deployment tenant");
+      if (!store.atomicProjectMigration) return error(501, "Upgrade the Todos backend for atomic project migration");
+      if (id) return error(404, "Unknown project migration path");
+      if (method === "GET") return json({schema_version:1,authority:migrationAuthority,supported_families:["projects","tasks","plans","taskLists","auditHistory"],supported_tombstones:["projects"],max_records:1000,max_bytes:2097152,atomic:true});
+      if (method !== "POST") return error(405, "Method not allowed");
+      // Bound the actual stream, not an untrusted Content-Length header.
+      const reader=req.body?.getReader();if(!reader)return error(400,"Missing migration body");
+      let size=0;const chunks:Uint8Array[]=[];
+      try { while(true){const part=await reader.read();if(part.done)break;size+=part.value.byteLength;if(size>2200000){await reader.cancel();return error(413,"Migration request exceeds the bounded body limit");}chunks.push(part.value);} } finally {reader.releaseLock();}
+      let body:unknown;try{body=JSON.parse(Buffer.concat(chunks).toString("utf8"));}catch{return error(400,"Invalid migration JSON");}
+      if(!body||typeof body!=="object"||Array.isArray(body))return error(400,"Invalid migration request");
+      if(!machineAuthorityMatches((body as Record<string,unknown>).expected_authority)||((body as Record<string,unknown>).expected_authority as Record<string,unknown>).deployment_id!==deploymentId)return error(409,"Migration authority changed or was not confirmed; no records imported");
+      return json(await store.atomicProjectMigration.apply(body as AtomicMigrationRequest));
+    }
     if (resource === "machines") {
       if (!machineTenantAllowed()) return error(403, "Machine registry key does not belong to this deployment tenant");
       if (!store.machines) return error(501, "Upgrade the Todos API: machine registry is unavailable");
@@ -802,6 +859,23 @@ export async function handleV1Request(
           if (includeSubtasks !== null && includeSubtasks !== "true" && includeSubtasks !== "false") {
             return error(400, "include_subtasks must be true or false");
           }
+          const includeArchived = url.searchParams.get("include_archived");
+          if (includeArchived !== null && includeArchived !== "true" && includeArchived !== "false") {
+            return error(400, "include_archived must be true or false");
+          }
+          const planRead = url.searchParams.get("plan_read_contract");
+          if (planRead !== null) {
+            const keys = [...url.searchParams.keys()];
+            const allowed = new Set([
+              "plan_read_contract", "plan_id", "include_subtasks", "include_archived", "limit", "offset",
+            ]);
+            if (new Set(keys).size !== keys.length || keys.some((key) => !allowed.has(key))) {
+              return error(400, "Plan read contract requires an exact unambiguous plan selection");
+            }
+            if (planRead !== "1" || !url.searchParams.get("plan_id") || includeSubtasks !== "true" || includeArchived === null || url.searchParams.has("parent_id")) {
+              return error(400, "plan_read_contract=1 requires plan_id and explicit complete selection flags");
+            }
+          }
           const hasParentFilter = url.searchParams.has("parent_id");
           // Reject an out-of-vocabulary status/priority here rather than casting it
           // `as never` into the store, where it matched nothing and the endpoint
@@ -830,6 +904,7 @@ export async function handleV1Request(
           const offsetParam = paginationQueryParam(url, "offset");
           if (!offsetParam.ok) return offsetParam.response;
           const filter = {
+            ...(includeArchived !== null ? { include_archived: includeArchived === "true" } : {}),
             ...(updatedAfter !== null && updatedAfter.ok ? { updated_after: updatedAfter.value } : {}),
             ...(url.searchParams.get("q") ? { query: url.searchParams.get("q")! } : {}),
             ...(statusParam.value !== undefined ? { status: statusParam.value } : {}),
@@ -860,7 +935,19 @@ export async function handleV1Request(
           // list and the count are SQL-side now — no O(n) JS materialization.
           const { limit: _l, offset: _o, ...countFilter } = filter;
           const total = await store.tasks.count(countFilter);
-          return json({ tasks, count: tasks.length, total });
+          return json({
+            tasks,
+            count: tasks.length,
+            total,
+            ...(planRead === "1" ? {
+              selection: {
+                schema_version: 1,
+                plan_id: filter.plan_id,
+                include_subtasks: true,
+                include_archived: filter.include_archived,
+              },
+            } : {}),
+          });
         }
         if (method === "POST") {
           const body = await readJson<CreateTaskInput>(req);
@@ -1329,6 +1416,15 @@ export async function handleV1Request(
 
     // ── /v1/projects ──
     if (resource === "projects") {
+      if (!machineTenantAllowed()) return error(403, "Project registry key does not belong to this deployment tenant");
+      if (id && action === "delete-preserving") {
+        if (subId) return error(404, "Project deletion route not found");
+        if (method !== "POST") return error(405, "Project deletion requires POST");
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(key => key !== "force" && key !== "require_completed_tasks") || (body.force !== undefined && typeof body.force !== "boolean") || (body.require_completed_tasks !== undefined && typeof body.require_completed_tasks !== "boolean")) return error(400, "force must be a boolean");
+        if (!store.projects.deletePreserving) return error(501, "Upgrade the Todos API: atomic project deletion is unavailable");
+        return json(await store.projects.deletePreserving(id, body.force === true, contextFromPrincipal(principal), body.require_completed_tasks === true));
+      }
       if (!id) {
         if (method === "GET") {
           const projects = await store.projects.list();
@@ -1417,14 +1513,16 @@ export async function handleV1Request(
         return json({ project });
       }
       if (method === "DELETE") {
-        await store.projects.delete(id, contextFromPrincipal(principal));
-        return json({ deleted: true, id });
+        if (!store.projects.deletePreserving) return error(501, "Upgrade the Todos API: atomic project deletion is unavailable");
+        const receipt=await store.projects.deletePreserving(id, false, contextFromPrincipal(principal));
+        return json({ ...receipt, id });
       }
       return error(405, `method ${method} not allowed on /v1/projects/:id`);
     }
 
     // ── /v1/plans ──
     if (resource === "plans") {
+      if (!machineTenantAllowed()) return error(403,"Plan registry key does not belong to this deployment tenant");
       if (!id && method === "GET") {
         const plans = await store.plans.list(url.searchParams.get("project_id") ?? undefined);
         return json({ plans, count: plans.length });
@@ -1500,7 +1598,8 @@ export async function handleV1Request(
       if (id && action === "comments") {
         if (!(await store.plans.get(id))) return error(404, "plan not found");
         if (method === "GET") {
-          if (store.plans.getCommentsPage) {
+          const completeHistoryRequested = url.searchParams.has("plan_read_contract");
+          if (!completeHistoryRequested && store.plans.getCommentsPage) {
             const rawLimit = url.searchParams.get("limit");
             const cursor = url.searchParams.get("cursor");
             const limit = rawLimit === null ? DEFAULT_COMMENT_PAGE_SIZE : Number(rawLimit);
@@ -1529,9 +1628,26 @@ export async function handleV1Request(
               next_cursor: hasMore && comments[0] ? encodeCommentCursor(comments[0]) : null,
             });
           }
-          const comments = ((await store.plans.getComments?.(id, contextFromPrincipal(principal))) ?? [])
-            .map(redactPlanComment);
-          return json({ comments, count: comments.length });
+          if (completeHistoryRequested) {
+            if (url.searchParams.get("plan_read_contract") !== "1") {
+              return error(400, "Unsupported plan read contract");
+            }
+            if (!store.plans.getComments) {
+              return error(503, "Complete plan history is unavailable");
+            }
+          }
+          const history = await store.plans.getComments?.(id, contextFromPrincipal(principal));
+          if (completeHistoryRequested && !Array.isArray(history)) {
+            return error(503, "Complete plan history is unavailable");
+          }
+          const comments = (history ?? []).map(redactPlanComment);
+          return json({
+            comments,
+            count: comments.length,
+            ...(completeHistoryRequested ? {
+              history_selection: { schema_version: 1, plan_id: id, complete: true },
+            } : {}),
+          });
         }
         if (method === "POST") {
           const body = (await readJson<{
@@ -1564,6 +1680,13 @@ export async function handleV1Request(
         }
         return error(405, `method ${method} not allowed on /v1/plans/:id/comments`);
       }
+      if (id && action === "delete-preserving" && !subId) {
+        if(method!=="POST")return error(405,"plan preserving deletion requires POST");
+        const body=await readJson<Record<string,unknown>>(req);
+        if(!body||typeof body!=="object"||Array.isArray(body)||Object.keys(body).some(key=>key!=="force")||(body.force!==undefined&&typeof body.force!=="boolean"))return error(400,"force must be a boolean");
+        if(!store.plans.deletePreserving)return error(501,"Upgrade the Todos API backend for reference-preserving plan deletion");
+        return json(await store.plans.deletePreserving(id,body.force===true,contextFromPrincipal(principal)));
+      }
       if (id && method === "GET") {
         const plan = await store.plans.get(id);
         return plan ? json({ plan }) : error(404, "plan not found");
@@ -1571,7 +1694,7 @@ export async function handleV1Request(
       if (id && (method === "PATCH" || method === "PUT")) {
         const body = await readJson<Record<string, unknown>>(req);
         if (!body || Object.keys(body).length === 0) return error(400, "plan patch is required");
-        const allowed = new Set(["name", "slug", "description", "status", "task_list_id", "agent_id"]);
+        const allowed = new Set(["name", "slug", "description", "status", "task_list_id", "agent_id", "start_date", "end_date"]);
         const unknownField = Object.keys(body).find((key) => !allowed.has(key));
         if (unknownField) return error(400, `unknown plan field: ${unknownField}`);
         for (const field of ["name", "slug", "task_list_id", "agent_id"] as const) {
@@ -1588,11 +1711,13 @@ export async function handleV1Request(
           return error(400, "description must be a string");
         }
         if (body.status !== undefined &&
-            (typeof body.status !== "string" || !["active", "completed", "archived"].includes(body.status))) {
-          return error(400, "status must be active, completed, or archived");
+            (typeof body.status !== "string" || !["active", "completed", "archived", "planning", "cancelled"].includes(body.status))) {
+          return error(400, "unsupported plan status");
         }
         const existing = await store.plans.get(id);
         if (!existing) return error(404, "plan not found");
+        const scheduleError = validatePlanSchedule({...existing,...body});
+        if (scheduleError) return error(400,scheduleError);
         if (typeof body.slug === "string") {
           const duplicate = (await store.plans.list(existing.project_id ?? undefined))
             .find((plan) => plan.id !== id && plan.project_id === existing.project_id && plan.slug === body.slug);
@@ -1615,17 +1740,59 @@ export async function handleV1Request(
 
     // ── /v1/templates ──
     if (resource === "templates") {
+      if (id === "initialize") {
+        if (method !== "POST" || action)
+          return error(405, "Use POST /v1/templates/initialize");
+        const body = await readJson<unknown>(req);
+        if (
+          !body ||
+          typeof body !== "object" ||
+          Array.isArray(body) ||
+          Object.keys(body).length
+        )
+          return error(
+            400,
+            "Template initialization accepts an empty object only",
+          );
+        if (!store.templates.initialize)
+          return error(
+            501,
+            "Upgrade the Todos API/storage for shared template initialization",
+          );
+        return json(
+          await store.templates.initialize(contextFromPrincipal(principal)),
+        );
+      }
+      if (id && action === "history") {
+        if (method !== "GET") return error(405, "Template history is read-only");
+        if (!store.templates.history)
+          return error(501, "Upgrade the Todos API/storage for template history");
+        const history = await store.templates.history(
+          id,
+          contextFromPrincipal(principal),
+        );
+        return history ? json(history) : error(404, "template not found");
+      }
+      if (action) return error(404, "Unknown template action");
       if (!id && method === "GET") {
         const projectId = url.searchParams.get("project_id");
-        const templates = (await store.templates.list()).filter((template) => projectId === null || template.project_id === projectId);
+        const templates = (await store.templates.list()).filter(
+          (template) => projectId === null || template.project_id === projectId,
+        );
         return json({ templates, count: templates.length });
       }
       if (!id && method === "POST") {
         const body = await readJson<unknown>(req);
         const validated = validateTemplateCreate(body);
         if (!validated.ok) return error(400, validated.message);
-        const template = await store.templates.create(validated.input, contextFromPrincipal(principal));
-        return json({ template: await store.templates.getWithTasks(template.id) }, 201);
+        const template = await store.templates.create(
+          validated.input,
+          contextFromPrincipal(principal),
+        );
+        return json(
+          { template: await store.templates.getWithTasks(template.id) },
+          201,
+        );
       }
       if (!id) return error(405, `method ${method} not allowed on /v1/templates`);
       if (method === "GET") {
@@ -1636,12 +1803,51 @@ export async function handleV1Request(
         const body = await readJson<unknown>(req);
         const validated = validateTemplatePatch(body);
         if (!validated.ok) return error(400, validated.message);
-        const template = await store.templates.update(id, validated.patch, contextFromPrincipal(principal));
-        return template ? json({ template: await store.templates.getWithTasks(id) }) : error(404, "template not found");
+        const checked = validated.patch.expected_version !== undefined;
+        if (checked && !store.templates.updateWithHistory)
+          return error(
+            501,
+            "Upgrade storage for revision-checked template history writes",
+          );
+        const template = checked
+          ? await store.templates.updateWithHistory!(
+              id,
+              validated.patch,
+              contextFromPrincipal(principal),
+            )
+          : await store.templates.update(
+              id,
+              validated.patch,
+              contextFromPrincipal(principal),
+            );
+        return template
+          ? json({
+              template:
+                "tasks" in template
+                  ? template
+                  : await store.templates.getWithTasks(id),
+              ...(checked
+                ? {
+                    history_write: {
+                      schema_version: 1,
+                      template_id: id,
+                      previous_version: validated.patch.expected_version,
+                      version: template.version,
+                      recorded: true,
+                    },
+                  }
+                : {}),
+            })
+          : error(404, "template not found");
       }
       if (method === "DELETE") {
-        const deleted = await store.templates.delete(id, contextFromPrincipal(principal));
-        return deleted ? json({ deleted: true, id }) : error(404, "template not found");
+        const deleted = await store.templates.delete(
+          id,
+          contextFromPrincipal(principal),
+        );
+        return deleted
+          ? json({ deleted: true, id })
+          : error(404, "template not found");
       }
       return error(405, `method ${method} not allowed on /v1/templates/:id`);
     }
@@ -1718,7 +1924,8 @@ export async function handleV1Request(
       if (!id && method === "POST") {
         const body = await readJson<CreateTaskListInput>(req);
         if (!body || typeof body.name !== "string" || !body.name.trim()) return error(400, "name is required");
-        const unknownField = Object.keys(body).find((key) => !["name", "slug", "project_id", "description", "metadata"].includes(key));
+        if (body.status !== undefined && !["active", "completed", "archived"].includes(body.status)) return error(400, "invalid task-list status");
+        const unknownField = Object.keys(body).find((key) => !["name", "slug", "project_id", "description", "metadata", "status"].includes(key));
         if (unknownField) return error(400, `unsupported task-list create field: ${unknownField}`);
         if (body.slug !== undefined && typeof body.slug !== "string") return error(400, "slug must be a string");
         if (body.project_id !== undefined && (typeof body.project_id !== "string" || !body.project_id.trim())) return error(400, "project_id must be a non-empty string");
@@ -1732,14 +1939,23 @@ export async function handleV1Request(
         const taskList = await store.taskLists.create(body, contextFromPrincipal(principal));
         return json({ task_list: taskList }, 201);
       }
+      if (id && action === "delete-preserving" && !subId) {
+        if (method !== "POST") return error(405, "task-list preserving deletion requires POST");
+        const body = await readJson<Record<string, unknown>>(req);
+        if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(key => key !== "force") || (body.force !== undefined && typeof body.force !== "boolean")) return error(400, "force must be a boolean");
+        if (!store.taskLists.deletePreserving) return error(501, "Upgrade the Todos API backend for reference-preserving task-list deletion");
+        return json(await store.taskLists.deletePreserving(id, body.force === true, contextFromPrincipal(principal)));
+      }
+      if (action) return error(405, "unsupported task-list action");
       if (id && method === "GET") {
         const taskList = await store.taskLists.get(id);
         return taskList ? json({ task_list: taskList }) : error(404, "task list not found");
       }
       if (id && (method === "PATCH" || method === "PUT")) {
         const body = await readJson<UpdateTaskListInput>(req);
-        if (!body) return error(400, "invalid JSON body");
-        const unknownField = Object.keys(body).find((key) => !["slug", "name", "description", "metadata", "project_id"].includes(key));
+        if (!body || typeof body !== "object" || Array.isArray(body)) return error(400, "invalid JSON body");
+        if (body.status !== undefined && !["active", "completed", "archived"].includes(body.status)) return error(400, "invalid task-list status");
+        const unknownField = Object.keys(body).find((key) => !["slug", "name", "description", "metadata", "status", "project_id"].includes(key));
         if (unknownField) return error(400, `unsupported task-list update field: ${unknownField}`);
         if (Object.keys(body).length === 0) return error(400, "task-list update must not be empty");
         if (body.slug !== undefined && (typeof body.slug !== "string" || !normalizeSlug(body.slug))) return error(400, "slug must be a non-empty string");
@@ -1935,6 +2151,7 @@ export async function handleV1Request(
 
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
+    if (e instanceof AtomicMigrationError) return error(e.status,e.message,{atomic:true,committed:false,...(e.record?{record:e.record}:{})});
     if (e instanceof MachineRegistryError) return error(e.status, e.message);
     if (e instanceof PlanProjectLinkError) {
       const status = e.code === "PLAN_PROJECT_LINK_PLAN_NOT_FOUND"
@@ -1964,6 +2181,7 @@ export async function handleV1Request(
         candidate_task_ids: e.candidateTaskIds,
       });
     }
+    if (e instanceof TaskListNotFoundError) return error(404, e.message, { code: TaskListNotFoundError.code });
     if (e instanceof TaskNotFoundError) {
       return error(404, e.message, { code: TaskNotFoundError.code });
     }

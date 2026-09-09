@@ -185,7 +185,7 @@ describe("no credential (owner ruling 2026-09-04)", () => {
     expect(message).toContain("HASNA_SECRETS_API_URL");
     expect(message).toContain("Keychain");
     expect(message).toContain(join(hasnaHome, APP, "config", "credentials"));
-    expect(message).toContain(LOCAL_VAULT_OPT_IN_ENV_KEY);
+    expect(message).toContain("No local vault is opened");
     // The false-green shapes stay gone.
     expect(message).not.toContain("secrets-local-fallback");
     // No local vault file was created while failing closed.
@@ -198,69 +198,14 @@ describe("no credential (owner ruling 2026-09-04)", () => {
     ).toThrow(/HASNA_SECRETS_API_KEY/);
   });
 
-  it("the explicit local opt-in selects the local vault and says so in one line", () => {
-    const resolved = getStoreWithResolution(env({ [LOCAL_VAULT_OPT_IN_ENV_KEY]: "1" }));
-    expect(resolved.store.mode).toBe("local");
-    expect(resolved.resolution).toBeNull();
-    expect(resolved.notice).toContain(LOCAL_VAULT_OPT_IN_ENV_KEY);
-    expect(resolved.notice).toContain("local vault");
+  it("rejects every legacy selector regardless of configured API authority", () => {
+    for(const name of [LOCAL_VAULT_OPT_IN_ENV_KEY,"HASNA_SECRETS_DB_PATH","OPEN_SECRETS_DB"]) {
+      for(const configured of [false,true]) {
+        expect(()=>getStoreWithResolution(env({[name]:"fixture-local-selection",...(configured?{HASNA_SECRETS_API_URL:"http://127.0.0.1:9999",HASNA_SECRETS_API_KEY:FIXTURE_KEY}:{})}))).toThrow("no longer supported");
+      }
+    }
   });
 
-  it("the local opt-in yields to a credential — an opted-in station stays hosted", () => {
-    // The opt-in is an UNHOSTED lane, not an override. A station that holds a
-    // hosted credential must not quietly diverge from the hosted vault.
-    const resolved = getStoreWithResolution(
-      env({ [LOCAL_VAULT_OPT_IN_ENV_KEY]: "1", HASNA_SECRETS_API_KEY: FIXTURE_KEY }),
-    );
-    expect(resolved.store.mode).toBe("api");
-    expect(resolved.notice).toBeNull();
-  });
-
-  it("the local opt-in yields to a configured AUTHORITY too — url with no key still fails closed", () => {
-    // The ruling is "no url AND no key", not "no key". Gating on the key alone
-    // meant a station with HASNA_SECRETS_API_URL exported and a Keychain lookup
-    // that misses (locked keychain, wrong HASNA_STATION account) silently read
-    // the on-box vault whenever the opt-in sat in the profile. A half-applied
-    // hosted run must fail exactly as loudly with the opt-in as without it.
-    expect(() =>
-      getStoreWithResolution(
-        env({ [LOCAL_VAULT_OPT_IN_ENV_KEY]: "1", HASNA_SECRETS_API_URL: "http://127.0.0.1:9999" }),
-      ),
-    ).toThrow(/HASNA_SECRETS_API_KEY/);
-  });
-
-  it("the local opt-in yields to the Keychain api-url item, not just to the env key", () => {
-    // Every tier of the authority ladder counts, or the hole just moves to the
-    // tier the ruling added.
-    expect(() =>
-      getStoreWithResolution(env({ [LOCAL_VAULT_OPT_IN_ENV_KEY]: "1", HASNA_STATION: "station-test" }), {
-        credentials: {
-          keychain: {
-            platform: "darwin",
-            run: fakeKeychain({ "hasna.credentials.secrets.api-url": "http://127.0.0.1:9999" }),
-          },
-        },
-      }),
-    ).toThrow(/HASNA_SECRETS_API_KEY/);
-  });
-
-  it("the local opt-in yields to an authority declared in the credentials file", () => {
-    const hasnaHome = writeCredentialsFile('HASNA_SECRETS_API_URL="http://127.0.0.1:9999"\n');
-    expect(() =>
-      getStoreWithResolution(env({ [LOCAL_VAULT_OPT_IN_ENV_KEY]: "1", HASNA_HOME: hasnaHome })),
-    ).toThrow(/HASNA_SECRETS_API_KEY/);
-  });
-
-  it("the local opt-in still applies when NOTHING configures a hosted run", () => {
-    // The other side of the same gate: an unhosted station is the product, and
-    // it must not have been tightened into unusability.
-    const hasnaHome = join(testDir, "empty-home");
-    const resolved = getStoreWithResolution(
-      env({ [LOCAL_VAULT_OPT_IN_ENV_KEY]: "1", HASNA_HOME: hasnaHome }),
-    );
-    expect(resolved.store.mode).toBe("local");
-    expect(resolved.notice).toContain("local vault");
-  });
 });
 
 describe("retired configuration is inert", () => {

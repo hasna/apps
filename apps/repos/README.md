@@ -699,7 +699,7 @@ environment variables.
 
 ### Data home
 
-The repos data root resolves through the `@hasna/paths` resolver (XDG/macOS
+The repos data root resolves via the in-package resolver (XDG/macOS
 home layout). The legacy default is `~/.hasna/repos`; once the resolver (XDG)
 data home is adopted (`HASNA_DATA_HOME` set, or the store already migrated to
 `~/.local/share/hasna/repos/repos.db`), config, the SQLite index, the GitHub

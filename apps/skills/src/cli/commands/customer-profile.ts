@@ -1,9 +1,11 @@
+import { registerWorkspaceInvitationCommands } from "./workspace-invitations.js";
 import type { Command } from "commander";
 import { prepareProfileWorkspace } from "../../lib/workspace-profile.js";
 import { registerWorkspaceListCommand } from "./workspace-selection.js";
 import { RemoteSkillsAuthClient } from "../../lib/remote-auth.js";
 import { customerNamePatch } from "../../lib/remote-profile.js";
 import { NameInputError, promptCode, readCode } from "./customer-verification.js";
+import { registerWorkspaceLeaveCommand } from "./workspace-leave.js";
 import { registerWorkspaceMembersCommand } from "./workspace-members.js";
 import { registerWorkspaceMemberMutationCommands } from "./workspace-member-mutations.js";
 
@@ -13,6 +15,8 @@ export function registerCustomerProfileCommands(program: Command) {
   registerWorkspaceListCommand(workspace);
   registerWorkspaceMembersCommand(workspace);
   registerWorkspaceMemberMutationCommands(workspace);
+  registerWorkspaceLeaveCommand(workspace);
+  registerWorkspaceInvitationCommands(workspace);
   const commands = [
     { kind: "account", command: account.command("update") },
     { kind: "workspace", command: workspace.command("update") },

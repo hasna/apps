@@ -19,12 +19,10 @@ const DB_VAR = "HASNA_CONVERSATIONS_DB_PATH";
 const FAKE_KEY = ["hasna", "conversations", "FAKE", "NOT", "A", "REAL", "KEY"].join("_");
 
 describe("transport report — the store and the status surface agree", () => {
-  test("an explicit local store path reports local on the store and db_path in the status", () => {
+  test("a retired local selector refuses both store and status", () => {
     const env = { [DB_VAR]: "/tmp/conversations-transport-report.db" };
-    expect(getStore(env).transport).toBe("local");
-    const report = storeStatusLocation(env);
-    expect("db_path" in report).toBe(true);
-    expect("api_url" in report).toBe(false);
+    expect(() => getStore(env)).toThrow(/no longer supported/);
+    expect(() => storeStatusLocation(env)).toThrow(/no longer supported/);
   });
 
   test("a URL + key resolves cloud-http on the store and api_url in the status", () => {
@@ -56,16 +54,14 @@ describe("transport report — the store and the status surface agree", () => {
     expect(() => storeStatusLocation(env)).toThrow();
   });
 
-  test("a DB path still wins over exported cloud credentials, and the report says local", () => {
+  test("a DB path alongside API credentials refuses both store and status", () => {
     const env = {
       [DB_VAR]: "/tmp/conversations-transport-report.db",
       [URL_VAR]: "https://api.hasna.com/conversations",
       [KEY_VAR]: FAKE_KEY,
     };
-    expect(getStore(env).transport).toBe("local");
-    const report = storeStatusLocation(env);
-    expect("db_path" in report).toBe(true);
-    expect("api_url" in report).toBe(false);
+    expect(() => getStore(env)).toThrow(/no longer supported/);
+    expect(() => storeStatusLocation(env)).toThrow(/no longer supported/);
   });
 
   test("the resolved client's base URL is the authority the report names", () => {

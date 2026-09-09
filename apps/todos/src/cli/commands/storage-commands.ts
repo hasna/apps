@@ -188,7 +188,7 @@ export function registerStorageCommands(program: Command) {
                 force_path_style: false,
               },
               issues: remoteAuthority.issues,
-              warnings: [],
+              warnings: remoteAuthority.warnings,
             }
           : { ...nativeStatus, transport: "sqlite" as const, remote_authority: remoteAuthority };
         if (opts.json || globalOpts.json) {
@@ -205,6 +205,7 @@ export function registerStorageCommands(program: Command) {
           console.log("Local fallback: disabled");
           console.log("Network: not used (configuration diagnostic only)");
           for (const issue of remoteAuthority.issues) console.error(chalk.red(`  ${issue}`));
+          for (const warning of remoteAuthority.warnings) console.error(chalk.yellow(`  ${warning}`));
           if (!status.ok) process.exitCode = 1;
           return;
         }

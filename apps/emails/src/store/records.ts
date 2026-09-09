@@ -346,6 +346,16 @@ export interface MessageCountsRecord {
  * (`add_label` / `remove_label`) rather than by replacing the array, which is what the
  * strongest arm does: a whole-array write loses a concurrent label change instead of
  * merging with it.
+ *
+ * FOLDER MOVES ARE EXPLICIT. The three folder labels — `archived`, `spam`, `trash` —
+ * are RESERVED: an `add_label` / `remove_label` naming one of them is a folder move
+ * (every store treats those values as the folder flags, never as a plain label), and
+ * callers that mean "quarantine to spam" or "send to trash" should use the dedicated
+ * boolean fields below, which are the unambiguous spelling of the same move:
+ * `archived`, `is_spam` and `is_trash` each set/clear the matching folder on the
+ * message (true = move INTO the folder, false = move OUT of it). Folder membership is
+ * not exclusive — a message may carry more than one folder label at once — so moving a
+ * message back to the inbox means clearing the folder(s) it is currently in.
  */
 export interface MessageStatusPatch {
   status?: string;
@@ -353,6 +363,10 @@ export interface MessageStatusPatch {
   is_read?: boolean;
   is_starred?: boolean;
   archived?: boolean;
+  /** Move the message into (true) or out of (false) the spam folder. */
+  is_spam?: boolean;
+  /** Move the message into (true) or out of (false) the trash folder. */
+  is_trash?: boolean;
   add_label?: string;
   remove_label?: string;
 }

@@ -108,23 +108,23 @@ secrets audit example/anthropic/test/api_key
 `agent` is the **issued-to subject of the credential that made the call**, not
 the process, session, host, or person behind it.
 
-In cloud mode the server derives it once per request from the verified API-key
-claims, and never from request input:
+When served by the hosted API the server derives it once per request from the
+verified API-key claims, and never from request input:
 
 ```ts
 const actor = decision.principal.agent ?? decision.principal.kid;
 ```
 
 That subject is fixed at issuance — `issue-key --agent <name>`, see
-[Cloud service](#cloud-service-self_hosted) — and is covered by the token
+[Hosted service](#hosted-service) — and is covered by the token
 signature, so a caller can neither assert nor override it. No endpoint accepts an
 agent *identity* parameter: `/v1/secrets/get` takes `key` and nothing else, and
 an unknown `agent` query parameter or header is ignored rather than rejected.
 (`POST /v1/users` does take a `type` of `human` or `agent`; that is a user record
-kind, not the identity of the caller.) In local mode the same column is instead
-filled from `AGENT_ID ?? USER ?? hostname()`, which *is* self-asserted. The two
-modes populate one column from two sources with different trust properties; read
-the mode before reading the value.
+kind, not the identity of the caller.) In the local vault the same column is
+instead filled from `AGENT_ID ?? USER ?? hostname()`, which *is* self-asserted.
+The two transports populate one column from two sources with different trust
+properties; read which transport served the row before reading the value.
 
 The consequence that matters when interpreting a row: **every caller sharing one
 key collapses to one `agent` value.** A deployment in which many callers share a
@@ -135,9 +135,9 @@ narrow the access to a machine either, so it must not be described as
 machine-attributed; that claims a narrowing the record does not contain.
 
 Distinct per-caller attribution therefore comes from distinct credentials, each
-issued with its own `--agent`. In cloud mode it is not reachable by any
+issued with its own `--agent`. Against the hosted API it is not reachable by any
 client-side change, because the client does not supply this value at all; in
-local mode the value is whatever the calling process asserts, which is a
+the local vault the value is whatever the calling process asserts, which is a
 different property and not a substitute for it.
 
 Inspect metadata-only secret reference health:
@@ -294,9 +294,10 @@ values copied from request context.
 
 The `agent` field below describes the intended contract for these grant-aware
 events. On the existing `get` / `set` / `delete` rows it is not a per-caller
-identity but the identity resolved for the caller by the active mode — the
-credential's issued-to subject in cloud mode, the process environment in local
-mode — and it carries exactly the attribution that source carries; see
+identity but the identity resolved for the caller by the active transport — the
+credential's issued-to subject against the hosted API, the process environment
+in the local vault — and it carries exactly the attribution that source
+carries; see
 [What the `agent` column attributes](#what-the-agent-column-attributes).
 A resolver implementing these events inherits that limit: it cannot narrow an
 access below the granularity of the identity available to it.
@@ -704,54 +705,33 @@ secrets export-env --dir ~/.secrets --dry-run
 secrets export-env --dir ~/.secrets --force
 ```
 
-## Storage Sync
+## Shared storage and migration
 
-This package supports optional remote storage sync directly against a Postgres/RDS
-database. Local SQLite remains the default.
+Ordinary CLI, MCP, and default library access use the authenticated API. Clients
+never connect directly to PostgreSQL or select a local SQLite vault. The service
+owns its database and encryption configuration.
 
-```bash
-export HASNA_SECRETS_DATABASE_URL=postgres://...
-
-secrets storage status
-secrets storage push
-secrets storage pull
-secrets storage sync
-```
-
-The remote storage URL can also be provided as the short non-deprecated fallback
-`SECRETS_DATABASE_URL`.
-
-For a managed deployment, point `HASNA_SECRETS_DATABASE_URL` at your own
-Postgres/RDS database. Deployment-specific infrastructure identifiers (the
-database cluster name and the AWS Secrets Manager path that holds the runtime
-`database_url`) are supplied by your hosting layer — this package ships no real
-cluster names or secrets-manager paths. `SECRETS_DATABASE_URL` remains supported
-as a rollback/local fallback. Do not print rows or values from the database;
-status commands expose only redacted URLs, table names, and non-secret metadata.
-
-MCP exposes the same flow through `storage_status`, `storage_push`,
-`storage_pull`, and `storage_sync`.
+For an existing vault, use the explicit `migrate-vault --source ... --key-file ...`
+protocol described in [lossless migration](docs/lossless-vault-migration.md). Keep the
+source until destination verification and the separate retirement checks finish.
+This command does not delete the source.
 
 ## Data Directory
 
-This section is about the **opt-in local vault** (`HASNA_SECRETS_LOCAL_VAULT=1`);
-a hosted run creates no file under any data home. The local data home resolves
-through the in-package data-home resolver (XDG/macOS home layout; the only
-`@hasna/paths` kind this package kept). The legacy default is `~/.hasna/secrets`;
-once the resolver (XDG) data home is adopted (`HASNA_DATA_HOME` set, or the vault
-already migrated to `~/.local/share/hasna/secrets` on Linux /
-`~/Library/Application Support/Hasna/secrets` on macOS), the vault database, key
-material and the AWS sync state resolve there instead. Nothing moves on disk
-until the store is physically migrated. `HASNA_HOME` is **not** consulted here:
-it replaces `~/.hasna` only for the `@hasna/contracts` credential file
-(`<HASNA_HOME>/secrets/config/credentials`), while the local vault stays at the
-home the test-isolation guard protects; move it with `HASNA_DATA_HOME` or the
-file-level overrides. No `~/.config/hasna` (or other XDG config/state/cache)
-location is composed by this package.
-The `~/.secrets` env-file bridge (import-env/export-env) is a separate legacy
-credential store and is unchanged. File-level overrides (`HASNA_SECRETS_DB_PATH`,
-`HASNA_SECRETS_KEY_DIR`, `HASNA_SECRETS_AWS_SYNC_STATE`) still win on top of
-the effective root.
+Ordinary clients keep account credentials and necessary client configuration on
+disk, but never create or copy `vault.db` or its journal/WAL/SHM sidecars. Browser
+serve tokens and AWS client configuration use a separate config-directory helper
+that cannot migrate vault/key files.
+
+Explicit `LocalStore` construction remains a storage-library compatibility handle
+for existing local fixtures and migration tooling. Its historical data/key path
+rules are not ordinary CLI/MCP selectors. `HASNA_SECRETS_LOCAL_VAULT`,
+`HASNA_SECRETS_DB_PATH`, and `OPEN_SECRETS_DB` are rejected by ordinary store
+resolution, including when API credentials are also configured. Use an explicit
+migration source rather than deleting credentials to select a different vault.
+The scanner reads explicitly requested files as bytes and does not initialize
+SQLite. The migration reader opens an existing file read-only without schema
+upgrades or implicit key creation.
 
 ```bash
 secrets path
@@ -801,13 +781,11 @@ printf 'HASNA_SECRETS_API_KEY="%s"\n' "$KEY" > ~/.hasna/secrets/config/credentia
 chmod 600 ~/.hasna/secrets/config/credentials
 ```
 
-**With NO credential from any tier the CLI and MCP FAIL CLOSED** — non-zero exit
-with an error naming every tier that was consulted — instead of silently serving
-local SQLite (owner ruling 2026-09-04). The LOCAL vault is served only behind the
-explicit `HASNA_SECRETS_LOCAL_VAULT=1` opt-in (standalone or offline use, local
-`serve`/MCP bridges), which prints one line on stderr saying the run is local.
-The opt-in yields to a credential: a station that holds a hosted key stays
-hosted.
+**Without an account credential, ordinary CLI and MCP data access fail closed.**
+Configure the canonical API credentials or saved account credential tier. Local
+selection flags (`--local`, `--local-vault`, `--db`, `--db-path`, `--storage-mode`)
+are rejected. Utility help and explicitly sourced migration/scanning remain
+separate from ordinary store resolution.
 
 Retired and inert, never read: `~/.hasna/fleet-env`, `~/.hasna/cloud`,
 `~/.config/hasna`, `$XDG_CONFIG_HOME`, and every `*_MODE` / `*_STORAGE_MODE`
@@ -815,6 +793,12 @@ variable — the transport is decided by the credential and the authority alone.
 `SECRETS_API_URL` / `SECRETS_API_KEY` remain accepted as a **silent alias for one
 release**; the canonical `HASNA_SECRETS_*` names are the supported spelling and
 no longer shadowed by them.
+
+Maintenance commands act on the active vault. API maintenance now verifies the configured runtime key and all four
+payload tables. `encrypt-vault` requires `secrets:migrate` and repairs plaintext
+atomically; unreadable ciphertext fails closed. KMS backing is not attested,
+and KMS setup still requires a separate operator-managed capability. See
+[verified encryption maintenance](docs/ENCRYPTION_MAINTENANCE.md).
 
 ## Safety Notes
 
@@ -880,7 +864,7 @@ Notes:
 - A test that genuinely needs to exercise the hosted transport should inject a
   fake `fetchImpl`, not point a real one at a remote host.
 
-## Cloud service (`self_hosted`)
+## Hosted service
 
 Beyond the local vault, `@hasna/secrets` ships a deployable HTTP service and a
 typed SDK. Four surfaces cover the same core:
@@ -897,7 +881,7 @@ typed SDK. Four surfaces cover the same core:
   exports the same API. The client resolves its credential and base URL through
   the shared [`@hasna/contracts` resolver](#credentials-five-tiers) — never a DSN.
 
-Storage is **PURE REMOTE (Amendment A1)** in cloud mode: `secrets-serve` reads
+Storage is **PURE REMOTE (Amendment A1)** on the hosted service: `secrets-serve` reads
 and writes the shared Postgres directly (no cache, no local mirror). Secret and
 vault-item values are **encrypted at rest** (AES-256-GCM) with a master key
 injected via `HASNA_SECRETS_MASTER_KEY` — the service fails closed without it.
@@ -956,3 +940,26 @@ Migrations live in [`migrations/`](migrations) (canonical checksummed set in
 ## License
 
 Apache-2.0 -- see [LICENSE](LICENSE)
+
+Migration protocol: [lossless vault migration](docs/lossless-vault-migration.md). This is separate from generic export/import and never deletes the source vault.
+
+### Shared expiry collection
+
+`secrets gc` calls `POST /v1/secrets/prune-expired` with `secrets:write`. The service compares expiration using its own clock, deletes only the authenticated tenant's expired rows and commits their audit records in the same transaction. A key renewed while collection waits for its row lock is rechecked and preserved. Invalid expiry data or audit failure aborts the transaction. This requires the updated service; clients do not fall back to deleting a stale metadata list. Secret version history and key ownership records remain preserved.
+
+### Required PostgreSQL acceptance tests
+
+`bun run test:postgres` executes all three dedicated PostgreSQL suites (lossless
+migration, encryption maintenance, and expiry pruning) without skips. CI runs
+this gate in `secrets live PostgreSQL`; missing suites, missing case output,
+failures, and skips fail the gate. Repository branch protection must require the
+`secrets-live-postgres` job before this becomes a protected merge requirement.
+
+Use only a disposable PostgreSQL fixture with the `secrets_test` administrative
+user and `secrets_test` database on literal `127.0.0.1` with an explicit port:
+`SECRETS_TEST_DATABASE_URL=postgresql://secrets_test@127.0.0.1:5432/secrets_test bun run test:postgres`.
+The runner rejects other targets and clears ambient credentials. Each suite
+creates and removes unique schemas and non-superuser/non-BYPASSRLS serving roles;
+the administrative fixture role is used only for schema/role setup and inspection.
+No production credentials or database resets are used. The older `test:pg`
+store proof remains available independently.

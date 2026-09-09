@@ -108,6 +108,8 @@ function publishedResourceContract() {
 export type V1StubResources = Record<string, Array<Record<string, unknown>>>;
 
 export interface V1StubOptions {
+  /** Test-only fixed loopback port for listener-collision regressions; default 0 asks the OS. */
+  port?: number;
   /** Bearer key the stub requires (default: a fixed test key). */
   apiKey?: string;
   /** Initial resources. Also used as the baseline restored by `reset()`. */
@@ -907,7 +909,10 @@ function messageCounts() {
 }
 
 const server = Bun.serve({
-  port: 0,
+  // Match the announced origin exactly. On macOS a wildcard socket may share
+  // a port with a live 127.0.0.1 fixture, whose handler then receives our calls.
+  hostname: "127.0.0.1",
+  port: Number(process.env.V1_STUB_PORT),
   async fetch(req) {
     const url = new URL(req.url);
     const parts = url.pathname.replace(/^\/+|\/+$/g, "").split("/");
@@ -1619,15 +1624,18 @@ const server = Bun.serve({
       const patch = await req.json().catch(function () { return {}; });
       if (resource === "messages") {
         // Mirror the real server updateMessageStatus: a raw labels array is
-        // IGNORED; the labels column is rebuilt from add_label/remove_label and
-        // the archived flag (guards the client label-write contract in tests).
+        // IGNORED; the labels column is rebuilt from add_label/remove_label and the
+        // folder flags (archived/is_spam/is_trash — the reserved folder labels),
+        // which guards the client label-write contract in tests.
         var labels = Array.isArray(e.labels) ? e.labels.slice() : [];
         var norm = function (v) { return String(v).trim().toLowerCase(); };
         if (typeof patch.add_label === "string" && !labels.some(function (l) { return norm(l) === norm(patch.add_label); })) labels.push(patch.add_label);
         if (typeof patch.remove_label === "string") labels = labels.filter(function (l) { return norm(l) !== norm(patch.remove_label); });
         if (typeof patch.archived === "boolean") { labels = labels.filter(function (l) { return norm(l) !== "archived"; }); if (patch.archived) labels.push("archived"); }
+        if (typeof patch.is_spam === "boolean") { labels = labels.filter(function (l) { return norm(l) !== "spam"; }); if (patch.is_spam) labels.push("spam"); }
+        if (typeof patch.is_trash === "boolean") { labels = labels.filter(function (l) { return norm(l) !== "trash"; }); if (patch.is_trash) labels.push("trash"); }
         var rest = Object.assign({}, patch);
-        delete rest.add_label; delete rest.remove_label; delete rest.labels;
+        delete rest.add_label; delete rest.remove_label; delete rest.is_spam; delete rest.is_trash; delete rest.labels;
         Object.assign(e, rest, { labels: labels, updated_at: new Date().toISOString() });
       } else {
         Object.assign(e, patch, { updated_at: new Date().toISOString() });
@@ -1709,6 +1717,10 @@ const MANAGED_ENV_KEYS: readonly string[] = Object.freeze([
  *   afterEach(() => stub.clearEnv());
  */
 export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> {
+  const port = options.port ?? 0;
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error("v1-stub port must be an integer between 0 and 65535");
+  }
   const apiKey = options.apiKey ?? DEFAULT_API_KEY;
   const initialSeed = JSON.stringify(options.seed ?? {});
   let priorEnv: Record<string, string | undefined> | undefined;
@@ -1716,6 +1728,7 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
   const proc = Bun.spawn(["bun", "-e", SERVER_SRC], {
     env: {
       ...process.env,
+      V1_STUB_PORT: String(port),
       V1_STUB_API_KEY: apiKey,
       V1_STUB_MANAGED_PROVIDERS: options.managedProviders === true ? "1" : "",
       V1_STUB_SEED: initialSeed,

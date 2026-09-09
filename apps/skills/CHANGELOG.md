@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.5.8
+
+### Patch Changes
+
+- 3751ba8: Accept boolean private execution capability reports while keeping publication and separately approved execution independent.
+
+  Widen publication recovery `executionEnabled` from literal false to `boolean | null`: existing recovery receipts report null because they do not contain a server capability observation. Align CLI/MCP output and guidance so publication is not confused with execution authorization.
+
+- 2e4ec23: Add a provider-neutral injected operation client with bounded immutable JSON, stable request identities, explicit status lookup, abort handling, and unknown-outcome errors without automatic retry. Credentials, authorization, IPC and provider execution remain the embedder's responsibility.
+
+## 0.5.7
+
+### Patch Changes
+
+- 3b903ec: Own image-profile configuration and resolved runtime projections, reject ambiguous dependency-layer keys, and capture admission identity, input digest, dependencies, policy, and limits before asynchronous lookups. Return independent admission projections so caller changes cannot rewrite stored runs through service results.
+
+## 0.5.6
+
+### Patch Changes
+
+- 1a35248: Fix AWS SigV4 query encoding and bytewise ordering so S3 requests support Unicode filenames and reserved punctuation. Preserve repeated query parameters and empty values when signing.
+- 791e0cf: Preserve valid Unicode and punctuation input filenames through quoted SDK, CLI, and MCP submissions. Match the API's 255-character basename contract while refusing separators, controls, malformed Unicode, dot paths, and duplicate names before network requests.
+
+## 0.5.5
+
+### Patch Changes
+
+- d0dcfde: Preserve opaque server quote receipts across SDK, CLI and MCP approval and submission, including exact input-file descriptors and owned upload bytes. Keep the originally approved quote instead of refreshing it, and reject malformed receipts or HTTP admission refusals without retrying.
+- 31d4b67: Preserve ambiguous ECS launch and stop states until the exact task is observed. Missing or partial task listings no longer permit replacement launches, and cancellation receipts require confirmed STOPPED state.
+
+  Bind every AWS ECS operation to one explicit cluster, collect bounded complete task-list pagination, and reject partial AWS responses. The optional cluster setting supports reconciliation after a client restart. Historical cancelled runs also require fresh stop proof before idempotent acceptance.
+
+- 0fae2f6: Use the gateway's /skills/v1 resource path while preserving separately selected commercial and custom instances. Add OSS server /v1 resource, health, and API-key identity aliases that delegate existing handlers. Reject unsupported interactive internal gateway login before transmitting account input; the independent internal origin and auth adapter remain integration requirements.
+- 3425e26: Add an explicit capability-gated private source publication SDK, CLI and MCP lifecycle with fresh workspace sessions, exact version UUID comparison, immutable recovery bundles and lost-response reconciliation. Existing registry publishing and private execution semantics remain unchanged.
+- 4b83999: Require a regular, bounded ownership marker before pruning a stale skill directory. Preserve directories when their marker or directory identity changes before removal, including symlink, malformed and foreign replacements.
+
+## 0.5.4
+
+### Patch Changes
+
+- 16d2ecb: Preserve known hosted quote refusal codes and display fixed, useful messages in the SDK and CLI. Unknown or malformed failures keep the safe generic HTTP error; server-controlled text is never displayed.
+
+## 0.5.3
+
+### Patch Changes
+
+- 0343a7e: Expose a bounded asynchronous bundle inspector and deterministic packer through the SDK. Uploaded gzip/ustar bundles can now be validated with streaming decompression, finite byte/path/entry/deadline budgets, strict archive checks, owned file buffers and no filesystem writes or execution. Existing synchronous unpack callers remain unchanged and must migrate separately for untrusted input.
+- e9e0eb6: Expose bounded entry-based canonical content hashing and same-entry manifest verification without extraction, preserving directory hashes. Export the existing content revision identity through supported SDK entrypoints.
+- 97ff397: Add explicit invitation email recovery to SDK and CLI, plus a separate two-tool MCP stdio mode. Preserve caller challenge IDs, bounded proof input, uncertain outcomes and unchanged credentials; require ordinary sign-in after acceptance.
+- 7e99f9a: Add explicitly confirmed workspace invitation operations to the SDK, CLI and MCP. Fresh verification binds the observed account and current membership, validates bounded results, preserves saved credentials and retains caller idempotency for uncertain issue or resend outcomes. Acceptance secrets use stdin or masked terminal input.
+
+## 0.5.2
+
+### Patch Changes
+
+- 5788bee: Add explicitly confirmed workspace self-leave through the SDK, CLI and MCP. Fresh verification stays bound to the observed membership and selected profile; uncertain outcomes never retry or modify saved credentials.
+
+## 0.5.1
+
+### Patch Changes
+
+- Keep fresh-auth MCP account, workspace member, and API-key operations bound to the live user and membership of the host's named credential profile. Capture authority per invocation, refuse stale or revoked profiles without default-workspace fallback, and return safe key-operation errors without persisting JWTs or mutating global profile selection.
+- Add fresh-auth CLI workspace discovery and explicit named-profile membership enrollment. Verify the selected session and newly issued key before saving, preserve unrelated profiles, and retain the live selected workspace for subsequent fresh-auth account, member, and key operations. Reject stale metadata, unsafe or oversized profile storage, and viewer key enrollment without adding persistent JWT sessions.
+- Add SDK workspace discovery and ephemeral session selection with explicit user and membership validation. Fresh-auth account, workspace, member and key operations can preserve a selected workspace after verification without changing saved keys or profiles. Existing default-workspace callers remain compatible.
+
 ## 0.5.0
 
 ### Minor Changes

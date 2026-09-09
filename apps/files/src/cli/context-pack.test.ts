@@ -75,6 +75,11 @@ describe("context-pack CLI", () => {
       HOME: testDir!,
       HASNA_HOME: testDir!,
       HASNA_CONFIG_HOME: testDir!,
+      // Keychain account pin: the spawned child's resolver reads HASNA_STATION
+      // else the short hostname else USER, so a real macOS keychain item under
+      // this machine's account would resolve next to the fake authority the
+      // child pins below. A sentinel account no item uses keeps the tier a miss.
+      HASNA_STATION: "files-hermetic-no-such-station",
     };
 
     for (const args of [["context-pack", "open-files://file/f_missing"], ["search-pack", "anything"]]) {

@@ -72,7 +72,7 @@ async function fetchCatalogPage(
   }
 }
 
-export async function discover(provider: Provider, env: Record<string, string | undefined> = process.env, resolveCredential?: CatalogCredentialResolver): Promise<Catalog> {
+async function discoverBase(provider: Provider, env: Record<string, string | undefined> = process.env, resolveCredential?: CatalogCredentialResolver): Promise<Catalog> {
   const refreshedAt = new Date().toISOString();
   if (provider.manualModels.length) return {models: provider.manualModels, source: "manual", refreshedAt};
   if (provider.catalogFormat === "none")
@@ -127,6 +127,7 @@ export async function discover(provider: Provider, env: Record<string, string | 
       const candidate = {
         id, name: row.displayName ?? row.name ?? row.display_name ?? id,
         available: provider.catalogFormat === "mistral" && typeof row.archived === "boolean" ? !row.archived : undefined,
+        expiresOn: row.expiresOn ?? row.expires_on,
         description: typeof row.description === "string" ? row.description.slice(0, 8000) : undefined,
         contextWindow: positive(row.context_length ?? row.context_window ?? row.contextLength ?? row.inputTokenLimit ?? row.model_info?.context_window ?? (provider.catalogFormat === "mistral" ? row.max_context_length : undefined)),
         maxOutputTokens: positive(row.top_provider?.max_completion_tokens ?? row.max_output_tokens ?? row.outputTokenLimit ?? row.model_info?.max_output_tokens),
@@ -220,4 +221,13 @@ export async function discover(provider: Provider, env: Record<string, string | 
     seenCursors.add(cursor); url.searchParams.set("after_id", cursor); url.searchParams.set("limit", "1000");
   }
   throw new Fault(502, "catalog_too_large", "Provider catalog pagination exceeded 100 pages.");
+}
+
+/** Add operator metadata only after remote pagination counts have been reconciled. */
+export async function discover(provider: Provider, env: Record<string, string | undefined> = process.env, resolveCredential?: CatalogCredentialResolver): Promise<Catalog> {
+  const catalog = await discoverBase(provider, env, resolveCredential);
+  const models = new Map(catalog.models.map(model => [model.id, model]));
+  for (const additional of provider.additionalModels ?? []) models.set(additional.id, {...models.get(additional.id), ...additional});
+  if (models.size > 10000) throw new Fault(502, "catalog_too_large", "Combined catalog exceeds 10,000 models.");
+  return {...catalog, models: [...models.values()]};
 }

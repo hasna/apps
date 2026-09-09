@@ -2,21 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createChannel } from "../lib/channels.js";
-import { subscribeToChannelNotifications } from "../lib/channel-notifications.js";
-import { closeDb } from "../lib/db.js";
-import { sendMessage } from "../lib/messages.js";
-import {
-  isolatedStoreChildEnv,
-  pinStoreToDb,
-  restoreStoreEnv,
-} from "../lib/store/isolated-test-env.js";
-
-const TEST_DB = join(
-  tmpdir(),
-  `conversations-watch-baseline-${Date.now()}-${process.pid}.db`,
-);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+import { getStore } from "../lib/store/index.js";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../lib/store/test-support/client-environment.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+let restore:()=>void;
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 const WATCHER = "watch-baseline-agent";
 const CHANNEL = "watch-baseline-channel";
 const PREARM_DM = "PREARMDMTOKEN";
@@ -24,24 +15,8 @@ const PREARM_CHANNEL = "PREARMCHANNELTOKEN";
 const LIVE_DM = "LIVEDMTOKEN";
 const LIVE_CHANNEL = "LIVECHANNELTOKEN";
 
-beforeEach(() => {
-  pinStoreToDb(TEST_DB);
-  closeDb();
-});
-
-afterEach(() => {
-  closeDb();
-  try {
-    unlinkSync(TEST_DB);
-  } catch {}
-  try {
-    unlinkSync(`${TEST_DB}-wal`);
-  } catch {}
-  try {
-    unlinkSync(`${TEST_DB}-shm`);
-  } catch {}
-  restoreStoreEnv();
-});
+beforeEach(async () => { fixture=await startLoopbackApiFixture(); restore=activateClientEnvironment(fixture.env); });
+afterEach(async () => { try { await fixture.stop(); } finally { restore(); } });
 
 function countOccurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
@@ -84,25 +59,24 @@ function capture(
 
 describe("conversations watch arm-time baseline", () => {
   test("emits readiness without replaying pre-arm traffic, then emits post-arm traffic once", async () => {
-    createChannel(CHANNEL, "fixture");
-    subscribeToChannelNotifications(CHANNEL, WATCHER);
-    sendMessage({ from: "alice", to: WATCHER, content: PREARM_DM });
-    sendMessage({
+    await getStore().createChannel(CHANNEL, "fixture");
+    await getStore().subscribeToChannelNotifications(CHANNEL, WATCHER);
+    await getStore().sendMessage({ from: "alice", to: WATCHER, content: PREARM_DM });
+    await getStore().sendMessage({
       from: "bob",
       to: CHANNEL,
       channel: CHANNEL,
       session_id: `channel:${CHANNEL}`,
       content: PREARM_CHANNEL,
     });
-    closeDb();
 
     const proc = Bun.spawn({
       cmd: [...CLI, "watch", "--all", "--from", WATCHER, "--interval", "20"],
       cwd: process.cwd(),
-      env: isolatedStoreChildEnv(TEST_DB, {
+      env: { ...fixture.env,
         FORCE_COLOR: "0",
         NO_COLOR: "1",
-      }),
+      },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -123,15 +97,14 @@ describe("conversations watch arm-time baseline", () => {
         () => stderr,
       );
 
-      sendMessage({ from: "carol", to: WATCHER, content: LIVE_DM });
-      sendMessage({
+      await getStore().sendMessage({ from: "carol", to: WATCHER, content: LIVE_DM });
+      await getStore().sendMessage({
         from: "dave",
         to: CHANNEL,
         channel: CHANNEL,
         session_id: `channel:${CHANNEL}`,
         content: LIVE_CHANNEL,
       });
-      closeDb();
 
       await waitForOutput(() => stdout, LIVE_DM, () => stderr);
       await waitForOutput(() => stdout, LIVE_CHANNEL, () => stderr);

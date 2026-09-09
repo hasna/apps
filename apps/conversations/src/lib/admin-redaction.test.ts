@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 import { closeDb, getDb } from "./db.js";
 import { exportMessages, getMessageById, searchMessages, sendMessage } from "./messages.js";
 import { redactMessagesById } from "./admin-redaction.js";
-import { clearStoreEnv, pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
+import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 import { HERMETIC_STATION } from "../test/hermetic.js";
 
 const TEST_ROOT = join(tmpdir(), `conversations-redaction-test-${Date.now()}`);
@@ -72,37 +72,25 @@ function seedLeakedMessage(opts: {
 }
 
 describe("redactMessagesById", () => {
-  test("refuses to run when conversations is flipped to the HTTP API", () => {
+  test("the local redaction does not gate on the transport: an API pair beside the store path changes nothing", () => {
     const msg = seedLeakedMessage({ content: markerContent() });
 
-    // Simulate an API client-flip: remove the explicit local DB path override and
-    // export API url + key so isCloudStore() resolves to the HTTP API.
-    clearStoreEnv();
+    // The store path (already pinned by beforeEach) is the ONLY selector of the
+    // local store. Exporting an API pair beside it must not change what the
+    // local redaction does — transport routing lives in getStore(), not here.
     process.env.HASNA_CONVERSATIONS_API_URL = "https://conversations.example.invalid";
     process.env.HASNA_CONVERSATIONS_API_KEY = ["fixture", "not", "a", "credential"].join("-");
-    // Ambient credential isolation: the shared resolver's DISK tier
-    // (~/.hasna/conversations/config/credentials) outranks the env tier, so
-    // on a provisioned station the fixture URL above is REFUSED as written
-    // for a different authority before isCloudStore() can answer (green on
-    // CI, red on the station). Anchor the home-layout roots at the test root
-    // — no credentials file can exist there — so the disk tier consults
-    // nothing on both kinds of machine.
-    const savedHomeRoots = new Map(
-      ["HOME", "HASNA_HOME", "HASNA_CONFIG_HOME"].map((name) => [name, process.env[name]]),
-    );
-    for (const name of savedHomeRoots.keys()) process.env[name] = TEST_ROOT;
     try {
-      expect(() => redactMessagesById({
+      const result = redactMessagesById({
         ids: [msg.id],
         actor: "security",
-        reason: "test cloud guard",
-      })).toThrow("flipped to the HTTP API");
+        reason: "test transport-agnostic local redaction",
+      });
+      expect(result.dry_run).toBe(true);
+      expect(result.matched_count).toBe(1);
     } finally {
-      pinStoreToDb(TEST_DB);
-      for (const [name, value] of savedHomeRoots) {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
-      }
+      delete process.env.HASNA_CONVERSATIONS_API_URL;
+      delete process.env.HASNA_CONVERSATIONS_API_KEY;
     }
   });
 

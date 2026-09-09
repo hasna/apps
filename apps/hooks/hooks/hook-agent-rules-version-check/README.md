@@ -43,7 +43,7 @@ export HOOKS_FLEET_TIMEOUT_MS=500               # configs CLI timeout (default 5
 
 ## Requirements
 
-- `configs` CLI (@hasna/configs) — optional; without it the hook falls back to cross-artifact consistency checking
+- `configs` CLI (@hasna/instructions — the package that ships the `configs` bin) — optional; without it the hook falls back to cross-artifact consistency checking
 
 ## Event
 

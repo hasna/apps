@@ -68,6 +68,7 @@ import {
   MailboxFilterConflictError,
   MailboxFilterInputError,
   MailboxFilterNotFoundError,
+  normalizeMailboxFilterApplyBody,
 } from "../../lib/mailbox-filters.js";
 import {
   humanLimitBytes,
@@ -152,6 +153,8 @@ const MESSAGE_PATCH_FIELDS = new Set([
   "is_read",
   "is_starred",
   "archived",
+  "is_spam",
+  "is_trash",
   "add_label",
   "remove_label",
   "body_text",
@@ -2275,6 +2278,8 @@ export async function handleSelfHostedRequest(
           body.is_read !== undefined ||
           body.is_starred !== undefined ||
           body.archived !== undefined ||
+          body.is_spam !== undefined ||
+          body.is_trash !== undefined ||
           body.add_label !== undefined ||
           body.remove_label !== undefined;
         let rec = statusTouched
@@ -2284,6 +2289,8 @@ export async function handleSelfHostedRequest(
               is_read: typeof body.is_read === "boolean" ? body.is_read : undefined,
               is_starred: typeof body.is_starred === "boolean" ? body.is_starred : undefined,
               archived: typeof body.archived === "boolean" ? body.archived : undefined,
+              is_spam: typeof body.is_spam === "boolean" ? body.is_spam : undefined,
+              is_trash: typeof body.is_trash === "boolean" ? body.is_trash : undefined,
               add_label: typeof body.add_label === "string" ? body.add_label : undefined,
               remove_label: typeof body.remove_label === "string" ? body.remove_label : undefined,
             })
@@ -2700,12 +2707,32 @@ export async function handleSelfHostedRequest(
       const isApply = path.endsWith("/apply");
       if (isApply) {
         if (method !== "POST") return json(405, { error: "method not allowed" });
-        const auth = await authenticate(deps, req, url, read);
+        // An absent/empty body or `{"mutate":false}` keeps the existing
+        // list-only apply (read authorization). `{"mutate":true}` performs a
+        // write and is therefore checked against write authorization BEFORE any
+        // message changes. Malformed non-object bodies and non-boolean `mutate`
+        // values are refused by the body reader / normalizer (400 invalid_input).
+        const { mutate } = normalizeMailboxFilterApplyBody(await readJsonBody(req));
+        const auth = await authenticate(deps, req, url, mutate ? write : read);
         if (!auth.ok) return auth.response;
         const result = await auth.store.applyMailboxFilter(identifier, {
           limit: queryInt(url, "limit"),
           offset: queryInt(url, "offset"),
+          mutate,
         });
+        if (result.mutate === true) {
+          return json(200, {
+            filter: result.filter,
+            items: [],
+            limit: result.limit,
+            offset: 0,
+            truncated: false,
+            mutate: true,
+            matched: result.matched ?? 0,
+            updated: result.updated ?? 0,
+            unchanged: result.unchanged ?? 0,
+          });
+        }
         return json(200, {
           filter: result.filter,
           items: result.page.items.slice(0, result.limit).map(publicMessageListItem),

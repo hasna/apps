@@ -1001,12 +1001,15 @@ public final class RecordingEngine: ObservableObject {
         RecordingEngine.focusedWindowTitle(pid: $0)
     }
     var commandCLI: @Sendable (_ args: [String], _ home: String, _ timeout: TimeInterval) -> String = { args, home, ceiling in
-        // The caller's timeout is the public ceiling on *observable* wall time. CLIRunner's
+        // The caller supplies the remaining public budget after queue admission. CLIRunner's
         // total deadline (execution, termination grace, kill grace, pipe drain) sits a full
         // return margin below it: spawn setup, waitid poll granularity, capture shutdown,
         // and the hop back to the caller all run outside CLIRunner's clamped waits and must
         // fit inside the reserved margin.
         let cliDeadline = ceiling - RecordingEngine.commandRewriteReturnMargin
+        guard cliDeadline > CLIRunner.wallClockCleanupReserve else {
+            return "ERROR: \(CLIRunner.ExecutionError.deadlineExhausted.localizedDescription)"
+        }
         return CLIRunner.run(args, home: home, timeout: cliDeadline, totalWallClockBudget: cliDeadline)
     }
     /// Resolves and revalidates the frozen rewrite target immediately before a rewrite:
@@ -1238,6 +1241,23 @@ public final class RecordingEngine: ObservableObject {
     /// *observable* rewrite time under the public ceiling even when the execution window,
     /// termination grace, and pipe drain all run to exhaustion.
     nonisolated static let commandRewriteReturnMargin: TimeInterval = 1
+
+    /// Create this operation synchronously before awaiting the blocking queue: creating
+    /// its deadline inside the submitted closure would give delayed work a fresh budget.
+    nonisolated static func makeCommandRewriteOperation(
+        args: [String],
+        home: String,
+        runCLI: @escaping @Sendable ([String], String, TimeInterval) -> String,
+        deadline: CLIRunner.WallClockDeadline = .init(after: commandRewriteTimeout)
+    ) -> @Sendable () -> String {
+        return {
+            let remaining = min(commandRewriteTimeout, deadline.remaining())
+            guard remaining > commandRewriteReturnMargin + CLIRunner.wallClockCleanupReserve else {
+                return "ERROR: \(CLIRunner.ExecutionError.deadlineExhausted.localizedDescription)"
+            }
+            return runCLI(args, home, remaining)
+        }
+    }
     /// Wait before each read-back of the target app's focused field. The window server
     /// delivers the posted keystroke asynchronously and the app then does its own work, so a
     /// read taken on the posting turn would report "unchanged" for a paste that is simply
@@ -1823,8 +1843,8 @@ public final class RecordingEngine: ObservableObject {
         // The selection is still frozen for every recording (not only an exposed "command
         // mode"), so a later command decision can only ever act on the exact text and
         // element that were selected when the user started speaking. The Accessibility IPC
-        // that reads it runs on a detached task, concurrently with recorder start: the
-        // microphone must never wait on a beachballing target app, and the MainActor stays
+        // that reads it runs on a blocking-work queue, concurrently with recorder start:
+        // neither the microphone nor a cooperative worker waits on a beachballing app. The MainActor stays
         // free to process the key-up that stops the recording. Skipped entirely when intent
         // detection is off — no command route exists to consume it.
         let shouldCaptureSelection = Self.shouldCaptureSelection(
@@ -1837,12 +1857,14 @@ public final class RecordingEngine: ObservableObject {
         let windowTitleLookup = focusedWindowTitleLookup
         let windowTitlePid = frontmostApp?.pid
         let axSnapshotTask = Task.detached(priority: .userInitiated) { () -> RecordingStartAXSnapshot in
-            let selectionToken = shouldCaptureSelection ? capturePid.flatMap { captureSelection($0) } : nil
-            let focusedWindowTitle = windowTitlePid.flatMap { windowTitleLookup($0) }
-            return RecordingStartAXSnapshot(
-                selectionToken: selectionToken,
-                focusedWindowTitle: focusedWindowTitle
-            )
+            await BlockingOperation.run {
+                let selectionToken = shouldCaptureSelection ? capturePid.flatMap { captureSelection($0) } : nil
+                let focusedWindowTitle = windowTitlePid.flatMap { windowTitleLookup($0) }
+                return RecordingStartAXSnapshot(
+                    selectionToken: selectionToken,
+                    focusedWindowTitle: focusedWindowTitle
+                )
+            }
         }
 
         // Project auto-selection and the processing configuration resolve with the
@@ -4101,10 +4123,12 @@ public final class RecordingEngine: ObservableObject {
                 activeProjectId: canonicalProjectId,
                 processingConfiguration: processingConfiguration
             )
-            let runCLI = self.commandCLI
-            let result = await Task.detached {
-                runCLI(rewriteArguments, homePath, Self.commandRewriteTimeout)
-            }.value
+            let rewriteOperation = Self.makeCommandRewriteOperation(
+                args: rewriteArguments,
+                home: homePath,
+                runCLI: self.commandCLI
+            )
+            let result = await BlockingOperation.run(rewriteOperation)
             if self.canOwnBusyState(pipelineGeneration: pipelineGeneration) {
                 self.isTranscribing = false
                 self.liveTranscriptionText = ""
@@ -5092,12 +5116,15 @@ enum CLIRunner: Sendable {
 
     enum ExecutionError: Error, LocalizedError, Equatable {
         case timedOut(executable: String, seconds: TimeInterval)
+        case deadlineExhausted
         case captureFailed(operation: CaptureOperation, code: Int32)
 
         var errorDescription: String? {
             switch self {
             case let .timedOut(executable, seconds):
                 return "Command timed out after \(seconds.formatted()) seconds: \(executable)"
+            case .deadlineExhausted:
+                return "Command timed out: insufficient time remains to start safely."
             case let .captureFailed(operation, code):
                 return "Failed to capture command output while \(operation.description): \(String(cString: strerror(code)))"
             }
@@ -5126,27 +5153,76 @@ enum CLIRunner: Sendable {
         _ lifecycleObserver: ((ProcessLifecycleEvent) -> Void)?
     ) throws -> Int32
 
+    /// An explicit monotonic deadline can cross queue and preparation boundaries without
+    /// resetting the budget. The clock is injectable for deterministic boundary tests.
+    struct WallClockDeadline: Sendable {
+        private let expiresAt: UInt64
+        private let now: @Sendable () -> UInt64
+
+        init(
+            after seconds: TimeInterval,
+            now: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }
+        ) {
+            precondition(seconds.isFinite && seconds >= 0)
+            let startedAt = now()
+            let maximumDelay = min(UInt64(Int64.max), UInt64.max - startedAt)
+            let requested = seconds * 1_000_000_000
+            // Truncate fractional nanoseconds: rounding up could extend the configured
+            // budget and reject its own deadline at a subsequent handoff validation.
+            let delay = requested >= Double(maximumDelay)
+                ? maximumDelay : UInt64(requested)
+            expiresAt = startedAt + delay
+            self.now = now
+        }
+
+        func remaining(reserving reserve: TimeInterval = 0) -> TimeInterval {
+            let current = now()
+            guard expiresAt > current else { return 0 }
+            return max(0, Double(expiresAt - current) / 1_000_000_000 - reserve)
+        }
+    }
+
+    private static func requireStartBudget(_ deadline: WallClockDeadline?) throws {
+        if let deadline, deadline.remaining() <= wallClockCleanupReserve {
+            throw ExecutionError.deadlineExhausted
+        }
+    }
+
     static func run(
         _ args: [String],
         home: String,
         timeout: TimeInterval = 120,
         totalWallClockBudget: TimeInterval? = nil,
-        environment suppliedEnvironment: [String: String]? = nil
+        environment suppliedEnvironment: [String: String]? = nil,
+        wallClockDeadline suppliedDeadline: WallClockDeadline? = nil,
+        environmentProvider: (() throws -> [String: String])? = nil
     ) -> String {
-        let command = resolveCommand(home: home)
-        let arguments = command.argumentsPrefix + args
+        if let totalWallClockBudget {
+            precondition(totalWallClockBudget.isFinite && totalWallClockBudget > wallClockCleanupReserve)
+        }
+        precondition(suppliedDeadline == nil || totalWallClockBudget != nil)
+        let deadline = suppliedDeadline ?? totalWallClockBudget.map { WallClockDeadline(after: $0) }
+        if let suppliedDeadline, let totalWallClockBudget {
+            precondition(suppliedDeadline.remaining() <= totalWallClockBudget)
+        }
         do {
-            let environment = try suppliedEnvironment ?? ServiceAPIConfiguration.childEnvironment(
+            try requireStartBudget(deadline)
+            let command = resolveCommand(home: home)
+            let arguments = command.argumentsPrefix + args
+            try requireStartBudget(deadline)
+            let environment = try suppliedEnvironment ?? environmentProvider?() ?? ServiceAPIConfiguration.childEnvironment(
                 base: OpenAIAPIKeyStore.childEnvironment(base: ProcessInfo.processInfo.environment.merging([
                     "PATH": "\(home)/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
                 ]) { _, new in new }, homePath: home)
             )
+            try requireStartBudget(deadline)
             let output = try runExecutable(
                 command.executable,
                 arguments: arguments,
                 environment: environment,
                 executionTimeout: timeout,
-                totalWallClockBudget: totalWallClockBudget
+                totalWallClockBudget: totalWallClockBudget,
+                wallClockDeadline: deadline
             )
             if output.terminationStatus != 0 {
                 let details = output.stderr.isEmpty ? output.stdout : output.stderr
@@ -5194,6 +5270,7 @@ enum CLIRunner: Sendable {
         forceKillGracePeriod: TimeInterval = 1,
         pipeDrainTimeout: TimeInterval = 2,
         totalWallClockBudget: TimeInterval? = nil,
+        wallClockDeadline suppliedDeadline: WallClockDeadline? = nil,
         beforeExecutionDeadline: (() -> Void)? = nil,
         lifecycleObserver: ((ProcessLifecycleEvent) -> Void)? = nil,
         leaderReaper: LeaderReaper? = nil,
@@ -5207,23 +5284,24 @@ enum CLIRunner: Sendable {
             precondition(totalWallClockBudget.isFinite && totalWallClockBudget > wallClockCleanupReserve)
         }
 
-        // The budget clock starts before the spawn so setup latency cannot extend the
-        // observable wall time. Every wait below is clamped to what is left of it.
-        let wallClockDeadline = totalWallClockBudget.map { monotonicUptimeDeadline(after: $0) }
+        precondition(suppliedDeadline == nil || totalWallClockBudget != nil)
+        if let suppliedDeadline, let totalWallClockBudget {
+            precondition(suppliedDeadline.remaining() <= totalWallClockBudget)
+        }
+        // A caller that prepared the command supplies its original deadline. Direct
+        // executable callers begin here; neither path resets a previously spent budget.
+        let wallClockDeadline = suppliedDeadline ?? totalWallClockBudget.map { WallClockDeadline(after: $0) }
         func clampedToWallClockBudget(
             _ phaseTimeout: TimeInterval,
             reserving reserve: TimeInterval = 0
         ) -> TimeInterval {
             guard let wallClockDeadline else { return phaseTimeout }
-            let now = DispatchTime.now().uptimeNanoseconds
-            let remaining = wallClockDeadline > now
-                ? Double(wallClockDeadline - now) / 1_000_000_000 - reserve
-                : 0
-            return max(0, min(phaseTimeout, remaining))
+            return min(phaseTimeout, wallClockDeadline.remaining(reserving: reserve))
         }
         let contractualExecutionTimeout = totalWallClockBudget
             .map { min(executionTimeout, $0 - wallClockCleanupReserve) } ?? executionTimeout
 
+        try requireStartBudget(wallClockDeadline)
         let stdoutReader = try PipeCaptureReader(systemCalls: captureSystemCalls)
         let stderrReader: PipeCaptureReader
         do {
@@ -5237,6 +5315,7 @@ enum CLIRunner: Sendable {
 
         let processIdentifier: pid_t
         do {
+            try requireStartBudget(wallClockDeadline)
             processIdentifier = try spawnProcessGroup(
                 executable,
                 arguments: arguments,
@@ -5416,6 +5495,30 @@ enum CLIRunner: Sendable {
             )
         }
 
+        // CLOEXEC_DEFAULT also closes stdin unless it is explicitly inherited. Keep
+        // the existing stdin behavior, including an already closed/CLOEXEC stream;
+        // a capture pipe that reused fd 0 must still be closed by the actions above.
+        if !inheritedDescriptors.contains(STDIN_FILENO) {
+            var inputFlags: Int32
+            repeat {
+                inputFlags = Darwin.fcntl(STDIN_FILENO, F_GETFD)
+            } while inputFlags == -1 && errno == EINTR
+            let inputError = errno
+            if inputFlags == -1 && inputError != EBADF {
+                throw NSError(
+                    domain: NSPOSIXErrorDomain,
+                    code: Int(inputError),
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to inspect command standard input"]
+                )
+            }
+            if inputFlags >= 0 && inputFlags & FD_CLOEXEC == 0 {
+                try checkPOSIX(
+                    posix_spawn_file_actions_addinherit_np(&fileActions, STDIN_FILENO),
+                    operation: "inherit command standard input"
+                )
+            }
+        }
+
         var attributes: posix_spawnattr_t?
         try checkPOSIX(posix_spawnattr_init(&attributes), operation: "initialize spawn attributes")
         defer { posix_spawnattr_destroy(&attributes) }
@@ -5432,7 +5535,10 @@ enum CLIRunner: Sendable {
             posix_spawnattr_setsigmask(&attributes, &unblockedSignals),
             operation: "unblock command signals"
         )
-        let spawnFlags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK
+        // A different reader may still be between pipe() and FD_CLOEXEC setup.
+        // Inherit only our explicit standard streams, never that unrelated pipe.
+        let spawnFlags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF
+            | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT
         try checkPOSIX(
             posix_spawnattr_setflags(&attributes, Int16(spawnFlags)),
             operation: "configure command process group"

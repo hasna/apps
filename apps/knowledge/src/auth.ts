@@ -7,8 +7,8 @@ import {
   HasnaHttpError,
   keychainConfigValue,
   resolveCredential,
-  type CredentialTier,
 } from '@hasna/contracts/client';
+import type { CredentialTier } from './contracts-types.js';
 import { ownAgentClaim, ownTenantId, parseApiKey } from '@hasna/contracts/auth';
 import {
   KNOWLEDGE_API_KEY_ENV,

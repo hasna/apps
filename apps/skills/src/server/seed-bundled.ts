@@ -26,6 +26,8 @@ import { join } from "node:path";
 import type { ArtifactStorage } from "./artifact-storage.js";
 import { listServerSkills } from "./registry.js";
 import { storePublishedSkill } from "./skills-api.js";
+import { revisionIdOfRecord } from "../lib/revision.js";
+import { SkillRevisionConflictError } from "./types.js";
 import type { ApiPrincipal, SkillsProductStore } from "./types.js";
 
 export interface SeedBundledCorpusOptions {
@@ -55,6 +57,20 @@ export async function seedBundledCorpus(options: SeedBundledCorpusOptions): Prom
         result.skipped.push(slug);
         continue;
       }
+      const current = await options.store.getSkill(options.principal, slug);
+      if (current) {
+        const previousVersion = current.version
+          ? await options.store.getSkillVersion(options.principal, slug, current.version) : null;
+        const provenance = previousVersion?.manifest.provenance as Record<string, unknown> | undefined;
+        // Source and bundle hash alone do not establish ownership: metadata edits keep
+        // both. Legacy seeds without revision provenance remain untouched conservatively.
+        if (current.tombstonedAt || current.source !== "bundled"
+          || provenance?.seededFrom !== "bundled-corpus"
+          || provenance.seededRevisionId !== current.revisionId) {
+          result.skipped.push(slug);
+          continue;
+        }
+      }
       const dir = getSkillPath(slug);
       if (!existsSync(dir)) {
         result.skipped.push(slug);
@@ -64,29 +80,34 @@ export async function seedBundledCorpus(options: SeedBundledCorpusOptions): Prom
       const packed = packSkillBundle(dir, { maxUnpackedBytes: 50_000_000 });
       const skillMdPath = join(dir, "SKILL.md");
       const skillMd = existsSync(skillMdPath) ? readFileSync(skillMdPath, "utf-8") : undefined;
-      const current = await options.store.getSkill(options.principal, slug);
+      const content = {
+        slug,
+        displayName: manifest.displayName ?? skill.displayName ?? slug,
+        description: manifest.description ?? skill.description ?? slug,
+        category: manifest.category ?? skill.category ?? "Development Tools",
+        tags: manifest.tags ?? skill.tags ?? [],
+        source: "bundled",
+        kind: manifest.kind ?? "instruction",
+        version,
+        ...(skillMd ? { skillMd } : {}),
+        bundleSha256: packed.sha256,
+        bundleByteSize: packed.bytes.byteLength,
+      };
       const { record } = await storePublishedSkill(
         options.store,
         options.artifactStorage,
         options.principal,
         {
           input: {
-            slug,
-            displayName: manifest.displayName ?? skill.displayName ?? slug,
-            description: manifest.description ?? skill.description ?? slug,
-            category: manifest.category ?? skill.category ?? "Development Tools",
-            tags: manifest.tags ?? skill.tags ?? [],
-            source: "bundled",
-            kind: manifest.kind ?? "instruction",
-            version,
-            ...(skillMd ? { skillMd } : {}),
+            ...content,
+            seedBundledOnly: true,
             bundle: { sha256: packed.sha256, byteSize: packed.bytes.byteLength, contentType: "application/gzip", storageKind: "db" },
             versionManifest: {
               files: packed.paths,
               fileCount: packed.fileCount,
               unpackedByteSize: packed.unpackedByteSize,
               bundleSha256: packed.sha256,
-              provenance: { seededFrom: "bundled-corpus", packageVersion: pkg.version },
+              provenance: { seededFrom: "bundled-corpus", packageVersion: pkg.version, seededRevisionId: revisionIdOfRecord(content) },
             },
           },
           bundleBytes: packed.bytes,
@@ -95,7 +116,8 @@ export async function seedBundledCorpus(options: SeedBundledCorpusOptions): Prom
       );
       result.seeded.push(`${record.slug}@${version}`);
     } catch (error) {
-      result.failed.push({ slug, error: (error as Error).message });
+      if (error instanceof SkillRevisionConflictError) result.skipped.push(slug);
+      else result.failed.push({ slug, error: (error as Error).message });
     }
   }
   log(`skills: bundled corpus seed v${version}: ${result.seeded.length} seeded, ${result.skipped.length} skipped, ${result.failed.length} failed`);

@@ -1,3 +1,4 @@
+import { encryptionReceipt } from "./encryption-fixture.js";
 import { describe, it, expect } from "bun:test";
 import type { HasnaStorageClient } from "../src/store/client.js";
 import { ApiStore, getStore, LocalStore, SecretDecryptionError } from "../src/store/index.js";
@@ -35,11 +36,12 @@ describe("secrets Store resolver (env flip)", () => {
     expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/HASNA_SECRETS_API_KEY/);
     // Every tier the resolver consulted is named, and so is the local opt-in.
     expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/Keychain/);
-    expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/HASNA_SECRETS_LOCAL_VAULT/);
+    expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/No local vault is opened/);
   });
 
-  it("resolves LocalStore only under the explicit local-vault opt-in", () => {
-    const store = getStore({ HASNA_SECRETS_LOCAL_VAULT: "1" } as NodeJS.ProcessEnv);
+  it("rejects local selection while retaining explicit LocalStore construction", () => {
+    expect(() => getStore({ HASNA_SECRETS_LOCAL_VAULT: "1" })).toThrow("no longer supported");
+    const store = new LocalStore();
     expect(store).toBeInstanceOf(LocalStore);
     expect(store.mode).toBe("local");
   });
@@ -172,13 +174,26 @@ describe("ApiStore route mapping", () => {
     expect(calls.some((c) => c[0] === "POST" && c[1] === "/feedback")).toBe(true);
   });
 
-  it("encryptVault throws in api mode (server owns encryption)", async () => {
-    const store = new ApiStore(fakeClient({}).client);
-    await expect(store.encryptVault()).rejects.toThrow(/api mode/);
+  it("encryptVault requires complete server-verified repair evidence for every payload table", async () => {
+    const receipt=encryptionReceipt();receipt.tables.secret_versions.repaired=1;
+    const {client,calls}=fakeClient({"POST /encryption/repair":receipt,"GET /encryption/status":receipt});
+    const store=new ApiStore(client);
+    expect(await store.encryptVault()).toEqual({migrated:1,alreadyEncrypted:3});
+    expect((await store.encryptionStatus()).verified).toBe(true);
+    expect(calls.map(c=>c.slice(0,2))).toEqual([["POST","/encryption/repair"],["GET","/encryption/status"]]);
+    for(const invalid of [{}, {...receipt,complete:false},{...receipt,tables:{}},{...receipt,verified:false}]) {
+      await expect(new ApiStore(fakeClient({"POST /encryption/repair":invalid}).client).encryptVault()).rejects.toThrow();
+    }
   });
 
-  it("pruneExpired is a no-op in api mode", async () => {
-    expect(await new ApiStore(fakeClient({}).client).pruneExpired()).toBe(0);
+  it("pruneExpired uses the atomic server operation and validates its receipt", async () => {
+    const { client, calls } = fakeClient({ "POST /secrets/prune-expired": { pruned: 2 } });
+    expect(await new ApiStore(client).pruneExpired()).toBe(2);
+    expect(calls.map(c => c.slice(0, 2))).toEqual([["POST", "/secrets/prune-expired"]]);
+    for (const receipt of [{}, { pruned: -1 }, { pruned: "2" }, { pruned: 0.5 }]) {
+      const store = new ApiStore(fakeClient({ "POST /secrets/prune-expired": receipt }).client);
+      await expect(store.pruneExpired()).rejects.toThrow("Invalid expired-secret pruning receipt");
+    }
   });
 
   it("versioning: listVersions reads { versions }, checkVersion reads { check }, restoreVersion POSTs /secrets/restore", async () => {
