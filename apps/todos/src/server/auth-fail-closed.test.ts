@@ -16,7 +16,10 @@
  * Test 1 FAILS against the pre-fix code (the process starts and answers 200).
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, setDefaultTimeout } from "bun:test";
+// Spawns child processes (CLI/server/scripts); bun's 5s default is too tight on a loaded host.
+setDefaultTimeout(60_000);
+
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,6 +86,66 @@ async function waitForExit(proc: ReturnType<typeof Bun.spawn>, timeoutMs: number
   return Promise.race([exited, timeout]);
 }
 
+/**
+ * The documented DEFAULT posture: no credential, no explicit DB path, no local
+ * opt-in — what a fresh install has.
+ *
+ * `localRoutingTestEnv` deliberately turns the local opt-in ON, so the refusal
+ * tests above exercise a store the process CAN open. That is exactly why they
+ * could not catch the regression these two tests pin: with no local opt-in the
+ * store's client-fallback guard fired before the auth posture was resolved, and
+ * the documented refusal was replaced by an internal storage error.
+ */
+function defaultPostureEnv(home: string): Record<string, string | undefined> {
+  const env = localRoutingTestEnv({
+    HOME: home,
+    HASNA_TODOS_DB_PATH: undefined,
+    TODOS_DB_PATH: undefined,
+    TODOS_AUTO_PROJECT: "false",
+  });
+  delete env["HASNA_TODOS_LOCAL"];
+  delete env["TODOS_LOCAL"];
+  return env;
+}
+
+/**
+ * Mint a generated API key into `dbPath` through the same `createApiKey()` the
+ * `todos api-keys create` command calls, restoring the process env afterwards.
+ */
+function mintStoredKey(dbPath: string): void {
+  const previousDbPath = process.env["TODOS_DB_PATH"];
+  process.env["TODOS_DB_PATH"] = dbPath;
+  resetDatabase();
+  getDatabase();
+  createApiKey({ name: "stored-key startup probe" });
+  closeDatabase();
+  resetDatabase();
+  if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+  else process.env["TODOS_DB_PATH"] = previousDbPath;
+}
+
+/** Read a live stream until `marker` appears (or the deadline passes). */
+async function readUntil(stream: ReadableStream<Uint8Array>, marker: string, timeoutMs: number): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  const deadline = Date.now() + timeoutMs;
+  let text = "";
+  try {
+    while (!text.includes(marker) && Date.now() < deadline) {
+      const remaining = Math.max(1, deadline - Date.now());
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise<{ done: true; value: undefined }>((resolve) => setTimeout(() => resolve({ done: true, value: undefined }), remaining)),
+      ]);
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value as Uint8Array, { stream: true });
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* stream already closed */ }
+  }
+  return text;
+}
+
 // ── 1. Unconfigured => refuse to start (this is the fail-open regression) ─────
 describe("unconfigured server fails closed", () => {
   let tmpDir: string;
@@ -142,6 +205,89 @@ describe("unconfigured server fails closed", () => {
       expect(exitCode).not.toBeNull();
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("--allow-anonymous is refused");
+    } finally {
+      proc.kill();
+      await proc.exited;
+    }
+  }, HOOK_TIMEOUT_MS);
+
+  it("refuses in the documented DEFAULT posture with the auth refusal, not the store's internal fallback error", async () => {
+    // Regression: `getDatabase()` ran before `resolveAuthPosture()`, and the
+    // store refuses to open implicitly without the local opt-in — so the
+    // default path (no credential, no DB path, no opt-in) died with
+    // API_DATABASE_FALLBACK_FORBIDDEN and the documented refusal never printed.
+    // `bun run verify:release` / `prepublishOnly` install-smoke asserts exactly
+    // this output.
+    const port = reserveFreePort(19800 + Math.floor(Math.random() * 100));
+    const proc = spawnServer(port, defaultPostureEnv(tmpDir));
+
+    try {
+      const exitCode = await waitForExit(proc, 15_000);
+      const stderr = await new Response(proc.stderr as ReadableStream).text();
+      expect(exitCode).not.toBeNull();
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("HASNA_TODOS_SERVER_API_KEY");
+      expect(stderr).toContain("refusing to start");
+      expect(stderr).not.toContain("API_DATABASE_FALLBACK_FORBIDDEN");
+      expect(stderr).not.toContain("Todos HTTP server running at");
+    } finally {
+      proc.kill();
+      await proc.exited;
+    }
+  }, HOOK_TIMEOUT_MS);
+
+  it("still starts for the documented --allow-anonymous local-dev path without the local opt-in", async () => {
+    // The other half of the same contract: the server IS an explicit storage
+    // handle, so it must open the local store even when the client-fallback
+    // guard would refuse an implicit open. The gate's install-smoke requires
+    // this startup line.
+    const port = reserveFreePort(19850 + Math.floor(Math.random() * 100));
+    const proc = spawnServer(port, defaultPostureEnv(tmpDir), ["--allow-anonymous"]);
+
+    try {
+      const stdout = await readUntil(proc.stdout as ReadableStream<Uint8Array>, "Todos HTTP server running at", 15_000);
+      expect(stdout).toContain("Todos HTTP server running at");
+    } finally {
+      proc.kill();
+      await proc.exited;
+    }
+  }, HOOK_TIMEOUT_MS);
+});
+
+// ── 1b. A stored generated key IS a documented credential source ──────────────
+describe("a stored generated key authorizes startup without the local opt-in", () => {
+  let tmpDir: string;
+
+  beforeAll(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "todos-stored-key-"));
+  });
+
+  afterAll(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("starts and enforces auth on a store that already holds a live generated key", async () => {
+    // Regression (0.16.0): the posture read the key through the ambient client
+    // singleton, which the client-fallback guard refuses without the local
+    // opt-in — so a store that DID hold a live key looked empty (the guard threw
+    // API_DATABASE_FALLBACK_FORBIDDEN, the catch returned false) and the server
+    // refused to start where published 0.15.52 started and enforced auth. The
+    // shipped README's auth table lists "at least one `todos api-keys create`
+    // key exists" as a credential source with no opt-in caveat.
+    const port = reserveFreePort(20100 + Math.floor(Math.random() * 100));
+    const dbPath = join(tmpDir, "stored-key.db");
+    mintStoredKey(dbPath);
+
+    const proc = spawnServer(port, {
+      ...defaultPostureEnv(tmpDir),
+      TODOS_DB_PATH: dbPath,
+    });
+    try {
+      const stdout = await readUntil(proc.stdout as ReadableStream<Uint8Array>, "Todos HTTP server running at", 15_000);
+      expect(stdout).toContain("Todos HTTP server running at");
+      expect(stdout).toContain("at least one active generated API key");
+      // The enforced plane really is up: an anonymous data read is refused.
+      expect((await fetch(localUrl(port, "/api/stats"))).status).toBe(401);
     } finally {
       proc.kill();
       await proc.exited;

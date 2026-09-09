@@ -242,14 +242,14 @@ export class ConversationsCloudInTestError extends Error {
   readonly indicators: string[];
   readonly degraded: boolean;
 
-  constructor(host: string, signal: TestRuntimeSignal, dbPathKeys: readonly string[]) {
+  constructor(host: string, signal: TestRuntimeSignal, _dbPathKeys: readonly string[]) {
     super(
       `Refusing to hand a test process the PRODUCTION conversations store at ${host}. ` +
         `This process looks like a test runner (${signal.indicators.join(", ")})` +
         (signal.degraded ? " — and at least one probe failed, so the detector failed closed" : "") +
         `, and the store was resolved from the ambient environment rather than from an env passed by the caller. ` +
         `The fleet exports the API URL and key into every shell, so this would have read and written the live deployment. ` +
-        `Set ${dbPathKeys.join(" or ")} to an isolated file to use a local store, ` +
+        `Configure an isolated loopback API fixture with synthetic credentials, ` +
         `pass an explicit env object to getStore() to name your own target, ` +
         `or set ${ALLOW_CLOUD_IN_TESTS_ENV_KEY}=1 if you genuinely mean to reach production.`,
     );

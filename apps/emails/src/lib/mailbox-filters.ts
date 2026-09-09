@@ -15,6 +15,29 @@ export interface MailboxFilterCriteria {
   since?: string;
   until?: string;
 }
+
+/**
+ * The ACTIONS a matching filter performs on a message: labels to add, archive
+ * and mark-read. `archive:false` and `mark_read:false` mean "no action" — they
+ * are never pushed as unarchive/unread status patches.
+ */
+export interface MailboxFilterActions {
+  add_labels: string[];
+  archive: boolean;
+  mark_read: boolean;
+}
+
+export const DEFAULT_MAILBOX_FILTER_ACTIONS: MailboxFilterActions = {
+  add_labels: [],
+  archive: false,
+  mark_read: false,
+};
+
+/** New and migrated filters default to disabled so nothing auto-acts on ingest. */
+export function defaultMailboxFilterActions(): MailboxFilterActions {
+  return { add_labels: [], archive: false, mark_read: false };
+}
+
 export interface MailboxFilter {
   id: string;
   /** Present on self-hosted responses; local SQLite is implicitly tenant-scoped. */
@@ -23,6 +46,12 @@ export interface MailboxFilter {
   normalized_name: string;
   mailbox: Mailbox;
   criteria: MailboxFilterCriteria;
+  /** Actions applied when an enabled filter matches a new message. */
+  actions: MailboxFilterActions;
+  /** Whether the filter auto-applies to newly imported messages. */
+  enabled: boolean;
+  /** Execution order for enabled filters: `order ASC, id ASC`. */
+  order: number;
   created_at: string;
   updated_at: string;
 }
@@ -32,6 +61,19 @@ export interface MailboxFilterInput {
   mailbox?: string;
   folder?: string;
   criteria?: Partial<MailboxFilterCriteria> & { folder?: string; mailbox?: string };
+  /**
+   * A canonical `MailboxFilterActions` object (the update path re-passes a
+   * stored/normalized value) or a raw partial with extra members tolerated.
+   * `normalizeMailboxFilterActions` accepts either at the boundary.
+   */
+  actions?: MailboxFilterActions | (Partial<MailboxFilterActions> & Record<string, unknown>);
+  enabled?: boolean;
+  order?: number;
+}
+
+/** Request body accepted by `POST …/{id}/apply`. */
+export interface MailboxFilterApplyInput {
+  mutate?: boolean;
 }
 
 export class MailboxFilterInputError extends Error {
@@ -86,6 +128,77 @@ function trueFlag(value: unknown, field: string): true | undefined {
   return true;
 }
 
+function normalizedBoolean(value: unknown, field: string): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value !== "boolean") throw new MailboxFilterInputError(`${field} must be boolean`);
+  return value;
+}
+
+function normalizedOrder(value: unknown): number {
+  if (value === undefined || value === null) return 0;
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new MailboxFilterInputError("order must be an integer");
+  }
+  if (value < 0 || value > 2147483647) {
+    throw new MailboxFilterInputError("order must be between 0 and 2147483647");
+  }
+  return value;
+}
+
+function normalizedStringArray(value: unknown, field: string): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new MailboxFilterInputError(`${field} must be an array of strings`);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") throw new MailboxFilterInputError(`${field} entries must be strings`);
+    const normalized = entry.trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+/**
+ * Normalize a filter's ACTIONS block. Omitted actions default to no-op; labels
+ * are trimmed/lowercased, emptied and deduplicated (first occurrence wins).
+ * Booleans are strict — `"true"`, `1`, `"yes"` are refused, not coerced.
+ */
+export function normalizeMailboxFilterActions(value: unknown): MailboxFilterActions {
+  if (value === undefined || value === null) return defaultMailboxFilterActions();
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new MailboxFilterInputError("actions must be an object");
+  }
+  const input = value as Record<string, unknown>;
+  const add_labels = normalizedStringArray(input.add_labels, "actions.add_labels");
+  const archive = normalizedBoolean(input.archive, "actions.archive");
+  const mark_read = normalizedBoolean(input.mark_read, "actions.mark_read");
+  return { add_labels, archive, mark_read };
+}
+
+/**
+ * Shared validation for the `POST …/{id}/apply` request body. Absent/empty
+ * bodies and `{"mutate":false}` keep the existing list-only behavior.
+ */
+export function normalizeMailboxFilterApplyBody(body: unknown): { mutate: boolean } {
+  if (body === undefined || body === null) return { mutate: false };
+  if (typeof body !== "object" || Array.isArray(body)) {
+    throw new MailboxFilterInputError("apply request body must be a JSON object");
+  }
+  const mutate = normalizedBoolean((body as Record<string, unknown>).mutate, "mutate");
+  return { mutate };
+}
+
+/** Merge a raw PATCH actions object over the stored (canonical) actions. */
+export function mergeMailboxFilterActions(
+  current: MailboxFilterActions,
+  patch: Partial<MailboxFilterActions> | undefined,
+): MailboxFilterActions {
+  if (patch === undefined) return current;
+  return normalizeMailboxFilterActions({ ...current, ...patch });
+}
+
 export function normalizeMailboxFilterCriteria(
   value: Partial<MailboxFilterCriteria> | undefined,
 ): MailboxFilterCriteria {
@@ -117,6 +230,9 @@ export function normalizeMailboxFilterInput(input: MailboxFilterInput): {
   normalized_name: string;
   mailbox: Mailbox;
   criteria: MailboxFilterCriteria;
+  actions: MailboxFilterActions;
+  enabled: boolean;
+  order: number;
 } {
   const name = typeof input.name === "string" ? input.name.trim() : "";
   const normalized_name = normalizeMailboxFilterName(name);
@@ -126,7 +242,18 @@ export function normalizeMailboxFilterInput(input: MailboxFilterInput): {
     throw new MailboxFilterInputError(`mailbox must be one of ${MAILBOXES.join(", ")}`);
   }
   const criteria = normalizeMailboxFilterCriteria(criteriaInput);
-  return { name, normalized_name, mailbox: mailboxValue.trim().toLowerCase() as Mailbox, criteria };
+  const actions = normalizeMailboxFilterActions(input.actions);
+  const enabled = normalizedBoolean(input.enabled, "enabled");
+  const order = normalizedOrder(input.order);
+  return {
+    name,
+    normalized_name,
+    mailbox: mailboxValue.trim().toLowerCase() as Mailbox,
+    criteria,
+    actions,
+    enabled,
+    order,
+  };
 }
 
 export function criteriaToMailboxListOptions(

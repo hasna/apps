@@ -65,8 +65,9 @@ explicit job retry.
 Ready means these configuration checks passed and the address records committed.
 It does not prove a running ingest worker or successful end-to-end mail delivery.
 No test message is sent. Domain purchase/setup, `provision up`, the domain-level
-retry command, daemon, and roundtrip acceptance remain separate unimplemented
-workflows.
+retry command and daemon remain separate unimplemented workflows.
+Use [`provision roundtrip`](ROUNDTRIP.md) to send a bounded delivery probe through
+the configured API and verify exact receipt markers in the shared inbox.
 
 API routes: `POST /v1/provision/address`, `GET /v1/provision/jobs/{id}`, and
 `POST /v1/provision/jobs/{id}/run`. SDK methods are `provisionAddress`,

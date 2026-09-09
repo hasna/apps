@@ -211,8 +211,8 @@ describe("self-hosted container TLS contract", () => {
         /\bdocker run --(?:rm|detach) --platform "\$platform"/g,
       ),
     ];
-    expect([...runtimeSmoke.matchAll(/\bdocker run\b/g)]).toHaveLength(4);
-    expect(runCommands).toHaveLength(4);
+    expect([...runtimeSmoke.matchAll(/\bdocker run\b/g)]).toHaveLength(6);
+    expect(runCommands).toHaveLength(6);
 
     expect(runtimeSmoke).toContain(
       "actual_platform=\"$(docker image inspect --format '{{.Os}}/{{.Architecture}}' \"$candidate_image\")\"",
@@ -300,9 +300,14 @@ describe("self-hosted container TLS contract", () => {
   });
 
   test("locks runtime copy semantics and ownership", () => {
+    expect(packageJson.repository).toEqual({
+      type: "git",
+      url: "git+https://github.com/hasna/apps.git",
+      directory: "apps/emails",
+    });
     expect(scratchStage).toContain("ARG VERSION=dev");
     expect(scratchStage).toContain("ARG REVISION=unknown");
-    expect(scratchStage).toContain('org.opencontainers.image.source="https://github.com/hasna/emails"');
+    expect(scratchStage).toContain('org.opencontainers.image.source="https://github.com/hasna/apps"');
     expect(scratchStage).toContain('org.opencontainers.image.version="$VERSION"');
     expect(scratchStage).toContain('org.opencontainers.image.revision="$REVISION"');
     expect(scratchStage.match(/^COPY .+$/gm)).toEqual([
@@ -346,57 +351,25 @@ describe("self-hosted container TLS contract", () => {
     expect(dockerfile).toContain("process.env.PORT");
   });
 
-  test("probes the endpoint the configured storage backend actually serves", async () => {
-    // THE HEALTHCHECK AND THE SERVER MUST AGREE ON ONE SETTING, and until this change they
-    // did not. The healthcheck keyed on the deployment word and treated its ABSENCE as the
-    // PostgreSQL arm (`/ready`), while src/server/index.ts treated the same absence as the
-    // SQLite arm (the dashboard, which serves no `/ready`). A container started with no
-    // deployment word therefore ran the dashboard and was probed for a route it does not
-    // have — permanently unhealthy, with no configuration error anywhere to explain it.
-    // Both now read EMAILS_DATABASE_URL, so they cannot disagree on any input.
+  test("production health requires PostgreSQL readiness and never accepts dashboard availability", async () => {
     expect(dockerfile).not.toContain("EMAILS_MODE=");
     expect(runtimeSmoke).not.toContain("EMAILS_MODE");
-    expect(runtimeSmoke).toContain(
-      'fetch("http://127.0.0.1:8080/api/providers?limit=1")',
-    );
-    expect(runtimeSmoke).not.toContain(
-      'fetch("http://127.0.0.1:8080/ready")',
-    );
-    expect(healthcheckScript).toContain("EMAILS_DATABASE_URL");
-    expect(healthcheckScript).not.toContain("EMAILS_MODE");
-
-    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
-      ...args: string[]
-    ) => (...args: unknown[]) => Promise<void>;
-    const selectedUrl = async (databaseUrl?: string) => {
-      let url: string | undefined;
-      let exitCode: number | undefined;
-      const env = databaseUrl === undefined
-        ? { PORT: "8123" }
-        : { EMAILS_DATABASE_URL: databaseUrl, PORT: "8123" };
+    expect(runtimeSmoke).toContain('fetch("http://127.0.0.1:8080/ready")');
+    expect(runtimeSmoke).not.toContain("/api/providers?limit=1");
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (...args: string[]) => (...args: unknown[]) => Promise<void>;
+    async function probe(databaseUrl: string | undefined, responseOk = true, throws = false) {
+      let url: string | undefined, exitCode: number | undefined;
       await new AsyncFunction("process", "fetch", healthcheckScript)(
-        { env, exit: (code: number) => { exitCode = code; } },
-        async (input: string) => {
-          url = input;
-          return { ok: true };
-        },
+        { env: { EMAILS_DATABASE_URL: databaseUrl, PORT: "8123" }, exit: (code: number) => { exitCode = code; } },
+        async (input: string) => { url = input; if (throws) throw Error("fixture unavailable"); return { ok: responseOk }; },
       );
-      expect(exitCode).toBe(0);
-      return url;
-    };
-
-    // A blank or whitespace-only value is NOT a configuration: the deploy path injects this
-    // variable from a secret, and an unresolved secret arrives as the empty string. Both
-    // the healthcheck and src/server/storage-backend.ts must read that as SQLite, or the
-    // probe and the process disagree in exactly the case that is hardest to diagnose.
-    for (const blank of [undefined, "", "   "]) {
-      expect(await selectedUrl(blank)).toBe("http://127.0.0.1:8123/api/providers?limit=1");
+      return { url, exitCode };
     }
-    for (const configured of [
-      "postgres://operator.invalid/emails",
-      "  postgres://operator.invalid/emails  ",
-    ]) {
-      expect(await selectedUrl(configured)).toBe("http://127.0.0.1:8123/ready");
+    for (const blank of [undefined, "", "   "]) expect(await probe(blank)).toEqual({ url: undefined, exitCode: 1 });
+    for (const configured of ["postgres://operator.invalid/emails", "  postgres://operator.invalid/emails  "]) {
+      expect(await probe(configured)).toEqual({ url: "http://127.0.0.1:8123/ready", exitCode: 0 });
+      expect((await probe(configured, false)).exitCode).toBe(1);
+      expect((await probe(configured, false, true)).exitCode).toBe(1);
     }
   });
 
@@ -413,19 +386,20 @@ describe("self-hosted container TLS contract", () => {
     expect(readinessLoop).not.toContain('--network "container:$container"');
   });
 
-  test("mounts a private writable SQLite directory for the read-only local runtime", () => {
-    const serviceRunStart = runtimeSmoke.indexOf("docker run --detach");
-    const serviceRun = runtimeSmoke.slice(
-      serviceRunStart,
-      runtimeSmoke.indexOf('"$image" >/dev/null', serviceRunStart),
-    );
-
-    expect(serviceRun).toContain("--read-only");
-    expect(serviceRun).toContain(
-      "--tmpfs /app/data:rw,noexec,nosuid,nodev,mode=0700,uid=1000,gid=1000",
-    );
-    expect(serviceRun).toContain("--env EMAILS_DB_PATH=/app/data/emails.db");
-    expect(runtimeSmoke).not.toContain("/tmp/emails.db");
+  test("smokes the read-only service against an isolated non-bypass PostgreSQL fixture", () => {
+    expect(runtimeSmoke).toContain('docker network create --internal "$network"');
+    expect(runtimeSmoke).toContain("NOSUPERUSER NOBYPASSRLS");
+    expect(runtimeSmoke).toContain('"$image" src/cli/index.tsx db migrate');
+    expect(runtimeSmoke).toContain('--env "EMAILS_DATABASE_URL=$fixture_database_url"');
+    expect(runtimeSmoke).toContain('--read-only --network "$network" --name "$container"');
+    expect(runtimeSmoke).toContain('response.status !== 401');
+    expect(runtimeSmoke).toContain("issueSelfHostedApiKey(keys, requireSigningSecret()");
+    expect(runtimeSmoke).toContain("authenticated PostgreSQL API read failed");
+    expect(runtimeSmoke).toContain("canonical API credential CLI read failed");
+    expect(runtimeSmoke).toContain("revoked synthetic API key was not denied");
+    expect(runtimeSmoke).not.toContain("EMAILS_DB_PATH");
+    expect(runtimeSmoke).not.toContain("EMAILS_ALLOW_REMOTE");
+    expect(runtimeSmoke).not.toContain("--publish");
   });
 
   test("allows the readiness probe to outlive the image cold-start health cadence", () => {

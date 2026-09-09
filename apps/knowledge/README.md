@@ -1007,7 +1007,10 @@ the local store (see [Credential resolution](#credential-resolution)).
 `auth login --api-key` writes the canonical credentials file
 `~/.hasna/knowledge/config/credentials` (0600) — the shared chain's DISK tier —
 so `auth whoami` right after a login probes through the file the resolver
-reads; `auth logout` removes it. There is no other local credential store: the
+reads; `auth logout` removes it. `auth login --api-url <url>` always requires
+an explicit `--api-key`: the ambient credential (Keychain item, credentials
+file, `HASNA_KNOWLEDGE_API_KEY`) is never recorded against a caller-supplied
+authority (hasna/apps#1794). There is no other local credential store: the
 legacy `~/.hasna/knowledge/auth.json` is never consulted, and `email`/`org`
 metadata is not persisted (the canonical file format has no fields for it).
 `remote contracts` prints the typed
@@ -1498,7 +1501,15 @@ Every command returns structured JSON when `--json` is passed:
 
 ```bash
 knowledge-mcp
+knowledge-mcp --version   # prints the package version; no server is started
 ```
+
+`knowledge-mcp` resolves its transport at startup through the same
+`@hasna/contracts` chain as the CLI. With no credential in any tier and no
+explicit `HASNA_KNOWLEDGE_LOCAL=1` opt-in it **fails closed before serving**:
+non-zero exit naming the tiers, no stdio transport connected, no port bound,
+`initialize` never answered, nothing created on-box. Every tool call still
+resolves the credential afresh, so a rotation heals a running server.
 
 ## HTTP mode
 

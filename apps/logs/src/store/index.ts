@@ -41,7 +41,9 @@
  */
 import {
   clientTransportEnvKeys,
+  completePointerCredential,
   resolveClientTransport,
+  resolveCredential,
   type ClientTransportConfigurationError,
 } from "@hasna/contracts/client";
 import { resolveStorageClient } from "@hasna/contracts/client/storage";
@@ -180,6 +182,41 @@ export function usesHttpTransport(env: NodeJS.ProcessEnv = process.env): boolean
   } catch (error) {
     if (isClientTransportConfigurationError(error)) return false;
     throw error;
+  }
+}
+
+/**
+ * Prove ONCE that the hosted credential can actually be PRODUCED — without
+ * holding it. {@link resolveStore} selects the transport; for every tier but
+ * the vault pointer that already means a key is in hand. A pointer
+ * (`HASNA_LOGS_API_KEY_REF`) is only shape-checked at selection and completed
+ * through the secrets SDK per request, so a process that cannot complete it
+ * (no `@hasna/secrets`, no secrets-client configuration, an unreachable vault,
+ * an empty item) would start and then refuse every call. The MCP startup gate
+ * calls this so an unresolvable DELIBERATE tier exits before serving
+ * (hasna/apps#1720 validation, round 2). The completed credential is
+ * discarded: the transport re-resolves per request, so a rotation still lands
+ * on the next call, and nothing here logs or returns a value.
+ *
+ * Resolves for a literal tier, and when no tier produced a credential (the
+ * local decision was already made by `resolveStore`). Rejects with the
+ * resolver's own `CredentialResolutionError` — its message names the env key
+ * and, for a pointer, says it is TERMINAL. `env` is passed through by
+ * identity so the ambient Keychain tier stays live (hasna/apps#1788).
+ */
+export async function assertHostedCredentialResolvable(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const resolved = resolveCredential(
+    LOGS_APP_SLUG,
+    env as Record<string, string | undefined>,
+  );
+  if (resolved?.tier === "pointer") {
+    await completePointerCredential(
+      LOGS_APP_SLUG,
+      resolved,
+      env as Record<string, string | undefined>,
+    );
   }
 }
 

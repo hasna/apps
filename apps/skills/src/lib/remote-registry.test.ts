@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildSkillsApiUrl,
   getConfiguredApiUrl,
@@ -9,10 +12,45 @@ import {
   parseRemoteSkillPayload,
 } from "./remote-registry.js";
 import type { SkillMeta } from "./registry.js";
+import { SkillsFleetCredentialError } from "./fleet-credentials.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
+
+// Ambient credential isolation. These cases drive the shared resolver through
+// the LIVE process.env (they set SKILLS_API_URL / SKILLS_API_KEY and call the
+// registry functions bare), and the resolver's DISK tier
+// (~/.hasna/skills/config/credentials) outranks the env tier: on a
+// provisioned station the operator's REAL credential is refused against the
+// fixture authority ("The selected Skills API does not match this
+// credential's instance") instead of the no-credential behavior under test
+// (green on CI, red on the station). Anchoring every home-layout root at the
+// file's scratch dir — no credentials file can exist there — makes the disk
+// tier consult nothing, identically on both kinds of machine.
+const HOME_ROOT_KEYS = ["HOME", "HASNA_HOME", "HASNA_CONFIG_HOME"] as const;
+const scratchHome = mkdtempSync(join(tmpdir(), "skills-registry-home-"));
+// Saved once at load: this package's test script does not run --isolate, so
+// every file in the suite shares ONE process and an anchored root that is not
+// put back would redirect a later file's disk-tier resolution (e.g.
+// registry-reconcile's fixture home) and break it.
+const savedHomeRoots = new Map(HOME_ROOT_KEYS.map((name) => [name, process.env[name]]));
+
+beforeEach(() => {
+  for (const name of HOME_ROOT_KEYS) process.env[name] = scratchHome;
+});
+
+afterEach(() => {
+  for (const name of HOME_ROOT_KEYS) {
+    const value = savedHomeRoots.get(name);
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+});
+
+afterAll(() => {
+  rmSync(scratchHome, { recursive: true, force: true });
+});
 
 describe("remote registry", () => {
   const originalSkillsApiUrl = process.env.SKILLS_API_URL;
@@ -38,17 +76,17 @@ describe("remote registry", () => {
     // collapsed onto the gateway app root — a 404 — so a correctly credentialled
     // install on the default authority could not run `skills list` at all.
     expect(buildSkillsApiUrl("https://api.hasna.com/skills")).toBe(
-      "https://api.hasna.com/skills/api/v1/skills",
+      "https://api.hasna.com/skills/v1/skills",
     );
     expect(buildSkillsApiUrl("https://api.hasna.com/skills", "/skills/demo")).toBe(
-      "https://api.hasna.com/skills/api/v1/skills/demo",
+      "https://api.hasna.com/skills/v1/skills/demo",
     );
   });
 
   test("composes the same URL RemoteSkillsClient does, from the same origin", () => {
     // The two composition sites are handed the same origin by the same
     // resolver; when they disagree, one of them 404s and the other does not.
-    for (const origin of ["https://api.hasna.com/skills", "https://skills.example.com", "http://localhost:3505"]) {
+    for (const origin of ["https://skills.example.com", "http://localhost:3505"]) {
       expect(buildSkillsApiUrl(origin)).toBe(`${origin}/api/v1/skills`);
       expect(buildSkillsApiUrl(origin, "/skills/demo")).toBe(`${origin}/api/v1/skills/demo`);
     }
@@ -316,6 +354,100 @@ describe("remote registry", () => {
     } finally {
       delete process.env.SKILLS_API_KEY;
     }
+  });
+
+  describe("the ambient credential is never attached to a caller-supplied apiUrl (hasna/apps#1794)", () => {
+    // Hermetic: the preload has stripped every credential variable and blinded
+    // the Keychain, so the env tier below is the ONLY credential in reach, and
+    // its authority is the fleet gateway default. HASNA_HOME points at an empty
+    // directory so the disk tier cannot contribute a differently-bound key.
+    const originalHasnaHome = process.env.HASNA_HOME;
+    const originalKey = process.env.HASNA_SKILLS_API_KEY;
+    let hasnaHome = "";
+
+    function armAmbientKey(): void {
+      const { mkdtempSync } = require("node:fs") as typeof import("node:fs");
+      const { tmpdir } = require("node:os") as typeof import("node:os");
+      const { join } = require("node:path") as typeof import("node:path");
+      hasnaHome = mkdtempSync(join(tmpdir(), "skills-remote-registry-1794-"));
+      process.env.HASNA_HOME = hasnaHome;
+      process.env.HASNA_SKILLS_API_KEY = "sk_ambient_never_leaves_its_origin";
+    }
+
+    afterEach(() => {
+      if (originalHasnaHome === undefined) delete process.env.HASNA_HOME;
+      else process.env.HASNA_HOME = originalHasnaHome;
+      if (originalKey === undefined) delete process.env.HASNA_SKILLS_API_KEY;
+      else process.env.HASNA_SKILLS_API_KEY = originalKey;
+      if (hasnaHome) {
+        (require("node:fs") as typeof import("node:fs")).rmSync(hasnaHome, { recursive: true, force: true });
+        hasnaHome = "";
+      }
+    });
+
+    test("loadRemoteRegistry({ apiUrl }) with no authToken refuses INSTANCE_CREDENTIAL_MISMATCH and never fetches", async () => {
+      armAmbientKey();
+      const calls: string[] = [];
+      let thrown: unknown;
+      try {
+        await loadRemoteRegistry({
+          apiUrl: "https://caller-supplied.invalid",
+          fetchImpl: async (input, init) => {
+            calls.push(`${String(input)} auth=${new Headers(init?.headers).has("authorization")}`);
+            return Response.json([]);
+          },
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(calls).toEqual([]);
+      expect(thrown).toBeInstanceOf(SkillsFleetCredentialError);
+      expect((thrown as SkillsFleetCredentialError).code).toBe("INSTANCE_CREDENTIAL_MISMATCH");
+      const message = (thrown as Error).message;
+      expect(message).toContain("https://caller-supplied.invalid");
+      expect(message).toContain("authToken");
+      expect(message).not.toContain("sk_ambient_never_leaves_its_origin");
+    });
+
+    test("loadRemoteSkill(name, { apiUrl }) refuses the same way", async () => {
+      armAmbientKey();
+      let fetched = false;
+      await expect(
+        loadRemoteSkill("remote-demo", {
+          apiUrl: "https://caller-supplied.invalid/api/v1",
+          fetchImpl: async () => {
+            fetched = true;
+            return Response.json({ slug: "remote-demo" });
+          },
+        }),
+      ).rejects.toMatchObject({ code: "INSTANCE_CREDENTIAL_MISMATCH" });
+      expect(fetched).toBe(false);
+    });
+
+    test("the resolved origin itself (spelled as an API base) still gets the ambient key — positive control", async () => {
+      armAmbientKey();
+      const seen: string[] = [];
+      await loadRemoteRegistry({
+        apiUrl: "https://api.hasna.com/skills/api/v1",
+        fetchImpl: async (input, init) => {
+          seen.push(`${String(input)} ${new Headers(init?.headers).get("authorization")}`);
+          return Response.json([]);
+        },
+      });
+      expect(seen).toEqual(["https://api.hasna.com/skills/v1/skills Bearer sk_ambient_never_leaves_its_origin"]);
+    });
+
+    test("an explicit authToken, or authToken: null, is the caller's own decision and goes through", async () => {
+      armAmbientKey();
+      const headers: Array<string | null> = [];
+      const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+        headers.push(new Headers(init?.headers).get("authorization"));
+        return Response.json([]);
+      };
+      await loadRemoteRegistry({ apiUrl: "https://caller-supplied.invalid", authToken: "caller-token", fetchImpl });
+      await loadRemoteRegistry({ apiUrl: "https://caller-supplied.invalid", authToken: null, fetchImpl });
+      expect(headers).toEqual(["Bearer caller-token", null]);
+    });
   });
 
   test("loads a single remote skill from the versioned detail endpoint", async () => {

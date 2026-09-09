@@ -432,20 +432,15 @@ for (const [label, makeStore] of STORE_VARIANTS) {
     });
 
     describe("listEmails and the provider filter", () => {
-      it("REFUSES a provider filter rather than ignoring it", async () => {
+      it("applies the provider filter and returns recorded provenance", async () => {
         seedLedger("a", stamp(1));
-
-        const error = await rejection(listEmails({ provider_id: PROVIDER }, makeStore()));
-
-        expect(error.message).toContain("filtered by provider");
-        expect(error.message).toContain("provider_id");
+        const rows = await listEmails({ provider_id: PROVIDER }, makeStore());
+        expect(rows.map((row) => row.id)).toEqual(["a"]);
+        expect(rows[0]?.provider_id).toBe(PROVIDER);
+        expect(await listEmails({ provider_id: "another-provider" }, makeStore())).toEqual([]);
       });
 
-      // THE COMPLEMENT OF THE REFUSAL, and the reason it is three cases rather than one: an
-      // unconditional guard does not refuse one filter, it takes down every read of the sent
-      // ledger. That is what an early draft of this collapse shipped — every `/api/emails*`
-      // route answered 500, including requests naming no provider at all — and it was found by
-      // an independent reviewer rather than by a test, so it gets tests.
+      // Explicit low-level compatibility keeps absent and blank filters unscoped.
       for (const [what, value] of [
         ["absent", undefined],
         ["empty", ""],
@@ -581,7 +576,7 @@ for (const [label, makeStore] of STORE_VARIANTS) {
 
         const email = await getEmail("rich", makeStore());
 
-        expect(email?.provider_id).toBeNull();
+        expect(email?.provider_id).toBe(PROVIDER);
         expect(email?.bcc_addresses).toBeNull();
         expect(email?.tags).toBeNull();
       });
@@ -1123,9 +1118,8 @@ describe("the local ledger writer, which is what still records a send", () => {
 
     expect(read?.subject).toBe("round trip");
     expect(read?.from_address).toBe("ops@example.com");
-    // And the fields the seam does not publish come back null through the READ even though the
-    // WRITE returned them, which is the shape note in `src/types/index.ts` made concrete.
-    expect(read?.provider_id).toBeNull();
+    // Provider provenance survives the explicit compatibility write/read seam.
+    expect(read?.provider_id).toBe(PROVIDER);
     expect(email.provider_id).toBe(PROVIDER);
   });
 });

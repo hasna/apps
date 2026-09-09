@@ -38,7 +38,7 @@ import {
   type ProjectRegistrationHistoricalAuthorityIdentity,
 } from "../../lib/project-registration.js";
 import { productionProjectRegistrationAuthorities } from "../../lib/production-project-registration-authorities.js";
-import { doctorWorkspace } from "../../lib/workspace-doctor.js";
+import { doctorWorkspaceWithStore } from "../../lib/workspace-doctor.js";
 import { resolveProjectStore, type ProjectStore } from "../../store/project-store.js";
 
 // Drop keys whose value is `undefined` so a hosted PATCH only carries fields the
@@ -3954,9 +3954,11 @@ function registerProjectCommands(program: Command): void {
     .action(async (idOrSlug, opts) => {
       try {
         const store = resolveProjectStore();
+        // Through the Store: a hosted project resolves its root/recipe against
+        // the shared registry and never opens the on-box SQLite (#1720).
         const runDoctor = (project: Workspace) => opts.fix && !opts.dryRun
-          ? withWorkspaceLock(store, project, mutationAgentId(store), "project doctor fix", () => doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, transport: store.transport }))
-          : Promise.resolve(doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, transport: store.transport }));
+          ? withWorkspaceLock(store, project, mutationAgentId(store), "project doctor fix", () => doctorWorkspaceWithStore(store, project, { fix: opts.fix, dryRun: opts.dryRun }))
+          : doctorWorkspaceWithStore(store, project, { fix: opts.fix, dryRun: opts.dryRun });
         const json = wantsJson(opts);
         const limit = json ? undefined : parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
         const results = idOrSlug

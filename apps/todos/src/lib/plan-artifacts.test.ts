@@ -40,7 +40,11 @@ describe("plan Markdown artifacts", () => {
     expect(docs).toContain("<plan-slug>--<id8>.md");
     expect(docs).toContain('plan_slug: "launch-plan"');
     expect(docs).toContain("legacy UUID path");
-    expect(docs).toContain("todos plans --artifact <id-or-slug> --json");
+    // The documented form requires the caller-chosen root; the bare
+    // `--artifact <id-or-slug> --json` form is called out only as the
+    // pre-0.16.0 invocation that now exits non-zero.
+    expect(docs).toContain("todos plans --artifact <id-or-slug> --artifact-root <directory> --json");
+    expect(docs).toContain("--artifact-root is required");
   });
 
   test("resolves project-scoped artifact paths by id and slug", () => {

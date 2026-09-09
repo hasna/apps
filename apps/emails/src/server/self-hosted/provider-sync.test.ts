@@ -8,7 +8,7 @@ it("reports partial pages and provider faults without claiming completeness", as
     listDeliverySyncMessages: async () => [{ id: "a", provider_message_id: "remote-a" }, { id: "b", provider_message_id: "remote-b" }, { id: "c", provider_message_id: "remote-c" }],
     applyDeliveryObservations: async () => ({ inserted: 1, contacts_updated: 0, unattributed: 0 }),
   } as unknown as TenantScopedStore;
-  const result = await syncProviderDelivery(store, "tenant", "provider", { limit: 2, resolveSender: () => ({ provider: "resend", send: async () => "never", readDelivery: async (id) => { seen.push(id); if (id === "remote-b") throw new Error("private exception"); return { observations: [{ type: "delivered" }], evidence: "current_status" }; } }) });
+  const result = await syncProviderDelivery(store, "tenant", "provider", { limit: 2, resolveSender: async () => ({ provider: "resend", send: async () => "never", readDelivery: async (id) => { seen.push(id); if (id === "remote-b") throw new Error("private exception"); return { observations: [{ type: "delivered" }], evidence: "current_status" }; } }) });
   expect(result).toMatchObject({ status: "partial", complete: false, checked: 1, synced: 1, next_cursor: "b" });
   expect(seen).toEqual(["remote-a", "remote-b"]);
   expect(JSON.stringify(result)).not.toContain("private exception");

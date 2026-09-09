@@ -17,6 +17,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import pkg from "../../package.json" with { type: "json" };
 import { resolveServerConfig } from "./config.js";
 import { resolveDatabaseTarget, type DatabaseTarget } from "./database-url.js";
 import { resolveMigrationsDir } from "./migrations-dir.js";
@@ -102,6 +103,28 @@ async function runPostgresMigrations(databaseUrl: string, migrationsDir: string)
 }
 
 if (import.meta.main) {
+  // Binds-before-version class, third bin: --version/--help must answer BEFORE
+  // resolveServerConfig() — they previously fell through to the "database URL
+  // is required" throw and exited 1 with a stack trace. Mirrors the guards in
+  // src/server/index.ts and src/server/worker.ts.
+  const EARLY_ARGV = process.argv.slice(2);
+  if (EARLY_ARGV.includes("--version") || EARLY_ARGV.includes("-V")) {
+    console.log(pkg.version);
+    process.exit(0);
+  }
+  if (EARLY_ARGV.includes("--help") || EARLY_ARGV.includes("-h")) {
+    console.log(`Usage: skills-migrate [options]
+
+Applies pending schema migrations to the configured @hasna/skills database.
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+
+Environment:
+  HASNA_SKILLS_DATABASE_URL  The database to migrate (required; DATABASE_URL is accepted)`);
+    process.exit(0);
+  }
   const config = resolveServerConfig();
   // Fail closed on an unconfigured target, exactly as this entrypoint always has.
   //

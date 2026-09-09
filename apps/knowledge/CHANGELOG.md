@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.3.2
+
+### Patch Changes
+
+- 4cc5626: Fail closed: a hosted Knowledge client with no resolvable credential exits
+  non-zero and touches nothing on-box — no SQLite, no `*-local-fallback` event
+  (hasna/apps#1720 class patch; knowledge 0.3.0/0.3.1 silently dropped an
+  unconfigured process onto the on-box store, the false green incident 715712
+  closes).
+
+  - The on-box store is now reachable ONLY by the explicit opt-in
+    `HASNA_KNOWLEDGE_LOCAL=1` (or an explicit `--store <path>` argument), and
+    local mode prints `local mode` once on stderr. The opt-in is answered before
+    the shared `@hasna/contracts` resolver runs — no Keychain item and no
+    credentials file is read for it — and an environment that configures an
+    authority or credential outranks it (a half-configured run still fails
+    closed).
+  - Every failure — no credential anywhere, a configured authority whose
+    credential does not resolve, a deliberate tier that cannot be honoured —
+    throws the same fail-closed diagnostic naming the opt-in, and the CLI exits
+    non-zero from every surface (CLI, MCP tool, `./sdk`).
+  - The legacy `~/.hasna/knowledge/auth.json` is no longer a credential source:
+    the chain never consults it (a fallback read from a different file would
+    authenticate as a principal the operator did not name). `knowledge auth
+login` now writes the shared chain's DISK tier —
+    `~/.hasna/knowledge/config/credentials` (0600) — so `auth whoami` right
+    after a login probes through the file the resolver reads, and `auth logout`
+    removes it. `email`/`org` metadata is not persisted (the canonical file
+    format has no fields for it); the legacy auth.json helpers remain exported
+    for migration only.
+  - `knowledge transport` reports `local-opt-in` for the opted-in on-box store
+    and fails closed with no credential and no opt-in; the retired
+    `*_MODE` / `*_STORAGE_MODE` selector ratchet still refuses stale variables
+    loudly.
+  - Fixes the knowledge half of the fail-closed semantics ruling (hasna/apps
+    #1720, #1788, #1794); `@hasna/contracts` stays pinned to exact 1.0.2.
+
+- 841d7e1: Resolver validation fixes (hasna/apps#1720): `knowledge-mcp` now FAILS CLOSED AT STARTUP — with no credential resolvable through the @hasna/contracts chain (Keychain item `hasna.credentials.knowledge.api-key`, `~/.hasna/knowledge/config/credentials`, `HASNA_KNOWLEDGE_API_KEY`) and no explicit `HASNA_KNOWLEDGE_LOCAL=1` opt-in it exits non-zero naming the tiers BEFORE a stdio transport is connected or an HTTP port is bound, so `initialize` is never answered and nothing on-box is created (previously the server started and refused only per tool call; the mementos #1868 ruling); `knowledge-mcp --version` prints the package version without starting a server; `knowledge auth login --api-url` requires an explicit `--api-key` — the ambient credential is never recorded against a caller-supplied authority (#1794); `KnowledgeService.itemStore()` (behind `./sdk` `items.*`, the CLI and the MCP tools) resolves the transport before creating the workspace skeleton, so a hosted or failed read no longer writes `config.json` and eight directories under `~/.hasna/knowledge`; the in-package data-home resolver is data-kind only, so the retired config-root path shape no longer ships in the bundle; the manifest declares the `cli` and `mcp` surfaces `api-key`.
+
 ## 0.3.1
 
 ### Patch Changes
@@ -41,6 +80,7 @@
 ### Patch Changes
 
 - Resolve @hasna/knowledge local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout, hotfixes plan 0f49f56a task P3.3). The legacy `~/.hasna/knowledge` home stays the effective home until the store is migrated to the XDG data home or `HASNA_DATA_HOME` is set; `HASNA_KNOWLEDGE_HOME` remains the exact-app override. Covers the global store home, the project-scoped `projects/<key>` sub-root, and the auth store default.
+
 ## 0.2.115
 
 ### Patch Changes

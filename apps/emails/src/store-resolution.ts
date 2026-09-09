@@ -62,6 +62,7 @@ import {
   EMAILS_SELF_HOSTED_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   EMAILS_IDP_TOKEN_ENV,
+  isEmailsCredentialResolutionError,
   isEmailsTransportConfigurationError,
   type EmailsClientCredentialSetting,
 } from "./lib/emails-credentials.js";
@@ -242,18 +243,19 @@ export function planEmailStore(env: NodeJS.ProcessEnv = process.env): StorePlan 
   //    operation would look exactly like a store that legitimately declines everything —
   //    so the resolver FAILS LOUD and this row arrives as a typed rejection, not a
   //    fallback. The seam's own message names every tier that was consulted; the store
-  //    resolution adds the explicit ways back to local in its own vocabulary.
+  //    resolution retains the typed boot error without suggesting a client database.
   if (databaseKeys.length === 0) {
     let hosted;
     try {
       hosted = resolveEmailsHostedTransport(env);
     } catch (error) {
-      if (isEmailsTransportConfigurationError(error)) {
+      // A DELIBERATE tier the resolver could not honour (a blank override, a
+      // profile with no credential, a malformed vault pointer) is the resolver's
+      // own typed refusal; it is reported exactly like a missing credential —
+      // one message, one exit — and never resolved around (#1720 validation).
+      if (isEmailsTransportConfigurationError(error) || isEmailsCredentialResolutionError(error)) {
         throw new StoreConfigurationError(
-          `${(error as Error).message} ` +
-            `To use the local database instead, choose it explicitly: set ` +
-            `${DATABASE_PATH_SETTINGS.join(" or ")} to a database file. The local database ` +
-            "is never served on an absence of configuration.",
+          (error as Error).message,
           [API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS, ...DATABASE_PATH_SETTINGS],
         );
       }

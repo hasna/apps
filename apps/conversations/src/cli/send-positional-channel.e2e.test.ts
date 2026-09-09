@@ -1,4 +1,8 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
+import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -14,16 +18,14 @@ import { join } from "path";
 // established flag forms (`--channel X "<message>"` and `--to A "<message>"`)
 // unchanged.
 
-const TEST_DB = join(tmpdir(), `conversations-cli-send-positional-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 function runCli(args: string[], agent: string) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
     env: {
-      ...process.env,
-      CONVERSATIONS_DB_PATH: TEST_DB,
+      ...fixture.env,
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",
     },
@@ -39,9 +41,8 @@ function runCli(args: string[], agent: string) {
 
 describe("send positional channel form (documented in charter and .claude/rules)", () => {
   afterAll(() => {
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-    try { unlinkSync(`${TEST_DB}-shm`); } catch {}
+
+
   });
 
   function seedChannel(channel: string): void {
@@ -74,7 +75,7 @@ describe("send positional channel form (documented in charter and .claude/rules)
       channel,
       content: "positional form body",
     });
-  });
+  }, 20_000);
 
   test("flag form `send \"<message>\" --channel X --from A` is unchanged", () => {
     const channel = "pos-channel-flag";

@@ -11,9 +11,9 @@ import type { MailboxSourceSummary, MailboxStatusSummary } from "../../lib/mail-
 describe("mailbox status/source formatters", () => {
   const source = (overrides: Partial<MailboxSourceSummary>): MailboxSourceSummary => ({
     id: "all",
-    label: "Self-hosted Emails",
+    label: "All mailboxes",
     kind: "all",
-    badges: ["self_hosted"],
+    badges: [],
     counts: { inbox: 12, unread: 3, priority: 0, starred: 0, sent: 0, archived: 0, spam: 0, trash: 0 },
     countsComplete: true,
     total: 12,

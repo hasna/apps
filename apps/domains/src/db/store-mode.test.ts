@@ -55,18 +55,15 @@ describe("store resolution through the @hasna/contracts resolver", () => {
     expect(() => isCloudStore({})).toThrow(/fails closed/);
   });
 
-  test("an explicit local path opt-in still resolves a LocalStore — and only it does", () => {
-    expect(getStore({ DOMAINS_DB_PATH: "/tmp/scratch.db" })).toBeInstanceOf(LocalStore);
-    expect(getStore({ HASNA_DOMAINS_DIR: "/tmp/domains" })).toBeInstanceOf(LocalStore);
-    expect(isCloudStore({ DOMAINS_DB_PATH: "/tmp/scratch.db" })).toBe(false);
-    expect(getStoreResolution({ HASNA_DOMAINS_DB_PATH: "/tmp/d.db" }).transport).toBe("local");
-  });
-
-  test("a local path set NEXT TO a configured credential is a hard conflict", () => {
-    expect(() => getStore({ ...HOSTED, DOMAINS_DB_PATH: "/tmp/scratch.db" })).toThrow(
-      /Refusing to resolve the hosted domains store while DOMAINS_DB_PATH is set/,
-    );
-    expect(() => getStore({ HASNA_DOMAINS_API_KEY: "key", HASNA_DOMAINS_DIR: "/tmp/d" })).toThrow(/fails|Refusing/);
+  test("every legacy path is rejected with or without credentials", () => {
+    for (const key of ["DOMAINS_DB_PATH", "HASNA_DOMAINS_DB_PATH", "DOMAINS_DIR", "HASNA_DOMAINS_DIR"]) {
+      for (const base of [{}, HOSTED]) {
+        const env = { ...base, [key]: "/tmp/retired-domains-fixture" };
+        expect(() => getStore(env)).toThrow(/no longer supported/);
+        expect(() => getStoreResolution(env)).toThrow(/no longer supported/);
+        expect(() => isCloudStore(env)).toThrow(/no longer supported/);
+      }
+    }
   });
 });
 
@@ -76,9 +73,7 @@ describe("the retired storage-mode env keys are gone from the package", () => {
     // smuggle the client into a backend at all — resolution fails closed.
     expect(() => getStore({ HASNA_DOMAINS_STORAGE_MODE: "cloud" })).toThrow(/fails closed/);
     // A stale mode var cannot veto an explicit local path opt-in either.
-    expect(
-      getStore({ HASNA_DOMAINS_STORAGE_MODE: "cloud", DOMAINS_DB_PATH: "/tmp/scratch.db" }),
-    ).toBeInstanceOf(LocalStore);
+    expect(() => getStore({ HASNA_DOMAINS_STORAGE_MODE: "cloud", DOMAINS_DB_PATH: "/tmp/scratch.db" })).toThrow(/no longer supported/);
     // With URL/key, a stale mode var must still resolve hosted.
     const env = { ...HOSTED, HASNA_DOMAINS_STORAGE_MODE: "local" };
     expect((getStore(env) as unknown as { transport: string }).transport).toBe("http");

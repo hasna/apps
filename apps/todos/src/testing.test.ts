@@ -69,21 +69,45 @@ describe("localTodosTestEnv", () => {
     // Local-intent defaults must not blind a fail-closed test: overrides are
     // applied last, so blanking the opt-in hands the resolver the real
     // "API env missing" shape and it must throw.
-    const env = localTodosTestEnv({
-      HASNA_TODOS_API_URL: "",
-      HASNA_TODOS_API_KEY: "",
-      HASNA_TODOS_LOCAL: "",
-      TODOS_LOCAL: "",
-    });
-    expect(() => resolveTodosCliTransport(env)).toThrow("REMOTE_API_CONFIG_MISSING");
+    //
+    // The env under test is a localTodosTestEnv() (a scrubbed copy of the
+    // live process.env), and the shared resolver's DISK tier outranks the env
+    // tier: on a provisioned station `~/.hasna/todos/config/credentials` is
+    // present, so a REAL credential would resolve and the fail-closed throw
+    // never happens (green on CI, red on the station). Anchoring HOME at a
+    // scratch dir — no credentials file can exist there — makes the disk tier
+    // consult nothing, identically on both kinds of machine.
+    const home = mkdtempSync(join(tmpdir(), "todos-failclosed-home-"));
+    try {
+      const env = localTodosTestEnv({
+        HASNA_TODOS_API_URL: "",
+        HASNA_TODOS_API_KEY: "",
+        HASNA_TODOS_LOCAL: "",
+        TODOS_LOCAL: "",
+        HOME: home,
+      });
+      expect(() => resolveTodosCliTransport(env)).toThrow("REMOTE_API_CONFIG_MISSING");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("still resolves http when a test opts back in explicitly", () => {
-    const env = localTodosTestEnv({
-      HASNA_TODOS_API_URL: "http://127.0.0.1:3901",
-      HASNA_TODOS_API_KEY: "throwaway",
-    });
-    expect(resolveTodosCliTransport(env).transport).toBe("http");
+    // Same scratch-HOME anchoring as the fail-closed case above: the fixture
+    // loopback authority must be the only one the resolver sees, or a
+    // station's real credential file is refused as a different authority
+    // (REMOTE_API_URL_INVALID) instead of resolving http.
+    const home = mkdtempSync(join(tmpdir(), "todos-httpback-home-"));
+    try {
+      const env = localTodosTestEnv({
+        HASNA_TODOS_API_URL: "http://127.0.0.1:3901",
+        HASNA_TODOS_API_KEY: "throwaway",
+        HOME: home,
+      });
+      expect(resolveTodosCliTransport(env).transport).toBe("http");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("overrides are applied after the scrub, not before", () => {

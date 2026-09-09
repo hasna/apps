@@ -40,7 +40,7 @@
       "kind": "sdk",
       "status": "supported",
       "authMode": "api-key",
-      "exportSubpath": ".",
+      "exportSubpath": "./sdk",
       "generatedFrom": "/openapi.json",
       "clientClassName": "TelephonyApiClient"
     },

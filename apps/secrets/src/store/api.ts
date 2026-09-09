@@ -1,13 +1,15 @@
-// ApiStore — the self_hosted/cloud transport.
+import { ENCRYPTION_TABLES, validateEncryptionReceipt } from "../encryption-maintenance.js";
+// ApiStore — the hosted API transport.
 //
-// Every read and write routes to the app's cloud HTTP API at `<API_URL>/v1` with
-// the bearer key, via the @hasna/contracts storage client. `self_hosted`
-// and `cloud` are identical here; only the URL/key differ (server-side tenancy).
+// Every read and write routes to the hosted secrets HTTP API at `<API_URL>/v1`
+// with the bearer key, via the @hasna/contracts storage client. There is no
+// storage-mode axis: the transport follows the resolved authority + key alone;
+// the old `self_hosted` / `cloud` labels were identical and are retired.
 //
 // SAFETY: values are sent as plaintext over TLS to the API, which encrypts them
-// server-side with the cloud master key — the local master key is never used in
-// api mode. The API key lives only inside the transport and is never logged,
-// returned, or embedded in any value produced here.
+// server-side with the cloud master key — the local master key is never used
+// against the hosted API. The API key lives only inside the transport and is
+// never logged, returned, or embedded in any value produced here.
 
 // The published type spelling, not @hasna/contracts: `ApiStore` is exported
 // from the `./storage` subpath, so its constructor signature is part of the
@@ -266,8 +268,11 @@ export class ApiStore implements Store {
   }
 
   async pruneExpired(): Promise<number> {
-    // The server owns TTL/expiry enforcement; there is nothing to prune client-side.
-    return 0;
+    const result = await this.transport.post<{ pruned: number }>("/secrets/prune-expired", {});
+    if (!result || !Number.isSafeInteger(result.pruned) || result.pruned < 0) {
+      throw new Error("Invalid expired-secret pruning receipt");
+    }
+    return result.pruned;
   }
 
   // ── structured vault items ───────────────────────────────────────────────
@@ -375,7 +380,7 @@ export class ApiStore implements Store {
     // (`https://api.hasna.com/secrets`) must be reported as the resolved
     // `.../v1` authority, never the bare origin — the origin alone no longer
     // identifies the app behind the shared gateway (issue #1588). Legacy and
-    // self-hosted endpoints keep reporting the origin only (never the key).
+    // custom endpoints keep reporting the origin only (never the key).
     const resolved = gatewayApiV1Root(this.transport.baseUrl);
     if (resolved) return { mode: "api", location: resolved };
     let location = this.transport.baseUrl;
@@ -387,7 +392,16 @@ export class ApiStore implements Store {
     return { mode: "api", location };
   }
 
+  async encryptionStatus() {
+    return validateEncryptionReceipt(await this.transport.get("/encryption/status"));
+  }
+
   async encryptVault(): Promise<EncryptVaultResult> {
-    throw new Error("encrypt-vault is a local-vault operation; in api mode the server owns encryption at rest.");
+    const receipt = validateEncryptionReceipt(await this.transport.post("/encryption/repair", {}));
+    if (!receipt.verified) throw new Error("Encryption repair was not verified");
+    return {
+      migrated: ENCRYPTION_TABLES.reduce((n,t)=>n+receipt.tables[t].repaired,0),
+      alreadyEncrypted: ENCRYPTION_TABLES.reduce((n,t)=>n+receipt.tables[t].active+receipt.tables[t].previous-receipt.tables[t].repaired,0),
+    };
   }
 }

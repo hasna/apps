@@ -9,6 +9,7 @@ import { resetStore } from "../lib/store/index.js";
 import { MediaStorage, type S3ClientLike } from "../lib/media-storage.js";
 import { createCall, getCallByTwilioSid } from "../db/calls.js";
 import { parseFormBody, handleStatusWebhook, flushBackgroundMediaCopies } from "./webhooks.js";
+import { optInLocalStore, snapshotStoreEnv } from "../../tests/support/hermetic-store-env.js";
 
 class InMemoryS3 implements S3ClientLike {
   readonly objects = new Map<string, Buffer>();
@@ -21,29 +22,23 @@ class InMemoryS3 implements S3ClientLike {
   }
 }
 
-const originalEnv = new Map(
-  ["HASNA_TELEPHONY_API_URL", "HASNA_TELEPHONY_API_KEY", "TELEPHONY_API_URL", "TELEPHONY_API_KEY", "HASNA_TELEPHONY_DB_PATH", "HASNA_TELEPHONY_LOCAL", "TELEPHONY_LOCAL", "HASNA_CONFIG_HOME", "HASNA_HOME"].map(
-    (name) => [name, process.env[name]] as const,
-  ),
-);
+// Every credential tier, the opt-in, the DB path and the data home: snapshotted
+// once, restored after each test.
+const restoreEnv = snapshotStoreEnv();
 
 let tempRoot: string | undefined;
 let originalFetch: typeof fetch;
 
-function restoreEnv(): void {
-  for (const [name, value] of originalEnv) {
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
-  }
-}
-
 beforeEach(() => {
-  for (const name of originalEnv.keys()) delete process.env[name];
+  tempRoot = mkdtempSync(join(tmpdir(), "telephony-status-webhook-test-"));
   // handleStatusWebhook dispatches call.status events through the store-backed
   // dispatchWebhook, whose resolver fails closed without the API env — select
   // local mode EXPLICITLY (HASNA_TELEPHONY_LOCAL=1), like the other
-  // store-backed telephony tests, so the on-box SQLite store serves the temp DB.
-  process.env.HASNA_TELEPHONY_LOCAL = "1";
+  // store-backed telephony tests, so the on-box SQLite store serves the temp
+  // DB. The opt-in yields to any resolved credential, so the Keychain and
+  // disk tiers are pointed at the temp root first and the helper proves the
+  // LocalStore was selected (hasna/apps#1720).
+  optInLocalStore(tempRoot);
   originalFetch = globalThis.fetch;
 });
 
@@ -83,12 +78,6 @@ describe("parseFormBody", () => {
 
 describe("handleStatusWebhook media copy", () => {
   it("copies the recording at call completion and stores object_key + sha256 on the call row", async () => {
-    tempRoot = mkdtempSync(join(tmpdir(), "telephony-status-webhook-test-"));
-    process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
-    // Scrub the disk credential tier: the machine's own station credential
-    // (~/.hasna/telephony/config/credentials) would otherwise outrank the
-    // explicit local opt-in from beforeEach.
-    process.env.HASNA_CONFIG_HOME = join(tempRoot, "config-home");
     resetStore();
 
     const call = createCall({
@@ -123,12 +112,6 @@ describe("handleStatusWebhook media copy", () => {
   });
 
   it("ignores intermediate recording status callbacks (partial media must not be copied)", async () => {
-    tempRoot = mkdtempSync(join(tmpdir(), "telephony-status-webhook-test-"));
-    process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
-    // Scrub the disk credential tier: the machine's own station credential
-    // (~/.hasna/telephony/config/credentials) would otherwise outrank the
-    // explicit local opt-in from beforeEach.
-    process.env.HASNA_CONFIG_HOME = join(tempRoot, "config-home");
     resetStore();
 
     const call = createCall({
@@ -162,12 +145,6 @@ describe("handleStatusWebhook media copy", () => {
   });
 
   it("leaves the call row untouched when the recording copy fails (soft-fail)", async () => {
-    tempRoot = mkdtempSync(join(tmpdir(), "telephony-status-webhook-test-"));
-    process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
-    // Scrub the disk credential tier: the machine's own station credential
-    // (~/.hasna/telephony/config/credentials) would otherwise outrank the
-    // explicit local opt-in from beforeEach.
-    process.env.HASNA_CONFIG_HOME = join(tempRoot, "config-home");
     resetStore();
 
     createCall({

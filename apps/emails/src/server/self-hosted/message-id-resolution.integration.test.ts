@@ -14,6 +14,7 @@
 // Skipped entirely when EMAILS_TEST_POSTGRES_URL is not set.
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createSerialIntegrationFixture, MIGRATION_CASE_TIMEOUT_MS, MIGRATION_DRAIN_TIMEOUT_MS } from "../../../scripts/serial-integration-fixture.js";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { createPgPool, createQueryClient, MigrationLedger, type PoolQueryClient } from "../../storage-kit/index.js";
 import { emailsSelfHostedMigrations } from "./migrations.js";
@@ -115,16 +116,20 @@ async function insertMessage(tenantId: string, id: string): Promise<void> {
   });
 }
 
-beforeAll(async () => {
+// Applying the full migration history is fixture setup, not a message latency
+// assertion. Bun's hook timeout does not cancel SQL; drain before closing its pool.
+const setupFixture = createSerialIntegrationFixture();
+beforeAll(() => setupFixture.run(async () => {
   if (!pgClient) return;
   await pgClient.execute("DROP SCHEMA IF EXISTS public CASCADE");
   await pgClient.execute("CREATE SCHEMA public");
   await new MigrationLedger(pgClient, emailsSelfHostedMigrations()).migrate();
-});
+}), MIGRATION_CASE_TIMEOUT_MS);
 
 afterAll(async () => {
+  await setupFixture.drain();
   await pgClient?.close();
-});
+}, MIGRATION_DRAIN_TIMEOUT_MS + 1_000);
 
 describe.skipIf(!pgClient)("store.resolveMessageId (migration 0014 index)", () => {
   it("full uuid returns verbatim; unique prefix resolves; ambiguous -> ambiguous; none -> null", async () => {
@@ -239,5 +244,52 @@ describe.skipIf(!pgClient)("GET/PATCH/DELETE /v1/messages/{id} prefix resolution
     expect((await call(deps, "GET", "/v1/messages/c0550000", { token: b.token })).status).toBe(404);
     // Full id is likewise invisible cross-tenant.
     expect((await call(deps, "GET", `/v1/messages/${idA}`, { token: b.token })).status).toBe(404);
+  });
+});
+
+describe.skipIf(!pgClient)("legacy rows answer to their bare canonical uuid", () => {
+  it("GET /v1/messages/{bare-uuid} resolves a migration-0007 legacy row", async () => {
+    const deps = makeDeps();
+    const a = await makeTenant("legacy-alias-a");
+    const b = await makeTenant("legacy-alias-b");
+
+    // Migration 0007 bridges legacy inbound/sent mail under a PREFIXED row id; the
+    // bare uuid below is the pre-unification canonical id a caller already holds.
+    const inboundUuid = "6e600000-aaaa-4aaa-8aaa-aaaa00000001";
+    const sentUuid = "6e600000-aaaa-4aaa-8aaa-aaaa00000002";
+    const otherTenantUuid = "6e600000-aaaa-4aaa-8aaa-aaaa00000003";
+    await insertMessage(a.tenantId, `legacy-inbound:${inboundUuid}`);
+    await insertMessage(a.tenantId, `legacy-sent:${sentUuid}`);
+    await insertMessage(b.tenantId, `legacy-inbound:${otherTenantUuid}`);
+
+    // The bare canonical uuid resolves to the prefixed row id in both directions.
+    const inbound = await call(deps, "GET", `/v1/messages/${inboundUuid}`, { token: a.token });
+    expect(inbound.status).toBe(200);
+    expect(inbound.body.message.id).toBe(`legacy-inbound:${inboundUuid}`);
+
+    const sent = await call(deps, "GET", `/v1/messages/${sentUuid}`, { token: a.token });
+    expect(sent.status).toBe(200);
+    expect(sent.body.message.id).toBe(`legacy-sent:${sentUuid}`);
+
+    // A bare uuid with no current row and no legacy alias still 404s.
+    const ghost = await call(deps, "GET", `/v1/messages/6e600000-aaaa-4aaa-8aaa-aaaa0000ffff`, { token: a.token });
+    expect(ghost.status).toBe(404);
+
+    // Tenant scope is preserved: B's legacy canonical uuid is invisible to A.
+    expect((await call(deps, "GET", `/v1/messages/${otherTenantUuid}`, { token: a.token })).status).toBe(404);
+    expect((await call(deps, "GET", `/v1/messages/${otherTenantUuid}`, { token: b.token })).status).toBe(200);
+  });
+
+  it("a current row whose id IS the bare uuid wins over any same-suffix legacy alias", async () => {
+    const deps = makeDeps();
+    const { tenantId, token } = await makeTenant("legacy-alias-current");
+    const uuid = "6e600000-aaaa-4aaa-8aaa-aaaa00000010";
+    await insertMessage(tenantId, uuid);
+    await insertMessage(tenantId, `legacy-sent:${uuid}`);
+
+    const res = await call(deps, "GET", `/v1/messages/${uuid}`, { token });
+    expect(res.status).toBe(200);
+    // The exact-id row wins — the legacy alias must not shadow a current message.
+    expect(res.body.message.id).toBe(uuid);
   });
 });

@@ -3,12 +3,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { computeTwilioSignature, resetTelephonySafetyState } from "../lib/safety.js";
+import { resolveTelephonyClientTransport } from "../lib/client-transport.js";
 import { resetStore } from "../lib/store/index.js";
+import { isolateStoreEnv, optInLocalStore, snapshotStoreEnv } from "../../tests/support/hermetic-store-env.js";
 
 let server: ReturnType<typeof Bun.serve> | undefined;
 let tempDir: string | undefined;
 
-const originalDbPath = process.env.HASNA_TELEPHONY_DB_PATH;
+// The store resolver's inputs (credential tiers, opt-in, DB path, data home)
+// are snapshotted once and put back after every test by the hermetic helper.
+const restoreStoreEnv = snapshotStoreEnv();
 const restCredentialEnvName = ["TELEPHONY", "REST", "API", "KEY"].join("_");
 const twilioCredentialEnvName = ["TWILIO", "AUTH", "TOKEN"].join("_");
 const originalRestCredential = process.env[restCredentialEnvName];
@@ -17,34 +21,6 @@ const originalProviderMode = process.env.TELEPHONY_PROVIDER_MODE;
 const originalDailyQuota = process.env.TELEPHONY_MAX_DAILY_MUTATIONS_PER_DESTINATION;
 const originalQuotaWindow = process.env.TELEPHONY_MUTATION_QUOTA_WINDOW_MS;
 const originalRetention = process.env.TELEPHONY_OPERATION_RETENTION_MS;
-const clientStoreEnvNames = [
-  "HASNA_TELEPHONY_STORAGE_MODE",
-  "HASNA_TELEPHONY_MODE",
-  "HASNA_TELEPHONY_API_URL",
-  "HASNA_TELEPHONY_API_KEY",
-  "HASNA_TELEPHONY_LOCAL",
-  "TELEPHONY_API_URL",
-  "TELEPHONY_API_KEY",
-  "TELEPHONY_LOCAL",
-  // The disk credential tier must not leak into these tests either: the
-  // resolver consults `<HASNA_CONFIG_HOME|HASNA_HOME|~/.hasna>/telephony/
-  // config/credentials` even when every env spelling above is cleared, and a
-  // real station credential outranks the local opt-in (or conflicts with a
-  // synthetic loopback pair).
-  "HASNA_CONFIG_HOME",
-  "HASNA_HOME",
-] as const;
-const originalClientStoreEnv = new Map(clientStoreEnvNames.map((name) => [name, process.env[name]]));
-
-function clearClientStoreEnv(): void {
-  for (const name of clientStoreEnvNames) delete process.env[name];
-  resetStore();
-}
-
-function restoreEnv(name: string, value: string | undefined): void {
-  if (value === undefined) delete process.env[name];
-  else process.env[name] = value;
-}
 
 function restCredential(): string {
   return ["test", "rest", "credential"].join("-");
@@ -59,17 +35,16 @@ function authHeaders(): Record<string, string> {
 }
 
 function startIsolatedServer() {
-  clearClientStoreEnv();
   tempDir = mkdtempSync(join(tmpdir(), "telephony-server-test-"));
-  process.env.HASNA_TELEPHONY_DB_PATH = join(tempDir, "telephony.db");
-  // Scrub the disk credential tier into the temp dir: the machine's own
-  // station credential (~/.hasna/telephony/config/credentials) would
-  // otherwise outrank the explicit local opt-in below.
-  process.env.HASNA_CONFIG_HOME = join(tempDir, "config-home");
   // This legacy local serve surface stores on-box: select that EXPLICITLY.
   // Without the fleet API env AND without this opt-in the store resolver fails
   // closed (owner directive 2026-09-04) — local SQLite is never the default.
-  process.env.HASNA_TELEPHONY_LOCAL = "1";
+  // The opt-in YIELDS to any resolved credential, so it is set on an
+  // environment where the Keychain and disk tiers cannot resolve one, and the
+  // helper refuses to continue unless the LocalStore was actually selected
+  // (hasna/apps#1720: fixture rows once reached the live fleet from here).
+  optInLocalStore(tempDir);
+  resetStore();
   Object.assign(process.env, { [restCredentialEnvName]: restCredential() });
 }
 
@@ -88,8 +63,6 @@ afterEach(async () => {
   closeDatabase();
   resetStore();
 
-  if (originalDbPath === undefined) delete process.env.HASNA_TELEPHONY_DB_PATH;
-  else process.env.HASNA_TELEPHONY_DB_PATH = originalDbPath;
   if (originalRestCredential === undefined) delete process.env[restCredentialEnvName];
   else Object.assign(process.env, { [restCredentialEnvName]: originalRestCredential });
   if (originalTwilioCredential === undefined) delete process.env[twilioCredentialEnvName];
@@ -102,7 +75,7 @@ afterEach(async () => {
   else process.env.TELEPHONY_MUTATION_QUOTA_WINDOW_MS = originalQuotaWindow;
   if (originalRetention === undefined) delete process.env.TELEPHONY_OPERATION_RETENTION_MS;
   else process.env.TELEPHONY_OPERATION_RETENTION_MS = originalRetention;
-  for (const name of clientStoreEnvNames) restoreEnv(name, originalClientStoreEnv.get(name));
+  restoreStoreEnv();
   resetStore();
 
   if (tempDir) {
@@ -448,7 +421,6 @@ describe("server-backed read routing", () => {
     // webhook receiver. Its read routes MUST come from the SAME
     // store the inbound handlers write to; reading on-box sqlite here is the
     // split-brain bug.
-    clearClientStoreEnv();
     const seenPaths: string[] = [];
     const cloud = Bun.serve({
       port: 0,
@@ -464,18 +436,21 @@ describe("server-backed read routing", () => {
       },
     });
 
-    // Isolated (empty) local DB so any accidental local read would return [].
+    // Isolated (empty) local DB so any accidental local read would return [];
+    // the Keychain and disk tiers are pointed away from the machine's stores so
+    // the env pair below is the ONLY credential that can resolve — the
+    // Keychain tier outranks the env tier, and a station key must never be
+    // sent to this loopback stub (hasna/apps#1720).
     tempDir = mkdtempSync(join(tmpdir(), "telephony-server-test-"));
-    process.env.HASNA_TELEPHONY_DB_PATH = join(tempDir, "telephony.db");
-    // Scrub the disk credential tier: the machine's own station credential
-    // would otherwise be consulted alongside the explicit loopback pair below
-    // and the resolver would refuse the divergent authorities.
-    process.env.HASNA_CONFIG_HOME = join(tempDir, "config-home");
+    isolateStoreEnv(tempDir);
     Object.assign(process.env, { [restCredentialEnvName]: restCredential() });
     process.env[apiUrlEnv] = `http://127.0.0.1:${cloud.port}`;
     process.env[apiKeyEnv] = ["test", "cloud", "key"].join("-");
 
     resetStore();
+    // The synthetic env key is the credential the stub receives — not a
+    // station key from a higher tier.
+    expect(resolveTelephonyClientTransport(process.env).report.apiKeySource).toBe(apiKeyEnv);
 
     try {
       const { createServer } = await import("./serve.js");

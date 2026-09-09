@@ -9,6 +9,7 @@ import { getMessage } from "../db/messages.js";
 import { resetStore } from "./store/index.js";
 import { MediaStorage, type S3ClientLike } from "./media-storage.js";
 import { handleInboundSms } from "./sms.js";
+import { optInLocalStore, snapshotStoreEnv } from "../../tests/support/hermetic-store-env.js";
 
 /**
  * In-memory bucket standing in for the AWS client (the artifact-kit injection
@@ -33,17 +34,12 @@ function inboundSmsFixture(): { bytes: Uint8Array; digest: string } {
 describe("handleInboundSms media copy", () => {
   it("creates the message row first, then copies inbound MMS media and attaches object_key + sha256", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "telephony-sms-media-test-"));
-    process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
-    process.env.HASNA_DATA_HOME = join(tempRoot, "data");
+    const restoreEnv = snapshotStoreEnv();
     // handleInboundSms persists through the store, whose resolver fails
     // closed without the API env — select local mode EXPLICITLY
-    // (HASNA_TELEPHONY_LOCAL=1), like the other store-backed telephony tests.
-    process.env.HASNA_TELEPHONY_LOCAL = "1";
-    // The opt-in YIELDS to any resolved credential, and the machine's own
-    // station credential (~/.hasna/telephony/config/credentials) would
-    // resolve from the disk tier under the real HOME — scrub the tier to a
-    // scratch dir so this test deterministically runs on-box SQLite.
-    process.env.HASNA_CONFIG_HOME = join(tempRoot, "config-home");
+    // (HASNA_TELEPHONY_LOCAL=1) on an environment where no credential tier
+    // can outrank the opt-in, and prove the LocalStore took (hasna/apps#1720).
+    optInLocalStore(tempRoot);
     const s3 = new InMemoryS3();
     const { bytes, digest } = inboundSmsFixture();
     const originalFetch = globalThis.fetch;
@@ -79,20 +75,15 @@ describe("handleInboundSms media copy", () => {
       globalThis.fetch = originalFetch;
       resetStore();
       closeDatabase();
+      restoreEnv();
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
   it("soft-fails: a failed copy still keeps the message row with object_key null", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "telephony-sms-media-test-"));
-    process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
-    process.env.HASNA_DATA_HOME = join(tempRoot, "data");
-    process.env.HASNA_TELEPHONY_LOCAL = "1";
-    // The opt-in YIELDS to any resolved credential, and the machine's own
-    // station credential (~/.hasna/telephony/config/credentials) would
-    // resolve from the disk tier under the real HOME — scrub the tier to a
-    // scratch dir so this test deterministically runs on-box SQLite.
-    process.env.HASNA_CONFIG_HOME = join(tempRoot, "config-home");
+    const restoreEnv = snapshotStoreEnv();
+    optInLocalStore(tempRoot);
     const s3 = new InMemoryS3();
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response("gone", { status: 503 });
@@ -124,6 +115,7 @@ describe("handleInboundSms media copy", () => {
       globalThis.fetch = originalFetch;
       resetStore();
       closeDatabase();
+      restoreEnv();
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });

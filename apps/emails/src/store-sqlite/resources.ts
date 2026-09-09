@@ -34,6 +34,20 @@ const DEFAULT_PAGE = 100;
 const MAX_PAGE = 500;
 
 /**
+ * Quote a trusted identifier for use as a column/table name.
+ *
+ * Every identifier here originates from `PRAGMA table_info` or from a caller
+ * key validated against that list — never from a free-form caller string — so
+ * quoting cannot be an injection risk. What quoting IS load-bearing for is the
+ * reserved word `order`: FR-0001 adds an `order` column to `mailbox_filters`,
+ * and an unquoted `mailbox_filters.order` in projection/insert/update SQL is a
+ * syntax error the moment that column exists.
+ */
+function q(column: string): string {
+  return `"${column.replaceAll('"', '""')}"`;
+}
+
+/**
  * Every uniform family on `EmailStore`, mapped to the SQLite table that holds it.
  *
  * This is the one thing that cannot be derived: the seam names families in the
@@ -278,13 +292,13 @@ function projection(shape: TableShape, table: string): string {
   // a future migration that adds a credential column must not silently publish it.
   const redacted = redactedFor(table);
   const visible = shape.columns.filter((column) => !redacted.includes(column));
-  const columns = visible.map((column) => `${table}.${column}`).join(", ");
-  return shape.idIsRowid ? `${table}.rowid AS rowid, ${columns}` : columns;
+  const columns = visible.map((column) => `${table}.${q(column)}`).join(", ");
+  return shape.idIsRowid ? `${table}."rowid" AS rowid, ${columns}` : columns;
 }
 
 function readRow(db: Database, table: string, shape: TableShape, id: SQLQueryBindings): ResourceRow | null {
   return db
-    .query(`SELECT ${projection(shape, table)} FROM ${table} WHERE ${shape.idColumn} = ?`)
+    .query(`SELECT ${projection(shape, table)} FROM ${table} WHERE ${q(shape.idColumn)} = ?`)
     .get(id) as ResourceRow | null;
 }
 
@@ -320,7 +334,7 @@ export function createResourceRepository(db: Database, table: string): ResourceR
           );
         }
         const keys = Object.keys(filters);
-        const where = keys.length > 0 ? `WHERE ${keys.map((key) => `${key} = ?`).join(" AND ")}` : "";
+        const where = keys.length > 0 ? `WHERE ${keys.map((key) => `${q(key)} = ?`).join(" AND ")}` : "";
         const rows = db
           .query(
             `SELECT ${projection(shape, table)} FROM ${table} ${where}
@@ -360,7 +374,7 @@ export function createResourceRepository(db: Database, table: string): ResourceR
             return invalidInput(`this resource requires an explicit ${shape.idColumn}`);
           }
           const result = db.run(
-            `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+            `INSERT INTO ${table} (${columns.map((column) => q(column)).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
             columns.map((column) => values.get(column) as SQLQueryBindings),
           );
           const id = shape.idIsRowid ? Number(result.lastInsertRowid) : (values.get(shape.idColumn) ?? null);
@@ -379,14 +393,14 @@ export function createResourceRepository(db: Database, table: string): ResourceR
           const writable = writableColumns(shape, table, patch);
           if ("refusal" in writable) return invalidInput(writable.refusal);
           const columns = writable.columns.filter((column) => column !== shape.idColumn);
-          const sets = columns.map((column) => `${column} = ?`);
+          const sets = columns.map((column) => `${q(column)} = ?`);
           const params = columns.map((column) => bindable(patch[column]));
           if (shape.hasUpdatedAt && !columns.includes("updated_at")) {
-            sets.push("updated_at = ?");
+            sets.push(`${q("updated_at")} = ?`);
             params.push(now());
           }
           if (sets.length === 0) return ok(readRow(db, table, shape, id));
-          db.run(`UPDATE ${table} SET ${sets.join(", ")} WHERE ${shape.idColumn} = ?`, [...params, id]);
+          db.run(`UPDATE ${table} SET ${sets.join(", ")} WHERE ${q(shape.idColumn)} = ?`, [...params, id]);
           return ok(readRow(db, table, shape, id));
         }),
       );
@@ -395,7 +409,7 @@ export function createResourceRepository(db: Database, table: string): ResourceR
     async remove(id: string): Promise<Outcome<boolean>> {
       return guard(() => {
         const shape = shapeOf();
-        return ok(db.run(`DELETE FROM ${table} WHERE ${shape.idColumn} = ?`, [id]).changes > 0);
+        return ok(db.run(`DELETE FROM ${table} WHERE ${q(shape.idColumn)} = ?`, [id]).changes > 0);
       });
     },
   };

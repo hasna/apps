@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "crypto";
 import { existsSync, realpathSync, statSync, unlinkSync } from "fs";
 import { join, resolve, sep } from "path";
 import { getDataDir, getDb } from "./db.js";
-import { isCloudStore } from "./store/index.js";
 
 export type RedactionClass =
   | "private_key"
@@ -102,32 +101,17 @@ const REDACTION_SURFACES = [
   "sqlite_free_pages",
 ];
 
+export { REDACTION_SURFACES };
+
 function hashText(value: string | null | undefined): string | null {
   if (value === null || value === undefined) return null;
   return createHash("sha256").update(value).digest("hex");
 }
 
-function uniqueIds(ids: number[]): number[] {
-  const seen = new Set<number>();
-  const result: number[] = [];
-  for (const id of ids) {
-    if (!Number.isInteger(id) || id <= 0) {
-      throw new Error(`Invalid message id: ${id}`);
-    }
-    if (seen.has(id)) continue;
-    seen.add(id);
-    result.push(id);
-  }
-  return result;
-}
+export { hashText };
 
-function privateKeyRegex(): RegExp {
-  const begin = "-----BEGIN";
-  const suffix = "PRIVATE KEY-----";
-  return new RegExp(`${begin}\\s+(?:[A-Z]+\\s+)?${suffix}`, "i");
-}
-
-function classifyText(value: string | null | undefined, surface: "content" | "metadata" | "attachments"): Set<RedactionClass> {
+/** Surface-aware credential-shaped content classifier (shared with the server-side PG redaction). */
+export function classifyText(value: string | null | undefined, surface: "content" | "metadata" | "attachments"): Set<RedactionClass> {
   const classes = new Set<RedactionClass>();
   if (!value) return classes;
 
@@ -154,7 +138,10 @@ function mergeClasses(...sets: Set<RedactionClass>[]): RedactionClass[] {
   return [...new Set(sets.flatMap((set) => [...set]))].sort();
 }
 
-function parseAttachments(raw: string | null): Array<Record<string, unknown>> {
+export { mergeClasses };
+
+/** Shared by the local path and its server-side PG mirror. */
+export function parseAttachments(raw: string | null): Array<Record<string, unknown>> {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -162,6 +149,26 @@ function parseAttachments(raw: string | null): Array<Record<string, unknown>> {
   } catch {
     return [];
   }
+}
+
+function uniqueIds(ids: number[]): number[] {
+  const seen = new Set<number>();
+  const result: number[] = [];
+  for (const id of ids) {
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new Error(`Invalid message id: ${id}`);
+    }
+    if (seen.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+  }
+  return result;
+}
+
+function privateKeyRegex(): RegExp {
+  const begin = "-----BEGIN";
+  const suffix = "PRIVATE KEY-----";
+  return new RegExp(`${begin}\\s+(?:[A-Z]+\\s+)?${suffix}`, "i");
 }
 
 /** The canonical (symlink-resolved) form of a directory, or the path itself when it does not exist yet. */
@@ -295,7 +302,7 @@ function ensureRedactionAuditTable(): void {
   `);
 }
 
-function redactedMetadata(report: RedactionMessageReport, opts: Required<Pick<RedactMessagesOptions, "actor" | "reason" | "authority">>, redactedAt: string): string {
+export function redactedMetadata(report: RedactionMessageReport, opts: Required<Pick<RedactMessagesOptions, "actor" | "reason" | "authority">>, redactedAt: string): string {
   return JSON.stringify({
     redacted: true,
     redacted_at: redactedAt,
@@ -310,7 +317,7 @@ function redactedMetadata(report: RedactionMessageReport, opts: Required<Pick<Re
   });
 }
 
-function redactedAttachments(report: RedactionMessageReport, redactedAt: string): string | null {
+export function redactedAttachments(report: RedactionMessageReport, redactedAt: string): string | null {
   if (report.attachment_count === 0 && !report.before_hashes.attachments_sha256) return null;
   return JSON.stringify([{
     name: "redacted-attachments",
@@ -371,20 +378,11 @@ function purgeAttachmentFiles(row: RawMessageRow): { deleted: number; errors: nu
 }
 
 export function redactMessagesById(options: RedactMessagesOptions): RedactMessagesResult {
-  // This tool redacts on-box SQLite only (secure_delete + WAL truncate + VACUUM).
-  // When the client is flipped to the HTTP API, the messages live in the API
-  // store (RDS), not in local sqlite — running here would silently scan an
-  // empty/stale local DB and falsely report a clean result. Fail loud instead so a
-  // security remediation is never mistaken for done. Mirrors the split-brain guard
-  // the public SDK surface enforces via getStore().
-  if (isCloudStore()) {
-    throw new Error(
-      "Refusing to run local SQLite redaction: conversations is flipped to the HTTP API. " +
-      "The target messages live in the API store (RDS), not on-box sqlite. " +
-      "Redact through the cloud API/database, or unset the API client-flip env to operate on local sqlite.",
-    );
-  }
-
+  // The LOCAL implementation. Store routing in `getStore()` decides which
+  // transport runs: LocalStore (this file) is reachable only under the
+  // explicit store-path opt-in, and the hosted API serves redaction through
+  // its own route (`src/server/admin-redaction-pg.ts`) behind ApiStore. A
+  // redaction never silently scans a store the caller did not ask for.
   const ids = uniqueIds(options.ids);
   if (ids.length === 0) throw new Error("At least one message id is required.");
 
