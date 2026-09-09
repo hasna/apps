@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, test, afterEach } from "bun:test";
+import { describe, expect, test, afterEach, setDefaultTimeout } from "bun:test";
+// Spawns child processes (CLI/server/scripts); bun's 5s default is too tight on a loaded host.
+setDefaultTimeout(60_000);
+
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

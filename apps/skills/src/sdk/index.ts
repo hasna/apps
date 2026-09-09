@@ -85,3 +85,6 @@ export { RemotePrivatePublicationsClient, PrivatePublicationError, PRIVATE_PUBLI
   type PrivatePublicationDeclaration, type PrivatePublicationView, type PrivatePublicationState, type PrivatePublishingCapability } from "../lib/remote-private-publications.js";
 export { preparePrivatePublication, readPrivatePublicationRecovery, continuePrivatePublication, inspectPrivatePublication,
   type PrivatePublicationRecovery, type PrivatePublicationResult } from "../lib/private-publication-recovery.js";
+export { createSkillOperationClient, SkillOperationClientError, SKILL_OPERATION_LIMITS,
+  type SkillOperationClient, type SkillOperationTransport, type SkillOperationRequest, type SkillOperationResult,
+  type SkillOperationJson, type SkillOperationRefusal, type SkillOperationClientErrorCode } from "./operations.js";

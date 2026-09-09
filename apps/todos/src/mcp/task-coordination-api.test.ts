@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { test, expect, setDefaultTimeout } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +9,10 @@ import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
 import { cloudTaskGraph, cloudTaskLockStatus } from "./task-coordination-api.js";
 import { cloudLockTask, cloudUnlockTask, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies } from "../cli/cloud-router.js";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
+
+// The first test boots the real MCP entrypoint in a cold subprocess; bun's 5s
+// default is under a single cold start on a loaded host.
+setDefaultTimeout(60_000);
 
 async function fixture(run: (client:Client,state:any)=>Promise<void>) {
   const root=mkdtempSync(join(tmpdir(),"todos-coordination-"));
@@ -66,7 +70,7 @@ test("actual saved-credential MCP coordinates locks, CAS priority and full depen
     expect((await call("add_task_dependency",{task_id:a,depends_on:b})).isError).toBe(true);
     expect(state.writes()).toBe(readOnlyWrites);
   });
-},30000);
+},60_000);
 
 test("shared CLI transport helpers reject missing, mismatched and ambiguous mutation receipts",async()=>{
   const fake=(value:unknown)=>({transport:{get:async()=>value,post:async()=>value,del:async()=>value}} as unknown as HasnaStorageClient);

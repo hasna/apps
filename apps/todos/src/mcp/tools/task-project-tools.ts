@@ -40,6 +40,7 @@ import {
   cloudResolveTaskListRef,
   cloudResolveTaskRef, cloudLockTask, cloudUnlockTask, cloudAddDependency, cloudRemoveDependency,
 } from "../../cli/cloud-router.js";
+import { requireTodosCloudClient } from "../remote-authority.js";
 import { cloudTaskLockStatus, cloudPrioritizeTask, cloudTaskGraph } from "../task-coordination-api.js";
 import {
   addComment, listComments, updateComment, deleteComment,
@@ -1735,8 +1736,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async (params) => {
         try {
-          const client = getTodosCloudClient();
-          if (!client) throw new Error("Task-list tools require the authenticated Todos API");
+          const client = requireTodosCloudClient("Task-list");
           const resolved = {...params, name: params.name.trim(), slug: normalizeSlug(params.name)};
           if (params.project_id) resolved.project_id = await cloudResolveProjectRef(client, params.project_id);
           const list = await cloudCreateTaskList(client, resolved);
@@ -1759,8 +1759,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ project_id, status }) => {
         try {
-          const client = getTodosCloudClient();
-          if (!client) throw new Error("Task-list tools require the authenticated Todos API");
+          const client = requireTodosCloudClient("Task-list");
           const projectId = project_id ? await cloudResolveProjectRef(client, project_id) : undefined;
           const lists = (await listSharedTaskLists(client, projectId)).filter(list => status === undefined || (list.status ?? "active") === status);
           if (lists.length === 0) return { content: [{ type: "text" as const, text: "No task lists found." }] };
@@ -1783,8 +1782,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_list_id, include_tasks = true }) => {
         try {
-          const client = getTodosCloudClient();
-          if (!client) throw new Error("Task-list tools require the authenticated Todos API");
+          const client = requireTodosCloudClient("Task-list");
           const list = await resolveSharedTaskList(client, task_list_id);
           const tasks = include_tasks ? await cloudListTaskListTasks(client, list.id) : [];
           const lines = [
@@ -1815,8 +1813,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_list_id, ...updates }) => {
         try {
-          const client = getTodosCloudClient();
-          if (!client) throw new Error("Task-list tools require the authenticated Todos API");
+          const client = requireTodosCloudClient("Task-list");
           const prior = await resolveSharedTaskList(client, task_list_id);
           const expected = {...updates, ...(updates.name !== undefined ? {name: updates.name.trim()} : {})};
           const list = await cloudUpdateTaskList(client, prior.id, expected);
@@ -1839,8 +1836,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_list_id, force }) => {
         try {
-          const client = getTodosCloudClient();
-          if (!client) throw new Error("Task-list tools require the authenticated Todos API");
+          const client = requireTodosCloudClient("Task-list");
           const list = await resolveSharedTaskList(client, task_list_id);
           const receipt = await deleteSharedTaskList(client, list.id, force === true);
           return { content: [{ type: "text" as const, text: JSON.stringify(receipt) }] };
@@ -1868,8 +1864,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async (params) => {
         try {
-          const cloud = getTodosCloudClient();
-          if (!cloud) throw new Error("Plan tools require the authenticated Todos API");
+          const cloud = requireTodosCloudClient("Plan");
           const resolved = { ...params, name:params.name.trim(), ...(params.slug !== undefined ? {slug:normalizeSlug(params.slug)} : {}), ...(params.project_id ? {project_id: await cloudResolveProjectRef(cloud, params.project_id)} : {}) };
           const plan = await cloudCreatePlan(cloud, resolved);
           assertPlanReceipt(plan,resolved);
@@ -1891,8 +1886,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ project_id, status }) => {
         try {
-          const cloud = getTodosCloudClient();
-          if (!cloud) throw new Error("Plan tools require the authenticated Todos API");
+          const cloud = requireTodosCloudClient("Plan");
           const project = project_id ? await cloudResolveProjectRef(cloud, project_id) : undefined;
           const plans = (await listSharedPlans(cloud, project)).filter(plan => status === undefined || plan.status === status);
           if (plans.length === 0) return { content: [{ type: "text" as const, text: "No plans found." }] };
@@ -1915,8 +1909,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ plan_id, include_tasks = true }) => {
         try {
-          const cloud = getTodosCloudClient();
-          if (!cloud) throw new Error("Plan tools require the authenticated Todos API");
+          const cloud = requireTodosCloudClient("Plan");
           const plan = await cloudResolvePlan(cloud, plan_id);
           if (!plan) throw new TaskNotFoundError(`Plan not found: ${plan_id}`);
           let tasks: Task[] = [];
@@ -1956,8 +1949,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ plan_id, ...updates }) => {
         try {
-          const cloud = getTodosCloudClient();
-          if (!cloud) throw new Error("Plan tools require the authenticated Todos API");
+          const cloud = requireTodosCloudClient("Plan");
           const existing = await cloudResolvePlan(cloud, plan_id);
           if (!existing) throw new TaskNotFoundError(`Plan not found: ${plan_id}`);
           if(updates.name!==undefined)updates.name=updates.name.trim();
@@ -1981,8 +1973,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ plan_id, force }) => {
         try {
-          const cloud=getTodosCloudClient();
-          if(!cloud)throw new Error("Plan tools require the authenticated Todos API");
+          const cloud=requireTodosCloudClient("Plan");
           const plan=await cloudResolvePlan(cloud,plan_id);
           if(!plan)throw new TaskNotFoundError(`Plan not found: ${plan_id}`);
           const receipt=await deleteSharedPlan(cloud,plan.id,force===true);

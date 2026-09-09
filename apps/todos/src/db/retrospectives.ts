@@ -2,6 +2,7 @@ import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getDatabase, now, resolvePartialId, uuid } from "./database.js";
 import { createTask } from "./tasks.js";
 import { redactEvidenceText, redactValue } from "../lib/redaction.js";
+import { InputValidationError } from "../types/index.js";
 
 export type RetrospectiveScope = "project" | "plan";
 export type RetrospectiveExportFormat = "json" | "markdown";
@@ -111,7 +112,13 @@ function scopeFromInput(input: CreateRetrospectiveInput, db: Database): { scope:
   const projectId = resolveKnownId("projects", input.project_id, db);
   if (planId) return { scope: "plan", scopeId: planId, projectId, planId, where: "plan_id = ?" };
   if (projectId) return { scope: "project", scopeId: projectId, projectId, planId: null, where: "project_id = ?" };
-  throw new Error("Retrospective requires --plan or --project");
+  // A caller-input refusal, not a server fault: typed so the MCP formatter
+  // returns INVALID_INPUT instead of sanitizing it to UNKNOWN_ERROR (measured
+  // on the zero-argument census under HASNA_TODOS_LOCAL=1).
+  throw new InputValidationError(
+    "Retrospective requires --plan or --project",
+    "Pass plan_id or project_id.",
+  );
 }
 
 function buildLessons(report: Omit<RetrospectiveReport, "lessons" | "follow_up_tasks">): string[] {

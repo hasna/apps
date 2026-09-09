@@ -1,5 +1,8 @@
 # Shared template commands
 
+Applies to `@hasna/todos` 0.16.0 (CLI). This is a breaking change from 0.15.52,
+where the template CLI commands read local SQLite.
+
 Stateful template CLI commands use the authenticated Todos API and saved account credentials. `templates` list/add/update/delete/use, preview, export, import, history, and initialization (including plural aliases) reject local database selectors before command imports. IDs may be unambiguous ID prefixes; names do not silently select a template.
 
 `template-library` list/show/write uses bundled definitions only and requires neither credentials nor a database. Explicitly requested JSON files remain local artifacts.

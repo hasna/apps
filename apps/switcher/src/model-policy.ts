@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { Fault, parse, type Model } from "./domain";
+import { Fault, parse, modelExpired, type Model } from "./domain";
 import { modelPolicySchema } from "./model-policy-schema";
 
 export const MODEL_POLICY_VERSION = 1 as const;
@@ -15,23 +15,28 @@ function stable(value: unknown): string { return JSON.stringify(value, (_k, v) =
 
 export function compileModelPolicy(model: string, catalog: readonly Model[], policy?: ModelPolicy): CompiledModelPolicy {
   const selected = id(model, "model");
-  const available = new Set(catalog.filter(m => m.available !== false).map(m => m.id));
-  if (!available.has(selected)) throw new Fault(422, "model_unavailable", "Selected model is not present in the eligible catalog.");
+  const available = new Set(catalog.filter(m => m.available !== false && !modelExpired(m)).map(m => m.id));
+  const expired = new Set(catalog.filter(m => modelExpired(m)).map(m => m.id));
+  const requireAvailable = (value: string, message: string) => {
+    if (expired.has(value)) throw new Fault(422, "model_expired", "A selected model has passed its configured expiry date. Select an unexpired model.");
+    if (!available.has(value)) throw new Fault(422, "model_unavailable", message);
+  };
+  requireAvailable(selected, "Selected model is not present in the eligible catalog.");
   if (policy && policy.version !== undefined && policy.version !== 1) throw new Fault(400, "invalid_model_policy", "Unsupported model policy version.");
   const p = parse(modelPolicySchema,policy ?? {});
   const roleInput = p.roles ?? {};
   if (Object.keys(roleInput).some(k => !roles.includes(k as ModelRole))) throw new Fault(400, "invalid_model_policy", "Unknown model policy role.");
   const compiledRoles = Object.fromEntries(roles.map(role => [role, id(roleInput[role] ?? selected, `roles.${role}`)])) as Record<ModelRole, string>;
-  for (const value of Object.values(compiledRoles)) if (!available.has(value)) throw new Fault(422, "model_unavailable", "A model policy role is not present in the eligible catalog.");
+  for (const value of Object.values(compiledRoles)) requireAvailable(value, "A model policy role is not present in the eligible catalog.");
   const explicitAllowed = (p.allowedModels ?? []).map((v, i) => id(v, `allowedModels[${i}]`));
   if (explicitAllowed.length > 500) throw new Fault(400, "invalid_model_policy", "Model policy allowedModels is too large.");
-  for (const value of explicitAllowed) if (!available.has(value)) throw new Fault(422, "model_unavailable", "An allowed model is not present in the eligible catalog.");
+  for (const value of explicitAllowed) requireAvailable(value, "An allowed model is not present in the eligible catalog.");
   const aliases: Record<string, string> = Object.create(null);
   for (const [name, target] of Object.entries(p.aliases ?? {})) {
     if (Object.keys(aliases).length >= 200 || !/^[A-Za-z0-9._/-]{1,120}$/.test(name) || ["__proto__", "prototype", "constructor"].includes(name)) throw new Fault(400, "invalid_model_policy", "A model alias is invalid or too numerous.");
     const canonical = id(target, `aliases.${name}`);
     if (available.has(name) && name !== canonical) throw new Fault(400, "invalid_model_policy", "A model alias cannot shadow a real model ID.");
-    if (!available.has(canonical)) throw new Fault(422, "model_unavailable", "A model alias target is not present in the eligible catalog.");
+    requireAvailable(canonical, "A model alias target is not present in the eligible catalog.");
     aliases[name] = canonical;
   }
   const fallbacks: Record<string, string[]> = Object.create(null);
@@ -39,7 +44,7 @@ export function compileModelPolicy(model: string, catalog: readonly Model[], pol
   for (const [source, targets] of Object.entries(p.fallbacks ?? {})) {
     if (!allowedSources.has(source) || !available.has(source) || !Array.isArray(targets) || Object.keys(fallbacks).length >= 200 || targets.length > 20) throw new Fault(400, "invalid_model_policy", "Fallback source or list is invalid.");
     const values = targets.map((v, i) => id(v, `fallbacks.${source}[${i}]`));
-    if (values.some(v => !available.has(v))) throw new Fault(422, "model_unavailable", "A fallback model is not present in the eligible catalog.");
+    for (const value of values) requireAvailable(value, "A fallback model is not present in the eligible catalog.");
     if (values.includes(source)) throw new Fault(400, "invalid_model_policy", "A model cannot fall back to itself.");
     fallbacks[source] = uniq(values);
   }

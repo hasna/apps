@@ -81,10 +81,12 @@ function server(apiPrefix = "/api/v1") {
   return state;
 }
 
-test("published source uses exact owned archive, one PUT, UUID CAS and bounded receipt without credentials", async () => {
+for (const executionEnabled of [false, true]) test(`publication recovery keeps unobserved execution unknown on an executionEnabled=${executionEnabled} server`, async () => {
   const s = server(), p = await prepared();
+  s.customize(url => url.pathname.endsWith("capabilities") ? Response.json({ contractVersion: 1, apiVersion: 1, privatePublishing: { ...capability, executionEnabled } }) : undefined);
   const result = await continuePrivatePublication(p.c, p.recovery, { confirm: true, waitMs: 0 });
-  expect(result).toMatchObject({ committed: true, executionEnabled: false, intentId, versionId, state: "committed" });
+  expect(result).toMatchObject({ committed: true, executionEnabled: null, intentId, versionId, state: "committed" });
+  expect(result.nextAction).toBe("Published; execution requires a separate server quote and approval.");
   expect(s.uploads).toBe(1); expect(s.calls.filter(c => c.method === "POST" && c.path.endsWith("/publication-uploads"))).toHaveLength(1);
   const receipt = readFileSync(join(p.recovery, "receipt.json"), "utf8");
   expect(receipt).not.toContain(token); expect(receipt).not.toContain("uploadUrl"); expect(receipt).not.toContain("Signature");
@@ -112,9 +114,9 @@ test("disabled publication refuses begin but permits existing status and cancel"
   await expect(p.c.finalize(skillId, intentId)).rejects.toMatchObject({ code: "PUBLICATION_CAPABILITY_UNAVAILABLE" }); expect(s.uploads).toBe(0);
 });
 
-test("capability absence, execution claims and unsupported contracts fail before mutation", async () => {
+test("capability absence, malformed execution flags and unsupported contracts fail before mutation", async () => {
   const s = server(), p = await prepared();
-  for (const privatePublishing of [undefined, { ...capability, contractVersion: 2 }, { ...capability, executionEnabled: true }, { ...capability, maxArchiveBytes: 16777217 }, { ...capability, extra: true }]) {
+  for (const privatePublishing of [undefined, { ...capability, contractVersion: 2 }, ...[undefined, null, 0, 1, "true", "false", [], {}].map(executionEnabled => ({ ...capability, executionEnabled })), { ...capability, maxArchiveBytes: 16777217 }, { ...capability, extra: true }]) {
     s.calls.length = 0; s.customize(url => url.pathname.endsWith("capabilities") ? Response.json({ contractVersion: 1, apiVersion: 1, privatePublishing }) : undefined);
     await expect(p.c.begin(skillId, p.receipt.declaration)).rejects.toMatchObject({ code: "PUBLICATION_CONTRACT_UNAVAILABLE" }); expect(s.calls).toHaveLength(1);
   }
@@ -212,7 +214,7 @@ test("resuming cancelled and expired intents cannot upload or finalize again", a
     s.losePut(); await expect(continuePrivatePublication(p.c, p.recovery, { confirm: true, waitMs: 0 })).rejects.toMatchObject({ uncertain: true });
     s.view.state = state; const before = s.calls.length;
     const result = await continuePrivatePublication(p.c, p.recovery, { confirm: true, waitMs: 0 });
-    expect(result).toMatchObject({ state, committed: false, executionEnabled: false });
+    expect(result).toMatchObject({ state, committed: false, executionEnabled: null });
     expect(s.calls.slice(before).every(c => c.method === "GET")).toBe(true); expect(s.uploads).toBe(1);
   }
 });
@@ -278,4 +280,53 @@ for (const [configured, apiPrefix] of [
   await c.begin(skillId, p.receipt.declaration);
   expect((await c.cancel(skillId, intentId)).state).toBe("cancelled");
   expect(cancelled.calls.some(row => row.method === "DELETE" && row.path === `${apiPrefix}/skills/${skillId}/publication-uploads/${intentId}`)).toBe(true);
+});
+
+for (const executionEnabled of [false, true]) test(`actual HTTP publication lifecycle accepts executionEnabled=${executionEnabled} without starting a run`, async () => {
+  const paths: string[] = [];
+  const view: PrivatePublicationView = { id: intentId, skillId, version: "1.0.0", expectedCurrentVersionId: null, archiveSha256: "a".repeat(64), archiveByteSize: 1,
+    state: "awaiting_upload", expiresAt: new Date(Date.now() + 60000).toISOString(), createdAt: new Date().toISOString(), versionId: null };
+  const http = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    const path = new URL(request.url).pathname; paths.push(`${request.method} ${path}`);
+    expect(request.headers.get("authorization")).toBe(`Bearer ${token}`);
+    if (path === "/api/v1/capabilities") return Response.json({ contractVersion: 1, apiVersion: 1, privatePublishing: { ...capability, executionEnabled } });
+    if (path.endsWith("/finalize")) return Response.json({ upload: { ...view, state: "committed", versionId } });
+    if (request.method === "DELETE") return Response.json({ upload: { ...view, state: "cancelled" } });
+    if (path.includes("/publication-uploads")) return Response.json({ upload: view });
+    return new Response(null, { status: 404 });
+  } });
+  try {
+    const c = new RemotePrivatePublicationsClient(http.url.origin, session);
+    const capabilityResult = await c.getCapability();
+    expect(capabilityResult.executionEnabled).toBe(executionEnabled); expect(Object.isFrozen(capabilityResult)).toBe(true);
+    const p = await prepared(c);
+    view.version = p.receipt.declaration.version; view.archiveSha256 = p.receipt.declaration.archiveSha256; view.archiveByteSize = p.receipt.declaration.archiveByteSize;
+    expect((await c.begin(skillId, p.receipt.declaration)).state).toBe("awaiting_upload");
+    expect((await c.get(skillId, intentId)).id).toBe(intentId);
+    expect((await c.finalize(skillId, intentId)).state).toBe("committed");
+    expect((await c.cancel(skillId, intentId)).state).toBe("cancelled");
+    expect(paths).toHaveLength(9);
+    expect(paths.filter(path => !path.endsWith("/capabilities"))).toEqual([
+      `POST /api/v1/skills/${skillId}/publication-uploads`, `GET /api/v1/skills/${skillId}/publication-uploads/${intentId}`,
+      `POST /api/v1/skills/${skillId}/publication-uploads/${intentId}/finalize`, `DELETE /api/v1/skills/${skillId}/publication-uploads/${intentId}`,
+    ]);
+  } finally { http.stop(true); }
+});
+
+test("actual HTTP malformed execution capability refuses before any publication mutation", async () => {
+  let executionEnabled: unknown, reads = 0, mutations = 0;
+  const http = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    if (new URL(request.url).pathname === "/api/v1/capabilities") {
+      reads++; return Response.json({ contractVersion: 1, apiVersion: 1, privatePublishing: { ...capability, executionEnabled } });
+    }
+    mutations++; return new Response(null, { status: 500 });
+  } });
+  try {
+    const c = new RemotePrivatePublicationsClient(http.url.origin, session), p = await prepared(c);
+    for (const malformed of [undefined, null, "true", "false", 0, 1, [], {}]) {
+      executionEnabled = malformed;
+      await expect(c.begin(skillId, p.receipt.declaration)).rejects.toMatchObject({ code: "PUBLICATION_CONTRACT_UNAVAILABLE" });
+    }
+    expect(reads).toBe(8); expect(mutations).toBe(0);
+  } finally { http.stop(true); }
 });

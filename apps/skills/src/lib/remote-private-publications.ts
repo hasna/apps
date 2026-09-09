@@ -17,7 +17,9 @@ export interface PrivatePublicationView {
 }
 export interface PrivatePublishingCapability {
   contractVersion: 1; enabled: boolean; authentication: "interactive-session";
-  maxArchiveBytes: 16777216; uploadMaxTtlSeconds: 300; executionEnabled: false;
+  maxArchiveBytes: 16777216; uploadMaxTtlSeconds: 300;
+  /** Server capability only; each execution still requires a separate quote and approval. */
+  executionEnabled: boolean;
 }
 /** Contains a short-lived bearer capability. Never print or persist this object. */
 export interface PrivatePublicationUpload {
@@ -147,7 +149,7 @@ export class RemotePrivatePublicationsClient {
     if (!record(response) || response.contractVersion !== 1 || response.apiVersion !== 1
       || !exact(p, ["contractVersion", "enabled", "authentication", "maxArchiveBytes", "uploadMaxTtlSeconds", "executionEnabled"])
       || p.contractVersion !== 1 || typeof p.enabled !== "boolean" || p.authentication !== "interactive-session"
-      || p.maxArchiveBytes !== PRIVATE_PUBLICATION_MAX_BYTES || p.uploadMaxTtlSeconds !== 300 || p.executionEnabled !== false)
+      || p.maxArchiveBytes !== PRIVATE_PUBLICATION_MAX_BYTES || p.uploadMaxTtlSeconds !== 300 || typeof p.executionEnabled !== "boolean")
       throw new PrivatePublicationError("PUBLICATION_CONTRACT_UNAVAILABLE", "This server does not support the hosted private publication contract.");
     return Object.freeze({ ...p }) as unknown as PrivatePublishingCapability;
   }
