@@ -513,6 +513,9 @@ export class SqliteSkillsStore implements SkillsProductStore {
       const previousSha = typeof previous?.bundle_sha256 === "string" ? previous.bundle_sha256 : null;
       const previousRevisionId = typeof previous?.revision_id === "string" && previous.revision_id ? previous.revision_id : null;
       const tombstoned = previous?.tombstoned_at != null;
+      if (input.seedBundledOnly && input.expectedRevisionId && !previous) {
+        throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, null);
+      }
       if (input.seedBundledOnly && previous && (tombstoned || previous.source !== "bundled")) {
         throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, previousRevisionId);
       }

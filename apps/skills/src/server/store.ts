@@ -265,6 +265,9 @@ export class MemorySkillsStore implements SkillsProductStore {
     const key = skillKey(input.principal.orgId, input.slug);
     const now = nowIso();
     const previous = this.skills.get(key);
+    if (input.seedBundledOnly && input.expectedRevisionId && !previous) {
+      throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, null);
+    }
     if (input.seedBundledOnly && previous && (previous.tombstonedAt || previous.source !== "bundled")) {
       throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, previous.revisionId);
     }
@@ -894,6 +897,9 @@ export class PostgresSkillsStore implements SkillsProductStore {
       const previousSha = typeof previous?.bundle_sha256 === "string" ? String(previous.bundle_sha256) : null;
       const previousRevisionId = typeof previous?.revision_id === "string" && previous.revision_id ? String(previous.revision_id) : null;
       const tombstoned = previous?.tombstoned_at != null;
+      if (input.seedBundledOnly && input.expectedRevisionId && !previous) {
+        throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, null);
+      }
       if (input.seedBundledOnly && previous && (tombstoned || previous.source !== "bundled")) {
         throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, previousRevisionId);
       }
@@ -955,6 +961,15 @@ export class PostgresSkillsStore implements SkillsProductStore {
         `;
       }
 
+      // Match ordinary publication's lock order (bundle, then registry) so a seed
+      // cannot deadlock a concurrent publisher by taking those locks in reverse.
+      // Lock before the upsert: a purge cannot turn an expected update into an insert.
+      if (input.seedBundledOnly) {
+        const seedRows = await tx`SELECT revision_id FROM skills_registry WHERE org_id = ${orgId} AND slug = ${input.slug} FOR UPDATE`;
+        if (input.expectedRevisionId && !seedRows[0]) {
+          throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, null);
+        }
+      }
       const rows = await tx`
         INSERT INTO skills_registry (org_id, slug, display_name, description, category, tags_json, source, kind, version, skill_md,
                                      bundle_sha256, bundle_byte_size, published_by_user_id, revision_id, revision_number, updated_at)

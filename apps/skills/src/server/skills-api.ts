@@ -488,6 +488,9 @@ export async function storePublishedSkill(
     // row's current revision. First publishes and revives over a tombstone need no guard.
     ...(expectedRevisionId ? { expectedRevisionId } : {}),
   };
+  if (input.seedBundledOnly && expectedRevisionId && !current) {
+    throw new SkillRevisionConflictError(input.slug, expectedRevisionId, null);
+  }
   if (input.seedBundledOnly && current && (current.tombstonedAt || current.source !== "bundled")) {
     throw new SkillRevisionConflictError(input.slug, expectedRevisionId, current.revisionId);
   }

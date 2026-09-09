@@ -65,8 +65,8 @@ for (const backend of backends) {
     try {
       const first = await seedBundledCorpus({ store, artifactStorage, principal, version: "seed-first" });
       expect(first.failed).toEqual([]);
-      const [custom, deleted, edited, legacy, racedCustom, racedDelete, racedMetadata, ordinary] = listServerSkills().slice(0, 8).map((skill) => skill.name) as [string, string, string, string, string, string, string, string];
-      const originals = new Map(await Promise.all([custom, deleted, edited, legacy, racedCustom, racedDelete, racedMetadata, ordinary].map(async (slug) => [slug, (await store.getSkill(principal, slug))!] as const)));
+      const [custom, deleted, edited, legacy, racedCustom, racedDelete, racedMetadata, racedPurge, ordinary] = listServerSkills().slice(0, 9).map((skill) => skill.name) as [string, string, string, string, string, string, string, string, string];
+      const originals = new Map(await Promise.all([custom, deleted, edited, legacy, racedCustom, racedDelete, racedMetadata, racedPurge, ordinary].map(async (slug) => [slug, (await store.getSkill(principal, slug))!] as const)));
       const immutable = await store.getSkillVersion(principal, ordinary, "seed-first");
       await store.publishSkill({ ...originals.get(custom)!, principal, source: "custom", skillMd: "# Customer custom document", expectedRevisionId: originals.get(custom)!.revisionId });
       await store.deleteSkill(principal, deleted, 86_400_000);
@@ -81,9 +81,14 @@ for (const backend of backends) {
       // Injection occurs at the final store boundary, AFTER storePublishedSkill's read
       // and artifact preparation. The actual backend still performs the guarded write.
       store.publishSkill = async (input) => {
-        if (input.seedBundledOnly && [racedCustom, racedDelete, racedMetadata].includes(input.slug)) {
+        if (input.seedBundledOnly && [racedCustom, racedDelete, racedMetadata, racedPurge].includes(input.slug)) {
           const before = (await store.getSkill(principal, input.slug))!;
-          if (input.slug === racedDelete) await store.deleteSkill(principal, input.slug, 86_400_000);
+          if (input.slug === racedPurge) {
+            await store.deleteSkill(principal, input.slug, 0);
+            await store.purgeExpiredTombstones(principal);
+            expect(await store.getSkill(principal, input.slug)).toBeNull();
+          }
+          else if (input.slug === racedDelete) await store.deleteSkill(principal, input.slug, 86_400_000);
           else if (input.slug === racedMetadata) await store.updateSkill(principal, input.slug, { description: "Racing metadata edit" }, before.revisionId);
           else await publish({ ...before, principal, source: "custom", skillMd: "# Racing customer", expectedRevisionId: before.revisionId });
           raceSnapshots.set(input.slug, await store.getSkill(principal, input.slug));
@@ -93,12 +98,12 @@ for (const backend of backends) {
       const next = await seedBundledCorpus({ store, artifactStorage, principal, version: "seed-next" });
       store.publishSkill = publish;
       expect(next.failed).toEqual([]);
-      for (const slug of [custom, deleted, edited, legacy, racedCustom, racedDelete, racedMetadata]) {
+      for (const slug of [custom, deleted, edited, legacy, racedCustom, racedDelete, racedMetadata, racedPurge]) {
         expect(next.skipped).toContain(slug);
         expect(await store.getSkill(principal, slug)).toEqual(untouched.get(slug) ?? raceSnapshots.get(slug) ?? null);
         expect(await store.getSkillVersion(principal, slug, "seed-next")).toBeNull();
       }
-      expect(raceSnapshots.size).toBe(3);
+      expect(raceSnapshots.size).toBe(4);
       expect(await store.getSkill(other, ordinary)).toEqual(otherBefore);
       expect(await store.getSkillVersion(principal, ordinary, "seed-first")).toEqual(immutable);
       expect(next.seeded).toContain(`${ordinary}@seed-next`);
