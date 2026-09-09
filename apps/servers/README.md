@@ -207,3 +207,11 @@ See [Database](docs/database.md) for initialization and concurrency details.
 ```bash
 bun add -g @hasna/servers
 ```
+
+## Development previews
+
+`servers preview` manages stable, Cloudflare Access-protected `workers.dev` URLs
+for many products and local workstations. It reuses managed local server lifecycle
+and supports named previews, explicit takeover, streaming and hot reload. See
+[the preview guide](docs/previews.md) for account setup, portable
+`servers.config.json`, commands, OAuth callbacks, and SDK/MCP interfaces.

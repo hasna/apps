@@ -24,30 +24,35 @@
 // shell may export this package's client configuration, and enumerating those
 // keys here would add references the mode-axis ratchet counts).
 
-import { afterAll, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SCRUBBED_ENV_PREFIXES = ["EMAILS_", "HASNA_EMAILS_", "MAILERY_", "HASNA_MAILERY_"] as const;
-const SCRUBBED_ENV_KEYS = [
-  "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
-  "RESEND_API_KEY",
-] as const;
-
+import { buildPrepublishTestEnv } from "../../../scripts/prepublish-local-test.mjs";
+import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
+let api: V1Stub;
 const tempDirs: string[] = [];
-
-function localEnv(): NodeJS.ProcessEnv {
+beforeAll(async () => { api = await startV1Stub({ openapi: true, apiKey: crypto.randomUUID() }); });
+beforeEach(async () => { await api.reset(); });
+afterEach(() => {
+  for (const dir of tempDirs) {
+    const mailFiles = readdirSync(dir, { recursive: true }).filter((name) => /\.(?:db|sqlite)(?:-|$)/.test(String(name)));
+    expect(mailFiles).toEqual([]);
+  }
+});
+function apiEnv(): NodeJS.ProcessEnv {
   const dir = mkdtempSync(join(tmpdir(), "emails-json-truth-"));
   tempDirs.push(dir);
-  const homePath = join(dir, "home");
-  mkdirSync(homePath, { recursive: true, mode: 0o700 });
-  const base = { ...process.env };
-  for (const key of Object.keys(base)) {
-    if (SCRUBBED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) delete base[key];
-  }
-  for (const key of SCRUBBED_ENV_KEYS) delete base[key];
-  return { ...base, EMAILS_DB_PATH: join(dir, "emails.db"), HOME: homePath, NO_COLOR: "1" };
+  mkdirSync(join(dir, "tmp"), { mode: 0o700 });
+  return {
+    ...buildPrepublishTestEnv(process.env, dir),
+    HASNA_STATION: `emails-json-truth-${crypto.randomUUID()}`,
+    HASNA_EMAILS_API_URL: api.baseUrl,
+    HASNA_EMAILS_API_KEY: api.apiKey,
+    EMAILS_CLIENT_ENV_LOADED: "1",
+    NO_COLOR: "1",
+  };
 }
 
 interface CliRun {
@@ -58,7 +63,7 @@ interface CliRun {
 
 function runCli(args: string[], env: NodeJS.ProcessEnv): CliRun {
   const result = Bun.spawnSync({
-    cmd: ["bun", "src/cli/index.tsx", ...args],
+    cmd: [process.execPath, "src/cli/index.tsx", ...args],
     cwd: process.cwd(),
     env,
     stdout: "pipe",
@@ -88,12 +93,13 @@ function structured(run: CliRun, what: string): unknown {
 }
 
 afterAll(() => {
+  api.stop();
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
 });
 
 describe("template/sequence read surfaces are structured under --json", () => {
   it("template show --json returns the template row", () => {
-    const env = localEnv();
+    const env = apiEnv();
     expect(runCli(["template", "add", "welcome", "--subject", "Hi {{name}}", "--text", "Body {{name}}"], env).exitCode).toBe(0);
 
     const doc = structured(runCli(["--json", "template", "show", "welcome"], env), "template show") as Record<string, unknown>;
@@ -103,7 +109,7 @@ describe("template/sequence read surfaces are structured under --json", () => {
   }, 120_000);
 
   it("template preview --json returns the rendered subject and body", () => {
-    const env = localEnv();
+    const env = apiEnv();
     expect(runCli(["template", "add", "welcome", "--subject", "Hi {{name}}", "--text", "Body {{name}}"], env).exitCode).toBe(0);
 
     const doc = structured(
@@ -115,7 +121,7 @@ describe("template/sequence read surfaces are structured under --json", () => {
   }, 120_000);
 
   it("sequence show --json returns the sequence with its steps", () => {
-    const env = localEnv();
+    const env = apiEnv();
     expect(runCli(["template", "add", "step-one", "--subject", "s", "--text", "b"], env).exitCode).toBe(0);
     expect(runCli(["sequence", "create", "drip", "--description", "d"], env).exitCode).toBe(0);
     expect(runCli(["sequence", "step", "add", "drip", "--step", "1", "--delay", "24", "--template", "step-one"], env).exitCode).toBe(0);
@@ -128,7 +134,7 @@ describe("template/sequence read surfaces are structured under --json", () => {
   }, 120_000);
 
   it("export emails --json emits the export once, not a double-encoded string", () => {
-    const env = localEnv();
+    const env = apiEnv();
     const doc = structured(runCli(["--json", "export", "emails"], env), "export emails");
     expect(Array.isArray(doc), `export must be the exported rows, got: ${JSON.stringify(doc).slice(0, 200)}`).toBe(true);
   }, 120_000);
@@ -136,7 +142,7 @@ describe("template/sequence read surfaces are structured under --json", () => {
 
 describe("mutation verbs answer structured data under --json", () => {
   it("template add/remove, sequence create, group create, contact suppress", () => {
-    const env = localEnv();
+    const env = apiEnv();
 
     const added = structured(runCli(["--json", "template", "add", "t", "--subject", "s", "--text", "b"], env), "template add") as Record<string, unknown>;
     expect(added["name"]).toBe("t");
@@ -158,7 +164,7 @@ describe("mutation verbs answer structured data under --json", () => {
 
 describe("inbox search --json keeps one shape", () => {
   it("answers [] on zero hits, matching the non-empty array shape", () => {
-    const env = localEnv();
+    const env = apiEnv();
     const run = runCli(["--json", "inbox", "search", "no-such-string-anywhere-zzz"], env);
     expect(run.exitCode, run.stderr).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual([]);
@@ -172,13 +178,13 @@ describe("not-found errors converge on handleError", () => {
     ["inbox", "mark-read", "zzzzzzzz"],
   ] as const) {
     it(`\`${command.join(" ")}\` --json puts {"error":{...}} on stderr, nothing on stdout`, () => {
-      const env = localEnv();
+      const env = apiEnv();
       const run = runCli(["--json", ...command], env);
 
       expect(run.exitCode).toBe(1);
       const failure = JSON.parse(run.stderr) as { error: { message: string } };
-      // The local arm's id resolver phrases the miss as "Could not resolve ID";
-      // the seam paths say "Email not found". Both are the same failure class —
+      // ID resolution may say "Could not resolve ID" or "Email not found".
+      // Both are the same failure class —
       // what this suite pins is the STREAM and the SHAPE, not the wording.
       expect(failure.error.message).toMatch(/not found|could not resolve/i);
       expect(run.stdout.trim(), "the error document must not land on stdout").toBe("");

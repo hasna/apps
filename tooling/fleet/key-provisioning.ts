@@ -59,6 +59,7 @@ export const KEY_PROBE_PATH = "/v1/__fleet-key-probe__";
 export const REFUSAL_STATUSES = [401, 403] as const;
 
 export type AppSource = "monorepo" | "external";
+export type AuthMode = "fleet-api-key" | "user-oauth";
 
 /**
  * How an app's client key is checked.
@@ -71,12 +72,18 @@ export type AppSource = "monorepo" | "external";
  *   hole. An entry may only claim it with `notes` saying why.
  */
 export type KeyCheck = "probe" | "none";
+export type ProbeAuth = "x-api-key" | "bearer";
 
 /** One registry entry as written in hosted-apps.json. */
 export interface FleetAppEntry {
   app: string;
   source: AppSource;
   baseUrl?: string;
+  authMode?: AuthMode;
+  targetClientBase?: string;
+  issuer?: string;
+  healthPath?: string;
+  unauthenticatedPath?: string;
   keySecretId?: string;
   /**
    * Path appended to `baseUrl` for the probe. Defaults to
@@ -86,21 +93,42 @@ export interface FleetAppEntry {
    * from a dead one there and must name a real gated route instead.
    */
   probePath?: string;
+  /** Authentication scheme required by this app's origin. */
+  probeAuth?: ProbeAuth;
   keyCheck?: KeyCheck;
   notes?: string;
 }
 
 /** A registry entry with every default resolved. */
-export interface FleetApp {
+interface HostedApp {
   app: string;
   source: AppSource;
   /** Base URL WITHOUT a trailing slash and WITHOUT the `/v1` suffix. */
   baseUrl: string;
-  keySecretId: string;
-  probePath: string;
-  keyCheck: KeyCheck;
+  targetClientBase: string;
   notes?: string;
 }
+
+export interface FleetApiKeyApp extends HostedApp {
+  authMode: "fleet-api-key";
+  keySecretId: string;
+  probePath: string;
+  probeAuth?: ProbeAuth;
+  keyCheck: KeyCheck;
+}
+
+export interface UserOAuthApp extends HostedApp {
+  authMode: "user-oauth";
+  issuer: string;
+  healthPath: string;
+  unauthenticatedPath: string;
+  keySecretId?: never;
+  probePath?: never;
+  probeAuth?: never;
+  keyCheck?: never;
+}
+
+export type FleetApp = FleetApiKeyApp | UserOAuthApp;
 
 /** Secrets Manager id of an app's client key. */
 export function keySecretIdFor(app: string): string {
@@ -126,6 +154,25 @@ export function probeUrlFor(baseUrl: string, probePath: string = KEY_PROBE_PATH)
 
 const APP_SLUG = /^[a-z][a-z0-9-]*$/;
 
+function httpsUrl(value: string, app: string, field: string): string {
+  let url: URL;
+  try { url = new URL(value); } catch {
+    throw new Error(`hosted-apps.json: ${app}: ${field} must be https`);
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash ||
+      url.href.replace(/\/+$/, "") !== value.replace(/\/+$/, "")) {
+    throw new Error(`hosted-apps.json: ${app}: ${field} must be https with no credentials, query, fragment or normalized path`);
+  }
+  return value.replace(/\/+$/, "");
+}
+
+function boundaryPath(value: string | undefined, app: string, field: string): string {
+  if (typeof value !== "string" || !/^\/v1\/[a-zA-Z0-9/_-]+$/.test(value) || value.includes("//")) {
+    throw new Error(`hosted-apps.json: ${app}: ${field} must be an explicit /v1/ route`);
+  }
+  return value;
+}
+
 /** Resolve one raw entry, validating it. Throws with the offending app named. */
 export function resolveEntry(entry: FleetAppEntry): FleetApp {
   if (!APP_SLUG.test(entry.app ?? "")) {
@@ -140,6 +187,43 @@ export function resolveEntry(entry: FleetAppEntry): FleetApp {
         `an unexplained external entry is how a deleted app stays in the daily check forever`,
     );
   }
+  const authMode = entry.authMode ?? "fleet-api-key";
+  if (authMode !== "fleet-api-key" && authMode !== "user-oauth") {
+    throw new Error(`hosted-apps.json: ${entry.app}: unsupported authMode`);
+  }
+  const targetClientBase = defaultBaseUrlFor(entry.app);
+  if (entry.targetClientBase !== undefined && entry.targetClientBase !== targetClientBase) {
+    throw new Error(`hosted-apps.json: ${entry.app}: targetClientBase must be ${targetClientBase} without /v1`);
+  }
+  const baseUrl = httpsUrl(entry.baseUrl ?? targetClientBase, entry.app, "baseUrl");
+  if (/(^|\/)v1(\/|$)/.test(new URL(baseUrl).pathname)) {
+    throw new Error(`hosted-apps.json: ${entry.app}: baseUrl must not include /v1`);
+  }
+  if (baseUrl !== targetClientBase && !entry.notes?.trim()) {
+    throw new Error(`hosted-apps.json: ${entry.app}: a baseUrl override must carry notes saying why`);
+  }
+  const shared = { app: entry.app, source: entry.source, baseUrl, targetClientBase,
+    ...(entry.notes ? { notes: entry.notes } : {}) };
+  if (authMode === "user-oauth") {
+    if (!entry.notes?.trim() || typeof entry.issuer !== "string") {
+      throw new Error(`hosted-apps.json: ${entry.app}: user-oauth requires notes and issuer`);
+    }
+    for (const field of ["keySecretId", "keyCheck", "probePath", "probeAuth", "mintTarget"] as const) {
+      if (Object.hasOwn(entry, field)) {
+        throw new Error(`hosted-apps.json: ${entry.app}: user-oauth cannot set ${field}`);
+      }
+    }
+    const healthPath = boundaryPath(entry.healthPath, entry.app, "healthPath");
+    const unauthenticatedPath = boundaryPath(entry.unauthenticatedPath, entry.app, "unauthenticatedPath");
+    if (healthPath === unauthenticatedPath) {
+      throw new Error(`hosted-apps.json: ${entry.app}: health and protected routes must differ`);
+    }
+    return { ...shared, authMode, issuer: httpsUrl(entry.issuer, entry.app, "issuer"),
+      healthPath, unauthenticatedPath };
+  }
+  if (["issuer", "healthPath", "unauthenticatedPath"].some((field) => Object.hasOwn(entry, field))) {
+    throw new Error(`hosted-apps.json: ${entry.app}: OAuth fields require authMode user-oauth`);
+  }
   const keyCheck: KeyCheck = entry.keyCheck ?? "probe";
   if (keyCheck !== "probe" && keyCheck !== "none") {
     throw new Error(`hosted-apps.json: ${entry.app}: keyCheck must be "probe" or "none"`);
@@ -153,22 +237,21 @@ export function resolveEntry(entry: FleetAppEntry): FleetApp {
   if (keyCheck === "none" && entry.probePath) {
     throw new Error(`hosted-apps.json: ${entry.app}: keyCheck "none" cannot also set probePath`);
   }
+  const probeAuth = entry.probeAuth ?? "x-api-key";
+  if (probeAuth !== "x-api-key" && probeAuth !== "bearer") {
+    throw new Error(`hosted-apps.json: ${entry.app}: probeAuth must be "x-api-key" or "bearer"`);
+  }
   const probePath = entry.probePath ?? KEY_PROBE_PATH;
   if (!probePath.startsWith("/")) {
     throw new Error(`hosted-apps.json: ${entry.app}: probePath must start with "/"`);
   }
-  const baseUrl = (entry.baseUrl ?? defaultBaseUrlFor(entry.app)).replace(/\/+$/, "");
-  if (!baseUrl.startsWith("https://")) {
-    throw new Error(`hosted-apps.json: ${entry.app}: baseUrl must be https`);
-  }
   return {
-    app: entry.app,
-    source: entry.source,
-    baseUrl,
+    ...shared,
+    authMode,
     keySecretId: entry.keySecretId ?? keySecretIdFor(entry.app),
     probePath,
+    probeAuth,
     keyCheck,
-    ...(entry.notes ? { notes: entry.notes } : {}),
   };
 }
 
@@ -275,11 +358,16 @@ export type KeyState =
   /** A secret exists but the origin refuses it — the projects/knowledge failure. Re-mint. */
   | "rejected"
   /** A secret exists but the probe could not prove anything. Report, do not re-mint. */
-  | "unverifiable";
+  | "unverifiable"
+  /** Public health=200 and anonymous protected route=401; no user login tested. */
+  | "user-auth-observed"
+  | "user-auth-failed"
+  | "user-auth-unverifiable";
 
 export interface KeyAssessment {
   app: string;
   state: KeyState;
+  authMode?: AuthMode;
   /** One line, safe to print and to post to #incidents. Never carries a key. */
   detail: string;
 }
@@ -337,7 +425,7 @@ export function assessKey(input: AssessInput): KeyAssessment {
 }
 
 /** States that must fail the daily check and open an incident. */
-export const FAILING_STATES: readonly KeyState[] = ["missing", "rejected"];
+export const FAILING_STATES: readonly KeyState[] = ["missing", "rejected", "user-auth-failed"];
 
 /**
  * Partition assessments into failures, warnings and passes.
@@ -350,18 +438,20 @@ export const FAILING_STATES: readonly KeyState[] = ["missing", "rejected"];
 export function partition(
   assessments: readonly KeyAssessment[],
   options: { strict?: boolean } = {},
-): { failures: KeyAssessment[]; warnings: KeyAssessment[]; passes: KeyAssessment[]; exempt: KeyAssessment[] } {
+): { failures: KeyAssessment[]; warnings: KeyAssessment[]; passes: KeyAssessment[]; exempt: KeyAssessment[]; observed: KeyAssessment[] } {
   const failures: KeyAssessment[] = [];
   const warnings: KeyAssessment[] = [];
   const passes: KeyAssessment[] = [];
   const exempt: KeyAssessment[] = [];
+  const observed: KeyAssessment[] = [];
   for (const a of assessments) {
     if (FAILING_STATES.includes(a.state)) failures.push(a);
-    else if (a.state === "unverifiable") (options.strict ? failures : warnings).push(a);
+    else if (a.state === "unverifiable" || a.state === "user-auth-unverifiable") (options.strict ? failures : warnings).push(a);
     else if (a.state === "exempt") exempt.push(a);
+    else if (a.state === "user-auth-observed") observed.push(a);
     else passes.push(a);
   }
-  return { failures, warnings, passes, exempt };
+  return { failures, warnings, passes, exempt, observed };
 }
 
 /**
@@ -373,21 +463,29 @@ export function renderIncidentReport(input: {
   warnings: readonly KeyAssessment[];
   passes: readonly KeyAssessment[];
   exempt?: readonly KeyAssessment[];
+  observed?: readonly KeyAssessment[];
   runUrl?: string;
 }): string {
   const exempt = input.exempt ?? [];
+  const observed = input.observed ?? [];
   const lines: string[] = [];
   lines.push(
     `fleet client-API-key drift: ${input.failures.length} failing, ${input.warnings.length} unverified, ` +
-      `${input.passes.length} healthy, ${exempt.length} exempt`,
+      `${input.passes.length} healthy, ${exempt.length} exempt, ${observed.length} user-auth boundaries observed`,
   );
   for (const f of input.failures) lines.push(`FAIL ${f.app}: ${f.detail}`);
   for (const w of input.warnings) lines.push(`WARN ${w.app}: ${w.detail}`);
   for (const e of exempt) lines.push(`EXEMPT ${e.app}: ${e.detail}`);
-  lines.push(
-    "Remedy: re-run the app's deploy lane, or mint by hand with the in-VPC one-off task " +
-      "(hasna-ops-mint-key-<app>); see hasna/apps#1595.",
-  );
+  for (const o of observed) lines.push(`OBSERVED ${o.app}: ${o.detail}`);
+  if ([...input.failures, ...input.warnings, ...input.passes, ...exempt].some((a) => a.authMode !== "user-oauth")) {
+    lines.push(
+      "Fleet-api-key remedy: re-run the app's deploy lane, or mint by hand with the in-VPC one-off task " +
+        "(hasna-ops-mint-key-<app>); see hasna/apps#1595.",
+    );
+  }
+  if ([...input.failures, ...input.warnings, ...observed].some((a) => a.authMode === "user-oauth")) {
+    lines.push("User-oauth: no shared key is read or minted. Check route/auth configuration; user sign-in and membership acceptance remain separate.");
+  }
   if (input.runUrl) lines.push(input.runUrl);
   return lines.join("\n");
 }
@@ -400,7 +498,7 @@ export interface Io {
   /** Read a Secrets Manager string value; `null` when the secret does not exist. */
   readSecret(secretId: string, region: string): Promise<string | null>;
   /** GET a URL, returning the status; `null` when the request did not complete. */
-  probe(url: string, apiKey: string | null): Promise<number | null>;
+  probe(url: string, apiKey: string | null, options?: { anonymousBoundary?: true; auth?: ProbeAuth }): Promise<number | null>;
   /** Run one `aws` invocation, returning stdout. Throws on a non-zero exit. */
   aws(args: readonly string[]): Promise<string>;
 }
@@ -552,13 +650,18 @@ export function createIo(options: { timeoutMs?: number } = {}): Io {
         throw new Error(`reading ${secretId} failed: ${firstLine(stderr) || (e as Error).message}`);
       }
     },
-    async probe(url, apiKey) {
+    async probe(url, apiKey, options) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const headers: Record<string, string> = { accept: "application/json" };
-        if (apiKey) headers["x-api-key"] = apiKey;
-        const response = await fetch(url, { method: "GET", headers, signal: controller.signal });
+        if (apiKey && !options?.anonymousBoundary) {
+          if (options?.auth === "bearer") headers.authorization = `Bearer ${apiKey}`;
+          else headers["x-api-key"] = apiKey;
+        }
+        const response = await fetch(url, { method: "GET", headers, signal: controller.signal,
+          redirect: options?.anonymousBoundary ? "manual" : "error", credentials: "omit" });
+        if (options?.anonymousBoundary) await response.body?.cancel();
         return response.status;
       } catch {
         return null;
@@ -576,14 +679,29 @@ function firstLine(text: string): string {
 
 /** Probe one app two-sidedly and assess it. */
 export async function checkApp(app: FleetApp, io: Io, region: string): Promise<KeyAssessment> {
+  // This branch must precede ALL secret IO. User identity and membership are
+  // owned by the app, never replaced with a station-wide key or audit token.
+  if (app.authMode === "user-oauth") {
+    const health = await io.probe(probeUrlFor(app.baseUrl, app.healthPath), null, { anonymousBoundary: true });
+    const protectedStatus = await io.probe(probeUrlFor(app.baseUrl, app.unauthenticatedPath), null, { anonymousBoundary: true });
+    // An observed wrong boundary must not hide behind an outage on the other
+    // request (for example, health=503 while the protected route serves 200).
+    const failed = (health !== null && !isInconclusiveStatus(health) && health !== 200) ||
+      (protectedStatus !== null && !isInconclusiveStatus(protectedStatus) && protectedStatus !== 401);
+    const state = failed ? "user-auth-failed" : health === 200 && protectedStatus === 401
+      ? "user-auth-observed" : "user-auth-unverifiable";
+    return { app: app.app, authMode: app.authMode, state,
+      detail: `public health=${health ?? "n/a"}, anonymous protected route=${protectedStatus ?? "n/a"}; expected 200/401; ` +
+        `user sign-in and membership NOT tested (issuer ${app.issuer}; current base ${app.baseUrl}; target ${app.targetClientBase})` };
+  }
   const secret = await io.readSecret(app.keySecretId, region);
   if (!secret) return assessKey({ app: app.app, secretPresent: false, verdict: "unreachable" });
   if (app.keyCheck === "none") {
     return assessKey({ app: app.app, secretPresent: true, verdict: "unreachable", keyCheck: "none" });
   }
   const url = probeUrlFor(app.baseUrl, app.probePath);
-  const withoutKey = await io.probe(url, null);
-  const withKey = await io.probe(url, secret);
+  const withoutKey = await io.probe(url, null, { auth: app.probeAuth });
+  const withKey = await io.probe(url, secret, { auth: app.probeAuth });
   const verdict = classifyProbe(withoutKey, withKey);
   return assessKey({ app: app.app, secretPresent: true, verdict, statuses: { withoutKey, withKey } });
 }
@@ -795,7 +913,14 @@ export function rotationNotice(app: string): string {
  * readable and testable without AWS, a network or a workflow.
  */
 export function planMint(assessment: KeyAssessment, options: { allowRotate?: boolean } = {}): MintPlan {
+  if (assessment.authMode === "user-oauth") {
+    return { action: "refuse", reason: `${assessment.app} uses per-user OAuth; shared fleet keys must never be minted or rotated` };
+  }
   switch (assessment.state) {
+    case "user-auth-observed":
+    case "user-auth-failed":
+    case "user-auth-unverifiable":
+      return { action: "refuse", reason: `${assessment.app} uses per-user OAuth; shared fleet keys must never be minted or rotated` };
     case "verified":
       return { action: "none", reason: assessment.detail };
     case "exempt":

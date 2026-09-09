@@ -488,6 +488,12 @@ export async function storePublishedSkill(
     // row's current revision. First publishes and revives over a tombstone need no guard.
     ...(expectedRevisionId ? { expectedRevisionId } : {}),
   };
+  if (input.seedBundledOnly && expectedRevisionId && !current) {
+    throw new SkillRevisionConflictError(input.slug, expectedRevisionId, null);
+  }
+  if (input.seedBundledOnly && current && (current.tombstonedAt || current.source !== "bundled")) {
+    throw new SkillRevisionConflictError(input.slug, expectedRevisionId, current.revisionId);
+  }
   // The optimistic-concurrency guard is answered first, the way the stores answer it: a
   // writer that has not read the live row (no or stale If-Match) gets REVISION_CONFLICT
   // before anything is said about versions, so the two refusals keep their existing order.

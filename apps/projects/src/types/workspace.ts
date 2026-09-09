@@ -1,12 +1,21 @@
 import type {
-  ProjectResourceAuthority as ContractsProjectResourceAuthority,
-  ProjectResourceLink as ContractsProjectResourceLink,
+  ProjectResourceAuthority,
+  ProjectResourceLink,
   ProjectResourceLinkCollectionV1,
-  ProjectResourceLinkInput as ContractsProjectResourceLinkInput,
-  ProjectResourceLinkLabels as ContractsProjectResourceLinkLabels,
-  ProjectResourceLinkLocator as ContractsProjectResourceLinkLocator,
-  ProjectResourceTargetKind as ContractsProjectResourceTargetKind,
-} from "@hasna/contracts/schemas";
+  ProjectResourceLinkInput,
+  ProjectResourceLinkLabels,
+  ProjectResourceLinkLocator,
+  ProjectResourceTargetKind,
+} from "./client-types.js";
+export type {
+  ProjectResourceAuthority,
+  ProjectResourceLink,
+  ProjectResourceLinkCollectionV1,
+  ProjectResourceLinkInput,
+  ProjectResourceLinkLabels,
+  ProjectResourceLinkLocator,
+  ProjectResourceTargetKind,
+} from "./client-types.js";
 
 export const WORKSPACE_STATUSES = ["active", "archived", "deleted"] as const;
 export type WorkspaceStatus = (typeof WORKSPACE_STATUSES)[number];
@@ -462,7 +471,6 @@ export interface GuardedProjectMutationRollbackRequest extends GuardedProjectMut
 }
 
 export const PROJECT_RESOURCE_AUTHORITIES = ["todos", "conversations", "knowledge", "mementos", "orgs", "contacts"] as const;
-export type ProjectResourceAuthority = ContractsProjectResourceAuthority;
 
 export const PROJECT_RESOURCE_LOCATOR_KINDS = [
   "external_uuid",
@@ -475,13 +483,7 @@ export const PROJECT_RESOURCE_LINK_SCOPES = ["resource", "collection"] as const;
 export type ProjectResourceLinkScope = (typeof PROJECT_RESOURCE_LINK_SCOPES)[number];
 export const PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS = 1_000;
 
-export type ProjectResourceTargetKind = ContractsProjectResourceTargetKind;
-export type ProjectResourceLinkLabels = ContractsProjectResourceLinkLabels;
-export type ProjectResourceLinkLocator = ContractsProjectResourceLinkLocator;
 export type ProjectResourceExternalUuidLocator = Extract<ProjectResourceLinkLocator, { kind: "external_uuid" }>;
-export type ProjectResourceLinkInput = ContractsProjectResourceLinkInput;
-export type ProjectResourceLink = ContractsProjectResourceLink;
-export type { ProjectResourceLinkCollectionV1 };
 
 export interface ProjectResourceLinkRow {
   id: string;

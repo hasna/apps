@@ -108,6 +108,11 @@ class FakeProjectRegistrationClient implements PoolQueryClient {
 
   private rows(sql: string, params: readonly unknown[] = []): Array<Record<string, unknown>> {
     const query = normalizedSql(sql);
+    // This unit corpus is initialized without historical adoption mappings.
+    if (query.includes("JOIN conversations_corpus_legacy_receipts m")) return [];
+    if (query.includes("FROM conversations_corpus_binding b JOIN project_channel_registration_identity")) {
+      return [{corpus_id:this.state.corpusId,tenant_id:"default",authority_id:"conversations",receipt_id:"fixture-adoption",actor:"fixture",adopted_at:"2026-09-07T00:00:00Z",legacy_receipt_count:0,legacy_receipt_digest:"0".repeat(64)}];
+    }
     if (query.includes("FROM project_channel_registration_identity")) {
       return [{ corpus_id: this.state.corpusId }];
     }
@@ -1435,6 +1440,7 @@ describe("PostgreSQL project channel registration authority", () => {
           ok: true,
           principal: {
             agent: "projects-adapter",
+            tid: "default",
             scopes: ["conversations:read", "conversations:write"],
           },
         };

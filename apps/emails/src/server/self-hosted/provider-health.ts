@@ -7,7 +7,7 @@ export async function readProviderHealth(store: TenantScopedStore, tenantId: str
   if (!provider) return null;
   const base = { provider_id: providerId, name: String(provider.name ?? providerId), type: String(provider.type), active: provider.active !== false, checked: false };
   if (provider.active === false) return { ...base, status: "inactive", message: "Provider is inactive." };
-  const sender = resolveSender?.(tenantId, providerId);
+  const sender = await resolveSender?.(tenantId, providerId);
   if (!sender) return { ...base, status: "unconfigured", message: "Configure EMAILS_SENDER_BINDINGS for this tenant/provider on the server." };
   if (sender.provider !== provider.type) return { ...base, status: "misconfigured", message: "Provider type does not match its server binding." };
   const bound = { ...base, credential_source: sender.credentialSource ?? "server_binding", ...(sender.region ? { region: sender.region } : {}) };

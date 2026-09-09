@@ -3,7 +3,7 @@ import { storeArtifactContent, verifyStoredArtifact, type ArtifactIntegrityRepor
 import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { sanitizePreWriteText, sanitizePreWriteValue } from "../lib/prewrite-secrets.js";
-import { TaskNotFoundError } from "../types/index.js";
+import { InputValidationError, TaskNotFoundError } from "../types/index.js";
 import { addComment } from "./comments.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { addTaskFile, type TaskFile } from "./task-files.js";
@@ -735,7 +735,11 @@ export function finishTaskRunTransaction(
       : null;
 
   if (!run) {
-    throw new Error(input.run_id ? `Run not found: ${input.run_id}` : "runs finish requires a run id or --key");
+    // Caller-input refusal: typed so the MCP formatter returns INVALID_INPUT
+    // rather than sanitizing it to UNKNOWN_ERROR (measured on the zero-argument
+    // census under HASNA_TODOS_LOCAL=1).
+    if (input.run_id) throw new InputValidationError(`Run not found: ${input.run_id}`, "Pass an existing run id, or --key.");
+    throw new InputValidationError("runs finish requires a run id or --key", "Pass run_id, or key with task_id.");
   }
   if (input.task_id && run.task_id !== input.task_id) {
     throw new Error(`Run ${run.id} belongs to task ${run.task_id}, not ${input.task_id}`);

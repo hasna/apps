@@ -10,6 +10,7 @@
 // SAFETY: the bearer key lives only inside the transport; it is never logged,
 // returned, or embedded in any value produced here.
 
+import { HasnaHttpError } from "@hasna/contracts/client";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { randomUUID } from "crypto";
 import type { ConversationsStore } from "./index.js";
@@ -63,6 +64,9 @@ import type {
   MessagePreview,
   MessagePreviewPage,
 } from "../../types.js";
+import type { DrainEventOutboxResult } from "../events-bridge.js";
+import type { SaveFeedbackResult } from "../feedback.js";
+import type { RedactMessagesResult } from "../admin-redaction.js";
 
 /**
  * The row ceiling the hosted `/messages` route clamps every read to.
@@ -216,7 +220,16 @@ export class ApiStore implements ConversationsStore {
     return this.t.get<T>(path, { query: prune(query), timeoutMs, retry: false });
   }
   private async post<T>(path: string, body?: unknown, query?: Q): Promise<T> {
-    return this.t.post<T>(path, body, query ? { query: prune(query) } : undefined);
+    try {
+      return await this.t.post<T>(path, body, query ? { query: prune(query) } : undefined);
+    } catch (error) {
+      if (path === "/projects" && isHttpStatus(error, 409)) {
+        const failure = new HasnaHttpError("POST", path, 409, { error: "Project name already exists" });
+        failure.message = "Project name already exists";
+        throw failure;
+      }
+      throw error;
+    }
   }
   private async patch<T>(path: string, body?: unknown): Promise<T> {
     return this.t.patch<T>(path, body);
@@ -890,6 +903,7 @@ export class ApiStore implements ConversationsStore {
     ) as never;
   };
   sendMessage: ConversationsStore["sendMessage"] = async (opts) => {
+    if (opts.channel !== undefined) assertNoSensitiveContent(opts.channel, "Message channel");
     if (opts.tenant_id !== undefined) {
       throw new Error("tenant_id is owned by the active storage context and cannot be supplied on a message write.");
     }
@@ -925,7 +939,23 @@ export class ApiStore implements ConversationsStore {
       reply_to: opts.reply_to ?? undefined,
       reply_to_uuid: replyUuid ?? undefined,
       attachments: attachmentUploads.length > 0 ? attachmentUploads : undefined,
+    }).catch((error: unknown) => {
+      const raw = error && typeof error === "object" ? (error as { body?: unknown }).body : null;
+      let response = raw;
+      if (typeof raw === "string" && raw.length <= 4096) {
+        try { response = JSON.parse(raw); } catch { response = null; }
+      }
+      const diagnostic = response && typeof response === "object" ? (response as Record<string, unknown>).error : null;
+      if (isHttpStatus(error, 400) && typeof diagnostic === "string" &&
+        /^(?:Message content|Message metadata|Message sender|Message recipient|Message session|Message channel) blocked: sensitive content detected \([^()\r\n]{1,256}\)\. Remove secrets before sending\.$/.test(diagnostic)) {
+        const message = "Message blocked: sensitive content detected. Remove secrets before sending.";
+        const failure = new HasnaHttpError("POST", "/messages", 400, { error: message, code: "SENSITIVE_CONTENT" });
+        failure.message = message;
+        throw failure;
+      }
+      throw error;
     });
+
     const returned = parseMessage(body.message);
     if (returned.uuid === messageUuid) {
       return attachSendRedaction(opts.content, returned) as never;
@@ -1105,10 +1135,11 @@ export class ApiStore implements ConversationsStore {
     const previewBytes = resolveCollectionPreviewBytes(opts.preview_bytes ?? opts.max_content_length);
     const timeoutMs = resolveCollectionTimeoutMs(opts.timeout_ms);
     const since = strictOptionalSince(opts.since, "since");
-    return await this.getBounded<MessagePreviewPage>("/messages", {
+    const window = resolveReadWindow({ ...opts, since });
+    const page = await this.getBounded<MessagePreviewPage>("/messages", {
       limit,
       cursor,
-      order: resolveReadWindow({ ...opts, since }).select,
+      order: window.select,
       session: strictOptionalString(opts.session_id, "session_id"),
       from: strictOptionalString(opts.from, "from"),
       to: strictOptionalString(opts.to, "to"),
@@ -1124,7 +1155,8 @@ export class ApiStore implements ConversationsStore {
       preview_bytes: previewBytes,
       timeout_ms: timeoutMs,
       detail: "preview",
-    }, timeoutMs) as never;
+    }, timeoutMs);
+    return { ...page, messages: window.reverse ? [...page.messages].reverse() : page.messages } as never;
   };
   readPinnedMessagePreviews: ConversationsStore["readPinnedMessagePreviews"] = async (opts = {}) => {
     const limit = resolveCollectionLimit(opts.limit);
@@ -1432,7 +1464,7 @@ export class ApiStore implements ConversationsStore {
   // remote acknowledged nothing and reported a count for it.
   markMentionsReadByIds: ConversationsStore["markMentionsReadByIds"] = async (agent, mentionIds) => {
     if (mentionIds.length === 0) return 0 as never;
-    const res = await this.post<{ marked?: number }>("/messages/read", { reader: agent, mention_ids: mentionIds });
+    const res = await this.post<{ marked?: number }>("/messages/read", { reader: agent, mentions_only: true, mention_ids: mentionIds });
     return Number(res?.marked ?? 0) as never;
   };
   listUnreadCounts: ConversationsStore["listUnreadCounts"] = async (agent) => {
@@ -1499,4 +1531,35 @@ export class ApiStore implements ConversationsStore {
       throw error;
     }
   };
+
+  // ── events outbox worker (hosted path) ────────────────────────────────────
+  // The server owns the outbox table; this asks the server to run its own
+  // outbox worker and returns the same counts the local worker reports.
+  drainEventOutbox: ConversationsStore["drainEventOutbox"] = async (opts) =>
+    this.post<DrainEventOutboxResult>("/events/outbox/drain", undefined, { limit: opts?.limit });
+
+  // ── feedback (hosted path) ────────────────────────────────────────────────
+  saveFeedback: ConversationsStore["saveFeedback"] = async (input) =>
+    this.post<SaveFeedbackResult>("/feedback", {
+      message: input.message,
+      email: input.email ?? undefined,
+      category: input.category ?? undefined,
+    });
+
+  // ── audited admin redaction (hosted path) ─────────────────────────────────
+  // Server-side mirror of the on-box redaction; report shape is identical so
+  // the CLI prints one format for both transports.
+  redactMessages: ConversationsStore["redactMessages"] = async (options) =>
+    this.post<RedactMessagesResult>("/admin/redact-messages", {
+      ids: options.ids,
+      actor: options.actor,
+      reason: options.reason,
+      apply: options.apply ?? false,
+      authority: options.authority,
+      backup_confirmed: options.backupConfirmed ?? false,
+      dry_run_confirmed: options.dryRunConfirmed ?? false,
+      purge_attachments: options.purgeAttachments,
+      replacement_content: options.replacementContent,
+      now: options.now,
+    });
 }

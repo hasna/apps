@@ -6,7 +6,7 @@
  * argv, environment variables, logs, stdin, or an ad hoc plaintext file. The
  * only materialization is directly into the authenticated HTTPS request body.
  */
-import type { HasnaStorageClient } from '@hasna/contracts/client/storage';
+import type { HasnaStorageClient } from './contracts-types.js';
 import { resolveKnowledgeGuardedTransport } from './http-store.js';
 import {
   KNOWLEDGE_GUARDED_WRITE_CONTRACT,

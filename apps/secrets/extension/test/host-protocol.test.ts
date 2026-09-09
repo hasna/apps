@@ -1,5 +1,5 @@
 // Native-host protocol tests for the Secrets Vault extension.
-// The host shells the user's own `secrets` CLI against a TEMP vault store and
+// The host shells the built `secrets` CLI against an authenticated fixture API and
 // answers bounded JSON messages. Contract under test (fail-closed):
 //   - auth-status / search / get / add-login round-trip against a temp vault
 //   - search metadata never carries the password value
@@ -7,10 +7,11 @@
 //   - malformed message, unknown verb, missing CLI, unauthenticated vault
 //     each yield an explicit { ok:false, error } — never silence
 // TDD: written before ../native-host/host.js existed; must fail.
+import { startLoopbackVault } from "../../tests/loopback-vault-fixture.mjs";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const EXT_DIR = join(import.meta.dir, "..");
@@ -99,48 +100,11 @@ beforeAll(() => {
   }
 });
 
-/**
- * Local-mode env: temp vault, no cloud steering, no test-isolation marker.
- * `binDir` is prepended to PATH so the host shells the resolved `secrets`.
- * When `appendPath` is false, PATH is REPLACED by binDir entirely — the
- * missing-CLI negative control must not be able to find any `secrets`.
- */
-function localEnv(vaultDir: string, binDir: string, appendPath = true): Record<string, string> {
-  const env: Record<string, string> = { ...process.env } as Record<string, string>;
-  delete env.HASNA_SECRETS_API_URL;
-  delete env.HASNA_SECRETS_API_KEY;
-  delete env.HASNA_SECRETS_API_KEY_OVERRIDE;
-  delete env.HASNA_SECRETS_API_KEY_REF;
-  delete env.HASNA_PROFILE;
-  delete env.HASNA_SECRETS_STORAGE_MODE;
-  delete env.HASNA_SECRETS_TEST_ISOLATION;
-  delete env.OPEN_SECRETS_DB;
-  env.HASNA_SECRETS_DB_PATH = join(vaultDir, "vault.db");
-  // The master key follows the vault into the temp dir: without this the child
-  // (which deliberately runs as a NON-test process) would read or create
-  // `vault.key` under the operator's own ~/.hasna/secrets (HC-00304).
-  env.HASNA_SECRETS_KEY_DIR = join(vaultDir, "keys");
-  // The credential chain has two AMBIENT tiers above the environment (#1720):
-  // the macOS Keychain and ~/.hasna/secrets/config/credentials. Deleting
-  // variables does not make them absent on a station that holds a live key, so
-  // both anchors point at this temp vault dir instead.
-  Object.assign(env, ambientTierRedirect(vaultDir));
+/** Saved API credentials, with an isolated HOME and optional empty PATH. */
+function apiEnv(_vaultDir: string, binDir: string, appendPath = true): Record<string, string> {
+  const env = api.env() as Record<string, string>;
   env.PATH = appendPath ? `${binDir}:${env.PATH ?? ""}` : binDir;
   return env;
-}
-
-/**
- * Aim the two ambient credential tiers at a throwaway location: an empty
- * `~/.hasna` root, and a Keychain ACCOUNT no generic-password item is stored
- * under (a missing item is an absent tier, so the lookup falls through).
- */
-function ambientTierRedirect(vaultDir: string): Record<string, string> {
-  const hasnaHome = join(vaultDir, "hasna-home");
-  return {
-    HASNA_HOME: hasnaHome,
-    HASNA_CONFIG_HOME: join(hasnaHome, "config"),
-    HASNA_STATION: `hasna-secrets-ext-test-${process.pid}`,
-  };
 }
 
 class HostClient {
@@ -202,12 +166,15 @@ class HostClient {
 }
 
 let vaultDir: string;
+let api: Awaited<ReturnType<typeof startLoopbackVault>>;
 
-beforeAll(() => {
+beforeAll(async () => {
   vaultDir = mkdtempSync(join(tmpdir(), "secrets-ext-host-"));
+  api = await startLoopbackVault(vaultDir);
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await api?.stop();
   try {
     rmSync(vaultDir, { recursive: true, force: true });
   } catch {
@@ -215,27 +182,27 @@ afterAll(() => {
   }
 });
 
-describe("host protocol against a temp vault", () => {
+describe("host protocol against the API", () => {
   beforeAll(() => {
     // Positive control on the instruments before any assertion.
     expect(NODE).not.toBeNull();
     expect(secretsBinDir).not.toBeNull();
   });
 
-  test("auth-status: a usable local vault reports authenticated", async () => {
-    const host = new HostClient(localEnv(vaultDir, secretsBinDir!));
+  test("auth-status: saved API credentials report authenticated", async () => {
+    const host = new HostClient(apiEnv(vaultDir, secretsBinDir!));
     try {
       const res = (await host.send({ verb: "auth-status" })) as any;
       expect(res.ok).toBe(true);
       expect(res.data.authenticated).toBe(true);
-      expect(res.data.mode).toBe("local");
+      expect(res.data.mode).toBe("api");
     } finally {
       host.close();
     }
   });
 
   test("add-login -> search -> get round-trip", async () => {
-    const host = new HostClient(localEnv(vaultDir, secretsBinDir!));
+    const host = new HostClient(apiEnv(vaultDir, secretsBinDir!));
     try {
       const added = (await host.send({
         verb: "add-login",
@@ -266,7 +233,7 @@ describe("host protocol against a temp vault", () => {
   });
 
   test("add-login validates required fields", async () => {
-    const host = new HostClient(localEnv(vaultDir, secretsBinDir!));
+    const host = new HostClient(apiEnv(vaultDir, secretsBinDir!));
     try {
       const res = (await host.send({
         verb: "add-login",
@@ -281,7 +248,7 @@ describe("host protocol against a temp vault", () => {
   });
 
   test("unknown verb fails closed", async () => {
-    const host = new HostClient(localEnv(vaultDir, secretsBinDir!));
+    const host = new HostClient(apiEnv(vaultDir, secretsBinDir!));
     try {
       const res = (await host.send({ verb: "delete-everything" })) as any;
       expect(res.ok).toBe(false);
@@ -292,7 +259,7 @@ describe("host protocol against a temp vault", () => {
   });
 
   test("malformed message fails closed", async () => {
-    const host = new HostClient(localEnv(vaultDir, secretsBinDir!));
+    const host = new HostClient(apiEnv(vaultDir, secretsBinDir!));
     try {
       const payload = Buffer.from("{not json at all", "utf8");
       const frame = Buffer.alloc(4 + payload.length);
@@ -317,7 +284,7 @@ describe("host protocol against a temp vault", () => {
   });
 
   test("missing CLI fails closed with E_CLI_NOT_FOUND", async () => {
-    const env = localEnv(vaultDir, join(vaultDir, "empty-bin"), false);
+    const env = apiEnv(vaultDir, join(vaultDir, "empty-bin"), false);
     const host = new HostClient(env);
     try {
       const res = (await host.send({ verb: "auth-status" })) as any;
@@ -329,7 +296,9 @@ describe("host protocol against a temp vault", () => {
   });
 
   test("unreachable vault reports unauthenticated, never silence", async () => {
-    const env = localEnv(vaultDir, secretsBinDir!);
+    const env = apiEnv(vaultDir, secretsBinDir!);
+    // A fresh HOME avoids a saved-authority conflict masking the network failure.
+    env.HOME = mkdtempSync(join(vaultDir, "unreachable-client-"));
     env.HASNA_SECRETS_API_URL = "http://127.0.0.1:9";
     // Assembled from fragments: the value's content is irrelevant to the CLI
     // (only non-empty matters), and the literal shape would trip this repo's
@@ -394,30 +363,18 @@ describe("installed host cold launch (Chrome path resolution)", () => {
   });
 
   test("regression: installed host under an EMPTY environment starts and answers auth-status ok", async () => {
-    // The exact cold-launch shape: only HOME is set — no PATH, no SHELL —
-    // plus the explicit local-vault opt-in. The kernel resolves the
-    // materialized absolute node shebang; the host shells the config-embedded
-    // absolute secrets CLI with its own bin dir prepended to PATH so the CLI's
-    // `#!/usr/bin/env bun` interpreter resolves. The vault opt-in is required
-    // since 2026-09-04: without fleet API env the CLI fails closed rather than
-    // silently serving the local vault, and this regression exercises the
-    // local transport (no API env here by construction).
-    // The vault and its key are pinned to this suite's temp dir explicitly:
-    // with the real HOME and no file-level override the shelled CLI would open
-    // the operator's own ~/.hasna/secrets/vault.db (HC-00304 — measured: its
-    // -shm mtime advanced on every run of this file).
+    // Chrome supplies no shell PATH or API variables. The saved credentials
+    // live under the isolated HOME; the station selector avoids real Keychain
+    // accounts. The installed host must resolve its embedded CLI and Bun.
     const host = HostClient.direct(installedHost, {
-      HOME: homedir(),
-      HASNA_SECRETS_LOCAL_VAULT: "1",
-      HASNA_SECRETS_DB_PATH: join(vaultDir, "vault.db"),
-      HASNA_SECRETS_KEY_DIR: join(vaultDir, "keys"),
-      ...ambientTierRedirect(vaultDir),
+      HOME: api.clientHome,
+      HASNA_STATION: api.env().HASNA_STATION!,
     });
     try {
       const res = (await host.send({ verb: "auth-status" })) as any;
       expect(res.ok).toBe(true);
       expect(res.data.authenticated).toBe(true);
-      expect(res.data.mode).toBe("local");
+      expect(res.data.mode).toBe("api");
     } finally {
       host.close();
     }

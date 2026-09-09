@@ -1,46 +1,10 @@
-// ── The domains Store abstraction ────────────────────────────────────────────
-//
-// ONE interface, TWO transports. Every CLI command, MCP tool, and SDK caller
-// that reads or writes domains DATA goes through `DomainsStore`. There are
-// exactly two implementations:
-//
-//   • LocalStore — on-box SQLite. Delegates to the query/mutate helpers in the
-//     ../db/* modules (domain-records, dns-records, alerts, domain-owners,
-//     domain-history, domain-reputation). Those modules are the sqlite backing
-//     of this transport and are ONLY reached through LocalStore.
-//   • ApiStore   — the hosted HTTP API at `<origin>/v1` with a bearer key.
-//     Delegates to the @hasna/contracts storage client and its transport
-//     escape hatch for nested resources.
-//
-// `getStore()` resolves which transport to use through the ONE shared client
-// resolver in @hasna/contracts (`../lib/domains-resolver.ts`) — the same five
-// tiers the CLI and the SDK use, resolved FRESH on every call — plus the
-// explicit local opt-in in `../lib/local-opt-in.ts`:
-//
-//   • explicit local path opt-in set AND the environment configures no
-//     authority and no credential -> LocalStore (local mode is announced on
-//     stderr, once per process);
-//   • a local path set NEXT TO a configured authority/credential -> CONFLICT,
-//     fail loud — configuring both a sqlite path and a hosted credential asks
-//     for two different datasets and nothing here can tell which the operator
-//     meant;
-//   • otherwise -> the resolver decides. URL + key (env, Keychain, disk) ->
-//     hosted ApiStore; a key alone defaults to the fleet gateway; and NO
-//     credential at all FAILS CLOSED with an error naming the canonical env
-//     pair — the default local database (~/.hasna/domains/domains.db) is never
-//     opened implicitly, and no `*_MODE` / `*_STORAGE_MODE` variable selects
-//     anything (those switches are stripped from the package entirely).
-//
-// Callers NEVER branch on a mode themselves and NEVER touch sqlite or fetch
-// directly — that split-brain bug is exactly what this module eliminates.
-//
-// SAFETY: the API key never leaves the transport; it is never logged, returned,
-// or embedded in any value produced here. Only the HTTP transport ever holds it.
-// A raw DB DSN/DATABASE_URL is NEVER used on the client side.
+// Domains clients always use the shared account API. LocalStore is retained
+// for explicit migration/SQLite unit fixtures; getStore never selects it.
+// Credentials resolve fresh on every request through the shared resolver.
 
 import { resolveDomainsHttpClient, resolveDomainsTransport } from "../lib/domains-resolver.js";
 import type { CredentialChainOptions, CredentialTier, HasnaStorageClient } from "../lib/client-types.js";
-import { announceLocal, explicitLocalPathVar, selectsLocalStore, LOCAL_PATH_VARS } from "../lib/local-opt-in.js";
+import { assertDomainsClientStorage } from "../lib/client-storage-policy.js";
 
 import * as records from "./domain-records.js";
 import * as dns from "./dns-records.js";
@@ -725,7 +689,7 @@ export class ApiStore implements DomainsStore {
 
 // ── Resolver ──────────────────────────────────────────────────────────────────
 
-export { LOCAL_PATH_VARS, explicitLocalPathVar } from "../lib/local-opt-in.js";
+export { LOCAL_PATH_VARS, explicitLocalPathVar } from "../lib/client-storage-policy.js";
 
 /**
  * A resolved store, with the sources that decided it — never a key value, and
@@ -733,9 +697,9 @@ export { LOCAL_PATH_VARS, explicitLocalPathVar } from "../lib/local-opt-in.js";
  */
 export interface DomainsStoreResolution {
   /** Which transport backs the store. */
-  transport: "local" | "http";
+  transport: "http";
   /** The local-path var that opted into LocalStore, or null for http. */
-  localPathVar: string | null;
+  localPathVar: null;
   /** For http: the `<origin>/v1` base URL the resolver produced. */
   baseUrl: string | null;
   /** WHERE the API URL came from: env key NAME, Keychain reference, file PATH, or `"default"`. */
@@ -749,64 +713,14 @@ export interface DomainsStoreResolution {
 /** Options forwarded to the shared resolver (credential tier-1 inputs, Keychain seam). */
 export interface StoreResolutionOptions {
   credentials?: CredentialChainOptions;
-  /** Where the one-line local-mode notice goes. Defaults to `process.stderr`. */
-  notice?: (line: string) => void;
 }
 
-/**
- * FAIL CLOSED on a contradictory store configuration.
- *
- * `HASNA_DOMAINS_DB_PATH` (and its siblings) name a SQLITE FILE. Only the
- * local transport has one. So setting such a variable while the environment
- * also configures a hosted authority or credential is not a preference to be
- * ranked — it is two mutually exclusive requests, and nothing in the
- * configuration says which the operator meant. Writing to the wrong one is
- * silent, so this is a hard boot error, never a precedence rule.
- *
- * The local opt-in applies ONLY when the environment configures nothing (see
- * `selectsLocalStore`); this error is the loud answer to every other
- * combination.
- */
-function assertNoStoreConflict(env: Record<string, string | undefined>): void {
-  const pathVar = explicitLocalPathVar(env);
-  if (!pathVar) return;
-  throw new Error(
-    `Refusing to resolve the hosted domains store while ${pathVar} is set: that variable ` +
-      `names a local sqlite file, so the configuration asks for BOTH stores at once and ` +
-      `nothing here can tell which you meant. Local mode is an explicit opt-in that applies ` +
-      `only when the environment configures no authority and no credential. Pick one: unset ` +
-      `${pathVar} (and every other of ${LOCAL_PATH_VARS.join(" / ")}) to use the hosted store, or ` +
-      `keep ${pathVar} and unset every authority/credential variable (HASNA_DOMAINS_API_URL, ` +
-      `HASNA_DOMAINS_API_KEY, HASNA_DOMAINS_API_KEY_OVERRIDE, HASNA_DOMAINS_API_KEY_REF, ` +
-      `HASNA_PROFILE — plus the Keychain item and ~/.hasna/domains/config/credentials) to use ` +
-      `the local store.`,
-  );
-}
-
-/**
- * Resolve the active {@link DomainsStore} for the current environment.
- *
- * FAIL CLOSED. An {@link ApiStore} resolves through the shared @hasna/contracts
- * resolver (URL + key from env, Keychain, or disk; a key alone defaults to the
- * fleet gateway). A {@link LocalStore} resolves ONLY on the explicit local
- * opt-in (one of the {@link LOCAL_PATH_VARS}) when the environment configures
- * no authority and no credential — and every local run announces itself on
- * stderr. With neither, this THROWS (the resolver's fail-closed error naming
- * the canonical env pair) — a CLI run without its fleet credential must never
- * silently serve the default local database. A local path set NEXT TO a
- * configured authority/credential is a hard conflict error. The resolver is
- * called fresh on every request (see `resolveDomainsHttpClient`), so a key
- * rotation heals a long-lived process without a rebuild.
- */
+/** Resolve the shared API store; a local path can never select SQLite. */
 export function getStore(
   env: Record<string, string | undefined> = process.env,
   options: StoreResolutionOptions = {},
 ): DomainsStore {
-  if (selectsLocalStore(env)) {
-    announceLocal(env, options.notice);
-    return new LocalStore();
-  }
-  assertNoStoreConflict(env);
+  assertDomainsClientStorage(env);
   const wired = resolveDomainsHttpClient(env, {
     ...(options.credentials ? { credentials: options.credentials } : {}),
   });
@@ -823,17 +737,7 @@ export function getStoreResolution(
   env: Record<string, string | undefined> = process.env,
   options: StoreResolutionOptions = {},
 ): DomainsStoreResolution {
-  if (selectsLocalStore(env)) {
-    return {
-      transport: "local",
-      localPathVar: explicitLocalPathVar(env) ?? null,
-      baseUrl: null,
-      apiUrlSource: null,
-      apiKeySource: null,
-      apiKeyTier: null,
-    };
-  }
-  assertNoStoreConflict(env);
+  assertDomainsClientStorage(env);
   const { report } = resolveDomainsTransport(env, {
     ...(options.credentials ? { credentials: options.credentials } : {}),
   });
@@ -850,7 +754,7 @@ export function getStoreResolution(
 /**
  * True when the resolved store is the hosted HTTP transport. Mirrors
  * {@link getStore} exactly: an env that would make {@link getStore} throw
- * (no resolvable credential AND no explicit local opt-in) throws here too — a
+ * (no resolvable credential) throws here too — a
  * bare `false` must never be read as a licence to open the default local
  * database.
  */

@@ -113,7 +113,7 @@ function schemaRetryMinIntervalMs(env: NodeJS.ProcessEnv = process.env): number 
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_SCHEMA_RETRY_MIN_MS;
 }
 
-function getCloudTenantId(): string {
+export function getCloudTenantId(): string {
   return process.env.HASNA_TODOS_TENANT_ID ?? "default";
 }
 

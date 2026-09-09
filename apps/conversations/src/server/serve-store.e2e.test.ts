@@ -76,7 +76,7 @@ const CLEARED: Record<string, undefined> = {
 
 async function probe(mode: string, env: Record<string, string> = {}) {
   const proc = Bun.spawn({
-    cmd: ["bun", "run", PROBE, mode],
+    cmd: [process.execPath, "--no-env-file", "run", PROBE, mode],
     cwd: process.cwd(),
     // HASNA_STATION pins the Keychain account to one no real item uses, so the
     // shared chain's Keychain tier (above the env tier) cannot answer for a case.
@@ -205,7 +205,7 @@ describe("dashboard server — hosted store answers every endpoint class", () =>
     });
     expect(run.exitCode, `probe failed: ${run.stderr}`).toBe(0);
     hosted = run.result;
-  });
+  }, 30_000);
 
   for (const [endpointClass, expected] of HOSTED_EXPECTATIONS) {
     test(`${endpointClass} returns the hosted count, not the local one`, () => {
@@ -299,30 +299,20 @@ describe("dashboard server — a half-configured client refuses instead of servi
   }
 
   test("no credential value ever reaches a refusal message", async () => {
-    const run = await probe("probe", { HASNA_CONVERSATIONS_API_KEY: FAKE_KEY });
+    const run = await probe("probe", { HASNA_CONVERSATIONS_API_KEY: FAKE_KEY, HASNA_CONVERSATIONS_API_URL: "not-a-url" });
     expect(JSON.stringify(run.result)).not.toContain(FAKE_KEY);
   });
 });
 
-// A local-selecting variable BEATS a valid url+key pair (store/index.ts precedence
-// rules 1 and 2), and that is correct: an operator asking for local gets local.
-//
-// It matters here because the macOS shell's guard (PR #51) reads only some of the
-// variables this resolver honours, so a stray DB_PATH makes the shell report
-// `store=hosted` while the child resolves LOCAL. serve.ts CANNOT prevent that —
-// from the server's side "DB_PATH is set" is indistinguishable from a deliberate
-// local configuration — so what it owes instead is TRUTHFULNESS: /api/status must
-// name the store that actually answered, so the condition is detectable rather
-// than invisible. These cases pin that, so the shell-side fix has something
-// dependable to be verified against.
-describe("dashboard server — a local-selecting variable is reported honestly, never as hosted", () => {
+// Retired database selectors never override shared credentials or expose source data.
+describe("dashboard server — retired selectors refuse instead of selecting SQLite", () => {
   const LOCAL_SELECTORS: Array<[string, (db: string) => Record<string, string>]> = [
     ["HASNA_CONVERSATIONS_DB_PATH", (db) => ({ HASNA_CONVERSATIONS_DB_PATH: db })],
     ["CONVERSATIONS_DB_PATH", (db) => ({ CONVERSATIONS_DB_PATH: db })],
   ];
 
   for (const [label, build] of LOCAL_SELECTORS) {
-    test(`${label} alongside a valid url+key pair reports the SQLite connection`, async () => {
+    test(`${label} alongside a valid url+key pair refuses without serving either dataset`, async () => {
       const db = join(sandboxHome, ".hasna", "conversations", "messages.db");
       const run = await probe("probe", {
         HASNA_CONVERSATIONS_API_URL: cloudUrl,
@@ -331,13 +321,11 @@ describe("dashboard server — a local-selecting variable is reported honestly, 
       });
       expect(run.exitCode, run.stderr).toBe(0);
 
-      // The endpoint must report the on-box connection it actually served.
-      expect(run.result.status.dbPathPresent).toBe(true);
-      expect(run.result.status.apiUrlPresent).toBe(false);
-      // And it really is the local dataset, not the cloud one.
-      expect(run.result.status.size).toBe(LOCAL.channels);
-      expect(run.result.channels.size).toBe(LOCAL.channels);
-      expect(run.result.channels.size).not.toBe(CLOUD.channels);
+      for (const key of ["status", "channels"]) {
+        expect(run.result[key].status).toBe(503);
+        expect(String(run.result[key].error)).toContain(label);
+        expect(run.result[key].size).toBeNull();
+      }
     });
   }
 
@@ -353,32 +341,20 @@ describe("dashboard server — a local-selecting variable is reported honestly, 
   });
 });
 
-describe("dashboard server — legitimate local use is untouched", () => {
-  // The fail-closed behaviour must not break the documented single-operator
-  // default, or the fix trades one broken configuration for another.
-  let local: Record<string, any>;
-
+describe("dashboard server — a retired selector alone cannot expose legacy data", () => {
+  let refused: Record<string, any>;
   beforeAll(async () => {
     const run = await probe("probe", {
       HASNA_CONVERSATIONS_DB_PATH: join(sandboxHome, ".hasna", "conversations", "messages.db"),
     });
-    expect(run.exitCode, `probe failed: ${run.stderr}`).toBe(0);
-    local = run.result;
+    expect(run.exitCode, run.stderr).toBe(0);
+    refused = run.result;
   });
-
-  test("channels still answer from the on-box store", () => {
-    expect(local.channels.status).toBe(200);
-    expect(local.channels.size).toBe(LOCAL.channels);
-  });
-
-  test("projects still answer from the on-box store", () => {
-    expect(local.projects.status).toBe(200);
-    expect(local.projects.size).toBe(LOCAL.projects);
-  });
-
-  test("/api/status reports the local store and its db path", () => {
-    expect(local.status.dbPathPresent).toBe(true);
-    expect(local.status.apiUrlPresent).toBe(false);
-    expect(local.status.size).toBe(LOCAL.channels);
-  });
+  for (const endpoint of ["channels", "projects", "status"]) {
+    test(`${endpoint} refuses without returning source data`, () => {
+      expect(refused[endpoint].status).toBe(503);
+      expect(String(refused[endpoint].error)).toContain("HASNA_CONVERSATIONS_DB_PATH");
+      expect(refused[endpoint].size).toBeNull();
+    });
+  }
 });

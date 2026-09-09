@@ -158,6 +158,10 @@ function findApp(registry: readonly FleetApp[], app: string): FleetApp {
 async function provision(args: Args, io: Io): Promise<number> {
   if (!args.app) throw new Error("provision requires --app");
   const target = findApp(loadRegistry(), args.app);
+  if (target.authMode === "user-oauth") {
+    console.error(`[fleet-key] ${target.app} uses per-user OAuth; provision/rotation is unsupported. No shared key or mint target is used.`);
+    return 1;
+  }
   const manifestName = args.manifest ?? `/hasna/deploy/${target.app}`;
 
   let assessment = await checkApp(target, io, args.region);
@@ -289,12 +293,13 @@ async function drift(args: Args, io: Io): Promise<number> {
     assessments.push(await checkApp(app, io, args.region));
   }
 
-  const { failures, warnings, passes, exempt } = partition(assessments, { strict: args.strict });
+  const { failures, warnings, passes, exempt, observed } = partition(assessments, { strict: args.strict });
   const report = renderIncidentReport({
     failures,
     warnings,
     passes,
     exempt,
+    observed,
     runUrl:
       process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
         ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
@@ -302,7 +307,7 @@ async function drift(args: Args, io: Io): Promise<number> {
   });
 
   if (args.json) {
-    console.log(JSON.stringify({ assessments, failures, warnings, passes, exempt, report }, null, 2));
+    console.log(JSON.stringify({ assessments, failures, warnings, passes, exempt, observed, report }, null, 2));
   } else {
     for (const a of assessments) console.log(`[fleet-key] ${a.app}: ${a.state} — ${a.detail}`);
     console.log("");
@@ -333,7 +338,7 @@ async function safeRead(file: string): Promise<string> {
 function listApps(args: Args): number {
   const registry = loadRegistry().filter((a) => !args.source || a.source === args.source);
   if (args.json) console.log(JSON.stringify(registry, null, 2));
-  else for (const a of registry) console.log(`${a.app}\t${a.source}\t${a.baseUrl}\t${a.keySecretId}`);
+  else for (const a of registry) console.log(`${a.app}\t${a.source}\t${a.baseUrl}\t${a.authMode === "user-oauth" ? `user-oauth (${a.issuer})` : a.keySecretId}`);
   return 0;
 }
 

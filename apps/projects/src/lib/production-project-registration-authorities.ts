@@ -338,10 +338,31 @@ async function loadHttpAuthority(
   return new ConversationsSdkAuthority(client);
 }
 
+/**
+ * The one line an explicit local authority prints when it is first loaded. A
+ * `HASNA_<APP>_DB_PATH` opens ANOTHER app's on-box SQLite from inside a
+ * projects run; the no-local-SQLite ruling (2026-09-04) allows that only as an
+ * announced, explicit opt-in — never silently. Same prefix as the projects
+ * local-mode notice so stderr filters treat both alike.
+ */
+function announceLocalAuthority(
+  authority: ProjectRegistrationAuthorityName,
+  localDatabaseKey: string,
+  notify: (line: string) => void,
+): void {
+  notify(
+    `projects: local mode — ${localDatabaseKey} is set, so the ${authority} project registration ` +
+    `authority reads and writes the on-box ${authority} SQLite instead of the hosted ${authority} service.`,
+  );
+}
+
 async function loadLocalAuthority(
   authority: ProjectRegistrationAuthorityName,
   importModule: AuthorityModuleImporter,
+  localDatabaseKey: string,
+  notify: (line: string) => void = (line) => console.error(line),
 ): Promise<ProjectRegistrationAuthorityAdapter> {
+  announceLocalAuthority(authority, localDatabaseKey, notify);
   if (authority === "todos") {
     const specifier = "@hasna/todos";
     const module = moduleObject(await importModule(specifier), specifier);
@@ -485,7 +506,8 @@ function configuredAuthority(
   options: Required<ProductionProjectRegistrationAuthorityOptions>,
 ): ProjectRegistrationAuthorityAdapter {
   const config = AUTHORITY_ENDPOINTS[authority];
-  const transport = firstConfigured(options.env, config.dbPathKeys)
+  const localDatabase = firstConfigured(options.env, config.dbPathKeys);
+  const transport = localDatabase
     ? "local"
     : firstConfigured(options.env, [...config.apiUrlKeys, ...config.apiKeyKeys])
       ? "api"
@@ -494,7 +516,8 @@ function configuredAuthority(
     const http = authorityHttpConfig(config, options.env);
     return http
       ? loadHttpAuthority(authority, http, options.fetch, options.importModule)
-      : loadLocalAuthority(authority, options.importModule);
+      // authorityHttpConfig() is null ONLY when a local database path is set.
+      : loadLocalAuthority(authority, options.importModule, localDatabase?.key ?? config.dbPathKeys[0]!);
   });
 }
 

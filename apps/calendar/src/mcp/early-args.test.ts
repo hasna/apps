@@ -13,8 +13,9 @@ import { describe, expect, test } from "bun:test";
  *
  * The probes are two-sided: --help/--version must answer rc=0 WITHOUT
  * entering the stdio loop (positive), and a plain run (no early args) must
- * STILL take the stdio MCP server path — it stays alive reading stdin and
- * does not exit (negative).
+ * STILL take the real MCP path — which is the #1720 fail-closed startup gate
+ * first, and a configured run then stays on the stdio server (negative:
+ * with no credential it refuses instead of serving).
  */
 
 const MCP_ENTRY = new URL("./index.ts", import.meta.url).pathname;
@@ -83,16 +84,20 @@ describe("calendar-mcp early arguments (binds-before-version class, BUG 06003b88
   });
 
   test(
-    "plain run (no early args) still takes the stdio MCP server path and stays alive on stdin (negative probe)",
+    "plain run (no early args) with no credential fails closed before entering the stdio loop",
     async () => {
-      // The real stdio path must be unchanged by the early-args fix: with no
-      // --help/--version, the entry still builds the server and connects to
-      // the stdio transport, which reads stdin for JSON-RPC and does not
-      // exit. stdin is an open, silent pipe, so a regression that swallowed
-      // the stdio path (or made plain runs exit immediately) would fail this
-      // probe.
+      // The #1720 fail-closed startup gate: with no resolvable credential the
+      // MCP entry refuses BEFORE the stdio transport connects — non-zero exit,
+      // empty stdout, the refusal as the first stderr line (the preload pins
+      // the Keychain account and the hasna home, so nothing ambient can
+      // resolve). A regression that swallowed the gate would serve and stay
+      // alive on stdin; one that skipped the stdio path for CONFIGURED runs
+      // is caught by the fail-closed-startup control instead.
       const result = await runMcp();
-      expect(result.timedOut).toBe(true);
+      expect(result.timedOut).toBe(false);
+      expect(result.code).not.toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.stderr.split("\n")[0]).toMatch(/^calendar-mcp: refusing to start/);
     },
     15_000,
   );

@@ -18,7 +18,7 @@ beforeAll(async () => {
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 type Seen = { path: string; method: string; body: any; authorization: string | null };
-async function fixture<T>(action: (origin: string, calls: Seen[]) => Promise<T>, opts: { costs?: number[]; quoteStatus?: number; malformed?: boolean } = {}) {
+async function fixture<T>(action: (origin: string, calls: Seen[]) => Promise<T>, opts: { costs?: number[]; quoteStatus?: number; quotePayload?: unknown; malformed?: boolean } = {}) {
   const calls: Seen[] = [];
   let quoteCount = 0;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
@@ -28,9 +28,9 @@ async function fixture<T>(action: (origin: string, calls: Seen[]) => Promise<T>,
     if (path.endsWith("/capabilities")) return Response.json({ contractVersion: 1, apiVersion: 1, capabilities: ["runs.submit"], billing: { unit: "credits", boundedRunApproval: true } });
     if (path.endsWith("/quote")) {
       const cost = opts.costs?.[quoteCount++] ?? opts.costs?.at(-1) ?? 25;
-      return Response.json(opts.malformed ? { skill: "blog-article", pricing: { costCents: -1 } } : {
+      return Response.json(opts.quotePayload ?? (opts.malformed ? { skill: "blog-article", pricing: { costCents: -1 } } : {
         skill: "blog-article", pricing: { costCents: cost, costCredits: cost, formattedCost: "$misleading" },
-      }, { status: opts.quoteStatus ?? 200 });
+      }), { status: opts.quoteStatus ?? 200 });
     }
     if (path.endsWith("/billing/status")) return Response.json({ plan: "credits", balanceCents: 500, creditBalance: 500, balance: "$5.00", hasPaymentMethod: true });
     if (path.endsWith("/billing/credits")) return Response.json(req.method === "POST" ? { url: "https://checkout.example.test/session" } : [{ id: "credits_500", credits: 500, amountCents: 500, amount: "$5", expiresInDays: 90 }]);
@@ -41,7 +41,7 @@ async function fixture<T>(action: (origin: string, calls: Seen[]) => Promise<T>,
   try { return await action(`http://127.0.0.1:${server.port}`, calls); } finally { await server.stop(true); }
 }
 
-async function cli(args: string[], origin: string, options: { key?: boolean; data?: string; profile?: string } = {}) {
+async function cli(args: string[], origin: string, options: { key?: boolean; data?: string; profile?: string; humanRefusal?: boolean } = {}) {
   const cwd = options.data ?? mkdtempSync(join(scratch, "consumer-"));
   mkdirSync(cwd, { recursive: true });
   const env = {
@@ -58,12 +58,27 @@ async function cli(args: string[], origin: string, options: { key?: boolean; dat
     const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(stdout.length + stderr.length).toBeLessThan(128_000);
     expect(stdout + stderr).not.toContain("fixture-key-not-a-secret");
-    if (!stdout) throw new Error(`CLI produced no JSON: ${stderr.slice(0, 1800)}`);
+    if (!stdout && !options.humanRefusal) throw new Error(`CLI produced no JSON: ${stderr.slice(0, 1800)}`);
     return { stdout, stderr, exitCode, cwd };
   } finally { clearTimeout(timer); }
 }
 
 describe("built public CLI server account and spending", () => {
+  test("known quote refusal at a terminal is fixed text and makes no submission", async () => fixture(async (origin, calls) => {
+    const result = await cli(["quote", "blog-article", "owned-topic"], origin, { humanRefusal: true });
+    expect(result.exitCode).toBe(1); expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("This skill is not enabled for hosted execution on this Skills instance.\n");
+    expect(calls.map(({ method, path }) => ({ method, path }))).toEqual([{ method: "POST", path: "/api/v1/skills/blog-article/quote" }]);
+  }, { quoteStatus: 503, quotePayload: { code: "RUNTIME_SKILL_NOT_ALLOWED", error: "fixture-key-not-a-secret\u001b[31m" } }));
+  test("known quote refusal is useful JSON without server text or paid side effects", async () => fixture(async (origin, calls) => {
+    const result = await cli(["quote", "--json", "blog-article", "owned-topic"], origin);
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.stdout)).toEqual({ code: "RUNTIME_SKILL_NOT_ALLOWED", status: 503,
+      error: "This skill is not enabled for hosted execution on this Skills instance." });
+    expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain("\u001b");
+    expect(calls.map(({ method, path }) => ({ method, path }))).toEqual([{ method: "POST", path: "/api/v1/skills/blog-article/quote" }]);
+  }, { quoteStatus: 503, quotePayload: { code: "RUNTIME_SKILL_NOT_ALLOWED", error: "fixture-key-not-a-secret\u001b[31m", details: ["unsafe instructions"] } }));
   test("CLI creation shares the portable scaffold, validates metadata and contains invalid names", async () => fixture(async (origin, calls) => {
     const description = 'Example: "quoted" text\nkind: instruction';
     const created = await cli(["create", "Public QA CLI", "--description", description, "--category", "Development Tools", "--tags", "qa,testing", "--json"], origin);

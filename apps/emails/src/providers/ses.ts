@@ -266,7 +266,7 @@ export class SESAdapter implements ProviderAdapter {
    * Set a custom MAIL FROM domain (improves SPF/DMARC alignment). Defaults to
    * `mail.<domain>`. Requires the MAIL FROM MX + SPF records to be published.
    */
-  async setMailFrom(domain: string, mailFromDomain?: string): Promise<string> {
+  async setMailFrom(domain: string, mailFromDomain?: string, signal?: AbortSignal): Promise<string> {
     const mailFrom = mailFromDomain ?? `mail.${domain}`;
     await this.client.send(
       new PutEmailIdentityMailFromAttributesCommand({
@@ -274,6 +274,7 @@ export class SESAdapter implements ProviderAdapter {
         MailFromDomain: mailFrom,
         BehaviorOnMxFailure: "REJECT_MESSAGE",
       }),
+      ...(signal ? [{ abortSignal: signal }] : []),
     );
     return mailFrom;
   }
@@ -349,7 +350,8 @@ export class SESAdapter implements ProviderAdapter {
     }
   }
 
-  async sendEmail(opts: SendEmailOptions): Promise<string> {
+  async sendEmail(opts: SendEmailOptions, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
     assertSafeEmailHeaders(opts);
     const toArr = Array.isArray(opts.to) ? opts.to : [opts.to];
     const ccArr = opts.cc ? (Array.isArray(opts.cc) ? opts.cc : [opts.cc]) : [];
@@ -379,8 +381,10 @@ export class SESAdapter implements ProviderAdapter {
           Content: {
             Raw: { Data: Buffer.from(rawMessage) },
           },
+          EmailTags: opts.tags ? Object.entries(opts.tags).map(([Name, Value]) => ({ Name, Value })) : undefined,
           ...(this.configurationSetName ? { ConfigurationSetName: this.configurationSetName } : {}),
         }),
+        ...(signal ? [{ abortSignal: signal }] : []),
       );
       return result.MessageId ?? "";
     }
@@ -408,6 +412,7 @@ export class SESAdapter implements ProviderAdapter {
           : undefined,
         ...(this.configurationSetName ? { ConfigurationSetName: this.configurationSetName } : {}),
       }),
+      ...(signal ? [{ abortSignal: signal }] : []),
     );
 
     return result.MessageId ?? "";

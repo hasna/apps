@@ -59,7 +59,13 @@
     "dist",
     "postinstall.js",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md",
+    "docs/PLAN_API.md",
+    "docs/TASK_LIST_API.md",
+    "docs/TEMPLATE_API.md",
+    "docs/TASK_QUERY_API.md",
+    "docs/native-storage.md"
   ],
   "scripts": {
     "build": "cd ai && bun install --frozen-lockfile && cd .. && rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external '@hasna/contracts' --external '@hasna/contracts/*' && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external '@hasna/contracts' --external '@hasna/contracts/*' && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun --external '@hasna/contracts' --external '@hasna/contracts/*' && bun build src/index.ts src/mcp.ts src/registry.ts src/contracts.ts src/storage.ts src/testing.ts src/project-registration.ts src/task-manifest.ts src/task-subtree-transfer.ts --outdir dist --root src --target bun --external '@hasna/contracts' --external '@hasna/contracts/*' && tsc --emitDeclarationOnly --outDir dist",

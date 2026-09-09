@@ -71,7 +71,9 @@ export async function readDomainConnection(
         registered: true,
         verified_for_sending:
           identity.VerifiedForSendingStatus === true &&
-          dkim?.Status === "SUCCESS",
+          dkim?.Status === "SUCCESS" &&
+          (identity.MailFromAttributes?.BehaviorOnMxFailure !== "REJECT_MESSAGE" ||
+            identity.MailFromAttributes.MailFromDomainStatus === "SUCCESS"),
         dns_tasks: tasks,
       };
     } catch (error) {

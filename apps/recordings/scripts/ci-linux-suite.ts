@@ -29,6 +29,7 @@
  *
  * Usage:
  *   bun scripts/ci-linux-suite.ts --check                 validate the quarantine file, print counts
+ *   bun scripts/ci-linux-suite.ts --all                   every discovered tracked test, including quarantine
  *   bun scripts/ci-linux-suite.ts --gated                 newline-separated gated files
  *   bun scripts/ci-linux-suite.ts --quarantined           newline-separated quarantined files
  *   bun scripts/ci-linux-suite.ts --verify-run <log>      assert a gated run honoured the partition
@@ -41,6 +42,13 @@ import { spawnSync } from "node:child_process";
 export const QUARANTINE_FILE = ".github/linux-quarantine.txt";
 
 const TEST_SUFFIX = ".test.ts";
+const BUN_TEST_SUFFIX = /[._](?:test|spec)\.(?:[cm]?[jt]sx?)$/;
+
+function supportedTestFiles(paths: string[]): string[] {
+  const unsupported = paths.filter(path => BUN_TEST_SUFFIX.test(path) && !path.endsWith(TEST_SUFFIX));
+  if (unsupported.length) throw new Error(`unsupported test suffix; extend discovery and JUnit contracts before adding:\n${unsupported.join("\n")}`);
+  return paths.filter(path => path.endsWith(TEST_SUFFIX));
+}
 
 /** Directories never worth walking. `.build` holds SwiftPM output, which can be enormous. */
 const SKIPPED_DIRS = new Set([".git", "node_modules", ".build", "dist"]);
@@ -92,7 +100,7 @@ export function entriesMissingReason(text: string): string[] {
  * in the working tree.
  */
 export function testFilesFromGit(repoRoot: string): string[] {
-  const result = spawnSync("git", ["-C", repoRoot, "ls-files", "-z", `*${TEST_SUFFIX}`], {
+  const result = spawnSync("git", ["-C", repoRoot, "ls-files", "-z"], {
     encoding: "utf8",
   });
   if (result.status !== 0) {
@@ -100,7 +108,7 @@ export function testFilesFromGit(repoRoot: string): string[] {
   }
   // -z because a path may legally contain a newline, and a newline-split enumeration would report
   // one such path as two missing files — a disagreement that reads as a broken walker.
-  return result.stdout.split("\0").filter((path) => path.length > 0).sort();
+  return supportedTestFiles(result.stdout.split("\0").filter((path) => path.length > 0)).sort();
 }
 
 /**
@@ -118,13 +126,13 @@ export function testFilesFromWalk(repoRoot: string): string[] {
       if (entry.isDirectory()) {
         if (SKIPPED_DIRS.has(entry.name)) continue;
         walk(absolute);
-      } else if (entry.isFile() && entry.name.endsWith(TEST_SUFFIX)) {
+      } else if (entry.isFile()) {
         found.push(relative(repoRoot, absolute).split(sep).join("/"));
       }
     }
   };
   walk(repoRoot);
-  return found.sort();
+  return supportedTestFiles(found).sort();
 }
 
 export type DiscoveryDisagreement = { trackedNotOnDisk: string[]; onDiskUntracked: string[] };
@@ -257,7 +265,7 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-function loadPartition(repoRoot: string): Partition & { discovered: string[] } {
+function loadPartition(repoRoot: string, requireNonemptyGated = true): Partition & { discovered: string[] } {
   const fromGit = testFilesFromGit(repoRoot);
   const { trackedNotOnDisk, onDiskUntracked } = compareDiscovery(fromGit, testFilesFromWalk(repoRoot));
   if (trackedNotOnDisk.length > 0) {
@@ -293,16 +301,14 @@ function loadPartition(repoRoot: string): Partition & { discovered: string[] } {
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
-  if (split.gated.length === 0) {
+  if (requireNonemptyGated && split.gated.length === 0) {
     fail(
       `Every discovered test file is quarantined by ${QUARANTINE_FILE}. The gate would run nothing.`,
     );
   }
-  // The workflow expands `--gated` unquoted so the runner receives one argument per file, which is
-  // only safe while no path contains whitespace. Asserting it here keeps that assumption in the
-  // same place as the list, instead of leaving a shell-quoting bug to be discovered by a suite that
-  // silently stopped being gated.
-  const whitespace = split.gated.filter((path) => /\s/.test(path));
+  // Keep the established newline/shell-safe manifest contract in both selections.
+  // Quarantined paths are still executable inputs to the explicit all-tests mode.
+  const whitespace = fromGit.filter((path) => /\s/.test(path));
   if (whitespace.length > 0) {
     fail(
       "Test paths containing whitespace cannot be passed through unquoted word splitting:\n" +
@@ -318,8 +324,12 @@ function main(argv: string[]): void {
     fail(`Run this from the repository root; ${QUARANTINE_FILE} is not there.`);
   }
   const mode = argv[0];
-  const { gated, quarantined, discovered } = loadPartition(repoRoot);
+  const { gated, quarantined, discovered } = loadPartition(repoRoot, mode !== "--all");
 
+  if (mode === "--all") {
+    console.log(discovered.join("\n"));
+    return;
+  }
   if (mode === "--gated") {
     console.log(gated.join("\n"));
     return;
@@ -395,7 +405,7 @@ function main(argv: string[]): void {
     }
     return;
   }
-  fail("usage: --check | --gated | --quarantined | --verify-run <junit.xml>");
+  fail("usage: --check | --all | --gated | --quarantined | --verify-run <junit.xml>");
 }
 
 if (import.meta.main) {

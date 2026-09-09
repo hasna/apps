@@ -1,3 +1,6 @@
+export { runProvisionUp, inspectProvisionUp, retryProvisionUp, runProvisionDaemon, provisionUpBody, formatProvisionUp, provisionUpSucceeded, type ProvisionUpOptions, type ProvisionUpResult, type ProvisionUpTick } from "./lib/provision-up-api.js";
+export { setupDomainCloudflare, provisionSendingDomain, inspectDomainDnsJob, formatDomainDns, domainDnsSucceeded } from "./lib/domain-dns-api.js";
+export type { DomainDnsOptions, DomainDnsReceipt } from "./lib/domain-dns-api.js";
 // Public API — types
 export type {
   Provider,

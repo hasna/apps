@@ -2,8 +2,8 @@
 //
 // This is the ONLY module (besides ../db.ts which owns the connection/migrations)
 // that touches sqlite for vault data. Every value is encrypted at rest via
-// ../crypto.ts. LocalStore is first-class: the app is fully functional with no
-// cloud config at all.
+// ../crypto.ts. This explicitly constructed library handle is never selected by
+// ordinary CLI/MCP/default store resolution.
 
 import { randomUUID, createHash } from "node:crypto";
 import { hostname } from "node:os";
@@ -788,7 +788,7 @@ export class LocalStore implements Store {
   /**
    * Synchronous metadata-only count of local vault secret rows (never includes
    * values). Local runs reach this store only through the explicit
-   * HASNA_SECRETS_LOCAL_VAULT=1 opt-in — there is no silent fallback anymore.
+   * explicit library construction; ordinary clients cannot select this store.
    */
   countSecretsSync(): number {
     const db = this.db();

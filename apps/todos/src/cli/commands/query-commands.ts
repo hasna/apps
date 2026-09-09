@@ -1,3 +1,4 @@
+import { cloudQueryTasks, cloudQueryBlockingDeps, taskTimestamp, taskDayWindow } from "../task-query-api.js";
 import type { Command } from "commander";
 import chalk from "chalk";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -71,7 +72,6 @@ import {
   cloudListTasks,
   cloudActiveWork,
   cloudStaleTasks,
-  cloudOverdueTasks,
   cloudEscalatedTasks,
   cloudChangedSince,
   cloudTaskStats,
@@ -1399,18 +1399,22 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
-      const start = new Date(); start.setHours(0, 0, 0, 0);
-      const tasks: any[] = cloud
-        ? await cloudChangedSince(cloud, start.toISOString())
-        : (await import("../../db/tasks.js")).getTasksChangedSince(start.toISOString(), undefined, getDatabase());
+      const {start, end, date} = taskDayWindow();
+      const allChanged: any[] = cloud
+        ? (await cloudQueryTasks(cloud, {include_subtasks:true, ...(globalOpts.project !== undefined ? {project_id:await cloudResolveProjectRef(cloud,globalOpts.project)} : {})}))
+        : (await import("../../db/tasks.js")).getTasksChangedSince(new Date(start.getTime() - 1).toISOString(), undefined, getDatabase());
+      const tasks = allChanged.filter((t: any) => {
+        const updated = taskTimestamp(t.updated_at);
+        return updated >= start.getTime() && updated < end.getTime();
+      }).sort((a, b) => taskTimestamp(b.updated_at) - taskTimestamp(a.updated_at));
       const completed = tasks.filter((t: any) => t.status === "completed");
       const started = tasks.filter((t: any) => t.status === "in_progress");
       const other = tasks.filter((t: any) => t.status !== "completed" && t.status !== "in_progress");
       if (opts.json || globalOpts.json) {
-        console.log(JSON.stringify({ date: start.toISOString().slice(0, 10), completed, started, changed: other }));
+        console.log(JSON.stringify({ date, completed, started, changed: other }));
         return;
       }
-      console.log(chalk.bold(`Today — ${start.toISOString().slice(0, 10)}\n`));
+      console.log(chalk.bold(`Today — ${date}\n`));
       if (completed.length > 0) {
         console.log(chalk.green(`  ✓ Completed (${completed.length}):`));
         for (const t of completed) console.log(`    ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}${t.assigned_to ? chalk.dim(` — ${t.assigned_to}`) : ""}`);
@@ -1430,19 +1434,22 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .action(async (opts) => {
       const globalOpts = program.opts();
       const cloud = getTodosCloudClient();
-      const start = new Date(); start.setDate(start.getDate() - 1); start.setHours(0, 0, 0, 0);
-      const end = new Date(start); end.setHours(23, 59, 59, 999);
+      const {start, end, date} = taskDayWindow(1);
       const allChanged: any[] = cloud
-        ? await cloudChangedSince(cloud, start.toISOString())
-        : (await import("../../db/tasks.js")).getTasksChangedSince(start.toISOString(), undefined, getDatabase());
-      const tasks = allChanged.filter((t: any) => t.updated_at <= end.toISOString());
+        ? (await cloudQueryTasks(cloud, {include_subtasks:true, ...(globalOpts.project !== undefined ? {project_id:await cloudResolveProjectRef(cloud,globalOpts.project)} : {})}))
+        : (await import("../../db/tasks.js")).getTasksChangedSince(new Date(start.getTime() - 1).toISOString(), undefined, getDatabase());
+      const tasks = allChanged.filter((t: any) => {
+        const updated = taskTimestamp(t.updated_at);
+        return updated >= start.getTime() && updated < end.getTime();
+      }).sort((a, b) => taskTimestamp(b.updated_at) - taskTimestamp(a.updated_at));
+
       const completed = tasks.filter((t: any) => t.status === "completed");
       const started = tasks.filter((t: any) => t.status === "in_progress");
       if (opts.json || globalOpts.json) {
-        console.log(JSON.stringify({ date: start.toISOString().slice(0, 10), completed, started }));
+        console.log(JSON.stringify({ date, completed, started }));
         return;
       }
-      console.log(chalk.bold(`Yesterday — ${start.toISOString().slice(0, 10)}\n`));
+      console.log(chalk.bold(`Yesterday — ${date}\n`));
       if (completed.length > 0) {
         console.log(chalk.green(`  ✓ Completed (${completed.length}):`));
         for (const t of completed) console.log(`    ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}${t.assigned_to ? chalk.dim(` — ${t.assigned_to}`) : ""}`);
@@ -1461,16 +1468,17 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("-j, --json", "Output as JSON")
     .action(async (agent: string, opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
-      const projectId = globalOpts.project ? (autoProject(globalOpts) || undefined) : undefined;
       const cloud = getTodosCloudClient();
+      const db = cloud ? undefined : getDatabase();
+      const projectId = globalOpts.project !== undefined ? (cloud ? await cloudResolveProjectRef(cloud, globalOpts.project) : autoProject(globalOpts)) : undefined;
+      if (!agent.trim()) throw new Error("Agent must not be blank");
       const filter: any = { assigned_to: agent };
       if (projectId) filter.project_id = projectId;
-      const tasks: any[] = cloud ? await cloudListTasks(cloud, filter) : listTasks(filter, db);
+      const tasks: any[] = cloud ? await cloudQueryTasks(cloud, filter) : listTasks(filter, db);
       // Also check agent_id for tasks created by this agent
       const filterByAgent: any = { agent_id: agent };
       if (projectId) filterByAgent.project_id = projectId;
-      const agentTasks: any[] = cloud ? await cloudListTasks(cloud, filterByAgent) : listTasks(filterByAgent, db);
+      const agentTasks: any[] = cloud ? await cloudQueryTasks(cloud, filterByAgent) : listTasks(filterByAgent, db);
       // Merge, dedupe by id
       const seen = new Set(tasks.map((t: any) => t.id));
       for (const t of agentTasks) {
@@ -1512,15 +1520,16 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("--project <id>", "Filter to project")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const db = getDatabase();
       const cloud = getTodosCloudClient();
-      const projectId = autoProject(globalOpts) || opts.project || undefined;
+      const db = cloud ? undefined : getDatabase();
+      const projectRef = opts.project ?? globalOpts.project;
+      const projectId = cloud ? (projectRef !== undefined ? await cloudResolveProjectRef(cloud, projectRef) : undefined) : autoProject({project:projectRef});
       const filter: any = { status: "pending" as const };
       if (projectId) filter.project_id = projectId;
-      const allPending: any[] = cloud ? await cloudListTasks(cloud, filter) : listTasks(filter, db);
+      const allPending: any[] = cloud ? await cloudQueryTasks(cloud, filter) : listTasks(filter, db);
       const blockedTasks: { task: any; blockers: any[] }[] = [];
       if (cloud) {
-        const map = await cloudBlockingDepsMap(cloud, allPending);
+        const map = await cloudQueryBlockingDeps(cloud, allPending);
         for (const t of allPending) {
           const blockers = map.get(t.id);
           if (blockers && blockers.length > 0) blockedTasks.push({ task: t, blockers });
@@ -1557,10 +1566,15 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
     .option("--project <id>", "Filter to project")
     .action(async (opts) => {
       const globalOpts = program.opts();
-      const projectId = autoProject(globalOpts) || opts.project || undefined;
       const cloud = getTodosCloudClient();
+      const projectRef = opts.project ?? globalOpts.project;
+      const projectId = cloud ? (projectRef !== undefined ? await cloudResolveProjectRef(cloud, projectRef) : undefined) : autoProject({project:projectRef});
       const { getOverdueTasks } = await import("../../db/tasks.js");
-      const tasks: any[] = cloud ? await cloudOverdueTasks(cloud, projectId) : getOverdueTasks(projectId);
+      const tasks: any[] = cloud
+        ? (await cloudQueryTasks(cloud, { ...(projectId ? {project_id:projectId} : {}), include_subtasks:true }))
+          .filter(t => !t.archived_at && !["completed","cancelled","failed"].includes(t.status) && t.due_at != null && taskTimestamp(t.due_at) < Date.now())
+          .sort((a,b)=>taskTimestamp(a.due_at)-taskTimestamp(b.due_at))
+        : getOverdueTasks(projectId);
       if (opts.json || globalOpts.json) {
         console.log(JSON.stringify(tasks));
         return;

@@ -1,6 +1,6 @@
-# Fleet client-API-key provisioning
+# Hosted app authentication checks and fleet key provisioning
 
-A hosted Hasna service is unusable from a station until a **client** key exists
+A hosted Hasna service using `fleet-api-key` is unusable from a station until a **client** key exists
 for it at `hasna/oss/<app>/api-key` (Secrets Manager, AWS account
 `hasna-internal`, `us-east-1`). Until hasna/apps#1595 nothing provisioned that
 key and nothing checked it, so:
@@ -17,7 +17,7 @@ is what makes them visible.
 
 | file | what it is |
 |------|------------|
-| `hosted-apps.json` | the written inventory: every hosted app, its base URL, its key secret, and how its key is probed |
+| `hosted-apps.json` | every hosted app, its current and target API base, authentication mode, and checks |
 | `key-provisioning.ts` | the library: registry parsing, probe classification, assessment, minting |
 | `fleet-key.ts` | the CLI both callers use |
 
@@ -38,6 +38,43 @@ bun tooling/fleet/fleet-key.ts apps [--json] [--source monorepo|external]
 ```
 
 ## How a key is proved to work
+
+Entries default to `authMode: "fleet-api-key"`, preserving existing key checks
+and provisioning. Apps with per-user accounts declare `authMode: "user-oauth"`
+instead; that mode never reads Secrets Manager, a deploy manifest, or a mint
+target. `provision` refuses it before any IO, including with `--allow-rotate`.
+It cannot set `keySecretId`, `keyCheck`, or `probePath`; `keyCheck: "none"` is
+still a different mode that **requires a key**, as used by hooks.
+
+### Per-user OAuth observations
+
+Nest is built in `hasna-products/nest` with direct Google OAuth and email/password.
+Its API checks verified user identity and current membership. The registry uses
+`https://api.getnest.sh` while its gateway route is pending; the canonical target
+is `https://api.hasna.com/nest` (callers append `/v1` exactly once). This does not
+change the issuer, `https://getnest.sh/api/auth`. A `baseUrl` override must explain
+why in `notes`. Registering an entry does not publish a gateway route: the
+reserved disabled legacy Nest route first needs an ownership handoff and live
+route verification before this override can be removed.
+
+Daily drift checks make two anonymous GETs, with no credentials, redirects, or
+response-body capture: `/v1/health` must return 200 and `/v1/auth/me` must return
+401. The `OBSERVED` bucket is separate from verified keys and exemptions. It
+only establishes public reachability and the anonymous refusal boundary;
+sign-in, token validation, membership enforcement, and tenant isolation still
+need separate authenticated acceptance. A redirect, 404, or unexpected 2xx
+fails the boundary check. Network failures, rate limits and 5xx are reported as
+unverifiable (failures with `--strict`), never as authenticated success. Nest
+remains visible in the JSON report, console output, and job summary.
+
+```bash
+bun tooling/fleet/fleet-key.ts drift --apps nest --strict
+```
+
+This adds check coverage when the existing daily lane is enabled; it does not
+enable that lane, grant cloud permissions, or deploy either route or service.
+
+### Fleet API keys
 
 Proving a key works needs an *authenticated* request, and pinning one real
 route per app would be thirty route tables to keep in sync — a probe that 404s

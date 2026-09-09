@@ -501,4 +501,46 @@ describe("self-hosted OpenAPI identity and authorization contract", () => {
       expect(names.has(expected), `listMessages is missing the ${expected} parameter`).toBe(true);
     }
   });
+
+  it("documents mailbox-filter actions/enabled/order and both apply responses (FR-0001)", () => {
+    const item = paths["/v1/mailbox-filters/{id}"];
+
+    // New fields are optional add-ons; PUT requirements stay exactly as before.
+    const replaceSchema = item?.put?.requestBody?.content?.["application/json"]?.schema as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    } | undefined;
+    expect(replaceSchema?.required).toEqual(["name", "mailbox", "criteria"]);
+    expect(replaceSchema?.properties).toHaveProperty("actions");
+    expect(replaceSchema?.properties).toHaveProperty("enabled");
+    expect(replaceSchema?.properties).toHaveProperty("order");
+
+    const readSchema = item?.get?.responses?.["200"]?.content?.["application/json"]?.schema as
+      { properties?: Record<string, unknown> } | undefined;
+    expect(readSchema?.properties).toHaveProperty("actions");
+    expect(readSchema?.properties).toHaveProperty("enabled");
+    expect(readSchema?.properties).toHaveProperty("order");
+
+    const apply = paths["/v1/mailbox-filters/{id}/apply"]?.post;
+    const applyBody = apply?.requestBody?.content?.["application/json"]?.schema as
+      { additionalProperties?: boolean; properties?: { mutate?: { type?: string } } } | undefined;
+    expect(applyBody?.additionalProperties).toBe(false);
+    expect(applyBody?.properties?.mutate?.type).toBe("boolean");
+
+    const okSchema = apply?.responses?.["200"]?.content?.["application/json"]?.schema as {
+      properties?: Record<string, { enum?: boolean[]; type?: string; minimum?: number }>;
+      required?: string[];
+    } | undefined;
+    // List-only response contract is unchanged; mutate mode only ADDS members.
+    expect(okSchema?.required).toEqual(["filter", "items", "limit", "offset", "truncated"]);
+    expect(okSchema?.properties?.mutate?.enum).toEqual([true]);
+    expect(okSchema?.properties?.matched?.type).toBe("integer");
+    expect(okSchema?.properties?.updated?.minimum).toBe(0);
+    expect(okSchema?.properties?.unchanged?.minimum).toBe(0);
+
+    // Mutate apply is a write: its documented failure modes.
+    for (const status of ["400", "401", "403", "404"]) {
+      expect(apply?.responses?.[status], `apply ${status} response`).toBeDefined();
+    }
+  });
 });

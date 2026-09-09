@@ -56,6 +56,12 @@ function isolateHome(): string {
 
 const KEYRING = "open-emails-provider-credentials.keyring.json";
 
+function expectedPlatformDataRoot(home: string): string {
+  return process.platform === "darwin"
+    ? join(home, "Library", "Application Support", "Hasna", "emails")
+    : join(home, ".local", "share", "hasna", "emails");
+}
+
 describe("resolver (XDG) data-root resolution", () => {
   test("home resolves HOME first, then the OS user database", () => {
     const home = isolateHome();
@@ -64,7 +70,7 @@ describe("resolver (XDG) data-root resolution", () => {
 
   test("resolver data root follows @hasna/paths under a fake HOME", () => {
     const home = isolateHome();
-    expect(getResolverDataRoot()).toBe(join(home, ".local", "share", "hasna", "emails"));
+    expect(getResolverDataRoot()).toBe(expectedPlatformDataRoot(home));
     expect(getLegacyDataRoot()).toBe(join(home, ".hasna", "emails"));
   });
 });
@@ -93,7 +99,7 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
 
   test("an existing store at the resolver data root adopts it even without HASNA_DATA_HOME", () => {
     const home = isolateHome();
-    const xdg = join(home, ".local", "share", "hasna", "emails");
+    const xdg = expectedPlatformDataRoot(home);
     mkdirSync(xdg, { recursive: true });
     writeFileSync(join(xdg, "emails.db"), "existing-migrated-store");
     expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(true);

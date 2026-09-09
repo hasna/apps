@@ -1,3 +1,4 @@
+import { awaitChannelDelivery } from "./channel-delivery.js";
 /**
  * Telegram channel bridge for conversations MCP server.
  *
@@ -31,10 +32,11 @@ interface TelegramUpdate {
   };
 }
 
-async function telegramRequest(token: string, method: string, params?: Record<string, unknown>): Promise<any> {
+async function telegramRequest(token: string, method: string, params?: Record<string, unknown>, signal?:AbortSignal): Promise<any> {
   const url = `https://api.telegram.org/bot${token}/${method}`;
   const res = await fetch(url, {
     method: "POST",
+    signal,
     headers: { "Content-Type": "application/json" },
     body: params ? JSON.stringify(params) : undefined,
   });
@@ -43,16 +45,20 @@ async function telegramRequest(token: string, method: string, params?: Record<st
   return data.result;
 }
 
-export function registerTelegramChannel(server: McpServer): void {
+export function registerTelegramChannel(server: McpServer): () => Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) return; // No token, no bridge
+  if (!token) return async () => {}; // No token, no bridge
 
+  const abort = new AbortController();
+  let disposed = false;
+  let inFlight: Promise<void> | null = null;
   let lastUpdateId = 0;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let botUsername = "bot";
 
   // Get bot info on startup
-  telegramRequest(token, "getMe").then((me: any) => {
+  const startup = telegramRequest(token, "getMe", undefined, abort.signal).then((me: any) => {
+    if (disposed) return;
     botUsername = me.username || me.first_name || "bot";
     console.error(`[telegram-channel] connected as @${botUsername}`);
   }).catch(() => {});
@@ -76,7 +82,7 @@ export function registerTelegramChannel(server: McpServer): void {
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
   });
 
-  function pushNotification(update: TelegramUpdate): void {
+  async function pushNotification(update: TelegramUpdate): Promise<void> {
     const msg = update.message;
     if (!msg?.text) return;
 
@@ -92,7 +98,7 @@ export function registerTelegramChannel(server: McpServer): void {
 
     const enrichedContent = `[${context}]\n${msg.text}`;
 
-    server.server.notification({
+    await awaitChannelDelivery(() => server.server.notification({
       method: "notifications/claude/channel",
       params: {
         content: enrichedContent,
@@ -104,7 +110,7 @@ export function registerTelegramChannel(server: McpServer): void {
           ...(msg.chat.title ? { chat_title: msg.chat.title } : {}),
         },
       },
-    }).catch(() => {});
+    }), abort.signal);
   }
 
   async function poll(): Promise<void> {
@@ -113,11 +119,13 @@ export function registerTelegramChannel(server: McpServer): void {
         offset: lastUpdateId + 1,
         timeout: 1,
         allowed_updates: ["message"],
-      });
+      }, abort.signal);
 
+      if (disposed) return;
       for (const update of updates) {
+        await pushNotification(update);
+        if (disposed) return;
         lastUpdateId = update.update_id;
-        pushNotification(update);
       }
     } catch {
       // Silently continue
@@ -126,9 +134,21 @@ export function registerTelegramChannel(server: McpServer): void {
 
   // Start polling after connection
   const startTimer = setTimeout(() => {
-    pollTimer = setInterval(() => poll(), POLL_INTERVAL_MS);
+    if (disposed) return;
+    pollTimer = setInterval(() => {
+      if (disposed || inFlight) return;
+      inFlight = poll().finally(() => { inFlight = null; });
+    }, POLL_INTERVAL_MS);
     unrefTimer(pollTimer);
     console.error("[telegram-channel] polling started");
   }, 2000);
   unrefTimer(startTimer);
+  return async () => {
+    disposed = true;
+    clearTimeout(startTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+    abort.abort();
+    await Promise.allSettled([startup, ...(inFlight ? [inFlight] : [])]);
+  };
 }

@@ -11,6 +11,7 @@ useDefaultTestTimeout();
 
 const scratch = mkdtempSync(join(tmpdir(), "skills-workspace-members-"));
 const binary = join(scratch, "skills.js"), mcp = join(scratch, "mcp.js"), guard = join(scratch, "guard.js");
+const actorId=randomUUID(), actorMid=randomUUID();
 const code = "132465", session = randomUUID(), durable = randomUUID(), ignoredKey = randomUUID();
 beforeAll(async () => {
   await buildCliFixture(resolve(import.meta.dir, "index.tsx"), binary);
@@ -29,7 +30,7 @@ function environment(root: string, origin: string) {
   mkdirSync(join(root, "config/skills"));
   for (const name of ["credentials", "credentials-selected", "credentials-unrelated"])
     writeFileSync(join(root, "config/skills", name), `HASNA_SKILLS_API_KEY=${durable}\nHASNA_SKILLS_API_URL=${name === "credentials-selected" ? origin : "http://127.0.0.1:1/unselected"}\n`, { mode: 0o600 });
-  writeFileSync(join(root, "config/skills/identity-selected.json"), JSON.stringify({ userId: "preserve", orgId: "preserve" }), { mode: 0o600 });
+  writeFileSync(join(root, "config/skills/identity-selected.json"), JSON.stringify({ userId: actorId }), { mode: 0o600 });
   return { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: join(root, "home"), HASNA_HOME: join(root, "hasna"),
     HASNA_CONFIG_HOME: join(root, "config"), HASNA_SKILLS_DIR: join(root, "data"), HASNA_PROFILE: "selected",
     TMPDIR: scratch, NO_COLOR: "1", TERM: "dumb", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", SKILLS_TEST_MODE: "1",
@@ -39,12 +40,15 @@ type Call = { path: string; method: string; authorized: boolean };
 async function fixture(action: (origin: string, calls: Call[], page: ReturnType<typeof makePage>, setMode: (mode: string) => void) => Promise<void>) {
   const calls: Call[] = [], page = makePage(); let mode = "ok";
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    const url = new URL(request.url), authorized = request.headers.get("authorization") === `Bearer ${session}`;
+    const url = new URL(request.url), authorized = [session,durable].some(value=>request.headers.get("authorization") === `Bearer ${value}`);
     calls.push({ path: url.pathname + url.search, method: request.method, authorized });
+    const identity={user:{id:actorId,membershipId:actorMid,email:"owner@example.test",displayName:null,role:"owner"},organization:{id:page.organizationId,slug:"selected",name:"Selected"}};
+    if(url.pathname==="/prefix/api/auth/whoami") return Response.json({...identity,authMethod:request.headers.get("authorization")===`Bearer ${durable}`?"api_key":"jwt"});
+    if(url.pathname==="/prefix/api/v1/account/workspaces/switch") { expect(await request.json()).toEqual({membershipId:actorMid});return Response.json({...identity,token:session}); }
     if (url.pathname === "/prefix/api/auth/login") return Response.json({ sent: true });
     if (url.pathname === "/prefix/api/auth/verify") {
       const body = await request.json() as { email: string; code: string };
-      return body.code === code && body.email === "owner@example.test" ? Response.json({ token: session, apiKey: ignoredKey }) : Response.json({ error: durable }, { status: 401 });
+      return body.code === code && body.email === "owner@example.test" ? Response.json({ token: session, apiKey: ignoredKey, user:{id:actorId} }) : Response.json({ error: durable }, { status: 401 });
     }
     if (url.pathname !== "/prefix/api/v1/workspace/members" || request.method !== "GET") return Response.json({ error: durable }, { status: 404 });
     if (!authorized || mode === "denied") return Response.json({ error: durable }, { status: 403 });
@@ -87,13 +91,13 @@ test("built CLI paginates with fresh session, refuses malformed/denied requests 
   const last = await invoke([...common, "--limit", "1", "--cursor", page.nextCursor, "--json"]);
   expect(last.exitCode).toBe(0); expect(JSON.parse(last.stdout)).toEqual({ ...page, members: [], nextCursor: null });
   const human = await invoke(common); expect(human.exitCode).toBe(0); expect(human.stdout).toContain(page.members[0]!.createdAt); expect(human.stdout).toContain(`Next cursor: ${page.nextCursor}`);
-  expect(calls.filter(call => call.method === "GET").map(call => call.path)).toEqual([
+  expect(calls.filter(call => call.method === "GET" && call.path.includes("/workspace/members")).map(call => call.path)).toEqual([
     "/prefix/api/v1/workspace/members?limit=1", "/prefix/api/v1/workspace/members?limit=1&cursor=opaque_cursor-A1", "/prefix/api/v1/workspace/members"]);
   expect(calls.every(call => call.path.includes("/verify") ? !call.authorized : call.authorized)).toBe(true);
   let count = calls.length;
   for (const args of [[...common, "--limit", "0"], [...common, "--limit", "101"], [...common, "--limit", "1.5"], [...common, "--cursor", ""], [...common.filter(arg => arg !== "--code-stdin"), "--json"], [...common, "extra"], [...common, "--organization-id", randomUUID()]]) expect((await invoke(args)).exitCode).toBe(1);
   expect((await invoke(common, "invalid")).exitCode).toBe(1); expect(calls.length).toBe(count);
-  expect((await invoke(common, "000000")).exitCode).toBe(1); expect(calls.length).toBe(count + 1);
+  expect((await invoke(common, "000000")).exitCode).toBe(1); expect(calls.length).toBe(count + 2);
   for (const mode of ["denied", "missing", "bad"]) {
     setMode(mode);
     for (const json of [false, true]) { const result = await invoke([...common, ...(json ? ["--json"] : [])]); expect(result.exitCode).toBe(1); if (json) expect(JSON.parse(result.stdout).error).toContain("Unable to list workspace members"); }

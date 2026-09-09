@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { getApiUrl } from "../../lib/auth-store.js";
+import { prepareProfileWorkspace } from "../../lib/workspace-profile.js";
 import { RemoteSkillsAuthClient } from "../../lib/remote-auth.js";
 import { workspaceMembersQuery } from "../../lib/remote-workspace.js";
 import { NameInputError, promptCode, readCode } from "./customer-verification.js";
@@ -17,14 +17,17 @@ export function registerWorkspaceMembersCommand(workspace: Command) {
         if (options.limit !== undefined && !/^[1-9]\d{0,2}$/.test(options.limit)) throw new NameInputError("Use a roster limit from 1 to 100.");
         const page = { limit: options.limit === undefined ? undefined : Number(options.limit), cursor: options.cursor };
         workspaceMembersQuery(page);
-        const client = new RemoteSkillsAuthClient(getApiUrl("List workspace members"));
+        const pending = prepareProfileWorkspace("List workspace members");
+        const client = new RemoteSkillsAuthClient(pending.origin);
         if (!options.codeStdin && (options.json || !process.stdin.isTTY || !process.stderr.isTTY))
           throw new NameInputError("Use --code-stdin with a fresh verification code for JSON or noninteractive roster requests.");
         let code: string | null;
         if (options.codeStdin) code = await readCode();
         else { await client.requestCode(options.email); code = await promptCode(); }
         if (code === null) return;
-        const result = await client.listWorkspaceMembers(options.email, code, page);
+        const target = await pending.resolve();
+        target.unchanged();
+        const result = await client.listWorkspaceMembers(options.email, code, page, target.context);
         if (options.json) console.log(JSON.stringify(result));
         else {
           const text = (value: string) => value.replace(/[\p{Cc}\p{Cs}\u2028\u2029]/gu, " ");
