@@ -353,13 +353,15 @@ function applyStatusPatch(db: Database, row: MessageRow, patch: MessageStatusPat
     patch.is_read !== undefined ||
     patch.is_starred !== undefined ||
     patch.archived !== undefined ||
+    patch.is_spam !== undefined ||
+    patch.is_trash !== undefined ||
     patch.add_label !== undefined ||
     patch.remove_label !== undefined;
 
   if (table === LEDGER_TABLE) {
     if (touchesFlags) {
       return invalidInput(
-        `message ${id} is a row of the legacy sent ledger, which stores no read, star, archive or label state; ` +
+        `message ${id} is a row of the legacy sent ledger, which stores no read, star, archive, spam, trash or label state; ` +
           "this store will not pretend the write landed",
       );
     }
@@ -375,6 +377,11 @@ function applyStatusPatch(db: Database, row: MessageRow, patch: MessageStatusPat
   }
   if (patch.is_starred !== undefined) set("is_starred", patch.is_starred ? 1 : 0);
   if (patch.archived !== undefined) set("is_archived", patch.archived ? 1 : 0);
+  // Explicit folder moves, parallel to `archived` above: these are the unambiguous
+  // spelling of a quarantine (spam) or delete-to-trash action. They write the same
+  // boolean columns an `add_label: "spam"` / `add_label: "trash"` folder move would.
+  if (patch.is_spam !== undefined) set("is_spam", patch.is_spam ? 1 : 0);
+  if (patch.is_trash !== undefined) set("is_trash", patch.is_trash ? 1 : 0);
 
   // Labels are edited ONE AT A TIME, never by replacing the caller's whole array,
   // because a whole-array write loses a concurrent label change instead of merging
