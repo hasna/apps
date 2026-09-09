@@ -176,6 +176,61 @@ def source_change_metadata(source, status):
     return {"status_bytes": len(status), "status_sha256": digest(status), "changes": rows}
 
 
+def normalize_known_bin_mode(source, changes, receipt):
+    """Restore only the exact mode-only bin-link delta observed in run 34377599508."""
+    name = "apps/contracts/dist/cli/contracts-cli.js"
+    content_hash = "eab40f61f614768141956b6d793b9197a7f56cbaa14154ab27d01e41372e7a40"
+    expected = {
+        "status_bytes": 44,
+        "status_sha256": "e28b851a42aec3ed338ad64782074184de200d818d022911224e510a37a889b4",
+        "changes": [{"path": name, "change": "M", "before_mode": 0o100644,
+                     "after_git_mode": 0o100755, "before_bytes": 70,
+                     "before_sha256": content_hash, "after_mode": 0o100777,
+                     "after_bytes": 70, "after_sha256": content_hash}],
+    }
+    status_command = ["git", "status", "--porcelain", "--untracked-files=no"]
+    if changes != expected or fixed_output(["git", "rev-parse", "HEAD"], source).decode().strip() != SOURCE:
+        raise ValueError("source_dirty")
+    status = fixed_output(status_command, source)
+    if source_change_metadata(source, status) != expected:
+        raise ValueError("source_dirty")
+    # Walk directory descriptors: no component, including the file, may be a symlink.
+    parent = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for component in Path(name).parts[:-1]:
+            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        fd = os.open(Path(name).name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        try:
+            before = os.fstat(fd)
+            if (before.st_mode != 0o100777 or before.st_size != 70 or before.st_uid != os.geteuid()
+                    or before.st_nlink != 1 or digest(os.read(fd, 71)) != content_hash):
+                raise ValueError("source_dirty")
+            # Refuse any additional staged/working-tree change before the sole mutation.
+            if fixed_output(status_command, source) != status:
+                raise ValueError("source_dirty")
+            receipt.update(path=name, before_mode=before.st_mode, bytes=70,
+                           sha256=content_hash, performed=0, clean=0)
+            os.fchmod(fd, 0o644)
+            receipt["performed"] = 1
+            after = os.fstat(fd)
+            linked = os.stat(Path(name).name, dir_fd=parent, follow_symlinks=False)
+            os.lseek(fd, 0, os.SEEK_SET)
+            if (after.st_mode != 0o100644 or after.st_size != 70 or after.st_nlink != 1
+                    or (after.st_dev, after.st_ino) != (linked.st_dev, linked.st_ino)
+                    or digest(os.read(fd, 71)) != content_hash):
+                raise ValueError("source_normalization_readback")
+            receipt["after_mode"] = after.st_mode
+        finally:
+            os.close(fd)
+    finally:
+        os.close(parent)
+    if fixed_output(status_command, source):
+        raise ValueError("source_dirty")
+    receipt["clean"] = 1
+
+
 def identity(path, version_arg):
     real = Path(path).resolve(strict=True)
     return {"path": str(real), "sha256": digest(real.read_bytes()),
@@ -289,6 +344,11 @@ def main():
             except Exception as exc:
                 # Detail collection must never replace or suppress the original refusal.
                 result["source_metadata_error"] = type(exc).__name__
+                raise ValueError("source_dirty") from None
+            result["source_normalization"] = {"performed": 0, "clean": 0}
+            normalize_known_bin_mode(source, result["source_changes"], result["source_normalization"])
+        # Mandatory after normalization as well as for an initially clean checkout.
+        if fixed_output(["git", "status", "--porcelain", "--untracked-files=no"], source):
             raise ValueError("source_dirty")
         result["imported_artifacts"] = {
             name: digest((source / name).read_bytes()) for name in (
@@ -320,7 +380,8 @@ def main():
     except Exception as exc:
         # No arbitrary exceptions or child output: fixed classification plus hashes only.
         allowed = {"patch_anchor", "source_hash", "assertion_change", "metadata_size", "metadata_count",
-                   "metadata_keys", "metadata_hash", "metadata_number", "source_identity", "source_dirty", "bun_version"}
+                   "metadata_keys", "metadata_hash", "metadata_number", "source_identity", "source_dirty", "bun_version",
+                   "source_normalization_readback"}
         code = str(exc)
         result["preparation_error"] = code if code in allowed else type(exc).__name__
     (reports / "result.json").write_text(json.dumps(result, indent=2) + "\n")
