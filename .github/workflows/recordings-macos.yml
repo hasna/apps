@@ -18,20 +18,22 @@
 # runner — so the assembly-and-ship leg remains the fleet-Mac ship lane's work.
 #
 # READ BEFORE TRUSTING A GREEN TICK. The `native` job compiles every Swift and
-# native-test target (empty known-errors baseline = plain build gate) and
-# RECORDS the outcome of `swift test`, which touches the microphone, clipboard
-# and accessibility APIs — all TCC-gated with no grantable state on a headless
-# runner — so the recorded outcome is not asserted as a pass.
+# native-test target (empty known-errors baseline = plain build gate), then
+# requires `swift test` to pass. Swift Testing handles intentional known issues
+# and opt-in skips; unexpected failures fail this job. Real microphone, paste
+# and Accessibility acceptance still belongs to the unlocked fleet-Mac lane.
 name: recordings-macos
 
 on:
   pull_request:
     paths:
       - apps/recordings/**
+      - .github/workflows/recordings-macos.yml
   push:
     branches: [main]
     paths:
       - apps/recordings/**
+      - .github/workflows/recordings-macos.yml
   workflow_dispatch:
 
 permissions:
@@ -50,9 +52,7 @@ jobs:
       run:
         working-directory: apps/recordings
     outputs:
-      # Surfaced so the `scope` job can state what actually compiled, rather than
-      # inferring it from this job's green tick. The tick means "nothing NEW
-      # broke"; see .github/native-known-errors.txt.
+      # Build evidence remains separate from the native test step's outcome.
       compiled: ${{ steps.compile.outputs.compiled }}
       blocked: ${{ steps.compile.outputs.blocked }}
       gatedTargets: ${{ steps.compile.outputs.gatedTargets }}
@@ -115,18 +115,11 @@ jobs:
         run: bun run verify:ci-native
 
       - name: Run the native test suites
-        # Only attempted when the package actually compiled. NOT a gate, and the
-        # reason is stated rather than implied: these targets touch the
-        # microphone, the clipboard and accessibility APIs, all TCC-gated with no
-        # grantable state on a headless runner. The job records the outcome
-        # instead of asserting one.
-        #
-        # `timeout-minutes` and `continue-on-error` are BOTH load-bearing: a step
-        # documented as non-gating must not be able to fail the job, and without a
-        # bound a wedged `swift test` eats the job's timeout-minutes.
+        # Run the whole suite after compilation. Preserve Swift's exit status
+        # through tee and watcher cleanup; expected issues/skips are classified
+        # by Swift Testing, never by treating all failures as headless limitations.
         id: native_tests
         if: steps.compile.outputs.compiled == 'true'
-        continue-on-error: true
         timeout-minutes: 12
         shell: bash
         run: |
@@ -159,15 +152,15 @@ jobs:
           summary="$(grep -m1 'Test run with' swift-test.log 2>/dev/null || true)"
           completed="$(grep -c 'passed after' swift-test.log 2>/dev/null || true)"
           if [ -n "$summary" ] && [ "$OUTCOME" = 'success' ]; then
-            echo "::notice title=Native tests completed and passed::$summary  swift test is green on this runner and can become a gate."
+            echo "::notice title=Native tests completed and passed::$summary  Native tests passed on this runner. Real microphone and paste acceptance remain separate."
           elif [ -n "$summary" ]; then
-            echo "::warning title=Native tests ran and did NOT pass::$summary  The native targets COMPILE but their behaviour is not verified. Not a gate. See the swift-test.log artifact."
+            echo "::error title=Native tests ran and did NOT pass::$summary  The native test gate failed. See the swift-test.log artifact."
           else
-            echo "::warning title=Native tests did NOT finish::swift test produced no run summary before its bound expired (step outcome: $OUTCOME); ${completed:-0} completion lines were recorded. The native targets COMPILE and LINK, and nothing whatever about their runtime behaviour is verified by this run. See the swift-test.log artifact."
+            echo "::error title=Native tests did NOT finish::swift test produced no run summary (step outcome: $OUTCOME); ${completed:-0} completion lines were recorded. Native runtime behaviour is unverified. See the swift-test.log artifact."
           fi
 
       - name: Native test suites were not attempted
-        if: steps.compile.outputs.compiled != 'true'
+        if: always() && steps.compile.outputs.compiled != 'true'
         run: |
           echo "::warning title=Native tests NOT run::The package did not compile, so swift test was not attempted. Nothing about native RUNTIME behaviour is verified by this run."
 
