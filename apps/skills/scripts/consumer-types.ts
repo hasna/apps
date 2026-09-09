@@ -35,7 +35,7 @@ try {
   }
   await writeFile(join(workspace, "package.json"), JSON.stringify({ private: true, type: "module",
     dependencies: { "@hasna/skills": `file:${join(workspace, filename)}` },
-    devDependencies: { typescript: "5.9.3", "@types/bun": metadata.devDependencies["@types/bun"] },
+    devDependencies: { typescript: "5.9.3", "@types/bun": metadata.devDependencies["@types/bun"], "@types/node": metadata.devDependencies["@types/node"] },
   }));
   await writeFile(join(workspace, "tsconfig.json"), JSON.stringify({ compilerOptions: {
     target: "ES2022", module: "ESNext", moduleResolution: "Bundler", strict: true,
