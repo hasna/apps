@@ -38,7 +38,7 @@ four things change:
 - **Most MCP tools that read the on-box store need `HASNA_TODOS_LOCAL=1`, and
   every refusal is typed.** The MCP server no longer opens the on-box SQLite
   store implicitly, so tools that still read it directly — the template family,
-  tags and labels, stale/blocked work, `doctor`/`standup`/`status`, run ledger,
+  tags and labels, stale/blocked work, `doctor`, run ledger,
   handoffs, review queues, retrospectives, risks, knowledge records, backups,
   calendar, boards, focus/time reports and dispatches — fail on the default
   posture with the typed `{"code":"API_DATABASE_FALLBACK_FORBIDDEN"}` payload,
@@ -75,10 +75,11 @@ four things change:
 
 Everything else still runs offline with `HASNA_TODOS_LOCAL=1` (when the
 environment configures no authority or credential of its own). The per-surface
-detail lives in the repository under `apps/todos/docs/` (`PLAN_API.md`,
+detail lives under `apps/todos/docs/` (`PLAN_API.md`,
 `TASK_LIST_API.md`, `TEMPLATE_API.md`, `TASK_QUERY_API.md`,
-`native-storage.md`); the npm tarball ships this README and `dist/` only, so
-read those files from the repo.
+`native-storage.md`). The npm tarball ships this README, `CHANGELOG.md` and those
+five documents alongside `dist/`, so they are readable from an installed
+package; `docs/cli-help.md` is repo-only.
 
 ## Credentials and Service Authority
 
@@ -112,6 +113,13 @@ resolved its own hosted authority, which is where rotation matters.
 | 3 | macOS Keychain | generic password `hasna.credentials.todos.api-key`, account `HASNA_STATION` → `hostname -s` → `USER` |
 | 4 | disk | `~/.hasna/todos/config/credentials`, owner-only `0400`/`0600` |
 | 5 | environment | `HASNA_TODOS_API_KEY` |
+
+Tier 3 is account-scoped, not host-scoped: the item is looked up under the
+station name, so a key stored for one station is invisible on another. Set
+`HASNA_STATION` explicitly (a wrapper, a launchd plist, a CI job) when the
+account name is not the first of `hostname -s` / `USER`; with none of the three
+matching the item's account, the lookup misses and the run fails closed with
+`REMOTE_API_CONFIG_MISSING` rather than silently resolving something else.
 
 Tiers 1 and 2 are *deliberate*: if one is set and cannot be honoured, the run
 fails — it never quietly authenticates as a different principal. Tier 5 is a

@@ -37,7 +37,7 @@ install:
    tool that still reads it directly — the template family (`create_template`,
    `list_templates`, `init_templates`, `preview_template`, `export_template`,
    `import_template`, `create_task_from_template`), tags and labels, stale and
-   blocked work, `doctor`/`standup`/`status`, the local run ledger, handoffs,
+   blocked work, `doctor`, the local run ledger, handoffs,
    review queues, retrospectives, risks, knowledge records, backups and
    integrity checks, calendar, boards, focus/time reports and dispatches — fails
    on the default posture. Measured at 0.16.0 with `TODOS_PROFILE=full` on the
@@ -194,6 +194,27 @@ per-surface detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
   `docs/TASK_QUERY_API.md`, `docs/native-storage.md`). npm consumers previously
   received only the README's Upgrading section, so the per-API breaking notes
   were unreachable from an installed package.
+- The publish gate's reviewed-file allowlist now admits the six documentation
+  paths 0.16.0 packs (`CHANGELOG.md` and the five `docs/*.md` files), so
+  `npm publish` no longer aborts at `prepublishOnly` with `package-files-extra`
+  for the very files this release added. `src/lib/public-release-gate.test.ts`
+  now validates the real `package.json`, not only a fixture, so a `files[]`
+  change the allowlist has not reviewed fails in tests instead of at publish
+  time.
+- `todos config --set` warns when the key looks like a credential or an
+  authority (`apiKey`, `api_url`, `*_token`, …) and no longer echoes the value.
+  0.16.0 removed the last reader of a credential from `config.json`, so a silent
+  `Set apiKey = …` told a migrating operator the write took effect while nothing
+  would ever consult it — and printed it to the terminal. The value is still
+  stored for a caller that reads the file itself; the warning names the tiers
+  that are read.
+- The README's account of the published tarball is corrected: the package ships
+  `CHANGELOG.md` and the five API documents alongside `dist/`, rather than
+  "this README and `dist/` only". The zero-argument MCP census in these 0.16.0
+  notes is corrected to sum to 125 (27 typed ok plus two `{"allowed":…}` policy
+  verdicts, which are not coded error envelopes) and no longer lists `standup`
+  or `status` among the `API_DATABASE_FALLBACK_FORBIDDEN` tools — both answer
+  `REMOTE_API_CONFIG_MISSING`, as the same entry already said.
 - The publish gate (`scripts/verify-public-release.ts`, publish mode) now runs
   the package test suite before it packs, so `npm publish` can no longer ship a
   tree whose own suite never ran — the gap left by a CI run that aborts on an
@@ -217,7 +238,9 @@ per-surface detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
   `TODOS_PROFILE=full`, the default posture census is unchanged
   (68 `API_DATABASE_FALLBACK_FORBIDDEN` / 18 `REMOTE_API_CONFIG_MISSING` /
   3 `INVALID_INPUT` / 1 `ENCRYPTION_KEY_UNAVAILABLE` /
-  1 `ENCRYPTED_PAYLOAD_INVALID` / 5 readable text / 29 ok / 2 status) and the
+  1 `ENCRYPTED_PAYLOAD_INVALID` / 5 readable text / 27 typed ok / 2 policy
+  verdicts — `check_workspace_permission` and `check_runner_sandbox` answer a
+  `{"allowed":…}` body, not a coded error envelope — which is all 125) and the
   `HASNA_TODOS_LOCAL=1` census is 0 `UNKNOWN_ERROR` with 5 `INVALID_INPUT`.
 - The on-box MCP tools that were not converted to the shared API are documented
   as requiring the deliberate `HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1` opt-in,
@@ -234,7 +257,8 @@ per-surface detail is in `apps/todos/docs/PLAN_API.md`, `TASK_LIST_API.md`,
   `machines_topology`) plus `list_plans` and `list_task_lists` return the typed
   `REMOTE_API_CONFIG_MISSING`; five more refuse caller input or local state with
   `INVALID_INPUT` / `ENCRYPTION_KEY_UNAVAILABLE` / `ENCRYPTED_PAYLOAD_INVALID`,
-  and five answer a readable text refusal. That is all 125 accounted for: no
+  and five answer a readable text refusal; the remaining 29 answer data (27) or
+  a `{"allowed":…}` policy verdict (2). That is all 125 accounted for: no
   zero-argument tool returns `UNKNOWN_ERROR` on the default posture, and the
   `HASNA_TODOS_LOCAL=1` posture has none either (see the entry above). This is
   the same defect class the
