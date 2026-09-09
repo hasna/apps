@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1
+
+### Patch Changes
+
+- 6bcb98d: `logs-mcp` refuses a deliberate credential tier it cannot honour before serving (hasna/apps#1720 validation, round 2). The startup gate now completes a `HASNA_LOGS_API_KEY_REF` vault pointer once — through the same `@hasna/contracts` completion the transport runs per request — so a pointer this process cannot dereference (no `@hasna/secrets`, no secrets-client configuration, an unreachable vault, an empty item) exits 1 with the resolver's TERMINAL message as the first stderr line before `initialize` is answered, instead of starting and refusing every tool call. The MCP self-telemetry store is resolved inside `buildServer()` rather than at module load, so a `HASNA_PROFILE` naming a profile with no key is diagnosed by the gate with the remedy as the first stderr line rather than thrown from the module's top level behind a Bun source frame. Nothing is created in either case; the completed credential is discarded and the transport keeps re-resolving per request.
+- 6bcb98d: Resolver validation fixes (hasna/apps#1720): a hosted `logs-mcp` no longer creates `agent-registry.db` under the app home — the agent-lifecycle registry now follows the transport (the persistent on-box file only under the explicit `HASNA_LOGS_LOCAL=1` opt-in, opened lazily on the first tool call; a per-process in-memory registry on the hosted transport, announced in the tool descriptions), and the MCP server resolves its store once at startup so a missing credential exits non-zero with the remedy as the first stderr line before `initialize` is answered and before the Streamable-HTTP listener binds. The local data directory honours `HASNA_HOME` like the credential chain (`$HASNA_HOME/logs`, `HASNA_LOGS_DATA_DIR` still wins) and is resolved per call rather than at module load, so the test suite no longer writes into the real `~/.hasna/logs`. The resolver-backed hosted-API client ships at the canonical `./sdk` subpath (self-contained bundle; `./api` stays as the alias) and the `logs-sdk` contract surface is declared supported; the nested `@hasna/logs-sdk` split-package manifest is deleted. Tests: the hosted api-lane suite resolves through a caller-built env instead of the station Keychain, and the identity repo-id expectation compares resolved paths.
+- b966fa9: Bind resolver-backed SDK requests to one authority and a freshly verified credential pair; refuse changed or invalid configuration instead of retaining a stale key. Expose the immutable destination for receipt-bound integrations.
+
 ## 0.5.0
 
 ### Minor Changes

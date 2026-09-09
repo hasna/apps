@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -21,7 +21,13 @@ const CLI = join(__dirname, '..', 'src', 'cli.ts');
 
 const panelTempRoots: string[] = [];
 const panelLocalAuthorities: KnowledgeProjectLinksAuthority[] = [];
-const panelFixedNow = () => '2026-08-10T12:00:00.000Z';
+// Fixture time is anchored to the run rather than frozen. A hard-coded
+// timestamp ages past the panel's 30-day staleness rule (freshnessFor), which
+// flipped the legacy-inventory test to state 'stale' on 2026-09-09T12:00Z and
+// reddened CI on a calendar boundary. One minute behind "now" keeps the
+// fixtures fresh and stable for the lifetime of a run.
+const PANEL_FIXTURE_NOW = Date.now();
+const panelFixedNow = () => new Date(PANEL_FIXTURE_NOW - 60_000).toISOString();
 
 afterAll(async () => {
   for (const authority of panelLocalAuthorities.splice(0)) await authority.close();
@@ -266,7 +272,11 @@ describe('knowledge project panel provider', () => {
   });
 
   test('CLI prints project-panel contract JSON for project scope', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'knowledge-project-panel-cli-'));
+    // Realpath the fixture root: the child CLI process resolves its cwd (and so
+    // its project-scoped knowledge home key) through /private/var on macOS,
+    // while the parent seeds the literal /var path. Without the realpath the
+    // child reads a different, empty home and reports zero active items.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'knowledge-project-panel-cli-')));
     seedStore(dir);
 
     const result = spawnSync('bun', [CLI, 'project-panel', '--project', 'Swiss Bank Account', '--json', '--contract'], {
@@ -359,27 +369,42 @@ describe('knowledge project panel provider', () => {
     ).rejects.toThrow(/not registered with a knowledge collection over the hosted route/);
   });
 
-  // Negative control: an unregistered project with no authority still keeps the
-  // legacy cwd-derived inventory path (the local store item is surfaced).
-  test('falls back to the legacy inventory path when the project is not registered', async () => {
-    const harness = panelLocalAuthority();
-    const dir = mkdtempSync(join(tmpdir(), 'knowledge-project-panel-unreg-'));
-    panelTempRoots.push(dir);
-    const service = createKnowledgeService({ scope: 'project', cwd: dir });
-    service.paths();
-    saveStore(service.jsonStorePath(), {
-      items: [panelItem('k_local_item', 'Local Unregistered Item', ['local'])],
-    });
+  // The legacy path measures freshness against the real clock, unlike the
+  // authority fixture's injected panelFixedNow. Keep both ages comfortably
+  // away from the production 30-day boundary so these cases do not expire.
+  for (const { ageDays, state, freshness } of [
+    { ageDays: 1, state: 'ready', freshness: 'fresh' },
+    { ageDays: 60, state: 'stale', freshness: 'stale' },
+  ] as const) {
+    test(`falls back to ${freshness} legacy inventory when the project is not registered`, async () => {
+      const harness = panelLocalAuthority();
+      const dir = mkdtempSync(join(tmpdir(), 'knowledge-project-panel-unreg-'));
+      panelTempRoots.push(dir);
+      const service = createKnowledgeService({ scope: 'project', cwd: dir });
+      service.paths();
+      const activityAt = new Date(Date.now() - ageDays * 24 * 60 * 60 * 1000).toISOString();
+      saveStore(service.jsonStorePath(), {
+        items: [{
+          ...panelItem('k_local_item', 'Local Unregistered Item', ['local']),
+          created_at: activityAt,
+          updated_at: activityAt,
+        }],
+      });
 
-    const panel = await createKnowledgeProjectPanel('Unregistered Project', {
-      service,
-      projectLinksAuthority: harness.authority,
-      limit: 10,
-    });
+      const panel = await createKnowledgeProjectPanel('Unregistered Project', {
+        service,
+        projectLinksAuthority: harness.authority,
+        limit: 10,
+      });
 
-    expect(panel.schema).toBe('hasna.project_panel.v1');
-    expect(panel.state).toBe('ready');
-    expect(panel.items.some((item) => item.title === 'Local Unregistered Item')).toBe(true);
-    expect(panel.metadata.project_links).toBeUndefined();
-  });
+      expect(panel.schema).toBe('hasna.project_panel.v1');
+      expect(panel.state).toBe(state);
+      expect(panel.freshness).toBe(freshness);
+      expect(panel.stateReason).toBe(state === 'stale'
+        ? 'Latest indexed knowledge activity is older than 30 days.'
+        : undefined);
+      expect(panel.items.some((item) => item.title === 'Local Unregistered Item')).toBe(true);
+      expect(panel.metadata.project_links).toBeUndefined();
+    });
+  }
 });

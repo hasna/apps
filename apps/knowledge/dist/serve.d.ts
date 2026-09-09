@@ -1,4 +1,4 @@
-import { ApiKeyStore, type ApiKeyVerifier } from '@hasna/contracts/auth';
+import type { ApiKeyVerifier, ServeApiKeyStore } from './contracts-types.js';
 export { createKnowledgeDatabaseClient } from './db/remote-storage.js';
 export { PG_MIGRATIONS } from './db/pg-migrations.js';
 export { buildKnowledgePostgresMigrations } from './db/migrate-list.js';
@@ -172,7 +172,7 @@ export declare function knowledgeOpenApi(version: string): Record<string, unknow
 export interface ServeDeps {
     client: PoolQueryClient;
     verifier: ApiKeyVerifier;
-    store: ApiKeyStore;
+    store: ServeApiKeyStore;
     version: string;
     /**
      * Explicit authority for FCAME-1 production writes. When absent, legacy

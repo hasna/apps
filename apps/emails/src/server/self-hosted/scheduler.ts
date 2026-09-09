@@ -78,7 +78,7 @@ async function sendPayload(
   if (!options || typeof options !== "object" || Array.isArray(options))
     throw new Error("Scheduled send options must be an object");
   const sendOptions = options as Record<string, unknown>;
-  for (const key of ["track_opens", "track_clicks", "tracking_url"]) if (sendOptions[key] !== undefined) payload[key] = sendOptions[key];
+  for (const key of ["headers", "tags", "track_opens", "track_clicks", "tracking_url"]) if (sendOptions[key] !== undefined) payload[key] = sendOptions[key];
   if (sendOptions.unsubscribe_url)
     payload.unsubscribe_url = sendOptions.unsubscribe_url;
   if (sendOptions.allow_suppressed_recipients === true)

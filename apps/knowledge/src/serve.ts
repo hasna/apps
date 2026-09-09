@@ -23,7 +23,8 @@
  *   DELETE /v1/notes/{id}/versions/{n}      purge ONE retained version (auth: knowledge:write)
  */
 import { readFileSync } from 'node:fs';
-import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier, type ApiKeyPrincipal } from '@hasna/contracts/auth';
+import { verifyApiKey, ApiKeyStore } from '@hasna/contracts/auth';
+import type { ApiKeyPrincipal, ApiKeyVerifier, ServeApiKeyStore } from './contracts-types.js';
 import { createKnowledgeDatabaseClient } from './db/remote-storage.js';
 export { createKnowledgeDatabaseClient } from './db/remote-storage.js';
 export { PG_MIGRATIONS } from './db/pg-migrations.js';
@@ -4135,7 +4136,7 @@ function parseExpectedVersion(req: Request, body: Record<string, unknown>): numb
 export interface ServeDeps {
   client: PoolQueryClient;
   verifier: ApiKeyVerifier;
-  store: ApiKeyStore;
+  store: ServeApiKeyStore;
   version: string;
   /**
    * Explicit authority for FCAME-1 production writes. When absent, legacy

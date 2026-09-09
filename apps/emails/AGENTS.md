@@ -17,39 +17,45 @@ breaks for each one.
 
 ## What This Package Does
 
-`@hasna/emails` manages the full email lifecycle locally:
+`@hasna/emails` manages the email lifecycle through a shared, authenticated API:
 - **Send** transactional emails via Resend or SES
 - **Receive** inbound emails via SMTP listener or webhooks
 - **Track** delivery events, opens, clicks, replies
 - **Manage** domains, addresses, templates, contacts, sequences
-- **Serve** a local dashboard API and REST API
+- **Serve** an authenticated REST API; retain standalone dashboard compatibility for existing consumers
 
-## Credential resolution (hosted client)
+## Client access and shared state
 
-The hosted Emails API client resolves its URL and key through the shared
+The Emails API client resolves its URL and key through the shared
 `@hasna/contracts` 1.0.2 resolver (apps/emails/src/lib/emails-credentials.ts) —
-the same five tiers every hosted Hasna CLI uses, FRESH on every request:
-`--api-key`/`--profile`, `HASNA_EMAILS_API_KEY_REF` pointers, the macOS
-Keychain items for this app (`api-key`, `api-url`), the
-`~/.hasna/emails/config/credentials` file, then `HASNA_EMAILS_API_KEY`. The
+the same tiers every hosted Hasna CLI uses, FRESH on every request: the
+deliberate `HASNA_EMAILS_API_KEY_OVERRIDE` / `HASNA_PROFILE` selections (a
+blank override or an absent profile refuses; a `HASNA_EMAILS_API_KEY_REF` vault
+pointer is refused by name — this client cannot complete it per request), the
+macOS Keychain items for this app (`api-key`, `api-url`), the
+`~/.hasna/emails/config/credentials` file, then `HASNA_EMAILS_API_KEY`. There
+are no `--api-key` / `--profile` resolver flags on the CLI. The
 canonical env names are `HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`; the
 legacy `EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` spellings stay
 accepted as aliases for one release. A live `EMAILS_SESSION_TOKEN` / agent
 `EMAILS_IDP_TOKEN` (the app's own multi-tenancy principals) wins as the bearer
-credential; the URL always comes from the resolver. Hosted runs with no
-credential FAIL CLOSED; local SQLite is reached only by an explicit
-`HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` and prints `emails: local mode` on
-stderr. The deployment-mode word (`EMAILS_MODE` / `HASNA_EMAILS_MODE`) and all
-`*_STORAGE_MODE` switches are DELETED — nothing reads them.
+credential; the URL always comes from the resolver. Missing or invalid API
+access must fail closed. Ordinary CLI, terminal UI, and MCP operations use the
+same tenant registry for providers, domains, addresses, sources, mail, and jobs.
+A fresh machine with access to that account must see the same registered
+resources. Do not create a separate client mail database or duplicate provider
+registrations to make a machine appear configured.
 
-Local data is stored in the effective data root resolved through the
-`@hasna/paths` resolver (XDG/macOS home layout): the legacy
-`~/.hasna/emails/emails.db` stays the default until the store is migrated to
-the resolver data home (`~/.local/share/hasna/emails` on Linux) or the operator
-sets the data-kind override `HASNA_DATA_HOME`; the exact-app overrides
-`HASNA_EMAILS_HOME` / `EMAILS_HOME` name an explicit root. Existing `~/.emails`
-data is migrated forward automatically. Use `HASNA_EMAILS_DB_PATH` or
-`EMAILS_DB_PATH` for isolated tests and smoke runs.
+The public `./storage` entrypoint and low-level database exports remain for
+explicit compatibility consumers and isolated fixtures. Historical identifiers
+such as `HASNA_EMAILS_DB_PATH`, `EMAILS_DB_PATH`, and
+`~/.hasna/emails/emails.db` remain relevant to those consumers and migration
+records, including the older `~/.emails` path; do not bulk-delete or rename them. The standalone SQLite dashboard
+also remains separate from the shared API service. These compatibility surfaces
+are not a reason to add a client storage selector or local fallback. Nonblank
+`HASNA_EMAILS_DB_PATH` or `EMAILS_DB_PATH` settings must be rejected by ordinary
+client entrypoints before opening SQLite, including when API access is also
+configured; direct users to remove them and configure account access.
 
 ## MCP Setup (Recommended for AI Agents)
 
@@ -80,7 +86,7 @@ update_provider(id, ...)                  → update credentials
 add_domain(provider_id, domain)           → register domain with provider
 get_dns_records(domain)                   → get DKIM/SPF/DMARC records
 verify_domain(domain)                     → re-check DNS status
-provision_domain(domain, provider_id, add_mx?) → NOT IMPLEMENTED in this build; use `emails domain adopt` + `emails aws setup-inbound`
+provision_domain(domain, provider_id, add_mx?, dry_run?, wait?) → publish sending DNS through server-bound Cloudflare zones
 create_warming_schedule(domain, target)   → start gradual volume ramp-up
 get_warming_status(domain)                → check today's limit
 ```
@@ -149,7 +155,7 @@ diagnose_inbound_delivery(address)        → missing-mail diagnosis, including 
 
 ### Sandbox (development)
 ```
-add_provider(name, type="sandbox")        → capture emails locally (never send)
+add_provider(name, type="sandbox")        → compatibility sandbox adapter (never send)
 list_sandbox_emails(provider_id?)        → browse captured emails
 clear_sandbox_emails()                    → wipe sandbox
 ```
@@ -181,7 +187,7 @@ emails://recent-errors     → latest provisioning/source errors
 ```
 
 ### Existing mailbox provider + SES sending
-> `emails address provision` and `emails provision address` use authenticated API jobs for addresses on configured SES inbound domains. `emails provision status` reads shared registry state; `emails provision job` inspects and retries durable jobs. See `docs/ADDRESS_PROVISIONING.md` for server bindings and readiness checks. Domain/up/daemon/roundtrip orchestration remains unimplemented.
+> `emails address provision` and `emails provision address` use authenticated API jobs for addresses on configured SES inbound domains. `emails provision status` reads shared registry state; `emails provision job` inspects and retries durable jobs. See `docs/ADDRESS_PROVISIONING.md` for server bindings and readiness checks. `domain setup`, `domain setup-cloudflare` and `provision domain` publish sending DNS through server-bound Cloudflare zones; see `docs/DOMAIN_DNS.md` and `docs/OWNED_DOMAIN_SETUP.md`. `emails provision roundtrip` performs an API-backed send/receipt probe; see `docs/ROUNDTRIP.md`. `provision up`, `provision daemon`, `provision retry` and `provision run` advance and inspect durable API jobs for already-owned domains; see `docs/PROVISION_UP.md`. Purchases remain outside Emails.
 ```
 1. Run `emails domain check example.com` to detect current root MX ownership.
 2. Use `emails domain adopt example.com --provider <ses-id>` for an already-registered, SES-verified domain.
@@ -206,25 +212,25 @@ emails://recent-errors     → latest provisioning/source errors
 
 ### Dev/test (never send real emails)
 ```
-1. add_provider(name="dev", type="sandbox")
-2. send_email(provider_id=<sandbox-id>, ...) → captured locally
-3. list_sandbox_emails() → inspect what would have been sent
+1. Use a hermetic fixture provider and disposable test account/store
+2. Exercise sends through that fixture; never send real mail during tests
+3. Inspect durable receipts and fixture-captured messages
 ```
 
 ## Important Constraints
 
-1. **DB location**: Default is `~/.hasna/emails/emails.db` (the legacy data root; it stays effective until the store is migrated to the resolver data home or the operator sets the data-kind override `HASNA_DATA_HOME` — the exact-app overrides `HASNA_EMAILS_HOME` / `EMAILS_HOME` name an explicit root); old `~/.emails` data is auto-migrated. Use `HASNA_EMAILS_DB_PATH` or `EMAILS_DB_PATH` for testing.
-2. **Provider credentials**: Never expose credentials in code — they're stored in the local DB. When listing providers, credentials are automatically redacted (`"***"`).
+1. **Shared registry**: Normal clients use the authenticated API. Tests use hermetic runners and disposable stores; existing SQLite paths belong to compatibility tests and exports, not client setup instructions.
+2. **Provider credentials**: Keep credentials in server bindings or the server's managed encrypted storage. Never expose values in logs or registry responses. Client account credentials and provider credentials are separate.
 3. **Domain warming**: If a warming schedule is active for a domain, `send_email` will block at the daily limit. Use `get_warming_status(domain)` first.
 4. **Suppression**: Always check `list_contacts(suppressed=true)` before bulk sends.
-5. **Attachment limits**: Local/provider flows may allow up to 25MB per attachment and 10 attachments. The self-hosted JSON send API is intentionally smaller: 5 inline attachments, 10MiB each, 20MiB total.
-6. **Server binding**: `emails serve` defaults to `127.0.0.1:3900` (localhost only). External local-dashboard binding requires both `EMAILS_ALLOW_REMOTE=1` and `--host 0.0.0.0`, and should sit behind an authenticating proxy or firewall.
+5. **Attachment limits**: The authenticated JSON send API accepts 5 inline attachments, 10MiB each, 20MiB total. Legacy provider adapters may have different limits; apply the active API contract to client sends.
+6. **Server binding**: The PostgreSQL `/v1` service uses port 8080 by default. The separate standalone SQLite dashboard uses `127.0.0.1:3900`; exposing that compatibility surface requires `EMAILS_ALLOW_REMOTE=1`, an explicit host, and an authenticating proxy/firewall.
 
 ## Development
 
 ```bash
 bun install          # install dependencies
-bun test             # run tests (EMAILS_DB_PATH=:memory: for isolation)
+bun run test         # hermetic test runner owns credential and database isolation
 bun run build        # build all bundles
 bun run dev:cli      # run CLI in dev mode
 bun run dev:mcp      # run MCP server in dev mode
@@ -246,7 +252,7 @@ src/
 │       ├── sequences.ts       # drip campaigns
 │       ├── inbox.ts           # SMTP listener + inbound email management
 │       └── ...                # provider/domain/inbox/address/provision/etc.
-├── db/                        # SQLite CRUD modules
+├── db/                        # resource helpers and explicit legacy SQLite compatibility
 │   ├── database.ts            # migrations + schema + legacy path migration
 │   ├── emails.ts, providers.ts, domains.ts, ...
 │   ├── sequences.ts, warming.ts, inbound.ts, sandbox.ts
@@ -272,10 +278,10 @@ src/
 ## Adding New Features
 
 The codebase follows these patterns:
-- **New DB table**: Add the SQLite migration/ensure-schema work in `db/database.ts`; if self-hosted, also add an immutable migration under `server/self-hosted/migrations.ts` and store/RLS coverage
+- **New shared resource**: Add an immutable PostgreSQL migration under `server/self-hosted/`, tenant-scoped store methods, and RLS/transaction coverage. Add legacy SQLite work only when explicitly required for an existing compatibility contract.
 - **New CLI command**: Add to appropriate `cli/commands/*.ts` file
 - **New MCP tool**: Add `server.tool(...)` in `mcp/tools/*.ts` and wire a new registrar from `mcp/server.ts` when needed
-- **New REST endpoint**: Add local dashboard routes under `server/routes/`; add self-hosted `/v1` routes and OpenAPI under `server/self-hosted/`
+- **New REST endpoint**: Add authenticated `/v1` routes and OpenAPI under `server/self-hosted/`; regenerate the public SDK and response contracts. Modify standalone dashboard routes under `server/routes/` only for explicitly scoped compatibility work.
 - **New library export**: Add to `src/index.ts`
 
 Test: `bun run test` — the hermetic runner owns DB isolation and must stay at 0 failures.

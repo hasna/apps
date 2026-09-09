@@ -7,7 +7,7 @@ export async function syncProviderDelivery(store: TenantScopedStore, tenantId: s
   const provider = await store.getResource(resourceSpecForPath("providers")!, providerId);
   if (!provider) throw new ProviderSyncError("Provider not found in this tenant.", 404);
   if (provider.active === false) throw new ProviderSyncError("Provider is inactive.", 409);
-  const sender = options.resolveSender?.(tenantId, providerId);
+  const sender = await options.resolveSender?.(tenantId, providerId);
   if (!sender) throw new ProviderSyncError("Configure EMAILS_SENDER_BINDINGS for this tenant/provider on the server.", 503);
   if (sender.provider !== provider.type) throw new ProviderSyncError("Provider type does not match its server binding.", 409);
   if (!sender.readDelivery) throw new ProviderSyncError("This server binding does not support reading delivery observations. Update the server or configure a supported binding.", 503);

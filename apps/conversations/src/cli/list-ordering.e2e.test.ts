@@ -1,8 +1,11 @@
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
 
 /**
  * Ordering disclosure, JSON truncation disclosure, and `--limit` on the JSON
@@ -20,17 +23,16 @@ import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
  * makes the test capable of failing.
  */
 
-const TEST_DB = join(tmpdir(), `conversations-list-ordering-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 function runCli(args: string[], agent = "list-order-observer") {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: isolatedStoreChildEnv(TEST_DB, {
+    env: { ...fixture.env,
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",
-    }),
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -67,11 +69,6 @@ beforeAll(() => {
   }
 }, HOOK_TIMEOUT_MS);
 
-afterAll(() => {
-  try { unlinkSync(TEST_DB); } catch {}
-  try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-  try { unlinkSync(`${TEST_DB}-shm`); } catch {}
-});
 
 describe("item 1 — ordering is disclosed on the text surface, and the disclosure is true", () => {
   /**
@@ -114,10 +111,10 @@ describe("item 1 — ordering is disclosed on the text surface, and the disclosu
     expect(res.stdout).toContain("sort=created_at asc");
   }, CASE_TIMEOUT_MS);
 
-  test("search discloses relevance, not a copy-pasted created_at", () => {
+  test("search discloses the actual API creation-time order", () => {
     const res = runCli(["search", "ord-first-message", "--limit", "2"]);
     expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain("sort=relevance desc");
+    expect(res.stdout).toContain("sort=created_at desc");
   }, CASE_TIMEOUT_MS);
 
   test("channel list discloses name asc and is alphabetical", () => {

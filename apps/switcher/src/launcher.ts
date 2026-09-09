@@ -4,7 +4,7 @@ import { assertHarnessArguments } from "./harness-arguments";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { SwitcherClient } from "./sdk";
-import { CommandInterrupted, codingEligible, harnessEligible, validateHarnessProvider, type LaunchPlan, type ProviderInput } from "./domain";
+import { CommandInterrupted, codingEligible, harnessEligible, modelExpired, validateHarnessProvider, type LaunchPlan, type ProviderInput } from "./domain";
 import { providerCredential } from "./presets";
 import { privateDirectory, switcherHome } from "./runtime";
 import { prepareHarnessLaunch, detectHarness, codexModel, validateHarnessVersion, validateHarnessConfiguration } from "./harnesses";
@@ -83,7 +83,7 @@ export async function prepareOriForPlan(plan: LaunchPlan, options: OriPreparatio
   if (!credential) throw new Error("OpenRouter credential is required for an Ori launch; configure a Switcher credential binding.");
   const ori = prepareOriLaunch({...request, executable: contract.executable, environment: {...process.env, ...options.credentialEnv, OPENROUTER_API_KEY: credential}});
   const native=await prepareHarnessLaunch({harness:plan.profile.harness,baseUrl:plan.provider.baseUrl,protocol:plan.provider.protocol,authStyle:plan.provider.authStyle,
-    model:plan.profile.model,models:plan.catalog.models.filter(m=>harnessEligible(m,plan.profile.harness)),modelPolicy:plan.profile.modelPolicy,
+    model:plan.profile.model,models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),modelPolicy:plan.profile.modelPolicy,
     providerId:plan.provider.id,onRoutingEvent:options.onRoutingEvent,credential,executable:detection.executable,version:detection.version,
     stateDir:options.stateDir,cwd:resolve(options.cwd??process.cwd()),args:options.args??[]});
   try {
@@ -155,7 +155,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   try {
     const prepared = backend === "ori" ? (await prepareOriForPlan(plan,{...options,stateDir,onRoutingEvent})).prepared : await prepareHarnessLaunch({
       harness:plan.profile.harness, baseUrl:plan.provider.baseUrl, protocol:plan.provider.protocol,
-      model:plan.profile.model, models:plan.catalog.models.filter(m=>harnessEligible(m,plan.profile.harness)),
+      model:plan.profile.model, models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),
       modelPolicy:plan.profile.modelPolicy,providerId:plan.provider.id,onRoutingEvent,
       credential, authStyle:plan.provider.authStyle, executable:options.executable ?? detection?.executable, args:options.args ?? [], stateDir,
       cwd:resolve(options.cwd ?? process.cwd()), version:detection?.version,

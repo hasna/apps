@@ -50,11 +50,14 @@
 // spellings match the real declarations.
 
 import {
+  CREDENTIAL_PROFILE_ENV_KEY,
   ClientTransportConfigurationError,
   CredentialResolutionError,
   appConfigDiskValue,
   clientTransportEnvKeys,
   credentialDiskSources,
+  credentialOverrideEnvKey,
+  credentialPointerEnvKey,
   defaultFleetGatewayBaseUrl,
   keychainConfigValue,
   resolveClientTransport,
@@ -166,6 +169,19 @@ export const EMAILS_API_KEY_ENV = EMAILS_API_KEY_ENV_KEYS[0] as string;
 export const EMAILS_SELF_HOSTED_URL_ENV = "EMAILS_SELF_HOSTED_URL";
 export const EMAILS_SELF_HOSTED_API_KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
 
+/**
+ * The DELIBERATE tiers of the shared chain, as the resolver spells them for this
+ * app: a per-app override (`HASNA_EMAILS_API_KEY_OVERRIDE`), a secrets-vault
+ * pointer (`HASNA_EMAILS_API_KEY_REF`) and the global profile selection
+ * (`HASNA_PROFILE`). They are named here because the environment snapshot below
+ * MUST carry them: a copy that drops them lets the resolver fall through to the
+ * ambient Keychain/disk tiers, which is the silent identity switch the contract
+ * forbids (hasna/apps#1720 validation, release review P1).
+ */
+export const EMAILS_API_KEY_OVERRIDE_ENV: string = credentialOverrideEnvKey(EMAILS_APP);
+export const EMAILS_API_KEY_REF_ENV: string = credentialPointerEnvKey(EMAILS_APP);
+export const EMAILS_PROFILE_ENV: string = CREDENTIAL_PROFILE_ENV_KEY;
+
 /** The app's own principals, in precedence order (a live session, then an agent identity). */
 export const EMAILS_SESSION_TOKEN_ENV = "EMAILS_SESSION_TOKEN";
 export const EMAILS_IDP_TOKEN_ENV = "EMAILS_IDP_TOKEN";
@@ -256,6 +272,12 @@ export function snapshotEmailsEnvironment(env: Env = process.env): Env {
   const ownKeys = new Set([
     ...ENV_KEYS.apiUrlKeys,
     ...ENV_KEYS.apiKeyKeys,
+    // The deliberate tiers travel with the snapshot. A blank override, an
+    // unresolvable profile or a bogus vault pointer must REFUSE in the
+    // resolver, never fall through to the station's Keychain (#1720 P1).
+    EMAILS_API_KEY_OVERRIDE_ENV,
+    EMAILS_API_KEY_REF_ENV,
+    EMAILS_PROFILE_ENV,
     EMAILS_SELF_HOSTED_URL_ENV,
     EMAILS_SELF_HOSTED_API_KEY_ENV,
     EMAILS_SESSION_TOKEN_ENV,
@@ -359,8 +381,13 @@ export function isEmailsTransportConfigurationError(error: unknown): boolean {
   );
 }
 
-/** True for the shared seam's credential error, across bundle boundaries. */
-function isCredentialResolutionError(error: unknown): boolean {
+/**
+ * True for the shared seam's credential error, across bundle boundaries — a
+ * DELIBERATE tier (override, vault pointer, profile) that could not be honoured,
+ * or an unusable credential. It is a refusal in the resolver's own words, and
+ * the store resolution reports it exactly like a transport configuration error.
+ */
+export function isEmailsCredentialResolutionError(error: unknown): boolean {
   return (
     error instanceof CredentialResolutionError ||
     (typeof error === "object" &&
@@ -368,6 +395,8 @@ function isCredentialResolutionError(error: unknown): boolean {
       (error as { name?: unknown }).name === "CredentialResolutionError")
   );
 }
+
+const isCredentialResolutionError = isEmailsCredentialResolutionError;
 
 /**
  * Resolve the hosted transport: the URL from the configured authority (or the
@@ -399,6 +428,24 @@ export function resolveEmailsHostedTransport(
     throw error;
   }
 
+  // A vault POINTER is a credential the operator selected deliberately, but its
+  // value lives in the secrets vault and this client resolves its credential
+  // synchronously (the store plan is sync), so it cannot complete the pointer
+  // per request. A deliberate tier that cannot produce a key REFUSES here — it
+  // is never resolved around to the Keychain, the file or the env, and the
+  // resolver's empty placeholder `apiKey` is never sent as a bearer.
+  if (contractsCredential?.tier === "pointer") {
+    throw new ClientTransportConfigurationError(
+      EMAILS_APP,
+      `${contractsCredential.source} names a secrets-vault item, and this client resolves its ` +
+        `credential synchronously, so it cannot complete the pointer per request. It is a deliberate ` +
+        `selection and is not resolved around. Use a literal tier instead — the Keychain item ` +
+        `${keychainService("api-key")}, ~/.hasna/${EMAILS_APP}/config/credentials, or ` +
+        `${EMAILS_API_KEY_ENV} — or unset ${contractsCredential.source}.`,
+      [contractsCredential.source],
+    );
+  }
+
   const principal = appPrincipalCredential(snapshot);
   const credential = principal ?? (contractsCredential ? { setting: contractsCredential.source, value: contractsCredential.apiKey } : null);
 
@@ -427,7 +474,7 @@ export function resolveEmailsHostedTransport(
       throw new ClientTransportConfigurationError(
         EMAILS_APP,
         `${configured.source} points this client at an Emails service but no API credential ` +
-          `resolved — refusing to run locally instead. Looked in the Keychain item ` +
+          `resolved — refusing to start. Looked in the Keychain item ` +
           `${keychainService("api-key")}${emailsCredentialFiles(snapshot).length > 0 ? `, in ` +
           `${emailsCredentialFiles(snapshot).join(" or ")}` : ""}, and in ${EMAILS_API_KEY_ENV} ` +
           `(or its alias ${EMAILS_SELF_HOSTED_API_KEY_ENV}). ` +
@@ -442,8 +489,7 @@ export function resolveEmailsHostedTransport(
       `No Emails API credential resolved and no authority is configured — refusing to start. ` +
         `Set ${EMAILS_API_KEY_ENV} and ${EMAILS_API_URL_ENV} (or ${EMAILS_SELF_HOSTED_API_KEY_ENV} and ` +
         `${EMAILS_SELF_HOSTED_URL_ENV}), store the key in the Keychain item ` +
-        `${keychainService("api-key")}, or write ~/.hasna/${EMAILS_APP}/config/credentials. ` +
-        `To use the local database instead, choose it explicitly by setting a database path.`,
+        `${keychainService("api-key")}, or write ~/.hasna/${EMAILS_APP}/config/credentials.`,
       [EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV],
     );
   }

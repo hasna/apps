@@ -1,6 +1,6 @@
 {
   "name": "@hasna/shortlinks",
-  "version": "0.2.10",
+  "version": "0.3.1",
   "description": "Shortlink manager for custom domains and click tracking, with local SQLite or hosted /v1 API (bearer key) storage and Cloudflare setup helpers",
   "type": "module",
   "main": "dist/index.js",

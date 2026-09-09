@@ -1,9 +1,10 @@
-import { describe, it, expect, mock, beforeEach, spyOn, afterAll } from "bun:test";
+import { describe, it, expect, mock, beforeEach, spyOn, beforeAll, afterAll } from "bun:test";
 import { Command } from "commander";
 import * as configModule from "../../core/config";
 import * as childProcess from "child_process";
 import { tmpdir } from "os";
-import { unlinkSync, writeFileSync } from "fs";
+import { join } from "path";
+import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from "fs";
 
 // ---------------------------------------------------------------------------
 // Mock core/upload and core/config before importing the command
@@ -91,7 +92,35 @@ mock.module("../../core/store", () => ({ ...actualStore, resolveStore: (env = pr
 const { registerUpload } = await import("./upload");
 
 // Restore all mocks after this file's tests complete so they don't leak into other test files
-afterAll(() => mock.restore());
+const savedResolverHome = process.env.HASNA_HOME;
+const savedAmbientRoots = new Map(
+  ["HOME", "HASNA_CONFIG_HOME", "HASNA_STATION"].map((key) => [key, process.env[key]]),
+);
+let scratchResolverHome: string;
+beforeAll(() => {
+  // Hermetic: the cloud-mode test exercises the REAL resolver (production
+  // resolveStore), so its disk tier must anchor to a scratch root — a
+  // station's real ~/.hasna/attachments/config/credentials would otherwise
+  // conflict with the fixture URL and flunk the test on machines that hold
+  // fleet credentials. The Keychain account is pinned to a sentinel no real
+  // item uses (macOS: the resolver falls back to this machine's short
+  // hostname otherwise), and HASNA_CONFIG_HOME is anchored so an exported
+  // config root cannot re-connect the real file.
+  scratchResolverHome = mkdtempSync(join(tmpdir(), "attachments-upload-resolver-"));
+  process.env.HASNA_HOME = scratchResolverHome;
+  process.env.HASNA_CONFIG_HOME = scratchResolverHome;
+  process.env.HASNA_STATION = "attachments-hermetic-test";
+});
+afterAll(() => {
+  if (savedResolverHome === undefined) delete process.env.HASNA_HOME;
+  else process.env.HASNA_HOME = savedResolverHome;
+  for (const [key, value] of savedAmbientRoots) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try { rmSync(scratchResolverHome, { recursive: true, force: true }); } catch {}
+  mock.restore();
+});
 
 // ---------------------------------------------------------------------------
 // Helpers

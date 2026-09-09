@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { resetProjectCache, detectProject } from "./project-detect.js";
 import { getDatabase, resetDatabase } from "../db/database.js";
 import { registerProject } from "../db/projects.js";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -17,7 +17,7 @@ describe("detectProject", () => {
     resetProjectCache();
     originalCwd = process.cwd();
 
-    repoDir = join(tmpdir(), `mementos-detect-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    repoDir = realpathSync(mkdtempSync(join(tmpdir(), "mementos-detect-")));
     mkdirSync(join(repoDir, ".git"), { recursive: true });
     writeFileSync(join(repoDir, ".git", "HEAD"), "ref: refs/heads/main\n");
     process.chdir(repoDir);

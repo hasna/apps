@@ -2,6 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { startLoopbackVault } from "./loopback-vault-fixture.mjs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { buildServer } from "../src/mcp.js";
@@ -11,11 +12,16 @@ describe("secrets MCP HTTP transport", () => {
   let httpServer: ReturnType<typeof Bun.serve>;
   let port: number;
   let testDir: string;
+  let vault: Awaited<ReturnType<typeof startLoopbackVault>>;
+  let savedEnv: NodeJS.ProcessEnv;
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    savedEnv = { ...process.env };
     testDir = join(tmpdir(), `secrets-http-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(testDir, { recursive: true });
-    process.env.OPEN_SECRETS_DB = join(testDir, "vault.db");
+    vault = await startLoopbackVault(testDir);
+    for (const key of Object.keys(process.env)) if (/^(HASNA_|SECRETS_|OPEN_SECRETS_|AWS_|DATABASE_URL$|PG|XDG_)/.test(key)) delete process.env[key];
+    Object.assign(process.env, vault.env(), { HASNA_SECRETS_TEST_ISOLATION: "1" });
 
     httpServer = Bun.serve({
       hostname: "127.0.0.1",
@@ -34,10 +40,13 @@ describe("secrets MCP HTTP transport", () => {
     port = httpServer.port!;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     httpServer.stop();
-    delete process.env.OPEN_SECRETS_DB;
-    rmSync(testDir, { recursive: true, force: true });
+    try { await vault.stop(); } finally {
+      for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
+      Object.assign(process.env, savedEnv);
+      rmSync(testDir, { recursive: true, force: true });
+    }
   });
 
   test("default port is 8848", () => {

@@ -10,52 +10,15 @@ import {
   TaskListNotFoundError,
   DependencyCycleError,
   CompletionGuardError,
+  InputValidationError,
 } from "../types/index.js";
-
-// Re-implement formatError here to test it in isolation (same logic as src/mcp/index.ts)
-function formatError(error: unknown): string {
-  if (error instanceof VersionConflictError) {
-    return JSON.stringify({ code: VersionConflictError.code, message: error.message, suggestion: VersionConflictError.suggestion });
-  }
-  if (error instanceof TaskNotFoundError) {
-    return JSON.stringify({ code: TaskNotFoundError.code, message: error.message, suggestion: TaskNotFoundError.suggestion });
-  }
-  if (error instanceof TaskReferenceAmbiguousError) {
-    return JSON.stringify({
-      code: TaskReferenceAmbiguousError.code,
-      message: error.message,
-      candidate_project_ids: error.candidateProjectIds,
-      candidate_task_ids: error.candidateTaskIds,
-      suggestion: "Use a full task UUID.",
-    });
-  }
-  if (error instanceof ProjectNotFoundError) {
-    return JSON.stringify({ code: ProjectNotFoundError.code, message: error.message, suggestion: ProjectNotFoundError.suggestion });
-  }
-  if (error instanceof PlanNotFoundError) {
-    return JSON.stringify({ code: PlanNotFoundError.code, message: error.message, suggestion: PlanNotFoundError.suggestion });
-  }
-  if (error instanceof TaskListNotFoundError) {
-    return JSON.stringify({ code: TaskListNotFoundError.code, message: error.message, suggestion: TaskListNotFoundError.suggestion });
-  }
-  if (error instanceof LockError) {
-    return JSON.stringify({ code: LockError.code, message: error.message, suggestion: LockError.suggestion });
-  }
-  if (error instanceof AgentNotFoundError) {
-    return JSON.stringify({ code: AgentNotFoundError.code, message: error.message, suggestion: AgentNotFoundError.suggestion });
-  }
-  if (error instanceof DependencyCycleError) {
-    return JSON.stringify({ code: DependencyCycleError.code, message: error.message, suggestion: DependencyCycleError.suggestion });
-  }
-  if (error instanceof CompletionGuardError) {
-    const retry = error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {};
-    return JSON.stringify({ code: CompletionGuardError.code, message: error.reason, suggestion: CompletionGuardError.suggestion, ...retry });
-  }
-  if (error instanceof Error) {
-    return JSON.stringify({ code: "UNKNOWN_ERROR", message: error.message });
-  }
-  return JSON.stringify({ code: "UNKNOWN_ERROR", message: String(error) });
-}
+import { EncryptedPayloadError, EncryptionKeyUnavailableError } from "../lib/local-encryption.js";
+// The REAL formatter, not a local copy: a re-implementation silently drifts
+// from the shipped one whenever a branch is added (the 0.16.0 typed
+// REMOTE_API_* refusal was exactly such a branch, and a copied formatter
+// cannot catch its regression).
+import { formatError } from "./index.js";
+import { REMOTE_API_CONFIG_MISSING, RemoteApiConfigMissingError } from "./remote-authority.js";
 
 describe("Error classes have correct static properties", () => {
   test("VersionConflictError has correct code and suggestion", () => {
@@ -203,19 +166,115 @@ describe("formatError returns structured JSON", () => {
     const err = new Error("something broke");
     const result = JSON.parse(formatError(err));
     expect(result.code).toBe("UNKNOWN_ERROR");
-    expect(result.message).toBe("something broke");
+    // The shipped formatter sanitizes an unclassified error rather than
+    // echoing its message (which can carry schema details).
+    expect(result.message).toBe("An unexpected error occurred. Check server logs for details.");
     expect(result.suggestion).toBeUndefined();
   });
 
   test("non-Error value gets UNKNOWN_ERROR code", () => {
     const result = JSON.parse(formatError("string error"));
     expect(result.code).toBe("UNKNOWN_ERROR");
-    expect(result.message).toBe("string error");
+    expect(result.message).toBe("An unexpected error occurred.");
   });
 
   test("null value gets UNKNOWN_ERROR code", () => {
     const result = JSON.parse(formatError(null));
     expect(result.code).toBe("UNKNOWN_ERROR");
-    expect(result.message).toBe("null");
+    expect(result.message).toBe("An unexpected error occurred.");
+  });
+
+  test("RemoteApiConfigMissingError gets the typed REMOTE_API_CONFIG_MISSING payload, not UNKNOWN_ERROR", () => {
+    const result = JSON.parse(formatError(new RemoteApiConfigMissingError("Plan")));
+    expect(result.code).toBe(REMOTE_API_CONFIG_MISSING);
+    expect(result.code).not.toBe("UNKNOWN_ERROR");
+    expect(result.message).toContain("Plan tools require the authenticated Todos API");
+    expect(result.suggestion).toContain("HASNA_TODOS_API_URL");
+  });
+});
+
+/**
+ * The storage and shared-API guards throw PLAIN `Error`s whose message begins
+ * with the CLI's stable code. Before this mapping those reached MCP clients as
+ * `UNKNOWN_ERROR` (measured: 89 of the 125 zero-required-argument tools on the
+ * default posture), so a configuration requirement read as a server bug. These
+ * tests pin the typed shape at the formatter — the single chokepoint every
+ * tool's handler error passes through.
+ */
+describe("plain-Error guard refusals get a typed, actionable payload", () => {
+  test("API_DATABASE_FALLBACK_FORBIDDEN keeps its code and names the local opt-in", () => {
+    const result = JSON.parse(formatError(new Error(
+      "API_DATABASE_FALLBACK_FORBIDDEN: this operation must use the shared Todos API; implicit SQLite access is unavailable",
+    )));
+    expect(result.code).toBe("API_DATABASE_FALLBACK_FORBIDDEN");
+    expect(result.code).not.toBe("UNKNOWN_ERROR");
+    expect(result.message).toContain("implicit SQLite access is unavailable");
+    expect(result.suggestion).toContain("HASNA_TODOS_LOCAL=1");
+  });
+
+  test("a REMOTE_API_* resolver refusal keeps its code and names the remedy for THAT code", () => {
+    // The code prefix alone does not imply one remedy: a rejected credential is
+    // not a missing URL. Each code must answer with its own fix, or a client
+    // follows the wrong advice and keeps failing.
+    const expected: Record<string, string> = {
+      REMOTE_API_CONFIG_MISSING: "HASNA_TODOS_API_URL",
+      REMOTE_API_KEY_MISSING: "HASNA_TODOS_API_KEY",
+      REMOTE_API_URL_INVALID: "HASNA_TODOS_API_URL",
+      REMOTE_API_UNAUTHORIZED: "REJECTED",
+      REMOTE_API_FORBIDDEN: "not permitted",
+      REMOTE_API_UNREACHABLE: "could not be reached",
+      REMOTE_API_TIMEOUT: "did not answer in time",
+      REMOTE_API_UNAVAILABLE: "server error",
+      REMOTE_API_REDIRECT_REJECTED: "redirected",
+      REMOTE_API_INCOMPATIBLE: "compatible shape",
+    };
+    for (const [code, needle] of Object.entries(expected)) {
+      const result = JSON.parse(formatError(new Error(`${code}: the authority could not serve this route`)));
+      expect(result.code).toBe(code);
+      expect(result.code).not.toBe("UNKNOWN_ERROR");
+      expect(result.message).toBe("the authority could not serve this route");
+      expect(result.suggestion).toContain(needle);
+    }
+  });
+
+  test("a rejected credential is not answered with the configure-the-API advice", () => {
+    const result = JSON.parse(formatError(new Error("REMOTE_API_UNAUTHORIZED: authority rejected the key")));
+    expect(result.code).toBe("REMOTE_API_UNAUTHORIZED");
+    expect(result.suggestion).not.toContain("set HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY");
+    expect(result.suggestion).toContain("Re-save");
+  });
+
+  test("RemoteApiConfigMissingError carries the remedy for its own code, not always CONFIG_MISSING", () => {
+    const unauthorized = new RemoteApiConfigMissingError("Plan", "REMOTE_API_UNAUTHORIZED", "rejected");
+    expect(unauthorized.suggestion).toContain("Re-save");
+    const result = JSON.parse(formatError(unauthorized));
+    expect(result.code).toBe("REMOTE_API_UNAUTHORIZED");
+    expect(result.suggestion).toContain("Re-save");
+    expect(result.suggestion).not.toContain("set HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY");
+  });
+
+  test("a code that is only mentioned mid-message still sanitizes", () => {
+    // The mapping is anchored to the message PREFIX, so an unclassified error
+    // that merely quotes a guard code keeps the sanitized payload.
+    const result = JSON.parse(formatError(new Error("wrapped: REMOTE_API_CONFIG_MISSING: detail")));
+    expect(result.code).toBe("UNKNOWN_ERROR");
+    expect(result.suggestion).toBeUndefined();
+  });
+
+  test("caller-input and local-state refusals are typed, not UNKNOWN_ERROR", () => {
+    const input = JSON.parse(formatError(new InputValidationError("path or backup is required", "Pass path or backup.")));
+    expect(input.code).toBe("INVALID_INPUT");
+    expect(input.message).toBe("path or backup is required");
+    expect(input.suggestion).toBe("Pass path or backup.");
+
+    const key = JSON.parse(formatError(new EncryptionKeyUnavailableError("TODOS_ENCRYPTION_KEY", "default")));
+    expect(key.code).toBe("ENCRYPTION_KEY_UNAVAILABLE");
+    expect(key.message).toContain("TODOS_ENCRYPTION_KEY");
+    expect(key.suggestion).toContain("TODOS_ENCRYPTION_KEY");
+
+    const payload = JSON.parse(formatError(new EncryptedPayloadError("value is not a hasna/todos encrypted envelope")));
+    expect(payload.code).toBe("ENCRYPTED_PAYLOAD_INVALID");
+    expect(payload.message).toBe("value is not a hasna/todos encrypted envelope");
+    expect(payload.suggestion).toContain("encrypt_local_value");
   });
 });

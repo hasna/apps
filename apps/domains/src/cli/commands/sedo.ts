@@ -195,21 +195,24 @@ export function registerSedoCommand(program: Command): void {
 
   sedo
     .command("buy")
-    .description("Record a Sedo domain purchase in the local DB")
+    .description("Record a Sedo domain purchase in your shared portfolio")
     .argument("<domain>", "Domain name purchased")
     .requiredOption("--price <n>", "Purchase price")
     .option("--order-id <id>", "Sedo order or transaction ID")
     .option("--json", "Output as JSON", false)
     .action(async (domain, opts) => {
-      const { recordSedoPurchase } = await import("../../lib/sedo.js");
-
-      const price = parseInt(opts.price);
-      const created = recordSedoPurchase(domain, price, opts.orderId);
-
-      if (opts.json) {
-        printLine(JSON.stringify(created, null, 2));
-      } else {
-        printLine(`Recorded Sedo purchase: ${domain} for $${price}`);
+      try {
+        const { recordSedoPurchase } = await import("../../lib/sedo.js");
+        const price = parseInt(opts.price);
+        const created = await recordSedoPurchase(domain, price, opts.orderId);
+        if (opts.json) {
+          printLine(JSON.stringify(created, null, 2));
+        } else {
+          printLine(`Recorded Sedo purchase: ${domain} for $${price}`);
+        }
+      } catch (error) {
+        printErrorLine(`Sedo purchase record failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exitCode = 1;
       }
     });
 }

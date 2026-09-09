@@ -166,12 +166,19 @@ describe("skills pull (end to end)", () => {
       expect(all.some((skill) => skill.name === "pulled-team-runbook")).toBe(true);
 
       // Surface 2 — the MCP `list_skills` tool, in-process, reading the same corpus.
+      // The tool runs the fail-closed read gate per call (lib/read-access.ts), and
+      // the preload has stripped the opt-in from this process: set it explicitly,
+      // the way the CLI and MCP harnesses do, so the on-machine corpus is served.
+      const previousOptIn = process.env.HASNA_SKILLS_LOCAL;
+      process.env.HASNA_SKILLS_LOCAL = "1";
       const mcp = await startMcpHttp();
       try {
         const listText = await mcpListSkillsText(mcp.baseUrl);
         expect(listText).toContain("pulled-team-runbook");
       } finally {
         await mcp.stop();
+        if (previousOptIn === undefined) delete process.env.HASNA_SKILLS_LOCAL;
+        else process.env.HASNA_SKILLS_LOCAL = previousOptIn;
       }
     } finally {
       await instance.stop();

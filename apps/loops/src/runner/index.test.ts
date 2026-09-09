@@ -30,27 +30,39 @@ function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>,
   });
 }
 
-/**
- * The shared resolver's disk tier (the canonical station credentials file at
- * ~/.hasna/loops/config/credentials) is consulted THROUGH process.env. Tests
- * that assert on `runnerStatus` connection states must relocate it to a
- * scratch root so the machine's real credential never decides the state.
- */
-function withCredentialTierIsolation<T>(fn: () => T): T {
-  const previous: Record<string, string | undefined> = {};
-  for (const key of ["HASNA_HOME", "HASNA_CONFIG_HOME", "HASNA_STATE_HOME", "HASNA_CACHE_HOME"]) {
-    previous[key] = process.env[key];
-  }
-  process.env.HASNA_HOME = join(mkdtempSync(join(tmpdir(), "loops-runner-hasna-home-")), "hasna");
-  process.env.HASNA_CONFIG_HOME = mkdtempSync(join(tmpdir(), "loops-runner-cfg-home-"));
-  process.env.HASNA_STATE_HOME = "";
-  process.env.HASNA_CACHE_HOME = "";
+// Ambient credential isolation. The store resolver's DISK tier
+// (`~/.hasna/loops/config/credentials`) outranks the env tier, so on a
+// provisioned station `runnerStatus()` resolves the operator's REAL
+// credential and the fixture authority below is refused as written for a
+// different one (or the "file" arm is overridden by the disk credential)
+// while CI stays green. Anchoring every home-layout root at a scratch dir —
+// no credentials file can exist there — makes the disk tier consult nothing,
+// identically on both kinds of machine.
+// The Keychain account is pinned alongside the home roots: `keychainAccount()`
+// in the shared resolver reads HASNA_STATION, else the short hostname, else
+// USER (apps/contracts/src/client/credentials.ts), so on a macOS station with
+// real `hasna.credentials.loops.*` items the AMBIENT tier would resolve the
+// real credential inside these in-process windows — the disk-tier class, one
+// tier up. A sentinel account no item uses keeps the tier a miss; the same
+// save/restore discipline applies, so nothing leaks after the window closes.
+const HOME_ROOT_KEYS = ["HOME", "HASNA_HOME", "HASNA_CONFIG_HOME"] as const;
+const KEYCHAIN_ACCOUNT_KEY = "HASNA_STATION";
+const TEST_KEYCHAIN_ACCOUNT = "loops-hermetic-no-such-station";
+
+function withScratchHome(root: string, fn: () => void): void {
+  const saved = new Map(HOME_ROOT_KEYS.map((name) => [name, process.env[name]]));
+  const savedAccount = process.env[KEYCHAIN_ACCOUNT_KEY];
   try {
-    return fn();
+    for (const name of HOME_ROOT_KEYS) process.env[name] = root;
+    process.env[KEYCHAIN_ACCOUNT_KEY] = TEST_KEYCHAIN_ACCOUNT;
+    fn();
   } finally {
-    for (const key of Object.keys(previous)) {
-      if (previous[key] === undefined) delete process.env[key];
-      else process.env[key] = previous[key] as string;
+    if (savedAccount === undefined) delete process.env[KEYCHAIN_ACCOUNT_KEY];
+    else process.env[KEYCHAIN_ACCOUNT_KEY] = savedAccount;
+    for (const name of HOME_ROOT_KEYS) {
+      const value = saved.get(name);
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
     }
   }
 }
@@ -273,17 +285,21 @@ describe("loops-runner", () => {
     const previousApiKey = process.env.HASNA_LOOPS_API_KEY;
     delete process.env.HASNA_LOOPS_API_URL;
     delete process.env.HASNA_LOOPS_API_KEY;
+    const scratch = mkdtempSync(join(tmpdir(), "loops-runner-home-"));
     try {
-      const status = withCredentialTierIsolation(() => runnerStatus());
-      expect(status.ok).toBe(true);
-      expect(status.service).toBe("loops-runner");
-      expect(status.storageConnection.connection).toBe("file");
-      expect(status.state).toBe("file_authoritative");
+      withScratchHome(scratch, () => {
+        const status = runnerStatus();
+        expect(status.ok).toBe(true);
+        expect(status.service).toBe("loops-runner");
+        expect(status.storageConnection.connection).toBe("file");
+        expect(status.state).toBe("file_authoritative");
+      });
     } finally {
       if (previousApiUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
       else process.env.HASNA_LOOPS_API_URL = previousApiUrl;
       if (previousApiKey === undefined) delete process.env.HASNA_LOOPS_API_KEY;
       else process.env.HASNA_LOOPS_API_KEY = previousApiKey;
+      rmSync(scratch, { recursive: true, force: true });
     }
   });
 
@@ -318,19 +334,22 @@ describe("loops-runner", () => {
     const previousApiKey = process.env.HASNA_LOOPS_API_KEY;
     process.env.HASNA_LOOPS_API_URL = "https://loops.example.test";
     process.env.HASNA_LOOPS_API_KEY = "token" + "-present";
-
+    const scratch = mkdtempSync(join(tmpdir(), "loops-runner-home-"));
     try {
-      const status = withCredentialTierIsolation(() => runnerStatus("machine-test"));
+      withScratchHome(scratch, () => {
+        const status = runnerStatus("machine-test");
 
-      expect(status.ok).toBe(true);
-      expect(status.storageConnection.connection).toBe("api");
-      expect(status.storageConnection.apiUrl).toBe("https://loops.example.test");
-      expect(status.state).toBe("api_ready");
+        expect(status.ok).toBe(true);
+        expect(status.storageConnection.connection).toBe("api");
+        expect(status.storageConnection.apiUrl).toBe("https://loops.example.test");
+        expect(status.state).toBe("api_ready");
+      });
     } finally {
       if (previousApiUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
       else process.env.HASNA_LOOPS_API_URL = previousApiUrl;
       if (previousApiKey === undefined) delete process.env.HASNA_LOOPS_API_KEY;
       else process.env.HASNA_LOOPS_API_KEY = previousApiKey;
+      rmSync(scratch, { recursive: true, force: true });
     }
   });
 
@@ -872,6 +891,16 @@ describe("runner env-file integration", () => {
     for (const key of RUNNER_ENV_KEYS) previousKeys[key] = process.env[key];
     process.env.LOOPS_DATA_DIR = dataDir;
     for (const key of RUNNER_ENV_KEYS) delete process.env[key];
+    // Ambient credential isolation: the runner.env fixture supplies the
+    // connection, and a provisioned station's real
+    // ~/.hasna/loops/config/credentials would outrank it and refuse the
+    // fixture authority. Anchoring the home-layout roots at the data dir (no
+    // credentials file can exist there) keeps the disk tier inert on both
+    // kinds of machine.
+    const savedHomeRoots = new Map(HOME_ROOT_KEYS.map((name) => [name, process.env[name]]));
+    const savedAccount = process.env[KEYCHAIN_ACCOUNT_KEY];
+    for (const name of HOME_ROOT_KEYS) process.env[name] = dataDir;
+    process.env[KEYCHAIN_ACCOUNT_KEY] = TEST_KEYCHAIN_ACCOUNT;
     mkdirSync(dataDir, { recursive: true });
     const path = join(dataDir, "runner.env");
     writeFileSync(path, contents, { mode: 0o600 });
@@ -883,6 +912,13 @@ describe("runner env-file integration", () => {
         if (previousKeys[key] === undefined) delete process.env[key];
         else process.env[key] = previousKeys[key] as string;
       }
+      for (const name of HOME_ROOT_KEYS) {
+        const value = savedHomeRoots.get(name);
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      if (savedAccount === undefined) delete process.env[KEYCHAIN_ACCOUNT_KEY];
+      else process.env[KEYCHAIN_ACCOUNT_KEY] = savedAccount;
       rmSync(dataDir, { recursive: true, force: true });
     };
   }
@@ -900,11 +936,18 @@ describe("runner env-file integration", () => {
     );
     try {
       applyRunnerEnvFile();
-      const status = withCredentialTierIsolation(() => runnerStatus());
-      expect(status.ok).toBe(true);
-      expect(status.state).toBe("api_ready");
-      expect(status.machineId).toBe("station01");
-      expect(status.claimScope).toBe("fleet");
+      const scratch = mkdtempSync(join(tmpdir(), "loops-runner-status-home-"));
+      try {
+      withScratchHome(scratch, () => {
+        const status = runnerStatus();
+        expect(status.ok).toBe(true);
+        expect(status.state).toBe("api_ready");
+        expect(status.machineId).toBe("station01");
+        expect(status.claimScope).toBe("fleet");
+      });
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
     } finally {
       restore();
     }

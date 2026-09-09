@@ -13,7 +13,7 @@ import {
 } from "./database.js";
 import { createMemory } from "./memories.js";
 import { SqliteAdapter as Database } from "../storage.js";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getDataRoot } from "../lib/paths.js";
@@ -215,7 +215,7 @@ describe("getDbPath", () => {
     const originalHome = process.env["HOME"];
     const originalUserProfile = process.env["USERPROFILE"];
     const originalCwd = process.cwd();
-    const tempHome = mkdtempSync(join(tmpdir(), "mementos-home-"));
+    const tempHome = realpathSync(mkdtempSync(join(tmpdir(), "mementos-home-")));
     try {
       process.env["HOME"] = tempHome;
       delete process.env["USERPROFILE"];
@@ -296,7 +296,7 @@ describe("getDbPath — store resolution follows the adopted data root", () => {
     const saved = saveRootEnv();
     clearRootEnv();
     const origCwd = process.cwd();
-    const tempHome = mkdtempSync(join(tmpdir(), "mementos-home-"));
+    const tempHome = realpathSync(mkdtempSync(join(tmpdir(), "mementos-home-")));
     try {
       process.env["HOME"] = tempHome;
       process.chdir("/tmp");
@@ -315,8 +315,8 @@ describe("getDbPath — store resolution follows the adopted data root", () => {
     const saved = saveRootEnv();
     clearRootEnv();
     const origCwd = process.cwd();
-    const tempHome = mkdtempSync(join(tmpdir(), "mementos-home-"));
-    const dataHome = mkdtempSync(join(tmpdir(), "mementos-data-"));
+    const tempHome = realpathSync(mkdtempSync(join(tmpdir(), "mementos-home-")));
+    const dataHome = realpathSync(mkdtempSync(join(tmpdir(), "mementos-data-")));
     try {
       process.env["HOME"] = tempHome;
       process.env["HASNA_DATA_HOME"] = dataHome;
@@ -337,10 +337,12 @@ describe("getDbPath — store resolution follows the adopted data root", () => {
     const saved = saveRootEnv();
     clearRootEnv();
     const origCwd = process.cwd();
-    const tempHome = mkdtempSync(join(tmpdir(), "mementos-home-"));
+    const tempHome = realpathSync(mkdtempSync(join(tmpdir(), "mementos-home-")));
     try {
       process.env["HOME"] = tempHome;
-      const xdg = join(tempHome, ".local", "share", "hasna", "mementos");
+      const xdg = process.platform === "darwin"
+        ? join(tempHome, "Library", "Application Support", "Hasna", "mementos")
+        : join(tempHome, ".local", "share", "hasna", "mementos");
       mkdirSync(xdg, { recursive: true });
       writeFileSync(join(xdg, "mementos.db"), "migrated-store");
       process.chdir("/tmp");
@@ -359,8 +361,8 @@ describe("getDbPath — store resolution follows the adopted data root", () => {
     const saved = saveRootEnv();
     clearRootEnv();
     const origCwd = process.cwd();
-    const tempHome = mkdtempSync(join(tmpdir(), "mementos-home-"));
-    const override = mkdtempSync(join(tmpdir(), "mementos-exact-"));
+    const tempHome = realpathSync(mkdtempSync(join(tmpdir(), "mementos-home-")));
+    const override = realpathSync(mkdtempSync(join(tmpdir(), "mementos-exact-")));
     try {
       process.env["HOME"] = tempHome;
       process.env["HASNA_MEMENTOS_HOME"] = override;
@@ -384,8 +386,8 @@ describe("getDbPath — store resolution follows the adopted data root", () => {
     const saved = saveRootEnv();
     clearRootEnv();
     const origCwd = process.cwd();
-    const tempHome = mkdtempSync(join(tmpdir(), "mementos-home-"));
-    const dataHome = mkdtempSync(join(tmpdir(), "mementos-data-"));
+    const tempHome = realpathSync(mkdtempSync(join(tmpdir(), "mementos-home-")));
+    const dataHome = realpathSync(mkdtempSync(join(tmpdir(), "mementos-data-")));
     try {
       process.env["HOME"] = tempHome;
       process.env["HASNA_DATA_HOME"] = dataHome;

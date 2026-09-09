@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.8.0
+
+### Minor Changes
+
+- 59d9423: Resolve the client credential and the service authority through the shared `@hasna/contracts` client seam (pinned to exactly 1.0.2) instead of this package's vendored copy of the transport, for the CLI, the MCP server, the hook and the library `getStore()` alike. Precedence, re-read on every call: explicit `credentials.apiKey` / `credentials.profile`, then the deliberate pointers `HASNA_CONVERSATIONS_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_CONVERSATIONS_API_KEY_REF`, then the macOS Keychain item `hasna.credentials.conversations.api-key` (account `HASNA_STATION`, else `hostname -s`, else `$USER`), then `~/.hasna/conversations/config/credentials` (0400/0600, `HASNA_HOME`/`HASNA_CONFIG_HOME` aware), then `HASNA_CONVERSATIONS_API_KEY` — a legitimate tier, below disk, with no deprecation notice. The authority ladder is `HASNA_CONVERSATIONS_API_URL` → the Keychain `api-url` item → the credentials file → the fleet gateway `https://api.hasna.com/conversations`: a key from any tier now reaches the fleet with no URL configured. The vendored `src/lib/contracts-client/` copy is deleted; the app imports `@hasna/contracts/client` and `/client/storage` directly.
+
+  Fail closed. A hosted run with no resolvable credential exits non-zero naming every place that was consulted, opens no SQLite, and emits no `*-local-fallback` event. The on-box SQLite store is reachable ONLY through the explicit opt-in `HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH` (which wins even over exported cloud credentials), and a local run announces itself once on stderr (`conversations: LOCAL mode — …`) so it is never a silent state. The legacy `~/.hasna/fleet-env/`, `~/.hasna/cloud/` and `~/.config/hasna/` locations are inputs nowhere, and no `*_MODE` / `*_STORAGE_MODE` variable is read.
+
+  The `./sdk` export stays an explicit `baseUrl`/`apiKey` constructor and never attaches the ambient fleet credential: an explicit `baseUrl` with no `apiKey` sends no key (hasna/apps#1794).
+
+### Patch Changes
+
+- a4a1f15: Resolver validation fixes for the `@hasna/contracts` credential chain
+  adoption (hasna/apps#1720, round-2 review of #1864).
+
+  - `conversations-mcp` now FAILS CLOSED BEFORE SERVING. The store selection is
+    decided once at startup, before either transport is connected: hosted with
+    no resolvable credential exits 1 with the chain's refusal on stderr (the
+    tiers consulted and the `HASNA_CONVERSATIONS_DB_PATH` opt-in — names, never
+    values), answers no `initialize`, binds no port under `--http`, and opens or
+    creates no SQLite file. Previously the server started, answered
+    `initialize`, and returned an `isError` result per tool call — fail-loud per
+    call, not fail-closed. The explicit local opt-in still starts the server and
+    prints the LOCAL-mode notice once on stderr at startup; the CLI's
+    `conversations mcp` subcommand raises the same refusal through the CLI error
+    surface. Mirrors what `@hasna/mementos` received in #1868.
+  - `conversations events-drain` accepts `--json`: the fail-closed refusal now
+    reaches the JSON error contract (`{"error", "code": "CONVERSATIONS_STORE_CONFIG"}`
+    on stdout) instead of Commander's `unknown option '--json'`, and a successful
+    drain under the local opt-in prints its report as a JSON object.
+  - `createConversationsClient` refreshes only the credential per request (one
+    pass down the chain, one Keychain read) instead of re-deciding the authority
+    the constructed client already holds.
+
+- 250470b: Fail-closed and resolver validation fixes for the `@hasna/contracts` credential
+  chain adoption (hasna/apps#1720, round-1 validator findings).
+
+  - `conversations events-drain` no longer opens the on-box SQLite store directly.
+    The outbox worker is local-only by nature, and local is an explicit opt-in:
+    without `HASNA_CONVERSATIONS_DB_PATH` it now exits non-zero through the same
+    `CONVERSATIONS_STORE_CONFIG` refusal every other surface raises (JSON error
+    contract honoured under `--json`), creates no `messages.db`/WAL/SHM under the
+    app home, and prints no "scanned 0" line; with the opt-in it prints the
+    LOCAL-mode notice before touching the store. Previously a hosted station with
+    no credential got exit 0, an empty drain report and a freshly created local
+    database.
+  - The MCP `send_feedback` tool is gated the same way: feedback is a local-only
+    table with no hosted route, so on a hosted station it returns an MCP error
+    naming `HASNA_CONVERSATIONS_DB_PATH` instead of silently creating
+    `~/.hasna/conversations/messages.db` as a side effect of the session.
+  - `@hasna/conversations/sdk` gains the contracts-chain entry point every other
+    adopter ships: `resolveConversationsSdkTransport(options)` feeds the
+    conversations resolver inputs (identity-preserving, so the Keychain tier stays
+    live — #1788) into the one `@hasna/contracts/client` chain and reports the
+    origin-form `baseUrl` (no `/v1` duplication) plus the credential and authority
+    SOURCES (never values); `createConversationsClient(options)` builds the
+    generated `ConversationsClient` from it with the credential re-resolved on
+    every request. Hosted-only: no credential anywhere throws
+    `ConversationsSdkResolutionError` (`CONVERSATIONS_CREDENTIAL_MISSING`) naming
+    every tier consulted and the local opt-in; the local opt-in itself is refused
+    (`CONVERSATIONS_LOCAL_STORE_SELECTED`) pointing at `getStore()`, since an HTTP
+    client cannot serve the on-box store. An explicit `baseUrl` with no `apiKey`
+    stays unauthenticated — the ambient fleet key is never attached to a
+    caller-chosen authority (#1794).
+  - The `./sdk` bundle is free of `bun:sqlite` again: `IdentityError` moved to the
+    dependency-free `src/lib/identity-error.ts` (re-exported from `identity.ts`
+    unchanged for existing imports), and a self-contained test builds the SDK
+    entry and asserts its bundle imports node builtins only, with the root bundle
+    as the positive control.
+  - `cloudApiUrl()` (and with it `status`, `status --json` and `/api/status`)
+    reports the authority the chain actually resolved — a Keychain `api-url` item
+    or a credentials-file authority included — instead of env-or-default.
+  - Admin redaction's attachment safety check canonicalises the attachment base
+    directory the same way it canonicalises the file (`realpathSync`), so
+    `safe_to_delete` is true on symlinked data roots (macOS `/var` →
+    `/private/var`) and `apply` actually removes the leaked file.
+  - Test fixtures pin `HASNA_STATION` to a station no Keychain item uses
+    (`HERMETIC_STATION`), so a fleet workstation's real `api-key`/`api-url` items
+    can no longer answer for a hermetic case.
+
 ## 0.7.14
 
 ### Patch Changes

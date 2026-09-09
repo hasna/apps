@@ -10,6 +10,7 @@ import { usesKnowledgeHttpTransport, KnowledgeVersionConflictError } from './htt
 import { KNOWLEDGE_APP_SLUG, knowledgeKeychainTierOptions } from './client-transport';
 import { diffEntries, formatEntryDiff, redactEntryDiff, type EntrySnapshot } from './entry-diff';
 import {
+  KNOWLEDGE_API_KEY_ENV,
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
   KNOWLEDGE_DEFAULT_API_URL,
@@ -607,7 +608,7 @@ function printCommandHelp(command: string): void {
   if (command === 'transport') { console.log(`Usage: knowledge transport [--json]\n  Reports whether this process uses the on-box SQLite store or the server HTTP API, and WHICH tier decided.\n  A credential from any tier of the shared @hasna/contracts chain selects HTTP: --api-key, ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}_OVERRIDE / HASNA_PROFILE / ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}_REF, the macOS Keychain item hasna.credentials.knowledge.api-key, ~/.hasna/knowledge/config/credentials, then ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}.\n  The authority is ${KNOWLEDGE_API_URL_ENV_KEYS[0]}, the Keychain api-url item, the credentials file, else ${KNOWLEDGE_DEFAULT_API_URL}.\n  A configured authority with no resolvable credential exits non-zero; with no credential anywhere and no ${KNOWLEDGE_LOCAL_OPT_IN_ENV}=1 opt-in the CLI FAILS CLOSED — the on-box store is opt-in only (it says "local" on stderr).\n  Reads source NAMES and presence only; it never prints credential values.`); return; }
   if (command === 'guarded') { console.log('Usage:\n  knowledge guarded capabilities [--json]\n  knowledge guarded execute-descriptor --ipc [--json]\n\n  execute-descriptor is an internal package-owned worker. Private requests and results use the\n  runtime-owned child-process IPC channel, never argv, stdin, environment variables, files, stdout,\n  or stderr. Direct shell invocation has no IPC channel and fails closed. Use the exported opaque-\n  descriptor helpers rather than invoking this worker directly from a shell.'); return; }
   if (command === 'setup') { console.log('Usage: knowledge setup [--canonical-example] [--scope local|global|project] [--json]\nClient routing: any resolved credential (Keychain item hasna.credentials.knowledge.api-key, ~/.hasna/knowledge/config/credentials, or HASNA_KNOWLEDGE_API_KEY) selects the server API at HASNA_KNOWLEDGE_API_URL, else the fleet gateway. A configured authority without a credential fails closed; with no credential anywhere the CLI fails closed unless the explicit ${KNOWLEDGE_LOCAL_OPT_IN_ENV}=1 opt-in (or an explicit --store) selects the on-box store.'); return; }
-  if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
+  if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://... --api-key <key>] [--scope local|global|project] [--json]\n       --api-url always requires an explicit --api-key: the ambient credential (Keychain, ~/.hasna/knowledge/config/credentials, HASNA_KNOWLEDGE_API_KEY) is never recorded against a caller-supplied authority.'); return; }
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path|migrate-project-path|merge-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]\n       knowledge storage import-legacy [--dry-run] [--scope global] [--json]\n       migrate-project-path moves <cwd>/.hasna/knowledge into ~/.hasna/knowledge/projects/<key> (canonical); dry-run by default'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--verbose] [--json]'); return; }
   if (command === 'sync') { console.log('Usage: knowledge sync status|doctor|readiness|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--mode deterministic|ai] [--model <alias|provider:model>] [--fake] [--no-tailscale] [--scope local|global|project] [--verbose] [--json]\n\nRemote machine sync resolves peer paths through @hasna/machines when --peer-workspace is omitted.'); return; }
@@ -1178,6 +1179,20 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     if (action === 'login') {
+      // A caller-supplied authority is never paired with the AMBIENT credential
+      // (Keychain item, credentials file, HASNA_KNOWLEDGE_API_KEY): resolving
+      // the station's fleet key and persisting it next to a foreign --api-url
+      // would send that key to whatever the URL names (hasna/apps#1794 — the
+      // same rule the ./sdk applies to an explicit baseUrl). An authority
+      // override must carry its own key.
+      if (flags.apiUrl !== undefined && flags.apiKey === undefined) {
+        throw new Error(
+          'knowledge auth login --api-url requires an explicit --api-key: the ambient credential '
+            + '(Keychain item hasna.credentials.knowledge.api-key, ~/.hasna/knowledge/config/credentials, '
+            + `${KNOWLEDGE_API_KEY_ENV}) is never recorded against a caller-supplied API URL. `
+            + 'Usage: knowledge auth login --api-url <url> --api-key <key>',
+        );
+      }
       const apiKey = flags.apiKey
         ?? resolveClientCredential(KNOWLEDGE_APP_SLUG, process.env, {
           keychain: knowledgeKeychainTierOptions(process.env),

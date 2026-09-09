@@ -531,9 +531,11 @@ describe("store seam", () => {
     expect(armFamilies.length, "no local arms were found at all").toBeGreaterThan(0);
 
     // `self-hosted-resource` is routing infrastructure shared BY the families, not a
-    // family: it owns no rows. It is the one exclusion, named here so adding another
-    // is a visible diff.
-    const notAFamily = ["self-hosted-resource"];
+    // family: it owns no rows. `mailbox-filter-runtime` is the same kind of thing —
+    // the shared match/apply runtime (no rows of its own) that FR-0001 added next to
+    // the mailbox-filters arms it serves. Both are excluded here, named so adding
+    // another is a visible diff.
+    const notAFamily = ["self-hosted-resource", "mailbox-filter-runtime"];
     const familyToRepository: Record<string, string> = {
       addresses: "addresses",
       "address-lifecycle": "addressLifecycle",

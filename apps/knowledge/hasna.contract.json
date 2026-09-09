@@ -51,14 +51,14 @@
       "kind": "mcp",
       "status": "supported",
       "mcpBin": "knowledge-mcp",
-      "authMode": "local-only"
+      "authMode": "api-key"
     },
     {
       "name": "cli",
       "kind": "cli",
       "status": "supported",
       "bin": "knowledge",
-      "authMode": "local-only"
+      "authMode": "api-key"
     }
   ],
   "storage": {

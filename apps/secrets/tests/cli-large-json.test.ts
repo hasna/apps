@@ -1,3 +1,5 @@
+import { startLoopbackVault } from "./loopback-vault-fixture.mjs";
+let api: Awaited<ReturnType<typeof startLoopbackVault>>;
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -35,7 +37,7 @@ beforeEach(async () => {
   resetDb();
 
   // Seed in-process (fast, hermetic) so the seeded store is exactly what the
-  // spawned CLI reads through the same OPEN_SECRETS_DB.
+  // fixture API serves. The spawned CLI receives only saved API credentials.
   const store = new LocalStore();
   for (let i = 0; i < SEED_COUNT; i++) {
     await store.setSecret(
@@ -45,9 +47,11 @@ beforeEach(async () => {
       `corpus label ${i} ${"L".repeat(300)}`,
     );
   }
+  api = await startLoopbackVault(testDir);
 }, 120_000);
 
-afterEach(() => {
+afterEach(async () => {
+  await api?.stop();
   resetDb();
   delete process.env.OPEN_SECRETS_DB;
   delete process.env.HASNA_SECRETS_KEY_DIR;
@@ -57,23 +61,11 @@ afterEach(() => {
 function runSecretsPiped(args: string[], pipelineTail: string): { exitCode: number; stdout: string; stderr: string } {
   // Run the CLI with stdout piped through the given consumer pipeline so the
   // output has to survive the same pipe-flush race a real `| jq` would.
-  const cli = ["bun", "src/index.ts", ...args].map((part) => JSON.stringify(part)).join(" ");
+  const cli = ["bun", "src/index.ts", ...args].map((part) => "'" + part.replaceAll("'", "'\"'\"'") + "'").join(" ");
   const proc = Bun.spawnSync({
     cmd: ["sh", "-c", `${cli} | ${pipelineTail}`],
     cwd: join(import.meta.dir, ".."),
-    env: {
-      ...(process.env as Record<string, string>),
-      OPEN_SECRETS_DB: process.env.OPEN_SECRETS_DB!,
-      HASNA_SECRETS_KEY_DIR: process.env.HASNA_SECRETS_KEY_DIR!,
-      NO_COLOR: "1",
-      // Strip any hosted-vault routing inherited from the host so the runs are
-      // hermetic and deterministic (same guards as the other CLI tests).
-      HASNA_SECRETS_API_URL: undefined,
-      HASNA_SECRETS_API_KEY: undefined,
-      HASNA_SECRETS_STORAGE_MODE: undefined,
-      SECRETS_API_URL: undefined,
-      SECRETS_API_KEY: undefined,
-    },
+    env: api.env(),
   });
   return {
     exitCode: proc.exitCode ?? -1,

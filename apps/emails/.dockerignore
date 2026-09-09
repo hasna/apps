@@ -9,3 +9,8 @@ coverage
 *.db-wal
 .env*
 .secrets*
+
+# Regression fixtures are never service runtime code.
+**/*.test-support.ts
+**/*.test.ts
+**/*.test.tsx

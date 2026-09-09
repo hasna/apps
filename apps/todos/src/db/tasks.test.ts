@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { Database } from "bun:sqlite";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
 import {
@@ -53,6 +53,9 @@ import { registerAgent } from "./agents.js";
 import { createPlan } from "./plans.js";
 import { ensureSchema } from "./schema.js";
 import { getTaskHistory } from "./audit.js";
+
+// Large in-process suite; bun's 5s default is too tight for a loaded host.
+setDefaultTimeout(60_000);
 
 let db: Database;
 

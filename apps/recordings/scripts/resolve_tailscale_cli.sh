@@ -77,6 +77,27 @@ recordings_tailscale_stat_owner_and_mode() {
   esac
 }
 
+# macOS does not ship /usr/bin/realpath on every supported host. Resolve with
+# Bash's physical-directory builtins, without a PATH tool or interpreter. The
+# callers still reject leaf symlinks and compare this physical path exactly.
+recordings_tailscale_physical_path() {
+  local candidate="$1"
+  local parent
+  local leaf
+
+  recordings_validate_tailscale_cli_shape "$candidate" || return 1
+  if [ -d "$candidate" ]; then
+    (unset CDPATH; builtin cd -P -- "$candidate" && builtin pwd -P)
+    return
+  fi
+  [ -e "$candidate" ] && [ ! -L "$candidate" ] || return 1
+  parent="${candidate%/*}"
+  leaf="${candidate##*/}"
+  [ -n "$parent" ] || parent=/
+  parent="$(unset CDPATH; builtin cd -P -- "$parent" && builtin pwd -P)" || return 1
+  printf '%s/%s\n' "${parent%/}" "$leaf"
+}
+
 recordings_validate_trusted_tailscale_app_cli() {
   local candidate="$1"
   local real_host_kernel="$2"
@@ -96,7 +117,7 @@ recordings_validate_trusted_tailscale_app_cli() {
     echo "Trusted Tailscale CLI must be a canonical non-symlink trusted executable." >&2
     return 1
   fi
-  canonical="$(/usr/bin/realpath "$candidate" 2>/dev/null)" || {
+  canonical="$(recordings_tailscale_physical_path "$candidate" 2>/dev/null)" || {
     echo "Trusted Tailscale CLI could not be resolved canonically." >&2
     return 1
   }
@@ -145,7 +166,7 @@ recordings_validate_private_tailscale_snapshot_parent() {
     echo "Tailscale snapshot parent must be an existing private directory." >&2
     return 1
   fi
-  canonical="$(/usr/bin/realpath "$snapshot_parent" 2>/dev/null)" || {
+  canonical="$(recordings_tailscale_physical_path "$snapshot_parent" 2>/dev/null)" || {
     echo "Tailscale snapshot parent could not be resolved canonically." >&2
     return 1
   }
@@ -270,7 +291,7 @@ recordings_verify_official_tailscale_app_and_cli() {
     echo "Trusted Tailscale app must be a canonical non-symlink directory." >&2
     return 1
   fi
-  canonical_app="$(/usr/bin/realpath "$app" 2>/dev/null)" || {
+  canonical_app="$(recordings_tailscale_physical_path "$app" 2>/dev/null)" || {
     echo "Trusted Tailscale app could not be resolved canonically." >&2
     return 1
   }

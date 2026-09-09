@@ -119,8 +119,8 @@ import {
 import {
   clientTransportEnvKeys,
   credentialDiskSources,
-  type CredentialChainOptions,
 } from "@hasna/contracts/client";
+import type { CredentialChainOptions } from "../types/client-types.js";
 import { selectsProjectsLocalStore } from "../lib/local-opt-in.js";
 import type { HasnaHttpTransport, HasnaRequestOptions, QueryParams } from "@hasna/contracts/client";
 import { getDbPath } from "../db/database.js";

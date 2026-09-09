@@ -11,8 +11,10 @@
 import type { SQLQueryBindings } from "bun:sqlite";
 import type { Database } from "../db/database.js";
 import { sqlEmailAddress } from "../db/email-address-sql.js";
+import { applyEnabledMailboxFiltersToNewMessage } from "../db/mailbox-filter-runtime.local.js";
 import { cappedLimit, safeOffset } from "../db/pagination.js";
 import { now, uuid } from "../db/runtime.js";
+import type { MailboxFilterActions } from "../lib/mailbox-filters.js";
 import type { StoreCapabilities } from "../store/capabilities.js";
 import type {
   AttachmentInventoryItem,
@@ -283,6 +285,14 @@ function insertUnifiedMessage(db: Database, input: MessageInput): string {
      VALUES (?, ?, 0, '[]', ${columns.map(() => "?").join(", ")})`,
     [id, timestamp, ...columns.map((column) => values[column] as SQLQueryBindings)],
   );
+  // Automatic mailbox-filter ACTIONS run on NEW rows only (FR-0001): the caller
+  // (createMessage / the inserted branch of upsertMessage) already holds an
+  // immediate write lock, and the writer joins that transaction so a filter
+  // write failure rolls the insert back. Existing-row updates never re-run them.
+  applyEnabledMailboxFiltersToNewMessage(db, id, {
+    apply: (messageId: string, actions: MailboxFilterActions): boolean =>
+      applyFilterActionsToUnified(db, messageId, actions),
+  });
   return id;
 }
 
@@ -353,13 +363,15 @@ function applyStatusPatch(db: Database, row: MessageRow, patch: MessageStatusPat
     patch.is_read !== undefined ||
     patch.is_starred !== undefined ||
     patch.archived !== undefined ||
+    patch.is_spam !== undefined ||
+    patch.is_trash !== undefined ||
     patch.add_label !== undefined ||
     patch.remove_label !== undefined;
 
   if (table === LEDGER_TABLE) {
     if (touchesFlags) {
       return invalidInput(
-        `message ${id} is a row of the legacy sent ledger, which stores no read, star, archive or label state; ` +
+        `message ${id} is a row of the legacy sent ledger, which stores no read, star, archive, spam, trash or label state; ` +
           "this store will not pretend the write landed",
       );
     }
@@ -375,6 +387,11 @@ function applyStatusPatch(db: Database, row: MessageRow, patch: MessageStatusPat
   }
   if (patch.is_starred !== undefined) set("is_starred", patch.is_starred ? 1 : 0);
   if (patch.archived !== undefined) set("is_archived", patch.archived ? 1 : 0);
+  // Explicit folder moves, parallel to `archived` above: these are the unambiguous
+  // spelling of a quarantine (spam) or delete-to-trash action. They write the same
+  // boolean columns an `add_label: "spam"` / `add_label: "trash"` folder move would.
+  if (patch.is_spam !== undefined) set("is_spam", patch.is_spam ? 1 : 0);
+  if (patch.is_trash !== undefined) set("is_trash", patch.is_trash ? 1 : 0);
 
   // Labels are edited ONE AT A TIME, never by replacing the caller's whole array,
   // because a whole-array write loses a concurrent label change instead of merging
@@ -409,6 +426,57 @@ function applyStatusPatch(db: Database, row: MessageRow, patch: MessageStatusPat
   set("updated_at", now());
   db.run(`UPDATE ${UNIFIED_TABLE} SET ${sets.join(", ")} WHERE id = ?`, [...params, id]);
   return ok(null);
+}
+
+function unifiedFlagValue(value: unknown): boolean {
+  return value === 1 || value === true;
+}
+
+/**
+ * Store-seam action writer for mailbox-filter ACTIONS (FR-0001). Re-applies only
+ * unsatisfied actions, re-reading the row before EACH write so multiple label
+ * adds cannot clobber one another (the blob is a full-column replacement).
+ * Legacy sent-ledger rows are skipped — `applyStatusPatch` refuses label/flag
+ * writes there and no filter action could ever change one. A refusal elsewhere
+ * is thrown so the enclosing insertion transaction rolls back.
+ */
+function applyFilterActionsToUnified(db: Database, messageId: string, actions: MailboxFilterActions): boolean {
+  const row = selectRow(db, messageId);
+  if (!row) return false;
+  if (rowTable(row) === LEDGER_TABLE) return false;
+  const isRead = unifiedFlagValue(row["is_read"]);
+  const isArchived = unifiedFlagValue(row["is_archived"]);
+  const isSpam = unifiedFlagValue(row["is_spam"]);
+  const isTrash = unifiedFlagValue(row["is_trash"]);
+  const storedLabels = new Set<string>();
+  for (const label of JSON.parse(textValue(row["labels_json"]) || "[]") as unknown[]) {
+    storedLabels.add(normalizeLabel(String(label)));
+  }
+  const alreadyArchived = isArchived || storedLabels.has("archived");
+  let changed = false;
+  const apply = (patch: MessageStatusPatch): void => {
+    const fresh = selectRow(db, messageId);
+    if (!fresh || rowTable(fresh) === LEDGER_TABLE) return;
+    const outcome = applyStatusPatch(db, fresh, patch);
+    if (!outcome.ok) throw new Error(outcome.message);
+    changed = true;
+  };
+  if (actions.mark_read && !isRead) apply({ is_read: true });
+  if (actions.archive && !alreadyArchived) apply({ archived: true });
+  for (const rawLabel of actions.add_labels) {
+    const label = normalizeLabel(rawLabel);
+    if (label === "archived") {
+      if (!alreadyArchived) apply({ archived: true });
+    } else if (label === "spam") {
+      if (!isSpam) apply({ is_spam: true });
+    } else if (label === "trash") {
+      if (!isTrash) apply({ is_trash: true });
+    } else if (!storedLabels.has(label)) {
+      apply({ add_label: label });
+      storedLabels.add(label);
+    }
+  }
+  return changed;
 }
 
 function patchMessage(db: Database, id: string, patch: MessageStatusPatch): Outcome<MessageRecord | null> {

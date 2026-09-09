@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { confinedShellCommand, benignShellExecutables } from "./helpers/confined-shell-fixture";
+import { maintenanceFixtureIdentity, prepareMaintenanceInstaller } from "./helpers/maintenance-installer-fixture";
 import {
   chmodSync,
   existsSync,
@@ -6,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -31,15 +34,28 @@ const testOnNonDarwin = process.platform === "darwin" ? test.skip : test;
 const repositoryRoot = resolve(import.meta.dir, "../..");
 const installer = join(repositoryRoot, "scripts", "install_macos_app.sh");
 const temporaryPaths: string[] = [];
+const installerChildren: { child: ReturnType<typeof Bun.spawn>; timer: ReturnType<typeof setTimeout> }[] = [];
+function spawnInstaller(fixture: ReturnType<typeof createEarlyInstallerFixture>, options: Parameters<typeof Bun.spawn>[1] = {}, args: string[] = []) {
+  const child = Bun.spawn([...installerArguments(fixture), ...args], { ...options, cwd: fixture.root, detached: true, stderr: "pipe" });
+  const timer = setTimeout(() => { if (child.exitCode === null) { try { process.kill(-child.pid, "SIGKILL"); } catch {} } }, 15000);
+  installerChildren.push({ child, timer });
+  return child as typeof child & { stderr: ReadableStream<Uint8Array> };
+}
 
-afterEach(() => {
+afterEach(async () => {
+  for (const { child, timer } of installerChildren.splice(0)) {
+    clearTimeout(timer);
+    if (child.exitCode === null) { try { process.kill(-child.pid, "SIGKILL"); } catch {} }
+    await child.exited;
+  }
   for (const path of temporaryPaths.splice(0)) {
     rmSync(path, { recursive: true, force: true });
   }
 });
 
 function temporaryDirectory(prefix: string): string {
-  const path = mkdtempSync(join(tmpdir(), prefix));
+  const path = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  chmodSync(path, 0o700);
   temporaryPaths.push(path);
   return path;
 }
@@ -77,7 +93,7 @@ function localizedProcessStartLocale(): string | null {
   if (locales.exitCode !== 0) return null;
   const baseline = normalizedProcessStart("C");
   if (!baseline) return null;
-  for (const locale of locales.stdout.toString().split(/\r?\n/)) {
+  for (const locale of (locales.stdout?.toString() ?? "").split(/\r?\n/)) {
     if (!/^(?:de|es|fr|it|ja|ko|pt|ru|zh)(?:_|\.)/i.test(locale)) continue;
     const localized = normalizedProcessStart(locale);
     if (localized && localized !== baseline) return locale;
@@ -132,8 +148,8 @@ fi
 exec /usr/bin/ls "$@"
 `,
   );
-  // The fixture intentionally fails at the first artifact-tool call, after
-  // lock + marker acquisition but before any app or state snapshot mutation.
+  // Fail at the first post-acquisition artifact-tool call (state-tree
+  // verification), before any app or state snapshot mutation.
   writeExecutable(
     join(bin, "bun"),
     `#!/usr/bin/env bash
@@ -141,14 +157,21 @@ case "$*" in
   *" native-fs-guard-check") exit 0 ;;
   *" fsync-tree "*|*" fsync-directory "*) exec "$REAL_BUN" "$@" ;;
 esac
+printf '%s\\n' "$*" >> "$HOME/../artifact-verification.log"
+if [ -d "$HOME/Applications/.Recordings-install-lock" ] && [ -d "$HOME/.hasna/.recordings-install-maintenance" ]; then
+  printf 'coordination-held\\n' >> "$HOME/../artifact-verification.log"
+fi
 exit 79
 `,
   );
   writeExecutable(join(bin, "noop"), "#!/usr/bin/env bash\nexit 0\n");
+  const prepared = prepareMaintenanceInstaller(root, repositoryRoot, home, bin);
   return {
     root,
     home,
     bin,
+    installer: prepared.path,
+    target: prepared.target,
     artifact,
     manifest,
     lock: join(home, "Applications", ".Recordings-install-lock"),
@@ -156,23 +179,14 @@ exit 79
   };
 }
 
+const maintenanceTools = [...benignShellExecutables, "/usr/bin/stat", "/usr/bin/id", "/usr/bin/awk", "/usr/bin/grep", "/bin/cat", "/bin/chmod", "/bin/mkdir", "/bin/rmdir", "/bin/cp", "/bin/date", "/bin/dd", "/bin/df", "/usr/bin/du", "/usr/bin/diff", "/usr/bin/head", "/bin/ls", "/usr/bin/tail", "/usr/bin/shasum", "/usr/bin/perl", "/usr/bin/perl5.34"];
 function installerArguments(fixture: ReturnType<typeof createEarlyInstallerFixture>): string[] {
-  return [
-    "bash",
-    installer,
-    "--artifact",
-    fixture.artifact,
-    "--manifest",
-    fixture.manifest,
-    "--expected-team-id",
-    "EXAMPLE123",
-    "--manifest-sha256",
-    "a".repeat(64),
-    "--expected-source-sha",
-    "b".repeat(40),
-    "--expected-version",
-    "0.2.13",
-  ];
+  return confinedShellCommand(fixture.root, [
+    "/bin/bash", fixture.installer, "--artifact", fixture.artifact, "--manifest", fixture.manifest,
+    "--manifest-sha256", "a".repeat(64), "--expected-source-sha", "b".repeat(40), "--expected-version", "0.2.13",
+    ...(process.platform === "darwin" ? ["--artifact-policy", "local-only", "--approved-target", fixture.target,
+      "--approved-target-identity-sha256", maintenanceFixtureIdentity, "--acknowledge-local-signing-and-permissions"] : ["--expected-team-id", "EXAMPLE123"]),
+  ], maintenanceTools);
 }
 
 function installerEnvironment(
@@ -181,6 +195,7 @@ function installerEnvironment(
 ): Record<string, string> {
   return {
     HOME: fixture.home,
+    TMPDIR: fixture.root,
     PATH: `${fixture.bin}:/usr/bin:/bin`,
     RECORDINGS_BUN_EXECUTABLE: join(fixture.bin, "bun"),
     REAL_BUN: process.execPath,
@@ -208,11 +223,12 @@ async function runEarlyInstaller(
   extraArguments: string[] = [],
   extraEnvironment: Record<string, string> = {},
 ) {
-  const child = Bun.spawn([...installerArguments(fixture), ...extraArguments], {
+  const child = spawnInstaller(fixture, {
+    cwd: fixture.root,
     env: installerEnvironment(fixture, extraEnvironment),
     stdout: "pipe",
     stderr: "pipe",
-  });
+  }, extraArguments);
   const [exitCode, stderr] = await Promise.all([
     child.exited,
     new Response(child.stderr).text(),
@@ -292,7 +308,7 @@ const agents = await apiStore.listAgents();
 console.log(JSON.stringify({ blocked, storeMode: apiStore.mode, storeCount: agents.length }));
 `,
     );
-    const child = Bun.spawn([process.execPath, probe], {
+    const child = Bun.spawn(confinedShellCommand(root, [process.execPath, probe]), {
       env: { HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
       stdout: "pipe",
       stderr: "pipe",
@@ -308,9 +324,27 @@ console.log(JSON.stringify({ blocked, storeMode: apiStore.mode, storeCount: agen
 });
 
 describe("installer maintenance marker", () => {
+  test("Linux artifact failure fixture records the exact verification call", async () => {
+    const fixture = createEarlyInstallerFixture();
+    // Exercise the actual Linux stub on every platform, without changing the
+    // process platform or launching the installer through an unsupported seam.
+    const child = Bun.spawn(confinedShellCommand(fixture.root, [join(fixture.bin, "bun"),
+      "fixture-artifact-tool.ts", "verify-archive", "--archive", fixture.artifact, "--manifest", fixture.manifest,
+    ], maintenanceTools), {
+      env: installerEnvironment(fixture), cwd: fixture.root, detached: true, stdout: "ignore", stderr: "pipe",
+    });
+    const timer = setTimeout(() => { if (child.exitCode === null) { try { process.kill(-child.pid, "SIGKILL"); } catch {} } }, 15000);
+    installerChildren.push({ child, timer });
+    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    expect(code, stderr).toBe(79);
+    expect(readFileSync(join(fixture.root, "artifact-verification.log"), "utf8")).toContain(" verify-archive ");
+    expect(existsSync(join(fixture.home, "Applications"))).toBeFalse();
+    expect(existsSync(join(fixture.home, ".hasna"))).toBeFalse();
+  });
+
   test("rejects an expected-hostname mismatch before lock or state mutation", async () => {
     const fixture = createEarlyInstallerFixture();
-    const result = await runEarlyInstaller(fixture, ["--expected-hostname", "station03"]);
+    const result = await runEarlyInstaller(fixture, ["--expected-hostname", "fixture-wrong-host"]);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("does not match the expected hostname");
     expect(existsSync(fixture.lock)).toBeFalse();
@@ -319,16 +353,23 @@ describe("installer maintenance marker", () => {
 
   test("releases the marker on ordinary failure after acquisition", async () => {
     const fixture = createEarlyInstallerFixture();
-    const result = await runEarlyInstaller(fixture, ["--expected-hostname", "station02"]);
-    expect(result.exitCode).not.toBe(0);
+    const result = await runEarlyInstaller(fixture, ["--expected-hostname", fixture.target]);
+    expect(result.exitCode, result.stderr).toBe(79);
+    expect(existsSync(join(fixture.root, "artifact-verification.log"))).toBeTrue();
+    const verification = readFileSync(join(fixture.root, "artifact-verification.log"), "utf8");
+    expect(verification).toContain(` verify-filesystem-tree --path ${join(fixture.home, ".hasna", "recordings")} --uid `);
+    expect(verification).toContain("coordination-held\n");
     expect(existsSync(fixture.marker)).toBeFalse();
     expect(existsSync(fixture.lock)).toBeFalse();
+    expect(existsSync(join(fixture.home, "Applications", "Hasna Recordings.app"))).toBeFalse();
+    expect(readdirSync(join(fixture.home, ".hasna", "recordings"))).toEqual([]);
   });
 
   testOnNonDarwin("leaves the marker after a crash and the next lock owner safely reclaims it", async () => {
     const fixture = createEarlyInstallerFixture();
-    const crashed = Bun.spawn(installerArguments(fixture), {
-      env: installerEnvironment(fixture, { RECORDINGS_TEST_HOLD_AFTER_LOCK_SECONDS: "30" }),
+    const crashed = spawnInstaller(fixture, {
+      cwd: fixture.root,
+    env: installerEnvironment(fixture, { RECORDINGS_TEST_HOLD_AFTER_LOCK_SECONDS: "30" }),
       stdout: "ignore",
       stderr: "ignore",
     });
@@ -356,6 +397,10 @@ describe("installer maintenance marker", () => {
         RECORDINGS_TEST_CRASH_DURING_MAINTENANCE_CLAIM: boundary,
       });
       expect(crashed.exitCode).not.toBe(0);
+      if (process.platform === "darwin") {
+        expect(crashed.exitCode, crashed.stderr).toBe(79);
+        expect(existsSync(join(fixture.root, "artifact-verification.log"))).toBeTrue();
+      }
       if (existsSync(fixture.marker)) {
         expect(existsSync(join(fixture.marker, "owner"))).toBeTrue();
       }
@@ -377,12 +422,14 @@ describe("installer maintenance marker", () => {
       (!existsSync(readers) || !readdirSync(readers).some((entry) => entry.startsWith("lease-")));
       attempt += 1) await Bun.sleep(10);
 
-    const child = Bun.spawn(installerArguments(fixture), {
-      env: installerEnvironment(fixture),
+    const child = spawnInstaller(fixture, {
+      cwd: fixture.root,
+    env: installerEnvironment(fixture),
       stdout: "ignore",
       stderr: "pipe",
     });
-    for (let attempt = 0; attempt < 200 && !existsSync(fixture.marker); attempt += 1) {
+    try {
+    for (let attempt = 0; attempt < 500 && !existsSync(fixture.marker); attempt += 1) {
       await Bun.sleep(10);
     }
     expect(existsSync(fixture.marker)).toBeTrue();
@@ -398,12 +445,25 @@ describe("installer maintenance marker", () => {
     expect(exitCode, stderr).toBe(79);
     expect(stderr).not.toContain("Timed out waiting");
     expect(existsSync(fixture.marker)).toBeFalse();
-  });
+    } finally {
+      releaseOperation();
+      await operation;
+    }
+  }, 10000);
 
   testWithLocalizedProcessStart(
     "keeps a live reader lease created under a localized process environment",
     async () => {
       const fixture = createEarlyInstallerFixture();
+      // A cold installer can need more than two seconds to acquire its marker.
+      // Delay only this owned launcher to make the readiness boundary repeatable.
+      const originalInstaller = fixture.installer;
+      fixture.installer = join(fixture.root, "delayed-installer.sh");
+      const quotedInstaller = "'" + originalInstaller.replaceAll("'", "'\\''") + "'";
+      writeExecutable(fixture.installer, `#!/bin/bash
+/bin/sleep 2.25
+exec /bin/bash ${quotedInstaller} "$@"
+`);
       const probe = join(fixture.root, "localized-reader.ts");
       const moduleUrl = pathToFileURL(
         join(repositoryRoot, "src", "lib", "install-maintenance.ts"),
@@ -443,16 +503,23 @@ await new Promise(() => {});
         expect(owner).toEqual([String(reader.pid), cIdentity]);
         expect(localizedIdentity).not.toBe(cIdentity);
 
-        const child = Bun.spawn(installerArguments(fixture), {
-          env: installerEnvironment(fixture, { LC_ALL: "C", LANG: "C", TZ: "UTC0" }),
+        const child = spawnInstaller(fixture, {
+          cwd: fixture.root,
+    env: installerEnvironment(fixture, { LC_ALL: "C", LANG: "C", TZ: "UTC0" }),
           stdout: "ignore",
           stderr: "pipe",
         });
+        const childStderr = new Response(child.stderr).text();
         try {
-          for (let attempt = 0; attempt < 200 && !existsSync(fixture.marker); attempt += 1) {
-            await Bun.sleep(10);
+          const deadline = performance.now() + 10_000;
+          while (!existsSync(fixture.marker) && child.exitCode === null && performance.now() < deadline) {
+            await Bun.sleep(20);
           }
-          expect(existsSync(fixture.marker)).toBeTrue();
+          const startup = existsSync(fixture.marker) ? "marker acquired" : JSON.stringify({
+            exitCode: child.exitCode,
+            stderr: child.exitCode === null ? "installer readiness deadline exceeded" : (await childStderr).slice(-8_000),
+          });
+          expect(existsSync(fixture.marker), startup).toBeTrue();
           await Bun.sleep(100);
           expect(child.exitCode).toBeNull();
           expect(readdirSync(readers).some((entry) => entry.startsWith("lease-"))).toBeTrue();
@@ -462,7 +529,7 @@ await new Promise(() => {});
             reader.exited,
             readerReady,
             child.exited,
-            new Response(child.stderr).text(),
+            childStderr,
           ]);
           expect(readerExit, readerStdout).toBe(0);
           expect(readerStdout).toContain("ready");
@@ -478,6 +545,7 @@ await new Promise(() => {});
         await reader.exited;
       }
     },
+    20_000,
   );
 
   test("orders exclusivity before recovery and the authoritative stopped-state copy", () => {

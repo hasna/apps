@@ -7,6 +7,7 @@ import { registerWebhookTools } from "./tools/webhooks.js";
 import { registerProjectTools } from "./tools/projects.js";
 import { registerLockTools } from "./tools/locks.js";
 import { registerLifecycleTools } from "./tools/lifecycle.js";
+import { registerPreviewTools } from "./tools/previews.js";
 import { getMcpVersion } from "./version.js";
 
 let serverInstance: McpServer | null = null;
@@ -40,6 +41,7 @@ export function createMcpServer(): McpServer {
   registerProjectTools(server, toolContext);
   registerLockTools(server, toolContext);
   registerLifecycleTools(server, toolContext);
+  registerPreviewTools(server, toolContext);
 
   return server;
 }

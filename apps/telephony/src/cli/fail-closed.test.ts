@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { HERMETIC_STATION, hermeticChildEnv } from "../../tests/support/hermetic-store-env.js";
 
 /**
  * Fail-closed regression probes (owner directive 2026-09-04): a fleet bin run
@@ -56,7 +57,10 @@ async function runEntry(
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...scrubEnv(), HOME: home, ...extra },
+    // HASNA_STATION is PINNED to an account that cannot exist rather than
+    // merely dropped: the Keychain miss is then deterministic on every station,
+    // not a side effect of HOME pointing at a scratch dir.
+    env: { ...scrubEnv(), ...hermeticChildEnv(home), ...extra },
   });
   const stdoutPromise = new Response(proc.stdout).text();
   const stderrPromise = new Response(proc.stderr).text();
@@ -91,6 +95,14 @@ describe("telephony CLI fails closed without the fleet API env", () => {
       expect(result.stderr).toContain("HASNA_TELEPHONY_LOCAL=1");
       expect(result.stderr).toContain("fails closed");
       expect(result.stderr).not.toContain("local-fallback");
+      // The FIRST stderr line names where the credential should live: the
+      // Keychain item under the account actually looked up, the credentials
+      // file under this probe's home, and the env variable — never a value.
+      const firstLine = result.stderr.split("\n")[0] ?? "";
+      expect(firstLine).toContain("hasna.credentials.telephony.api-key");
+      expect(firstLine).toContain(`account "${HERMETIC_STATION}"`);
+      expect(firstLine).toContain(join(home, ".hasna", "telephony", "config", "credentials"));
+      expect(firstLine).toContain("HASNA_TELEPHONY_API_KEY");
       expect(result.stdout).toBe("");
       // No run without env may open or create the local SQLite home.
       expect(existsSync(join(home, ".hasna", "telephony"))).toBe(false);
