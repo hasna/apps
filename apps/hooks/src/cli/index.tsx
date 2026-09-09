@@ -210,6 +210,20 @@ program
   .alias("i")
   .description("Interactive hook browser")
   .action(() => {
+    // The Ink TUI needs a terminal (raw-mode input). Without one — an
+    // unknown token through a pipe, or a bare `hooks` in a script — refuse
+    // cleanly with the non-interactive alternatives instead of letting Ink
+    // fail on raw mode with a stack trace and a false-green exit.
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.error(
+        chalk.red("The interactive hook browser requires a TTY terminal.") +
+          "\n" +
+          chalk.dim(
+            "Use `hooks search <query>`, `hooks list`, or `hooks categories` for non-interactive use.",
+          ),
+      );
+      process.exit(1);
+    }
     render(<App />);
   });
 

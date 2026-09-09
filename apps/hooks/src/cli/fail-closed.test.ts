@@ -199,20 +199,22 @@ describe("no transport gating (storage-mode axis retired)", () => {
     expect(existsSync(sb.dataDir)).toBe(false);
   });
 
-  test("an unknown token opens the interactive TUI instead of a transport refusal", async () => {
+  test("an unknown token routes to the interactive default — refused only for the missing TTY, never for the transport", async () => {
     // `interactive` is the default command, so commander routes any token that
-    // matches no command to the interactive TUI. No transport gate exists to
-    // refuse it: the TUI browses the local catalog. In a non-TTY harness the
-    // ink menu renders and exits 0 (raw mode is unavailable) — the assertion
-    // is that the TUI opened and the run never failed closed.
+    // matches no command to it. No transport gate exists to refuse the run:
+    // the Ink TUI itself requires a TTY (raw-mode input), and this harness
+    // stdin is not one, so the CLI refuses cleanly with the TTY message and
+    // the non-interactive alternatives — exit 1 naming the TTY, never the
+    // store, and never an Ink raw-mode stack on stdout.
     const sb = makeSandbox();
     sandboxes.push(sb);
     const result = await runCli(["frobnicate"], cleanEnv(sb), 8000);
     expect(result.timedOut).toBe(false);
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
     expect(result.stderr).not.toContain(REFUSING);
-    expect(result.stdout).toContain("Browse by category");
-    expect(result.stdout).toContain("Search hooks");
+    expect(result.stderr).toContain("requires a TTY terminal");
+    expect(result.stderr).toContain("hooks search <query>");
+    expect(result.stdout).not.toContain("Raw mode");
   });
 
   test("help and version stay available without any transport configuration", async () => {
