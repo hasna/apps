@@ -738,7 +738,7 @@
     },
     "apps/notes": {
       "name": "@hasna/notes",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "bin": {
         "notes": "bin/notes.mjs",
         "notes-mcp": "bin/notes-mcp.mjs",

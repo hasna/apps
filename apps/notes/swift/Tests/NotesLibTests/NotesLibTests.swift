@@ -116,6 +116,11 @@ final class NotesLibTests: @unchecked Sendable {
         let sdk = try NotesClient(apiBase: unwrap(URL(string: "https://notes.example.com/v1"))) { nil }
         do { _ = try await sdk.list(); fail("Expected missing credential") }
         catch let error as NotesAPIError { expectEqual(error.code, "missing_credential") }
+        let failed = try NotesClient(apiBase: unwrap(URL(string: "https://notes.example.com/v1"))) {
+            throw NotesAPIError("missing_credential", "Reflected fixture-credential")
+        }
+        do { _ = try await failed.list(); fail("Expected provider refusal") }
+        catch let error as NotesAPIError { expectEqual(error.code, "missing_credential"); expectFalse(error.message.contains("fixture-credential")) }
     }
 }
 
