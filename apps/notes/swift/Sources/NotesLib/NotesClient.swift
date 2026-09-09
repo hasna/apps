@@ -38,12 +38,14 @@ public struct NotesClient: Sendable {
                       query: [URLQueryItem] = [], idempotencyKey: String? = nil) async throws -> T {
         try Task.checkCancellation()
         let key: String
+        let supplied: String?
         do {
-            guard let value = try credential(), !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  !value.contains("\r"), !value.contains("\n") else { throw NotesAPIError("missing_credential", "Sign in to access Notes.") }
-            key = value
-        } catch let error as NotesAPIError where error.code == "missing_credential" { throw error }
+            supplied = try credential()
+        }
         catch { throw NotesAPIError("missing_credential", "The Notes session could not be read.") }
+        guard let supplied, !supplied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !supplied.contains("\r"), !supplied.contains("\n") else { throw NotesAPIError("missing_credential", "Sign in to access Notes.") }
+        key = supplied
         try Task.checkCancellation()
         guard let url = URL(string: path, relativeTo: apiBase)?.absoluteURL,
               url.absoluteString.hasPrefix(apiBase.absoluteString),
