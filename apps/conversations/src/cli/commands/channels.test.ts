@@ -36,8 +36,24 @@ describe("registerChannelCommands", () => {
     expect(send?.options.some((o) => o.long === "--priority")).toBe(true);
   });
 
-  test("registers channel read subcommand", () => {
+  test("channel send carries --metadata/--session/--working-dir like the top-level send", () => {
     const program = new Command();
+    registerChannelCommands(program);
+
+    const channel = program.commands.find((c) => c.name() === "channel");
+    const send = channel?.commands.find((c) => c.name() === "send");
+    expect(send).toBeDefined();
+    expect(send?.options.some((o) => o.long === "--metadata")).toBe(true);
+    expect(send?.options.some((o) => o.long === "--session")).toBe(true);
+    expect(send?.options.some((o) => o.long === "--working-dir")).toBe(true);
+
+    const help = send?.helpInformation() ?? "";
+    expect(help).toContain("--metadata");
+    expect(help).toContain("--session");
+    expect(help).toContain("--working-dir");
+  });
+
+  test("registers channel read subcommand", () => {    const program = new Command();
     registerChannelCommands(program);
 
     const channel = program.commands.find((c) => c.name() === "channel");
