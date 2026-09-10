@@ -12,10 +12,13 @@ import { emailsSelfHostedMigrations } from "./migrations.js";
 const databaseUrl = process.env.EMAILS_TEST_POSTGRES_URL;
 const schema = "public";
 const rlsRole = `forwarding_rls_${crypto.randomUUID().replaceAll("-", "")}`;
+let rlsRoleCreated = false;
 let pool: ReturnType<typeof createPgPool>;
 let client: PoolQueryClient, store: EmailsSelfHostedStore;
 const tenantA = "00000000-0000-0000-0000-000000000001",
   tenantB = "00000000-0000-0000-0000-000000000002";
+// Rebuilding the cold schema can exceed Bun's default 5s hook deadline.
+// Match the other migration fixtures without extending individual case limits.
 beforeAll(async () => {
   if (!databaseUrl) return;
   pool = createPgPool({
@@ -35,11 +38,16 @@ beforeAll(async () => {
   await client.execute(
     `CREATE ROLE "${rlsRole}" NOLOGIN; GRANT USAGE ON SCHEMA public TO "${rlsRole}"; GRANT SELECT,INSERT,UPDATE,DELETE ON forwarding_delivery_jobs TO "${rlsRole}"`,
   );
-});
+  rlsRoleCreated = true;
+}, 60_000);
 afterAll(async () => {
-  if (!databaseUrl) return;
-  await client.execute(`DROP OWNED BY "${rlsRole}"; DROP ROLE "${rlsRole}"`);
-  await pool.end();
+  if (!pool) return;
+  try {
+    if (rlsRoleCreated)
+      await client.execute(`DROP OWNED BY "${rlsRole}"; DROP ROLE "${rlsRole}"`);
+  } finally {
+    await pool.end();
+  }
 });
 beforeEach(async () => {
   if (databaseUrl)
