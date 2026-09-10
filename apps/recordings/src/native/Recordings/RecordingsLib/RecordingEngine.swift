@@ -87,6 +87,22 @@ struct RecordingCaptureConfiguration: Sendable {
     /// Started at recording start and awaited only after the recorder has stopped, so
     /// capture latency can never delay microphone start.
     let startContext: Task<RecordingStartResolvedContext, Never>
+    var preservesStartSelection = true
+
+    func retargeted(to target: RecordingPasteTarget?, preservesSelection: Bool) -> Self {
+        Self(targetAppBundleIdentifier: target?.bundleIdentifier, targetAppPid: target?.processIdentifier,
+             startContext: startContext, preservesStartSelection: preservesStartSelection && preservesSelection)
+    }
+
+    func resolvedStartContext() async -> RecordingStartResolvedContext {
+        let context = await startContext.value
+        guard !preservesStartSelection else { return context }
+        // The recording keeps its start-time processing/project configuration, but
+        // another application's frozen AX selection must never reach the new target.
+        return RecordingStartResolvedContext(selectionToken: nil, canonicalProjectId: context.canonicalProjectId,
+            displayProjectId: context.displayProjectId, activeProjectName: context.activeProjectName,
+            processing: context.processing)
+    }
 }
 
 /// The frontmost-application identity `startRecording` freezes. Abstracted from
@@ -2495,7 +2511,27 @@ public final class RecordingEngine: ObservableObject {
         }
     }
 
-    public func stopAndTranscribe() {
+    private func validatedStopPasteTarget(_ selection: RecordingPasteTargetSelection) -> RecordingPasteTarget? {
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        switch selection {
+        case .frozen(let target):
+            guard let target, target.processIdentifier != currentPID,
+                  let observed = pasteTargetApplicationLookup(target.processIdentifier),
+                  target.matches(observed) else { return nil }
+            return target
+        case .frontmostApplication:
+            guard let frontmost = frontmostAppSnapshot(),
+                  let observed = pasteTargetApplicationLookup(frontmost.pid),
+                  observed.pid == frontmost.pid, observed.bundleIdentifier == frontmost.bundleIdentifier,
+                  observed.launchDate == frontmost.launchDate else { return nil }
+            return RecordingPasteTarget(observation: observed, currentPID: currentPID)
+        }
+    }
+
+    /// An explicit override selects and freezes the destination at an active Stop.
+    /// Omitting it preserves the Start-time target. Frozen nil means no destination;
+    /// duplicate, idle, cancelled, and warm-up Stops cannot retarget a pipeline.
+    public func stopAndTranscribe(pasteTarget: RecordingPasteTargetSelection? = nil) {
         // Stop during the warm-up window has nothing to transcribe — the microphone was opened
         // but has not delivered a sample. Abandon visibly instead of spending a transcription
         // pipeline (and a CLI round trip) on an empty buffer.
@@ -2516,7 +2552,7 @@ public final class RecordingEngine: ObservableObject {
         isRecording = false
         isTranscribing = true
 
-        guard let captureConfiguration = activeCaptureConfiguration else {
+        guard var captureConfiguration = activeCaptureConfiguration else {
             recorder?.stop()
             realtimeClient?.stop()
             realtimeClient = nil
@@ -2529,6 +2565,22 @@ public final class RecordingEngine: ObservableObject {
             resetRecordingIntent()
             finish("Recording configuration unavailable")
             return
+        }
+        if let pasteTarget {
+            let previousIdentity = pasteTargetProcessIdentityByGeneration[recordingGeneration]
+            let target = validatedStopPasteTarget(pasteTarget)
+            let identity = target.map {
+                PasteTargetProcessIdentity(pid: $0.processIdentifier, bundleIdentifier: $0.bundleIdentifier,
+                                           launchDate: $0.launchDate)
+            }
+            // Even an explicit frontmost request is now frozen: later focus or a
+            // missing/replaced process cannot substitute another destination.
+            frozenPasteTargetsByGeneration[recordingGeneration] = .frozen(target)
+            pasteTargetProcessIdentityByGeneration[recordingGeneration] = identity
+            self.targetAppBundleIdentifier = target?.bundleIdentifier
+            self.targetAppPid = target?.processIdentifier
+            captureConfiguration = captureConfiguration.retargeted(to: target,
+                preservesSelection: identity != nil && identity == previousIdentity)
         }
         activeCaptureConfiguration = nil
         let targetAppBundleIdentifier = captureConfiguration.targetAppBundleIdentifier
@@ -2585,7 +2637,7 @@ public final class RecordingEngine: ObservableObject {
             // The start context was captured concurrently at recording start; by the time
             // the realtime transcript has settled it is resolved in all but pathological
             // cases, and its Accessibility reads are bounded either way.
-            let startContext = await captureConfiguration.startContext.value
+            let startContext = await captureConfiguration.resolvedStartContext()
             let selectionToken = startContext.selectionToken
             let activeProjectId = startContext.displayProjectId
             let canonicalProjectId = startContext.canonicalProjectId
