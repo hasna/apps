@@ -689,18 +689,19 @@ private final class PCMStreamPipe: @unchecked Sendable {
                 guard !Task.isCancelled else { break }
                 guard !data.isEmpty else { continue }
                 recordedPCM.append(data)
+                // Providers need every admitted packet before a pause can settle.
+                // Only the legacy realtime client waits for network-sized chunks.
+                providerSession?.appendPCM(data)
                 pendingChunk.append(data)
 
                 while pendingChunk.count >= chunkSize {
                     let chunk = pendingChunk.prefixData(count: chunkSize)
-                    providerSession?.appendPCM(chunk)
                     await client?.sendAudio(chunk)
                     pendingChunk.removeFirst(chunkSize)
                 }
             }
 
             if !Task.isCancelled && !pendingChunk.isEmpty {
-                providerSession?.appendPCM(pendingChunk)
                 await client?.sendAudio(pendingChunk)
             }
             return recordedPCM
