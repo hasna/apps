@@ -149,6 +149,16 @@ not a product relationship:
    add a Mailery-shaped feature here is refused on that ground; if Mailery needs
    something, it is because the primitive is generally useful, and it lands as a
    general primitive on a subpath that carries no store.
+6. The consumption is through `@hasna/emails/inbound` and nothing else. That is
+   enforced on Mailery's side by a contract test that scans its shipped source
+   and fails on a bare `@hasna/emails` import, so the storage-free boundary this
+   subpath was created for holds in practice and not just in intent. Where a
+   primitive Mailery wants is reachable only from the package root — today
+   `generateSpfRecord` and `generateDmarcRecord` — Mailery does without it and
+   keeps its own copy rather than pull this package's store, database and
+   provider layer into its server bundle. Publishing those two on a
+   storage-free subpath is the fix, and it is a request on this package, not an
+   argument for relaxing the rule.
 
 **Check any of this against GitHub, not a local checkout.** The stale on-disk
 clone that once carried `"@hasna/mailery": "0.6.93"` led an adversarial reviewer
