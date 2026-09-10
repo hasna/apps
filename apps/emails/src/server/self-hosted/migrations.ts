@@ -3217,6 +3217,12 @@ const MAILBOX_FILTER_ACTIONS = defineMigration(
  *
  * `CREATE INDEX` (not CONCURRENTLY) because the migration ledger runs migrations inside
  * its own transaction; the table is a per-tenant mailbox, so the write lock is brief.
+ *
+ * SUPERSEDED BY 0043 FOR THE PLAN (BUG-0050 third verification). This index can never be
+ * used by the serving role: the expression is not LEAKPROOF, and 0013 FORCEs RLS onto
+ * the NOSUPERUSER NOBYPASSRLS serving role, so the clause is refused as an index qual and
+ * the lookup Seq Scans (see 0043). The SQL below is a published migration and stays
+ * byte-identical; the lookup now compares the stored column 0043 adds.
  */
 const INBOUND_MESSAGE_IDENTITY_INDEX = defineMigration(
   "0042_inbound_message_identity_index",
@@ -3224,6 +3230,47 @@ const INBOUND_MESSAGE_IDENTITY_INDEX = defineMigration(
   CREATE INDEX IF NOT EXISTS messages_inbound_rfc_message_id_idx
     ON messages (tenant_id, lower(btrim(COALESCE(headers->>'message-id', ''), '<>')))
     WHERE direction = 'inbound' AND headers->>'message-id' IS NOT NULL;
+  `,
+);
+
+/**
+ * The fence's stored content identity, promotable under RLS (BUG-0050 third verification).
+ *
+ * `createInboundMessageWithProvenance` asks "does this tenant already hold this MESSAGE?"
+ * — same RFC `Message-ID`, sender, subject and receipt instant. 0042 tried to index that
+ * question as an EXPRESSION over `headers->>'message-id'`, and the expression can never
+ * be an index qual under the serving role. The serving role is proven at boot to be
+ * NOSUPERUSER NOBYPASSRLS (`rls-guard.ts`) and 0013 FORCEs RLS onto it, so every query
+ * clause is raised to RLS security level 1 and `match_clause_to_index` admits it as an
+ * index qual only when it is securely promotable — security level 0, or leakproof
+ * (`indxpath.c` -> `restriction_is_securely_promotable` -> `contain_leaked_vars`).
+ * `lower`, `btrim` and `jsonb_object_field_text` are all `proleakproof = f`, so the
+ * expression can never be promoted. Measured under exactly that role, with the tenant GUC
+ * set: the lookup planned as a Seq Scan (165666 rows removed, ~13ms) and, with
+ * `enable_seqscan = off`, as an Index Scan on `messages_direction_idx` — never on 0042's
+ * index. As superuser (RLS bypassed) the same query used 0042's index in 0.02ms, which is
+ * what made the previous measurement look fixed.
+ *
+ * A STORED GENERATED column is the same repair 0019 made for list ordering, for the same
+ * reason: the qual becomes a plain-Var comparison with the leakproof `texteq` operator,
+ * which IS promotable under RLS, and the value can never drift from the header expression
+ * it mirrors — every write path, SQL included, gets it. The `NULLIF(..., '')` is
+ * load-bearing: mail with no `Message-ID` must key NULL, so the lookup's
+ * `rfc_message_id = $2` can never match it, and two `Message-ID`-less rows can never be
+ * collapsed (the identity function also skips them outright). `ADD COLUMN ... STORED`
+ * backfills every existing row in the one-time rewrite that adds it, so there is no
+ * separate UPDATE pass. `CREATE INDEX` (not CONCURRENTLY) for the same ledger-transaction
+ * reason as 0042.
+ */
+const INBOUND_MESSAGE_IDENTITY_COLUMN = defineMigration(
+  "0043_inbound_message_identity_column",
+  `
+  ALTER TABLE messages ADD COLUMN IF NOT EXISTS rfc_message_id text
+    GENERATED ALWAYS AS (NULLIF(lower(btrim(COALESCE(headers->>'message-id', ''), '<>')), '')) STORED;
+
+  CREATE INDEX IF NOT EXISTS messages_inbound_rfc_message_id_col_idx
+    ON messages (tenant_id, rfc_message_id)
+    WHERE direction = 'inbound' AND rfc_message_id IS NOT NULL;
   `,
 );
 
@@ -3277,5 +3324,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     MESSAGE_SEND_TAGS,
     MAILBOX_FILTER_ACTIONS,
     INBOUND_MESSAGE_IDENTITY_INDEX,
+    INBOUND_MESSAGE_IDENTITY_COLUMN,
   ];
 }

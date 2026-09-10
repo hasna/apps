@@ -589,6 +589,49 @@ const MESSAGE_COLUMNS =
   "headers, attachments, source_id, idempotency_key, send_payload_hash, send_state, send_started_at, " +
   "created_at, updated_at";
 
+/**
+ * The by-message identity lookup the SES→S3 ingest fence runs before it inserts
+ * (BUG-0050). It answers "does this tenant already hold this MESSAGE?" — same RFC
+ * `Message-ID` (normalised), sender, subject and receipt instant — where the
+ * `source_id` fence answers "does this tenant already hold this OBJECT?".
+ *
+ * The `Message-ID` half compares `messages.rfc_message_id`, the STORED GENERATED column
+ * migration 0043 adds, never the `headers->>'message-id'` expression 0042 indexed.
+ * Under the serving role RLS is FORCEd (0013) and the role is proven NOSUPERUSER
+ * NOBYPASSRLS at boot (`rls-guard.ts`), so every clause is raised to RLS security level
+ * 1 and `match_clause_to_index` admits it as an index qual only when it is securely
+ * promotable — level 0 or leakproof (`restriction_is_securely_promotable` ->
+ * `contain_leaked_vars`). `lower`, `btrim` and `jsonb_object_field_text` are all
+ * `proleakproof = f`, so a comparison written over the raw header can never be promoted
+ * and the lookup Seq Scans the tenant's mail (measured: 165666 rows removed, ~13ms;
+ * and with `enable_seqscan = off`, `messages_direction_idx` — never 0042's index). The
+ * stored column is compared with the leakproof `texteq` operator, which IS promotable,
+ * so `messages_inbound_rfc_message_id_col_idx` carries the lookup.
+ *
+ * `rfc_message_id IS NOT NULL` stays load-bearing twice over: the partial index's own
+ * predicate is implied textually from it, and it keeps the collapse structural — a row
+ * with no `Message-ID` keys NULL and can never equal another such row, and the caller
+ * only reaches here with a non-empty identity at all.
+ *
+ * The sender/subject/instant clauses are the rest of the content identity, unchanged;
+ * they run as filters after the index seek, never as the key.
+ *
+ * Exported so `rls.integration.test.ts` can assert this query's PLAN under the real
+ * serving posture — the previous attempt was "proven" by a superuser EXPLAIN, i.e. with
+ * RLS bypassed, which is exactly what hid that 0042's index was inert.
+ */
+export const INBOUND_MESSAGE_IDENTITY_LOOKUP_SQL = `SELECT ${MESSAGE_COLUMNS} FROM messages
+   WHERE tenant_id = $1::uuid
+     AND direction = 'inbound'
+     AND rfc_message_id IS NOT NULL
+     AND rfc_message_id = $2
+     AND lower(COALESCE(from_addr, '')) = $3
+     AND COALESCE(subject, '') = $4
+     AND received_at IS NOT DISTINCT FROM $5::timestamptz
+   ORDER BY created_at ASC, id ASC
+   LIMIT 1
+   FOR UPDATE`;
+
 /** List snippet budget. 140 chars keeps a 100-row page well under 100KB. */
 const MESSAGE_SNIPPET_CHARS = 140;
 
@@ -4976,9 +5019,11 @@ export class TenantScopedStore {
    * its distinct messages. A caller with no `Message-ID` is untouched: no identity, no
    * adoption, exactly the previous insert.
    *
-   * The lookup runs under an advisory lock rather than a unique index, because the
-   * identity is a property of the parsed mail and not a storable column of it; the lock
-   * is what makes two concurrent objects carrying one message resolve to one row.
+   * The lookup runs under an advisory lock rather than a unique index: the key is a
+   * normalised projection of the parsed mail (`messages.rfc_message_id`, migration
+   * 0043), and mail without a `Message-ID` has no key at all — the lock, not a unique
+   * constraint, is what makes two concurrent objects carrying one message resolve to
+   * one row.
    */
   async createInboundMessageWithProvenance(
     input: MessageInput,
@@ -5013,32 +5058,9 @@ export class TenantScopedStore {
           [Buffer.from(`${this.tenantId}\u001f${identity.rfcMessageId}`, "utf8")],
         );
         const canonical = await tx.get<Record<string, unknown>>(
-          // Two clauses below are load-bearing for the PLAN, not for the result, and
-          // they must stay paired with migration 0042:
-          //   - `headers->>'message-id' IS NOT NULL` is the clause the planner needs to
-          //     prove 0042's partial predicate (`... AND headers->>'message-id' IS NOT
-          //     NULL`) follows from this WHERE clause. It cannot derive it from the
-          //     `COALESCE` equality, so without this exact test the index is inert and
-          //     every ingest Seq Scans plus Sorts the tenant's mail (measured).
-          //   - the comparison must keep `lower(btrim(COALESCE(headers->>'message-id',
-          //     ''), '<>'))` verbatim, because that is the index's expression; a
-          //     normalisation written any other way matches no index entry.
-          // Neither clause changes which rows match: the identity's `Message-ID` is
-          // never empty (a message with none has no identity and never reaches here),
-          // and the null test excludes only rows the equality already excluded. What it
-          // does add is that a no-`Message-ID` row can no longer be adopted even if a
-          // caller ever passed an empty identity.
-          `SELECT ${MESSAGE_COLUMNS} FROM messages
-           WHERE tenant_id = $1::uuid
-             AND direction = 'inbound'
-             AND headers->>'message-id' IS NOT NULL
-             AND lower(btrim(COALESCE(headers->>'message-id', ''), '<>')) = $2
-             AND lower(COALESCE(from_addr, '')) = $3
-             AND COALESCE(subject, '') = $4
-             AND received_at IS NOT DISTINCT FROM $5::timestamptz
-           ORDER BY created_at ASC, id ASC
-           LIMIT 1
-           FOR UPDATE`,
+          // The shape — and WHY it must stay this shape (plain stored column, leakproof
+          // equality) — is documented on the constant and asserted by the RLS plan test.
+          INBOUND_MESSAGE_IDENTITY_LOOKUP_SQL,
           [this.tenantId, identity.rfcMessageId, identity.fromAddr, identity.subject, identity.receivedAt],
         );
         if (canonical) {

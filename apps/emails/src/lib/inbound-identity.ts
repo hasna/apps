@@ -49,8 +49,10 @@ export interface InboundIdentityFields {
  * `Message-ID` has no content identity and is never collapsed onto another row.
  *
  * Case-folding is safe here and required for the comparison to hold: the store compares
- * against `lower(btrim(headers->>'message-id', '<>'))`, and the local part of a
- * Message-ID is case-sensitive in theory but generated as a single token in practice.
+ * against `messages.rfc_message_id`, the STORED GENERATED column migration 0043 derives
+ * as `NULLIF(lower(btrim(COALESCE(headers->>'message-id', ''), '<>')), '')`, and the
+ * local part of a Message-ID is case-sensitive in theory but generated as a single
+ * token in practice.
  */
 export function normalizeRfcMessageId(value: unknown): string | null {
   if (typeof value !== "string") return null;

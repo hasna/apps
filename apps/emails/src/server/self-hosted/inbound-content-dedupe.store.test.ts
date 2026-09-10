@@ -25,7 +25,7 @@ const RAW_SHA256 = createHash("sha256").update("raw-object-bytes").digest("hex")
 
 type Row = Record<string, unknown>;
 
-/** The exact normalization the SQL does: `lower(btrim(value, '<>'))`. */
+/** The exact normalization migration 0043's generated column does: `NULLIF(lower(btrim(value, '<>')), '')`. */
 function canonicalHeaderId(value: unknown): string {
   return String(value ?? "").toLowerCase().replace(/^[<>]+|[<>]+$/g, "");
 }
@@ -53,6 +53,9 @@ function identityClient() {
     is_starred: p[14] ?? false,
     labels: JSON.parse(String(p[15])),
     headers: JSON.parse(String(p[16])),
+    // Migration 0043 computes this column in Postgres from `headers`; the emulator
+    // mirrors that so the lookup's `rfc_message_id = $2` behaves as on the real schema.
+    rfc_message_id: canonicalHeaderId((JSON.parse(String(p[16])) as Record<string, unknown>)["message-id"]) || null,
     attachments: JSON.parse(String(p[17])),
     source_id: p[18] ?? null,
     idempotency_key: p[19] ?? null,
@@ -85,7 +88,8 @@ function identityClient() {
         lookups.push(sql);
         const found = rows.find((row) =>
           row["direction"] === "inbound"
-          && canonicalHeaderId((row["headers"] as Record<string, unknown> | undefined)?.["message-id"]) === String(p[1])
+          && row["rfc_message_id"] != null
+          && row["rfc_message_id"] === p[1]
           && String(row["from_addr"] ?? "").toLowerCase() === String(p[2])
           && String(row["subject"] ?? "") === String(p[3])
           && String(row["received_at"] ?? "") === String(p[4] ?? ""));
@@ -258,7 +262,7 @@ describe("createInboundMessageWithProvenance content fence", () => {
     expect(insertCount()).toBe(1);
   });
 
-  test("the identity lookup keeps the clauses migration 0042's index needs to be used", async () => {
+  test("the identity lookup keys on the stored column with a plain equality — the only shape RLS admits", async () => {
     const { client, lookups } = identityClient();
     const store = new EmailsSelfHostedStore(client).forTenant(TENANT);
 
@@ -266,18 +270,19 @@ describe("createInboundMessageWithProvenance content fence", () => {
 
     expect(lookups).toHaveLength(1);
     const lookup = lookups[0]!;
-    // A partial expression index is used only when the planner can prove its predicate
-    // from the query's WHERE clause AND the compared expression matches, and neither is
-    // visible in the row the query returns. Migration 0042's predicate is
-    // `direction = 'inbound' AND headers->>'message-id' IS NOT NULL`, so this lookup must
-    // carry BOTH of those tests (the planner cannot derive the `IS NOT NULL` from the
-    // `COALESCE(...)` equality), and must compare the index's exact normalisation. Drop
-    // or reword either half and the ingest still answers correctly, but silently reverts
-    // to a Seq Scan plus Sort of the tenant's mail on every object — the cost 0042 exists
-    // to prevent.
+    // The Message-ID key must be `messages.rfc_message_id` (migration 0043's STORED
+    // GENERATED column) compared with the plain `=`, i.e. the leakproof `texteq`
+    // operator. 0013 FORCEs RLS onto the NOSUPERUSER NOBYPASSRLS serving role, and
+    // `match_clause_to_index` admits a clause as an index qual only when it is leakproof
+    // (`lower`, `btrim` and `jsonb_object_field_text` are all `proleakproof = f`), so a
+    // comparison written over `headers->>'message-id'` — what 0042 indexed — can NEVER be
+    // promoted and the lookup Seq Scans the tenant's mail on every object. That is a
+    // PLAN property this text keeps pinned: the plan-level proof itself is the EXPLAIN
+    // under the real serving role in `rls.integration.test.ts`.
     expect(lookup).toContain("direction = 'inbound'");
-    expect(lookup).toContain("headers->>'message-id' IS NOT NULL");
-    expect(lookup).toContain("lower(btrim(COALESCE(headers->>'message-id', ''), '<>')) = $2");
+    expect(lookup).toContain("rfc_message_id IS NOT NULL");
+    expect(lookup).toContain("rfc_message_id = $2");
+    expect(lookup).not.toContain("headers->>'message-id'");
   });
 });
 
