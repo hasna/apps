@@ -96,6 +96,18 @@ switcher launch claude --provider deepseek --model deepseek-v4-pro
 
 `--vault-cli /absolute/path/to/secrets` selects a particular installation. Vault lookup uses `secrets exec` to inject the value into a short-lived receiver, which delivers it over an authenticated loopback connection. Values stay in process memory. The lookup has a 20-second deadline and owns a separate process group; it finishes before the native harness starts. Each lookup reads the vault again. Conflicting Secrets service URL configuration fails explicitly. Vault CLI bindings currently require POSIX; Windows callers can inject provider environment variables.
 
+If launch reports `vault_exec_permissions`, verify the installed Secrets package against its trusted release artifact before repairing it. Bun 1.3.14's [bin-link installer](https://github.com/oven-sh/bun/blob/bun-v1.3.14/src/install/bin.zig#L731-L735) can change an executable member from mode `0755` to `0777`, including with `--ignore-scripts`. Changing the shell umask does not correct that installer behavior.
+
+After validating the package archive against its registry integrity, compute the SHA256 of the executable member **inside that verified archive**. Use that expected digest to finalize the existing binding's installed executable:
+
+```sh
+switcher credentials repair-executable deepseek --sha256 EXPECTED_EXECUTABLE_SHA256
+```
+
+For a fresh installation whose unsafe executable prevents creating a binding, use `switcher credentials repair-executable --vault-cli /absolute/path/to/secrets --sha256 EXPECTED_EXECUTABLE_SHA256` first, then bind normally. Select either a binding reference or an explicit path.
+
+The digest is a release-artifact checksum, not a credential. Do not substitute the installed file's own hash: that would trust any altered bytes. Repair checks the exact bytes, file owner/type and every path ancestor, then creates an identical private copy and atomically replaces the writable executable with group/public write permission removed. Cache hardlinks and already-open writers retain the old inode and cannot change the repaired executable. It then runs the ordinary launch checks again. Safe files are unchanged; digest mismatches, unsafe ancestors and unowned files are refused. The command never starts Secrets, contacts the vault, changes bindings, or repairs permissions automatically during launch. Run this explicit step after each affected installation; a later Bun install can reset bin modes again. Reinstall a verified package if its bytes differ.
+
 For provider keys already stored in macOS Keychain, use `--keychain-service SERVICE --keychain-account ACCOUNT` instead of vault options. Bindings contain only references and authorized origins under `~/.hasna/switcher/config/credential-bindings`, in owner-only files. They remain local even when Switcher uses a remote API. A configured binding takes precedence over environment aliases; an unavailable binding never falls back to another account.
 
 `credentials list` displays bindings; `credentials remove PRESET_OR_REFERENCE` removes only the locator. Replacement requires explicit removal. Custom credential references require `--origin URL` (repeatable); preset bindings authorize their documented origins by default. `credentials check` reports availability, length and hash, not successful provider authentication. Provider credentials needed by a remote API's catalog discovery must still be configured on that server independently.
