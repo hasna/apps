@@ -3,6 +3,8 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { buildCliFixture } from "./cli-build.fixture.js";
+import { useDefaultTestTimeout } from "../test-preload.js";
+useDefaultTestTimeout();
 
 const scratch = mkdtempSync(join(tmpdir(), "skills-search-pin-"));
 const binary = join(scratch, "skills.js"), guard = join(scratch, "guard.js");
@@ -63,5 +65,5 @@ async function journey(cancel: boolean) {
     expect(persisted.createdAt).toBe(original.createdAt);
   }
 }
-test("real interactive search accepts q, selects and persists only the confirmed skill", () => journey(false), 30000);
-test("Escape cancels a selected search result without changing project pins", () => journey(true), 30000);
+test("real interactive search accepts q, selects and persists only the confirmed skill", () => journey(false));
+test("Escape cancels a selected search result without changing project pins", () => journey(true));
