@@ -1,6 +1,10 @@
 import { isAbsolute, join } from 'node:path';
 import { writeFileSync } from 'node:fs';
 
+export function sdkPackageCommand(destination) {
+  return [process.execPath, '--no-env-file', 'scripts/test-sdk-package.mjs', destination];
+}
+
 export function npmPackCommand(destination) {
   // An outer `npm pack --dry-run` exposes npm_config_dry_run to prepack.
   // This inner pack must still materialize the exact archive for the scanner.

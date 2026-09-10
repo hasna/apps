@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, lstatSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { npmPackCommand, packedFilename, runSdkPackageCommand } from '../scripts/pack-output.mjs';
+import { npmPackCommand, sdkPackageCommand, packedFilename, runSdkPackageCommand } from '../scripts/pack-output.mjs';
 
 describe('exact npm artifact selection', () => {
   test('selects the single npm archive without reconstructing a Bun payload', () => {
@@ -71,5 +71,22 @@ test('packed consumer keeps npm notice stderr out of machine stdout and retains 
       `process.stdout.write('not JSON');process.stderr.write(${JSON.stringify(warning)})`],
       { cwd: root, env: {}, evidenceDir: root, log: 'malformed.json' });
     expect(() => packedFilename(malformed)).toThrow();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('installed PostgreSQL package preparation refuses producer dotenv reload', () => {
+  const root = mkdtempSync(join(tmpdir(), 'notes-pack-dotenv-'));
+  try {
+    mkdirSync(join(root, 'scripts'));
+    writeFileSync(join(root, '.env'), 'QA_NOTES_DOTENV_CANARY=owned-dotenv-canary\n');
+    writeFileSync(join(root, 'scripts/test-sdk-package.mjs'), 'console.log(process.env.QA_NOTES_DOTENV_CANARY ?? "absent");');
+    const command = sdkPackageCommand(join(root, 'output'));
+    const options = { cwd: root, env: {}, stdout: 'pipe', stderr: 'pipe' };
+    const poisoned = Bun.spawnSync(command.filter(value => value !== '--no-env-file'), options);
+    expect(poisoned.exitCode).toBe(0);
+    expect(new TextDecoder().decode(poisoned.stdout).trim()).toBe('owned-dotenv-canary');
+    const isolated = Bun.spawnSync(command, options);
+    expect(isolated.exitCode).toBe(0);
+    expect(new TextDecoder().decode(isolated.stdout).trim()).toBe('absent');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

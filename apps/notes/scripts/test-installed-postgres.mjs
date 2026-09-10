@@ -6,6 +6,7 @@ import { resolve, join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { sdkPackageCommand } from './pack-output.mjs';
 
 assert.equal(process.platform, 'linux', 'Installed four-surface PostgreSQL acceptance requires Linux');
 const databaseUrl = process.env.NOTES_TEST_DATABASE_URL;
@@ -18,7 +19,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 assert(process.argv[2], 'A new evidence directory is required');
 const scratch = resolve(process.argv[2]);
 const env = { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR };
-const packed = Bun.spawnSync([process.execPath, 'scripts/test-sdk-package.mjs', scratch], { cwd: root, env, stdout: 'pipe', stderr: 'pipe', timeout: 240000 });
+const packed = Bun.spawnSync(sdkPackageCommand(scratch), { cwd: root, env, stdout: 'pipe', stderr: 'pipe', timeout: 240000 });
 assert.equal(packed.exitCode, 0, 'Strict fresh package preparation failed');
 const consumer = join(scratch, 'consumer'), packageDir = realpathSync(join(consumer, 'node_modules/@hasna/notes'));
 assert.equal(packageDir, join(consumer, 'node_modules/@hasna/notes'));
