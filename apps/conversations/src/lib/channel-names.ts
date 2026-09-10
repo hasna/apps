@@ -55,6 +55,38 @@ export function archivedChannelMessage(channel: string): string {
     + `'conversations channel unarchive ${channel}' if it should accept new posts again.`;
 }
 
+/**
+ * The channel a `to` recipient names, if it can name one at all.
+ *
+ * `to` is not only a DM recipient. The documented send contract — what the
+ * generic workflow scripts and the fleet runbooks post — is
+ * `POST /v1/messages {to: "<channel>", content}`: `to` NAMES THE CHANNEL.
+ * Before this resolver existed that body fell through to the DM branch: the
+ * row was written with `channel = NULL` and
+ * `session_id = "<from>-<to>-<hash>"`, the API answered 201 with a message
+ * object, and the message was invisible to `GET /v1/messages?channel=<name>`
+ * — a SILENT loss of #incidents alerts, project summaries and cross-agent
+ * handoffs (BUG-0041).
+ *
+ * The candidate name is derived HERE, once, and each backend adds only its own
+ * existence lookup (`to` binds to a channel when a channel of that name
+ * exists, and stays a DM recipient otherwise). A decision expressed once
+ * cannot be present on one backend and absent on the other, which is exactly
+ * where this class of defect survives — the same rationale that puts
+ * unknownChannelMessage/archivedChannelMessage in this storage-free module.
+ *
+ * Returns null for a non-string, for an empty/whitespace value, and for input
+ * with no usable characters (`normalizeChannelName` falls back to the literal
+ * `"channel"` there, which is not a recipient anybody wrote).
+ */
+export function recipientChannelCandidate(to: unknown): string | null {
+  if (typeof to !== "string") return null;
+  const raw = to.trim();
+  if (raw.length === 0) return null;
+  if (!/[a-z0-9]/i.test(raw)) return null;
+  return normalizeChannelName(raw);
+}
+
 export function buildLegacyChannelNameMap(legacyNames: Iterable<string>): Map<string, string> {
   const names = [...new Set([...legacyNames].map((name) => name.trim()).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right));

@@ -27,6 +27,7 @@ import { openapiSpec } from "./openapi.js";
 import { decayedStatus, SINGLE_TOUCH_TOLERANCE_SECONDS, SINGLE_TOUCH_REAP_WINDOW_SECONDS } from "../lib/presence.js";
 import {
   normalizeChannelName,
+  recipientChannelCandidate,
   unknownChannelMessage,
   archivedChannelMessage,
   reservedHistoricalChannelMessage,
@@ -2685,6 +2686,29 @@ async function handleV1(
         return json({ error: reservedHistoricalChannelMessage(requestedChannel, currentChannel) }, 409);
       }
     }
+    // `to` NAMES A CHANNEL under the documented send contract — the one the
+    // generic workflow scripts and the fleet runbooks post, `{to: <channel>,
+    // content}`. It is a DM recipient only when no channel of that name
+    // exists. Resolving it here, before the session id is derived, binds
+    // `channel` and `session_id = "channel:<name>"` together exactly as an
+    // explicit `channel` field does; without it the row was written
+    // channel-less under a session id no channel listing can reach, and the
+    // 201 hid the loss (BUG-0041). Precedence is unchanged: an explicit
+    // `channel` field still wins, and a reply still derives its channel from
+    // its parent.
+    const replyRequested = body.reply_to_uuid !== undefined && body.reply_to_uuid !== null;
+    const recipientCandidate = !replyRequested && requestedChannel === null
+      ? recipientChannelCandidate(body.to)
+      : null;
+    // Validate the original identifier before normalization or channel lookup,
+    // as the explicit-channel path above does: normalization can turn
+    // credential-bearing text into an ordinary slug.
+    if (recipientCandidate !== null && typeof body.to === "string") {
+      assertNoSensitiveContent(body.to, "Message recipient");
+    }
+    const recipientChannel = recipientCandidate === null
+      ? null
+      : (await client.get<{ name: string }>("SELECT name FROM channels WHERE name = $1", [recipientCandidate]))?.name ?? null;
     const requestedSession = str(body.session_id);
     const workingDir = str(body.working_dir);
     const repository = str(body.repository);
@@ -2766,7 +2790,7 @@ async function handleV1(
 
     const channelName = replyParent?.channel
       ? normalizeChannelName(replyParent.channel)
-      : requestedChannel;
+      : requestedChannel ?? recipientChannel;
     // A channel message addresses the channel itself; a DM needs an explicit `to`.
     const toAgent = channelName ?? str(body.to);
     if (!from || !toAgent || !content) return json({ error: "from, to (or channel), and content are required" }, 400);
