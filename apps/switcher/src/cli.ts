@@ -14,12 +14,16 @@ const HELP = `switcher — launch a coding harness with a provider and its model
   switcher providers presets [ID]
   switcher providers list [--search TEXT] [--limit N] [--offset N]
   switcher providers add ID --url URL --protocol PROTOCOL [--credential-env NAME]
+                            [--model MODEL | --models-file FILE] [--catalog-format none]
   switcher providers add ID --preset PRESET [--protocol PROTOCOL] [--catalog-account-id ID]
   switcher providers get|refresh ID
   switcher providers update ID --file provider.json --version N
   switcher providers delete ID --version N
   switcher models PROVIDER [--refresh] [--search TEXT] [--limit N]
-  switcher models add PROVIDER MODEL [--name NAME] [--expires-on YYYY-MM-DD]
+  switcher models list PROVIDER [--refresh] [--search TEXT] [--limit N]
+  switcher models add|update PROVIDER MODEL [--file model.json | --name NAME --expires-on YYYY-MM-DD]
+  switcher models remove PROVIDER MODEL
+  switcher models config PROVIDER
   switcher profiles list|get [ID]
   switcher profiles add ID --provider ID --harness HARNESS --model MODEL [--model-policy-file FILE] [--role-model ROLE=MODEL]
   switcher profiles update ID --file profile.json --version N
@@ -45,6 +49,10 @@ Remote API URL/key resolve through @hasna/contracts: overrides, Keychain,
 ~/.hasna/switcher/config/credentials, then environment. A key alone uses the gateway.
 A configured remote API never falls back to local data.
 Provider credential references must start SWITCHER_PROVIDER_.
+--models-file accepts a JSON array of model metadata; --model adds one starter.
+Use --catalog-format none for a manual catalog; otherwise discovery stays active.
+models update replaces saved metadata; omit expiry in its JSON to clear it.
+models remove removes saved metadata, not entries in an upstream catalog.
 Credential bindings contain references only. Custom destinations require --origin URL.
 Vault bindings use the installed secrets CLI and its canonical Contracts URL/key
 by default. --vault-account pins a Keychain account; --vault-operator env requires
@@ -80,7 +88,7 @@ export async function main(args = process.argv.slice(2)) {
   const split = args.indexOf("--"); const nativeArgs = split >= 0 ? args.slice(split+1) : [];
   const {values,positionals} = parseArgs({args:split>=0?args.slice(0,split):args,allowPositionals:true,options:{
     help:{type:"boolean"},version:{type:"string"},json:{type:"boolean"},url:{type:"string"},sha256:{type:"string"},
-    protocol:{type:"string"},preset:{type:"string"},name:{type:"string"},file:{type:"string"},
+    protocol:{type:"string"},preset:{type:"string"},name:{type:"string"},file:{type:"string"},"models-file":{type:"string"},
     "credential-env":{type:"string"},"auth-style":{type:"string"},
     "catalog-url":{type:"string"},"catalog-format":{type:"string"},"catalog-auth-style":{type:"string"},
     "catalog-credential-env":{type:"string"},"catalog-account-id":{type:"string"},"models-path":{type:"string"},"dry-run":{type:"boolean"},provider:{type:"string"},
@@ -97,11 +105,32 @@ export async function main(args = process.argv.slice(2)) {
     throw new Error("Unknown command. Run switcher --help.");
   const providerFlags = ["url", "protocol", "preset", "credential-env", "auth-style", "catalog-url", "catalog-format", "catalog-auth-style", "catalog-credential-env", "catalog-account-id", "models-path"] as const;
   const provided = (names: readonly (keyof typeof values)[]) => names.some(name => values[name] !== undefined);
-  const addingModel = command === "models" && action === "add";
-  if (values["expires-on"] !== undefined && !addingModel) throw new Fault(400,"conflicting_options","--expires-on belongs to models add.");
-  if (addingModel && (positionals.length !== 4 || nativeArgs.length || Object.keys(values).some(name=>!["name","expires-on","json"].includes(name))))
-    throw new Fault(400,"invalid_request","Use models add PROVIDER MODEL with optional --name and --expires-on.");
-  const modelAddition = addingModel ? parse(modelSchema,{id:positionals[3],name:values.name??positionals[3],expiresOn:values["expires-on"]}) : undefined;
+  // A lone argument remains a provider ID, including IDs named after a verb.
+  const editingModel = command === "models" && positionals.length > 2 && ["add", "update", "remove"].includes(action);
+  const configuringModels = command === "models" && positionals.length > 2 && action === "config";
+  const listingModels = command === "models" && positionals.length > 2 && action === "list";
+  if (listingModels && (positionals.length !== 3 || nativeArgs.length || Object.keys(values).some(name=>!["refresh","search","limit","offset","json"].includes(name))))
+    throw new Fault(400,"invalid_request","Use models list PROVIDER with optional --refresh, --search, --limit and --offset.");
+  if (values["expires-on"] !== undefined && (!editingModel || action === "remove"))
+    throw new Fault(400,"conflicting_options","--expires-on belongs to models add/update.");
+  if (editingModel && (positionals.length !== 4 || nativeArgs.length || Object.keys(values).some(name=>!(action === "remove" ? ["json"] : ["name","expires-on","file","json"]).includes(name))))
+    throw new Fault(400,"invalid_request","Use models add/update PROVIDER MODEL with --file or --name/--expires-on; models remove accepts only PROVIDER MODEL.");
+  if (configuringModels && (positionals.length !== 3 || nativeArgs.length || Object.keys(values).some(name=>name!=="json")))
+    throw new Fault(400,"invalid_request","Use models config PROVIDER without other settings.");
+  if (editingModel && values.file !== undefined && (values.name !== undefined || values["expires-on"] !== undefined))
+    throw new Fault(400,"conflicting_options","Use --file by itself for model metadata.");
+  const modelInput = editingModel && action !== "remove" ? parse(modelSchema, values.file !== undefined ? await readInput(values.file) : {id:positionals[3],name:values.name??positionals[3],expiresOn:values["expires-on"]}) : undefined;
+  if (modelInput && modelInput.id !== positionals[3]) throw new Fault(400,"id_mismatch","Model file id must match the command model ID.");
+  if (editingModel && action === "remove") parse(modelSchema.shape.id,positionals[3]);
+  const seedingProvider = command === "providers" && action === "add";
+  if (values["models-file"] !== undefined && !seedingProvider) throw new Fault(400,"conflicting_options","--models-file belongs to providers add.");
+  if (command === "providers" && values.model !== undefined && !seedingProvider) throw new Fault(400,"conflicting_options","Provider --model belongs to providers add. Use models add/update/remove for saved providers.");
+  if (seedingProvider && values["models-file"] !== undefined && values.model !== undefined) throw new Fault(400,"conflicting_options","Use --model or --models-file, not both.");
+  let starterModels;
+  if (seedingProvider && (values.model !== undefined || values["models-file"] !== undefined)) {
+    starterModels = parse(modelSchema.array().min(1).max(10000), values["models-file"] !== undefined ? await readInput(values["models-file"]) : [{id:values.model,name:values.model}]);
+    if (new Set(starterModels.map(model=>model.id)).size !== starterModels.length) throw new Fault(400,"duplicate_model","Model IDs must be unique.");
+  }
   const credentialFlags = ["vault-key","vault-url","vault-cli","vault-account","vault-operator","keychain-service","keychain-account","origin"] as const;
   const credentials = new CredentialResolver();
   if (values.sha256 !== undefined && !(command === "credentials" && action === "repair-executable")) throw new Fault(400,"conflicting_options","--sha256 belongs to credentials repair-executable.");
@@ -148,7 +177,7 @@ export async function main(args = process.argv.slice(2)) {
   if (command === "launch" && backend === "direct" && values["ori-executable"] !== undefined)
     throw new Fault(400, "conflicting_options", "--ori-executable requires --backend ori.");
   const mutation = (command === "providers" || command === "profiles") && ["add", "update"].includes(action);
-  if (values.file && (!mutation || provided([...providerFlags, "name", "provider", "harness", "model", "model-policy-file", "role-model"])))
+  if (values.file && !editingModel && (!mutation || provided([...providerFlags, "name", "provider", "harness", "model", "models-file", "model-policy-file", "role-model"])))
     throw new Fault(400, "conflicting_options", "Use --file by itself for provider/profile settings; inline settings cannot override an input file.");
   if (command === "launch" && !values.provider && provided([...providerFlags, "name", "harness", "model", "search", "model-policy-file", "role-model"]))
     throw new Fault(400, "conflicting_options", "Use --provider PROVIDER for direct launch settings, or update the saved profile explicitly.");
@@ -221,17 +250,18 @@ export async function main(args = process.argv.slice(2)) {
     process.exitCode = await launch(client, profileId, {backend: backend as LaunchBackend, oriExecutable: values["ori-executable"], cwd: values.cwd, executable: values.executable, stateDir: values["state-dir"], args: nativeArgs, timeoutMs, refresh: false, resolveCredential: provider=>credentials.resolve(provider)});
     return;
   }
-  if (modelAddition) {
+  if (editingModel) {
+    const saved = action === "add" ? await client.addModel(id,modelInput!) : action === "update" ? await client.updateModel(id,modelInput!) : await client.removeModel(id,positionals[3]);
+    output({providerId:saved.id,version:saved.version,...(modelInput ? {model:modelInput,expired:modelExpired(modelInput)} : {removed:positionals[3]})});
+    return;
+  }
+  if (configuringModels) {
     const provider = await client.getProvider(id);
-    const {version,updatedAt,...input} = provider;
-    if ((provider.additionalModels??[]).some(model=>model.id===modelAddition.id))
-      throw new Fault(409,"model_exists","This additional model already exists. Use providers update --file to edit its metadata.");
-    await client.updateProvider({...input,additionalModels:[...(provider.additionalModels??[]),modelAddition]},version);
-    output({providerId:provider.id,model:modelAddition,expired:modelExpired(modelAddition)});
+    output({providerId:provider.id,version:provider.version,manualModels:provider.manualModels,additionalModels:provider.additionalModels??[]});
     return;
   }
   if (command === "models" && action) {
-    const provider = await resolveLaunchProvider(client, action, presetOptions());
+    const provider = await resolveLaunchProvider(client, listingModels ? id : action, presetOptions());
     if (values.refresh) await client.refreshModels(provider.id);
     try { output(await client.listModels(provider.id, page)); }
     catch (error) {
@@ -248,13 +278,19 @@ export async function main(args = process.argv.slice(2)) {
     if(action==="refresh"&&id) {output(await client.refreshModels(id));return;}
     if(action==="delete"&&id) {output(await client.deleteProvider(id,currentVersion()));return;}
     if(["add","update"].includes(action)&&id) {
-      const input = parse(providerInputSchema, values.file ? await readInput(values.file) : values.preset ?
+      let input = parse(providerInputSchema, values.file ? await readInput(values.file) : values.preset ?
         {...providerFromPreset(values.preset, {...presetOptions(), id}), ...(values.name ? {name: values.name} : {})} : {
           id, name: values.name ?? id, baseUrl: values.url, protocol: values.protocol,
           credentialEnv: values["credential-env"], authStyle: values["auth-style"],
           catalogBaseUrl: values["catalog-url"], catalogCredentialEnv: values["catalog-credential-env"],
           catalogAuthStyle: values["catalog-auth-style"], catalogFormat: values["catalog-format"], catalogAccountId: values["catalog-account-id"], modelsPath: values["models-path"],
         });
+      if (starterModels) {
+        const field = input.catalogFormat === "none" ? "manualModels" : "additionalModels";
+        const models = new Map((input[field]??[]).map(model=>[model.id,model]));
+        for (const model of starterModels) models.set(model.id,model);
+        input = parse(providerInputSchema,{...input,[field]:[...models.values()]});
+      }
       if(input.id!==id) throw new Error("File id must match the command id.");
       output(action==="add"?await client.createProvider(input):await client.updateProvider(input,currentVersion()));return;
     }

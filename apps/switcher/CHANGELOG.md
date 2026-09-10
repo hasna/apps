@@ -9,6 +9,11 @@ status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
+## 0.1.8
+### Patch Changes
+
+- Configure starter models while adding arbitrary providers, and add, replace, inspect or remove saved model metadata through the CLI, SDK and MCP without replacing provider settings. Preserve live discovery and optimistic concurrency. Update DeepSeek presets to the officially launched V4.1 Flash API ID `deepseek-flash` and support its Responses route.
+
 ## 0.1.7
 ### Patch Changes
 

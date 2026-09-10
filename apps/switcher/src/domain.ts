@@ -4,7 +4,7 @@ export { modelPolicySchema, routingEventSchema, routingEventsSchema } from "./mo
 export type { ModelPolicy, RoutingEvent } from "./model-policy-schema";
 export type { AuthStyle } from "./auth";
 
-export const VERSION = "0.1.7";
+export const VERSION = "0.1.8";
 export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode", "opencode2", "pi", "omp", "dsh", "cline", "hermes", "prime-agent", "gemini", "aider", "kilo"]);
 export const protocolSchema = z.enum(["anthropic-messages", "openai-responses", "openai-chat", "gemini-generate-content"]);
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
@@ -26,7 +26,7 @@ export const expiresOnSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(va
   return Number.isFinite(day.getTime()) && day.toISOString().slice(0, 10) === value;
 }, "Use a real calendar date in YYYY-MM-DD format.");
 export const modelSchema = z.object({
-  id: z.string().min(1).max(300), name: label, description: z.string().max(8000).optional(),
+  id: z.string().min(1).max(300).refine(value => value === value.trim() && !/[\x00-\x1f\x7f-\x9f]/.test(value), "Use a nonblank model ID without surrounding whitespace or control characters."), name: label, description: z.string().max(8000).optional(),
   available: z.boolean().optional(),
   expiresOn: expiresOnSchema.optional(),
   contextWindow: z.number().int().positive().optional(), maxOutputTokens: z.number().int().positive().optional(),

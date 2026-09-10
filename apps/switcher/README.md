@@ -291,16 +291,45 @@ Claude Code with a non-Claude model is experimental and unsupported by Anthropic
 
 For Claude Code using the official DeepSeek Messages endpoint, Switcher defaults `CLAUDE_CODE_AUTO_COMPACT_WINDOW` to `786432`, following [DeepSeek's integration guidance](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code/). An explicitly set environment value takes precedence. Recognized provider context-overflow errors become a sanitized `prompt is too long` error so the native client can compact or guide recovery; unrelated errors retain the sanitized upstream status. Existing launches must pick up the compaction setting or start a new launch to use this default.
 
-New DeepSeek presets include `deepseek-v4.1-flash-expires-on-0910` as an additional preview model with `expiresOn: "2026-09-10"`. The provider's normal model discovery stays active. To register an unlisted model on an existing provider:
+DeepSeek officially released V4.1 Flash on 2026-09-10. Its API model ID is `deepseek-flash`, as documented in the [official release notes](https://api-docs.deepseek.com/updates/) and [API quick start](https://api-docs.deepseek.com/). New DeepSeek presets include that model with text/image input and tool support, and support Chat Completions, Anthropic Messages, and Responses (for Codex). Saved providers and profiles keep their existing model selections. Configure an existing provider explicitly to adopt the new model:
 
 ```sh
-switcher models add my-provider vendor/preview --name "Preview" --expires-on 2026-09-10
+switcher models add deepseek-messages deepseek-flash --name "DeepSeek V4.1 Flash"
+switcher launch claude --provider deepseek-messages --model deepseek-flash
+# Or create the documented Responses preset and select the model directly:
+switcher launch codex --provider deepseek --model deepseek-flash
+```
+
+Configure a new model on any saved provider without editing the provider's JSON:
+
+```sh
+switcher models add my-provider vendor/new-model --name "New model"
+switcher models add my-provider vendor/detailed-model --file model.json
+switcher models config my-provider
+switcher models list my-provider --refresh
+switcher models update my-provider vendor/new-model --name "Preview" --expires-on 2027-01-01
+switcher models remove my-provider vendor/new-model
 switcher models my-provider --refresh
 ```
 
-`--expires-on` is optional and accepts a real `YYYY-MM-DD` date. Dates are inclusive in UTC: `2026-09-10` becomes expired at `2026-09-11T00:00:00Z`. This is operator metadata, not a guarantee of provider uptime. Expired models remain visible in `switcher models` with `expired: true` and `codingEligible: false`; new launches, policy roles, native picker catalogs and subsequent gateway requests reject them. Existing processes are not stopped. `models add` appends to the provider's optional `additionalModels` array; entries merge by model ID with discovered or manual models and override only supplied metadata. A duplicate additional entry is rejected; use a versioned `providers update --file` to edit it. Remote catalogs can also supply `expiresOn` or `expires_on`. `manualModels` continues to replace discovery when explicitly configured.
+A model JSON object needs `id` and `name`; it can also carry `contextWindow`, `maxOutputTokens`, `inputModalities`, `outputModalities`, `supportedParameters`, `supportedGenerationMethods`, `available`, `description`, and `expiresOn`. The file ID must match the command. Unknown fields, raw credential fields, invalid dates and blank/control-character model IDs are rejected. `models update` replaces that model's saved metadata: omit an optional field from the replacement to clear it. `models config` reads only saved settings and makes no provider request. SDK clients expose `addModel`, `updateModel`, and `removeModel`; MCP exposes `models_add`, `models_update`, and `models_remove` with the same behavior.
 
-For a provider without discovery, use `providers add ID --file provider.json` with `manualModels`. Each model needs `id` and `name`; optional fields are `contextWindow`, `maxOutputTokens`, `inputModalities`, `outputModalities`, `supportedParameters`, and `available`. Use `catalogBaseUrl` and `modelsPath` for a separate discovery root/path; CLI equivalents are `--catalog-url` and `--models-path`. Use `catalogFormat: "ollama"` for `/api/tags`. Mistral presets select a capability-aware parser, including archived status. Together presets select its native bare-array parser. Fireworks requires `--catalog-account-id ID` or an explicit catalog URL and retains count evidence across its paginated account catalog. DashScope requires an explicit region/workspace `--catalog-url` with `--catalog-format dashscope`. Z.AI currently requires an explicit catalog or manual models because its documented API has no model-list contract. MiniMax defaults to its `.cn` Open Platform endpoints; use an explicit authority and credential reference for another product or region. A different authenticated catalog origin requires an explicit `catalogCredentialEnv`; a public catalog can declare `catalogAuthStyle: "none"`. Standard credential aliases are resolved only for the matching built-in provider origin. The default parser follows Anthropic-style `has_more/last_id` pagination and otherwise expects an OpenAI-style `data` array. HTTP redirects are rejected.
+For providers using discovery, configured models live in `additionalModels`; discovery still runs and its errors still block launch. Additions merge by ID and override only supplied remote metadata. Removing an addition reveals any upstream entry with the same ID. For manual catalogs, model commands edit `manualModels`. Edits use the provider's current version and fail on concurrent changes rather than overwriting them. Existing profiles are not silently repointed when a model is removed or replaced.
+
+`--expires-on` is optional and accepts a real `YYYY-MM-DD` date, inclusive in UTC. Expired models remain visible with `expired: true` and `codingEligible: false`; new launches, policy roles, native picker catalogs and subsequent gateway requests reject them. Existing processes are not stopped. Expiry is operator metadata, not a guarantee of upstream availability.
+
+Create an arbitrary provider with a starter model or a JSON array of model objects:
+
+```sh
+switcher providers add deployment --url https://inference.example/v1 --protocol openai-responses \
+  --credential-env SWITCHER_PROVIDER_DEPLOYMENT --catalog-format none --model team/deployment
+switcher providers add catalog-provider --url https://inference.example/v1 --protocol openai-chat \
+  --credential-env SWITCHER_PROVIDER_CUSTOM --models-file models.json
+```
+
+`--catalog-format none` explicitly selects a manual catalog and avoids model discovery. Without it, starter models supplement discovery. Credential flags store reference names only; use the existing credential binding commands to configure their source.
+
+For advanced provider settings, use `providers add ID --file provider.json` with `manualModels` when discovery is unavailable. Each model needs `id` and `name`; optional fields are `contextWindow`, `maxOutputTokens`, `inputModalities`, `outputModalities`, `supportedParameters`, and `available`. Use `catalogBaseUrl` and `modelsPath` for a separate discovery root/path; CLI equivalents are `--catalog-url` and `--models-path`. Use `catalogFormat: "ollama"` for `/api/tags`. Mistral presets select a capability-aware parser, including archived status. Together presets select its native bare-array parser. Fireworks requires `--catalog-account-id ID` or an explicit catalog URL and retains count evidence across its paginated account catalog. DashScope requires an explicit region/workspace `--catalog-url` with `--catalog-format dashscope`. Z.AI currently requires an explicit catalog or manual models because its documented API has no model-list contract. MiniMax defaults to its `.cn` Open Platform endpoints; use an explicit authority and credential reference for another product or region. A different authenticated catalog origin requires an explicit `catalogCredentialEnv`; a public catalog can declare `catalogAuthStyle: "none"`. Standard credential aliases are resolved only for the matching built-in provider origin. The default parser follows Anthropic-style `has_more/last_id` pagination and otherwise expects an OpenAI-style `data` array. HTTP redirects are rejected.
 
 Grok uses a per-launch authenticated loopback bridge because its environment overlay cannot define providers. The bridge serves model metadata and forwards the selected protocol unchanged. It holds upstream credentials only in memory; Grok receives an ephemeral local token. The same bridge handles credentialless endpoints and OpenCode auth-header mismatches. Bridged requests are limited to 4 MiB and four minutes. Grok resumes retain the selected profile model. Use `-- --resume SESSION_ID -p PROMPT` for headless continuation, or omit the prompt and type after the interactive session loads. Interactive resume with an inline positional prompt is rejected because the native client can send it before applying the selected model. Grok 1.0.13 passed source and installed development CLI resume checks against a controlled Messages fixture and live DeepSeek Flash. OpenCode's provider identity stays stable across temporary bridge ports; `-- run --session SESSION_ID PROMPT` resumes with fresh launch settings. The installed beta-19157 passed two-process Messages resume checks against a controlled local upstream and live DeepSeek Flash, including a proof-file read and preserved history. Other provider/protocol and registry-release cells remain tracked separately in COMPATIBILITY.md.
 
