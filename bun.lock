@@ -846,7 +846,7 @@
     },
     "apps/recordings": {
       "name": "@hasna/recordings",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "bin": {
         "recordings": "dist/cli/index.js",
         "recordings-mcp": "dist/mcp/index.js",
