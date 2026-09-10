@@ -729,6 +729,7 @@ describe("conformance harness", () => {
       "addresses/list-includes-the-created-row",
       "addresses/quota-clear-is-not-a-no-op",
       "attachments/content-lookup-answers-with-the-stored-bytes",
+      "attachments/inventory-answers-a-non-null-received-at",
       "attachments/inventory-scan-emits-every-attachment-exactly-once",
       "attachments/metadata-batch-reports-content-availability",
       "domains/create-then-read-back",
