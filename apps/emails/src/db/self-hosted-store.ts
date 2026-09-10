@@ -247,7 +247,18 @@ function httpRequest(config: SelfHostedConfig, method: string, path: string, bod
   return httpRequestOnce(config, method, path, body);
 }
 
-function httpRequestOnce(config: SelfHostedConfig, method: string, path: string, body?: unknown): CurlResult {
+type CurlAttempt =
+  | { kind: "response"; result: CurlResult }
+  | { kind: "no-status"; retryable: boolean; detail: string };
+
+/**
+ * One curl transport attempt. `retryable` is set ONLY for the transient anomaly
+ * a retry can plausibly clear: curl exited 0 yet reported an empty/unparseable
+ * http_code — an accepted connection that dropped before a response. A timeout,
+ * a refused connection or a spawn failure stay non-retryable: those are real
+ * reachability failures, not a lost-response flake.
+ */
+function curlAttempt(config: SelfHostedConfig, method: string, path: string, body?: unknown): CurlAttempt {
   const url = `${config.baseUrl}${path}`;
   const connectTimeout = connectTimeoutSeconds();
   const maxTime = maxTimeSeconds();
@@ -298,16 +309,41 @@ function httpRequestOnce(config: SelfHostedConfig, method: string, path: string,
   const bodyText = nl >= 0 ? out.slice(0, nl) : "";
   const status = Number.parseInt(statusStr, 10);
   // http_code 000 (or unparseable) means curl never got an HTTP response:
-  // connect failure or the connect/max-time budget elapsed. Fail LOUD so a
-  // read never silently degrades to an empty list with a success exit code.
+  // connect failure, a dropped connection before the response, or the
+  // connect/max-time budget elapsed. Never silently degrade to an empty list
+  // with a success exit code — report the outcome and let httpRequestOnce decide
+  // whether it is the one shape worth a retry.
   if (!Number.isFinite(status) || status === 0) {
     const stderr = (proc.stderr || "").trim();
     const detail = proc.status === 28
       ? `timed out after ${maxTime}s`
       : (stderr || `curl exited ${proc.status ?? "unknown"}`);
-    throw new SelfHostedTransportError(method, path, detail);
+    // ONLY "curl exited 0 with an empty/unparseable http_code" is retryable: curl
+    // reached the peer and exited cleanly yet no status came back (the CI flake
+    // in BUG-0047). Any other exit code — timeout 28, connect-refused 7, DNS 6 —
+    // is a real reachability failure, surfaced fail-loud on the first attempt.
+    return { kind: "no-status", retryable: proc.status === 0, detail };
   }
-  return { status, body: bodyText };
+  return { kind: "response", result: { status, body: bodyText } };
+}
+
+/**
+ * The transport call. A SINGLE retry is allowed, and ONLY for curl's retryable
+ * no-status shape (exited 0 with an empty/unparseable http_code) — a lost
+ * response, not a real reachability failure. Every other no-status outcome
+ * throws on the first attempt, and a repeated flake throws on the second, so the
+ * fail-loud contract holds: a read never degrades to an empty list merely
+ * because curl happened to exit 0.
+ */
+function httpRequestOnce(config: SelfHostedConfig, method: string, path: string, body?: unknown): CurlResult {
+  let attempt = curlAttempt(config, method, path, body);
+  if (attempt.kind === "no-status" && attempt.retryable) {
+    attempt = curlAttempt(config, method, path, body);
+  }
+  if (attempt.kind === "no-status") {
+    throw new SelfHostedTransportError(method, path, attempt.detail);
+  }
+  return attempt.result;
 }
 
 function extractValidatedList(raw: unknown, resource: string): Record<string, unknown>[] {
