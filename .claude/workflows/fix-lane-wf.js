@@ -74,7 +74,7 @@ const plan = await agent(
 Task title/summary: ${SUMMARY}
 
 IDEMPOTENCY CHECK FIRST — before any investigation work, verify ALL of:
-1. The row ${TASK_ID} is still pending and unowned (re-read it via the todos CLI; an exact-line short-id match in /tmp/task-drain-seen.txt naming this lane counts as unowned).
+1. The row ${TASK_ID} is still pending and unowned (re-read it via the todos CLI; an exact-line short-id match in <scratch>/task-drain-seen.txt naming this lane counts as unowned). <scratch> is the absolute directory that ONE 'scratchpad path' call prints — make that call once, then write there with ordinary file I/O. Scratch NEVER goes in /tmp; if the scratchpad CLI is not installed on this station, STOP and report the missing CLI rather than substituting /tmp.
 2. NO live fixer: no in_progress row, no open PR, no branch, no workflow run already repairing this exact defect (search todos comments + open PRs on the owning repo; a comment naming a workstream or an open PR touching the same package = live).
 3. The defect still reproduces at CURRENT origin/main HEAD (pull the repo first; if the defect is already fixed at head, that is a legitimate stop).
 If ANY of 1-3 fails, STOP: do not write code, do not open a PR. Report which check failed and the evidence.
@@ -109,7 +109,7 @@ REPAIR CLASS BRANCH — the investigate phase classified the repair as ${plan.re
 - If CODE-FIX (a package/source change): follow steps 1-7.
 
 Implement the smallest owned fix (CODE-FIX path):
-1. Create a task-specific worktree at $HOME/.hasna/repos/worktrees/hasna-apps/<task-short>/ via the repos CLI worktree verb (or git worktree add at exactly that path), branched from CURRENT origin/main (pull first; never a shared checkout, never a stale base). Run repos scan after creating the worktree.
+1. Create a task-specific worktree with the sanctioned verb — repos worktree add apps --name <task-short> --branch <branch> --base origin/main — which places it at $HOME/.hasna/repos/worktrees/apps/<task-short>/ and pins the base from a freshly fetched origin (pull first; never a shared checkout, never a stale base; NEVER git worktree add by hand). Run repos scan after creating the worktree.
 2. Write a failing regression test FIRST where a test surface exists for this defect; confirm it fails; then implement the root-cause fix (never the symptom, never a workaround).
 3. Keep the diff to the fix and its test only. No unrelated cleanup.
 4. Run the owning repo's check/tests for the affected lanes.

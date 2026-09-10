@@ -86,6 +86,26 @@ them. The class is owned by the durable lane, not by the instance:
 A one-off that recurs a second time becomes a task for the owning lane, per
 the four-artefacts doctrine (rule + taxonomy + workflow + abstraction).
 
+## Scratch — the scratchpad contract, never /tmp
+
+Lane agents write scratch through the scratchpad, never to `/tmp`:
+
+```bash
+scratchpad path    # ONE call — prints this session's absolute scratch directory
+```
+
+Then do ordinary file I/O inside the printed directory. `/tmp` is shared,
+world-readable, and has no owner-approved lifetime; the scratchpad directory is
+per-session and owner-approved. A lane prompt that needs scratch says so by
+name (`<scratch>`) and tells the agent to make the one `scratchpad path` call.
+
+Where the scratchpad CLI is not installed on a station, the agent reports the
+missing CLI and stops — it never substitutes `/tmp` as a fallback.
+
+One deliberate exception: the credential-zero E2B box in
+`verify-apps-qa-wf.js` uses in-box `/tmp` for ephemeral run logs. That path is
+inside the box and dies with it — it is not station scratch, and it stays.
+
 ## Governance (axis 4, per the construction taxonomy)
 
 - Mandatory adversarial review; Fable reviewers; two-cycle remediation cap.
