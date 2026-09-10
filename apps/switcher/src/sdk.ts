@@ -1,5 +1,5 @@
 import type { components } from "./generated/api";
-import { endpoint } from "./domain";
+import { endpoint, modelSchema, parse } from "./domain";
 import { boundedJson } from "./http";
 import { createClientTransport, type CredentialChainOptions, type HasnaHttpTransport } from "@hasna/contracts/client";
 export { providerFromPreset } from "./presets";
@@ -119,6 +119,32 @@ export class SwitcherClient {
   createProvider(input: ProviderInput, idempotencyKey?: string) { return this.request<Provider>("POST", "/v1/providers", input, {idempotencyKey}); }
   updateProvider(input: ProviderInput, version: number, idempotencyKey?: string) { return this.request<Provider>("PUT", `/v1/providers/${encodeURIComponent(input.id)}`, input, {version, idempotencyKey}); }
   deleteProvider(id: string, version: number, idempotencyKey?: string) { return this.request<{deleted: string}>("DELETE", `/v1/providers/${encodeURIComponent(id)}`, undefined, {version, idempotencyKey}); }
+  /** Configure model metadata through the existing versioned provider API.
+   * Discovery stays active unless the provider explicitly uses a manual catalog.
+   * A concurrent edit returns 409; it is never silently overwritten or retried. */
+  private async editModel(providerId: string, operation: "add" | "update" | "remove", value: Model | string) {
+    const model = typeof value === "string" ? undefined : parse(modelSchema, value);
+    const id = model?.id ?? parse(modelSchema.shape.id, value);
+    const provider = await this.getProvider(providerId);
+    const {version, updatedAt, ...input} = provider;
+    const manual = provider.manualModels.some(item => item.id === id);
+    const additional = (provider.additionalModels ?? []).some(item => item.id === id);
+    if (operation === "add" && (manual || additional))
+      throw new SwitcherError(409, "model_exists", "This model is already configured. Use models update to replace its metadata.");
+    if (operation !== "add" && !manual && !additional)
+      throw new SwitcherError(404, "model_not_configured", "This model has no saved metadata. Use models add to configure a catalog model; remote catalog entries cannot be deleted locally.");
+    // Updating legacy duplicate metadata collapses both copies into the manual
+    // entry. Removing an overlay reveals the unchanged remote catalog entry.
+    const useManual = manual || (!additional && (provider.manualModels.length > 0 || provider.catalogFormat === "none"));
+    const manualModels = provider.manualModels.filter(item => item.id !== id);
+    const additionalModels = (provider.additionalModels ?? []).filter(item => item.id !== id);
+    if (operation !== "remove") (useManual ? manualModels : additionalModels).push(model!);
+    return this.updateProvider({...input, manualModels, additionalModels}, version);
+  }
+  addModel(providerId: string, model: Model) { return this.editModel(providerId, "add", model); }
+  /** Replace all saved metadata for one model, including clearing omitted fields. */
+  updateModel(providerId: string, model: Model) { return this.editModel(providerId, "update", model); }
+  removeModel(providerId: string, modelId: string) { return this.editModel(providerId, "remove", modelId); }
   refreshModels(id: string, idempotencyKey?: string) { return this.request<Catalog>("POST", `/v1/providers/${encodeURIComponent(id)}/refresh`, {}, {idempotencyKey}); }
   listModels(id: string, options = {}) { return this.request<components["schemas"]["ModelPage"]>("GET", `/v1/providers/${encodeURIComponent(id)}/models?${this.query(options)}`); }
   listProfiles(options = {}) { return this.request<Page<Profile>>("GET", `/v1/profiles?${this.query(options)}`); }
