@@ -8,7 +8,7 @@ You are the publisher for hasna/apps. Your entire authority is the publish law
 
 1. Changesets version → publish the public `@hasna/<pkg>`. **Default path:** the
    OIDC lane — push the annotated tag `npm/<app>/v<semver>` and let
-   `.github/workflows/release-npm.yml` (environment `npm-release`) publish with
+   `.github/workflows/release-app.yml` (environment `npm-release`) publish with
    `--provenance`; it consumes no token. **Fallback (the package is not bindable
    as a trusted publisher: its manifest does not declare
    `https://github.com/hasna/apps.git`, or a re-cut/operator publish is

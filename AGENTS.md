@@ -40,7 +40,7 @@ public-estate imports are tracked by the import wave (todos `28ac4516`).
    `@hasna/<name>`), kebab-case, enforced by the CI name-conformance gate.
 5. **Publish guard — OIDC first, vault token as the fallback.** A tagged
    release (`npm/<app>/v<semver>`) publishes through the generic OIDC lane
-   (`.github/workflows/release-npm.yml`, environment `npm-release`,
+   (`.github/workflows/release-app.yml`, environment `npm-release`,
    `id-token: write`, `npm publish --provenance`) with **no npm token at all**.
    npm binds a trusted publisher to the workflow filename + environment, so both
    are contract, not decoration. The vault-token form — per-package `npm
@@ -81,9 +81,11 @@ bun run check               # names + secrets + manifests + publish-guard + stan
   (versioning + standard-adherence, hard gate), `build-test` (`turbo --affected`
   with `TURBO_SCM_BASE`), `verify-generated` (byte-reproducible bin/dist),
   `publish-guard` (npm pack --dry-run per member) — alongside six other
-  workflows: `release-npm.yml` (the generic OIDC npm release lane; it
-  supersedes the legacy per-package `release.yml` and `release-todos.yml`
-  shapes), `deploy-projects.yml`, `deploy-skills.yml`, `deploy-todos.yml`,
+  workflows: `release-app.yml` (the generic OIDC npm release lane; it will
+  supersede the legacy per-package `release.yml` and `release-todos.yml` shapes,
+  which stay live until every member is bound and are decommissioned in a
+  separate change — today they still trigger on their own tags),
+  `deploy-projects.yml`, `deploy-skills.yml`, `deploy-todos.yml`,
   `recordings-macos.yml`, `blacksmith-testbox.yml`.
 - Agent identities: `.claude/agents/{fixer,publisher,reviewer}.md`, laws in
   `.claude/rules/`.

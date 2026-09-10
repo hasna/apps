@@ -27,7 +27,7 @@ extending `../../tsconfig.base.json` is the exception, not the rule — only
 ## Publishing
 
 A tagged release (`npm/<app>/v<semver>`) publishes through the generic OIDC
-lane (`.github/workflows/release-npm.yml`, environment `npm-release`) with no
+lane (`.github/workflows/release-app.yml`, environment `npm-release`) with no
 npm token at all; `npm publish --provenance --access public`. The vault-token
 per-package form is the documented fallback and is the only path for a member
 whose manifest does not declare `repository.url`

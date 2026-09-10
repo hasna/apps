@@ -9,7 +9,7 @@ short:
   `main` directly (the one bootstrap commit to main is already done).
 - **No secrets in the tree.** Scan the staged diff before every commit and
   push (`secrets scan staged`). A tagged release (`npm/<app>/v<semver>`) goes
-  through the OIDC lane (`.github/workflows/release-npm.yml`, environment
+  through the OIDC lane (`.github/workflows/release-app.yml`, environment
   `npm-release`) and consumes NO token; the vault fallback — for members whose
   manifest does not declare this repo — is `secrets exec
   hasna/npm/live/publish-token --as NODE_AUTH_TOKEN -- npm publish

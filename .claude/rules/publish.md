@@ -19,12 +19,13 @@ release gate; both publish one package at a time, and never `bun publish`.
 ## Path A — OIDC trusted publishing (DEFAULT for a tagged release)
 
 An annotated tag `npm/<app>/v<semver>` on a commit that is on protected `main`
-(or a `workflow_dispatch` run) drives `.github/workflows/release-npm.yml` — job
+(or a `workflow_dispatch` run) drives `.github/workflows/release-app.yml` — job
 `publish`, GitHub environment `npm-release`, `permissions: contents: read` +
-`id-token: write`. The job resolves the tag through the checked-in package table
-(`NPM_RELEASE_PACKAGES`: `packagePath` / `manifestPath` / `packageName` /
-`tagPrefix`), reads the manifest **at the tagged commit** (`git show
-<sha>:<manifestPath>`), never the working tree, then publishes:
+`id-token: write`. The job resolves the tag through the checked-in allowlist
+inside its own resolver step (`RELEASE_PACKAGES`: `packagePath` / `manifestPath`
+/ `packageName` / `tagPrefix` / `authority`), reads the manifest **at the tagged
+commit** (`git show <sha>:<manifestPath>`), never the working tree, then
+publishes:
 
 ```text
 npm publish --provenance --access public
@@ -36,7 +37,7 @@ exchanged with the registry.
 
 **The workflow FILENAME and the environment are CONTRACT, not implementation
 detail.** npm binds a trusted publisher to `owner/repo` + workflow **filename**
-+ environment. Renaming `.github/workflows/release-npm.yml`, changing the
++ environment. Renaming `.github/workflows/release-app.yml`, changing the
 environment, or moving the publish step into another workflow silently
 unbinds every package and must be handled as a release-infrastructure change
 (re-point the npm trusted-publisher config for every bound package in the same
@@ -49,16 +50,32 @@ public repository — true for `hasna/apps`.
 The lane fails closed. It has no soft-skip branch, and a failure means nothing
 was published:
 
-- unknown tag prefix (no table entry) — refuse, never guess;
-- version absent from the resolved manifest, or a version string containing
-  whitespace or `/`;
+- unknown tag prefix (no allowlist entry) — refuse, never guess;
+- ambiguous tag prefix — more than one allowlist entry matches, so no single
+  package is identified;
+- version absent from the resolved manifest, a mismatch between the tag version
+  and the manifest version, or a version string containing whitespace or `/`;
+- the resolved manifest's `name` disagreeing with the allowlist's
+  `packageName`;
 - `publishConfig.registry` that is not `https://registry.npmjs.org`;
 - the release commit is not the tagged commit, or is not an ancestor of
   `origin/main`;
 - the version already exists on the registry (negative control before publish);
 - **no `prepublishOnly` gate on the resolved manifest** — npm only runs a hook
   that exists, so a missing one is a silent ungated publish;
+- on a `workflow_dispatch` run, an absent `scripts["verify:release"]` — a manual
+  run exists to exercise the package's own release checks, and a package with
+  none must not report success;
+- a resolved `authority` that no publish step claims — a tag push that matched
+  no publish step would otherwise end green having published nothing;
 - **`repository.url` that is not this repository** (below).
+
+**Blast radius while the precedents are still live.** Path A is added ALONGSIDE
+`release.yml` (`npm/secrets/v*`) and `release-todos.yml` (`npm/todos/v*`), which
+this change does not modify or decommission: `@hasna/secrets` and `@hasna/todos`
+therefore each have two workflows that can trigger on the same tag. Once those
+two members are bound to Path A, the precedents must be decommissioned — a
+decommission is a separate change with its own review.
 
 ### The `repository.url` binding — and which packages still need the token
 
@@ -70,7 +87,7 @@ declares, so the declared identity IS the gate:
 ```
 
 A package whose `repository.url` is anything else cannot be bound as a trusted
-publisher. Three of those values are dead names under ORG LAW (owner ruling
+publisher. Four of those values are refused under ORG LAW (owner ruling
 2026-09-10 — the `hasnaxyz` org no longer exists and neither do the
 pre-monorepo per-app repos), and the lane refuses all of them:
 
@@ -86,14 +103,17 @@ Measured 2026-09-10 at `4138908db`, over the 45 member manifests
 | `repository.url` state | count | OIDC |
 |---|---|---|
 | byte-exact `https://github.com/hasna/apps.git` — `@hasna/messages`, `@hasna/todos` | 2 | bindable as-is |
-| right repo, written `git+…` and/or without `.git` — connectors, emails, notes, prompts, recordings, secrets, skills, switcher, workflows | 9 | only if the lane's normalization accepts it (below) |
-| dead per-app name — the remaining 33, incl. `@hasna/attachments`, `@hasna/contracts`, `@hasna/todos-ai` | 34 | refused — vault token required |
+| right repo, written `git+…` and/or without `.git` — connectors, emails, notes, prompts, recordings, secrets, skills, switcher, workflows | 9 | bindable — the lane normalises these spellings explicitly (below) |
+| dead per-app name — every other allowlist row, incl. `@hasna/attachments`, `@hasna/contracts` and `@hasna/todos-ai` (which lives at `apps/todos/ai`, not `apps/*`) | 34 | refused — vault token required |
 
 The counts are a snapshot; the LIVE list is the printed set of this command (run
-from the repo root):
+from the repo root). It reads the allowlist out of the workflow and applies the
+lane's own normalizer, so the list cannot drift from the lane. It requires
+`.github/workflows/release-app.yml` to be in the tree, i.e. it applies once the
+workflow change lands:
 
 ```bash
-node -e 'const fs=require("fs");const C="https://github.com/hasna/apps.git";for(const d of fs.readdirSync("apps")){const p=`apps/${d}/package.json`;if(!fs.existsSync(p))continue;const j=JSON.parse(fs.readFileSync(p,"utf8"));if(j.repository?.url!==C)console.log(j.name,j.repository?.url??"(none)");}'
+node -e 'const fs=require("fs");const C="https://github.com/hasna/apps";const n=u=>typeof u!=="string"?"":u.trim().toLowerCase().replace(/^git\+/,"").replace(/^ssh:\/\/git@github\.com\//,"https://github.com/").replace(/^git@github\.com:/,"https://github.com/").replace(/\/+$/,"").replace(/\.git$/,"").replace(/\/+$/,"");const w=fs.readFileSync(".github/workflows/release-app.yml","utf8");for(const m of w.matchAll(/manifestPath: "([^"]+)", packageName: "([^"]+)"/g)){const j=JSON.parse(fs.readFileSync(m[1],"utf8"));if(n(j.repository?.url)!==n(C))console.log(m[2],j.repository?.url??"(none)");}'
 ```
 
 **Which packages still require the vault token, and why.** Every package that
@@ -109,13 +129,15 @@ publish-time exceptions:
 A package becomes eligible for Path A the moment its manifest declares this repo;
 it does not need a new release, only a manifest fix and a fresh tag.
 
-**Normalization must be explicit, never silent.** npm itself treats
-`git+https://github.com/hasna/apps.git` and `https://github.com/hasna/apps` as
-the same repository. The lane MAY accept that normalization (the 9 packages in
-the table's middle row) — but the check must say so where it lives, and until it
-does, treat those 9 as unbindable and publish them with the token. What is
-forbidden is a quiet loosening: a gate that matches more than it documents is a
-gate nobody can audit.
+**The lane's normalization is explicit, never silent.** npm treats
+`git+https://github.com/hasna/apps.git`, the same URL without `.git`, a trailing
+slash and the ssh spellings as one repository, and the resolver in
+`.github/workflows/release-app.yml` documents and applies exactly that
+normalization (`normaliseRepository`) — so the 9 packages in the table's middle
+row ARE bindable, and the command above (which uses the same normalizer) does
+not list them. A dead name still normalises to a different repository and is
+still refused. A quiet loosening would be forbidden; this one is stated in the
+file that implements it.
 
 `repository.directory` is set on 5 of the 45 manifests. It is not needed for the
 OIDC binding, but it is our own identity claim; add `apps/<name>` whenever the
