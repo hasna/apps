@@ -65,8 +65,8 @@ function restoreInheritedProcessEnv(): void {
   Object.assign(process.env, INHERITED_PROCESS_ENV);
 }
 
-// Forty-eight cases, each one several HTTP round trips, run once clean plus once per
-// neutering. Well past the 5s default.
+// Every case in `CONFORMANCE_CASES` makes several HTTP round trips, and the suite runs
+// once clean plus once per neutering. Well past the 5s default.
 const SUITE_TIMEOUT_MS = 120_000;
 
 let db: Database;
