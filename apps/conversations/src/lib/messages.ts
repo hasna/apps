@@ -44,6 +44,7 @@ import {
 import {
   normalizeChannelName,
   recipientChannelCandidate,
+  channelListingMatchSql,
   unknownChannelMessage,
   archivedChannelMessage,
   reservedHistoricalChannelMessage,
@@ -702,8 +703,14 @@ export function readMessagePreviews(opts: ReadMessagePreviewsOptions = {}): Mess
     params.push(opts.to);
   }
   if (opts.channel) {
-    conditions.push("channel = ?");
-    params.push(normalizeChannelName(opts.channel));
+    // Channel membership is not the `channel` column alone. A send whose body
+    // names the channel only in `to` (`{to: <channel>, content}` — the
+    // documented contract) is bound to the channel on write, but a row stored
+    // BEFORE that binding carries `channel = NULL` with the name in `to_agent`,
+    // and `channel = ?` alone hides it from every channel read (BUG-0062).
+    const normalizedChannel = normalizeChannelName(opts.channel);
+    conditions.push(channelListingMatchSql("channel", "?"));
+    params.push(normalizedChannel, normalizedChannel);
   }
   if (opts.project_id) {
     conditions.push("project_id = ?");
@@ -829,8 +836,11 @@ export function countMessages(opts: CountMessagesOptions = {}): number {
     params.push(opts.to);
   }
   if (opts.channel) {
-    conditions.push("channel = ?");
-    params.push(normalizeChannelName(opts.channel));
+    // Same membership rule as readMessagePreviews — the count beside a channel
+    // listing must count what that listing shows (BUG-0062).
+    const normalizedChannel = normalizeChannelName(opts.channel);
+    conditions.push(channelListingMatchSql("channel", "?"));
+    params.push(normalizedChannel, normalizedChannel);
   }
   if (opts.project_id) {
     conditions.push("project_id = ?");

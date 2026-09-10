@@ -87,6 +87,41 @@ export function recipientChannelCandidate(to: unknown): string | null {
   return normalizeChannelName(raw);
 }
 
+/**
+ * The channel-membership predicate a channel listing must use.
+ *
+ * A send that names its channel only in `to` (`{to: <channel>, content}` — the
+ * documented contract the generic workflow scripts and the fleet runbooks
+ * post) is bound to the channel on the way in by `recipientChannelCandidate`.
+ * Rows written BEFORE that binding existed do not have it: they carry
+ * `channel = NULL` with the channel name sitting in `to_agent`, so no channel
+ * read can ever reach them. The listing selected `channel = <name>` alone, and
+ * a reviewer asking "do the claimed posts exist?" found nothing while the
+ * caller held a 200/201 with a message id — the silent loss BUG-0062 records,
+ * still unrepaired for every row already stored (message 789923 among them).
+ *
+ * So a message belongs to channel `<name>` when its `channel` column IS that
+ * name, OR when it has no channel at all and was ADDRESSED to that name. The
+ * second arm cannot capture a live DM: a `to` naming an existing channel is
+ * bound to it on write, so only rows written before that binding — i.e. rows
+ * whose author meant the channel, per the contract — can match.
+ *
+ * The rule is expressed once, here, so both backends interpolate their own
+ * placeholder into the SAME predicate: the PG collection query (src/server/api.ts)
+ * and the SQLite preview read (src/lib/messages.ts). A membership rule present
+ * on only one backend is absent exactly where it matters — the same rationale
+ * that puts unknownChannelMessage/recipientChannelCandidate in this
+ * storage-free module.
+ *
+ * PostgreSQL may reuse one `$n` twice in a predicate, so its call site passes
+ * `$n` once; SQLite's `?` binds positionally, so its call site pushes the
+ * normalized name twice. `column` is the channel column as spelled in the
+ * calling query.
+ */
+export function channelListingMatchSql(column: string, placeholder: string): string {
+  return `(${column} = ${placeholder} OR (${column} IS NULL AND lower(to_agent) = lower(${placeholder})))`;
+}
+
 export function buildLegacyChannelNameMap(legacyNames: Iterable<string>): Map<string, string> {
   const names = [...new Set([...legacyNames].map((name) => name.trim()).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right));

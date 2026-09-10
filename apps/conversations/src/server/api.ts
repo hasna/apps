@@ -28,6 +28,7 @@ import { decayedStatus, SINGLE_TOUCH_TOLERANCE_SECONDS, SINGLE_TOUCH_REAP_WINDOW
 import {
   normalizeChannelName,
   recipientChannelCandidate,
+  channelListingMatchSql,
   unknownChannelMessage,
   archivedChannelMessage,
   reservedHistoricalChannelMessage,
@@ -2056,7 +2057,18 @@ async function handleV1(
     }
     if (to) { params.push(to); clauses.push(`to_agent = $${params.length}`); }
     if (from) { params.push(from); clauses.push(`from_agent = $${params.length}`); }
-    if (channel) { params.push(channel); clauses.push(`channel = $${params.length}`); }
+    if (channel) {
+      params.push(channel);
+      // Channel membership is not the `channel` column alone. A send whose body
+      // names the channel only in `to` (`{to: <channel>, content}` — the
+      // documented contract) is bound to the channel on write, but rows stored
+      // BEFORE that binding carry `channel = NULL` with the name in `to_agent`,
+      // and `channel = $n` alone leaves them unreachable from every channel read
+      // (BUG-0062: post 789923 invisible to `?channel=incidents` while its
+      // caller held a 201 and a message id). The predicate lives in
+      // channel-names.ts so the SQLite listing applies the same rule.
+      clauses.push(channelListingMatchSql("channel", `$${params.length}`));
+    }
     if (session) { params.push(session); clauses.push(`session_id = $${params.length}`); }
     if (projectId) { params.push(projectId); clauses.push(`project_id = $${params.length}`); }
     if (uuid) { params.push(uuid); clauses.push(`uuid = $${params.length}`); }
@@ -3743,7 +3755,7 @@ async function handleV1(
     const rows = await client.many<Record<string, unknown>>(
       `SELECT c.*,
               (SELECT COUNT(*) FROM channel_members WHERE channel = c.name)::int AS member_count,
-              (SELECT COUNT(*) FROM messages WHERE channel = c.name)::int AS message_count
+              (SELECT COUNT(*) FROM messages WHERE ${channelListingMatchSql("channel", "c.name")})::int AS message_count
        FROM channels c ${where} ORDER BY c.name ASC`,
       params,
     );
@@ -3919,7 +3931,7 @@ async function handleV1(
       const row = await client.get<Record<string, unknown>>(
         `SELECT c.*,
                 (SELECT COUNT(*) FROM channel_members WHERE channel = c.name)::int AS member_count,
-                (SELECT COUNT(*) FROM messages WHERE channel = c.name)::int AS message_count
+                (SELECT COUNT(*) FROM messages WHERE ${channelListingMatchSql("channel", "c.name")})::int AS message_count
          FROM channels c WHERE c.name = $1`,
         [name],
       );
