@@ -26,6 +26,7 @@ import {
   workspaceRevision,
   workspaceSnapshot,
 } from "../lib/guarded-project-mutation.js";
+import { assertProjectChannelIntegrationWritable } from "../lib/project-channel-guard.js";
 import {
   assertProjectResourceLinkIntegrationMutation,
   assertProjectResourceLinkReadContractEquality,
@@ -1155,6 +1156,17 @@ export class ProjectsPgStore {
         input.integrations,
         await this.listProjectResourceLinks(before.id, PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS),
       );
+      // Deliberately NOT checked here: whether a caller-supplied
+      // conversations_channel names a real channel. This store has no
+      // conversations client and must not gain one silently, so the
+      // channel-existence rule stays on the client surfaces that apply it
+      // (assertProjectChannelIntegrationWritable: CLI create/update/link,
+      // MCP create/update/link, the prompt-agent tools, the prefix migration,
+      // and the resource-link projection below). The gap this leaves — a
+      // direct PATCH/PUT /v1/workspaces/{id} with `integrations` bypasses the
+      // client guard — is an accepted, documented boundary (BUG-0063 round 4);
+      // closing it server-side is a decision about adding an outbound
+      // conversations dependency, not a line of validation.
     }
     const root = input.root_id ? await this.getRoot(input.root_id) : null;
     if (input.root_id && !root) throw new ValidationError(`Root not found: ${input.root_id}`);
@@ -1631,6 +1643,18 @@ export class ProjectsPgStore {
     }
     const integrations = forcedIntegrations
       ?? projectResourceLinkIntegrationProjection(beforeProject.integrations, beforeLinks, desired);
+    // Server-side, on the value this write persists: the conversations channel
+    // link projection is authoritative for integrations.conversations_channel,
+    // so it must not pin a name the conversations app has no channel for — the
+    // same class the CLI/MCP/agent writers refuse (BUG-0063). Guarded before
+    // the dry-run preview so an unwritable plan is never reported as planned.
+    // The rule is imported from the db-free project-channel-guard module: this
+    // store never touches bun:sqlite.
+    try {
+      assertProjectChannelIntegrationWritable(integrations, beforeProject.integrations);
+    } catch (error) {
+      throw new ValidationError(error instanceof Error ? error.message : String(error));
+    }
     const preview = projectResourceLinkSnapshot({ ...beforeProject, integrations }, desired);
     if (input.dry_run) {
       return withResponseControl({
