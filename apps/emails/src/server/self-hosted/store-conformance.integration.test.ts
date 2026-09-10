@@ -226,10 +226,12 @@ describe.skipIf(!pgClient)("HttpEmailStore conformance against the real /v1 serv
       const counted = totals(report);
       // THE CASE COUNT IS READ, NOT RE-TYPED. Every executed case lands in exactly one
       // bucket, so the buckets must add up to the REAL case list — checked against
-      // `CONFORMANCE_CASES.length` rather than against a second copy of that number,
-      // which is what this line used to be (`toBe(63)`) and exactly how it went stale
-      // when BUG-0043's case made the list 64. The breakdown below still pins the claim
-      // about the service, and a new case changes it, so this cannot go quietly green.
+      // `CONFORMANCE_CASES.length` rather than against a second copy of that number.
+      // This line used to carry that second copy, as a literal in a `toBe(...)`, and that
+      // is how it went wrong: BUG-0043 added a case and left the literal a case short, and
+      // BUG-0053 has since added another. A literal cannot know, so the count is read.
+      // The breakdown below still pins the claim about the service, and a new case changes
+      // it, so this cannot go quietly green.
       expect(counted.passed + counted.refused + counted.failed).toBe(CONFORMANCE_CASES.length);
       expect(counted).toEqual({ passed: 57, refused: 8, failed: 0 });
       // The 8 refusals are exactly the cases whose capability this store declares false —
