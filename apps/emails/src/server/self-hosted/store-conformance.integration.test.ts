@@ -1,13 +1,13 @@
 // The shared store conformance suite, run by `HttpEmailStore` over real HTTP against
 // the REAL `/v1` service, backed by real Postgres.
 //
-// WHY THIS FILE IS THE POINT OF THE PHASE. `src/store-http.test.ts` runs the same 62
-// cases against `src/test-support/v1-store-api.ts` — a translation-layer fixture that
-// re-implements the route contract. That run is worth having (it catches a client that
-// mis-maps a field, because every row it serves comes out of a real store), but it can
-// only ever prove the client agrees with a second implementation of the server. A
-// fixture's DIVERGENCES are exactly what its green result does not cover, and the
-// headline finding of the previous phase was one: the fixture accepted an outbound
+// WHY THIS FILE IS THE POINT OF THE PHASE. `src/store-http.test.ts` runs the same
+// `CONFORMANCE_CASES` against `src/test-support/v1-store-api.ts` — a translation-layer
+// fixture that re-implements the route contract. That run is worth having (it catches a
+// client that mis-maps a field, because every row it serves comes out of a real store),
+// but it can only ever prove the client agrees with a second implementation of the
+// server. A fixture's DIVERGENCES are exactly what its green result does not cover, and
+// the headline finding of the previous phase was one: the fixture accepted an outbound
 // `POST /v1/messages` that the service answered 409 to, so four cases were green against
 // the fixture and would have been red against `/v1`.
 //
