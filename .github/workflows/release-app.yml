@@ -1,0 +1,675 @@
+name: Release app package to npm
+
+# The ONE generic npm release workflow for the hasna/apps producer monorepo.
+# It replaces the two pre-monorepo per-app shapes:
+#   * .github/workflows/release-todos.yml  (single app, tag prefix npm/todos/v*)
+#   * .github/workflows/release.yml        (single app, tag prefix npm/secrets/v*)
+# Both stay in the tree until every package below is bound to this workflow;
+# this file does not modify them.
+#
+# TRIGGER CONTRACT: npm/<package-suffix>/v<semver>, resolved ONLY through the
+# checked-in allowlist inside the resolver step below. An app that is not in
+# that table cannot be published through this workflow at all — the resolver
+# fails with "unrecognised npm release tag" and every later step keys off the
+# outputs it never wrote.
+#
+# NO TOKEN. Publishing runs on OIDC trusted publishing: the job holds
+# `id-token: write` and no npm credential of any kind, matching release.yml:56-60
+# and release-todos.yml:22-24. npm >= 11.5.1 is required for trusted publishing,
+# and release.yml:82-84 measured that the runner's bundled npm is older, so the
+# toolchain is pinned to npm@11.19.0 into a private prefix and prepended to
+# GITHUB_PATH (:56-62).
+#
+# ---------------------------------------------------------------------------
+# HARD PREREQUISITE — TRUSTED-PUBLISHER BINDING BY FILENAME
+# npm binds a trusted publisher to the workflow FILENAME plus the environment
+# name (release.yml:3-9). This file is `release-app.yml` with environment
+# `npm-release`. Every package released through it must have its npm
+# trusted-publisher configuration pointed at `release-app.yml` + `npm-release`
+# BEFORE its first tag push; a tag pushed first fails as an auth error that
+# never names the real cause. Nothing is bound to this filename yet, so the name
+# is still free to change — after the first binding it is not.
+#
+# ---------------------------------------------------------------------------
+# FAIL-CLOSED (never a soft skip). Each of these ends the run with ::error::
+# and exit 1:
+#   * unknown app name            -> no table entry / no single prefix match
+#   * ambiguous tag prefix        -> more than one table entry matches
+#   * tag version != manifest     -> release-package-version
+#   * manifest name != table name -> release-package-name
+#   * repository.url not hasna/apps -> checked on the RESOLVED manifest
+#   * scripts.prepublishOnly absent -> npm runs that gate only when it exists,
+#                                      so its absence is an invisible no-gate
+#                                      publish; the resolver refuses
+#   * publishConfig.registry != npmjs.org
+#   * version already on the registry
+#   * release commit not on protected main / not the annotated tag's peel
+#   * an absent scripts["verify:release"] on a manual run
+#   * a resolved release authority that no publish step claims
+#
+# ---------------------------------------------------------------------------
+# TWO PRECEDENT DEFECTS THIS FILE FIXES ON PURPOSE
+#   A. release-todos.yml:73-82 asserts repository.url against the HARDCODED
+#      ./apps/todos/package.json, while the table it uses also admits
+#      apps/todos/ai and the tag prefix npm/todos-ai/v. A npm/todos-ai/v tag
+#      therefore validated the wrong manifest and would have published
+#      @hasna/todos-ai (repository.url = the dead name github.com/hasna/todos.git)
+#      with no check at all. Here the repository check runs inside the resolver,
+#      against the manifest the tag actually resolved to.
+#   B. The precedent's strict equality admits no `git+` prefix, so 7 members
+#      that point at the right repository as `git+https://github.com/hasna/apps.git`
+#      fail a check the precedent calls "the repo is correct". The generic check
+#      normalises `git+`, a missing `.git`, a trailing slash, the ssh forms and
+#      case, and compares repository IDENTITIES. This is a deliberate, stated
+#      loosening, not a silent one: `git+https://github.com/hasna/attachments.git`
+#      still normalises to a different repository and is still refused.
+#
+# ---------------------------------------------------------------------------
+# WHAT WAS NOT GENERALISED (the signed-review receipt)
+#   1. RELEASE_REVIEWER_AGENT / RELEASE_REVIEW_KEY_ID / RELEASE_REVIEW_PUBLIC_KEY
+#      (repository Variables) and NPM_RELEASE_AGENT_REVIEW_RECEIPT (Secret) are
+#      exported ONLY by the publish step whose table rows say
+#      `authority: "signed-agent-review"` — today @hasna/todos and
+#      @hasna/todos-ai, the two packages whose release procedure reaches
+#      apps/todos/scripts/verify-npm-release-agent-review.ts. Exporting them to
+#      every package would let a gate read "the variables are present" as
+#      "this release was reviewed" — a fail-open for a package with no receipt.
+#   2. HASNA_TODOS_EXPECTED_COMMIT / HASNA_TODOS_RELEASE_PACKAGE_PATH are
+#      todos-named and stay scoped to those same rows; they are not a generic
+#      hasna/* contract and cannot become one without renaming that gate.
+#   3. The dependency build order is DERIVED from the workspace graph at the
+#      tagged commit (root `workspaces` globs + each member's dependency
+#      fields), not the precedent's hardcoded `--filter @hasna/contracts
+#      --filter @hasna/events` (:108-115), which silently under-builds any
+#      package whose graph differs.
+#   4. No per-package `working-directory: apps/<name>` hardcoding (the
+#      release.yml:105,161,174,189 anti-pattern): every package-scoped step uses
+#      the resolved path output.
+#   5. `timeout-minutes: 60` and the 14 GiB heap below are carried from
+#      release-todos.yml:21,25-26. They are todos-scale CEILINGS, not per-package
+#      tuning; a package that needs more must raise them, and the value should
+#      come down once the slowest member is measured.
+#
+# ---------------------------------------------------------------------------
+# KNOWN GATES THIS WORKFLOW APPLIES TO THE WHOLE REPO (blast radius, measured
+# on the base commit of this change — the work is sequenced, not hidden):
+#   * 34 of 45 member manifests fail the fail-closed repository-identity check
+#     (all dead per-app names; none simply absent). The 11 that pass are:
+#     @hasna/messages and @hasna/todos written byte-exact, 7 that reach the
+#     right repository only as `git+https://github.com/hasna/apps.git`
+#     (connectors, emails, prompts, secrets, skills, switcher, workflows), and
+#     @hasna/notes + @hasna/recordings which also omit the `.git` suffix.
+#     Without defect B's normalisation 9 of those 11 would be refused too.
+#   * 6 members declare no scripts.prepublishOnly and so cannot publish here
+#     at all: computers, economy, logs, monitor, notes, switcher.
+#   * 4 members declare no scripts.typecheck: emails, knowledge, logs, notes;
+#     notes also declares no scripts.build.
+#   * 36 members declare no scripts["verify:release"], so a manual dry run
+#     refuses for them by design.
+#   * 4 members fail the registry check as the PRECEDENT defines it, i.e.
+#     publishConfig.registry !== "https://registry.npmjs.org" exactly:
+#     computers, guardrails and tai declare no registry at all (npm would
+#     still publish them publicly), and snapshots declares it with a trailing
+#     slash. Strictness is carried over deliberately; loosening it is a
+#     decision for the manifest-remediation wave, not a drive-by edit here.
+# These are remediation-wave items (fix the manifest, then tag), not workflow
+# bugs: the workflow refuses a package that cannot be released safely.
+on:
+  push:
+    tags:
+      - "npm/*/v*"
+  # A manual run exercises the package-owned release checks and NEVER publishes.
+  # It needs the `package` input because this workflow is generic: a bare
+  # dispatch has no tag to resolve, so the resolver refuses an empty path rather
+  # than guessing an app. The precedent defaulted to apps/todos (:24) because it
+  # was a single-app workflow; that default is not generalisable.
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Workspace-relative package path to exercise, e.g. apps/todos. A manual run never publishes."
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: hasna-apps-npm-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.repository == 'hasna/apps'
+    runs-on: ubuntu-latest
+    environment: npm-release
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NODE_OPTIONS: --max-old-space-size=14336
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Tags are not covered by the main-branch ruleset, so the release is bound
+      # to reviewed history here: an annotated tag object whose peeled commit is
+      # exactly GITHUB_SHA, and that commit contained in protected main.
+      - name: Require the exact release commit on protected main
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_TYPE" = tag
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag
+          test "$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install and verify the CI npm toolchain
+        run: |
+          set -euo pipefail
+          npm_prefix="$(mktemp -d "$RUNNER_TEMP/npm-toolchain.XXXXXX")"
+          npm install --global --prefix "$npm_prefix" npm@11.19.0
+          test "$("$npm_prefix/bin/npm" --version)" = 11.19.0
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
+
+      # The resolver is a checked-in artifact with a single home: this workflow.
+      # It is materialised to a temp path rather than invoked from the package
+      # under release, because the package under release is exactly what the
+      # resolver has to be able to REJECT — an untrusted script must not decide
+      # whether it may publish. Written with a quoted heredoc so no shell
+      # expansion reaches it, then syntax-checked before it is trusted.
+      - name: Materialise the generic release-package resolver
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/resolve-release-package.mjs" <<'RESOLVER_EOF'
+          // GENERIC npm release-package resolver for the hasna/apps monorepo.
+          //
+          // This file is materialised from .github/workflows/release-app.yml at run
+          // time; the workflow is its only home, so that the LANE that owns the workflow
+          // owns the whole release contract. It replaces the per-app string slicing of
+          // the two precedents (release-todos.yml:116-127, release.yml:116-122) with one
+          // checked-in allowlist and one exact-prefix lookup.
+          //
+          // Fail-closed contract (every failure is `::error::` + exit 1, never a skip):
+          //   * unknown app          -> no table entry, or no single prefix match
+          //   * ambiguous tag        -> more than one tagPrefix matches
+          //   * version mismatch     -> tag suffix != manifest version
+          //   * name mismatch        -> manifest name != table packageName
+          //   * repository.url wrong -> the RESOLVED manifest must identify hasna/apps
+          //   * prepublishOnly gone  -> the resolved manifest must declare a non-empty gate
+          //   * non-public registry  -> publishConfig.registry must be npmjs.org
+          //   * unreadable manifest  -> git show of the tagged commit must succeed
+          //
+          // Two defects of the precedent are fixed here, on purpose and in the open:
+          //   A. release-todos.yml:73-82 asserts repository.url against the HARDCODED
+          //      ./apps/todos/package.json while the table also admits apps/todos/ai
+          //      (tag prefix npm/todos-ai/v). A npm/todos-ai/v tag therefore validated
+          //      the wrong manifest. The check now runs against the RESOLVED manifest.
+          //   B. The precedent compares repository.url with strict equality, which no
+          //      `git+https://...` form satisfies. npm documents the `git+` prefix as the
+          //      canonical shorthand and normalises a missing `.git` too, so the generic
+          //      check normalises both sides and compares REPOSITORY identities. This is
+          //      a deliberate, stated loosening: `git+https://github.com/hasna/attachments.git`
+          //      still normalises to a different repository and is still refused.
+          import { appendFileSync } from "node:fs";
+          import { spawnSync } from "node:child_process";
+
+          const REPOSITORY = "https://github.com/hasna/apps";
+          const REGISTRY = "https://registry.npmjs.org";
+          const AUTHORITIES = ["package-owned", "signed-agent-review"];
+
+          // The allowlist. A release tag only ever publishes a package named here; an
+          // app that is not in this table cannot be published through this workflow at
+          // all. `authority` scopes the publish-time environment to the gate the package
+          // actually owns (see the two publish steps in the workflow): the signed-review
+          // variables must NOT be exported to every package, because that would turn a
+          // "the variables are present" reading into a fail-open review claim.
+          const RELEASE_PACKAGES = [
+            { packagePath: "apps/attachments", manifestPath: "apps/attachments/package.json", packageName: "@hasna/attachments", tagPrefix: "npm/attachments/v", authority: "package-owned" },
+            { packagePath: "apps/automations", manifestPath: "apps/automations/package.json", packageName: "@hasna/automations", tagPrefix: "npm/automations/v", authority: "package-owned" },
+            { packagePath: "apps/bridge", manifestPath: "apps/bridge/package.json", packageName: "@hasna/bridge", tagPrefix: "npm/bridge/v", authority: "package-owned" },
+            { packagePath: "apps/calendar", manifestPath: "apps/calendar/package.json", packageName: "@hasna/calendar", tagPrefix: "npm/calendar/v", authority: "package-owned" },
+            { packagePath: "apps/changelog", manifestPath: "apps/changelog/package.json", packageName: "@hasna/changelog", tagPrefix: "npm/changelog/v", authority: "package-owned" },
+            { packagePath: "apps/computers", manifestPath: "apps/computers/package.json", packageName: "@hasna/computers", tagPrefix: "npm/computers/v", authority: "package-owned" },
+            { packagePath: "apps/connectors", manifestPath: "apps/connectors/package.json", packageName: "@hasna/connectors", tagPrefix: "npm/connectors/v", authority: "package-owned" },
+            { packagePath: "apps/contacts", manifestPath: "apps/contacts/package.json", packageName: "@hasna/contacts", tagPrefix: "npm/contacts/v", authority: "package-owned" },
+            { packagePath: "apps/contracts", manifestPath: "apps/contracts/package.json", packageName: "@hasna/contracts", tagPrefix: "npm/contracts/v", authority: "package-owned" },
+            { packagePath: "apps/conversations", manifestPath: "apps/conversations/package.json", packageName: "@hasna/conversations", tagPrefix: "npm/conversations/v", authority: "package-owned" },
+            { packagePath: "apps/dispatch", manifestPath: "apps/dispatch/package.json", packageName: "@hasna/dispatch", tagPrefix: "npm/dispatch/v", authority: "package-owned" },
+            { packagePath: "apps/domains", manifestPath: "apps/domains/package.json", packageName: "@hasna/domains", tagPrefix: "npm/domains/v", authority: "package-owned" },
+            { packagePath: "apps/economy", manifestPath: "apps/economy/package.json", packageName: "@hasna/economy", tagPrefix: "npm/economy/v", authority: "package-owned" },
+            { packagePath: "apps/emails", manifestPath: "apps/emails/package.json", packageName: "@hasna/emails", tagPrefix: "npm/emails/v", authority: "package-owned" },
+            { packagePath: "apps/events", manifestPath: "apps/events/package.json", packageName: "@hasna/events", tagPrefix: "npm/events/v", authority: "package-owned" },
+            { packagePath: "apps/feedback", manifestPath: "apps/feedback/package.json", packageName: "@hasna/feedback", tagPrefix: "npm/feedback/v", authority: "package-owned" },
+            { packagePath: "apps/files", manifestPath: "apps/files/package.json", packageName: "@hasna/files", tagPrefix: "npm/files/v", authority: "package-owned" },
+            { packagePath: "apps/guardrails", manifestPath: "apps/guardrails/package.json", packageName: "@hasna/guardrails", tagPrefix: "npm/guardrails/v", authority: "package-owned" },
+            { packagePath: "apps/hooks", manifestPath: "apps/hooks/package.json", packageName: "@hasna/hooks", tagPrefix: "npm/hooks/v", authority: "package-owned" },
+            { packagePath: "apps/instructions", manifestPath: "apps/instructions/package.json", packageName: "@hasna/instructions", tagPrefix: "npm/instructions/v", authority: "package-owned" },
+            { packagePath: "apps/knowledge", manifestPath: "apps/knowledge/package.json", packageName: "@hasna/knowledge", tagPrefix: "npm/knowledge/v", authority: "package-owned" },
+            { packagePath: "apps/logs", manifestPath: "apps/logs/package.json", packageName: "@hasna/logs", tagPrefix: "npm/logs/v", authority: "package-owned" },
+            { packagePath: "apps/loops", manifestPath: "apps/loops/package.json", packageName: "@hasna/loops", tagPrefix: "npm/loops/v", authority: "package-owned" },
+            { packagePath: "apps/mementos", manifestPath: "apps/mementos/package.json", packageName: "@hasna/mementos", tagPrefix: "npm/mementos/v", authority: "package-owned" },
+            { packagePath: "apps/messages", manifestPath: "apps/messages/package.json", packageName: "@hasna/messages", tagPrefix: "npm/messages/v", authority: "package-owned" },
+            { packagePath: "apps/monitor", manifestPath: "apps/monitor/package.json", packageName: "@hasna/monitor", tagPrefix: "npm/monitor/v", authority: "package-owned" },
+            { packagePath: "apps/notes", manifestPath: "apps/notes/package.json", packageName: "@hasna/notes", tagPrefix: "npm/notes/v", authority: "package-owned" },
+            { packagePath: "apps/orgs", manifestPath: "apps/orgs/package.json", packageName: "@hasna/orgs", tagPrefix: "npm/orgs/v", authority: "package-owned" },
+            { packagePath: "apps/projects", manifestPath: "apps/projects/package.json", packageName: "@hasna/projects", tagPrefix: "npm/projects/v", authority: "package-owned" },
+            { packagePath: "apps/prompts", manifestPath: "apps/prompts/package.json", packageName: "@hasna/prompts", tagPrefix: "npm/prompts/v", authority: "package-owned" },
+            { packagePath: "apps/recordings", manifestPath: "apps/recordings/package.json", packageName: "@hasna/recordings", tagPrefix: "npm/recordings/v", authority: "package-owned" },
+            { packagePath: "apps/releases", manifestPath: "apps/releases/package.json", packageName: "@hasna/releases", tagPrefix: "npm/releases/v", authority: "package-owned" },
+            { packagePath: "apps/repos", manifestPath: "apps/repos/package.json", packageName: "@hasna/repos", tagPrefix: "npm/repos/v", authority: "package-owned" },
+            { packagePath: "apps/secrets", manifestPath: "apps/secrets/package.json", packageName: "@hasna/secrets", tagPrefix: "npm/secrets/v", authority: "package-owned" },
+            { packagePath: "apps/servers", manifestPath: "apps/servers/package.json", packageName: "@hasna/servers", tagPrefix: "npm/servers/v", authority: "package-owned" },
+            { packagePath: "apps/shortlinks", manifestPath: "apps/shortlinks/package.json", packageName: "@hasna/shortlinks", tagPrefix: "npm/shortlinks/v", authority: "package-owned" },
+            { packagePath: "apps/skills", manifestPath: "apps/skills/package.json", packageName: "@hasna/skills", tagPrefix: "npm/skills/v", authority: "package-owned" },
+            { packagePath: "apps/snapshots", manifestPath: "apps/snapshots/package.json", packageName: "@hasna/snapshots", tagPrefix: "npm/snapshots/v", authority: "package-owned" },
+            { packagePath: "apps/statusline", manifestPath: "apps/statusline/package.json", packageName: "@hasna/statusline", tagPrefix: "npm/statusline/v", authority: "package-owned" },
+            { packagePath: "apps/switcher", manifestPath: "apps/switcher/package.json", packageName: "@hasna/switcher", tagPrefix: "npm/switcher/v", authority: "package-owned" },
+            { packagePath: "apps/tai", manifestPath: "apps/tai/package.json", packageName: "@hasna/tai", tagPrefix: "npm/tai/v", authority: "package-owned" },
+            { packagePath: "apps/telephony", manifestPath: "apps/telephony/package.json", packageName: "@hasna/telephony", tagPrefix: "npm/telephony/v", authority: "package-owned" },
+            { packagePath: "apps/todos", manifestPath: "apps/todos/package.json", packageName: "@hasna/todos", tagPrefix: "npm/todos/v", authority: "signed-agent-review" },
+            { packagePath: "apps/todos/ai", manifestPath: "apps/todos/ai/package.json", packageName: "@hasna/todos-ai", tagPrefix: "npm/todos-ai/v", authority: "signed-agent-review" },
+            { packagePath: "apps/workflows", manifestPath: "apps/workflows/package.json", packageName: "@hasna/workflows", tagPrefix: "npm/workflows/v", authority: "package-owned" },
+          ];
+
+          const options = parseOptions(process.argv.slice(2));
+          if (!/^[0-9a-f]{40}$/.test(options.releaseCommit)) {
+            fail("--release-commit must be an exact 40-hex Git commit");
+          }
+          if (!options.output) fail("--output is required");
+
+          for (const entry of RELEASE_PACKAGES) {
+            if (!AUTHORITIES.includes(entry.authority)) {
+              fail(`table entry ${entry.packageName} declares unknown release authority ${entry.authority}`);
+            }
+          }
+
+          const selected = options.refType === "tag"
+            ? resolveByTag(options.refName)
+            : resolveByPath(options.requestedPath);
+
+          const manifest = readManifest(`${options.releaseCommit}:${selected.entry.manifestPath}`);
+          const version = manifest.version;
+          if (typeof version !== "string" || version === "") {
+            fail(`${selected.entry.manifestPath} must declare a version`);
+          }
+          const tag = options.refType === "tag" ? options.refName : `${selected.entry.tagPrefix}${version}`;
+          const failures = bindingFailures(selected.entry, selected.tagVersion, manifest, version, tag);
+          if (failures.length > 0) fail(failures.join("; "));
+
+          const deps = workspaceBuildOrder(selected.entry.packageName);
+          const prepublishOnly = manifest.scripts?.prepublishOnly;
+
+          appendFileSync(options.output, [
+            `path=${selected.entry.packagePath}`,
+            `manifest=${selected.entry.manifestPath}`,
+            `name=${manifest.name}`,
+            `version=${version}`,
+            `tag_prefix=${selected.entry.tagPrefix}`,
+            `authority=${selected.entry.authority}`,
+            `verify_release=${manifest.scripts?.["verify:release"] ? "true" : "false"}`,
+            `deps=${deps.join(" ")}`,
+          ].join("\n") + "\n");
+          console.log(options.refType === "tag"
+            ? `tag ${options.refName} selects ${selected.entry.packagePath} and agrees with ${manifest.name}@${version}`
+            : `manual run selects ${selected.entry.packagePath} and ${manifest.name}@${version}`);
+          console.log(`prepublishOnly gate: ${prepublishOnly}`);
+          console.log(deps.length > 0
+            ? `workspace dependencies, topological order: ${deps.join(" ")}`
+            : "no workspace dependencies");
+
+          function resolveByTag(tagName) {
+            const matches = RELEASE_PACKAGES.filter((entry) => tagName.startsWith(entry.tagPrefix));
+            if (matches.length === 0) fail("unrecognised npm release tag " + tagName);
+            if (matches.length > 1) fail("ambiguous npm release tag " + tagName);
+            const entry = matches[0];
+            const tagVersion = tagName.slice(entry.tagPrefix.length);
+            if (!tagVersion || /[\s/]/.test(tagVersion)) {
+              fail(`unrecognised npm release tag ${tagName}: ${entry.tagPrefix} must carry exactly one version segment`);
+            }
+            return { entry, tagVersion };
+          }
+
+          function resolveByPath(packagePath) {
+            if (!packagePath) {
+              fail("a manual run must name the package to exercise: dispatch this workflow with the `package` input");
+            }
+            const entry = RELEASE_PACKAGES.find((candidate) => candidate.packagePath === packagePath);
+            if (!entry) fail(`unknown package path ${packagePath}: it is not in the release allowlist`);
+            return { entry, tagVersion: "" };
+          }
+
+          function bindingFailures(entry, tagVersion, manifest, version, tag) {
+            const failures = [];
+            if (manifest.name !== entry.packageName) {
+              failures.push(`release-package-name: ${entry.manifestPath} declares ${manifest.name ?? "(no name)"}, not ${entry.packageName}`);
+            }
+            if (tagVersion && version !== tagVersion) {
+              failures.push(`release-package-version: tag ${tag} carries ${tagVersion} but ${entry.manifestPath} declares ${version}`);
+            }
+            if (manifest.publishConfig?.registry !== REGISTRY) {
+              failures.push(`release-package-registry: ${entry.manifestPath} must target ${REGISTRY}, not ${String(manifest.publishConfig?.registry)}`);
+            }
+            const declaredRepository = manifest.repository?.url;
+            if (normaliseRepository(declaredRepository) !== normaliseRepository(REPOSITORY)) {
+              failures.push(`release-package-repository: ${entry.manifestPath} repository.url ${JSON.stringify(declaredRepository ?? null)} does not identify ${REPOSITORY}`);
+            }
+            if (typeof manifest.scripts?.prepublishOnly !== "string" || manifest.scripts.prepublishOnly.trim() === "") {
+              failures.push(`release-package-prepublish-gate: ${entry.manifestPath} must declare a non-empty scripts.prepublishOnly; npm only runs that gate when it exists, so its absence publishes unpinned from the run's own claim that a gate ran`);
+            }
+            return failures;
+          }
+
+          function normaliseRepository(url) {
+            if (typeof url !== "string") return undefined;
+            return url.trim().toLowerCase()
+              .replace(/^git\+/, "")
+              .replace(/^ssh:\/\/git@github\.com\//, "https://github.com/")
+              .replace(/^git@github\.com:/, "https://github.com/")
+              .replace(/\.git$/, "")
+              .replace(/\/+$/, "");
+          }
+
+          function readManifest(spec) {
+            const source = runGit(["show", spec]);
+            try {
+              return JSON.parse(source);
+            } catch {
+              fail(`${spec} is not valid JSON`);
+            }
+          }
+
+          /**
+           * Workspace dependency closure of `packageName`, deepest-first.
+           *
+           * Derived from the workspace graph at the TAGGED COMMIT (root `workspaces`
+           * globs + each member manifest's dependency fields), never from a hand-kept
+           * per-package list: the precedent hardcodes `@hasna/contracts @hasna/events`
+           * (release-todos.yml:108-115), which silently under-builds any package whose
+           * graph differs. Only names that are workspace members are edges; a published
+           * `@hasna/*` dependency outside this repo is not.
+           *
+           * EDGE SET: runtime `dependencies` + `optionalDependencies` only. That is the
+           * set that must exist as built dist before the released package is packed, and
+           * the precedent's hardcoded pair is exactly @hasna/todos' runtime closure.
+           * `peerDependencies` and `devDependencies` are deliberately excluded: measured
+           * on this base commit they form a real cycle — @hasna/contracts peer-depends on
+           * @hasna/secrets, @hasna/secrets dev-depends on @hasna/events, @hasna/events
+           * depends on @hasna/contracts — so a build order over them is not defined, and
+           * neither edge is a prerequisite for the published artifact. The cycle check
+           * below therefore still fires if a RUNTIME cycle is ever introduced.
+           */
+          function workspaceBuildOrder(packageName) {
+            const members = workspaceMembers();
+            const manifestCache = new Map();
+            const manifestOf = (path) => {
+              if (!manifestCache.has(path)) manifestCache.set(path, readManifest(`${options.releaseCommit}:${path}/package.json`));
+              return manifestCache.get(path);
+            };
+            const directDeps = (name) => {
+              const path = members.get(name);
+              if (!path) return [];
+              const member = manifestOf(path);
+              const edges = new Set();
+              for (const field of ["dependencies", "optionalDependencies"]) {
+                for (const dependency of Object.keys(member[field] ?? {})) {
+                  if (members.has(dependency)) edges.add(dependency);
+                }
+              }
+              return [...edges];
+            };
+            const state = new Map();
+            const order = [];
+            const visit = (name) => {
+              const seen = state.get(name);
+              if (seen === "done") return;
+              if (seen === "visiting") fail(`workspace dependency cycle through ${name}`);
+              state.set(name, "visiting");
+              for (const dependency of directDeps(name)) visit(dependency);
+              state.set(name, "done");
+              order.push(name);
+            };
+            visit(packageName);
+            return order.filter((name) => name !== packageName);
+          }
+
+          function workspaceMembers() {
+            const rootManifest = readManifest(`${options.releaseCommit}:package.json`);
+            const members = new Map();
+            for (const glob of rootManifest.workspaces ?? []) {
+              for (const path of expandWorkspaceGlob(glob)) {
+                const manifest = readManifest(`${options.releaseCommit}:${path}/package.json`);
+                if (typeof manifest.name === "string" && manifest.name !== "") members.set(manifest.name, path);
+              }
+            }
+            return members;
+          }
+
+          /** Supports the literal paths and the single trailing-segment `dir/*` globs the root manifest uses. */
+          function expandWorkspaceGlob(glob) {
+            const segments = glob.split("/");
+            let candidates = [""];
+            for (const segment of segments) {
+              const next = [];
+              for (const base of candidates) {
+                if (segment === "*") {
+                  for (const entry of runGit(["ls-tree", "--name-only", `${options.releaseCommit}:${base}`]).split("\n")) {
+                    if (entry !== "") next.push(base === "" ? entry : `${base}/${entry}`);
+                  }
+                } else {
+                  next.push(base === "" ? segment : `${base}/${segment}`);
+                }
+              }
+              candidates = next;
+            }
+            return candidates.filter((path) => {
+              const result = spawnSync("git", ["cat-file", "-e", `${options.releaseCommit}:${path}/package.json`], { encoding: "utf8" });
+              return result.status === 0;
+            });
+          }
+
+          function parseOptions(args) {
+            const parsed = { releaseCommit: "", refType: "", refName: "", requestedPath: "", output: "" };
+            for (let index = 0; index < args.length; index += 2) {
+              const flag = args[index];
+              const value = args[index + 1];
+              if (typeof flag !== "string" || !flag.startsWith("--") || value === undefined) {
+                fail(`missing value for ${flag ?? "argument"}`);
+              }
+              switch (flag) {
+                case "--release-commit": parsed.releaseCommit = value; break;
+                case "--ref-type": parsed.refType = value; break;
+                case "--ref-name": parsed.refName = value; break;
+                case "--requested-path": parsed.requestedPath = value; break;
+                case "--output": parsed.output = value; break;
+                default: fail(`unknown option ${flag}`);
+              }
+            }
+            return parsed;
+          }
+
+          function runGit(args) {
+            const result = spawnSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+            if (result.status !== 0) fail(result.stderr.trim() || `git ${args[0]} failed`);
+            return result.stdout;
+          }
+
+          function fail(message) {
+            console.error(`::error::Could not resolve npm release package: ${message}`);
+            process.exit(1);
+          }
+          RESOLVER_EOF
+          node --check "$RUNNER_TEMP/resolve-release-package.mjs"
+
+      # Reads the manifest at the TAGGED COMMIT via `git show`, never the
+      # working tree, so the version, the repository identity and the
+      # prepublishOnly gate are the ones the reviewed commit actually carries.
+      - name: Bind the tag to the resolved package manifest
+        id: version
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/resolve-release-package.mjs" \
+            --release-commit "$GITHUB_SHA" \
+            --ref-type "$GITHUB_REF_TYPE" \
+            --ref-name "$GITHUB_REF_NAME" \
+            --requested-path "${{ inputs.package }}" \
+            --output "$GITHUB_OUTPUT"
+
+      # npm versions are immutable, so a version that already exists can never
+      # be replaced by this run. 404 is the only publishable answer; any other
+      # status is an inconclusive lookup, not a green light (release-todos.yml:84-100).
+      - name: Reject an existing version or an inconclusive registry lookup
+        if: github.event_name == 'push'
+        env:
+          RELEASE_NAME: ${{ steps.version.outputs.name }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            const name = process.env.RELEASE_NAME;
+            const version = process.env.RELEASE_VERSION;
+            const url = "https://registry.npmjs.org/" + name.replace("/", "%2F") + "/" + encodeURIComponent(version);
+            const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
+            if (response.status === 404) {
+              console.log(name + "@" + version + " is not published");
+            } else if (response.ok) {
+              throw new Error(name + "@" + version + " is already published and npm versions are immutable; bump the version");
+            } else {
+              throw new Error("Registry lookup failed: HTTP " + response.status);
+            }
+          '
+
+      # Root lockfile, scoped to the package being released and the workspace
+      # dependencies the resolver derived from the graph. Lifecycle scripts stay
+      # enabled, as in the precedent (release-todos.yml:102-109): a scriptless
+      # install would skip the postinstall steps members such as connectors rely
+      # on. RELEASE_DEPS is a deliberate word-split: the resolver emits it as a
+      # single space-separated line in topological order.
+      - name: Install locked release dependencies
+        env:
+          RELEASE_PACKAGE: ${{ steps.version.outputs.name }}
+          RELEASE_DEPS: ${{ steps.version.outputs.deps }}
+        run: |
+          set -euo pipefail
+          filters=(--filter "$RELEASE_PACKAGE")
+          for dep in $RELEASE_DEPS; do filters+=(--filter "$dep"); done
+          bun install --frozen-lockfile "${filters[@]}"
+
+      - name: Build workspace dependencies in order
+        env:
+          RELEASE_DEPS: ${{ steps.version.outputs.deps }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_DEPS// /}" ]; then
+            echo "no workspace dependencies to build for this package"
+            exit 0
+          fi
+          for dep in $RELEASE_DEPS; do
+            echo "building workspace dependency ${dep}"
+            bun run --filter "$dep" build
+          done
+
+      - name: Typecheck
+        working-directory: ${{ steps.version.outputs.path }}
+        run: bun run typecheck
+
+      - name: Build
+        working-directory: ${{ steps.version.outputs.path }}
+        run: bun run build
+
+      - name: Test
+        working-directory: ${{ steps.version.outputs.path }}
+        run: bun test
+
+      # A manual run shows what the package's own release checks would say.
+      # A package that declares no such check has nothing to exercise, and
+      # saying so is the whole point of the run — it must not report success.
+      - name: Exercise the package-owned release checks without publishing
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: ${{ steps.version.outputs.path }}
+        env:
+          RELEASE_NAME: ${{ steps.version.outputs.name }}
+          RELEASE_VERIFY: ${{ steps.version.outputs.verify_release }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_VERIFY" != "true" ]; then
+            echo "::error::${RELEASE_NAME} declares no scripts[\"verify:release\"], so a manual run has nothing to exercise"
+            exit 1
+          fi
+          bun run verify:release
+
+      # Publish path 1 of 2: packages whose release procedure reaches the signed
+      # agent review gate. ONLY these rows receive the review variables, so a
+      # package with no signed receipt cannot inherit a "reviewed" reading.
+      - name: Publish via OIDC and the signed agent review gate
+        id: publish_review
+        if: github.event_name == 'push' && steps.version.outputs.authority == 'signed-agent-review'
+        working-directory: ${{ steps.version.outputs.path }}
+        env:
+          HASNA_TODOS_EXPECTED_COMMIT: ${{ github.sha }}
+          HASNA_TODOS_RELEASE_PACKAGE_PATH: ${{ steps.version.outputs.path }}
+          RELEASE_REVIEWER_AGENT: ${{ vars.RELEASE_REVIEWER_AGENT }}
+          RELEASE_REVIEW_KEY_ID: ${{ vars.RELEASE_REVIEW_KEY_ID }}
+          RELEASE_REVIEW_PUBLIC_KEY: ${{ vars.RELEASE_REVIEW_PUBLIC_KEY }}
+          NPM_RELEASE_AGENT_REVIEW_RECEIPT: ${{ secrets.NPM_RELEASE_AGENT_REVIEW_RECEIPT }}
+        run: npm publish --provenance --access public
+
+      # Publish path 2 of 2: the package's own prepublishOnly gate, which npm
+      # runs implicitly during `npm publish` and which the resolver has already
+      # asserted is present and non-empty on the tagged manifest.
+      - name: Publish via OIDC and the package-owned prepublishOnly gate
+        id: publish_package_owned
+        if: github.event_name == 'push' && steps.version.outputs.authority == 'package-owned'
+        working-directory: ${{ steps.version.outputs.path }}
+        run: npm publish --provenance --access public
+
+      # The two publish steps are keyed on the table's authority vocabulary,
+      # which the resolver validates. This assertion makes a drift between the
+      # two impossible to report as success: a tag push that matched no publish
+      # step would otherwise end green having published nothing.
+      - name: Assert a publish path was taken
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          review="${{ steps.publish_review.outcome }}"
+          package_owned="${{ steps.publish_package_owned.outcome }}"
+          if [ "${review}" = "skipped" ] && [ "${package_owned}" = "skipped" ]; then
+            echo "::error::no publish step matched the resolved release authority; refusing to report a release that never ran"
+            exit 1
+          fi
+
+      - name: Verify the published version
+        if: github.event_name == 'push'
+        env:
+          RELEASE_NAME: ${{ steps.version.outputs.name }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          spec="${RELEASE_NAME}@${RELEASE_VERSION}"
+          for attempt in 1 2 3 4 5; do
+            if resolved="$(npm view "$spec" version 2>/dev/null)"; then
+              test "$resolved" = "$RELEASE_VERSION"
+              npm view "$spec" version dist.integrity dist.attestations --json
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$spec did not become visible after publish"
+          exit 1
