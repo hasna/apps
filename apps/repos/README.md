@@ -743,3 +743,8 @@ migrated.
 ## License
 
 Apache-2.0
+
+For existing legacy worktrees, `repos worktree normalize <org>/<repo> --name <name>`
+prepares a dry-run migration plan. Apply with its exact `--expected-plan-hash`;
+files and Git metadata are checkpointed, registry/lease paths are updated, and
+an old-path compatibility link is retained. See [normalization and rollback](docs/cli.md#normalize-a-legacy-worktree).

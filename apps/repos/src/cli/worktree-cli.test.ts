@@ -177,3 +177,13 @@ describe("repos worktree — argument surface", () => {
     expect(help.stdout).toContain("dry run");
   });
 });
+
+test("normalize exposes reviewed dry runs and rollback, but no destination override", () => {
+  const dbPath = seedDb();
+  const help = runCli(dbPath, ["worktree", "normalize", "--help"]);
+  expect(help.code).toBe(0);
+  for (const flag of ["--name", "--dry-run", "--apply", "--expected-plan-hash", "--rollback"]) expect(help.stdout).toContain(flag);
+  for (const flag of ["--path", "--destination", "--target", "--root"]) expect(help.stdout).not.toContain(flag);
+  const result = runCli(dbPath, ["worktree", "normalize", "hasna/repos", "--name", "../escape", "--json"]);
+  expect(result.code).toBe(1); expect(errorOf(result.stdout).code).toBe("INVALID_WORKTREE_NAME");
+});

@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { resolveTrustedAccountHome } from "./account-home.js";
 import { closeDb, getDb } from "../db/database.js";
 import {
   WorktreeError,
@@ -85,7 +86,7 @@ function seed(opts: {
   indexedRemote?: string;
 } = {}) {
   const repoName = opts.repoName ?? "open-fixture";
-  tempDir = mkdtempSync(join(tmpdir(), "repos-worktree-"));
+  tempDir = realpathSync(mkdtempSync(join(tmpdir(), "repos-worktree-")));
   const root = join(tempDir, "worktrees");
   mkdirSync(root, { recursive: true });
   setWorktreeRootForTests(root);
@@ -310,11 +311,18 @@ describe("the root follows the resolver data root (P5.1)", () => {
     });
   });
 
-  test("HASNA_DATA_HOME adopts the resolver (XDG) data root for the worktree root", () => {
-    const xdg = join(tmpdir(), "repos-xdg-data-home");
-    runWithEnv({ HASNA_DATA_HOME: xdg }, () => {
-      expect(worktreeRootDir()).toBe(join(xdg, "repos", "worktrees"));
-      expect(clonesRootDir()).toBe(join(xdg, "repos", "clones"));
+  test("HASNA_DATA_HOME respects an existing account store until it is physically migrated", () => {
+    tempDir = realpathSync(mkdtempSync(join(tmpdir(), "repos-worktree-xdg-")));
+    const xdg = join(tempDir, "data");
+    const accountHome = resolveTrustedAccountHome();
+    expect(accountHome).not.toBeNull();
+    const legacy = join(accountHome!, ".hasna", "repos");
+    // A real station can already have a store. The override must preserve it;
+    // on a fresh CI account the same override may adopt the new data root.
+    const expected = existsSync(join(legacy, "repos.db")) ? legacy : join(xdg, "repos");
+    runWithEnv({ HASNA_DATA_HOME: xdg, HASNA_REPOS_HOME: "" }, () => {
+      expect(worktreeRootDir()).toBe(join(expected, "worktrees"));
+      expect(clonesRootDir()).toBe(join(expected, "clones"));
     });
   });
 });

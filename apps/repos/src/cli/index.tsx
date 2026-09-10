@@ -101,6 +101,7 @@ import {
   removeWorktree,
 } from "../lib/worktrees.js";
 import type { WorktreeListEntry } from "../lib/worktrees.js";
+import { normalizeWorktree, WORKTREE_NORMALIZE_SCHEMA } from "../lib/worktree-normalize.js";
 import {
   WORKTREE_SYNC_SCHEMA,
   WorktreeSyncError,
@@ -1222,6 +1223,28 @@ worktree
     } catch (error) {
       printWorktreeError(error, json, WORKTREE_LEASE_SCHEMA);
     }
+  });
+
+worktree
+  .command("normalize <repo>")
+  .description("Checkpoint and move one legacy worktree to its org-scoped path; dry run by default")
+  .requiredOption("--name <name>", "Existing worktree name (one path segment)")
+  .option("--dry-run", "Return the current plan without writing (default)")
+  .option("--apply", "Apply the exact reviewed plan and retain a compatibility alias")
+  .option("--expected-plan-hash <sha256>", "Exact hash from the dry run; required with --apply")
+  .option("--rollback <sha256>", "Restore paths and registry rows using this operation's checkpoint")
+  .option("--json", "Output the versioned JSON result")
+  .action((repo, opts) => {
+    const json = Boolean(opts.json);
+    try {
+      if (opts.dryRun && (opts.apply || opts.rollback)) throw new WorktreeError("INVALID_REQUEST", "dry-run cannot be combined with apply or rollback");
+      const result = normalizeWorktree({ repo, name: opts.name, apply: Boolean(opts.apply), expectedPlanHash: opts.expectedPlanHash, rollback: opts.rollback });
+      if (json) { printJson(result); return; }
+      console.log(`${result.action}: ${result.source} → ${result.destination}`);
+      console.log(`Plan: ${result.plan_hash}`);
+      if (result.checkpoint) console.log(`Checkpoint: ${result.checkpoint}`);
+      if (!result.applied && result.action === "move") console.log("Dry run only. Re-run with --apply --expected-plan-hash <hash> after reviewing the plan.");
+    } catch (error) { printWorktreeError(error, json, WORKTREE_NORMALIZE_SCHEMA); }
   });
 
 worktree
