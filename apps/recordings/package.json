@@ -83,7 +83,7 @@
   },
   "files": [
     "dist/",
-    "!dist/__tests__/",
+    "!dist/__tests__/**",
     "scripts/",
     "!scripts/test-recorder-fixtures.ts",
     "!scripts/**/__pycache__/",
