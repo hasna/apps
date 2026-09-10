@@ -1,0 +1,12 @@
+{
+  "defaultSeconds": 300,
+  "estimatesSeconds": {
+    "@hasna/todos#test": 753,
+    "@hasna/emails#test": 402,
+    "@hasna/conversations#test": 290,
+    "@hasna/skills#test": 264,
+    "@hasna/mementos#test": 181,
+    "@hasna/loops#test": 171,
+    "@hasna/recordings#test": 900
+  }
+}
