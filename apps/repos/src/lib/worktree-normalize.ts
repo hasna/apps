@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
-import { closeSync, constants, cpSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, readSync, realpathSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, cpSync, fsyncSync, lchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, readSync, realpathSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getDb } from "../db/database.js";
 import type { Repo } from "../types/index.js";
@@ -158,6 +158,13 @@ function expectedSnapshot(state: State, moved: boolean): Snapshot {
     return link ? { ...entry, target: link.after } : entry;
   }) };
 }
+function preserveLinkMode(path: string, mode: number): void {
+  const st = lstatSync(path);
+  if (!st.isSymbolicLink()) fail("checkpoint or relocated symlink changed during normalization");
+  // Darwin symlinks can carry permissions. cpSync and symlinkSync recreate
+  // them with the caller's umask; chmod would incorrectly follow the link.
+  if ((st.mode & 0o777) !== mode) lchmodSync(path, mode);
+}
 function adjustLinks(state: State, moved: boolean): void {
   const root = moved ? state.destination : state.source;
   for (const link of state.links) {
@@ -167,6 +174,7 @@ function adjustLinks(state: State, moved: boolean): void {
     if (current === want) continue;
     if (current !== (moved ? link.before : link.after)) fail("relative symlink target changed during normalization");
     unlinkSync(path); symlinkSync(want, path);
+    preserveLinkMode(path, state.snapshot.files.find(entry => entry.path === link.path)!.mode);
   }
 }
 function mappedRow(row: Row, state: State, table: "repos" | "worktree_leases"): Row {
@@ -272,6 +280,9 @@ export function normalizeWorktree(request: NormalizeWorktreeRequest): NormalizeW
   // Copy-on-write where supported; fall back to copying. Never follow symlinks.
   const copyOptions = { recursive: true, dereference: false, verbatimSymlinks: true, preserveTimestamps: true, mode: constants.COPYFILE_FICLONE };
   cpSync(source, join(checkpoint, "files"), copyOptions);
+  for (const entry of state.snapshot.files) {
+    if (entry.kind === "link") preserveLinkMode(join(checkpoint, "files", entry.path), entry.mode);
+  }
   cpSync(state.git_dir, join(checkpoint, "git-admin"), copyOptions);
   if (hash(inventory(join(checkpoint, "files"))) !== hash(state.snapshot.files)) fail("file checkpoint verification failed; source retained");
   journal.phase = "checkpointed"; writeJournal(journalPath, journal);
