@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies, getThreadUnreadCount, compactMessage, listUnreadCounts, parseMentions, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markMentionsReadByIds, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus, MAX_MESSAGE_BYTES } from "./messages";
-import { createChannel, joinChannel } from "./channels";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies, getThreadUnreadCount, compactMessage, listUnreadCounts, parseMentions, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markMentionsReadByIds, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus, countMessages, MAX_MESSAGE_BYTES } from "./messages";
+import { createChannel, getChannel, joinChannel } from "./channels";
 import { readChannelNotifications, subscribeToChannelNotifications } from "./channel-notifications";
 import { closeDb, getDb } from "./db";
 import { DEFAULT_READ_LIMIT } from "./message-window";
@@ -168,6 +168,31 @@ describe("sendMessage", () => {
     const msg = sendMessage({ from: "alice", to: "bob", content: "dm" });
     expect(msg.channel).toBeNull();
     expect(msg.session_id).toMatch(/^alice-bob-[0-9a-f]{8}$/);
+  });
+
+  // Regression cover for BUG-0062. A row stored BEFORE the send path bound a
+  // channel-naming `to` sits channel-less with the channel name in `to_agent`.
+  // The channel listing selected the `channel` column alone, so such a post was
+  // invisible to every channel read while its caller held a message id — a
+  // silent loss for rows that already exist, which binding new sends cannot
+  // repair.
+  test("lists a channel-less row addressed to a channel that was created later", () => {
+    const orphan = sendMessage({ from: "station02", to: "orphan-chan", content: "posted before the channel existed" });
+    expect(orphan.channel).toBeNull();
+    const unrelated = sendMessage({ from: "station02", to: "some-other-recipient", content: "a real dm" });
+    expect(unrelated.channel).toBeNull();
+
+    createChannel("orphan-chan", "station02");
+
+    const listed = readMessages({ channel: "orphan-chan" }).map((m) => m.id);
+    expect(listed).toContain(orphan.id);
+    // The second arm is not a blanket "match to_agent": a row addressed to
+    // another name stays out of this channel.
+    expect(listed).not.toContain(unrelated.id);
+    // The count beside a channel listing counts what the listing shows.
+    expect(countMessages({ channel: "orphan-chan" })).toBe(1);
+    // ...and so does the channel object's own message_count (channels.ts).
+    expect(getChannel("orphan-chan")?.message_count).toBe(1);
   });
 
   test("supports metadata", () => {
