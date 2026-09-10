@@ -100,6 +100,7 @@ import {
   releaseWorktree,
   removeWorktree,
 } from "../lib/worktrees.js";
+import type { WorktreeListEntry } from "../lib/worktrees.js";
 import {
   WORKTREE_SYNC_SCHEMA,
   WorktreeSyncError,
@@ -1043,15 +1044,17 @@ registry
  * Two properties are load-bearing and are asserted in `worktree-cli.test.ts`
  * rather than left to review:
  *
- *   - **`add` has no path option.** The destination is computed from the repo
- *     name and the worktree name. A caller cannot express a different location,
- *     which is what finally holds the layout that prose has failed to hold —
- *     444 entries at the root on this station on 2026-07-28, mixing flat,
- *     machine-segmented and UUID-named directories.
- *   - **`remove` and `release` have no path argument.** They take a lease id or
- *     `<repo>/<worktree>`. `iapp-factory`'s worktree helper force-removed
- *     whatever path it was handed; here there is no argument in which a victim
- *     path can be passed.
+ *   - **`add` has no path option.** The destination is computed from the
+ *     registry row's GitHub org, the repo name and the worktree name
+ *     (`<root>/<org>/<repo>/<worktree>`, owner ruling 2026-09-10). A caller
+ *     cannot express a different location, which is what finally holds the
+ *     layout that prose has failed to hold — 444 entries at the root on this
+ *     station on 2026-07-28, mixing flat, machine-segmented and UUID-named
+ *     directories.
+ *   - **`remove` and `release` have no path argument.** They take a lease id,
+ *     `<repo>/<worktree>` or `<org>/<repo>/<worktree>`. `iapp-factory`'s
+ *     worktree helper force-removed whatever path it was handed; here there is
+ *     no argument in which a victim path can be passed.
  *
  * None of these verbs read a credential of their own — no `gh`, no token
  * environment variable, no vault. They are not credential-free end to end,
@@ -1081,7 +1084,7 @@ function printWorktreeError(error: unknown, json: boolean, schema: string): void
 
 worktree
   .command("add <repo>")
-  .description("Create a worktree at the computed canonical path and claim a lease")
+  .description("Create a worktree at the computed canonical path (<root>/<org>/<repo>/<worktree>) and claim a lease; <repo> is a registry id, path, unique name or <org>/<repo>")
   .option("--task <id>", "Todos task id; the ratified worktree name when a task exists")
   .option("--name <name>", "Worktree name when no task exists (single path segment)")
   .option("--base <ref>", "Base ref, pinned from origin (default: the repo's default branch)")
@@ -1127,12 +1130,17 @@ worktree
         onlyStale: Boolean(opts.stale),
         staleDays: intFlag(String(opts.staleDays), "--stale-days", 0),
       });
-      const entries = repo ? result.entries.filter((entry) => entry.repo_name === repo) : result.entries;
+      // The filter accepts the same spellings `add` does: a bare repo name
+      // (every org) or `<org>/<repo>`. Legacy flat entries carry no org and
+      // match on the bare name only.
+      const matchesRepo = (entry: WorktreeListEntry): boolean =>
+        entry.repo_name === repo || (entry.org !== null && `${entry.org}/${entry.repo_name}` === repo);
+      const entries = repo ? result.entries.filter(matchesRepo) : result.entries;
       // A repo filter cannot express a violation that belongs to no repo — a
       // checkout sitting flat at the root has no repo segment by definition.
       // Say how many were set aside rather than let the filter read as "clean".
       const hiddenViolations = repo
-        ? result.entries.filter((entry) => entry.repo_name !== repo && entry.issues.length > 0).length
+        ? result.entries.filter((entry) => !matchesRepo(entry) && entry.issues.length > 0).length
         : 0;
       // Recomputed, not carried over: a summary describing the whole root next
       // to a filtered listing reads as "this repo has 1468 problems".
@@ -1150,6 +1158,9 @@ worktree
       for (const entry of entries.slice(0, resolveLimit(opts, 40))) {
         const flags = entry.issues.length === 0 ? chalk.green("ok") : chalk.yellow(entry.issues.join(","));
         console.log(`  ${flags} ${compactText(entry.path, 110)}`);
+        if (entry.suggested_path) {
+          console.log(chalk.dim(`      canonical: ${compactText(entry.suggested_path, 100)} (not moved)`));
+        }
       }
       console.log(chalk.dim(`  ${entries.length} entr(ies), ${summary.issue_count} with issues.`));
       if (hiddenViolations > 0) {
@@ -1164,7 +1175,7 @@ worktree
 
 worktree
   .command("remove <ref>")
-  .description("Remove a worktree by lease id or <repo>/<worktree> — never by path")
+  .description("Remove a worktree by lease id, <repo>/<worktree> or <org>/<repo>/<worktree> — never by path")
   .option("--discard-changes", "Archive the dirty state and branch, then force the teardown")
   .option(
     "--allow-unlanded",
@@ -1285,6 +1296,12 @@ worktree
  * local-only fallback, on purpose (#1613: no silent local storage in hosted
  * mode later, and no silent divergence from the remote now).
  */
+function syncRefLabel(parsed: { org?: string; repoName: string; worktreeName: string }): string {
+  return parsed.org
+    ? `${parsed.org}/${parsed.repoName}/${parsed.worktreeName}`
+    : `${parsed.repoName}/${parsed.worktreeName}`;
+}
+
 function printWorktreeSyncError(error: unknown, json: boolean): void {
   const code = error instanceof WorktreeSyncError ? error.code : "UNEXPECTED_ERROR";
   const message = error instanceof Error ? error.message : "unknown worktree sync error";
@@ -1308,12 +1325,12 @@ worktree
     const json = Boolean(opts.json);
     try {
       const parsed = parseSyncRef(ref);
-      const result = await pushWorktree(parsed.repoName, parsed.worktreeName);
+      const result = await pushWorktree(parsed.repoName, parsed.worktreeName, { org: parsed.org });
       if (json) {
         printJson(result);
         return;
       }
-      console.log(chalk.green(`✓ pushed ${parsed.repoName}/${parsed.worktreeName} @ ${result.version}`));
+      console.log(chalk.green(`✓ pushed ${syncRefLabel(parsed)} @ ${result.version}`));
       console.log(chalk.dim(`  bundle ${result.bundle_sha256.slice(0, 16)}…  ${result.byte_size} bytes`));
       console.log(chalk.dim(
         `  includes:${result.includes.patch ? " patch" : ""}` +
@@ -1335,6 +1352,7 @@ worktree
     try {
       const parsed = parseSyncRef(ref);
       const result = await pullWorktree(parsed.repoName, parsed.worktreeName, {
+        org: parsed.org,
         version: parsed.version,
         parentCheckout: opts.parentCheckout,
       });
@@ -1342,7 +1360,7 @@ worktree
         printJson(result);
         return;
       }
-      console.log(chalk.green(`✓ materialised ${parsed.repoName}/${parsed.worktreeName} @ ${result.version}`));
+      console.log(chalk.green(`✓ materialised ${syncRefLabel(parsed)} @ ${result.version}`));
       console.log(chalk.dim(`  ${result.path}`));
       console.log(chalk.dim(
         `  head ${result.head_sha.slice(0, 12)}  branch ${result.branch ?? "(detached)"}  ` +
@@ -1361,7 +1379,7 @@ worktree
     const json = Boolean(opts.json);
     try {
       const parsed = parseSyncRef(ref);
-      const result = await syncWorktree(parsed.repoName, parsed.worktreeName);
+      const result = await syncWorktree(parsed.repoName, parsed.worktreeName, { org: parsed.org });
       if (result.conflict) {
         // A refused sync is a FAILURE in both output modes. The library carries
         // the refusal on the result (the push itself succeeded); the CLI raises
@@ -1382,7 +1400,7 @@ worktree
         printJson(result);
         return;
       }
-      console.log(chalk.green(`✓ synced ${parsed.repoName}/${parsed.worktreeName} @ ${result.pushed_version}`));
+      console.log(chalk.green(`✓ synced ${syncRefLabel(parsed)} @ ${result.pushed_version}`));
       console.log(chalk.dim(`  remote newest: ${result.remote_latest}`));
     } catch (error) {
       printWorktreeSyncError(error, json);
@@ -1402,7 +1420,7 @@ worktree
         printJson(result);
         return;
       }
-      console.log(chalk.bold(`${parsed.repoName}/${parsed.worktreeName} — ${result.versions.length} version(s)`));
+      console.log(chalk.bold(`${syncRefLabel(parsed)} — ${result.versions.length} version(s)`));
       for (const entry of result.versions.slice(0, 20)) {
         console.log(
           `  ${entry.version}  ${chalk.dim(entry.packed_at)}  ${entry.branch ?? "(detached)"} ` +
