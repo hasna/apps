@@ -22,7 +22,7 @@ async function fixture(root: string) {
   writeFileSync(join(root, ".gitignore"), "node_modules\n.turbo\ndist\nhome\ntmp\n");
   for (const [name, dir] of [["contracts", "contracts"], ["todos", "todos"], ["skills", "skills"], ["emails", "emails"], ["recordings", "recordings"], ["notes", "notes"], ["notes-server", "notes/server"]]) {
     const directory = join(root, "apps", dir!); mkdirSync(directory, { recursive: true });
-    write(join(directory, "package.json"), { name: `@hasna/${name}`, version: "1.0.0", scripts: {
+    write(join(directory, "package.json"), { name: name === "notes-server" ? name : `@hasna/${name}`, version: "1.0.0", scripts: {
       ...(name!.startsWith("notes") ? {} : { build: 'bun -e \'require("node:fs").mkdirSync("dist",{recursive:true});require("node:fs").writeFileSync("dist/result","built")\'' }),
       test: "bun run test:serial", "test:serial": "bun check.ts",
     }, ...(name === "skills" || name === "todos" ? { dependencies: { "@hasna/contracts": "workspace:*" } } : {}) });
@@ -51,7 +51,7 @@ test("pinned Turbo executes every assigned fixture task exactly once across isol
     const env = await fixture(source); await good(source, [process.execPath, cli, "plan", planDir], env);
     const planPath = join(planDir, "plan.json"), plan: Plan = json(planPath), sha = hash(readFileSync(planPath));
     expect(plan.testGraph.filter(t => t.task === "test")).toHaveLength(7);
-    expect(plan.buildGraph.filter(t => t.command === null).map(t => t.taskId)).toEqual(["@hasna/notes#build", "@hasna/notes-server#build"]);
+    expect(plan.buildGraph.filter(t => t.command === null).map(t => t.taskId)).toEqual(["@hasna/notes#build", "notes-server#build"]);
     const observed: string[] = [];
     for (const shard of plan.shards) {
       const work = join(owned, `runner-${shard.id}`), out = join(receiptRoot, String(shard.id)), seen = join(owned, `observed-${shard.id}`);

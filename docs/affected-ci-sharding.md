@@ -24,7 +24,9 @@ expansion cannot execute them on multiple runners.
 
 Each runner verifies the immutable identity and manifest commands, repeats the
 entire affected build serially, then passes its package-qualified test IDs as
-individual process arguments to Turbo. The selected dry-run graph must equal
+individual process arguments to Turbo. Both scoped member names and the
+existing unscoped nested `notes-server` workspace are validated against their
+actual manifests. The selected dry-run graph must equal
 the planned dependency closure. There is no `--only` shortcut. Build nodes with
 Turbo's `NONEXISTENT` command remain explicit no-command placeholders; they are
 never reported as executed builds. A new unsupported task kind or no-command
@@ -75,4 +77,7 @@ successors understand the planner, all four shards, aggregate and immutable
 artifacts. Historical release receipts and accepted publisher scripts must not
 be rewritten to make them accept a new run. Hold this rollout until in-flight
 releases finish, then require green candidate CI and independent review before
-merge. No publisher authorization or deployment is part of this change.
+merge. This tooling-only change normally has an empty affected graph: its
+Linux runtime fixtures prove nonempty orchestration, while the first genuine
+nonempty repository run remains a separate integration/performance gate.
+No publisher authorization or deployment is part of this change.

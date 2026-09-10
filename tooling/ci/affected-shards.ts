@@ -20,7 +20,7 @@ export function canonical(value: unknown): string {
 }
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 function record(value: unknown): value is Row { return !!value && typeof value === "object" && !Array.isArray(value); }
-const taskPattern = /^@hasna\/[a-z0-9]+(?:-[a-z0-9]+)*#(?:build|test)$/;
+const taskPattern = /^(?:@hasna\/)?[a-z0-9]+(?:-[a-z0-9]+)*#(?:build|test)$/;
 function taskId(value: unknown): asserts value is string { insist(typeof value === "string" && taskPattern.test(value), "Invalid package-qualified task ID"); }
 function uniqueStrings(value: unknown): string[] { insist(Array.isArray(value) && value.every(v => typeof v === "string"), "Expected string list"); insist(new Set(value).size === value.length, "Duplicate list entry"); return [...value].sort(); }
 export function validateContext(value: unknown): asserts value is Context {

@@ -7,8 +7,8 @@ const timing = { defaultSeconds: 300, estimatesSeconds: { "@hasna/todos#test": 7
 const raw = (name: string, task: string, dependencies: string[] = [], command = task === "build" ? "bun run build:real" : "bun test --timeout 30000") => ({ taskId: `@hasna/${name}#${task}`, package: `@hasna/${name}`, task, directory: `apps/${name}`, dependencies, command });
 const dry = (tasks: unknown[]) => ({ turboVersion: "2.5.4", envMode: "strict", scm: { sha: context.head }, tasks });
 function fixture(): Plan {
-  const builds = [raw("contracts", "build"), raw("todos", "build", ["@hasna/contracts#build"]), raw("emails", "build"), raw("notes", "build", [], "<NONEXISTENT>"), { ...raw("notes-server", "build", [], "<NONEXISTENT>"), directory: "apps/notes/server" }];
-  const tests = [raw("todos", "test", ["@hasna/todos#build"]), raw("emails", "test", ["@hasna/emails#build"], "bun run test:hermetic"), raw("notes", "test", ["@hasna/notes#build"]), { ...raw("notes-server", "test", ["@hasna/notes-server#build"]), directory: "apps/notes/server" }];
+  const builds = [raw("contracts", "build"), raw("todos", "build", ["@hasna/contracts#build"]), raw("emails", "build"), raw("notes", "build", [], "<NONEXISTENT>"), { ...raw("notes-server", "build", [], "<NONEXISTENT>"), taskId: "notes-server#build", package: "notes-server", directory: "apps/notes/server" }];
+  const tests = [raw("todos", "test", ["@hasna/todos#build"]), raw("emails", "test", ["@hasna/emails#build"], "bun run test:hermetic"), raw("notes", "test", ["@hasna/notes#build"]), { ...raw("notes-server", "test", ["notes-server#build"]), taskId: "notes-server#test", package: "notes-server", directory: "apps/notes/server" }];
   return makePlan(context, parseDryRun(dry(builds), context.head), parseDryRun(dry([...builds, ...tests]), context.head), timing);
 }
 function summary(graph: Task[]) {
@@ -26,7 +26,7 @@ describe("affected task plan", () => {
   test("partitions exact executable tasks; retains nested workspace and nonexecuting build nodes", () => {
     const plan = fixture(); expect(validatePlan(plan)).toEqual(plan);
     expect(plan.shards).toHaveLength(4); expect(plan.shards.flatMap(s => s.tests).sort()).toEqual(plan.testGraph.filter(t => t.task === "test").map(t => t.taskId));
-    expect(plan.buildGraph.filter(t => t.command === null).map(t => t.taskId)).toEqual(["@hasna/notes#build", "@hasna/notes-server#build"]);
+    expect(plan.buildGraph.filter(t => t.command === null).map(t => t.taskId)).toEqual(["@hasna/notes#build", "notes-server#build"]);
     expect(partition([...plan.testGraph].reverse(), timing)).toEqual(plan.shards);
   });
   test("new and renamed test tasks get the conservative default, never timing-based omission", () => {
