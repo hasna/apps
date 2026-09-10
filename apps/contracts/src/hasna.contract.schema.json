@@ -97,6 +97,36 @@
       "uniqueItems": true,
       "description": "Customer-facing product stories. Public OSS cores include user-hosted; add hasna-saas only when a managed control plane exists."
     },
+    "serving": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "routeSlug",
+        "access",
+        "targetClientBase"
+      ],
+      "description": "Where a served app is reachable from a client: the gateway route slug, its credential gate, and the client base URL. Mirrors the triple the fleet registry (tooling/fleet/hosted-apps.json) carries per hosted app. Omit to assert nothing about routing.",
+      "properties": {
+        "routeSlug": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "description": "Gateway path segment; the route is reachable at https://api.hasna.com/<routeSlug>."
+        },
+        "access": {
+          "enum": [
+            "public",
+            "api-key",
+            "signature"
+          ],
+          "description": "Credential gate on the route: none, a fleet client API key at hasna/oss/<routeSlug>/api-key, or a request-signature check."
+        },
+        "targetClientBase": {
+          "type": "string",
+          "pattern": "^https://[^\\s/@?#]+(?:/[^\\s/?#]+)*$",
+          "description": "Client base URL: absolute https, no credentials, query, fragment, or trailing slash, and never ending in /v1 (clients append the version segment). A base on api.hasna.com must be path-prefixed with routeSlug."
+        }
+      }
+    },
     "serviceSurfaces": {
       "type": "array",
       "items": {

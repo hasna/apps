@@ -5288,6 +5288,20 @@ export const HOSTING_MODES = ["user-hosted", "hasna-saas"] as const;
 export const HostingModeSchema = z.enum(HOSTING_MODES);
 export type HostingMode = z.infer<typeof HostingModeSchema>;
 
+/**
+ * Credential gate on a served route. `hosting` says WHO a product story is
+ * for; this says HOW a client gets past the edge — no gate at all (`public`),
+ * a fleet client API key (`api-key`, the gateway default), or a
+ * request-signature check (`signature`, what hooks uses instead of a
+ * presented key).
+ */
+export const SERVING_ACCESS_MODES = ["public", "api-key", "signature"] as const;
+export const ServingAccessSchema = z.enum(SERVING_ACCESS_MODES);
+export type ServingAccess = z.infer<typeof ServingAccessSchema>;
+
+/** The shared gateway every path-prefixed fleet route is served under. */
+export const FLEET_GATEWAY_HOST = "api.hasna.com";
+
 export const SERVICE_SURFACE_KINDS = ["api", "sdk", "mcp", "cli"] as const;
 export const ServiceSurfaceKindSchema = z.enum(SERVICE_SURFACE_KINDS);
 export type ServiceSurfaceKind = z.infer<typeof ServiceSurfaceKindSchema>;
@@ -6057,6 +6071,80 @@ export const PublishingContractSchema = z
   });
 export type PublishingContract = z.infer<typeof PublishingContractSchema>;
 
+/** Secrets Manager id of a route's client API key (`hasna/oss/<routeSlug>/api-key`). */
+export function clientKeySecretRefFor(routeSlug: string): string {
+  return `hasna/oss/${routeSlug}/api-key`;
+}
+
+/** Canonical client base for a route served on the shared gateway. */
+export function gatewayClientBaseFor(routeSlug: string): string {
+  return `https://${FLEET_GATEWAY_HOST}/${routeSlug}`;
+}
+
+/**
+ * Where a served app is reachable from a client (hasna/apps#1601).
+ *
+ * WHY A NEW BLOCK AND NOT A NEW `hosting` VALUE. `hosting` is a product-story
+ * enum consumed by the conformance `hosting_story` check (`saas` repos must
+ * declare `hasna-saas`, every public OSS core must declare `user-hosted`).
+ * Route placement is orthogonal to that: an OSS core that is `user-hosted` is
+ * still served at `https://api.hasna.com/<slug>`. Adding route values to the
+ * enum would let a repo satisfy the product-story check with a value that says
+ * nothing about the story, weakening a gate that already works.
+ *
+ * WHAT IT MIRRORS. The fleet registry (`tooling/fleet/hosted-apps.json`,
+ * `tooling/fleet/key-provisioning.ts`) already expresses a route as this exact
+ * triple: an `app` slug that is the gateway path segment, a `baseUrl` derived
+ * as `https://api.hasna.com/<app>` (clients append `/v1` themselves, so the
+ * base NEVER ends in `/v1`), and a credential gate — `keyCheck: "probe"` for a
+ * client API key at `hasna/oss/<app>/api-key`, `keyCheck: "none"` for hooks,
+ * which verifies request signatures. `routeSlug`, `access` and
+ * `targetClientBase` are those three, named for a contract.
+ *
+ * Backwards compatible by construction: the block is optional, and omitting it
+ * asserts nothing about routing (exactly as omitting `publishing` asserts
+ * nothing about publication). Existing manifests keep validating unchanged.
+ */
+export const ServingContractSchema = z
+  .object({
+    /** Gateway path segment; the route is reachable at https://api.hasna.com/<routeSlug>. */
+    routeSlug: AppNameSchema,
+    /** Credential gate on the route. Named explicitly: a route's gate is a security fact, never defaulted. */
+    access: ServingAccessSchema,
+    /** Client base URL: absolute https, no trailing slash, never ending in /v1. */
+    targetClientBase: z
+      .string()
+      .regex(
+        /^https:\/\/[^\s/@?#]+(?:\/[^\s/?#]+)*$/,
+        "targetClientBase must be an absolute https URL with no credentials, query, fragment, or trailing slash"
+      )
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.targetClientBase.endsWith("/v1")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "targetClientBase must not end in /v1; clients append the version segment themselves",
+        path: ["targetClientBase"]
+      });
+    }
+    const authority = value.targetClientBase.replace(/^https:\/\//, "").split("/")[0] ?? "";
+    const host = authority.split(":")[0] ?? "";
+    if (host === FLEET_GATEWAY_HOST) {
+      // The gateway path-prefixes by route slug. A base on the gateway that
+      // names a different segment would route to another app's surface.
+      const expected = gatewayClientBaseFor(value.routeSlug);
+      if (value.targetClientBase !== expected) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `a ${FLEET_GATEWAY_HOST} route must be path-prefixed with its routeSlug: expected ${expected}`,
+          path: ["targetClientBase"]
+        });
+      }
+    }
+  });
+export type ServingContract = z.infer<typeof ServingContractSchema>;
+
 export const ServiceContractManifestSchema = z
   .object({
     /** Optional editor hint pointing at the JSON Schema; ignored at runtime. */
@@ -6071,6 +6159,7 @@ export const ServiceContractManifestSchema = z
     bins: z.array(z.string().min(1)).default([]),
     storage: StorageContractSchema.optional(),
     hosting: z.array(HostingModeSchema).min(1).default(["user-hosted"]),
+    serving: ServingContractSchema.optional(),
     serviceSurfaces: z.array(ServiceSurfaceSchema).default([]),
     publishing: PublishingContractSchema.optional(),
     metadata: ServiceContractMetadataSchema.optional()
@@ -6129,6 +6218,15 @@ export const ServiceContractManifestSchema = z
           code: z.ZodIssueCode.custom,
           message: "library repos must not ship a -serve or -mcp bin",
           path: ["bins"]
+        });
+      }
+      if (value.serving) {
+        // A library ships no serve surface, so a route declaration would name a
+        // route nothing in this repo answers.
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "library repos must not declare serving; they ship no serve surface",
+          path: ["serving"]
         });
       }
     }

@@ -17,7 +17,7 @@ var __export = (target, all) => {
 // src/todos/common.ts
 import { createHash } from "crypto";
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/core.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/core.js
 var NEVER = Object.freeze({
   status: "aborted"
 });
@@ -77,7 +77,7 @@ function config(newConfig) {
     Object.assign(globalConfig, newConfig);
   return globalConfig;
 }
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/util.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/util.js
 var exports_util = {};
 __export(exports_util, {
   unwrapMessage: () => unwrapMessage,
@@ -591,7 +591,7 @@ class Class {
   constructor(..._args) {}
 }
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/errors.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/errors.js
 var initializer = (inst, def) => {
   inst.name = "$ZodError";
   Object.defineProperty(inst, "_zod", {
@@ -665,7 +665,7 @@ function formatError(error, _mapper) {
   return fieldErrors;
 }
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/parse.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/parse.js
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
   const ctx = _ctx ? Object.assign(_ctx, { async: false }) : { async: false };
   const result = schema._zod.run({ value, issues: [] }, ctx);
@@ -714,7 +714,7 @@ var _safeParseAsync = (_Err) => async (schema, value, _ctx) => {
   } : { success: true, data: result.value };
 };
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync($ZodRealError);
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/regexes.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/regexes.js
 var cuid = /^[cC][^\s-]{8,}$/;
 var cuid2 = /^[0-9a-z]+$/;
 var ulid = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/;
@@ -772,7 +772,7 @@ var _null = /null/i;
 var lowercase = /^[^A-Z]*$/;
 var uppercase = /^[^a-z]*$/;
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/checks.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
   var _a;
   inst._zod ?? (inst._zod = {});
@@ -1156,7 +1156,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
   };
 });
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/doc.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/doc.js
 class Doc {
   constructor(args = []) {
     this.content = [];
@@ -1194,14 +1194,14 @@ class Doc {
   }
 }
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/versions.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 0,
   patch: 0
 };
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/schemas.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
   var _a;
   inst ?? (inst = {});
@@ -2275,7 +2275,7 @@ function handleRefineResult(result, payload, input, inst) {
     payload.issues.push(issue(_iss));
   }
 }
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/locales/en.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/locales/en.js
 var parsedType = (data) => {
   const t = typeof data;
   switch (t) {
@@ -2392,7 +2392,7 @@ function en_default() {
     localeError: error()
   };
 }
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/registries.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/registries.js
 var $output = Symbol("ZodOutput");
 var $input = Symbol("ZodInput");
 
@@ -2442,7 +2442,7 @@ function registry() {
   return new $ZodRegistry;
 }
 var globalRegistry = /* @__PURE__ */ registry();
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/api.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/api.js
 function _string(Class2, params) {
   return new Class2({
     type: "string",
@@ -2866,7 +2866,7 @@ function _refine(Class2, fn, _params) {
   });
   return schema;
 }
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/iso.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/iso.js
 var exports_iso = {};
 __export(exports_iso, {
   time: () => time2,
@@ -2907,7 +2907,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/errors.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/errors.js
 var initializer2 = (inst, issues) => {
   $ZodError.init(inst, issues);
   inst.name = "ZodError";
@@ -2936,13 +2936,13 @@ var ZodRealError = $constructor("ZodError", initializer2, {
   Parent: Error
 });
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/parse.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/parse.js
 var parse2 = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError);
 var safeParseAsync2 = /* @__PURE__ */ _safeParseAsync(ZodRealError);
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/schemas.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/schemas.js
 var ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
   $ZodType.init(inst, def);
   inst.def = def;
@@ -3504,7 +3504,7 @@ function superRefine(fn) {
   });
   return ch;
 }
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/external.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/external.js
 config(en_default());
 
 // src/todos/common.ts
@@ -3576,7 +3576,7 @@ function sha256TodosText(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/external.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/external.js
 var exports_external = {};
 __export(exports_external, {
   void: () => voidType,
@@ -3688,7 +3688,7 @@ __export(exports_external, {
   BRAND: () => BRAND
 });
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/util.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/util.js
 var util;
 (function(util2) {
   util2.assertEqual = (_) => {};
@@ -3819,7 +3819,7 @@ var getParsedType2 = (data) => {
   }
 };
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/ZodError.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/ZodError.js
 var ZodIssueCode = util.arrayToEnum([
   "invalid_type",
   "invalid_literal",
@@ -3938,7 +3938,7 @@ ZodError2.create = (issues) => {
   return error2;
 };
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/locales/en.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/locales/en.js
 var errorMap = (issue2, _ctx) => {
   let message;
   switch (issue2.code) {
@@ -4041,7 +4041,7 @@ var errorMap = (issue2, _ctx) => {
 };
 var en_default2 = errorMap;
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/errors.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/errors.js
 var overrideErrorMap = en_default2;
 function setErrorMap(map) {
   overrideErrorMap = map;
@@ -4049,7 +4049,7 @@ function setErrorMap(map) {
 function getErrorMap() {
   return overrideErrorMap;
 }
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
   const { data, path, errorMaps, issueData } = params;
   const fullPath = [...path, ...issueData.path || []];
@@ -4155,14 +4155,14 @@ var isAborted = (x) => x.status === "aborted";
 var isDirty = (x) => x.status === "dirty";
 var isValid = (x) => x.status === "valid";
 var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/errorUtil.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
 (function(errorUtil2) {
   errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
   errorUtil2.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil || (errorUtil = {}));
 
-// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/types.js
+// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/types.js
 class ParseInputLazyPath {
   constructor(parent, value, path, key) {
     this._cachedPath = [];
@@ -13208,6 +13208,9 @@ var SERVICE_CONTRACT_VERSION = "v1";
 var RepoClassSchema = exports_external.enum(["library", "cli-with-store", "service", "saas"]);
 var HOSTING_MODES = ["user-hosted", "hasna-saas"];
 var HostingModeSchema = exports_external.enum(HOSTING_MODES);
+var SERVING_ACCESS_MODES = ["public", "api-key", "signature"];
+var ServingAccessSchema = exports_external.enum(SERVING_ACCESS_MODES);
+var FLEET_GATEWAY_HOST = "api.hasna.com";
 var SERVICE_SURFACE_KINDS = ["api", "sdk", "mcp", "cli"];
 var ServiceSurfaceKindSchema = exports_external.enum(SERVICE_SURFACE_KINDS);
 var ServiceSurfaceStatusSchema = exports_external.enum(["supported", "deferred", "unsupported"]);
@@ -13620,6 +13623,37 @@ var PublishingContractSchema = exports_external.object({
     seen.add(key);
   }
 });
+function clientKeySecretRefFor(routeSlug) {
+  return `hasna/oss/${routeSlug}/api-key`;
+}
+function gatewayClientBaseFor(routeSlug) {
+  return `https://${FLEET_GATEWAY_HOST}/${routeSlug}`;
+}
+var ServingContractSchema = exports_external.object({
+  routeSlug: AppNameSchema,
+  access: ServingAccessSchema,
+  targetClientBase: exports_external.string().regex(/^https:\/\/[^\s/@?#]+(?:\/[^\s/?#]+)*$/, "targetClientBase must be an absolute https URL with no credentials, query, fragment, or trailing slash")
+}).strict().superRefine((value, ctx) => {
+  if (value.targetClientBase.endsWith("/v1")) {
+    ctx.addIssue({
+      code: exports_external.ZodIssueCode.custom,
+      message: "targetClientBase must not end in /v1; clients append the version segment themselves",
+      path: ["targetClientBase"]
+    });
+  }
+  const authority = value.targetClientBase.replace(/^https:\/\//, "").split("/")[0] ?? "";
+  const host = authority.split(":")[0] ?? "";
+  if (host === FLEET_GATEWAY_HOST) {
+    const expected = gatewayClientBaseFor(value.routeSlug);
+    if (value.targetClientBase !== expected) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: `a ${FLEET_GATEWAY_HOST} route must be path-prefixed with its routeSlug: expected ${expected}`,
+        path: ["targetClientBase"]
+      });
+    }
+  }
+});
 var ServiceContractManifestSchema = exports_external.object({
   $schema: exports_external.string().min(1).optional(),
   schema: exports_external.literal(SCHEMA_IDS.serviceContract),
@@ -13631,6 +13665,7 @@ var ServiceContractManifestSchema = exports_external.object({
   bins: exports_external.array(exports_external.string().min(1)).default([]),
   storage: StorageContractSchema.optional(),
   hosting: exports_external.array(HostingModeSchema).min(1).default(["user-hosted"]),
+  serving: ServingContractSchema.optional(),
   serviceSurfaces: exports_external.array(ServiceSurfaceSchema).default([]),
   publishing: PublishingContractSchema.optional(),
   metadata: ServiceContractMetadataSchema.optional()
@@ -13684,6 +13719,13 @@ var ServiceContractManifestSchema = exports_external.object({
         code: exports_external.ZodIssueCode.custom,
         message: "library repos must not ship a -serve or -mcp bin",
         path: ["bins"]
+      });
+    }
+    if (value.serving) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "library repos must not declare serving; they ship no serve surface",
+        path: ["serving"]
       });
     }
   }
@@ -14235,6 +14277,28 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
       minItems: 1,
       uniqueItems: true,
       description: "Customer-facing product stories. Public OSS cores include user-hosted; add hasna-saas only when a managed control plane exists."
+    },
+    serving: {
+      type: "object",
+      additionalProperties: false,
+      required: ["routeSlug", "access", "targetClientBase"],
+      description: "Where a served app is reachable from a client: the gateway route slug, its credential gate, and the client base URL. Mirrors the triple the fleet registry (tooling/fleet/hosted-apps.json) carries per hosted app. Omit to assert nothing about routing.",
+      properties: {
+        routeSlug: {
+          type: "string",
+          pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          description: "Gateway path segment; the route is reachable at https://api.hasna.com/<routeSlug>."
+        },
+        access: {
+          enum: ["public", "api-key", "signature"],
+          description: "Credential gate on the route: none, a fleet client API key at hasna/oss/<routeSlug>/api-key, or a request-signature check."
+        },
+        targetClientBase: {
+          type: "string",
+          pattern: "^https://[^\\s/@?#]+(?:/[^\\s/?#]+)*$",
+          description: "Client base URL: absolute https, no credentials, query, fragment, or trailing slash, and never ending in /v1 (clients append the version segment). A base on api.hasna.com must be path-prefixed with routeSlug."
+        }
+      }
     },
     serviceSurfaces: {
       type: "array",
