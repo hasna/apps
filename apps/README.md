@@ -24,6 +24,19 @@ by the CI name-conformance gate. Every member publishes with
 extending `../../tsconfig.base.json` is the exception, not the rule — only
 `apps/workflows` does.
 
+## Publishing
+
+A tagged release (`npm/<app>/v<semver>`) publishes through the generic OIDC
+lane (`.github/workflows/release-npm.yml`, environment `npm-release`) with no
+npm token at all; `npm publish --provenance --access public`. The vault-token
+per-package form is the documented fallback and is the only path for a member
+whose manifest does not declare `repository.url`
+`https://github.com/hasna/apps.git` — a pre-monorepo per-app name, a deleted
+org (`hasnaxyz/*`), a mismatched app name, or no `repository` field at all.
+Those manifests are the blocker, not the tag lane: fix the manifest and the
+member joins the OIDC path. Full law, and the command that prints the members
+still on the token path, in `.claude/rules/publish.md`.
+
 ## Dependencies
 
 Members may depend on published `@hasna/*` registry packages and on other

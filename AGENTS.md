@@ -38,12 +38,20 @@ public-estate imports are tracked by the import wave (todos `28ac4516`).
    (`<name>` bin), an MCP server bin, a `-serve` server bin, and an `./sdk`
    importable module. Name must match the directory (`apps/<name>` ↔
    `@hasna/<name>`), kebab-case, enforced by the CI name-conformance gate.
-5. **Publish guard.** Publishing is per-package `npm publish` from the package
-   directory with the vault token `hasna/npm/live/publish-token` via
-   `secrets exec` + a temp npmrc referencing `NODE_AUTH_TOKEN`. Never `bun
-   publish` (no workspace filter; `workspace:*` tarball leak). Announce intent
-   on `git-publishing` before publishing, confirm in-thread after. See
-   `.claude/rules/publish.md`.
+5. **Publish guard — OIDC first, vault token as the fallback.** A tagged
+   release (`npm/<app>/v<semver>`) publishes through the generic OIDC lane
+   (`.github/workflows/release-npm.yml`, environment `npm-release`,
+   `id-token: write`, `npm publish --provenance`) with **no npm token at all**.
+   npm binds a trusted publisher to the workflow filename + environment, so both
+   are contract, not decoration. The vault-token form — per-package `npm
+   publish` from the package directory with `hasna/npm/live/publish-token` via
+   `secrets exec` + a temp npmrc referencing `NODE_AUTH_TOKEN` — remains the
+   documented fallback, and is the only path for a package whose manifest does
+   not declare `https://github.com/hasna/apps.git` (a dead pre-monorepo name —
+   bare `hasna/<app>`, `hasnaxyz/*`, `hasna-products/*` — is an ORG LAW
+   violation). Never `bun publish` (no workspace filter; `workspace:*` tarball
+   leak). Announce intent on `git-publishing` before publishing, confirm
+   in-thread after. See `.claude/rules/publish.md`.
 6. **`Agent:` trailer.** Agent-made commits end the message with
    `Agent: <registered-name>`. Never `Co-Authored-By`. Never override git
    identity.
@@ -73,7 +81,9 @@ bun run check               # names + secrets + manifests + publish-guard + stan
   (versioning + standard-adherence, hard gate), `build-test` (`turbo --affected`
   with `TURBO_SCM_BASE`), `verify-generated` (byte-reproducible bin/dist),
   `publish-guard` (npm pack --dry-run per member) — alongside six other
-  workflows: `release.yml`, `deploy-projects.yml`, `deploy-skills.yml`,
-  `deploy-todos.yml`, `recordings-macos.yml`, `blacksmith-testbox.yml`.
+  workflows: `release-npm.yml` (the generic OIDC npm release lane; it
+  supersedes the legacy per-package `release.yml` and `release-todos.yml`
+  shapes), `deploy-projects.yml`, `deploy-skills.yml`, `deploy-todos.yml`,
+  `recordings-macos.yml`, `blacksmith-testbox.yml`.
 - Agent identities: `.claude/agents/{fixer,publisher,reviewer}.md`, laws in
   `.claude/rules/`.

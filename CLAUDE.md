@@ -8,8 +8,11 @@ short:
   `$HOME/.hasna/repos/worktrees/apps/<name>`, never the shared checkout, never
   `main` directly (the one bootstrap commit to main is already done).
 - **No secrets in the tree.** Scan the staged diff before every commit and
-  push (`secrets scan staged`). Values live in the vault; consume with
-  `secrets exec hasna/npm/live/publish-token --as NODE_AUTH_TOKEN -- npm publish
+  push (`secrets scan staged`). A tagged release (`npm/<app>/v<semver>`) goes
+  through the OIDC lane (`.github/workflows/release-npm.yml`, environment
+  `npm-release`) and consumes NO token; the vault fallback — for members whose
+  manifest does not declare this repo — is `secrets exec
+  hasna/npm/live/publish-token --as NODE_AUTH_TOKEN -- npm publish
   --userconfig "$NPMRC"` (temp npmrc holding the placeholder text).
 - **Public names only.** Every member is `@hasna/<name>`, four surfaces
   (CLI + MCP bin + `-serve` + `./sdk`). No `@hasna-internal/*`, no internal

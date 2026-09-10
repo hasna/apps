@@ -18,7 +18,7 @@ apps/                  member packages (one dir per @hasna/<name>, four-surface 
 contracts/             contract manifests / schemas (tier-0, founder-owned; schema lane deferred)
 tooling/ci/            CI gate scripts (secret scan, name conformance, publish guard)
 .claude/               agent identities (fixer, publisher, reviewer) + repo laws
-.github/workflows/     CI: ci.yml (gates, test-suites, build-test, verify-generated, publish-guard) + release.yml, deploy-projects.yml, deploy-skills.yml, deploy-todos.yml, recordings-macos.yml, blacksmith-testbox.yml
+.github/workflows/     CI: ci.yml (gates, test-suites, build-test, verify-generated, publish-guard) + release-npm.yml (the generic OIDC npm release lane; supersedes the per-package release.yml / release-todos.yml shapes), deploy-projects.yml, deploy-skills.yml, deploy-todos.yml, recordings-macos.yml, blacksmith-testbox.yml
 ```
 
 ## Member status
