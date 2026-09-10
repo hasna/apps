@@ -150,8 +150,10 @@ identity cleanup, todos upsert, and loop report functions mutate state. Their
 request and result types are exported. Prefer their typed error classes/codes
 over matching message text.
 
-- Worktree destinations are computed below the trusted account root. Removal
-  accepts only a lease ID or `<repo>/<worktree>` reference.
+- Worktree destinations are computed below the trusted account root as
+  `<root>/<org>/<repo>/<worktree>` (`computeWorktreePath(org, repo, worktree)`;
+  the org comes from the registry row in `addWorktree`). Removal accepts only a
+  lease ID, `<repo>/<worktree>` or `<org>/<repo>/<worktree>` reference.
 - Repository lifecycle functions use station-owned GitHub credentials just like
   their CLI equivalents.
 - `relocatePrimaryRepo` and `adjudicateBranches` are dry-run/apply APIs that
