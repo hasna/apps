@@ -21,6 +21,7 @@ import {
   workspaceRevision,
   workspaceSnapshot,
 } from "../lib/guarded-project-mutation.js";
+import { assertProjectChannelIntegrationWritable } from "../lib/project-channel-guard.js";
 import {
   assertProjectResourceLinkIntegrationMutation,
   assertProjectResourceLinkReadContractEquality,
@@ -1681,6 +1682,15 @@ function mutateProjectResourceLinksInternal(
     }
     const integrations = forcedIntegrations
       ?? projectResourceLinkIntegrationProjection(beforeProject.integrations, beforeLinks, desired);
+    // A typed conversations channel link is authoritative for
+    // integrations.conversations_channel, so this projection is the other way a
+    // project gets pinned at a channel name — including a stale
+    // labels.channel_name a rename left behind (BUG-0063). Guarded here, on the
+    // value this write persists, before even the dry-run preview: a plan that
+    // cannot be written must not be reported as writable. The rule is the same
+    // one every caller-supplied pin goes through, and it only refuses a channel
+    // the conversations app positively does not have.
+    assertProjectChannelIntegrationWritable(integrations, beforeProject.integrations);
     const previewProject = { ...beforeProject, integrations };
     const preview = projectResourceLinkSnapshot(previewProject, desired);
     if (input.dry_run) {
