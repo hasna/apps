@@ -50,12 +50,15 @@ integrations themselves.
 Two boundaries this change does NOT cross, stated because a guard whose
 coverage is implied to be total is worse than one whose edge is named:
 
-1. The hosted HTTP API accepts a caller-supplied `integrations` blob
+1. The hosted HTTP API accepted a caller-supplied `integrations` blob
    (`PATCH`/`PUT /v1/workspaces/{id}`, and `POST` create) with no
-   channel-existence check. The rule is client-side by construction: the
-   projects server has no conversations client, so a server-side backstop would
-   mean adding an outbound conversations dependency to the hosted service.
-   Accepted here as a documented boundary, not silently.
+   channel-existence check. The rule was client-side by construction, so this
+   was left as a documented boundary rather than a silent one. CLOSED by the
+   follow-up in this same release: the store now applies the same db-free rule
+   at its own write points (`pg-store.ts` update, guarded patch, create and
+   resource-link projection), which needs no conversations client — the probe
+   is the same one-shot CLI call, and an unavailable probe or an `unknown`
+   verdict still passes.
 2. A channel derived at create (`workspace-plan.ts` locally;
    `pg-store.createWorkspace` on the hosted side) is not validated — the local
    path ensures it through `ensureProjectChannel` after the write, and the
