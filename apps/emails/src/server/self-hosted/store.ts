@@ -1223,7 +1223,14 @@ function mapMessageRow(row: Record<string, unknown>): MessageRecord {
     headers: toObject(row["headers"]),
     is_read: Boolean(row["is_read"]),
     is_starred: Boolean(row["is_starred"]),
-    received_at: toIso(row["received_at"]),
+    // NEVER NULL (BUG-0043). An outbound row stores no `received_at` — nothing was
+    // received — and `sort_ts`, the column every list is ordered by, has always been
+    // `COALESCE(received_at, created_at)`. Answering the raw column left the record's
+    // timestamp null while its own ordering key said otherwise, so a caller windowing on
+    // `received_at` could not tell "outside the window" from "no timestamp": a sweep
+    // either dropped every sent message or admitted the entire send history, silently.
+    // The record now reports the instant it is ordered by.
+    received_at: toIso(row["received_at"]) ?? toIso(row["created_at"]),
     send_started_at: toIso(row["send_started_at"]),
     created_at: toIso(row["created_at"]) ?? "",
     updated_at: toIso(row["updated_at"]) ?? "",
