@@ -3191,6 +3191,31 @@ const MAILBOX_FILTER_ACTIONS = defineMigration(
   `,
 );
 
+/**
+ * The by-message lookup the SES→S3 ingest fence runs before it inserts (BUG-0050).
+ *
+ * `createInboundMessageWithProvenance` now asks "does this tenant already hold this
+ * MESSAGE?" — same RFC `Message-ID`, sender, subject and receipt instant — because the
+ * `source_id` fence answers a different question ("does it already hold this OBJECT?"),
+ * and SES re-archives one message under a fresh object for every recipient group and
+ * every redelivery. Without an index that question is a scan of the tenant's inbound
+ * mail on every single ingest, so it gets the same partial, tenant-scoped expression
+ * index the lookup uses: the expression is the exact one in the WHERE clause, and the
+ * `direction`/`message-id` predicates keep it off outbound rows and off mail that
+ * carries no identity at all.
+ *
+ * `CREATE INDEX` (not CONCURRENTLY) because the migration ledger runs migrations inside
+ * its own transaction; the table is a per-tenant mailbox, so the write lock is brief.
+ */
+const INBOUND_MESSAGE_IDENTITY_INDEX = defineMigration(
+  "0042_inbound_message_identity_index",
+  `
+  CREATE INDEX IF NOT EXISTS messages_inbound_rfc_message_id_idx
+    ON messages (tenant_id, lower(btrim(COALESCE(headers->>'message-id', ''), '<>')))
+    WHERE direction = 'inbound' AND headers->>'message-id' IS NOT NULL;
+  `,
+);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3240,5 +3265,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     SERVICE_FEEDBACK,
     MESSAGE_SEND_TAGS,
     MAILBOX_FILTER_ACTIONS,
+    INBOUND_MESSAGE_IDENTITY_INDEX,
   ];
 }

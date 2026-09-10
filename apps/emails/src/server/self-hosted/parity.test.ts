@@ -853,17 +853,36 @@ describe("self-hosted parity: mailbox-filter actions, enabled/order and mutate a
   test("0041 mailbox-filter actions migration appends after 0040, leaving prior ids and checksums untouched", () => {
     const migrations = emailsSelfHostedMigrations();
     const ids = migrations.map((m) => m.id);
-    expect(ids[ids.length - 1]).toBe("0041_mailbox_filter_actions");
-    expect(ids[ids.length - 2]).toBe("0040_message_send_tags");
+    // Later migrations may append after it (0042 does), but FR-0001's own ordering
+    // contract is that it comes directly after 0040 and that nothing before it moved.
+    expect(ids.indexOf("0041_mailbox_filter_actions")).toBe(ids.indexOf("0040_message_send_tags") + 1);
     // FR-0001 only appends; every pre-existing migration id keeps its position.
     expect(ids.indexOf("0026_mailbox_filters")).toBeGreaterThan(-1);
     expect(ids.indexOf("0026_mailbox_filters")).toBeLessThan(ids.indexOf("0040_message_send_tags"));
-    const actions = migrations.at(-1)!;
+    const actions = migrations[ids.indexOf("0041_mailbox_filter_actions")]!;
     expect(actions.id).toBe("0041_mailbox_filter_actions");
     expect(actions.sql).toContain("ADD COLUMN IF NOT EXISTS actions jsonb NOT NULL DEFAULT '{}'::jsonb");
     expect(actions.sql).toContain("ADD COLUMN IF NOT EXISTS enabled boolean NOT NULL DEFAULT false");
     expect(actions.sql).toContain('ADD COLUMN IF NOT EXISTS "order" integer NOT NULL DEFAULT 0');
     expect(actions.sql).toContain("mailbox_filters_enabled_order_idx");
+  });
+
+  test("0042 inbound message-identity index appends last, leaving prior ids and checksums untouched", () => {
+    const migrations = emailsSelfHostedMigrations();
+    const ids = migrations.map((m) => m.id);
+    // BUG-0050 adds one index and nothing else; it must be the tail of the ledger so
+    // every earlier id keeps the position and the checksum its deployment recorded.
+    expect(ids.at(-1)).toBe("0042_inbound_message_identity_index");
+    expect(ids.indexOf("0042_inbound_message_identity_index")).toBe(
+      ids.indexOf("0041_mailbox_filter_actions") + 1,
+    );
+    const index = migrations.at(-1)!;
+    // A partial expression index over inbound rows only: it must normalize the header
+    // the same way the duplicate lookup does, and must not index outbound mail.
+    expect(index.sql).toContain("messages_inbound_rfc_message_id_idx");
+    expect(index.sql).toContain("lower(btrim(COALESCE(headers->>'message-id', ''), '<>'))");
+    expect(index.sql).toContain("WHERE direction = 'inbound' AND headers->>'message-id' IS NOT NULL");
+    expect(index.sql).toContain("CREATE INDEX IF NOT EXISTS");
   });
 
   test("self-hosted mailbox-filter CRUD round-trips actions, enabled and order, with legacy defaults", async () => {

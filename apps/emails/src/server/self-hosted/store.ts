@@ -23,6 +23,7 @@ import type { QueryResultRow } from "pg";
 import type { SelfHostedResourceSpec, ResourceColumn } from "./resources.js";
 import { resourceKeyColumn, resourceListOrderBy } from "./resources.js";
 import { canonicalSender } from "../../lib/email-address.js";
+import { inboundMessageIdentity, mergeRecipientLists } from "../../lib/inbound-identity.js";
 import {
   MAX_ATTACHMENT_DOWNLOAD_BYTES,
   decodeAttachmentPayload,
@@ -4963,6 +4964,21 @@ export class TenantScopedStore {
    * Insert a new inbound row (or observe a concurrent exact-source insert) and
    * establish immutable provenance in the SAME database transaction. A source
    * conflict aborts the transaction, so an unprovenanced new message cannot leak.
+   *
+   * THE SOURCE KEY IS A DELIVERY, NOT A MESSAGE (BUG-0050). Fencing only on the S3
+   * object makes every SES re-delivery — and every fan-out of one message to several
+   * recipient groups — a new row, because SES mints a fresh message id, and so a fresh
+   * archived object, each time. Three objects carrying one KPMG reply became three
+   * enumerable rows. So before inserting, this looks for a row of the SAME message in
+   * this tenant: equal RFC `Message-ID` AND equal sender, subject and receipt instant.
+   * A match is the same mail, and adopting it (after unioning the envelope recipients
+   * into the row that already holds it) is what keeps the store's enumeration equal to
+   * its distinct messages. A caller with no `Message-ID` is untouched: no identity, no
+   * adoption, exactly the previous insert.
+   *
+   * The lookup runs under an advisory lock rather than a unique index, because the
+   * identity is a property of the parsed mail and not a storable column of it; the lock
+   * is what makes two concurrent objects carrying one message resolve to one row.
    */
   async createInboundMessageWithProvenance(
     input: MessageInput,
@@ -4983,9 +4999,51 @@ export class TenantScopedStore {
       || !this.atomicClient) {
       throw new Error("atomic inbound message provenance requires an exact source and transactional store");
     }
+    const identity = inboundMessageIdentity(input);
     return this.atomicClient.transaction(async (tx) => {
       await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
       if (fence) await this.lockInboundPersistenceFence(tx, fence);
+      if (identity) {
+        // The lock key travels as bytea so the tenant/message separator is an explicit
+        // control byte rather than a character that could occur inside either half, and
+        // its lossless hex is what gets hashed — the same shape the attachment-repair
+        // fence uses.
+        await tx.execute(
+          `SELECT pg_advisory_xact_lock(hashtextextended(encode($1::bytea, 'hex'), 0))`,
+          [Buffer.from(`${this.tenantId}\u001f${identity.rfcMessageId}`, "utf8")],
+        );
+        const canonical = await tx.get<Record<string, unknown>>(
+          `SELECT ${MESSAGE_COLUMNS} FROM messages
+           WHERE tenant_id = $1::uuid
+             AND direction = 'inbound'
+             AND lower(btrim(COALESCE(headers->>'message-id', ''), '<>')) = $2
+             AND lower(COALESCE(from_addr, '')) = $3
+             AND COALESCE(subject, '') = $4
+             AND received_at IS NOT DISTINCT FROM $5::timestamptz
+           ORDER BY created_at ASC, id ASC
+           LIMIT 1
+           FOR UPDATE`,
+          [this.tenantId, identity.rfcMessageId, identity.fromAddr, identity.subject, identity.receivedAt],
+        );
+        if (canonical) {
+          const storedRecipients = Array.isArray(canonical["to_addrs"]) ? canonical["to_addrs"] : [];
+          const merged = mergeRecipientLists(storedRecipients, input.to_addrs ?? []);
+          let record = mapMessageRow(canonical);
+          if (merged.length !== storedRecipients.length) {
+            await tx.execute(
+              `UPDATE messages SET to_addrs = $1::jsonb, updated_at = now()
+               WHERE tenant_id = $2::uuid AND id = $3`,
+              [JSON.stringify(merged), this.tenantId, canonical["id"]],
+            );
+            record = (await this.loadMessageRecord(tx, String(canonical["id"]))) ?? record;
+          }
+          // No provenance row is written: the object that carried this copy keeps a
+          // DIFFERENT key from the canonical source, and `inbound_message_sources`
+          // binds one exact object per row. The copy is fully represented by the row
+          // it merged into, and a replay of it re-resolves here deterministically.
+          return { record, inserted: false, provenance: "existing_match" as const };
+        }
+      }
       const insertedRow = await tx.get<Record<string, unknown>>(
         `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
          VALUES (${MESSAGE_INSERT_VALUES}, $26)
