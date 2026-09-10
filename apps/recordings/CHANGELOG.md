@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1
+
+### Patch Changes
+
+- Wait briefly for the exact paste target to become active before preparing the clipboard. Use one cooperative activation request, preserve process and permission checks, and stop waiting after 1.5 seconds or recording cancellation.
+- af14ca1: Make the native recorder ready for the next recording immediately after paste delivery is confirmed, removing the extra 600 ms clipboard grace period on that path. Restore the previous clipboard only while the transaction still owns it, and retain the existing grace period when delivery cannot be confirmed.
+- Allow native callers to freeze the paste destination when recording stops, preserving exact process identity and discarding stale selection context when the destination changes.
+
 ## 0.5.0
 
 ### Minor Changes
