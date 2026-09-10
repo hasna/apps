@@ -2,23 +2,41 @@
 # The serve process reads/writes Postgres selected by
 # HASNA_CONVERSATIONS_DATABASE_URL. No SQLite, no local state.
 #
-# Base image: AWS's credential-free ECR Public mirror of the Debian Official
-# Image, with a pinned Bun installed via the official installer. oven/bun:1 is
-# itself Debian-based, so this is functionally equivalent — but it avoids
-# docker.io, whose anonymous pull rate limit (HTTP 429) reliably fails the
-# shared-IP CodeBuild fleet builder.
-FROM public.ecr.aws/docker/library/debian:bookworm-slim AS base
+# Base image: the official oven/bun Alpine image, pinned by multi-arch index
+# digest, in lockstep with the deploy-todos / deploy-skills / deploy-projects
+# lanes. It replaces public.ecr.aws/docker/library/debian:bookworm-slim, whose
+# Debian OS layer could never clear this lane's local vulnerability gate
+# (BUG-0067): the gate rejected every candidate with critical=4, high=67, and
+# Trivy attributed all four criticals and 63 of the 67 highs to Debian packages
+# that ship no fix at all in bookworm — perl-base (CVE-2026-13221,
+# CVE-2026-42496, CVE-2026-8376), zlib1g (CVE-2023-45853, will_not_fix), and the
+# util-linux/mount/bsdutils, ncurses, libacl, libldap, libsystemd and curl
+# groups. Trivy reported FixedVersion "none" for every one of them, so no
+# apt-get upgrade could ever clear them: with `ignore-unfixed: false` and a gate
+# that rejects any critical or high, no Debian-based conversations image could
+# ever deploy. Alpine is the fleet's clean baseline — this exact pinned image
+# already passes that gate for todos, skills and projects.
+#
+# Pinning the digest also removes the `curl | bash` Bun installer the Debian
+# image needed, so the toolchain arrives as an immutable image layer instead of
+# a script piped from bun.sh during the build.
+ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0
+ARG BUN_VERSION=1.3.14
+
+FROM ${BUN_IMAGE} AS base
+ARG BUN_VERSION
 WORKDIR /app
 
 # ---- bun runtime ----
-ENV BUN_INSTALL=/usr/local/bun
-ENV PATH=$BUN_INSTALL/bin:$PATH
-ARG BUN_VERSION=1.3.13
-RUN apt-get update \
- && apt-get install -y --no-install-recommends curl unzip ca-certificates \
- && rm -rf /var/lib/apt/lists/* \
- && curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
- && bun --version
+# Bun ships in the base image, built against musl. Assert the musl boundary, the
+# exact Bun version the deploy lane checks against the shipped artefact (it
+# greps `ARG BUN_VERSION` out of this file), and the absence of the Debian-only
+# packages that produced BUG-0067's criticals — so an accidental base-image or
+# digest change fails here, at build time, rather than at the vulnerability gate
+# with production credentials already staged.
+RUN test "$(bun --version)" = "${BUN_VERSION}"
+RUN ! apk info -e glibc
+RUN ! apk info -e perl
 
 # ---- deps (cached) ----
 # --ignore-scripts: the postinstall only pre-creates the host ~/.hasna/conversations
