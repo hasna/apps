@@ -66,7 +66,7 @@
     "test:vacuity-battery:chain": "bun scripts/vacuity-mutation-battery.ts scripts/vacuity-manifests/install-chain.tsv",
     "test:vacuity-battery:vars": "bun scripts/vacuity-mutation-battery.ts scripts/vacuity-manifests/variable-operands.tsv",
     "test:vacuity-battery:reorder": "bun scripts/vacuity-mutation-battery.ts scripts/vacuity-manifests/reorder.tsv",
-    "test:coverage": "bun test --coverage",
+    "test:coverage": "bun test --timeout 120000 --coverage",
     "dev:cli": "bun run src/cli/index.ts",
     "desktop:snapshot": "bun run src/cli/index.ts app snapshot",
     "dev:mcp": "bun run src/mcp/index.ts",

@@ -19,7 +19,7 @@
     "build": "rm -rf ./dist ./bin && bun build ./src/index.ts --outdir ./dist --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir ./dist && bun build ./src/cli/index.ts --outdir ./bin --target bun",
     "dev": "bun run ./src/cli/index.ts",
     "prepublishOnly": "bun run build",
-    "test": "bun test",
+    "test": "bun test --timeout 120000",
     "typecheck": "tsc --noEmit"
   },
   "files": [

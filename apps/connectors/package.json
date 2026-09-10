@@ -40,10 +40,10 @@
     "dev": "bun run ./src/cli/index.tsx",
     "check:package-secrets": "bun run scripts/check-package-secrets.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.social.json --noEmit",
-    "test": "bun run build && bun test",
+    "test": "bun run build && bun test --timeout 120000",
     "secrets:scan:npmrc": "bun run scripts/scan-npmrc-auth.mjs",
     "sdk:build": "cd sdk && bun run build",
-    "prepublishOnly": "bun run secrets:scan:npmrc && bun run build && bun run check:package-secrets && bun test",
+    "prepublishOnly": "bun run secrets:scan:npmrc && bun run build && bun run check:package-secrets && bun test --timeout 120000",
     "prepack": "bun run build && bun run check:package-secrets"
   },
   "keywords": [

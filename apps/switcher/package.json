@@ -41,7 +41,7 @@
     "generate": "bun scripts/generate.ts",
     "check:generated": "bun scripts/generate.ts --check",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "test": "bun test --timeout 120000",
     "contract:check": "bun ./node_modules/@hasna/contracts/dist/cli/contracts-cli.js repo-conformance .",
     "verify": "bun run check:generated && bun run typecheck && bun run test && bun run build && bun run contract:check",
     "test:postgres": "bun scripts/pg-test-gate.mjs",

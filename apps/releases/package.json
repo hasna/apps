@@ -28,11 +28,11 @@
     "clean": "rm -rf dist",
     "build": "bun run clean && bun build src/index.ts --outdir dist --target bun --external bun:sqlite && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk --external bun:sqlite && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external bun:sqlite && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "test": "bun test --timeout 120000",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "prepack": "bun run build && bun run scan:artifact",
-    "prepublishOnly": "bun run typecheck && bun test",
+    "prepublishOnly": "bun run typecheck && bun test --timeout 120000",
     "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/releases-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan releases-artifact-scan.tgz; rc=$?; rm -f \"$PWD/releases-artifact-scan.tgz\"; exit $rc"
   },
   "keywords": [

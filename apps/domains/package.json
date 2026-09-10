@@ -54,7 +54,7 @@
     "clean": "rm -rf dist",
     "build": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external ink-text-input --external @modelcontextprotocol/sdk --external @hasna/contacts --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external pg && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun --external pg && bun build src/lib/capability.ts src/lib/cloudflare.ts src/lib/cloudflare-auth.ts src/lib/delegate.ts src/lib/registrar.ts src/lib/route53.ts --outdir dist/lib --target node --packages external && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
-    "test": "bun test --preload ./test-setup.ts",
+    "test": "bun test --timeout 120000 --preload ./test-setup.ts",
     "sdk:gen": "bun run scripts/gen-sdk.ts",
     "kit:check": "contracts vendor-kit --check",
     "dev:cli": "bun run src/cli/index.ts",

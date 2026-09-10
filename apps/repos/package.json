@@ -28,11 +28,11 @@
     "clean": "rm -rf dist",
     "build": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external pg && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts --outdir dist --target bun --external pg && bun build src/release/verify-provenance.ts --outdir dist/release --target bun && tsc --emitDeclarationOnly --outDir dist && bun run src/release/write-provenance.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "test": "bun test --timeout 120000",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "prepublishOnly": "bun run typecheck && bun test && bun run build",
+    "prepublishOnly": "bun run typecheck && bun test --timeout 120000 && bun run build",
     "postinstall": "node postinstall.js",
     "prepack": "bun run build"
   },

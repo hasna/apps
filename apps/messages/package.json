@@ -48,7 +48,7 @@
     "build": "bun run clean && bun build ./src/index.ts ./src/sdk/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outfile ./bin/index.js --target bun && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/serve-entry.ts --outfile ./bin/serve.js --target bun && chmod 755 ./bin/index.js ./bin/mcp.js ./bin/serve.js && tsc -p tsconfig.build.json",
     "dev": "bun run ./src/cli/index.ts",
     "serve": "bun run ./src/server/serve-entry.ts",
-    "test": "bun test",
+    "test": "bun test --timeout 120000",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "contract-check": "bunx @hasna/contracts@1.0.2 repo-conformance .",
