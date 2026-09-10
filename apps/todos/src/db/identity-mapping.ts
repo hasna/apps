@@ -142,11 +142,26 @@ function ensureColumn(db: Database, table: string, column: string, type: string)
 /**
  * Guarded DDL for the append-only history triggers on
  * `agent_identity_source_mappings`. Every statement is `CREATE TRIGGER IF NOT
- * EXISTS` so the block is intrinsically idempotent: executing it any number of
- * times against a database that already carries the triggers is a no-op rather
- * than "trigger ... already exists". The initialiser drops them first (to
- * refresh an older definition); this constant is what makes a second run —
- * including one that reaches the CREATE without the DROP — safe.
+ * EXISTS`, so the block is intrinsically idempotent: executing it against a
+ * database that already carries the triggers is a no-op rather than
+ * "trigger ... already exists".
+ *
+ * This is defence in depth, not the removal of a reachable failure — stated
+ * plainly because the earlier framing claimed otherwise. The repair block runs
+ * inside `install.immediate()` (`BEGIN IMMEDIATE`), so its DROP and CREATE are
+ * atomic with respect to every other connection, and the DROP sits on the line
+ * directly above the CREATE: re-running the shipped initialiser against a
+ * database that already carries the trigger therefore succeeds on the pre-fix
+ * source too, and no end-to-end reproduction of "trigger ... already exists"
+ * exists from current `main`.
+ *
+ * What was actually wrong is the shape. Idempotency rested on statement
+ * adjacency — the CREATE was only safe because something above it dropped the
+ * trigger first — so any future caller that reached the CREATE without the
+ * DROP (another call site, a moved guard, a refactor) would reintroduce the
+ * error. `CREATE TRIGGER IF NOT EXISTS` makes each statement safe wherever it
+ * is reached from, including a caller that runs this exported constant on its
+ * own.
  */
 export const AGENT_IDENTITY_HISTORY_TRIGGER_DDL = `
   CREATE TRIGGER IF NOT EXISTS trg_agent_identity_mapping_history_immutable
@@ -251,11 +266,12 @@ export function ensureAgentIdentitySchema(db: Database): void {
 
       -- Drop first so an older definition is replaced rather than silently
       -- retained (the upgrade path). AGENT_IDENTITY_HISTORY_TRIGGER_DDL then
-      -- re-creates them with CREATE TRIGGER IF NOT EXISTS, so the CREATE is
-      -- idempotent on its own and re-running the initialiser can never fail
-      -- with "trigger ... already exists". Both guards are required: the DROP
-      -- alone does not protect a future caller that runs the CREATE block
-      -- without it.
+      -- re-creates them with CREATE TRIGGER IF NOT EXISTS. The two statements
+      -- do different jobs and both are kept: the DROP is what refreshes a
+      -- stale definition, and the IF NOT EXISTS is what keeps the CREATE safe
+      -- on its own — so a caller that reaches it without a preceding DROP, in
+      -- its own connection or transaction, gets a no-op instead of
+      -- "trigger ... already exists".
       DROP TRIGGER IF EXISTS trg_agent_identity_mapping_history_immutable;
       DROP TRIGGER IF EXISTS trg_agent_identity_mapping_history_append_only;
       ${AGENT_IDENTITY_HISTORY_TRIGGER_DDL}

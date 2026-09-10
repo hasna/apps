@@ -10,20 +10,26 @@ import {
 } from "./identity-mapping.js";
 
 /**
- * Regression: `todos --json agents` failed on databases that already carried
- * `trg_agent_identity_mapping_history_immutable` with
+ * Pins the intrinsic idempotency of the agent-identity history-trigger DDL.
+ *
+ * The repair block in `ensureAgentIdentitySchema` created those triggers with a
+ * bare `CREATE TRIGGER` and relied on a `DROP TRIGGER IF EXISTS` on the line
+ * above it. The shipped path was already safe: the whole block runs inside
+ * `install.immediate()` (`BEGIN IMMEDIATE`), so the DROP and CREATE are atomic
+ * together and no other connection can get between them. `todos --json agents`
+ * could NOT be made to fail with
  *
  *   SQLiteError: trigger trg_agent_identity_mapping_history_immutable already exists
  *
- * The repair block in `ensureAgentIdentitySchema` created that trigger with a
- * bare `CREATE TRIGGER`. It was only safe because a `DROP TRIGGER IF EXISTS`
- * sits on the line above it — so the CREATE was not idempotent on its own, and
- * any path that reached the CREATE without the DROP (a partially-applied
- * migration 65, a retried/aborted exec, or a future refactor that moves or
- * removes the DROP) reproduced the failure. The DDL is now
- * `CREATE TRIGGER IF NOT EXISTS`, which is idempotent regardless of the DROP.
+ * from current `main`, and these tests do not claim otherwise. What was wrong
+ * is the shape — the CREATE was not idempotent on its own, so the block's
+ * safety rested on statement adjacency and on nobody ever reaching the CREATE
+ * without the DROP. `CREATE TRIGGER IF NOT EXISTS` removes that dependency.
  *
- * These tests run the initialiser twice and run the guarded DDL twice.
+ * The tests therefore pin the guarantee rather than a reproduction: the DDL is
+ * safe to execute against a database that already carries the triggers, and the
+ * shipped initialiser is safe across the partially-applied states it exists to
+ * repair. Both fail on the pre-fix DDL (bare `CREATE TRIGGER`).
  */
 
 describe("agent identity history-trigger idempotency", () => {
@@ -75,7 +81,7 @@ describe("agent identity history-trigger idempotency", () => {
     try {
       // The database already carries the triggers from migration 65, and the
       // DDL is executed without the initialiser's DROP in front of it: this is
-      // the exact shape that produced "trigger ... already exists".
+      // the shape the pre-fix bare `CREATE TRIGGER` could not survive.
       expect(historyTriggerSql(db)).not.toBeNull();
 
       db.exec(AGENT_IDENTITY_HISTORY_TRIGGER_DDL);
@@ -96,7 +102,9 @@ describe("agent identity history-trigger idempotency", () => {
       expect(historyTriggerSql(db)).not.toBeNull();
 
       // Second full application of the repair over an already-initialised
-      // database: this is what surfaced as "trigger ... already exists".
+      // database. This already passed on the pre-fix source — the DROP masks
+      // the bare CREATE — so it is pinned as the shipped-path guard it is, not
+      // as a reproduction.
       expect(() => ensureAgentIdentitySchema(db)).not.toThrow();
       expect(() => ensureAgentIdentitySchema(db)).not.toThrow();
 
@@ -106,6 +114,56 @@ describe("agent identity history-trigger idempotency", () => {
       expect(count.count).toBe(1);
     } finally {
       db.close();
+    }
+  });
+
+  it("repairs the partially-applied states it exists for, without throwing", () => {
+    // ensureAgentIdentitySchema is a repair for a half-applied migration 65,
+    // so the states below are the ones it can actually meet. Each is built on
+    // a database that already has the base schema (migrations 1-65), and each
+    // runs the real initialiser twice.
+    const states: Array<[string, () => Database]> = [
+      [
+        "the trigger is already present",
+        () => databaseAfterMigration65(databasePath("state-present.db")),
+      ],
+      [
+        "the repair ledger entry was lost",
+        () => {
+          const db = databaseAfterMigration65(databasePath("state-lost-ledger.db"));
+          db.exec("DELETE FROM _migrations WHERE CAST(id AS TEXT) = '65'");
+          return db;
+        },
+      ],
+      [
+        "the history indexes were dropped",
+        () => {
+          const db = databaseAfterMigration65(databasePath("state-dropped-index.db"));
+          db.exec("DROP INDEX IF EXISTS idx_agent_identity_source_revision_unique");
+          db.exec("DROP INDEX IF EXISTS idx_agent_identity_source_identity");
+          db.exec("DROP INDEX IF EXISTS idx_agent_identity_source_local");
+          return db;
+        },
+      ],
+      [
+        "the alias table was dropped",
+        () => {
+          const db = databaseAfterMigration65(databasePath("state-dropped-alias.db"));
+          db.exec("DROP TABLE IF EXISTS agent_identity_aliases");
+          return db;
+        },
+      ],
+    ];
+
+    for (const [label, open] of states) {
+      const db = open();
+      try {
+        expect(() => ensureAgentIdentitySchema(db), label).not.toThrow();
+        expect(() => ensureAgentIdentitySchema(db), label).not.toThrow();
+        expect(historyTriggerSql(db), label).not.toBeNull();
+      } finally {
+        db.close();
+      }
     }
   });
 
