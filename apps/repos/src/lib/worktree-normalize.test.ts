@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lchmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { closeDb, getDb } from "../db/database.js";
@@ -31,6 +31,26 @@ function seed() {
 afterEach(() => { closeDb(); setWorktreeRootForTests(null); if (temp) rmSync(temp, { recursive: true, force: true }); temp = ""; });
 
 describe("worktree normalization", () => {
+  test.skipIf(process.platform !== "darwin")("preserves symlink permissions in checkpoints, adjusted links and rollback", () => {
+    const f = seed();
+    const external = join(temp, "external");
+    writeFileSync(external, "external\n", { mode: 0o600 });
+    symlinkSync("../../../external", join(f.source, "external-link"));
+    symlinkSync("tracked", join(f.source, "internal-link"));
+    for (const name of ["external-link", "internal-link"]) lchmodSync(join(f.source, name), 0o700);
+    const plan = normalizeWorktree({ repo: "acme/demo", name: "task", db: f.db });
+    const result = normalizeWorktree({ repo: "acme/demo", name: "task", apply: true, expectedPlanHash: plan.plan_hash, db: f.db });
+    for (const name of ["external-link", "internal-link"]) {
+      expect(lstatSync(join(f.target, name)).mode & 0o777).toBe(0o700);
+      expect(lstatSync(join(result.checkpoint!, "files", name)).mode & 0o777).toBe(0o700);
+    }
+    expect(readFileSync(join(f.target, "external-link"), "utf8")).toBe("external\n");
+    expect(lstatSync(external).mode & 0o777).toBe(0o600);
+    expect(normalizeWorktree({ repo: "acme/demo", name: "task", rollback: plan.plan_hash, db: f.db }).action).toBe("rolled-back");
+    for (const name of ["external-link", "internal-link"]) expect(lstatSync(join(f.source, name)).mode & 0o777).toBe(0o700);
+    expect(readlinkSync(join(f.source, "external-link"))).toBe("../../../external");
+    expect(lstatSync(external).mode & 0o777).toBe(0o600);
+  });
   test("dry run is read only; apply preserves dirty files, lease identity, aliases and Git registration", () => {
     const f = seed();
     writeFileSync(join(f.source, "tracked"), "staged\n"); git(f.source, "add", "tracked");
