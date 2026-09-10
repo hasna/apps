@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, lstatSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, lstatSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { npmPackCommand, packedFilename } from '../scripts/pack-output.mjs';
+import { npmPackCommand, packedFilename, runSdkPackageCommand } from '../scripts/pack-output.mjs';
 
 describe('exact npm artifact selection', () => {
   test('selects the single npm archive without reconstructing a Bun payload', () => {
@@ -51,4 +51,25 @@ describe('exact npm artifact selection', () => {
       rmSync(fixture, { recursive: true, force: true });
     }
   }, 30000);
+});
+
+test('packed consumer keeps npm notice stderr out of machine stdout and retains both streams', () => {
+  const root = mkdtempSync(join(tmpdir(), 'notes-pack-streams-'));
+  const warning = 'npm notice New major version of npm available!';
+  try {
+    const stdout = runSdkPackageCommand([process.execPath, '-e',
+      `process.stdout.write(JSON.stringify([{filename:'owned.tgz'}]));process.stderr.write(${JSON.stringify(warning)})`],
+      { cwd: root, env: {}, evidenceDir: root, log: 'pack.json' });
+    expect(packedFilename(stdout)).toBe('owned.tgz');
+    expect(readFileSync(join(root, 'pack.json'), 'utf8')).toBe(stdout);
+    expect(readFileSync(join(root, 'pack.json.stderr.log'), 'utf8')).toBe(warning);
+    expect(stdout).not.toContain('npm notice');
+    expect(() => runSdkPackageCommand([process.execPath, '-e',
+      `process.stdout.write(JSON.stringify([{filename:'owned.tgz'}]));process.stderr.write(${JSON.stringify(warning)});process.exit(7)`],
+      { cwd: root, env: {}, evidenceDir: root, log: 'failed.json' })).toThrow('expected exit 0, got 7');
+    const malformed = runSdkPackageCommand([process.execPath, '-e',
+      `process.stdout.write('not JSON');process.stderr.write(${JSON.stringify(warning)})`],
+      { cwd: root, env: {}, evidenceDir: root, log: 'malformed.json' });
+    expect(() => packedFilename(malformed)).toThrow();
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

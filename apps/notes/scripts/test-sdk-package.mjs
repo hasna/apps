@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { npmPackCommand, packedFilename } from './pack-output.mjs';
+import { npmPackCommand, packedFilename, runSdkPackageCommand } from './pack-output.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const destination = process.argv[2];
@@ -17,13 +17,9 @@ const env = { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, SystemRoot: pr
   npm_config_ignore_scripts: 'true', npm_config_audit: 'false', npm_config_fund: 'false' };
 writeFileSync(env.npm_config_userconfig, '');
 writeFileSync(env.npm_config_globalconfig, '');
-function run(command, cwd, log, expected = 0) {
-  const result = Bun.spawnSync(command, { cwd, env, stdout: 'pipe', stderr: 'pipe', timeout: 180_000 });
-  const output = new TextDecoder().decode(result.stdout) + new TextDecoder().decode(result.stderr);
-  writeFileSync(join(scratch, log), output);
-  if (result.exitCode !== expected) throw new Error(`${log}: expected exit ${expected}, got ${result.exitCode}; see ${scratch}`);
-  return output;
-}
+const run = (command, cwd, log, expected = 0) =>
+  runSdkPackageCommand(command, { cwd, env, log, expected, evidenceDir: scratch });
+
 let passed = false;
 try {
   run([process.execPath, 'scripts/sdk-declarations.mjs', '--check'], root, 'generated.log');

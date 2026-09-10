@@ -40,7 +40,7 @@ jobs:
         working-directory: apps/notes
         run: |
           bun run check:sdk-types
-          bun test test/http-store.test.mjs test/transport.test.mjs test/resolver.test.mjs test/package-boundary.test.mjs
+          bun test test/http-store.test.mjs test/transport.test.mjs test/resolver.test.mjs test/package-boundary.test.mjs test/pack-output.test.mjs
       - name: Fresh packed external strict consumer and refusal controls
         working-directory: apps/notes
         run: bun scripts/test-sdk-package.mjs "$RUNNER_TEMP/notes-sdk-package"
