@@ -22,7 +22,7 @@ const run = (command, cwd, log, expected = 0) =>
 
 let passed = false;
 try {
-  run([process.execPath, 'scripts/sdk-declarations.mjs', '--check'], root, 'generated.log');
+  run([process.execPath, '--no-env-file', 'scripts/sdk-declarations.mjs', '--check'], root, 'generated.log');
   const packed = run(npmPackCommand(scratch), root, 'pack.json');
   const archive = join(scratch, packedFilename(packed));
   const consumer = join(scratch, 'consumer');
