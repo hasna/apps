@@ -593,6 +593,50 @@ describe("conversations-serve", () => {
     expect(list.messages.length).toBeGreaterThan(0);
   });
 
+  // Regression cover for BUG-0041. The documented send contract is
+  // `POST /v1/messages {to: <channel>, content}`: `to` NAMES THE CHANNEL.
+  // Before this, such a body fell into the DM branch — 201, channel=null,
+  // session_id "<from>-<to>-<hash>" — and the message never appeared in
+  // `GET /v1/messages?channel=<name>`, so the 201 hid a silent loss of
+  // #incidents alerts and cross-agent handoffs.
+  test("POST /v1/messages with {to: <channel>} binds the channel instead of a channel-less orphan", async () => {
+    const channelName = "recipient-channel-binding";
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ name: channelName, created_by: "station02", description: "d" }),
+    });
+    expect(created.status).toBe(201);
+
+    // No `channel` field: exactly the body the workflow scripts post.
+    const sent = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "station02", to: channelName, content: "recipient-only send" }),
+    });
+    expect(sent.status).toBe(201);
+    const sentMessage = (await sent.json()).message;
+    expect(sentMessage.channel).toBe(channelName);
+    expect(sentMessage.session_id).toBe(`channel:${channelName}`);
+
+    // The row is reachable through the channel listing — the whole point.
+    const listed = await (await fetch(`${base}/v1/messages?channel=${channelName}`, { headers: { "x-api-key": rwKey } })).json();
+    expect(listed.messages.map((message: any) => message.uuid)).toContain(sentMessage.uuid);
+
+    // A `to` that names no channel is still a DM: channel null and a session id
+    // derived from the two participants.
+    const direct = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "station02", to: "no-such-channel-here", content: "dm" }),
+    });
+    expect(direct.status).toBe(201);
+    const directMessage = (await direct.json()).message;
+    expect(directMessage.channel).toBeNull();
+    // `<from>-<to>` sorted, then the random suffix — never `channel:<name>`.
+    expect(directMessage.session_id).toMatch(/^no-such-channel-here-station02-[0-9a-f]{8}$/);
+  });
+
   // Regression cover for todos 5229dec2. The hosted GET /v1/messages handler
   // rejected since_id=0 with a 400 ("must be a positive integer"), contradicting
   // the OpenAPI contract (openapi.ts declares since_id minimum: 0), the local

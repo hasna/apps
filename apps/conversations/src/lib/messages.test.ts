@@ -151,6 +151,25 @@ describe("sendMessage", () => {
     expect(msg.session_id).toBe("channel:general");
   });
 
+  // Regression cover for BUG-0041. The documented send contract posts
+  // `{to: <channel>, content}` — no `channel` field. That used to fall into the
+  // DM branch and write a channel-less orphan under a `<from>-<to>-<hash>`
+  // session id, which no channel listing can reach, while the caller still saw
+  // a successful send.
+  test("binds {to: <existing channel>} to that channel with no explicit channel field", () => {
+    const msg = sendMessage({ from: "alice", to: "general", content: "recipient-only" });
+    expect(msg.channel).toBe("general");
+    expect(msg.to_agent).toBe("general");
+    expect(msg.session_id).toBe("channel:general");
+    expect(readMessages({ channel: "general" }).map((m) => m.id)).toContain(msg.id);
+  });
+
+  test("keeps {to: <agent>} a direct message when no channel carries that name", () => {
+    const msg = sendMessage({ from: "alice", to: "bob", content: "dm" });
+    expect(msg.channel).toBeNull();
+    expect(msg.session_id).toMatch(/^alice-bob-[0-9a-f]{8}$/);
+  });
+
   test("supports metadata", () => {
     const msg = sendMessage({ from: "a", to: "b", content: "hi", metadata: { key: "value" } });
     expect(msg.metadata).toEqual({ key: "value" });
