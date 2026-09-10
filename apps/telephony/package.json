@@ -68,7 +68,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/telephony.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/telephony"
   },
   "homepage": "https://github.com/hasna/telephony",
   "bugs": {

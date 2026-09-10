@@ -58,7 +58,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/apps.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/workflows"
   },
   "homepage": "https://github.com/hasna/apps/tree/main/apps/workflows",
   "bugs": {
