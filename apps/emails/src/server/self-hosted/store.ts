@@ -5013,9 +5013,25 @@ export class TenantScopedStore {
           [Buffer.from(`${this.tenantId}\u001f${identity.rfcMessageId}`, "utf8")],
         );
         const canonical = await tx.get<Record<string, unknown>>(
+          // Two clauses below are load-bearing for the PLAN, not for the result, and
+          // they must stay paired with migration 0042:
+          //   - `headers->>'message-id' IS NOT NULL` is the clause the planner needs to
+          //     prove 0042's partial predicate (`... AND headers->>'message-id' IS NOT
+          //     NULL`) follows from this WHERE clause. It cannot derive it from the
+          //     `COALESCE` equality, so without this exact test the index is inert and
+          //     every ingest Seq Scans plus Sorts the tenant's mail (measured).
+          //   - the comparison must keep `lower(btrim(COALESCE(headers->>'message-id',
+          //     ''), '<>'))` verbatim, because that is the index's expression; a
+          //     normalisation written any other way matches no index entry.
+          // Neither clause changes which rows match: the identity's `Message-ID` is
+          // never empty (a message with none has no identity and never reaches here),
+          // and the null test excludes only rows the equality already excluded. What it
+          // does add is that a no-`Message-ID` row can no longer be adopted even if a
+          // caller ever passed an empty identity.
           `SELECT ${MESSAGE_COLUMNS} FROM messages
            WHERE tenant_id = $1::uuid
              AND direction = 'inbound'
+             AND headers->>'message-id' IS NOT NULL
              AND lower(btrim(COALESCE(headers->>'message-id', ''), '<>')) = $2
              AND lower(COALESCE(from_addr, '')) = $3
              AND COALESCE(subject, '') = $4

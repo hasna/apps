@@ -32,6 +32,7 @@ function canonicalHeaderId(value: unknown): string {
 
 function identityClient() {
   const rows: Row[] = [];
+  const lookups: string[] = [];
   let inserts = 0;
 
   const rowFromInsert = (p: readonly unknown[]): Row => ({
@@ -81,6 +82,7 @@ function identityClient() {
         return row as unknown as T;
       }
       if (/FROM messages[\s\S]*direction = 'inbound'[\s\S]*FOR UPDATE/i.test(sql)) {
+        lookups.push(sql);
         const found = rows.find((row) =>
           row["direction"] === "inbound"
           && canonicalHeaderId((row["headers"] as Record<string, unknown> | undefined)?.["message-id"]) === String(p[1])
@@ -124,6 +126,7 @@ function identityClient() {
     } as unknown as PoolQueryClient,
     rows,
     insertCount: () => inserts,
+    lookups,
   };
 }
 
@@ -253,6 +256,28 @@ describe("createInboundMessageWithProvenance content fence", () => {
     expect(replay.inserted).toBe(false);
     expect(replay.record.id).toBe(first.record.id);
     expect(insertCount()).toBe(1);
+  });
+
+  test("the identity lookup keeps the clauses migration 0042's index needs to be used", async () => {
+    const { client, lookups } = identityClient();
+    const store = new EmailsSelfHostedStore(client).forTenant(TENANT);
+
+    await store.createInboundMessageWithProvenance(inboundInput(), provenance("inbound/example.test/first-object"));
+
+    expect(lookups).toHaveLength(1);
+    const lookup = lookups[0]!;
+    // A partial expression index is used only when the planner can prove its predicate
+    // from the query's WHERE clause AND the compared expression matches, and neither is
+    // visible in the row the query returns. Migration 0042's predicate is
+    // `direction = 'inbound' AND headers->>'message-id' IS NOT NULL`, so this lookup must
+    // carry BOTH of those tests (the planner cannot derive the `IS NOT NULL` from the
+    // `COALESCE(...)` equality), and must compare the index's exact normalisation. Drop
+    // or reword either half and the ingest still answers correctly, but silently reverts
+    // to a Seq Scan plus Sort of the tenant's mail on every object — the cost 0042 exists
+    // to prevent.
+    expect(lookup).toContain("direction = 'inbound'");
+    expect(lookup).toContain("headers->>'message-id' IS NOT NULL");
+    expect(lookup).toContain("lower(btrim(COALESCE(headers->>'message-id', ''), '<>')) = $2");
   });
 });
 

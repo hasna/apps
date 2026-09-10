@@ -3204,6 +3204,17 @@ const MAILBOX_FILTER_ACTIONS = defineMigration(
  * `direction`/`message-id` predicates keep it off outbound rows and off mail that
  * carries no identity at all.
  *
+ * THIS INDEX IS ONLY USABLE IF THE LOOKUP KEEPS TWO CLAUSES (BUG-0050 review). A
+ * partial index is used only when the planner can prove its predicate follows from the
+ * query's WHERE clause, and an expression index only when the compared expression
+ * matches exactly. It cannot prove `headers->>'message-id' IS NOT NULL` from a
+ * `COALESCE(...) = $2` comparison (the `COALESCE` wrapper is opaque to it), and it will
+ * not match a normalisation written differently. So the WHERE clause must carry the
+ * `IS NOT NULL` test verbatim AND compare `lower(btrim(COALESCE(headers->>'message-id',
+ * ''), '<>'))`; drop either and the plan silently reverts to a Seq Scan plus Sort of the
+ * tenant's mail on every ingest, with no failing test and no wrong answer. That pairing
+ * is asserted in `inbound-content-dedupe.store.test.ts`.
+ *
  * `CREATE INDEX` (not CONCURRENTLY) because the migration ledger runs migrations inside
  * its own transaction; the table is a per-tenant mailbox, so the write lock is brief.
  */
