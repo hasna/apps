@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.9
+
+### Patch Changes
+
+- Keep the interactive quit shortcut from intercepting q while typing a skill search. Search results can be selected and pinned normally; Escape still cancels and q still exits menu and completion screens.
+
 ## 0.5.8
 
 ### Patch Changes
