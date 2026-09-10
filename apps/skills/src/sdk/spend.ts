@@ -1,3 +1,4 @@
+import { assertCents } from "./amounts.js";
 /**
  * Spend governance: credit reservations and org ceilings, enforced at admission.
  *
@@ -37,6 +38,8 @@ export function createSpendService(options: { governanceStore: GovernanceStore; 
   const store = options.governanceStore;
   const ceilings: SpendCeilings = { ...DEFAULT_SPEND_CEILINGS, ...options.ceilings, perRun: { ...DEFAULT_SPEND_CEILINGS.perRun, ...options.ceilings?.perRun } };
 
+  assertCents(ceilings.monthlyTotalCents, "monthlyTotalCents");
+
   function exhaust(ceiling: string, detail: string): never {
     throw new GovernanceError(
       GOVERNANCE_ERROR_CODES.RUN_BUDGET_EXHAUSTED,
@@ -47,6 +50,8 @@ export function createSpendService(options: { governanceStore: GovernanceStore; 
 
   return {
     async admit(input) {
+      const estimated = input.estimatedCents === undefined ? 0 : input.estimatedCents;
+      assertCents(estimated, "estimatedCents");
       const quota = input.quota ?? ceilings.perRun;
       const perRun = ceilings.perRun;
       const over = (label: keyof RunQuota, requested: number, allowed: number): boolean => requested > allowed;
@@ -64,17 +69,19 @@ export function createSpendService(options: { governanceStore: GovernanceStore; 
       const now = input.now ?? new Date();
       const monthPrefix = now.toISOString().slice(0, 7);
       const monthly = await store.monthlySpendCents(input.principal.orgId, monthPrefix);
-      const estimated = input.estimatedCents ?? 0;
-      if (monthly + estimated > ceilings.monthlyTotalCents) {
+      assertCents(monthly, "monthlySpendCents");
+      if (estimated > ceilings.monthlyTotalCents - monthly) {
         exhaust("monthly", `org spend for ${monthPrefix} is ${monthly} cents and this run estimates ${estimated}; monthly ceiling is ${ceilings.monthlyTotalCents} cents`);
       }
     },
 
     async reserve(tenantId, runId, estimatedCents) {
+      assertCents(estimatedCents, "estimatedCents");
       return store.createReservation({ orgId: tenantId, runId, estimatedCents });
     },
 
     async reconcile(tenantId, runId, actualCents) {
+      assertCents(actualCents, "actualCents");
       const reservations = await store.reservationsForRun(tenantId, runId);
       const open = reservations.find((reservation) => reservation.status === "reserved");
       if (!open) return null;
