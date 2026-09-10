@@ -59,7 +59,7 @@ try {
   const receipt = { nodeVersion, npmVersion, package: metadata.name, version: metadata.version, archiveSha256: createHash('sha256').update(readFileSync(archive)).digest('hex'),
     typescript: dev.typescript, nodeTypes: dev['@types/node'], strict: true, skipLibCheck: false, overrides: false,
     runtimeRootEqualsSdk: true, separateBrowser: true, missingDeclarationRefusal: true, typedNegativeRefusals: true,
-    applicationRequests: 0 };
+    scope: 'Installed declaration checking and module import identity; application requests are not measured' };
   writeFileSync(join(scratch, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   console.log(JSON.stringify(receipt));
   passed = true;
