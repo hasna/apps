@@ -51,11 +51,12 @@ name: Release app package to npm
 # TWO PRECEDENT DEFECTS THIS FILE FIXES ON PURPOSE
 #   A. release-todos.yml:73-82 asserts repository.url against the HARDCODED
 #      ./apps/todos/package.json, while the table it uses also admits
-#      apps/todos/ai and the tag prefix npm/todos-ai/v. A npm/todos-ai/v tag
-#      therefore validated the wrong manifest and would have published
-#      @hasna/todos-ai (repository.url = the dead name github.com/hasna/todos.git)
-#      with no check at all. Here the repository check runs inside the resolver,
-#      against the manifest the tag actually resolved to.
+#      apps/todos/ai and the tag prefix npm/todos-ai/v. That workflow triggers
+#      on npm/todos/v* only, which does NOT match npm/todos-ai/v*, so the gap
+#      was LATENT (no tag could reach it) rather than reachable on main — but
+#      the assertion was still bound to a path instead of to the resolved
+#      manifest. Here the repository check runs inside the resolver, against
+#      the manifest the tag actually resolved to.
 #   B. The precedent's strict equality admits no `git+` prefix, so 7 members
 #      that point at the right repository as `git+https://github.com/hasna/apps.git`
 #      fail a check the precedent calls "the repo is correct". The generic check
@@ -219,9 +220,11 @@ jobs:
           //
           // Two defects of the precedent are fixed here, on purpose and in the open:
           //   A. release-todos.yml:73-82 asserts repository.url against the HARDCODED
-          //      ./apps/todos/package.json while the table also admits apps/todos/ai
-          //      (tag prefix npm/todos-ai/v). A npm/todos-ai/v tag therefore validated
-          //      the wrong manifest. The check now runs against the RESOLVED manifest.
+          //      ./apps/todos/package.json while its table also admits apps/todos/ai
+          //      (tag prefix npm/todos-ai/v). No tag could reach that gap — its trigger
+          //      was npm/todos/v* only — so the flaw was latent, but the assertion was
+          //      bound to a path rather than to the manifest. The check now runs
+          //      against the RESOLVED manifest.
           //   B. The precedent compares repository.url with strict equality, which no
           //      `git+https://...` form satisfies. npm documents the `git+` prefix as the
           //      canonical shorthand and normalises a missing `.git` too, so the generic
@@ -298,6 +301,13 @@ jobs:
           for (const entry of RELEASE_PACKAGES) {
             if (!AUTHORITIES.includes(entry.authority)) {
               fail(`table entry ${entry.packageName} declares unknown release authority ${entry.authority}`);
+            }
+            // The manifest that is VALIDATED and the directory that is PUBLISHED
+            // must be the same package. Without this, a table edit could validate
+            // one manifest and ship the contents of another directory, and no
+            // assertion below would notice.
+            if (entry.manifestPath !== `${entry.packagePath}/package.json`) {
+              fail(`table entry ${entry.packageName} validates ${entry.manifestPath} but publishes ${entry.packagePath}; the two must name the same package directory`);
             }
           }
 
@@ -383,6 +393,10 @@ jobs:
               .replace(/^git\+/, "")
               .replace(/^ssh:\/\/git@github\.com\//, "https://github.com/")
               .replace(/^git@github\.com:/, "https://github.com/")
+              // Trailing slashes are stripped BEFORE and AFTER the .git strip so
+              // that both `…/apps` and `…/apps.git/` reduce to the same identity;
+              // stripping only after left `…/apps.git/` unnormalised (refused).
+              .replace(/\/+$/, "")
               .replace(/\.git$/, "")
               .replace(/\/+$/, "");
           }
@@ -523,13 +537,20 @@ jobs:
       # prepublishOnly gate are the ones the reviewed commit actually carries.
       - name: Bind the tag to the resolved package manifest
         id: version
+        env:
+          # A dispatch input is caller-supplied and MUST NOT be interpolated into
+          # the script body: `${{ inputs.package }}` inside a shell word would let
+          # a repo-write actor break out of the quotes and run commands in this
+          # credential-holding job. Passing it through the environment keeps it a
+          # value, never code.
+          REQUESTED_PACKAGE_PATH: ${{ inputs.package }}
         run: |
           set -euo pipefail
           node "$RUNNER_TEMP/resolve-release-package.mjs" \
             --release-commit "$GITHUB_SHA" \
             --ref-type "$GITHUB_REF_TYPE" \
             --ref-name "$GITHUB_REF_NAME" \
-            --requested-path "${{ inputs.package }}" \
+            --requested-path "$REQUESTED_PACKAGE_PATH" \
             --output "$GITHUB_OUTPUT"
 
       # npm versions are immutable, so a version that already exists can never
