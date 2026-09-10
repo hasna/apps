@@ -56,6 +56,24 @@ const args = new Set(rawArgs);
 // import time (#103 shipped exactly that ReferenceError).
 const SERVE_PROBE_TIMEOUT_SECONDS = "15";
 
+// Per-test backstop for the package suite this gate runs before publish.
+//
+// `bun test` with no `--timeout` runs on bun 1.3.14's framework default of
+// 5000ms — a wall-clock kill that measures host load, not the code under test,
+// because this package's subprocess-bound suites have a duration of
+// `N spawns x per-spawn process-boot cost`. Measured elsewhere in this repo at
+// 5.2s per test at loadavg ~10 (see apps/loops/src/test-timeout-policy.ts,
+// which documents the measurements and why bunfig.toml's `[test] timeout` and
+// setDefaultTimeout() were both measured NOT to work on bun 1.3.14). The
+// package's own `test` and `test:no-cloud` scripts already pass
+// `--timeout 120000`; the gate's suite invocation has to carry the same budget
+// or it reintroduces exactly the flake those scripts removed, and fails a
+// publish before anything is packed.
+//
+// Declared BEFORE the top-level main() call for the same temporal-dead-zone
+// reason as SERVE_PROBE_TIMEOUT_SECONDS above (#103).
+const SUITE_TIMEOUT_MS = 120_000;
+
 if (import.meta.main) {
   main();
 }
@@ -98,8 +116,10 @@ function main(): void {
     // publish can ship a tree whose own tests never ran — the exact gap a red
     // CI run leaves, where `@hasna/todos:test` was never reached. `bun test`
     // runs the package suite from the package root and exits non-zero on any
-    // failure, which fails the gate before anything is packed.
-    const suite = run("bun", ["test"]);
+    // failure, which fails the gate before anything is packed. `--timeout`
+    // carries the package's suite budget (see SUITE_TIMEOUT_MS) so this run
+    // does not fall back onto bun's 5000ms default.
+    const suite = run("bun", ["test", "--timeout", String(SUITE_TIMEOUT_MS)]);
     if (suite.status !== 0) {
       failReleaseGate([{
         check: "release-test-suite",
