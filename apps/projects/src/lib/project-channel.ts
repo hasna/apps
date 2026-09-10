@@ -472,6 +472,92 @@ export function shouldProbeConversationsChannel(envValue: Record<string, string 
   return true;
 }
 
+/**
+ * The probe a write-side channel guard uses when the caller supplies none.
+ * `undefined` when this box cannot reach the conversations app (tests, or
+ * `HASNA_PROJECTS_CHANNEL_VERIFY=0`) — an unverifiable write is never refused,
+ * see {@link assertProjectChannelWritable}.
+ */
+export function projectChannelWriteProbe(
+  envValue: Record<string, string | undefined> = process.env,
+): ProjectChannelExistenceProbe | undefined {
+  return shouldProbeConversationsChannel(envValue) ? conversationsCliChannelProbe() : undefined;
+}
+
+/**
+ * The channel name a write would newly pin, or `null` when the write leaves
+ * `integrations.conversations_channel` alone (absent on both sides, or
+ * byte-equal to what the record already held — a full-integrations write that
+ * merely carries the existing value forward is not a new claim).
+ */
+export function changedProjectChannel(
+  next: WorkspaceIntegrations | undefined,
+  previous: WorkspaceIntegrations | undefined,
+): string | null {
+  const normalized = (value: string | undefined): string | null => {
+    const trimmed = value?.trim();
+    return trimmed ? normalizeProjectChannelName(trimmed) : null;
+  };
+  const nextChannel = normalized(next?.[PROJECT_CHANNEL_INTEGRATION_KEY]);
+  const previousChannel = normalized(previous?.[PROJECT_CHANNEL_INTEGRATION_KEY]);
+  if (!nextChannel || nextChannel === previousChannel) return null;
+  return nextChannel;
+}
+
+/**
+ * Refuse a write that would pin `integrations.conversations_channel` at a name
+ * the conversations app has no channel for (BUG-0063).
+ *
+ * The registry stores the channel as a free-form name and nothing validated it,
+ * so a renamed project kept pointing at its old name — `employee-contracts`
+ * still carrying `employee-contract-closing`. That name resolved as an agent DM
+ * handle and not as a channel, so the project-channel post fell through to the
+ * DM lane (nobody watching the project channel ever saw it) or failed closed
+ * with HTTP 400 "Channel ... does not exist, so this message was not sent."
+ *
+ * Only a positive `missing` verdict refuses the write. An unavailable probe
+ * (`probe` undefined, e.g. tests, or a box with no conversations CLI) or an
+ * `unknown` verdict passes through: this guard must never invent a failure
+ * from an answer it could not obtain — the same discipline the workspace
+ * doctor follows when it reports "not verified" instead of a fabricated
+ * error.
+ */
+export function assertProjectChannelWritable(
+  channel: string | null | undefined,
+  options: { probe?: ProjectChannelExistenceProbe } = {},
+): void {
+  const target = channel?.trim();
+  if (!target) return;
+  const probe = options.probe;
+  if (!probe) return;
+  const result = probe(target);
+  if (result.verdict !== "missing") return;
+  throw new Error(
+    `Refusing to pin integrations.${PROJECT_CHANNEL_INTEGRATION_KEY} "${target}": the conversations app has no channel with that name, `
+    + `so a project-channel post would fail closed (HTTP 400 "Channel \\"${target}\\" does not exist, so this message was not sent.") `
+    + `or land in an agent DM of the same name instead of in a channel. `
+    + `Create the channel first (conversations channel create ${target}) or point the project at a channel that exists `
+    + `(conversations channel list -j). Set HASNA_PROJECTS_CHANNEL_VERIFY=0 to skip this check.`,
+  );
+}
+
+/**
+ * The write-time guard for an integration mutation: checks the channel only
+ * when this write actually sets or changes it, so a full-integrations write
+ * that carries an existing (already-broken) value forward still succeeds and
+ * the repair stays a deliberate, separate act.
+ */
+export function assertProjectChannelIntegrationWritable(
+  next: WorkspaceIntegrations | undefined,
+  previous: WorkspaceIntegrations | undefined,
+  options: { probe?: ProjectChannelExistenceProbe; env?: Record<string, string | undefined> } = {},
+): void {
+  const channel = changedProjectChannel(next, previous);
+  if (!channel) return;
+  const probe = options.probe ?? projectChannelWriteProbe(options.env);
+  assertProjectChannelWritable(channel, { probe });
+}
+
 function projectAgentOnlineMessage(project: Workspace, agentTool: string, sessionName: string): string {
   const label = project.name.trim() || project.slug;
   return `A ${agentTool} agent is online for ${label} (tmux session: ${sessionName}).`;

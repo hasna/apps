@@ -158,6 +158,16 @@ projects channel my-app --ensure           # create the channel if it does not e
 # name would outrank derivation forever and survive a revert. The link is set at
 # project creation, or deliberately by an operator.
 #
+# A pinned channel must be a channel: `link --conversations-channel`,
+# `update --integrations-json` and the MCP projects_link tool refuse a name the
+# conversations app has no channel for (BUG-0063). A name that only resolves as
+# an agent DM silently sent project posts to the DM lane, or failed closed with
+# HTTP 400. The check runs only when the write actually sets or changes the
+# channel, only where the conversations CLI is reachable, and never on an
+# unreadable channel listing (skip with HASNA_PROJECTS_CHANNEL_VERIFY=0).
+# `projects doctor` reports an already-pinned bad channel as
+# WORKSPACE_CHANNEL_MISSING.
+#
 # The channel class comes from the project record too:
 # integrations.conversations_channel_class if set, else the project kind, else
 # unset — in which case no --class is sent and conversations picks the default.

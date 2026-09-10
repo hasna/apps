@@ -26,7 +26,7 @@ import {
   type ProjectBudgetStatus,
 } from "../lib/budget.js";
 import { filterProjectEvalArtifacts } from "../lib/project-eval-artifacts.js";
-import { projectChannelSummary, resolveProjectChannelForProject } from "../lib/project-channel.js";
+import { assertProjectChannelIntegrationWritable, projectChannelSummary, resolveProjectChannelForProject } from "../lib/project-channel.js";
 import { repairProjectPermissions } from "../lib/project-permissions.js";
 import { redactProjectValue } from "../lib/redaction.js";
 import {
@@ -1769,11 +1769,14 @@ server.tool(
     try {
       const store = resolveProjectStore();
       const project = await store.resolveTarget(input.project);
+      const linkedIntegrations = mergeProjectIntegrations(
+        project.integrations,
+        normalizeWorkspaceIntegrations(input.integrations as WorkspaceIntegrations),
+      );
+      // Same write-time channel guard as the CLI link (BUG-0063).
+      assertProjectChannelIntegrationWritable(linkedIntegrations, project.integrations);
       const updated = await store.updateProject(project.id, {
-        integrations: mergeProjectIntegrations(
-          project.integrations,
-          normalizeWorkspaceIntegrations(input.integrations as WorkspaceIntegrations),
-        ),
+        integrations: linkedIntegrations,
         agent_id: mcpMutationAgent(store, input.agent),
         source: "mcp",
         command: "projects_link",
