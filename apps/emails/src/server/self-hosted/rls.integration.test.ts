@@ -722,8 +722,39 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
         [TENANT_A, first.record.id],
       );
       expect(provenanceRow.object_key).toBe("inbound/example.test/rls-object-1");
+
+      // Mail with no Message-ID has NO key (the generated column is NULL), so two such
+      // deliveries must both insert: the dangerous merge the previous attempts already
+      // made impossible has to stay impossible at the DB layer, not just in the caller.
+      const noId = { ...input, headers: { subject: "no identity" } };
+      const noIdFirst = await store.createInboundMessageWithProvenance(
+        { ...noId, source_id: "inbound/example.test/rls-object-3", message_id: "inbound/example.test/rls-object-3" },
+        provenanceFor("inbound/example.test/rls-object-3", "c".repeat(64)),
+      );
+      const noIdSecond = await store.createInboundMessageWithProvenance(
+        { ...noId, source_id: "inbound/example.test/rls-object-4", message_id: "inbound/example.test/rls-object-4" },
+        provenanceFor("inbound/example.test/rls-object-4", "d".repeat(64)),
+      );
+      expect(noIdFirst.inserted).toBe(true);
+      expect(noIdSecond.inserted).toBe(true);
+      expect(noIdSecond.record.id).not.toBe(noIdFirst.record.id);
+      const noIdRows = await pg!.one<{ n: number }>(
+        `SELECT count(*)::int AS n FROM messages WHERE tenant_id = $1 AND source_id = ANY($2)`,
+        [TENANT_A, ["inbound/example.test/rls-object-3", "inbound/example.test/rls-object-4"]],
+      );
+      expect(noIdRows.n).toBe(2);
     } finally {
-      await pg!.execute(`DELETE FROM messages WHERE tenant_id = $1 AND rfc_message_id = $2`, [TENANT_A, rfcMessageId]);
+      await pg!.execute(
+        `DELETE FROM messages
+          WHERE tenant_id = $1
+            AND (rfc_message_id = $2 OR source_id = ANY($3))`,
+        [TENANT_A, rfcMessageId, [
+          "inbound/example.test/rls-object-1",
+          "inbound/example.test/rls-object-2",
+          "inbound/example.test/rls-object-3",
+          "inbound/example.test/rls-object-4",
+        ]],
+      );
     }
   });
 });
