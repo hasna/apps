@@ -19,8 +19,12 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/apps.git",
+    "url": "https://github.com/hasna/apps.git",
     "directory": "apps/emails"
+  },
+  "homepage": "https://github.com/hasna/apps",
+  "bugs": {
+    "url": "https://github.com/hasna/apps/issues"
   },
   "bin": {
     "emails": "dist/cli/index.js",

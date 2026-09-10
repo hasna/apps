@@ -24,8 +24,12 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/connectors.git",
-    "directory": "sdk"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/connectors/sdk"
+  },
+  "homepage": "https://github.com/hasna/apps",
+  "bugs": {
+    "url": "https://github.com/hasna/apps/issues"
   },
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target browser && tsc -p tsconfig.json",

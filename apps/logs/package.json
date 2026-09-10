@@ -53,7 +53,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/logs.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/logs"
+  },
+  "homepage": "https://github.com/hasna/apps",
+  "bugs": {
+    "url": "https://github.com/hasna/apps/issues"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
