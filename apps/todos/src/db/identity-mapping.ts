@@ -140,6 +140,30 @@ function ensureColumn(db: Database, table: string, column: string, type: string)
 }
 
 /**
+ * Guarded DDL for the append-only history triggers on
+ * `agent_identity_source_mappings`. Every statement is `CREATE TRIGGER IF NOT
+ * EXISTS` so the block is intrinsically idempotent: executing it any number of
+ * times against a database that already carries the triggers is a no-op rather
+ * than "trigger ... already exists". The initialiser drops them first (to
+ * refresh an older definition); this constant is what makes a second run —
+ * including one that reaches the CREATE without the DROP — safe.
+ */
+export const AGENT_IDENTITY_HISTORY_TRIGGER_DDL = `
+  CREATE TRIGGER IF NOT EXISTS trg_agent_identity_mapping_history_immutable
+  BEFORE UPDATE OF local_agent_id, observed_label, evidence, mapping_basis, status, revision, created_at
+    ON agent_identity_source_mappings
+  BEGIN
+    SELECT RAISE(ABORT, 'IDENTITY_MAPPING_HISTORY_IMMUTABLE');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_agent_identity_mapping_history_append_only
+  BEFORE DELETE ON agent_identity_source_mappings
+  BEGIN
+    SELECT RAISE(ABORT, 'IDENTITY_MAPPING_HISTORY_IMMUTABLE');
+  END;
+`;
+
+/**
  * Repairs partially-applied migration 65 without rewriting agent rows. The
  * transaction is bounded to local SQLite DDL and never touches task leases,
  * fences, heartbeats, or external Runtime Coordination state.
@@ -225,20 +249,16 @@ export function ensureAgentIdentitySchema(db: Database): void {
         SELECT RAISE(ABORT, 'IDENTITY_SOURCE_LINEAGE_IMMUTABLE');
       END;
 
+      -- Drop first so an older definition is replaced rather than silently
+      -- retained (the upgrade path). AGENT_IDENTITY_HISTORY_TRIGGER_DDL then
+      -- re-creates them with CREATE TRIGGER IF NOT EXISTS, so the CREATE is
+      -- idempotent on its own and re-running the initialiser can never fail
+      -- with "trigger ... already exists". Both guards are required: the DROP
+      -- alone does not protect a future caller that runs the CREATE block
+      -- without it.
       DROP TRIGGER IF EXISTS trg_agent_identity_mapping_history_immutable;
-      CREATE TRIGGER trg_agent_identity_mapping_history_immutable
-      BEFORE UPDATE OF local_agent_id, observed_label, evidence, mapping_basis, status, revision, created_at
-        ON agent_identity_source_mappings
-      BEGIN
-        SELECT RAISE(ABORT, 'IDENTITY_MAPPING_HISTORY_IMMUTABLE');
-      END;
-
       DROP TRIGGER IF EXISTS trg_agent_identity_mapping_history_append_only;
-      CREATE TRIGGER trg_agent_identity_mapping_history_append_only
-      BEFORE DELETE ON agent_identity_source_mappings
-      BEGIN
-        SELECT RAISE(ABORT, 'IDENTITY_MAPPING_HISTORY_IMMUTABLE');
-      END;
+      ${AGENT_IDENTITY_HISTORY_TRIGGER_DDL}
     `);
     db.run("INSERT OR IGNORE INTO _migrations (id) VALUES (?)", [IDENTITY_MIGRATION_ID]);
   });
