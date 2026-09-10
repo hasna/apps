@@ -29,7 +29,7 @@ struct PasteTargetTests {
 
     @Test("serialized paste transactions write their own payload immediately before one post")
     @MainActor
-    func serializedPasteTransactionsKeepPayloadsIsolated() {
+    func serializedPasteTransactionsKeepPayloadsIsolated() throws {
         var scheduled: [@MainActor @Sendable () -> Void] = []
         var pasteboardText = "original"
         var postedPayloads: [String] = []
@@ -68,7 +68,8 @@ struct PasteTargetTests {
         #expect(coordinator.hasPendingTransaction)
         #expect(scheduled.count == 1)
 
-        let scheduledA = scheduled.removeFirst()
+        let scheduledA = try #require(scheduled.first)
+        scheduled.removeFirst()
         scheduledA()
         scheduledA()
         #expect(postedPayloads == ["recording A"])
@@ -76,10 +77,7 @@ struct PasteTargetTests {
         #expect(completions.count == 1)
         #expect(completions.first?.0 == 41)
         #expect(completions.first?.1 == .pasted)
-        #expect(coordinator.hasPendingTransaction)
-        #expect(!coordinator.submit(text: "recording B", generation: 42, delay: 0) { _, _ in })
-
-        scheduled.removeFirst()()
+        #expect(scheduled.isEmpty, "confirmed delivery settles on its read-back turn")
         #expect(!coordinator.hasPendingTransaction)
 
         #expect(coordinator.submit(
@@ -91,7 +89,9 @@ struct PasteTargetTests {
             completions.append((transaction.generation, outcome))
         })
         pasteboardText = "another mutation"
-        scheduled.removeFirst()()
+        let scheduledB = try #require(scheduled.first)
+        scheduled.removeFirst()
+        scheduledB()
         #expect(postedPayloads == ["recording A", "recording B"])
         #expect(completions.map(\.0) == [41, 42])
         #expect(completions.map(\.1) == [.pasted, .pasted])
@@ -717,7 +717,7 @@ struct PasteTargetTests {
 
     @Test("named pasteboard restoration does not overwrite a same-text newer owner")
     @MainActor
-    func namedPasteboardChangeCountPreventsABARestore() {
+    func namedPasteboardChangeCountPreventsABARestore() throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("recordings-paste-aba-\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
@@ -725,6 +725,8 @@ struct PasteTargetTests {
 
         var scheduled: [@MainActor @Sendable () -> Void] = []
         var ownedChangeCount: Int?
+        var externalChangeCount: Int?
+        var outcomes: [PasteDeliveryOutcome] = []
         let coordinator = PasteTransactionCoordinator(
             schedule: { _, operation in scheduled.append(operation) },
             writeAndVerify: { text in RecordingEngine.writeClipboardAttempt(text, to: pasteboard) },
@@ -738,7 +740,13 @@ struct PasteTargetTests {
             settlementDelay: 0.6,
             writeAttempted: { ownedChangeCount = $0.ownershipChangeCount },
             verify: { .confirmedByFocusedValue }
-        ) { _, _ in
+        ) { _, outcome in
+            outcomes.append(outcome)
+            // Change ownership after confirming delivery and before immediate restoration.
+            // The identical text must not make this transaction own the new clipboard write.
+            pasteboard.clearContents()
+            pasteboard.setString("A", forType: .string)
+            externalChangeCount = pasteboard.changeCount
         } settlement: { transaction, outcome in
             guard outcome == .pasted,
                   pasteboard.changeCount == ownedChangeCount,
@@ -746,15 +754,15 @@ struct PasteTargetTests {
             pasteboard.clearContents()
             pasteboard.setString("original", forType: .string)
         })
-        scheduled.removeFirst()()
+        let postingHop = try #require(scheduled.first)
+        scheduled.removeFirst()
+        postingHop()
 
-        pasteboard.clearContents()
-        pasteboard.setString("A", forType: .string)
-        let externalChangeCount = pasteboard.changeCount
-        scheduled.removeFirst()()
-
+        #expect(outcomes == [.pasted])
+        #expect(scheduled.isEmpty)
         #expect(pasteboard.string(forType: .string) == "A")
-        #expect(pasteboard.changeCount == externalChangeCount)
+        let newerOwnerChangeCount = try #require(externalChangeCount)
+        #expect(pasteboard.changeCount == newerOwnerChangeCount)
         #expect(!coordinator.hasPendingTransaction)
     }
 
@@ -801,7 +809,7 @@ struct PasteTargetTests {
 
     @Test("separate command copy and paste transactions preserve a newer clipboard owner")
     @MainActor
-    func commandRewriteDelayPreservesNewClipboardOwner() {
+    func commandRewriteDelayPreservesNewClipboardOwner() throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("recordings-command-copy-paste-\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
@@ -824,6 +832,7 @@ struct PasteTargetTests {
         var scheduled: [@MainActor @Sendable () -> Void] = []
         var prePasteValue: String?
         var ownedChangeCount: Int?
+        var outcomes: [PasteDeliveryOutcome] = []
         let coordinator = PasteTransactionCoordinator(
             schedule: { _, operation in scheduled.append(operation) },
             writeAndVerify: { text in RecordingEngine.writeClipboardAttempt(text, to: pasteboard) },
@@ -838,7 +847,8 @@ struct PasteTargetTests {
             prepare: { prePasteValue = pasteboard.string(forType: .string) },
             writeAttempted: { ownedChangeCount = $0.ownershipChangeCount },
             verify: { .confirmedByFocusedValue }
-        ) { _, _ in
+        ) { _, outcome in
+            outcomes.append(outcome)
         } settlement: { transaction, outcome in
             guard outcome == .pasted,
                   let ownedChangeCount,
@@ -850,9 +860,13 @@ struct PasteTargetTests {
             pasteboard.clearContents()
             pasteboard.setString(prePasteValue ?? "", forType: .string)
         })
-        scheduled.removeFirst()()
-        scheduled.removeFirst()()
+        let postingHop = try #require(scheduled.first)
+        scheduled.removeFirst()
+        postingHop()
 
+        #expect(outcomes == [.pasted])
+        #expect(scheduled.isEmpty)
+        #expect(!coordinator.hasPendingTransaction)
         #expect(pasteboard.string(forType: .string) == "new external value")
     }
 
