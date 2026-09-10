@@ -22,7 +22,7 @@ const run = (command, cwd, log, expected = 0) =>
 
 let passed = false;
 try {
-  run([process.execPath, 'scripts/sdk-declarations.mjs', '--check'], root, 'generated.log');
+  run([process.execPath, '--no-env-file', 'scripts/sdk-declarations.mjs', '--check'], root, 'generated.log');
   const packed = run(npmPackCommand(scratch), root, 'pack.json');
   const archive = join(scratch, packedFilename(packed));
   const consumer = join(scratch, 'consumer');
@@ -59,7 +59,7 @@ try {
   const receipt = { nodeVersion, npmVersion, package: metadata.name, version: metadata.version, archiveSha256: createHash('sha256').update(readFileSync(archive)).digest('hex'),
     typescript: dev.typescript, nodeTypes: dev['@types/node'], strict: true, skipLibCheck: false, overrides: false,
     runtimeRootEqualsSdk: true, separateBrowser: true, missingDeclarationRefusal: true, typedNegativeRefusals: true,
-    applicationRequests: 0 };
+    scope: 'Installed declaration checking and module import identity; application requests are not measured' };
   writeFileSync(join(scratch, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   console.log(JSON.stringify(receipt));
   passed = true;

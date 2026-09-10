@@ -35,7 +35,7 @@ not listed here are not part of the package-root API.
 | Repository read errors | `AmbiguousRepoNameError`, `AmbiguousRemoteError` |
 | GitHub | `syncGithubPRs`, `syncAllGithubPRs`, `syncRemotePullRequests`, `fetchRepoMetadata`, `parseGithubRemote` |
 | GitHub catalog | `getDefaultGithubCatalogCachePath`, `loadGithubRepoCatalog`, `syncGithubRepoCatalog`, `enumerateGithubRepoCatalog`, `iterateGithubRepoCatalog`, `applyGithubCatalogFilter`, `extractGithubFullNameFromRemote` |
-| Worktrees | `WORKTREE_LEASE_SCHEMA`, `WORKTREE_LIST_SCHEMA`, `WORKTREE_ADOPT_SCHEMA`, `WorktreeError`, `worktreeRootDir`, `assertWorktreeName`, `computeWorktreePath`, `parseWorktreeRef`, `addWorktree`, `listWorktrees`, `removeWorktree`, `adoptWorktrees`, `releaseWorktree`, `redactGitDiagnostics` |
+| Worktrees | `WORKTREE_LEASE_SCHEMA`, `WORKTREE_LIST_SCHEMA`, `WORKTREE_ADOPT_SCHEMA`, `WorktreeError`, `worktreeRootDir`, `assertWorktreeName`, `computeWorktreePath`, `parseWorktreeRef`, `addWorktree`, `listWorktrees`, `removeWorktree`, `adoptWorktrees`, `releaseWorktree`, `redactGitDiagnostics`, `WORKTREE_NORMALIZE_SCHEMA`, `normalizeWorktree` |
 | Repository lifecycle | `REPO_CREATE_SCHEMA`, `REPO_CLONE_SCHEMA`, `REPO_ARCHIVE_SCHEMA`, `RepoLifecycleError`, `parseRepoSpec`, `isRepoSpec`, `createRepository`, `cloneRepository`, `archiveRepository`, `redactRepoLifecycleText` |
 | Registry relocation | `PrimaryRelocationError`, `relocatePrimaryRepo` |
 | Branch adjudication | `BranchAdjudicationError`, `adjudicateBranches` |
@@ -172,3 +172,20 @@ adds either a dry-run comment preview or an explicitly requested todos write.
 Loop producers return domain-specific versioned envelopes and deterministic
 `task_suggestions`. `writeLoopReport` writes a private report file only when a
 report directory is supplied.
+
+### Normalize an existing worktree
+
+`normalizeWorktree({ repo: "example/project", name: "task-name" })` returns a
+read-only plan. Its `NormalizeWorktreeResult` includes the source, computed
+org-scoped destination, HEAD, lease IDs, file count, and `plan_hash`.
+
+Apply the reviewed plan with `apply: true` and `expectedPlanHash: plan.plan_hash`.
+The API checkpoints every file and the Git administrative directory, verifies
+contents and ownership, relocates through Git, updates local registry/lease
+paths, and retains a compatibility symlink. Existing lease ownership stays
+unchanged. `rollback: plan.plan_hash` recovers a saved operation; changed work
+is refused rather than overwritten. See [CLI normalization](cli.md#normalize-a-legacy-worktree)
+for checkpoint, alias, disk-space, and active-writer requirements.
+
+Both `NormalizeWorktreeRequest` and `NormalizeWorktreeResult` are exported types.
+The JSON envelope uses `WORKTREE_NORMALIZE_SCHEMA` (`repos.worktree-normalize.v1`).

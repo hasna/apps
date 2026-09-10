@@ -264,3 +264,35 @@ Its default store is `~/.hasna/events`.
 It verifies the package digest before reading its embedded provenance, then
 binds the reviewed commit/tree and the exact packaged and selected executable
 bytes. Success prints a versioned JSON receipt; any mismatch exits non-zero.
+
+### Normalize a legacy worktree
+
+`repos worktree normalize <org>/<repo> --name <existing-name> --json` computes
+`worktrees/<repo>/<name>` → `worktrees/<org>/<repo>/<name>` from the registered
+primary checkout and returns a read-only plan. No destination argument exists.
+
+After reviewing the plan, repeat with `--apply --expected-plan-hash <hash>`.
+The command refuses changed contents/metadata, occupied destinations, wrong Git
+ownership, path aliases, Git locks, submodules and tracked relative symlinks
+that cross the worktree boundary. Coordinate active writers before applying.
+
+It checkpoints **all files, including ignored and untracked files**, plus the
+Git administrative directory, then uses Git's worktree move operation. Copies
+use copy-on-write where available and ordinary copies elsewhere; ensure enough
+space before applying. It verifies file hashes, index, HEAD, directory identity
+and the Git backlink, updates affected local registry and lease paths, and
+leaves an absolute compatibility symlink at the old path. Untracked relative
+symlinks crossing the worktree boundary are adjusted to retain their targets.
+Existing lease IDs and ownership fields remain unchanged; no ownership is
+invented for unleased worktrees. Use `adopt` separately after verifying ownership.
+
+The receipt and checkpoints stay under
+`worktrees/.evidence/normalize-<plan-hash>/`. A database error rolls the move
+back. Following an interruption, use
+`repos worktree normalize <org>/<repo> --name <name> --rollback <plan-hash>`.
+Rollback checks the receipt and refuses to overwrite work changed since the
+move. It restores paths and registry/lease rows, retaining the checkpoint.
+Retry after rollback with a new dry run; retained checkpoints are never silently
+overwritten. The command does not rewrite external session databases, runtime
+configuration, or old aliases elsewhere; compatibility links keep old paths
+reachable while those consumers are verified separately.

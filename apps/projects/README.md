@@ -172,10 +172,15 @@ projects channel my-app --ensure           # create the channel if it does not e
 # channel, only where the conversations CLI is reachable, and never on an
 # unreadable channel listing (skip with HASNA_PROJECTS_CHANNEL_VERIFY=0).
 # `projects doctor` reports an already-pinned bad channel as
-# WORKSPACE_CHANNEL_MISSING. Not covered by design: a direct hosted
-# PATCH/PUT /v1/workspaces/{id} integrations blob (the projects server has no
-# conversations client — the rule is client-side), and a channel derived at
-# create rather than pinned by a caller.
+# WORKSPACE_CHANNEL_MISSING. The hosted store applies the same rule at its own
+# writes — POST /v1/workspaces, PATCH/PUT /v1/workspaces/{id}, POST
+# /v1/workspaces/{id}/guarded-metadata and the resource-link projection — so a
+# direct HTTP/SDK caller that never passes a client-level check is refused too
+# (BUG-0076); the rule is db-free and its probe is the same one-shot CLI call,
+# so a server box without the conversations CLI still cannot invent a refusal.
+# Still not covered by design: a channel DERIVED at create rather than pinned
+# by a caller (the local path ensures it through `projects channel --ensure`
+# after the write; the hosted path has no ensure).
 #
 # The channel class comes from the project record too:
 # integrations.conversations_channel_class if set, else the project kind, else
