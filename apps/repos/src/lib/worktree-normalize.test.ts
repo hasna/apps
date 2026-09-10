@@ -85,8 +85,12 @@ describe("worktree normalization", () => {
     expect(restored.action).toBe("rolled-back"); expect(lstatSync(f.source).isSymbolicLink()).toBe(false);
     expect(existsSync(f.target)).toBe(false);
     expect((f.db.query("SELECT worktree_path FROM worktree_leases").get() as any).worktree_path).toBe(f.source);
+    // An incomplete file checkpoint from an interrupted copy is retained,
+    // and retry makes a fresh checkpoint from the still-intact worktree.
+    rmSync(join(restored.checkpoint!, "files", "tracked"));
     const retry = normalizeWorktree({ repo: "acme/demo", name: "task", db: f.db });
     expect(normalizeWorktree({ repo: "acme/demo", name: "task", apply: true, expectedPlanHash: retry.plan_hash, db: f.db }).applied).toBe(true);
+    expect(existsSync(`${restored.checkpoint}.attempt-1`)).toBe(true);
   });
   test("a database write failure rolls Git and the compatibility alias back", () => {
     const f = seed();

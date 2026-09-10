@@ -260,21 +260,20 @@ export function normalizeWorktree(request: NormalizeWorktreeRequest): NormalizeW
   if (present(checkpoint)) {
     const previous = JSON.parse(readFileSync(journalPath, "utf8")) as Journal;
     if (previous.phase !== "rolled-back" || hash(previous.state) !== planHash) fail(`checkpoint already exists; inspect it or use --rollback ${planHash} before retrying`);
-    if (hash(inventory(join(checkpoint, "files"))) !== hash(state.snapshot.files)) fail("retained checkpoint does not match the reviewed files");
-    // Keep each completed rollback receipt; retries reuse immutable backup files.
+    // A failed copy may have left a partial checkpoint. Preserve that entire
+    // attempt, including its receipt, and make a fresh verified checkpoint.
     let attempt = 1;
-    while (present(join(checkpoint, `journal.attempt-${attempt}.json`))) attempt++;
-    writeFileSync(join(checkpoint, `journal.attempt-${attempt}.json`), JSON.stringify(previous, null, 2), { flag: "wx", mode: 0o600 });
-  } else {
-    mkdirSync(dirname(checkpoint), { recursive: true, mode: 0o700 });
-    mkdirSync(checkpoint, { mode: 0o700 });
-    writeJournal(journalPath, journal);
-    // Copy-on-write where supported; fall back to copying. Never follow symlinks.
-    const copyOptions = { recursive: true, dereference: false, verbatimSymlinks: true, preserveTimestamps: true, mode: constants.COPYFILE_FICLONE };
-    cpSync(source, join(checkpoint, "files"), copyOptions);
-    cpSync(state.git_dir, join(checkpoint, "git-admin"), copyOptions);
-    if (hash(inventory(join(checkpoint, "files"))) !== hash(state.snapshot.files)) fail("file checkpoint verification failed; source retained");
+    while (present(`${checkpoint}.attempt-${attempt}`)) attempt++;
+    renameSync(checkpoint, `${checkpoint}.attempt-${attempt}`);
   }
+  mkdirSync(dirname(checkpoint), { recursive: true, mode: 0o700 });
+  mkdirSync(checkpoint, { mode: 0o700 });
+  writeJournal(journalPath, journal);
+  // Copy-on-write where supported; fall back to copying. Never follow symlinks.
+  const copyOptions = { recursive: true, dereference: false, verbatimSymlinks: true, preserveTimestamps: true, mode: constants.COPYFILE_FICLONE };
+  cpSync(source, join(checkpoint, "files"), copyOptions);
+  cpSync(state.git_dir, join(checkpoint, "git-admin"), copyOptions);
+  if (hash(inventory(join(checkpoint, "files"))) !== hash(state.snapshot.files)) fail("file checkpoint verification failed; source retained");
   journal.phase = "checkpointed"; writeJournal(journalPath, journal);
   if (hash(capture(db, repo, source, destination)) !== planHash) fail("normalization plan changed while checkpointing; source retained");
   mkdirSync(dirname(destination), { recursive: true });
