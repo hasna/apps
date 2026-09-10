@@ -12,7 +12,12 @@ interface CiStep {
   "continue-on-error"?: unknown;
   "working-directory"?: unknown;
 }
-interface CiJob extends Omit<CiStep, "run"> { steps?: CiStep[] }
+interface CiJob extends Omit<CiStep, "run"> {
+  steps?: CiStep[];
+  needs?: string | string[];
+  env?: Record<string, unknown>;
+  strategy?: { matrix?: unknown; "fail-fast"?: unknown };
+}
 interface RootCi { jobs?: Record<string, CiJob> }
 
 function rootCi(): RootCi {
@@ -22,20 +27,38 @@ function rootCi(): RootCi {
 /** The nested standalone-era workflow is not a GitHub Actions entry point. */
 function rootCiViolations(workflow: RootCi): string[] {
   const violations: string[] = [];
-  const stepIndex = (jobName: string, command: string) => {
+  const always = "${{ always() }}";
+  const stepIndex = (jobName: string, command: string, requiredIf?: string) => {
     const job = workflow.jobs?.[jobName];
     const index = job?.steps?.findIndex((step) => step.run?.split("\n").some((line) => line.trim() === command)) ?? -1;
     const step = job?.steps?.[index];
-    if (!job || !step || [job, step].some((entry) => entry.if !== undefined ||
+    if (!job || !step || [job, step].some((entry) => entry.if !== requiredIf ||
       (entry["continue-on-error"] !== undefined && entry["continue-on-error"] !== false) ||
       entry["working-directory"] !== undefined)) {
-      violations.push(`${jobName}: missing unconditional hard root command ${command}`);
+      violations.push(`${jobName}: missing hard root command ${command}`);
     }
     return index;
   };
-  const build = stepIndex("build-test", "bunx turbo run build --affected --concurrency=1");
-  const test = stepIndex("build-test", "bunx turbo run test --affected --concurrency=1");
-  if (build < 0 || test <= build) violations.push("affected build must precede affected tests");
+  // A frozen plan feeds isolated serial runners; the required aggregate must
+  // execute even when a shard fails and reject missing/failed terminal receipts.
+  stepIndex("affected-plan", 'bun tooling/ci/run-affected-shards.ts plan "$RUNNER_TEMP/affected-plan"');
+  stepIndex("affected-shard", 'bun tooling/ci/run-affected-shards.ts shard "$RUNNER_TEMP/affected-plan/plan.json" "$AFFECTED_PLAN_SHA256" "$AFFECTED_SHARD" "$RUNNER_TEMP/affected-shard"');
+  stepIndex("build-test", 'bun tooling/ci/run-affected-shards.ts aggregate "$RUNNER_TEMP/affected-plan/plan.json" "$AFFECTED_PLAN_SHA256" "$RUNNER_TEMP/affected-receipts" "$AFFECTED_MATRIX_RESULT" "$RUNNER_TEMP/affected-aggregate.json"', always);
+  const shard = workflow.jobs?.["affected-shard"];
+  const aggregate = workflow.jobs?.["build-test"];
+  const needs = (job?: CiJob) => typeof job?.needs === "string" ? [job.needs] : job?.needs ?? [];
+  const equal = (value: unknown, expected: unknown, message: string) => {
+    if (JSON.stringify(value) !== JSON.stringify(expected)) violations.push(message);
+  };
+  equal(needs(shard), ["affected-plan"], "shards must depend on the frozen plan");
+  equal([...needs(aggregate)].sort(), ["affected-plan", "affected-shard"], "aggregate must depend on planner and all shards");
+  equal(shard?.strategy?.matrix, "${{ fromJSON(needs.affected-plan.outputs.matrix) }}", "all planned shards must execute");
+  equal(shard?.strategy?.["fail-fast"], false, "a failed shard must not cancel other planned tests");
+  for (const job of [shard, aggregate]) {
+    equal(job?.env?.AFFECTED_PLAN_SHA256, "${{ needs.affected-plan.outputs.plan-sha256 }}", "execution must bind the frozen plan digest");
+  }
+  equal(shard?.env?.AFFECTED_SHARD, "${{ matrix.shard }}", "each runner must execute its selected shard");
+  equal(aggregate?.env?.AFFECTED_MATRIX_RESULT, "${{ needs.affected-shard.result }}", "aggregate must receive the actual shard result");
   stepIndex("gates", "bun tooling/ci/check-manifests.ts --self-test");
   stepIndex("gates", "bun tooling/ci/check-manifests.ts");
   stepIndex("publish-guard", "bun tooling/ci/check-publish-guard.ts --self-test");
@@ -212,7 +235,7 @@ describe("scan:artifact release gate", () => {
   });
 
   test("root CI coverage checks reject missing, skipped and softened lanes", () => {
-    for (const jobName of ["build-test", "gates", "publish-guard"]) {
+    for (const jobName of ["affected-plan", "affected-shard", "build-test", "gates", "publish-guard"]) {
       const missing = rootCi();
       delete missing.jobs![jobName];
       expect(rootCiViolations(missing).length).toBeGreaterThan(0);
@@ -222,11 +245,11 @@ describe("scan:artifact release gate", () => {
         expect(rootCiViolations(softened).length).toBeGreaterThan(0);
       }
     }
-    for (const jobName of ["build-test", "gates", "publish-guard"]) {
+    for (const jobName of ["affected-plan", "affected-shard", "build-test", "gates", "publish-guard"]) {
       const original = rootCi();
       const steps = original.jobs![jobName]!.steps!;
       for (const [index, step] of steps.entries()) {
-        if (!step.run?.match(/turbo run (build|test)|bun tooling\/ci\/check-(manifests|publish-guard)\.ts(?: --self-test)?(?:\n|$)/)) continue;
+        if (!step.run?.match(/bun tooling\/ci\/run-affected-shards\.ts (plan|shard|aggregate)|bun tooling\/ci\/check-(manifests|publish-guard)\.ts(?: --self-test)?(?:\n|$)/)) continue;
         for (const mutation of ["commented", "conditional", "softened"] as const) {
           const changed = structuredClone(original);
           const target = changed.jobs![jobName]!.steps![index]!;
@@ -237,9 +260,20 @@ describe("scan:artifact release gate", () => {
         }
       }
     }
-    const reordered = rootCi();
-    reordered.jobs!["build-test"]!.steps!.reverse();
-    expect(rootCiViolations(reordered)).toContain("affected build must precede affected tests");
+    for (const mutation of [
+      (ci: RootCi) => { ci.jobs!["affected-shard"]!.needs = []; },
+      (ci: RootCi) => { ci.jobs!["build-test"]!.needs = ["affected-plan"]; },
+      (ci: RootCi) => { ci.jobs!["affected-shard"]!.strategy!.matrix = { shard: [0] }; },
+      (ci: RootCi) => { ci.jobs!["affected-shard"]!.strategy!["fail-fast"] = true; },
+      (ci: RootCi) => { ci.jobs!["affected-shard"]!.env!.AFFECTED_SHARD = "0"; },
+      (ci: RootCi) => { ci.jobs!["affected-shard"]!.env!.AFFECTED_PLAN_SHA256 = "unbound"; },
+      (ci: RootCi) => { ci.jobs!["build-test"]!.env!.AFFECTED_PLAN_SHA256 = "unbound"; },
+      (ci: RootCi) => { ci.jobs!["build-test"]!.env!.AFFECTED_MATRIX_RESULT = "success"; },
+      (ci: RootCi) => { delete ci.jobs!["build-test"]!.if; },
+    ]) {
+      const changed = rootCi(); mutation(changed);
+      expect(rootCiViolations(changed).length).toBeGreaterThan(0);
+    }
   });
 
   test("packs the artifact and passes the scan with the pinned kit", () => {
