@@ -12,7 +12,7 @@ const packageJson = await Bun.file(
   new URL("../package.json", import.meta.url),
 ).json() as {
   name: string;
-  repository: { url: string };
+  repository: { type: string; url: string; directory: string };
   publishConfig: { registry: string; access: string };
 };
 
@@ -60,10 +60,15 @@ describe("npm trusted publishing workflow", () => {
     expect(workflow).not.toContain("NODE_AUTH_TOKEN:");
     expect(workflow).not.toContain("${{ secrets.");
 
+    // ORG LAW (2026-09-10): the pre-monorepo per-app repo is gone; the package
+    // lives in hasna/apps at apps/files, so the tuple is the monorepo url with
+    // the on-disk directory — no `git+` prefix, no `hasna/files.git`.
     expect(packageJson).toMatchObject({
       name: "@hasna/files",
       repository: {
-        url: "git+https://github.com/hasna/files.git",
+        type: "git",
+        url: "https://github.com/hasna/apps.git",
+        directory: "apps/files",
       },
       publishConfig: {
         registry: "https://registry.npmjs.org",
