@@ -1,4 +1,4 @@
-import { assertCents } from "./amounts.js";
+import { assertReservationCents } from "./amounts.js";
 /**
  * GovernanceStore: the append-only lifecycle ledger + spend ledger behind the
  * governance services.
@@ -45,7 +45,9 @@ export interface CreditReservation {
   id: string;
   orgId: string;
   runId: string;
+  /** Per-reservation integer cents (0..2147483647) across all store backends. */
   estimatedCents: number;
+  /** Settled integer cents in the same per-reservation range. */
   actualCents?: number;
   status: ReservationStatus;
   createdAt: string;
@@ -126,7 +128,7 @@ export class MemoryGovernanceStore implements GovernanceStore {
 
   async createReservation(input: { orgId: string; runId: string; estimatedCents: number }): Promise<CreditReservation> {
     const estimatedCents = input.estimatedCents;
-    assertCents(estimatedCents, "estimatedCents");
+    assertReservationCents(estimatedCents, "estimatedCents");
     const reservation: CreditReservation = { ...input, estimatedCents, id: reservationId(), status: "reserved", createdAt: nowIso() };
     this.reservations.push(reservation);
     return reservation;
@@ -137,7 +139,7 @@ export class MemoryGovernanceStore implements GovernanceStore {
   }
 
   async reconcileReservation(reservationId: string, actualCents: number, status: "charged" | "released"): Promise<CreditReservation | null> {
-    assertCents(actualCents, "actualCents");
+    assertReservationCents(actualCents, "actualCents");
     const reservation = this.reservations.find((candidate) => candidate.id === reservationId);
     if (!reservation || reservation.status !== "reserved") return reservation ?? null;
     const next: CreditReservation = { ...reservation, actualCents, status, reconciledAt: nowIso() };
@@ -239,7 +241,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
 
   async createReservation(input: { orgId: string; runId: string; estimatedCents: number }): Promise<CreditReservation> {
     const estimatedCents = input.estimatedCents;
-    assertCents(estimatedCents, "estimatedCents");
+    assertReservationCents(estimatedCents, "estimatedCents");
     const reservation: CreditReservation = { ...input, estimatedCents, id: reservationId(), status: "reserved", createdAt: nowIso() };
     this.db.run(
       `INSERT INTO skills_credit_reservations (id, org_id, run_id, estimated_cents, status, created_at)
@@ -257,7 +259,7 @@ export class SqliteGovernanceStore implements GovernanceStore {
   }
 
   async reconcileReservation(reservationId: string, actualCents: number, status: "charged" | "released"): Promise<CreditReservation | null> {
-    assertCents(actualCents, "actualCents");
+    assertReservationCents(actualCents, "actualCents");
     // The predicate and transition must be one SQLite statement: separate
     // connections can both observe reserved before either writes a result.
     const updated = this.db.query(
@@ -365,7 +367,7 @@ export class PostgresGovernanceStore implements GovernanceStore {
 
   async createReservation(input: { orgId: string; runId: string; estimatedCents: number }): Promise<CreditReservation> {
     const estimatedCents = input.estimatedCents;
-    assertCents(estimatedCents, "estimatedCents");
+    assertReservationCents(estimatedCents, "estimatedCents");
     const reservation: CreditReservation = { ...input, estimatedCents, id: reservationId(), status: "reserved", createdAt: nowIso() };
     await this.sql`
       INSERT INTO skills_credit_reservations (id, org_id, run_id, estimated_cents, status)
@@ -382,7 +384,7 @@ export class PostgresGovernanceStore implements GovernanceStore {
   }
 
   async reconcileReservation(reservationId: string, actualCents: number, status: "charged" | "released"): Promise<CreditReservation | null> {
-    assertCents(actualCents, "actualCents");
+    assertReservationCents(actualCents, "actualCents");
     const rows = await this.sql`
       UPDATE skills_credit_reservations
       SET actual_cents = ${actualCents}, status = ${status}, reconciled_at = now()

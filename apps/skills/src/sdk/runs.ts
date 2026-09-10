@@ -1,4 +1,4 @@
-import { assertCents } from "./amounts.js";
+import { assertReservationCents } from "./amounts.js";
 /**
  * Run protocol + atomic run services seam.
  *
@@ -150,7 +150,7 @@ export interface RunServiceGovernance {
   events?: RunEventEmitter;
   /** Resource envelope this run requests, checked against the org ceilings. */
   quota?: RunQuota;
-  /** Estimated cost in cents, reserved before dispatch. */
+  /** Estimated integer cents (0..2147483647), reserved before dispatch. */
   estimatedCents?: number;
 }
 
@@ -160,7 +160,7 @@ export function createRunService({ store, governance }: RunServiceOptions): RunS
     async admit(input) {
       // Own the validated amount before an offline/store callback can yield.
       const estimatedCents = governance?.estimatedCents;
-      if (estimatedCents !== undefined) assertCents(estimatedCents, "estimatedCents");
+      if (estimatedCents !== undefined) assertReservationCents(estimatedCents, "estimatedCents");
       if (governance) {
         await governance.offline?.assertCanRunLocal(input.slug);
         await governance.spend?.admit({
@@ -197,7 +197,7 @@ export async function settleRun(
   actualCents?: number,
 ): Promise<void> {
   const amount = actualCents === undefined ? run.costCents : actualCents;
-  assertCents(amount, "actualCents");
+  assertReservationCents(amount, "actualCents");
   if (options.spend) {
     await options.spend.reconcile(run.orgId, run.id, amount);
   }
