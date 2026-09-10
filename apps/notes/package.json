@@ -9,8 +9,14 @@
     "notes-serve": "bin/notes-serve.mjs"
   },
   "exports": {
-    ".": "./sdk/index.mjs",
-    "./sdk": "./sdk/index.mjs",
+    ".": {
+      "types": "./sdk/index.d.mts",
+      "default": "./sdk/index.mjs"
+    },
+    "./sdk": {
+      "types": "./sdk/index.d.mts",
+      "default": "./sdk/index.mjs"
+    },
     "./sdk/browser": {
       "types": "./sdk/browser.d.mts",
       "import": "./sdk/browser.mjs"
@@ -59,8 +65,11 @@
     "test:sdk-types": "tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --moduleResolution NodeNext --lib ES2022,DOM test/browser-sdk.types.mts",
     "test:pg": "bun scripts/pg-test-gate.mjs",
     "scan:artifact": "bun scripts/scan-artifact.mjs",
-    "prepack": "bun run scan:artifact",
-    "pack:dry": "bun pm pack --dry-run"
+    "prepack": "bun run build:sdk-types && bun run scan:artifact",
+    "pack:dry": "bun pm pack --dry-run",
+    "build:sdk-types": "bun scripts/sdk-declarations.mjs",
+    "check:sdk-types": "bun scripts/sdk-declarations.mjs --check",
+    "test:sdk-package": "bun scripts/test-sdk-package.mjs"
   },
   "keywords": [
     "notes",
@@ -93,10 +102,13 @@
   "devDependencies": {
     "@electric-sql/pglite": "0.5.4",
     "@types/bun": "1.2.4",
-    "@types/pg": "^8.15.6"
+    "@types/pg": "^8.15.6",
+    "typescript": "5.9.3",
+    "@types/node": "25.2.3"
   },
   "private": false,
   "workspaces": [
     "server"
-  ]
+  ],
+  "types": "./sdk/index.d.mts"
 }
