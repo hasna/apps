@@ -11,10 +11,14 @@ as a channel, so a project-channel post landed in the DM lane (nobody watching
 the project channel saw it) or failed closed with HTTP 400 "Channel ... does
 not exist, so this message was not sent."
 
-`link --conversations-channel`, `update --integrations-json`, the guarded
-update and the MCP `projects_link` tool now probe the conversations channel
-listing (`conversations channel list -j`, cached per process) and refuse only a
-positive `missing` verdict; the error names the channel and both failure modes.
+Every surface that can pin the integration is guarded: `create` and
+`update`/`link`/guarded-update `--integrations-json`, and the MCP
+`projects_create`, `projects_update` and `projects_link` tools — the two
+integrations writers that previously reached `store.createProject` /
+`store.updateProject` unguarded, in both the local and the hosted transport.
+Each probes the conversations channel listing (`conversations channel list -j`,
+cached per process) and refuses only a positive `missing` verdict; the error
+names the channel and both failure modes.
 The check fires only when the write actually sets or changes the channel — a
 full-integrations write that carries an existing value forward still succeeds,
 so repairing a record stays a deliberate, separate act. An unavailable probe or

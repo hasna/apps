@@ -1272,6 +1272,10 @@ server.tool(
         // (directory/git/tmux) does not apply to a hosted project row. Root/
         // recipe are shared registry resources: resolve slug->id through the
         // Store so intent is honored (not silently dropped) in the hosted backend.
+        // Same write-time channel guard as the CLI create (BUG-0063): a hosted
+        // row is not a reason to store a channel name nothing can post to.
+        const hostedIntegrations = input.integrations as WorkspaceIntegrations | undefined;
+        assertProjectChannelIntegrationWritable(hostedIntegrations, undefined);
         const project = await store.createProject({
           name: input.name,
           slug: input.slug,
@@ -1280,7 +1284,7 @@ server.tool(
           root_id: await rootId(store, input.root),
           recipe_id: await recipeId(store, input.recipe),
           tags: input.tags,
-          integrations: input.integrations as WorkspaceIntegrations | undefined,
+          integrations: hostedIntegrations,
           metadata: input.metadata as JsonObject | undefined,
         });
         return jsonText({ project });
@@ -1304,6 +1308,8 @@ server.tool(
         brief_id: input.brief_id,
         brief_path: input.brief_path,
       }) ?? integrationsBase;
+      // Same write-time channel guard as the CLI create (BUG-0063).
+      assertProjectChannelIntegrationWritable(integrations, undefined);
       return jsonProjectText(await executeWorkspaceCreation({
         name: input.name,
         slug: input.slug,
@@ -1725,6 +1731,8 @@ server.tool(
       const integrations = hasProjectIntegrationFields(integrationFields)
         ? mergeProjectIntegrationFields(integrationsBase, integrationFields)
         : input.integrations === undefined ? undefined : integrationsBase;
+      // Same write-time channel guard as the CLI update/link (BUG-0063).
+      assertProjectChannelIntegrationWritable(integrations, project.integrations);
       // Root/recipe are shared registry resources; resolve slug->id through the
       // Store in BOTH transports so root/recipe are never silently dropped on a
       // flipped machine.
