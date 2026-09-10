@@ -1374,7 +1374,18 @@ function mapAttachmentInventoryRow(row: Record<string, unknown>): AttachmentInve
     // validator used by authenticated download, so this is a truthful prediction.
     content_available: row["content_available"] === true && metadataValid,
     direction: typeof row["direction"] === "string" ? (row["direction"] as string) : null,
-    received_at: toIso(row["received_at"]),
+    // NEVER NULL (BUG-0053) — the rule BUG-0043 established for the message record,
+    // applied to this surface instead of leaving it as the odd one out.
+    //
+    // An OUTBOUND message stores no `received_at`: nothing was received. But the scan
+    // that emits these rows is keyset-ordered by `sort_ts` = COALESCE(received_at,
+    // created_at), and the cursor it hands back is cut from that same instant. Answering
+    // the raw column left the row's own timestamp null while the cursor it was emitted
+    // under said otherwise, so a consumer windowing the inventory on `received_at` could
+    // not tell "outside the window" from "no timestamp" and dropped every outbound
+    // attachment silently — the exact failure mode BUG-0043 fixed for the message list.
+    // The row now reports the instant it is ordered by, so the two surfaces agree.
+    received_at: toIso(row["received_at"]) ?? toIso(row["created_at"]),
   };
 }
 
@@ -3662,6 +3673,11 @@ export class TenantScopedStore {
          END AS content_available,
          m.direction AS direction,
          m.received_at AS received_at,
+         -- The fallback half of the never-null received_at rule (BUG-0053), projected
+         -- for the same reason the message-list projection carries it: the scan is
+         -- ordered and cursored by sort_ts = COALESCE(received_at, created_at), so a
+         -- row with no stored instant still has one to report, and it is this column.
+         m.created_at AS created_at,
          to_char(m.sort_ts AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
        FROM messages m
        CROSS JOIN LATERAL jsonb_array_elements(

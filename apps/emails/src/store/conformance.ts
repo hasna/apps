@@ -1896,6 +1896,51 @@ function buildConformanceCases(): ConformanceCase[] {
         same(asArray(page["items"], "attachment items").length, 1, "a one-row page holds one row");
       },
     },
+    {
+      id: "attachments/inventory-answers-a-non-null-received-at",
+      what: "an outbound message's attachment inventory row answers a non-null received_at — the instant the scan is ordered by — rather than the raw null column",
+      requires: "keysetPagination",
+      async exercise(store: EmailStore): Promise<unknown> {
+        const filename = `${token("received-at")}.txt`;
+        const created = await must(
+          store.messages.createMessage({
+            ...outboundMessage(`inventory-received-at ${RUN_TAG}`),
+            attachments: [{ filename, content_type: "text/plain", size: 3 }],
+          }),
+          "createMessage",
+        );
+        stash("attachments/inventory-answers-a-non-null-received-at", { id: created.id, filename });
+        const drained = await drainAttachments(store, 2);
+        if ("refused" in drained) return drained.refused;
+        // The message record is read too, so the two surfaces are COMPARED rather than
+        // each pinned to a literal: the inventory must agree with the record about when
+        // the row happened.
+        const record = await store.messages.getMessage(created.id);
+        const mine = drained.items.filter((item) => String(item.filename ?? "") === filename);
+        return { mine: mine.map((item) => ({ ...item })), record };
+      },
+      expect(outcome: unknown): void {
+        const answers = asObject(outcome, "the inventory rows and the message record");
+        const mine = asArray(answers["mine"], "the outbound inventory rows");
+        same(mine.length, 1, "the outbound attachment carries exactly one inventory row");
+        const row = asObject(mine[0], "inventory row");
+        same(row["direction"], "outbound", "inventory direction");
+        // THE REGRESSION. An outbound row stores no `received_at` — nothing was received —
+        // while this scan is keyset-ordered, and cursored, by
+        // `COALESCE(received_at, created_at)`. Answering the raw column returned null for
+        // every outbound attachment, so a caller windowing this surface on `received_at`
+        // could not tell "outside the window" from "no timestamp" and dropped the row
+        // silently — the same failure BUG-0043 fixed on the message list, left standing on
+        // this adjacent surface. The row must report the instant it is ordered by.
+        check(row["received_at"] !== null, "an outbound inventory row answered a null received_at");
+        const read = recordOf(value(answers["record"], "getMessage"), "message record");
+        same(
+          row["received_at"],
+          read.created_at,
+          "the inventory row is timestamped by the message's creation instant",
+        );
+      },
+    },
 
     {
       id: "messages/list-filters-narrow-to-the-written-message",

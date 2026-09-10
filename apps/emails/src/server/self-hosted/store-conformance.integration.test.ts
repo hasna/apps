@@ -204,7 +204,7 @@ describe.skipIf(!pgClient)("HttpEmailStore conformance against the real /v1 serv
       expect(conformanceFailures(report)).toEqual([]);
       expect(() => assertUniformCaseCoverage(report, CONFORMANCE_CASES)).not.toThrow();
 
-      // THE NUMBERS, pinned exactly rather than as inequalities. 56 / 8 / 0 is the claim
+      // THE NUMBERS, pinned exactly rather than as inequalities. 57 / 8 / 0 is the claim
       // this phase makes about the real service; the previous phase measured 36 / 8 / 4
       // against it, and the four failures were the outbound writes that had no route.
       // The 54th pass is `resources/boolean-equality-filter-round-trip` (OPE105-00241):
@@ -218,6 +218,11 @@ describe.skipIf(!pgClient)("HttpEmailStore conformance against the real /v1 serv
       // an outbound row stores no `received_at` while every list orders by
       // `COALESCE(received_at, created_at)`, so the record now reports the instant it is
       // ordered by. It requires no capability, so it can only be a pass or a failure.
+      // The 57th is `attachments/inventory-answers-a-non-null-received-at` (BUG-0053): the
+      // attachment inventory answered the raw `received_at` column, so an outbound
+      // attachment read back null while the cursor it was emitted under was cut from
+      // `COALESCE(received_at, created_at)`. It requires `keysetPagination`, which this
+      // store declares true, so it is counted as a pass and never as a refusal.
       const counted = totals(report);
       // THE CASE COUNT IS READ, NOT RE-TYPED. Every executed case lands in exactly one
       // bucket, so the buckets must add up to the REAL case list — checked against
@@ -226,7 +231,7 @@ describe.skipIf(!pgClient)("HttpEmailStore conformance against the real /v1 serv
       // when BUG-0043's case made the list 64. The breakdown below still pins the claim
       // about the service, and a new case changes it, so this cannot go quietly green.
       expect(counted.passed + counted.refused + counted.failed).toBe(CONFORMANCE_CASES.length);
-      expect(counted).toEqual({ passed: 56, refused: 8, failed: 0 });
+      expect(counted).toEqual({ passed: 57, refused: 8, failed: 0 });
       // The 8 refusals are exactly the cases whose capability this store declares false —
       // never one it claims to support.
       const refusedCapabilities = new Set<string>();
