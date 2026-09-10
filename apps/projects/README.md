@@ -159,8 +159,10 @@ projects channel my-app --ensure           # create the channel if it does not e
 # project creation, or deliberately by an operator.
 #
 # A pinned channel must be a channel: `create`/`link --conversations-channel`,
-# `update --integrations-json` and the MCP projects_create / projects_update /
-# projects_link tools refuse a name the conversations app has no channel for
+# `update --integrations-json`, the MCP projects_create / projects_update /
+# projects_link tools, the prompt-agent's own projects_update / projects_create
+# / projects_link tools (projects_agent_prompt) and the project step of the
+# prefix migration refuse a name the conversations app has no channel for
 # (BUG-0063). A name that only resolves as
 # an agent DM silently sent project posts to the DM lane, or failed closed with
 # HTTP 400. The check runs only when the write actually sets or changes the
