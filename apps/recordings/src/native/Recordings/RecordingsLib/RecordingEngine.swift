@@ -329,6 +329,16 @@ enum PasteDeliveryOutcome: Equatable, Sendable {
     case clipboardWriteFailed
     case eventPostFailed
 
+    /// Confirmed read-back proves the target has consumed the payload. Uncertain delivery
+    /// still needs its clipboard grace period in case the target processes the paste late.
+    var requiresClipboardGracePeriod: Bool {
+        switch self {
+        case .pasted: false
+        case .deliveryNotObserved, .deliveredUnverified, .secureInputActive, .targetUnavailable,
+             .clipboardOwnershipLost, .clipboardWriteFailed, .eventPostFailed: true
+        }
+    }
+
     /// The single place delivery evidence is allowed to become `.pasted`. Kept next to the
     /// outcome so a reader can check the whole mapping at once: two confirming reads, one
     /// contradicting read, everything else unverified.
@@ -381,8 +391,8 @@ final class PasteTransactionCoordinator {
     private let schedule: Scheduler
     private let writeAndVerify: PayloadWriter
     private let postPaste: PastePoster
-    /// Fires immediately before `hasPendingTransaction` changes value. The settlement hop
-    /// back to idle runs on its own scheduled turn with no other state write, so an owner
+    /// Fires immediately before `hasPendingTransaction` changes value. Settlement can return
+    /// to idle without any other state write, so an owner
     /// deriving gates from this coordinator (e.g. `canStartRecording`) must publish here or
     /// its observers never recompute after settlement.
     var pendingTransactionWillChange: (@MainActor () -> Void)?
@@ -543,7 +553,9 @@ final class PasteTransactionCoordinator {
 
     private func complete(_ pending: PendingDelivery, outcome: PasteDeliveryOutcome) {
         pending.completion(pending.transaction, outcome)
-        guard pending.settlementDelay > 0 else {
+        guard outcome.requiresClipboardGracePeriod, pending.settlementDelay > 0 else {
+            // Keep the transaction occupied until restoration has rechecked clipboard
+            // ownership. Completion and settlement callbacks cannot admit another paste.
             pending.settlement(pending.transaction, outcome)
             state = .idle
             return
@@ -4578,21 +4590,11 @@ public final class RecordingEngine: ObservableObject {
                 clipboardOwnershipWasLost = true
             }
             guard let previousClipboard else { return }
-            let shouldRestore = switch outcome {
-            case .clipboardWriteFailed:
-                stillOwnsChangeCount
-            // Never restore over secure input, even when `restoreClipboard` was requested.
-            // By the time this outcome is reachable the payload writer has already run, so the
-            // transcript IS the clipboard — and the status line has just told the owner to press
-            // Cmd-V. Restoring would delete the exact text the app told them to paste. This
-            // deliberately overrides an explicit opt-in, which is why the status message for
-            // this outcome says the clipboard was kept instead of restored.
-            case .secureInputActive:
-                false
-            case .targetUnavailable, .clipboardOwnershipLost, .eventPostFailed, .pasted,
-                 .deliveryNotObserved, .deliveredUnverified:
-                stillOwnsPayload
-            }
+            let shouldRestore = Self.shouldRestorePreviousClipboard(
+                outcome: outcome,
+                stillOwnsPayload: stillOwnsPayload,
+                stillOwnsChangeCount: stillOwnsChangeCount
+            )
             if shouldRestore {
                 previousClipboard.restore(to: pasteboard)
             }
@@ -4606,6 +4608,25 @@ public final class RecordingEngine: ObservableObject {
             )
             deliveryCompleted?()
             return
+        }
+    }
+
+    nonisolated static func shouldRestorePreviousClipboard(
+        outcome: PasteDeliveryOutcome,
+        stillOwnsPayload: Bool,
+        stillOwnsChangeCount: Bool
+    ) -> Bool {
+        switch outcome {
+        case .clipboardWriteFailed:
+            stillOwnsChangeCount
+        // Never restore over secure input, even when `restoreClipboard` was requested.
+        // The payload writer has already run and the status tells the user to press Cmd-V.
+        // Restoring would delete the exact transcript they were told to paste.
+        case .secureInputActive:
+            false
+        case .targetUnavailable, .clipboardOwnershipLost, .eventPostFailed, .pasted,
+             .deliveryNotObserved, .deliveredUnverified:
+            stillOwnsPayload
         }
     }
 
