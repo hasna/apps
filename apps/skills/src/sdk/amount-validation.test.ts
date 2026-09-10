@@ -44,9 +44,11 @@ for (const [estimate, actual] of [[0, 0], [25, 9], [Number.MAX_SAFE_INTEGER, Num
   const spend = createSpendService({ governanceStore: governance, ceilings: { perRun: { cpu: 1, memoryMB: 128, durationSeconds: 1, networkMB: 0, artifactBytes: 0 }, concurrency: 1, monthlyTotalCents: Number.MAX_SAFE_INTEGER } });
   const run = await createRunService({ store, governance: { spend, estimatedCents: estimate } }).admit(input);
   const before = await governance.reservationsForRun(principal.orgId, run.id); expect(before[0]?.estimatedCents).toBe(estimate);
-  await settleRun(store, { spend }, run, actual);
+  const claim = await store.claimNextRun({ workerId: "owned-amount-worker" }); expect(claim?.id).toBe(run.id);
+  const terminal = await store.transitionRun(run.id, { status: "succeeded" }, claim!.leaseGeneration); expect(terminal).not.toBeNull();
+  await settleRun(store, { spend }, terminal!, actual);
   const after = await governance.reservationsForRun(principal.orgId, run.id); expect(after[0]?.actualCents).toBe(actual); expect(after[0]?.status).toBe(actual ? "charged" : "released");
-  await settleRun(store, { spend }, run, 0); expect(await governance.reservationsForRun(principal.orgId, run.id)).toEqual(after);
+  await settleRun(store, { spend }, terminal!, 0); expect(await governance.reservationsForRun(principal.orgId, run.id)).toEqual(after);
 }));
 
 test("admission captures validated estimate before asynchronous offline work", async () => owned(async (store, governance) => {
