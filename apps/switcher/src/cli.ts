@@ -20,6 +20,7 @@ const HELP = `switcher — launch a coding harness with a provider and its model
   switcher providers update ID --file provider.json --version N
   switcher providers delete ID --version N
   switcher models PROVIDER [--refresh] [--search TEXT] [--limit N]
+  switcher models list PROVIDER [--refresh] [--search TEXT] [--limit N]
   switcher models add|update PROVIDER MODEL [--file model.json | --name NAME --expires-on YYYY-MM-DD]
   switcher models remove PROVIDER MODEL
   switcher models config PROVIDER
@@ -104,8 +105,12 @@ export async function main(args = process.argv.slice(2)) {
     throw new Error("Unknown command. Run switcher --help.");
   const providerFlags = ["url", "protocol", "preset", "credential-env", "auth-style", "catalog-url", "catalog-format", "catalog-auth-style", "catalog-credential-env", "catalog-account-id", "models-path"] as const;
   const provided = (names: readonly (keyof typeof values)[]) => names.some(name => values[name] !== undefined);
-  const editingModel = command === "models" && ["add", "update", "remove"].includes(action);
-  const configuringModels = command === "models" && action === "config";
+  // A lone argument remains a provider ID, including IDs named after a verb.
+  const editingModel = command === "models" && positionals.length > 2 && ["add", "update", "remove"].includes(action);
+  const configuringModels = command === "models" && positionals.length > 2 && action === "config";
+  const listingModels = command === "models" && positionals.length > 2 && action === "list";
+  if (listingModels && (positionals.length !== 3 || nativeArgs.length || Object.keys(values).some(name=>!["refresh","search","limit","offset","json"].includes(name))))
+    throw new Fault(400,"invalid_request","Use models list PROVIDER with optional --refresh, --search, --limit and --offset.");
   if (values["expires-on"] !== undefined && (!editingModel || action === "remove"))
     throw new Fault(400,"conflicting_options","--expires-on belongs to models add/update.");
   if (editingModel && (positionals.length !== 4 || nativeArgs.length || Object.keys(values).some(name=>!(action === "remove" ? ["json"] : ["name","expires-on","file","json"]).includes(name))))
@@ -256,7 +261,7 @@ export async function main(args = process.argv.slice(2)) {
     return;
   }
   if (command === "models" && action) {
-    const provider = await resolveLaunchProvider(client, action, presetOptions());
+    const provider = await resolveLaunchProvider(client, listingModels ? id : action, presetOptions());
     if (values.refresh) await client.refreshModels(provider.id);
     try { output(await client.listModels(provider.id, page)); }
     catch (error) {

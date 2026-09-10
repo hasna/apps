@@ -24,6 +24,18 @@ test("CLI creates a custom manual provider and edits/selects models without prov
     const remaining=await run(home,["models","config","deployment"]);expect(JSON.parse(remaining.stdout).manualModels).toEqual([{id:"vendor/first",name:"vendor/first"}]);
   }finally{await rm(home,{recursive:true,force:true});}
 },30000);
+test("CLI keeps verb-shaped provider IDs reachable through shorthand and explicit listing",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"switcher-config-cli-"));
+  try{
+    for(const provider of ["config","update","remove","add","list"]){
+      const created=await run(home,["providers","add",provider,"--url","http://127.0.0.1:9997/v1","--protocol","openai-chat","--catalog-format","none","--model",provider+"/model"]);
+      expect(created.code,created.stderr).toBe(0);
+      for(const args of [["models",provider],["models","list",provider]]){
+        const listed=await run(home,args);expect(listed.code,listed.stderr).toBe(0);expect(JSON.parse(listed.stdout).data[0].id).toBe(provider+"/model");
+      }
+    }
+  }finally{await rm(home,{recursive:true,force:true});}
+},30000);
 test("CLI imports a model array, rejects duplicates and secret-bearing metadata before saving",async()=>{
   const home=await mkdtemp(join(tmpdir(),"switcher-config-cli-"));
   try{

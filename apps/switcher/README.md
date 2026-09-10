@@ -306,6 +306,7 @@ Configure a new model on any saved provider without editing the provider's JSON:
 switcher models add my-provider vendor/new-model --name "New model"
 switcher models add my-provider vendor/detailed-model --file model.json
 switcher models config my-provider
+switcher models list my-provider --refresh
 switcher models update my-provider vendor/new-model --name "Preview" --expires-on 2027-01-01
 switcher models remove my-provider vendor/new-model
 switcher models my-provider --refresh
