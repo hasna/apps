@@ -407,6 +407,8 @@ final class PasteTransactionCoordinator {
     private let schedule: Scheduler
     private let writeAndVerify: PayloadWriter
     private let postPaste: PastePoster
+    private let now: @MainActor @Sendable () -> TimeInterval
+    private var activationPollID: UUID?
     /// Fires immediately before `hasPendingTransaction` changes value. Settlement can return
     /// to idle without any other state write, so an owner
     /// deriving gates from this coordinator (e.g. `canStartRecording`) must publish here or
@@ -423,11 +425,13 @@ final class PasteTransactionCoordinator {
     init(
         schedule: @escaping Scheduler,
         writeAndVerify: @escaping PayloadWriter,
-        postPaste: @escaping PastePoster
+        postPaste: @escaping PastePoster,
+        now: @escaping @MainActor @Sendable () -> TimeInterval = { PasteActivation.continuousTime() }
     ) {
         self.schedule = schedule
         self.writeAndVerify = writeAndVerify
         self.postPaste = postPaste
+        self.now = now
     }
 
     var hasPendingTransaction: Bool {
@@ -440,6 +444,7 @@ final class PasteTransactionCoordinator {
         generation: UInt64?,
         delay: TimeInterval,
         settlementDelay: TimeInterval = 0,
+        activation: PasteActivation? = nil,
         targetIsReady: @escaping @MainActor @Sendable () -> Bool = { true },
         payloadIsReady: @escaping @MainActor @Sendable () -> Bool = { true },
         prepare: @escaping ScheduledOperation = {},
@@ -458,7 +463,7 @@ final class PasteTransactionCoordinator {
         guard state == .idle else { return false }
         let transaction = PasteDeliveryTransaction(id: UUID(), text: text, generation: generation)
         state = .scheduled(transaction.id)
-        schedule(delay) { [weak self] in
+        let deliver: ScheduledOperation = { [weak self] in
             guard let self, self.state == .scheduled(transaction.id) else { return }
             self.state = .settling(transaction.id)
             guard targetIsReady() else {
@@ -537,7 +542,93 @@ final class PasteTransactionCoordinator {
                 self.settleFromDeliveryEvidence(pending, readBackAttempt: 1)
             }
         }
+        if let activation {
+            beginActivation(activation, transaction: transaction, deliver: deliver,
+                            completion: completion, settlement: settlement)
+        } else {
+            schedule(delay, deliver)
+        }
         return true
+    }
+
+    private func beginActivation(
+        _ activation: PasteActivation, transaction: PasteDeliveryTransaction,
+        deliver: @escaping ScheduledOperation,
+        completion: @escaping Completion, settlement: @escaping Settlement
+    ) {
+        let started = now()
+        let attempt: PasteActivationAttempt
+        let initialReadiness = activation.readiness()
+        guard now() - started < PasteActivation.timeout else {
+            failActivation(activation, transaction: transaction, attempt: .notAttempted,
+                           reason: .timedOut, started: started, completion: completion, settlement: settlement)
+            return
+        }
+        switch initialReadiness {
+        case .unavailable(let reason):
+            failActivation(activation, transaction: transaction, attempt: .notAttempted,
+                           reason: reason, started: started, completion: completion, settlement: settlement)
+            return
+        case .ready:
+            attempt = .alreadyFrontmost
+        case .waitingForFocus:
+            guard activation.request() else {
+                failActivation(activation, transaction: transaction, attempt: .rejected,
+                               reason: .activationRejected, started: started,
+                               completion: completion, settlement: settlement)
+                return
+            }
+            attempt = .accepted
+        }
+        waitForActivation(activation, transaction: transaction, attempt: attempt, started: started,
+                          deliver: deliver, completion: completion, settlement: settlement)
+    }
+
+    private func waitForActivation(
+        _ activation: PasteActivation, transaction: PasteDeliveryTransaction,
+        attempt: PasteActivationAttempt, started: TimeInterval,
+        deliver: @escaping ScheduledOperation,
+        completion: @escaping Completion, settlement: @escaping Settlement
+    ) {
+        let ticket = UUID()
+        activationPollID = ticket
+        let remaining = max(0, PasteActivation.timeout - (now() - started))
+        schedule(min(PasteActivation.pollingInterval, remaining)) { [weak self] in
+            guard let self, self.state == .scheduled(transaction.id),
+                  self.activationPollID == ticket else { return }
+            self.activationPollID = nil
+            let readiness = activation.readiness()
+            let elapsed = self.now() - started
+            let failure: PasteActivationFailure
+            switch readiness {
+            case .unavailable(let reason): failure = reason
+            case .ready where elapsed <= PasteActivation.timeout:
+                activation.report(PasteActivationReport(attempt: attempt, failure: nil, elapsed: elapsed))
+                deliver()
+                return
+            case .waitingForFocus where elapsed < PasteActivation.timeout:
+                self.waitForActivation(activation, transaction: transaction, attempt: attempt,
+                    started: started, deliver: deliver, completion: completion, settlement: settlement)
+                return
+            case .ready, .waitingForFocus: failure = .timedOut
+            }
+            self.failActivation(activation, transaction: transaction, attempt: attempt,
+                reason: failure, started: started, completion: completion, settlement: settlement)
+        }
+    }
+
+    private func failActivation(
+        _ activation: PasteActivation, transaction: PasteDeliveryTransaction,
+        attempt: PasteActivationAttempt, reason: PasteActivationFailure, started: TimeInterval,
+        completion: Completion, settlement: Settlement
+    ) {
+        guard state == .scheduled(transaction.id) else { return }
+        activationPollID = nil
+        state = .settling(transaction.id)
+        activation.report(PasteActivationReport(attempt: attempt, failure: reason, elapsed: now() - started))
+        settlement(transaction, .targetUnavailable)
+        state = .idle
+        completion(transaction, .targetUnavailable)
     }
 
     /// Everything the read-back loop needs after the keystroke has been posted.
@@ -4443,13 +4534,42 @@ public final class RecordingEngine: ObservableObject {
             return
         }
 
-        // Activate the exact app that owned focus when recording started, then paste after focus settles.
+        // Freeze the selected process before activation; polling must not select a replacement
+        // process or a different foreground app while the system processes the request.
         let alreadyFrontmost = app.processIdentifier == frontmostPid
-        if !alreadyFrontmost {
-            app.activate()
-        }
-
-        let pasteDelay: TimeInterval = alreadyFrontmost ? 0.15 : 0.5
+        let expectedApp = PasteApplicationObservation(
+            pid: requiredProcessIdentity?.pid ?? app.processIdentifier,
+            bundleIdentifier: requiredProcessIdentity?.bundleIdentifier ?? app.bundleIdentifier,
+            launchDate: requiredProcessIdentity?.launchDate ?? app.launchDate,
+            isRegular: app.activationPolicy == .regular
+        )
+        let activation = PasteActivation(
+            request: {
+                PasteActivation.requestOnce(
+                    recorderIsActive: NSApp?.isActive == true
+                        && NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier,
+                    yield: { NSApp?.yieldActivation(to: app) },
+                    activate: { cooperative in
+                        cooperative ? app.activate(from: .current, options: []) : app.activate(options: [])
+                    }
+                )
+            },
+            readiness: {
+                PasteActivation.readiness(
+                    expected: expectedApp,
+                    live: NSRunningApplication(processIdentifier: expectedApp.pid).map(PasteApplicationObservation.init),
+                    frontmost: NSWorkspace.shared.frontmostApplication.map(PasteApplicationObservation.init),
+                    accessibilityTrusted: AXIsProcessTrusted(),
+                    cancelled: Self.shouldAbandonDelivery(
+                        pipelineGeneration: pipelineGeneration,
+                        currentGeneration: self.recordingGeneration,
+                        isRecording: self.isRecording
+                    ),
+                    requiresProcessIdentity: pipelineGeneration != nil && targetAppPid != nil
+                )
+            },
+            report: { self.log($0.logLine) }
+        )
         var ownedPasteboardChangeCount: Int?
         var clipboardWrite: PasteboardWriteResult?
         var clipboardOwnershipWasLost = false
@@ -4466,21 +4586,11 @@ public final class RecordingEngine: ObservableObject {
         let accepted = pasteTransactionCoordinator.submit(
             text: text,
             generation: pipelineGeneration,
-            delay: pasteDelay,
+            delay: 0,
             settlementDelay: restoreClipboard ? 0.6 : 0,
+            activation: activation,
             targetIsReady: {
-                let frontmost = NSWorkspace.shared.frontmostApplication
-                let appIsReady = Self.pasteTargetIsReady(
-                    expectedPid: app.processIdentifier,
-                    expectedBundleIdentifier: app.bundleIdentifier,
-                    frontmostPid: frontmost?.processIdentifier,
-                    frontmostBundleIdentifier: frontmost?.bundleIdentifier,
-                    accessibilityTrusted: AXIsProcessTrusted(),
-                    expectedLaunchDate: requiredProcessIdentity?.launchDate,
-                    frontmostLaunchDate: frontmost?.launchDate,
-                    requiresProcessIdentity: pipelineGeneration != nil && targetAppPid != nil
-                )
-                guard appIsReady else { return false }
+                guard activation.readiness() == .ready else { return false }
                 return selectionToken?.matchesCurrentSelection(for: app.processIdentifier) ?? true
             },
             payloadIsReady: {
@@ -4520,6 +4630,18 @@ public final class RecordingEngine: ObservableObject {
             verificationDelay: Self.pasteReadBackInterval,
             verificationAttempts: Self.pasteReadBackAttempts
         ) { transaction, outcome in
+            // A cancelled generation must not copy a fallback payload after its readiness
+            // wait was abandoned. Ownership-checked settlement still runs unchanged.
+            if PasteActivation.abandonsFallback(
+                outcome: outcome,
+                generation: transaction.generation,
+                currentGeneration: self.recordingGeneration,
+                isRecording: self.isRecording
+            ) {
+                self.log("paste abandoned during activation or preparation reason=cancelled")
+                deliveryCompleted?()
+                return
+            }
             let accessibilityTrusted = AXIsProcessTrusted()
             // Same reason the two static predicates below switch instead of comparing: a `==`
             // test answers `false` for any outcome added later, and this feeds
