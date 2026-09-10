@@ -253,10 +253,11 @@ jobs:
       # source (CMD ["bun", "run", "src/server/serve-entry.ts"]); bin/ is not
       # copied into it. So the shipped-artefact probes pin the stage and the
       # source entrypoint: serve-entry answers --version before any backend
-      # resolution (todos row 3c0da7fd), and the runtime is the bun the pinned
-      # oven/bun base image ships, asserted equal to the ARG BUN_VERSION the
-      # base image is tagged with (it is also asserted inside the build, before
-      # this step can run).
+      # resolution (todos row 3c0da7fd), and the runtime is the bun the
+      # Dockerfile declares — ARG BUN_VERSION, asserted against the running
+      # binary at build time — on the digest-pinned oven/bun:1.3.14-alpine base
+      # (BUG-0067: the Debian base this lane used to build could not pass the
+      # local vulnerability gate and blocked every conversations deploy).
       - name: Verify shipped runtime and package version
         run: |
           set -Eeuo pipefail
