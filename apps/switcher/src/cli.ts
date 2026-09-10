@@ -8,7 +8,7 @@ import { launch, validateOriForPlan, type LaunchBackend } from "./launcher";
 import { openCliRuntime } from "./runtime";
 import { providerFromPreset, type PresetOptions } from "./presets";
 import { resolveLaunchProvider, selectModel, ensureLaunchProfile } from "./direct-launch";
-import { CredentialResolver, bindingTarget, credentialReference, credentialBindingSchema, deliverVaultCredential } from "./credentials";
+import { CredentialResolver, bindingTarget, credentialReference, credentialBindingSchema, deliverVaultCredential, repairVaultExecutablePermissions } from "./credentials";
 const HELP = `switcher — launch a coding harness with a provider and its model catalog
 
   switcher providers presets [ID]
@@ -36,6 +36,8 @@ const HELP = `switcher — launch a coding harness with a provider and its model
                             [--vault-cli PATH] [--vault-account ACCOUNT | --vault-operator env]
   switcher credentials bind PRESET --keychain-service SERVICE --keychain-account ACCOUNT
   switcher credentials list|check|remove [PRESET_OR_REFERENCE]
+  switcher credentials repair-executable PRESET_OR_REFERENCE --sha256 EXPECTED
+  switcher credentials repair-executable --vault-cli PATH --sha256 EXPECTED
   switcher doctor
 
 HARNESS: claude, codex, grok, opencode, opencode2, pi, omp, dsh, cline, hermes, prime-agent, gemini, aider, kilo
@@ -55,6 +57,8 @@ Vault bindings use the installed secrets CLI and its canonical Contracts URL/key
 by default. --vault-account pins a Keychain account; --vault-operator env requires
 per-process HASNA_SECRETS_API_KEY. Explicit operators also require --vault-url.
   --file accepts a JSON object including id; raw credentials are never accepted.
+Executable repair requires the digest of its member in a verified package artifact.
+It replaces writable installed bytes with an identical protected copy; it does not contact the vault.
 Fireworks discovery requires --catalog-account-id (or an explicit --catalog-url).
 --json outputs machine-readable records (also the default for data commands).
 switcher --version | --help
@@ -82,7 +86,7 @@ export async function main(args = process.argv.slice(2)) {
   if (args.length === 1 && args[0] === "__credential-delivery") return deliverVaultCredential();
   const split = args.indexOf("--"); const nativeArgs = split >= 0 ? args.slice(split+1) : [];
   const {values,positionals} = parseArgs({args:split>=0?args.slice(0,split):args,allowPositionals:true,options:{
-    help:{type:"boolean"},version:{type:"string"},json:{type:"boolean"},url:{type:"string"},
+    help:{type:"boolean"},version:{type:"string"},json:{type:"boolean"},url:{type:"string"},sha256:{type:"string"},
     protocol:{type:"string"},preset:{type:"string"},name:{type:"string"},file:{type:"string"},"models-file":{type:"string"},
     "credential-env":{type:"string"},"auth-style":{type:"string"},
     "catalog-url":{type:"string"},"catalog-format":{type:"string"},"catalog-auth-style":{type:"string"},
@@ -124,7 +128,20 @@ export async function main(args = process.argv.slice(2)) {
   }
   const credentialFlags = ["vault-key","vault-url","vault-cli","vault-account","vault-operator","keychain-service","keychain-account","origin"] as const;
   const credentials = new CredentialResolver();
+  if (values.sha256 !== undefined && !(command === "credentials" && action === "repair-executable")) throw new Fault(400,"conflicting_options","--sha256 belongs to credentials repair-executable.");
   if (command === "credentials") {
+    if (action === "repair-executable") {
+      const explicitPath = values["vault-cli"];
+      if ((Boolean(id) === (explicitPath !== undefined)) || positionals.length !== (id ? 3 : 2) || nativeArgs.length || Object.keys(values).some(name=>!["sha256","json","vault-cli"].includes(name)) || !/^[a-f0-9]{64}$/.test(values.sha256??""))
+        throw new Fault(400,"invalid_request","Use credentials repair-executable PRESET_OR_REFERENCE (or --vault-cli PATH) --sha256 EXPECTED, with the executable digest from a verified package artifact.");
+      let executable = explicitPath;
+      if (id) {
+        const binding = await credentials.bindings.get(credentialReference(id));
+        if (!binding || binding.source.kind !== "vault") throw new Fault(422,"vault_binding_required","Choose an existing vault credential binding to repair its configured executable.");
+        executable = binding.source.executable;
+      }
+      output(await repairVaultExecutablePermissions(executable!,values.sha256!)); return;
+    }
     const bindingFlags = [...credentialFlags,"credential-env"] as const;
     if (nativeArgs.length || positionals.length > 3 || Object.keys(values).some(name=>name!=="json" && !bindingFlags.includes(name as typeof bindingFlags[number])))
       throw new Fault(400,"conflicting_options","Credentials accepts only binding options; no API, profile or harness settings.");
