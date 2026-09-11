@@ -2,6 +2,7 @@ import { proxyProviderStream } from "./provider-stream";
 import { createProviderRequest, type ProviderRequestTiming } from "./provider-request";
 import { isContextOverflow } from "./provider-error";
 import { normalizeCodexDelegation } from "./codex-delegation";
+import { openCodeHeaders, prepareOpenCodeMessages } from "./opencode";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { authHeader } from "./auth";
 import { endpoint, Fault, modelExpired } from "./domain";
@@ -16,11 +17,13 @@ const routingFields = ["models", "fallbacks", "model_list", "deployment_id", "de
 /** A per-launch credential boundary: the native client never receives the provider key. */
 export function createInferenceGateway(input: GatewayInput, timing: ProviderRequestTiming = {}) {
   const token=crypto.randomUUID()+crypto.randomUUID();
+  const openCodeSession=crypto.randomUUID();
+  const openCodeState=new Map<string,string>();
   const digest=(value:string)=>createHash("sha256").update(value).digest();
   const expected=digest(token), policy=input.compiledPolicy;
   const known=new Set(input.models.map(m=>m.id));
   const safeModel=(value:unknown)=>typeof value==="string" && value!==input.credential && (known.has(value)||Object.hasOwn(policy.aliases,value)) ? value : "<unrecognized>";
-  const fail=(status:number,code:string)=>Response.json({error:{type:"switcher_model_policy",code,message:code==="model_not_allowed"?"This model is outside the launch policy. Select it with switcher launch --model or explicitly assign an allowed role model.":`Switcher inference gateway: ${code}.`}},{status});
+  const fail=(status:number,code:string,message?:string)=>Response.json({error:{type:"switcher_model_policy",code,message:message??(code==="model_not_allowed"?"This model is outside the launch policy. Select it with switcher launch --model or explicitly assign an allowed role model.":`Switcher inference gateway: ${code}.`)}},{status});
   let closing=false,stopped:Promise<void>|undefined;
   const active=new Set<{abort:AbortController;done:Promise<void>;cancel?:()=>Promise<void>}>();
   const server=Bun.serve({hostname:"127.0.0.1",port:0,maxRequestBodySize:4*1024*1024,idleTimeout:255,async fetch(request, server) {
@@ -66,6 +69,7 @@ export function createInferenceGateway(input: GatewayInput, timing: ProviderRequ
     const signal=activity.fetchOptions.signal;
     server.timeout(request,0); // Authenticated inference is bounded by upstream activity.
     const headers:Record<string,string>={"content-type":"application/json"};
+    Object.assign(headers,openCodeHeaders(input.baseUrl,request.headers,body,openCodeSession));
     if(input.credential){const [name,value]=gemini?["x-goog-api-key",input.credential]:authHeader(input.authStyle??"bearer",input.credential);headers[name]=value;}
     if(input.protocol==="anthropic-messages") {headers["anthropic-version"]=request.headers.get("anthropic-version")??"2023-06-01";if(request.headers.has("anthropic-beta"))headers["anthropic-beta"]=request.headers.get("anthropic-beta")!;}
     const candidates=[resolved,...(policy.fallbacks[resolved]??[])];
@@ -82,11 +86,15 @@ export function createInferenceGateway(input: GatewayInput, timing: ProviderRequ
         const guidance=renderModelGuidance({harness:input.harness,providerId:input.providerId,baseUrl:input.baseUrl,model,compiled:policy,catalogPath:input.catalogPath});
         const compatible=input.harness==="codex"&&input.protocol==="openai-responses"&&new URL(input.baseUrl).hostname!=="api.openai.com"?normalizeCodexDelegation(payload):payload;
         const outgoing=injectModelGuidance(input.protocol,compatible,guidance,match?.[2]);
-        const path=gemini?`/models/${encodeURIComponent(model)}:${match![2]}${url.search}`:suffix+(betaQuery?"?beta=true":"");
-        try {response=await activity.run(()=>fetch(endpoint(input.baseUrl)+path,{method:"POST",headers,body:JSON.stringify(outgoing),redirect:"manual",...activity.fetchOptions}));}
+        const translated=input.protocol==="anthropic-messages"?prepareOpenCodeMessages(input.baseUrl,outgoing as Record<string,any>,suffix,input.credential,openCodeState):undefined;
+        const path=translated?.path??(gemini?`/models/${encodeURIComponent(model)}:${match![2]}${url.search}`:suffix+(betaQuery?"?beta=true":""));
+        const upstreamHeaders={...headers};
+        if(translated){delete upstreamHeaders["x-api-key"];delete upstreamHeaders.authorization;delete upstreamHeaders["anthropic-version"];delete upstreamHeaders["anthropic-beta"];Object.assign(upstreamHeaders,translated.auth);}
+        try {response=await activity.run(()=>fetch(endpoint(input.baseUrl)+path,{method:"POST",headers:upstreamHeaders,body:JSON.stringify(translated?.body??outgoing),redirect:"manual",...activity.fetchOptions}));}
         catch {current.reason=activity.timedOut()?"provider_idle_timeout":signal.aborted?"request_cancelled":"network_error";if(!signal.aborted&&attempt+1<candidates.length)continue;throw new Error("provider_request_failed");}
         current.upstreamStatus=response.status;
         if((response.status===429||response.status>=500)&&attempt+1<candidates.length){void response.body?.cancel().catch(() => undefined);response=undefined;continue;}
+        if(translated)response=await activity.run(()=>translated.response(response!));
         break;
       }
       if(!response)throw new Error("provider_request_failed");
@@ -95,7 +103,10 @@ export function createInferenceGateway(input: GatewayInput, timing: ProviderRequ
         if(overflow)current.reason="context_length_exceeded";
         release();
         if(overflow)return Response.json({type:"error",error:{type:"invalid_request_error",code:"context_length_exceeded",message:"prompt is too long: the provider context window was exceeded. Compact the conversation or start a new session."}},{status:400});
-        return fail(response.status>=300&&response.status<400?502:response.status,`upstream_http_${response.status}`);
+        const rejected=fail(response.status>=300&&response.status<400?502:response.status,`upstream_http_${response.status}`);
+        const retryAfter=response.headers.get("retry-after");
+        if((response.status===429||response.status===503)&&retryAfter&&retryAfter.length<=128&&(/^\d+$/.test(retryAfter)||Number.isFinite(Date.parse(retryAfter))))rejected.headers.set("retry-after",retryAfter);
+        return rejected;
       }
       if(!response.body){release();return new Response(null,{status:response.status});}
       const decoder=new TextDecoder();
@@ -111,7 +122,7 @@ export function createInferenceGateway(input: GatewayInput, timing: ProviderRequ
       const {stream,cancel}=proxyProviderStream({response,protocol:input.protocol,requestSignal:request.signal,abort,closing:()=>closing,release,activity,inspect,interrupted:reason=>{current.reason=reason;}});
       record.cancel=cancel;
       return new Response(stream,{status:response.status,headers:{"content-type":response.headers.get("content-type")??"application/json","cache-control":"no-store"}});
-    }catch(error) {if(error instanceof Fault)current.reason=error.code;else if(activity.timedOut())current.reason="provider_idle_timeout";release();return fail(error instanceof Fault?error.status:activity.timedOut()?504:502,error instanceof Fault?error.code:activity.timedOut()?"provider_idle_timeout":"provider_request_failed");}
+    }catch(error) {if(error instanceof Fault)current.reason=error.code;else if(activity.timedOut())current.reason="provider_idle_timeout";release();return fail(error instanceof Fault?error.status:activity.timedOut()?504:502,error instanceof Fault?error.code:activity.timedOut()?"provider_idle_timeout":"provider_request_failed",error instanceof Fault&&error.code==="opencode_translation_unsupported"?error.message:undefined);}
   }});
   return {baseUrl:new URL(input.protocol==="gemini-generate-content"?"v1beta":"v1",server.url).href,token,cleanup:()=>stopped??=(async()=>{closing=true;const pending=[...active];for(const request of pending)request.abort.abort();await Promise.allSettled(pending.map(async request=>{await request.cancel?.();await request.done;}));await server.stop(true);})()};
 }
