@@ -9,7 +9,12 @@ export declare const HASNA_CACHE_HOME_ENV_KEY = "HASNA_CACHE_HOME";
 /** Every override this resolver honours. Nothing else moves an app home. */
 export declare const APP_HOME_ENV_KEYS: readonly ["HASNA_HOME", "HASNA_CONFIG_HOME", "HASNA_DATA_HOME", "HASNA_STATE_HOME", "HASNA_CACHE_HOME"];
 export declare const PUBLIC_HOME_DIR_NAME = ".hasna";
-export declare const INTERNAL_HOME_DIR_NAME = ".hasna-internal";
+/** The suffix that turns the public root and the public package scope into the internal ones. */
+export declare const INTERNAL_SCOPE_SUFFIX = "internal";
+/** `.hasna` + `-` + the internal suffix. */
+export declare const INTERNAL_HOME_DIR_NAME: string;
+/** `@hasna-` + the internal suffix + `/` — the package scope prefix of internal apps. */
+export declare const INTERNAL_PACKAGE_SCOPE_PREFIX: string;
 export declare const APP_CONFIG_SUBDIR = "config";
 export declare const APP_STATE_SUBDIR = "state";
 export declare const APP_CACHE_SUBDIR = "cache";
@@ -20,9 +25,9 @@ export declare const APP_CREDENTIALS_FILE = "credentials";
  * FILESYSTEM sink.
  */
 export declare const APP_HOME_SLUG_PATTERN: RegExp;
-/** The scope for a package name: `@hasna/*` is public, `@hasna-internal/*` is internal, anything else is unknown. */
+/** The scope for a package name: `@hasna/*` is public, the internal package scope is internal, anything else is unknown. */
 export declare function appScopeForPackageName(packageName: string): AppHomeScope | null;
-/** `.hasna` or `.hasna-internal`. */
+/** `.hasna`, or the same name with the `-internal` suffix. */
 export declare function scopeHomeDirName(scope: AppHomeScope): string;
 export interface ResolveAppHomeOptions {
     /** Defaults to `"public"`. Internal apps pass `"internal"` (from `hasna.contract.json` `scope`). */
@@ -40,7 +45,7 @@ export interface AppHomeSources {
 export interface AppHome {
     name: string;
     scope: AppHomeScope;
-    /** The scope root: `~/.hasna` or `~/.hasna-internal` (or `HASNA_HOME`). */
+    /** The scope root: `~/.hasna`, or the same root with the `-internal` suffix (or `HASNA_HOME`). */
     root: string;
     /** `<root>/<app>` — the app home. Data lives here. */
     home: string;

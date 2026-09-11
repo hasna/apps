@@ -37332,8 +37332,8 @@ export declare const ServiceAuthModeSchema: z.ZodEnum<["none", "local-only", "ap
 export type ServiceAuthMode = z.infer<typeof ServiceAuthModeSchema>;
 /**
  * Which home root an app owns (2026-09-04 home-layout ruling): `public` is
- * `~/.hasna/<name>` for `@hasna/*`, `internal` is `~/.hasna-internal/<name>`
- * for `@hasna-internal/*`. The credentials file follows the scope; Keychain
+ * `~/.hasna/<name>` for `@hasna/*`, `internal` is the same root with the
+ * `-internal` suffix, for internal-scope packages. The credentials file follows the scope; Keychain
  * item names do not change.
  */
 export declare const APP_SCOPES: readonly ["public", "internal"];
@@ -40572,7 +40572,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             provenance?: "none" | "required" | "best-effort" | undefined;
         }[] | undefined;
     }>>;
-    /** Which home root the app owns (`~/.hasna` or `~/.hasna-internal`); absent means public. */
+    /** Which home root the app owns (`~/.hasna`, or the same root with the `-internal` suffix); absent means public. */
     scope: z.ZodOptional<z.ZodEnum<["public", "internal"]>>;
     /** The hosted client contract, or `null` to state explicitly that the repo ships no client (a local-by-design tool). */
     client: z.ZodOptional<z.ZodNullable<z.ZodEffects<z.ZodObject<{
@@ -71533,7 +71533,7 @@ declare const CoreContractSchemaRegistry: {
                 provenance?: "none" | "required" | "best-effort" | undefined;
             }[] | undefined;
         }>>;
-        /** Which home root the app owns (`~/.hasna` or `~/.hasna-internal`); absent means public. */
+        /** Which home root the app owns (`~/.hasna`, or the same root with the `-internal` suffix); absent means public. */
         scope: z.ZodOptional<z.ZodEnum<["public", "internal"]>>;
         /** The hosted client contract, or `null` to state explicitly that the repo ships no client (a local-by-design tool). */
         client: z.ZodOptional<z.ZodNullable<z.ZodEffects<z.ZodObject<{

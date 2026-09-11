@@ -18406,7 +18406,7 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
     },
     scope: {
       enum: ["public", "internal"],
-      description: "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*), internal is ~/.hasna-internal/<name> (@hasna-internal/*). Absent means public."
+      description: "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*); internal is the same root with the -internal suffix, for internal-scope packages. Absent means public."
     },
     client: {
       oneOf: [
@@ -18789,9 +18789,107 @@ function secureLocalStorePolicy(stores) {
   });
 }
 
+// src/client/app-home.ts
+import { isAbsolute, join as join4 } from "path";
+var APP_HOME_SCOPES = ["public", "internal"];
+var HASNA_HOME_ENV_KEY = "HASNA_HOME";
+var HASNA_CONFIG_HOME_ENV_KEY = "HASNA_CONFIG_HOME";
+var HASNA_DATA_HOME_ENV_KEY = "HASNA_DATA_HOME";
+var HASNA_STATE_HOME_ENV_KEY = "HASNA_STATE_HOME";
+var HASNA_CACHE_HOME_ENV_KEY = "HASNA_CACHE_HOME";
+var APP_HOME_ENV_KEYS = [
+  HASNA_HOME_ENV_KEY,
+  HASNA_CONFIG_HOME_ENV_KEY,
+  HASNA_DATA_HOME_ENV_KEY,
+  HASNA_STATE_HOME_ENV_KEY,
+  HASNA_CACHE_HOME_ENV_KEY
+];
+var PUBLIC_HOME_DIR_NAME = ".hasna";
+var INTERNAL_SCOPE_SUFFIX = "internal";
+var INTERNAL_HOME_DIR_NAME = [PUBLIC_HOME_DIR_NAME, INTERNAL_SCOPE_SUFFIX].join("-");
+var INTERNAL_PACKAGE_SCOPE_PREFIX = ["@hasna", `${INTERNAL_SCOPE_SUFFIX}/`].join("-");
+var APP_CONFIG_SUBDIR = "config";
+var APP_STATE_SUBDIR = "state";
+var APP_CACHE_SUBDIR = "cache";
+var APP_CREDENTIALS_FILE = "credentials";
+var APP_HOME_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+function appScopeForPackageName(packageName) {
+  if (packageName.startsWith("@hasna/"))
+    return "public";
+  if (packageName.startsWith(INTERNAL_PACKAGE_SCOPE_PREFIX))
+    return "internal";
+  return null;
+}
+function scopeHomeDirName(scope) {
+  return scope === "internal" ? INTERNAL_HOME_DIR_NAME : PUBLIC_HOME_DIR_NAME;
+}
+
+class AppHomeUnresolvableError extends Error {
+  appName;
+  constructor(appName, message) {
+    super(message);
+    this.name = "AppHomeUnresolvableError";
+    this.appName = appName;
+  }
+}
+function absoluteOverride(env, key) {
+  const value = env[key]?.trim();
+  return value && isAbsolute(value) ? value : null;
+}
+function homeDir(env) {
+  const home = env.HOME?.trim();
+  return home ? home : null;
+}
+function resolveAppHome(name, env = process.env, options = {}) {
+  if (!APP_HOME_SLUG_PATTERN.test(name)) {
+    throw new AppHomeUnresolvableError(name, `App name '${name}' is not a safe path segment; use a lowercase dashed slug.`);
+  }
+  const scope = options.scope ?? "public";
+  const rootOverride = absoluteOverride(env, HASNA_HOME_ENV_KEY);
+  const home = homeDir(env);
+  const root = rootOverride ?? (home ? join4(home, scopeHomeDirName(scope)) : null);
+  if (!root)
+    return null;
+  const appHome = join4(root, name);
+  const layer = (key, fallback) => {
+    const override = absoluteOverride(env, key);
+    return override ? { path: join4(override, name), source: key } : { path: fallback, source: "home" };
+  };
+  const config2 = layer(HASNA_CONFIG_HOME_ENV_KEY, join4(appHome, APP_CONFIG_SUBDIR));
+  const data = layer(HASNA_DATA_HOME_ENV_KEY, appHome);
+  const state = layer(HASNA_STATE_HOME_ENV_KEY, join4(appHome, APP_STATE_SUBDIR));
+  const cache = layer(HASNA_CACHE_HOME_ENV_KEY, join4(appHome, APP_CACHE_SUBDIR));
+  return Object.freeze({
+    name,
+    scope,
+    root,
+    home: appHome,
+    config: config2.path,
+    credentials: join4(config2.path, APP_CREDENTIALS_FILE),
+    data: data.path,
+    state: state.path,
+    cache: cache.path,
+    localDb: join4(data.path, `${name}.db`),
+    sources: Object.freeze({
+      root: rootOverride ? HASNA_HOME_ENV_KEY : "HOME",
+      config: config2.source,
+      data: data.source,
+      state: state.source,
+      cache: cache.source
+    })
+  });
+}
+function appPaths(name, env = process.env, options = {}) {
+  const resolved = resolveAppHome(name, env, options);
+  if (!resolved) {
+    throw new AppHomeUnresolvableError(name, `No HOME or ${HASNA_HOME_ENV_KEY} in this environment, so no home can be resolved for '${name}'.`);
+  }
+  return resolved;
+}
+
 // src/conformance-import-graph.ts
 import { existsSync as existsSync2, readFileSync as readFileSync3, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
-import { basename as basename2, dirname, join as join4, relative as relative2, resolve as resolve3 } from "path";
+import { basename as basename2, dirname, join as join5, relative as relative2, resolve as resolve3 } from "path";
 var SQLITE_MODULE_SPECIFIERS = Object.freeze([
   ["bun", "sqlite"].join(":"),
   ["better", "sqlite3"].join("-"),
@@ -18841,10 +18939,10 @@ function resolveRelativeImport(fromFile, specifier) {
     `${base}.js`,
     `${base}.mts`,
     `${base}.mjs`,
-    join4(base, "index.ts"),
-    join4(base, "index.tsx"),
-    join4(base, "index.js"),
-    join4(base, "index.mjs")
+    join5(base, "index.ts"),
+    join5(base, "index.tsx"),
+    join5(base, "index.js"),
+    join5(base, "index.mjs")
   ];
   for (const candidate of candidates) {
     try {
@@ -18862,7 +18960,7 @@ function walkSourceFiles(dir, out) {
     return;
   }
   for (const entry of entries) {
-    const full = join4(dir, entry.name);
+    const full = join5(dir, entry.name);
     if (entry.isDirectory()) {
       if (!IMPORT_GRAPH_SKIP_DIRS.has(entry.name))
         walkSourceFiles(full, out);
@@ -18914,12 +19012,12 @@ function analyzeSourceFile(path) {
 function buildImportGraph(repoRoot) {
   const root = resolve3(repoRoot);
   const files = [];
-  const sourceRoot = join4(root, "src");
+  const sourceRoot = join5(root, "src");
   if (existsSync2(sourceRoot))
     walkSourceFiles(sourceRoot, files);
   else
     walkSourceFiles(root, files);
-  const binRoot = join4(root, "bin");
+  const binRoot = join5(root, "bin");
   if (existsSync2(binRoot))
     walkSourceFiles(binRoot, files);
   const infos = new Map;
@@ -18952,13 +19050,13 @@ function resolveBinEntry(repoRoot, binTarget) {
       guesses.push(direct);
   }
   const stem = basename2(binTarget).replace(/\.[cm]?js$/, "");
-  guesses.push(join4(root, "src", `${stem}.ts`), join4(root, "src", stem, "index.ts"), join4(root, "src", "cli", `${stem}.ts`));
+  guesses.push(join5(root, "src", `${stem}.ts`), join5(root, "src", stem, "index.ts"), join5(root, "src", "cli", `${stem}.ts`));
   if (/mcp/.test(stem))
-    guesses.push(join4(root, "src", "mcp", "index.ts"), join4(root, "src", "mcp.ts"));
+    guesses.push(join5(root, "src", "mcp", "index.ts"), join5(root, "src", "mcp.ts"));
   if (/serve|server/.test(stem))
-    guesses.push(join4(root, "src", "server", "index.ts"), join4(root, "src", "server.ts"));
+    guesses.push(join5(root, "src", "server", "index.ts"), join5(root, "src", "server.ts"));
   if (/^(?:index|cli)$/.test(stem) || stem === basename2(root)) {
-    guesses.push(join4(root, "src", "cli", "index.ts"), join4(root, "src", "cli.ts"), join4(root, "src", "index.ts"));
+    guesses.push(join5(root, "src", "cli", "index.ts"), join5(root, "src", "cli.ts"), join5(root, "src", "index.ts"));
   }
   for (const guess of guesses) {
     try {
@@ -19033,7 +19131,7 @@ function importsLocalOptInGate(path) {
 
 // src/conformance.ts
 import { existsSync as existsSync4, readFileSync as readFileSync6, statSync as statSync5 } from "fs";
-import { join as join7, relative as relative5 } from "path";
+import { join as join8, relative as relative5 } from "path";
 
 // src/auth/keys.ts
 import { createHash as createHash3, createHmac, randomBytes, timingSafeEqual } from "crypto";
@@ -19386,7 +19484,7 @@ function verifyApiKeyToken(token, options) {
 
 // src/credential-seam.ts
 import { readFileSync as readFileSync4, readdirSync as readdirSync3, statSync as statSync3 } from "fs";
-import { join as join5, relative as relative3 } from "path";
+import { join as join6, relative as relative3 } from "path";
 var SKIP_DIRS2 = new Set([
   ".git",
   "node_modules",
@@ -19500,7 +19598,7 @@ function lineNumberAt(text, index) {
 }
 function packageName(repoRoot) {
   try {
-    const pkg = JSON.parse(readFileSync4(join5(repoRoot, "package.json"), "utf8"));
+    const pkg = JSON.parse(readFileSync4(join6(repoRoot, "package.json"), "utf8"));
     return typeof pkg.name === "string" ? pkg.name : null;
   } catch {
     return null;
@@ -19516,7 +19614,7 @@ function collectSourceFiles(root) {
       return;
     }
     for (const entry of entries) {
-      const full = join5(dir, entry.name);
+      const full = join6(dir, entry.name);
       if (entry.isDirectory()) {
         if (!SKIP_DIRS2.has(entry.name))
           walk(full);
@@ -19632,7 +19730,7 @@ import { existsSync as existsSync3, readFileSync as readFileSync5, readdirSync a
 import { spawnSync } from "child_process";
 import { mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "fs";
 import { tmpdir as tmpdir2 } from "os";
-import { join as join6, relative as relative4, resolve as resolve4 } from "path";
+import { join as join7, relative as relative4, resolve as resolve4 } from "path";
 var MAX_FINDINGS_IN_DETAIL = 8;
 function verdict(id, findings, passDetail, strict) {
   if (findings.length === 0)
@@ -19643,7 +19741,7 @@ function verdict(id, findings, passDetail, strict) {
   return { id, status, detail: `${shown.join("; ")}${more}` };
 }
 function readPackage(repoRoot) {
-  const path = join6(repoRoot, "package.json");
+  const path = join7(repoRoot, "package.json");
   if (!existsSync3(path))
     return { present: false, name: null, bins: {}, kitPin: null };
   try {
@@ -19758,7 +19856,7 @@ function filesUnder(root) {
       return;
     }
     for (const entry of entries) {
-      const full = join6(dir, entry.name);
+      const full = join7(dir, entry.name);
       if (entry.isDirectory())
         walk(full);
       else
@@ -19793,10 +19891,10 @@ function clientFailClosedBlackboxCheck(repoRoot, manifest, options = {}) {
   const timeoutMs = options.blackboxTimeoutMs ?? 60000;
   const run = options.blackboxRunner ?? defaultBlackboxRunner(timeoutMs);
   const optIn = manifest.client.localOptIn ?? null;
-  const scopeDir = manifest.scope === "internal" ? ".hasna-internal" : ".hasna";
+  const scopeDir = scopeHomeDirName(manifest.scope ?? "public");
   const findings = [];
   const probeOnce = (label, extra) => {
-    const home = mkdtempSync2(join6(tmpdir2(), "contracts-blackbox-"));
+    const home = mkdtempSync2(join7(tmpdir2(), "contracts-blackbox-"));
     try {
       const env = {
         HOME: home,
@@ -19821,10 +19919,10 @@ function clientFailClosedBlackboxCheck(repoRoot, manifest, options = {}) {
     findings.push(`${absent.label}: created ${absent.created.length} store/JSON file(s) under an empty HOME (${absent.created.slice(0, 3).join(", ")})`);
   if (optIn) {
     const local = probeOnce(`${optIn}=1`, { [optIn]: "1" });
-    const expectedStore = join6(scopeDir, manifest.name, `${manifest.name}.db`);
+    const expectedStore = join7(scopeDir, manifest.name, `${manifest.name}.db`);
     if (local.result.status !== 0)
       findings.push(`${local.label}: exit ${local.result.status ?? "signal"}, expected 0`);
-    const stray = local.created.filter((file) => !file.startsWith(join6(scopeDir, manifest.name) + "/"));
+    const stray = local.created.filter((file) => !file.startsWith(join7(scopeDir, manifest.name) + "/"));
     if (stray.length > 0)
       findings.push(`${local.label}: wrote outside ${scopeDir}/${manifest.name}/ (${stray.slice(0, 3).join(", ")})`);
     if (!local.created.includes(expectedStore))
@@ -19859,7 +19957,7 @@ function noModeVocabularyPatterns() {
     { label: "retired cloud runtime config env", pattern: new RegExp(lit("HASNA_", "CLOUD")), outsideContracts: true },
     { label: "XDG base directory variable", pattern: new RegExp(`\\b${lit("XDG_")}(?:CONFIG|DATA|STATE|CACHE)_HOME\\b`) },
     { label: "macOS library support root", pattern: new RegExp(lit("Application", " ", "Support")) },
-    { label: "retired paths package", pattern: new RegExp(esc2(lit("@hasna", "/paths")) + "|" + esc2(lit("@hasna-internal", "/paths"))) },
+    { label: "retired paths package", pattern: new RegExp(esc2(lit("@hasna", "/paths")) + "|" + esc2(lit("@hasna-", "internal", "/paths"))) },
     { label: "second local door (*_DB_PATH read)", pattern: new RegExp(`(?:process\\.env|\\benv)\\s*(?:\\.|\\[\\s*["'\`])[A-Z][A-Z0-9_]*_DB_PATH\\b`) },
     { label: "own Keychain read outside the seam", pattern: new RegExp(lit("find-generic", "-password")), outsideContracts: true },
     { label: "own credentials-file read outside the seam", pattern: new RegExp(esc2(lit("config", "/credentials"))), outsideContracts: true }
@@ -20005,15 +20103,15 @@ function sourceCandidatesForExportTarget(target) {
 function exportTargetExists(repoRoot, target) {
   if (!target.startsWith("./"))
     return false;
-  const resolved = join7(repoRoot, target);
+  const resolved = join8(repoRoot, target);
   if (relative5(repoRoot, resolved).startsWith(".."))
     return false;
   if (isFile(resolved))
     return true;
-  return sourceCandidatesForExportTarget(target).some((candidate) => isFile(join7(repoRoot, candidate)));
+  return sourceCandidatesForExportTarget(target).some((candidate) => isFile(join8(repoRoot, candidate)));
 }
 function packageJsonInfo(repoRoot) {
-  const path = join7(repoRoot, "package.json");
+  const path = join8(repoRoot, "package.json");
   if (!existsSync4(path))
     return { present: false, bins: [], exportSubpaths: [], exportTargets: {} };
   try {
@@ -20257,7 +20355,7 @@ function unpinnedPackageRunnerInvocations(body) {
   return unpinned;
 }
 function publishedArtifactGateCheck(repoRoot, manifest) {
-  const packagePath = join7(repoRoot, "package.json");
+  const packagePath = join8(repoRoot, "package.json");
   if (!existsSync4(packagePath)) {
     return { id: "published_artifact_gate", status: "skip", detail: "no package.json found" };
   }
@@ -20455,7 +20553,7 @@ function runRepoConformance(repoRoot, options = {}) {
     detail: requiresGeneratedServiceSdk ? apiTopologyFailures.length === 0 ? "supported API declares GET /health, GET /ready, and GET /version" : apiTopologyFailures.join("; ") : `${manifest.class} repo has no required service API topology`
   });
   if (requiresGeneratedServiceSdk) {
-    const presentArtifacts = SELF_HOST_ARTIFACTS.filter((artifact) => isFile(join7(repoRoot, artifact)));
+    const presentArtifacts = SELF_HOST_ARTIFACTS.filter((artifact) => isFile(join8(repoRoot, artifact)));
     checks3.push({
       id: "self_host_artifact",
       status: presentArtifacts.length > 0 ? "pass" : "fail",
@@ -20614,7 +20712,7 @@ function runRepoConformance(repoRoot, options = {}) {
 // src/kit/generate.ts
 import { createHash as createHash4 } from "crypto";
 import { existsSync as existsSync5, mkdirSync, readdirSync as readdirSync5, readFileSync as readFileSync7, unlinkSync, writeFileSync } from "fs";
-import { dirname as dirname2, join as join8, resolve as resolve5 } from "path";
+import { dirname as dirname2, join as join9, resolve as resolve5 } from "path";
 import { fileURLToPath } from "url";
 var KIT_TEMPLATE_FILES = [
   "own.ts",
@@ -20656,7 +20754,7 @@ function kitMatchesDeclaredDependency(kitVersion, declared) {
   return kit.minor === dep.minor;
 }
 function readDeclaredKitDependency(targetRepo) {
-  const pkgPath = join8(resolve5(targetRepo), "package.json");
+  const pkgPath = join9(resolve5(targetRepo), "package.json");
   if (!existsSync5(pkgPath))
     return null;
   try {
@@ -20675,7 +20773,7 @@ function moduleDir() {
 function findPackageRoot(start = moduleDir()) {
   let dir = start;
   for (let i = 0;i < 8; i++) {
-    const pkgPath = join8(dir, "package.json");
+    const pkgPath = join9(dir, "package.json");
     if (existsSync5(pkgPath)) {
       try {
         const pkg = JSON.parse(readFileSync7(pkgPath, "utf8"));
@@ -20692,17 +20790,17 @@ function findPackageRoot(start = moduleDir()) {
 }
 function resolveTemplatesDir() {
   const candidates = [
-    join8(moduleDir(), "templates"),
-    join8(findPackageRoot(), "src", "kit", "templates")
+    join9(moduleDir(), "templates"),
+    join9(findPackageRoot(), "src", "kit", "templates")
   ];
   for (const candidate of candidates) {
-    if (existsSync5(join8(candidate, "index.ts")))
+    if (existsSync5(join9(candidate, "index.ts")))
       return candidate;
   }
   throw new Error(`Kit templates not found. Looked in: ${candidates.join(", ")}`);
 }
 function getKitVersion() {
-  const pkg = JSON.parse(readFileSync7(join8(findPackageRoot(), "package.json"), "utf8"));
+  const pkg = JSON.parse(readFileSync7(join9(findPackageRoot(), "package.json"), "utf8"));
   if (!pkg.version)
     throw new Error("@hasna/contracts package.json has no version.");
   return pkg.version;
@@ -20718,7 +20816,7 @@ function tsHeader(version2) {
 `);
 }
 function renderKitFile(file, version2, templatesDir = resolveTemplatesDir()) {
-  const raw = readFileSync7(join8(templatesDir, file), "utf8");
+  const raw = readFileSync7(join9(templatesDir, file), "utf8");
   const withVersion = raw.split(KIT_VERSION_PLACEHOLDER).join(version2);
   if (file.endsWith(".ts"))
     return tsHeader(version2) + withVersion;
@@ -20747,11 +20845,11 @@ function renderKit(version2 = getKitVersion()) {
 function generateKit(options) {
   const version2 = options.version ?? getKitVersion();
   const rendered = renderKit(version2);
-  const targetDir = join8(resolve5(options.targetRepo), KIT_TARGET_SUBDIR);
+  const targetDir = join9(resolve5(options.targetRepo), KIT_TARGET_SUBDIR);
   mkdirSync(targetDir, { recursive: true });
   const removed = [];
   for (const file of RETIRED_KIT_FILES) {
-    const path = join8(targetDir, file);
+    const path = join9(targetDir, file);
     if (!existsSync5(path))
       continue;
     unlinkSync(path);
@@ -20762,10 +20860,10 @@ function generateKit(options) {
     const content = rendered.files[file];
     if (content === undefined)
       continue;
-    writeFileSync(join8(targetDir, file), content, "utf8");
+    writeFileSync(join9(targetDir, file), content, "utf8");
     written.push(file);
   }
-  writeFileSync(join8(targetDir, KIT_MANIFEST_FILE), JSON.stringify(rendered.manifest, null, 2) + `
+  writeFileSync(join9(targetDir, KIT_MANIFEST_FILE), JSON.stringify(rendered.manifest, null, 2) + `
 `, "utf8");
   written.push(KIT_MANIFEST_FILE);
   let contractUpdated = false;
@@ -20775,7 +20873,7 @@ function generateKit(options) {
   return { version: version2, targetDir, written, removed, contractUpdated };
 }
 function writeKitVersionToContract(targetRepo, version2) {
-  const contractPath = join8(targetRepo, "hasna.contract.json");
+  const contractPath = join9(targetRepo, "hasna.contract.json");
   if (!existsSync5(contractPath))
     return false;
   const contract = JSON.parse(readFileSync7(contractPath, "utf8"));
@@ -20789,10 +20887,10 @@ function writeKitVersionToContract(targetRepo, version2) {
 function checkKit(options) {
   const version2 = options.version ?? getKitVersion();
   const rendered = renderKit(version2);
-  const targetDir = join8(resolve5(options.targetRepo), KIT_TARGET_SUBDIR);
+  const targetDir = join9(resolve5(options.targetRepo), KIT_TARGET_SUBDIR);
   const files = [];
   for (const file of KIT_TEMPLATE_FILES) {
-    const path = join8(targetDir, file);
+    const path = join9(targetDir, file);
     if (!existsSync5(path)) {
       files.push({ file, status: "missing" });
       continue;
@@ -20811,7 +20909,7 @@ function checkKit(options) {
   }
   let staleVersion = null;
   let manifestKitVersion = null;
-  const manifestPath = join8(targetDir, KIT_MANIFEST_FILE);
+  const manifestPath = join9(targetDir, KIT_MANIFEST_FILE);
   if (existsSync5(manifestPath)) {
     try {
       const manifest = JSON.parse(readFileSync7(manifestPath, "utf8"));
@@ -22256,102 +22354,6 @@ function generateSdkFromOpenApi(spec, options = {}) {
 `) + `
 ` : "") + runtime;
   return { code, operations, warnings: emitter.warnings };
-}
-
-// src/client/app-home.ts
-import { isAbsolute, join as join9 } from "path";
-var APP_HOME_SCOPES = ["public", "internal"];
-var HASNA_HOME_ENV_KEY = "HASNA_HOME";
-var HASNA_CONFIG_HOME_ENV_KEY = "HASNA_CONFIG_HOME";
-var HASNA_DATA_HOME_ENV_KEY = "HASNA_DATA_HOME";
-var HASNA_STATE_HOME_ENV_KEY = "HASNA_STATE_HOME";
-var HASNA_CACHE_HOME_ENV_KEY = "HASNA_CACHE_HOME";
-var APP_HOME_ENV_KEYS = [
-  HASNA_HOME_ENV_KEY,
-  HASNA_CONFIG_HOME_ENV_KEY,
-  HASNA_DATA_HOME_ENV_KEY,
-  HASNA_STATE_HOME_ENV_KEY,
-  HASNA_CACHE_HOME_ENV_KEY
-];
-var PUBLIC_HOME_DIR_NAME = ".hasna";
-var INTERNAL_HOME_DIR_NAME = ".hasna-internal";
-var APP_CONFIG_SUBDIR = "config";
-var APP_STATE_SUBDIR = "state";
-var APP_CACHE_SUBDIR = "cache";
-var APP_CREDENTIALS_FILE = "credentials";
-var APP_HOME_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
-function appScopeForPackageName(packageName2) {
-  if (packageName2.startsWith("@hasna/"))
-    return "public";
-  if (packageName2.startsWith("@hasna-internal/"))
-    return "internal";
-  return null;
-}
-function scopeHomeDirName(scope) {
-  return scope === "internal" ? INTERNAL_HOME_DIR_NAME : PUBLIC_HOME_DIR_NAME;
-}
-
-class AppHomeUnresolvableError extends Error {
-  appName;
-  constructor(appName, message) {
-    super(message);
-    this.name = "AppHomeUnresolvableError";
-    this.appName = appName;
-  }
-}
-function absoluteOverride(env, key) {
-  const value = env[key]?.trim();
-  return value && isAbsolute(value) ? value : null;
-}
-function homeDir(env) {
-  const home = env.HOME?.trim();
-  return home ? home : null;
-}
-function resolveAppHome(name, env = process.env, options = {}) {
-  if (!APP_HOME_SLUG_PATTERN.test(name)) {
-    throw new AppHomeUnresolvableError(name, `App name '${name}' is not a safe path segment; use a lowercase dashed slug.`);
-  }
-  const scope = options.scope ?? "public";
-  const rootOverride = absoluteOverride(env, HASNA_HOME_ENV_KEY);
-  const home = homeDir(env);
-  const root = rootOverride ?? (home ? join9(home, scopeHomeDirName(scope)) : null);
-  if (!root)
-    return null;
-  const appHome = join9(root, name);
-  const layer = (key, fallback) => {
-    const override = absoluteOverride(env, key);
-    return override ? { path: join9(override, name), source: key } : { path: fallback, source: "home" };
-  };
-  const config2 = layer(HASNA_CONFIG_HOME_ENV_KEY, join9(appHome, APP_CONFIG_SUBDIR));
-  const data = layer(HASNA_DATA_HOME_ENV_KEY, appHome);
-  const state = layer(HASNA_STATE_HOME_ENV_KEY, join9(appHome, APP_STATE_SUBDIR));
-  const cache = layer(HASNA_CACHE_HOME_ENV_KEY, join9(appHome, APP_CACHE_SUBDIR));
-  return Object.freeze({
-    name,
-    scope,
-    root,
-    home: appHome,
-    config: config2.path,
-    credentials: join9(config2.path, APP_CREDENTIALS_FILE),
-    data: data.path,
-    state: state.path,
-    cache: cache.path,
-    localDb: join9(data.path, `${name}.db`),
-    sources: Object.freeze({
-      root: rootOverride ? HASNA_HOME_ENV_KEY : "HOME",
-      config: config2.source,
-      data: data.source,
-      state: state.source,
-      cache: cache.source
-    })
-  });
-}
-function appPaths(name, env = process.env, options = {}) {
-  const resolved = resolveAppHome(name, env, options);
-  if (!resolved) {
-    throw new AppHomeUnresolvableError(name, `No HOME or ${HASNA_HOME_ENV_KEY} in this environment, so no home can be resolved for '${name}'.`);
-  }
-  return resolved;
 }
 
 // src/client/transport.ts
@@ -24084,6 +24086,8 @@ export {
   IntentSnapshotSchema,
   IntentSnapshotRefSchema,
   IntegrationRefSchema,
+  INTERNAL_SCOPE_SUFFIX,
+  INTERNAL_PACKAGE_SCOPE_PREFIX,
   INTERNAL_HOME_DIR_NAME,
   HostingModeSchema,
   HealthResponseSchema,

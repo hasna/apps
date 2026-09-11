@@ -21,6 +21,7 @@ import type { ConformanceCheck, ConformanceStatus } from "./conformance.js";
 import { FLEET_MIN_KIT_VERSION, type ServiceContractManifest } from "./schemas.js";
 import { localOptInEnvKey } from "./client/local-opt-in.js";
 import { clientTransportEnvKeys } from "./client/env-keys.js";
+import { scopeHomeDirName } from "./client/app-home.js";
 import {
   buildImportGraph,
   importsLocalOptInGate,
@@ -266,7 +267,7 @@ export function clientFailClosedBlackboxCheck(
   const timeoutMs = options.blackboxTimeoutMs ?? 60_000;
   const run = options.blackboxRunner ?? defaultBlackboxRunner(timeoutMs);
   const optIn = manifest.client.localOptIn ?? null;
-  const scopeDir = manifest.scope === "internal" ? ".hasna-internal" : ".hasna";
+  const scopeDir = scopeHomeDirName(manifest.scope ?? "public");
   const findings: string[] = [];
 
   const probeOnce = (label: string, extra: Record<string, string>) => {
@@ -345,7 +346,7 @@ export function noModeVocabularyPatterns(): VocabularyPattern[] {
     { label: "retired cloud runtime config env", pattern: new RegExp(lit("HASNA_", "CLOUD")), outsideContracts: true },
     { label: "XDG base directory variable", pattern: new RegExp(`\\b${lit("XDG_")}(?:CONFIG|DATA|STATE|CACHE)_HOME\\b`) },
     { label: "macOS library support root", pattern: new RegExp(lit("Application", " ", "Support")) },
-    { label: "retired paths package", pattern: new RegExp(esc(lit("@hasna", "/paths")) + "|" + esc(lit("@hasna-internal", "/paths"))) },
+    { label: "retired paths package", pattern: new RegExp(esc(lit("@hasna", "/paths")) + "|" + esc(lit("@hasna-", "internal", "/paths"))) },
     { label: "second local door (*_DB_PATH read)", pattern: new RegExp(`(?:process\\.env|\\benv)\\s*(?:\\.|\\[\\s*["'\`])[A-Z][A-Z0-9_]*_DB_PATH\\b`) },
     { label: "own Keychain read outside the seam", pattern: new RegExp(lit("find-generic", "-password")), outsideContracts: true },
     { label: "own credentials-file read outside the seam", pattern: new RegExp(esc(lit("config", "/credentials"))), outsideContracts: true },

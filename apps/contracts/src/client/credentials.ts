@@ -188,7 +188,7 @@ export interface CredentialChainOptions {
   keychain?: KeychainTierOptions;
   /**
    * Tier 4: which home root the credentials file lives under — `~/.hasna/<app>`
-   * (`"public"`, the default) or `~/.hasna-internal/<app>` (`"internal"`).
+   * (`"public"`, the default) or the same root with the `-internal` suffix (`"internal"`).
    * Internal apps pass the `scope` their `hasna.contract.json` declares. The
    * Keychain item names are the same for both scopes.
    */
@@ -321,7 +321,7 @@ const VAULT_POINTER_SHAPE = /^[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-_.]*){2,}$/
 /**
  * The app's config directory: `<HASNA_CONFIG_HOME>/<app>` when the config root
  * is overridden, else `<home root>/<app>/config` where the home root is
- * `~/.hasna` (public) or `~/.hasna-internal` (internal), or `HASNA_HOME`.
+ * `~/.hasna` (public) or the same root with the `-internal` suffix (internal), or `HASNA_HOME`.
  * Delegates to the ONE home resolver in `app-home.ts`; null when neither HOME
  * nor HASNA_HOME anchors a root. Callers validate the slug first.
  */

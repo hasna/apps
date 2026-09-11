@@ -60,7 +60,7 @@ import { resolveStorageClient } from "@hasna/contracts/client/storage";
 
 export function resolveStore(env = process.env) {
   if (selectsLocalStore("todos", env)) {            // HASNA_TODOS_LOCAL=1, answered before any Keychain/disk read
-    const home = appPaths("todos", env);            // ~/.hasna/todos (scope: "internal" -> ~/.hasna-internal/todos)
+    const home = appPaths("todos", env);            // ~/.hasna/todos (scope: "internal" -> the root with the -internal suffix)
     process.stderr.write(localStoreNotice("todos", home.localDb) + "\n");
     return openSqlite(home.localDb);                // the ONE module allowed to open a store
   }

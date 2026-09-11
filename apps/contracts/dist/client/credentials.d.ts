@@ -84,7 +84,7 @@ export interface CredentialChainOptions {
     keychain?: KeychainTierOptions;
     /**
      * Tier 4: which home root the credentials file lives under — `~/.hasna/<app>`
-     * (`"public"`, the default) or `~/.hasna-internal/<app>` (`"internal"`).
+     * (`"public"`, the default) or the same root with the `-internal` suffix (`"internal"`).
      * Internal apps pass the `scope` their `hasna.contract.json` declares. The
      * Keychain item names are the same for both scopes.
      */

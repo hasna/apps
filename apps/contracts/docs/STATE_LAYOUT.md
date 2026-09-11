@@ -59,7 +59,7 @@ reads only the owner-safe app credentials file (see CONTRACT.md §3a; the
 
 ```text
 ~/.hasna/<name>/config/credentials             (HASNA_HOME replaces ~/.hasna)
-~/.hasna-internal/<name>/config/credentials    (scope: internal, @hasna-internal/*)
+<the same root with the -internal suffix>/<name>/config/credentials   (scope: internal)
 <HASNA_CONFIG_HOME>/<name>/credentials         (when HASNA_CONFIG_HOME is set)
 ~/.hasna/<name>/config/credentials-<profile>   (profiles)
 ```

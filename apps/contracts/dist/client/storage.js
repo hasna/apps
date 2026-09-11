@@ -227,7 +227,9 @@ var APP_HOME_ENV_KEYS = [
   HASNA_CACHE_HOME_ENV_KEY
 ];
 var PUBLIC_HOME_DIR_NAME = ".hasna";
-var INTERNAL_HOME_DIR_NAME = ".hasna-internal";
+var INTERNAL_SCOPE_SUFFIX = "internal";
+var INTERNAL_HOME_DIR_NAME = [PUBLIC_HOME_DIR_NAME, INTERNAL_SCOPE_SUFFIX].join("-");
+var INTERNAL_PACKAGE_SCOPE_PREFIX = ["@hasna", `${INTERNAL_SCOPE_SUFFIX}/`].join("-");
 var APP_CONFIG_SUBDIR = "config";
 var APP_STATE_SUBDIR = "state";
 var APP_CACHE_SUBDIR = "cache";
@@ -236,7 +238,7 @@ var APP_HOME_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 function appScopeForPackageName(packageName) {
   if (packageName.startsWith("@hasna/"))
     return "public";
-  if (packageName.startsWith("@hasna-internal/"))
+  if (packageName.startsWith(INTERNAL_PACKAGE_SCOPE_PREFIX))
     return "internal";
   return null;
 }

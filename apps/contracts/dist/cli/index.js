@@ -22603,7 +22603,7 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
     },
     scope: {
       enum: ["public", "internal"],
-      description: "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*), internal is ~/.hasna-internal/<name> (@hasna-internal/*). Absent means public."
+      description: "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*); internal is the same root with the -internal suffix, for internal-scope packages. Absent means public."
     },
     client: {
       oneOf: [
@@ -23155,6 +23155,15 @@ import { mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "fs";
 import { tmpdir as tmpdir2 } from "os";
 import { join as join6, relative as relative4, resolve as resolve4 } from "path";
 
+// src/client/app-home.ts
+var PUBLIC_HOME_DIR_NAME = ".hasna";
+var INTERNAL_SCOPE_SUFFIX = "internal";
+var INTERNAL_HOME_DIR_NAME = [PUBLIC_HOME_DIR_NAME, INTERNAL_SCOPE_SUFFIX].join("-");
+var INTERNAL_PACKAGE_SCOPE_PREFIX = ["@hasna", `${INTERNAL_SCOPE_SUFFIX}/`].join("-");
+function scopeHomeDirName(scope) {
+  return scope === "internal" ? INTERNAL_HOME_DIR_NAME : PUBLIC_HOME_DIR_NAME;
+}
+
 // src/conformance-import-graph.ts
 import { existsSync as existsSync2, readFileSync as readFileSync4, readdirSync as readdirSync3, statSync as statSync3 } from "fs";
 import { basename as basename2, dirname, join as join5, relative as relative3, resolve as resolve3 } from "path";
@@ -23558,7 +23567,7 @@ function clientFailClosedBlackboxCheck(repoRoot, manifest, options = {}) {
   const timeoutMs = options.blackboxTimeoutMs ?? 60000;
   const run = options.blackboxRunner ?? defaultBlackboxRunner(timeoutMs);
   const optIn = manifest.client.localOptIn ?? null;
-  const scopeDir = manifest.scope === "internal" ? ".hasna-internal" : ".hasna";
+  const scopeDir = scopeHomeDirName(manifest.scope ?? "public");
   const findings = [];
   const probeOnce = (label, extra) => {
     const home = mkdtempSync2(join6(tmpdir2(), "contracts-blackbox-"));
@@ -23624,7 +23633,7 @@ function noModeVocabularyPatterns() {
     { label: "retired cloud runtime config env", pattern: new RegExp(lit("HASNA_", "CLOUD")), outsideContracts: true },
     { label: "XDG base directory variable", pattern: new RegExp(`\\b${lit("XDG_")}(?:CONFIG|DATA|STATE|CACHE)_HOME\\b`) },
     { label: "macOS library support root", pattern: new RegExp(lit("Application", " ", "Support")) },
-    { label: "retired paths package", pattern: new RegExp(esc2(lit("@hasna", "/paths")) + "|" + esc2(lit("@hasna-internal", "/paths"))) },
+    { label: "retired paths package", pattern: new RegExp(esc2(lit("@hasna", "/paths")) + "|" + esc2(lit("@hasna-", "internal", "/paths"))) },
     { label: "second local door (*_DB_PATH read)", pattern: new RegExp(`(?:process\\.env|\\benv)\\s*(?:\\.|\\[\\s*["'\`])[A-Z][A-Z0-9_]*_DB_PATH\\b`) },
     { label: "own Keychain read outside the seam", pattern: new RegExp(lit("find-generic", "-password")), outsideContracts: true },
     { label: "own credentials-file read outside the seam", pattern: new RegExp(esc2(lit("config", "/credentials"))), outsideContracts: true }

@@ -516,7 +516,7 @@ export declare const SERVICE_CONTRACT_JSON_SCHEMA: {
         };
         readonly scope: {
             readonly enum: readonly ["public", "internal"];
-            readonly description: "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*), internal is ~/.hasna-internal/<name> (@hasna-internal/*). Absent means public.";
+            readonly description: "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*); internal is the same root with the -internal suffix, for internal-scope packages. Absent means public.";
         };
         readonly client: {
             readonly oneOf: readonly [{

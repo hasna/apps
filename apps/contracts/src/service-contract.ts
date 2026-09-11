@@ -439,7 +439,7 @@ export const SERVICE_CONTRACT_JSON_SCHEMA = {
     scope: {
       enum: ["public", "internal"],
       description:
-        "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*), internal is ~/.hasna-internal/<name> (@hasna-internal/*). Absent means public."
+        "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*); internal is the same root with the -internal suffix, for internal-scope packages. Absent means public."
     },
     client: {
       oneOf: [

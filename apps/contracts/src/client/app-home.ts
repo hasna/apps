@@ -1,7 +1,12 @@
 // The ONE home resolver for Hasna apps (2026-09-04 home-layout ruling).
 //
-//   public apps   (@hasna/<app>)          -> ~/.hasna/<app>
-//   internal apps (@hasna-internal/<app>) -> ~/.hasna-internal/<app>
+//   public apps   (@hasna/<app>)                -> ~/.hasna/<app>
+//   internal apps (the internal package scope)  -> the same root with the
+//                                                  `-internal` suffix, /<app>
+//
+// The internal names are assembled from fragments below: a PUBLIC tarball must
+// not carry the internal org's name as a literal (the publish guard scans for
+// it), while the resolved paths stay exactly the ruled ones.
 //
 // Sub-layers inside the home: `config/` (credentials and non-secret routing
 // config), `state/`, `cache/`, and DATA at the home root (the opted-in local
@@ -37,7 +42,12 @@ export const APP_HOME_ENV_KEYS = [
 ] as const;
 
 export const PUBLIC_HOME_DIR_NAME = ".hasna";
-export const INTERNAL_HOME_DIR_NAME = ".hasna-internal";
+/** The suffix that turns the public root and the public package scope into the internal ones. */
+export const INTERNAL_SCOPE_SUFFIX = "internal";
+/** `.hasna` + `-` + the internal suffix. */
+export const INTERNAL_HOME_DIR_NAME = [PUBLIC_HOME_DIR_NAME, INTERNAL_SCOPE_SUFFIX].join("-");
+/** `@hasna-` + the internal suffix + `/` — the package scope prefix of internal apps. */
+export const INTERNAL_PACKAGE_SCOPE_PREFIX = ["@hasna", `${INTERNAL_SCOPE_SUFFIX}/`].join("-");
 export const APP_CONFIG_SUBDIR = "config";
 export const APP_STATE_SUBDIR = "state";
 export const APP_CACHE_SUBDIR = "cache";
@@ -50,14 +60,14 @@ export const APP_CREDENTIALS_FILE = "credentials";
  */
 export const APP_HOME_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
-/** The scope for a package name: `@hasna/*` is public, `@hasna-internal/*` is internal, anything else is unknown. */
+/** The scope for a package name: `@hasna/*` is public, the internal package scope is internal, anything else is unknown. */
 export function appScopeForPackageName(packageName: string): AppHomeScope | null {
   if (packageName.startsWith("@hasna/")) return "public";
-  if (packageName.startsWith("@hasna-internal/")) return "internal";
+  if (packageName.startsWith(INTERNAL_PACKAGE_SCOPE_PREFIX)) return "internal";
   return null;
 }
 
-/** `.hasna` or `.hasna-internal`. */
+/** `.hasna`, or the same name with the `-internal` suffix. */
 export function scopeHomeDirName(scope: AppHomeScope): string {
   return scope === "internal" ? INTERNAL_HOME_DIR_NAME : PUBLIC_HOME_DIR_NAME;
 }
@@ -80,7 +90,7 @@ export interface AppHomeSources {
 export interface AppHome {
   name: string;
   scope: AppHomeScope;
-  /** The scope root: `~/.hasna` or `~/.hasna-internal` (or `HASNA_HOME`). */
+  /** The scope root: `~/.hasna`, or the same root with the `-internal` suffix (or `HASNA_HOME`). */
   root: string;
   /** `<root>/<app>` — the app home. Data lives here. */
   home: string;

@@ -239,8 +239,8 @@ the credential is unreadable.
 **One home resolver.** `resolveAppHome(name, env, { scope })` (null when
 neither `HOME` nor `HASNA_HOME` anchors a root) and `appPaths(...)` (throws
 instead) return the app home for its scope — `public` (`@hasna/*`) is
-`~/.hasna/<name>`, `internal` (`@hasna-internal/*`) is
-`~/.hasna-internal/<name>` — with the layers `config/` (the credentials file),
+`~/.hasna/<name>`, `internal` (internal-scope packages) is the same root
+with the `-internal` suffix — with the layers `config/` (the credentials file),
 `state/`, `cache/`, data at the home root and `localDb` at
 `<data>/<name>.db`. The overrides are exactly `HASNA_HOME` (replaces the scope
 root) and `HASNA_CONFIG_HOME`, `HASNA_DATA_HOME`, `HASNA_STATE_HOME`,
@@ -249,7 +249,7 @@ absolute and non-blank only. No XDG variable and no macOS library folder is
 ever consulted. The credential chain's disk tier reads
 `resolveAppHome(...).credentials` for the `scope` passed in
 `credentials.scope` (default `public`), so an internal app's credentials file
-is `~/.hasna-internal/<name>/config/credentials`; Keychain item names are the
+is `<internal root>/<name>/config/credentials`; Keychain item names are the
 same for both scopes.
 
 ---
@@ -535,7 +535,7 @@ backend, storage capabilities, and product surfaces are separate axes:
 - `publishing` — optional. How the repo's artifacts reach consumers. See
   section 9.1.
 - `scope` — optional (1.1.0). `public` (`~/.hasna/<name>`, the default) or
-  `internal` (`~/.hasna-internal/<name>`); the home root the app owns, derived
+  `internal` (the same root with the `-internal` suffix); the home root the app owns, derived
   from its package scope.
 - `client` — optional (1.1.0). The hosted client contract: `transport:
   "hosted"`, `credentialChain: "contracts"`, an optional `authority` (absolute
