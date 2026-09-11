@@ -1,5 +1,14 @@
 ## 1.6.0
 
+## 1.6.1
+
+### Patch Changes
+
+- Update Mailparser to 3.9.20 and Nodemailer to 9.1.1 to fix GHSA-2x7j-588g-ccc2.
+- Bound expensive message searches with process admission and transaction-local time limits; busy searches return HTTP 429 with retry guidance.
+- Keep backend idle connections open longer than the proxy timeout to prevent reuse of closed sockets.
+
+
 First publication since 1.4.10. The 1.5.0 section below was cut (hasna/apps#1867) but never published — its independent release review returned NO_GO on the deliberate-tier defect fixed in this release — so everything listed under 1.5.0 ships here for the first time, together with the changes below.
 
 **Credential resolution as shipped.** The hosted client (`emails` CLI, `emails-mcp`, the `./storage` plan and the hosted HTTP store) resolves its API URL and key through the shared `@hasna/contracts` 1.0.2 resolver, fresh on every request (hasna/apps#1720):
