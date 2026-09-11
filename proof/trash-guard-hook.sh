@@ -104,7 +104,7 @@ jrc=$?
 # and is correctly allowed), while a missing / null / non-string command is
 # refused.
 if ! printf '%s' "$payload" | jq -e '(.tool_input? | type) == "object" and (.tool_input.command? | type) == "string"' >/dev/null 2>&1; then
-  deny "the hook could not read a string tool_input.command from its input payload, so it cannot verify what would run — refusing rather than allowing an unverifiable call. Re-run the delete explicitly as \`rm -- <path>\`."
+  deny "the hook could not read a string tool_input.command from its input payload, so it cannot verify what would run — refusing rather than allowing an unverifiable call. Re-run the delete with a literal path and it will be redirected into trash."
 fi
 cmd=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)
 jrc=$?
