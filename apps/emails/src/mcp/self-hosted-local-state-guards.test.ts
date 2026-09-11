@@ -2,9 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 import { buildServer } from "./server.js";
 
-// Self-hosted-ONLY: no local SQLite. `prepare_inbox` genuinely has no route in this
-// client and is refused; `list_replies` claimed the same and was WRONG (see below);
-// get_next_action routes through runtime status. All of it runs against the /v1 stub.
+// Shared API behavior with no local mailbox database.
 
 let stub: V1Stub;
 
@@ -20,7 +18,7 @@ function resultText(result: { content: Array<{ text: string }> }): string {
 }
 
 beforeAll(async () => {
-  stub = await startV1Stub();
+  stub = await startV1Stub({ openapi: true });
 });
 
 afterAll(() => stub.stop());
@@ -35,12 +33,21 @@ afterEach(() => {
 });
 
 describe("MCP self_hosted local-state guards", () => {
-  it("refuses prepare_inbox, which really has no route in this client", async () => {
-    // Unlike list_replies below, this one is honest: there is no `/v1` provisioning
-    // route and `emails address provision` is `serverOnly(...)`.
-    const result = await callTool("prepare_inbox", { email: "ops@example.com", create_missing: true, provider_id: "provider-1" });
+  it("diagnoses a registered inbox without creating or provisioning it", async () => {
+    await stub.seed({ addresses: [{ id: "address-1", email: "ops@example.com", provider_id: "provider-1", status: "active", provisioning_status: "ready" }] });
+    const result = await callTool("prepare_inbox", { email: "ops@example.com" });
+    expect(result.isError, resultText(result)).not.toBe(true);
+    const payload = JSON.parse(resultText(result));
+    expect(payload.address.id).toBe("address-1");
+    expect(payload.provisioning.provisioning_status).toBe("ready");
+    expect(payload.source).toBe("account_registry");
+    expect(await stub.list("addresses")).toHaveLength(1);
+  });
+  it("does not register a missing inbox without create_missing", async () => {
+    const result = await callTool("prepare_inbox", { email: "missing@example.com" });
     expect(result.isError).toBe(true);
-    expect(resultText(result)).toContain("not available in the self-hosted client");
+    expect(resultText(result)).toContain("create_missing");
+    expect(await stub.list("addresses")).toHaveLength(0);
   });
 
   it("no longer refuses list_replies — it serves replies from /v1/messages", async () => {

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 import { getPackageVersion } from "../lib/version.js";
 
@@ -110,9 +112,16 @@ describe("domains-mcp answers --version/--help before binding the HTTP server", 
       // its banner, and reads stdin for JSON-RPC without exiting. stdin is an
       // open, silent pipe, so a regression that swallowed the stdio path (or
       // made plain runs exit immediately) would fail this probe.
+      const home = mkdtempSync(join(tmpdir(), "domains-mcp-startup-"));
       const proc = Bun.spawn([process.execPath, "run", MCP_ENTRY, "--stdio"], {
         cwd: PACKAGE_ROOT,
-        env: process.env,
+        env: {
+          PATH: process.env.PATH,
+          HOME: home,
+          HASNA_STATION: "domains-mcp-startup-fixture",
+          HASNA_DOMAINS_API_URL: "http://127.0.0.1:1",
+          HASNA_DOMAINS_API_KEY: "domains-startup-fixture-key",
+        },
         stdout: "pipe",
         stderr: "pipe",
         stdin: "pipe",
@@ -128,6 +137,7 @@ describe("domains-mcp answers --version/--help before binding the HTTP server", 
       ]);
       const stderr = await readStream(proc.stderr);
       await proc.exited;
+      rmSync(home, { recursive: true, force: true });
       expect(timedOut).toBe(true);
       expect(stderr).toContain("domains MCP server running on stdio");
     },

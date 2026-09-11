@@ -151,7 +151,7 @@ export interface LocalSkillsFleet {
 export type SkillsFleet = HostedSkillsFleet | LocalSkillsFleet;
 
 /** Machine-readable reasons a hosted resolution was refused. */
-export type SkillsFleetErrorCode = "MISSING_API_CREDENTIAL" | "INVALID_API_URL" | "INSTANCE_CREDENTIAL_MISMATCH";
+export type SkillsFleetErrorCode = "MISSING_API_CREDENTIAL" | "INVALID_API_URL" | "INSTANCE_CREDENTIAL_MISMATCH" | "GATEWAY_AUTH_UNAVAILABLE";
 
 /**
  * A configured install could not produce a usable hosted client.
@@ -193,8 +193,14 @@ function isCredentialResolutionError(error: unknown): boolean {
   );
 }
 
-/** True for this package's own refusal, across bundle boundaries. */
-function isSkillsFleetCredentialError(error: unknown): boolean {
+/**
+ * True for this package's own refusal, across bundle boundaries.
+ *
+ * Exported for the surfaces that turn the refusal into data (an MCP tool's
+ * `AUTH_REQUIRED` result, a CLI handler's one-line stderr exit) so they match
+ * on the error's NAME rather than on a class identity a bundle may not share.
+ */
+export function isSkillsFleetCredentialError(error: unknown): error is SkillsFleetCredentialError {
   return (
     error instanceof SkillsFleetCredentialError ||
     (typeof error === "object" &&
@@ -237,7 +243,9 @@ export function normalizeSkillsApiOrigin(apiUrl: string): string {
     throw new SkillsFleetCredentialError("A Skills API URL must use HTTPS (or loopback HTTP), without credentials, query or fragment", "INVALID_API_URL");
   }
   const pathname = url.pathname.replace(/\/+$/, "");
-  if (pathname === "/api" || pathname === "/api/v1") {
+  if (url.origin === "https://api.hasna.com" && pathname === "/skills/v1") {
+    url.pathname = "/skills";
+  } else if (pathname === "/api" || pathname === "/api/v1") {
     url.pathname = "/";
   } else if (pathname.endsWith("/api/v1")) {
     url.pathname = pathname.slice(0, -"/api/v1".length) || "/";
@@ -245,6 +253,28 @@ export function normalizeSkillsApiOrigin(apiUrl: string): string {
     url.pathname = pathname.slice(0, -"/api".length) || "/";
   }
   return url.toString().replace(/\/+$/, "");
+}
+
+/** Compose a known Skills route without changing its credential-bound instance.
+ * The fleet gateway strips /skills and forwards /v1 to its independent origin.
+ * Other instances retain the established /api/v1 and /api/auth contracts.
+ */
+export function skillsApiRequestUrl(apiUrl: string, route: string): string {
+  const origin = normalizeSkillsApiOrigin(apiUrl);
+  if (!route.startsWith("/api/") || route.includes("#") || route.includes("\\")) {
+    throw new SkillsFleetCredentialError("Invalid Skills API route", "INVALID_API_URL");
+  }
+  if (origin === "https://api.hasna.com/skills") {
+    if (route === "/api/auth/whoami") return `${origin}/v1/auth/whoami`;
+    if (!route.startsWith("/api/v1/")) {
+      throw new SkillsFleetCredentialError(
+        "The internal Skills gateway has no established login contract yet. Select an explicitly configured instance with supported authentication.",
+        "GATEWAY_AUTH_UNAVAILABLE",
+      );
+    }
+    return `${origin}${route.slice("/api".length)}`;
+  }
+  return `${origin}${route}`;
 }
 
 /** One configured authority: its value and the source that decided it. */
@@ -406,16 +436,18 @@ function resolveSkillsFleetOrThrow(env: Env, options: SkillsFleetOptions): Skill
     if (!configured) {
       // Nothing at all: no credential, no authority, no opt-in. Fail closed —
       // the alternative is quietly answering from the bundled corpus for a
-      // machine that was never told to serve it.
+      // machine that was never told to serve it. The one line names WHERE the
+      // credential should live (#1720 validation): an operator reading it on a
+      // station has to be able to fix the station, not only log in.
       throw new SkillsFleetCredentialError(
         `No API key resolved and no Skills API URL is configured — failing closed ` +
           `(local mode is opt-in only: set ${SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]}=1 to run on this machine). ` +
-          `Sign in with: skills auth login`,
+          `Looked in ${credentialLocations(env)}. Sign in with: skills auth login`,
       );
     }
     throw new SkillsFleetCredentialError(
       `${configured.source} points this CLI at a Skills service but no API key resolved — refusing to run locally instead. ` +
-        `Looked in hasna.credentials.skills.api-key, ${skillsCredentialFiles(env).join(" or ") || "no credentials file"}, and ${SKILLS_API_KEY_ENV}. Sign in with: skills auth login`,
+        `Looked in ${credentialLocations(env)}. Sign in with: skills auth login`,
     );
   }
   const apiOrigin = normalizeSkillsApiOrigin(configured?.value ?? defaultFleetGatewayBaseUrl(SKILLS_APP));
@@ -456,6 +488,16 @@ function resolveSkillsFleetOrThrow(env: Env, options: SkillsFleetOptions): Skill
   }
 
   return { ...base, apiKey: credential.apiKey, apiKeyPointer: null };
+}
+
+/**
+ * Every place the ladder looked for a credential, for a refusal that has to
+ * say where one should be put: the Keychain item (with the account rule), the
+ * credentials file(s) this environment resolves, and the env tier. Names only.
+ */
+function credentialLocations(env: Env): string {
+  const files = skillsCredentialFiles(env).join(" or ") || "no credentials file (HOME is unset)";
+  return `hasna.credentials.${SKILLS_APP}.api-key (macOS Keychain, account HASNA_STATION or the host name), ${files}, and ${SKILLS_API_KEY_ENV}`;
 }
 
 function assertCredentialInstance(credential: ResolvedCredential, apiOrigin: string, env: Env, options: SkillsFleetOptions): void {

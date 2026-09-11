@@ -1,3 +1,6 @@
+import { proxyProviderStream } from "./provider-stream";
+import { codexReasoning, type ReasoningEffort } from "./reasoning";
+import { claudeContextEnvironment } from "./claude-context";
 import { compileOpenCodeModelPolicy, openCodeInvocationModel } from "./opencode-model-policy";
 import { prepareKilo, validateKiloConfiguration } from "./kilo";
 import { prepareGemini, validateGeminiConfiguration } from "./gemini-config";
@@ -13,7 +16,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createConnection } from "node:net";
-import { compatible, endpoint, harnessEligible } from "./domain";
+import { compatible, endpoint, harnessEligible, modelExpired } from "./domain";
 import { prepareAider, validateAiderConfiguration } from "./aider-config";
 import { childEnvironment } from "./harness-environment";
 import { privateDirectory, switcherHome } from "./runtime";
@@ -264,12 +267,13 @@ async function preservedOpenCodePolicy(cwd:string):Promise<OpenCodePolicy> {
   if(result.tools) result.permission=mergePolicyValue(toolsPermission(result.tools,"OpenCode tools policy"),result.permission);
   return result;
 }
-export function codexModel(model: HarnessLaunchInput["models"][number], priority:number) {
-  // Conservative wire/tool choices; no invented reasoning levels or model-specific policies.
+export function codexModel(model: HarnessLaunchInput["models"][number], priority:number,baseUrl="https://provider.invalid",selectedReasoning?:ReasoningEffort) {
+  const reasoning=codexReasoning(model,baseUrl,selectedReasoning);
+  // Conservative wire/tool choices with explicit reasoning capabilities.
   return {
     slug:model.id,display_name:model.name,description:model.description??model.id,
     shell_type:"shell_command",visibility:"list",supported_in_api:true,priority,
-    supported_reasoning_levels:[],default_reasoning_level:null,
+    supported_reasoning_levels:reasoning.levels.map(effort=>({effort,description:effort==="none"?"Disable reasoning":`${effort} reasoning effort`})),default_reasoning_level:reasoning.defaultEffort,
     support_verbosity:false,supports_reasoning_summary_parameter:false,default_verbosity:null,
     supports_parallel_tool_calls:false,apply_patch_tool_type:null,
     truncation_policy:{mode:"tokens",limit:10000},experimental_supported_tools:[],
@@ -324,29 +328,8 @@ function grokBridge(input: HarnessLaunchInput) {
       const response=await fetch(`${input.baseUrl}${apiPath}`,{method:"POST",headers,body:JSON.stringify(body),redirect:"manual",signal:AbortSignal.any([record.abort.signal,request.signal,AbortSignal.timeout(240000)])});
       if(!response.ok){await response.body?.cancel();release();return Response.json({error:{message:`Provider returned HTTP ${response.status}`}},{status:response.status>=300&&response.status<400?502:response.status});}
       if(!response.body){release();return new Response(null,{status:response.status});}
-      const reader=response.body.getReader();
-      let ended=false;
-      let output:ReadableStreamDefaultController<Uint8Array>;
-      const end=(error?:Error)=>{
-        if(ended)return;ended=true;
-        try{if(error&&!closing)output.error(error);else output.close();}catch{}
-        release();
-      };
-      const stream=new ReadableStream<Uint8Array>({
-        start(controller){output=controller;},
-        async pull(controller){
-          try{const chunk=await reader.read();if(ended)return;if(chunk.done)end();else controller.enqueue(chunk.value);}
-          catch{end(new Error("Provider stream ended unexpectedly"));}
-        },
-        async cancel(){
-          ended=true;record.abort.abort();
-          try{await reader.cancel();}finally{release();}
-        },
-      });
-      record.cancel=async()=>{
-        record.abort.abort();
-        try{await reader.cancel();}catch{}finally{end();}
-      };
+      const {stream,cancel}=proxyProviderStream({response,protocol:input.protocol,requestSignal:request.signal,abort:record.abort,closing:()=>closing,release});
+      record.cancel=cancel;
       return new Response(stream,{status:response.status,headers:{"content-type":response.headers.get("content-type")??"application/json","cache-control":"no-store"}});
     }catch{release();return Response.json({error:{message:"Provider request failed"}},{status:502});}
   }});
@@ -552,6 +535,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   if(input.harness==="claude") {
     env.ANTHROPIC_BASE_URL=input.baseUrl.replace(/\/v1$/,"");
     Object.assign(env,input.nativePolicy?.env);
+    Object.assign(env,claudeContextEnvironment(providerBaseUrl));
     env.ANTHROPIC_MODEL=input.model;
     // The native Default picker row has separate precedence from --model.
     // Keep it and unassigned subagents on the selected provider model.
@@ -565,7 +549,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   }
   if(input.harness==="codex") {
     const rolePolicy=await prepareCodexModelPolicy({cwd:input.cwd,stateDir:input.stateDir,model:input.model,policy:input.modelPolicy?{version:1,...input.modelPolicy}:undefined,switcherProvider:"switcher",switcherBaseUrl:input.baseUrl});
-    const file=await jsonFile(input.stateDir,"codex-models.json",{models:input.models.map(codexModel)});
+    const file=await jsonFile(input.stateDir,"codex-models.json",{models:input.models.map((model,index)=>codexModel(model,index,providerBaseUrl,model.id===input.model?input.reasoning:undefined))});
     configPaths.push(file);
     configPaths.push(...Object.values(rolePolicy.agentConfigPaths));
     env[KEY]=input.credential??"switcher-local-no-auth";
@@ -581,7 +565,10 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
       overrides.push("-c",`agents.${name}.config_file=${quote(path)}`);
     }
     overrides.push("-c",`memories.extract_model=${quote(input.model)}`,"-c",`memories.consolidation_model=${quote(input.model)}`);
-    warnings.push("Codex catalog uses conservative generic tool metadata and a model-neutral coding prompt; provider-specific reasoning is not advertised.");
+    if(input.reasoning)overrides.push("-c",`model_reasoning_effort=${quote(input.reasoning)}`);
+    if(input.dangerouslyBypassApprovalsAndSandbox)overrides.push("-c",'approval_policy="never"',"-c",'sandbox_mode="danger-full-access"');
+    warnings.push("Codex catalog uses conservative generic tool metadata and a model-neutral coding prompt; reasoning controls come from declared capabilities, documented provider support or an explicit --reasoning selection.");
+    if(input.dangerouslyBypassApprovalsAndSandbox)warnings.push("Full access: approval prompts and command sandboxing are disabled for this launch.");
     return {executable,args:[...overrides,...args],env,configPaths,warnings};
   }
   if(input.harness==="grok") {
@@ -838,6 +825,7 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
   if(!compatible(input.harness,input.protocol))throw new Error("Harness and provider protocol are incompatible.");
   if(!isAbsolute(input.stateDir)||!isAbsolute(input.cwd))throw new Error("Launch state and working directories must be absolute.");
   const compiledPolicy=compileModelPolicy(input.model,input.models,input.modelPolicy);
+  input={...input,models:input.models.filter(model=>!modelExpired(model))};
   const nativePolicy=compileNativeModelPolicy({harness:input.harness,mainModel:input.model,roles:compiledPolicy.roles,version:input.version});
   const specialized=new Set(["opencode","opencode2","gemini","hermes"]);
   const unsupported=specialized.has(input.harness)?[]:nativePolicy.unsupportedRoles.filter(role=>role!=="main"&&compiledPolicy.roles[role]!==input.model);

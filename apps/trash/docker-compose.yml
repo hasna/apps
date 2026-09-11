@@ -1,0 +1,10 @@
+services:
+  trash:
+    build: .
+    command: ["bun", "run", "dist/serve/index.js"]
+    environment:
+      - HASNA_TRASH_API_KEY=${HASNA_TRASH_API_KEY:-}
+    volumes:
+      - ~/.hasna/trash:/data
+    ports:
+      - "8080:8080"

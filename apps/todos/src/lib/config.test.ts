@@ -12,6 +12,7 @@ import {
   normalizeApiUrl,
   resetConfig,
   updateConfig,
+  isCredentialShapedConfigKey,
 } from "./config.js";
 
 // The config module has an in-memory cache. We set up a config file once
@@ -223,5 +224,41 @@ describe("local API config", () => {
     const stored = loadConfig() as Record<string, unknown>;
     expect("apiKey" in stored).toBe(false);
     expect("apiUrl" in stored).toBe(false);
+  });
+});
+
+describe("credential-shaped config keys", () => {
+  it("flags credential and authority names at any depth", () => {
+    for (const key of [
+      "apiKey",
+      "api_key",
+      "apiUrl",
+      "api_url",
+      "token",
+      "authToken",
+      "secret",
+      "password",
+      "credentials",
+      "authorization",
+      "sdk.apiKey",
+      "provider.nested.api_key",
+      "HASNA_TODOS_API_KEY",
+    ]) {
+      expect(isCredentialShapedConfigKey(key)).toBe(true);
+    }
+  });
+
+  it("leaves ordinary config keys alone", () => {
+    for (const key of [
+      "task_list_id",
+      "completion_guard.enabled",
+      "agent_pool",
+      "cli_path_test",
+      "myguard.enabled",
+      "deeply.nested.key",
+      "keyboard_shortcuts",
+    ]) {
+      expect(isCredentialShapedConfigKey(key)).toBe(false);
+    }
   });
 });

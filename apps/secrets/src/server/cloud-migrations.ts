@@ -166,9 +166,55 @@ export const SECRETS_TENANCY_MIGRATIONS: Migration[] = [
   ),
 ];
 
+export const VAULT_MIGRATION_SCHEMA = defineMigration("secrets_0014_lossless_vault_migrations", `
+ALTER TABLE secret_versions ADD COLUMN tenant_id UUID;
+UPDATE secret_versions v SET tenant_id=s.tenant_id FROM secrets s WHERE s.key=v.key;
+ALTER TABLE secret_versions ALTER COLUMN tenant_id SET DEFAULT nullif(current_setting('app.secrets_tenant_id',true),'')::uuid;
+CREATE TABLE secret_key_owners (key TEXT PRIMARY KEY, tenant_id UUID REFERENCES tenants(id));
+INSERT INTO secret_key_owners(key,tenant_id) SELECT key,tenant_id FROM secrets;
+INSERT INTO secret_key_owners(key,tenant_id) SELECT DISTINCT key,tenant_id FROM secret_versions ON CONFLICT(key) DO NOTHING;
+DO $migration$ BEGIN
+EXECUTE format($definition$
+CREATE FUNCTION claim_secret_key_owner() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, %I, pg_temp AS $function$
+DECLARE owner_tenant UUID;
+BEGIN
+ IF NEW.tenant_id IS NULL OR NEW.tenant_id IS DISTINCT FROM nullif(current_setting('app.secrets_tenant_id',true),'')::uuid THEN
+  RAISE EXCEPTION 'secret key tenant authority required' USING ERRCODE='42501';
+ END IF;
+ INSERT INTO secret_key_owners(key,tenant_id) VALUES(NEW.key,NEW.tenant_id) ON CONFLICT(key) DO NOTHING;
+ SELECT tenant_id INTO owner_tenant FROM secret_key_owners WHERE key=NEW.key FOR UPDATE;
+ IF owner_tenant IS DISTINCT FROM NEW.tenant_id THEN
+  RAISE EXCEPTION 'secret key identity conflict' USING ERRCODE='23505';
+ END IF;
+ RETURN NEW;
+END $function$;
+$definition$, current_schema());
+END $migration$;
+CREATE TRIGGER secrets_key_owner BEFORE INSERT OR UPDATE OF key,tenant_id ON secrets FOR EACH ROW EXECUTE FUNCTION claim_secret_key_owner();
+CREATE TRIGGER secret_versions_key_owner BEFORE INSERT OR UPDATE OF key,tenant_id ON secret_versions FOR EACH ROW EXECUTE FUNCTION claim_secret_key_owner();
+CREATE TABLE vault_migrations (
+ id UUID NOT NULL, tenant_id UUID NOT NULL REFERENCES tenants(id), source_id UUID NOT NULL,
+ manifest TEXT NOT NULL CHECK (manifest LIKE 'enc:v1:%'), created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ PRIMARY KEY(tenant_id,id)
+);
+CREATE TABLE vault_migration_keys (
+ tenant_id UUID NOT NULL, migration_id UUID NOT NULL, key TEXT NOT NULL,
+ PRIMARY KEY(tenant_id,migration_id,key),
+ FOREIGN KEY(tenant_id,migration_id) REFERENCES vault_migrations(tenant_id,id)
+);
+` + ["secrets","vault_items","users","feedback","audit_log","secret_versions","vault_migrations","vault_migration_keys"].map(table => `
+ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ${table} FORCE ROW LEVEL SECURITY;
+CREATE POLICY secrets_tenant_boundary ON ${table}
+ USING (tenant_id = nullif(current_setting('app.secrets_tenant_id',true),'')::uuid)
+ WITH CHECK (tenant_id = nullif(current_setting('app.secrets_tenant_id',true),'')::uuid);
+`).join("\n"));
+
 /** Full ordered migration set for the secrets cloud database. */
 export const SECRETS_MIGRATIONS: Migration[] = [
   ...SECRETS_APP_MIGRATIONS,
   ...SECRETS_AUTH_MIGRATIONS,
   ...SECRETS_TENANCY_MIGRATIONS,
+  VAULT_MIGRATION_SCHEMA,
 ];

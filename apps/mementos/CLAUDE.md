@@ -187,5 +187,5 @@ src/
   db/           SQLite layer (bun:sqlite) — memories, agents, projects, entities, relations
   lib/          search (FTS5+fuzzy), extractor, injection, retention, sync
   types/        TypeScript interfaces
-sdk/            @hasna/mementos-sdk — zero-dep fetch client
+  sdk/          `@hasna/mementos/sdk` — zero-dep fetch client (the ONLY SDK; no -sdk package)
 ```

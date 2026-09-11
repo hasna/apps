@@ -41,8 +41,8 @@ function restoreInheritedProcessEnv(): void {
   Object.assign(process.env, INHERITED_PROCESS_ENV);
 }
 
-// Forty-eight cases, each writing a handful of rows, run once clean plus once per
-// neutering. Well past the 5s default on a loaded runner.
+// Every case in `CONFORMANCE_CASES` writes a handful of rows, and the suite runs once
+// clean plus once per neutering. Well past the 5s default on a loaded runner.
 const SUITE_TIMEOUT_MS = 60_000;
 
 let db: Database;
@@ -554,4 +554,294 @@ describe("the conformance suite can fail", () => {
     const report = await runConformanceSuite([store()], CONFORMANCE_CASES);
     expect(conformanceFailures(report)).toEqual([]);
   }, SUITE_TIMEOUT_MS);
+});
+
+describe("SqliteEmailStore explicit spam/trash folder moves", () => {
+  it("is_spam / is_trash move folder counts and surface the folder label, and false moves back to inbox", async () => {
+    // BUG-0028 regression: quarantine/un-quarantine was not expressible through
+    // updateMessageStatus — the patch had no is_spam/is_trash and only add_label
+    // "spam"/"trash" (reserved folder moves) reached the columns. The explicit
+    // flags are the documented spelling and must behave exactly like them.
+    const subject = store();
+    const created = await subject.messages.createMessage({
+      direction: "inbound",
+      from_addr: `spam-${uuid()}@example.test`,
+      to_addrs: ["me@example.test"],
+      subject: "quarantine me",
+      received_at: now(),
+    });
+    if (!created.ok) throw new Error("createMessage failed");
+    const id = created.value.id;
+
+    const before = await subject.messages.messageCounts();
+    if (!before.ok) throw new Error("messageCounts failed");
+    expect(before.value.inbox).toBeGreaterThan(0);
+
+    const quarantined = await subject.messages.updateMessageStatus(id, { is_spam: true });
+    if (!quarantined.ok || quarantined.value === null) throw new Error("is_spam write failed");
+    expect(quarantined.value.labels).toContain("spam");
+    const inSpam = await subject.messages.messageCounts();
+    if (!inSpam.ok) throw new Error("messageCounts (spam) failed");
+    expect(inSpam.value.inbox).toBe(before.value.inbox - 1);
+    expect(inSpam.value.spam).toBe(before.value.spam + 1);
+
+    const trashed = await subject.messages.updateMessageStatus(id, { is_trash: true });
+    if (!trashed.ok || trashed.value === null) throw new Error("is_trash write failed");
+    expect(trashed.value.labels).toContain("trash");
+    const inTrash = await subject.messages.messageCounts();
+    if (!inTrash.ok) throw new Error("messageCounts (trash) failed");
+    expect(inTrash.value.trash).toBe(before.value.trash + 1);
+
+    const restored = await subject.messages.updateMessageStatus(id, { is_spam: false, is_trash: false });
+    if (!restored.ok || restored.value === null) throw new Error("restore write failed");
+    expect(restored.value.labels).not.toContain("spam");
+    expect(restored.value.labels).not.toContain("trash");
+    const back = await subject.messages.messageCounts();
+    if (!back.ok) throw new Error("messageCounts (restored) failed");
+    expect(back.value.inbox).toBe(before.value.inbox);
+    expect(back.value.spam).toBe(before.value.spam);
+    expect(back.value.trash).toBe(before.value.trash);
+  });
+});
+
+// ---- mailbox-filter ACTIONS on the store ingest path (FR-0001) --------------
+
+// The ingest hook in insertUnifiedMessage runs enabled filters against EVERY new
+// row (createMessage and the inserted branch of upsertMessage); an existing-row
+// upsert never re-runs them. The hook reads the same `mailbox_filters` table the
+// generic resource path writes, so these tests seed enabled filters directly and
+// drive messages through the store's own writers.
+describe("SqliteEmailStore mailbox-filter actions on ingest (FR-0001)", () => {
+  interface SeedFilter {
+    name: string;
+    mailbox?: string;
+    criteria: Record<string, unknown>;
+    actions: { add_labels?: string[]; archive?: boolean; mark_read?: boolean };
+    enabled?: boolean;
+    order?: number;
+  }
+
+  function seedFilter(input: SeedFilter): void {
+    db.run(
+      `INSERT INTO mailbox_filters
+        (id, tenant_id, name, normalized_name, mailbox, criteria_json, actions_json, enabled, "order")
+       VALUES (?, 'local', ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        uuid(),
+        input.name,
+        input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+        input.mailbox ?? "inbox",
+        JSON.stringify(input.criteria),
+        JSON.stringify({
+          add_labels: input.actions.add_labels ?? [],
+          archive: input.actions.archive ?? false,
+          mark_read: input.actions.mark_read ?? false,
+        }),
+        (input.enabled === undefined || input.enabled) ? 1 : 0,
+        input.order ?? 0,
+      ],
+    );
+  }
+
+  function setEnabled(name: string, enabled: boolean): void {
+    db.run("UPDATE mailbox_filters SET enabled = ? WHERE name = ?", [enabled ? 1 : 0, name]);
+  }
+
+  async function createInbound(subjectName: string, overrides: Record<string, unknown> = {}): Promise<string> {
+    const subject = store();
+    const created = await subject.messages.createMessage({
+      direction: "inbound",
+      from_addr: "sender@example.test",
+      to_addrs: ["me@example.test"],
+      subject: subjectName,
+      received_at: now(),
+      ...overrides,
+    });
+    if (!created.ok) throw new Error(`createMessage failed: ${created.message}`);
+    return created.value.id;
+  }
+
+  it("applies an enabled matching filter's actions to a new create, leaving non-matches untouched", async () => {
+    const subject = store();
+    seedFilter({
+      name: "Auto archive",
+      criteria: { from: "billing@example.test", subject: "invoice" },
+      actions: { add_labels: ["Invoices"], archive: true, mark_read: true },
+      enabled: true,
+    });
+
+    const hit = await createInbound("invoice #42", { from_addr: "billing@example.test" });
+    const hitRecord = await subject.messages.getMessage(hit);
+    if (!hitRecord.ok || hitRecord.value === null) throw new Error("hit message did not read back");
+    expect(hitRecord.value.is_read).toBe(true);
+    expect(hitRecord.value.labels).toContain("archived");
+    expect(hitRecord.value.labels).toContain("invoices");
+
+    const miss = await createInbound("plain hello", { from_addr: "nobody@example.test" });
+    const missRecord = await subject.messages.getMessage(miss);
+    if (!missRecord.ok || missRecord.value === null) throw new Error("miss message did not read back");
+    expect(missRecord.value.is_read).toBe(false);
+    expect(missRecord.value.labels).not.toContain("archived");
+    expect(missRecord.value.labels).not.toContain("invoices");
+  });
+
+  it("a disabled filter and a filter with no matching criteria act on nothing", async () => {
+    const subject = store();
+    seedFilter({
+      name: "Disabled mover",
+      criteria: { from: "billing@example.test" },
+      actions: { archive: true },
+      enabled: false,
+    });
+    seedFilter({
+      name: "Wrong sender",
+      criteria: { from: "someone-else@example.test" },
+      actions: { add_labels: ["x"], archive: true, mark_read: true },
+      enabled: true,
+    });
+
+    const id = await createInbound("promo", { from_addr: "billing@example.test" });
+    const record = await subject.messages.getMessage(id);
+    if (!record.ok || record.value === null) throw new Error("message did not read back");
+    expect(record.value.is_read).toBe(false);
+    expect(record.value.labels).toEqual([]);
+  });
+
+  it("runs filters in order, with state re-read between them so earlier actions evict later matches", async () => {
+    const subject = store();
+    seedFilter({
+      name: "Read it",
+      criteria: { subject: "trip" },
+      actions: { archive: true, mark_read: true },
+      enabled: true,
+      order: 0,
+    });
+    // Later filter targets inbox + unread; the first filter's archive+read must
+    // evict the message from both predicates before this one is evaluated.
+    seedFilter({
+      name: "Unread only",
+      criteria: { subject: "trip", unread: true },
+      actions: { add_labels: ["still-unread"] },
+      enabled: true,
+      order: 1,
+    });
+
+    const id = await createInbound("Trip to the mountains");
+    const record = await subject.messages.getMessage(id);
+    if (!record.ok || record.value === null) throw new Error("message did not read back");
+    expect(record.value.is_read).toBe(true);
+    expect(record.value.labels).toContain("archived");
+    expect(record.value.labels).not.toContain("still-unread");
+  });
+
+  it("adds multiple labels from one filter to a message that already carries its own labels", async () => {
+    const subject = store();
+    seedFilter({
+      name: "Tag receipts",
+      criteria: { from: "shop@example.test" },
+      actions: { add_labels: ["purchases", "archive-2026"] },
+      enabled: true,
+    });
+
+    const id = await createInbound("order receipt", { from_addr: "shop@example.test", labels: ["receipts"] });
+    const record = await subject.messages.getMessage(id);
+    if (!record.ok || record.value === null) throw new Error("message did not read back");
+    // The pre-existing label survives and both of the filter's labels land.
+    expect(record.value.labels).toEqual(expect.arrayContaining(["receipts", "purchases", "archive-2026"]));
+    expect(record.value.labels).toContain("receipts");
+  });
+
+  it("a new upsert applies the hook and an existing-row upsert does not re-run it", async () => {
+    const subject = store();
+    // Start DISABLED so the first (inserting) upsert cannot act even though it matches.
+    seedFilter({
+      name: "Auto tag",
+      criteria: { subject: "auto" },
+      actions: { add_labels: ["auto-tagged"] },
+      enabled: false,
+    });
+
+    const first = await subject.messages.upsertMessage({
+      source_id: "seed-1",
+      direction: "inbound",
+      from_addr: "sender@example.test",
+      to_addrs: ["me@example.test"],
+      subject: "auto processing",
+      received_at: now(),
+    });
+    if (!first.ok || !first.value.inserted) throw new Error("first upsert did not insert");
+    expect(first.value.record.labels).not.toContain("auto-tagged");
+
+    // Now enable the filter and upsert the SAME source_id again. This is an existing
+    // row, so the hook must not run even though the filter now matches.
+    setEnabled("Auto tag", true);
+    const second = await subject.messages.upsertMessage({
+      source_id: "seed-1",
+      direction: "inbound",
+      from_addr: "sender@example.test",
+      to_addrs: ["me@example.test"],
+      subject: "auto processing again",
+      received_at: now(),
+    });
+    if (!second.ok || second.value.inserted) throw new Error("second upsert must hit the existing row");
+    expect(second.value.record.labels).not.toContain("auto-tagged");
+
+    // A NEW message matching the same filter DOES get the hook applied — proving the
+    // filter is live and the existing-row path, not the filter, skipped the action.
+    const fresh = await createInbound("auto new arrival");
+    const freshRecord = await subject.messages.getMessage(fresh);
+    if (!freshRecord.ok || freshRecord.value === null) throw new Error("fresh message did not read back");
+    expect(freshRecord.value.labels).toContain("auto-tagged");
+  });
+
+  it("rolls the whole insert back when an enabled filter's stored actions are corrupt", async () => {
+    const subject = store();
+    // Corrupt actions_json makes listEnabledMailboxFilters throw mid-insert; the
+    // enclosing immediate transaction must roll back the row, not leave it behind.
+    db.run(
+      `INSERT INTO mailbox_filters
+        (id, tenant_id, name, normalized_name, mailbox, criteria_json, actions_json, enabled, "order")
+       VALUES (?, 'local', 'Broken filter', 'broken-filter', 'inbox', '{}', '{not-json', 1, 0)`,
+      [uuid()],
+    );
+    const before = (db.query("SELECT COUNT(*) AS c FROM inbound_emails").get() as { c: number }).c;
+
+    const created = subject.messages.createMessage({
+      direction: "inbound",
+      from_addr: "sender@example.test",
+      to_addrs: ["me@example.test"],
+      subject: "doomed",
+      received_at: now(),
+    });
+    await expect(created).rejects.toThrow(/invalid JSON/);
+
+    const after = (db.query("SELECT COUNT(*) AS c FROM inbound_emails").get() as { c: number }).c;
+    expect(after).toBe(before);
+  });
+
+  it("round-trips the reserved `order` column through the generic resource path", async () => {
+    const subject = store();
+    const created = await subject.mailboxFilters.create({
+      name: "Ordered",
+      normalized_name: "ordered",
+      mailbox: "inbox",
+      enabled: 1,
+      order: 7,
+    });
+    expect(created.ok, `create refused: ${created.ok ? "" : created.message}`).toBe(true);
+    if (!created.ok) return;
+    const id = String(created.value["id"]);
+    expect(created.value["order"]).toBe(7);
+    expect(created.value["enabled"]).toBe(1);
+
+    const listed = await subject.mailboxFilters.list();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) return;
+    expect(listed.value.map((row) => Number(row["order"]))).toContain(7);
+
+    const updated = await subject.mailboxFilters.update(id, { order: 2 });
+    expect(updated.ok).toBe(true);
+    if (!updated.ok || updated.value === null) return;
+    expect(Number(updated.value["order"])).toBe(2);
+  });
 });

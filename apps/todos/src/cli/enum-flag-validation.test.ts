@@ -11,6 +11,7 @@
  * result set with exit 0. Asserted in BOTH storage modes, because the incident
  * happened against the shared self-hosted authority, not local SQLite.
  */
+import {randomUUID} from "node:crypto";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -66,6 +67,24 @@ async function runLocal(args: string[], root: string): Promise<CliResult> {
     TODOS_AUTO_PROJECT: "false",
     HASNA_EVENTS_DIR: join(root, "events"),
   }));
+}
+
+async function withSharedTaskListFixture(root:string, run:(cli:(args:string[])=>Promise<CliResult>)=>Promise<void>):Promise<void>{
+ const lists:Array<Record<string,unknown>>=[];
+ const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch:async request=>{
+  if(request.headers.get("authorization")!==`Bearer ${TEST_API_KEY}`)return new Response("Unauthorized",{status:401});
+  const url=new URL(request.url);
+  if(url.pathname==="/v1/tasks")return Response.json({tasks:[],count:0,total:0});
+  if(url.pathname==="/v1/task-lists"){
+   if(request.method==="GET")return Response.json({task_lists:lists,count:lists.length});
+   if(request.method==="POST"){const body=await request.json();const list={id:randomUUID(),...body,status:body.status??"active",project_id:body.project_id??null};lists.push(list);return Response.json({task_list:list},{status:201});}
+  }
+  const id=url.pathname.split("/")[3];const list=lists.find(row=>row.id===id);
+  if(list&&request.method==="PATCH"){Object.assign(list,await request.json());return Response.json({task_list:list});}
+  if(list&&request.method==="GET")return Response.json({task_list:list});
+  return new Response("Not found",{status:404});
+ }});
+ try{await run(args=>spawnCli(args,{PATH:process.env.PATH??"",HOME:join(root,"home"),TMPDIR:root,HASNA_STATION:`fixture-${randomUUID()}`,HASNA_TODOS_API_URL:server.url.origin,HASNA_TODOS_API_KEY:TEST_API_KEY}));}finally{server.stop(true);}
 }
 
 /**
@@ -729,23 +748,27 @@ describe("commands that emit only through output() print in human mode", () => {
 
   test("lists --show prints the task list on stdout without --json", async () => {
     const root = tempRoot("todos-output-lists-show-");
-    const created = await runLocal(["lists", "--add", "Enum Fixture List", "--json"], root);
+    await withSharedTaskListFixture(root, async run => {
+    const created = await run(["lists", "--add", "Enum Fixture List", "--json"]);
     expect(created.exitCode).toBe(0);
     const listId = (JSON.parse(created.stdout) as { id: string }).id;
-    const result = await runLocal(["lists", "--show", listId], root);
+    const result = await run(["lists", "--show", listId]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).not.toBe("");
     expect(result.stdout).toContain("Enum Fixture List");
+    });
   });
 
   test("lists --update confirms the write on stdout without --json", async () => {
     const root = tempRoot("todos-output-lists-update-");
-    const created = await runLocal(["lists", "--add", "Enum Fixture List", "--json"], root);
+    await withSharedTaskListFixture(root, async run => {
+    const created = await run(["lists", "--add", "Enum Fixture List", "--json"]);
     const listId = (JSON.parse(created.stdout) as { id: string }).id;
-    const result = await runLocal(["lists", "--update", listId, "--description", "updated by test"], root);
+    const result = await run(["lists", "--update", listId, "--description", "updated by test"]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).not.toBe("");
     expect(result.stdout).toContain("updated by test");
+    });
   });
 
   test("projects --show --json still emits parseable JSON only", async () => {

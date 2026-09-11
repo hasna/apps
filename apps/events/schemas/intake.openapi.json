@@ -1,0 +1,512 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Events durable intake",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/v1/intake/events": {
+      "post": {
+        "operationId": "acceptEvent",
+        "description": "Requires events:intake scope.",
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "Bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-events-tenant-id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-events-sink-id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-events-producer-id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-events-corpus-id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+              "description": "Exact producer-owned identifier; no trimming or case normalization."
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-events-source-authority-id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+              "description": "Exact producer-owned identifier; no trimming or case normalization."
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Committed durable receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Fixed diagnostic; no acceptance proof",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntakeRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/intake/capability": {
+      "get": {
+        "operationId": "intakeCapability",
+        "description": "Requires events:receipts scope.",
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "Bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-events-tenant-id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-events-sink-id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-events-producer-id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-events-corpus-id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+              "description": "Exact producer-owned identifier; no trimming or case normalization."
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-events-source-authority-id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+              "description": "Exact producer-owned identifier; no trimming or case normalization."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized producer capability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeCapability"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Fixed diagnostic; no acceptance proof",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/intake/receipts": {
+      "get": {
+        "operationId": "readReceipt",
+        "description": "Requires events:receipts scope.",
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "Bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-events-tenant-id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-events-sink-id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-events-producer-id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-events-corpus-id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+              "description": "Exact producer-owned identifier; no trimming or case normalization."
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-events-source-authority-id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+              "description": "Exact producer-owned identifier; no trimming or case normalization."
+            }
+          },
+          {
+            "in": "query",
+            "name": "event_id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Committed durable receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Fixed diagnostic; no acceptance proof",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      },
+      "Bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "IntakeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "protocol",
+          "sink_id",
+          "producer_id",
+          "corpus_id",
+          "source_authority_id",
+          "event_id",
+          "dedupe_key",
+          "envelope_sha256",
+          "encoding",
+          "envelope_json"
+        ],
+        "properties": {
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "hasna.events.intake.v1"
+            ]
+          },
+          "sink_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "producer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "corpus_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+            "description": "Exact producer-owned identifier; no trimming or case normalization."
+          },
+          "source_authority_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+            "description": "Exact producer-owned identifier; no trimming or case normalization."
+          },
+          "event_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "dedupe_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "envelope_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "hasna.sorted-json.v1"
+            ]
+          },
+          "envelope_json": {
+            "type": "string",
+            "description": "Canonical UTF-8 EventEnvelope 1.0, at most 262144 bytes; bounded depth and sensitive content policy apply."
+          }
+        }
+      },
+      "IntakeReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "protocol",
+          "sink_id",
+          "producer_id",
+          "corpus_id",
+          "source_authority_id",
+          "event_id",
+          "dedupe_key",
+          "envelope_sha256",
+          "tenant_id",
+          "receipt_id",
+          "accepted_at",
+          "status"
+        ],
+        "properties": {
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "hasna.events.intake.v1"
+            ]
+          },
+          "sink_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "producer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "corpus_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+            "description": "Exact producer-owned identifier; no trimming or case normalization."
+          },
+          "source_authority_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+            "description": "Exact producer-owned identifier; no trimming or case normalization."
+          },
+          "event_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "dedupe_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "envelope_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "receipt_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "accepted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "accepted_durable"
+            ]
+          }
+        }
+      },
+      "IntakeCapability": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "protocol",
+          "sink_id",
+          "producer_id",
+          "corpus_id",
+          "source_authority_id",
+          "tenant_id",
+          "kid"
+        ],
+        "properties": {
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "hasna.events.intake.v1"
+            ]
+          },
+          "sink_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "producer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "corpus_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+            "description": "Exact producer-owned identifier; no trimming or case normalization."
+          },
+          "source_authority_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$(?![\\s\\S])",
+            "description": "Exact producer-owned identifier; no trimming or case normalization."
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "kid": {
+            "type": "string"
+          }
+        }
+      },
+      "IntakeError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

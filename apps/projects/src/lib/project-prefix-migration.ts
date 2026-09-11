@@ -1,5 +1,6 @@
 import { canonicalJson, sha256 } from "./guarded-project-mutation.js";
 import {
+  PROJECT_CHANNEL_INTEGRATION_KEY,
   conversationsCliRunner,
   type ConversationsChannelRunner,
 } from "./project-channel.js";
@@ -191,6 +192,42 @@ function projectPatch(project: Workspace): UpdateWorkspaceInput {
     };
   }
   return patch;
+}
+
+/**
+ * Every conversations channel NAME that exists once this migration completes:
+ * the names inventoried now, plus the target of every channel step (a rename
+ * step removes its source name and introduces its target).
+ *
+ * A project step rewrites `integrations.conversations_channel` to the
+ * prefix-stripped name. When the project's pinned name HAS a strippable prefix
+ * but no matching channel exists, `buildSteps` emits no channel step for it, so
+ * this stripped name is absent here — nothing renamed a channel to it and no
+ * channel carries it (BUG-0063).
+ */
+function finalChannelNames(channels: ConversationsChannelIdentity[], steps: PrefixMigrationStep[]): Set<string> {
+  return new Set<string>([
+    ...channels.map((channel) => channel.name),
+    ...steps.filter((step) => step.target_kind === "channel").map((step) => step.target_name),
+  ]);
+}
+
+/**
+ * The channel a project step would pin although that name is not a channel
+ * after the migration, or `null` when the pin is backed.
+ *
+ * Exported for its unit test: the apply path can only reach a non-null result
+ * if `validateAmbiguousLinks` — which refuses a pin naming no existing channel
+ * before any step is built — is ever relaxed, so the predicate is asserted
+ * directly rather than through a run that cannot produce the condition.
+ */
+export function unbackedProjectChannelPin(
+  patch: UpdateWorkspaceInput,
+  channelNamesAfterMigration: ReadonlySet<string>,
+): string | null {
+  const pinned = patch.integrations?.[PROJECT_CHANNEL_INTEGRATION_KEY]?.trim();
+  if (!pinned) return null;
+  return channelNamesAfterMigration.has(pinned) ? null : pinned;
 }
 
 function parseChannelList(stdout: string): ConversationsChannelIdentity[] {
@@ -516,6 +553,7 @@ export async function runProjectPrefixMigration(options: RunProjectPrefixMigrati
   const bounds = assertBounds(options);
   const projectById = new Map(projects.projects.map((project) => [project.id, project]));
   const channelByName = new Map(channels.channels.map((channel) => [channel.name, channel]));
+  const channelNamesAfterMigration = finalChannelNames(channels.channels, steps);
   const accepted: PrefixMigrationStep[] = [];
   let activeStep: PrefixMigrationStep | null = null;
   const markerWriter = options.write_marker ?? ((project: Workspace) => writeWorkspaceMarker(project, {
@@ -560,12 +598,27 @@ export async function runProjectPrefixMigration(options: RunProjectPrefixMigrati
 
       const project = projectById.get(step.project_id ?? "");
       if (!project) throw new PrefixMigrationError(`Project source "${step.project_id}" disappeared after complete inventory.`);
+      const patch = projectPatch(project);
+      // The project half of a step pins the prefix-stripped channel name. That
+      // write is guarded for existence exactly like every other writer of
+      // `integrations.conversations_channel` (BUG-0063): buildSteps emits a
+      // channel step only for a channel that EXISTS, so a project whose pin has
+      // a strippable prefix but no matching channel would otherwise be pinned
+      // unchecked onto a name that cannot receive the project's posts.
+      const unbackedPin = unbackedProjectChannelPin(patch, channelNamesAfterMigration);
+      if (unbackedPin) {
+        throw new PrefixMigrationError(
+          `Project step ${step.step_id} would pin integrations.${PROJECT_CHANNEL_INTEGRATION_KEY} "${unbackedPin}", which names no conversations channel and is not produced by any channel step in this migration `
+          + `(no channel named "${project.integrations[PROJECT_CHANNEL_INTEGRATION_KEY] ?? ""}" exists, so no rename produces it). `
+          + `Create the channel first (conversations channel create ${unbackedPin}), or repair the pin, then re-run.`,
+        );
+      }
       const guarded = await options.store.guardedUpdateProject({
         project_id: project.id,
         operation_id,
         step_id: step.step_id,
         expected_revision: project.updated_at,
-        patch: projectPatch(project),
+        patch,
         response_byte_limit: bounds.response_byte_limit,
         time_budget_ms: bounds.time_budget_ms,
         agent_id: options.agent_id,

@@ -16,7 +16,11 @@ import Foundation
 /// back only the engine and so have no scope to remove it from; `CLIRunnerTests` instead
 /// passes the temp home it already creates and already deletes.
 func makeIsolatedTestHome(_ label: String) -> String {
-    let url = FileManager.default.temporaryDirectory
+    // Foundation can ignore TMPDIR under the Darwin test-bundle launcher. An
+    // explicit fixture root keeps confined tests inside their owned write scope.
+    let root = ProcessInfo.processInfo.environment["RECORDINGS_TEST_TMP_ROOT"]
+        .map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory
+    let url = root
         .appendingPathComponent("recordings-\(label)-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url.path

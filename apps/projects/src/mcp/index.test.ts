@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "../db/schema.js";
@@ -119,7 +119,201 @@ describe("projects-mcp CLI flags", () => {
 
 });
 
+function sqliteFilesUnder(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return (readdirSync(dir, { recursive: true }) as string[]).filter((name) => /\.db(-wal|-shm|-journal)?$/.test(name));
+}
+
+const INITIALIZE_REQUEST = {
+  jsonrpc: "2.0",
+  id: 1,
+  method: "initialize",
+  params: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "project-mcp-test", version: "0" },
+  },
+};
+
+describe("projects-mcp fail-closed startup (hasna/apps#1720)", () => {
+  test("with no credential in any tier and no local opt-in it exits non-zero before serving, naming the tiers, and creates no SQLite", () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-fail-closed-"));
+    try {
+      // testSpawnEnv silences the Keychain and disk tiers and drops the env
+      // tier; a blank opt-in restores the fail-closed case. stdin is closed,
+      // so a server that DID start would see EOF and exit 0 — the regression
+      // this guards against.
+      const result = Bun.spawnSync({
+        cmd: ["bun", "run", "src/mcp/index.ts"],
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        env: testSpawnEnv({ HASNA_PROJECTS_LOCAL: "", HASNA_PROJECTS_HOME: join(root, "home") }),
+        timeout: 20_000,
+      });
+      const stderr = Buffer.from(result.stderr).toString("utf-8");
+      expect(result.exitCode).not.toBe(0);
+      expect(Buffer.from(result.stdout).toString("utf-8")).toBe("");
+      expect(stderr).toContain("no API key could be resolved");
+      expect(stderr).toContain("HASNA_PROJECTS_API_KEY");
+      expect(stderr).toContain("never fall back to SQLite");
+      expect(stderr).not.toContain("local mode");
+      expect(stderr).not.toContain("local-fallback");
+      expect(sqliteFilesUnder(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("it never answers initialize without a credential", () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-fail-closed-init-"));
+    try {
+      const result = runMcpSession([INITIALIZE_REQUEST], {
+        ...testSpawnEnv({ HASNA_PROJECTS_LOCAL: "", HASNA_PROJECTS_HOME: join(root, "home") }),
+        HASNA_PROJECTS_LOCAL: "",
+      });
+      const stdout = Buffer.from(result.stdout).toString("utf-8");
+      const stderr = Buffer.from(result.stderr).toString("utf-8");
+      expect(result.exitCode).not.toBe(0);
+      expect(stdout).not.toContain("protocolVersion");
+      expect(stdout).not.toContain("\"id\":1");
+      expect(stderr).toContain("no API key could be resolved");
+      expect(sqliteFilesUnder(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("the explicit local opt-in serves and announces itself once at startup", () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-local-opt-in-"));
+    try {
+      const result = runMcpSession(
+        [INITIALIZE_REQUEST, { jsonrpc: "2.0", method: "notifications/initialized", params: {} }],
+        testSpawnEnv({ HASNA_PROJECTS_DB_PATH: join(root, "projects.db") }),
+      );
+      const stderr = Buffer.from(result.stderr).toString("utf-8");
+      expect(result.exitCode).toBe(0);
+      expect(Buffer.from(result.stdout).toString("utf-8")).toContain("protocolVersion");
+      expect(stderr.split("\n").filter((line) => line.startsWith("projects: local mode"))).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
 describe("projects-mcp project-first surface", () => {
+  test("projects_doctor on a hosted project resolves root/recipe through the registry and creates no on-box SQLite (#1720 acceptance f)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-cloud-doctor-no-sqlite-"));
+    const projectsHome = join(root, "home");
+    const projectId = "wks_hosted_doctor_mcp";
+    const rootId = "root_hosted_doctor_mcp";
+    const recipeId = "rcp_hosted_doctor_mcp_missing";
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        requests.push(`${req.method} ${url.pathname}`);
+        if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}`) {
+          return Response.json({
+            id: projectId,
+            slug: "hosted-doctor-mcp",
+            name: "Hosted Doctor MCP",
+            description: null,
+            kind: "generic",
+            status: "active",
+            root_id: rootId,
+            recipe_id: recipeId,
+            canonical_machine: null,
+            primary_path: null,
+            git_remote: null,
+            s3_bucket: null,
+            s3_prefix: null,
+            tags: [],
+            integrations: {},
+            metadata: {},
+            last_opened_at: null,
+            created_at: "2026-08-07 12:00:00.000",
+            updated_at: "2026-08-07 12:00:00.000",
+            synced_at: null,
+          });
+        }
+        if (req.method === "GET" && url.pathname === `/v1/roots/${rootId}`) {
+          return Response.json({
+            id: rootId,
+            slug: "hosted-root",
+            name: "Hosted Root",
+            base_path: "/srv/hosted",
+            tags: [],
+            default_kind: null,
+            default_recipe_id: null,
+            default_tmux_profile_id: null,
+            github_org: null,
+            repo_visibility: null,
+            path_template: null,
+            name_template: null,
+            allowed_recipes: [],
+            allowed_agents: [],
+            metadata: {},
+            created_at: "2026-08-07 12:00:00.000",
+            updated_at: "2026-08-07 12:00:00.000",
+          });
+        }
+        return Response.json({ error: "Not found" }, { status: 404 });
+      },
+    });
+    try {
+      const messages = [
+        INITIALIZE_REQUEST,
+        { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+        { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "projects_doctor", arguments: { id: projectId, verbose: true } } },
+      ];
+      const proc = Bun.spawn({
+        cmd: ["node", "src/testing/mcp-stdio-client.mjs", JSON.stringify(messages)],
+        stdout: "pipe",
+        stderr: "pipe",
+        // No HASNA_PROJECTS_DB_PATH: the default registry path is under the
+        // redirected home, which must stay free of SQLite files.
+        env: testSpawnEnv({
+          HASNA_PROJECTS_HOME: projectsHome,
+          HASNA_PROJECTS_API_URL: `http://127.0.0.1:${server.port}`,
+          HASNA_PROJECTS_API_KEY: "test-key",
+        }),
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      await proc.exited;
+
+      expect(stderr).toBe("");
+      expect(proc.exitCode).toBe(0);
+      const responses = stdout.trim().split("\n").map((line) => JSON.parse(line)) as Array<{
+        id?: number;
+        result?: { content?: Array<{ type: string; text: string }> };
+      }>;
+      const payload = JSON.parse(responses.find((response) => response.id === 2)?.result?.content?.[0]?.text ?? "[]") as Array<{
+        ok: boolean;
+        checks: Array<{ code: string }>;
+      }>;
+      expect(payload).toHaveLength(1);
+      const codes = payload[0]!.checks.map((check) => check.code);
+      expect(codes).toContain("WORKSPACE_ROOT_OK");
+      expect(codes).toContain("WORKSPACE_RECIPE_MISSING");
+      expect(codes).toContain("WORKSPACE_AGENT_RUNS_LOCAL_ONLY");
+      expect(codes).not.toContain("WORKSPACE_AGENT_RUNS_OK");
+      expect(payload[0]!.ok).toBe(false);
+      expect(requests.sort()).toEqual([
+        `GET /v1/projects/${projectId}`,
+        `GET /v1/recipes/${recipeId}`,
+        `GET /v1/roots/${rootId}`,
+      ]);
+      expect(sqliteFilesUnder(projectsHome)).toEqual([]);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("projects_doctor repairs an API-backed marker without local location or event writes", async () => {
     const root = mkdtempSync(join(tmpdir(), "project-mcp-cloud-doctor-"));
     const dbPath = join(root, "projects.db");
@@ -634,4 +828,129 @@ describe("projects-mcp project-first surface", () => {
       expect(stdout).not.toContain(leaked);
     }
   });
+});
+
+describe("MCP integration writers validate a pinned conversations channel (BUG-0063)", () => {
+  const CHANNELS = ["product-mvp-launch", "employee-contracts"];
+
+  /**
+   * A conversations stand-in whose `channel list -j` is the channel set the
+   * guard adjudicates against. Anything else is an unexpected invocation: the
+   * write path must only ever list, never create or post.
+   */
+  function stubConversationsBin(root: string): string {
+    const bin = join(root, "conversations");
+    writeFileSync(
+      bin,
+      "#!/bin/sh\n"
+      + "if [ \"$1\" = \"channel\" ] && [ \"$2\" = \"list\" ]; then\n"
+      + `  printf '%s' '${JSON.stringify(CHANNELS.map((name) => ({ name })))}'\n`
+      + "  exit 0\n"
+      + "fi\n"
+      + "echo \"unexpected conversations invocation: $*\" >&2\n"
+      + "exit 1\n",
+    );
+    chmodSync(bin, 0o755);
+    return bin;
+  }
+
+  function seedProject(root: string): { dbPath: string; projectId: string } {
+    const dbPath = join(root, "projects.db");
+    const db = new Database(dbPath);
+    db.run("PRAGMA foreign_keys=ON");
+    runMigrations(db);
+    const project = createWorkspace({
+      name: "MCP Channel Guard",
+      slug: "mcp-channel-guard",
+      kind: "project",
+      primary_path: join(root, "mcp-channel-guard"),
+    }, db);
+    db.close();
+    return { dbPath, projectId: project.id };
+  }
+
+  function callTool(dbPath: string, bin: string, name: string, args: Record<string, unknown>) {
+    const result = runMcpSession(
+      [
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "project-mcp-test", version: "0" },
+          },
+        },
+        { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+        { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: args } },
+      ],
+      testSpawnEnv({
+        HASNA_PROJECTS_DB_PATH: dbPath,
+        HASNA_PROJECTS_CHANNEL_VERIFY: "1",
+        HASNA_PROJECTS_CHANNEL_ENSURE: "0",
+        HASNA_PROJECTS_CONVERSATIONS_BIN: bin,
+      }),
+    );
+    return Buffer.from(result.stdout).toString("utf-8");
+  }
+
+  function storedChannel(dbPath: string, slug: string): string | null | undefined {
+    const db = new Database(dbPath);
+    const row = db.query("SELECT integrations FROM workspaces WHERE slug = ?").get(slug) as { integrations: string } | null;
+    db.close();
+    if (!row) return undefined;
+    const integrations = JSON.parse(row.integrations) as Record<string, unknown>;
+    return (integrations.conversations_channel ?? null) as string | null;
+  }
+
+  test("projects_update refuses a conversations_channel that is not a channel, and stores nothing", () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-channel-guard-"));
+    try {
+      const bin = stubConversationsBin(root);
+      const { dbPath, projectId } = seedProject(root);
+
+      const stdout = callTool(dbPath, bin, "projects_update", {
+        id: projectId,
+        integrations: { conversations_channel: "employee-contract-closing" },
+      });
+
+      // The refusal text is JSON-escaped inside the tool result, so assert on
+      // the unescaped fragment plus the named channel.
+      expect(stdout).toContain("Refusing to pin integrations.conversations_channel");
+      expect(stdout).toContain("employee-contract-closing");
+      expect(stdout).toContain("the conversations app has no channel with that name");
+      // The refused token must not have been persisted behind the error.
+      expect(storedChannel(dbPath, "mcp-channel-guard")).toBeNull();
+
+      // The same tool accepts a channel the conversations app actually has.
+      const accepted = callTool(dbPath, bin, "projects_update", {
+        id: projectId,
+        integrations: { conversations_channel: "product-mvp-launch" },
+      });
+      expect(accepted).not.toContain("Refusing to pin");
+      expect(storedChannel(dbPath, "mcp-channel-guard")).toBe("product-mvp-launch");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("projects_create refuses a pinned conversations_channel and leaves no row behind", () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-channel-create-"));
+    try {
+      const bin = stubConversationsBin(root);
+      const { dbPath } = seedProject(root);
+
+      const stdout = callTool(dbPath, bin, "projects_create", {
+        name: "MCP Channel Create",
+        slug: "mcp-channel-create",
+        integrations: { conversations_channel: "employee-contract-closing" },
+      });
+
+      expect(stdout).toContain("Refusing to pin integrations.conversations_channel");
+      expect(storedChannel(dbPath, "mcp-channel-create")).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

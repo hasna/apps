@@ -4,7 +4,7 @@ import { assertHarnessArguments } from "./harness-arguments";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { SwitcherClient } from "./sdk";
-import { CommandInterrupted, codingEligible, harnessEligible, validateHarnessProvider, type LaunchPlan, type ProviderInput } from "./domain";
+import { CommandInterrupted, codingEligible, harnessEligible, modelExpired, validateHarnessProvider, type LaunchPlan, type ProviderInput } from "./domain";
 import { providerCredential } from "./presets";
 import { privateDirectory, switcherHome } from "./runtime";
 import { prepareHarnessLaunch, detectHarness, codexModel, validateHarnessVersion, validateHarnessConfiguration } from "./harnesses";
@@ -12,16 +12,20 @@ import { harnessInstallationMessage } from "./harness-installation";
 import { runHarnessProcess } from "./harness-process";
 import { oriLaunchWarnings, assertOriLoginAllowed, inspectOri, prepareOriLaunch, requireOriHarness, validateOriLaunchRequest, type OriContract, type OriLaunchPlan } from "./ori-backend";
 
+import { prepareChatGPTLaunch } from "./chatgpt-launch";
+import { prepareClaudeDesktopLaunch } from "./claude-desktop-launch";
+import type { ChatGPTInstallation, ClaudeDesktopInstallation } from "./desktop-apps";
+import type { ReasoningEffort } from "./reasoning";
 import { childEnvironment } from "./harness-environment";
 import type { RoutingEvent } from "./inference-gateway";
 export { childEnvironment } from "./harness-environment";
 export type LaunchBackend = "direct" | "ori";
-export type LaunchOptions = {backend?: LaunchBackend; oriExecutable?: string; cwd?: string; executable?: string; stateDir?: string; args?: string[]; timeoutMs?: number; refresh?: boolean; credentialEnv?: NodeJS.ProcessEnv; resolveCredential?: (provider: ProviderInput)=>Promise<string | undefined>};
+export type LaunchOptions = {desktop?: ChatGPTInstallation; claudeDesktop?:ClaudeDesktopInstallation; reasoning?:ReasoningEffort; dangerouslyBypassApprovalsAndSandbox?:boolean; backend?: LaunchBackend; oriExecutable?: string; cwd?: string; executable?: string; stateDir?: string; args?: string[]; timeoutMs?: number; refresh?: boolean; credentialEnv?: NodeJS.ProcessEnv; resolveCredential?: (provider: ProviderInput)=>Promise<string | undefined>};
 const LATE_RUN_FINALIZATION_TIMEOUT_MS = 5_000;
 
 async function writeOriCodexCatalog(stateDir: string, models: LaunchPlan["catalog"]["models"]): Promise<string> {
   const path = join(stateDir, "ori-codex-models.json");
-  const nativeModels = models.filter(codingEligible).map(codexModel);
+  const nativeModels = models.filter(codingEligible).map((model,index)=>codexModel(model,index));
   await writeFile(path, JSON.stringify({models: nativeModels}, null, 2) + "\n", {mode: 0o600, flag: "wx"});
   return path;
 }
@@ -83,7 +87,7 @@ export async function prepareOriForPlan(plan: LaunchPlan, options: OriPreparatio
   if (!credential) throw new Error("OpenRouter credential is required for an Ori launch; configure a Switcher credential binding.");
   const ori = prepareOriLaunch({...request, executable: contract.executable, environment: {...process.env, ...options.credentialEnv, OPENROUTER_API_KEY: credential}});
   const native=await prepareHarnessLaunch({harness:plan.profile.harness,baseUrl:plan.provider.baseUrl,protocol:plan.provider.protocol,authStyle:plan.provider.authStyle,
-    model:plan.profile.model,models:plan.catalog.models.filter(m=>harnessEligible(m,plan.profile.harness)),modelPolicy:plan.profile.modelPolicy,
+    model:plan.profile.model,models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),modelPolicy:plan.profile.modelPolicy,
     providerId:plan.provider.id,onRoutingEvent:options.onRoutingEvent,credential,executable:detection.executable,version:detection.version,
     stateDir:options.stateDir,cwd:resolve(options.cwd??process.cwd()),args:options.args??[]});
   try {
@@ -98,6 +102,7 @@ export async function prepareOriForPlan(plan: LaunchPlan, options: OriPreparatio
 export async function launch(client: SwitcherClient, profileId: string, options: LaunchOptions = {}): Promise<number> {
   const launchDeadline = options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs;
   const profile = await client.getProfile(profileId);
+  if((options.reasoning||options.dangerouslyBypassApprovalsAndSandbox)&&(profile.harness!=="codex"||(options.backend??"direct")!=="direct"))throw new Error("Reasoning and full-access launch options require direct Codex or ChatGPT.");
   assertHarnessArguments(profile.harness,options.args ?? []);
   if (profile.harness === "gemini") validateHarnessProvider(profile.harness, await client.getProvider(profile.providerId));
   await validateHarnessConfiguration(profile.harness,resolve(options.cwd??process.cwd()),options.args);
@@ -116,8 +121,11 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   if (backend !== "direct" && backend !== "ori") throw new Error("Unknown launch backend; use direct or ori.");
   if (backend === "ori" && options.executable) throw new Error("--executable is ambiguous with --backend ori; use --ori-executable PATH.");
   if (backend === "direct" && options.oriExecutable) throw new Error("--ori-executable requires --backend ori.");
-  const detection = backend === "direct" ? await detectHarness(plan.profile.harness, options.executable) : undefined;
-  if (backend === "direct" && !detection?.available) throw new Error(harnessInstallationMessage(plan.profile.harness, detection?.executable ?? plan.profile.harness, Boolean(options.executable)));
+  if (options.desktop && (plan.profile.harness !== "codex" || backend !== "direct")) throw new Error("ChatGPT requires the direct Codex provider adapter.");
+  if (options.claudeDesktop && (options.desktop || plan.profile.harness !== "claude" || backend !== "direct" || options.executable || options.args?.length)) throw new Error("Claude desktop requires its direct Messages gateway adapter without native CLI overrides.");
+  const nativeExecutable = options.desktop?.codexExecutable ?? options.executable;
+  const detection = backend === "direct" && !options.claudeDesktop ? await detectHarness(plan.profile.harness, nativeExecutable) : undefined;
+  if (backend === "direct" && !options.claudeDesktop && !detection?.available) throw new Error(harnessInstallationMessage(plan.profile.harness, detection?.executable ?? plan.profile.harness, Boolean(options.executable)));
   if (backend === "direct" && plan.profile.harness === "gemini") validateHarnessVersion("gemini", detection?.version);
   if(backend==="direct"&&plan.profile.harness==="aider")validateHarnessVersion(plan.profile.harness,detection?.version);
   const root = resolve(options.stateDir ?? join(switcherHome(),"state"));
@@ -153,15 +161,23 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   // keep the cancellation promise handled in that synchronous path too.
   void preparationCancellation.catch(() => undefined);
   try {
-    const prepared = backend === "ori" ? (await prepareOriForPlan(plan,{...options,stateDir,onRoutingEvent})).prepared : await prepareHarnessLaunch({
+    const input = {
+      harness:plan.profile.harness,baseUrl:plan.provider.baseUrl,protocol:plan.provider.protocol,authStyle:plan.provider.authStyle,model:plan.profile.model,models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),modelPolicy:plan.profile.modelPolicy,providerId:plan.provider.id,onRoutingEvent,credential,stateDir,cwd:resolve(options.cwd??process.cwd()),
+    };
+    let prepared = options.claudeDesktop ? await prepareClaudeDesktopLaunch(input,options.claudeDesktop,join(root,"desktop-claude",profileId)) : backend === "ori" ? (await prepareOriForPlan(plan,{...options,stateDir,onRoutingEvent})).prepared : await prepareHarnessLaunch({
       harness:plan.profile.harness, baseUrl:plan.provider.baseUrl, protocol:plan.provider.protocol,
-      model:plan.profile.model, models:plan.catalog.models.filter(m=>harnessEligible(m,plan.profile.harness)),
+      model:plan.profile.model, models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),
       modelPolicy:plan.profile.modelPolicy,providerId:plan.provider.id,onRoutingEvent,
-      credential, authStyle:plan.provider.authStyle, executable:options.executable ?? detection?.executable, args:options.args ?? [], stateDir,
+      reasoning:options.reasoning,dangerouslyBypassApprovalsAndSandbox:options.dangerouslyBypassApprovalsAndSandbox,
+      credential, authStyle:plan.provider.authStyle, executable:nativeExecutable ?? detection?.executable, args:options.args ?? [], stateDir,
       cwd:resolve(options.cwd ?? process.cwd()), version:detection?.version,
       ...(["pi","omp","dsh","cline","hermes","prime-agent","gemini","aider","opencode","kilo"].includes(plan.profile.harness) ? {sessionDir:join(root,"sessions",plan.profile.harness,profileId)} : {}),
     });
     cleanup = prepared.cleanup;
+    if (options.desktop) {
+      prepared = await prepareChatGPTLaunch(prepared,options.desktop,stateDir,join(root,"desktop",profileId));
+      cleanup = prepared.cleanup;
+    }
     for (const warning of [...plan.warnings,...prepared.warnings]) console.error(`switcher: ${warning}`);
     // Some adapters must start an owned native supervisor before the normal
     // harness process can install its signal handlers. Keep this narrow
@@ -222,7 +238,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
       interruptPreparation(new CommandInterrupted(143, "Launch timed out before the native harness started."), false);
       throw preparationSignal;
     }
-    const {code,interrupted} = await runHarnessProcess({executable:prepared.executable,args:prepared.args,cwd:resolve(options.cwd ?? process.cwd()),env:{...childEnvironment(),...prepared.env},timeoutMs:remainingRuntime});
+    const {code,interrupted} = await runHarnessProcess({executable:prepared.executable,args:prepared.args,cwd:resolve(options.cwd ?? process.cwd()),env:{...childEnvironment(),...prepared.env},silent:Boolean(options.desktop||options.claudeDesktop),timeoutMs:remainingRuntime});
     // Close native background traffic before persisting the final routing log.
     await cleanup?.(); cleanup=undefined;
     await finishRunOnce(run,{status:interrupted?"interrupted":code===0?"exited":"failed",exitCode:code},`switcher: Harness exited ${code}; final metadata could not be saved for run ${run!.id}.`);

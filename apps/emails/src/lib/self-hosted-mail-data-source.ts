@@ -1,3 +1,4 @@
+import { normalizeSendMetadata } from "./send-metadata.js";
 // SelfHostedMailDataSource maps the operator-configured Emails service onto the
 // common mailbox interface. The service speaks a versioned resource API — the
 // same shape `src/db/self-hosted-store.ts` already uses for `domains`:
@@ -2264,6 +2265,9 @@ export class SelfHostedMailDataSource implements MailDataSource {
   }
 
   async send(input: MailSendInput): Promise<MailSendResult> {
+    const metadata = normalizeSendMetadata(input.headers, input.tags);
+    if (input.sendKey !== undefined && (typeof input.sendKey !== "string" || !input.sendKey.trim())) throw new Error("sendKey must be a nonempty scoped send key");
+    if (input.sendKey !== undefined && input.scheduledAt) throw new Error("Scoped send keys cannot be stored in scheduled jobs");
     if (input.providerId !== undefined && (typeof input.providerId !== "string" || !input.providerId.trim())) {
       throw new Error("providerId must be a non-empty provider identifier.");
     }
@@ -2271,6 +2275,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     const useMarkdown = input.markdown !== false;
     const html = input.html ?? (useMarkdown ? renderMarkdown(input.body) : undefined);
     const body: Record<string, unknown> = {
+      ...metadata,
       from: input.from,
       to,
       subject: input.subject,
@@ -2281,10 +2286,12 @@ export class SelfHostedMailDataSource implements MailDataSource {
     const trackingRequested = input.trackOpens === true || input.trackClicks === true;
     for (const value of [input.trackOpens,input.trackClicks]) if (value !== undefined && typeof value !== "boolean") throw new Error("Tracking switches must be boolean");
     if (input.trackingUrl !== undefined && (typeof input.trackingUrl !== "string" || !input.trackingUrl.trim() || !trackingRequested)) throw new Error("trackingUrl requires a nonempty URL and trackOpens or trackClicks");
-    if (input.providerId || input.unsubscribeUrl || trackingRequested) {
+    if (input.providerId || input.unsubscribeUrl || input.sendKey || trackingRequested || input.headers !== undefined || input.tags !== undefined) {
       const contract = await this.request("GET", "/openapi.json");
       const doc = contract.json as { paths?: Record<string, { post?: { requestBody?: { content?: Record<string, { schema?: { properties?: Record<string, unknown> } }> } } }> };
       const properties = doc?.paths?.[input.scheduledAt ? "/v1/scheduled/enqueue" : "/v1/messages/send"]?.post?.requestBody?.content?.["application/json"]?.schema?.properties;
+      if ((input.headers !== undefined && !properties?.headers) || (input.tags !== undefined && !properties?.tags)) throw new Error("The Emails API needs an update to support custom send headers and tags; no message was sent.");
+      if (input.sendKey && !properties?.send_key) throw new Error("The Emails API needs an update to support scoped send keys; no message was sent.");
       if (trackingRequested && (!properties?.track_opens || !properties?.track_clicks || !properties?.tracking_url)) throw new Error("The Emails API needs an update to support tracking; no message was sent.");
       if (contract.status !== 200 || (input.providerId && !properties?.provider_id) || (input.unsubscribeUrl && !properties?.unsubscribe_url)) {
         throw new Error("The Emails API needs an update to support provider selection and unsubscribe headers; no message was sent.");
@@ -2296,6 +2303,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     }
     if (input.providerId) body["provider_id"] = input.providerId;
     if (input.unsubscribeUrl) body["unsubscribe_url"] = input.unsubscribeUrl;
+    if (input.sendKey) body["send_key"] = input.sendKey;
     if (input.attachments?.length) body["attachments"] = input.attachments;
     if (input.cc) body["cc"] = input.cc.split(",").map((v) => v.trim()).filter(Boolean);
     if (input.bcc) body["bcc"] = input.bcc.split(",").map((v) => v.trim()).filter(Boolean);

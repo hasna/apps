@@ -5,8 +5,11 @@ import { listMemories } from "../db/memories.js";
 import { listAgents } from "../db/agents.js";
 import { listProjects } from "../db/projects.js";
 import { getDatabase } from "../db/database.js";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { announceMementosLocalMode, selectsMementosLocalStore } from "../lib/local-opt-in.js";
 import { assertClientStoreConfigured } from "../db/api-mode.js";
+import { getDataRoot } from "../lib/paths.js";
 import { getPrimaryMachineStartupWarning } from "../db/machines.js";
 import { detectProject } from "../lib/project-detect.js";
 import { loadWebhooksFromDb } from "../lib/built-in-hooks.js";
@@ -155,10 +158,15 @@ async function ensureRestServerRunning(): Promise<void> {
     // Not running — spawn it
   }
 
+  // Only reached under the explicit local opt-in (see prepareMcpRuntime), so
+  // the app's data root is the store this server serves; its log belongs
+  // there too — never a world-readable, shared /tmp file.
+  const logPath = join(getDataRoot(), "mementos-serve.log");
+  mkdirSync(dirname(logPath), { recursive: true });
   const proc = Bun.spawn(["mementos-serve"], {
     detached: true,
-    stdout: Bun.file("/tmp/mementos.log"),
-    stderr: Bun.file("/tmp/mementos.log"),
+    stdout: Bun.file(logPath),
+    stderr: Bun.file(logPath),
   });
   proc.unref();
 

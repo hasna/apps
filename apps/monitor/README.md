@@ -384,7 +384,7 @@ reference is available in [docs/api.md](docs/api.md).
 ## Configuration
 
 Config is stored at the effective monitor home — `~/.hasna/monitor/config.json`
-by default, resolved through `@hasna/paths` to the XDG data home once the store is
+by default, resolved by the in-package resolver to the XDG data home once the store is
 migrated there or `HASNA_DATA_HOME` is set. Set `MONITOR_CONFIG_DIR` (or the
 `HASNA_MONITOR_HOME` alias) to use a different config/database directory for CI,
 tests, or isolated agent runs.
@@ -430,7 +430,7 @@ tests, or isolated agent runs.
     "loadAvg": 10
   },
   "dbPath": "~/.hasna/monitor/monitor.db",
-  // resolved through @hasna/paths; the XDG data home is adopted once the store is
+  // resolved through the in-package resolver; the XDG data home is adopted once the store is
   // migrated there or HASNA_DATA_HOME is set.
   "apiPort": 3847,
   "webPort": 3848,
@@ -533,7 +533,7 @@ monitor completions bash >> ~/.bashrc
 
 ## Database
 
-By default uses SQLite at the effective monitor home — `~/.hasna/monitor/monitor.db` by default, resolved through `@hasna/paths` to the XDG data home once the store is migrated there or `HASNA_DATA_HOME` is set. For production or multi-agent setups, use PostgreSQL:
+By default uses SQLite at the effective monitor home — `~/.hasna/monitor/monitor.db` by default, resolved by the in-package resolver to the XDG data home once the store is migrated there or `HASNA_DATA_HOME` is set. For production or multi-agent setups, use PostgreSQL:
 
 Set `MONITOR_DATABASE_URL` environment variable:
 

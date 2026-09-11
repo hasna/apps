@@ -1,23 +1,17 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
+import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 const HOME_DIR = mkdtempSync(join(tmpdir(), "conversations-force-home-"));
-const TEST_DB = join(tmpdir(), `conversations-force-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 function runCli(args: string[]) {
-  const env = { ...process.env } as Record<string, string>;
-  for (const key of Object.keys(env)) {
-    if (key === "CONVERSATIONS_AGENT_ID" || key.startsWith("HASNA_CONVERSATIONS_")) {
-      delete env[key];
-    }
-  }
-
-  env.HOME = HOME_DIR;
-  env.USERPROFILE = HOME_DIR;
-  env.CONVERSATIONS_DB_PATH = TEST_DB;
+  const env = { ...fixture.env };
   env.FORCE_COLOR = "0";
 
   const result = Bun.spawnSync({
@@ -38,9 +32,6 @@ function runCli(args: string[]) {
 describe("CLI agent force takeover (e2e)", () => {
   afterAll(() => {
     try { rmSync(HOME_DIR, { recursive: true, force: true }); } catch {}
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try { rmSync(`${TEST_DB}${suffix}`, { force: true }); } catch {}
-    }
   });
 
   test("requires --force to take over an active agent", () => {

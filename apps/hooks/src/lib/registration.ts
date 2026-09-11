@@ -7,6 +7,68 @@
  * as 'PreToolUse:Bash' must be split before lookup, never used as a key.
  */
 
+import { resolveHook } from "./resolve.js";
+
+/**
+ * The command forms the installer writes — `hooks run <name>` and
+ * `hooks run <name> --profile <id>` — plus the legacy bare `hook-<name>` form
+ * it still reads. A command outside these forms (a direct-path wire the
+ * installer never wrote) is not a hook registration.
+ */
+const REGISTRATION_COMMAND_RE = /^(?:hooks run ([\w-]+)(?:\s+--profile\s+[\w-]+)?|hook-([\w-]+))$/;
+
+function registrationName(command: unknown): string | undefined {
+  if (typeof command !== "string") return undefined;
+  const match = command.trim().match(REGISTRATION_COMMAND_RE);
+  return match ? (match[1] ?? match[2]) : undefined;
+}
+
+/** A settings registration whose hook name cannot resolve. */
+export interface StaleRegistration {
+  /** Settings file the registration lives in. */
+  file: string;
+  /** Settings event key holding the entry (PreToolUse, …). */
+  event: string;
+  /** The registered hook name that does not resolve. */
+  hook: string;
+  /** The raw command string from the settings entry. */
+  command: string;
+}
+
+/**
+ * Find settings registrations whose hook does not resolve.
+ *
+ * A registration is a `hooks run <name>` (or legacy `hook-<name>`) command;
+ * it is stale when `resolveHook(name)` finds no bundled, custom or stored
+ * hook — exactly the lookup `hooks run` performs, so a stale registration
+ * fails on every tool call it is wired to. Direct-path wiring outside the
+ * installer's own command forms is reported by `countSettingsWiring`, never
+ * treated as a hook registration.
+ */
+export function findStaleRegistrations(
+  settings: Record<string, unknown>,
+  file: string,
+  resolves: (name: string) => boolean = (name) => resolveHook(name) !== undefined,
+): StaleRegistration[] {
+  const hooks = (settings as any).hooks;
+  if (!hooks || typeof hooks !== "object") return [];
+
+  const stale: StaleRegistration[] = [];
+  for (const eventKey of Object.keys(hooks)) {
+    const entries = hooks[eventKey];
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      if (!Array.isArray(entry?.hooks)) continue;
+      for (const hook of entry.hooks) {
+        const name = registrationName(hook?.command);
+        if (name === undefined || resolves(name)) continue;
+        stale.push({ file, event: eventKey, hook: name, command: hook.command });
+      }
+    }
+  }
+  return stale;
+}
+
 function safeMatcherTest(pattern: string, value: string): boolean {
   try {
     return new RegExp(pattern).test(value);

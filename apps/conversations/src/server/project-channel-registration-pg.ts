@@ -1,3 +1,4 @@
+import { readCorpusBinding, CorpusBindingError } from "./corpus-binding.js";
 import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit/query.js";
 import { newChannelId } from "../lib/channel-id.js";
 import {
@@ -149,7 +150,9 @@ async function capability(
      WHERE singleton = TRUE${lock ? " FOR UPDATE" : ""}`,
   );
   if (!row?.corpus_id) throw new Error("project channel registration corpus identity is missing.");
-  return buildProjectChannelRegistrationCapability(row.corpus_id);
+  const binding = await readCorpusBinding(client);
+  if (binding.corpus_id !== row.corpus_id) throw new Error("Corpus binding identity mismatch.");
+  return { ...buildProjectChannelRegistrationCapability(row.corpus_id), tenant_id: binding.tenant_id, authority_id: binding.authority_id };
 }
 
 export async function projectChannelRegistrationPgCapability(
@@ -212,6 +215,14 @@ async function insertReceipt(
     throw new Error(`project channel registration receipt id collision: ${receipt.receipt_id}`);
   }
   return parsed;
+}
+
+async function assertNoUnreconciledLegacyStep(client: TypedQueryClient, cap: ProjectChannelRegistrationCapability, request: ProjectChannelRegistrationRequest): Promise<void> {
+  const legacy = await client.get(`SELECT r.receipt_id FROM project_channel_registration_receipts r
+    JOIN conversations_corpus_legacy_receipts m ON m.receipt_id=r.receipt_id
+    WHERE r.operation_id=$1 AND r.step_id=$2 AND r.corpus_id=$3
+      AND (r.tenant_id<>$4 OR r.authority_id<>$5) LIMIT 1`, [request.operation_id,request.step_id,cap.corpus_id,cap.tenant_id,cap.authority_id]);
+  if (legacy) throw new CorpusBindingError(409, "This operation has historical ownership evidence; reconcile its adoption mapping before issuing new registration mutations.");
 }
 
 async function acceptedForStep(
@@ -380,6 +391,7 @@ export async function registerProjectChannelPg(
   return client.transaction(async (tx) => {
     const cap = await capability(tx, true);
     assertProjectChannelRegistrationIdentity(request, cap);
+    await assertNoUnreconciledLegacyStep(tx, cap, request);
     await lockRegistration(tx, cap, request, validated.channel);
 
     const accepted = await acceptedForStep(tx, cap, request);
@@ -800,7 +812,9 @@ export async function lookupProjectChannelRegistrationReceiptPg(
   request: ProjectChannelRegistrationLookupRequest,
 ): Promise<ProjectChannelRegistrationLookupResult> {
   const startedAt = performance.now();
-  const cap = await capability(client);
+  let cap = await capability(client);
+  const legacyLookup = request.tenant_id === "default" && request.authority_id === "conversations" && (cap.tenant_id !== "default" || cap.authority_id !== "conversations");
+  if (legacyLookup) cap = { ...cap, tenant_id: "default", authority_id: "conversations" };
   const exactTargetId = validateProjectChannelRegistrationLookup(request, cap);
   const params: unknown[] = [
     request.authority,
@@ -826,6 +840,7 @@ export async function lookupProjectChannelRegistrationReceiptPg(
       AND direction = $9 AND idempotency_key = $10
       AND request_digest = $11 AND precondition_digest = $12
       ${targetClause}
+      ${legacyLookup ? "AND EXISTS (SELECT 1 FROM conversations_corpus_legacy_receipts m WHERE m.receipt_id=project_channel_registration_receipts.receipt_id AND m.receipt_digest=conversations_registration_receipt_digest(project_channel_registration_receipts))" : ""}
     ORDER BY
       CASE outcome
         WHEN 'terminal_nonacceptance' THEN 3
@@ -958,6 +973,7 @@ export async function compensateProjectChannelRegistrationPg(
 
   return client.transaction(async (tx) => {
     const cap = await capability(tx, true);
+    await assertNoUnreconciledLegacyStep(tx, cap, request);
     const accepted = await sourceReceipt(tx, request);
     if (!accepted) {
       const receipt = await terminalInverse(

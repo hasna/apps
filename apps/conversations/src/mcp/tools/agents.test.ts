@@ -1,27 +1,30 @@
+import { startLoopbackApiFixture } from "../../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../../lib/store/test-support/client-environment.js";
+import { getStore } from "../../lib/store/index.js";
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAgentTools } from "./agents";
-import { closeDb, getDataDir } from "../../lib/db";
+import { getDataDir } from "../../lib/db";
 import { getAutoName, readPersistedIdentity, _resetAutoName } from "../../lib/identity";
 import { getSessionAgent, setSessionAgent } from "../channel";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-const TEST_DB = join(tmpdir(), `conversations-test-agents-mcp-${Date.now()}.db`);
-
 describe("agent MCP tools", () => {
   let client: Client;
+  let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+  let restoreClient: () => void;
   let server: McpServer;
   let agentFocus: Map<string, { project_id: string | null }>;
   const getAgentFocus = async (agentId: string) => agentFocus.get(agentId)?.project_id ?? null;
 
   beforeAll(async () => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+    fixture = await startLoopbackApiFixture();
+    restoreClient = activateClientEnvironment(fixture.env);
     delete process.env.CONVERSATIONS_AGENT_ID;
-    closeDb();
 
     server = new McpServer({ name: "test-agents-mcp", version: "0.0.1" });
     agentFocus = new Map();
@@ -35,11 +38,10 @@ describe("agent MCP tools", () => {
 
   afterAll(async () => {
     delete process.env.CONVERSATIONS_DB_PATH;
-    closeDb();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(TEST_DB + "-wal"); } catch {}
-    try { unlinkSync(TEST_DB + "-shm"); } catch {}
+
     await client.close();
+    restoreClient();
+    await fixture.stop();
   });
 
   function parseResult(result: { content: unknown[] }): unknown {
@@ -288,8 +290,7 @@ describe("agent MCP tools", () => {
 
     test("returns blocking messages when they exist", async () => {
       // Send a blocking message to our agent
-      const { sendMessage: sendMsg } = await import("../../lib/messages");
-      sendMsg({
+      await getStore().sendMessage({
         from: "blocker-sender",
         to: "blocker-target",
         content: "BLOCK: fix this now",
@@ -310,8 +311,7 @@ describe("agent MCP tools", () => {
       // A distinct target so this test is independent of the other blocker
       // test's message (shared store across tests in this file).
       const target = "blocker-target-scoped";
-      const { sendMessage: sendMsg } = await import("../../lib/messages");
-      sendMsg({
+      await getStore().sendMessage({
         from: "blocker-sender",
         to: target,
         content: "BLOCK: fix this now",
@@ -358,6 +358,9 @@ describe("agent MCP tools", () => {
       savedHome = process.env.HOME;
       savedUserProfile = process.env.USERPROFILE;
       tempHome = mkdtempSync(join(tmpdir(), "conversations-mcp-identity-"));
+      const credentials = join(tempHome, ".hasna/conversations/config");
+      mkdirSync(credentials, { recursive: true, mode: 0o700 });
+      copyFileSync(join(fixture.home, ".hasna/conversations/config/credentials"), join(credentials, "credentials"));
       process.env.HOME = tempHome;
       process.env.USERPROFILE = tempHome;
       delete process.env.CONVERSATIONS_AGENT_ID;

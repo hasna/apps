@@ -1,7 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { Database } from "bun:sqlite";
 import { getDatabase, closeDatabase, resetDatabase } from "./database.js";
 import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries, dispatchWebhook, validateWebhookUrl } from "./webhooks.js";
+
+// In-process suite that was a pass-1 timeout victim under host contention;
+// bun's 5s default is too tight for a loaded host.
+setDefaultTimeout(60_000);
 
 let db: Database;
 
