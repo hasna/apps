@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "../db/schema.js";
@@ -828,4 +828,129 @@ describe("projects-mcp project-first surface", () => {
       expect(stdout).not.toContain(leaked);
     }
   });
+});
+
+describe("MCP integration writers validate a pinned conversations channel (BUG-0063)", () => {
+  const CHANNELS = ["product-mvp-launch", "employee-contracts"];
+
+  /**
+   * A conversations stand-in whose `channel list -j` is the channel set the
+   * guard adjudicates against. Anything else is an unexpected invocation: the
+   * write path must only ever list, never create or post.
+   */
+  function stubConversationsBin(root: string): string {
+    const bin = join(root, "conversations");
+    writeFileSync(
+      bin,
+      "#!/bin/sh\n"
+      + "if [ \"$1\" = \"channel\" ] && [ \"$2\" = \"list\" ]; then\n"
+      + `  printf '%s' '${JSON.stringify(CHANNELS.map((name) => ({ name })))}'\n`
+      + "  exit 0\n"
+      + "fi\n"
+      + "echo \"unexpected conversations invocation: $*\" >&2\n"
+      + "exit 1\n",
+    );
+    chmodSync(bin, 0o755);
+    return bin;
+  }
+
+  function seedProject(root: string): { dbPath: string; projectId: string } {
+    const dbPath = join(root, "projects.db");
+    const db = new Database(dbPath);
+    db.run("PRAGMA foreign_keys=ON");
+    runMigrations(db);
+    const project = createWorkspace({
+      name: "MCP Channel Guard",
+      slug: "mcp-channel-guard",
+      kind: "project",
+      primary_path: join(root, "mcp-channel-guard"),
+    }, db);
+    db.close();
+    return { dbPath, projectId: project.id };
+  }
+
+  function callTool(dbPath: string, bin: string, name: string, args: Record<string, unknown>) {
+    const result = runMcpSession(
+      [
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "project-mcp-test", version: "0" },
+          },
+        },
+        { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+        { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: args } },
+      ],
+      testSpawnEnv({
+        HASNA_PROJECTS_DB_PATH: dbPath,
+        HASNA_PROJECTS_CHANNEL_VERIFY: "1",
+        HASNA_PROJECTS_CHANNEL_ENSURE: "0",
+        HASNA_PROJECTS_CONVERSATIONS_BIN: bin,
+      }),
+    );
+    return Buffer.from(result.stdout).toString("utf-8");
+  }
+
+  function storedChannel(dbPath: string, slug: string): string | null | undefined {
+    const db = new Database(dbPath);
+    const row = db.query("SELECT integrations FROM workspaces WHERE slug = ?").get(slug) as { integrations: string } | null;
+    db.close();
+    if (!row) return undefined;
+    const integrations = JSON.parse(row.integrations) as Record<string, unknown>;
+    return (integrations.conversations_channel ?? null) as string | null;
+  }
+
+  test("projects_update refuses a conversations_channel that is not a channel, and stores nothing", () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-channel-guard-"));
+    try {
+      const bin = stubConversationsBin(root);
+      const { dbPath, projectId } = seedProject(root);
+
+      const stdout = callTool(dbPath, bin, "projects_update", {
+        id: projectId,
+        integrations: { conversations_channel: "employee-contract-closing" },
+      });
+
+      // The refusal text is JSON-escaped inside the tool result, so assert on
+      // the unescaped fragment plus the named channel.
+      expect(stdout).toContain("Refusing to pin integrations.conversations_channel");
+      expect(stdout).toContain("employee-contract-closing");
+      expect(stdout).toContain("the conversations app has no channel with that name");
+      // The refused token must not have been persisted behind the error.
+      expect(storedChannel(dbPath, "mcp-channel-guard")).toBeNull();
+
+      // The same tool accepts a channel the conversations app actually has.
+      const accepted = callTool(dbPath, bin, "projects_update", {
+        id: projectId,
+        integrations: { conversations_channel: "product-mvp-launch" },
+      });
+      expect(accepted).not.toContain("Refusing to pin");
+      expect(storedChannel(dbPath, "mcp-channel-guard")).toBe("product-mvp-launch");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("projects_create refuses a pinned conversations_channel and leaves no row behind", () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-channel-create-"));
+    try {
+      const bin = stubConversationsBin(root);
+      const { dbPath } = seedProject(root);
+
+      const stdout = callTool(dbPath, bin, "projects_create", {
+        name: "MCP Channel Create",
+        slug: "mcp-channel-create",
+        integrations: { conversations_channel: "employee-contract-closing" },
+      });
+
+      expect(stdout).toContain("Refusing to pin integrations.conversations_channel");
+      expect(storedChannel(dbPath, "mcp-channel-create")).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

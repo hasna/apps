@@ -9,6 +9,7 @@ import {
   createConversationsPrefixPort,
   runProjectPrefixMigration,
   stripProjectPrefix,
+  unbackedProjectChannelPin,
   type ConversationsChannelIdentity,
   type ConversationsPrefixPort,
 } from "./project-prefix-migration.js";
@@ -927,5 +928,87 @@ describe("project prefix migration", () => {
 
     await expect(createConversationsPrefixPort(runner).listChannels())
       .rejects.toThrow(/changed between complete traversals/);
+  });
+});
+
+// --------------------------------------------------------------------------
+// BUG-0063: the project half of a migration step rewrites
+// integrations.conversations_channel to the prefix-stripped name. That write is
+// asserted against the migration's own complete channel inventory, so a pin can
+// only land on a name a channel carries once the migration completes.
+// --------------------------------------------------------------------------
+
+describe("project prefix migration channel pins (BUG-0063)", () => {
+  test("a pin is backed by an existing channel or by a channel step's target, and unbacked otherwise", () => {
+    const names = new Set(["product-mvp-launch", "stripped-lane"]);
+    // Already a channel name: nothing renames it, it exists.
+    expect(unbackedProjectChannelPin({ integrations: { conversations_channel: "product-mvp-launch" } }, names)).toBeNull();
+    // Produced by a pending channel step (source renamed away): present in the set.
+    expect(unbackedProjectChannelPin({ integrations: { conversations_channel: "stripped-lane" } }, names)).toBeNull();
+    // No channel carries it and no channel step produces it.
+    expect(unbackedProjectChannelPin({ integrations: { conversations_channel: "ghost-lane" } }, names)).toBe("ghost-lane");
+    // A step that pins no channel is not a pin at all.
+    expect(unbackedProjectChannelPin({ integrations: { todos_project_id: "todos-1" } }, names)).toBeNull();
+    expect(unbackedProjectChannelPin({}, names)).toBeNull();
+  });
+
+  test("pins the stripped name when the pinned channel exists but is unlinked", async () => {
+    // The pinned channel exists, so validateAmbiguousLinks accepts it, but it is
+    // not linked to the project — its own rename step is therefore a candidate
+    // for a different position in the saga than the project step. The pin is
+    // still backed BY THE PLAN, so the migration must proceed rather than
+    // refuse: a bare existence probe at the project step would false-refuse
+    // here whenever the channel rename has not run yet.
+    const source = project({
+      id: "wks_unlinked001",
+      slug: "unlinked-lane",
+      name: "Unlinked Lane",
+      status: "active",
+      integrations: {
+        conversations_project_id: "conversations-unlinked",
+        conversations_channel: "iproj-unlinked-lane",
+      },
+    });
+    const harness = makeHarness([source], [channel("iproj-unlinked-lane", null)]);
+
+    const applied = await runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+      write_marker: harness.write_marker,
+      dry_run: false,
+    });
+
+    expect(applied.ok).toBe(true);
+    expect(applied.refusal).toBeNull();
+    expect(harness.projects.get(source.id)?.integrations.conversations_channel).toBe("unlinked-lane");
+    expect([...harness.channels.keys()]).toEqual(["unlinked-lane"]);
+  });
+
+  test("a project step never pins a name no channel carries", async () => {
+    // A pin whose channel does not exist at all. The inventory refuses it
+    // (validateAmbiguousLinks) before any step is built, and the project-step
+    // assertion re-checks the same invariant at the write site; either way the
+    // record must be left exactly as found.
+    const source = project({
+      id: "wks_ghostpin001",
+      slug: "ghost-pin-lane",
+      name: "Ghost Pin Lane",
+      status: "active",
+      integrations: {
+        conversations_project_id: "conversations-ghost",
+        conversations_channel: "iproj-ghost-lane",
+      },
+    });
+    const harness = makeHarness([source], []);
+
+    await expect(runProjectPrefixMigration({
+      store: harness.store,
+      conversations: harness.conversations,
+      write_marker: harness.write_marker,
+      dry_run: false,
+    })).rejects.toThrow(/iproj-ghost-lane/);
+
+    expect(harness.projects.get(source.id)?.integrations.conversations_channel).toBe("iproj-ghost-lane");
+    expect(harness.projects.get(source.id)?.slug).toBe("ghost-pin-lane");
   });
 });

@@ -808,7 +808,16 @@ export function createEmailContentRepository(db: Database, capabilities: StoreCa
         const rows = db
           .query(
             `SELECT m.id AS message_id, att.key AS attachment_index, att.value AS element,
-                    m.direction AS direction, m.received_at AS received_at, m.sort_ts AS sort_ts
+                    m.direction AS direction,
+                    -- NEVER NULL (BUG-0053): this scan is ordered by m.sort_ts, which is
+                    -- COALESCE(received_at, created_at), so a row that carries no stored
+                    -- instant still has the one it is ordered by to report. Answering the
+                    -- raw column made an outbound row's received_at null while its own
+                    -- ordering key said otherwise, and a caller windowing this surface on
+                    -- received_at dropped it silently. Same rule as the record mapper in
+                    -- the PostgreSQL arm.
+                    COALESCE(m.received_at, m.created_at) AS received_at,
+                    m.sort_ts AS sort_ts
                FROM ${UNIFIED_MESSAGES_SQL} m, json_each(m.attachments_json) att
                ${where}
               ORDER BY m.sort_ts DESC, m.id DESC, att.key ASC

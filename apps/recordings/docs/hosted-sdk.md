@@ -69,3 +69,74 @@ original cause. A timed-out mutation may already have committed: reconcile using
 the known recording or receipt ID instead of blindly retrying. This JSON client
 does not implement audio upload/download, WebSocket sessions, native app control,
 tenant storage, usage admission or provider execution.
+
+## Hosted Library across interfaces
+
+The additive `HostedLibrary` adapter provides read-only `list` and `get`
+operations through CLI, MCP, serve and SDK. Output includes only `id`, `title`,
+`createdAt` and `durationMs`; `transcript` requires an explicit option. Unknown
+upstream fields are omitted. Metadata can itself be private. The upstream
+currently returns transcript text before projection, so this minimizes output
+rather than implementing server-side redaction.
+
+The CLI always emits JSON. Configure a complete API base and the **name** of an
+environment variable containing that API's existing bearer session:
+
+```sh
+recordings --json hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION list --limit 25
+recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION get <recording-id> --include-text
+```
+
+The named variable is read fresh per request. No token argument, implicit API
+base, local-store fallback, provider-key lookup, Keychain lookup or credential
+persistence is added. The caller supplies the existing session. Legacy commands
+and their transport configuration are unchanged.
+
+A full page returns `nextCursor: {before, beforeId}`; supply both with `--before`
+and `--before-id`. A cursor permits another request without promising another
+row. There is no offset, inferred total, extra count request or automatic
+pagination. Limits are 1–100, default 25.
+
+```sh
+recordings-mcp --hosted --stdio --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION
+```
+
+This explicit mode exposes only `recordings_hosted_list` and
+`recordings_hosted_get`. Both are read-only and accept `includeText: true`.
+Stdio is required so the selected session cannot be shared through the legacy
+MCP HTTP listener. Legacy MCP mode is unchanged.
+
+```sh
+recordings-serve --hosted --api-base "$MY_RECORDINGS_API_BASE" --port 8874
+```
+
+The read-only proxy binds to `127.0.0.1` by default; only `127.0.0.1` and `::1`
+are accepted. It supports `GET /v1/recordings` and `GET /v1/recordings/<id>`.
+List accepts `limit`, `before`, `beforeId` and `includeText=true|false`; get
+accepts only `includeText`. Every request supplies its own
+`Authorization: Bearer <session>` header. Process credentials are never used,
+and a request cannot choose the upstream authority. Cookies, browser Origin
+headers, mutation methods and unknown query fields are refused. Responses are
+not cached. `/health` describes the proxy process only. Legacy serve mode and
+its database/auth configuration are unchanged.
+
+The `./sdk` entry adds the hosted exports while retaining its generated legacy
+client. Its generator updates only `v1.generated.ts`:
+
+```ts
+import { HostedRecordingsClient, HostedLibrary } from "@hasna/recordings/sdk";
+const library = new HostedLibrary(new HostedRecordingsClient({
+  apiBase: configuration.completeV1Base,
+  credentialProvider: ({ apiBase, signal }) => session.accessTokenFor(apiBase, signal),
+}));
+const page = await library.list({ limit: 25 });
+const detail = await library.get(recordingId, { includeText: true });
+```
+
+The existing hosted transport supplies validation, prefix preservation,
+credential/origin isolation, redirect refusal, cancellation, deadlines and
+response-size bounds. SDK callers can configure those bounds. Wrapper failures
+expose fixed codes/messages without response bodies, credentials or arbitrary
+causes. This addition does not implement sign-in, refresh, writes, microphone
+control, audio transfer or transcription; those hosted parity gates remain
+separate.

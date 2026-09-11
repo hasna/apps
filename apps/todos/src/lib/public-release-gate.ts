@@ -78,9 +78,9 @@ export type InstallSmokeCommand = {
 };
 
 const PACKAGE_NAME = "@hasna/todos";
-const REPOSITORY_URL = "https://github.com/hasna/todos.git";
-const HOMEPAGE_URL = "https://github.com/hasna/todos";
-const ISSUES_URL = "https://github.com/hasna/todos/issues";
+const REPOSITORY_URL = "https://github.com/hasna/apps.git";
+const HOMEPAGE_URL = "https://github.com/hasna/apps";
+const ISSUES_URL = "https://github.com/hasna/apps/issues";
 
 const FORBIDDEN_DEPENDENCY_PARTS = [
   "aws",

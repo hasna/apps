@@ -6,7 +6,7 @@
   "subject": {
     "kind": "repo",
     "id": "open-contracts",
-    "uri": "git+https://github.com/hasna/contracts.git"
+    "uri": "git+https://github.com/hasna/apps.git"
   },
   "checks": [
     {

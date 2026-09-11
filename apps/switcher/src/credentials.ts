@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { constants } from "node:fs";
-import { open, readdir, unlink, link, lstat, access, stat, realpath, readlink } from "node:fs/promises";
+import { open, readdir, unlink, link, lstat, access, stat, realpath, readlink, rename } from "node:fs/promises";
 import { join, isAbsolute, dirname, parse as pathParts, resolve as resolvePath, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
@@ -105,7 +105,7 @@ export function credentialReference(selector: string) {
   return parse(reference,name);
 }
 
-export async function validateVaultExecutable(path: string) {
+async function inspectVaultExecutable(path: string, permitWritableFile = false) {
   let info, resolved: string;
   try {
     resolved = await realpath(path);
@@ -114,8 +114,8 @@ export async function validateVaultExecutable(path: string) {
     if (!info.isFile()) throw new Error();
   }
   catch { throw new Fault(422,"vault_exec_unavailable","The configured secrets CLI must be an installed executable file. Use --vault-cli with its absolute path."); }
-  if (process.platform !== "win32" && ((info.mode & 0o022) || (info.uid !== 0 && info.uid !== process.getuid?.())))
-    throw new Fault(422,"vault_exec_permissions","The secrets executable must be owned by this user or root and not writable by other users. Remove group/public write permission from its resolved file or choose a trusted installation.");
+  if (process.platform !== "win32" && ((!permitWritableFile && (info.mode & 0o022)) || (info.uid !== 0 && info.uid !== process.getuid?.())))
+    throw new Fault(422,"vault_exec_permissions","The secrets executable must be owned by this user or root and not writable by other users. Choose a trusted installation, or use credentials repair-executable REFERENCE --sha256 EXPECTED with the executable digest from a verified package artifact. Launch never repairs permissions automatically.");
   if (process.platform !== "win32") {
     const seen = new Set<string>();
     const inspect = async (candidate: string): Promise<void> => {
@@ -127,7 +127,8 @@ export async function validateVaultExecutable(path: string) {
         seen.add(prefix);
         if (seen.size > 256) throw new Fault(422,"vault_exec_permissions","The secrets executable path has too many symlink components.");
         const entry = await lstat(prefix);
-        if ((entry.uid !== 0 && entry.uid !== process.getuid?.()) || (!entry.isSymbolicLink() && (entry.mode & 0o022)))
+        const permittedFile = permitWritableFile && prefix === resolved && entry.isFile();
+        if ((entry.uid !== 0 && entry.uid !== process.getuid?.()) || (!entry.isSymbolicLink() && !permittedFile && (entry.mode & 0o022)))
           throw new Fault(422,"vault_exec_permissions","The secrets executable and its ancestor directories must not be replaceable by other users. Choose an installation owned by this user or root without group/public write permissions.");
         if (entry.isSymbolicLink()) await inspect(resolvePath(dirname(prefix),await readlink(prefix)));
       }
@@ -136,6 +137,61 @@ export async function validateVaultExecutable(path: string) {
     catch (error) { if (error instanceof Fault) throw error; throw new Fault(422,"vault_exec_unavailable","The secrets executable path changed or could not be verified. Retry with a trusted installation."); }
   }
   return resolved;
+}
+
+export async function validateVaultExecutable(path: string) { return inspectVaultExecutable(path); }
+
+/** Explicit install finalization. The caller supplies a digest from a verified
+ * artifact, never a digest computed from the currently installed executable.
+ * No credential is resolved and the executable is never started. */
+export async function repairVaultExecutablePermissions(path: string, expectedSha256: string) {
+  if (!/^[a-f0-9]{64}$/.test(expectedSha256)) throw new Fault(400,"invalid_request","--sha256 requires the SHA256 of the executable member from a verified package artifact.");
+  if (!isAbsolute(path) || path.length > 4096 || /[\x00-\x1f\x7f]/.test(path)) throw new Fault(400,"invalid_request","Secrets executable must be an absolute path without control characters.");
+  if (process.platform === "win32") throw new Fault(422,"vault_exec_repair_unsafe","Executable permission repair requires POSIX file permissions.");
+  const resolved = await inspectVaultExecutable(path,true);
+  const file = await open(resolved,constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const unsafe = () => new Fault(422,"vault_exec_repair_unsafe","Executable ownership, type, links or contents changed; no trusted repair can be confirmed.");
+  let temporary: string | undefined;
+  try {
+    const before = await file.stat();
+    const limit = 256 * 1024 * 1024;
+    if (!before.isFile() || before.uid !== process.getuid?.() || before.size > limit || (before.mode & 0o7000)) throw unsafe();
+    const sameFile = (info: typeof before) => info.dev === before.dev && info.ino === before.ino && info.size === before.size && info.uid === before.uid && info.nlink === before.nlink && info.mode === before.mode && info.mtimeMs === before.mtimeMs && info.ctimeMs === before.ctimeMs;
+    const hash = async (target?: typeof file) => {
+      const digest = createHash("sha256"); const buffer = Buffer.alloc(1024 * 1024); let position = 0;
+      while (true) {
+        const {bytesRead} = await file.read(buffer,0,buffer.length,position);
+        if (!bytesRead) break;
+        position += bytesRead; if (position > limit) throw unsafe();
+        const bytes = buffer.subarray(0,bytesRead); digest.update(bytes);
+        if (target) await target.writeFile(bytes);
+      }
+      if (position !== before.size || !sameFile(await file.stat())) throw unsafe();
+      if (digest.digest("hex") !== expectedSha256) throw new Fault(422,"vault_exec_digest_mismatch","Installed executable differs from the trusted artifact digest. Reinstall the verified package; no credential was accessed.");
+    };
+    await hash();
+    const mode = (before.mode & 0o777) & ~0o022;
+    const changed = mode !== (before.mode & 0o777);
+    if (await inspectVaultExecutable(path,true) !== resolved || !sameFile(await lstat(resolved))) throw unsafe();
+    if (!changed) { await validateVaultExecutable(path); return {changed,mode:mode.toString(8).padStart(4,"0"),sha256:expectedSha256}; }
+    // Every writable inode is replaced, including nlink=1: chmod cannot revoke
+    // an already-open writer fd. Cache hardlinks retain their original inode.
+    temporary = join(dirname(resolved),`.switcher-repair-${randomUUID()}`);
+    const replacement = await open(temporary,"wx",0o600);
+    try {
+      await hash(replacement);
+      await replacement.chmod(mode); await replacement.sync();
+      const ready = await replacement.stat();
+      if (!ready.isFile() || ready.nlink !== 1 || ready.uid !== before.uid || ready.size !== before.size) throw unsafe();
+      if (await inspectVaultExecutable(path,true) !== resolved || !sameFile(await lstat(resolved))) throw unsafe();
+      await rename(temporary,resolved); temporary = undefined;
+      const installed = await lstat(resolved);
+      if (installed.dev !== ready.dev || installed.ino !== ready.ino || await validateVaultExecutable(path) !== resolved) throw unsafe();
+      const directory = await open(dirname(resolved),constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      try { await directory.sync(); } finally { await directory.close(); }
+    } finally { await replacement.close(); }
+    return {changed,mode:mode.toString(8).padStart(4,"0"),sha256:expectedSha256};
+  } finally { await file.close(); if (temporary) await unlink(temporary); }
 }
 
 export function bindingTarget(selector: string, override?: string, allowedOrigins?: string[]) {

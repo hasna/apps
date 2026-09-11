@@ -286,7 +286,10 @@ test("concurrent first-run CLI processes share SQLite without startup-lock failu
 }, 60_000);
 
 test("preset aliases cannot follow endpoint overrides to a different origin", () => {
-  expect(()=>providerFromPreset("deepseek",{harness:"codex"})).toThrow("compatible");
+  const responses=providerFromPreset("deepseek",{harness:"codex"});
+  expect(responses.protocol).toBe("openai-responses");
+  expect(providerCredential(responses,{DEEPSEEK_API_KEY:"fixture-alias"})).toBe("fixture-alias");
+  expect(providerCredential({...responses,baseUrl:"https://other.example/v1"},{DEEPSEEK_API_KEY:"fixture-alias"})).toBeUndefined();
   expect(()=>providerFromPreset("deepseek",{baseUrl:"https://other.example/v1"})).toThrow("credential-env");
   const original=providerFromPreset("deepseek",{harness:"claude"});
   expect(providerCredential(original,{DEEPSEEK_API_KEY:"fixture-alias"})).toBe("fixture-alias");
