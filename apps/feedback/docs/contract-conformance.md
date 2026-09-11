@@ -1,7 +1,7 @@
 # Contract Conformance
 
 Hasna Feedback ships a `hasna.contract.json` describing itself against the
-[Hasna Service Contract v1](https://github.com/hasna/contracts). Run the check
+[Hasna Service Contract v1](https://github.com/hasna/apps/tree/main/apps/contracts). Run the check
 with:
 
 ```bash

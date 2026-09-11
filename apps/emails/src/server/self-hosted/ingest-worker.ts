@@ -13,6 +13,11 @@
 //   - Before writing, we also skip anything already present under the same key
 //     in `message_id` (the local→self_hosted history backfill stored the object key
 //     there), so the live drain never duplicates imported history.
+//   - The object key fences a DELIVERY, not the message (BUG-0050). SES archives one
+//     message under a fresh object for every recipient group it delivers to, so the
+//     write itself additionally adopts a row the tenant already holds for the same
+//     RFC `Message-ID` + sender + subject + receipt instant, unioning the envelope
+//     recipients. See `createInboundMessageWithProvenance`.
 //
 // Failure handling: any fetch/parse/DB error leaves the message on the queue
 // for SQS redelivery; after the queue's maxReceiveCount it lands in the DLQ
