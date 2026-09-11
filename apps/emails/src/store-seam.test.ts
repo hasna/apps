@@ -714,9 +714,9 @@ describe("conformance harness", () => {
     // list EMPTY, and it is strictly stronger: the gap list must now be empty rather
     // than complete.
     expect(capabilityCoverageGaps()).toEqual([]);
-    // THE EXACT LIST, not a floor. A `>=` floor is not a pin: with 62 cases declared, a
-    // floor of 30 lets thirty-one be deleted with this test still green — and the
-    // assertion this one replaced (`CONFORMANCE_CASES` is empty) WAS exact, so a floor
+    // THE EXACT LIST, not a floor. A `>=` floor is not a pin: a floor of any value below
+    // the real case count lets the difference be deleted with this test still green — and
+    // the assertion this one replaced (`CONFORMANCE_CASES` is empty) WAS exact, so a floor
     // would have been a loss of precision at the moment the list started mattering.
     // Adding a case means adding a line here, which is the visible diff the seam's
     // index.ts asks for from every other addition.
@@ -729,6 +729,7 @@ describe("conformance harness", () => {
       "addresses/list-includes-the-created-row",
       "addresses/quota-clear-is-not-a-no-op",
       "attachments/content-lookup-answers-with-the-stored-bytes",
+      "attachments/inventory-answers-a-non-null-received-at",
       "attachments/inventory-scan-emits-every-attachment-exactly-once",
       "attachments/metadata-batch-reports-content-availability",
       "domains/create-then-read-back",
@@ -751,6 +752,7 @@ describe("conformance harness", () => {
       "messages/keyset-scan-emits-every-row-exactly-once",
       "messages/keyset-scan-is-exact-once-across-a-write-during-the-scan",
       "messages/list-filters-narrow-to-the-written-message",
+      "messages/outbound-received-at-is-its-effective-timestamp",
       "messages/raw-mime-carries-the-written-headers",
       "messages/resolve-id-answers-not-found-for-an-unknown-id",
       "messages/search-treats-like-metacharacters-as-literal-text",

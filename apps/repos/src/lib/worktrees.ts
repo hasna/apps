@@ -18,6 +18,18 @@
  * can express a different location. That is the difference between a rule and
  * an enforcement point.
  *
+ * ## Why the org is a path segment
+ *
+ * Owner ruling 2026-09-10: the canonical layout is
+ * `~/.hasna/repos/worktrees/<github-org>/<repo>/<worktree>`. Repository names
+ * collide across orgs — `hasna/apps` and `hasna-products/<x>` share this
+ * station, and their directory names do too — so `<root>/<repo>/<worktree>`
+ * was never a unique address. The org segment comes from the registry row
+ * (`worktreeOrgSegment`), never from an argument, exactly as the repo segment
+ * does. Worktrees created under the previous flat layout are reported by
+ * `list` as `legacy-flat-layout`, with the path they would have today, and are
+ * still reachable by every verb; nothing moves them automatically.
+ *
  * ## Why `remove` refuses to take a path
  *
  * `iapp-factory`'s `addWorktree` opened by force-removing whatever occupied the
@@ -67,10 +79,12 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getDb } from "../db/database.js";
 import {
+  AmbiguousRemoteError,
   AmbiguousRepoNameError,
   RepoIdentityMismatchError,
   getRepo,
   isDerivedCheckoutPath,
+  listReposByRemote,
   resolveIdOrName,
 } from "../db/repos.js";
 import type { Repo } from "../types/index.js";
@@ -163,6 +177,7 @@ export type WorktreeErrorCode =
   | "BRANCH_EXISTS"
   | "REPO_NOT_FOUND"
   | "AMBIGUOUS_REPO"
+  | "REPO_ORG_UNRESOLVABLE"
   | "REPO_IDENTITY_MISMATCH"
   | "PARENT_CHECKOUT_BROKEN"
   | "WORKTREE_PATH_OCCUPIED"
@@ -405,17 +420,104 @@ function safePathSegment(value: string): string {
   return `unsafe-${createHash("sha256").update(value).digest("hex").slice(0, 16)}`;
 }
 
-function assertRepoSegment(name: string): string {
-  if (!NAME_PATTERN.test(name) || name.endsWith(".")) {
-    fail("INVALID_REQUEST", `registry repo name '${name}' is not usable as a directory segment`, {
-      repo: name,
+/**
+ * A stored registry value — the org or the repo name — accepted as exactly one
+ * path segment, or refused. Same alphabet as a worktree name: the containment
+ * argument needs every segment of `<root>/<org>/<repo>/<name>` to be a
+ * segment and never a path expression, whichever table it was read from.
+ */
+export function assertRepoSegment(name: string, label = "registry repo name"): string {
+  if (typeof name !== "string" || !NAME_PATTERN.test(name) || name.endsWith(".")) {
+    const printable = String(name).replace(/[^\x20-\x7e]/g, "?").slice(0, 120);
+    fail("INVALID_REQUEST", `${label} '${printable}' is not usable as a directory segment`, {
+      repo: printable,
     });
   }
   return name;
 }
 
-/** `<root>/<repo-name>/<worktree-name>` — the only shape this module produces. */
-export function computeWorktreePath(repoName: string, worktreeName: string): string {
+/** The owner segment of a sanitized remote identity (`host/owner/repo`). */
+function remoteOwner(remoteUrl: string | null | undefined): string | null {
+  const identity = sanitizeRemoteIdentity(remoteUrl ?? undefined);
+  return identity ? identity.split("/")[1] ?? null : null;
+}
+
+/**
+ * The GitHub org segment of a repo's canonical worktree path.
+ *
+ * Source, in order: the registry row's `org` column — the scanner fills it
+ * from the owner segment of the origin remote (`extractOrg` in
+ * `lib/scanner.ts`), so for every scanned GitHub checkout it IS the GitHub
+ * owner — and, for a row whose `org` is empty, the owner segment of the
+ * sanitized `remote_url`. A row with neither has no GitHub org to be placed
+ * under and is refused with REPO_ORG_UNRESOLVABLE rather than filed under an
+ * invented segment: a made-up org would be the flat layout wearing a new name.
+ */
+export function worktreeOrgSegment(repo: Pick<Repo, "name" | "org" | "remote_url">): string {
+  const stored = typeof repo.org === "string" ? repo.org.trim() : "";
+  const candidate = stored || remoteOwner(repo.remote_url) || "";
+  if (!candidate) {
+    fail("REPO_ORG_UNRESOLVABLE", `registry row '${repo.name}' has no org and no remote to derive one from`, {
+      repo: repo.name,
+      hint: "the canonical layout is <root>/<org>/<repo>/<worktree>; re-scan the checkout so its origin remote fills the org column, or register it with a GitHub remote",
+    });
+  }
+  return assertRepoSegment(candidate, "registry org");
+}
+
+/**
+ * `<root>/<org>/<repo-name>/<worktree-name>` — the only shape this module
+ * produces (owner ruling 2026-09-10). `computeClonePath` nests clones the same
+ * way for the same reason: `hasna/apps` and `hasna-products/apps` must never
+ * share a directory.
+ */
+export function computeWorktreePath(org: string, repoName: string, worktreeName: string): string {
+  return join(
+    worktreeRootDir(),
+    assertRepoSegment(org, "registry org"),
+    assertRepoSegment(repoName),
+    assertWorktreeName(worktreeName),
+  );
+}
+
+/** The canonical path for a registry row's worktree: the org from the row, never from an argument. */
+function canonicalWorktreePathFor(repo: Repo, worktreeName: string): string {
+  return computeWorktreePath(worktreeOrgSegment(repo), repo.name, worktreeName);
+}
+
+/**
+ * The canonical path for a row's worktree, or null when the row cannot place
+ * one (no org, an unusable segment). For reconciliation surfaces, which report
+ * rather than refuse. Never throws a WorktreeError.
+ */
+function canonicalPathOrNull(root: string, row: Repo | null, worktreeName: string): string | null {
+  if (!row) return null;
+  try {
+    return join(root, worktreeOrgSegment(row), assertRepoSegment(row.name), assertWorktreeName(worktreeName));
+  } catch (error) {
+    if (error instanceof WorktreeError) return null;
+    throw error;
+  }
+}
+
+/** `worktreeOrgSegment` for surfaces that report instead of refusing. */
+function orgSegmentOrNull(row: Repo | null): string | null {
+  if (!row) return null;
+  try {
+    return worktreeOrgSegment(row);
+  } catch (error) {
+    if (error instanceof WorktreeError) return null;
+    throw error;
+  }
+}
+
+/**
+ * `<root>/<repo-name>/<worktree-name>` — the layout this module produced
+ * BEFORE the org segment was ratified. Read, never written: `list` names it
+ * `legacy-flat-layout`, `remove` and `adopt` still reach it, and nothing moves
+ * it. Both segments are validated the way the canonical form validates them.
+ */
+export function legacyFlatWorktreePath(repoName: string, worktreeName: string): string {
   return join(worktreeRootDir(), assertRepoSegment(repoName), assertWorktreeName(worktreeName));
 }
 
@@ -458,7 +560,7 @@ export function clonesRootDir(env: NodeJS.ProcessEnv = process.env): string {
  * that both own an `apps` repository cannot collide.
  */
 export function computeClonePath(org: string, repoName: string): string {
-  return join(clonesRootDir(), assertRepoSegment(org), assertRepoSegment(repoName));
+  return join(clonesRootDir(), assertRepoSegment(org, "registry org"), assertRepoSegment(repoName));
 }
 
 // ── repo resolution and parent health ────────────────────────────────────────
@@ -474,6 +576,58 @@ function exactRepoLookup(input: string): string | number {
   return resolveIdOrName(input);
 }
 
+/**
+ * The tie-break for an `<org>/<repo>` reference whose remote has several
+ * usable, non-derived checkouts on this station.
+ *
+ * Measured 2026-09-10: `hasna-products/mailery` matched two rows — the
+ * canonical clone at `<clones-root>/hasna-products/mailery` and an older
+ * `platform-mailery` checkout sharing the remote — and `add` refused the
+ * reference as ambiguous, which made the one unambiguous way of naming a
+ * repository unusable exactly where it was needed. The rule, in order:
+ *
+ *  1. The row whose path IS the canonical clone path for the reference
+ *     (`computeClonePath(org, repo)`, compared after symlink resolution) wins.
+ *     That path is the destination `repos clone` produces and nothing else
+ *     lands there, so it is the checkout the reference means.
+ *  2. Otherwise the single row whose registry `org` and `name` equal the
+ *     reference's `<org>` and `<repo>` wins (GitHub identities are
+ *     case-insensitive, so the comparison is too): the checkout whose
+ *     directory name still matches the repository it was cloned from.
+ *  3. Otherwise the reference is genuinely ambiguous and stays a loud
+ *     AMBIGUOUS_REPO. A bare `<repo>` name is never disambiguated here — only
+ *     the qualified form reaches this function.
+ *
+ * Only the rows the remote lookup already judged usable and non-derived are
+ * considered; this never resurrects a hollow or scratch checkout.
+ */
+function preferCanonicalCheckout(input: string, error: AmbiguousRemoteError): Repo | null {
+  const identity = sanitizeRemoteIdentity(input) ?? sanitizeRemoteIdentity(`github.com/${input.replace(/^\/+/, "")}`);
+  if (!identity) return null;
+  const [, owner, name] = identity.split("/") as [string, string, string];
+  const contenders = new Set(error.paths.map((path) => realpathOrSelf(path)));
+  const rows = listReposByRemote(identity).filter((row) => contenders.has(realpathOrSelf(row.path)));
+  if (rows.length === 0) return null;
+
+  let canonicalClone: string | null = null;
+  try {
+    canonicalClone = realpathOrSelf(computeClonePath(owner, name));
+  } catch (error) {
+    // No resolvable clones root, or a segment the layout cannot hold: rule 1
+    // cannot apply and rule 2 decides.
+    if (!(error instanceof WorktreeError)) throw error;
+  }
+  const atCanonical = canonicalClone ? rows.filter((row) => realpathOrSelf(row.path) === canonicalClone) : [];
+  if (atCanonical.length === 1) return atCanonical[0]!;
+
+  const exact = rows.filter(
+    (row) =>
+      (row.org ?? "").toLowerCase() === owner.toLowerCase() && row.name.toLowerCase() === name.toLowerCase(),
+  );
+  if (exact.length === 1) return exact[0]!;
+  return null;
+}
+
 function resolveRepo(input: string): Repo {
   if (!input || typeof input !== "string") {
     fail("INVALID_REQUEST", "a repo id, path or unique name is required");
@@ -487,6 +641,14 @@ function resolveRepo(input: string): Repo {
     }
     if (error instanceof RepoIdentityMismatchError) {
       fail("REPO_IDENTITY_MISMATCH", error.message, { repo: input, path: error.mismatch.path });
+    }
+    if (error instanceof AmbiguousRemoteError) {
+      const preferred = preferCanonicalCheckout(input, error);
+      if (preferred) return preferred;
+      fail("AMBIGUOUS_REPO", error.message, {
+        repo: input,
+        hint: "several usable checkouts share this remote and none is the canonical clone (<clones-root>/<org>/<repo>) or the single exact <org>/<repo> registry match; pass the checkout's registry id or path",
+      });
     }
     throw error;
   }
@@ -870,14 +1032,17 @@ export function addWorktree(request: AddWorktreeRequest): AddWorktreeResult {
   const worktreeName = assertWorktreeName(request.task ?? request.name);
 
   const repo = resolveRepo(request.repo);
+  // Both stored segments are validated before the parent is even opened: a
+  // registry row cannot steer the path any more than an argument can.
+  const orgSegment = worktreeOrgSegment(repo);
   const repoSegment = assertRepoSegment(repo.name);
   const parent = assertHealthyParent(repo);
 
   const root = worktreeRootDir();
-  const target = join(root, repoSegment, worktreeName);
+  const target = join(root, orgSegment, repoSegment, worktreeName);
   // Belt and braces: the computed path must still land inside the root after
-  // symlink resolution. `<root>/<repo>` may itself be a symlink planted by
-  // something else on a shared station.
+  // symlink resolution. `<root>/<org>` or `<root>/<org>/<repo>` may itself be
+  // a symlink planted by something else on a shared station.
   const resolvedTarget = assertInsideRoot(target, "the computed worktree path");
   if (!isDerivedCheckoutPath(resolvedTarget)) {
     // The path must be classified as a derived checkout, so that a remote
@@ -1032,7 +1197,7 @@ export function addWorktree(request: AddWorktreeRequest): AddWorktreeResult {
     task_id: request.task ?? worktreeName,
     run_id: runId,
     mode: request.mode ?? (request.task ? "task" : "manual"),
-    owner_metadata: JSON.stringify({ base_source: base.source, worktree_name: worktreeName }),
+    owner_metadata: JSON.stringify({ base_source: base.source, worktree_name: worktreeName, org: orgSegment }),
     cleanup_policy: request.cleanupPolicy ?? "delete-if-clean",
     status: "claimed",
     git_common_dir: parent.commonDir,
@@ -1411,40 +1576,53 @@ export interface RemoveWorktreeResult {
 
 type ParsedRef =
   | { kind: "lease"; leaseId: string }
-  | { kind: "pair"; repoName: string; worktreeName: string };
+  | { kind: "pair"; repoName: string; worktreeName: string }
+  | { kind: "triple"; org: string; repoName: string; worktreeName: string };
 
 /**
- * Parse the only two reference shapes a destructive verb accepts.
+ * Parse the only three reference shapes a destructive verb accepts: a lease
+ * id, `<repo>/<worktree>`, or the fully qualified `<org>/<repo>/<worktree>`.
  *
  * Everything path-shaped is rejected here, before resolution — an absolute
- * path, a relative path, a `..` component, a tilde and a three-segment string
- * all fail on shape. That is what makes "remove the wrong directory" an
- * argument this CLI cannot express.
+ * path, a relative path, a `..` component, a tilde, an empty segment and a
+ * four-segment string all fail on shape. Every accepted segment is a plain
+ * slug, so a reference can only ever name a directory under the canonical
+ * root. That is what makes "remove the wrong directory" an argument this CLI
+ * cannot express.
  */
 export function parseWorktreeRef(ref: string): ParsedRef {
   if (typeof ref !== "string" || ref.length === 0 || ref.length > 200 || ref.includes("\0")) {
-    fail("INVALID_REQUEST", "a lease id or <repo>/<worktree> reference is required");
+    fail("INVALID_REQUEST", "a lease id, <repo>/<worktree> or <org>/<repo>/<worktree> reference is required");
   }
   const parts = ref.split("/");
+  const plain = (segment: string) => NAME_PATTERN.test(segment) && !segment.endsWith(".");
   if (parts.length === 1) {
-    if (!NAME_PATTERN.test(ref) || ref.endsWith(".")) {
+    if (!plain(ref)) {
       fail("INVALID_REQUEST", "a lease id must be a single slug token, not a path", { name: ref });
     }
     return { kind: "lease", leaseId: ref };
   }
   if (parts.length === 2) {
     const [repoName, worktreeName] = parts as [string, string];
-    if (
-      !NAME_PATTERN.test(repoName) || repoName.endsWith(".")
-      || !NAME_PATTERN.test(worktreeName) || worktreeName.endsWith(".")
-    ) {
+    if (!plain(repoName) || !plain(worktreeName)) {
       fail("INVALID_REQUEST", "a <repo>/<worktree> reference must be two plain name segments", { name: ref });
     }
     return { kind: "pair", repoName, worktreeName };
   }
-  fail("INVALID_REQUEST", "a filesystem path is not an accepted reference; use a lease id or <repo>/<worktree>", {
-    name: ref.slice(0, 64),
-  });
+  if (parts.length === 3) {
+    const [org, repoName, worktreeName] = parts as [string, string, string];
+    if (!plain(org) || !plain(repoName) || !plain(worktreeName)) {
+      fail("INVALID_REQUEST", "an <org>/<repo>/<worktree> reference must be three plain name segments", {
+        name: ref,
+      });
+    }
+    return { kind: "triple", org, repoName, worktreeName };
+  }
+  fail(
+    "INVALID_REQUEST",
+    "a filesystem path is not an accepted reference; use a lease id, <repo>/<worktree> or <org>/<repo>/<worktree>",
+    { name: ref.slice(0, 64) },
+  );
 }
 
 interface ResolvedTarget {
@@ -1453,6 +1631,29 @@ interface ResolvedTarget {
   branch: string | null;
   parentPath: string | null;
   repoCatalogId: number | null;
+}
+
+/**
+ * The paths a `<repo>/<worktree>` pair can mean, most canonical first.
+ *
+ * The canonical `<root>/<org>/<repo>/<worktree>` needs the org, which only the
+ * registry row knows; the row is resolved the way `add` resolves it, but a
+ * name that is unregistered or ambiguous does not block the verb — a legacy
+ * flat worktree of a repo whose row has since been pruned must still be
+ * removable, or the corpus becomes unmanageable. The flat
+ * `<root>/<repo>/<worktree>` is always the last candidate: it is read for the
+ * pre-ruling corpus and never produced.
+ */
+function candidatePathsForPair(repoName: string, worktreeName: string): string[] {
+  const candidates: string[] = [];
+  try {
+    candidates.push(canonicalWorktreePathFor(resolveRepo(repoName), worktreeName));
+  } catch (error) {
+    if (!(error instanceof WorktreeError)) throw error;
+  }
+  const legacy = legacyFlatWorktreePath(repoName, worktreeName);
+  if (!candidates.includes(legacy)) candidates.push(legacy);
+  return candidates;
 }
 
 function resolveRemovalTarget(db: Database, ref: string): ResolvedTarget {
@@ -1468,23 +1669,33 @@ function resolveRemovalTarget(db: Database, ref: string): ResolvedTarget {
       repoCatalogId: lease.repo_catalog_id,
     };
   }
-  const path = join(worktreeRootDir(), parsed.repoName, parsed.worktreeName);
-  const lease = leaseByPath(db, path);
-  if (lease) {
-    return {
-      path,
-      lease,
-      branch: lease.branch,
-      parentPath: lease.repo_path,
-      repoCatalogId: lease.repo_catalog_id,
-    };
+  // A fully qualified reference names exactly one canonical path and needs no
+  // registry row; a pair is tried at its canonical path first, then at the
+  // legacy flat path.
+  const candidates = parsed.kind === "triple"
+    ? [computeWorktreePath(parsed.org, parsed.repoName, parsed.worktreeName)]
+    : candidatePathsForPair(parsed.repoName, parsed.worktreeName);
+  for (const path of candidates) {
+    const lease = leaseByPath(db, path);
+    if (lease) {
+      return {
+        path,
+        lease,
+        branch: lease.branch,
+        parentPath: lease.repo_path,
+        repoCatalogId: lease.repo_catalog_id,
+      };
+    }
   }
-  if (!existsSync(path)) {
-    fail("LEASE_NOT_FOUND", `no lease and no directory for '${ref}'`, { path });
+  const onDisk = candidates.find((path) => existsSync(path));
+  if (!onDisk) {
+    const details: WorktreeErrorDetails = { path: candidates[0]! };
+    if (candidates.length > 1) details.hint = `looked at: ${candidates.join(", ")}`;
+    fail("LEASE_NOT_FOUND", `no lease and no directory for '${ref}'`, details);
   }
   // An adopted stray: on disk and a real worktree, but never leased. It is
   // still removable, because refusing here would leave the corpus unmanageable.
-  return { path, lease: null, branch: null, parentPath: null, repoCatalogId: null };
+  return { path: onDisk, lease: null, branch: null, parentPath: null, repoCatalogId: null };
 }
 
 /**
@@ -1944,6 +2155,8 @@ export type WorktreeIssue =
   | "no-lease"
   | "missing-directory"
   | "flat-layout"
+  | "legacy-flat-layout"
+  | "layout-mismatch"
   | "nested-layout"
   | "machine-mismatch"
   | "stale"
@@ -1952,6 +2165,8 @@ export type WorktreeIssue =
 
 export interface WorktreeListEntry {
   path: string;
+  /** The org segment of an org-nested path; null for flat and legacy entries. */
+  org: string | null;
   repo_name: string | null;
   worktree_name: string | null;
   lease_id: string | null;
@@ -1962,6 +2177,13 @@ export interface WorktreeListEntry {
   on_disk: boolean;
   is_worktree: boolean;
   issues: WorktreeIssue[];
+  /**
+   * Where this worktree would live under the canonical layout, when the
+   * registry can say — set for `legacy-flat-layout` and `layout-mismatch`
+   * entries whose parent checkout has a registry row. A suggestion only:
+   * nothing here moves a directory.
+   */
+  suggested_path: string | null;
 }
 
 export interface WorktreeListResult {
@@ -1998,15 +2220,33 @@ function listChildDirs(path: string): string[] {
   }
 }
 
+/** A linked worktree or a primary checkout — anything git would open as a working tree. */
+function isCheckoutDir(path: string): boolean {
+  return isLinkedWorktree(path) || existsSync(join(path, ".git"));
+}
+
 /**
  * Walk the root and classify what is actually there against what the leases
  * claim.
  *
- * The classes are the ones measured on this station, not invented ones: a
- * directory that is itself a worktree sitting directly under the root
- * (`flat-layout`), a worktree buried one level deeper than the convention
- * allows — the `station01/` machine segment (`nested-layout`), a lease whose
- * directory is gone, and a lease claimed by another machine.
+ * Canonical is `<root>/<org>/<repo>/<worktree>` — three segments. The classes
+ * are the ones measured on this station, not invented ones:
+ *
+ *  - `flat-layout`: a checkout sitting directly under the root.
+ *  - `legacy-flat-layout`: a worktree at `<root>/<repo>/<worktree>`, the
+ *    layout this module produced before the org segment was ratified
+ *    (2026-09-10). Reported, not blocked — every verb still reaches it — and
+ *    carried with the org-nested path it would have today whenever the
+ *    registry knows its parent checkout. Nothing moves it automatically.
+ *  - `layout-mismatch`: a three-segment path whose parent checkout is
+ *    registered under a different `<org>/<repo>` than the path says. The old
+ *    `station01/<repo>/<worktree>` machine-segment corpus lands here now that
+ *    three segments are canonical by shape. Only detectable when the parent
+ *    checkout has a registry row; a three-segment worktree of an unregistered
+ *    checkout reads as canonical.
+ *  - `nested-layout`: a worktree buried deeper than the canonical three
+ *    segments (`<org>/<repo>/<something>/<worktree>`).
+ *  - a lease whose directory is gone, and a lease claimed by another machine.
  */
 export function listWorktrees(options: WorktreeListOptions = {}): WorktreeListResult {
   const db = options.db ?? getDb();
@@ -2024,6 +2264,7 @@ export function listWorktrees(options: WorktreeListOptions = {}): WorktreeListRe
     if (existing) return existing;
     const entry: WorktreeListEntry = {
       path,
+      org: null,
       repo_name: null,
       worktree_name: null,
       lease_id: null,
@@ -2034,79 +2275,146 @@ export function listWorktrees(options: WorktreeListOptions = {}): WorktreeListRe
       on_disk: existsSync(path),
       is_worktree: false,
       issues: [],
+      suggested_path: null,
       ...seed,
     };
     entries.set(path, entry);
     return entry;
   };
+  const flag = (entry: WorktreeListEntry, issue: WorktreeIssue): void => {
+    if (!entry.issues.includes(issue)) entry.issues.push(issue);
+  };
+  const flagDeadGitdir = (entry: WorktreeListEntry): void => {
+    if (isLinkedWorktree(entry.path) && !linkedGitdirIsLive(entry.path)) flag(entry, "dead-gitdir");
+  };
 
-  for (const repoDir of listChildDirs(root)) {
-    const repoName = repoDir.slice(root.length + 1);
-    if (isLinkedWorktree(repoDir) || existsSync(join(repoDir, ".git"))) {
-      // A worktree (or any checkout) directly under the root: the flat class.
-      const entry = record(repoDir, { worktree_name: repoName, on_disk: true, is_worktree: true });
-      entry.issues.push("flat-layout");
-      if (isLinkedWorktree(repoDir) && !linkedGitdirIsLive(repoDir)) {
-        entry.issues.push("dead-gitdir");
+  // Registry rows keyed by the resolved checkout path, built once and only
+  // when some entry needs its parent looked up: the listing runs over ~2,000
+  // directories on the live root, and a per-entry table scan with a realpath
+  // per row would turn a read-only report into millions of syscalls.
+  let rowsByCheckout: Map<string, Repo> | null = null;
+  const parentRowOf = (worktreePath: string): Repo | null => {
+    const parent = owningParentCheckout(worktreePath);
+    if (!parent) return null;
+    if (!rowsByCheckout) {
+      rowsByCheckout = new Map();
+      for (const row of db.query("SELECT * FROM repos").all() as Repo[]) {
+        rowsByCheckout.set(realpathOrSelf(row.path), row);
       }
+    }
+    return rowsByCheckout.get(realpathOrSelf(parent)) ?? null;
+  };
+
+  for (const orgDir of listChildDirs(root)) {
+    const orgName = orgDir.slice(root.length + 1);
+    if (isCheckoutDir(orgDir)) {
+      // A worktree (or any checkout) directly under the root: the flat class.
+      const entry = record(orgDir, { worktree_name: orgName, on_disk: true, is_worktree: true });
+      flag(entry, "flat-layout");
+      flagDeadGitdir(entry);
       continue;
     }
-    for (const worktreeDir of listChildDirs(repoDir)) {
-      const worktreeName = worktreeDir.slice(repoDir.length + 1);
-      const linked = isLinkedWorktree(worktreeDir);
-      const entry = record(worktreeDir, {
-        repo_name: repoName,
-        worktree_name: worktreeName,
-        on_disk: true,
-        is_worktree: linked,
-      });
-      if (!linked) {
-        // Not a worktree at this depth — either an ordinary directory or a
-        // machine segment holding worktrees one level further down.
-        const deeper = listChildDirs(worktreeDir).filter((child) =>
-          isLinkedWorktree(child) || existsSync(join(child, ".git")));
-        if (deeper.length > 0) {
-          entries.delete(worktreeDir);
-          for (const nested of deeper) {
-            // The repo segment is carried down. Adversarial-review finding P2-5:
-            // leaving it null meant `worktree list <repo>` filtered out a
-            // violation sitting literally inside `<root>/<repo>/` — 218 nested
-            // entries invisible to exactly the query that should surface them.
-            const nestedEntry = record(nested, {
-              repo_name: repoName,
-              worktree_name: nested.slice(worktreeDir.length + 1),
-              on_disk: true,
-              is_worktree: true,
-            });
-            nestedEntry.issues.push("nested-layout");
-            if (!linkedGitdirIsLive(nested)) {
-              nestedEntry.issues.push("dead-gitdir");
-            }
+    // An empty top-level directory (an org whose worktrees were all removed)
+    // is not reported, exactly as an empty repo directory was not before.
+    for (const repoDir of listChildDirs(orgDir)) {
+      const repoName = repoDir.slice(orgDir.length + 1);
+      if (isLinkedWorktree(repoDir)) {
+        // `<root>/<repo>/<worktree>`: the pre-ruling layout. The first
+        // segment is the repo, not an org, and the entry says where the
+        // worktree would sit today when its parent checkout is registered.
+        const entry = record(repoDir, {
+          repo_name: orgName,
+          worktree_name: repoName,
+          on_disk: true,
+          is_worktree: true,
+        });
+        flag(entry, "legacy-flat-layout");
+        entry.suggested_path = canonicalPathOrNull(root, parentRowOf(repoDir), repoName);
+        flagDeadGitdir(entry);
+        continue;
+      }
+      if (isCheckoutDir(repoDir)) {
+        // A primary checkout two deep: not a worktree of anything, and not a
+        // `<org>/<repo>` directory to descend into either.
+        flag(record(repoDir, { repo_name: orgName, worktree_name: repoName, on_disk: true }), "not-a-worktree");
+        continue;
+      }
+      const worktreeDirs = listChildDirs(repoDir);
+      if (worktreeDirs.length === 0) {
+        flag(record(repoDir, { repo_name: orgName, worktree_name: repoName, on_disk: true }), "not-a-worktree");
+        continue;
+      }
+      for (const worktreeDir of worktreeDirs) {
+        const worktreeName = worktreeDir.slice(repoDir.length + 1);
+        if (isLinkedWorktree(worktreeDir)) {
+          // `<root>/<org>/<repo>/<worktree>`: canonical by shape. When the
+          // parent checkout is registered, the shape is checked against the
+          // path the registry would compute for it.
+          const entry = record(worktreeDir, {
+            org: orgName,
+            repo_name: repoName,
+            worktree_name: worktreeName,
+            on_disk: true,
+            is_worktree: true,
+          });
+          const expected = canonicalPathOrNull(root, parentRowOf(worktreeDir), worktreeName);
+          if (expected && expected !== worktreeDir) {
+            flag(entry, "layout-mismatch");
+            entry.suggested_path = expected;
           }
+          flagDeadGitdir(entry);
           continue;
         }
-        entry.issues.push("not-a-worktree");
-      } else if (!linkedGitdirIsLive(worktreeDir)) {
-        // A shape-valid `.git` pointer whose gitdir is gone — the parent
-        // checkout moved or was deleted. git cannot open the worktree, so the
-        // reconciliation surface has to name the class: measured at ~1,600
-        // entries under the live root after the 2026-08-14 monorepo move.
-        entry.issues.push("dead-gitdir");
+        if (isCheckoutDir(worktreeDir)) {
+          flag(
+            record(worktreeDir, { org: orgName, repo_name: repoName, worktree_name: worktreeName, on_disk: true }),
+            "not-a-worktree",
+          );
+          continue;
+        }
+        // Not a worktree at the canonical depth — either an ordinary
+        // directory or a segment holding worktrees one level further down.
+        const deeper = listChildDirs(worktreeDir).filter(isCheckoutDir);
+        if (deeper.length === 0) {
+          flag(
+            record(worktreeDir, { org: orgName, repo_name: repoName, worktree_name: worktreeName, on_disk: true }),
+            "not-a-worktree",
+          );
+          continue;
+        }
+        for (const nested of deeper) {
+          // The org and repo segments are carried down. Adversarial-review
+          // finding P2-5: leaving them null meant `worktree list <repo>`
+          // filtered out a violation sitting literally inside the repo's own
+          // directory — 218 nested entries invisible to exactly the query
+          // that should surface them.
+          const nestedEntry = record(nested, {
+            org: orgName,
+            repo_name: repoName,
+            worktree_name: nested.slice(worktreeDir.length + 1),
+            on_disk: true,
+            is_worktree: true,
+          });
+          flag(nestedEntry, "nested-layout");
+          flagDeadGitdir(nestedEntry);
+        }
       }
     }
   }
 
   for (const lease of leases) {
-    // The repo segment comes from the lease's position under the root, not from
-    // the parent checkout's directory name — those differ (`repos` under
-    // the root, `clones/repos` on disk) and a listing keyed on the wrong
+    // The segments come from the lease's position under the root, not from
+    // the parent checkout's directory name — those differ (`hasna/repos` under
+    // the root, `clones/hasna/repos` on disk) and a listing keyed on the wrong
     // one cannot be filtered by the same name `add` was given.
-    const relativeToRoot = isWithin(root, lease.worktree_path)
+    const segments = isWithin(root, lease.worktree_path)
       ? relative(root, lease.worktree_path).split(sep)
       : [];
+    const worktreeName = lease.worktree_path.split(sep).pop() ?? null;
     const entry = record(lease.worktree_path, {
-      repo_name: relativeToRoot.length >= 2 ? relativeToRoot[0]! : null,
-      worktree_name: lease.worktree_path.split(sep).pop() ?? null,
+      org: segments.length === 3 ? segments[0]! : null,
+      repo_name: segments.length === 3 ? segments[1]! : segments.length === 2 ? segments[0]! : null,
+      worktree_name: worktreeName,
       on_disk: existsSync(lease.worktree_path),
     });
     entry.lease_id = lease.lease_id;
@@ -2114,17 +2422,26 @@ export function listWorktrees(options: WorktreeListOptions = {}): WorktreeListRe
     entry.machine_id = lease.machine_id;
     entry.status = lease.status;
     entry.claimed_at = lease.claimed_at;
-    if (!entry.on_disk) entry.issues.push("missing-directory");
-    if (lease.machine_id !== machineId) entry.issues.push("machine-mismatch");
+    if (segments.length === 2) {
+      // A lease written under the pre-ruling layout. Its row knows the parent
+      // checkout, so the suggestion does not depend on the directory existing.
+      flag(entry, "legacy-flat-layout");
+      if (!entry.suggested_path && worktreeName && lease.repo_catalog_id !== null) {
+        const row = db.query("SELECT * FROM repos WHERE id = ?").get(lease.repo_catalog_id) as Repo | null;
+        entry.suggested_path = canonicalPathOrNull(root, row, worktreeName);
+      }
+    }
+    if (!entry.on_disk) flag(entry, "missing-directory");
+    if (lease.machine_id !== machineId) flag(entry, "machine-mismatch");
     const claimedAt = Date.parse(lease.claimed_at);
     if (Number.isFinite(claimedAt) && now.getTime() - claimedAt > staleDays * 86_400_000) {
-      entry.issues.push("stale");
+      flag(entry, "stale");
     }
   }
 
   for (const entry of entries.values()) {
     if (!entry.lease_id && entry.on_disk && !leaseByWorktreePath.has(entry.path)) {
-      entry.issues.push("no-lease");
+      flag(entry, "no-lease");
     }
   }
 
@@ -2154,8 +2471,20 @@ export interface AdoptWorktreeRequest {
   machineId?: string;
 }
 
+/**
+ * Where an adopted worktree sits relative to the canonical layout. `canonical`
+ * is `<root>/<org>/<repo>/<worktree>` as the registry would compute it;
+ * `legacy-flat` is the pre-ruling `<root>/<repo>/<worktree>`; anything else
+ * (a machine segment, an unregistered parent, a differently named org) is
+ * `other`. Adoption leases all three — a lease is a claim on a worktree
+ * wherever it already is — and moves none of them.
+ */
+export type AdoptedWorktreeLayout = "canonical" | "legacy-flat" | "other";
+
 export interface AdoptedWorktree {
   path: string;
+  /** The org segment the registry would place this worktree under; null when the parent is unregistered or has none. */
+  org: string | null;
   repo_name: string | null;
   worktree_name: string;
   branch: string | null;
@@ -2163,6 +2492,9 @@ export interface AdoptedWorktree {
   lease_id: string | null;
   mode: string;
   already_leased: boolean;
+  layout: AdoptedWorktreeLayout;
+  /** The path `add` would compute for this worktree today, when the registry can say. */
+  canonical_path: string | null;
 }
 
 export interface AdoptWorktreeResult {
@@ -2252,15 +2584,20 @@ export function adoptWorktrees(request: AdoptWorktreeRequest = {}): AdoptWorktre
     }
     candidates.push(resolved);
   } else {
-    for (const repoDir of listChildDirs(root)) {
-      for (const worktreeDir of listChildDirs(repoDir)) {
-        if (isLinkedWorktree(worktreeDir)) {
-          if (linkedGitdirIsLive(worktreeDir)) {
-            candidates.push(worktreeDir);
-          } else {
-            skipped.push({ path: worktreeDir, reason: "dead-gitdir" });
-          }
-        }
+    // Canonical `<org>/<repo>/<worktree>` sits three deep; the pre-ruling flat
+    // `<repo>/<worktree>` two deep. Both are swept — the corpus this verb
+    // exists for was made under the old layout, and the org-nested worktrees
+    // made by hand since the ruling need leases just the same.
+    const consider = (dir: string): boolean => {
+      if (!isLinkedWorktree(dir)) return false;
+      if (linkedGitdirIsLive(dir)) candidates.push(dir);
+      else skipped.push({ path: dir, reason: "dead-gitdir" });
+      return true;
+    };
+    for (const orgDir of listChildDirs(root)) {
+      for (const repoDir of listChildDirs(orgDir)) {
+        if (consider(repoDir)) continue;
+        for (const worktreeDir of listChildDirs(repoDir)) consider(worktreeDir);
       }
     }
   }
@@ -2281,8 +2618,11 @@ export function adoptWorktrees(request: AdoptWorktreeRequest = {}): AdoptWorktre
     const repo = repoRowForCommonDir(db, commonDir);
     const branch = gitOut(path, ["rev-parse", "--abbrev-ref", "HEAD"], { allowFailure: true }) || null;
     const worktreeName = path.split(sep).pop() ?? path;
+    const canonicalPath = canonicalPathOrNull(root, repo, worktreeName);
+    const depth = isWithin(root, path) ? relative(root, path).split(sep).length : 0;
     const record: AdoptedWorktree = {
       path,
+      org: orgSegmentOrNull(repo),
       repo_name: repo?.name ?? null,
       worktree_name: worktreeName,
       branch,
@@ -2290,6 +2630,8 @@ export function adoptWorktrees(request: AdoptWorktreeRequest = {}): AdoptWorktre
       lease_id: existing?.lease_id ?? null,
       mode: "adopted",
       already_leased: Boolean(liveLease),
+      layout: canonicalPath === path ? "canonical" : depth === 2 ? "legacy-flat" : "other",
+      canonical_path: canonicalPath,
     };
 
     if (request.apply && !liveLease) {

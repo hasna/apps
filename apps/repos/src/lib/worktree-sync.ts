@@ -36,7 +36,16 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join, resolve } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 
-import { computeWorktreePath, redactGitDiagnostics } from "./worktrees.js";
+import {
+  WorktreeError,
+  assertRepoSegment,
+  assertWorktreeName,
+  computeWorktreePath,
+  legacyFlatWorktreePath,
+  redactGitDiagnostics,
+  worktreeOrgSegment,
+} from "./worktrees.js";
+import { sanitizeRemoteIdentity } from "./remote-identity.js";
 import { getSourceMachineId } from "./machine-id.js";
 import { getRepo } from "../db/repos.js";
 
@@ -704,11 +713,81 @@ export function resolveWorktreeRemote(env: NodeJS.ProcessEnv = process.env): Wor
 
 // ── the verbs ───────────────────────────────────────────────────────────────
 
-export interface PushWorktreeOptions {
+/**
+ * Where a sync verb finds (or places) the worktree on this station.
+ *
+ * The canonical path is `<root>/<org>/<repo>/<worktree>`, and the org is not
+ * part of the artifact remote's key (`worktrees/<repo>/<worktree>/<version>/`
+ * is unchanged), so it has to come from somewhere: the `<org>/<repo>/<name>`
+ * reference form when the caller spelled it, else the registry row for
+ * `<repo>` (the same `org` source `repos worktree add` uses), else — for
+ * `pull --parent-checkout` on a fresh station with no row — the owner of the
+ * parent checkout's origin remote. A pre-ruling worktree still sitting at the
+ * flat `<root>/<repo>/<worktree>` is found there when nothing occupies the
+ * canonical path; nothing is ever materialised at the flat path.
+ */
+export interface WorktreePlacementOptions {
+  /** The GitHub org segment; resolved from the registry (or the parent checkout) when omitted. */
+  org?: string;
+}
+
+export interface PushWorktreeOptions extends WorktreePlacementOptions {
   remote?: WorktreeSyncRemote;
   /** Explicit version; defaults to the current RFC 3339 timestamp. */
   version?: string;
   agent?: string;
+}
+
+function registryOrg(repoName: string): string | null {
+  try {
+    const repo = getRepo(repoName);
+    return repo ? worktreeOrgSegment(repo) : null;
+  } catch (error) {
+    // No registry on this machine, an ambiguous name, or a row that cannot
+    // be placed: not an answer, and the caller has other sources.
+    if (error instanceof Error) return null;
+    throw error;
+  }
+}
+
+function parentCheckoutOrg(parentCheckout: string | undefined): string | null {
+  if (!parentCheckout || !existsSync(parentCheckout)) return null;
+  const url = runGit(parentCheckout, ["remote", "get-url", "origin"]);
+  if (!url.ok) return null;
+  const identity = sanitizeRemoteIdentity(gitText(url.stdout));
+  return identity ? identity.split("/")[1] ?? null : null;
+}
+
+/**
+ * The path a sync verb operates on. `mustExist` is the push/sync side (the
+ * worktree is already here, canonical or legacy); pull always computes the
+ * canonical target and never falls back to the flat layout.
+ */
+function placeSyncWorktree(
+  repoName: string,
+  worktreeName: string,
+  options: WorktreePlacementOptions & { parentCheckout?: string; mustExist: boolean },
+): string {
+  const org = options.org ?? registryOrg(repoName) ?? parentCheckoutOrg(options.parentCheckout);
+  const canonical = org ? computeWorktreePath(org, repoName, worktreeName) : null;
+  if (canonical && (!options.mustExist || existsSync(canonical))) return canonical;
+  if (options.mustExist) {
+    const legacy = legacyFlatWorktreePath(repoName, worktreeName);
+    if (existsSync(legacy)) return legacy;
+  }
+  if (!canonical) {
+    syncFail("WORKTREE_NOT_FOUND", "the worktree's GitHub org could not be resolved, so its canonical path is unknown", {
+      repo: repoName,
+      name: worktreeName,
+      hint: "reference the worktree as <org>/<repo>/<worktree>, or register the parent checkout so the registry knows its org",
+    });
+  }
+  syncFail("WORKTREE_NOT_FOUND", "no worktree at the canonical path", {
+    path: canonical,
+    repo: repoName,
+    name: worktreeName,
+    hint: "create it first with `repos worktree add <repo> --name <name>` (or `--task <id>`)",
+  });
 }
 
 export interface PushWorktreeResult {
@@ -741,15 +820,7 @@ export async function pushWorktree(
     );
   }
 
-  const path = computeWorktreePath(repoName, worktreeName);
-  if (!existsSync(path)) {
-    syncFail("WORKTREE_NOT_FOUND", "no worktree at the canonical path", {
-      path,
-      repo: repoName,
-      name: worktreeName,
-      hint: "create it first with `repos worktree add <repo> --name <name>` (or `--task <id>`)",
-    });
-  }
+  const path = placeSyncWorktree(repoName, worktreeName, { org: options.org, mustExist: true });
 
   const state = readWorktreeGitState(path);
   const bundle = packWorktreeSyncBundle(path);
@@ -792,7 +863,7 @@ export async function pushWorktree(
   };
 }
 
-export interface PullWorktreeOptions {
+export interface PullWorktreeOptions extends WorktreePlacementOptions {
   remote?: WorktreeSyncRemote;
   /** Exact version to pull; defaults to the newest published version. */
   version?: string;
@@ -828,7 +899,11 @@ export async function pullWorktree(
   options: PullWorktreeOptions = {},
 ): Promise<PullWorktreeResult> {
   const remote = options.remote ?? new WorktreeSyncRemote(resolveWorktreeRemote());
-  const target = computeWorktreePath(repoName, worktreeName);
+  const target = placeSyncWorktree(repoName, worktreeName, {
+    org: options.org,
+    parentCheckout: options.parentCheckout,
+    mustExist: false,
+  });
   if (existsSync(target)) {
     syncFail("MATERIALIZED_ALREADY", "a directory already occupies the canonical worktree path", {
       path: target,
@@ -1068,6 +1143,8 @@ export async function syncWorktree(
 // ── ref parsing and parent resolution ───────────────────────────────────────
 
 export interface ParsedSyncRef {
+  /** Present only for the fully qualified `<org>/<repo>/<worktree>` form. */
+  org?: string;
   repoName: string;
   worktreeName: string;
   version?: string;
@@ -1076,23 +1153,41 @@ export interface ParsedSyncRef {
 /** Parse `<repo>/<name>` with an optional `@<version>` suffix. Paths are refused on shape. */
 export function parseSyncRef(ref: string): ParsedSyncRef {
   if (typeof ref !== "string" || ref.length === 0 || ref.length > 260 || ref.includes("\0")) {
-    syncFail("WORKTREE_NOT_FOUND", "a <repo>/<worktree> reference is required (optionally <repo>/<worktree>@<version>)");
+    syncFail(
+      "WORKTREE_NOT_FOUND",
+      "a <repo>/<worktree> or <org>/<repo>/<worktree> reference is required (optionally @<version>)",
+    );
   }
   const at = ref.lastIndexOf("@");
   const refPart = at > 0 ? ref.slice(0, at) : ref;
   const version = at > 0 ? ref.slice(at + 1) : undefined;
   const parts = refPart.split("/");
-  if (parts.length !== 2 || !parts[0] || !parts[1]) {
-    syncFail("WORKTREE_NOT_FOUND", "a sync reference must be exactly <repo>/<worktree> (optionally @<version>)", {
-      name: ref.slice(0, 64),
-    });
+  if ((parts.length !== 2 && parts.length !== 3) || parts.some((part) => !part)) {
+    syncFail(
+      "WORKTREE_NOT_FOUND",
+      "a sync reference must be exactly <repo>/<worktree> or <org>/<repo>/<worktree> (optionally @<version>)",
+      { name: ref.slice(0, 64) },
+    );
   }
   if (version !== undefined && version.length === 0) {
     syncFail("WORKTREE_NOT_FOUND", "a version after '@' must not be empty", { name: ref.slice(0, 64) });
   }
-  // The canonical path computation is the single source of name validation.
-  computeWorktreePath(parts[0]!, parts[1]!);
-  return { repoName: parts[0]!, worktreeName: parts[1]!, version };
+  // The canonical path computation's own segment validation is the single
+  // source of name validation; the org is only known here when spelled. A
+  // segment it refuses is a malformed sync reference, reported in this
+  // module's own error class so every CLI surface prints the typed envelope.
+  try {
+    if (parts.length === 3) {
+      computeWorktreePath(parts[0]!, parts[1]!, parts[2]!);
+      return { org: parts[0]!, repoName: parts[1]!, worktreeName: parts[2]!, version };
+    }
+    assertRepoSegment(parts[0]!);
+    assertWorktreeName(parts[1]!);
+    return { repoName: parts[0]!, worktreeName: parts[1]!, version };
+  } catch (error) {
+    if (!(error instanceof WorktreeError)) throw error;
+    syncFail("WORKTREE_NOT_FOUND", `not a usable sync reference: ${error.message}`, { name: ref.slice(0, 64) });
+  }
 }
 
 /** Resolve the parent checkout: db row when one exists, else fail closed. */

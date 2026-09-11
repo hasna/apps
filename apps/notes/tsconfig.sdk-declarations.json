@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowJs": true,
+    "checkJs": true,
+    "strict": true,
+    "skipLibCheck": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "noEmitOnError": true,
+    "rootDir": ".",
+    "outDir": ".sdk-types",
+    "types": ["node"]
+  },
+  "include": ["sdk/index.mjs"],
+  "exclude": ["node_modules", ".sdk-types"]
+}

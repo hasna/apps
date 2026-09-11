@@ -80,7 +80,9 @@
     "!hooks/*/dist/",
     "scripts/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "!hooks/**/*.test.ts",
+    "!hooks/**/tsconfig.json"
   ],
   "homepage": "https://github.com/hasna/hooks#readme",
   "bugs": {

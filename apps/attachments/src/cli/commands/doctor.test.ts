@@ -32,6 +32,12 @@ describe("doctor canonical diagnostic", () => {
     globalThis.fetch = (async (url, init) => { calls++; expect(String(url)).toContain("https://attachments.example.test/v1/attachments"); expect(new Headers(init?.headers).get("authorization")).toBe("Bearer diagnostic-test-key"); expect(init?.redirect).toBe("error"); return Response.json([]); }) as typeof fetch;
     const { stdout, stderr } = await run(); expect(stdout).toContain("authorized and reachable"); expect(stdout).not.toContain("diagnostic-test-key"); expect(stderr).toBe(""); expect(calls).toBe(1);
   });
+  test("states the remote-only transport contract and advertises no local preferences path (BUG-0048)", async () => {
+    globalThis.fetch = (async () => Response.json([])) as typeof fetch;
+    const { stdout } = await run();
+    expect(stdout).toContain("Transport: authenticated HTTPS (remote-only; no local fallback)");
+    expect(stdout).not.toContain("Preferences");
+  });
   for (const status of [401, 403, 500]) test("reports blocked for HTTP " + status, async () => {
     globalThis.fetch = (async () => new Response("sensitive-response", { status })) as typeof fetch;
     const { stdout, stderr } = await run(); expect(stderr).toContain("BLOCKED"); expect(stdout).toBe(""); expect(stderr).not.toContain("sensitive-response"); expect(process.exitCode).toBe(1);

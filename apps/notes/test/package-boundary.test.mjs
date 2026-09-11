@@ -18,8 +18,9 @@ describe('package boundary', () => {
     expect(pkg.name).toBe('@hasna/notes');
     expect(pkg.bin.notes).toBe('bin/notes.mjs');
     expect(pkg.bin['notes-mcp']).toBe('bin/notes-mcp.mjs');
-    expect(pkg.exports['.']).toBe('./sdk/index.mjs');
-    expect(pkg.exports['./sdk']).toBe('./sdk/index.mjs');
+    expect(pkg.exports['.']).toEqual({ types: './sdk/index.d.mts', default: './sdk/index.mjs' });
+    expect(pkg.exports['./sdk']).toEqual(pkg.exports['.']);
+    expect(pkg.types).toBe('./sdk/index.d.mts');
     expect(pkg.exports['./compat/markdown-format']).toBe('./compat/markdown-format.mjs');
     expect(pkg.exports['./events']).toBe('./tools/notes-events.mjs');
     expect(pkg.dependencies['@hasna/events']).toBe('0.1.16');

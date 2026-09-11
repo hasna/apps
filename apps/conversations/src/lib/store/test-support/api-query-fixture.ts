@@ -49,11 +49,35 @@ export function makeFakeClient(
     concurrentAttempt: ReturnType<typeof deferred>;
     pauseConsumed: boolean;
   } = null;
+  // The channel-membership rule (channelListingMatchSql in
+  // src/lib/channel-names.ts), in the direction a channel-side count needs: a
+  // message belongs to channel `name` when its channel column IS that name, or
+  // when it has no channel at all and was ADDRESSED to that name. Mirrors the
+  // real predicate so a channel's message_count agrees with its listing.
+  function channelHasMessage(message: any, name: string): boolean {
+    if (message.channel != null) return String(message.channel).toLowerCase() === String(name).toLowerCase();
+    return String(message.to_agent ?? "").toLowerCase() === String(name).toLowerCase();
+  }
+
   function messageRows(sql: string, params: readonly unknown[]): any[] {
     let rows = messages.slice();
     const where = sql.slice(sql.indexOf("WHERE") + 5);
+    // The channel-membership predicate (channelListingMatchSql in
+    // src/lib/channel-names.ts): the channel column IS the name, OR the row has
+    // no channel and was ADDRESSED to that name. Emulated before the generic
+    // equality loop so the bare `channel = $n` inside the predicate is not
+    // applied as a strict filter, which would hide exactly the rows BUG-0062 is
+    // about.
+    const channelListing = where.match(/\(channel = \$(\d+) OR \(channel IS NULL AND lower\(to_agent\) = lower\(\$\d+\)\)\)/i);
+    if (channelListing) {
+      const value = String(params[Number(channelListing[1]) - 1]).toLowerCase();
+      rows = rows.filter(row =>
+        (row.channel != null && String(row.channel).toLowerCase() === value)
+        || (row.channel == null && String(row.to_agent ?? "").toLowerCase() === value));
+    }
     for (const match of where.matchAll(/(?:\b(?:m|messages)\.)?\b(id|uuid|channel|session_id|project_id|to_agent|from_agent|reply_to)\s*(=|<>|>)\s*\$(\d+)/gi)) {
       const [, field, op, position] = match;
+      if (field.toLowerCase() === "channel" && channelListing) continue;
       const value = params[Number(position) - 1];
       rows = rows.filter(row => op === "=" ? String(row[field]) === String(value) : op === "<>" ? String(row[field]) !== String(value) : Number(row[field]) > Number(value));
     }
@@ -185,7 +209,7 @@ export function makeFakeClient(
         return Object.values(channels).map((row) => ({
           ...row,
           member_count: [...channelMembers].filter((entry) => entry.startsWith(`${row.name}:`)).length,
-          message_count: messages.filter((message) => message.channel === row.name).length,
+          message_count: messages.filter((message) => channelHasMessage(message, row.name)).length,
         }));
       }
       if (/WITH latest AS/i.test(sql) && /legacy_ids AS/i.test(sql)) {
@@ -826,7 +850,7 @@ export function makeFakeClient(
           ? {
               ...row,
               member_count: [...channelMembers].filter((entry) => entry.startsWith(`${row.name}:`)).length,
-              message_count: messages.filter((message) => message.channel === row.name).length,
+              message_count: messages.filter((message) => channelHasMessage(message, row.name)).length,
             }
           : null;
       }

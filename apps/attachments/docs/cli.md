@@ -43,6 +43,30 @@ endpoint, no local database, no client DSN and no fallback. Run
   requires the Sessions equivalent. URL overrides must match the configured
   authority and prefix.
 
+### Diagnostic transport contract
+
+The healthy `status` / `doctor` report is a stable, parseable contract:
+
+```
+Transport: authenticated HTTPS (remote-only; no local fallback)
+API: <resolved service origin>
+API key source: <source name> (<tier>)
+Health: authorized and reachable
+Sample records: <n>
+```
+
+Consumers key on the `Transport:` line. The `remote-only; no local fallback`
+marker is the **replacement for the pre-1.2.0 `Mode:` line**, which was retired
+along with the local SQLite / `localhost:3459` fallback; a `Mode:` line is no
+longer emitted and nothing in the report implies a local dataset. The
+`Preferences:` line was removed (BUG-0048): the resolved local config file is
+**non-authoritative for transport** — it holds non-transport preferences only
+(`config set --expiry` / `--link-type`) — and naming it in a transport
+diagnostic made healthy remote-only CLIs read as unconfigured. Credentials and
+the service authority always come from the shared resolver chain above, never
+from a local config path. On failure the report is BLOCKED on stderr with exit
+1, and states that no local fallback exists.
+
 Metadata-only agent attribution and user preferences are non-authoritative local
 state. Configuration resolution uses @hasna/paths; no legacy dataset is imported.
 

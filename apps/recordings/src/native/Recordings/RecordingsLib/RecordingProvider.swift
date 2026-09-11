@@ -75,10 +75,10 @@ public protocol RecordingTranscriptionProvider: Sendable {
 }
 
 public protocol RecordingTranscriptionSession: Sendable {
-    /// Called in capture order, in roughly 100 ms chunks, off the audio callback.
+    /// Called in capture order with variable-sized admitted PCM packets, off the audio
+    /// callback. Empty packets are omitted; all admitted packets precede inputEnded().
     /// Return promptly. Providers must bound any queue while connecting or sending.
-    /// The final short chunk is delivered before finish. An in-flight append may race cancel;
-    /// a cancelled session must ignore it.
+    /// An in-flight append may race cancel; a cancelled session must ignore it.
     func appendPCM(_ data: Data)
     /// Called once after all capture/converter PCM drains, before the fallback WAV is written.
     /// Streaming providers may close input now and cache an early final result. Return promptly;

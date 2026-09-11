@@ -1,3 +1,4 @@
+import { assertReservationCents } from "./amounts.js";
 /**
  * Run protocol + atomic run services seam.
  *
@@ -149,7 +150,7 @@ export interface RunServiceGovernance {
   events?: RunEventEmitter;
   /** Resource envelope this run requests, checked against the org ceilings. */
   quota?: RunQuota;
-  /** Estimated cost in cents, reserved before dispatch. */
+  /** Estimated integer cents (0..2147483647), reserved before dispatch. */
   estimatedCents?: number;
 }
 
@@ -157,19 +158,22 @@ export interface RunServiceGovernance {
 export function createRunService({ store, governance }: RunServiceOptions): RunService {
   return {
     async admit(input) {
+      // Own the validated amount before an offline/store callback can yield.
+      const estimatedCents = governance?.estimatedCents;
+      if (estimatedCents !== undefined) assertReservationCents(estimatedCents, "estimatedCents");
       if (governance) {
         await governance.offline?.assertCanRunLocal(input.slug);
         await governance.spend?.admit({
           principal: input.principal,
           slug: input.slug,
           quota: governance.quota,
-          estimatedCents: governance.estimatedCents,
+          estimatedCents,
         });
       }
       const run = await store.createRun(input);
       if (governance) {
-        if (governance.spend && governance.estimatedCents !== undefined) {
-          await governance.spend.reserve(run.orgId, run.id, governance.estimatedCents);
+        if (governance.spend && estimatedCents !== undefined) {
+          await governance.spend.reserve(run.orgId, run.id, estimatedCents);
         }
         await governance.events?.emit("skills.run.admitted", run);
       }
@@ -192,8 +196,10 @@ export async function settleRun(
   run: ServerRunRecord,
   actualCents?: number,
 ): Promise<void> {
+  const amount = actualCents === undefined ? run.costCents : actualCents;
+  assertReservationCents(amount, "actualCents");
   if (options.spend) {
-    await options.spend.reconcile(run.orgId, run.id, actualCents ?? run.costCents);
+    await options.spend.reconcile(run.orgId, run.id, amount);
   }
   if (options.events) {
     const type = run.status === "cancelled" ? "skills.run.cancelled" : "skills.run.terminal";

@@ -19,9 +19,10 @@ import { selectsRecordingsLocalStore } from "../lib/local-opt-in.js";
 import { getRecordingsTransportStatus } from "../http/client.js";
 
 // ── Initialize ──────────────────────────────────────────────────────────────
-// Config is loaded eagerly for the transcription/enhancement tools. Storage is
+// Only constructing the legacy server loads provider configuration. Storage is
 // resolved lazily per call via `getStore()` so cloud mode never opens SQLite.
 
+export function buildServer(): McpServer {
 const config = loadConfig();
 
 function runtimeConfig(): typeof config {
@@ -32,7 +33,6 @@ function runtimeConfig(): typeof config {
   };
 }
 
-export function buildServer(): McpServer {
 const server = new McpServer({
   name: "recordings",
   version: VERSION,
@@ -893,6 +893,8 @@ Start the @hasna/recordings MCP server.
 
 Options:
   --stdio        Serve MCP over stdio (Codex/Claude agent form)
+  --hosted       Read-only SaaS Library mode; requires --stdio, --api-base <complete-v1-url>
+                 and --credential-env <environment-variable-name>
   --http         Serve MCP over the shared Streamable HTTP endpoint
   --port <port>  HTTP port to bind. Defaults to ${DEFAULT_MCP_HTTP_PORT} (or $MCP_HTTP_PORT)
   -V, --version  output the version number
@@ -912,6 +914,15 @@ async function main(): Promise<void> {
   }
   if (args.includes("--help") || args.includes("-h")) {
     printHelp();
+    return;
+  }
+  if (args.includes("--hosted")) {
+    const { parseHostedProcessOptions, hostedProcessClient, hostedFailure } = await import("../hosted/process-options.js");
+    try {
+      const options = parseHostedProcessOptions(args, "mcp");
+      const { buildHostedServer } = await import("./hosted.js");
+      await buildHostedServer(hostedProcessClient(options)).connect(new StdioServerTransport());
+    } catch (error) { console.error(JSON.stringify(hostedFailure(error))); process.exitCode = 1; }
     return;
   }
 
@@ -937,7 +948,7 @@ async function main(): Promise<void> {
     );
     // A failed-closed hosted server must not create local store directories as
     // a startup side effect; only an opted-in local server may touch them.
-    ensureDataDir(config);
+    ensureDataDir(loadConfig());
   }
 
   if (isStdioMode(args)) {

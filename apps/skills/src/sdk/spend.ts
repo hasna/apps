@@ -1,3 +1,4 @@
+import { assertCents, assertReservationCents } from "./amounts.js";
 /**
  * Spend governance: credit reservations and org ceilings, enforced at admission.
  *
@@ -9,8 +10,10 @@
  * actual cost is charged (status "charged") or, when nothing was used, the
  * reservation is released ("released") - the unused half never lingers.
  *
- * All numbers are cents; a ceiling is a finite integer, never an open-ended
- * budget.
+ * Each reservation or charge uses integer cents from 0 through 2147483647,
+ * matching the supported PostgreSQL and SQLite schema. Monthly ceilings and
+ * aggregates may exceed that per-row limit but must remain JavaScript-safe
+ * nonnegative integers. Invalid amounts throw RangeError before store access.
  */
 import type { ApiPrincipal } from "../server/types.js";
 import { DEFAULT_SPEND_CEILINGS, GOVERNANCE_ERROR_CODES, GovernanceError, type RunQuota, type SpendCeilings } from "./governance.js";
@@ -20,6 +23,7 @@ export interface SpendAdmissionInput {
   principal: ApiPrincipal;
   slug: string;
   quota?: RunQuota;
+  /** Integer cents from 0 through 2147483647; omission estimates zero. */
   estimatedCents?: number;
   now?: Date;
 }
@@ -37,6 +41,8 @@ export function createSpendService(options: { governanceStore: GovernanceStore; 
   const store = options.governanceStore;
   const ceilings: SpendCeilings = { ...DEFAULT_SPEND_CEILINGS, ...options.ceilings, perRun: { ...DEFAULT_SPEND_CEILINGS.perRun, ...options.ceilings?.perRun } };
 
+  assertCents(ceilings.monthlyTotalCents, "monthlyTotalCents");
+
   function exhaust(ceiling: string, detail: string): never {
     throw new GovernanceError(
       GOVERNANCE_ERROR_CODES.RUN_BUDGET_EXHAUSTED,
@@ -47,6 +53,8 @@ export function createSpendService(options: { governanceStore: GovernanceStore; 
 
   return {
     async admit(input) {
+      const estimated = input.estimatedCents === undefined ? 0 : input.estimatedCents;
+      assertReservationCents(estimated, "estimatedCents");
       const quota = input.quota ?? ceilings.perRun;
       const perRun = ceilings.perRun;
       const over = (label: keyof RunQuota, requested: number, allowed: number): boolean => requested > allowed;
@@ -64,17 +72,19 @@ export function createSpendService(options: { governanceStore: GovernanceStore; 
       const now = input.now ?? new Date();
       const monthPrefix = now.toISOString().slice(0, 7);
       const monthly = await store.monthlySpendCents(input.principal.orgId, monthPrefix);
-      const estimated = input.estimatedCents ?? 0;
-      if (monthly + estimated > ceilings.monthlyTotalCents) {
+      assertCents(monthly, "monthlySpendCents");
+      if (estimated > ceilings.monthlyTotalCents - monthly) {
         exhaust("monthly", `org spend for ${monthPrefix} is ${monthly} cents and this run estimates ${estimated}; monthly ceiling is ${ceilings.monthlyTotalCents} cents`);
       }
     },
 
     async reserve(tenantId, runId, estimatedCents) {
+      assertReservationCents(estimatedCents, "estimatedCents");
       return store.createReservation({ orgId: tenantId, runId, estimatedCents });
     },
 
     async reconcile(tenantId, runId, actualCents) {
+      assertReservationCents(actualCents, "actualCents");
       const reservations = await store.reservationsForRun(tenantId, runId);
       const open = reservations.find((reservation) => reservation.status === "reserved");
       if (!open) return null;

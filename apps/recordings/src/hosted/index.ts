@@ -2,6 +2,7 @@ import * as contract from "../contracts/hosted-v1.js";
 import { recordingIDParser } from "../contracts/stream-v1.js";
 import { input, output, Transport, type ClientOptions, type RequestOptions } from "./transport.js";
 export { RecordingsSDKError, type SDKErrorCode, type CredentialProvider, type ClientOptions, type RequestOptions } from "./transport.js";
+export { HostedLibrary, type HostedLibraryOptions, type HostedLibraryRecording, type HostedLibraryPage } from "./library.js";
 export type { HostedRecordingInput as RecordingInput, HostedRecording as Recording, HostedPasteInput as PasteInput,
   HostedPasteReceipt as PasteReceipt, HostedAccount as Account, HostedAccountResponse as AccountResponse,
   HostedPageOptions as PageOptions } from "../contracts/hosted-v1.js";

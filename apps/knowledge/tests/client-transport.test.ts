@@ -19,6 +19,7 @@ import {
   KNOWLEDGE_API_URL_ENV,
   KNOWLEDGE_DEFAULT_API_URL,
   KNOWLEDGE_LOCAL_OPT_IN_ENV,
+  KnowledgeSourceUnavailableError,
   RetiredKnowledgeStorageSelectorError,
   resetKnowledgeLocalModeNotice,
   resolveKnowledgeClientTransport,
@@ -182,6 +183,43 @@ describe('Knowledge client transport', () => {
       // No local-mode announcement, no fallback notice: the failure is loud
       // and it is the only thing that is loud.
       expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  test('a fail-closed rejection is TYPED and carries a machine-readable source-unavailable detail', () => {
+    // BUG-0044: the KNOWLEDGE source going dark on a host was recorded by hand
+    // because the CLI only produced prose. The rejection now carries the answer
+    // a run branches on — and no value, and no authority URL, either: the
+    // resolution refused a URL, so it must not echo one back.
+    const errSpy = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      let caught: unknown;
+      try {
+        resolveKnowledgeClientTransport({ [KNOWLEDGE_API_URL_ENV]: 'https://knowledge.example.test' });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(KnowledgeSourceUnavailableError);
+      const rejection = caught as KnowledgeSourceUnavailableError;
+      expect(rejection.code).toBe('source_unavailable');
+      expect(rejection.status).toBe('unavailable');
+      expect(rejection.detail).toMatchObject({
+        status: 'unavailable',
+        credential_source: 'none',
+        local_opt_in_present: false,
+      });
+      expect(Array.isArray(rejection.detail.credential_file_candidates)).toBe(true);
+      expect(rejection.detail.credential_env_keys).toContain(KNOWLEDGE_API_KEY_ENV);
+      expect(rejection.detail.reason).toMatch(/no API key could be resolved/);
+      // Value-free and authority-free, on every field of the detail.
+      const serialized = JSON.stringify(rejection.detail);
+      expect(serialized).not.toContain('https://knowledge.example.test');
+      // And still an Error with the original prose, so nothing that caught the
+      // old shape breaks.
+      expect(rejection).toBeInstanceOf(Error);
+      expect(rejection.message).toMatch(/no local fallback/);
     } finally {
       errSpy.mockRestore();
     }
