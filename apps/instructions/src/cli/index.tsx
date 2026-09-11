@@ -2042,6 +2042,80 @@ program
     }
   });
 
+/** Drop a TOML line comment, ignoring `#` inside a quoted key or value. */
+function stripTomlComment(line: string): string {
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (quote) {
+      if (quote === '"' && ch === "\\") i++;
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === "#") {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
+/**
+ * Parse a TOML table header line into its dotted key PARTS, or null when the
+ * line is not a table header. Covers the equivalent ways a real header may be
+ * written — `[a.b]`, `[a.b] # comment`, `[ a . b ]`, `["a"."b"]`, `[[a.b]]` —
+ * while rejecting lines that merely mention the text (comments, quoted values)
+ * and the quoted single key `["a.b"]`, which names ONE key and is not the
+ * nested table `a.b`.
+ */
+function tomlTableHeaderParts(line: string): string[] | null {
+  let body = stripTomlComment(line).trim();
+  if (body.startsWith("[[")) {
+    if (!body.endsWith("]]")) return null;
+    body = body.slice(2, -2);
+  } else if (body.startsWith("[")) {
+    if (!body.endsWith("]")) return null;
+    body = body.slice(1, -1);
+  } else {
+    return null;
+  }
+  const inner = body.trim();
+  if (!inner) return null;
+  const parts: string[] = [];
+  let i = 0;
+  while (i < inner.length) {
+    while (i < inner.length && /\s/.test(inner[i]!)) i++;
+    if (i >= inner.length) break;
+    const quote = inner[i] === '"' || inner[i] === "'" ? inner[i] : null;
+    let part = "";
+    if (quote) {
+      i++;
+      while (i < inner.length && inner[i] !== quote) {
+        if (quote === '"' && inner[i] === "\\") {
+          i++;
+          if (i >= inner.length) break;
+        }
+        part += inner[i]!;
+        i++;
+      }
+      if (i >= inner.length) return null; // unterminated quoted key
+      i++; // closing quote
+    } else {
+      while (i < inner.length && inner[i] !== "." && !/\s/.test(inner[i]!)) {
+        part += inner[i]!;
+        i++;
+      }
+    }
+    if (!part) return null;
+    parts.push(part);
+    while (i < inner.length && /\s/.test(inner[i]!)) i++;
+    if (i < inner.length) {
+      if (inner[i] !== ".") return null;
+      i++;
+    }
+  }
+  return parts.length > 0 ? parts : null;
+}
+
 /**
  * Locate a TOML table by its header LINE, as a half-open `[start, end)` range
  * of line indexes (the header line through the line before the next table
@@ -2053,10 +2127,19 @@ program
  * at such an offset ends the prefix mid-comment or mid-string, so the next
  * table header is glued onto it — commenting out the user's OTHER server and
  * leaving an unterminated TOML string.
+ *
+ * Matching the header by exact text is not enough either: TOML allows a
+ * trailing comment on the header line (`[mcp_servers.configs] # hasna
+ * managed`). A miss there makes install append a SECOND `[mcp_servers.configs]`
+ * table — invalid TOML, so Codex can no longer parse its config — while
+ * uninstall reports "not installed" and leaves the server registered.
  */
 function findTomlTableLines(lines: string[], table: string): { start: number; end: number } | null {
-  const header = `[${table}]`;
-  const start = lines.findIndex((line) => line.trim() === header);
+  const want = table.split(".");
+  const start = lines.findIndex((line) => {
+    const parts = tomlTableHeaderParts(line);
+    return parts !== null && parts.length === want.length && parts.every((p, i) => p === want[i]);
+  });
   if (start === -1) return null;
   // The table runs to the next line whose first non-space character opens a
   // table (`[`). A commented-out header starts with `#`, so it does not end it.

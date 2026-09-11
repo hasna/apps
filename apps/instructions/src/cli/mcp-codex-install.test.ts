@@ -156,6 +156,58 @@ describe("mcp install/uninstall parity", () => {
     expect(readFileSync(configPath, "utf-8")).toContain("\n[mcp_servers.configs]\n");
   });
 
+  /**
+   * TOML allows a trailing comment on a table header (`[a.b] # note`). Reading
+   * the header by exact text misses that, so install appended a SECOND
+   * `[mcp_servers.configs]` table — invalid TOML (duplicate declaration), Codex
+   * can no longer parse its config — while uninstall reported "not installed"
+   * and left the server registered. Every equivalent spelling of the header
+   * names the same table.
+   */
+  test("codex install/uninstall recognize a header carrying trailing text", () => {
+    const home = makeTempRoot("mcp-codex-header-comment-");
+    const dbPath = join(home, "instructions.db");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const configPath = join(home, ".codex", "config.toml");
+
+    const withComment = `[mcp_servers.configs] # hasna managed\ncommand = "/configs-mcp"\nargs = []\n\n[mcp_servers.echo]\ncommand = "echo"\n`;
+    writeFileSync(configPath, withComment, "utf-8");
+
+    // Install must see the existing table and write nothing (no duplicate).
+    const installed = runCli(["mcp", "install", "--codex"], home, dbPath);
+    expect(installed.status).toBe(0);
+    expect(installed.stdout).toContain("Already installed in Codex");
+    expect(readFileSync(configPath, "utf-8")).toBe(withComment);
+
+    // Uninstall must strip that table and leave the other server intact.
+    const removed = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+    expect(removed.status).toBe(0);
+    expect(removed.stdout).toContain("Removed from Codex");
+    const remaining = readFileSync(configPath, "utf-8");
+    expect(remaining).not.toContain("mcp_servers.configs");
+    expect(remaining).toContain("[mcp_servers.echo]");
+
+    // Whitespace and quoted key PARTS are the same table in TOML.
+    for (const header of ["[ mcp_servers.configs ]", `[mcp_servers."configs"]`, "[mcp_servers . configs]"]) {
+      writeFileSync(configPath, `${header}\ncommand = "/configs-mcp"\n\n[mcp_servers.echo]\ncommand = "echo"\n`, "utf-8");
+      const report = runCli(["mcp", "install", "--codex"], home, dbPath);
+      expect(report.stdout).toContain("Already installed in Codex");
+      const stripped = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+      expect(stripped.stdout).toContain("Removed from Codex");
+      expect(readFileSync(configPath, "utf-8")).toContain("[mcp_servers.echo]");
+    }
+
+    // A quoted SINGLE key is one key literally named "mcp_servers.configs" —
+    // not our nested table. It must never be read as an install, and must
+    // survive uninstall byte-identical.
+    const singleKey = `["mcp_servers.configs"]\ncommand = "/other"\n`;
+    writeFileSync(configPath, singleKey, "utf-8");
+    const notOurs = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+    expect(notOurs.status).toBe(0);
+    expect(notOurs.stdout).toContain("Not installed in Codex");
+    expect(readFileSync(configPath, "utf-8")).toBe(singleKey);
+  });
+
   test("antigravity install registers and uninstall removes only the configs entry", () => {
     const home = makeTempRoot("mcp-antigravity-");
     const dbPath = join(home, "instructions.db");
