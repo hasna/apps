@@ -520,6 +520,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0 # the scoped guard diffs against the PR base / previous push head
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
@@ -552,5 +554,22 @@ jobs:
       - name: Publish-guard self-test
         run: bun tooling/ci/check-publish-guard.ts --self-test
 
-      - name: Publish-guard (npm pack --dry-run + block internal-infra strings)
-        run: bun tooling/ci/check-publish-guard.ts
+      # SCOPED to the members whose tarball can differ from the base (their
+      # apps/<m>/** changed, or an in-tree member they bundle changed); EVERY
+      # member when a shared tarball input changed (root package.json, bun.lock,
+      # turbo.json, tsconfig.base.json, tooling/, this file) or when the base
+      # cannot be resolved. One member's pack-time flake no longer reddens this
+      # required check for unrelated packages (fb59fb6a, 2026-09-11). Same base
+      # resolution as the secret scan.
+      - name: Publish-guard (npm pack --dry-run + block internal-infra strings; scoped to members changed vs base)
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            bun tooling/ci/check-publish-guard.ts --changed-since "origin/${{ github.base_ref }}"
+          else
+            BASE="${{ github.event.before }}"
+            ZEROES="0000000000000000000000000000000000000000"
+            if [ -z "$BASE" ] || [ "$BASE" = "$ZEROES" ]; then
+              BASE="HEAD^"
+            fi
+            bun tooling/ci/check-publish-guard.ts --changed-since "$BASE"
+          fi
