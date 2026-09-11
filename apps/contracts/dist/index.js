@@ -13406,6 +13406,9 @@ var SERVICE_CONTRACT_VERSION = "v1";
 var RepoClassSchema = exports_external.enum(["library", "cli-with-store", "service", "saas"]);
 var HOSTING_MODES = ["user-hosted", "hasna-saas"];
 var HostingModeSchema = exports_external.enum(HOSTING_MODES);
+var SERVING_ACCESS_MODES = ["public", "api-key", "signature"];
+var ServingAccessSchema = exports_external.enum(SERVING_ACCESS_MODES);
+var FLEET_GATEWAY_HOST = "api.hasna.com";
 var SERVICE_SURFACE_KINDS = ["api", "sdk", "mcp", "cli"];
 var ServiceSurfaceKindSchema = exports_external.enum(SERVICE_SURFACE_KINDS);
 var ServiceSurfaceStatusSchema = exports_external.enum(["supported", "deferred", "unsupported"]);
@@ -13877,6 +13880,37 @@ var PublishingContractSchema = exports_external.object({
     seen.add(key);
   }
 });
+function clientKeySecretRefFor(routeSlug) {
+  return `hasna/oss/${routeSlug}/api-key`;
+}
+function gatewayClientBaseFor(routeSlug) {
+  return `https://${FLEET_GATEWAY_HOST}/${routeSlug}`;
+}
+var ServingContractSchema = exports_external.object({
+  routeSlug: AppNameSchema,
+  access: ServingAccessSchema,
+  targetClientBase: exports_external.string().regex(/^https:\/\/[^\s/@?#]+(?:\/[^\s/?#]+)*$/, "targetClientBase must be an absolute https URL with no credentials, query, fragment, or trailing slash")
+}).strict().superRefine((value, ctx) => {
+  if (value.targetClientBase.endsWith("/v1")) {
+    ctx.addIssue({
+      code: exports_external.ZodIssueCode.custom,
+      message: "targetClientBase must not end in /v1; clients append the version segment themselves",
+      path: ["targetClientBase"]
+    });
+  }
+  const authority = value.targetClientBase.replace(/^https:\/\//, "").split("/")[0] ?? "";
+  const host = authority.split(":")[0] ?? "";
+  if (host === FLEET_GATEWAY_HOST) {
+    const expected = gatewayClientBaseFor(value.routeSlug);
+    if (value.targetClientBase !== expected) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: `a ${FLEET_GATEWAY_HOST} route must be path-prefixed with its routeSlug: expected ${expected}`,
+        path: ["targetClientBase"]
+      });
+    }
+  }
+});
 var ServiceContractManifestSchema = exports_external.object({
   $schema: exports_external.string().min(1).optional(),
   schema: exports_external.literal(SCHEMA_IDS.serviceContract),
@@ -13888,6 +13922,7 @@ var ServiceContractManifestSchema = exports_external.object({
   bins: exports_external.array(exports_external.string().min(1)).default([]),
   storage: StorageContractSchema.optional(),
   hosting: exports_external.array(HostingModeSchema).min(1).default(["user-hosted"]),
+  serving: ServingContractSchema.optional(),
   serviceSurfaces: exports_external.array(ServiceSurfaceSchema).default([]),
   publishing: PublishingContractSchema.optional(),
   scope: AppScopeSchema.optional(),
@@ -13944,6 +13979,13 @@ var ServiceContractManifestSchema = exports_external.object({
         code: exports_external.ZodIssueCode.custom,
         message: "library repos must not ship a -serve or -mcp bin",
         path: ["bins"]
+      });
+    }
+    if (value.serving) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "library repos must not declare serving; they ship no serve surface",
+        path: ["serving"]
       });
     }
   }
@@ -18057,6 +18099,28 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
       minItems: 1,
       uniqueItems: true,
       description: "Customer-facing product stories. Public OSS cores include user-hosted; add hasna-saas only when a managed control plane exists."
+    },
+    serving: {
+      type: "object",
+      additionalProperties: false,
+      required: ["routeSlug", "access", "targetClientBase"],
+      description: "Where a served app is reachable from a client: the gateway route slug, its credential gate, and the client base URL. Mirrors the triple the fleet registry (tooling/fleet/hosted-apps.json) carries per hosted app. Omit to assert nothing about routing.",
+      properties: {
+        routeSlug: {
+          type: "string",
+          pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          description: "Gateway path segment; the route is reachable at https://api.hasna.com/<routeSlug>."
+        },
+        access: {
+          enum: ["public", "api-key", "signature"],
+          description: "Credential gate on the route: none, a fleet client API key at hasna/oss/<routeSlug>/api-key, or a request-signature check."
+        },
+        targetClientBase: {
+          type: "string",
+          pattern: "^https://[^\\s/@?#]+(?:/[^\\s/?#]+)*$",
+          description: "Client base URL: absolute https, no credentials, query, fragment, or trailing slash, and never ending in /v1 (clients append the version segment). A base on api.hasna.com must be path-prefixed with routeSlug."
+        }
+      }
     },
     serviceSurfaces: {
       type: "array",
@@ -23804,6 +23868,7 @@ export {
   generateSdkFromOpenApi,
   generateKit,
   generateKid,
+  gatewayClientBaseFor,
   formatClientResolutionFailure,
   fleetApiDomain,
   findPackageRoot,
@@ -23843,6 +23908,7 @@ export {
   clientTransportEnvKeys,
   clientResolutionExitCode,
   clientResolutionCodeOf,
+  clientKeySecretRefFor,
   checkKit,
   canonicalizeTenantId,
   canonicalizeDeploymentValue,
@@ -23903,6 +23969,8 @@ export {
   StorageContractSchema,
   SigningSecretError,
   Sha256DigestSchema,
+  ServingContractSchema,
+  ServingAccessSchema,
   ServiceSurfaceStatusSchema,
   ServiceSurfaceSchema,
   ServiceSurfaceKindSchema,
@@ -23933,6 +24001,7 @@ export {
   STORAGE_WAIVER_REASON_MAX_LENGTH,
   STORAGE_ENGINE_VALUES,
   STORAGE_ENGINES,
+  SERVING_ACCESS_MODES,
   SERVICE_SURFACE_KINDS,
   SERVICE_CONTRACT_VERSION,
   SERVICE_CONTRACT_MANIFEST_FILENAME,
@@ -24058,6 +24127,7 @@ export {
   FLEET_TOKEN_TYP,
   FLEET_TOKEN_ALG,
   FLEET_MIN_KIT_VERSION,
+  FLEET_GATEWAY_HOST,
   EvidenceRefSchema,
   EvidencePointerSchema,
   EvidenceKindSchema,

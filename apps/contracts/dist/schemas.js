@@ -13406,6 +13406,9 @@ var SERVICE_CONTRACT_VERSION = "v1";
 var RepoClassSchema = exports_external.enum(["library", "cli-with-store", "service", "saas"]);
 var HOSTING_MODES = ["user-hosted", "hasna-saas"];
 var HostingModeSchema = exports_external.enum(HOSTING_MODES);
+var SERVING_ACCESS_MODES = ["public", "api-key", "signature"];
+var ServingAccessSchema = exports_external.enum(SERVING_ACCESS_MODES);
+var FLEET_GATEWAY_HOST = "api.hasna.com";
 var SERVICE_SURFACE_KINDS = ["api", "sdk", "mcp", "cli"];
 var ServiceSurfaceKindSchema = exports_external.enum(SERVICE_SURFACE_KINDS);
 var ServiceSurfaceStatusSchema = exports_external.enum(["supported", "deferred", "unsupported"]);
@@ -13877,6 +13880,37 @@ var PublishingContractSchema = exports_external.object({
     seen.add(key);
   }
 });
+function clientKeySecretRefFor(routeSlug) {
+  return `hasna/oss/${routeSlug}/api-key`;
+}
+function gatewayClientBaseFor(routeSlug) {
+  return `https://${FLEET_GATEWAY_HOST}/${routeSlug}`;
+}
+var ServingContractSchema = exports_external.object({
+  routeSlug: AppNameSchema,
+  access: ServingAccessSchema,
+  targetClientBase: exports_external.string().regex(/^https:\/\/[^\s/@?#]+(?:\/[^\s/?#]+)*$/, "targetClientBase must be an absolute https URL with no credentials, query, fragment, or trailing slash")
+}).strict().superRefine((value, ctx) => {
+  if (value.targetClientBase.endsWith("/v1")) {
+    ctx.addIssue({
+      code: exports_external.ZodIssueCode.custom,
+      message: "targetClientBase must not end in /v1; clients append the version segment themselves",
+      path: ["targetClientBase"]
+    });
+  }
+  const authority = value.targetClientBase.replace(/^https:\/\//, "").split("/")[0] ?? "";
+  const host = authority.split(":")[0] ?? "";
+  if (host === FLEET_GATEWAY_HOST) {
+    const expected = gatewayClientBaseFor(value.routeSlug);
+    if (value.targetClientBase !== expected) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: `a ${FLEET_GATEWAY_HOST} route must be path-prefixed with its routeSlug: expected ${expected}`,
+        path: ["targetClientBase"]
+      });
+    }
+  }
+});
 var ServiceContractManifestSchema = exports_external.object({
   $schema: exports_external.string().min(1).optional(),
   schema: exports_external.literal(SCHEMA_IDS.serviceContract),
@@ -13888,6 +13922,7 @@ var ServiceContractManifestSchema = exports_external.object({
   bins: exports_external.array(exports_external.string().min(1)).default([]),
   storage: StorageContractSchema.optional(),
   hosting: exports_external.array(HostingModeSchema).min(1).default(["user-hosted"]),
+  serving: ServingContractSchema.optional(),
   serviceSurfaces: exports_external.array(ServiceSurfaceSchema).default([]),
   publishing: PublishingContractSchema.optional(),
   scope: AppScopeSchema.optional(),
@@ -13944,6 +13979,13 @@ var ServiceContractManifestSchema = exports_external.object({
         code: exports_external.ZodIssueCode.custom,
         message: "library repos must not ship a -serve or -mcp bin",
         path: ["bins"]
+      });
+    }
+    if (value.serving) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "library repos must not declare serving; they ship no serve surface",
+        path: ["serving"]
       });
     }
   }
@@ -14418,6 +14460,7 @@ export {
   validateTaskToPrAdapterCoreEquivalence,
   validateCommsTaggedMessage,
   storageWaiverIneligibilityReason,
+  gatewayClientBaseFor,
   extractCommsSeverityTag,
   deriveTaskToPrRefId,
   deriveTaskToPrIdentityDigest,
@@ -14428,6 +14471,7 @@ export {
   databaseUrlSecretRefFor,
   contractBaseSchema,
   commsSeverityTagToken,
+  clientKeySecretRefFor,
   allowedBinsForName,
   WorkRunSchema,
   WAIVABLE_STORAGE_ENGINES,
@@ -14473,6 +14517,8 @@ export {
   StorageEngineSchema,
   StorageContractSchema,
   Sha256DigestSchema,
+  ServingContractSchema,
+  ServingAccessSchema,
   ServiceSurfaceStatusSchema,
   ServiceSurfaceSchema,
   ServiceSurfaceKindSchema,
@@ -14503,6 +14549,7 @@ export {
   STORAGE_WAIVER_REASON_MAX_LENGTH,
   STORAGE_ENGINE_VALUES,
   STORAGE_ENGINES,
+  SERVING_ACCESS_MODES,
   SERVICE_SURFACE_KINDS,
   SERVICE_CONTRACT_VERSION,
   SERVER_DATA_BACKENDS,
@@ -14600,6 +14647,7 @@ export {
   GitShaSchema,
   FORBIDDEN_SHARED_CLOUD_RUNTIMES,
   FLEET_MIN_KIT_VERSION,
+  FLEET_GATEWAY_HOST,
   EvidenceRefSchema,
   EvidencePointerSchema,
   EvidenceKindSchema,
