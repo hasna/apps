@@ -904,7 +904,7 @@
       "post": {
         "operationId": "importRows",
         "summary": "Bulk id-preserving import (control-plane backfill)",
-        "description": "Upsert full workflow/loop/run rows by id (idempotent; ON CONFLICT(id) DO UPDATE). Preserves ids, definitions, and timestamps while applying safe defaults: imported workflows are archived, imported loops are paused, and nextRunAt/retryScheduledFor are cleared by default so backfills never schedule immediately. Set preserveWorkflowActivation=true or preserveLoopScheduling=true only for intentional activation. Applied FK-safe: workflows, then loops, then runs. Volatile running runs are skipped and reported.",
+        "description": "Upsert bounded workflow/loop/run rows by id with a v2 receipt bound to an operation id, request digest, and exact row ids. Imported workflows are archived and imported loops are paused with scheduling pointers cleared unless explicit preservation is requested. Existing same-id rows are skipped unless replace=true; volatile running runs are skipped and reported. The route preflights known id/slot conflicts, but callers must treat transport or server failure after dispatch as reconciliation-required rather than retrying blindly.",
         "requestBody": {
           "required": true,
           "content": {
@@ -935,6 +935,12 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The authoritative destination conflicts with a submitted identity or run slot; reconcile before retrying."
+          },
+          "413": {
+            "description": "The import body or bounded row count exceeds the server limit."
           }
         },
         "x-authorization-operation": "tenant.import",
@@ -4630,6 +4636,13 @@
           },
           "detail": {
             "type": "string"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Server capabilities that clients must verify before using side-effecting versioned contracts."
           }
         },
         "required": [
@@ -5851,26 +5864,34 @@
         "type": "object",
         "description": "Batches of full rows to upsert by id. Any array may be omitted.",
         "properties": {
+          "operationId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Caller-generated operation id echoed in the v2 receipt. Optional for legacy clients; new clients must send and verify it."
+          },
           "workflows": {
             "type": "array",
             "items": {
               "type": "object",
               "additionalProperties": true
-            }
+            },
+            "maxItems": 2000
           },
           "loops": {
             "type": "array",
             "items": {
               "type": "object",
               "additionalProperties": true
-            }
+            },
+            "maxItems": 2000
           },
           "runs": {
             "type": "array",
             "items": {
               "type": "object",
               "additionalProperties": true
-            }
+            },
+            "maxItems": 2000
           },
           "replace": {
             "type": "boolean",
@@ -5884,7 +5905,8 @@
             "type": "boolean",
             "description": "Default false. When false, imported workflows are written archived, including same-id active rows, so backfills cannot activate workflow execution unless explicitly requested."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "ImportResponse": {
         "type": "object",
@@ -5894,15 +5916,19 @@
           },
           "imported": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "workflows": {
-                "type": "integer"
+                "type": "integer",
+                "minimum": 0
               },
               "loops": {
-                "type": "integer"
+                "type": "integer",
+                "minimum": 0
               },
               "runs": {
-                "type": "integer"
+                "type": "integer",
+                "minimum": 0
               }
             },
             "required": [
@@ -5912,14 +5938,44 @@
             ]
           },
           "skippedRunning": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 0
+          },
+          "skippedExisting": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "workflows": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "loops": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "runs": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "workflows",
+              "loops",
+              "runs"
+            ]
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/ImportReceiptV2"
           }
         },
         "required": [
           "ok",
           "imported",
-          "skippedRunning"
-        ]
+          "skippedRunning",
+          "skippedExisting",
+          "receipt"
+        ],
+        "additionalProperties": false
       },
       "AgentSessionContract": {
         "type": "object",
@@ -6725,6 +6781,75 @@
             "type": "integer"
           }
         }
+      },
+      "ImportIdGroups": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workflows": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "loops": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "workflows",
+          "loops",
+          "runs"
+        ]
+      },
+      "ImportReceiptV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "contract": {
+            "type": "string",
+            "enum": [
+              "loops.import.v2"
+            ]
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "importedIds": {
+            "$ref": "#/components/schemas/ImportIdGroups"
+          },
+          "skippedRunningIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "skippedExistingIds": {
+            "$ref": "#/components/schemas/ImportIdGroups"
+          }
+        },
+        "required": [
+          "contract",
+          "operationId",
+          "requestDigest",
+          "importedIds",
+          "skippedRunningIds",
+          "skippedExistingIds"
+        ]
       }
     },
     "securitySchemes": {

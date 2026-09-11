@@ -78,6 +78,16 @@ loops import ./loops-export.json --apply
 creates a SQLite backup first. Existing ids are not overwritten unless
 `--replace` is used and the dry-run has no conflicts or blockers.
 
+On a hosted connection the command resolves authority before reading the file,
+uses bounded `/v1` reads for its preview, and sends only explicit insert/update
+rows through `POST /v1/import`. Existing public-projection rows are skipped
+unless `--replace` is explicit. Oversized imports, incomplete collision windows,
+malformed responses, and identity mismatches refuse. There is no local backup;
+imported workflows land archived and imported loops land paused with scheduling
+cleared. Hosted apply requires the server's `loops.import.v2` identity-bound
+receipt, so deploy the corresponding server before releasing this client. See
+`docs/STORAGE-BACKENDS.md` for the exact bounds.
+
 No-loss export/import currently preserves workflow specs, loop definitions, and
 terminal loop run history. It intentionally blocks when unsupported durable
 tables contain rows (workflow invocations/work items, workflow run/step/event
@@ -97,10 +107,10 @@ loops push --apply --manifest-file ./self-hosted-push.json
 loops pull --dry-run
 ```
 
-Self-hosted push is safe by default: workflows are archived and loops are
-paused with scheduling pointers cleared, including existing same-id rows that
-need re-neutralizing. `--replace` permits broader same-id data updates, but is
-not required for that safety normalization. `loops-runner run-once` uses the
+Self-hosted push is safe by default: newly written workflows are archived and
+newly written loops are paused with scheduling pointers cleared. Existing
+same-id rows are skipped unless `--replace` is explicit, preventing a row
+created after preview from being overwritten by a default push. `loops-runner run-once` uses the
 current bounded non-workflow
 claim/execute/finalize protocol. Durable runner registration is intentionally
 absent until the control plane persists and verifies machine records.
@@ -1243,6 +1253,12 @@ loops daemon logs
 loops daemon stop
 loops doctor
 ```
+
+With a hosted authority, `loops doctor` is deliberately control-plane-only: it
+performs bounded `/v1` reads and lists machine runtime, daemon, provider, and
+account checks as `unchecked` instead of spawning local tools with hosted
+credentials. Run `HASNA_LOOPS_LOCAL=1 loops doctor` on the executing machine for
+the local runtime checks.
 
 Run in the foreground for supervised environments:
 

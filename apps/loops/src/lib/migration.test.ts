@@ -7,6 +7,7 @@ import {
   exportLoopsMigrationBundle,
   migrationHash,
   validateLoopsMigrationBundle,
+  type MigrationDestination,
 } from "./migration.js";
 import { Store } from "./store.js";
 
@@ -36,6 +37,67 @@ describe("migration agent target validation", () => {
       store.close();
     }
   });
+
+  test("keeps an explicitly non-importable bundle non-importable after planning", () => {
+    const source = new Store(":memory:");
+    const destination = new Store(":memory:");
+    try {
+      source.createLoop({
+        name: "non-importable",
+        schedule: { type: "once", at: "2026-01-01T00:00:00.000Z" },
+        target: { type: "command", command: "true" },
+      });
+      const bundle = exportLoopsMigrationBundle(source, { includeRuns: false });
+      bundle.importable = false;
+      const { hash: _hash, ...body } = bundle;
+      bundle.hash = migrationHash(body);
+      const plan = buildImportMigrationPlan(destination, bundle);
+      expect(plan.summary.blocked).toBe(0);
+      expect(plan.summary.conflict).toBe(0);
+      expect(plan.importable).toBe(false);
+    } finally {
+      source.close();
+      destination.close();
+    }
+  });
+
+  test("blocks dependent rows when a hosted workflow is only an opaque representation", () => {
+    const source = new Store(":memory:");
+    try {
+      const workflow = source.createWorkflow({
+        name: "opaque-workflow",
+        steps: [{ id: "one", target: { type: "command", command: "true" } }],
+      });
+      source.createLoop({
+        name: "dependent-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00.000Z" },
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      const bundle = exportLoopsMigrationBundle(source, { includeRuns: false });
+      const represented = { ...workflow, description: "opaque public projection" };
+      const destination: MigrationDestination = {
+        comparison: "representation",
+        normalizesWorkflowActivation: true,
+        listWorkflows: () => [],
+        getWorkflow: (id) => id === workflow.id ? represented : undefined,
+        getLoop: () => undefined,
+        getRun: () => undefined,
+        getRunBySlot: () => undefined,
+      };
+      const plan = buildImportMigrationPlan(destination, bundle);
+      expect(plan.rows.find((row) => row.resource === "workflow")?.action).toBe("skip");
+      expect(plan.rows.find((row) => row.resource === "loop")?.action).toBe("blocked");
+      expect(plan.importable).toBe(false);
+
+      const replace = buildImportMigrationPlan(destination, bundle, { replace: true });
+      expect(replace.rows.find((row) => row.resource === "workflow")?.action).toBe("update");
+      expect(replace.rows.find((row) => row.resource === "loop")?.action).toBe("insert");
+      expect(replace.importable).toBe(true);
+    } finally {
+      source.close();
+    }
+  });
+
 });
 
 describe("control-plane request bounds", () => {

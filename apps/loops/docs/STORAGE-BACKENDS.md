@@ -180,11 +180,30 @@ refuses to write a no-loss bundle unless the operator explicitly uses
 requires `--apply`; existing rows with the same id are updated only with
 `--replace`. The CLI creates a local SQLite backup before a safe apply.
 
-`loops push` applies an additional safety rule. Imported
-workflow definitions are archived, and imported loops are paused with
-`nextRunAt`/`retryScheduledFor` cleared. That safety normalization can re-archive
-or re-pause existing same-id rows even when `--replace` is not supplied; explicit
-preserve flags are reserved for deliberate activation.
+On a hosted connection `loops import` resolves the configured authority before
+reading the bundle, then plans from bounded `/v1` reads. Hosted rows are public
+projections, so an existing id is skipped by default and is updated only with an
+explicit `--replace`; the client never claims byte equality it cannot observe.
+`--apply` sends only rows marked `insert` or `update` in one `POST /v1/import`.
+The hosted file is capped at 32 MiB. The planner accepts at most 2,000
+selected rows, fully pages at most 10,000 active workflow definitions, and
+checks at most 500 historical slots per referenced loop. Apply refuses when a safety-critical slot window is incomplete.
+Malformed counts, list rows, row identities, and import receipts fail closed; an
+uncertain mutation receipt is reported as reconciliation-required rather than
+retried automatically.
+
+There is no local backup to take. The route's backfill safety applies: imported
+workflow definitions land archived and imported loops land paused with
+`nextRunAt`/`retryScheduledFor` cleared, so resume them explicitly. The local-only
+destination table census is listed under `not checked` rather than represented
+as a successful hosted check.
+
+`loops push` uses the same server safety rule for rows it actually writes:
+workflow definitions are archived, and loops are paused with
+`nextRunAt`/`retryScheduledFor` cleared. Existing same-id rows are not changed
+unless `--replace` is explicit; this prevents a row created after preview from
+being overwritten by an unfenced default import. Explicit preservation flags
+remain reserved for deliberate activation.
 
 No-loss validation blocks unsupported or live state instead of silently
 dropping it. The current migration bundle does not preserve workflow invocation

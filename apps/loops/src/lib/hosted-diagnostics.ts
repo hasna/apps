@@ -1,26 +1,26 @@
 import type { Loop, LoopRun, LoopStatus, RunStatus } from "../types.js";
-import { isDaemonRunning } from "../daemon/control.js";
 import type { LoopStore } from "./store/index.js";
-import { ApiStore, HostedResponseShapeError } from "./store/index.js";
+import { ApiStore } from "./store/index.js";
+import { HostedResponseShapeError } from "./hosted-errors.js";
+import { hostedLoop, hostedRun, uniqueHostedRows } from "./hosted-records.js";
 import {
   buildHealthScan,
   buildHealthReport,
+  classifyRunFailure,
+  expectationForLoop,
   RESTART_INTERRUPTED_RUN_PREFIX,
   type BuildHealthScanOptions,
   type HealthSource,
+  type LoopExpectationResult,
   type LoopsHealthReport,
   type LoopsHealthScan,
 } from "./health.js";
-import { localRuntimeChecks, type DoctorCheck, type DoctorReport } from "./doctor.js";
-import { preflightTarget } from "./executor.js";
-import { workflowExecutionOrder } from "./workflow-spec.js";
-import { displayControlPlaneUrl, resolveRuntimeConfig } from "./runtime-config.js";
-import { schedulerStateForConnection } from "./runtime-status.js";
+import type { DoctorCheck, DoctorReport } from "./doctor.js";
 
 /**
  * Hosted-mode `loops health` and `loops doctor` (task e3b6f1d4).
  *
- * Before this, both verbs refused outright whenever the client was flipped to
+ * Before this, both verbs refused outright whenever the client selected
  * the hosted API — the CLI's only two diagnostics were unavailable in the one
  * configuration this fleet runs, and therefore unavailable during a scheduler
  * incident. The refusal's advice (unset the HASNA_LOOPS_* variables) pointed the
@@ -120,13 +120,18 @@ class HostedSnapshot implements HealthSource {
 
 async function latestRunsFor(store: LoopStore, loopIds: string[], into: Map<string, LoopRun[]>): Promise<string[]> {
   const failed: string[] = [];
-  for (const loopId of loopIds) {
-    try {
-      into.set(loopId, await store.listRuns({ loopId, limit: EXECUTION_TRUTH_RUN_LIMIT }));
-    } catch (error) {
-      if (error instanceof HostedResponseShapeError) throw error;
-      failed.push(loopId);
-    }
+  const concurrency = 8;
+  for (let offset = 0; offset < loopIds.length; offset += concurrency) {
+    await Promise.all(loopIds.slice(offset, offset + concurrency).map(async (loopId) => {
+      try {
+        const runs = (await store.listRuns({ loopId, limit: EXECUTION_TRUTH_RUN_LIMIT }))
+          .map((run) => hostedRun(run, { loopId }));
+        into.set(loopId, uniqueHostedRows(runs, `recent runs for ${loopId}`));
+      } catch (error) {
+        if (error instanceof HostedResponseShapeError) throw error;
+        failed.push(loopId);
+      }
+    }));
   }
   return failed;
 }
@@ -213,6 +218,75 @@ function applyExecutionTruth(
   };
 }
 
+export class HostedInventoryChangedError extends Error {
+  readonly code = "HOSTED_INVENTORY_CHANGED";
+  constructor(scope: string) {
+    super(`hosted Loops ${scope} changed while its bounded pages were being read; retry the read`);
+    this.name = "HostedInventoryChangedError";
+  }
+}
+
+async function hostedLoopInventoryPass(
+  store: LoopStore,
+  statuses: LoopStatus[],
+  limit: number,
+  includeArchived: boolean | undefined,
+): Promise<{ loops: Loop[]; total: number; truncated: boolean }> {
+  const counts = await Promise.all(
+    statuses.map((status) => store.countLoops(status, { includeArchived })),
+  );
+  const total = counts.reduce((sum, count) => sum + count, 0);
+  const loops: Loop[] = [];
+  for (let index = 0; index < statuses.length && loops.length < limit; index += 1) {
+    const status = statuses[index]!;
+    const expected = Math.min(counts[index]!, limit - loops.length);
+    if (expected === 0) continue;
+    const page = (await store.listLoops({ status, limit: expected, includeArchived }))
+      .map((loop) => hostedLoop(loop));
+    if (page.length !== expected || page.some((loop) => loop.status !== status)) {
+      throw new HostedResponseShapeError(
+        `status=${status} loop page to contain ${expected} matching rows from declared total ${counts[index]}`,
+      );
+    }
+    loops.push(...page);
+  }
+  uniqueHostedRows(loops, "hosted loop inventory");
+  const afterCounts = await Promise.all(
+    statuses.map((status) => store.countLoops(status, { includeArchived })),
+  );
+  if (afterCounts.some((count, index) => count !== counts[index])) {
+    throw new HostedInventoryChangedError("loop inventory");
+  }
+  return { loops, total, truncated: total > loops.length };
+}
+
+async function boundedHostedLoopInventory(
+  store: LoopStore,
+  statuses: LoopStatus[],
+  limit: number,
+  includeArchived: boolean | undefined,
+): Promise<{ loops: Loop[]; total: number; truncated: boolean }> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const first = await hostedLoopInventoryPass(store, statuses, limit, includeArchived);
+      const second = await hostedLoopInventoryPass(store, statuses, limit, includeArchived);
+      const identity = (inventory: { loops: Loop[]; total: number }) => JSON.stringify({
+        total: inventory.total,
+        loops: inventory.loops.map((loop) => ({
+          id: loop.id,
+          status: loop.status,
+          archivedAt: loop.archivedAt ?? null,
+          updatedAt: loop.updatedAt,
+        })),
+      });
+      if (identity(first) === identity(second)) return second;
+    } catch (error) {
+      if (!(error instanceof HostedInventoryChangedError)) throw error;
+    }
+  }
+  throw new HostedInventoryChangedError("loop inventory");
+}
+
 /**
  * Build the health report against the hosted control plane.
  *
@@ -226,7 +300,14 @@ export async function buildHostedHealthReport(
   opts: { limit?: number; includeInactive?: boolean; includeArchived?: boolean; now?: Date } = {},
 ): Promise<HostedHealthResult> {
   const limit = opts.limit ?? DEFAULT_LOOP_LIMIT;
-  const loops = await store.listLoops({ limit, includeArchived: opts.includeArchived });
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > DEFAULT_LOOP_LIMIT) {
+    throw new HostedResponseShapeError(`hosted health limit to be a safe integer from 1 to ${DEFAULT_LOOP_LIMIT}`);
+  }
+  const statuses: LoopStatus[] = opts.includeInactive
+    ? ["active", "paused", "stopped", "expired"]
+    : ["active", "paused"];
+  const inventory = await boundedHostedLoopInventory(store, statuses, limit, opts.includeArchived);
+  const loops = inventory.loops;
   const runs = new Map<string, LoopRun[]>();
   const unreachable = await latestRunsFor(store, loops.map((loop) => loop.id), runs);
 
@@ -248,6 +329,12 @@ export async function buildHostedHealthReport(
   report = applyExecutionTruth(report, executionTruth);
 
   const unchecked: UncheckedItem[] = [
+    ...(inventory.truncated
+      ? [{
+          id: "loop-inventory-window",
+          reason: `the hosted health report returned ${loops.length} of ${inventory.total} matching loops under its ${limit}-row bound.`,
+        }]
+      : []),
     {
       id: "runner-liveness",
       reason:
@@ -276,6 +363,13 @@ export async function buildHostedHealthReport(
     });
   }
 
+  if (inventory.truncated || unchecked.some((entry) => entry.id.startsWith("runs:"))) {
+    report = {
+      ...report,
+      ok: false,
+      summary: { ...report.summary, warnings: report.summary.warnings + 1 },
+    };
+  }
   return { backend: hostedBackend(store), report, executionTruth, unchecked };
 }
 
@@ -292,12 +386,16 @@ export async function buildHostedHealthScan(
   opts: BuildHealthScanOptions = {},
 ): Promise<HostedHealthScanResult> {
   const limit = opts.limit ?? DEFAULT_LOOP_LIMIT;
-  const statuses = opts.includeStatuses?.length ? [...new Set(opts.includeStatuses)] : undefined;
-  const loops = statuses
-    ? (await Promise.all(statuses.map((status) =>
-        store.listLoops({ status, limit, includeArchived: opts.includeArchived })
-      ))).flat()
-    : await store.listLoops({ limit, includeArchived: opts.includeArchived });
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > DEFAULT_LOOP_LIMIT) {
+    throw new HostedResponseShapeError(`hosted health scan limit to be a safe integer from 1 to ${DEFAULT_LOOP_LIMIT}`);
+  }
+  const statuses = opts.includeStatuses?.length
+    ? [...new Set(opts.includeStatuses)]
+    : (["active", "paused"] as LoopStatus[]);
+  const inventory = await boundedHostedLoopInventory(store, statuses, limit, opts.includeArchived);
+  const loops = inventory.loops;
+  const total = inventory.total;
+  const inventoryTruncated = inventory.truncated;
   const runs = new Map<string, LoopRun[]>();
   const unreachable = await latestRunsFor(store, loops.map((loop) => loop.id), runs);
   const snapshot = new HostedSnapshot(loops, runs);
@@ -310,7 +408,12 @@ export async function buildHostedHealthScan(
     scan = buildHealthScan(snapshot, opts);
   }
 
-  const unchecked: UncheckedItem[] = [];
+  const unchecked: UncheckedItem[] = inventoryTruncated
+    ? [{
+        id: "loop-inventory-window",
+        reason: `the hosted health scan returned ${loops.length} of ${total} matching loops under its ${limit}-row bound.`,
+      }]
+    : [];
   for (const loopId of new Set([...unreachable, ...snapshot.misses])) {
     unchecked.push({
       id: `runs:${loopId}`,
@@ -331,10 +434,16 @@ async function boundedRunCount(
   filter?: (run: LoopRun) => boolean,
 ): Promise<{ count: number; capped: boolean } | undefined> {
   try {
-    const runs = await store.listRuns({ status, limit: RUN_SCAN_LIMIT });
+    const runs = (await store.listRuns({ status, limit: RUN_SCAN_LIMIT }))
+      .map((run) => hostedRun(run));
+    if (runs.some((run) => run.status !== status)) {
+      throw new HostedResponseShapeError(`status=${status} run pages to contain only matching rows`);
+    }
+    uniqueHostedRows(runs, `status=${status} runs`);
     const matched = filter ? runs.filter(filter) : runs;
     return { count: matched.length, capped: runs.length >= RUN_SCAN_LIMIT };
-  } catch {
+  } catch (error) {
+    if (error instanceof HostedResponseShapeError) throw error;
     return undefined;
   }
 }
@@ -342,67 +451,36 @@ async function boundedRunCount(
 /**
  * Doctor against the hosted control plane.
  *
- * Split deliberately in two: the machine-scoped checks answer "can a loop
- * execute here", the control-plane-scoped ones answer "what does the scheduler
- * hold". Neither substitutes for the other, and mixing them unlabelled is how
- * an operator reads a green local toolchain as a green scheduler.
+ * Hosted doctor is deliberately control-plane-only. Machine runtime, daemon,
+ * provider, profile, and account checks are named in `unchecked` and never
+ * spawned with hosted credentials.
  */
 export async function buildHostedDoctorReport(store: LoopStore): Promise<HostedDoctorResult> {
-  const checks: DoctorCheck[] = localRuntimeChecks().map((check) => ({ ...check, scope: "machine" as const }));
-
-  // The local daemon is NOT the hosted scheduler. Report it as a machine fact
-  // and say so, rather than letting "daemon is not running" read as an incident.
-  const daemon = isDaemonRunning();
-  checks.push({
-    id: "daemon:local",
-    scope: "machine",
-    status: daemon.stale ? "warn" : "ok",
-    message: daemon.running
-      ? `local daemon is running pid=${daemon.pid}`
-      : daemon.stale
-        ? "local daemon pid file is stale"
-        : "local daemon is not running",
-    detail: "this is this machine's daemon, not the hosted scheduler; hosted run claiming is not observable from the client",
-  });
-
-  let schedulerCheck: DoctorCheck;
-  try {
-    const config = resolveRuntimeConfig();
-    const schedulerState = schedulerStateForConnection(config);
-    schedulerCheck = {
-      id: "scheduler-state",
-      scope: "machine",
-      status: schedulerState.remoteStore.configured ? "ok" : "warn",
-      message: `scheduler state storage=${config.storage} connection=${config.connection} remote_scheduler=${schedulerState.remoteStore.backend}`,
-      detail: config.apiUrl ? `api_url=${displayControlPlaneUrl(config.apiUrl)}` : undefined,
-    };
-  } catch (error) {
-    schedulerCheck = {
-      id: "scheduler-state",
-      scope: "machine",
-      status: "fail",
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-  checks.push(schedulerCheck);
-
+  const checks: DoctorCheck[] = [];
   const unchecked: UncheckedItem[] = [
+    {
+      id: "machine-runtime",
+      reason:
+        "hosted doctor does not inspect or spawn this machine's provider binaries, daemon, data directory, profiles, or account tooling; " +
+        "run doctor under explicit HASNA_LOOPS_LOCAL=1 on the executing machine for those checks.",
+    },
     {
       id: "runner-liveness",
       reason:
-        "no read-only runner heartbeat exists on the hosted /v1 contract (poll/claim are POST and would claim work), " +
-        "so this report cannot prove the hosted scheduler is claiming; use 'loops health' and read summary.overdue, " +
-        "which counts slots that passed with no run recorded and excludes slots whose run is still in flight.",
+        "no read-only runner heartbeat exists on the hosted /v1 contract; poll/claim would mutate ownership, so this diagnostic does not call them.",
     },
     {
       id: "control-plane-host",
-      reason: "the hosted server's own data dir, database, disk, and process health are not visible to this client.",
+      reason: "the hosted server's own disk, process, and database host are outside this client-facing contract.",
     },
   ];
 
   let loops: Loop[] = [];
   try {
-    loops = await store.listLoops({ limit: DEFAULT_LOOP_LIMIT });
+    loops = uniqueHostedRows(
+      (await store.listLoops({ limit: DEFAULT_LOOP_LIMIT })).map((loop) => hostedLoop(loop)),
+      "doctor loop",
+    );
     checks.push({
       id: "control-plane",
       scope: "control-plane",
@@ -410,7 +488,14 @@ export async function buildHostedDoctorReport(store: LoopStore): Promise<HostedD
       message: `hosted control plane reachable (${loops.length} loop(s) read)`,
       detail: store instanceof ApiStore ? store.baseUrl : undefined,
     });
+    if (loops.length >= DEFAULT_LOOP_LIMIT) {
+      unchecked.push({
+        id: "loop-inventory-window",
+        reason: `doctor inspected the first ${DEFAULT_LOOP_LIMIT} hosted loops; completeness beyond that bound is not asserted.`,
+      });
+    }
   } catch (error) {
+    if (error instanceof HostedResponseShapeError) throw error;
     checks.push({
       id: "control-plane",
       scope: "control-plane",
@@ -432,11 +517,15 @@ export async function buildHostedDoctorReport(store: LoopStore): Promise<HostedD
             scope: "control-plane",
             status: "warn",
             message: `${failed.capped ? `at least ${failed.count}` : `${failed.count}`} failed loop run(s) recorded`,
-            detail: `scanned the most recent ${RUN_SCAN_LIMIT} failed run(s)${failed.capped ? "; the window was full, so the true total is higher" : ""}`,
+            detail: `scanned at most ${RUN_SCAN_LIMIT} failed run(s)${failed.capped ? "; the window was full, so the true total is higher" : ""}`,
           },
   );
 
-  const interrupted = await boundedRunCount(store, "skipped", (run) => Boolean(run.error?.startsWith(RESTART_INTERRUPTED_RUN_PREFIX)));
+  const interrupted = await boundedRunCount(
+    store,
+    "skipped",
+    (run) => Boolean(run.error?.startsWith(RESTART_INTERRUPTED_RUN_PREFIX)),
+  );
   if (interrupted && interrupted.count > 0) {
     checks.push({
       id: "loop-runs:restart-interrupted",
@@ -449,53 +538,11 @@ export async function buildHostedDoctorReport(store: LoopStore): Promise<HostedD
       id: "restart-interrupted-runs",
       reason: "skipped-run history could not be read from the hosted API, so restart-interrupted runs were not counted.",
     });
-  }
-
-  // Target preflight asks whether a target can run HERE. For a loop pinned to
-  // another machine that question is either wrong or would reach out over the
-  // network, so it is declined and named rather than answered misleadingly.
-  const remote: string[] = [];
-  for (const loop of loops.filter((entry) => entry.status === "active")) {
-    if (loop.machine) {
-      remote.push(loop.name);
-      continue;
-    }
-    try {
-      if (loop.target.type === "workflow") {
-        const workflow = await store.requireWorkflow(loop.target.workflowId);
-        for (const step of workflowExecutionOrder(workflow)) {
-          preflightTarget(
-            {
-              ...step.target,
-              account: step.account ?? step.target.account,
-              timeoutMs: step.timeoutMs !== undefined ? step.timeoutMs : step.target.timeoutMs,
-            },
-            { loopId: loop.id, loopName: loop.name, workflowId: workflow.id, workflowName: workflow.name, workflowStepId: step.id },
-          );
-        }
-      } else {
-        preflightTarget(loop.target, { loopId: loop.id, loopName: loop.name });
-      }
-      checks.push({
-        id: `loop:${loop.id}:preflight`,
-        scope: "machine",
-        status: "ok",
-        message: `active loop target is ready on this machine: ${loop.name}`,
-      });
-    } catch (error) {
-      checks.push({
-        id: `loop:${loop.id}:preflight`,
-        scope: "machine",
-        status: "fail",
-        message: `active loop target preflight failed on this machine: ${loop.name}`,
-        detail: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  if (remote.length > 0) {
+  } else if (interrupted.capped) {
     unchecked.push({
-      id: "preflight:machine-assigned-loops",
-      reason: `${remote.length} active loop(s) are pinned to another machine and were not preflighted from here: ${remote.slice(0, 10).join(", ")}${remote.length > 10 ? ", …" : ""}`,
+      id: "restart-interrupted-runs",
+      reason:
+        `the newest ${RUN_SCAN_LIMIT} skipped runs contained no restart-interrupted marker; older skipped history was not inspected.`,
     });
   }
 
@@ -503,5 +550,85 @@ export async function buildHostedDoctorReport(store: LoopStore): Promise<HostedD
     backend: hostedBackend(store),
     report: { ok: checks.every((check) => check.status !== "fail"), checks },
     unchecked,
+  };
+}
+
+export interface HostedLoopDiagnosis {
+  backend: HostedBackend;
+  loop: Loop;
+  expectation: LoopExpectationResult;
+  recentRuns: Array<{ run: LoopRun; failure: ReturnType<typeof classifyRunFailure> }>;
+  unchecked: UncheckedItem[];
+}
+
+/**
+ * Per-loop diagnosis against the hosted control plane: the same expectation
+ * classifier the local tool uses, fed from `/v1` reads instead of sqlite.
+ *
+ * The expectation classifier is synchronous over a {@link HealthSource}, so the
+ * runs it needs are fetched first and served from an in-memory snapshot — the
+ * same shape `buildHostedHealthReport` uses. `runLimit` bounds the classified
+ * window and the bound is reported in `unchecked` rather than implied, because
+ * "no failures in the last N runs" is not "no failures".
+ */
+export async function buildHostedLoopDiagnosis(
+  store: LoopStore,
+  idOrName: string,
+  opts: { runLimit?: number; now?: Date } = {},
+): Promise<HostedLoopDiagnosis> {
+  const runLimit = opts.runLimit ?? 5;
+  if (!Number.isSafeInteger(runLimit) || runLimit < 1 || runLimit > 50) {
+    throw new HostedResponseShapeError("diagnosis runLimit to be a safe integer from 1 to 50");
+  }
+  const loop = hostedLoop(await store.requireUniqueLoop(idOrName));
+  if (loop.id !== idOrName && loop.name !== idOrName) {
+    throw new HostedResponseShapeError(`diagnosed loop identity to match requested id or exact name '${idOrName}'`);
+  }
+  const runs = uniqueHostedRows(
+    (await store.listRuns({ loopId: loop.id, limit: runLimit })).map((run) => hostedRun(run, { loopId: loop.id })),
+    `diagnosis runs for ${loop.id}`,
+  );
+  const runMap = new Map([[loop.id, runs]]);
+  const snapshot = new HostedSnapshot([loop], runMap);
+  let expectation = expectationForLoop(snapshot, loop, { now: opts.now });
+  const unreachable: string[] = [];
+  if (snapshot.misses.size > 0) {
+    const pending = [...snapshot.misses];
+    snapshot.misses.clear();
+    unreachable.push(...(await latestRunsFor(store, pending, runMap)));
+    expectation = expectationForLoop(snapshot, loop, { now: opts.now });
+  }
+  const unresolved = [...new Set([...unreachable, ...snapshot.misses])];
+  if (unresolved.length > 0 && expectation.ok) {
+    expectation = {
+      ...expectation,
+      ok: false,
+      check: {
+        id: "latest-run-succeeded",
+        status: "warn",
+        message: "diagnosis is incomplete because referenced child-loop run evidence could not be read",
+      },
+    };
+  }
+  return {
+    backend: hostedBackend(store),
+    loop,
+    expectation,
+    recentRuns: runs.map((run) => ({ run, failure: classifyRunFailure(run) })),
+    unchecked: [
+      {
+        id: "run-history-depth",
+        reason: `only the ${runs.length} most recent run(s) (limit ${runLimit}) were classified; older failures are not claimed either way.`,
+      },
+      ...unresolved.map((loopId) => ({
+        id: `runs:${loopId}`,
+        reason: "referenced child-loop runs could not be read from the hosted API; the diagnosis is incomplete.",
+      })),
+      {
+        id: "local-runtime",
+        reason:
+          "provider binaries, this machine's data directory and its daemon are not inspected by a hosted diagnose; run local doctor on the executing machine for those.",
+      },
+    ],
   };
 }

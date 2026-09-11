@@ -33,7 +33,7 @@ export interface StuckRunReconciliationOutcome { "runId": string; "outcome": "re
 
 export interface StuckRunReconciliationResponse { "ok": boolean; "reconciliation": { "outcomes": Array<StuckRunReconciliationOutcome> } }
 
-export interface Foundation { "status": string; "version": string; "storage": "sqlite" | "postgresql"; "connection": "file" | "api"; "service"?: string; "detail"?: string }
+export interface Foundation { "status": string; "version": string; "storage": "sqlite" | "postgresql"; "connection": "file" | "api"; "service"?: string; "detail"?: string; "capabilities"?: Array<string> }
 
 export interface Loop { "id": string; "name": string; "description"?: string | null; "labels": Array<string>; "status": "active" | "paused" | "stopped" | "expired"; "schedule"?: Record<string, unknown>; "target"?: Record<string, unknown>; "nextRunAt"?: string | null; "expiresAfterRuns"?: number | null; "createdAt"?: string; "updatedAt"?: string; "machine"?: LoopMachineRef }
 
@@ -101,9 +101,9 @@ export interface WorkflowWorkItemResponse { "ok": boolean; "workItem": WorkflowW
 
 export interface WorkflowWorkItemListResponse { "ok": boolean; "workItems": Array<WorkflowWorkItem> }
 
-export interface ImportInput { "workflows"?: Array<Record<string, unknown>>; "loops"?: Array<Record<string, unknown>>; "runs"?: Array<Record<string, unknown>>; "replace"?: boolean; "preserveLoopScheduling"?: boolean; "preserveWorkflowActivation"?: boolean }
+export interface ImportInput { "operationId"?: string; "workflows"?: Array<Record<string, unknown>>; "loops"?: Array<Record<string, unknown>>; "runs"?: Array<Record<string, unknown>>; "replace"?: boolean; "preserveLoopScheduling"?: boolean; "preserveWorkflowActivation"?: boolean }
 
-export interface ImportResponse { "ok": boolean; "imported": { "workflows": number; "loops": number; "runs": number }; "skippedRunning": number }
+export interface ImportResponse { "ok": boolean; "imported": { "workflows": number; "loops": number; "runs": number }; "skippedRunning": number; "skippedExisting": { "workflows": number; "loops": number; "runs": number }; "receipt": ImportReceiptV2 }
 
 export interface AgentSessionContract { "version": 1; "provider": "claude" | "cursor" | "codewith" | "codex" | "aicopilot" | "opencode"; "model"?: string; "cwd"?: string; "permissionMode": "default" | "plan" | "auto" | "bypass"; "sandbox": "read-only" | "workspace-write" | "danger-full-access" | "enabled" | "disabled" | "provider-default"; "manualBreakGlass": boolean; "routing"?: { "projectPath"?: string; "projectGroup"?: string; "taskId"?: string; "eventId"?: string; "eventType"?: string; "eventSource"?: string; "role"?: "triage" | "planner" | "worker" | "verifier" }; "timeoutMs": number | null; "restrictions": { "tools"?: Array<string>; "commands"?: Array<string>; "enforcement": "metadata_only"; "providerEnforced": false }; "safetyReason"?: string }
 
@@ -148,6 +148,10 @@ export interface LoopPinResponse { "ok": boolean; "pinnedVersion"?: number | nul
 export interface BundleSummary { "bundleName": string; "loopId": string; "loopName"?: string; "latestVersion"?: number; "pinnedVersion"?: number; "bundleDigest"?: string; "carriesPrompt"?: boolean; "machineId"?: string; "updatedAt"?: string }
 
 export interface BundleListResponse { "ok": boolean; "bundles": Array<BundleSummary>; "total"?: number }
+
+export interface ImportIdGroups { "workflows": Array<string>; "loops": Array<string>; "runs": Array<string> }
+
+export interface ImportReceiptV2 { "contract": "loops.import.v2"; "operationId": string; "requestDigest": string; "importedIds": ImportIdGroups; "skippedRunningIds": Array<string>; "skippedExistingIds": ImportIdGroups }
 
 export interface LoopsClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */

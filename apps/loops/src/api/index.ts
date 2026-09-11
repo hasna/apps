@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import { isDeepStrictEqual } from "node:util";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   CreateLoopInput,
   CreateWorkflowInvocationInput,
@@ -77,6 +77,13 @@ import type { BundleArtifactStorage } from "../lib/bundle/artifact-storage.js";
 import { routePolicy, type RoutePolicy } from "../lib/auth/route-policy.js";
 import type { TenantAuthContext, TenantAuthDecision } from "../lib/auth/tenant-auth.js";
 import { packageVersion } from "../lib/version.js";
+import { hostedLoop, hostedRun, hostedWorkflow } from "../lib/hosted-records.js";
+import {
+  importRequestDigest,
+  LOOPS_IMPORT_RECEIPT_CONTRACT,
+  validImportOperationId,
+  type ImportContractInput,
+} from "../lib/import-contract.js";
 import {
   DEFAULT_OPERATION_LOOKUP_CAPS,
   isPrivateOperationEventType,
@@ -108,6 +115,7 @@ const DEFAULT_EVIDENCE_LIMIT_BYTES = 256 * 1024;
 // workflow rows, so it needs a much larger body budget than single-object CRUD.
 // The client batches by byte budget well under this ceiling.
 const DEFAULT_IMPORT_LIMIT_BYTES = 32 * 1024 * 1024;
+const DEFAULT_IMPORT_MAX_ROWS = 2_000;
 const MIN_RUNNER_LEASE_MS = 1_000;
 
 program
@@ -188,12 +196,11 @@ export interface LoopsApiServerOptions {
 
 /**
  * Capabilities an already-deployed control plane advertises on the open
- * `/version` probe, so a runner can tell an enforcing server from one that will
- * accept its claim body and ignore half of it. There is no unclaim endpoint, so
- * a runner that needs enforcement has to establish it BEFORE its first claim —
- * discovering non-enforcement from the response is already too late.
+ * `/version` probe before clients enter side-effecting versioned contracts.
+ * Runner claim scope and import receipts both have to be established before the
+ * corresponding mutation; discovering non-enforcement afterward is too late.
  */
-const API_CAPABILITIES = ["runner.claimScope", "bundles"] as const;
+const API_CAPABILITIES = ["runner.claimScope", "bundles", "loops.import.v2"] as const;
 
 /** Shared { status, version, storage, connection } envelope for /health, /ready, /version. */
 function foundationEnvelope(
@@ -620,13 +627,24 @@ function parseExpiredRunLeaseCandidate(value: unknown): PublicStuckRunCandidate 
   return { runId, loopId, snapshotId };
 }
 
-interface ImportRequestBody {
-  workflows?: WorkflowSpec[];
-  loops?: Loop[];
-  runs?: LoopRun[];
-  replace?: boolean;
-  preserveLoopScheduling?: boolean;
-  preserveWorkflowActivation?: boolean;
+interface ImportRequestBody extends ImportContractInput {}
+
+function importRows<T>(body: ImportRequestBody, key: "workflows" | "loops" | "runs"): T[] {
+  if (!Object.hasOwn(body, key)) return [];
+  const value = body[key];
+  if (!Array.isArray(value)) throw apiError(`invalid_import_${key}`, 422);
+  return value as T[];
+}
+
+function assertUniqueImportIds(rows: Array<{ id?: unknown }>, label: string): void {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || typeof row.id !== "string" || row.id.trim().length === 0) {
+      throw apiError(`invalid_import_${label}_id`, 422);
+    }
+    if (seen.has(row.id)) throw apiError(`duplicate_import_${label}_id`, 422);
+    seen.add(row.id);
+  }
 }
 
 function safeImportedWorkflow(workflow: WorkflowSpec, opts: { preserveWorkflowActivation: boolean }): WorkflowSpec {
@@ -674,38 +692,132 @@ async function handleImportRequest(ctx: V1RequestContext, segments: string[]): P
   if (segments.length !== 0 || ctx.request.method !== "POST") return fail("not_found", 404);
   const storage = requireStorage(ctx.storage);
   const body = await readJsonBody<ImportRequestBody>(ctx.request, ctx.importLimitBytes);
+  const allowedFields = new Set([
+    "operationId",
+    "workflows",
+    "loops",
+    "runs",
+    "replace",
+    "preserveLoopScheduling",
+    "preserveWorkflowActivation",
+  ]);
+  if (Object.keys(body).some((key) => !allowedFields.has(key))) throw apiError("unknown_import_field", 422);
+  for (const key of ["replace", "preserveLoopScheduling", "preserveWorkflowActivation"] as const) {
+    if (Object.hasOwn(body, key) && typeof body[key] !== "boolean") throw apiError(`invalid_import_${key}`, 422);
+  }
+  if (body.operationId !== undefined && !validImportOperationId(body.operationId)) {
+    throw apiError("invalid_import_operation_id", 422);
+  }
+  const operationId = body.operationId ?? randomUUID();
   const replace = body.replace === true;
-  const workflows = Array.isArray(body.workflows) ? body.workflows : [];
-  const loops = Array.isArray(body.loops) ? body.loops : [];
-  const runs = Array.isArray(body.runs) ? body.runs : [];
+  const workflows = importRows<WorkflowSpec>(body, "workflows");
+  const loops = importRows<Loop>(body, "loops");
+  const runs = importRows<LoopRun>(body, "runs");
+  const rowCount = workflows.length + loops.length + runs.length;
+  if (rowCount > DEFAULT_IMPORT_MAX_ROWS) throw apiError("import_row_limit_exceeded", 413);
+  assertUniqueImportIds(workflows, "workflow");
+  assertUniqueImportIds(loops, "loop");
+  assertUniqueImportIds(runs, "run");
+  try {
+    workflows.forEach((workflow) => hostedWorkflow(workflow, workflow.id));
+    loops.forEach((loop) => hostedLoop(loop, loop.id));
+    runs.forEach((run) => hostedRun(run, { id: run.id, loopId: run.loopId }));
+  } catch {
+    throw apiError("invalid_import_row", 422);
+  }
+  const slots = new Set<string>();
+  for (const run of runs) {
+    const slot = `${run.loopId}\u0000${run.scheduledFor}`;
+    if (slots.has(slot)) throw apiError("duplicate_import_run_slot", 422);
+    slots.add(slot);
+  }
   validateImportedAgentTargets(workflows, loops);
   const preserveWorkflowActivation = body.preserveWorkflowActivation === true;
   const preserveLoopScheduling = body.preserveLoopScheduling === true;
-  const imported = { workflows: 0, loops: 0, runs: 0 };
-  let skippedRunning = 0;
-  // FK-safe order: workflow_specs, then loops (loop_runs.loop_id REFERENCES
-  // loops), then loop_runs.
+  const request: ImportContractInput & { operationId: string } = {
+    operationId,
+    workflows,
+    loops,
+    runs,
+    replace,
+    preserveWorkflowActivation,
+    preserveLoopScheduling,
+  };
+  const importedIds = { workflows: [] as string[], loops: [] as string[], runs: [] as string[] };
+  const skippedExistingIds = { workflows: [] as string[], loops: [] as string[], runs: [] as string[] };
+  const skippedRunningIds: string[] = [];
+
+  // Preflight same-id and run-slot conflicts before the first write. This does
+  // not pretend the route is transactional, but it removes known deterministic
+  // partial-write cases and leaves transport/server uncertainty explicit in the
+  // v2 receipt contract.
   for (const workflow of workflows) {
-    await storage.upsertMigrationWorkflow(safeImportedWorkflow(workflow, { preserveWorkflowActivation }), {
-      replace: replace || !preserveWorkflowActivation,
-    });
-    imported.workflows += 1;
+    if (!replace && await storage.getWorkflow(workflow.id)) skippedExistingIds.workflows.push(workflow.id);
   }
   for (const loop of loops) {
-    await storage.upsertMigrationLoop(safeImportedLoop(loop, { preserveLoopScheduling }), {
-      replace: replace || !preserveLoopScheduling,
-    });
-    imported.loops += 1;
+    if (!replace && await storage.getLoop(loop.id)) skippedExistingIds.loops.push(loop.id);
   }
   for (const run of runs) {
     if (run.status === "running") {
-      skippedRunning += 1;
+      skippedRunningIds.push(run.id);
       continue;
     }
-    await storage.upsertMigrationRun(run, { replace });
-    imported.runs += 1;
+    const existing = await storage.getRun(run.id);
+    if (existing?.status === "running") throw apiError("import_running_destination_run", 409);
+    if (!replace && existing) {
+      skippedExistingIds.runs.push(run.id);
+      continue;
+    }
+    const occupant = await storage.getRunBySlot(run.loopId, run.scheduledFor);
+    if (occupant && occupant.id !== run.id) throw apiError("import_run_slot_conflict", 409);
   }
-  return ok({ imported, skippedRunning });
+
+  for (const workflow of workflows) {
+    if (skippedExistingIds.workflows.includes(workflow.id)) continue;
+    const stored = await storage.upsertMigrationWorkflow(
+      safeImportedWorkflow(workflow, { preserveWorkflowActivation }),
+      { replace },
+    );
+    if (stored.id !== workflow.id) throw apiError("import_workflow_identity_mismatch", 409);
+    importedIds.workflows.push(stored.id);
+  }
+  for (const loop of loops) {
+    if (skippedExistingIds.loops.includes(loop.id)) continue;
+    const stored = await storage.upsertMigrationLoop(
+      safeImportedLoop(loop, { preserveLoopScheduling }),
+      { replace },
+    );
+    if (stored.id !== loop.id) throw apiError("import_loop_identity_mismatch", 409);
+    importedIds.loops.push(stored.id);
+  }
+  for (const run of runs) {
+    if (skippedRunningIds.includes(run.id) || skippedExistingIds.runs.includes(run.id)) continue;
+    const stored = await storage.upsertMigrationRun(run, { replace });
+    if (stored.id !== run.id) throw apiError("import_run_identity_mismatch", 409);
+    importedIds.runs.push(stored.id);
+  }
+  const receipt = {
+    contract: LOOPS_IMPORT_RECEIPT_CONTRACT,
+    operationId,
+    requestDigest: importRequestDigest(request),
+    importedIds,
+    skippedRunningIds,
+    skippedExistingIds,
+  };
+  return ok({
+    imported: {
+      workflows: importedIds.workflows.length,
+      loops: importedIds.loops.length,
+      runs: importedIds.runs.length,
+    },
+    skippedRunning: skippedRunningIds.length,
+    skippedExisting: {
+      workflows: skippedExistingIds.workflows.length,
+      loops: skippedExistingIds.loops.length,
+      runs: skippedExistingIds.runs.length,
+    },
+    receipt,
+  });
 }
 
 async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
