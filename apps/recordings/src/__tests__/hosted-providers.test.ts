@@ -49,11 +49,26 @@ test("provider selection is optional and leaves the four mandatory capabilities 
 });
 
 test("malformed and oversized catalogs fail with fixed errors without retaining upstream configuration", async () => {
-  for (const response of [null, { providers: [null] }, { providers: Array(33).fill(catalog.providers[0]) },
-    { providers: [{ ...catalog.providers[0], models: Array(101).fill("fictional") }] },
+  for (const response of [null, { providers: [null] },
+    { providers: Array.from({ length: 17 }, (_, index) => ({ ...catalog.providers[0], id: `fictional-${index}` })) },
+    { providers: [{ ...catalog.providers[0], models: Array.from({ length: 65 }, (_, index) => `fictional-${index}`), defaultModel: undefined, modelDetails: undefined }] },
     { ...catalog, defaultProvider: "fictional\n" }, { providers: [{ ...catalog.providers[0], ready: "hidden-fictional" }] }]) {
     await expect(fixture(response).client.providers()).rejects.toMatchObject({ code: "invalid_response" });
   }
+});
+
+test("catalog bounds match native discovery while preserving the existing streaming model contract", () => {
+  const provider = catalog.providers[0]!;
+  expect(providersResponseParser.safeParse({ providers: Array.from({ length: 16 }, (_, index) => ({ ...provider, id: `fictional-${index}` })) }).success).toBe(true);
+  expect(providersResponseParser.safeParse({ providers: [{ ...provider, models: Array.from({ length: 64 }, (_, index) => `fictional-${index}`), defaultModel: undefined, modelDetails: undefined }] }).success).toBe(true);
+  for (const value of [{ ...provider, cancellation: false }, { ...provider, formats: [{ ...provider.formats[0], sampleRateHz: 48_000 }] },
+    { ...provider, name: "a".repeat(121) }, { ...provider, name: "Fictional\u202e" },
+    { ...provider, models: ["fictional model"], defaultModel: undefined, modelDetails: undefined },
+    { ...provider, models: ["é-model"], defaultModel: undefined, modelDetails: undefined }]) {
+    expect(providersResponseParser.safeParse({ providers: [value] }).success).toBe(false);
+  }
+  const start = { type: "session.start", sessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", model: "legacy model" };
+  expect(streamControlParser.parse(start)).toEqual(start);
 });
 
 test("catalogs refuse ambiguous selections, phantom defaults, incomplete details and unsafe labels", () => {

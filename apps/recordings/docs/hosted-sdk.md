@@ -197,10 +197,14 @@ also provide optional `defaultProvider`, provider `name`, `defaultModel`,
 absent; clients must not infer the first provider/model as the default.
 Unknown fields are omitted at every catalog level. Readiness is a server
 report, not a live transcription test. The client makes no provider request.
-Catalogs require nonempty provider/model/format lists, unique provider and model
-IDs, defaults that belong to the advertised lists, and complete model details
-when supplied. Labels cannot contain control characters or consist only of
-whitespace. Invalid catalogs fail instead of presenting ambiguous choices.
+Catalogs require nonempty lists of at most 16 providers, 64 models per provider
+and 16 formats, unique provider and model IDs, defaults that belong to the
+advertised lists, and complete model details when supplied. Discovery model IDs
+are ASCII identifiers of 1–100 characters: an alphanumeric first character,
+then alphanumerics or `._:/@+-`. Labels are at most 120 UTF-16 code units and
+cannot contain Unicode control/format characters or consist only of whitespace.
+Cancellation must be supported, and formats must include 24 kHz mono PCM16.
+Invalid catalogs fail instead of presenting ambiguous choices.
 Although the service exposes discovery publicly, these hosted client surfaces
 require the caller's configured bearer, consistently with the other hosted reads.
 
