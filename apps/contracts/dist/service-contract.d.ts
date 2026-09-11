@@ -85,6 +85,28 @@ export declare const SERVICE_CONTRACT_JSON_SCHEMA: {
             readonly uniqueItems: true;
             readonly description: "Customer-facing product stories. Public OSS cores include user-hosted; add hasna-saas only when a managed control plane exists.";
         };
+        readonly serving: {
+            readonly type: "object";
+            readonly additionalProperties: false;
+            readonly required: readonly ["routeSlug", "access", "targetClientBase"];
+            readonly description: "Where a served app is reachable from a client: the gateway route slug, its credential gate, and the client base URL. Mirrors the triple the fleet registry (tooling/fleet/hosted-apps.json) carries per hosted app. Omit to assert nothing about routing.";
+            readonly properties: {
+                readonly routeSlug: {
+                    readonly type: "string";
+                    readonly pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$";
+                    readonly description: "Gateway path segment; the route is reachable at https://api.hasna.com/<routeSlug>.";
+                };
+                readonly access: {
+                    readonly enum: readonly ["public", "api-key", "signature"];
+                    readonly description: "Credential gate on the route: none, a fleet client API key at hasna/oss/<routeSlug>/api-key, or a request-signature check.";
+                };
+                readonly targetClientBase: {
+                    readonly type: "string";
+                    readonly pattern: "^https://[^\\s/@?#]+(?:/[^\\s/?#]+)*$";
+                    readonly description: "Client base URL: absolute https, no credentials, query, fragment, or trailing slash, and never ending in /v1 (clients append the version segment). A base on api.hasna.com must be path-prefixed with routeSlug.";
+                };
+            };
+        };
         readonly serviceSurfaces: {
             readonly type: "array";
             readonly items: {
