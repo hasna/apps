@@ -6,6 +6,7 @@ import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { hermeticHomeEnv } from "../test/hermetic.js";
 
 // Regression for todos 4a2a4ac1 (P-00946): the fleet's documented form
 // `conversations send <channel> "<message>" --from X` (charter working
@@ -25,6 +26,7 @@ function runCli(args: string[], agent: string) {
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
     env: {
+      ...hermeticHomeEnv(),
       ...fixture.env,
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",
