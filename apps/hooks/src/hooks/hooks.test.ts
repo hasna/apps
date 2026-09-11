@@ -644,7 +644,7 @@ describe("observability hooks write to SQLite", () => {
       // and this block asserts the ON-BOX store: the child env carries the
       // opt-in AND no authority variable (the opt-in alone loses to a
       // configured registry, by design).
-      env: localHookStoreChildEnv({ HOOKS_DB_PATH: dbPath }),
+      env: localHookStoreChildEnv({ HOOKS_DB_PATH: dbPath, HOME: tmpDir, HASNA_STATION: "no-such-station" }),
     });
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),

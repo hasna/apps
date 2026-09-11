@@ -45,6 +45,10 @@ function hostedEnv(extra: Record<string, string | undefined> = {}): Record<strin
   homes.push(home);
   return {
     HOME: home,
+    // A station name that cannot match a Keychain item. Caller-built envs
+    // already leave the Keychain tier off, but the isolation is stated, not
+    // inherited from a resolver default.
+    HASNA_STATION: "no-such-station",
     HASNA_HOOKS_API_URL: origin,
     HASNA_HOOKS_API_KEY: API_KEY,
     ...extra,
@@ -248,7 +252,7 @@ describe("fail-closed behaviour", () => {
     const notices: string[] = [];
     await writeHookEventRouted(
       { session_id: "s", hook_name: "commandlog", event_type: "Stop" },
-      { env: { HOME: home }, notice: (line) => notices.push(line) },
+      { env: { HOME: home, HASNA_STATION: "no-such-station" }, notice: (line) => notices.push(line) },
     );
     expect(notices.join("\n")).toMatch(/event not recorded/);
     expect(sqliteFilesUnder(home)).toEqual([]);
@@ -257,7 +261,7 @@ describe("fail-closed behaviour", () => {
   test("a read with no resolvable credential THROWS rather than returning an empty list", async () => {
     const home = mkdtempSync(join(tmpdir(), "hooks-sink-noread-"));
     homes.push(home);
-    await expect(listHookEvents({}, { env: { HOME: home } })).rejects.toThrow(
+    await expect(listHookEvents({}, { env: { HOME: home, HASNA_STATION: "no-such-station" } })).rejects.toThrow(
       /no registry authority resolved|REMOTE_API_CONFIG_MISSING/,
     );
   });

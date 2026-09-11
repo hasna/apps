@@ -25,16 +25,28 @@ import {
 } from "./event-store.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-event-routes-"));
+const TEST_HOME = mkdtempSync(join(tmpdir(), "hooks-event-routes-home-"));
 const API_KEY = "fixture-serve-key";
+const savedHome = process.env.HOME;
+const savedStation = process.env.HASNA_STATION;
 
 beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;
   process.env.HASNA_HOOKS_DB_PATH = ":memory:";
+  // Nothing in these routes should reach the real home; pin it anyway so a
+  // future route that resolves a credential cannot read the station's.
+  process.env.HOME = TEST_HOME;
+  process.env.HASNA_STATION = "no-such-station";
 });
 
 afterAll(() => {
   delete process.env.HASNA_HOOKS_DATA_DIR;
   delete process.env.HASNA_HOOKS_DB_PATH;
+  if (savedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = savedHome;
+  if (savedStation === undefined) delete process.env.HASNA_STATION;
+  else process.env.HASNA_STATION = savedStation;
+  rmSync(TEST_HOME, { recursive: true, force: true });
   closeDb();
   __resetHookEventStore();
   rmSync(TEST_DIR, { recursive: true, force: true });
