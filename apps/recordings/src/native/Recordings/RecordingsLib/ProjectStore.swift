@@ -288,7 +288,7 @@ public final class ProjectStore: ObservableObject {
         isReadyForRecording = false
         let registrations: [(String, RecordingsCLI.CanonicalProject)]
         do {
-            registrations = try await Task.detached(priority: .utility) {
+            registrations = try await BlockingOperation.runThrowing(qos: .utility) {
                 try original.projects.map { project in
                     let canonical = try RecordingsCLI.registerProject(
                         name: project.name,
@@ -297,7 +297,7 @@ public final class ProjectStore: ObservableObject {
                     )
                     return (project.id, canonical)
                 }
-            }.value
+            }
         } catch {
             let message = "Failed to register projects: \((error as? RecordingsCLI.Failure)?.message ?? error.localizedDescription)"
             synchronizationError = message
@@ -347,9 +347,9 @@ public final class ProjectStore: ObservableObject {
         let local = RecProject(name: name, path: path, systemPrompt: systemPrompt, color: color)
         let canonical: RecordingsCLI.CanonicalProject
         do {
-            canonical = try await Task.detached(priority: .userInitiated) {
+            canonical = try await BlockingOperation.runThrowing {
                 try RecordingsCLI.registerProject(name: local.name, path: local.registrationPath, home: home)
-            }.value
+            }
         } catch {
             persistenceError = "Failed to register project: \((error as? RecordingsCLI.Failure)?.message ?? error.localizedDescription)"
             throw error

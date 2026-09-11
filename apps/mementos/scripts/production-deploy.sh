@@ -255,7 +255,10 @@ deploy_service() {
   local task_count
   task_count="$(jq -r '.taskArns | length' "$TMP_DIR/task-list.json")"
   (( task_count > 0 )) || fail "deployment readback returned no running service tasks"
-  mapfile -t task_arns < <(jq -r '.taskArns[]' "$TMP_DIR/task-list.json")
+  task_arns=()
+  while IFS= read -r task_arn; do
+    [[ -n "$task_arn" ]] && task_arns+=("$task_arn")
+  done < <(jq -r '.taskArns[]' "$TMP_DIR/task-list.json")
   run_aws "$TMP_DIR/task-readback.json" "$TMP_DIR/task-readback.err" ecs describe-tasks \
     --cluster "$CLUSTER" --tasks "${task_arns[@]}"
 

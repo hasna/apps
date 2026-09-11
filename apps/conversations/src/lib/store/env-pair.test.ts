@@ -30,14 +30,11 @@ describe("conversationsCloudEnv", () => {
     expect(client!.baseUrl).toBe("https://api.hasna.com/conversations/v1");
   });
 
-  test("local DB path overrides inherited API routing and strips the credentials", () => {
-    const env = conversationsCloudEnv({
-      ...CLOUD_ENV,
-      CONVERSATIONS_DB_PATH: "/tmp/conversations-test.db",
-    });
-    expect(env.HASNA_CONVERSATIONS_API_URL).toBeUndefined();
-    expect(env.HASNA_CONVERSATIONS_API_KEY).toBeUndefined();
-    expect(resolveConversationsCloud(env)).toBeNull();
+  test("retired DB path is rejected without stripping inherited API credentials", () => {
+    const input = { ...CLOUD_ENV, CONVERSATIONS_DB_PATH: "/tmp/conversations-test.db" };
+    expect(() => conversationsCloudEnv(input)).toThrow(/CONVERSATIONS_DB_PATH/);
+    expect(input.HASNA_CONVERSATIONS_API_KEY).toBe(CLOUD_ENV.HASNA_CONVERSATIONS_API_KEY);
+    expect(input.HASNA_CONVERSATIONS_API_URL).toBe(CLOUD_ENV.HASNA_CONVERSATIONS_API_URL);
   });
 
   test("no url/key and no store path refuses instead of selecting local (fail closed, 2026-09-04)", () => {
@@ -45,8 +42,8 @@ describe("conversationsCloudEnv", () => {
     expect(() => conversationsCloudEnv({})).toThrow(/HASNA_CONVERSATIONS_API_KEY/);
   });
 
-  test("an explicit store path is the ONLY no-API route to local", () => {
-    const env = conversationsCloudEnv({ CONVERSATIONS_DB_PATH: "/tmp/conversations-test.db" });
-    expect(resolveConversationsCloud(env)).toBeNull();
+  test("a retired store path without API credentials also refuses", () => {
+    expect(() => conversationsCloudEnv({ CONVERSATIONS_DB_PATH: "/tmp/conversations-test.db" }))
+      .toThrow(/CONVERSATIONS_DB_PATH/);
   });
 });

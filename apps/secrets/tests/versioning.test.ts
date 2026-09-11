@@ -1,3 +1,5 @@
+import { startLoopbackVault } from "./loopback-vault-fixture.mjs";
+let api: Awaited<ReturnType<typeof startLoopbackVault>>;
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -52,9 +54,11 @@ beforeEach(async () => {
   // which CLI children (fresh processes, fresh key file) cannot decrypt.
   _resetLocalMasterKey();
   resetDb();
+  api = await startLoopbackVault(testDir, { dbPath, keyDir });
 });
 
 afterEach(async () => {
+  await api?.stop();
   resetDb();
   _resetLocalMasterKey();
   delete process.env.OPEN_SECRETS_DB;
@@ -66,12 +70,7 @@ async function runCli(args: string[], stdinText?: string) {
   const proc = Bun.spawn({
     cmd: ["bun", "src/index.ts", ...args],
     cwd: rootDir,
-    env: {
-      ...process.env,
-      OPEN_SECRETS_DB: dbPath,
-      HASNA_SECRETS_KEY_DIR: keyDir,
-      NO_COLOR: "1",
-    },
+    env: api.env(),
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",

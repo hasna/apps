@@ -682,7 +682,7 @@ describe("secure-input delivery contract", () => {
     const deliveryStatus = sliceBetween(
       engineSource,
       "private func updateDeliveryStatus(",
-      "private func selectedRunningPasteTarget(",
+      "private func appendUndeliveredPaste(",
     );
     expect(deliveryStatus).toContain("setBlockedReason(nil, for: .delivery)");
     expect(deliveryStatus).toContain("setBlockedReason(nil, for: .pressConsumed)");
@@ -785,21 +785,25 @@ describe("secure-input delivery contract", () => {
    * `restoreClipboard` is an explicit opt-in.
    */
   test("secure input never restores the clipboard, and the message says so", () => {
-    // End marker is the restore CALL, not the literal `if shouldRestore {`: that marker pinned the
-    // exact spelling of a guard two lines below a test which is only about the decision TABLE, so
-    // parenthesising the condition — or putting a comment in it — failed here.
-    //
-    // But widening the region to include the guard line was NOT free, and the first version of this
-    // comment wrongly said it was. An adversarial review replaced the `stillOwnsPayload` arm with
-    // `true` — removing the opt-in entirely — and added `// stillOwnsPayload is folded into the
-    // table above` to the guard line. `toContain("stillOwnsPayload")` was then satisfied by the
-    // COMMENT, and the mutation passed at EXIT=0 where it had died before the marker moved.
-    //
-    // So the region is read with every comment stripped, trailing ones included. Comments cannot
-    // satisfy an assertion about code.
-    const settlement = withoutAnyComments(
-      sliceBetween(engineSource, "let shouldRestore = switch outcome {", "previousClipboard.restore("),
+    // The unchanged table now lives in a pure helper shared with the compiled Swift tests.
+    // Strip every comment before reading it: a comment mentioning stillOwnsPayload must not
+    // satisfy the ownership assertion if the executable arm was changed to `true`.
+    const predicate = withoutAnyComments(
+      sliceBetweenUnique(
+        engineSource,
+        "nonisolated static func shouldRestorePreviousClipboard(",
+        "nonisolated static func outcomeLeavesTranscriptOnClipboard(",
+      ),
     );
+    const bodyOpen = predicate.indexOf("{");
+    const bodyClose = matchingDelimiterIndex(predicate, bodyOpen, "{", "}");
+    const switchAt = predicate.indexOf("switch outcome {", bodyOpen);
+    expect(switchAt, "the restore predicate must switch on the supplied outcome").toBeGreaterThan(bodyOpen);
+    const tableOpen = predicate.indexOf("{", switchAt);
+    const tableClose = matchingDelimiterIndex(predicate, tableOpen, "{", "}");
+    // The helper must return exactly this switch, with no earlier return or later override.
+    expect(predicate.slice(bodyOpen + 1, switchAt).trim()).toBe("");
+    expect(predicate.slice(tableClose + 1, bodyClose).trim()).toBe("");
     // The whole table as a MAPPING from outcome to expression — not as arm text. Text got both
     // directions wrong: it false-positived on a pure reorder of the case list, and it missed
     // splitting one outcome out of the group into its own arm with a different expression (giving
@@ -807,9 +811,7 @@ describe("secure-input delivery contract", () => {
     // so a target-unavailable failure never restored though the owner opted in and we still held the
     // payload). A mapping is invariant under both, and a `_ = stillOwnsPayload` statement elsewhere
     // in the region cannot satisfy it either.
-    const decision = switchArmsByOutcome(
-      sliceBetween(settlement, "switch outcome {", "\n            }"),
-    );
+    const decision = switchArmsByOutcome(predicate.slice(tableOpen + 1, tableClose));
     // STRICTNESS COST, disclosed rather than left to be discovered: these are exact `.toBe` on the
     // arm expression, so reflowing an expression across lines fails here. That is the same class of
     // cost as requiring the table and its use to be adjacent — a legitimate refactor is a one-line
@@ -838,8 +840,7 @@ describe("secure-input delivery contract", () => {
   });
 
   /**
-   * The switch above decides correctly and the assertion above stops at `if shouldRestore {` — so
-   * the restore CALL SITE was outside every assertion in the suite. Widening the condition to
+   * A correct switch alone does not protect the restore CALL SITE. Widening the condition to
    * `if shouldRestore || outcome == .secureInputActive(…)` restores the previous clipboard over
    * secure input, deleting the exact text the status line has just told the owner to press Cmd-V
    * for, and leaves the switch — and all 63 assertions — untouched.
@@ -866,8 +867,20 @@ describe("secure-input delivery contract", () => {
     const restoreGuard = executableClosure.match(/if ([^\n{]+?)\s*\{[^{}]*?previousClipboard\.restore\(/);
     expect(restoreGuard, "the restore is no longer guarded by a single `if`").not.toBeNull();
 
-    // And NOTHING may sit between the decision and its use. The decision table's closing brace must
-    // be followed immediately by this `if` — no intervening statement at all.
+    // The extracted predicate must receive the actual outcome and both ownership readbacks.
+    // Hardcoding or exchanging an argument would disconnect the correct table from this paste.
+    const decisionCalls = [...executableClosure.matchAll(
+      /let shouldRestore\s*=\s*Self\.shouldRestorePreviousClipboard\s*\(/g,
+    )];
+    expect(decisionCalls).toHaveLength(1);
+    const decisionOpen = executableClosure.indexOf("(", decisionCalls[0]!.index);
+    const decisionClose = matchingDelimiterIndex(executableClosure, decisionOpen, "(", ")");
+    expect(executableClosure.slice(decisionOpen + 1, decisionClose).replace(/\s/g, "")).toBe(
+      "outcome:outcome,stillOwnsPayload:stillOwnsPayload,stillOwnsChangeCount:stillOwnsChangeCount",
+    );
+
+    // And NOTHING may sit between the decision call and its use. The call's closing parenthesis
+    // must be followed immediately by this `if` — no intervening statement at all.
     //
     // This replaces a brace-depth check that was wrong in both directions. It was too WEAK, because
     // it counted braces over text that still contained string bodies, so one `}` inside a log line
@@ -882,21 +895,16 @@ describe("secure-input delivery contract", () => {
     // It was also too STRICT in a way I did not disclose: `do { if shouldRestore { … } }` is
     // semantics-identical and it failed. This assertion is strict too — deliberately, and stated
     // here rather than discovered. Any `do`, `if let`, `switch` arm or early return introduced
-    // between the table and its use fails LOUDLY with the message below, so a legitimate refactor
+    // between the decision call and its use fails LOUDLY with the message below, so a legitimate refactor
     // is a one-line change to this test plus an argument for why the decision is still total. That
     // is the trade this file makes everywhere else, and the alternative is a control-flow analysis
     // this suite has no parser for.
     const guardAt = executableClosure.indexOf(restoreGuard![0]);
-    // The table's OWN closing brace, brace-matched. `lastIndexOf("}", guardAt)` is not brace
-    // matching: `guard stillOwnsChangeCount else { return }` between the table and the guard puts a
-    // nearer `}` in the way, so the check below saw only whitespace and passed — measured surviving
-    // at EXIT=0 while semantically gating the restore on a second condition.
-    const tableOpen = executableClosure.indexOf("{", executableClosure.indexOf("let shouldRestore = switch outcome"));
-    expect(tableOpen, "the decision table's opening brace is not locatable").toBeGreaterThan(-1);
-    const tableClose = matchingDelimiterIndex(executableClosure, tableOpen, "{", "}");
-    expect(tableClose, "the decision table's closing brace is not locatable").toBeLessThan(guardAt);
+    // Match the decision call's OWN closing delimiter rather than the last delimiter before
+    // the guard, which could belong to an intervening early-return or enclosing condition.
+    expect(decisionClose, "the restore decision must precede its guard").toBeLessThan(guardAt);
     expect(
-      executableClosure.slice(tableClose + 1, guardAt).trim(),
+      executableClosure.slice(decisionClose + 1, guardAt).trim(),
       "nothing may sit between the shouldRestore decision and the `if` that uses it — an early " +
         "return, an enclosing condition or an extra branch all gate the restore on something the " +
         "decision table does not know about",
@@ -1017,7 +1025,7 @@ describe("secure-input delivery contract", () => {
     const startRecording = sliceBetweenUnique(
       engineSource,
       "public func startRecording(",
-      "let frontmostApp = frontmostAppSnapshot()",
+      "let frontmostApp: FrontmostAppSnapshot?",
     );
     expect(startRecording).toContain("setBlockedReason(nil, for: .pressConsumed)");
     expect(startRecording).toContain("setBlockedReason(nil, for: .delivery)");

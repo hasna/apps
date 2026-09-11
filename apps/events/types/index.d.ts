@@ -3,6 +3,7 @@ import { type EventsStore } from "./storage.js";
 import { type TransportDispatchOptions } from "./transports.js";
 import { type EventTypeCatalog } from "./catalog.js";
 export * from "./types.js";
+export { createIntakeClient, prepareIntake } from "./intake/client.js";
 export * from "./storage.js";
 export * from "./filter.js";
 export * from "./signing.js";

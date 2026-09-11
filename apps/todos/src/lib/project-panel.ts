@@ -9,7 +9,7 @@ import { getPlan, listPlans } from "../db/plans.js";
 import { getProject, slugify } from "../db/projects.js";
 import { getTaskWithRelations, listTasks } from "../db/task-crud.js";
 import { getDatabase, now } from "../db/database.js";
-import type { Project, Task, TaskPriority, TaskStatus } from "../types/index.js";
+import type { Plan, Project, Task, TaskPriority, TaskStatus } from "../types/index.js";
 
 export interface TodosProjectPanelOptions {
   limit?: number;
@@ -120,23 +120,28 @@ export function createTodosProjectPanel(projectId: string, options: TodosProject
     throw new Error(`Project not found: ${projectId}`);
   }
 
-  const generatedAt = now();
-  const projectSlug = projectSlugForPanel(project);
   const tasks = listTasks({ project_id: project.id, include_archived: false }, db);
   const plans = listPlans(project.id, db);
-  const activePlans = plans.filter((plan) => plan.status === "active");
-  const statusCounts = countByStatus(tasks);
-  const priorityCounts = countByPriority(tasks);
-
-  const relations = tasks
-    .map((task) => getTaskWithRelations(task.id, db))
-    .filter((task): task is NonNullable<ReturnType<typeof getTaskWithRelations>> => task !== null);
   const blockersByTask = new Map<string, Task[]>();
-  for (const task of relations) {
-    const blockers = task.dependencies.filter((dep) => !TERMINAL_STATUSES.has(dep.status));
-    if (blockers.length > 0) blockersByTask.set(task.id, blockers);
+  for (const task of tasks) {
+    const relations = getTaskWithRelations(task.id, db);
+    const blockers = relations?.dependencies.filter(dep => !TERMINAL_STATUSES.has(dep.status)) ?? [];
+    if (blockers.length) blockersByTask.set(task.id,blockers);
   }
+  const planNames = new Map(plans.map(plan=>[plan.id,plan.name]));
+  for (const task of tasks) if(task.plan_id && !planNames.has(task.plan_id)) {const plan=getPlan(task.plan_id,db);if(plan)planNames.set(plan.id,plan.name);}
+  return renderTodosProjectPanel(project,tasks,plans,blockersByTask,{limit,planNames});
+}
 
+/** Render a complete, already-authorized snapshot without reading any database. */
+export function renderTodosProjectPanel(project:Project,tasks:Task[],plans:Plan[],blockersByTask:Map<string,Task[]>,options:{limit?:number;planNames?:Map<string,string>} = {}):ProjectPanel {
+  const limit=clampLimit(options.limit);
+  const generatedAt=now();
+  const projectSlug=projectSlugForPanel(project);
+  const activePlans=plans.filter(plan=>plan.status==='active');
+  const statusCounts=countByStatus(tasks);
+  const priorityCounts=countByPriority(tasks);
+  const planNames=options.planNames??new Map(plans.map(plan=>[plan.id,plan.name]));
   const blockedTasks = tasks.filter((task) => blockersByTask.has(task.id) && !TERMINAL_STATUSES.has(task.status));
   const overdueTasks = tasks.filter((task) => isOverdue(task, generatedAt));
   const activeTasks = tasks.filter((task) => !TERMINAL_STATUSES.has(task.status));
@@ -190,7 +195,7 @@ export function createTodosProjectPanel(projectId: string, options: TodosProject
       timestamp: task.updated_at,
       resourceRefs: [
         taskResource(task),
-        ...(task.plan_id ? [planResource(task.plan_id, getPlan(task.plan_id, db)?.name)] : []),
+        ...(task.plan_id ? [planResource(task.plan_id, planNames.get(task.plan_id))] : []),
       ],
       metadata: {
         due_at: task.due_at,

@@ -1,5 +1,157 @@
 # @hasna/notes
 
+## 0.6.2
+
+### Patch Changes
+
+- Ship generated TypeScript declarations for the existing package root and `./sdk` HTTP client, including typed note inputs, pagination, exports, transport reports, and errors. Keep both runtime entrypoints and the separate browser SDK unchanged. Add a fresh packed strict consumer that checks inferred positive and negative types without skipping dependency declaration checks.
+
+## 0.6.1
+
+### Patch Changes
+
+- notes-serve bounds passwordless login without giving anyone a lockout
+  primitive, and its per-IP limits now see the real client behind the fleet's
+  proxies.
+
+  **Login requests carry a nonce.** `POST /auth/login` mints a request per call:
+  a six-digit code (delivered to the address) and an opaque `requestId`,
+  returned only to the requester. `POST /auth/verify` now takes
+  `{ email, code, requestId }` — `requestId` is required — and looks the request
+  up by its nonce, never "the latest code for the address". A request that does
+  not resolve is refused before anything is counted. Wrong codes count against
+  that request and burn it after 5; after that even the correct code is refused
+  and the holder simply requests a new one. Nothing is keyed on the address: a
+  stranger can only burn requests it minted itself, so guessing is bounded at
+  five tries per code while N IPs requesting codes for an address and guessing
+  at them cannot stop its owner from logging in. Minting is bounded per source
+  IP (5/hour) and by a process-wide budget (300 codes per minute,
+  `otpMintBudget`). Storage gains `otp_login_requests.failed_attempts`
+  (PostgreSQL migration `notes_pg_010`, additive).
+
+  This replaces the per-email hourly quota from #1756 (anyone who knew an
+  address could spend its budget from throwaway IPs) and the #1761 code burn
+  keyed on the address (ten throwaway IPs could kill the owner's code).
+
+  **Per-IP limits behind proxies (#1784).** Behind the fleet ALB the socket peer
+  is the balancer, so every user shared one bucket and 21 wrong verifies from
+  one machine locked everyone out for an hour. `HASNA_NOTES_SERVER_TRUSTED_PROXY_HOPS`
+  (default `0`; the image sets `1`) names how many `x-forwarded-for`-appending
+  proxies to trust, counted from the right — never the leftmost, client-written
+  entry. `HASNA_NOTES_SERVER_TRUSTED_GATEWAY_PEERS` (IPs/CIDRs) lets `x-real-ip`
+  from the api.hasna.com gateway's egress identify the client; from any other
+  peer it is ignored. `--auto-approve` keeps deciding on the raw socket peer.
+
+  Login codes stay out of the server log: the request line records only the
+  address and the expiry, and the code itself is printed only under the explicit
+  `HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES=1` opt-in (or `--dev`, which returns it
+  in the response body). Fixes hasna/apps#1542; follow-up to #1761 and the #1770
+  reviews; addresses #1784 for this server.
+
+- Add a typed browser-safe Notes client with explicit authority and per-request credentials, shared SaaS wire fixtures, trash restore, revision preconditions, label operations and paged changes. Preserve the existing Node resolver and independent command surfaces.
+
+## 0.6.0
+
+### Minor Changes
+
+- a053564: Resolve credentials and authority through the `@hasna/contracts` client chain
+  (hasna/apps#1720), and move the client wire dialect to the `/v1` authority root.
+
+  The CLI, the MCP server and the `./sdk` client no longer read canonical env
+  variables by hand. All three call the one resolver in `@hasna/contracts`
+  (bumped from 0.10.6 to the exact 1.0.2), per call, fresh: an explicit
+  `apiKey`/`profile` argument, then `HASNA_NOTES_API_KEY_OVERRIDE` /
+  `HASNA_PROFILE` / `HASNA_NOTES_API_KEY_REF`, then the macOS Keychain item
+  `hasna.credentials.notes.api-key`, then `~/.hasna/notes/config/credentials`
+  (owner-only 0400/0600), then `HASNA_NOTES_API_KEY`. The authority follows the
+  same ladder — `HASNA_NOTES_API_URL`, the Keychain `api-url` item, the
+  credentials file — and now DEFAULTS to the fleet gateway
+  `https://api.hasna.com/notes` once a credential resolves, so a key alone is a
+  complete configuration. Resolving per call is what makes a rotation heal a
+  long-lived MCP server, shell or agent without restarting it: every request
+  re-resolves, and the transport refuses to send when the authority or
+  credential changed since the client was built.
+
+  What this removes:
+
+  - The app's own credential chain in `client/transport.mjs` (environment
+    snapshot + hand-rolled URL/DSN checks): nothing reads `~/.hasna/fleet-env`,
+    `~/.hasna/cloud`, `~/.config/hasna` or `$XDG_CONFIG_HOME`, and no client
+    surface resolves a key outside `@hasna/contracts`.
+  - The legacy-env DEPRECATED notice class: `HASNA_NOTES_API_KEY` remains a
+    legitimate tier, it simply sits below Keychain and disk.
+  - The `/api/v1` wire prefix. The client, the server routes, auth, the OpenAPI
+    document, the device page and the dialect docs all speak the `/v1`
+    authority root (`/v1/notes`, `/v1/export`, `/v1/auth/...`). The
+    `personalnotes/v1` wire NAME and the unversioned `/api/auth` login mirror
+    are unchanged. Self-hosted servers must move any pinned `/api/v1/*`
+    endpoint to `/v1/*`; the server answers `GET /v1` (dialect discovery),
+    `/v1/health`, `/ready`, `/version` and `/openapi.json`.
+
+  What this adds:
+
+  - `notes storage status` (JSON and text) reports `baseUrl`, `apiUrlSource`,
+    `apiKeySource` and `apiKeyTier` — WHICH tier supplied the credential
+    (never the value).
+  - The SDK re-exports the resolver seam (`resolveNotesClientTransport`,
+    `createNotesHttpStore`, `NotesHttpStoreError`) unchanged in shape, with the
+    new report fields.
+
+  Behaviour worth knowing about:
+
+  - Hosted mode with no credential still fails closed — non-zero exit, no
+    SQLite, no local-fallback event — and the message now names the tier and
+    file it consulted. There is deliberately NO local mode to opt into.
+  - A declared-but-blank variable is a refusal, not an absence, and — because
+    the resolver is given the live `process.env` AS-IS, never a copy (#1788) —
+    a blank `HASNA_NOTES_*` variable can no longer silently switch the ambient
+    Keychain tier off.
+  - An explicit base URL with no explicit API key is refused outright: the
+    ambient fleet credential is never attached to an arbitrary authority
+    (#1794).
+  - The transport treats every 3xx as terminal (redirect never followed),
+    cancels 401/403 response bodies unread, and surfaces the credential SOURCE
+    (never the value) in auth failures. The notes store's error envelope
+    (`NotesHttpStoreError` with status/code/details and credential redaction)
+    is preserved.
+  - The server is unchanged in storage/auth semantics; it remains
+    PostgreSQL-only with the mandatory server-only `HASNA_NOTES_DATABASE_URL`.
+
+### Patch Changes
+
+- f115060: Resolver validation fixes for the @hasna/contracts credential chain
+  (hasna/apps#1720, notes P1 lane, round 1).
+
+  - **Non-JSON responses name the HTTP status.** `NotesHttpStoreError` for a
+    non-JSON body now reads `Notes API GET /notes returned HTTP 404 with a
+non-JSON body` (code `invalid_json`, `status` set) instead of `returned
+invalid JSON`, so the CLI and MCP — which print only the message — let an
+    operator tell a gateway/deployment mismatch (an origin that does not serve
+    `/v1` answers 404 text/plain) apart from a corrupt body.
+  - **`storage status` reports `apiUrlPresent` honestly.** The transport report's
+    `api_url_present` was a copy of `api_key_present`; it is now true when an
+    operator configured the authority (`HASNA_NOTES_API_URL`, the Keychain
+    `api-url` item, or the credentials file) and false when the default fleet
+    gateway applied (`apiUrlSource: "default"`).
+  - **Maintenance path module is name-only.** `server/paths.mjs` keeps just the
+    data-home branch (`HASNA_DATA_HOME`, else the platform data location): the
+    unused config/state/cache branches — including the retired `~/.config/hasna`
+    path shape — the unprefixed `NOTES_HOME` override and the import-time
+    `DEFAULT_DB_PATH` (`<data root>/server.db`) constant are removed. Exact
+    overrides stay `HASNA_NOTES_HOME`, then `HASNA_NOTES_ROOT`. Credentials and
+    the service authority never resolved here (the contracts chain owns
+    `~/.hasna/notes/config/credentials` and `HASNA_HOME`).
+  - **Hermetic bin/MCP tests.** The bin-runtime and MCP edge suites pin
+    `HASNA_STATION` to a sentinel account and hand the child a throwaway
+    `HASNA_HOME`, so a provisioned macOS station's Keychain items can no longer
+    turn the fixed-authority case into an authority conflict or the
+    no-credential case into a live fleet request. Both suites now also assert
+    the fail-closed first stderr line names every credential tier and that
+    nothing (no `*.db`, no data root) is created under the fake home.
+
+  No client behaviour changes otherwise: hosted with no credential still fails
+  closed on the CLI, MCP and `./sdk`, and there is no local fallback.
+
 ## 0.5.0
 
 ### Minor Changes

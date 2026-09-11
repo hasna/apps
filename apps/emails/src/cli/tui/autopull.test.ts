@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildS3PullTargets } from "./autopull-targets.js";
+import { buildS3PullTargets } from "./autopull-targets.test-support.js";
 
 const ENV_KEYS = [
   "HOME",
@@ -98,7 +98,7 @@ describe("TUI autopull in self_hosted mode", () => {
       const script = `
         import { existsSync } from "node:fs";
         import { join } from "node:path";
-        import { autoPull } from "./src/cli/tui/autopull.ts";
+        import { autoPull } from "./src/cli/tui/autopull.test-support.ts";
         const result = await autoPull({ s3: true, forwarding: true, limit: 2 });
         console.log(JSON.stringify({
           result,

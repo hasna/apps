@@ -49,7 +49,7 @@
  * app's behalf. `~/.hasna/knowledge/auth.json` is no longer consulted by the
  * credential chain at all (see src/auth.ts).
  */
-import { type CredentialTier, type KeychainTierOptions } from '@hasna/contracts/client';
+import type { CredentialTier, KeychainTierOptions } from './contracts-types.js';
 export declare const KNOWLEDGE_APP_SLUG = "knowledge";
 /**
  * Canonical client variables. The unprefixed `KNOWLEDGE_API_URL` /
@@ -175,6 +175,51 @@ export declare function resetKnowledgeLocalModeNotice(): void;
 /** The fail-closed diagnostic every unresolved transport reports. Never a credential value. */
 export declare function knowledgeFailClosedMessage(original: string): string;
 /**
+ * The value-free diagnostic a fail-closed resolution carries. A run that must
+ * record KNOWLEDGE as a dark source needs an ANSWER it can branch on, not prose
+ * it has to scrape (BUG-0044): `status: 'unavailable'` plus the places that were
+ * consulted is that answer.
+ *
+ * Nothing here is a credential value, and the configured authority is
+ * deliberately NOT included — a resolution that refused to use a URL must not
+ * echo it back.
+ */
+export interface KnowledgeSourceUnavailableDetail {
+    /** Always `unavailable`: the machine-readable verb for "this source is dark". */
+    status: 'unavailable';
+    /** Always `none` here: nothing resolved. */
+    credential_source: 'none';
+    /** The exact paths the DISK tier consulted, in precedence order. */
+    credential_file_candidates: readonly string[];
+    /** The env KEY NAMES that could have supplied the credential. Never values. */
+    credential_env_keys: readonly string[];
+    /** Whether the macOS Keychain tier was live for this process. */
+    keychain_tier_enabled: boolean;
+    /** Whether the explicit on-box opt-in was present (it does not select here, or nothing resolved). */
+    local_opt_in_present: boolean;
+    network_guard_active: boolean;
+    /** The underlying resolution failure, verbatim. Never a credential value. */
+    reason: string;
+}
+/**
+ * A process that needs a hosted credential and has none: the shared chain could
+ * not resolve one from any tier. This is the fail-closed ruling (incident
+ * 715712) — the caller exits non-zero rather than dropping onto the on-box store
+ * — carrying a machine-readable `code`/`status` so a consuming run records the
+ * source as unavailable mechanically instead of by hand (BUG-0044).
+ *
+ * The message is unchanged from the pre-typed form, so human output and the
+ * existing prose assertions stay exactly as they were.
+ */
+export declare class KnowledgeSourceUnavailableError extends Error {
+    readonly code: 'source_unavailable';
+    readonly status: 'unavailable';
+    readonly detail: KnowledgeSourceUnavailableDetail;
+    constructor(detail: KnowledgeSourceUnavailableDetail, options?: {
+        cause?: unknown;
+    });
+}
+/**
  * Resolve the client connection through the shared @hasna/contracts resolver.
  *
  * HTTP when a credential resolves from any tier — the fleet gateway is the
@@ -186,5 +231,9 @@ export declare function knowledgeFailClosedMessage(original: string): string;
  * cannot be honoured — THROWS and the caller exits non-zero: there is no
  * on-box fallback, no sqlite touch and no *-local-fallback event. Values are
  * never included in the report or in errors.
+ *
+ * @throws {KnowledgeSourceUnavailableError} when no credential resolves from
+ * any tier — `code: 'source_unavailable'`, a value-free `detail`, and a
+ * non-zero CLI exit. The message is unchanged from the prose form.
  */
 export declare function resolveKnowledgeClientTransport(env?: NodeJS.ProcessEnv, options?: KnowledgeClientTransportOptions): KnowledgeClientTransportReport;

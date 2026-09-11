@@ -30,7 +30,7 @@ describe("TASK_PRIORITIES", () => {
 
 describe("PLAN_STATUSES", () => {
   it("should contain the expected statuses", () => {
-    expect(PLAN_STATUSES).toEqual(["active", "completed", "archived"]);
+    expect(PLAN_STATUSES).toEqual(["active", "completed", "archived", "planning", "cancelled"]);
   });
 });
 

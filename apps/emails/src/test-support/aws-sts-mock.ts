@@ -7,7 +7,7 @@
 // mutable per-test handler. Source paths that reach STS at test time:
 // src/lib/aws-inbound.ts (account-id lookup for the bucket policy condition),
 // src/cli/commands/domain.ts (`adopt`'s default-bucket resolution), and
-// src/lib/inbound-chain.ts (the provisioning preflight).
+// src/lib/inbound-chain.test-support.ts (the provisioning preflight).
 //
 // The DEFAULT handler THROWS, mirroring what the real SDK does in the scrubbed
 // hermetic test environment (no credentials, instance metadata disabled): callers

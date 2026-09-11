@@ -4,11 +4,15 @@
 import { assertTodosPriorRegistrationAdoptionValidationEnvelope } from "../project-registration/adoption-validation.js";
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.15.35
+// Source: Todos V1 API 0.16.0
+
+export interface MachineAuthority { "tenant_id": string; "kid": string }
+
+export interface Machine { "id": string; "name": string; "hostname": string; "platform": string; "last_seen_at": string; "metadata": Record<string, unknown>; "created_at": string; "ssh_address": string; "is_primary": boolean; "archived_at": string }
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "created_by"?: string | null; "reason"?: string | null; "tags"?: Array<string>; "version"?: number; "locked_by"?: string | null; "locked_at"?: string | null; "created_at"?: string; "updated_at"?: string }
 
-export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "parent_id"?: string | null; "created_at"?: string; "updated_at"?: string }
+export interface Project { "status"?: "active" | "completed" | "on_hold" | "archived"; "short_id"?: string | null; "metadata"?: Record<string, unknown>; "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "parent_id"?: string | null; "created_at"?: string; "updated_at"?: string }
 
 export interface TaskManifestBounds { "tasks": number; "dependencies": number; "comments": number; "verifications": number; "effects": number; "metadata_fields": number; "effect_payload_fields": number; "request_bytes": number; "response_bytes": number }
 
@@ -78,7 +82,7 @@ export interface ProjectResource { "source_project_id": string; "kind": "project
 
 export interface ProjectResourcePage { "authority": "todos"; "route": "todos.project-registration.v1"; "package_version": string; "authority_id": string; "tenant_id": string; "corpus_id": string; "source_project_id": string; "todos_project_id": string; "task_list_id": string; "include_anchors": boolean; "collection_revision": string; "limit": number; "count": number; "resources": Array<ProjectResource>; "has_more": boolean; "next_cursor": string | null; "complete": boolean; "truncated": false }
 
-export interface TaskList { "id"?: string; "project_id"?: string | null; "slug"?: string; "name"?: string; "description"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
+export interface TaskList { "status"?: "active" | "completed" | "archived"; "id"?: string; "project_id"?: string | null; "slug"?: string; "name"?: string; "description"?: string | null; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
 export interface ProjectTaskListEnsureReceipt { "schema_version": "todos.project-task-list-ensure.v1"; "receipt_id": string; "idempotency_key": string; "project_id": string; "task_list_id": string; "slug": string; "created_by_operation": boolean; "result_revision": string; "result_digest": string; "rollback_supported": boolean; "created_at": string }
 
@@ -94,7 +98,7 @@ export interface StaleLockHandoffReceipt { "schema_version": "todos.stale-lock-h
 
 export interface TaskGitRef { "id": string; "task_id": string; "ref_type": "branch" | "pull_request"; "name": string; "url": string | null; "provider": string | null; "metadata": Record<string, unknown>; "created_at": string; "updated_at": string }
 
-export interface Plan { "id": string; "slug": string | null; "project_id"?: string | null; "task_list_id"?: string | null; "agent_id"?: string | null; "name": string; "description"?: string | null; "status": "active" | "completed" | "archived"; "created_at": string; "updated_at": string }
+export interface Plan { "id": string; "slug": string | null; "project_id"?: string | null; "task_list_id"?: string | null; "agent_id"?: string | null; "name": string; "description"?: string | null; "start_date"?: string | null; "end_date"?: string | null; "status": "active" | "completed" | "archived" | "planning" | "cancelled"; "created_at": string; "updated_at": string }
 
 export interface PlanProjectLinkReceipt { "schema_version": "todos.plan-project-link.v1"; "receipt_id": string; "idempotency_key": string; "plan_id": string; "project_id": string; "prior_plan_project_id": string | null; "prior_task_project_ids": Record<string, string | null>; "task_ids": Array<string>; "task_count": number; "result_plan_revision": string; "result_digest": string; "rollback_supported": true; "created_at": string }
 
@@ -120,9 +124,9 @@ export interface FailTaskInput { "agent_id"?: string; "reason"?: string; "retry"
 
 export interface TaskFailureResult { "task": Task; "retryTask"?: Task }
 
-export interface CreateProjectInput { "name": string; "path": string; "description"?: string; "task_list_id"?: string; "task_prefix"?: string; "parent_id"?: string }
+export interface CreateProjectInput { "status"?: "active" | "completed" | "on_hold" | "archived"; "short_id"?: string | null; "metadata"?: Record<string, unknown>; "name": string; "path": string; "description"?: string; "task_list_id"?: string; "task_prefix"?: string; "parent_id"?: string }
 
-export interface UpdateProjectInput { "name"?: string; "path"?: string; "description"?: string | null; "parent_id"?: string | null }
+export interface UpdateProjectInput { "status"?: "active" | "completed" | "on_hold" | "archived"; "short_id"?: string | null; "metadata"?: Record<string, unknown>; "name"?: string; "path"?: string; "description"?: string | null; "parent_id"?: string | null }
 
 export interface RenameProjectInput { "new_slug": string; "name"?: string }
 
@@ -134,21 +138,23 @@ export interface PlanProjectLinkApplyInput { "project_id": string; "expected_pla
 
 export interface PlanProjectLinkRollbackInput { "project_id": string; "receipt_id": string; "expected_plan_revision": string }
 
+export interface PlanProjectLinkConflictResponse { "error": string; "code"?: string; "conflict"?: boolean; "operation_committed"?: true; "current_state_matches_receipt"?: false; "receipt"?: PlanProjectLinkReceipt }
+
 export interface ErrorResponse { "error": string; "code"?: string; "conflict"?: boolean }
 
-export interface CreateTaskListInput { "name": string; "slug"?: string; "project_id"?: string; "description"?: string; "metadata"?: Record<string, unknown> }
+export interface CreateTaskListInput { "status"?: "active" | "completed" | "archived"; "name": string; "slug"?: string; "project_id"?: string; "description"?: string; "metadata"?: Record<string, unknown> }
 
-export interface UpdateTaskListInput { "slug"?: string; "name"?: string; "description"?: string; "metadata"?: Record<string, unknown>; "project_id"?: string | null }
+export interface UpdateTaskListInput { "status"?: "active" | "completed" | "archived"; "slug"?: string; "name"?: string; "description"?: string; "metadata"?: Record<string, unknown>; "project_id"?: string | null }
 
 export interface CreateTaskCommentInput { "content": string; "agent_id"?: string; "session_id"?: string; "type"?: "comment" | "progress" | "note"; "progress_pct"?: number }
 
-export interface CreatePlanInput { "name": string; "slug"?: string; "description"?: string; "project_id"?: string; "task_list_id"?: string; "agent_id"?: string; "status"?: "active" | "completed" | "archived" }
+export interface CreatePlanInput { "name": string; "slug"?: string; "description"?: string; "project_id"?: string; "task_list_id"?: string; "agent_id"?: string; "start_date"?: string | null; "end_date"?: string | null; "status"?: "active" | "completed" | "archived" | "planning" | "cancelled" }
 
-export interface UpdatePlanInput { "name"?: string; "slug"?: string; "description"?: string; "task_list_id"?: string; "agent_id"?: string; "status"?: "active" | "completed" | "archived" }
+export interface UpdatePlanInput { "name"?: string; "slug"?: string; "description"?: string; "task_list_id"?: string; "agent_id"?: string; "start_date"?: string | null; "end_date"?: string | null; "status"?: "active" | "completed" | "archived" | "planning" | "cancelled" }
 
 export interface CreateTemplateInput { "name": string; "title_pattern": string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<TemplateVariable>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown>; "tasks"?: Array<CreateTemplateTaskInput> }
 
-export interface UpdateTemplateInput { "name"?: string; "title_pattern"?: string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<Record<string, unknown>>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown> }
+export interface UpdateTemplateInput { "expected_version"?: number; "name"?: string; "title_pattern"?: string; "description"?: string | null; "priority"?: "low" | "medium" | "high" | "critical"; "tags"?: Array<string>; "variables"?: Array<Record<string, unknown>>; "project_id"?: string | null; "plan_id"?: string | null; "metadata"?: Record<string, unknown> }
 
 export interface PrGroupCiProof { "provider": string; "provider_run_id": string; "status": "success"; "repository": string; "pr_number": number; "base_sha": string; "head_sha": string }
 
@@ -220,7 +226,14 @@ export class TodosV1Client {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+          }
+        } else {
+          url.searchParams.set(key, String(value));
+        }
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };
@@ -240,8 +253,35 @@ export class TodosV1Client {
   }
 
     /** Bulk-ingest a snapshot or atomically complete one observed plan */
-    async importSnapshot(body: { "exportedAt"?: string; "source"?: string; "tasks"?: Array<Task>; "projects"?: Array<Project>; "projectMachinePaths"?: Array<Record<string, unknown>>; "plans"?: Array<Record<string, unknown>>; "agents"?: Array<Record<string, unknown>>; "taskLists"?: Array<Record<string, unknown>>; "templates"?: Array<Record<string, unknown>>; "templateTasks"?: Array<TemplateTask>; "auditHistory"?: Array<Record<string, unknown>>; "tombstones"?: Array<Record<string, unknown>>; "planCompletions"?: Array<{ "id": string; "expected_updated_at": string; "status": "completed" }> }, init?: RequestInit): Promise<{ "received"?: number; "result"?: { "inserted"?: number; "updated"?: number; "deleted"?: number; "skipped"?: number; "errors"?: Array<string> }; "planCompletions"?: Array<{ "id": string; "status": "completed"; "expected_updated_at": string; "result_updated_at": string; "applied": boolean }> }> {
-      return this.request("POST", `/v1/import`, {
+    async importSnapshot(body: { "exportedAt"?: string; "source"?: string; "tasks"?: Array<Task>; "projects"?: Array<Project>; "projectMachinePaths"?: Array<Record<string, unknown>>; "machines"?: Array<Machine>; "expected_machine_authority"?: MachineAuthority; "plans"?: Array<Record<string, unknown>>; "agents"?: Array<Record<string, unknown>>; "taskLists"?: Array<Record<string, unknown>>; "templates"?: Array<Record<string, unknown>>; "templateTasks"?: Array<TemplateTask>; "auditHistory"?: Array<Record<string, unknown>>; "tombstones"?: Array<Record<string, unknown>>; "planCompletions"?: Array<{ "id": string; "expected_updated_at": string; "status": "completed" }> }, init?: RequestInit): Promise<{ "received"?: number; "machine_authority"?: MachineAuthority; "result"?: { "inserted"?: number; "updated"?: number; "deleted"?: number; "skipped"?: number; "errors"?: Array<string> }; "planCompletions"?: Array<{ "id": string; "status": "completed"; "expected_updated_at": string; "result_updated_at": string; "applied": boolean }> }> {
+      if (body.machines !== undefined && !Array.isArray(body.machines)) throw new Error("Invalid machine snapshot array; no snapshot was posted");
+      if (body.machines?.length) {
+        let capability;
+        try { capability = await this.listMachines(init); }
+        catch { throw new Error("REMOTE_API_INCOMPATIBLE: machine import requires an upgraded Todos server; no snapshot was posted"); }
+        if (capability?.schema_version !== 2 || !Array.isArray(capability.machines) || !capability.authority || typeof capability.authority.tenant_id !== "string" || !capability.authority.tenant_id || typeof capability.authority.kid !== "string" || !capability.authority.kid) throw new Error("REMOTE_API_INCOMPATIBLE: machine registry capability is missing; no snapshot was posted");
+        if (body.expected_machine_authority && (body.expected_machine_authority.kid !== capability.authority.kid || body.expected_machine_authority.tenant_id !== capability.authority.tenant_id)) throw new Error("Machine migration authority changed before POST; no snapshot was posted");
+        body = { ...body, expected_machine_authority: { ...capability.authority } };
+      }
+      const result = await this.request<Awaited<ReturnType<TodosV1Client["importSnapshot"]>>>("POST", `/v1/import`, {
+        body, query: undefined, init,
+      });
+      if (body.machines?.length && (result.machine_authority?.kid !== body.expected_machine_authority?.kid || result.machine_authority?.tenant_id !== body.expected_machine_authority?.tenant_id)) throw new Error("Machine receipt authority changed; preserve the source and inspect before retrying");
+      return result;
+    }
+
+    /** Read the complete shared machine registry */
+    async listMachines(init?: RequestInit): Promise<{ "authority": MachineAuthority; "schema_version": 2; "machines": Array<Machine> }> {
+      return this.request("GET", `/v1/machines`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Apply an atomic machine registry operation */
+    async mutateMachineRegistry(body: { "expected_authority": MachineAuthority; "action": "register" | "heartbeat" | "set-primary" | "archive" | "unarchive" | "delete" | "import"; "name"?: string; "id"?: string; "options"?: Record<string, unknown>; "machines"?: Array<Machine> }, init?: RequestInit): Promise<{ "authority": MachineAuthority; "schema_version": 2; "machines": Array<Machine>; "machine"?: Machine; "inserted": number; "skipped": number; "deleted"?: boolean }> {
+      return this.request("POST", `/v1/machines`, {
         body,
         query: undefined,
         init,
@@ -287,6 +327,24 @@ export class TodosV1Client {
     /** Update a plan */
     async updatePlan(id: string, body: UpdatePlanInput, init?: RequestInit): Promise<{ "plan"?: Plan }> {
       return this.request("PATCH", `/v1/plans/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read complete plan comment history */
+    async listPlanComments(id: string, query?: { "plan_read_contract"?: "1" }, init?: RequestInit): Promise<{ "count": number; "comments": Array<{ "id": string; "plan_id": string; "content": string; "created_at": string; "agent_id": string | null; "session_id": string | null; "type": "comment" | "progress" | "note"; "progress_pct": number | null }>; "history_selection"?: { "schema_version": 1; "plan_id": string; "complete": true } }> {
+      return this.request("GET", `/v1/plans/${encodeURIComponent(String(id))}/comments`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Delete a plan, detaching linked records only with force and preserving their content/history */
+    async deletePlanPreserving(id: string, body: { "force"?: boolean }, init?: RequestInit): Promise<{ "schema_version": 1; "plan_id": string; "deleted": boolean; "detached_task_ids": Array<string>; "detached_task_list_ids": Array<string>; "detached_tasks": number; "detached_task_lists": number }> {
+      return this.request("POST", `/v1/plans/${encodeURIComponent(String(id))}/delete-preserving`, {
         body,
         query: undefined,
         init,
@@ -359,6 +417,24 @@ export class TodosV1Client {
     /** Fence the prior attempt and create or adopt a recovery generation */
     async recoverPrGroup(id: string, body: RecoverPrGroupInput, init?: RequestInit): Promise<PrGroupMutationResult> {
       return this.request("POST", `/v1/pr-groups/${encodeURIComponent(String(id))}/recover`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Inspect bounded atomic migration authority (explicit todos:migrate scope required) */
+    async getAtomicProjectMigrationCapability(init?: RequestInit): Promise<{ "schema_version": 1; "authority": { "tenant_id": string; "kid": string; "deployment_id": string }; "supported_families": Array<string>; "supported_tombstones": Array<string>; "max_records": number; "max_bytes": number; "atomic": true }> {
+      return this.request("GET", `/v1/project-migrations`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Atomically reconcile a bounded project snapshot with durable replay receipts */
+    async importAtomicProjectSnapshot(body: { "schema_version": 1; "operation_id": string; "expected_authority": { "tenant_id": string; "kid": string; "deployment_id": string }; "snapshot_hash": string; "snapshot": Record<string, unknown> }, init?: RequestInit): Promise<{ "schema_version": 1; "operation_id": string; "snapshot_hash": string; "authority": { "tenant_id": string; "kid": string; "deployment_id": string }; "status": "complete"; "records": Array<{ "object_type": string; "object_id": string; "outcome": "inserted" | "updated" | "identical" | "superseded" | "deleted" | "detached"; "before_hash": string | null; "after_hash": string; "source_hash": string }> }> {
+      return this.request("POST", `/v1/project-migrations`, {
         body,
         query: undefined,
         init,
@@ -485,6 +561,15 @@ export class TodosV1Client {
       });
     }
 
+    /** Delete project identity and atomically detach linked records without deleting their content */
+    async deleteProjectPreserving(id: string, body: { "force"?: boolean; "require_completed_tasks"?: boolean }, init?: RequestInit): Promise<{ "schema_version": 1; "project_id": string; "deleted": boolean; "preserved_tasks": number; "preserved_plans": number; "detached_task_lists": number; "detached_child_projects": number }> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/delete-preserving`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Atomically rename a project and its canonical task list */
     async renameProject(id: string, body: RenameProjectInput, init?: RequestInit): Promise<{ "project"?: Project; "task_lists_updated"?: number }> {
       return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/rename`, {
@@ -584,6 +669,15 @@ export class TodosV1Client {
       });
     }
 
+    /** Delete a task list, optionally detaching linked tasks and plans while retaining their content and history */
+    async deleteTaskListPreserving(id: string, body: { "force"?: boolean }, init?: RequestInit): Promise<{ "schema_version": 1; "task_list_id": string; "deleted": boolean; "detached_task_ids": Array<string>; "detached_plan_ids": Array<string>; "detached_tasks": number; "detached_plans": number }> {
+      return this.request("POST", `/v1/task-lists/${encodeURIComponent(String(id))}/delete-preserving`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Apply one exact task-manifest graph through the Todos authority */
     async applyTaskManifest(body: TaskManifest, init?: RequestInit): Promise<TaskManifestApplyResponse> {
       return this.request("POST", `/v1/task-manifest/apply`, {
@@ -675,7 +769,7 @@ export class TodosV1Client {
     }
 
     /** List tasks */
-    async listTasks(query?: { "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled" | Array<"pending" | "in_progress" | "completed" | "failed" | "cancelled">; "priority"?: "low" | "medium" | "high" | "critical" | Array<"low" | "medium" | "high" | "critical">; "project_id"?: string; "parent_id"?: string | null; "include_subtasks"?: boolean; "plan_id"?: string; "task_list_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: string; "updated_after"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "tasks": Array<Task>; "count": number; "total": number }> {
+    async listTasks(query?: { "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled" | Array<"pending" | "in_progress" | "completed" | "failed" | "cancelled">; "priority"?: "low" | "medium" | "high" | "critical" | Array<"low" | "medium" | "high" | "critical">; "project_id"?: string; "parent_id"?: string | null; "include_subtasks"?: boolean; "include_archived"?: boolean; "plan_read_contract"?: "1"; "plan_id"?: string; "task_list_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: string; "updated_after"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "tasks": Array<Task>; "count": number; "total": number; "selection"?: { "schema_version": 1; "plan_id": string; "include_subtasks": true; "include_archived": boolean } }> {
       return this.request("GET", `/v1/tasks`, {
         body: undefined,
         query,
@@ -809,6 +903,15 @@ export class TodosV1Client {
       });
     }
 
+    /** Atomically initialize server-owned bundled definitions, retaining existing same-name templates */
+    async initializeTemplates(body: Record<string, unknown>, init?: RequestInit): Promise<{ "schema_version": 1; "created": number; "skipped": number; "names": Array<string>; "records": Array<{ "definition_index": number; "ids": Array<string>; "name": string; "status": "created" | "skipped" }> }> {
+      return this.request("POST", `/v1/templates/initialize`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Get one reusable task template with its checklist steps */
     async getTemplate(id: string, init?: RequestInit): Promise<{ "template"?: Template }> {
       return this.request("GET", `/v1/templates/${encodeURIComponent(String(id))}`, {
@@ -828,9 +931,18 @@ export class TodosV1Client {
     }
 
     /** Update reusable template metadata and defaults */
-    async updateTemplate(id: string, body: UpdateTemplateInput, init?: RequestInit): Promise<{ "template"?: Template }> {
+    async updateTemplate(id: string, body: UpdateTemplateInput, init?: RequestInit): Promise<{ "template"?: Template; "history_write"?: { "schema_version": 1; "template_id": string; "previous_version": number; "version": number; "recorded": true } }> {
       return this.request("PATCH", `/v1/templates/${encodeURIComponent(String(id))}`, {
         body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read recorded template versions with explicit missing-version evidence */
+    async getTemplateHistory(id: string, init?: RequestInit): Promise<{ "current_version": number; "versions": Array<{ "id": string; "template_id": string; "version": number; "snapshot": string; "created_at": string }>; "selection": { "schema_version": 1; "template_id": string; "complete": boolean; "missing_versions": Array<number> } }> {
+      return this.request("GET", `/v1/templates/${encodeURIComponent(String(id))}/history`, {
+        body: undefined,
         query: undefined,
         init,
       });

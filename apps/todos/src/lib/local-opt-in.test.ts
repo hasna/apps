@@ -22,6 +22,7 @@
  * thing that was being lost, and they name no credential values.
  */
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import type { KeychainCommandResult } from "@hasna/contracts/client";
 import { resolveTodosCliTransport } from "../cli/cloud-router.js";
 import {
@@ -147,5 +148,26 @@ describe("the CLI forwards the gate it was given", () => {
     expect(blanked.transport).toBe(clean.transport);
     expect(blanked.authority?.apiKeyTier).toBe("keychain");
     expect(blanked.authority?.apiKeySource).toBe(clean.authority?.apiKeySource);
+  });
+});
+
+describe("the shipped README states the blank rule the code implements", () => {
+  // Line wrapping is presentation: collapse it so an assertion names the prose
+  // rather than the column where a sentence happens to break.
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+
+  test("a declared-but-blank authority variable is documented as unset, not as a refusal", () => {
+    // Regression (0.16.0): the README listed "a blank variable" among the
+    // refusals thrown on all three surfaces. It is not one — todosResolverEnv
+    // removes a declared-but-blank authority variable before the resolver runs,
+    // so it resolves the machine's ambient Keychain item exactly as an unset
+    // variable does (the tests above pin that behaviour). A wrapper that wants
+    // to withhold hosted access sets the local opt-in instead.
+    expect(readme).toContain(
+      "A **declared-but-blank** authority variable is deliberately *not* one of those",
+    );
+    expect(readme).toContain("`HASNA_TODOS_API_KEY=` therefore resolves the machine's");
+    expect(readme).toContain("To force the on-box store from a wrapper, set");
+    expect(readme).not.toContain("a blank variable, aliases that disagree");
   });
 });

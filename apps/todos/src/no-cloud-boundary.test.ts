@@ -78,13 +78,13 @@ describe("OSS no-cloud boundary", () => {
   test("published package metadata stays public and local-only", () => {
     expect(packageJson.name).toBe("@hasna/todos");
     expect(packageJson.publishConfig).toMatchObject({ access: "public" });
-    expect(packageJson.repository.url).toBe("https://github.com/hasna/todos.git");
+    expect(packageJson.repository.url).toBe("https://github.com/hasna/apps.git");
     expect(packageJson.workspaces).toContain("ai");
     expect(packageJson.bin).not.toHaveProperty("todos-remote");
     expect(packageJson.exports).not.toHaveProperty("./remote");
-    expect(sdkPackageJson.repository.url).toBe("https://github.com/hasna/todos.git");
-    expect(sdkPackageJson.homepage).toBe("https://github.com/hasna/todos");
-    expect(sdkPackageJson.bugs.url).toBe("https://github.com/hasna/todos/issues");
+    expect(sdkPackageJson.repository.url).toBe("https://github.com/hasna/apps.git");
+    expect(sdkPackageJson.homepage).toBe("https://github.com/hasna/apps");
+    expect(sdkPackageJson.bugs.url).toBe("https://github.com/hasna/apps/issues");
 
     const dependencyNames = [
       ...Object.keys(packageJson.dependencies ?? {}),

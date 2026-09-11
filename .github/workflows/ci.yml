@@ -1,6 +1,6 @@
 # CI — the gate set for hasna/apps.
 #
-# Five jobs, split by what they NEED rather than by what they check:
+# Four independent gates plus a planner, four isolated shards and a required aggregate:
 #
 #   gates         — shared toolchain/dependency setup, then checks that can refuse a
 #                   pull request in seconds: secret scan (with its own
@@ -8,13 +8,14 @@
 #                   contract-manifest gate (contracts repo-conformance per
 #                   member).
 #   test-suites   — versioning + standard-adherence suites (hard gate).
-#   build-test    — the affected build + test graph via turbo --affected.
+#   affected-plan / affected-shard — immutable affected graph, four serial runners.
+#   build-test    — required exact-union acceptance of terminal shard receipts.
 #   verify-generated — byte-reproducibility of committed generated bundles.
 #   publish-guard — internal-infra strings must never reach a published
 #                   tarball. Real npm pack --dry-run per member; fails loudly
 #                   when a pack cannot be parsed (never a vacuous pass).
 #
-# Every job is independent, so a red secret scan does not hide a red
+# The four other gates remain independent, so a red secret scan does not hide a red
 # conformance run and the summary names which gate refused rather than "CI
 # failed".
 #
@@ -49,11 +50,11 @@ jobs:
     name: gates (secrets, names, manifests)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0 # the secret scan diffs against a merge base; a shallow clone has none
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14 # in lockstep with package.json "packageManager"
 
@@ -189,11 +190,11 @@ jobs:
     name: test-suites (versioning + standard-adherence)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0 # the versioning suite diffs package versions against a base ref
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14 # in lockstep with package.json "packageManager"
 
@@ -217,22 +218,24 @@ jobs:
         run: bun run test:standard
 
   # ---------------------------------------------------------------------------------
-  build-test:
-    name: build + test (affected)
+  affected-plan:
+    name: plan affected build and test tasks
     runs-on: ubuntu-latest
     env:
-      # @hasna/todos multi-entry bundle OOMs below 8GB; runner has 16GB
       NODE_OPTIONS: --max-old-space-size=14336
-
+    outputs:
+      head: ${{ steps.plan.outputs.head }}
+      base: ${{ steps.plan.outputs.base }}
+      plan-sha256: ${{ steps.plan.outputs.plan-sha256 }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          fetch-depth: 0 # turbo --affected needs the base to diff against
-
-      - uses: oven-sh/setup-bun@v2
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
-
       - name: Install npm for artifact gates
         run: |
           set -euo pipefail
@@ -240,66 +243,123 @@ jobs:
           npm install --global --prefix "$npm_prefix" npm@11.19.0 --ignore-scripts
           test "$("$npm_prefix/bin/npm" --version)" = "11.19.0"
           echo "$npm_prefix/bin" >> "$GITHUB_PATH"
-
       - name: Install
         run: |
           bun install --frozen-lockfile --ignore-scripts
           bun run prepare:ordered
+      # Preserve existing semantics: current origin/base branch for PRs;
+      # HEAD^ for pushes, HEAD itself for a root commit. Resolve it only here.
+      - name: Freeze affected task plan
+        id: plan
+        run: bun tooling/ci/run-affected-shards.ts plan "$RUNNER_TEMP/affected-plan"
+      - name: Retain immutable affected plan
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: affected-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/affected-plan/*.json
+          if-no-files-found: error
+          retention-days: 7
 
-      # TURBO_SCM_BASE makes --affected real in both lanes. On pull_request the
-      # base is the CURRENT base branch ref — not
-      # github.event.pull_request.base.sha, which is a snapshot from PR-open
-      # time and goes stale as the base branch moves. On push to main it is
-      # HEAD^...HEAD, except on the ROOT commit where HEAD^ does not exist
-      # (measured on the repo's first push: turbo died with "ambiguous
-      # argument 'HEAD^'") — there the base falls back to HEAD, which diffs the
-      # root commit against itself and correctly builds nothing.
-      - name: Compute affected base
-        id: affected
+  affected-shard:
+    name: affected test shard ${{ matrix.shard }}
+    needs: affected-plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.affected-plan.outputs.matrix) }}
+    env:
+      # Separate 16GB runners; never parallelize the 8-14GB builds or
+      # spawn-heavy package suites inside one runner. Existing suite flags stay.
+      NODE_OPTIONS: --max-old-space-size=14336
+      AFFECTED_PLAN_SHA256: ${{ needs.affected-plan.outputs.plan-sha256 }}
+      AFFECTED_SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.affected-plan.outputs.head }}
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Install npm for artifact gates
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "base=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
-          elif git rev-parse --verify -q HEAD^ >/dev/null; then
-            echo "base=HEAD^" >> "$GITHUB_OUTPUT"
-          else
-            echo "base=HEAD" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build (affected)
+          set -euo pipefail
+          npm_prefix="$(mktemp -d "${RUNNER_TEMP}/npm-toolchain.XXXXXX")"
+          npm install --global --prefix "$npm_prefix" npm@11.19.0 --ignore-scripts
+          test "$("$npm_prefix/bin/npm" --version)" = "11.19.0"
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
+      - name: Install
         run: |
-          bunx turbo run build --affected --concurrency=1
-          rc=$?
-          if [ $rc -ne 0 ]; then
-            echo "--- dirty-tree diagnostics (turbo rc=$rc; repos provenance gate refuses a dirty tree) ---"
-            git status --porcelain --untracked-files=all | head -80
-          fi
-          exit $rc
-        env:
-          TURBO_SCM_BASE: ${{ steps.affected.outputs.base }}
-          # Serial execution only: the heavy members (todos/mementos
-          # dashboards, multi-entry bundles, tsc) each peak at 8-14GB. The
-          # job-level NODE_OPTIONS=--max-old-space-size=14336 (#966) removes
-          # node's 4GB default old-space cap; at uncapped parallelism the
-          # aggregate still exceeded the 16GB runner (measured OOMs on PR
-          # runs 32627899668 and 32628694226), and at --concurrency=1 the
-          # todos bundle died at its own 8GB cap on run 32629922346
-          # (8056/8224 MB). One heavy process at a time with the 14GB cap is
-          # what fits the runner. Never set the cap below 8GB: the todos
-          # multi-entry bundle dies there.
+          bun install --frozen-lockfile --ignore-scripts
+          bun run prepare:ordered
+      - name: Download immutable affected plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: affected-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/affected-plan
+      - name: Execute serial affected shard
+        run: bun tooling/ci/run-affected-shards.ts shard "$RUNNER_TEMP/affected-plan/plan.json" "$AFFECTED_PLAN_SHA256" "$AFFECTED_SHARD" "$RUNNER_TEMP/affected-shard"
+      - name: Retain shard terminal evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: affected-shard-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/affected-shard/*.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain Recordings release diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: recordings-release-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: |
+            /tmp/recordings-release-gate-*/*.log
+            /tmp/recordings-release-gate-*/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
-      - name: Test (affected)
-        # Serial execution: the runner (4 cores) kills test-spawned subprocesses
-        # (null status / SIGTERM) when several spawn-heavy suites run in
-        # parallel in the sweep. Measured on the skills import PR (5/5 fails on
-        # the runner; 0 fails in a clean local replica), and again on
-        # ci/test-suites PR #114 2026-08-14: the full 74-member sweep at
-        # --concurrency=2 failed the test phase on a rotating spawn-heavy
-        # member per run (mementos, automations, knowledge, shield — each
-        # passes locally). --concurrency=1 runs every suite to completion,
-        # serially; it slows the lane, it does not skip anything.
-        run: bunx turbo run test --affected --concurrency=1
-        env:
-          TURBO_SCM_BASE: ${{ steps.affected.outputs.base }}
+  build-test:
+    # Keep this required check name; acceptance is now the exact union of four
+    # successful terminal receipts, not a matrix result or a skipped job alone.
+    name: build + test (affected)
+    if: ${{ always() }}
+    needs: [affected-plan, affected-shard]
+    runs-on: ubuntu-latest
+    env:
+      AFFECTED_PLAN_SHA256: ${{ needs.affected-plan.outputs.plan-sha256 }}
+      AFFECTED_MATRIX_RESULT: ${{ needs.affected-shard.result }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      # The aggregator imports only Bun/Node builtins and does not run packages.
+      - name: Download immutable affected plan
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: affected-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/affected-plan
+      - name: Download all terminal shard evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: affected-shard-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: ${{ runner.temp }}/affected-receipts
+      - name: Verify complete disjoint task execution
+        if: ${{ always() }}
+        run: bun tooling/ci/run-affected-shards.ts aggregate "$RUNNER_TEMP/affected-plan/plan.json" "$AFFECTED_PLAN_SHA256" "$RUNNER_TEMP/affected-receipts" "$AFFECTED_MATRIX_RESULT" "$RUNNER_TEMP/affected-aggregate.json"
+      - name: Retain aggregate acceptance
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: affected-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/affected-aggregate.json
+          if-no-files-found: error
+          retention-days: 7
 
   # ---------------------------------------------------------------------------------
   # verify-generated: the committed byte-reproducibility gate, one step per
@@ -337,9 +397,9 @@ jobs:
     name: verify generated artifacts (byte-reproducible)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14 # LOAD-BEARING — see the note above and in apps/knowledge ci.yml
 
@@ -374,8 +434,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
 

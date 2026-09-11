@@ -1,3 +1,5 @@
+import { startLoopbackVault } from "./loopback-vault-fixture.mjs";
+let api: Awaited<ReturnType<typeof startLoopbackVault>>;
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -7,22 +9,18 @@ const rootDir = join(import.meta.dir, "..");
 
 let testDir: string;
 
-beforeEach(() => {
+beforeEach(async () => {
   testDir = join(tmpdir(), `secrets-cli-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testDir, { recursive: true });
+  api = await startLoopbackVault(testDir);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await api?.stop();
   rmSync(testDir, { recursive: true, force: true });
 });
 
-function env(): Record<string, string> {
-  return {
-    ...process.env,
-    OPEN_SECRETS_DB: join(testDir, "vault.db"),
-    HASNA_SECRETS_KEY_DIR: join(testDir, "keys"),
-    NO_COLOR: "1",
-  };
+function env(): Record<string, string> { return api.env();
 }
 
 function runSecrets(args: string[]) {

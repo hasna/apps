@@ -11,7 +11,7 @@
 // directory, so a case about configuration must not be able to touch a developer's real mailbox.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -35,7 +35,7 @@ function clearStoreSettings(env: NodeJS.ProcessEnv): void {
 
 beforeEach(() => {
   INHERITED_PROCESS_ENV = { ...process.env };
-  home = mkdtempSync(join(tmpdir(), "storage-wiring-home-"));
+  home = realpathSync(mkdtempSync(join(tmpdir(), "storage-wiring-home-")));
   process.env["HOME"] = home;
   clearStoreSettings(process.env);
 });
@@ -91,7 +91,8 @@ describe("readStorageWiring", () => {
     expect(wiring.kind).toBe("unresolved");
     const message = wiring.kind === "unresolved" ? wiring.message : "";
     expect(message).toContain("refusing to start");
-    expect(message).toContain("never served on an absence of configuration");
+    expect(message).toContain("HASNA_EMAILS_API_URL");
+    expect(message).toContain("HASNA_EMAILS_API_KEY");
   });
 
   it("reports API storage, and carries NO path and NO credential", () => {

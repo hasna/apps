@@ -11,7 +11,7 @@ todos release-compat check --format markdown
 
 The check covers:
 
-- package identity: `@hasna/todos`, public publish access, and `hasna/todos`
+- package identity: `@hasna/todos`, public publish access, and `hasna/apps`
   repository metadata
 - binary stability for `todos`, `todos-mcp`, and `todos-serve`
 - package export stability for the root package, SDK, MCP manifest, registry,
@@ -38,6 +38,24 @@ requires `npm_lifecycle_event=prepublishOnly`. The expected commit cannot be
 passed as a command-line argument. The package has no `prepack`, `prepare`, or
 other final-pack mutation scripts, so npm's final publish pack is generated
 from the same deterministic build state verified by the gate.
+
+The Actions entrypoint is the repository-root
+`.github/workflows/release-todos.yml`. A push of an annotated
+`npm/todos/v<version>` tag on protected-main history invokes `npm publish`
+from `apps/todos`. The workflow sets `HASNA_TODOS_EXPECTED_COMMIT` to
+GitHub's event SHA and supplies the fixed reviewer variables and signed receipt
+from the `npm-release` environment. See `npm-release-agent-review.md` for
+the independent review and receipt procedure.
+
+The npm trusted publisher for `@hasna/todos` must bind `hasna/apps`,
+`release-todos.yml`, and `npm-release`, with direct publishing enabled.
+A manual workflow run executes review-mode checks without publishing and does
+not validate the npm OIDC binding or authoritative receipt gate.
+
+Without the export, `prepublishOnly` fails the gate with
+`release-expected-commit` and nothing is published; with a value that is not
+`HEAD`, it fails with `release-expected-commit-match`. Both negative controls
+are covered in `src/lib/public-release-gate.test.ts`.
 
 Both modes use Bun 1.3.14, `npm pack --ignore-scripts`, a committer-time-derived
 `SOURCE_DATE_EPOCH`, explicit tracked blob/mode/symlink verification against

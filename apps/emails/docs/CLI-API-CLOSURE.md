@@ -4,8 +4,8 @@ This is a source implementation matrix, not a claim that the public service or n
 
 | Command or family | Source closure | Remaining acceptance/dependency |
 | --- | --- | --- |
-| `test`, `batch` | Authenticated send composition, templates/CSV validation, retry identities and partial-failure receipts | Provider selector requires provider-aware send service; no production test messages authorized |
-| `email list`, `log --from/--status` | Filters implemented before paging; bounded reads fail explicitly on an incomplete scan | Provider provenance/filter support is a separate integration |
+| `test`, `batch` | Authenticated send composition, templates/CSV validation, retry identities and partial-failure receipts | Deploy provider-aware send service; no production test messages authorized |
+| `email list/export`, `log --from/--status`, MCP `list_emails/get_email` | Provider provenance and filters carried through every API page and readback; incomplete scans fail explicitly | Deploy provenance migration and advertised provider filter contract; older APIs refuse scoped reads |
 | `doctor delivery`, `inbox explain` | API registry/message diagnostics; optional public MX inspection | Registry evidence does not establish provider credentials or worker health |
 | `inbox realtime-status` | Registered sources and last-sync metadata, paginated beyond 500 | Worker heartbeat/queue health remains unmeasured until a service endpoint exposes it |
 | `schedule run`, `scheduler` | `/v1/scheduled/run`, atomic tenant-scoped claims, expiring leases, fenced completion, stable send-intent identity; `--once`, `--limit`, interval polling | Deploy routes and migration0029, then exercise installed client; sequences have independent limits and measured results |
@@ -20,14 +20,23 @@ This is a source implementation matrix, not a claim that the public service or n
 | `webhook listen` | Foreground relay preserves original signed bytes; the API verifies provider signatures, retrieves full MIME, and persists scoped messages/events with durable receipts | Deploy routes and `EMAILS_WEBHOOK_BINDINGS`; send-only delivery events use outbound ownership, and receive writes recheck routing/source lifecycle atomically |
 | `provision status` | Reads domain/address provisioning state from the shared API registry | No local registration or orchestration implied |
 | `address provision`, `provision address`, `provision job` | Operator-authorized durable address jobs, read-only readiness plans, retries and atomic ownership/audit receipts on configured SES inbound domains | Deploy migration 0033 and routes; requires verified provider, SES-only MX and SES/S3/SNS/SQS routing; readiness does not prove roundtrip delivery |
-| Remaining `provision domain/up/roundtrip/daemon/retry` | Orchestration remains | Domain infrastructure jobs, runtime supervision and actual delivery probes |
+| `domain setup`, `domain setup-cloudflare`, `provision domain`, `domain dns-job` | Operator-authorized server DNS binding, owned-domain setup, preserved records, explicit bound MX switching, SES MAIL FROM, durable jobs and provider readback | Deploy routes and configure existing Cloudflare zone/provider bindings; no purchase, delegation or inbound infrastructure; see `DOMAIN_DNS.md` and `OWNED_DOMAIN_SETUP.md` |
+| `provision up/daemon/retry/run` | Available for already-owned SES domains | Frozen API job intent, bounded leased steps, DNS/address readiness and exact-token delivery evidence; existing inbound infrastructure required |
+| `provision roundtrip` | API-backed address-ring probe with exact sender/subject/body receipt checks, stable retry keys, bounded polling and optional server S3 synchronization | Existing provider-aware send API and inbound delivery must be configured; explicit invocation sends test mail |
 | `domain/domains connect` | Operator API jobs register owned domains with configured SES/Resend providers and return shared DNS tasks; dry runs make no writes | Deploy routes and migration 0033; DNS changes and provider verification remain explicit, and new registry domains stay pending |
 | `domain/domains verify/status/enable-*/disable-outbound` | Verification, status and inbound/outbound lifecycle operations implemented; pending-to-inbound and outbound-disable preserve routing | Deploy lifecycle routes and provider bindings |
-| `domain setup*` | Infrastructure orchestration remains | Bound DNS and registrar operations with durable receipts |
 | `send --track-opens/--track-clicks/--tracking-url` | API-backed opaque expiring tracking capabilities, stable retry content and scheduled option preservation; observations do not alter delivery status or contacts | Deploy migration 0035, configure the server keyring and tenant-approved HTTPS bases; scanner activity is not proof a person opened or clicked |
 | `provider secrets status` | Operator API reports actual tenant provider bindings and credential sources; ordinary clients no longer open a local keyring database | Deploy status route; reference-backed credentials remain externally managed |
-| `provider secrets rewrap/rotate-root/revoke-root`, `daemon restart`, server logs | Operator service actions remain | Real tenant credential lifecycle backend and actual supervisor/log access |
+| `provider secrets install/rewrap/rotate-root/revoke-root`, provider add/update | Authenticated tenant credential lifecycle, KMS envelope encryption and atomic provider writes | Deploy migration 0036, routes and KMS configuration; server resolves provider secrets |
+| `logs tail` | Persisted tenant API operation events, with operator authorization and fixed fields | Deploy migration 0037 and routes; historical activity and container stdout are not reconstructed |
+| `daemon start/status/restart` | Foreground scheduler/sequence workers with durable ownership, fenced claims, drain and confirmed restart generations | Deploy migration 0038 and worker routes; expired or uncertain owners require reconciliation |
 | `self-hosted key/idp-principal`, `db`, `serve` | Canonical `server key/idp-principal/db` operator namespace; `self-hosted` and root `db` compatibility aliases | Server database/signing credentials remain required for bootstrap actions; ordinary account API keys use `keys` |
+| MCP `sync_s3_inbox`, `pull_events` | Existing authenticated ingestion/provider APIs; bounded S3 paging and partial receipts retain counts, failures and continuation cursors | Deploy existing sync routes and tenant source/provider bindings; no client AWS credentials or local mail database |
+| MCP `send_email` headers/tags | Bounded custom X-* headers and tags validated, persisted, hashed for retries and preserved in scheduled sends | Deploy metadata contract and migration 0040; reserved routing/auth/tracking headers remain private |
+| MCP `send_feedback` | Tenant-scoped API stores feedback and acknowledges saved, not delivered | Deploy feedback route and migration 0039; no external delivery implied |
+| MCP `batch_send` and domain setup helpers | Shared API execution, durable per-send/job receipts and explicit incomplete/blocked results | Deploy corresponding send/setup routes and configured bindings; no implicit purchase or fabricated readiness |
+
+Native cloud-bound library helpers remain explicit compatibility APIs. Ordinary MCP tools use the shared service and do not invoke those local ingestion implementations.
 
 ## Scheduled execution boundaries
 

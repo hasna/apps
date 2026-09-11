@@ -4,9 +4,9 @@ import { existsSync, openSync, closeSync, writeSync, readSync, constants } from 
 import { terminalDescriptorDuplicator } from "./terminal-descriptors";
 
 /** Own a POSIX process group; interactive children get a controlling terminal. */
-export async function runHarnessProcess(options: {executable:string;args:string[];cwd:string;env:NodeJS.ProcessEnv;timeoutMs?:number}): Promise<{code:number;interrupted:boolean}> {
+export async function runHarnessProcess(options: {executable:string;args:string[];cwd:string;env:NodeJS.ProcessEnv;timeoutMs?:number;silent?:boolean}): Promise<{code:number;interrupted:boolean}> {
   const tty=[Boolean(process.stdin.isTTY),Boolean(process.stdout.isTTY),Boolean(process.stderr.isTTY)];
-  const grouped=process.platform!=="win32",interactive=grouped&&tty.some(Boolean);
+  const grouped=process.platform!=="win32",interactive=!options.silent&&grouped&&tty.some(Boolean);
   const redirects=interactive?tty.flatMap((value,index)=>value?[]:[index]):[];
   const duplicator=redirects.length?await terminalDescriptorDuplicator():undefined;
   return new Promise((resolveResult,reject) => {
@@ -29,7 +29,7 @@ export async function runHarnessProcess(options: {executable:string;args:string[
     let relay:((chunk:Buffer)=>void)|undefined;
     let resize:(()=>void)|undefined;
     const child:EventEmitter & {pid?:number;kill:(signal:NodeJS.Signals)=>unknown} = (()=>{
-      if (!interactive) return spawn(options.executable,options.args,{cwd:options.cwd,env:options.env,stdio:"inherit",shell:false,detached:grouped});
+      if (!interactive) return spawn(options.executable,options.args,{cwd:options.cwd,env:options.env,stdio:options.silent?"ignore":"inherit",shell:false,detached:grouped});
       const duplicates:number[]=[];
       let native:Bun.Subprocess;
       try {

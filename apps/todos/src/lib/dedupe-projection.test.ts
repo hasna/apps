@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,6 +7,9 @@ import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
 import { createTask } from "../db/tasks.js";
 import { DEDUPE_SOURCE_KEY_ALLOWLIST, projectTasksForDedupe } from "./dedupe-projection.js";
 import { findDuplicateTasks } from "./task-dedupe.js";
+
+// Spawns the CLI; bun's 5s default is too tight for a cold start on a loaded host.
+setDefaultTimeout(60_000);
 
 // Synthetic secret fixtures, assembled from fragments so the literal never
 // appears in this file: the repo CI secret scan matches a bare xai prefix

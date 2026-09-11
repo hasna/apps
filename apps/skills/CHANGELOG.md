@@ -1,5 +1,155 @@
 # Changelog
 
+## 0.5.10
+
+### Patch Changes
+
+- Preserve own JSON keys such as `__proto__` while canonicalizing skill manifests for content hashes. Changing those fields now changes the digest and invalidates an old declaration. Ordinary manifest hashes and the SHA-256 framing remain unchanged.
+
+## 0.5.9
+
+### Patch Changes
+
+- Reject negative, fractional, non-finite and unsafe monetary amounts before SDK admission, reservation or settlement writes. Limit each reservation and charge to 2147483647 cents across all stores, preventing PostgreSQL integer overflow after run creation; monthly totals and ceilings may still exceed this per-reservation limit. Capture validated estimates before asynchronous admission checks, and preserve zero amounts and first-reconciliation replay behavior.
+- Keep the interactive quit shortcut from intercepting q while typing a skill search. Search results can be selected and pinned normally; Escape still cancels and q still exits menu and completion screens.
+
+## 0.5.8
+
+### Patch Changes
+
+- 3751ba8: Accept boolean private execution capability reports while keeping publication and separately approved execution independent.
+
+  Widen publication recovery `executionEnabled` from literal false to `boolean | null`: existing recovery receipts report null because they do not contain a server capability observation. Align CLI/MCP output and guidance so publication is not confused with execution authorization.
+
+- 2e4ec23: Add a provider-neutral injected operation client with bounded immutable JSON, stable request identities, explicit status lookup, abort handling, and unknown-outcome errors without automatic retry. Credentials, authorization, IPC and provider execution remain the embedder's responsibility.
+
+## 0.5.7
+
+### Patch Changes
+
+- 3b903ec: Own image-profile configuration and resolved runtime projections, reject ambiguous dependency-layer keys, and capture admission identity, input digest, dependencies, policy, and limits before asynchronous lookups. Return independent admission projections so caller changes cannot rewrite stored runs through service results.
+
+## 0.5.6
+
+### Patch Changes
+
+- 1a35248: Fix AWS SigV4 query encoding and bytewise ordering so S3 requests support Unicode filenames and reserved punctuation. Preserve repeated query parameters and empty values when signing.
+- 791e0cf: Preserve valid Unicode and punctuation input filenames through quoted SDK, CLI, and MCP submissions. Match the API's 255-character basename contract while refusing separators, controls, malformed Unicode, dot paths, and duplicate names before network requests.
+
+## 0.5.5
+
+### Patch Changes
+
+- d0dcfde: Preserve opaque server quote receipts across SDK, CLI and MCP approval and submission, including exact input-file descriptors and owned upload bytes. Keep the originally approved quote instead of refreshing it, and reject malformed receipts or HTTP admission refusals without retrying.
+- 31d4b67: Preserve ambiguous ECS launch and stop states until the exact task is observed. Missing or partial task listings no longer permit replacement launches, and cancellation receipts require confirmed STOPPED state.
+
+  Bind every AWS ECS operation to one explicit cluster, collect bounded complete task-list pagination, and reject partial AWS responses. The optional cluster setting supports reconciliation after a client restart. Historical cancelled runs also require fresh stop proof before idempotent acceptance.
+
+- 0fae2f6: Use the gateway's /skills/v1 resource path while preserving separately selected commercial and custom instances. Add OSS server /v1 resource, health, and API-key identity aliases that delegate existing handlers. Reject unsupported interactive internal gateway login before transmitting account input; the independent internal origin and auth adapter remain integration requirements.
+- 3425e26: Add an explicit capability-gated private source publication SDK, CLI and MCP lifecycle with fresh workspace sessions, exact version UUID comparison, immutable recovery bundles and lost-response reconciliation. Existing registry publishing and private execution semantics remain unchanged.
+- 4b83999: Require a regular, bounded ownership marker before pruning a stale skill directory. Preserve directories when their marker or directory identity changes before removal, including symlink, malformed and foreign replacements.
+
+## 0.5.4
+
+### Patch Changes
+
+- 16d2ecb: Preserve known hosted quote refusal codes and display fixed, useful messages in the SDK and CLI. Unknown or malformed failures keep the safe generic HTTP error; server-controlled text is never displayed.
+
+## 0.5.3
+
+### Patch Changes
+
+- 0343a7e: Expose a bounded asynchronous bundle inspector and deterministic packer through the SDK. Uploaded gzip/ustar bundles can now be validated with streaming decompression, finite byte/path/entry/deadline budgets, strict archive checks, owned file buffers and no filesystem writes or execution. Existing synchronous unpack callers remain unchanged and must migrate separately for untrusted input.
+- e9e0eb6: Expose bounded entry-based canonical content hashing and same-entry manifest verification without extraction, preserving directory hashes. Export the existing content revision identity through supported SDK entrypoints.
+- 97ff397: Add explicit invitation email recovery to SDK and CLI, plus a separate two-tool MCP stdio mode. Preserve caller challenge IDs, bounded proof input, uncertain outcomes and unchanged credentials; require ordinary sign-in after acceptance.
+- 7e99f9a: Add explicitly confirmed workspace invitation operations to the SDK, CLI and MCP. Fresh verification binds the observed account and current membership, validates bounded results, preserves saved credentials and retains caller idempotency for uncertain issue or resend outcomes. Acceptance secrets use stdin or masked terminal input.
+
+## 0.5.2
+
+### Patch Changes
+
+- 5788bee: Add explicitly confirmed workspace self-leave through the SDK, CLI and MCP. Fresh verification stays bound to the observed membership and selected profile; uncertain outcomes never retry or modify saved credentials.
+
+## 0.5.1
+
+### Patch Changes
+
+- Keep fresh-auth MCP account, workspace member, and API-key operations bound to the live user and membership of the host's named credential profile. Capture authority per invocation, refuse stale or revoked profiles without default-workspace fallback, and return safe key-operation errors without persisting JWTs or mutating global profile selection.
+- Add fresh-auth CLI workspace discovery and explicit named-profile membership enrollment. Verify the selected session and newly issued key before saving, preserve unrelated profiles, and retain the live selected workspace for subsequent fresh-auth account, member, and key operations. Reject stale metadata, unsafe or oversized profile storage, and viewer key enrollment without adding persistent JWT sessions.
+- Add SDK workspace discovery and ephemeral session selection with explicit user and membership validation. Fresh-auth account, workspace, member and key operations can preserve a selected workspace after verification without changing saved keys or profiles. Existing default-workspace callers remain compatible.
+
+## 0.5.0
+
+### Minor Changes
+
+- 1d87533: Add customer profile and current-workspace name updates through the remote SDK,
+  fresh-session authentication client, CLI and MCP. Terminal updates support a
+  masked fresh-code prompt or bounded stdin automation, retain saved credentials,
+  and return clear failures when the selected server does not support the routes.
+- 1f8c3e2: Keep global identities representable in the admin user list when their default workspace has no active membership: the required list-row role may now be null. Consumers must handle this explicit absence of authority. Active organization rosters and role-assignment inputs/responses retain their nonnullable roles; no mutation or impersonation authority is added.
+- 756c2fa: Add SDK, fresh-verification CLI and MCP adapters for current-workspace member role changes and removal on compatible servers. Require the exact membership incarnation and observed role, validate safe results, preserve known refusal codes, and leave saved credentials unchanged without automatic refresh or retry.
+- fdf9ced: Add a typed, read-only current-workspace roster client, `workspace members` command, and `list_workspace_members` MCP tool. Paginated results preserve exact server timestamps and opaque cursors. CLI and MCP use fresh owner/admin verification without replacing saved credentials or profiles; invitation, membership mutation and workspace switching are not enabled.
+
+### Patch Changes
+
+- df38d01: Fail closed when no credential and no API URL resolve; the on-machine run is
+  opt-in only (owner directive 2026-09-04, hasna/apps#1720; class-patch order
+  2026-09-06). skills 0.4.0 adopted the shared `@hasna/contracts` resolver but
+  kept the wrong local-mode semantics: an install with neither a credential nor a
+  URL silently served the bundled corpus ("local mode" as the absence of
+  configuration). The class patch closes that.
+
+  - **Local mode only by explicit opt-in.** `HASNA_SKILLS_LOCAL=1` (alias
+    `SKILLS_LOCAL=1`) selects the on-machine run when the environment configures
+    no authority; it is answered before the resolver runs, so opting in never
+    reads the Keychain or the credentials file. A configured environment always
+    outranks it. The opted-in run prints `skills: local mode …` on stderr once.
+  - **Fail closed.** Hosted with no credential now exits non-zero — a URL
+    configured with no key was already a loud failure; nothing configured without
+    the opt-in is one now too: `MISSING_API_CREDENTIAL`, no SQLite opened, no
+    `*-local-fallback` event, one line naming the opt-in.
+  - **Published declarations stay self-contained (#1782).**
+    `@hasna/contracts` is a build-time devDependency (`bun build --target bun`
+    inlines it); the crossing client types are spelled locally in
+    `src/lib/client-types.ts`, with mutual-assignability tests, so the published
+    `.d.ts` files import no `@hasna/contracts`.
+  - `@hasna/contracts` stays pinned to exact `1.0.2`.
+
+  The fix depends on nothing being deleted: a stale `~/.hasna/skills/config/credentials`
+  holding only newlines parses as "no disk credential" (no throw) and lands on the
+  same fail-closed refusal; station01/02 write the real credential file and are
+  served hosted as before.
+
+- c2a2c26: Resolver validation fixes (hasna/apps#1720): `skills-mcp` fails closed at startup — with no credential, no authority and no `HASNA_SKILLS_LOCAL=1` opt-in it exits 1 with the ladder's one line before `initialize` is answered or a port is bound; every MCP data tool (`list_skills`, `search_skills`, `get_skill_info`, `get_skill_docs`, `list_categories`, `list_tags`, `get_requirements`) and every CLI read verb (`info`, `show`, `docs`, `requires`, the bare non-TTY listing) runs the same per-call gate as `skills list` and refuses (`AUTH_REQUIRED` / exit 1) instead of serving the bundled catalog and `~/.hasna/skills/installed`, with the listing tools sharing one folder-UNION-cloud registry with the CLI; `loadRemoteRegistry()` / `loadRemoteSkill()` never attach the ambient fleet credential to a caller-supplied `apiUrl` that is not the resolved origin (#1794 — `INSTANCE_CREDENTIAL_MISMATCH` unless an explicit `authToken`, or `authToken: null`, is passed); the nothing-configured refusal names the Keychain item, the credentials file and `HASNA_SKILLS_API_KEY`; `setup-info` exits 1 when the credential state is misconfigured and the MCP `whoami` tool reports the same credential sources (never values); a run refused by the credential ladder no longer writes a `.skills/runs` record; `skills-migrate --version` / `--help` answer before configuration is resolved; the retired `~/.config/hasna` path shape no longer ships in the client bundle.
+- 7e46fbb: Refuse skill uploads when the revision preflight fails or returns an unusable row.
+  An explicit missing-skill or catalogue-only absence response permits an initial
+  publish; updates and the single forced version retry retain the exact verified
+  revision precondition.
+
+  Catalogue-only responses explicitly identify the absence of an organization publication, preserving initial catalogue overrides while concurrent publications remain protected by server revision checks.
+
+- 34fdadd: Preserve explicit `__proto__` JSON keys during canonical serialization, including
+  nested objects and arrays. Run input and request digests now distinguish these
+  inputs from inputs without that data, while equivalent key orderings still
+  deduplicate. Existing persisted admissions and idempotency-key lookups are unchanged.
+- Use the released @hasna/events 0.1.18 dependency for verified channel-test exit codes and embedded webhook policy.
+- e8fe12c: Return a failing exit status from `skills test --json` when any selected skill is not ready, matching human output. Preserve readiness report fields and successful empty or fully ready results.
+- e34cfaf: Keep schedule run JSON parseable when local skills write output. Stream child stdout and stderr to stderr in JSON mode, preserving human output, actual execution exits and schedule history. Add an optional stderr streaming mode to runSkill without changing existing inherit or pipe callers.
+- e585727: Return a nonzero exit status when any scheduled item fails, in both human and JSON output. Preserve every per-item result, identify actual local executor attempts with `attempted`, and count only those attempts in `ran`. Refusals before execution leave the occurrence due and its history unchanged; actual local attempts retain success/error bookkeeping. Hosted scheduling remains unsupported, and dry runs or batches with nothing due remain successful.
+
+  Report a history-write failure separately from the execution outcome without retrying the write or abandoning later due items. Preserve execution errors and warn callers to inspect the skill's effects before retrying an attempt whose history could not be saved.
+
+- 4dfb173: Honor selected corpus, agents, and skill names in home adoption and pruning. Reject invalid selections before applying changes, and preserve directories whose marker belongs to another tool.
+- 0353dce: Verify that the Skills command selected on PATH belongs to the same Bun installer's global bin directory before reporting self-update success. Refuse discovery failures, shadowed commands and invalid version results while preserving successful updates and installer failures. Explain that installation may already have completed without automatically retrying it or changing PATH.
+- 75c3790: Keep the first terminal SQLite SDK credit-reservation reconciliation when separate processes race. Later attempts return the stored status, actual cost and reconciliation timestamp unchanged, matching the existing PostgreSQL adapter contract.
+- e43a4d1: Honor source, agent and skill-name selectors in `sync --check` and its `render`
+  alias. Refuse unknown selections instead of reporting a misleading clean census,
+  while preserving read-only checks and nonzero drift status in human and JSON output.
+- 29c7ab0: Validate remote version history and individual version responses before returning them. Malformed responses now fail consistently in the SDK and both CLI output formats, while valid empty history, known domain absence, optional fields, and additive server data remain supported.
+- 8292ab3: Preserve directories with foreign or malformed ownership markers during ordinary sync and both library agent-removal helpers. Require the exact Skills owner before updating or removing a managed directory, while retaining explicit force adoption for directories containing SKILL.md.
+
+  Apply the same ownership requirement to remote tombstone deletion and registry reconciliation baselines, preserving explicit conflict overrides.
+
 ## 0.4.2
 
 ### Patch Changes

@@ -4,7 +4,7 @@ import { closeDatabase, getDatabase, resetDatabase } from "../../db/database.js"
 import { createDomain } from "../../db/domains.local.js";
 import { createProvider } from "../../db/providers.local.js";
 import { setDomainProvisioning } from "../../db/provisioning.js";
-import { formatDaemonStatus, registerDaemonCommands } from "./daemon.local.js";
+import { formatDaemonStatus, registerDaemonCommands } from "./daemon.local.test-support.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 function captureInheritedProcessEnv(): void {

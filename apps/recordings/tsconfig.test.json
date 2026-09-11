@@ -19,6 +19,7 @@
     "src/cli/macos-shortcut.ts",
     "src/cli/trigger-probe.ts",
     "src/__tests__/macos-shortcut-contract.test.ts",
-    "src/__tests__/trigger-diagnosis.test.ts"
+    "src/__tests__/trigger-diagnosis.test.ts",
+    "src/__tests__/helpers/trigger-cli-fixture.ts"
   ]
 }

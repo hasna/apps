@@ -1,3 +1,4 @@
+import { createPostgresMachineRegistry, validateMachines } from "./machine-registry.js";
 import type { TaskHistory } from "../types/index.js";
 import { ResourceConflictError } from "../types/index.js";
 import type {
@@ -60,11 +61,11 @@ export interface PullPostgresTodosSnapshotOptions {
 
 export interface PostgresTodosSyncPushResult {
   records: number;
-  objectTypes: Partial<Record<TodosPostgresSyncRecordType, number>>;
+  objectTypes: Partial<Record<TodosPostgresSyncRecordType | "machines", number>>;
 }
 
 export interface TodosPostgresSyncRecordRow {
-  object_type: TodosPostgresSyncRecordType;
+  object_type: TodosPostgresSyncRecordType | "machines";
   object_id?: string;
   payload: unknown;
   updated_at?: string | Date;
@@ -427,6 +428,8 @@ export class PostgresTodosSyncStore {
     snapshot: TodosStorageSnapshot,
     context: TodosStorageContext = {},
   ): Promise<PostgresTodosSyncPushResult> {
+    if ((snapshot.tombstones ?? []).some(row => (row.object_type as string) === "machines")) throw new Error("Machine tombstones require explicit registry lifecycle operations");
+    if (snapshot.machines !== undefined) validateMachines(snapshot.machines);
     const routingErrors = validateSnapshotRoutingRecords(snapshot.projects, snapshot.taskLists);
     if (routingErrors.length > 0) {
       throw new Error(`Invalid snapshot routing metadata: ${routingErrors.join("; ")}`);
@@ -469,6 +472,13 @@ export class PostgresTodosSyncStore {
         );
       }
       const result: PostgresTodosSyncPushResult = { records: 0, objectTypes: {} };
+      if (snapshot.machines?.length) {
+        if (!this.client.transaction) throw new Error("Machine snapshot migration requires transaction(callback)");
+        const registry = createPostgresMachineRegistry({ query: client.query.bind(client), transaction: fn => fn(client) }, this.service, this.tableName, async () => {});
+        const receipt = await registry.execute({ action: "import", machines: snapshot.machines });
+        result.records += receipt.inserted + receipt.skipped;
+        result.objectTypes.machines = receipt.inserted + receipt.skipped;
+      }
       const sourceMachineId = context.requestId ?? this.sourceMachineId ?? null;
       for (const entry of snapshotEntries(snapshot)) {
         if (entry.deletedAt === null) assertCanonicalScopedSlugEntry(entry);
@@ -693,6 +703,7 @@ function rowsToSnapshot(rows: TodosPostgresSyncRecordRow[]): TodosStorageSnapsho
     tasks: [],
     projects: [],
     projectMachinePaths: [],
+    machines: [],
     plans: [],
     agents: [],
     taskLists: [],
@@ -705,6 +716,11 @@ function rowsToSnapshot(rows: TodosPostgresSyncRecordRow[]): TodosStorageSnapsho
   for (const row of rows) {
     const payload = payloadRecord(row.payload);
     const deletedAt = stringValue(row.deleted_at);
+    if (row.object_type === "machines") {
+      if (deletedAt) throw new Error("Snapshot contains retired machine identities; use the authoritative registry instead of silently discarding tombstones");
+      snapshot.machines!.push(payload as unknown as NonNullable<TodosStorageSnapshot["machines"]>[number]);
+      continue;
+    }
     if (deletedAt) {
       snapshot.tombstones ??= [];
       snapshot.tombstones.push({

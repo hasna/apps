@@ -158,7 +158,7 @@ function remoteTarget(digest: string) {
   return {
     digest,
     withOwnedPath<T>(_consumer: (absolutePath: string) => T): T {
-      throw new Error("project registration target paths are not available through the CLI.");
+      throw new Error("project registration target paths cannot be materialized in the CLI (digest-only target).");
     },
   };
 }

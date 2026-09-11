@@ -10,39 +10,34 @@
 // rather than registering the commands in-process: the bug class was "the source
 // looks fine, invoking the command refuses", so invoking the command is what gets
 // asserted on. No live provider or cloud credential is used — the env is scrubbed
-// and the store is a temp SQLite file.
-import { afterAll, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+// and an isolated authenticated API fixture stores the test rows.
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// Anything that could point the process at a real endpoint or account.
-const SCRUBBED_ENV_KEYS = [
-  "EMAILS_MODE", "HASNA_EMAILS_MODE", "EMAILS_DB_PATH", "HASNA_EMAILS_DB_PATH",
-  "EMAILS_SELF_HOSTED_URL", "EMAILS_SELF_HOSTED_API_KEY", "EMAILS_SESSION_TOKEN",
-  "EMAILS_CLIENT_ENV_SECRET", "EMAILS_DATABASE_URL", "HASNA_EMAILS_DATABASE_URL",
-  "EMAILS_STORAGE_MODE", "HASNA_EMAILS_STORAGE_MODE",
-  "MAILERY_MODE", "HASNA_MAILERY_MODE", "MAILERY_STORAGE_MODE", "HASNA_MAILERY_STORAGE_MODE",
-  "MAILERY_API_URL", "MAILERY_API_KEY", "HASNA_MAILERY_API_URL", "HASNA_MAILERY_API_KEY",
-  "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
-  "RESEND_API_KEY",
-] as const;
-
+import { buildPrepublishTestEnv } from "../../../scripts/prepublish-local-test.mjs";
+import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
+let api: V1Stub;
 const tempDirs: string[] = [];
-
-/** A fresh local-mode CLI environment: temp HOME, temp SQLite, no credentials. */
-function localWarmingEnv(): NodeJS.ProcessEnv {
-  // mkdtempSync creates the directory 0700, which the SQLite path guard requires.
+beforeAll(async () => { api = await startV1Stub({ openapi: true, apiKey: crypto.randomUUID() }); });
+beforeEach(async () => { await api.reset(); });
+afterEach(() => {
+  for (const dir of tempDirs) {
+    const mailFiles = readdirSync(dir, { recursive: true }).filter((name) => /\.(?:db|sqlite)(?:-|$)/.test(String(name)));
+    expect(mailFiles).toEqual([]);
+  }
+});
+function apiEnv(): NodeJS.ProcessEnv {
   const dir = mkdtempSync(join(tmpdir(), "emails-warming-"));
   tempDirs.push(dir);
-  const homePath = join(dir, "home");
-  mkdirSync(homePath, { recursive: true, mode: 0o700 });
-  const base = { ...process.env };
-  for (const key of SCRUBBED_ENV_KEYS) delete base[key];
+  mkdirSync(join(dir, "tmp"), { mode: 0o700 });
   return {
-    ...base,
-    EMAILS_DB_PATH: join(dir, "emails.db"),
-    HOME: homePath,
+    ...buildPrepublishTestEnv(process.env, dir),
+    HASNA_STATION: `emails-warming-${crypto.randomUUID()}`,
+    HASNA_EMAILS_API_URL: api.baseUrl,
+    HASNA_EMAILS_API_KEY: api.apiKey,
+    EMAILS_CLIENT_ENV_LOADED: "1",
     NO_COLOR: "1",
   };
 }
@@ -55,7 +50,7 @@ interface CliRun {
 
 function runCli(args: string[], env: NodeJS.ProcessEnv): CliRun {
   const result = Bun.spawnSync({
-    cmd: ["bun", "src/cli/index.tsx", ...args],
+    cmd: [process.execPath, "src/cli/index.tsx", ...args],
     cwd: process.cwd(),
     env,
     stdout: "pipe",
@@ -120,12 +115,13 @@ function utcDaysAgo(count: number): string {
 }
 
 afterAll(() => {
+  api.stop();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-describe("emails domain warm* (live, temp SQLite)", () => {
+describe("emails domain warm* (live, authenticated API)", () => {
   it("drives the whole schedule lifecycle: warm -> status -> list -> pause -> resume -> complete", () => {
-    const env = localWarmingEnv();
+    const env = apiEnv();
     // Started 6 days ago so the ramp is mid-flight and the day/limit math is
     // observable rather than always "day 1, limit 50".
     const startDate = utcDaysAgo(6);
@@ -194,7 +190,7 @@ describe("emails domain warm* (live, temp SQLite)", () => {
     expect(paused).toMatchObject({ domain: "ramp.example.com", status: "paused" });
     const pausedStatus = runJson<WarmStatusPayload>(["domain", "warm-status", "ramp.example.com"], env);
     expect(pausedStatus.schedule.status).toBe("paused");
-    // A paused schedule imposes no limit (send.local.ts keys off exactly this).
+    // A paused schedule imposes no warming limit.
     expect(pausedStatus.today_limit).toBeNull();
 
     const pausedOnly = runJson<WarmingSchedulePayload[]>(["domain", "warm-list", "--status", "paused"], env);
@@ -216,7 +212,7 @@ describe("emails domain warm* (live, temp SQLite)", () => {
     expect(completedStatus.schedule.status).toBe("completed");
     expect(completedStatus.today_limit).toBeNull();
 
-    // The state survived every separate process: it is in the SQLite file, not memory.
+    // The state survived every separate process: the same API holds it across client processes.
     const finalRows = runJson<WarmingSchedulePayload[]>(["domain", "warm-list"], env);
     expect(finalRows.map((row) => [row.domain, row.status]).sort()).toEqual([
       ["ramp.example.com", "completed"],
@@ -244,7 +240,7 @@ describe("emails domain warm* (live, temp SQLite)", () => {
   }, 180_000);
 
   it("refuses to silently create a duplicate schedule for the same domain", () => {
-    const env = localWarmingEnv();
+    const env = apiEnv();
     runJson(["domain", "warm", "dup.example.com", "--target", "100"], env);
 
     const failure = runJsonError(["domain", "warm", "dup.example.com", "--target", "999"], env);
@@ -261,7 +257,7 @@ describe("emails domain warm* (live, temp SQLite)", () => {
   }, 90_000);
 
   it("fails loud (and truthfully) when the domain has no schedule", () => {
-    const env = localWarmingEnv();
+    const env = apiEnv();
 
     for (const command of ["warm-status", "warm-pause", "warm-resume", "warm-complete", "warm-delete"]) {
       const failure = runJsonError(["domain", command, "ghost.example.com"], env);
@@ -279,7 +275,7 @@ describe("emails domain warm* (live, temp SQLite)", () => {
   }, 90_000);
 
   it("validates --target, --start-date, and --status instead of storing junk", () => {
-    const env = localWarmingEnv();
+    const env = apiEnv();
 
     const badTarget = runJsonError(["domain", "warm", "bad.example.com", "--target", "not-a-number"], env);
     expect(badTarget.error.message).toContain("Invalid --target");
@@ -301,7 +297,7 @@ describe("emails domain warm* (live, temp SQLite)", () => {
   }, 90_000);
 
   it("advertises the warming commands in --help and never repeats the retired refusal", () => {
-    const env = localWarmingEnv();
+    const env = apiEnv();
     const help = runCli(["domain", "--help"], env);
     expect(help.exitCode, help.stderr).toBe(0);
     for (const command of ["warm ", "warm-status", "warm-list", "warm-pause", "warm-resume", "warm-complete", "warm-delete"]) {

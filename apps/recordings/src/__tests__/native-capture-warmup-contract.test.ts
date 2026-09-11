@@ -181,11 +181,15 @@ describe("native capture warm-up contract", () => {
     // `guard isRecording` that used to make them no-ops.
     const stop = region(
       engine,
-      "public func stopAndTranscribe() {",
+      "public func stopAndTranscribe(",
       "let pipelineTrace = RecordingPipelineTrace()",
     );
     expect(stop).toContain("if isWarmingUpCapture {");
     expect(stop).toContain("abandonWarmingCapture(");
+    expect(stop).toContain("pasteTarget: RecordingPasteTargetSelection? = nil");
+    expect(stop.indexOf("guard isRecording else { return }")).toBeGreaterThan(
+      stop.indexOf("abandonWarmingCapture("),
+    );
 
     const cancel = region(engine, "public func cancelRecording() {", 'log("cancelRecording")');
     expect(cancel).toContain("if isWarmingUpCapture {");
@@ -458,7 +462,7 @@ describe("native capture warm-up contract", () => {
     const engine = read("RecordingsLib/RecordingEngine.swift");
     const startRecording = region(
       engine,
-      "public func startRecording(trigger: RecordingTrigger = .manual) {",
+      "public func startRecording(",
       "let myPID = ProcessInfo.processInfo.processIdentifier",
     );
     // Reached only when the gate passed, so it is the boundary the clears must sit behind.

@@ -6,7 +6,7 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 import { buildCliFixture } from "./cli-build.fixture.js";
 
 useDefaultTestTimeout();
-const scratch = mkdtempSync(join(tmpdir(), "skills-self-update-")), binary = join(scratch, "skills.js");
+const scratch = realpathSync(mkdtempSync(join(tmpdir(), "skills-self-update-"))), binary = join(scratch, "skills.js");
 beforeAll(() => buildCliFixture(resolve(import.meta.dir, "index.tsx"), binary));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
