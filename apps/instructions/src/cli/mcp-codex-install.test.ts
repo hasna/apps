@@ -208,6 +208,57 @@ describe("mcp install/uninstall parity", () => {
     expect(readFileSync(configPath, "utf-8")).toBe(singleKey);
   });
 
+  /**
+   * A TOML multi-line string (`"""` / `'''`) may contain a line that LOOKS like
+   * a table header. Reading the table's end as "the next line starting with
+   * `[`" ends the range inside that string, so the splice cuts the file
+   * mid-string: the remaining server is glued onto an unterminated literal and
+   * Codex can no longer parse its config — while the CLI still reports success.
+   * The header itself must be read the same way, or a header-looking line
+   * inside a string is mistaken for a real install.
+   */
+  test("codex uninstall never splices inside a TOML multi-line string", () => {
+    const home = makeTempRoot("mcp-codex-multiline-");
+    const dbPath = join(home, "instructions.db");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const configPath = join(home, ".codex", "config.toml");
+
+    // The configs table's own description spans lines and contains a header.
+    for (const quote of ['"""', "'''"]) {
+      writeFileSync(
+        configPath,
+        `[mcp_servers.configs]\ncommand = "/configs-mcp"\nargs = []\ndescription = ${quote}\n[mcp_servers.other]\n${quote}\n\n[mcp_servers.other]\ncommand = "echo"\n`,
+        "utf-8",
+      );
+      const removed = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+      expect(removed.status).toBe(0);
+      expect(removed.stdout).toContain("Removed from Codex");
+      // Exactly the other server: the whole configs table went, and the
+      // description it carried went with it instead of being cut open.
+      expect(readFileSync(configPath, "utf-8")).toBe(`[mcp_servers.other]\ncommand = "echo"\n`);
+    }
+
+    // The marker occurs only INSIDE a multi-line string: that is string
+    // content, not an install — never splice it, and never report it removed.
+    const inString = `[model]\nprovider = "anthropic"\nnote = """\n[mcp_servers.configs]\n"""\n\n[mcp_servers.echo]\ncommand = "echo"\n`;
+    writeFileSync(configPath, inString, "utf-8");
+    const untouched = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+    expect(untouched.status).toBe(0);
+    expect(untouched.stdout).toContain("Not installed in Codex");
+    expect(readFileSync(configPath, "utf-8")).toBe(inString);
+
+    // ...so install must ADD a real table rather than claim it is present.
+    const installed = runCli(["mcp", "install", "--codex"], home, dbPath);
+    expect(installed.status).toBe(0);
+    expect(installed.stdout).toContain("Installed into Codex");
+
+    // Uninstalling now strips that real table and restores the file byte-for-byte.
+    const cleaned = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+    expect(cleaned.status).toBe(0);
+    expect(cleaned.stdout).toContain("Removed from Codex");
+    expect(readFileSync(configPath, "utf-8")).toBe(inString);
+  });
+
   test("antigravity install registers and uninstall removes only the configs entry", () => {
     const home = makeTempRoot("mcp-antigravity-");
     const dbPath = join(home, "instructions.db");

@@ -2116,6 +2116,82 @@ function tomlTableHeaderParts(line: string): string[] | null {
   return parts.length > 0 ? parts : null;
 }
 
+/** An open TOML multi-line string delimiter, or null when outside every string. */
+type TomlMultilineOpen = '"""' | "'''" | null;
+
+/**
+ * Advance the "inside a multi-line string" state across one line, starting
+ * from `open` (null when the line begins outside every string). `"""` is a
+ * multi-line BASIC string, whose backslash escapes apply; `'''` is a
+ * multi-line LITERAL string, where a backslash is an ordinary character.
+ *
+ * Tracked because a line inside such a block is string CONTENT, not syntax:
+ * `[mcp_servers.other]` appearing between `"""` fences is a description, not a
+ * table header, and splicing at it corrupts the file.
+ */
+function advanceTomlMultiline(line: string, open: TomlMultilineOpen): TomlMultilineOpen {
+  let i = 0;
+  while (i < line.length) {
+    if (open === null) {
+      const ch = line[i]!;
+      // A `#` outside every string opens a comment that runs to end of line.
+      if (ch === "#") return null;
+      if (ch === '"' || ch === "'") {
+        if (line.startsWith(ch.repeat(3), i)) {
+          // Multi-line delimiter: open here and scan for its close below.
+          open = ch.repeat(3) as TomlMultilineOpen;
+          i += 3;
+          continue;
+        }
+        // Single-line string: skip to its closing delimiter. Only a basic
+        // string honours a backslash escape (a literal one takes it verbatim).
+        const basic = ch === '"';
+        i++;
+        while (i < line.length) {
+          if (basic && line[i] === "\\") {
+            i += 2;
+            continue;
+          }
+          if (line[i] === ch) {
+            i++;
+            break;
+          }
+          i++;
+        }
+        continue;
+      }
+      i++;
+      continue;
+    }
+    // Inside a multi-line string: the next unescaped delimiter closes it.
+    let j = i;
+    if (open === '"""') {
+      while (j < line.length) {
+        if (line[j] === "\\") {
+          j += 2; // an escaped character, including a line-ending continuation
+          continue;
+        }
+        if (line.startsWith('"""', j)) return null;
+        j++;
+      }
+      return open; // still open at end of line
+    }
+    return line.includes("'''", j) ? null : open;
+  }
+  return open;
+}
+
+/** Per-line flag: is this line already inside a multi-line string when it starts? */
+function tomlMultilineOpenByLine(lines: string[]): TomlMultilineOpen[] {
+  const opens: TomlMultilineOpen[] = [];
+  let open: TomlMultilineOpen = null;
+  for (const line of lines) {
+    opens.push(open);
+    open = advanceTomlMultiline(line, open);
+  }
+  return opens;
+}
+
 /**
  * Locate a TOML table by its header LINE, as a half-open `[start, end)` range
  * of line indexes (the header line through the line before the next table
@@ -2133,18 +2209,34 @@ function tomlTableHeaderParts(line: string): string[] | null {
  * managed`). A miss there makes install append a SECOND `[mcp_servers.configs]`
  * table — invalid TOML, so Codex can no longer parse its config — while
  * uninstall reports "not installed" and leaves the server registered.
+ *
+ * Both the header and the table's END are read only on lines that start
+ * OUTSIDE a multi-line string, so a `[mcp_servers.configs]`-looking line
+ * inside a `"""` description is neither mistaken for an install nor allowed to
+ * terminate the range. Splicing there would cut mid-string and write invalid
+ * TOML while still reporting success.
  */
 function findTomlTableLines(lines: string[], table: string): { start: number; end: number } | null {
   const want = table.split(".");
-  const start = lines.findIndex((line) => {
-    const parts = tomlTableHeaderParts(line);
-    return parts !== null && parts.length === want.length && parts.every((p, i) => p === want[i]);
-  });
+  const opens = tomlMultilineOpenByLine(lines);
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (opens[i] !== null) continue; // string content, not a header
+    const parts = tomlTableHeaderParts(lines[i]!);
+    if (parts !== null && parts.length === want.length && parts.every((p, k) => p === want[k])) {
+      start = i;
+      break;
+    }
+  }
   if (start === -1) return null;
-  // The table runs to the next line whose first non-space character opens a
-  // table (`[`). A commented-out header starts with `#`, so it does not end it.
-  const next = lines.slice(start + 1).findIndex((line) => line.trimStart().startsWith("["));
-  return { start, end: next === -1 ? lines.length : start + 1 + next };
+  // The table runs to the next line that starts outside every multi-line
+  // string and whose first non-space character opens a table (`[`). A
+  // commented-out header starts with `#`, so it does not end it.
+  for (let i = start + 1; i < lines.length; i++) {
+    if (opens[i] !== null) continue; // string content, not a table boundary
+    if (lines[i]!.trimStart().startsWith("[")) return { start, end: i };
+  }
+  return { start, end: lines.length };
 }
 
 // ── mcp ───────────────────────────────────────────────────────────────────────
