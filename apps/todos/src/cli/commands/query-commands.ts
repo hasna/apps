@@ -86,6 +86,10 @@ import {
   cloudListPlans,
   cloudListTaskLists,
   cloudFailTask,
+  cloudResolveTaskRef,
+  cloudLockTask,
+  cloudTaskAction,
+  cloudUnlockTask,
 } from "../cloud-router.js";
 import {
   buildRemoteIntegrityReport,
@@ -369,8 +373,29 @@ export function registerQueryCommands(program: Command) {
     .option("--project <id>", "Filter to project")
     .action(async (agent, opts) => {
       const globalOpts = program.opts();
-      const { stealTask } = await import("../../db/tasks.js");
-      const task = stealTask(agent, { stale_minutes: parseInt(opts.staleMinutes, 10), project_id: opts.project });
+      // http authority routing: GET /v1/tasks?status=in_progress (staleness
+      // applied client-side, same window as the local query), then
+      // POST /v1/tasks/:id/lock + /start so the steal is visible fleet-wide
+      // instead of moving a row in this machine's private store.
+      const cloud = getTodosCloudClient();
+      let task: Awaited<ReturnType<typeof cloudGetTask>> | null = null;
+      if (cloud) {
+        const projectId = opts.project ? await cloudResolveProjectRef(cloud, opts.project) : undefined;
+        const rank: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+        const candidates = (await cloudStaleTasks(cloud, parseInt(opts.staleMinutes, 10), (projectId ? { project_id: projectId } : {}) as never))
+          .filter((t) => (t.locked_by ?? t.assigned_to ?? "").toLowerCase() !== agent.toLowerCase())
+          .sort((a, b) => (rank[a.priority] ?? 4) - (rank[b.priority] ?? 4) || (a.updated_at ?? "").localeCompare(b.updated_at ?? ""));
+        const target = candidates[0];
+        if (target) {
+          await cloudUnlockTask(cloud, target.id, undefined, true);
+          const lock = await cloudLockTask(cloud, target.id, agent);
+          if (!lock.success) { handleError(new Error(`Could not take the lock on ${target.id.slice(0, 8)}: ${lock.error ?? "refused"}`)); return; }
+          task = await cloudTaskAction(cloud, target.id, "start", { agent_id: agent });
+        }
+      } else {
+        const { stealTask } = await import("../../db/tasks.js");
+        task = stealTask(agent, { stale_minutes: parseInt(opts.staleMinutes, 10), project_id: opts.project });
+      }
       if (!task) { console.log(chalk.dim("No stale tasks available to steal.")); return; }
       if (globalOpts.json) { output(task, true); return; }
       console.log(chalk.green(`Stolen: ${task.short_id || task.id.slice(0, 8)} | ${task.priority} | ${task.title}`));
@@ -679,6 +704,30 @@ export function registerQueryCommands(program: Command) {
     .option("-j, --json", "Output as JSON")
     .action(async (agent: string, opts) => {
       const globalOpts = program.opts();
+      // http authority routing: stale set from GET /v1/tasks, release with
+      // POST /v1/tasks/:id/unlock + PATCH /v1/tasks/:id, then claim with
+      // POST /v1/tasks/next/claim. Releasing locally left the shared row locked.
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        const cloudProjectId = opts.project ? await cloudResolveProjectRef(cloud, opts.project) : undefined;
+        const maxAge = parseInt(opts.maxAge, 10);
+        const cap = opts.limit ? parseInt(opts.limit, 10) : undefined;
+        let stale = await cloudStaleTasks(cloud, maxAge, (cloudProjectId ? { project_id: cloudProjectId } : {}) as never);
+        if (cap !== undefined) stale = stale.slice(0, cap);
+        const released = [];
+        for (const t of stale) {
+          await cloudUnlockTask(cloud, t.id, undefined, true);
+          released.push(await cloudUpdateTask(cloud, t.id, { status: "pending", assigned_to: null, version: t.version }));
+        }
+        const claimed = await cloudClaimNext(cloud, agent);
+        const cloudResult = { released, claimed };
+        if (opts.json || globalOpts.json) { console.log(JSON.stringify(cloudResult, null, 2)); return; }
+        console.log(chalk.bold(`Released ${released.length} stale task(s).`));
+        for (const t of released) console.log(`  ${chalk.yellow("released")} ${chalk.cyan(t.short_id || t.id.slice(0, 8))} ${t.title}`);
+        if (claimed) console.log(chalk.green(`\nClaimed: ${chalk.cyan(claimed.short_id || claimed.id.slice(0, 8))} ${claimed.title}`));
+        else console.log(chalk.dim("\nNo task claimed (nothing available)."));
+        return;
+      }
       const db = getDatabase();
       const projectId = opts.project ? resolvePartialId(db, "projects", opts.project) ?? opts.project : autoProject(globalOpts) ?? undefined;
       const result = redistributeStaleTasks(agent, {
@@ -860,6 +909,21 @@ export function registerQueryCommands(program: Command) {
     .option("-j, --json", "Output as JSON")
     .action(async (id: string, opts) => {
       const globalOpts = program.opts();
+      // http authority routing: PATCH /v1/tasks/:id. `prioritize`/`update`
+      // already routed here; `pin` was the escalation shortcut still writing
+      // the priority into this machine's local sqlite.
+      const cloud = getTodosCloudClient();
+      if (cloud) {
+        try {
+          const taskId = await cloudResolveTaskRef(cloud, id);
+          const current = await cloudGetTask(cloud, taskId);
+          if (!current) throw new Error(`Task not found: ${id}`);
+          const pinned = await cloudUpdateTask(cloud, current.id, { priority: "critical", version: current.version });
+          if (opts.json || globalOpts.json) { console.log(JSON.stringify(pinned)); return; }
+          console.log(chalk.red(`Pinned (critical): ${formatTaskLine(pinned)}`));
+        } catch (error) { handleError(error); }
+        return;
+      }
       const resolvedId = resolveTaskId(id);
       const db = getDatabase();
       const { setTaskPriority } = await import("../../db/tasks.js");
