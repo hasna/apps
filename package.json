@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "license": "Apache-2.0",
   "packageManager": "bun@1.3.14",
-  "description": "Hasna's public OSS apps monorepo \u2014 @hasna/* packages built and published from apps/ (per-app CLIs and SDKs).",
+  "description": "Hasna's public OSS apps monorepo — @hasna/* packages built and published from apps/ (per-app CLIs and SDKs).",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hasna/apps.git"
@@ -25,6 +25,7 @@
     "check:publish-guard": "bun tooling/ci/check-publish-guard.ts",
     "check:deploy-lanes": "bun tooling/ci/check-deploy-lanes.ts && bun tooling/ci/check-todos-deploy.ts --self-test && bun tooling/ci/check-todos-deploy.ts",
     "test:standard": "bun test tooling/ci/tests/standard",
+    "test:client-gates": "bun test tooling/ci/tests/client-gates",
     "test:versioning": "bun test test/versioning",
     "test:suites": "bun run test:versioning && bun run test:standard",
     "prepare:ordered": "bun run --filter @hasna/attachments build && bun run --filter @hasna/loops build && bun run --filter @hasna/mementos build && bun run --filter @hasna/skills build && bun run --filter @hasna/connectors postinstall",

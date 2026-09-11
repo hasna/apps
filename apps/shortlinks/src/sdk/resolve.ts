@@ -20,7 +20,7 @@
  * `https://api.hasna.com/shortlinks` — URLs never need configuring. A
  * credential that cannot be used, a declared-but-blank variable, an unreadable
  * credential file, an authority that is set but malformed — every one of those
- * THROWS. The SDK is hosted-only (the generated `/v1` client has no local
+ * THROWS. The SDK client is HTTP-only (the generated `/v1` client has no local
  * store), so a missing credential is a hard error, never a fallback.
  *
  * THE AUTHORITY PIN (#1794). An explicit `baseUrl` with no `apiKey` is a
@@ -44,7 +44,7 @@ type SdkEnv = Record<string, string | undefined>;
 
 /** The resolved SDK transport: authority, credential, and WHERE each came from. */
 export interface ShortlinksSdkTransport {
-  /** The SDK is hosted-only: every resolved transport talks HTTP to the `/v1` API. */
+  /** The SDK transport is HTTP-only: every resolved transport talks HTTP to the `/v1` API. */
   mode: "http";
   /**
    * Origin WITHOUT the `/v1` suffix, so a caller that composes `/v1/...` gets
@@ -83,7 +83,7 @@ function stripV1(baseUrl: string): string {
  * @hasna/contracts client chain. An explicit `baseUrl` pins the credential
  * (tier 1 only — the ambient fleet key is never attached to a caller-chosen
  * authority, #1794); otherwise the chain decides, and a missing credential
- * throws — the SDK is hosted-only and never degrades.
+ * throws — the SDK client is HTTP-only and never degrades.
  */
 export function resolveShortlinksSdkTransport(
   options: ResolveShortlinksSdkTransportOptions = {},
@@ -123,7 +123,7 @@ export function resolveShortlinksSdkTransport(
   const credential: ShortlinksResolvedCredential | null = resolveCredential("shortlinks", env, credentials);
   if (!credential) {
     throw new Error(
-      "SHORTLINKS_CREDENTIAL_MISSING: the /v1 SDK client is hosted-only and no Hasna Shortlinks " +
+      "SHORTLINKS_CREDENTIAL_MISSING: the /v1 SDK client is HTTP-only and no Hasna Shortlinks " +
         "credential resolved. Looked at HASNA_SHORTLINKS_API_KEY_OVERRIDE / HASNA_PROFILE / " +
         "HASNA_SHORTLINKS_API_KEY_REF, the Keychain item hasna.credentials.shortlinks.api-key, " +
         "~/.hasna/shortlinks/config/credentials, then HASNA_SHORTLINKS_API_KEY.",
@@ -160,7 +160,7 @@ export function resolveShortlinksSdkTransport(
  * one mid-flight.
  *
  * Throws when no credential resolves: this client speaks only to the hosted
- * authority, so there is no local mode to degrade to.
+ * authority, so there is no local fallback.
  */
 export function createShortlinksApiClient(
   options: ResolveShortlinksSdkTransportOptions = {},
@@ -168,7 +168,7 @@ export function createShortlinksApiClient(
   const resolved = resolveShortlinksSdkTransport(options);
   if (resolved.mode !== "http" || !resolved.apiKey) {
     throw new Error(
-      "SHORTLINKS_CREDENTIAL_MISSING: the /v1 client is hosted-only and no Hasna Shortlinks " +
+      "SHORTLINKS_CREDENTIAL_MISSING: the /v1 client is HTTP-only and no Hasna Shortlinks " +
         "credential resolved. Set HASNA_SHORTLINKS_API_KEY, add the Keychain item " +
         "hasna.credentials.shortlinks.api-key, or write ~/.hasna/shortlinks/config/credentials. " +
         "An explicit baseUrl pins an explicit apiKey — the ambient fleet key is never attached to " +

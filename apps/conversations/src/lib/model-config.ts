@@ -1,11 +1,11 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
-import { getDataDir } from "./db.js";
+import { getConversationsHome } from "./home.js";
 
 export const DEFAULT_MODEL = "gpt-4o-mini";
 
 function getConfigPath(): string {
-  return process.env.CONVERSATIONS_CONFIG_PATH || join(getDataDir(), "config.json");
+  return process.env.CONVERSATIONS_CONFIG_PATH || join(getConversationsHome(), "config.json");
 }
 
 interface ConversationsConfig {

@@ -10,7 +10,7 @@ import { getStore } from "../../lib/store/index.js";
 import { updateCachedAutoName, readPersistedIdentity, isSelfRename } from "../../lib/identity.js";
 import { identityFor } from "../identity.js";
 import { env } from "../../lib/env.js";
-import { normalizeAgentName } from "../../lib/presence.js";
+import { normalizeAgentName } from "../../lib/agent-names.js";
 import { getSessionAgent, setSessionAgent, setClaudeSessionId } from "../channel.js";
 import { compactQueriedMessages, compactWindowedAgents, jsonText, resolveMcpWindow } from "../compact.js";
 import { BLOCKERS_LIST_ORDER } from "../../lib/list-order.js";

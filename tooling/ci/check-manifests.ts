@@ -1,12 +1,14 @@
 /**
  * Contract-manifest gate — real validator.
  *
- * Runs the canonical manifest validator (`contracts repo-conformance` from
- * @hasna/contracts) against every publishable member, at the member's
- * effective kit version, using the SAME resolution and invocation as the
- * standard-adherence suite (tooling/ci/tests/standard/contracts.test.ts via
- * ./tests/standard/census). A member is validated by exactly one code path
- * wherever the gate runs.
+ * Runs the canonical manifest validator — the IN-TREE `contracts
+ * repo-conformance` (apps/contracts, the kit this repository ships), executed
+ * by the bun running this gate — against every publishable member, using the
+ * SAME invocation as the standard-adherence suite
+ * (tooling/ci/tests/standard/contracts.test.ts via ./tests/standard/census).
+ * A member is validated by exactly one code path wherever the gate runs, and
+ * nothing is installed from the registry (2026-09-11: the per-member pinned
+ * `bunx` path is gone — see census.ts#conformanceCommand).
  *
  * The gate's acceptance is EXACTLY the standard-adherence suite's, so the
  * gates job and test-suites always agree. It refuses (exit 1) when any
@@ -41,13 +43,10 @@ import {
   membersIn,
   CONTRACTS_EXCEPTION_MEMBERS,
   MANIFEST_MISSING_MEMBERS,
-  resolveValidatorVersion,
+  inTreeKitVersion,
   runConformance,
 } from "./tests/standard/census";
 
-/** Known valid kit versions — identical to the standard suite's report set,
- * so both resolve the same effective validator version. */
-const KNOWN_VALIDATOR_VERSIONS = new Set(["0.4.1", "0.4.2", "0.5.2", "0.8.1", "0.8.2", "0.8.4", "0.8.5", "0.9.0", "0.10.6", "0.13.1"]);
 
 export interface ManifestGateEntry {
   member: string;
@@ -64,10 +63,7 @@ export function buildGateEntries(appsDir: string = APPS_DIR): ManifestGateEntry[
       entries.push({ member: m.name, version: "", status: "missing", detail: ["no hasna.contract.json"] });
       continue;
     }
-    const manifest = JSON.parse(fs.readFileSync(path.join(appsDir, m.name, "hasna.contract.json"), "utf8")) as {
-      kitVersion?: string;
-    };
-    const version = resolveValidatorVersion(m.contractsDep, manifest.kitVersion, KNOWN_VALIDATOR_VERSIONS);
+    const version = inTreeKitVersion();
     const { verdict, fails } = runConformance(path.relative(REPO_ROOT, path.join(appsDir, m.name)), version);
     entries.push({
       member: m.name,

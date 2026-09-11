@@ -29,7 +29,7 @@ HASNA_SHORTLINKS_LOCAL=1. With neither it exits non-zero before serving.
  * tier and the opt-in, so the bin exits non-zero before any transport starts —
  * a server whose every tool would refuse must never announce "stdio ready".
  * Hosted resolution touches nothing on disk; only the explicit local opt-in
- * opens the on-box database (announcing local mode on stderr, once).
+ * opens the on-box database (announcing the local backend on stderr, once).
  */
 export function assertMcpBackend(env: Env = process.env): void {
   const store = resolveStore(env);

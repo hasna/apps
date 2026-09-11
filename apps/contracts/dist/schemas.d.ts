@@ -37304,6 +37304,18 @@ export type RepoClass = z.infer<typeof RepoClassSchema>;
 export declare const HOSTING_MODES: readonly ["user-hosted", "hasna-saas"];
 export declare const HostingModeSchema: z.ZodEnum<["user-hosted", "hasna-saas"]>;
 export type HostingMode = z.infer<typeof HostingModeSchema>;
+/**
+ * Credential gate on a served route. `hosting` says WHO a product story is
+ * for; this says HOW a client gets past the edge — no gate at all (`public`),
+ * a fleet client API key (`api-key`, the gateway default), or a
+ * request-signature check (`signature`, what hooks uses instead of a
+ * presented key).
+ */
+export declare const SERVING_ACCESS_MODES: readonly ["public", "api-key", "signature"];
+export declare const ServingAccessSchema: z.ZodEnum<["public", "api-key", "signature"]>;
+export type ServingAccess = z.infer<typeof ServingAccessSchema>;
+/** The shared gateway every path-prefixed fleet route is served under. */
+export declare const FLEET_GATEWAY_HOST = "api.hasna.com";
 export declare const SERVICE_SURFACE_KINDS: readonly ["api", "sdk", "mcp", "cli"];
 export declare const ServiceSurfaceKindSchema: z.ZodEnum<["api", "sdk", "mcp", "cli"]>;
 export type ServiceSurfaceKind = z.infer<typeof ServiceSurfaceKindSchema>;
@@ -37559,7 +37571,7 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
 }, "strict", z.ZodTypeAny, {
     name: string;
     status: "deferred" | "supported" | "unsupported";
-    authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+    authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
     readinessGates: {
         id: string;
         kind: "health" | "storage" | "other" | "smoke" | "migration" | "readiness" | "redaction" | "auth" | "secret-ref" | "operator";
@@ -37605,7 +37617,7 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
 }, {
     name: string;
     status: "deferred" | "supported" | "unsupported";
-    authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+    authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
     health?: {
         path: string;
         method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -37651,7 +37663,7 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
 }>, {
     name: string;
     status: "deferred" | "supported" | "unsupported";
-    authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+    authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
     readinessGates: {
         id: string;
         kind: "health" | "storage" | "other" | "smoke" | "migration" | "readiness" | "redaction" | "auth" | "secret-ref" | "operator";
@@ -37697,7 +37709,7 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
 }, {
     name: string;
     status: "deferred" | "supported" | "unsupported";
-    authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+    authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
     health?: {
         path: string;
         method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -39745,6 +39757,59 @@ export declare const PublishingContractSchema: z.ZodEffects<z.ZodObject<{
     }[] | undefined;
 }>;
 export type PublishingContract = z.infer<typeof PublishingContractSchema>;
+/** Secrets Manager id of a route's client API key (`hasna/oss/<routeSlug>/api-key`). */
+export declare function clientKeySecretRefFor(routeSlug: string): string;
+/** Canonical client base for a route served on the shared gateway. */
+export declare function gatewayClientBaseFor(routeSlug: string): string;
+/**
+ * Where a served app is reachable from a client (hasna/apps#1601).
+ *
+ * WHY A NEW BLOCK AND NOT A NEW `hosting` VALUE. `hosting` is a product-story
+ * enum consumed by the conformance `hosting_story` check (`saas` repos must
+ * declare `hasna-saas`, every public OSS core must declare `user-hosted`).
+ * Route placement is orthogonal to that: an OSS core that is `user-hosted` is
+ * still served at `https://api.hasna.com/<slug>`. Adding route values to the
+ * enum would let a repo satisfy the product-story check with a value that says
+ * nothing about the story, weakening a gate that already works.
+ *
+ * WHAT IT MIRRORS. The fleet registry (`tooling/fleet/hosted-apps.json`,
+ * `tooling/fleet/key-provisioning.ts`) already expresses a route as this exact
+ * triple: an `app` slug that is the gateway path segment, a `baseUrl` derived
+ * as `https://api.hasna.com/<app>` (clients append `/v1` themselves, so the
+ * base NEVER ends in `/v1`), and a credential gate — `keyCheck: "probe"` for a
+ * client API key at `hasna/oss/<app>/api-key`, `keyCheck: "none"` for hooks,
+ * which verifies request signatures. `routeSlug`, `access` and
+ * `targetClientBase` are those three, named for a contract.
+ *
+ * Backwards compatible by construction: the block is optional, and omitting it
+ * asserts nothing about routing (exactly as omitting `publishing` asserts
+ * nothing about publication). Existing manifests keep validating unchanged.
+ */
+export declare const ServingContractSchema: z.ZodEffects<z.ZodObject<{
+    /** Gateway path segment; the route is reachable at https://api.hasna.com/<routeSlug>. */
+    routeSlug: z.ZodString;
+    /** Credential gate on the route. Named explicitly: a route's gate is a security fact, never defaulted. */
+    access: z.ZodEnum<["public", "api-key", "signature"]>;
+    /** Client base URL: absolute https, no trailing slash, never ending in /v1. */
+    targetClientBase: z.ZodString;
+}, "strict", z.ZodTypeAny, {
+    access: "public" | "api-key" | "signature";
+    routeSlug: string;
+    targetClientBase: string;
+}, {
+    access: "public" | "api-key" | "signature";
+    routeSlug: string;
+    targetClientBase: string;
+}>, {
+    access: "public" | "api-key" | "signature";
+    routeSlug: string;
+    targetClientBase: string;
+}, {
+    access: "public" | "api-key" | "signature";
+    routeSlug: string;
+    targetClientBase: string;
+}>;
+export type ServingContract = z.infer<typeof ServingContractSchema>;
 export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
     /** Optional editor hint pointing at the JSON Schema; ignored at runtime. */
     $schema: z.ZodOptional<z.ZodString>;
@@ -39826,6 +39891,30 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
         } | undefined;
     }>>;
     hosting: z.ZodDefault<z.ZodArray<z.ZodEnum<["user-hosted", "hasna-saas"]>, "many">>;
+    serving: z.ZodOptional<z.ZodEffects<z.ZodObject<{
+        /** Gateway path segment; the route is reachable at https://api.hasna.com/<routeSlug>. */
+        routeSlug: z.ZodString;
+        /** Credential gate on the route. Named explicitly: a route's gate is a security fact, never defaulted. */
+        access: z.ZodEnum<["public", "api-key", "signature"]>;
+        /** Client base URL: absolute https, no trailing slash, never ending in /v1. */
+        targetClientBase: z.ZodString;
+    }, "strict", z.ZodTypeAny, {
+        access: "public" | "api-key" | "signature";
+        routeSlug: string;
+        targetClientBase: string;
+    }, {
+        access: "public" | "api-key" | "signature";
+        routeSlug: string;
+        targetClientBase: string;
+    }>, {
+        access: "public" | "api-key" | "signature";
+        routeSlug: string;
+        targetClientBase: string;
+    }, {
+        access: "public" | "api-key" | "signature";
+        routeSlug: string;
+        targetClientBase: string;
+    }>>;
     serviceSurfaces: z.ZodDefault<z.ZodArray<z.ZodEffects<z.ZodObject<{
         name: z.ZodString;
         kind: z.ZodOptional<z.ZodEnum<["api", "sdk", "mcp", "cli"]>>;
@@ -39973,7 +40062,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
     }, "strict", z.ZodTypeAny, {
         name: string;
         status: "deferred" | "supported" | "unsupported";
-        authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+        authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
         readinessGates: {
             id: string;
             kind: "health" | "storage" | "other" | "smoke" | "migration" | "readiness" | "redaction" | "auth" | "secret-ref" | "operator";
@@ -40019,7 +40108,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
     }, {
         name: string;
         status: "deferred" | "supported" | "unsupported";
-        authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+        authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
         health?: {
             path: string;
             method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -40065,7 +40154,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
     }>, {
         name: string;
         status: "deferred" | "supported" | "unsupported";
-        authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+        authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
         readinessGates: {
             id: string;
             kind: "health" | "storage" | "other" | "smoke" | "migration" | "readiness" | "redaction" | "auth" | "secret-ref" | "operator";
@@ -40111,7 +40200,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
     }, {
         name: string;
         status: "deferred" | "supported" | "unsupported";
-        authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+        authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
         health?: {
             path: string;
             method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -40901,7 +40990,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
     serviceSurfaces: {
         name: string;
         status: "deferred" | "supported" | "unsupported";
-        authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+        authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
         readinessGates: {
             id: string;
             kind: "health" | "storage" | "other" | "smoke" | "migration" | "readiness" | "redaction" | "auth" | "secret-ref" | "operator";
@@ -41149,6 +41238,11 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
     }, z.ZodUnknown, "strip"> | undefined;
     description?: string | undefined;
     $schema?: string | undefined;
+    serving?: {
+        access: "public" | "api-key" | "signature";
+        routeSlug: string;
+        targetClientBase: string;
+    } | undefined;
     publishing?: {
         status: "published" | "unpublished";
         targets: {
@@ -41379,10 +41473,15 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
     description?: string | undefined;
     bins?: string[] | undefined;
     $schema?: string | undefined;
+    serving?: {
+        access: "public" | "api-key" | "signature";
+        routeSlug: string;
+        targetClientBase: string;
+    } | undefined;
     serviceSurfaces?: {
         name: string;
         status: "deferred" | "supported" | "unsupported";
-        authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+        authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
         health?: {
             path: string;
             method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -41455,7 +41554,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
     serviceSurfaces: {
         name: string;
         status: "deferred" | "supported" | "unsupported";
-        authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+        authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
         readinessGates: {
             id: string;
             kind: "health" | "storage" | "other" | "smoke" | "migration" | "readiness" | "redaction" | "auth" | "secret-ref" | "operator";
@@ -41703,6 +41802,11 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
     }, z.ZodUnknown, "strip"> | undefined;
     description?: string | undefined;
     $schema?: string | undefined;
+    serving?: {
+        access: "public" | "api-key" | "signature";
+        routeSlug: string;
+        targetClientBase: string;
+    } | undefined;
     publishing?: {
         status: "published" | "unpublished";
         targets: {
@@ -41933,10 +42037,15 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
     description?: string | undefined;
     bins?: string[] | undefined;
     $schema?: string | undefined;
+    serving?: {
+        access: "public" | "api-key" | "signature";
+        routeSlug: string;
+        targetClientBase: string;
+    } | undefined;
     serviceSurfaces?: {
         name: string;
         status: "deferred" | "supported" | "unsupported";
-        authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+        authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
         health?: {
             path: string;
             method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -70611,6 +70720,30 @@ declare const CoreContractSchemaRegistry: {
             } | undefined;
         }>>;
         hosting: z.ZodDefault<z.ZodArray<z.ZodEnum<["user-hosted", "hasna-saas"]>, "many">>;
+        serving: z.ZodOptional<z.ZodEffects<z.ZodObject<{
+            /** Gateway path segment; the route is reachable at https://api.hasna.com/<routeSlug>. */
+            routeSlug: z.ZodString;
+            /** Credential gate on the route. Named explicitly: a route's gate is a security fact, never defaulted. */
+            access: z.ZodEnum<["public", "api-key", "signature"]>;
+            /** Client base URL: absolute https, no trailing slash, never ending in /v1. */
+            targetClientBase: z.ZodString;
+        }, "strict", z.ZodTypeAny, {
+            access: "public" | "api-key" | "signature";
+            routeSlug: string;
+            targetClientBase: string;
+        }, {
+            access: "public" | "api-key" | "signature";
+            routeSlug: string;
+            targetClientBase: string;
+        }>, {
+            access: "public" | "api-key" | "signature";
+            routeSlug: string;
+            targetClientBase: string;
+        }, {
+            access: "public" | "api-key" | "signature";
+            routeSlug: string;
+            targetClientBase: string;
+        }>>;
         serviceSurfaces: z.ZodDefault<z.ZodArray<z.ZodEffects<z.ZodObject<{
             name: z.ZodString;
             kind: z.ZodOptional<z.ZodEnum<["api", "sdk", "mcp", "cli"]>>;
@@ -70758,7 +70891,7 @@ declare const CoreContractSchemaRegistry: {
         }, "strict", z.ZodTypeAny, {
             name: string;
             status: "deferred" | "supported" | "unsupported";
-            authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+            authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
             readinessGates: {
                 id: string;
                 kind: "health" | "storage" | "other" | "smoke" | "migration" | "readiness" | "redaction" | "auth" | "secret-ref" | "operator";
@@ -70804,7 +70937,7 @@ declare const CoreContractSchemaRegistry: {
         }, {
             name: string;
             status: "deferred" | "supported" | "unsupported";
-            authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+            authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
             health?: {
                 path: string;
                 method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -70850,7 +70983,7 @@ declare const CoreContractSchemaRegistry: {
         }>, {
             name: string;
             status: "deferred" | "supported" | "unsupported";
-            authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+            authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
             readinessGates: {
                 id: string;
                 kind: "health" | "storage" | "other" | "smoke" | "migration" | "readiness" | "redaction" | "auth" | "secret-ref" | "operator";
@@ -70896,7 +71029,7 @@ declare const CoreContractSchemaRegistry: {
         }, {
             name: string;
             status: "deferred" | "supported" | "unsupported";
-            authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+            authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
             health?: {
                 path: string;
                 method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -71686,7 +71819,7 @@ declare const CoreContractSchemaRegistry: {
         serviceSurfaces: {
             name: string;
             status: "deferred" | "supported" | "unsupported";
-            authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+            authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
             readinessGates: {
                 id: string;
                 kind: "health" | "storage" | "other" | "smoke" | "migration" | "readiness" | "redaction" | "auth" | "secret-ref" | "operator";
@@ -71934,6 +72067,11 @@ declare const CoreContractSchemaRegistry: {
         }, z.ZodUnknown, "strip"> | undefined;
         description?: string | undefined;
         $schema?: string | undefined;
+        serving?: {
+            access: "public" | "api-key" | "signature";
+            routeSlug: string;
+            targetClientBase: string;
+        } | undefined;
         publishing?: {
             status: "published" | "unpublished";
             targets: {
@@ -72164,10 +72302,15 @@ declare const CoreContractSchemaRegistry: {
         description?: string | undefined;
         bins?: string[] | undefined;
         $schema?: string | undefined;
+        serving?: {
+            access: "public" | "api-key" | "signature";
+            routeSlug: string;
+            targetClientBase: string;
+        } | undefined;
         serviceSurfaces?: {
             name: string;
             status: "deferred" | "supported" | "unsupported";
-            authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+            authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
             health?: {
                 path: string;
                 method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -72240,7 +72383,7 @@ declare const CoreContractSchemaRegistry: {
         serviceSurfaces: {
             name: string;
             status: "deferred" | "supported" | "unsupported";
-            authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+            authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
             readinessGates: {
                 id: string;
                 kind: "health" | "storage" | "other" | "smoke" | "migration" | "readiness" | "redaction" | "auth" | "secret-ref" | "operator";
@@ -72488,6 +72631,11 @@ declare const CoreContractSchemaRegistry: {
         }, z.ZodUnknown, "strip"> | undefined;
         description?: string | undefined;
         $schema?: string | undefined;
+        serving?: {
+            access: "public" | "api-key" | "signature";
+            routeSlug: string;
+            targetClientBase: string;
+        } | undefined;
         publishing?: {
             status: "published" | "unpublished";
             targets: {
@@ -72718,10 +72866,15 @@ declare const CoreContractSchemaRegistry: {
         description?: string | undefined;
         bins?: string[] | undefined;
         $schema?: string | undefined;
+        serving?: {
+            access: "public" | "api-key" | "signature";
+            routeSlug: string;
+            targetClientBase: string;
+        } | undefined;
         serviceSurfaces?: {
             name: string;
             status: "deferred" | "supported" | "unsupported";
-            authMode: "custom" | "session" | "none" | "local-only" | "api-key" | "service-token";
+            authMode: "custom" | "session" | "none" | "api-key" | "local-only" | "service-token";
             health?: {
                 path: string;
                 method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";

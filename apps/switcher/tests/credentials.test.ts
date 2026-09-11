@@ -10,13 +10,14 @@ import { openCliRuntime } from "../src/runtime";
 const cli = fileURLToPath(new URL("../src/cli.ts",import.meta.url));
 const scratch = process.env.SWITCHER_TEST_ROOT ?? join(homedir(),"Workspace/scratch/switcher-tests");
 async function directory() { await mkdir(scratch,{recursive:true}); return mkdtemp(join(scratch,"credentials-")); }
-const envFor = (dir: string, extra: NodeJS.ProcessEnv = {}) => ({PATH:process.env.PATH,HOME:dir,USER:"fixture",HASNA_STATION:"switcher-credential-fixture",HASNA_SWITCHER_HOME:join(dir,"data"),...extra});
+const envFor = (dir: string, extra: NodeJS.ProcessEnv = {}) => ({PATH:process.env.PATH,HOME:dir,USER:"fixture",HASNA_STATION:"switcher-credential-fixture",HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"data"),...extra});
+const withoutLocalNotice = (stderr: string) => stderr.replace(/^switcher: LOCAL mode [^\n]*\n/, ""); // The opt-in notice is asserted in fail-closed.test.ts; here it would only mask the command's own diagnostics.
 async function command(dir: string, args: string[], extra: NodeJS.ProcessEnv = {}) {
   const child = Bun.spawn([process.execPath,cli,...args],{cwd:dir,env:envFor(dir,extra),stdin:"ignore",stdout:"pipe",stderr:"pipe"});
   const timeout = setTimeout(()=>child.kill("SIGKILL"),25_000);
   try {
     const [stdout,stderr,code] = await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);
-    return {stdout,stderr,code};
+    return {stdout,stderr:withoutLocalNotice(stderr),code};
   } finally { clearTimeout(timeout); }
 }
 const keychainBinding = () => credentialBindingSchema.parse({schema:1,...bindingTarget("deepseek"),source:{kind:"keychain",service:"fixture-provider",account:"fixture-account"}});
@@ -196,7 +197,7 @@ await nested.exited;
     child.kill(signal);
     const [code,stderr] = await Promise.all([child.exited,new Response(child.stderr).text()]);
     expect(code,stderr).toBe(signal === "SIGTERM" ? 143 : 130);
-    expect(JSON.parse(stderr).error.code).toBe("interrupted");
+    expect(JSON.parse(withoutLocalNotice(stderr)).error.code).toBe("interrupted");
     await Bun.sleep(100);
     for (const pid of pids) expect(()=>process.kill(pid,0)).toThrow();
     expect((await command(dir,["providers","list"])).code).toBe(0);

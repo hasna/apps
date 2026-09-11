@@ -1,3 +1,14 @@
+// The registry is an on-box file ONLY under the explicit local opt-in and it
+// lives next to the memory store. Pin a scratch store before anything imports
+// the module so this suite never touches a real machine's files.
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
+const SCRATCH_HOME = mkdtempSync(joinPath(tmpdir(), "mementos-session-registry-"));
+process.env["HASNA_MEMENTOS_LOCAL"] = "1";
+process.env["HASNA_MEMENTOS_DB_PATH"] = joinPath(SCRATCH_HOME, "mementos.db");
+for (const key of ["HASNA_MEMENTOS_API_URL", "HASNA_MEMENTOS_API_KEY", "MEMENTOS_API_URL", "MEMENTOS_API_KEY"]) delete process.env[key];
+
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   registerSession,

@@ -155,7 +155,8 @@ export function versionAtLeast(v: string, min: string): boolean {
   return true;
 }
 
-/** Effective validator version for a member: the pinned @hasna/contracts
+/** LEGACY (no longer selects a validator since 2026-09-11 — see conformanceCommand).
+ * Effective validator version for a member: the pinned @hasna/contracts
  * dependency when it exposes `repo-conformance` (>= MIN_VALIDATOR_VERSION);
  * else the manifest's kitVersion when that version exists on npm; else
  * `latest`. Shared by the standard-adherence suite and the
@@ -166,22 +167,35 @@ export function resolveValidatorVersion(pinned: string | undefined, kitVersion: 
   return "latest";
 }
 
-/** Run the canonical manifest validator (`contracts repo-conformance` from
- * @hasna/contracts) against one member directory. Returns a verdict and the
- * raw output. Shared by the standard-adherence suite and the check-manifests
- * CI gate, so a member is validated by exactly the same invocation in both. */
-export function conformanceCommand(version: string): { executable: string; args: string[] } {
-  const root = path.join(APPS_DIR, "contracts");
-  const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  // This producer repository must validate a candidate before publishing it.
-  // Use its canonical source CLI only for the exact in-tree version. Older
-  // pins, ranges and latest retain their independent registry resolution.
-  if (manifest.name === "@hasna/contracts" && version === manifest.version)
-    return { executable: "bun", args: [path.join(root, "src/cli/index.ts")] };
-  return { executable: "bunx", args: ["--bun", `@hasna/contracts@${version}`] };
+/** The kit version this tree ships — the ONLY validator version the suite and
+ * the check-manifests gate run since 2026-09-11. */
+export function inTreeKitVersion(): string {
+  const manifest = JSON.parse(fs.readFileSync(path.join(APPS_DIR, "contracts", "package.json"), "utf8")) as { version?: string };
+  return String(manifest.version ?? "0.0.0");
 }
 
-export function runConformance(dir: string, version: string): { verdict: "ok" | "fail" | "cannot-run"; fails: string[]; raw: string } {
+/**
+ * Run the canonical manifest validator: the IN-TREE `contracts repo-conformance`
+ * (apps/contracts/src/cli/index.ts), executed by the SAME bun binary that is
+ * running the suite (`process.execPath`).
+ *
+ * Until 2026-09-11 this resolved each member's own pinned @hasna/contracts
+ * version and ran it through `bunx --bun @hasna/contracts@<pin>` — which
+ * shells out to whichever `bun` is first on PATH (homebrew 1.4.0 on the
+ * stations, not the pinned 1.3.14), performs `bun add … --force --no-cache`
+ * per member per version (a full network resolve every run), and has no
+ * serialisation, so concurrent suite runs melted a station (load 47/24 cores
+ * measured) and produced racy "validator could not run" reds. A producer
+ * repository validates its manifests with the kit it ships: no registry
+ * install, no PATH lookup, deterministic, concurrent-safe. The `version`
+ * argument is accepted for call-site compatibility and reported, never used
+ * to select a validator.
+ */
+export function conformanceCommand(_version?: string): { executable: string; args: string[] } {
+  return { executable: process.execPath, args: [path.join(APPS_DIR, "contracts", "src/cli/index.ts")] };
+}
+
+export function runConformance(dir: string, version: string = inTreeKitVersion()): { verdict: "ok" | "fail" | "cannot-run"; fails: string[]; raw: string } {
   const command = conformanceCommand(version);
   const res = spawnSync(command.executable, [...command.args, "repo-conformance", dir], {
     cwd: REPO_ROOT,
@@ -296,40 +310,23 @@ export const LICENSE_EXCEPTIONS: Array<{ member: string; license: string; reason
 export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "automations", reason: "Daemon-shaped member (automations-daemon); no MCP surface declared." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); ships `contracts` + `contracts-cli` bins only." },
-  { member: "docs", reason: "Docs/instruction renderer; library-shaped, no MCP surface." },
-  { member: "draw", reason: "Library-shaped (canvas/design tokens); no MCP surface." },
   { member: "guardrails", reason: "Library-shaped (guardrail policies); no MCP surface." },
   { member: "hooks", reason: "CLI+serve member (hooks registry/serve); no MCP surface yet." },
-  { member: "models", reason: "Library-shaped (model metadata); no MCP surface." },
   { member: "orgs", reason: "Registry-shaped; no MCP surface." },
-  { member: "paths", reason: "Library-shaped (pure path helper); no MCP surface." },
-  { member: "slides", reason: "Library-shaped; no MCP surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
-  { member: "tables", reason: "Library-shaped (tabular data); no MCP surface." },
-  { member: "terminal", reason: "CLI-only member (terminal tooling); no MCP surface. Imported by #88 after the original census; aggregate task (todos 35e136f2)." },
-  { member: "test-guard", reason: "Shell-guard member (bash sentinel/bun-wrapper/battery, SC-00062); no MCP surface." }
 ];
 
 /** Four-surface WARN exceptions — members missing the <name>-serve bin. */
 export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
-  { member: "announce", reason: "CLI-only member; no server surface." },
   { member: "automations", reason: "Daemon-shaped (automations-daemon); no HTTP serve bin." },
   { member: "bridge", reason: "Client-shaped (bridge to other tools); no server surface." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); no server surface." },
   { member: "dispatch", reason: "Dispatch daemon surface only; no HTTP serve bin." },
-  { member: "docs", reason: "Docs renderer; no server surface." },
-  { member: "draw", reason: "Library-shaped; no server surface." },
   { member: "guardrails", reason: "Library-shaped; no server surface." },
-  { member: "models", reason: "Library-shaped; no server surface." },
   { member: "orgs", reason: "Registry-shaped; no server surface." },
-  { member: "paths", reason: "Library-shaped (pure path helper); no server surface." },
   { member: "releases", reason: "CLI-only member; no server surface." },
   { member: "servers", reason: "CLI-only member (server lifecycle tooling); no server surface." },
-  { member: "slides", reason: "Library-shaped; no server surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
   { member: "statusline", reason: "CLI-only member; no server surface." },
-  { member: "tables", reason: "Library-shaped; no server surface." },
   { member: "tai", reason: "Client-shaped; no server surface." },
-  { member: "terminal", reason: "CLI-only member (terminal tooling); no server surface. Imported by #88 after the original census; aggregate task (todos 35e136f2)." },
-  { member: "test-guard", reason: "Shell-guard member (host-local concurrency guard); no server surface." }
 ];
 
 /** Four-surface WARN exceptions — members missing the ./sdk export. The
@@ -337,41 +334,24 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
  * ([P5] Standardize typed ./sdk exports + embedding contracts); entries
  * here reference it. */
 export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
-  { member: "announce", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "automations", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "billing", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "bridge", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "changelog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "controls", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "connectors", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #80 after the original census." },
-  { member: "docs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "draw", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "emails", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "models", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "repos", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "servers", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "slides", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "snapshots", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "statusline", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "tables", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "terminal", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #88 after the original census." },
-  { member: "test-guard", reason: "SDK lane (c7ce8b75); bash-only guard ships no importable Node SDK export (see the member's CONTRACTS_EXCEPTIONS entry)." },
-  { member: "tickets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." }
 ];
 
 /** HARD four-surface exceptions — members missing the `<name>` CLI bin.
  * These are the only four-surface violations that are task-mandated (the
  * bin must NOT be invented in-suite; remediation is a tracked task). */
-export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: string }> = [
-  {
-    member: "slides",
-    reason: "Library-shaped member; no public `slides` CLI bin. Remediation task filed.",
-    task: "todos 62ec9dbc (slides missing CLI bin)",
-  },
-];
+export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: string }> = [];
 
 /** hasna.contract.json must exist for every publishable member. Members
  * measured without one (22 — 23 at the original census, connectors added by
@@ -392,69 +372,83 @@ export const MANIFEST_MISSING_EXCEPTIONS: Array<{ member: string; reason: string
  * `contracts repo-conformance` at the resolved validator version. Each
  * carries the measured failure cause and the filed remediation task. */
 export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: string }> = [
+  // Re-measured 2026-09-11 (fleet-alignment wave, W2) against the IN-TREE kit
+  // (apps/contracts 1.0.2), which is the only validator since that date. Each
+  // entry names the rule ids the in-tree run reports; a member that passes at
+  // the in-tree kit must have its entry deleted (two-sided contract).
   {
     member: "calendar",
-    cause: "manifest_valid at pinned 0.4.2 (mode-era schema vs mixed-era manifest): storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; <root> Unrecognized key(s) in object: 'hosting', 'serviceSurfaces'. The earlier mode_enum_compliance env-var cause no longer fires.",
+    cause: "published_artifact_gate: metadata.release.artifactScan.script is required for a published package (in-tree kit 1.0.2).",
     task: "todos a967c9bd (contracts task — calendar)",
   },
   {
+    member: "changelog",
+    cause: "bins_match_package: package.json ships changelog-mcp and changelog-serve that the manifest does not declare; surface_matrix: api and mcp surfaces neither declared supported nor waived (in-tree kit 1.0.2; passed at its own pin, first measured failing when validation moved in-tree).",
+    task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: changelog lane; declare the two bins and the api/mcp surfaces or waive them",
+  },
+  {
+    member: "contacts",
+    cause: "credential_seam_compliance: src/cli/status-domain.preload.ts:45 reads HASNA_CONTACTS_API_KEY straight from the process environment (in-tree kit 1.0.2; first measured failing when validation moved in-tree).",
+    task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: contacts lane; resolve through @hasna/contracts/client",
+  },
+  {
     member: "conversations",
-    cause: "bins_match_package: package.json ships bins conversations-inbox and conversations-hook that the manifest does not declare (manifest declares conversations, conversations-mcp, conversations-serve only). Imported by #100 after the original census; validated at pinned ^0.4.2 (kitVersion 0.4.2).",
-    task: "todos ee9fbb4d (import row — conversations; reconcile the two bins against the manifest or extend the manifest's bins)",
+    cause: "bins_match_package: conversations-inbox and conversations-hook undeclared; storage_capabilities: storage.pgTestGate required; public_manifest_safety: secret-ref values at storage.databaseUrlSecretRef, metadata.service.signingSecretSecretRef, metadata.service.databaseUrlOwnerSecretRef; published_artifact_gate: metadata.release.artifactScan.script required (in-tree kit 1.0.2).",
+    task: "todos ee9fbb4d (import row — conversations)",
   },
   {
     member: "economy",
-    cause: "bins_match_package: package.json ships bin economy-otel that the manifest cannot declare (economy-otel is not in ALLOWED_BIN_SUFFIXES; the kit allowlist lacks an -otel suffix). Validated at pinned 0.13.3 (kitVersion 0.13.3). Same recorded class as conversations/events/monitor/instructions.",
+    cause: "bins_match_package: package.json ships bin economy-otel that the manifest cannot declare (-otel is not an allowlisted suffix) (in-tree kit 1.0.2).",
     task: "todos 2a70ece0-d4af-4aae-bea8-4dff128a38ca (contracts task — economy)",
   },
   {
+    member: "emails",
+    cause: "credential_seam_compliance: src/cli/commands/domain-setup.test-support.ts:21 reads HASNA_EMAILS_API_KEY straight from the process environment (in-tree kit 1.0.2; first measured failing when validation moved in-tree).",
+    task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: emails lane (W6); resolve through @hasna/contracts/client",
+  },
+  {
     member: "events",
-    cause: "bins_match_package: package.json ships bin hasna-events (alias of events, npm parity with 0.1.15) that the manifest does not declare; hasna-events is not in CANONICAL_HASNA_BIN_ALIASES so it can never be allowlisted. Imported by #160.",
+    cause: "bins_match_package: package.json ships bin hasna-events (alias of events, npm parity with 0.1.15) that the manifest does not declare and cannot allowlist (in-tree kit 1.0.2).",
     task: "todos 9b78ba7e-d859-4928-a999-3184fa6baf97 (contracts task — events)",
   },
   {
     member: "feedback",
-    cause: "surface_matrix: missing supported api surface (feedback-serve publishes no /ready, /version, or /openapi.json; api surface deferred truthfully); self_host_artifact: no Dockerfile/docker-compose; storage_capabilities: pgTestGate required; service_api_topology: no supported API surface. Manifest schema-valid at kit 0.11.1.",
+    cause: "surface_matrix: api and sdk missing/unwaived; service_api_topology: a supported API surface is required; self_host_artifact: no Dockerfile/compose; storage_capabilities: storage.pgTestGate required (in-tree kit 1.0.2).",
     task: "todos 5e31148b-6552-44ea-93ba-d7c4e1676079 (contracts task — feedback)",
   },
   {
     member: "files",
-    cause: "manifest_valid: service-class manifest declares no service surface (service repos must declare at least one). Imported by #90 after the original census; validated at pinned 0.5.2.",
+    cause: "manifest_valid: storage.backend Required; storage carries the retired key 'mode' (in-tree kit 1.0.2 — the manifest is still the pre-backend-schema shape).",
     task: "todos b0845699-4e54-49f7-817e-025d4f6ca270 (contracts task — files)",
   },
   {
+    member: "hooks",
+    cause: "no_cloud_guard: hasna.contract.json carries a legacy .hasna/cloud runtime-config reference (in-tree kit 1.0.2; first measured failing when validation moved in-tree).",
+    task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: hooks lane (W6); remove the retired location from the manifest",
+  },
+  {
     member: "instructions",
-    cause: "bins_match_package: package.json ships legacy alias bins configs/configs-mcp (fleet-compat, not contract-allowlisted — same class as the recorded economy hasna-events precedent); storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required; credential_seam_compliance: src/db/database.ts reads HASNA_INSTRUCTIONS_API_KEY from the process environment. Manifest schema-valid at kit 0.11.1.",
+    cause: "bins_match_package: legacy alias bins configs/configs-mcp undeclared; storage_capabilities: storage.pgTestGate required; published_artifact_gate: metadata.release.artifactScan.script required (in-tree kit 1.0.2).",
     task: "todos c15cca18 (contracts task — instructions)",
   },
   {
     member: "logs",
-    cause: "storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required. Manifest schema-valid at kit 0.11.1. (The surface_matrix sdk cause no longer fires: the #1720 validation fix ships ./sdk and declares the logs-sdk surface supported.)",
+    cause: "storage_capabilities: storage.pgTestGate required; published_artifact_gate: metadata.release.artifactScan.script required (in-tree kit 1.0.2).",
     task: "todos d166125e (contracts task — logs)",
   },
   {
     member: "monitor",
-    cause: "bins_match_package: package.json ships bins monitor-server and monitor-serve that the manifest does not declare (manifest declares monitor, monitor-mcp, monitor-daemon). monitor-serve is the canonical rename shipped by #1602, but it cannot be declared yet: declaring a -serve bin flips a cli-with-store manifest to service-capable and invalidates the sqlite-only storage waiver (see the manifest contractAlignment conformanceBaseline, which pins this exact failure). monitor-web was dropped by the dashboard-removal wave (#1678) after this entry was written. Imported by #97 after the original census; validated at kitVersion 0.8.5 (no pinned dep).",
+    cause: "bins_match_package: package.json ships monitor-serve and monitor-server that the manifest does not declare (declaring -serve would flip the cli-with-store manifest to service-capable) (in-tree kit 1.0.2).",
     task: "todos d2c6d20f-7c80-4b84-ae35-a92ce866bc14 (contracts task — monitor)",
   },
   {
     member: "prompts",
-    cause: "surface_matrix (api/sdk missing or unwaived), service_api_topology (a supported API surface is required), self_host_artifact (no Dockerfile/compose), storage_capabilities (engines + pgTestGate undeclared; SQLite-only store). All four verified firing at kits 0.13.4, 0.14.0 (pinned) and 0.14.1 (latest), 2026-08-26; the serve-bin-derived requirements make them one root, documented in apps/prompts/docs/contracts-conformance.md (todos 1c1c18f0-072e-4331-a1e8-e8f897427485) with closure in progress via hasna/apps#265 (feat/prompts-storage-core — /v1 API).",
+    cause: "surface_matrix: api and sdk missing/unwaived; service_api_topology: a supported API surface is required; self_host_artifact: no Dockerfile/compose; storage_capabilities: missing engines sqlite, postgresql and storage.pgTestGate required (in-tree kit 1.0.2).",
     task: "todos eb3f331d (contracts task — prompts)",
   },
   {
-    member: "slides",
-    cause: "surface_matrix: no supported cli surface declared; library-class cli waivers are not permitted by the kit and slides ships no CLI bin (package.json bin is empty; the SDK is the consumer surface). Declared cli deferred truthfully in the manifest. published_artifact_gate fixed (scan:artifact wired into prepack).",
-    task: "todos ccc2e931 (contracts task — slides)",
-  },
-  {
-    member: "tables",
-    cause: "kitVersion 0.1.0 predates repo-conformance; no @hasna/contracts dep pinned; validated at latest, manifest is pre-backend-schema era.",
-    task: "todos daaa2841 (contracts task — tables)",
-  },
-  {
     member: "todos",
-    cause: "manifest_valid: pre-backend-schema-era manifest (kitVersion 0.8.4) validated at pinned 0.5.2 — storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; serviceSurfaces.*.deploymentModes Required; serviceSurfaces.* Unrecognized key(s) in object: 'kind'/'exportSubpath'/'generatedFrom'; <root> Unrecognized key(s) in object: 'hosting'. Imported by #105 after the original census.",
+    cause: "published_artifact_gate: metadata.release.artifactScan.script required; credential_seam_compliance: src/testing.ts:243,303 and src/cli/stage-a.ts:70,72 read HASNA_TODOS_API_KEY / TODOS_API_KEY straight from the environment; no_cloud_guard: src/lib/public-release-gate.ts (+ its test) reference the retired @hasna/cloud runtime (in-tree kit 1.0.2).",
     task: "todos 0ad82b16-5a7c-43c3-95b9-db2dc64f7ffa (contracts task — todos)",
   },
 ];
@@ -500,17 +494,12 @@ export const NO_VALIDATOR_PIN: string[] = [
   "bridge",
   "changelog",
   "computers",
-  "context",
   "contracts",
-  "docs",
-  "draw",
   "guardrails",
   "hooks",
   "monitor",
   "notes",
   "orgs",
-  "slides",
-  "tables",
   "releases",
 ];
 

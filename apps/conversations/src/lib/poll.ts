@@ -7,7 +7,6 @@
 
 import { getStore, type ConversationsStore } from "./store/index.js";
 import { createPollHealth, type PollHealthReporter } from "./poll-health.js";
-import { readMessages as readLocalMessages } from "./messages.js";
 import type { Message } from "../types.js";
 
 export interface PollOptions {
@@ -59,10 +58,8 @@ export function startPolling(opts: PollOptions): PollHandle {
   let current: Promise<void> | null = null;
 
   // Seed lastSeenId at call time so we never replay messages that already
-  // existed when watching began. The read is issued synchronously (the local
-  // transport resolves inline; the cloud transport on the next tick) and every
-  // poll awaits it before querying, keeping the "only NEW messages" contract in
-  // both modes.
+  // existed when watching began. Every poll awaits the seed read before
+  // querying, keeping the "only NEW messages" contract.
   const health = createPollHealth({ label: "watch", report: opts.on_poll_error });
 
   let resolveReady!: () => void;
@@ -79,9 +76,7 @@ export function startPolling(opts: PollOptions): PollHandle {
       order?: "asc" | "desc";
       limit?: number;
     }): Promise<Message[]> =>
-      store.transport === "local" && !opts.store
-        ? Promise.resolve(readLocalMessages(args))
-        : store.readMessages(args);
+      store.readMessages(args);
 
   const ensureSeeded = (): Promise<void> => {
     if (seeded) return Promise.resolve();
