@@ -1,90 +1,27 @@
 import { cpSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-// --- Local path resolver -------------------------------------------------
-// @hasna/paths was deleted (hasna/apps#1535, 2026-09-03); this in-package
-// implementation preserves the resolver contract (XDG / macOS home layout
-// honoring HASNA_{CONFIG,DATA,STATE,CACHE}_HOME, with the same env-override
-// and home-override semantics the deleted package had).
-import { homedir as pathsResolverHomedir } from "node:os";
-import { join as pathsResolverJoin } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
-export type PathKind = "config" | "data" | "state" | "cache";
-
-const PATHS_RESOLVER_KIND_ENV: Record<PathKind, string> = {
-  config: "HASNA_CONFIG_HOME",
-  data: "HASNA_DATA_HOME",
-  state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME",
-};
-
-export interface PathsResolverOptions {
-  app: string;
-  internal?: boolean;
-  platform?: string;
-  home?: string;
-  env?: Record<string, string | undefined>;
-}
-
-const PATHS_RESOLVER_APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-function pathsResolverAssertApp(app: string): void {
-  if (typeof app !== "string" || app.length === 0) {
-    throw new TypeError("paths: app must be a non-empty string");
-  }
-  if (!PATHS_RESOLVER_APP_SLUG_RE.test(app)) {
-    throw new TypeError(
-      `paths: invalid app slug "${app}" — expected lowercase kebab-case ([a-z0-9]+(-[a-z0-9]+)*)`,
-    );
-  }
-}
-
-function pathsResolverAssertKind(kind: PathKind): void {
-  if (!(Object.keys(PATHS_RESOLVER_KIND_ENV) as string[]).includes(kind)) {
-    throw new TypeError(
-      `paths: invalid path kind "${kind}" — expected one of ${Object.keys(PATHS_RESOLVER_KIND_ENV).join(", ")}`,
-    );
-  }
-}
-
-function pathsResolverBaseDir(kind: PathKind, options: PathsResolverOptions): string {
-  pathsResolverAssertKind(kind);
-  const env: Record<string, string | undefined> = options.env ?? process.env;
-  const override = env[PATHS_RESOLVER_KIND_ENV[kind]];
-  if (typeof override === "string" && override.length > 0) return override;
-  const home = options.home ?? pathsResolverHomedir();
-  const platform = options.platform ?? process.platform;
-  if (platform === "darwin") {
-    switch (kind) {
-      case "config":
-      case "data":
-        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
-      case "state":
-        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
-    }
-  }
-  switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
-    case "data":
-      return pathsResolverJoin(home, ".local", "share", "hasna");
-    case "state":
-      return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
-  }
-}
-
-function pathsResolverResolve(kind: PathKind, options: PathsResolverOptions): string {
-  pathsResolverAssertApp(options.app);
-  const appSegment = options.internal === true ? pathsResolverJoin("internal", options.app) : options.app;
-  return pathsResolverJoin(pathsResolverBaseDir(kind, options), appSegment);
-}
-export function dataDir(options: PathsResolverOptions): string {
-  return pathsResolverResolve("data", options);
-}
+/**
+ * Where `files` keeps its on-box state.
+ *
+ * Home-layout ruling, 2026-09-04: the ONLY canonical per-app home for a public
+ * `@hasna/*` app is `~/.hasna/<app>` — here, `~/.hasna/files`. `HASNA_HOME`
+ * relocates the `~/.hasna` root and `HASNA_DATA_HOME` relocates the data root;
+ * the exact-app overrides (`HASNA_FILES_DATA_DIR`, `FILES_DATA_DIR`,
+ * `HASNA_FILES_HOME`, `FILES_HOME`) name the whole data root directly and win
+ * over both. Nothing else moves this app's home.
+ *
+ * This file used to carry a private fork of the deleted `@hasna/paths`
+ * (hasna/apps#1535) that resolved an XDG / macOS layout —
+ * `~/.local/share/hasna/files`, `~/Library/Application Support/Hasna/files` —
+ * labelled `~/.hasna/files` "legacy (pre-XDG)", and preferred the XDG root over
+ * it. That inverted the ruling, so the fork is gone. Its silent-adoption rule
+ * is gone too: the data root used to switch to the XDG path merely because a
+ * `files.db` already existed there, which relocated a station's home with no
+ * operator intent AND keyed live behaviour on a local SQLite file that the
+ * no-local-SQLite rule forbids from existing at all.
+ */
 
 /**
  * Resolve the user's home directory: $HOME, then $USERPROFILE (Windows), then
@@ -100,49 +37,36 @@ export function getHomeDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * The @hasna/paths-resolved (XDG / macOS home layout) data root for files.
- * This is the forward-looking home the XDG migration (hotfixes plan
- * 0f49f56a, task P3.3) moves the store toward: `~/.local/share/hasna/files`
- * on Linux, `~/Library/Application Support/Hasna/files` on macOS. The home
- * override mirrors the pre-existing $HOME-first resolution so the resolver
- * follows the same home the legacy path does.
+ * An absolute, non-blank override, or undefined. A relative or whitespace
+ * value is treated as unset rather than silently resolved against cwd — the
+ * same rule `@hasna/contracts` applies to these keys.
  */
-export function getResolverDataRoot(env: NodeJS.ProcessEnv = process.env): string {
-  return dataDir({ app: "files", home: getHomeDir(env), env });
+function absoluteOverride(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  const value = env[key]?.trim();
+  return value && isAbsolute(value) ? value : undefined;
 }
 
-/** The legacy (pre-XDG) data root: ~/.hasna/files */
-export function getLegacyDataRoot(env: NodeJS.ProcessEnv = process.env): string {
-  return join(getHomeDir(env), ".hasna", "files");
+/** The `~/.hasna` root: `HASNA_HOME` when absolute, else `$HOME/.hasna`. */
+export function getHasnaHome(env: NodeJS.ProcessEnv = process.env): string {
+  return absoluteOverride(env, "HASNA_HOME") ?? join(getHomeDir(env), ".hasna");
 }
 
 /**
- * Whether the resolver (XDG) data root should be adopted as the effective
- * data root. The resolver root is adopted only when the operator has set
- * `HASNA_DATA_HOME` (the data-kind override — a deliberate opt-in to the XDG
- * layout) or the store has already been physically migrated there
- * (`files.db` exists). A machine that only redirects another kind (e.g.
- * cache to tmpfs) must NOT have its data home moved, and a live store at the
- * legacy home must never become invisible on upgrade.
+ * The canonical data root for this app: `<hasna home>/files`. This is the
+ * ruling's layout and the default on every station.
  */
-export function adoptResolverDataRoot(
-  resolved: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  const dataOverride = env.HASNA_DATA_HOME;
-  if (typeof dataOverride === "string" && dataOverride.trim().length > 0) return true;
-  return existsSync(join(resolved, "files.db"));
+export function getCanonicalDataRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getHasnaHome(env), "files");
 }
 
 /**
- * The exact-app override root, when set. The existing data-dir overrides
- * (`HASNA_FILES_DATA_DIR`, then `FILES_DATA_DIR`) keep their pre-resolver
- * precedence — they name the whole data root directly — followed by the
- * XDG-style exact-app home overrides `HASNA_FILES_HOME`, then `FILES_HOME`.
- * First-nonblank selection: a set-but-whitespace override must not suppress
- * a valid fallback. The postinstall script (scripts/ensure-data-dir.mjs)
- * selects with the same `?.trim() ||` semantics, so the two surfaces stay in
- * parity.
+ * The exact-app override root, when set. The data-dir overrides
+ * (`HASNA_FILES_DATA_DIR`, then `FILES_DATA_DIR`) keep their precedence — they
+ * name the whole data root directly — followed by the exact-app home overrides
+ * `HASNA_FILES_HOME`, then `FILES_HOME`. First-nonblank selection: a
+ * set-but-whitespace override must not suppress a valid fallback. The
+ * postinstall script (scripts/ensure-data-dir.mjs) selects with the same
+ * `?.trim() ||` semantics, so the two surfaces stay in parity.
  */
 export function getExactDataRoot(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const dataDirOverride = env["HASNA_FILES_DATA_DIR"]?.trim() || env["FILES_DATA_DIR"]?.trim();
@@ -153,18 +77,23 @@ export function getExactDataRoot(env: NodeJS.ProcessEnv = process.env): string |
 }
 
 /**
- * The effective data root: an exact-app override (data-dir overrides, then
- * `HASNA_FILES_HOME` / `FILES_HOME`) wins unconditionally; otherwise the
- * resolver (XDG) data root once adopted; otherwise the legacy
- * `~/.hasna/files` default. The store path (`HASNA_FILES_DB_PATH` /
- * `FILES_DB_PATH` / `--db`) is layered on top of this by the database layer,
- * so an explicit store path always wins regardless.
+ * The data-kind override root: `<HASNA_DATA_HOME>/files`. A non-data kind
+ * override (`HASNA_CACHE_HOME`, `HASNA_STATE_HOME`, `HASNA_CONFIG_HOME`) must
+ * never move the data home, so none of them are read here.
+ */
+function getDataHomeRoot(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const root = absoluteOverride(env, "HASNA_DATA_HOME");
+  return root ? join(root, "files") : undefined;
+}
+
+/**
+ * The effective data root: an exact-app override wins unconditionally; then
+ * `HASNA_DATA_HOME`; otherwise the canonical `~/.hasna/files`. The store path
+ * (`HASNA_FILES_DB_PATH` / `FILES_DB_PATH` / `--db`) is layered on top of this
+ * by the database layer, so an explicit store path always wins regardless.
  */
 export function getDataRoot(env: NodeJS.ProcessEnv = process.env): string {
-  const exact = getExactDataRoot(env);
-  if (exact) return exact;
-  const resolved = getResolverDataRoot(env);
-  return adoptResolverDataRoot(resolved, env) ? resolve(resolved) : getLegacyDataRoot(env);
+  return getExactDataRoot(env) ?? getDataHomeRoot(env) ?? getCanonicalDataRoot(env);
 }
 
 /** Alias kept for readability at call sites that want "the files data dir". */
@@ -173,11 +102,10 @@ export function getFilesDataDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * The effective data dir, provisioned. Preserves the pre-resolver behavior of
- * `resolveDataDir()` in src/db/database.ts / src/lib/config.ts: the one-time
- * auto-migration copies a legacy `~/.files` data directory into the effective
- * data root when the root does not yet exist. The copy targets the effective
- * root, so an adopted (XDG) install lands the legacy data in the new home.
+ * The effective data dir, provisioned. The one-time auto-migration copies a
+ * legacy `~/.files` data directory into the effective data root when that root
+ * does not yet exist — so on a default station the copy lands in
+ * `~/.hasna/files`.
  */
 export function resolveDataDir(env: NodeJS.ProcessEnv = process.env): string {
   const dir = getFilesDataDir(env);

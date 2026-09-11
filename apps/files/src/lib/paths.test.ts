@@ -6,21 +6,23 @@ import { join } from "node:path";
 import { getConfigPath } from "./config.js";
 import { googleDriveConnectorDirs } from "./google-drive-client.js";
 import {
-  adoptResolverDataRoot,
+  getCanonicalDataRoot,
   getDataRoot,
   getExactDataRoot,
   getFilesDataDir,
+  getHasnaHome,
   getHomeDir,
-  getLegacyDataRoot,
-  getResolverDataRoot,
   resolveDataDir,
 } from "./paths.js";
 
 const ENV_KEYS = [
   "HOME",
   "USERPROFILE",
+  "HASNA_HOME",
   "HASNA_DATA_HOME",
   "HASNA_CACHE_HOME",
+  "HASNA_STATE_HOME",
+  "HASNA_CONFIG_HOME",
   "HASNA_FILES_HOME",
   "FILES_HOME",
   "HASNA_FILES_DATA_DIR",
@@ -57,24 +59,44 @@ function isolateHome(): string {
   return tempHome;
 }
 
-describe("resolver (XDG) data-root resolution", () => {
+describe("canonical data-root resolution (home-layout ruling, 2026-09-04)", () => {
   test("home resolves HOME first, then the OS user database", () => {
     const home = isolateHome();
     expect(getHomeDir()).toBe(home);
   });
 
-  test("resolver data root follows @hasna/paths under a fake HOME", () => {
+  test("the data root is ~/.hasna/files on every platform", () => {
     const home = isolateHome();
-    expect(getResolverDataRoot()).toBe(join(home, ".local", "share", "hasna", "files"));
-    expect(getLegacyDataRoot()).toBe(join(home, ".hasna", "files"));
+    // Platform-independent by construction: the retired fork resolved
+    // ~/.local/share/hasna/files on Linux and
+    // ~/Library/Application Support/Hasna/files on macOS, so this assertion
+    // could only ever hold on one OS. The ruling has one layout everywhere.
+    expect(getHasnaHome()).toBe(join(home, ".hasna"));
+    expect(getCanonicalDataRoot()).toBe(join(home, ".hasna", "files"));
+    expect(getDataRoot()).toBe(join(home, ".hasna", "files"));
+  });
+
+  test("HASNA_HOME relocates the ~/.hasna root", () => {
+    isolateHome();
+    const root = mkdtempSync(join(tmpdir(), "files-hasna-home-root-")); cleanups.push(root);
+    process.env.HASNA_HOME = root;
+    expect(getHasnaHome()).toBe(root);
+    expect(getDataRoot()).toBe(join(root, "files"));
+    expect(getConfigPath()).toBe(join(root, "files", "config.json"));
+  });
+
+  test("a relative HASNA_HOME is ignored rather than resolved against cwd", () => {
+    const home = isolateHome();
+    process.env.HASNA_HOME = "relative/not/absolute";
+    expect(getHasnaHome()).toBe(join(home, ".hasna"));
+    expect(getDataRoot()).toBe(join(home, ".hasna", "files"));
   });
 });
 
-describe("resolver (XDG) adoption — the legacy home must never become invisible", () => {
-  test("legacy ~/.hasna/files stays the effective root until adopted", () => {
+describe("the retired XDG root must never capture the home again", () => {
+  test("~/.hasna/files is the effective root, and downstream entry points agree", () => {
     const home = isolateHome();
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(false);
-    expect(getDataRoot()).toBe(getLegacyDataRoot());
+    expect(getDataRoot()).toBe(getCanonicalDataRoot());
     expect(getFilesDataDir()).toBe(join(home, ".hasna", "files"));
     // Downstream entry points agree on the effective root.
     expect(getConfigPath()).toBe(join(home, ".hasna", "files", "config.json"));
@@ -83,11 +105,10 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
     );
   });
 
-  test("HASNA_DATA_HOME adopts the resolver (XDG) data root", () => {
+  test("HASNA_DATA_HOME relocates the data root", () => {
     isolateHome();
     const base = mkdtempSync(join(tmpdir(), "files-data-home-")); cleanups.push(base);
     process.env.HASNA_DATA_HOME = base;
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(true);
     expect(getDataRoot()).toBe(join(base, "files"));
     expect(getFilesDataDir()).toBe(join(base, "files"));
     expect(getConfigPath()).toBe(join(base, "files", "config.json"));
@@ -96,20 +117,34 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
     );
   });
 
-  test("an existing store at the resolver data root adopts it even without HASNA_DATA_HOME", () => {
+  test("an existing files.db at either retired XDG root does NOT relocate the home", () => {
     const home = isolateHome();
-    const xdg = join(home, ".local", "share", "hasna", "files");
-    mkdirSync(xdg, { recursive: true });
-    writeFileSync(join(xdg, "files.db"), "existing-migrated-store");
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(true);
-    expect(getDataRoot()).toBe(xdg);
+    // Both retired roots, so the guard holds whichever OS runs it.
+    for (const retired of [
+      join(home, ".local", "share", "hasna", "files"),
+      join(home, "Library", "Application Support", "Hasna", "files"),
+    ]) {
+      mkdirSync(retired, { recursive: true });
+      writeFileSync(join(retired, "files.db"), "store left by the retired XDG fork");
+    }
+    // No behaviour may key on a local SQLite file — the no-local-SQLite rule
+    // forbids it existing at all, so it cannot be allowed to move the home.
+    expect(getDataRoot()).toBe(join(home, ".hasna", "files"));
+    expect(getConfigPath()).toBe(join(home, ".hasna", "files", "config.json"));
+  });
+
+  test("a non-data kind override (HASNA_CONFIG_HOME / HASNA_STATE_HOME) must NOT move the data home", () => {
+    const home = isolateHome();
+    const other = mkdtempSync(join(tmpdir(), "files-other-home-")); cleanups.push(other);
+    process.env.HASNA_CONFIG_HOME = other;
+    process.env.HASNA_STATE_HOME = other;
+    expect(getDataRoot()).toBe(join(home, ".hasna", "files"));
   });
 
   test("a non-data kind override (HASNA_CACHE_HOME) must NOT move the data home", () => {
     const home = isolateHome();
     const cache = mkdtempSync(join(tmpdir(), "files-cache-home-")); cleanups.push(cache);
     process.env.HASNA_CACHE_HOME = cache;
-    expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(false);
     expect(getDataRoot()).toBe(join(home, ".hasna", "files"));
   });
 });
@@ -119,7 +154,7 @@ describe("exact-app overrides", () => {
     isolateHome();
     const override = mkdtempSync(join(tmpdir(), "files-hasna-home-")); cleanups.push(override);
     const base = mkdtempSync(join(tmpdir(), "files-data-home2-")); cleanups.push(base);
-    process.env.HASNA_DATA_HOME = base; // would adopt the XDG root, but the override must win
+    process.env.HASNA_DATA_HOME = base; // the exact-app override must still win
     process.env.HASNA_FILES_HOME = override;
     expect(getExactDataRoot()).toBe(override);
     expect(getDataRoot()).toBe(override);
@@ -157,12 +192,12 @@ describe("exact-app overrides", () => {
     isolateHome();
     process.env.HASNA_FILES_HOME = "   ";
     expect(getExactDataRoot()).toBeUndefined();
-    expect(getDataRoot()).toBe(getLegacyDataRoot());
+    expect(getDataRoot()).toBe(getCanonicalDataRoot());
   });
 });
 
 describe("legacy ~/.files auto-migration", () => {
-  test("old ~/.files data is copied into the legacy effective root when missing", () => {
+  test("old ~/.files data is copied into the canonical effective root when missing", () => {
     const home = isolateHome();
     const oldDir = join(home, ".files");
     mkdirSync(oldDir, { recursive: true });
@@ -171,7 +206,7 @@ describe("legacy ~/.files auto-migration", () => {
     expect(existsSync(join(home, ".hasna", "files", "legacy.db"))).toBe(true);
   });
 
-  test("old ~/.files data is copied into the adopted (XDG) effective root", () => {
+  test("old ~/.files data is copied into an overridden effective root", () => {
     const home = isolateHome();
     const base = mkdtempSync(join(tmpdir(), "files-data-home3-")); cleanups.push(base);
     process.env.HASNA_DATA_HOME = base;

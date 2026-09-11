@@ -26,11 +26,10 @@ SQLite store is created, no `*-local-fallback` event is emitted. The local
 transport is used only under the explicit opt-in `HASNA_FILES_LOCAL=1` (alias
 `FILES_LOCAL=1`) — the retired `HASNA_FILES_LOCAL_MODE` /
 `FILES_LOCAL_MODE`/`*_STORAGE_MODE` switches are gone — and every local run
-prints one `files: LOCAL mode — ...` line on stderr. Local mode uses the
-resolver-resolved data root (`~/.local/share/hasna/files/files.db` on Linux,
-`~/Library/Application Support/Hasna/files/files.db` on macOS; the legacy
-`~/.hasna/files/files.db` stays effective until migrated or `HASNA_DATA_HOME`
-is set).
+prints one `files: LOCAL mode — ...` line on stderr. Local mode uses
+`~/.hasna/files/files.db` on every platform, unless relocated by
+`HASNA_FILES_DATA_DIR` / `FILES_DATA_DIR` / `HASNA_FILES_HOME` / `FILES_HOME`,
+`HASNA_DATA_HOME`, `HASNA_HOME`, or `HASNA_FILES_DB_PATH`.
 
 Commands marked **on-box** require local files, a local SQLite index, or local
 ingestion state and fail explicitly on the hosted transport. Commands marked
