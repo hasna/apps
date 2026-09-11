@@ -230,7 +230,7 @@ async function main(): Promise<void> {
   // Fail closed at startup: no credential and no local opt-in means there is
   // no store to serve — exit non-zero naming the chain, never "stdio ready".
   try {
-    assertMcpBackend(process.env);
+    await assertMcpBackend(process.env);
   } catch (error) {
     console.error(`[shortlinks-mcp] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);

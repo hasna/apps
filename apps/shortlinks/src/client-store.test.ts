@@ -1,11 +1,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Env } from "./store-interface.js";
 import {
   LOCAL_OPT_IN_ENV_KEY,
   LOCAL_OPT_IN_ENV_KEYS,
+  dbPathWithoutOptInMessage,
   isLocalOptIn,
   missingBackendMessage,
   resolveStore,
@@ -76,19 +77,19 @@ function writeDiskCredential(home: string, body: string): void {
 }
 
 describe("fail-closed store resolution (owner ruling 2026-09-04)", () => {
-  test("no hosted env and no local opt-in: resolveStore throws naming the credential chain", () => {
+  test("no hosted env and no local opt-in: resolveStore rejects naming the credential chain", async () => {
     const home = tempHome();
     const error = () => resolveStore(env(home));
-    expect(error).toThrow(/HASNA_SHORTLINKS_API_URL/);
-    expect(error).toThrow(/HASNA_SHORTLINKS_API_KEY/);
+    await expect(error()).rejects.toThrow(/HASNA_SHORTLINKS_API_URL/);
+    await expect(error()).rejects.toThrow(/HASNA_SHORTLINKS_API_KEY/);
     // The error is actionable: it names the local opt-in as well.
-    expect(error).toThrow(new RegExp(`${LOCAL_OPT_IN_ENV_KEY}=1`));
-    expect(error).toThrow(/never falls back to local storage/);
+    await expect(error()).rejects.toThrow(new RegExp(`${LOCAL_OPT_IN_ENV_KEY}=1`));
+    await expect(error()).rejects.toThrow(/never falls back to local storage/);
   });
 
-  test("failed resolution creates no local database and no data-dir files", () => {
+  test("failed resolution creates no local database and no data-dir files", async () => {
     const home = tempHome();
-    expect(() => resolveStore(env(home))).toThrow(/HASNA_SHORTLINKS_API_URL/);
+    await expect(resolveStore(env(home))).rejects.toThrow(/HASNA_SHORTLINKS_API_URL/);
     // The on-box SQLite store (~/.hasna/<app>/<app>.db) is never opened or
     // created by a failing resolution — no db file, no config file.
     expect(existsSync(join(home, "shortlinks.db"))).toBe(false);
@@ -103,75 +104,81 @@ describe("fail-closed store resolution (owner ruling 2026-09-04)", () => {
     expect(existsSync(join(home, "shortlinks.db"))).toBe(false);
   });
 
-  test("a URL without a credential fails closed even when --db would opt into local", () => {
+  test("a URL without a credential fails closed even under the local opt-in with a --db path", async () => {
     // A partially configured hosted client must fail loudly, never silently
-    // drift to the local dataset: the URL declares intent, so --db cannot
-    // quietly serve the on-box store instead.
+    // drift to the local dataset: the URL declares intent, so the opt-in (and
+    // the file --db names) cannot quietly serve the on-box store instead.
     const home = tempHome();
     const urlOnly = () =>
-      resolveStore(env(home, { HASNA_SHORTLINKS_API_URL: "https://shortlinks.example.test" }), {
-        dbPath: join(home, "explicit.db"),
-      });
-    expect(urlOnly).toThrow(/no API key could be resolved/);
+      resolveStore(
+        env(home, {
+          HASNA_SHORTLINKS_API_URL: "https://shortlinks.example.test",
+          [LOCAL_OPT_IN_ENV_KEY]: "1",
+        }),
+        { dbPath: join(home, "explicit.db"), notice: quiet },
+      );
+    await expect(urlOnly()).rejects.toThrow(/no API key could be resolved/);
     expect(existsSync(join(home, "explicit.db"))).toBe(false);
   });
 
-  test("a declared-but-blank authority variable fails closed (blank means a loud error at the resolver)", () => {
+  test("a declared-but-blank authority variable fails closed (blank means a loud error at the resolver)", async () => {
     const home = tempHome();
     const blank = () => resolveStore(env(home, { HASNA_SHORTLINKS_API_URL: "" }));
     // "blank means unset" holds at the APP seam (see client-resolver-inputs.ts),
     // so a blank URL with nothing else is the missing-credential case; a blank
     // authored ALONGSIDE a real value is not — that pair is refused by the
     // resolver's own disagreeing-authority rule. Either way: no local store.
-    expect(blank).toThrow(/HASNA_SHORTLINKS_API_URL/);
+    await expect(blank()).rejects.toThrow(/HASNA_SHORTLINKS_API_URL/);
     expect(existsSync(join(home, "shortlinks.db"))).toBe(false);
   });
 
-  test("a fully configured hosted API selects the cloud store", () => {
+  test("a fully configured hosted API selects the cloud store", async () => {
     const home = tempHome();
-    const store = resolveStore(env(home, CLOUD_ENV));
+    const store = await resolveStore(env(home, CLOUD_ENV));
     expect(store.kind).toBe("http");
     void store.close();
   });
 
-  test("a credential alone selects the cloud store at the fleet gateway", () => {
+  test("a credential alone selects the cloud store at the fleet gateway", async () => {
     // Owner directive 2026-09-04: URLs never need configuring — a key from any
     // tier is enough, and the default authority is https://api.hasna.com/<app>.
     const home = tempHome();
-    const store = resolveStore(env(home, { HASNA_SHORTLINKS_API_KEY: "hasna_shortlinks_test_key" }));
+    const store = await resolveStore(env(home, { HASNA_SHORTLINKS_API_KEY: "hasna_shortlinks_test_key" }));
     expect(store.kind).toBe("http");
     expect((store as CloudShortlinksStore).baseUrl).toBe("https://api.hasna.com/shortlinks/v1");
     void store.close();
   });
 
-  test("legacy alias env (SHORTLINKS_API_URL / SHORTLINKS_API_KEY) selects the cloud store", () => {
+  test("legacy alias env (SHORTLINKS_API_URL / SHORTLINKS_API_KEY) selects the cloud store", async () => {
     const home = tempHome();
-    const store = resolveStore(env(home, CLOUD_ALIAS_ENV));
+    const store = await resolveStore(env(home, CLOUD_ALIAS_ENV));
     expect(store.kind).toBe("http");
     void store.close();
   });
 
-  test("a fully configured hosted API wins over the local opt-in", () => {
+  test("a fully configured hosted API wins over the local opt-in", async () => {
     const home = tempHome();
-    const store = resolveStore(env(home, { ...CLOUD_ENV, [LOCAL_OPT_IN_ENV_KEY]: "1" }));
+    const store = await resolveStore(env(home, { ...CLOUD_ENV, [LOCAL_OPT_IN_ENV_KEY]: "1" }));
     expect(store.kind).toBe("http");
     void store.close();
   });
 
-  test("blank authority env is normalised at the app seam (env by identity when nothing is blank)", () => {
+  test("blank authority env is normalised at the app seam (env by identity when nothing is blank)", async () => {
     // Regression for hasna/apps#1788: scrubbed test environments author blanks
     // instead of deleting. The app seam treats a declared-but-blank variable as
     // unset — but only by removing it BEFORE the resolver sees it, and the
     // resolver is never handed a silent copy.
     const home = tempHome();
-    const store = resolveStore(
+    const store = await resolveStore(
       env(home, {
         HASNA_SHORTLINKS_API_URL: "",
         HASNA_SHORTLINKS_API_KEY: "",
         SHORTLINKS_API_URL: "",
         SHORTLINKS_API_KEY: "",
+        // --db names the file; the env opt-in is what selects local storage.
+        [LOCAL_OPT_IN_ENV_KEY]: "1",
       }),
-      { dbPath: join(home, "explicit.db") },
+      { dbPath: join(home, "explicit.db"), notice: quiet },
     );
     expect(store.kind).toBe("local");
     void store.close();
@@ -180,9 +187,9 @@ describe("fail-closed store resolution (owner ruling 2026-09-04)", () => {
 });
 
 describe("credential resolution through the @hasna/contracts chain", () => {
-  test("env tier: HASNA_SHORTLINKS_API_KEY resolves the hosted store and reports its source", () => {
+  test("env tier: HASNA_SHORTLINKS_API_KEY resolves the hosted store and reports its source", async () => {
     const home = tempHome();
-    const store = resolveStore(env(home, { HASNA_SHORTLINKS_API_KEY: "env-key" })) as CloudShortlinksStore;
+    const store = (await resolveStore(env(home, { HASNA_SHORTLINKS_API_KEY: "env-key" }))) as CloudShortlinksStore;
     expect(store.kind).toBe("http");
     // The transport sealed the credential it will send; requesting is lazy, so
     // no network is touched here.
@@ -190,29 +197,29 @@ describe("credential resolution through the @hasna/contracts chain", () => {
     void store.close();
   });
 
-  test("disk tier: ~/.hasna/shortlinks/config/credentials resolves the hosted store", () => {
+  test("disk tier: ~/.hasna/shortlinks/config/credentials resolves the hosted store", async () => {
     const home = tempHome();
     writeDiskCredential(home, "HASNA_SHORTLINKS_API_KEY=disk-key\n");
-    const store = resolveStore(env(home)) as CloudShortlinksStore;
+    const store = (await resolveStore(env(home))) as CloudShortlinksStore;
     expect(store.kind).toBe("http");
     expect(store.baseUrl).toBe("https://api.hasna.com/shortlinks/v1");
     void store.close();
   });
 
-  test("disk tier can also pin the authority via HASNA_SHORTLINKS_API_URL", () => {
+  test("disk tier can also pin the authority via HASNA_SHORTLINKS_API_URL", async () => {
     const home = tempHome();
     writeDiskCredential(home, "HASNA_SHORTLINKS_API_KEY=disk-key\nHASNA_SHORTLINKS_API_URL=https://shortlinks.disk.test\n");
-    const store = resolveStore(env(home)) as CloudShortlinksStore;
+    const store = (await resolveStore(env(home))) as CloudShortlinksStore;
     expect(store.kind).toBe("http");
     expect(store.baseUrl).toBe("https://shortlinks.disk.test/v1");
     void store.close();
   });
 
-  test("injected security runner: the Keychain tier resolves on a darwin platform", () => {
+  test("injected security runner: the Keychain tier resolves on a darwin platform", async () => {
     const home = tempHome();
     const reads: Array<readonly string[]> = [];
     const envWithKeychain = env(home, { HASNA_STATION: "test-station", USER: "hasna" });
-    const store = resolveStore(envWithKeychain, {
+    const store = (await resolveStore(envWithKeychain, {
       cloudOverrides: {
         credentials: {
           keychain: {
@@ -227,7 +234,7 @@ describe("credential resolution through the @hasna/contracts chain", () => {
           },
         },
       },
-    }) as CloudShortlinksStore;
+    })) as CloudShortlinksStore;
     expect(store.kind).toBe("http");
     expect(store.baseUrl).toBe("https://api.hasna.com/shortlinks/v1");
     // The runner was consulted for the credential item (and the absent api-url
@@ -236,24 +243,24 @@ describe("credential resolution through the @hasna/contracts chain", () => {
     void store.close();
   });
 
-  test("an unreadable credential file is a loud error, never a fallback to local", () => {
+  test("an unreadable credential file is a loud error, never a fallback to local", async () => {
     const home = tempHome();
     writeDiskCredential(home, "HASNA_SHORTLINKS_API_KEY=disk-key\n");
     chmodSync(join(home, ".hasna", "shortlinks", "config", "credentials"), 0o644);
-    expect(() => resolveStore(env(home))).toThrow(/owner-only/);
+    await expect(resolveStore(env(home))).rejects.toThrow(/owner-only/);
     expect(existsSync(join(home, "shortlinks.db"))).toBe(false);
   });
 });
 
 describe("transport report", () => {
-  test("hosted resolution reports the source of the authority and the credential", () => {
+  test("hosted resolution reports the source of the authority and the credential", async () => {
     const home = tempHome();
-    const store = resolveStore(
+    const store = (await resolveStore(
       env(home, {
         HASNA_SHORTLINKS_API_URL: "https://shortlinks.report.test",
         HASNA_SHORTLINKS_API_KEY: "report-key",
       }),
-    ) as CloudShortlinksStore;
+    )) as CloudShortlinksStore;
     expect(store.kind).toBe("http");
     expect(store.baseUrl).toBe("https://shortlinks.report.test/v1");
     void store.close();
@@ -266,39 +273,54 @@ describe("transport report", () => {
     expect(message).toContain("HASNA_SHORTLINKS_API_KEY");
     expect(message).toContain("HASNA_SHORTLINKS_API_URL");
     expect(message).toContain(`${LOCAL_OPT_IN_ENV_KEY}=1`);
-    expect(message).toContain("--db <path>");
+    // --db is named as the FILE chooser for an opted-in run, not as an opt-in.
+    expect(message).toContain("--db <path> then chooses the database file");
     expect(message).toContain("never falls back to local storage");
     expect(message).not.toMatch(/local-fallback/);
   });
 });
 
 describe("explicit local opt-in", () => {
-  test("an explicit dbPath opts into the on-box SQLite store", () => {
+  test("--db alone is NOT an opt-in: it is refused with one line naming the opt-in", async () => {
+    // Ruling (d), 2026-09-11: local storage has exactly ONE door, the env
+    // opt-in. --db used to be a second one — it now only names the file.
     const home = tempHome();
     const dbPath = join(home, "explicit.db");
-    const store = resolveStore(env(home), { dbPath, notice: quiet });
+    const refused = () => resolveStore(env(home), { dbPath, notice: quiet });
+    await expect(refused()).rejects.toThrow(new RegExp(`${LOCAL_OPT_IN_ENV_KEY}=1`));
+    await expect(refused()).rejects.toThrow(/no longer selects the on-box SQLite store on its own/);
+    expect(dbPathWithoutOptInMessage(dbPath)).toContain(`${LOCAL_OPT_IN_ENV_KEY}=1`);
+    // The refused run opened nothing.
+    expect(existsSync(dbPath)).toBe(false);
+    expect(readdirSync(home)).toEqual([]);
+  });
+
+  test("an explicit dbPath under the opt-in chooses the database file", async () => {
+    const home = tempHome();
+    const dbPath = join(home, "explicit.db");
+    const store = await resolveStore(env(home, { [LOCAL_OPT_IN_ENV_KEY]: "1" }), { dbPath, notice: quiet });
     expect(store.kind).toBe("local");
-    void store.close();
+    await store.close();
     expect(existsSync(dbPath)).toBe(true);
   });
 
-  test("HASNA_SHORTLINKS_LOCAL=1 opts into the on-box SQLite store without a dbPath, in the caller's home", () => {
+  test("HASNA_SHORTLINKS_LOCAL=1 opts into the on-box SQLite store without a dbPath, in the caller's home", async () => {
     const home = tempHome();
-    const store = resolveStore(env(home, { [LOCAL_OPT_IN_ENV_KEY]: "1" }), { notice: quiet });
+    const store = await resolveStore(env(home, { [LOCAL_OPT_IN_ENV_KEY]: "1" }), { notice: quiet });
     expect(store.kind).toBe("local");
     void store.close();
     expect(existsSync(join(home, "shortlinks.db"))).toBe(true);
   });
 
-  test("the legacy SHORTLINKS_LOCAL alias still opts in, in the caller's home", () => {
+  test("the legacy SHORTLINKS_LOCAL alias still opts in, in the caller's home", async () => {
     const home = tempHome();
-    const store = resolveStore(env(home, { SHORTLINKS_LOCAL: "1" }), { notice: quiet });
+    const store = await resolveStore(env(home, { SHORTLINKS_LOCAL: "1" }), { notice: quiet });
     expect(store.kind).toBe("local");
     void store.close();
     expect(existsSync(join(home, "shortlinks.db"))).toBe(true);
   });
 
-  test("a caller-built env never leaks the local store into the live process home (#1720 validation)", () => {
+  test("a caller-built env never leaks the local store into the live process home (#1720 validation)", async () => {
     // The live process env points the app home at a sentinel directory while
     // the resolver is handed a DIFFERENT env. The database must follow the env
     // the caller handed over, never process.env — the leak that used to plant
@@ -308,7 +330,7 @@ describe("explicit local opt-in", () => {
     const previousHome = process.env.SHORTLINKS_HOME;
     process.env.SHORTLINKS_HOME = sentinel;
     try {
-      const store = resolveStore(env(home, { SHORTLINKS_LOCAL: "1" }), { notice: quiet });
+      const store = await resolveStore(env(home, { SHORTLINKS_LOCAL: "1" }), { notice: quiet });
       expect(store.kind).toBe("local");
       void store.close();
     } finally {
@@ -319,10 +341,10 @@ describe("explicit local opt-in", () => {
     expect(readdirSync(sentinel)).toEqual([]);
   });
 
-  test("HASNA_HOME relocates the app home for the local store, as it does for the credential chain", () => {
+  test("HASNA_HOME relocates the app home for the local store, as it does for the credential chain", async () => {
     const home = tempHome();
     const hasnaHome = join(home, "hasna-root");
-    const store = resolveStore(
+    const store = await resolveStore(
       { HOME: home, HASNA_HOME: hasnaHome, [LOCAL_OPT_IN_ENV_KEY]: "1" },
       { notice: quiet },
     );
@@ -332,19 +354,20 @@ describe("explicit local opt-in", () => {
     expect(existsSync(join(home, ".hasna"))).toBe(false);
   });
 
-  test("a hosted resolution creates nothing under the app home", () => {
+  test("a hosted resolution creates nothing under the app home", async () => {
     const home = tempHome();
-    const store = resolveStore(env(home, CLOUD_ENV));
+    const store = await resolveStore(env(home, CLOUD_ENV));
     expect(store.kind).toBe("http");
     void store.close();
     expect(readdirSync(home)).toEqual([]);
   });
 
-  test("local opt-in is an explicit choice: 0/false/no/off do not select local", () => {
+  test("local opt-in is an explicit choice: 0/false/no/off do not select local", async () => {
     for (const value of ["0", "false", "no", "off", ""]) {
       const home = tempHome();
-      const error = () => resolveStore(env(home, { [LOCAL_OPT_IN_ENV_KEY]: value }));
-      expect(error).toThrow(/HASNA_SHORTLINKS_API_URL/);
+      await expect(resolveStore(env(home, { [LOCAL_OPT_IN_ENV_KEY]: value }))).rejects.toThrow(
+        /HASNA_SHORTLINKS_API_URL/,
+      );
     }
   });
 
@@ -358,5 +381,21 @@ describe("explicit local opt-in", () => {
       }
     }
     expect(isLocalOptIn({})).toBe(false);
+  });
+});
+describe("the local store stays behind ONE gated dynamic import", () => {
+  test("client-store.ts never statically imports the sqlite store", () => {
+    // The ratchet behind the bundle proof: a static import here puts
+    // `bun:sqlite` back into dist/cli and dist/mcp. The ONLY reference to the
+    // local store in this module is the gated `await import(...)`.
+    const source = readFileSync(new URL("./client-store.ts", import.meta.url), "utf-8");
+    expect(source).not.toMatch(/^import .*from "\.\/(local-)?store\.js"/m);
+    expect(source).not.toMatch(/^export \{[^}]*\} from "\.\/(local-)?store\.js"/m);
+    const code = source
+      .split("\n")
+      .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join("\n");
+    const dynamicImports = code.match(/await import\("\.\/local-store\.js"\)/g) ?? [];
+    expect(dynamicImports).toHaveLength(1);
   });
 });

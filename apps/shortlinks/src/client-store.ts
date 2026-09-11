@@ -11,12 +11,21 @@
 // resolvable credential must never serve ~/.hasna/shortlinks/shortlinks.db and
 // exit 0 (owner ruling 2026-09-04: no silent local fallback).
 //
-// The on-box SQLite `LocalStore` is reachable ONLY through an explicit opt-in:
-//   • `HASNA_SHORTLINKS_LOCAL=1` in the environment (alias `SHORTLINKS_LOCAL`), or
-//   • an explicit database path (`--db <path>` / `options.dbPath`).
+// The on-box SQLite `LocalStore` is reachable ONLY through the explicit
+// environment opt-in `HASNA_SHORTLINKS_LOCAL=1` (alias `SHORTLINKS_LOCAL=1`).
+// `--db <path>` / `options.dbPath` CHOOSES THE FILE for that opt-in; since
+// 0.4.0 it no longer opens local storage on its own (owner ruling (d),
+// 2026-09-11: local storage lives behind one env opt-in and nothing else), and
+// a `--db` passed without the opt-in is refused with a line naming it.
 // A hosted configuration always wins over the opt-in, and selecting the local
 // backend ANNOUNCES it on stderr (once per process) — the local backend is
 // never silent.
+//
+// `bun:sqlite` is NOT in this module's static graph: the local store is loaded
+// through ONE gated `await import("./local-store.js")`, taken only after the
+// opt-in was checked, so the sqlite engine never lands in `dist/cli` or
+// `dist/mcp` (the build splits it into `dist/chunks/`). That is why
+// `resolveStore()` is async.
 //
 // There is NO postgres/DSN branch here: a client never reads or writes the raw
 // RDS. Partial hosted configuration (a URL without a credential, a
@@ -25,29 +34,26 @@
 // never silently drift back to the wrong dataset.
 
 import { CloudShortlinksStore } from "./cloud-store.js";
-import { ShortlinksStore } from "./store.js";
 import { shortlinksResolverInputs } from "./client-resolver-inputs.js";
-import type { Env, ListLinksOptions, Store, TotalStats } from "./store-interface.js";
+import type { Env, Store } from "./store-interface.js";
 import type { ShortlinksTransportOverrides } from "./client-types.js";
-import type {
-  AddDomainInput,
-  Click,
-  ClickInput,
-  CreateLinkInput,
-  Domain,
-  Link,
-  LinkStats,
-} from "./types.js";
 
 /** The hosted-API HTTP transport. */
 export { CloudShortlinksStore as ApiStore } from "./cloud-store.js";
 export type { Store } from "./store-interface.js";
+/**
+ * The on-box SQLite store — TYPE ONLY here. A value import would drag
+ * `bun:sqlite` back into every bundle that touches this seam; the class is
+ * loaded through the gated dynamic import in {@link resolveStore}.
+ */
+export type { LocalStore } from "./local-store.js";
 
 /**
  * Environment opt-in for the on-box SQLite store, canonical name first. The
  * legacy `SHORTLINKS_LOCAL` spelling stays accepted (it is documented and in
- * the wild). Without a hosted credential AND without this flag (or an explicit
- * `--db` path) the CLI fails closed instead of serving local data.
+ * the wild). This is the ONLY door to local storage: without a hosted
+ * credential AND without this flag the CLI fails closed instead of serving
+ * local data, and `--db <path>` alone is refused.
  */
 export const LOCAL_OPT_IN_ENV_KEYS = ["HASNA_SHORTLINKS_LOCAL", "SHORTLINKS_LOCAL"] as const;
 
@@ -59,7 +65,7 @@ export const LOCAL_OPT_IN_ENV_KEY = LOCAL_OPT_IN_ENV_KEYS[0];
  * `HASNA_SHORTLINKS_LOCAL` / `SHORTLINKS_LOCAL`. Any value except an empty
  * string / 0 / false / no / off opts in. A fully configured hosted API still
  * wins over this flag — opt-in never silently shadows an explicit hosted
- * configuration (same precedence as `--db`).
+ * configuration.
  */
 export function isLocalOptIn(env: Env): boolean {
   for (const key of LOCAL_OPT_IN_ENV_KEYS) {
@@ -79,7 +85,20 @@ export function missingBackendMessage(): string {
     `(0400/0600, HASNA_SHORTLINKS_API_KEY=...), or set HASNA_SHORTLINKS_API_KEY ` +
     `(alias SHORTLINKS_API_KEY; the authority defaults to https://api.hasna.com/shortlinks and can be ` +
     `overridden with HASNA_SHORTLINKS_API_URL). To use the on-box SQLite store explicitly, set ` +
-    `${LOCAL_OPT_IN_ENV_KEY}=1 (alias SHORTLINKS_LOCAL) or pass --db <path>.`
+    `${LOCAL_OPT_IN_ENV_KEY}=1 (alias SHORTLINKS_LOCAL); --db <path> then chooses the database file.`
+  );
+}
+
+/**
+ * Refusal for `--db <path>` / `options.dbPath` without the environment opt-in.
+ * `--db` used to select the on-box store by itself — a second, undocumented
+ * door into local storage. It now only NAMES THE FILE for a run that already
+ * opted in, so one line naming the opt-in is the whole fix an operator needs.
+ */
+export function dbPathWithoutOptInMessage(dbPath: string): string {
+  return (
+    `--db ${dbPath} no longer selects the on-box SQLite store on its own: set ${LOCAL_OPT_IN_ENV_KEY}=1 ` +
+    `(alias SHORTLINKS_LOCAL) to use local storage, and --db to choose its file.`
   );
 }
 
@@ -96,12 +115,12 @@ export function __resetShortlinksLocalNotice(): void {
  * API is the false-green this ruling exists to end, so the local backend is
  * never silent.
  */
-function announceLocalBackend(reason: string, notice?: (line: string) => void): void {
+function announceLocalBackend(reason: string, target: string, notice?: (line: string) => void): void {
   if (localNoticePrinted) return;
   localNoticePrinted = true;
   const line =
-    `shortlinks: local backend — on-box SQLite store in use (${reason}); reading and writing ` +
-    `~/.hasna/shortlinks/shortlinks.db instead of the hosted API. To use the hosted API, set ` +
+    `shortlinks: LOCAL mode — on-box SQLite store in use (${reason}); reading and writing ` +
+    `${target} instead of the hosted API. To use the hosted API, set ` +
     `HASNA_SHORTLINKS_API_KEY, add the Keychain item hasna.credentials.shortlinks.api-key, or write ` +
     `~/.hasna/shortlinks/config/credentials.`;
   if (notice) notice(line);
@@ -109,89 +128,25 @@ function announceLocalBackend(reason: string, notice?: (line: string) => void): 
 }
 
 /**
- * On-box SQLite store. An async adapter over the synchronous sqlite engine
- * (`ShortlinksStore`) so it satisfies the shared async {@link Store} interface.
+ * Load the on-box SQLite store. THE ONE GATED DYNAMIC IMPORT: it is only ever
+ * reached after {@link resolveStore} decided that no hosted backend is
+ * configured AND that the environment explicitly opted into local storage, so
+ * the sqlite engine is never even loaded on a hosted (or refusing) run — and,
+ * because the specifier is dynamic and the build uses `--splitting`, it is not
+ * bundled into `dist/cli` or `dist/mcp` at all.
  */
-export class LocalStore implements Store {
-  readonly kind = "local" as const;
-  private readonly inner: ShortlinksStore;
-
-  /**
-   * `env` is the environment the store was resolved from: the database path
-   * and every app-home read follow IT, never a silent `process.env` read on a
-   * caller-built env (hasna/apps#1720 validation).
-   */
-  constructor(dbPath?: string, env: Env = process.env) {
-    this.inner = new ShortlinksStore(dbPath, env);
-  }
-
-  async addDomain(input: AddDomainInput): Promise<Domain> {
-    return this.inner.addDomain(input);
-  }
-
-  async listDomains(): Promise<Domain[]> {
-    return this.inner.listDomains();
-  }
-
-  async getDomain(hostnameOrId: string): Promise<Domain | null> {
-    return this.inner.getDomain(hostnameOrId);
-  }
-
-  async getDefaultDomain(): Promise<Domain | null> {
-    return this.inner.getDefaultDomain();
-  }
-
-  async deleteDomain(hostnameOrId: string): Promise<Domain> {
-    return this.inner.deleteDomain(hostnameOrId);
-  }
-
-  async createLink(input: CreateLinkInput): Promise<Link> {
-    return this.inner.createLink(input);
-  }
-
-  async listLinks(options: ListLinksOptions = {}): Promise<Link[]> {
-    return this.inner.listLinks(options);
-  }
-
-  async getLink(domainOrSlug: string, maybeSlug?: string): Promise<Link | null> {
-    return this.inner.getLink(domainOrSlug, maybeSlug);
-  }
-
-  async resolve(hostname: string, slug: string): Promise<Link | null> {
-    return this.inner.resolve(hostname, slug);
-  }
-
-  async setLinkActive(
-    domainOrSlug: string,
-    slugOrActive: string | boolean,
-    active?: boolean,
-  ): Promise<Link> {
-    return this.inner.setLinkActive(domainOrSlug, slugOrActive, active);
-  }
-
-  async deleteLink(domainOrSlug: string, maybeSlug?: string): Promise<Link> {
-    return this.inner.deleteLink(domainOrSlug, maybeSlug);
-  }
-
-  async recordClick(link: Link, input: ClickInput = {}): Promise<Click> {
-    return this.inner.recordClick(link, input);
-  }
-
-  async getStats(domainOrSlug: string, maybeSlug?: string): Promise<LinkStats> {
-    return this.inner.getStats(domainOrSlug, maybeSlug);
-  }
-
-  async totalStats(): Promise<TotalStats> {
-    return this.inner.totalStats();
-  }
-
-  async close(): Promise<void> {
-    this.inner.close();
-  }
+async function openLocalStore(dbPath: string | undefined, env: Env): Promise<Store> {
+  const { LocalStore } = await import("./local-store.js");
+  return new LocalStore(dbPath, env);
 }
 
 export interface ResolveStoreOptions {
-  /** Explicit local SQLite path (CLI `--db`); also opts into the local store. Ignored when the hosted API is selected. */
+  /**
+   * Explicit local SQLite path (CLI `--db`). It CHOOSES THE FILE for a run
+   * that already opted into local storage; it is NOT itself an opt-in (a
+   * `dbPath` without `HASNA_SHORTLINKS_LOCAL` is refused), and it is ignored
+   * when the hosted API is selected.
+   */
   dbPath?: string;
   /** Transport overrides for the hosted-API client (test injection: fetchImpl, ...). */
   cloudOverrides?: ShortlinksTransportOverrides;
@@ -205,16 +160,20 @@ export interface ResolveStoreOptions {
  * - The hosted-API {@link ApiStore} wins when the @hasna/contracts client
  *   resolver finds a shortlinks credential (Keychain, disk credential file, or
  *   `HASNA_SHORTLINKS_API_KEY`); a partially configured hosted client throws.
- * - Otherwise the on-box {@link LocalStore} is used ONLY when the local backend
- *   was explicitly opted into (`HASNA_SHORTLINKS_LOCAL=1`, alias `SHORTLINKS_LOCAL`,
- *   or an explicit `dbPath`).
+ * - Otherwise the on-box `LocalStore` is used ONLY when the environment
+ *   explicitly opted in (`HASNA_SHORTLINKS_LOCAL=1`, alias `SHORTLINKS_LOCAL=1`);
+ *   `dbPath` (`--db`) names the file for such a run but never opens one by
+ *   itself — a `dbPath` without the opt-in is REFUSED.
  * - Otherwise resolution FAILS CLOSED: it throws an error naming the credential
  *   chain instead of silently serving the local SQLite dataset.
+ *
+ * Async because the local store — and with it `bun:sqlite` — is behind a gated
+ * dynamic import; the hosted and fail-closed paths never touch it.
  */
-export function resolveStore(
+export async function resolveStore(
   env: Env = process.env,
   options: ResolveStoreOptions = {},
-): Store {
+): Promise<Store> {
   // Normalise declared-but-blank authority variables WITHOUT handing the
   // resolver a silent copy: the Keychain tier's ambient gate travels with the
   // copy when one is forced (hasna/apps#1788). See ./client-resolver-inputs.ts.
@@ -225,15 +184,22 @@ export function resolveStore(
   });
   if (cloud) return cloud;
   // No hosted backend resolved. The local SQLite backend is never the silent
-  // default: it requires the documented opt-in (HASNA_SHORTLINKS_LOCAL=1 /
-  // SHORTLINKS_LOCAL=1 or --db <path>), and selecting it is announced on stderr
-  // (once per process).
-  if (options.dbPath !== undefined || isLocalOptIn(env)) {
+  // default and has exactly ONE door: the documented environment opt-in
+  // (HASNA_SHORTLINKS_LOCAL=1 / SHORTLINKS_LOCAL=1). Selecting it is announced
+  // on stderr (once per process).
+  const optedIn = isLocalOptIn(env);
+  if (!optedIn && options.dbPath !== undefined) {
+    // `--db <path>` used to be a second opt-in of its own. It is now only the
+    // file name for an opted-in run, so say so in one line instead of quietly
+    // opening a database the operator did not ask the fleet for.
+    throw new Error(dbPathWithoutOptInMessage(options.dbPath));
+  }
+  if (optedIn) {
     const reason = options.dbPath !== undefined
-      ? `--db ${options.dbPath}`
+      ? `${LOCAL_OPT_IN_ENV_KEY}=1, --db ${options.dbPath}`
       : `${LOCAL_OPT_IN_ENV_KEY}=1`;
-    announceLocalBackend(reason, options.notice);
-    return new LocalStore(options.dbPath, env);
+    announceLocalBackend(reason, options.dbPath ?? "~/.hasna/shortlinks/shortlinks.db", options.notice);
+    return openLocalStore(options.dbPath, env);
   }
   throw new Error(missingBackendMessage());
 }
@@ -249,7 +215,7 @@ export async function withStore<T>(
   env: Env = process.env,
   options: ResolveStoreOptions = {},
 ): Promise<T> {
-  const store = resolveStore(env, options);
+  const store = await resolveStore(env, options);
   try {
     return await fn(store);
   } finally {

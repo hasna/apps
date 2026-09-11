@@ -41,7 +41,7 @@
     "SECURITY.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts src/mcp/index.ts src/serve/index.ts src/sdk/index.ts src/index.ts src/server.ts src/cloudflare.ts src/pg-store.ts --root src --outdir dist --target bun --external @modelcontextprotocol/sdk --external pg && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts src/mcp/index.ts src/serve/index.ts src/sdk/index.ts src/index.ts src/server.ts src/cloudflare.ts src/pg-store.ts --root src --outdir dist --target bun --splitting --chunk-naming 'chunks/[name]-[hash].[ext]' --external @modelcontextprotocol/sdk --external pg && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "sdk:generate": "bun run scripts/generate-sdk.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",

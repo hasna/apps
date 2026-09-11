@@ -31,7 +31,7 @@ HASNA_SHORTLINKS_LOCAL=1. With neither it exits non-zero before serving.
  * Hosted resolution touches nothing on disk; only the explicit local opt-in
  * opens the on-box database (announcing the local backend on stderr, once).
  */
-export function assertMcpBackend(env: Env = process.env): void {
-  const store = resolveStore(env);
-  void store.close();
+export async function assertMcpBackend(env: Env = process.env): Promise<void> {
+  const store = await resolveStore(env);
+  await store.close();
 }

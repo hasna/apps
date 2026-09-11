@@ -2,7 +2,7 @@
 
 Shortlink management for custom domains — CLI, MCP server, REST API, and a generated SDK.
 
-`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers and `@hasna/domains`. The client resolves one store through the `@hasna/contracts` 1.0.2 client resolver: the hosted `/v1` API when a shortlinks credential resolves (the macOS Keychain, `~/.hasna/shortlinks/config/credentials`, or `HASNA_SHORTLINKS_API_KEY` — the URL defaults to the fleet gateway `https://api.hasna.com/shortlinks` and never needs configuring), or the on-box SQLite database (`~/.hasna/shortlinks/shortlinks.db`) when the local backend is explicitly opted into with `HASNA_SHORTLINKS_LOCAL=1` (alias `SHORTLINKS_LOCAL`; or `--db <path>`), which is announced on stderr. With neither, store-backed commands fail closed — the CLI never falls back to local storage on its own. The `shortlinks-serve` service reads/writes an app-owned PostgreSQL database when `HASNA_SHORTLINKS_DATABASE_URL` is configured.
+`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers and `@hasna/domains`. The client resolves one store through the `@hasna/contracts` 1.0.2 client resolver: the hosted `/v1` API when a shortlinks credential resolves (the macOS Keychain, `~/.hasna/shortlinks/config/credentials`, or `HASNA_SHORTLINKS_API_KEY` — the URL defaults to the fleet gateway `https://api.hasna.com/shortlinks` and never needs configuring), or the on-box SQLite database (`~/.hasna/shortlinks/shortlinks.db`) when the local backend is explicitly opted into with `HASNA_SHORTLINKS_LOCAL=1` (alias `SHORTLINKS_LOCAL=1`), which is announced on stderr as `shortlinks: LOCAL mode — …`. That environment opt-in is the only door into local storage: `--db <path>` chooses the database file for such a run and, on its own, is refused. With neither, store-backed commands fail closed — the CLI never falls back to local storage on its own. The `shortlinks-serve` service reads/writes an app-owned PostgreSQL database when `HASNA_SHORTLINKS_DATABASE_URL` is configured.
 
 ## Surfaces
 
@@ -63,7 +63,7 @@ request:
 | `HASNA_SHORTLINKS_API_KEY_OVERRIDE` | Deliberate per-run key that outranks everything else (never populated automatically). |
 | `HASNA_SHORTLINKS_API_KEY_REF` | Deliberate pointer to a `@hasna/secrets` vault item key (resolved at request time). |
 | `HASNA_PROFILE` | Selects which identity profile's credential file to use. |
-| `HASNA_SHORTLINKS_LOCAL=1` | Explicit opt-in to the on-box SQLite store (alias `SHORTLINKS_LOCAL=1`), announced on stderr. `--db <path>` does the same for one command. |
+| `HASNA_SHORTLINKS_LOCAL=1` | The ONLY opt-in to the on-box SQLite store (alias `SHORTLINKS_LOCAL=1`), announced once per process on stderr (`shortlinks: LOCAL mode — …`). `--db <path>` only names the database file for a run that already opted in; without the opt-in it is refused. |
 | `SHORTLINKS_HOME` / `HASNA_HOME` | Relocate the app home (`~/.hasna/shortlinks`: config, click salt, machine id, and the on-box database). `SHORTLINKS_HOME` names the directory itself; `HASNA_HOME` replaces `~/.hasna` exactly as it does for the credential chain. Every surface derives the home from the environment it was handed, and a hosted-mode read creates nothing there. |
 | `HASNA_SHORTLINKS_DATABASE_URL` | Server only (`shortlinks-serve`): Postgres DSN for the service's own pool. Never read by clients. |
 
@@ -91,9 +91,10 @@ shortlinks create https://example.com --slug docs
 shortlinks serve --host 127.0.0.1 --port 8787
 ```
 
-With neither a resolvable credential nor `SHORTLINKS_LOCAL=1`/`--db`,
-store-backed commands exit non-zero with an error naming the required
-configuration — they never silently serve local data.
+With neither a resolvable credential nor `SHORTLINKS_LOCAL=1`, store-backed
+commands exit non-zero with an error naming the required configuration — they
+never silently serve local data. `--db <path>` is not an opt-in: passing it
+alone refuses with one line naming `HASNA_SHORTLINKS_LOCAL=1`.
 
 Then a request for `https://has.na/docs` redirects to `https://example.com` and records a click.
 
@@ -247,8 +248,12 @@ The client resolves ONE `Store` through the `@hasna/contracts` client resolver �
   disagreeing variable) fails loudly — never silent local drift.
 - **on-box SQLite** (explicit opt-in only): the local database at
   `~/.hasna/shortlinks/shortlinks.db` is used ONLY when the local backend is
-  explicitly selected with `HASNA_SHORTLINKS_LOCAL=1` / `SHORTLINKS_LOCAL=1` or
-  the `--db <path>` flag — and selecting it says "local" on stderr.
+  explicitly selected with `HASNA_SHORTLINKS_LOCAL=1` / `SHORTLINKS_LOCAL=1` —
+  and selecting it prints `shortlinks: LOCAL mode — …` on stderr, once per
+  process. `--db <path>` (and `SHORTLINKS_DB`) only choose WHICH file that
+  opted-in run uses; `--db` alone is refused with a line naming the opt-in.
+  The sqlite engine is loaded through a single gated dynamic import, so it is
+  not even part of the `shortlinks` / `shortlinks-mcp` bundles.
 - **fail closed** (no configuration): with no resolvable credential and no
   local opt-in, store-backed commands exit non-zero with an error naming the
   chain and the local opt-in — the CLI never silently serves local data and
@@ -259,7 +264,7 @@ The client resolves ONE `Store` through the `@hasna/contracts` client resolver �
 export HASNA_SHORTLINKS_API_KEY=hsk_...
 shortlinks doctor
 
-# Explicit local backend (on-box SQLite — prints "local" on stderr):
+# Explicit local backend (on-box SQLite — prints "LOCAL mode" on stderr):
 export SHORTLINKS_LOCAL=1
 shortlinks init --domain has.na
 ```

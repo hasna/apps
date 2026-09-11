@@ -15,8 +15,10 @@ import { join } from "node:path";
  *     closed naming both members — never degrades to the local store.
  *  3. `--json` mode reports the same refusal as a parseable JSON error with a
  *     non-zero exit (never a false-green exit 0 local-fallback event).
- *  4. The local backend works only under an EXPLICIT opt-in: SHORTLINKS_LOCAL=1
- *     or the --db <path> flag.
+ *  4. The local backend works only under the EXPLICIT environment opt-in
+ *     HASNA_SHORTLINKS_LOCAL=1 (alias SHORTLINKS_LOCAL=1). `--db <path>` names
+ *     the database file for such a run; on its own it is REFUSED with one line
+ *     naming the opt-in (ruling (d), 2026-09-11 — one door into local storage).
  *
  * Unlike `cli.test.ts` these tests deliberately do NOT pass `--db` by default
  * and DO strip every fleet/local env key, so the process under test really has
@@ -48,9 +50,9 @@ let dbPath = "";
 interface RunOptions {
   env?: Record<string, string>;
   json?: boolean;
-  /** Pass the root --db <path> flag (an explicit local opt-in). */
+  /** Pass the root --db <path> flag (the file name, never an opt-in of its own). */
   db?: boolean;
-  /** Set SHORTLINKS_LOCAL=1 (an explicit local opt-in). */
+  /** Set SHORTLINKS_LOCAL=1 (THE explicit local opt-in). */
   local?: boolean;
 }
 
@@ -163,7 +165,7 @@ describe("the station credentials file selects the hosted store from a pristine 
     const text = output(result);
     // The credential file resolved, so neither refusal fired:
     expect(text).not.toMatch(/No shortlinks data backend is configured/);
-    expect(text).not.toMatch(/local backend|local mode/);
+    expect(text).not.toMatch(/LOCAL mode/i);
     // The process failed on the network, i.e. the hosted transport ran:
     expect(result.exitCode).toBe(1);
     expect(text).toMatch(/connect|refused|fetch|ECONN/i);
@@ -179,8 +181,8 @@ describe("explicit local opt-in still works", () => {
     const initJson = JSON.parse(init.stdout.toString()) as { store: string; config: { defaultDomain: string } };
     expect(initJson.store).toBe("local");
     expect(initJson.config.defaultDomain).toBe("has.na");
-    // Local backend is never silent: the opt-in says "local" on stderr.
-    expect(init.stderr.toString()).toMatch(/local/);
+    // Local backend is never silent: the opt-in announces LOCAL mode on stderr.
+    expect(init.stderr.toString()).toMatch(/LOCAL mode/);
 
     const doctor = runCli(["doctor"], { db: false, local: true });
     expect(doctor.exitCode).toBe(0);
@@ -192,13 +194,26 @@ describe("explicit local opt-in still works", () => {
     expect(existsSync(join(tempHome, "shortlinks.db"))).toBe(true);
   });
 
-  test("--db <path> opts into the on-box SQLite store without SHORTLINKS_LOCAL", () => {
+  test("--db <path> alone is REFUSED: it is the file name, not a second opt-in", () => {
+    // The second door ruling (d) closes: --db used to select the on-box store
+    // by itself. It now refuses with one line naming the env opt-in, and it
+    // opens nothing.
     const init = runCli(["init", "--domain", "has.na"], { db: true });
+    expect(init.exitCode).toBe(1);
+    const text = output(init);
+    expect(text).toMatch(/HASNA_SHORTLINKS_LOCAL=1/);
+    expect(text).toMatch(/no longer selects the on-box SQLite store on its own/);
+    expect(existsSync(dbPath)).toBe(false);
+    expect(existsSync(join(tempHome, "config.json"))).toBe(false);
+  });
+
+  test("--db <path> under the opt-in chooses the database file", () => {
+    const init = runCli(["init", "--domain", "has.na"], { db: true, local: true });
     expect(init.exitCode).toBe(0);
     const initJson = JSON.parse(init.stdout.toString()) as { store: string };
     expect(initJson.store).toBe("local");
-    // Local backend is never silent: --db says "local" on stderr too.
-    expect(init.stderr.toString()).toMatch(/local/);
+    // Local backend is never silent: the run announces LOCAL mode on stderr.
+    expect(init.stderr.toString()).toMatch(/LOCAL mode/);
     expect(existsSync(dbPath)).toBe(true);
   });
 });
