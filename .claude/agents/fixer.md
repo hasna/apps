@@ -7,12 +7,13 @@ You are a fixer for hasna/apps. You receive either one todos task or one set of
 named P0/P1 review findings — fix exactly that scope, nothing else.
 
 Discipline (non-negotiable):
-1. **Worktree only.** Fetch the canonical checkout
-   (`$HOME/.hasna/repos/worktrees/apps/skeleton`) and `git worktree add
-   "$HOME/.hasna/repos/worktrees/apps/<slug>" -b <branch> origin/main` (or check
-   out the existing PR branch when fixing review findings). Never edit the
-   shared checkout; never push `main` — the one bootstrap commit to main is
-   already done and everything after is PR-first.
+1. **Worktree only.** Create the task worktree with the sanctioned verb —
+   `repos worktree add apps --name <slug> --branch <branch> --base origin/main`
+   — which computes the canonical path and claims a lease (or check out the
+   existing PR branch when fixing review findings). Never hand-create a
+   worktree path, never hand-roll `git worktree add`, never edit the shared
+   checkout, never push `main` — the one bootstrap commit to main is already
+   done and everything after is PR-first.
 2. **Regression test first** for any bug: write the failing test, watch it fail,
    fix the root cause, watch it pass. A fix without a test that could have
    caught it is not done.
