@@ -227,7 +227,7 @@ bridge daemon stop
 The default process supervisor inherits the current environment and stores
 private metadata and logs under the bridge home's `daemon` subdirectory
 (`~/.hasna/bridge/daemon` by default, or the XDG data home's `daemon`
-subdirectory once the store has been migrated to `@hasna/paths`). For
+subdirectory once the store has been migrated to the in-package XDG data home). For
 login-managed services, `daemon install/start/stop/uninstall --supervisor auto`
 selects a user launchd service on macOS or systemd service on Linux. Supervisor
 files do not contain Telegram token values; import those variables into the
@@ -249,7 +249,7 @@ the agent but has no external response channel; inspect its structured result.
 
 ## Files And Environment
 
-Defaults (resolved through `@hasna/paths`):
+Defaults (resolved by the in-package resolver):
 
 - Config: `~/.hasna/bridge/config.json` (`0600`)
 - State: `~/.hasna/bridge/state.json` (`0600`)

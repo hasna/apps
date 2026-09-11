@@ -15,6 +15,7 @@ import {
   KNOWLEDGE_API_URL_ENV_KEYS,
   KNOWLEDGE_DEFAULT_API_URL,
   KNOWLEDGE_LOCAL_OPT_IN_ENV,
+  KnowledgeSourceUnavailableError,
   assertNoRetiredKnowledgeStorageSelector,
   resolveKnowledgeClientTransport,
   type KnowledgeClientTransportReport,
@@ -2977,6 +2978,14 @@ async function run(argv: string[]): Promise<void> {
  * `expected`, `current`) as well as in the message — so a caller can tell
  * "the concurrency guard fired" apart from "something else went wrong"
  * without parsing prose.
+ *
+ * A fail-closed credential resolution ({@link KnowledgeSourceUnavailableError})
+ * is its own distinct exit too (3), with `code: 'source_unavailable'`,
+ * `status: 'unavailable'` and the value-free list of sources consulted in
+ * `--json`. A fleet run whose KNOWLEDGE source is dark must be able to record
+ * `status=unavailable` from the status field instead of reading the prose
+ * (BUG-0044) — and, because it is a distinct code, tell a dark source apart
+ * from a command that failed for an unrelated reason.
  */
 function emitCliError(error: unknown, argv: string[]): void {
   const message = error instanceof Error ? error.message : String(error);
@@ -2988,6 +2997,7 @@ function emitCliError(error: unknown, argv: string[]): void {
   console.error(`Error: ${message}`);
   const conflict = error instanceof KnowledgeVersionConflictError ? error : null;
   const projectLinksError = error instanceof KnowledgeProjectLinksError ? error : null;
+  const sourceUnavailable = error instanceof KnowledgeSourceUnavailableError ? error : null;
   if (argv.includes('--json')) {
     output({
       ok: false,
@@ -2995,12 +3005,14 @@ function emitCliError(error: unknown, argv: string[]): void {
       message,
       ...(conflict
         ? { code: 'version_conflict', expected: conflict.expected, current: conflict.current }
-        : projectLinksError
-          ? { code: projectLinksError.code, details: projectLinksError.details }
-          : {}),
+        : sourceUnavailable
+          ? { code: sourceUnavailable.code, ...sourceUnavailable.detail }
+          : projectLinksError
+            ? { code: projectLinksError.code, details: projectLinksError.details }
+            : {}),
     }, true);
   }
-  process.exitCode = conflict ? 2 : 1;
+  process.exitCode = conflict ? 2 : sourceUnavailable ? 3 : 1;
 }
 
 if (import.meta.main) {

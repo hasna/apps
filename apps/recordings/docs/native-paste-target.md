@@ -32,6 +32,13 @@ undelivered receipt. Command rewrites retain their no-copy fallback policy.
 The host should present transcription/persistence separately from this delivery
 outcome; a copied transcript is not a confirmed paste.
 
+After a read-back confirms that the target received the text, clipboard restoration
+settles on the same turn and `canStartRecording` can become true. Restoration still
+checks current clipboard ownership, so an intervening copy is preserved. The 600 ms
+clipboard grace period remains for unverified or unobserved delivery; app activation
+and read-back delays are unchanged. This shortens the wait between visible insertion
+and readiness for the next recording.
+
 Headless validation on Darwin: 45 tests in the tracker, frozen-target, provider and
 existing paste-target suites passed. Fixtures use fabricated process observations,
 a fake PCM recorder/provider, and an injected copy writer; no real microphone,
