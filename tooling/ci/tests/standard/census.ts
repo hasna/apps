@@ -296,40 +296,23 @@ export const LICENSE_EXCEPTIONS: Array<{ member: string; license: string; reason
 export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "automations", reason: "Daemon-shaped member (automations-daemon); no MCP surface declared." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); ships `contracts` + `contracts-cli` bins only." },
-  { member: "docs", reason: "Docs/instruction renderer; library-shaped, no MCP surface." },
-  { member: "draw", reason: "Library-shaped (canvas/design tokens); no MCP surface." },
   { member: "guardrails", reason: "Library-shaped (guardrail policies); no MCP surface." },
   { member: "hooks", reason: "CLI+serve member (hooks registry/serve); no MCP surface yet." },
-  { member: "models", reason: "Library-shaped (model metadata); no MCP surface." },
   { member: "orgs", reason: "Registry-shaped; no MCP surface." },
-  { member: "paths", reason: "Library-shaped (pure path helper); no MCP surface." },
-  { member: "slides", reason: "Library-shaped; no MCP surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
-  { member: "tables", reason: "Library-shaped (tabular data); no MCP surface." },
-  { member: "terminal", reason: "CLI-only member (terminal tooling); no MCP surface. Imported by #88 after the original census; aggregate task (todos 35e136f2)." },
-  { member: "test-guard", reason: "Shell-guard member (bash sentinel/bun-wrapper/battery, SC-00062); no MCP surface." }
 ];
 
 /** Four-surface WARN exceptions — members missing the <name>-serve bin. */
 export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
-  { member: "announce", reason: "CLI-only member; no server surface." },
   { member: "automations", reason: "Daemon-shaped (automations-daemon); no HTTP serve bin." },
   { member: "bridge", reason: "Client-shaped (bridge to other tools); no server surface." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); no server surface." },
   { member: "dispatch", reason: "Dispatch daemon surface only; no HTTP serve bin." },
-  { member: "docs", reason: "Docs renderer; no server surface." },
-  { member: "draw", reason: "Library-shaped; no server surface." },
   { member: "guardrails", reason: "Library-shaped; no server surface." },
-  { member: "models", reason: "Library-shaped; no server surface." },
   { member: "orgs", reason: "Registry-shaped; no server surface." },
-  { member: "paths", reason: "Library-shaped (pure path helper); no server surface." },
   { member: "releases", reason: "CLI-only member; no server surface." },
   { member: "servers", reason: "CLI-only member (server lifecycle tooling); no server surface." },
-  { member: "slides", reason: "Library-shaped; no server surface (also missing the HARD CLI bin — see CLI_EXCEPTIONS)." },
   { member: "statusline", reason: "CLI-only member; no server surface." },
-  { member: "tables", reason: "Library-shaped; no server surface." },
   { member: "tai", reason: "Client-shaped; no server surface." },
-  { member: "terminal", reason: "CLI-only member (terminal tooling); no server surface. Imported by #88 after the original census; aggregate task (todos 35e136f2)." },
-  { member: "test-guard", reason: "Shell-guard member (host-local concurrency guard); no server surface." }
 ];
 
 /** Four-surface WARN exceptions — members missing the ./sdk export. The
@@ -337,41 +320,24 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
  * ([P5] Standardize typed ./sdk exports + embedding contracts); entries
  * here reference it. */
 export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
-  { member: "announce", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "automations", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "billing", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "bridge", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "changelog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "controls", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "connectors", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #80 after the original census." },
-  { member: "docs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "draw", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "emails", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "models", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "repos", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "servers", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "slides", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "snapshots", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "statusline", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "tables", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "terminal", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #88 after the original census." },
-  { member: "test-guard", reason: "SDK lane (c7ce8b75); bash-only guard ships no importable Node SDK export (see the member's CONTRACTS_EXCEPTIONS entry)." },
-  { member: "tickets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." }
 ];
 
 /** HARD four-surface exceptions — members missing the `<name>` CLI bin.
  * These are the only four-surface violations that are task-mandated (the
  * bin must NOT be invented in-suite; remediation is a tracked task). */
-export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: string }> = [
-  {
-    member: "slides",
-    reason: "Library-shaped member; no public `slides` CLI bin. Remediation task filed.",
-    task: "todos 62ec9dbc (slides missing CLI bin)",
-  },
-];
+export const CLI_EXCEPTIONS: Array<{ member: string; reason: string; task: string }> = [];
 
 /** hasna.contract.json must exist for every publishable member. Members
  * measured without one (22 — 23 at the original census, connectors added by
@@ -443,16 +409,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos eb3f331d (contracts task — prompts)",
   },
   {
-    member: "slides",
-    cause: "surface_matrix: no supported cli surface declared; library-class cli waivers are not permitted by the kit and slides ships no CLI bin (package.json bin is empty; the SDK is the consumer surface). Declared cli deferred truthfully in the manifest. published_artifact_gate fixed (scan:artifact wired into prepack).",
-    task: "todos ccc2e931 (contracts task — slides)",
-  },
-  {
-    member: "tables",
-    cause: "kitVersion 0.1.0 predates repo-conformance; no @hasna/contracts dep pinned; validated at latest, manifest is pre-backend-schema era.",
-    task: "todos daaa2841 (contracts task — tables)",
-  },
-  {
     member: "todos",
     cause: "manifest_valid: pre-backend-schema-era manifest (kitVersion 0.8.4) validated at pinned 0.5.2 — storage.mode Invalid enum value. Expected 'local' | 'cloud', received 'sqlite'; storage Unrecognized key(s) in object: 'engines', 'pgTestGate'; serviceSurfaces.*.deploymentModes Required; serviceSurfaces.* Unrecognized key(s) in object: 'kind'/'exportSubpath'/'generatedFrom'; <root> Unrecognized key(s) in object: 'hosting'. Imported by #105 after the original census.",
     task: "todos 0ad82b16-5a7c-43c3-95b9-db2dc64f7ffa (contracts task — todos)",
@@ -500,17 +456,12 @@ export const NO_VALIDATOR_PIN: string[] = [
   "bridge",
   "changelog",
   "computers",
-  "context",
   "contracts",
-  "docs",
-  "draw",
   "guardrails",
   "hooks",
   "monitor",
   "notes",
   "orgs",
-  "slides",
-  "tables",
   "releases",
 ];
 

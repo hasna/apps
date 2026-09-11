@@ -16,6 +16,36 @@ conform to the hasna/apps standards. Complements the repo's own gates
 | 5. dist hygiene | `dist-hygiene.test.ts` | no `files` entry pulls in `node_modules` (negated exclusions fine) | HARD |
 | 6. intra-wave unpublished pins | `published-pins.test.ts` | no publishable member exact-pins an intra-wave dep (`@hasna/*` member of this tree) to a version not on the npm registry (wave tooling must publish the bumped dep before/within the same wave, or hold pins at the last published version) | HARD, registry-backed |
 | 7. quarantine window admissions | `quarantine-pins.test.ts` | no finding-scope member's declared `dependencies` admit a version published inside the fleet 7-day `minimumReleaseAge` window (fresh resolution and pack-audit installs fail the 604800s guard; pin to the last version published before the window). Non-scope members' admissions are reported as a census, never asserted | HARD (scope), registry-backed |
+| 8. fleet hostnames (ruling c) | `fleet-hostnames.test.ts` | no `*.hasna.xyz` / `hasna.xyz`, no `hasna.internal`, no fixed-port loopback client default in any member's `src/`, manifest, docs, Dockerfile, deploy/infra files; registry `baseUrl` pins and root `deploy-*.yml` scanned too. Test material and CHANGELOGs skipped by shape; `ALLOWLIST` entries carry reasons and are hygiene-checked | REPORT (gate-mode) |
+| 9. no mode vocabulary (rulings d, e) | `no-mode-vocabulary.test.ts` | no `self_hosted`/`self-hosted`, `*_STORAGE_MODE`, `*_MODE` env-read switch, `fleet-env`/`fleet.env`/`.hasna/cloud` in members (negated docs lines and vendor catalog tags excused with reasons) | REPORT (gate-mode) |
+| 10. nested packages (one package per app) | `nested-packages.test.ts` + `tooling/ci/check-nested-packages.ts` | no `package.json` below a member root declares a publishable `@hasna/*` name; the connector and hook plugin catalogs are recorded families whose names must match their directory | REPORT (gate-mode; gate step runs `--report`) |
+| 11. registry hygiene | `registry-hygiene.test.ts` | every recorded exception in every census registry names a member that exists in `apps/` (deleted members cannot rot in the registries) | HARD |
+| 12. commit trailers (repo law 6) | `commit-trailers.test.ts` + `tooling/ci/check-commit-trailers.ts` | every non-merge commit in the PR/push carries `Agent: <registered-name>` and no `Co-Authored-By` line; the range check runs in the `gates` job (`--report` at landing), this test pins its self-test | REPORT (gate step) |
+| 13. member scaffold manifest | `member-scaffold.test.ts` | a generated member's `hasna.contract.json` is hosted-shaped (`class: service`, PostgreSQL-only storage, no `sqlitePath`, `api-key` surfaces) and passes the IN-TREE `contracts repo-conformance` | HARD |
+
+## Fleet-alignment gates land in REPORT mode (2026-09-11)
+
+`gate-mode.ts` holds one switch per fleet-alignment gate (`GATE_MODES`). A gate
+in `report` mode measures the tree, prints every violation under a stable
+`[report <gate>]` prefix plus a one-line per-member census, and PASSES; the
+same test in `hard` mode refuses with the same list. Fixture self-tests are
+always hard, so a report-mode gate still proves it can fire. Flip a gate by
+editing `GATE_MODES` in a reviewed PR once its report prints 0 on main;
+`HASNA_GATE_MODE_<GATE>=hard` previews a flip locally. Hosted-member
+resolution for these gates is `hosted.ts` (registry `source: monorepo` ∪
+manifest `hosting: hasna-saas` ∪ `placement.hosted`).
+
+## Client gates need BUILT bins: `tooling/ci/tests/client-gates`
+
+`bun run test:client-gates` — `client-fail-closed.test.ts` (the PLAN §6
+black-box probe: `HASNA_STATION=no-such-station HOME=$(mktemp -d) <bin> <read>`
+must exit non-zero and create no `*.db*`) and `client-sqlite-isolation.test.ts`
+(`<name>` / `<name>-mcp` bundles carry no `bun:sqlite` / `better-sqlite3`).
+They read the bins `package.json#bin` declares, so they live outside the
+source-only standard suite and run in the ci.yml `client-gates` job after
+`tooling/ci/build-hosted-members.ts` builds every hosted member;
+`HASNA_CLIENT_GATES_REQUIRE_BUILT=1` there makes an unbuilt bin a violation so
+the job cannot pass by not building. Both are `report` mode at landing.
 
 ## The census exception records are a REPORTING lane (f05fe292, 2026-08-15)
 
