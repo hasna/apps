@@ -126,3 +126,28 @@ export function mapExtractionStatus(extraction: ExtractedTextResult): KnowledgeS
   if (extraction.status === "unsupported") return "unsupported";
   return "error";
 }
+
+/**
+ * Whether a file's bytes are extractable as text, from its mime and name alone.
+ * Pure and I/O-free, so both the on-box resolver and the hosted one answer
+ * `content.text_available` identically without reading the object.
+ */
+export function isExtractableTextMime(mime: string, filename = ""): boolean {
+  const normalized = mime.split(";")[0]!.toLowerCase();
+  if (normalized.startsWith("text/")) return true;
+  if ([
+    "application/json",
+    "application/ld+json",
+    "application/xml",
+    "application/xhtml+xml",
+    "application/yaml",
+    "application/x-yaml",
+    "application/toml",
+    "application/javascript",
+    "application/typescript",
+    "application/sql",
+    "image/svg+xml",
+  ].includes(normalized)) return true;
+
+  return /\.(md|markdown|mdx|txt|csv|tsv|json|jsonl|yaml|yml|toml|xml|html|htm|css|js|jsx|ts|tsx|sql|svg)$/i.test(filename);
+}

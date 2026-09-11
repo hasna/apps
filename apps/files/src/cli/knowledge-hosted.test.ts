@@ -126,10 +126,17 @@ describe("files knowledge resolve on the hosted transport", () => {
     const result = await runCli(["knowledge", "resolve", "open-files://file/f_know1", "--json"]);
 
     expect(result.exitCode).toBe(0);
-    const payload = JSON.parse(result.stdout) as { status: string; file_id: string; path: string };
+    const payload = JSON.parse(result.stdout) as {
+      status: string; file_id: string; path: string;
+      content: { text_available: boolean; extracted_text_ref?: string };
+    };
     expect(payload.status).toBe("ready");
     expect(payload.file_id).toBe("f_know1");
     expect(payload.path).toBe("docs/notes.md");
+    // Parity with the on-box resolver: text availability comes from mime +
+    // filename, so metadata mode reports it without reading any bytes.
+    expect(payload.content.text_available).toBe(true);
+    expect(payload.content.extracted_text_ref).toBe("open-files://file/f_know1/text");
     expect(hits).toEqual(["GET /files/f_know1"]);
     expect(databaseFilesUnder(testDir)).toEqual([]);
   });
@@ -201,13 +208,25 @@ describe("files knowledge doctor on the hosted transport", () => {
     expect(report.checked_count).toBe(1);
     expect(report.checks[0]?.source_ref).toBe("open-files://file/f_know1");
     expect(report.checks[0]?.status).toBe("ready");
-    expect(report.checks[0]?.content.extraction_status).toBe("ready");
     expect(report.summary.ready).toBe(1);
-    expect(hits).toEqual([
-      "GET /files",
-      "GET /files/f_know1",
-      "POST /files/f_know1/extract-text",
+    // text_available is decided from mime + filename, so the default doctor
+    // answers "extracted text present" without extracting anything.
+    expect(hits).toEqual(["GET /files", "GET /files/f_know1"]);
+    expect(databaseFilesUnder(testDir)).toEqual([]);
+  });
+
+  test("--check-extracted-text opts into POST /v1/files/{id}/extract-text", async () => {
+    const result = await runCli([
+      "knowledge", "doctor", "open-files://file/f_know1", "--check-extracted-text", "--json",
     ]);
+
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as {
+      checks: Array<{ status: string; content: { extraction_status?: string } }>;
+    };
+    expect(report.checks[0]?.status).toBe("ready");
+    expect(report.checks[0]?.content.extraction_status).toBe("ready");
+    expect(hits).toEqual(["GET /files/f_know1", "POST /files/f_know1/extract-text"]);
     expect(databaseFilesUnder(testDir)).toEqual([]);
   });
 

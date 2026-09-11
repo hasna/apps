@@ -23,6 +23,7 @@ import {
   addIssue,
   DOCTOR_DEFAULT_PURPOSE,
   doctorStatus,
+  isExtractableTextMime,
   mapExtractionStatus,
   normalizeDoctorLimit,
   recommendationFor,
@@ -111,6 +112,7 @@ export async function resolveKnowledgeSourceRefViaApi(
   }
 
   const resolvedRef = requestedRevisionId ? sourceRef : buildOpenFilesFileRef(file.id);
+  const textAvailable = isExtractableTextMime(file.mime, file.name);
   const base: KnowledgeSourceResolution = {
     source_ref: resolvedRef,
     requested_ref: sourceRef,
@@ -128,7 +130,11 @@ export async function resolveKnowledgeSourceRefViaApi(
       mime: file.mime,
       size: file.size,
       hash: file.hash,
-      text_available: false,
+      // Same answer the on-box resolver gives (knowledge-resolver.ts
+      // contentDescriptor): text availability is a pure function of mime +
+      // filename, so it needs no byte read and must not differ by transport.
+      text_available: textAvailable,
+      extracted_text_ref: textAvailable ? `${resolvedRef}/text` : undefined,
     },
     permissions: {
       mode: "read_only",
@@ -379,14 +385,14 @@ async function doctorRefViaApi(
   if (resolution.deleted) addIssue(issueCodes, "deleted");
 
   let extractionStatus = resolution.content.extraction?.status;
-  // On the hosted transport `text_available` is not part of file metadata —
-  // the service answers "is there extracted text" only by extracting. So when
-  // extracted text is REQUIRED the hosted doctor always asks (one
-  // POST /v1/files/{id}/extract-text per ref) rather than inferring an answer
-  // the server never sent. `check_extracted_text` is a no-op here: it exists
-  // on the on-box path to opt into work the local store can otherwise skip.
+  // Identical rule to the on-box doctor: `text_available` is decided from mime
+  // + filename, so no request is needed to answer "is extracted text missing".
+  if (opts.require_extracted_text && !resolution.content.text_available) {
+    addIssue(issueCodes, "missing_extracted_text");
+  }
+  // `check_extracted_text` opts into actually extracting, exactly as on-box.
   const resolvable = resolution.status === "ready" && !resolution.deleted && resolution.file_id !== undefined;
-  if (opts.require_extracted_text && resolvable) {
+  if (opts.require_extracted_text && opts.check_extracted_text && resolvable && resolution.content.text_available) {
     // The metadata above already identified the file, so extract directly
     // rather than re-resolving the ref (one round trip per ref, not two).
     try {
@@ -400,8 +406,6 @@ async function doctorRefViaApi(
     } catch {
       addIssue(issueCodes, "missing_extracted_text");
     }
-  } else if (opts.require_extracted_text) {
-    addIssue(issueCodes, "missing_extracted_text");
   }
 
   const status = doctorStatus(issueCodes);
