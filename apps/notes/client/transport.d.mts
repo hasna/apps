@@ -4,9 +4,6 @@
 export function readPlainClientValue(object: object, key: string): string | undefined;
 /** @param {import('../sdk/types.js').NotesEnvironment} env @param {string} key @returns {boolean} */
 export function isPresent(env: import("../sdk/types.js").NotesEnvironment, key: string): boolean;
-/** Reject stale selector variables even when their value is blank. */
-/** @param {import('../sdk/types.js').NotesEnvironment} [env] @returns {void} */
-export function assertNoRetiredNotesStorageSelector(env?: import("../sdk/types.js").NotesEnvironment): void;
 /**
  * A client process must not carry the server DSN: presence alone (even blank)
  * is a refusal, so a wrapper that sources both sides cannot quietly run a
@@ -67,17 +64,4 @@ export const NOTES_DATABASE_URL_ENV: "HASNA_NOTES_DATABASE_URL";
 /** Canonical client variables. The resolver's own legacy alias handling applies. */
 export const NOTES_API_URL_ENV_KEYS: string[];
 export const NOTES_API_KEY_ENV_KEYS: string[];
-/**
- * Removed selector names. They remain here only as a fail-loud ratchet so a
- * stale station fragment cannot be silently ignored. PERSONALNOTES_MODE is the
- * retired mode-enum selector (deployment modes were removed); the storage-mode
- * family is the retired mode-enum class every app retired in the two-backend
- * transition. None of them selects anything — their presence is a refusal.
- */
-export const RETIRED_SELECTOR_ENV_KEYS: string[];
 export const NOTES_CLIENT_TRANSPORTS: string[];
-export class RetiredNotesStorageSelectorError extends Error {
-    /** @param {string} envKey */
-    constructor(envKey: string);
-    code: string;
-}
