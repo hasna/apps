@@ -76,7 +76,7 @@ export function registerProviderCommands(program: Command): void {
 
   program
     .command("sync")
-    .description("Sync domains from a domain inventory provider to local DB")
+    .description("Sync domains from a domain inventory provider to the portfolio")
     .option("--provider <provider>", "Provider name")
     .option("--all", "Sync from all configured domain inventory providers")
     .option("--json", "Output as JSON", false)

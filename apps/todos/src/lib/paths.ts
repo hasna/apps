@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 // --- Local path resolver -------------------------------------------------
 // @hasna/paths was deleted (hasna/apps#1535, 2026-09-03); this in-package
 // implementation preserves the resolver contract (XDG / macOS home layout
@@ -97,9 +97,24 @@ export function effectiveHome(env: NodeJS.ProcessEnv = process.env): string {
   return env.HOME || env.USERPROFILE || homedir();
 }
 
-/** Pre-XDG default data home: `~/.hasna/todos`. */
+/**
+ * The `~/.hasna` root: `HASNA_HOME` when it is an absolute, non-blank value,
+ * else `$HOME/.hasna` — the same rule `@hasna/contracts` applies when it looks
+ * for `<root>/todos/config/credentials`. Honouring it here too is what keeps
+ * ONE isolated `HASNA_HOME` isolating both the credential file and the store:
+ * before this, a run with `HASNA_HOME=/tmp/x` read its credential from
+ * `/tmp/x/todos/config/credentials` but still opened the operator's real
+ * `~/.hasna/todos/todos.db` (hasna/apps#1720 validation).
+ */
+export function hasnaHomeRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env["HASNA_HOME"]?.trim();
+  if (override && isAbsolute(override)) return override;
+  return join(effectiveHome(env), ".hasna");
+}
+
+/** Pre-XDG default data home: `<hasna root>/todos`, i.e. `~/.hasna/todos`. */
 export function legacyHomeDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(effectiveHome(env), ".hasna", "todos");
+  return join(hasnaHomeRoot(env), "todos");
 }
 
 /**

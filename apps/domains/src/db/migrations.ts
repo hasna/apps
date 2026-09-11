@@ -217,7 +217,7 @@ export const MIGRATIONS: MigrationEntry[] = [
       CREATE TABLE IF NOT EXISTS domain_history (
         id TEXT PRIMARY KEY,
         domain_id TEXT NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
-        snapshot_type TEXT NOT NULL CHECK (snapshot_type IN ('whois', 'rdap', 'dns', 'ssl', 'reputation', 'exa_research')),
+        snapshot_type TEXT NOT NULL CHECK (snapshot_type IN ('whois', 'rdap', 'dns', 'ssl', 'reputation', 'exa_research', 'purchase', 'renewal')),
         raw_data TEXT NOT NULL DEFAULT '{}',
         registrant_name TEXT,
         registrant_email TEXT,
@@ -266,6 +266,43 @@ export const MIGRATIONS: MigrationEntry[] = [
       ALTER TABLE domains ADD COLUMN expiry_synced_at TEXT;
 
       CREATE INDEX IF NOT EXISTS idx_domains_expiry_synced_at ON domains(expiry_synced_at);
+    `,
+  },
+  {
+    id: 7,
+    name: "domain_history_snapshot_types",
+    sql: `
+      -- SQLite cannot alter a CHECK constraint in place, so rebuild the table to
+      -- match the schema the cloud Postgres applied long ago: 'purchase' and
+      -- 'renewal' are written by the sedo buy and wallet buy|renew commands
+      -- through the shared store — the same command must work on every transport.
+      ALTER TABLE domain_history RENAME TO domain_history_v7_old;
+
+      CREATE TABLE domain_history (
+        id TEXT PRIMARY KEY,
+        domain_id TEXT NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+        snapshot_type TEXT NOT NULL CHECK (snapshot_type IN ('whois', 'rdap', 'dns', 'ssl', 'reputation', 'exa_research', 'purchase', 'renewal')),
+        raw_data TEXT NOT NULL DEFAULT '{}',
+        registrant_name TEXT,
+        registrant_email TEXT,
+        registrant_org TEXT,
+        nameservers TEXT NOT NULL DEFAULT '[]',
+        registrar TEXT,
+        status TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      INSERT INTO domain_history (id, domain_id, snapshot_type, raw_data, registrant_name, registrant_email, registrant_org, nameservers, registrar, status, notes, created_at)
+        SELECT id, domain_id, snapshot_type, raw_data, registrant_name, registrant_email, registrant_org, nameservers, registrar, status, notes, created_at
+        FROM domain_history_v7_old;
+
+      DROP TABLE domain_history_v7_old;
+
+      CREATE INDEX idx_domain_history_domain ON domain_history(domain_id);
+      CREATE INDEX idx_domain_history_type ON domain_history(snapshot_type);
+      CREATE INDEX idx_domain_history_created ON domain_history(created_at);
+      CREATE INDEX idx_domain_history_email ON domain_history(registrant_email);
     `,
   },
 ];

@@ -14,7 +14,6 @@ export {
   isCloudStore,
   LocalStore,
   ApiStore,
-  CloudUnsupportedError,
   TELEPHONY_APP,
 } from "./lib/store/index.js";
 export type {

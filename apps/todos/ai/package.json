@@ -57,12 +57,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/todos.git",
-    "directory": "ai"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/todos/ai"
   },
-  "homepage": "https://github.com/hasna/todos/tree/main/ai",
+  "homepage": "https://github.com/hasna/apps",
   "bugs": {
-    "url": "https://github.com/hasna/todos/issues"
+    "url": "https://github.com/hasna/apps/issues"
   },
   "engines": {
     "node": ">=22"

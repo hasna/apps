@@ -161,7 +161,45 @@ function maybeInstallShadowCapture(db: Database): void {
   }
 }
 
+/**
+ * A process-wide refusal of the on-box store, installed by a surface that has
+ * resolved a HOSTED authority before it serves anything (today: the stdio MCP
+ * server, hasna/apps#1720 validation).
+ *
+ * Why a choke point rather than a gate in every tool: the MCP surface has
+ * several hundred tools and a dozen `todos://` resources, most of which call
+ * straight into `src/db/*`, and a hand-maintained list of "local-only" names
+ * was exactly what let `resources/read todos://projects` answer `[]` from an
+ * empty local file while the fleet held thousands of projects. Every one of
+ * those reads funnels through this function, so refusing HERE is what makes
+ * "no local SQLite is opened or created on the hosted route" true by
+ * construction. The refusal is a `REMOTE_COMMAND_UNSUPPORTED` error — the
+ * same code the CLI's stage-A uses for a local-only verb on the /v1 route —
+ * and it names only sources, never a credential value.
+ */
+let localStoreRefusal: string | null = null;
+
+/** Refuse every local-store open for the rest of this process. */
+export function refuseLocalStore(message: string): void {
+  localStoreRefusal = message;
+}
+
+/** Lift a refusal installed by {@link refuseLocalStore}. Test seam. */
+export function allowLocalStore(): void {
+  localStoreRefusal = null;
+}
+
+/** True while {@link refuseLocalStore} is in force for this process. */
+export function isLocalStoreRefused(): boolean {
+  return localStoreRefusal !== null;
+}
+
 export function getDatabase(dbPath?: string): Database {
+  // A process-wide refusal installed by a hosted surface (the stdio MCP
+  // server, hasna/apps#1720 validation) outranks every other rule: once a
+  // hosted authority is being served, no call may open the on-box store at
+  // all, not even the ambient-fallback guard below.
+  if (localStoreRefusal !== null) throw new Error(localStoreRefusal);
   // The ambient singleton is a client fallback, not an explicit storage handle.
   // Preserve intentional ./storage callers that pass a path or a Database, while
   // preventing any missed CLI/MCP/UI branch from recreating a station database.

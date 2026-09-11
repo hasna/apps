@@ -1,12 +1,14 @@
 import { proxyProviderStream } from "./provider-stream";
 import { isContextOverflow } from "./provider-error";
+import { normalizeCodexDelegation } from "./codex-delegation";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { authHeader } from "./auth";
 import { endpoint, Fault, modelExpired } from "./domain";
+import { reasoningEffortSchema, type ReasoningEffort } from "./reasoning";
 import type { HarnessLaunchInput } from "./harness-types";
 import { injectModelGuidance, renderModelGuidance, resolvePolicyModel, type CompiledModelPolicy } from "./model-policy";
 
-export type RoutingEvent = {at:string;requestId:string;requestedModel:string;resolvedModel?:string;reportedModel?:string;decision:"allow"|"alias"|"reject"|"fallback";reason?:string;upstreamStatus?:number};
+export type RoutingEvent = {at:string;requestId:string;requestedModel:string;resolvedModel?:string;reportedModel?:string;reasoningEffort?:ReasoningEffort;decision:"allow"|"alias"|"reject"|"fallback";reason?:string;upstreamStatus?:number};
 type GatewayInput = HarnessLaunchInput & {compiledPolicy:CompiledModelPolicy;catalogPath:string;onRoutingEvent?:(event:RoutingEvent)=>void};
 const routingFields = ["models", "fallbacks", "model_list", "deployment_id", "deployment", "router", "route", "extra_body", "plugins"];
 
@@ -41,6 +43,8 @@ export function createInferenceGateway(input: GatewayInput) {
     if(gemini)try{requested=decodeURIComponent(match![1]);}catch{return fail(400,"invalid_model_path");}
     const requestId=crypto.randomUUID();
     const event:RoutingEvent={at:new Date().toISOString(),requestId,requestedModel:safeModel(requested),decision:"reject"};
+    const effort=reasoningEffortSchema.safeParse(body.reasoning?.effort);
+    if(effort.success)event.reasoningEffort=effort.data;
     const emit=()=>input.onRoutingEvent?.(event);
     let resolved:string;
     try {
@@ -68,12 +72,13 @@ export function createInferenceGateway(input: GatewayInput) {
         if(signal.aborted)throw new Error("aborted");
         const model=candidates[attempt];
         if(input.models.some(entry=>entry.id===model&&modelExpired(entry)))throw new Fault(422,"model_expired","Selected model has expired.");
-        if(attempt){flush();current={at:new Date().toISOString(),requestId,requestedModel:safeModel(requested),resolvedModel:model,decision:"fallback",reason:"explicit_transient_fallback"};}
+        if(attempt){flush();current={at:new Date().toISOString(),requestId,requestedModel:safeModel(requested),resolvedModel:model,decision:"fallback",reason:"explicit_transient_fallback",...(effort.success?{reasoningEffort:effort.data}:{})};}
         const payload=structuredClone(body);
         if(gemini) {if(payload.model!==undefined)payload.model=`models/${model}`;if(payload.generateContentRequest?.model!==undefined)payload.generateContentRequest.model=`models/${model}`;}
         else payload.model=model;
         const guidance=renderModelGuidance({harness:input.harness,providerId:input.providerId,baseUrl:input.baseUrl,model,compiled:policy,catalogPath:input.catalogPath});
-        const outgoing=injectModelGuidance(input.protocol,payload,guidance,match?.[2]);
+        const compatible=input.harness==="codex"&&input.protocol==="openai-responses"&&new URL(input.baseUrl).hostname!=="api.openai.com"?normalizeCodexDelegation(payload):payload;
+        const outgoing=injectModelGuidance(input.protocol,compatible,guidance,match?.[2]);
         const path=gemini?`/models/${encodeURIComponent(model)}:${match![2]}${url.search}`:suffix+(betaQuery?"?beta=true":"");
         try {response=await fetch(endpoint(input.baseUrl)+path,{method:"POST",headers,body:JSON.stringify(outgoing),redirect:"manual",signal});}
         catch {current.reason=signal.aborted?"request_cancelled":"network_error";if(!signal.aborted&&attempt+1<candidates.length)continue;throw new Error("provider_request_failed");}

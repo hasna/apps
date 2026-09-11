@@ -442,7 +442,7 @@ export function registerDomainCommand(program: Command): void {
 
   domain
     .command("whois <name>")
-    .description("Run WHOIS lookup and update local DB record")
+    .description("Run WHOIS lookup and update the portfolio record")
     .option("-j, --json", "Output JSON")
     .action(async (name: string, opts: { json?: boolean }) => {
       try {
@@ -568,7 +568,7 @@ export function registerDomainCommand(program: Command): void {
 
   domain
     .command("sync")
-    .description("Sync domains from a provider to the local DB")
+    .description("Sync domains from a provider to the portfolio")
     .option("--provider <name>", "Provider name (default: all configured)")
     .action(async (opts: { provider?: string }) => {
       const providers = opts.provider
@@ -1003,7 +1003,7 @@ export function registerDomainCommand(program: Command): void {
           }
         }
 
-        // 5. Sync to local DB
+        // 5. Sync to portfolio
         writeStdout(opts.wait ? "[5/5] Adding to portfolio... " : "[4/4] Adding to portfolio... ");
         const existing = await getDomainByName(name);
         const dbInput = { registrar: `AWS Route 53`, status: "active" as const, auto_renew: true, nameservers };
