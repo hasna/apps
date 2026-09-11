@@ -3,8 +3,8 @@
   "name": "conversations",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.13.4",
-  "description": "Real-time messaging + coordination for AI agents: channels, messages, projects, presence, tasks. CLI + MCP + HTTP API (conversations-serve) + generated SDK. The CLI, MCP server and library resolve the credential and the service authority through the @hasna/contracts client chain (HASNA_CONVERSATIONS_API_KEY, the macOS Keychain item hasna.credentials.conversations.api-key, ~/.hasna/conversations/config/credentials; authority HASNA_CONVERSATIONS_API_URL or the fleet gateway https://api.hasna.com/conversations). Hosted runs fail closed without a resolvable credential; the on-box SQLite store is reachable only by the explicit HASNA_CONVERSATIONS_DB_PATH opt-in. conversations-serve reads PostgreSQL selected by HASNA_CONVERSATIONS_DATABASE_URL.",
+  "kitVersion": "0.10.6",
+  "description": "Real-time messaging + coordination for AI agents: channels, messages, projects, presence, tasks. CLI + MCP + HTTP API (conversations-serve) + generated SDK. The CLI, MCP server, hook and library are API-only: they resolve the credential and the service authority through the @hasna/contracts client chain (macOS Keychain item hasna.credentials.conversations.api-key, ~/.hasna/conversations/config/credentials, HASNA_CONVERSATIONS_API_KEY; authority HASNA_CONVERSATIONS_API_URL or the fleet gateway https://api.hasna.com/conversations) and fail closed without a resolvable credential. No client surface opens a local database; HASNA_CONVERSATIONS_DB_PATH is rejected. conversations-serve reads PostgreSQL selected by HASNA_CONVERSATIONS_DATABASE_URL.",
   "bins": [
     "conversations",
     "conversations-mcp",
@@ -48,26 +48,24 @@
       "kind": "cli",
       "status": "supported",
       "bin": "conversations",
-      "authMode": "local-only"
+      "authMode": "api-key"
     },
     {
       "name": "conversations-mcp",
       "kind": "mcp",
       "status": "supported",
       "mcpBin": "conversations-mcp",
-      "authMode": "local-only"
+      "authMode": "api-key"
     }
   ],
   "storage": {
     "backend": "postgresql",
     "engines": [
-      "sqlite",
       "postgresql"
     ],
     "envPrefix": "HASNA_CONVERSATIONS_",
     "aliasEnvPrefix": "CONVERSATIONS_",
-    "databaseUrlSecretRef": "hasna/oss/conversations/database-url",
-    "sqlitePath": "~/.hasna/conversations/conversations.db"
+    "databaseUrlSecretRef": "hasna/oss/conversations/database-url"
   },
   "metadata": {
     "service": {

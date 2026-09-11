@@ -24,11 +24,43 @@ function compactPathParts(parts: Array<string | undefined>): string[] {
   return result;
 }
 
+/**
+ * The Bun global install's dependency bin directory.
+ *
+ * `bun add -g <pkg>` symlinks ONLY the directly-installed package's `bin`
+ * entries into `$BUN_INSTALL/bin`. The bins of everything else it resolves —
+ * every transitive dependency — are materialized at
+ * `$BUN_INSTALL/install/global/node_modules/.bin`, a directory bun never puts
+ * on PATH.
+ *
+ * So a companion CLI that is installed as a *dependency* rather than as its
+ * own top-level global package is "not found" (exit 127) even though it is on
+ * the machine and on PATH's own terms healthy. `accounts` is the live example
+ * on this fleet: it is present at
+ * `~/.bun/install/global/node_modules/@hasna/accounts` and at
+ * `~/.bun/install/global/node_modules/.bin/accounts`, while `~/.bun/bin`
+ * contains no `accounts` link at all.
+ *
+ * Measured 2026-09-10 on bun 1.3.14; npm 11 behaves the same way (only the
+ * top-level package's bins reach the prefix bin dir; the rest land in
+ * `<pkg>/node_modules/.bin`). Neither package manager can be configured out of
+ * this, and it is not fixable from a package manifest — the fix is to search
+ * the directory the install actually wrote.
+ */
+export function bunGlobalDependencyBinDirs(env: NodeJS.ProcessEnv = process.env): string[] {
+  const home = env.HOME || homedir();
+  const installRoots = [env.BUN_INSTALL, join(home, ".bun")];
+  return compactPathParts(
+    installRoots.map((root) => (root ? join(root, "install", "global", "node_modules", ".bin") : undefined)),
+  );
+}
+
 export function commonExecutableDirs(env: NodeJS.ProcessEnv = process.env): string[] {
   const home = env.HOME || homedir();
   return compactPathParts([
     join(home, ".local", "bin"),
     join(home, ".bun", "bin"),
+    ...bunGlobalDependencyBinDirs(env),
     join(home, ".cargo", "bin"),
     join(home, ".npm-global", "bin"),
     join(home, "bin"),

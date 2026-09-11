@@ -26,6 +26,7 @@ import packageJson from "../../package.json";
 const root = join(import.meta.dir, "..", "..");
 const SDK_ENTRY = "./src/sdk/index.ts";
 const ROOT_ENTRY = "./src/index.ts";
+const LOCAL_STORE_ENTRY = "./src/lib/store/local-store.ts";
 const outDirs: string[] = [];
 
 afterEach(() => {
@@ -93,8 +94,14 @@ describe("dist/sdk/index.js is self-contained", () => {
     expect(code).toContain("IDENTITY_NOT_SET");
   });
 
-  test("positive control: the ROOT bundle (which ships the LocalStore) does import bun:sqlite", () => {
+  test("the ROOT bundle is API-only too: it no longer imports bun:sqlite", () => {
     const code = build(ROOT_ENTRY);
+    const specifiers = importSpecifiers(code);
+    expect(specifiers).not.toContain("bun:sqlite");
+  });
+
+  test("positive control: the test-only LocalStore module does import bun:sqlite", () => {
+    const code = build(LOCAL_STORE_ENTRY);
     const specifiers = importSpecifiers(code);
     expect(specifiers).toContain("bun:sqlite");
   });

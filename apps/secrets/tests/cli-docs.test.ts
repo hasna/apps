@@ -28,7 +28,9 @@ describe("CLI docs", () => {
     expect(stdout).toContain("Agents connect over stdio by running:");
     expect(stdout).toContain("secrets mcp");
     expect(stdout).toContain("secrets mcp http --port 8848");
-    expect(stdout).toContain("secrets import-env --dir ~/.secrets --dry-run");
+    // The ~/.secrets env-file bridge is gone; the docs must not advertise it.
+    expect(stdout).not.toContain("import-env");
+    expect(stdout).not.toContain("export-env");
     expect(stdout).toContain("secrets export");
     expect(stdout).toContain("secrets scan workspace --limit 50");
   });

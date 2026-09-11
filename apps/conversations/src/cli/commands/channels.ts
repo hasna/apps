@@ -2,7 +2,6 @@ import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 // Reads/writes route through getStore(): ApiStore (HTTP API) or LocalStore.
-import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { previewText, windowItems } from "../../lib/compact-output.js";
 import { assertNoSensitiveContent } from "../../lib/content-safety.js";
@@ -80,7 +79,6 @@ function parseChannelTagsOption(raw: string): string[] {
 
 function failCommand(error: unknown, fallback: string): never {
   printErrorLine(chalk.red(error instanceof Error ? error.message : fallback));
-  closeDb();
   process.exit(1);
 }
 
@@ -141,7 +139,6 @@ export function registerChannelCommands(program: Command): void {
         // how to render an HTTP failure with its reason/hint instead of a bare message.
         throw e;
       }
-      closeDb();
     });
 
   channel
@@ -195,7 +192,6 @@ export function registerChannelCommands(program: Command): void {
           });
         }
       }
-      closeDb();
     });
 
   channel
@@ -266,7 +262,6 @@ export function registerChannelCommands(program: Command): void {
         printErrorLine(chalk.red(e.message));
         process.exit(1);
       }
-      closeDb();
     });
 
   channel
@@ -302,7 +297,6 @@ export function registerChannelCommands(program: Command): void {
         printErrorLine(chalk.red(e.message));
         process.exit(1);
       }
-      closeDb();
     });
 
   channel
@@ -328,7 +322,6 @@ export function registerChannelCommands(program: Command): void {
         printErrorLine(chalk.red(e.message));
         process.exit(1);
       }
-      closeDb();
     });
 
   channel
@@ -354,7 +347,6 @@ export function registerChannelCommands(program: Command): void {
         printErrorLine(chalk.red(e.message));
         process.exit(1);
       }
-      closeDb();
     });
 
   channel
@@ -409,7 +401,6 @@ export function registerChannelCommands(program: Command): void {
       } catch (error) {
         return failCommand(error, "Failed to link channel messages to their project.");
       }
-      closeDb();
     });
 
   channel
@@ -448,7 +439,6 @@ export function registerChannelCommands(program: Command): void {
       } catch (error) {
         return failCommand(error, "Failed to roll back channel project-message linkage.");
       }
-      closeDb();
     });
 
   channel
@@ -514,7 +504,6 @@ export function registerChannelCommands(program: Command): void {
       } catch (error) {
         return failCommand(error, "Failed to merge channels.");
       }
-      closeDb();
     });
 
   channel
@@ -601,7 +590,6 @@ export function registerChannelCommands(program: Command): void {
       } else {
         printLine(chalk.green(`Message sent to #${channelArg}`) + chalk.dim(` (uuid: ${msg.uuid}, id: ${msg.id})`));
       }
-      closeDb();
     });
 
   channel
@@ -664,7 +652,6 @@ export function registerChannelCommands(program: Command): void {
           });
         }
       }
-      closeDb();
     });
 
   channel
@@ -698,7 +685,6 @@ export function registerChannelCommands(program: Command): void {
       } else {
         printLine(chalk.green(`${agent} joined #${channelArg}`));
       }
-      closeDb();
     });
 
   channel
@@ -731,7 +717,6 @@ export function registerChannelCommands(program: Command): void {
           printLine(chalk.dim(`${agent} was not a member of #${channelArg}`));
         }
       }
-      closeDb();
     });
 
   channel
@@ -765,7 +750,6 @@ export function registerChannelCommands(program: Command): void {
         printErrorLine(chalk.red(e.message));
         process.exit(1);
       }
-      closeDb();
     });
 
   channel
@@ -795,7 +779,6 @@ export function registerChannelCommands(program: Command): void {
       } else {
         printLine(chalk.dim(`${agent} had no notification subscription for #${channelArg}`));
       }
-      closeDb();
     });
 
   channel
@@ -846,7 +829,6 @@ export function registerChannelCommands(program: Command): void {
           sort: CHANNEL_SUBSCRIPTION_AGENT_ORDER,
         });
       }
-      closeDb();
     });
 
   channel
@@ -898,6 +880,5 @@ export function registerChannelCommands(program: Command): void {
           });
         }
       }
-      closeDb();
     });
 }

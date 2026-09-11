@@ -1,8 +1,9 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import {
+  bunGlobalDependencyBinDirs,
   commandNotFoundMessage,
   commonExecutableDirs,
   executableExists,
@@ -25,6 +26,58 @@ describe("env", () => {
     expect(dirs).toContain("/opt/npm-global/bin");
     expect(dirs).toContain("/usr/bin");
     expect(dirs).toContain("/bin");
+  });
+
+  test("commonExecutableDirs searches the Bun global dependency bin dir, which is never on PATH", () => {
+    const dirs = commonExecutableDirs({
+      HOME: "/home/example",
+      BUN_INSTALL: "/opt/bun",
+    });
+    // `bun add -g <pkg>` links only the top-level package's bins into
+    // `<BUN_INSTALL>/bin`; every transitive dependency's bins are materialized
+    // here instead, and bun does not export this directory.
+    expect(dirs).toContain("/opt/bun/install/global/node_modules/.bin");
+    // The default install root must be searched even with BUN_INSTALL unset.
+    expect(commonExecutableDirs({ HOME: "/home/example" })).toContain(
+      "/home/example/.bun/install/global/node_modules/.bin",
+    );
+    expect(bunGlobalDependencyBinDirs({ HOME: "/home/example", BUN_INSTALL: "/opt/bun" })).toEqual([
+      "/opt/bun/install/global/node_modules/.bin",
+      "/home/example/.bun/install/global/node_modules/.bin",
+    ]);
+  });
+
+  test("normalizeExecutionPath resolves a dependency-installed CLI that bun left unlinked in $BUN_INSTALL/bin", () => {
+    // The real shape of a station global install, reproduced on disk:
+    //
+    //   <BUN_INSTALL>/bin/                                     <- top-level links only
+    //   <BUN_INSTALL>/install/global/node_modules/@hasna/accounts
+    //   <BUN_INSTALL>/install/global/node_modules/.bin/accounts <- the CLI itself
+    //
+    // `accounts` is installed as a dependency, so no `<BUN_INSTALL>/bin/accounts`
+    // symlink exists — the preflight's `command -v accounts` sees nothing and the
+    // remote bootstrap exits 127 on a healthy machine. The resolver is the fix.
+    const root = mkdtempSync(join(tmpdir(), "loops-env-bun-global-"));
+    const bunInstall = join(root, "bun");
+    const topLevelBin = join(bunInstall, "bin");
+    const dependencyBin = join(bunInstall, "install", "global", "node_modules", ".bin");
+    mkdirSync(topLevelBin, { recursive: true });
+    mkdirSync(dependencyBin, { recursive: true });
+    const dependencyCli = join(dependencyBin, "openloops-env-accounts");
+    writeFileSync(dependencyCli, "#!/bin/sh\nexit 0\n");
+    chmodSync(dependencyCli, 0o755);
+    try {
+      const env = { HOME: root, BUN_INSTALL: bunInstall, PATH: "/usr/bin:/bin" };
+      // The contract: bun produced no top-level link, so PATH alone cannot see it…
+      expect(existsSync(join(topLevelBin, "openloops-env-accounts"))).toBe(false);
+      expect(executableExists("openloops-env-accounts", env)).toBe(false);
+      // …and the resolution path the executor actually hands its children does.
+      const resolved = { ...env, PATH: normalizeExecutionPath(env) };
+      expect(executableExists("openloops-env-accounts", resolved)).toBe(true);
+      expect(normalizeExecutionPath(env)).toContain(dependencyBin);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("commonExecutableDirs drops blank and duplicate entries", () => {

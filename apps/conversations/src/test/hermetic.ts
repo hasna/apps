@@ -92,9 +92,22 @@ export function installNetworkGuard(options: { allowLoopback?: boolean } = {}): 
   return () => { globalThis.fetch = original; };
 }
 
+/**
+ * The HOME anchor a spawned CLI/MCP process must inherit so it resolves the
+ * same throw-away home as the test run (see src/test/preload.ts). Spread this
+ * into every hand-built child env.
+ */
+export function hermeticHomeEnv(): Record<string, string> {
+  // HOME only: a fixture that hands the child its own HOME (with the credential
+  // file under it) must win, and an exported HASNA_HOME would out-rank it in the
+  // @hasna/contracts chain. Spread this FIRST, then the fixture env.
+  const home = process.env.HOME;
+  return home === undefined ? {} : { HOME: home };
+}
+
 export function hermeticSpawnEnv(overrides: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const key of ["PATH", "TMPDIR", "LANG", "LC_ALL"] as const) {
+  for (const key of ["PATH", "TMPDIR", "LANG", "LC_ALL", "HOME"] as const) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
