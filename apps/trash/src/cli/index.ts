@@ -1,5 +1,5 @@
-/** CLI entry — `<name>` bin. */
-import { hello } from "./index.js";
+/** CLI entry — `trash` bin. Emitted to `dist/cli/index.js`. */
+import { hello } from "../index.js";
 
 const arg = process.argv[2] ?? "world";
 if (process.argv.includes("--version")) {

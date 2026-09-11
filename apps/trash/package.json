@@ -1,13 +1,13 @@
 {
-  "name": "@hasna/__MEMBER__",
+  "name": "@hasna/trash",
   "version": "0.0.0",
   "type": "module",
-  "description": "__MEMBER_DESC__",
+  "description": "Reversible deletion for agents - deletes land in a trash store, sync to cloud, expire on a chosen retention",
   "license": "Apache-2.0",
   "bin": {
-    "__MEMBER__": "dist/cli/index.js",
-    "__MEMBER__-mcp": "dist/mcp/index.js",
-    "__MEMBER__-serve": "dist/serve/index.js"
+    "trash": "dist/cli/index.js",
+    "trash-mcp": "dist/mcp/index.js",
+    "trash-serve": "dist/serve/index.js"
   },
   "exports": {
     ".": {
@@ -42,7 +42,7 @@
     "contract:check": "bunx --bun @hasna/contracts@0.11.1 repo-conformance .",
     "verify": "bun run typecheck && bun run test && bun run build && bun run contract:check",
     "test:postgres": "bun scripts/pg-test-gate.mjs",
-    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/__MEMBER__-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan __MEMBER__-artifact-scan.tgz; rc=$?; rm -f \"$PWD/__MEMBER__-artifact-scan.tgz\"; exit $rc",
+    "scan:artifact": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/trash-artifact-scan.tgz\" && bunx @hasna/contracts@0.11.1 artifact-scan trash-artifact-scan.tgz; rc=$?; rm -f \"$PWD/trash-artifact-scan.tgz\"; exit $rc",
     "prepack": "bun run verify && bun run scan:artifact"
   },
   "devDependencies": {

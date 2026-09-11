@@ -1,0 +1,25 @@
+{
+  // Self-contained (mirrors the options of the repo-root tsconfig.base.json)
+  // so the generated member builds standalone — the Dockerfile build copies
+  // only package.json + tsconfig.json + src into the image, where the repo
+  // root base config does not exist. Matches the fleet member shape: 0 of 80
+  // members extend the base; every member carries its own config.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "rootDir": "src"
+  },
+  "include": ["src"]
+}
