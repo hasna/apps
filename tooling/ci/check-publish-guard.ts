@@ -3,7 +3,8 @@
  * published tarball.
  *
  * For every member package, dry-run `npm pack` and scan the resulting file
- * list for internal-infra strings: `*.hasna.xyz`, ARNs, 12-digit AWS account
+ * list for internal-infra strings: `*.hasna.xyz` (every spelling, template
+ * forms included — see INTERNAL_PATTERNS and CONTENT_EXCEPTIONS), ARNs, 12-digit AWS account
  * ids, the private-scope markers, the internal platform account id, and local
  * filesystem paths from an out-of-root build. A public npm package that
  * carries any of these leaks Hasna's internal estate — or an author's machine
@@ -43,14 +44,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 const INTERNAL_PATTERNS: Array<{ name: string; re: RegExp; contentRe?: RegExp }> = [
-  // The content form of the domain detector requires a CONCRETE label before
-  // `.hasna.xyz`. The strict name scan keeps the catch-all; the content form
-  // drops the measured benign class of placeholder templates in runtime host
-  // resolution and docs — `https://${name}.hasna.xyz`, `<app>.hasna.xyz` —
-  // which carry no internal identity (measured on @hasna/secrets
-  // transport.ts host default and its bundled docs). Concrete subdomains
-  // (`secrets.hasna.xyz`, `telephony.hasna.xyz`) still fire in content.
-  { name: "hasna-xyz-domain", re: /[.]hasna[.]xyz/, contentRe: /[a-z0-9-]+[.]hasna[.]xyz/ },
+  // The content form of the domain detector fires on EVERY spelling of the
+  // internal origin domain: a concrete label (`secrets.hasna.xyz`), a
+  // placeholder template (`<app>.hasna.xyz`, `${name}.hasna.xyz`,
+  // `*.hasna.xyz`) and the bare apex (`hasna.xyz`). Until 2026-09-11 the
+  // template forms were deliberately excused as "no internal identity"; the
+  // fleet-alignment ruling (c) retires the origin domain from every public
+  // artifact — the gateway `https://api.hasna.com/<app>` is the only
+  // authority a package may name — so the template form is exactly the
+  // string a consumer would copy into a config. Measured on the fully built
+  // tree (npm pack --dry-run per member, 2026-09-11): the flip fires on six
+  // members' comments and docs only, each recorded in CONTENT_EXCEPTIONS with
+  // its owner; nothing fires in code.
+  { name: "hasna-xyz-domain", re: /[.]hasna[.]xyz/, contentRe: /(?:^|[^A-Za-z0-9_])hasna[.]xyz\b|[.]hasna[.]xyz\b/im },
   // The content form of the ARN detector requires an account-bearing or
   // concrete-resource ARN. The strict name scan keeps the catch-all; the
   // content form drops the measured benign class of placeholder templates in
@@ -122,6 +128,43 @@ const INTERNAL_PATTERNS: Array<{ name: string; re: RegExp; contentRe?: RegExp }>
   { name: "local-home-path", re: /\/(Users|home)\/[A-Za-z0-9._-]+[/]|C:[/\\]{1,2}Users[/\\]/i, contentRe: /C:[/\\]{1,2}Users[/\\]/i },
 ];
 
+/**
+ * Recorded content exceptions — two-sided, like the census registries.
+ *
+ * Each entry names a member, the packed entry (regex over the tarball path)
+ * and the pattern it may match, with the reason and the owner who removes
+ * it. A hit that matches an entry is reported as `excepted` and does not
+ * fail the guard. An entry whose packed file is present in this run's pack
+ * list but no longer matches is STALE and fails the guard (delete it). An
+ * entry whose file is absent from the pack list (the member's dist was not
+ * built at guard time) is neither honored nor stale — it is skipped, so an
+ * unbuilt member cannot mask a leak or manufacture a red.
+ *
+ * Measured 2026-09-11 on the fully built tree after the hasna-xyz-domain
+ * content form was widened to template spellings: six files, all comments
+ * or docs explaining the pre-gateway origin. Owner: the member's
+ * fleet-alignment PR (W6 for todos; the member lane otherwise).
+ */
+export const CONTENT_EXCEPTIONS: Array<{ member: string; entry: RegExp; pattern: string; reason: string }> = [
+  { member: "conversations", entry: /^dist\/lib\/store\/status-location\.d\.ts$/, pattern: "hasna-xyz-domain", reason: "doc comment names the `<app>.hasna.xyz` origin as the pre-#1512 todos exception; scrub with the status-location rewrite." },
+  { member: "economy", entry: /^dist\/lib\/api-display-url\.d\.ts$/, pattern: "hasna-xyz-domain", reason: "doc comment names the `<app>.hasna.xyz` origin as the pre-#1512 todos exception; scrub with the api-display-url rewrite." },
+  { member: "secrets", entry: /^dist\/api-display-url\.d\.ts$/, pattern: "hasna-xyz-domain", reason: "doc comment names the `<app>.hasna.xyz` origin as the pre-#1512 todos exception; scrub with the api-display-url rewrite." },
+  { member: "telephony", entry: /^src\/lib\/request-origin\.ts$/, pattern: "hasna-xyz-domain", reason: "packed source comment explains forwarded-origin recovery with a `<app>.hasna.xyz` example; reword to the gateway form." },
+  { member: "guardrails", entry: /^docs\/boundaries\.md$/, pattern: "hasna-xyz-domain", reason: "boundaries doc explains the gateway→origin hop with `<app>.hasna.xyz`; reword to 'origin' once the origins are private." },
+  { member: "todos", entry: /^docs\/native-storage\.md$/, pattern: "hasna-xyz-domain", reason: "native-storage doc names the `<app>.hasna.xyz` origin; reword to the gateway form (W6 todos alignment PR)." },
+];
+
+/**
+ * A CHANGELOG is release history: an entry that says "removed the
+ * *.hasna.xyz default" must be allowed to say so. Only the domain pattern is
+ * exempted there — an ARN or account id in a changelog is still a leak.
+ */
+const CHANGELOG_EXEMPT_PATTERNS = new Set(["hasna-xyz-domain"]);
+
+function isChangelog(entryName: string): boolean {
+  return path.basename(entryName) === "CHANGELOG.md";
+}
+
 function memberPackages(root: string): string[] {
   const apps = path.join(root, "apps");
   if (!fs.existsSync(apps)) return [];
@@ -180,6 +223,7 @@ function scanContents(
     }
     const text = buf.toString("utf-8");
     for (const p of INTERNAL_PATTERNS) {
+      if (isChangelog(name) && CHANGELOG_EXEMPT_PATTERNS.has(p.name)) continue;
       if ((p.contentRe ?? p.re).test(text)) hits.push({ name, pattern: p.name });
     }
     scanned++;
@@ -379,7 +423,7 @@ function missingDeclaredBins(pkgDir: string, names: string[]): string[] {
     .filter((p) => p.length > 0 && !names.includes(p));
 }
 
-function run(root: string): number {
+function run(root: string, exceptions: typeof CONTENT_EXCEPTIONS = CONTENT_EXCEPTIONS): number {
   const pkgs = memberPackages(root);
   if (pkgs.length === 0) {
     console.log("publish guard: 0 member packages — nothing to scan");
@@ -419,15 +463,26 @@ function run(root: string): number {
     }
     const nameHits = scanNames(names);
     const content = scanContents(pkg, names);
-    const hits = [...nameHits, ...content.hits];
+    const member = path.basename(pkg);
+    const mine = exceptions.filter((e) => e.member === member);
+    const isExcepted = (h: { name: string; pattern: string }) => mine.some((e) => e.pattern === h.pattern && e.entry.test(h.name));
+    const excepted = content.hits.filter(isExcepted);
+    const hits = [...nameHits, ...content.hits.filter((h) => !isExcepted(h))];
+    // Two-sided: an exception whose packed file is present but clean is stale.
+    const stale = mine.filter((e) => names.some((n) => e.entry.test(n)) && !content.hits.some((h) => h.pattern === e.pattern && e.entry.test(h.name)));
+    for (const e of stale) {
+      failed = true;
+      console.error(`PUBLISH-GUARD STALE EXCEPTION in ${pkg}: ${e.entry} no longer matches ${e.pattern} — delete its CONTENT_EXCEPTIONS entry`);
+    }
     const skippedNote = content.skipped > 0 ? `, ${content.skipped} binary/oversize/absent skipped` : "";
+    const exceptedNote = excepted.length > 0 ? `, ${excepted.length} recorded exception(s): ${excepted.map((h) => h.name).join(", ")}` : "";
     if (hits.length > 0) {
       failed = true;
       console.error(`PUBLISH-GUARD VIOLATION in ${pkg} (${hits.length}):`);
       for (const h of hits) console.error(`  ${h.name} — pattern ${h.pattern}`);
     } else {
       console.log(
-        `publish guard: ${path.basename(pkg)} — ${names.length} tarball entries, ${content.scanned} contents scanned, 0 internal-infra strings${skippedNote}`,
+        `publish guard: ${member} — ${names.length} tarball entries, ${content.scanned} contents scanned, 0 internal-infra strings${skippedNote}${exceptedNote}`,
       );
     }
   }
@@ -623,18 +678,72 @@ function selfTest(): number {
       "self-test-template",
       ["policy.json"],
       false,
-      {
-        "policy.json":
-          `{"Resource": "arn:aws:s3:::${"${bucket}"}/*"}\n` +
-          `{"Host": "https://${"${name}"}.hasna.xyz"}\n`,
-      },
+      { "policy.json": `{"Resource": "arn:aws:s3:::${"${bucket}"}/*"}\n` },
     );
     const template = capture(() => run(templateRoot));
     const templateOut = template.lines.join("\n");
     check(
-      "placeholder ARN/domain templates in CONTENT stay SILENT (rc=0, no violation)",
+      "placeholder ARN template in CONTENT stays SILENT (rc=0, no violation)",
       template.rc === 0 && !templateOut.includes("PUBLISH-GUARD VIOLATION"),
     );
+
+    // Domain spellings (ruling c): the template form `${name}.hasna.xyz`,
+    // the `<app>.hasna.xyz` form and the bare apex all FIRE in content now;
+    // a CHANGELOG entry naming the domain does not (release history).
+    const domainRoot = path.join(root, "domain-root");
+    fs.mkdirSync(domainRoot, { recursive: true });
+    fixturePackage(
+      path.join(domainRoot, "apps"),
+      "self-test-domain",
+      ["host.json", "readme.md", "apex.txt", "CHANGELOG.md"],
+      false,
+      {
+        "host.json": `{"Host": "https://${"${name}"}.hasna.xyz"}\n`,
+        "readme.md": "The origin is `https://<app>.hasna.xyz` behind the gateway.\n",
+        "apex.txt": `apex ${"hasna" + "." + "xyz"} only\n`,
+        "CHANGELOG.md": `- removed the *.${"hasna" + "." + "xyz"} default\n`,
+      },
+    );
+    const domain = capture(() => run(domainRoot));
+    const domainOut = domain.lines.join("\n");
+    check(
+      "template `${name}.hasna.xyz`, `<app>.hasna.xyz` and bare apex in CONTENT FIRE (rc=1, three entries named)",
+      domain.rc === 1 && domainOut.includes("data/host.json") && domainOut.includes("data/readme.md") && domainOut.includes("data/apex.txt"),
+    );
+    check("a CHANGELOG naming the domain stays SILENT (release history)", !domainOut.includes("data/CHANGELOG.md"));
+
+    // Recorded exception arms: an entry silences exactly its file; a stale
+    // entry (file packed, pattern absent) FAILS the guard.
+    const excepted = capture(() =>
+      run(domainRoot, [
+        { member: "self-test-domain", entry: /^data\/host\.json$/, pattern: "hasna-xyz-domain", reason: "fixture" },
+        { member: "self-test-domain", entry: /^data\/readme\.md$/, pattern: "hasna-xyz-domain", reason: "fixture" },
+        { member: "self-test-domain", entry: /^data\/apex\.txt$/, pattern: "hasna-xyz-domain", reason: "fixture" },
+      ]),
+    );
+    const exceptedOut = excepted.lines.join("\n");
+    check(
+      "recorded content exceptions silence exactly their entries (rc=0, 3 recorded exceptions reported)",
+      excepted.rc === 0 && exceptedOut.includes("3 recorded exception(s)") && !exceptedOut.includes("PUBLISH-GUARD VIOLATION"),
+    );
+    const stale = capture(() =>
+      run(domainRoot, [
+        { member: "self-test-domain", entry: /^data\/host\.json$/, pattern: "hasna-xyz-domain", reason: "fixture" },
+        { member: "self-test-domain", entry: /^data\/readme\.md$/, pattern: "hasna-xyz-domain", reason: "fixture" },
+        { member: "self-test-domain", entry: /^data\/apex\.txt$/, pattern: "hasna-xyz-domain", reason: "fixture" },
+        { member: "self-test-domain", entry: /^data\/CHANGELOG\.md$/, pattern: "hasna-xyz-domain", reason: "fixture: packed but exempt -> stale" },
+      ]),
+    );
+    check("a stale recorded exception (file packed, no hit) FAILS the guard", stale.rc === 1 && stale.lines.join("\n").includes("STALE EXCEPTION"));
+    const unbuiltException = capture(() =>
+      run(domainRoot, [
+        { member: "self-test-domain", entry: /^data\/host\.json$/, pattern: "hasna-xyz-domain", reason: "fixture" },
+        { member: "self-test-domain", entry: /^data\/readme\.md$/, pattern: "hasna-xyz-domain", reason: "fixture" },
+        { member: "self-test-domain", entry: /^data\/apex\.txt$/, pattern: "hasna-xyz-domain", reason: "fixture" },
+        { member: "self-test-domain", entry: /^dist\/not-built\.d\.ts$/, pattern: "hasna-xyz-domain", reason: "fixture: not in the pack list -> skipped, not stale" },
+      ]),
+    );
+    check("an exception whose file is absent from the pack list is skipped, not stale (rc=0)", unbuiltException.rc === 0);
 
     // Local-filesystem-path checks (issue #1774). The exact #1708 defect
     // shape — a bundler banner comment escaping the checkout into the

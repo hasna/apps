@@ -60,18 +60,20 @@ export interface ScaffoldProduct {
   changesetRaw: string;
   binPaths: string[];
   entries: string[];
+  manifest: Record<string, unknown>;
+  memberDir: string;
 }
 
 /** Run the generator into `root` and read back the parts the gates care about. */
-export function generateInto(root: string): ScaffoldProduct {
+export function generateInto(root: string, name = "probe-member"): ScaffoldProduct {
   fs.mkdirSync(path.join(root, ".changeset"), { recursive: true });
-  const run = spawnSync(process.execPath, [GENERATOR, "probe-member", "probe member", "--out", root], {
+  const run = spawnSync(process.execPath, [GENERATOR, name, "probe member", "--out", root], {
     encoding: "utf8",
   });
   if (run.status !== 0) {
     throw new Error(`generator exited ${run.status}: ${run.stderr || run.stdout}`);
   }
-  const memberDir = path.join(root, "apps", "probe-member");
+  const memberDir = path.join(root, "apps", name);
   const pkg = JSON.parse(fs.readFileSync(path.join(memberDir, "package.json"), "utf8")) as { bin?: Record<string, string> };
   const entries: string[] = [];
   const stack = [path.join(memberDir, "src")];
@@ -84,10 +86,30 @@ export function generateInto(root: string): ScaffoldProduct {
     }
   }
   return {
-    changesetRaw: fs.readFileSync(path.join(root, ".changeset", "probe-member-bootstrap.md"), "utf8"),
+    changesetRaw: fs.readFileSync(path.join(root, ".changeset", `${name}-bootstrap.md`), "utf8"),
     binPaths: Object.values(pkg.bin ?? {}),
     entries: entries.sort(),
+    manifest: JSON.parse(fs.readFileSync(path.join(memberDir, "hasna.contract.json"), "utf8")) as Record<string, unknown>,
+    memberDir,
   };
+}
+
+/**
+ * The manifest shapes a generated member must NOT carry (fleet-alignment
+ * rulings d/f, 2026-09-11). Before this gate the template seeded
+ * `storage.backend: sqlite`, a `sqlitePath` and `authMode: local-only` on the
+ * CLI and MCP surfaces, so every new member was born as a silent local store.
+ */
+export function forbiddenManifestShapes(manifest: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const storage = (manifest.storage ?? {}) as Record<string, unknown>;
+  if (storage.backend === "sqlite" || storage.backend === "json") out.push(`storage.backend is ${String(storage.backend)} (must be postgresql)`);
+  if (Array.isArray(storage.engines) && storage.engines.includes("sqlite")) out.push("storage.engines includes sqlite");
+  if (typeof storage.sqlitePath === "string") out.push(`storage.sqlitePath is set (${storage.sqlitePath})`);
+  for (const surface of (manifest.serviceSurfaces ?? []) as Array<Record<string, unknown>>) {
+    if (surface.authMode === "local-only") out.push(`serviceSurfaces[${String(surface.name)}].authMode is local-only (must be api-key)`);
+  }
+  return out;
 }
 
 describe("standard-adherence: member scaffold", () => {
@@ -121,6 +143,48 @@ describe("standard-adherence: member scaffold", () => {
     } finally {
       cleanupSandbox(root);
     }
+  });
+
+  test("the generated manifest is hosted-shaped: no sqlite backend, no sqlitePath, no local-only surface", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "standard-scaffold-manifest-"));
+    try {
+      const product = generateInto(root);
+      expect(forbiddenManifestShapes(product.manifest)).toEqual([]);
+      expect(product.manifest.class).toBe("service");
+    } finally {
+      cleanupSandbox(root);
+    }
+  });
+
+  test("the generated member passes the in-tree `contracts repo-conformance` (the kit this tree ships, not a registry pin)", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "standard-scaffold-conformance-"));
+    try {
+      // Single-word name: every real member is one word, and the kit's own
+      // storage.envPrefix rule is not satisfiable for a hyphenated name
+      // (schema regex ^HASNA_[A-Z][A-Z0-9]*_$ vs the derived HASNA_<A_B>_ —
+      // an @hasna/contracts inconsistency owned by the contracts lane).
+      const product = generateInto(root, "probemember");
+      const cli = path.join(REPO_ROOT, "apps", "contracts", "src", "cli", "index.ts");
+      const run = spawnSync(process.execPath, [cli, "repo-conformance", product.memberDir], { encoding: "utf8", cwd: REPO_ROOT, timeout: 120_000 });
+      const out = `${run.stdout}\n${run.stderr}`;
+      const verdict = out.split("\n").find((l) => /^(ok|fail) hasna\.service_contract\.v1/.test(l.trim()))?.trim() ?? "";
+      expect(verdict, out.slice(0, 2000)).toStartWith("ok ");
+    } finally {
+      cleanupSandbox(root);
+    }
+  }, 180_000);
+
+  test("self-test: the manifest-shape guard fires on the pre-fix template shape and stays silent on the hosted shape", () => {
+    const preFix = {
+      storage: { backend: "sqlite", engines: ["sqlite", "postgresql"], sqlitePath: "~/.hasna/x/x.db" },
+      serviceSurfaces: [{ name: "cli", authMode: "local-only" }, { name: "mcp", authMode: "local-only" }, { name: "http-api", authMode: "api-key" }],
+    };
+    expect(forbiddenManifestShapes(preFix)).toHaveLength(5);
+    const hosted = {
+      storage: { backend: "postgresql", engines: ["postgresql"] },
+      serviceSurfaces: [{ name: "cli", authMode: "api-key" }, { name: "mcp", authMode: "api-key" }],
+    };
+    expect(forbiddenManifestShapes(hosted)).toEqual([]);
   });
 
   test("self-test: the guard fires on the pre-fix changeset shape and stays silent on the fixed one", () => {

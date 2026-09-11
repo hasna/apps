@@ -2,9 +2,9 @@
   "$schema": "./node_modules/@hasna/contracts/src/hasna.contract.schema.json",
   "schema": "hasna.service_contract.v1",
   "name": "__MEMBER__",
-  "class": "cli-with-store",
+  "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.11.1",
+  "kitVersion": "1.0.2",
   "description": "__MEMBER_DESC__",
   "bins": [
     "__MEMBER__",
@@ -52,25 +52,23 @@
       "kind": "mcp",
       "status": "supported",
       "mcpBin": "__MEMBER__-mcp",
-      "authMode": "local-only"
+      "authMode": "api-key"
     },
     {
       "name": "cli",
       "kind": "cli",
       "status": "supported",
       "bin": "__MEMBER__",
-      "authMode": "local-only"
+      "authMode": "api-key"
     }
   ],
   "storage": {
-    "backend": "sqlite",
+    "backend": "postgresql",
     "engines": [
-      "sqlite",
       "postgresql"
     ],
     "envPrefix": "HASNA___MEMBER_UPPER___",
     "aliasEnvPrefix": "__MEMBER_UPPER___",
-    "sqlitePath": "~/.hasna/__MEMBER__/__MEMBER__.db",
     "pgTestGate": {
       "envVar": "__MEMBER_UPPER___TEST_DATABASE_URL",
       "command": "bun scripts/pg-test-gate.mjs"
