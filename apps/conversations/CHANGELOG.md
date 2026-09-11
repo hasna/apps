@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.0
+
+### Minor Changes
+
+- 39d104e: API-only client surfaces. The CLI, MCP server, hook and the `@hasna/conversations` library no longer bundle the on-box SQLite store: `LocalStore` is not exported, `bun:sqlite` is absent from every client bundle (enforced by `src/client-bundles-sqlite-free.test.ts`), the `local-read-worker` bin is gone and `postinstall.js` no longer creates directories under the station home. The station app home is `~/.hasna/conversations` (`HASNA_CONVERSATIONS_HOME` / `HASNA_HOME` overrides only; no XDG or Application Support branches) and holds identity and session bindings only. `hasna.contract.json` now declares all five bins (`conversations`, `conversations-mcp`, `conversations-serve`, `conversations-hook`, `conversations-inbox`), API-key auth for the CLI and MCP surfaces and a PostgreSQL-only storage contract. Tests run against a throw-away HOME (`bunfig.toml` preload) so the suite stops writing into the operator's real home. Removed from the package: the member-level `.github/` workflows, `.cursor/mcp.json`, the macOS shell (`Package.swift`, `Sources/`, `Tests/`) and the unauthenticated local server it spawned (`src/server/serve.ts`), station scripts (`scripts/deploy_apple03.sh`, `scripts/build_conversations_app.sh`, `.scripts/midnight-sync.sh`), the unregistered webhook tools, and `pnpm-workspace.yaml`.
+
+### Patch Changes
+
+- cde7f7e: Every command and MCP tool now works in every transport: `events-drain`, `admin redact-messages` and MCP `send_feedback` gained hosted API paths (`POST /v1/events/outbox/drain`, `POST /v1/admin/redact-messages`, `POST /v1/feedback`), the interactive TUI is Store-backed end to end, and the legacy local-mode-only gates plus the `LOCAL mode` notice wording are retired — the on-box store remains reachable only by the explicit opt-in (`HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH`), never by default (hasna/apps#1897).
+
+  The explicit `HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH` opt-in referenced here was itself retired in this release: every client surface rejects those selectors and no local store remains reachable.
+- 306a015: Prevent duplicate TUI sends while an API response is pending and preserve drafts typed during that request. Restore unchanged safe drafts only for explicit retries after failure, keep sensitive-content errors redacted, retry initial history independently, and handle exact-detail/read-acknowledgement failures in the chat view.
+- 327bd25: Require explicit immutable corpus ownership before API access or readiness. Add owner-role inspection/adoption with inventory proofs, preserve mapped historical registration receipts, and reject wrong-tenant requests without querying corpus data.
+- f50b8c0: Switch @hasna/conversations local path reads/writes through the in-package resolver (XDG/macOS home layout). The legacy `~/.hasna/conversations` data root (with the `HASNA_CONVERSATIONS_HOME` / `CONVERSATIONS_HOME` exact-app overrides layered on top of the existing `HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH` store override) stays the effective data root until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The install-time postinstall now creates the same effective data root (and its `training` subdir) the runtime resolves. The wave-wide resolver dependency (`@hasna/paths@0.1.0`) was deleted 2026-09-03 (hasna/apps#1535); the resolver is now implemented locally in-package.
+
+  Superseded within this same release by the API-only cutover above: the shipped client surfaces resolve only the station app home `~/.hasna/conversations` (`HASNA_CONVERSATIONS_HOME` / `HASNA_HOME` overrides) through `src/lib/home.ts`; the XDG / Application Support resolver, the `HASNA_DATA_HOME` adoption rule and the install-time `postinstall` described here no longer exist in the package.
+
 ## 0.8.0
 
 ### Minor Changes
