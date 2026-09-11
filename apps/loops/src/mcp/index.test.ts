@@ -891,16 +891,21 @@ describe("Loops MCP server", () => {
     }
   });
 
-  test("cloud-flipped MCP fails diagnose/health loudly instead of reading the local island", async () => {
+  // The diagnostics now ANSWER on a hosted connection (see
+  // mcp/hosted-diagnostics.test.ts); what must never happen is the fallback this
+  // test guards: when the hosted control plane cannot be read, the tool fails —
+  // it does not quietly substitute the on-box sqlite island.
+  test("cloud-flipped MCP diagnostics fail loudly rather than read the local island", async () => {
     const root = mkdtempSync(join(tmpdir(), "loops-mcp-cloud-guard-"));
     roots.push(root);
-    // Seed a LOCAL loop so a silent local read would (wrongly) succeed. The guard
-    // must fire before any local access, so this loop must never surface.
+    // Seed a LOCAL loop carrying a marker no hosted answer could contain. A
+    // silent local read would (wrongly) surface it.
     withLoopDataDir(root, () => {
       const store = new Store();
       try {
         store.createLoop({
           name: "local-only-loop",
+          labels: ["local-island-marker"],
           schedule: { type: "interval", everyMs: 60_000 },
           target: { type: "command", command: "true" },
         });
@@ -909,6 +914,7 @@ describe("Loops MCP server", () => {
       }
     });
     const cloudEnv = {
+      // Port 1 refuses connections, so every hosted read fails.
       HASNA_LOOPS_API_URL: "http://127.0.0.1:1",
       HASNA_LOOPS_API_KEY: "test-bearer-key",
     };
@@ -919,9 +925,9 @@ describe("Loops MCP server", () => {
         const result = await client.callTool({ name, arguments: args });
         expect(result.isError).toBe(true);
         const text = JSON.stringify(result.content);
-        expect(text).toContain("not available while flipped");
         // It must NOT have silently returned the seeded local loop.
-        expect(text).not.toContain("local-only-loop");
+        expect(text).not.toContain("local-island-marker");
+        expect(text).not.toContain("expectation");
       }
     } finally {
       await client.close();

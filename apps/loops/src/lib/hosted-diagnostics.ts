@@ -5,9 +5,12 @@ import { ApiStore, HostedResponseShapeError } from "./store/index.js";
 import {
   buildHealthScan,
   buildHealthReport,
+  classifyRunFailure,
+  expectationForLoop,
   RESTART_INTERRUPTED_RUN_PREFIX,
   type BuildHealthScanOptions,
   type HealthSource,
+  type LoopExpectationResult,
   type LoopsHealthReport,
   type LoopsHealthScan,
 } from "./health.js";
@@ -503,5 +506,52 @@ export async function buildHostedDoctorReport(store: LoopStore): Promise<HostedD
     backend: hostedBackend(store),
     report: { ok: checks.every((check) => check.status !== "fail"), checks },
     unchecked,
+  };
+}
+
+export interface HostedLoopDiagnosis {
+  backend: HostedBackend;
+  loop: Loop;
+  expectation: LoopExpectationResult;
+  recentRuns: Array<{ run: LoopRun; failure: ReturnType<typeof classifyRunFailure> }>;
+  unchecked: UncheckedItem[];
+}
+
+/**
+ * Per-loop diagnosis against the hosted control plane: the same expectation
+ * classifier the local tool uses, fed from `/v1` reads instead of sqlite.
+ *
+ * The expectation classifier is synchronous over a {@link HealthSource}, so the
+ * runs it needs are fetched first and served from an in-memory snapshot — the
+ * same shape `buildHostedHealthReport` uses. `runLimit` bounds the classified
+ * window and the bound is reported in `unchecked` rather than implied, because
+ * "no failures in the last N runs" is not "no failures".
+ */
+export async function buildHostedLoopDiagnosis(
+  store: LoopStore,
+  idOrName: string,
+  opts: { runLimit?: number; now?: Date } = {},
+): Promise<HostedLoopDiagnosis> {
+  const runLimit = opts.runLimit ?? 5;
+  const loop = await store.requireLoop(idOrName);
+  const runs = await store.listRuns({ loopId: loop.id, limit: runLimit });
+  const snapshot = new HostedSnapshot([loop], new Map([[loop.id, runs]]));
+  const expectation = expectationForLoop(snapshot, loop, { now: opts.now });
+  return {
+    backend: hostedBackend(store),
+    loop,
+    expectation,
+    recentRuns: runs.map((run) => ({ run, failure: classifyRunFailure(run) })),
+    unchecked: [
+      {
+        id: "run-history-depth",
+        reason: `only the ${runs.length} most recent run(s) (limit ${runLimit}) were classified; older failures are not claimed either way.`,
+      },
+      {
+        id: "local-runtime",
+        reason:
+          "provider binaries, this machine's data directory and its daemon are not inspected by a hosted diagnose; run 'loops doctor' on the executing machine for those.",
+      },
+    ],
   };
 }

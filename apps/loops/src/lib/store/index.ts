@@ -589,6 +589,34 @@ export class ApiStore implements LoopStore {
     const raw = await this.t.get("/loops/count", { query: clean({ status, ...opts }) });
     return Number(pickObject<number>(raw, "count") ?? 0);
   }
+
+  /**
+   * Bulk id-preserving import through `POST /v1/import`.
+   *
+   * Not part of {@link LoopStore}: it is a transport-level bulk write with no
+   * local-store counterpart (the local side applies a plan row by row), so it
+   * lives on the API transport only and callers reach it behind an
+   * `instanceof ApiStore` check rather than through the shared interface.
+   */
+  async importMigration(body: {
+    workflows?: WorkflowSpec[];
+    loops?: Loop[];
+    runs?: LoopRun[];
+    replace?: boolean;
+    preserveLoopScheduling?: boolean;
+    preserveWorkflowActivation?: boolean;
+  }): Promise<{ imported: { workflows: number; loops: number; runs: number }; skippedRunning: number }> {
+    const raw = (await this.t.post("/import", body)) as Record<string, unknown> | undefined;
+    const imported = (raw?.imported ?? {}) as Partial<Record<"workflows" | "loops" | "runs", number>>;
+    return {
+      imported: {
+        workflows: Number(imported.workflows ?? 0),
+        loops: Number(imported.loops ?? 0),
+        runs: Number(imported.runs ?? 0),
+      },
+      skippedRunning: Number(raw?.skippedRunning ?? 0),
+    };
+  }
   async updateLoop(
     id: string,
     patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt" | "labels" | "maxAttempts" | "leaseMs">>,
