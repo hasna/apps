@@ -12,6 +12,7 @@ import { getSource } from "../db/sources.js";
 import { buildOpenFilesFileRef, parseOpenFilesSourceRef } from "./source-ref.js";
 import { extractTextFromBuffer, isExtractableTextMime, type ExtractTextOptions } from "./extraction.js";
 import { buildExtractionSnapshot } from "./extraction-snapshot.js";
+import { mapExtractionStatus } from "./knowledge-shared.js";
 import { resolveFileObject } from "./file-object.js";
 import { createS3ClientConfig } from "./s3.js";
 import type {
@@ -824,13 +825,6 @@ function extractOptions(opts: KnowledgeSourceResolverOptions): ExtractTextOption
     redactor: opts.redactor,
     redact_patterns: opts.redact_patterns,
   };
-}
-
-function mapExtractionStatus(extraction: ExtractedTextResult): KnowledgeSourceResolveStatus {
-  if (extraction.status === "ready" || extraction.status === "empty") return "ready";
-  if (extraction.status === "too_large") return "too_large";
-  if (extraction.status === "unsupported") return "unsupported";
-  return "error";
 }
 
 function formatHash(algorithm: string | undefined, hash: string | undefined): string | undefined {

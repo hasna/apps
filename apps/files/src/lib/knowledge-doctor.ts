@@ -3,6 +3,17 @@ import { getFile } from "../db/files.js";
 import { getFileVersion, getLatestFileVersion } from "../db/file-versions.js";
 import { exportKnowledgeSourceManifest } from "./knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "./knowledge-resolver.js";
+import {
+  actionsFor,
+  addIssue,
+  DOCTOR_DEFAULT_PURPOSE,
+  doctorStatus,
+  normalizeDoctorLimit,
+  recommendationFor,
+  sanitizeStorage,
+  summarizeChecks,
+  uniqueRefs,
+} from "./knowledge-shared.js";
 import { parseOpenFilesSourceRef } from "./source-ref.js";
 import type {
   FileOrganizationAclReviewStatus,
@@ -13,16 +24,10 @@ import type {
   KnowledgeSourceDoctorCheck,
   KnowledgeSourceDoctorIssueCode,
   KnowledgeSourceDoctorOptions,
-  KnowledgeSourceDoctorRecommendation,
   KnowledgeSourceDoctorReport,
-  KnowledgeSourceDoctorStatus,
   KnowledgeSourceManifestFileItem,
-  KnowledgeSourceResolverStorage,
 } from "../types/index.js";
 
-const DEFAULT_PURPOSE = "knowledge_index";
-const DEFAULT_LIMIT = 100;
-const MAX_LIMIT = 1000;
 
 interface AclSummaryRow {
   id: string;
@@ -38,7 +43,7 @@ export async function doctorKnowledgeSources(
   opts: KnowledgeSourceDoctorOptions = {},
 ): Promise<KnowledgeSourceDoctorReport> {
   const generatedAt = new Date().toISOString();
-  const purpose = opts.purpose ?? DEFAULT_PURPOSE;
+  const purpose = opts.purpose ?? DOCTOR_DEFAULT_PURPOSE;
   const requireExtractedText = opts.require_extracted_text ?? true;
   const checkExtractedText = opts.check_extracted_text ?? false;
   const refs = await collectDoctorSourceRefs(opts);
@@ -65,7 +70,7 @@ export async function doctorKnowledgeSources(
 }
 
 async function collectDoctorSourceRefs(opts: KnowledgeSourceDoctorOptions): Promise<string[]> {
-  const limit = normalizeLimit(opts.limit);
+  const limit = normalizeDoctorLimit(opts.limit);
   if (opts.source_refs?.length) return uniqueRefs(opts.source_refs).slice(0, limit);
 
   const manifest = await exportKnowledgeSourceManifest({
@@ -226,98 +231,3 @@ function getKnowledgeSourceAclSummary(fileId: string): KnowledgeSourceDoctorAclS
   };
 }
 
-function doctorStatus(issueCodes: KnowledgeSourceDoctorIssueCode[]): KnowledgeSourceDoctorStatus {
-  if (!issueCodes.length) return "ready";
-  if (issueCodes.includes("not_found")) return "not_found";
-  if (issueCodes.includes("acl_revoked")) return "acl_revoked";
-  if (issueCodes.includes("deleted")) return "deleted";
-  if (issueCodes.includes("stale_revision")) return "stale";
-  if (issueCodes.includes("missing_extracted_text")) return "missing_extracted_text";
-  if (issueCodes.includes("source_disabled") || issueCodes.includes("denied")) return "denied";
-  if (issueCodes.includes("unsupported")) return "unsupported";
-  if (issueCodes.includes("error")) return "error";
-  return "needs_review";
-}
-
-function recommendationFor(issueCodes: KnowledgeSourceDoctorIssueCode[]): KnowledgeSourceDoctorRecommendation {
-  if (!issueCodes.length) return "none";
-  if (issueCodes.includes("not_found")) return "fix_ref";
-  if (issueCodes.includes("deleted")) return "skip";
-  if (issueCodes.includes("stale_revision") || issueCodes.includes("missing_extracted_text")) return "reindex";
-  return "source_review";
-}
-
-function actionsFor(issueCodes: KnowledgeSourceDoctorIssueCode[]): string[] {
-  const actions = new Set<string>();
-  for (const code of issueCodes) {
-    if (code === "stale_revision" || code === "missing_extracted_text") actions.add("reindex");
-    if (code === "not_found") {
-      actions.add("fix_ref");
-      actions.add("source_review");
-    }
-    if (code === "deleted") actions.add("drop_from_index");
-    if (
-      code === "acl_revoked"
-      || code === "acl_review_needed"
-      || code === "source_disabled"
-      || code === "denied"
-      || code === "unsupported"
-      || code === "error"
-    ) {
-      actions.add("source_review");
-    }
-  }
-  return [...actions].sort();
-}
-
-function summarizeChecks(checks: KnowledgeSourceDoctorCheck[]): KnowledgeSourceDoctorReport["summary"] {
-  const summary: KnowledgeSourceDoctorReport["summary"] = {
-    ready: 0,
-    needs_action: 0,
-    not_found: 0,
-    stale: 0,
-    acl_revoked: 0,
-    deleted: 0,
-    missing_extracted_text: 0,
-    denied: 0,
-    unsupported: 0,
-    error: 0,
-    needs_review: 0,
-  };
-  for (const check of checks) {
-    if (check.status === "ready") {
-      summary.ready++;
-      continue;
-    }
-    summary.needs_action++;
-    summary[check.status]++;
-  }
-  return summary;
-}
-
-function sanitizeStorage(storage: KnowledgeSourceResolverStorage | undefined): KnowledgeSourceResolverStorage | undefined {
-  if (!storage) return undefined;
-  return {
-    provider: storage.provider,
-    source_id: storage.source_id,
-    bucket: storage.bucket,
-    region: storage.region,
-    version_id: storage.version_id,
-    s3_object: storage.s3_object,
-  };
-}
-
-function addIssue(issueCodes: KnowledgeSourceDoctorIssueCode[], code: KnowledgeSourceDoctorIssueCode): void {
-  if (!issueCodes.includes(code)) issueCodes.push(code);
-}
-
-function uniqueRefs(refs: string[]): string[] {
-  return [...new Set(refs.map((ref) => ref.trim()).filter(Boolean))];
-}
-
-function normalizeLimit(value: number | undefined): number {
-  if (!Number.isFinite(value ?? DEFAULT_LIMIT)) return DEFAULT_LIMIT;
-  const normalized = Math.floor(value ?? DEFAULT_LIMIT);
-  if (normalized <= 0) return DEFAULT_LIMIT;
-  return Math.min(normalized, MAX_LIMIT);
-}

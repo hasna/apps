@@ -19,10 +19,11 @@ import { listGoogleDriveItems, listGoogleDriveProfiles, listGoogleDriveSharedDri
 import { indexS3Source } from "../lib/s3.js";
 import { downloadResolvedFileObject, resolveFileObject, resolvedFileObjectSummary } from "../lib/file-object.js";
 import { extractTextFromFile } from "../lib/extraction.js";
-import { extractTextSnapshotFromFile } from "../lib/extraction-snapshot.js";
+import { buildExtractionSnapshot, extractTextSnapshotFromFile } from "../lib/extraction-snapshot.js";
 import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
 import { exportKnowledgeSourceManifest, formatKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
+import { doctorKnowledgeSourcesViaApi, resolveKnowledgeSourceRefViaApi } from "../lib/knowledge-resolver-api.js";
 import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack.js";
 import { openSecureOutput } from "../lib/secure-output.js";
 import { buildOpenFilesFileRef, buildOpenFilesFileRevisionRef } from "../lib/source-ref.js";
@@ -33,12 +34,15 @@ import { requireId } from "../db/resolve.js";
 import { basename, dirname, resolve, join } from "path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import type {
+  ExtractionSnapshot,
   FilesContextPack,
   FileSearchDocument,
   FileSearchDocumentKind,
   FileSearchDocumentStatus,
   GoogleDriveConfig,
+  KnowledgeSourceDoctorReport,
   KnowledgeSourceManifestFormat,
+  KnowledgeSourceResolution,
   KnowledgeSourceResolveMode,
   S3Config,
   SearchScope,
@@ -76,6 +80,17 @@ function requireLocalTransport(command: string): void {
     console.error(chalk.red(`${command} runs on-box only and is unavailable on the hosted transport; the files service owns ingestion.`));
     process.exit(1);
   }
+}
+
+/**
+ * The active store when the CLI is bound to the hosted (api) transport, or
+ * null on the local transport. Commands whose operation has a `/v1` route
+ * take this arm and never touch the on-box SQLite island; the
+ * `requireLocalTransport` guard above then applies only to the local arm.
+ */
+function apiStore(): ApiStore | null {
+  const files = store();
+  return files.transport === "api" ? (files as ApiStore) : null;
 }
 
 program
@@ -1637,32 +1652,86 @@ program
     segmentChars: string;
     redact: string[];
   }) => {
+    const maxBytes = parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 });
+    const maxSegmentChars = parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 });
+    const api = apiStore();
+    if (api) {
+      // Hosted: the server extracts (POST /v1/files/{id}/extract-text); the
+      // deterministic snapshot framing is pure and stays client-side.
+      try {
+        const snapshot = buildExtractionSnapshot(await api.extractFileText(fileId, {
+          max_bytes: maxBytes,
+          max_segment_chars: maxSegmentChars,
+          redact_patterns: opts.redact,
+        }));
+        printExtractionSnapshot(snapshot, opts.json);
+        return;
+      } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+    }
     requireLocalTransport("files extract-snapshot");
     try {
-      const maxBytes = parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 });
-      const maxSegmentChars = parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 });
       const snapshot = await extractTextSnapshotFromFile(requireId(fileId, "files"), {
         max_bytes: maxBytes,
         max_segment_chars: maxSegmentChars,
         redact_patterns: opts.redact.map((pattern) => new RegExp(pattern, "g")),
       });
 
-      if (opts.json) {
-        console.log(JSON.stringify(snapshot, null, 2));
-        return;
-      }
-
-      console.log(chalk.bold(`snapshot: ${snapshot.snapshot_id}`));
-      console.log(`status: ${snapshot.status}`);
-      console.log(`hash: ${snapshot.content_hash_algorithm}:${snapshot.content_hash}`);
-      console.log(`sections: ${snapshot.sections.length}`);
-      for (const section of snapshot.sections) {
-        console.log(chalk.dim(`\n--- ${section.title ?? section.id} lines ${section.line_start}-${section.line_end} bytes ${section.byte_start}-${section.byte_end} ---`));
-        process.stdout.write(section.text);
-        if (!section.text.endsWith("\n")) process.stdout.write("\n");
-      }
+      printExtractionSnapshot(snapshot, opts.json);
     } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
   });
+
+/** Render an extraction snapshot identically on the hosted and local arms. */
+function printExtractionSnapshot(snapshot: ExtractionSnapshot, json?: boolean): void {
+  if (json) {
+    console.log(JSON.stringify(snapshot, null, 2));
+    return;
+  }
+  console.log(chalk.bold(`snapshot: ${snapshot.snapshot_id}`));
+  console.log(`status: ${snapshot.status}`);
+  console.log(`hash: ${snapshot.content_hash_algorithm}:${snapshot.content_hash}`);
+  console.log(`sections: ${snapshot.sections.length}`);
+  for (const section of snapshot.sections) {
+    console.log(chalk.dim(`\n--- ${section.title ?? section.id} lines ${section.line_start}-${section.line_end} bytes ${section.byte_start}-${section.byte_end} ---`));
+    process.stdout.write(section.text);
+    if (!section.text.endsWith("\n")) process.stdout.write("\n");
+  }
+}
+
+/** Render a knowledge doctor report identically on the hosted and local arms. */
+function printKnowledgeDoctorReport(report: KnowledgeSourceDoctorReport, json?: boolean): void {
+  if (json) {
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+  console.log(chalk.bold(`knowledge source doctor: ${report.checked_count} checked`));
+  console.log(`ready: ${report.summary.ready}  needs_action: ${report.summary.needs_action}`);
+  for (const check of report.checks) {
+    const color = check.status === "ready" ? chalk.green : chalk.yellow;
+    console.log(color(`${check.status}: ${check.source_ref}`));
+    if (check.issue_codes.length) console.log(chalk.dim(`  issues: ${check.issue_codes.join(", ")}`));
+    if (check.actions.length) console.log(chalk.dim(`  actions: ${check.actions.join(", ")}`));
+    if (check.status_reason) console.log(chalk.dim(`  reason: ${check.status_reason}`));
+  }
+}
+
+/** Render a knowledge source resolution identically on the hosted and local arms. */
+function printKnowledgeResolution(
+  result: KnowledgeSourceResolution,
+  mode: KnowledgeSourceResolveMode,
+  json?: boolean,
+): void {
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(chalk.bold(`${result.status}: ${result.source_ref}`));
+  if (result.status_reason) console.log(chalk.dim(result.status_reason));
+  console.log(`mode: ${mode}`);
+  console.log(`mime: ${result.content.mime}`);
+  if (result.content.bytes_read !== undefined) console.log(`bytes_read: ${result.content.bytes_read}`);
+  if (result.content.extraction?.snapshot_id) console.log(`snapshot: ${result.content.extraction.snapshot_id}`);
+  if (result.access?.url) console.log(result.access.url);
+}
 
 const knowledge = program.command("knowledge").description("Read-only source APIs for knowledge indexing");
 
@@ -1769,37 +1838,33 @@ knowledge
     segmentChars: string;
     json?: boolean;
   }) => {
+    const doctorOptions = {
+      source_refs: sourceRefs,
+      source_id: opts.source,
+      collection_id: opts.collection,
+      project_id: opts.project,
+      tag: opts.tag,
+      status: opts.status as any,
+      limit: parseIntFlag(opts.limit, "limit", { min: 1 }),
+      purpose: opts.purpose,
+      require_extracted_text: opts.extractedTextRequired,
+      check_extracted_text: opts.checkExtractedText,
+      max_bytes: parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 }),
+      max_segment_chars: parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 }),
+    };
+    const doctorApi = apiStore();
+    if (doctorApi) {
+      // Hosted: refs from GET /v1/files, each checked through the hosted resolver.
+      try {
+        printKnowledgeDoctorReport(await doctorKnowledgeSourcesViaApi(doctorApi, doctorOptions), opts.json);
+        return;
+      } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+    }
     requireLocalTransport("files knowledge doctor");
     try {
-      const report = await doctorKnowledgeSources({
-        source_refs: sourceRefs,
-        source_id: opts.source,
-        collection_id: opts.collection,
-        project_id: opts.project,
-        tag: opts.tag,
-        status: opts.status as any,
-        limit: parseIntFlag(opts.limit, "limit", { min: 1 }),
-        purpose: opts.purpose,
-        require_extracted_text: opts.extractedTextRequired,
-        check_extracted_text: opts.checkExtractedText,
-        max_bytes: parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 }),
-        max_segment_chars: parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 }),
-      });
+      const report = await doctorKnowledgeSources(doctorOptions);
 
-      if (opts.json) {
-        console.log(JSON.stringify(report, null, 2));
-        return;
-      }
-
-      console.log(chalk.bold(`knowledge source doctor: ${report.checked_count} checked`));
-      console.log(`ready: ${report.summary.ready}  needs_action: ${report.summary.needs_action}`);
-      for (const check of report.checks) {
-        const color = check.status === "ready" ? chalk.green : chalk.yellow;
-        console.log(color(`${check.status}: ${check.source_ref}`));
-        if (check.issue_codes.length) console.log(chalk.dim(`  issues: ${check.issue_codes.join(", ")}`));
-        if (check.actions.length) console.log(chalk.dim(`  actions: ${check.actions.join(", ")}`));
-        if (check.status_reason) console.log(chalk.dim(`  reason: ${check.status_reason}`));
-      }
+      printKnowledgeDoctorReport(report, opts.json);
     } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
   });
 
@@ -1824,31 +1889,29 @@ knowledge
     signedUrlExpires: string;
     json?: boolean;
   }) => {
+    const mode = parseResolveMode(opts.mode);
+    const resolverOptions = {
+      mode,
+      purpose: opts.purpose,
+      max_bytes: parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 }),
+      max_segment_chars: parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 }),
+      allowed_mimes: opts.mime.length > 0 ? opts.mime : undefined,
+      allow_binary: opts.allowBinary,
+      signed_url_expires_in: parseIntFlag(opts.signedUrlExpires, "signed-url-expires", { min: 1 }),
+    };
+    const resolveApi = apiStore();
+    if (resolveApi) {
+      // Hosted: every mode maps onto an existing /v1 file route.
+      try {
+        printKnowledgeResolution(await resolveKnowledgeSourceRefViaApi(resolveApi, sourceRef, resolverOptions), mode, opts.json);
+        return;
+      } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
+    }
     requireLocalTransport("files knowledge resolve");
     try {
-      const mode = parseResolveMode(opts.mode);
-      const result = await resolveKnowledgeSourceRef(sourceRef, {
-        mode,
-        purpose: opts.purpose,
-        max_bytes: parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 }),
-        max_segment_chars: parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 }),
-        allowed_mimes: opts.mime.length > 0 ? opts.mime : undefined,
-        allow_binary: opts.allowBinary,
-        signed_url_expires_in: parseIntFlag(opts.signedUrlExpires, "signed-url-expires", { min: 1 }),
-      });
+      const result = await resolveKnowledgeSourceRef(sourceRef, resolverOptions);
 
-      if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
-        return;
-      }
-
-      console.log(chalk.bold(`${result.status}: ${result.source_ref}`));
-      if (result.status_reason) console.log(chalk.dim(result.status_reason));
-      console.log(`mode: ${mode}`);
-      console.log(`mime: ${result.content.mime}`);
-      if (result.content.bytes_read !== undefined) console.log(`bytes_read: ${result.content.bytes_read}`);
-      if (result.content.extraction?.snapshot_id) console.log(`snapshot: ${result.content.extraction.snapshot_id}`);
-      if (result.access?.url) console.log(result.access.url);
+      printKnowledgeResolution(result, mode, opts.json);
     } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
   });
 
