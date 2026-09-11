@@ -2,7 +2,7 @@
 
 `economy sync` imports local coding-agent usage into Economy's SQLite database. A sync with no source flag runs every source; one or more source flags limit the run. Reads such as `economy today` also auto-sync all local sources before querying.
 
-In cloud-client mode, CLI and MCP reads/writes go directly to the shared HTTP API. Local `sync` and `billing sync` deliberately do nothing in that mode; ingest on a machine running in local mode, or use the authenticated server ingest endpoints.
+In cloud-client mode, CLI and MCP reads/writes go directly to the shared HTTP API (on-box auto-sync is skipped). The explicit `economy sync` / `economy billing sync` verbs still run the same on-box provider ingest against a scratch store and push the rows to `/v1/ingest`.
 
 ## Sources
 
