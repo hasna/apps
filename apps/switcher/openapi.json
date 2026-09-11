@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Switcher API",
-    "version": "0.1.6",
+    "version": "0.1.9",
     "description": "Authenticated provider/profile/catalog control plane. Launches run locally; the API never returns provider credentials."
   },
   "security": [
@@ -1441,6 +1441,23 @@
                   },
                   "maxItems": 100
                 },
+                "reasoningEfforts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "minimal",
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max",
+                      "ultra"
+                    ]
+                  },
+                  "maxItems": 8
+                },
                 "supportedGenerationMethods": {
                   "type": "array",
                   "items": {
@@ -1519,6 +1536,23 @@
                     "maxLength": 100
                   },
                   "maxItems": 100
+                },
+                "reasoningEfforts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "minimal",
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max",
+                      "ultra"
+                    ]
+                  },
+                  "maxItems": 8
                 },
                 "supportedGenerationMethods": {
                   "type": "array",
@@ -1685,6 +1719,23 @@
                   },
                   "maxItems": 100
                 },
+                "reasoningEfforts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "minimal",
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max",
+                      "ultra"
+                    ]
+                  },
+                  "maxItems": 8
+                },
                 "supportedGenerationMethods": {
                   "type": "array",
                   "items": {
@@ -1763,6 +1814,23 @@
                     "maxLength": 100
                   },
                   "maxItems": 100
+                },
+                "reasoningEfforts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "minimal",
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max",
+                      "ultra"
+                    ]
+                  },
+                  "maxItems": 8
                 },
                 "supportedGenerationMethods": {
                   "type": "array",
@@ -2167,6 +2235,23 @@
             },
             "maxItems": 100
           },
+          "reasoningEfforts": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra"
+              ]
+            },
+            "maxItems": 8
+          },
           "supportedGenerationMethods": {
             "type": "array",
             "items": {
@@ -2311,6 +2396,19 @@
             "maxLength": 300,
             "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
           },
+          "reasoningEffort": {
+            "type": "string",
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ]
+          },
           "decision": {
             "type": "string",
             "enum": [
@@ -2414,6 +2512,23 @@
                     "maxLength": 100
                   },
                   "maxItems": 100
+                },
+                "reasoningEfforts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "minimal",
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max",
+                      "ultra"
+                    ]
+                  },
+                  "maxItems": 8
                 },
                 "supportedGenerationMethods": {
                   "type": "array",
@@ -2532,6 +2647,23 @@
                     "maxLength": 100
                   },
                   "maxItems": 100
+                },
+                "reasoningEfforts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "minimal",
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max",
+                      "ultra"
+                    ]
+                  },
+                  "maxItems": 8
                 },
                 "supportedGenerationMethods": {
                   "type": "array",
@@ -2709,6 +2841,23 @@
                       },
                       "maxItems": 100
                     },
+                    "reasoningEfforts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "minimal",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh",
+                          "max",
+                          "ultra"
+                        ]
+                      },
+                      "maxItems": 8
+                    },
                     "supportedGenerationMethods": {
                       "type": "array",
                       "items": {
@@ -2787,6 +2936,23 @@
                         "maxLength": 100
                       },
                       "maxItems": 100
+                    },
+                    "reasoningEfforts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "minimal",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh",
+                          "max",
+                          "ultra"
+                        ]
+                      },
+                      "maxItems": 8
                     },
                     "supportedGenerationMethods": {
                       "type": "array",
@@ -3047,6 +3213,23 @@
                       },
                       "maxItems": 100
                     },
+                    "reasoningEfforts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "none",
+                          "minimal",
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh",
+                          "max",
+                          "ultra"
+                        ]
+                      },
+                      "maxItems": 8
+                    },
                     "supportedGenerationMethods": {
                       "type": "array",
                       "items": {
@@ -3297,6 +3480,19 @@
                   "minLength": 1,
                   "maxLength": 300,
                   "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "reasoningEffort": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "minimal",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max",
+                    "ultra"
+                  ]
                 },
                 "decision": {
                   "type": "string",
@@ -3567,6 +3763,19 @@
                   "minLength": 1,
                   "maxLength": 300,
                   "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "reasoningEffort": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "minimal",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max",
+                    "ultra"
+                  ]
                 },
                 "decision": {
                   "type": "string",

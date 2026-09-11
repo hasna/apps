@@ -26,7 +26,10 @@
     "dist",
     "assets/skills/inbox/SKILL.md",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "!dist/**/*.test.d.ts",
+    "!dist/**/*.test.d.ts.map",
+    "!dist/test-support/**"
   ],
   "scripts": {
     "clean": "rm -rf dist",
@@ -65,11 +68,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/instructions.git"
+    "url": "git+https://github.com/hasna/apps.git",
+    "directory": "apps/instructions"
   },
-  "homepage": "https://github.com/hasna/instructions",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/instructions",
   "bugs": {
-    "url": "https://github.com/hasna/instructions/issues"
+    "url": "https://github.com/hasna/apps/issues"
   },
   "engines": {
     "bun": ">=1.0.0"

@@ -2556,6 +2556,23 @@ async function updateTask(
       }
     }
   }
+  // BUG-0049: a task created WITHOUT a project (so `createTask` had no project
+  // to number it under) and PATCHed onto a project/list later kept
+  // `short_id = null` forever. It stayed invisible to the COD-#### numbering
+  // that run notes, reviews and owner queues cite, and silently broke the
+  // list's sequence-continuity invariant (and the "next number" derivation
+  // that depends on it). Backfill from the target project's prefix + counter
+  // the moment the patch gives the task a placement while it has no number.
+  //
+  // Only a NULL short_id is backfilled: renumbering a task that already has one
+  // would detach it from every reference already written against it. The
+  // counter is allocated via the same atomic increment createTask uses (M8), so
+  // concurrent backfills cannot collide.
+  const patchTouchesPlacement = input.project_id !== undefined || input.task_list_id !== undefined;
+  const effectiveProjectIdForShortId = input.project_id !== undefined ? input.project_id : existing.project_id;
+  const backfilledShortId = existing.short_id === null && patchTouchesPlacement && effectiveProjectIdForShortId
+    ? await nextTaskShortId(effectiveProjectIdForShortId, store, context)
+    : null;
   const reopened = existing.status === "completed"
     && input.status !== undefined
     && input.status !== "completed"
@@ -2572,6 +2589,10 @@ async function updateTask(
     ...existing,
     ...definedPatch(input),
     ...(terminalNow ? { locked_by: null, locked_at: null } : {}),
+    // BUG-0049: `backfilledShortId` is the freshly allocated number for a task
+    // that had none; null means "keep whatever it already had" — a task with a
+    // live short_id is never renumbered by a placement change.
+    short_id: backfilledShortId ?? existing.short_id,
     version: existing.version + 1,
     updated_at: new Date().toISOString(),
     tags: input.tags ?? existing.tags,

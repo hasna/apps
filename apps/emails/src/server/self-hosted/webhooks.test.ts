@@ -121,6 +121,10 @@ function fakeDb(): FakeDb {
 
     // Layer-2 tenant GUC + readiness probes: no-ops for the double.
     if (/set_config\('app\.current_tenant'/i.test(flat)) return [];
+    // The inbound content fence's serialization point (BUG-0050): a transaction-scoped
+    // advisory lock. It orders concurrent ingests of one message; it returns no rows
+    // and has no effect on the row state the caller then re-reads.
+    if (/^SELECT pg_advisory_xact_lock\(/i.test(flat)) return [];
     if (/^SELECT 1\b/i.test(flat)) return [{ ok: 1 }];
     if (/^SELECT id, checksum FROM schema_migrations/i.test(flat)) return [];
 
@@ -176,6 +180,25 @@ function fakeDb(): FakeDb {
       return rowsOf(tables, "events")
         .filter((row) => row["tenant_id"] === tenantId && row["provider_event_id"] === providerEventId)
         .map((row) => ({ id: row["id"] }));
+    }
+
+    // createInboundMessageWithProvenance content fence (BUG-0050): the canonical row
+    // this delivery is a copy of, matched exactly as the SQL matches it — the RFC
+    // Message-ID normalized out of the header map, plus the envelope-visible content.
+    if (/FROM messages[\s\S]*direction = 'inbound'[\s\S]*FOR UPDATE/i.test(flat)) {
+      const [tenantId, rfcMessageId, fromAddr, subject, receivedAt] = params as [
+        string, string, string, string, string | null,
+      ];
+      return rowsOf(tables, "messages").filter((row) => {
+        if (row["tenant_id"] !== tenantId || row["direction"] !== "inbound") return false;
+        const headers = row["headers"] as Record<string, unknown> | undefined;
+        const storedMessageId = String(headers?.["message-id"] ?? "")
+          .toLowerCase().replace(/^[<>]+|[<>]+$/g, "");
+        return storedMessageId === rfcMessageId
+          && String(row["from_addr"] ?? "").toLowerCase() === fromAddr
+          && String(row["subject"] ?? "") === subject
+          && String(row["received_at"] ?? "") === String(receivedAt ?? "");
+      });
     }
 
     // createInboundMessageWithProvenance conflict re-read

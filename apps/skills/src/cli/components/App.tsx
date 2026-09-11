@@ -37,7 +37,8 @@ export function App({ initialSkills, overwrite = false }: AppProps) {
         exit();
       }
     }
-    if (input === "q") {
+    // Search owns printable input; its TextInput must receive ordinary q characters.
+    if (input === "q" && view !== "search") {
       exit();
     }
   });
