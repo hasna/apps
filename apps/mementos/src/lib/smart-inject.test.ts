@@ -69,6 +69,22 @@ function freshDb(): Database {
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       accessed_at TEXT
     );
+    -- The real schema has this, and memories.machine_id above references it.
+    -- The fixture omitted it, so smartInject's machine-visibility filter used
+    -- to hit "no such table: machines" and silently degrade. Since
+    -- resolveVisibleMachineId now REFUSES instead of degrading, the fixture has
+    -- to carry the table it was already implying — which also makes the test
+    -- exercise the real filter rather than its failure path.
+    CREATE TABLE IF NOT EXISTS machines (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      hostname TEXT NOT NULL,
+      platform TEXT NOT NULL DEFAULT 'unknown',
+      is_primary INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_machines_hostname ON machines(hostname);
     CREATE TABLE IF NOT EXISTS memory_tags (
       memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
       tag TEXT NOT NULL,
