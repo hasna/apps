@@ -14,8 +14,9 @@ import {
   getSettingsPath,
   buildCodewithTomlFragment,
   isEventSupported,
+  detectRewriteConflict,
 } from "./installer.js";
-import { HOOKS, getHookEvents } from "./registry.js";
+import { HOOKS, getHook, getHookEvents } from "./registry.js";
 
 const TEST_HOME = mkdtempSync(join(process.cwd(), ".tmp-installer-home-"));
 const GLOBAL_SETTINGS = join(TEST_HOME, ".claude", "settings.json");
@@ -128,9 +129,9 @@ describe("installer", () => {
       expect(hookExists("nonexistent")).toBe(false);
     });
 
-    test("returns true for all 51 registered hooks", () => {
+    test("returns true for all 52 registered hooks", () => {
       const names = HOOKS.map((hook) => hook.name);
-      expect(names).toHaveLength(51);
+      expect(names).toHaveLength(52);
       for (const name of names) {
         expect(hookExists(name)).toBe(true);
       }
@@ -163,6 +164,64 @@ describe("installer", () => {
         e.hooks?.some((h: any) => h.command === "hooks run gitguard")
       );
       expect(entry.matcher).toBe("Bash");
+    });
+
+    test("an input-rewriting guard registers with its declared timeout", () => {
+      const result = installHook("trash-guard");
+      expect(result.success).toBe(true);
+      const settings = JSON.parse(readFileSync(GLOBAL_SETTINGS, "utf-8"));
+      const entry = settings.hooks.PreToolUse.find((e: any) =>
+        e.hooks?.some((h: any) => h.command === "hooks run trash-guard")
+      );
+      expect(entry.matcher).toBe("Bash");
+      // The harness default is 600s and a TIMED-OUT HOOK DOES NOT BLOCK — the
+      // guard's registration must carry a timeout it can meet.
+      expect(entry.hooks[0].timeout).toBe(5);
+      // Declared once in the registry, emitted into the settings entry.
+      expect(entry.hooks[0].timeout).toBe(getHook("trash-guard")?.timeoutSeconds);
+    });
+
+    test("the only input-rewriting hook installs normally (negative control)", () => {
+      // The refusal fires on the SECOND rewriting hook; with one registered
+      // there is nothing to conflict with, and re-installing it is a
+      // self-conflict that is skipped.
+      expect(installHook("trash-guard").success).toBe(true);
+      expect(detectRewriteConflict("trash-guard", "global", "claude")).toBeUndefined();
+      const again = installHook("trash-guard", { overwrite: true });
+      expect(again.success).toBe(true);
+      expect(again.error).toBeUndefined();
+    });
+
+    test("install is REFUSED when a second input-rewriting hook overlaps", () => {
+      // A second rewriting PreToolUse hook on an overlapping matcher is a
+      // silent-disarm hazard, not a style nit: the harness applies one rewrite
+      // per tool call, so one guard disappears with no error anywhere.
+      writeFileSync(
+        GLOBAL_SETTINGS,
+        JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "hooks run rival-guard" }] }] } }, null, 2),
+      );
+      const refusal = detectRewriteConflict("trash-guard", "global", "claude", (hookName) => ({
+        name: hookName,
+        displayName: "Rival Guard",
+        description: "second input rewriter",
+        version: "0.1.0",
+        category: "Git Safety",
+        event: "PreToolUse",
+        matcher: "Bash",
+        tags: [],
+        rewritesInput: true,
+      }));
+      expect(refusal).toContain("rival-guard");
+      expect(refusal).toContain("rewrite the tool input");
+    });
+
+    test("an overlapping hook that does NOT rewrite is still only a warning", () => {
+      // Every other conflict keeps installing, with the advisory string.
+      const registered = installHook("pre-bash");
+      expect(registered.success).toBe(true);
+      const overlapping = installHook("gitguard");
+      expect(overlapping.success).toBe(true);
+      expect(overlapping.error).toBeUndefined();
     });
 
     test("does not copy any files", () => {
@@ -366,7 +425,7 @@ describe("installer", () => {
       const allNames = HOOKS
         .filter((hook) => getHookEvents(hook).every((event) => isEventSupported(event, "claude")))
         .map((hook) => hook.name);
-      expect(allNames).toHaveLength(49);
+      expect(allNames).toHaveLength(50);
       const results = installHooks(allNames);
       expect(results.every((r) => r.success)).toBe(true);
       expect(getRegisteredHooks().length).toBeGreaterThanOrEqual(48);

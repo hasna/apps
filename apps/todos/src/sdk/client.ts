@@ -8,7 +8,9 @@
  * ```ts
  * import { TodosClient } from "@hasna/todos";
  *
- * const client = new TodosClient(); // credentials via @hasna/contracts, else the local serve
+ * // resolves the @hasna/contracts credential chain; throws TODOS_CREDENTIAL_MISSING
+ * // when nothing is configured (the local serve needs HASNA_TODOS_LOCAL=1)
+ * const client = new TodosClient();
  * const tasks = await client.tasks.list({ status: "pending", limit: 20 });
  * await client.tasks.complete(taskId);
  * ```

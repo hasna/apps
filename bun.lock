@@ -442,7 +442,7 @@
     },
     "apps/files": {
       "name": "@hasna/files",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "bin": {
         "files": "dist/cli/index.js",
         "files-mcp": "dist/mcp/index.js",
@@ -495,7 +495,7 @@
     },
     "apps/hooks": {
       "name": "@hasna/hooks",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "bin": {
         "hooks": "bin/index.js",
         "hooks-serve": "bin/serve.js",
@@ -617,7 +617,7 @@
     },
     "apps/loops": {
       "name": "@hasna/loops",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "bin": {
         "loops": "dist/cli/index.js",
         "loops-daemon": "dist/daemon/index.js",
@@ -1137,7 +1137,7 @@
     },
     "apps/todos": {
       "name": "@hasna/todos",
-      "version": "0.16.0",
+      "version": "0.16.1",
       "bin": {
         "todos": "dist/cli/index.js",
         "todos-mcp": "dist/mcp/index.js",

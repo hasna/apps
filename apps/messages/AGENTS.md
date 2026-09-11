@@ -11,7 +11,7 @@ dependency; `bun build --target bun` inlines it). The CLI, the MCP server and
 `./sdk` all resolve through `src/sdk/resolve.ts` → `@hasna/contracts/client`,
 per request, fresh. Do NOT reintroduce a private env chain — no
 `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`,
-`~/.messages/config.json`, no `*_MODE` / `*_STORAGE_MODE` switches, no
+`~/.messages/config.json`, no legacy mode-selector switches, no
 DEPRECATED notices.
 
 - Ladder: explicit arg → `HASNA_MESSAGES_API_KEY_OVERRIDE` / `HASNA_PROFILE` /

@@ -3,18 +3,30 @@
 # process reads/writes RDS Postgres directly with @hasna/contracts API-key auth).
 # The ECS one-shot migration task overrides the command with `... migrate`.
 
-ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:efc5e42c7bedc1661ab0b7272c74c3ebf794f054297f530a62055f2d1a0eb662
+ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0
 ARG BASH_VERSION=5.2.37-r0
 ARG OPENSSL_VERSION=3.5.8-r0
 
 FROM ${BUN_IMAGE} AS base
 ARG OPENSSL_VERSION
-# The single-platform digest resolves directly to the official linux/amd64 (oss-fleet-prod ECS host)
-# Bun 1.3.14 Alpine manifest. Assert the musl boundary and the immutable base's
-# security-relevant package floor so an accidental digest or platform change
-# fails during the build. The official immutable image contains OpenSSL
-# 3.5.6-r0; upgrade only its runtime libraries to Alpine's exact patched v3.22
-# release before any application layer is built.
+# Base pinned to the multi-arch image INDEX (application/vnd.oci.image.index.v1+json),
+# never to one platform's manifest. This lane builds native linux/arm64
+# (deploy-todos.yml runs `--platform linux/arm64` on ubuntu-24.04-arm, and the
+# buildspec candidate gate builds `--platform linux/arm64` too), and an index
+# digest is what lets buildx resolve the manifest matching the platform it was
+# asked to build. The previous pin was the linux/amd64 child manifest
+# (efc5e42c…): the arm64 build pulled amd64 layers, and after buildkit warned
+# `was pulled with platform "linux/amd64", expected "linux/arm64"` the first RUN
+# died with `exec /bin/sh: exec format error`. Index 5acc90a9… (verified against
+# registry-1.docker.io) resolves to
+#   linux/amd64 efc5e42c7bedc1661ab0b7272c74c3ebf794f054297f530a62055f2d1a0eb662
+#   linux/arm64 3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f
+# so the amd64 child stays reachable for amd64 builds, and this is the pin
+# apps/skills and apps/loops already carry. Assert the musl boundary and the
+# immutable base's security-relevant package floor so an accidental digest or
+# platform change fails during the build. The official immutable image contains
+# OpenSSL 3.5.6-r0; upgrade only its runtime libraries to Alpine's exact patched
+# v3.22 release before any application layer is built.
 RUN test "$(bun --version)" = "1.3.14"
 RUN apk add --no-cache \
       "libcrypto3=${OPENSSL_VERSION}" \
