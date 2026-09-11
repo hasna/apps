@@ -593,6 +593,95 @@ describe("conversations-serve", () => {
     expect(list.messages.length).toBeGreaterThan(0);
   });
 
+  // Regression cover for BUG-0041. The documented send contract is
+  // `POST /v1/messages {to: <channel>, content}`: `to` NAMES THE CHANNEL.
+  // Before this, such a body fell into the DM branch — 201, channel=null,
+  // session_id "<from>-<to>-<hash>" — and the message never appeared in
+  // `GET /v1/messages?channel=<name>`, so the 201 hid a silent loss of
+  // #incidents alerts and cross-agent handoffs.
+  test("POST /v1/messages with {to: <channel>} binds the channel instead of a channel-less orphan", async () => {
+    const channelName = "recipient-channel-binding";
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ name: channelName, created_by: "station02", description: "d" }),
+    });
+    expect(created.status).toBe(201);
+
+    // No `channel` field: exactly the body the workflow scripts post.
+    const sent = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "station02", to: channelName, content: "recipient-only send" }),
+    });
+    expect(sent.status).toBe(201);
+    const sentMessage = (await sent.json()).message;
+    expect(sentMessage.channel).toBe(channelName);
+    expect(sentMessage.session_id).toBe(`channel:${channelName}`);
+
+    // The row is reachable through the channel listing — the whole point.
+    const listed = await (await fetch(`${base}/v1/messages?channel=${channelName}`, { headers: { "x-api-key": rwKey } })).json();
+    expect(listed.messages.map((message: any) => message.uuid)).toContain(sentMessage.uuid);
+
+    // A `to` that names no channel is still a DM: channel null and a session id
+    // derived from the two participants.
+    const direct = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "station02", to: "no-such-channel-here", content: "dm" }),
+    });
+    expect(direct.status).toBe(201);
+    const directMessage = (await direct.json()).message;
+    expect(directMessage.channel).toBeNull();
+    // `<from>-<to>` sorted, then the random suffix — never `channel:<name>`.
+    expect(directMessage.session_id).toMatch(/^no-such-channel-here-station02-[0-9a-f]{8}$/);
+  });
+
+  // Regression cover for BUG-0062. A row stored BEFORE the send path bound a
+  // channel-naming `to` (BUG-0041) carries channel=NULL with the channel name
+  // in `to_agent`. `?channel=<name>` selected the `channel` column alone, so
+  // such a post was unreachable from every channel read — live row 789923 was
+  // invisible to `?channel=incidents` while its caller held a 201 and a message
+  // id, and a reviewer's "do the claimed posts exist?" check could not find it.
+  test("GET /v1/messages?channel=<name> lists a channel-less row addressed to that channel", async () => {
+    const channelName = "legacy-orphan-channel";
+    // The historical sequence: the post names the channel before the channel
+    // exists, so nothing binds it and it is stored channel-less.
+    const orphan = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "station02", to: channelName, content: "posted before the channel existed" }),
+    });
+    expect(orphan.status).toBe(201);
+    const orphanMessage = (await orphan.json()).message;
+    expect(orphanMessage.channel).toBeNull();
+
+    const unrelated = await fetch(`${base}/v1/messages`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ from: "station02", to: "some-other-recipient", content: "a real dm" }),
+    });
+    expect(unrelated.status).toBe(201);
+    const unrelatedMessage = (await unrelated.json()).message;
+
+    const created = await fetch(`${base}/v1/channels`, {
+      method: "POST",
+      headers: { "x-api-key": rwKey, "content-type": "application/json" },
+      body: JSON.stringify({ name: channelName, created_by: "station02", description: "d" }),
+    });
+    expect(created.status).toBe(201);
+
+    const listed = await (await fetch(`${base}/v1/messages?channel=${channelName}`, { headers: { "x-api-key": rwKey } })).json();
+    const uuids = listed.messages.map((message: any) => message.uuid);
+    expect(uuids).toContain(orphanMessage.uuid);
+    // The second arm matches the addressed name, not every channel-less row.
+    expect(uuids).not.toContain(unrelatedMessage.uuid);
+
+    // The channel's own count must agree with its listing.
+    const detail = await (await fetch(`${base}/v1/channels/${channelName}`, { headers: { "x-api-key": rwKey } })).json();
+    expect(detail.channel.message_count).toBe(1);
+  });
+
   // Regression cover for todos 5229dec2. The hosted GET /v1/messages handler
   // rejected since_id=0 with a 400 ("must be a positive integer"), contradicting
   // the OpenAPI contract (openapi.ts declares since_id minimum: 0), the local

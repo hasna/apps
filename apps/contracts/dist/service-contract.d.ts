@@ -11,6 +11,7 @@ export declare const SERVICE_CONTRACT_MANIFEST_FILENAME = "hasna.contract.json";
 export declare const SERVICE_CONTRACT_JSON_SCHEMA: {
     readonly $schema: "http://json-schema.org/draft-07/schema#";
     readonly $id: "https://github.com/hasna/contracts/schema/hasna.service_contract.v1.json";
+    readonly $comment: string;
     readonly title: "Hasna Service Contract v1";
     readonly description: "Repo self-description (hasna.contract.json) for the Hasna Service Contract v1. Public clients use one authenticated HTTPS service transport; authoritative server data is PostgreSQL.";
     readonly type: "object";

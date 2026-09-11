@@ -158,6 +158,30 @@ projects channel my-app --ensure           # create the channel if it does not e
 # name would outrank derivation forever and survive a revert. The link is set at
 # project creation, or deliberately by an operator.
 #
+# A pinned channel must be a channel: `create`/`link --conversations-channel`,
+# `update --integrations-json`, the MCP projects_create / projects_update /
+# projects_link tools, the prompt-agent's own projects_update / projects_create
+# / projects_link tools (projects_agent_prompt), the project step of the
+# prefix migration, and a typed conversations channel resource link (whose
+# labels.channel_name is projected onto integrations.conversations_channel —
+# a stale label after a rename is refused, in both the local and the hosted
+# store) refuse a name the conversations app has no channel for (BUG-0063). A
+# name that only resolves as
+# an agent DM silently sent project posts to the DM lane, or failed closed with
+# HTTP 400. The check runs only when the write actually sets or changes the
+# channel, only where the conversations CLI is reachable, and never on an
+# unreadable channel listing (skip with HASNA_PROJECTS_CHANNEL_VERIFY=0).
+# `projects doctor` reports an already-pinned bad channel as
+# WORKSPACE_CHANNEL_MISSING. The hosted store applies the same rule at its own
+# writes — POST /v1/workspaces, PATCH/PUT /v1/workspaces/{id}, POST
+# /v1/workspaces/{id}/guarded-metadata and the resource-link projection — so a
+# direct HTTP/SDK caller that never passes a client-level check is refused too
+# (BUG-0076); the rule is db-free and its probe is the same one-shot CLI call,
+# so a server box without the conversations CLI still cannot invent a refusal.
+# Still not covered by design: a channel DERIVED at create rather than pinned
+# by a caller (the local path ensures it through `projects channel --ensure`
+# after the write; the hosted path has no ensure).
+#
 # The channel class comes from the project record too:
 # integrations.conversations_channel_class if set, else the project kind, else
 # unset — in which case no --class is sent and conversations picks the default.

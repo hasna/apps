@@ -1194,6 +1194,48 @@ function buildConformanceCases(): ConformanceCase[] {
       },
     },
     {
+      id: "messages/outbound-received-at-is-its-effective-timestamp",
+      what: "an outbound message created without received_at reads back — and lists in the sent folder — with a non-null timestamp",
+      requires: null,
+      async exercise(store: EmailStore): Promise<unknown> {
+        const subject = token("subject");
+        const created = await must(store.messages.createMessage(outboundMessage(subject)), "createMessage");
+        stash("messages/outbound-received-at-is-its-effective-timestamp", { id: created.id, subject });
+        return {
+          record: await store.messages.getMessage(created.id),
+          sent: await store.messages.listMessages({ folder: "sent", limit: 50 }),
+        };
+      },
+      expect(outcome: unknown): void {
+        const state = stashed("messages/outbound-received-at-is-its-effective-timestamp");
+        const answers = asObject(outcome, "the created message and the sent folder");
+        // THE REGRESSION. An outbound row stores no `received_at` — nothing was received —
+        // while the list order has always keyed on `COALESCE(received_at, created_at)`. A
+        // reader that answered the raw column returned null for every sent message, so a
+        // caller windowing on received_at could not tell "outside the window" from "no
+        // timestamp": the row was dropped silently, or, with a naive fallback, the whole
+        // send history was admitted. The record must report the instant it is ordered by.
+        const read = recordOf(value(answers["record"], "getMessage"), "message record");
+        same(read.direction, "outbound", "message direction");
+        check(read.received_at !== null, "an outbound record answered a null received_at");
+        same(
+          read.received_at,
+          read.created_at,
+          "a message created without received_at is timestamped by its creation instant",
+        );
+        // And the LIST is the shape the defect was reported through: folder=sent, one page.
+        const sent = pageOf(value(answers["sent"], "listMessages(folder=sent)"), "sent page");
+        const listed = sent.items.filter((item) => item.id === state["id"]);
+        same(listed.length, 1, "the outbound message appears exactly once in the sent folder");
+        check(listed[0]!.received_at !== null, "the sent-folder row answered a null received_at");
+        same(
+          listed[0]!.received_at,
+          listed[0]!.created_at,
+          "the sent-folder row is timestamped by its creation instant",
+        );
+      },
+    },
+    {
       id: "messages/resolve-id-answers-not-found-for-an-unknown-id",
       what: "resolveMessageId resolves a full id it just created and refuses an unknown one with not_found",
       requires: null,
@@ -1852,6 +1894,51 @@ function buildConformanceCases(): ConformanceCase[] {
         void store;
         const page = asObject(value(outcome, "listAttachments"), "attachment page");
         same(asArray(page["items"], "attachment items").length, 1, "a one-row page holds one row");
+      },
+    },
+    {
+      id: "attachments/inventory-answers-a-non-null-received-at",
+      what: "an outbound message's attachment inventory row answers a non-null received_at — the instant the scan is ordered by — rather than the raw null column",
+      requires: "keysetPagination",
+      async exercise(store: EmailStore): Promise<unknown> {
+        const filename = `${token("received-at")}.txt`;
+        const created = await must(
+          store.messages.createMessage({
+            ...outboundMessage(`inventory-received-at ${RUN_TAG}`),
+            attachments: [{ filename, content_type: "text/plain", size: 3 }],
+          }),
+          "createMessage",
+        );
+        stash("attachments/inventory-answers-a-non-null-received-at", { id: created.id, filename });
+        const drained = await drainAttachments(store, 2);
+        if ("refused" in drained) return drained.refused;
+        // The message record is read too, so the two surfaces are COMPARED rather than
+        // each pinned to a literal: the inventory must agree with the record about when
+        // the row happened.
+        const record = await store.messages.getMessage(created.id);
+        const mine = drained.items.filter((item) => String(item.filename ?? "") === filename);
+        return { mine: mine.map((item) => ({ ...item })), record };
+      },
+      expect(outcome: unknown): void {
+        const answers = asObject(outcome, "the inventory rows and the message record");
+        const mine = asArray(answers["mine"], "the outbound inventory rows");
+        same(mine.length, 1, "the outbound attachment carries exactly one inventory row");
+        const row = asObject(mine[0], "inventory row");
+        same(row["direction"], "outbound", "inventory direction");
+        // THE REGRESSION. An outbound row stores no `received_at` — nothing was received —
+        // while this scan is keyset-ordered, and cursored, by
+        // `COALESCE(received_at, created_at)`. Answering the raw column returned null for
+        // every outbound attachment, so a caller windowing this surface on `received_at`
+        // could not tell "outside the window" from "no timestamp" and dropped the row
+        // silently — the same failure BUG-0043 fixed on the message list, left standing on
+        // this adjacent surface. The row must report the instant it is ordered by.
+        check(row["received_at"] !== null, "an outbound inventory row answered a null received_at");
+        const read = recordOf(value(answers["record"], "getMessage"), "message record");
+        same(
+          row["received_at"],
+          read.created_at,
+          "the inventory row is timestamped by the message's creation instant",
+        );
       },
     },
 

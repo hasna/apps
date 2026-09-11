@@ -434,6 +434,12 @@ PostgreSQL, apply migrations, and launch `emails-serve`; the PostgreSQL service
 binds to `0.0.0.0:8080` by default. See the deployment instructions below for
 signing keys, tenant authentication, provider bindings, and HTTPS access.
 
+Full-text search over `/v1/messages` is passed as the `q` query parameter
+(the native spelling; `search` is accepted as the original alias). A
+`term` parameter does not exist and is ignored, so requests built against it
+return an unfiltered page instead of a search — callers should use `q` (or
+`search`).
+
 ### Standalone compatibility surfaces
 
 The package still includes a legacy SQLite dashboard under `/api/*` and explicit

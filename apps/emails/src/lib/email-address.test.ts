@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { canonicalSender } from "./email-address.js";
+import { canonicalSender, senderDisplayName } from "./email-address.js";
 
 describe("canonicalSender", () => {
   it("parses a bare address (lowercased)", () => {
@@ -33,5 +33,37 @@ describe("canonicalSender", () => {
     expect(canonicalSender("a..b@example.com")).toBeNull();
     expect(canonicalSender("a@-bad.example")).toBeNull();
     expect(canonicalSender("")).toBeNull();
+  });
+});
+
+describe("senderDisplayName", () => {
+  it("returns the phrase from an unquoted `Name <addr>` form", () => {
+    expect(senderDisplayName("Andrei Hasna <andrei@example.com>")).toBe("Andrei Hasna");
+  });
+
+  it("unquotes a quoted phrase for re-rendering", () => {
+    expect(senderDisplayName('"Andrei Hasna" <andrei@example.com>')).toBe("Andrei Hasna");
+    expect(senderDisplayName('"Augustus (CEO seat)" <ceo@example.com>')).toBe("Augustus (CEO seat)");
+  });
+
+  it("preserves diacritics verbatim", () => {
+    expect(senderDisplayName("Andrei Hăsnaș <andrei@example.com>")).toBe("Andrei Hăsnaș");
+  });
+
+  it("returns null for a bare addr-spec (no display name to render)", () => {
+    expect(senderDisplayName("andrei@example.com")).toBeNull();
+  });
+
+  it("returns null for an empty phrase or an ambiguous double angle-addr", () => {
+    expect(senderDisplayName("<andrei@example.com>")).toBeNull();
+    expect(senderDisplayName("x <a@x.com> <b@y.com>")).toBeNull();
+    expect(senderDisplayName("  <andrei@example.com>")).toBeNull();
+    expect(senderDisplayName("")).toBeNull();
+  });
+
+  it("does not filter control characters (the caller applies header safety)", () => {
+    // Mirrors the address-record display_name contract: safety is enforced at
+    // the provider-call boundary via the header-safety check, not here.
+    expect(senderDisplayName("Evil\r\nBcc: a@b.c <sender@example.com>")).toBe("Evil\r\nBcc: a@b.c");
   });
 });

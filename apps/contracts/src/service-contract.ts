@@ -39,6 +39,14 @@ const WAIVER_TEXT_JSON_SCHEMA_PATTERN = "^[^\\u0000-\\u001f\\u007f]*$";
 export const SERVICE_CONTRACT_JSON_SCHEMA = {
   $schema: "http://json-schema.org/draft-07/schema#",
   $id: "https://github.com/hasna/contracts/schema/hasna.service_contract.v1.json",
+  $comment:
+    "$id is an opaque JSON Schema identity URI for contractVersion v1. It is " +
+    "deliberately not a repository link, and dereferencing it is neither " +
+    "required nor expected. The @hasna/contracts package now lives in " +
+    "hasna/apps; this legacy path is retained unchanged so that already-" +
+    "published v1 contract documents keep their identity. Changing it is an " +
+    "owner-gated contract-identity decision: see " +
+    "docs/adr/0002-service-contract-schema-identity-uri.md.",
   title: "Hasna Service Contract v1",
   description:
     "Repo self-description (hasna.contract.json) for the Hasna Service Contract v1. Public clients use one authenticated HTTPS service transport; authoritative server data is PostgreSQL.",

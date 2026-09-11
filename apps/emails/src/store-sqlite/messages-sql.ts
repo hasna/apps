@@ -90,7 +90,15 @@ export const UNIFIED_MESSAGES_SQL = `(
     e.provider_message_id AS provider_message_id,
     e.message_id AS message_id,
     e.in_reply_to AS in_reply_to,
-    e.sent_at AS received_at,
+    -- NEVER NULL, and the fallback is not decoration. The seam's received_at is the
+    -- row's EFFECTIVE timestamp — the same expression the ordering key below uses — not
+    -- the raw column. An outbound row has nothing that was "received", the ledger's
+    -- sent_at is the only inert timestamp it carries, and a reader that answered NULL
+    -- made every received_at-anchored window silently drop the message: the caller could
+    -- not tell "outside the window" from "no timestamp", so a sweep either lost all sent
+    -- mail or admitted the entire history. Reported as BUG-0043; the same rule now holds
+    -- in the PostgreSQL arm's record mapper.
+    COALESCE(e.sent_at, e.created_at) AS received_at,
     -- The ledger has no read or star state, and is_read on the seam's record is a
     -- non-optional boolean, so there is no "unknown" to return. 1 is the answer
     -- src/cli/tui/data.local.ts already gives for these same rows (you have read
@@ -142,7 +150,9 @@ export const UNIFIED_MESSAGES_SQL = `(
         json_extract(i.headers_json, '$."in-reply-to"')
       )
       ELSE NULL END,
-    i.received_at,
+    -- Same rule as the ledger branch above: a row read back through the seam reports the
+    -- timestamp it is ORDERED by, so received_at is never null (BUG-0043).
+    COALESCE(i.received_at, i.created_at),
     i.is_read,
     i.is_starred,
     i.is_archived,
