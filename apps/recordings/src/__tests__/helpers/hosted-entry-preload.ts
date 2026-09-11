@@ -5,6 +5,7 @@ import * as config from "../../lib/config.js";
 import { lstatSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
+import vectors from "../../../contracts/v1/fixtures.json";
 
 const home = process.env.HOME ?? "", info = lstatSync(home);
 if (!info.isDirectory() || info.isSymbolicLink() || realpathSync(home) !== home ||
@@ -26,10 +27,15 @@ const row = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", title: "Fictional", tr
   durationMs: 1000, createdAt: "2026-01-01T12:00:00Z", updatedAt: "2026-01-01T12:00:00Z" };
 globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input);
-  if (!["https://fictional.example.test/api/v1/recordings?limit=1", "https://fictional.example.test/api/v1/paste-history?limit=1"].includes(url) ||
+  if (!["https://fictional.example.test/api/v1/recordings?limit=1", "https://fictional.example.test/api/v1/paste-history?limit=1", "https://fictional.example.test/api/v1/providers"].includes(url) ||
       init?.method !== "GET" || new Headers(init.headers).get("authorization") !== "Bearer fictional-entry-session" ||
       init.redirect !== "manual" || init.credentials !== "omit") return refuse();
   counts.requests++; writeBoundary();
+  if (url.endsWith("/providers")) {
+    const catalog = vectors.cases.find(value => value.name === "provider catalog with explicit defaults")!.value;
+    if (!catalog || typeof catalog !== "object" || Array.isArray(catalog)) return refuse();
+    return Response.json({ ...catalog, serverConfiguration: "Hidden fictional provider configuration" });
+  }
   return url.includes("/paste-history?") ? Response.json({ receipts: [{ id: row.id, recordingId: row.id,
     text: "Hidden fictional paste.", destinationAppId: "test.fictional.editor", destinationAppName: "Fictional editor",
     status: "confirmed", occurredAt: row.createdAt, createdAt: row.createdAt, updatedAt: row.updatedAt,

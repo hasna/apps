@@ -19,6 +19,10 @@ export function buildHostedServer(client: HostedRecordingsClient): McpServer {
       return { content: [{ type: "text" as const, text: JSON.stringify(result) }], structuredContent: result, isError: true };
     }
   };
+  server.registerTool("recordings_hosted_providers", {
+    description: "Read server-configured transcription providers, models and optional defaults. Availability is reported by the server; no provider request is made.",
+    inputSchema: z.object({}).strict(), annotations,
+  }, () => execute(() => client.providers()));
   server.registerTool("recordings_hosted_list", {
     description: "Read one hosted Library page. Private transcripts require includeText. A cursor permits another request, without an inferred total.",
     inputSchema: { limit: z.number().int().min(1).max(100).optional(), before: z.string().optional(),
