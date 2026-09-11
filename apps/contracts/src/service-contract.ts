@@ -15,12 +15,12 @@ import {
   databaseUrlSecretRefFor,
   defaultSqlitePathFor,
   type ServiceContractManifest
-} from "./schemas";
+} from "./schemas.js";
 
 import {
   serverDataBackendEnvKeys,
   type ServerDataBackendEnvKeys,
-} from "./server-backend";
+} from "./server-backend.js";
 
 export const SERVICE_CONTRACT_MANIFEST_FILENAME = "hasna.contract.json";
 
@@ -206,6 +206,25 @@ export const SERVICE_CONTRACT_JSON_SCHEMA = {
             pattern: "^[A-Za-z_$][A-Za-z0-9_$]*$"
           },
           deferReason: { type: "string", minLength: 1 },
+          dataAccess: {
+            enum: ["hosted", "server-only", "local-opt-in"],
+            description:
+              "How the surface reaches data: hosted (the authenticated /v1 client only), server-only (never reachable from a CLI or MCP bin), or local-opt-in (the on-box store behind HASNA_<NAME>_LOCAL=1 only). Absent asserts nothing."
+          },
+          commands: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["name", "dataAccess"],
+              properties: {
+                name: { type: "string", minLength: 1 },
+                dataAccess: { enum: ["hosted", "server-only", "local-opt-in"] }
+              }
+            },
+            description:
+              "Per-command data access where it differs from the surface default, e.g. a `db migrate` command that is server-only."
+          },
           readinessGates: {
             type: "array",
             items: {
@@ -416,6 +435,63 @@ export const SERVICE_CONTRACT_JSON_SCHEMA = {
       },
       description:
         "How the repo's artifacts reach consumers. Optional and additive; absence asserts nothing."
+    },
+    scope: {
+      enum: ["public", "internal"],
+      description:
+        "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*), internal is ~/.hasna-internal/<name> (@hasna-internal/*). Absent means public."
+    },
+    placement: {
+      type: "object",
+      additionalProperties: false,
+      required: ["hosted"],
+      properties: {
+        hosted: {
+          enum: ["default", "never"],
+          description:
+            "default: data lives in the hosted service and the client is required; never: a local-by-design tool that makes no hosted claim."
+        }
+      },
+      description: "Where the app's data lives by default."
+    },
+    client: {
+      oneOf: [
+        { type: "null" },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["transport", "credentialChain"],
+          properties: {
+            transport: { const: "hosted" },
+            authority: {
+              type: "string",
+              pattern: "^https://[^\\s/@?#]+(?:/[^\\s/?#]+)*$",
+              description:
+                "Absolute https client base with no credentials, query, fragment, or trailing slash, never ending in /v1. Defaults to https://api.hasna.com/<name>."
+            },
+            credentialChain: { const: "contracts" },
+            localOptIn: {
+              type: ["string", "null"],
+              pattern: "^HASNA_[A-Z][A-Z0-9_]*_LOCAL$",
+              description: "HASNA_<NAME>_LOCAL, the one door to an on-box store; null when the app has none."
+            },
+            localStoreModule: {
+              type: ["string", "null"],
+              minLength: 1,
+              description:
+                "Repo-relative source path of the one module allowed to open the on-box store, e.g. src/db/database.ts."
+            },
+            readProbe: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string", minLength: 1 },
+              description: 'The read command the black-box fail-closed check runs, e.g. ["list", "--limit", "1"].'
+            }
+          }
+        }
+      ],
+      description:
+        "The hosted client contract: CLI and MCP bins reach data only through the shared authenticated client. null states explicitly that the repo ships no client. Omit to assert nothing."
     },
     metadata: {
       type: "object",

@@ -8808,6 +8808,203 @@ function validateDeploymentContractSet(schemas3, input) {
   };
 }
 
+// src/client/errors.ts
+var CLIENT_RESOLUTION_CODES = [
+  "CREDENTIAL_ABSENT",
+  "CREDENTIAL_UNREADABLE",
+  "CREDENTIAL_REJECTED",
+  "AUTHORITY_MISSING",
+  "AUTHORITY_INVALID",
+  "AUTHORITY_CONFLICT",
+  "LOCAL_OPT_IN_CONFLICT",
+  "TRANSPORT_UNAVAILABLE",
+  "NOT_AVAILABLE_HOSTED"
+];
+var CLIENT_RESOLUTION_EXIT_CODES = Object.freeze({
+  CREDENTIAL_ABSENT: 2,
+  CREDENTIAL_UNREADABLE: 3,
+  CREDENTIAL_REJECTED: 4,
+  AUTHORITY_MISSING: 5,
+  AUTHORITY_INVALID: 5,
+  AUTHORITY_CONFLICT: 5,
+  LOCAL_OPT_IN_CONFLICT: 6,
+  TRANSPORT_UNAVAILABLE: 7,
+  NOT_AVAILABLE_HOSTED: 8
+});
+var CLIENT_RESOLUTION_CODE_DESCRIPTIONS = Object.freeze({
+  CREDENTIAL_ABSENT: "no credential in the Keychain, the credentials file, or the environment, and the local opt-in is off",
+  CREDENTIAL_UNREADABLE: "a credential source exists but cannot be read or holds an unusable value",
+  CREDENTIAL_REJECTED: "the authority rejected the presented credential (401/403)",
+  AUTHORITY_MISSING: "no service authority is configured and the fleet gateway default cannot be composed",
+  AUTHORITY_INVALID: "a declared service authority is not a usable HTTPS URL",
+  AUTHORITY_CONFLICT: "configured service authorities disagree or changed during a request",
+  LOCAL_OPT_IN_CONFLICT: "the local opt-in and hosted client configuration were both declared",
+  TRANSPORT_UNAVAILABLE: "the service authority could not be reached",
+  NOT_AVAILABLE_HOSTED: "the command is server-only and has no hosted client path"
+});
+function isClientResolutionCode(value) {
+  return typeof value === "string" && CLIENT_RESOLUTION_CODES.includes(value);
+}
+function exitCodeForClientResolutionCode(code) {
+  return CLIENT_RESOLUTION_EXIT_CODES[code];
+}
+
+class ClientResolutionError extends Error {
+  code;
+  exitCode;
+  app;
+  sources;
+  remedy;
+  constructor(code, app, message, options = {}) {
+    super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
+    if (!isClientResolutionCode(code)) {
+      throw new TypeError(`Unknown client resolution code: ${String(code)}`);
+    }
+    this.name = "ClientResolutionError";
+    this.code = code;
+    this.exitCode = CLIENT_RESOLUTION_EXIT_CODES[code];
+    this.app = app;
+    this.sources = Object.freeze([...options.sources ?? []]);
+    this.remedy = options.remedy ?? null;
+  }
+  toJSON() {
+    return {
+      name: this.name,
+      code: this.code,
+      exitCode: this.exitCode,
+      app: this.app,
+      message: this.message,
+      sources: [...this.sources],
+      remedy: this.remedy
+    };
+  }
+}
+function isClientResolutionError(value) {
+  return value instanceof ClientResolutionError;
+}
+function clientResolutionCodeOf(error2) {
+  if (!error2 || typeof error2 !== "object")
+    return null;
+  const code = error2.code;
+  return isClientResolutionCode(code) ? code : null;
+}
+function clientResolutionExitCode(error2, fallback = 1) {
+  const code = clientResolutionCodeOf(error2);
+  return code ? CLIENT_RESOLUTION_EXIT_CODES[code] : fallback;
+}
+function formatClientResolutionFailure(error2, options = {}) {
+  const app = options.app ?? error2.app ?? "client";
+  if (options.json) {
+    return JSON.stringify({ ...error2.toJSON(), app });
+  }
+  const oneLine = (text) => text.replace(/\s*\n\s*/g, " ").trim();
+  const remedy = error2.remedy ? ` ${oneLine(error2.remedy)}` : "";
+  return `${app}: ${error2.code}: ${oneLine(error2.message)}${remedy}`;
+}
+
+// src/env-token.ts
+function envToken(name) {
+  return name.toUpperCase().replace(/-/g, "_");
+}
+
+// src/client/env-keys.ts
+function clientTransportEnvKeys(name) {
+  const envSegment = envToken(name);
+  return {
+    apiUrlKeys: [`HASNA_${envSegment}_API_URL`, `${envSegment}_API_URL`],
+    apiKeyKeys: [`HASNA_${envSegment}_API_KEY`, `${envSegment}_API_KEY`]
+  };
+}
+function credentialOverrideEnvKey(name) {
+  return `HASNA_${envToken(name)}_API_KEY_OVERRIDE`;
+}
+var CREDENTIAL_PROFILE_ENV_KEY = "HASNA_PROFILE";
+function credentialPointerEnvKey(name) {
+  return `HASNA_${envToken(name)}_API_KEY_REF`;
+}
+
+// src/client/local-opt-in.ts
+function localOptInEnvKey(name) {
+  return `HASNA_${envToken(name)}_LOCAL`;
+}
+function localOptInAliasEnvKey(name) {
+  return `${envToken(name)}_LOCAL`;
+}
+var LOCAL_OPT_IN_TRUE_VALUES = ["1", "true", "yes"];
+var LOCAL_OPT_IN_FALSE_VALUES = ["", "0", "false", "no"];
+function hostedClientEnvKeys(name) {
+  const keys = clientTransportEnvKeys(name);
+  return [
+    ...keys.apiUrlKeys,
+    ...keys.apiKeyKeys,
+    credentialOverrideEnvKey(name),
+    credentialPointerEnvKey(name),
+    CREDENTIAL_PROFILE_ENV_KEY
+  ];
+}
+function ownStringValue(env, key) {
+  if (!Object.prototype.hasOwnProperty.call(env, key))
+    return;
+  const descriptor = Object.getOwnPropertyDescriptor(env, key);
+  if (!descriptor || !("value" in descriptor))
+    return;
+  const value = descriptor.value;
+  return typeof value === "string" ? value : undefined;
+}
+function flagState(raw) {
+  if (raw === undefined)
+    return "unset";
+  const normalized = raw.trim().toLowerCase();
+  if (LOCAL_OPT_IN_TRUE_VALUES.includes(normalized))
+    return "on";
+  if (LOCAL_OPT_IN_FALSE_VALUES.includes(normalized))
+    return "off";
+  return "unrecognized";
+}
+function describeLocalOptIn(name, env = process.env) {
+  const envKey = localOptInEnvKey(name);
+  const aliasKey = localOptInAliasEnvKey(name);
+  const canonical = flagState(ownStringValue(env, envKey));
+  const alias = flagState(ownStringValue(env, aliasKey));
+  const recognized = canonical !== "unrecognized" && alias !== "unrecognized";
+  let on = false;
+  let source = null;
+  const conflicts = [];
+  if (canonical === "on") {
+    on = true;
+    source = envKey;
+    if (alias === "off")
+      conflicts.push(aliasKey);
+  } else if (canonical === "off") {
+    if (alias === "on")
+      conflicts.push(aliasKey);
+  } else if (alias === "on") {
+    on = true;
+    source = aliasKey;
+  }
+  if (on) {
+    for (const key of hostedClientEnvKeys(name)) {
+      if (ownStringValue(env, key) !== undefined)
+        conflicts.push(key);
+    }
+  }
+  const state = conflicts.length > 0 ? "conflict" : on ? "on" : "off";
+  return { state, envKey, source, conflicts, recognized };
+}
+function selectsLocalStore(name, env = process.env) {
+  const described = describeLocalOptIn(name, env);
+  if (described.state === "conflict") {
+    throw new ClientResolutionError("LOCAL_OPT_IN_CONFLICT", name, `${described.source ?? described.envKey} selects the on-box store for '${name}', but ${described.conflicts.join(", ")} ` + `${described.conflicts.length === 1 ? "is" : "are"} also declared; a process runs against exactly one store.`, {
+      sources: [described.source ?? described.envKey, ...described.conflicts],
+      remedy: `Unset ${described.envKey} to use the hosted service, or unset the hosted keys to use the on-box store.`
+    });
+  }
+  return described.state === "on";
+}
+function localStoreNotice(name, storePath) {
+  return `local mode (${localOptInEnvKey(name)}=1): on-box store ${storePath}; hosted data is NOT visible`;
+}
+
 // src/schemas.ts
 import { createHash as createHash2 } from "crypto";
 
@@ -9171,7 +9368,8 @@ function createDeploymentEnvelopeSchema(primitives) {
 
 // src/schemas.ts
 var CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-var CONTRACTS_PACKAGE_VERSION = "1.0.2";
+var CONTRACTS_PACKAGE_VERSION = "1.1.0";
+var FLEET_MIN_KIT_VERSION = "1.1.0";
 var SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
   resourceRef: "hasna.resource_ref.v1",
@@ -13215,6 +13413,54 @@ var SERVICE_SURFACE_KINDS = ["api", "sdk", "mcp", "cli"];
 var ServiceSurfaceKindSchema = exports_external.enum(SERVICE_SURFACE_KINDS);
 var ServiceSurfaceStatusSchema = exports_external.enum(["supported", "deferred", "unsupported"]);
 var ServiceAuthModeSchema = exports_external.enum(["none", "local-only", "api-key", "session", "service-token", "custom"]);
+var APP_SCOPES = ["public", "internal"];
+var AppScopeSchema = exports_external.enum(APP_SCOPES);
+var DATA_ACCESS_MODES = ["hosted", "server-only", "local-opt-in"];
+var DataAccessSchema = exports_external.enum(DATA_ACCESS_MODES);
+var SurfaceCommandSchema = exports_external.object({
+  name: exports_external.string().trim().min(1),
+  dataAccess: DataAccessSchema
+}).strict();
+var PLACEMENT_HOSTED_MODES = ["default", "never"];
+var PlacementHostedSchema = exports_external.enum(PLACEMENT_HOSTED_MODES);
+var PlacementContractSchema = exports_external.object({ hosted: PlacementHostedSchema }).strict();
+var CLIENT_CONTRACT_TRANSPORTS = ["hosted"];
+var ClientContractTransportSchema = exports_external.enum(CLIENT_CONTRACT_TRANSPORTS);
+var CLIENT_CREDENTIAL_CHAINS = ["contracts"];
+var ClientCredentialChainSchema = exports_external.enum(CLIENT_CREDENTIAL_CHAINS);
+var CLIENT_AUTHORITY_PATTERN = /^https:\/\/[^\s/@?#]+(?:\/[^\s/?#]+)*$/;
+var LOCAL_OPT_IN_KEY_PATTERN = /^HASNA_[A-Z][A-Z0-9_]*_LOCAL$/;
+var RELATIVE_SOURCE_PATH_PATTERN = /^(?!\/)(?!\.\.)[A-Za-z0-9_./-]+\.[cm]?[jt]sx?$/;
+var ClientContractSchema = exports_external.object({
+  transport: ClientContractTransportSchema,
+  authority: exports_external.string().regex(CLIENT_AUTHORITY_PATTERN, "client.authority must be an absolute https URL with no credentials, query, fragment, or trailing slash").optional(),
+  credentialChain: ClientCredentialChainSchema,
+  localOptIn: exports_external.string().regex(LOCAL_OPT_IN_KEY_PATTERN, "client.localOptIn must be HASNA_<NAME>_LOCAL").nullable().optional(),
+  localStoreModule: exports_external.string().regex(RELATIVE_SOURCE_PATH_PATTERN, "client.localStoreModule must be a repo-relative source path such as src/db/database.ts").nullable().optional(),
+  readProbe: exports_external.array(exports_external.string().min(1)).min(1).optional()
+}).strict().superRefine((value, ctx) => {
+  if (value.authority?.endsWith("/v1")) {
+    ctx.addIssue({
+      code: exports_external.ZodIssueCode.custom,
+      message: "client.authority must not end in /v1; the client appends the version segment itself",
+      path: ["authority"]
+    });
+  }
+  if (value.localOptIn && !value.localStoreModule) {
+    ctx.addIssue({
+      code: exports_external.ZodIssueCode.custom,
+      message: "client.localOptIn names a door, so client.localStoreModule must name the one module that opens the on-box store",
+      path: ["localStoreModule"]
+    });
+  }
+  if (value.localStoreModule && !value.localOptIn) {
+    ctx.addIssue({
+      code: exports_external.ZodIssueCode.custom,
+      message: "client.localStoreModule names an on-box store, so client.localOptIn must name its door",
+      path: ["localOptIn"]
+    });
+  }
+});
 var ServiceEndpointSchema = exports_external.object({
   method: exports_external.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
   path: exports_external.string().regex(/^\/[A-Za-z0-9_./:*-]*$/, "Endpoint paths must be absolute HTTP paths"),
@@ -13254,8 +13500,19 @@ var ServiceSurfaceSchema = exports_external.object({
   generatedFrom: exports_external.string().regex(/^\/[A-Za-z0-9_./:-]*$/, "SDK generatedFrom must reference an absolute OpenAPI path").optional(),
   clientClassName: exports_external.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/).optional(),
   deferReason: exports_external.string().min(1).optional(),
-  readinessGates: exports_external.array(DeploymentReadinessGateSchema).default([])
+  readinessGates: exports_external.array(DeploymentReadinessGateSchema).default([]),
+  dataAccess: DataAccessSchema.optional(),
+  commands: exports_external.array(SurfaceCommandSchema).optional()
 }).strict().superRefine((value, ctx) => {
+  if (value.commands) {
+    const seen = new Set;
+    for (const [index, command] of value.commands.entries()) {
+      if (seen.has(command.name)) {
+        ctx.addIssue({ code: exports_external.ZodIssueCode.custom, message: `Duplicate command declaration "${command.name}"`, path: ["commands", index, "name"] });
+      }
+      seen.add(command.name);
+    }
+  }
   if (value.status === "supported") {
     if (!value.kind || value.kind === "api") {
       if (!value.bin) {
@@ -13668,6 +13925,9 @@ var ServiceContractManifestSchema = exports_external.object({
   serving: ServingContractSchema.optional(),
   serviceSurfaces: exports_external.array(ServiceSurfaceSchema).default([]),
   publishing: PublishingContractSchema.optional(),
+  scope: AppScopeSchema.optional(),
+  placement: PlacementContractSchema.optional(),
+  client: ClientContractSchema.nullable().optional(),
   metadata: ServiceContractMetadataSchema.optional()
 }).strict().superRefine((value, ctx) => {
   if (new Set(value.hosting).size !== value.hosting.length) {
@@ -13818,6 +14078,47 @@ var ServiceContractManifestSchema = exports_external.object({
         code: exports_external.ZodIssueCode.custom,
         message: `Service surface MCP bin "${surface.mcpBin}" must be declared in bins`,
         path: ["serviceSurfaces", index, "mcpBin"]
+      });
+    }
+  }
+  if (value.client) {
+    const expectedOptIn = localOptInEnvKey(value.name);
+    if (value.client.localOptIn && value.client.localOptIn !== expectedOptIn) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: `client.localOptIn must be ${expectedOptIn}`,
+        path: ["client", "localOptIn"]
+      });
+    }
+    if (value.class === "library") {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "library repos ship no client; declare client: null or omit it",
+        path: ["client"]
+      });
+    }
+    if (value.placement?.hosted === "never") {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "placement.hosted is never, so the repo cannot also declare a hosted client; drop one of them",
+        path: ["client"]
+      });
+    }
+  }
+  for (const [index, surface] of value.serviceSurfaces.entries()) {
+    const accesses = [surface.dataAccess, ...(surface.commands ?? []).map((command) => command.dataAccess)];
+    if (accesses.includes("local-opt-in") && !value.client?.localOptIn) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "a local-opt-in surface or command requires client.localOptIn to name the door",
+        path: ["serviceSurfaces", index, "dataAccess"]
+      });
+    }
+    if (accesses.includes("hosted") && value.placement?.hosted === "never") {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "placement.hosted is never, so no surface or command can declare hosted data access",
+        path: ["serviceSurfaces", index, "dataAccess"]
       });
     }
   }
@@ -15650,11 +15951,6 @@ function scanNoCloudTarget(target, options = {}) {
   });
 }
 
-// src/env-token.ts
-function envToken(name) {
-  return name.toUpperCase().replace(/-/g, "_");
-}
-
 // src/server-backend.ts
 function serverDataBackendEnvKeys(name) {
   const token = envToken(name);
@@ -15873,6 +16169,23 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
             pattern: "^[A-Za-z_$][A-Za-z0-9_$]*$"
           },
           deferReason: { type: "string", minLength: 1 },
+          dataAccess: {
+            enum: ["hosted", "server-only", "local-opt-in"],
+            description: "How the surface reaches data: hosted (the authenticated /v1 client only), server-only (never reachable from a CLI or MCP bin), or local-opt-in (the on-box store behind HASNA_<NAME>_LOCAL=1 only). Absent asserts nothing."
+          },
+          commands: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["name", "dataAccess"],
+              properties: {
+                name: { type: "string", minLength: 1 },
+                dataAccess: { enum: ["hosted", "server-only", "local-opt-in"] }
+              }
+            },
+            description: "Per-command data access where it differs from the surface default, e.g. a `db migrate` command that is server-only."
+          },
           readinessGates: {
             type: "array",
             items: {
@@ -16072,6 +16385,58 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
       },
       description: "How the repo's artifacts reach consumers. Optional and additive; absence asserts nothing."
     },
+    scope: {
+      enum: ["public", "internal"],
+      description: "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*), internal is ~/.hasna-internal/<name> (@hasna-internal/*). Absent means public."
+    },
+    placement: {
+      type: "object",
+      additionalProperties: false,
+      required: ["hosted"],
+      properties: {
+        hosted: {
+          enum: ["default", "never"],
+          description: "default: data lives in the hosted service and the client is required; never: a local-by-design tool that makes no hosted claim."
+        }
+      },
+      description: "Where the app's data lives by default."
+    },
+    client: {
+      oneOf: [
+        { type: "null" },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["transport", "credentialChain"],
+          properties: {
+            transport: { const: "hosted" },
+            authority: {
+              type: "string",
+              pattern: "^https://[^\\s/@?#]+(?:/[^\\s/?#]+)*$",
+              description: "Absolute https client base with no credentials, query, fragment, or trailing slash, never ending in /v1. Defaults to https://api.hasna.com/<name>."
+            },
+            credentialChain: { const: "contracts" },
+            localOptIn: {
+              type: ["string", "null"],
+              pattern: "^HASNA_[A-Z][A-Z0-9_]*_LOCAL$",
+              description: "HASNA_<NAME>_LOCAL, the one door to an on-box store; null when the app has none."
+            },
+            localStoreModule: {
+              type: ["string", "null"],
+              minLength: 1,
+              description: "Repo-relative source path of the one module allowed to open the on-box store, e.g. src/db/database.ts."
+            },
+            readProbe: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string", minLength: 1 },
+              description: 'The read command the black-box fail-closed check runs, e.g. ["list", "--limit", "1"].'
+            }
+          }
+        }
+      ],
+      description: "The hosted client contract: CLI and MCP bins reach data only through the shared authenticated client. null states explicitly that the repo ships no client. Omit to assert nothing."
+    },
     metadata: {
       type: "object",
       additionalProperties: true,
@@ -16165,9 +16530,251 @@ function serviceContractSpec(name) {
   };
 }
 
+// src/conformance-import-graph.ts
+import { existsSync as existsSync2, readFileSync as readFileSync3, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
+import { basename as basename2, dirname, join as join4, relative as relative2, resolve as resolve3 } from "path";
+var SQLITE_MODULE_SPECIFIERS = Object.freeze([
+  ["bun", "sqlite"].join(":"),
+  ["better", "sqlite3"].join("-"),
+  ["node", "sqlite"].join(":"),
+  "sqlite3",
+  "sqlite",
+  ["@libsql", "client"].join("/"),
+  "libsql"
+]);
+var SQLITE_SPECIFIER_SET = new Set(SQLITE_MODULE_SPECIFIERS);
+var NEW_DATABASE = new RegExp(`\\bnew\\s+${["Data", "base"].join("")}\\s*\\(`);
+var NEW_DATABASE_EVIDENCE = ["new ", "Data", "base("].join("");
+var SOURCE_FILE = /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/;
+var TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
+var DECLARATION_FILE = /\.d\.[cm]?ts$/;
+var MAX_FILE_BYTES = 2000000;
+var IMPORT_GRAPH_SKIP_DIRS = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "build",
+  "out",
+  "coverage",
+  ".next",
+  ".turbo",
+  ".cache",
+  "tests",
+  "test",
+  "__tests__"
+]);
+var IMPORT_SPECIFIER = /(?:import|export)\s+(?:[^'";]*?\s+from\s+)?["']([^"']+)["']|\brequire\(\s*["']([^"']+)["']\s*\)|\bimport\(\s*["']([^"']+)["']\s*\)/g;
+function maskSourceComments(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, " ")).replace(/(^|[^:"'`\\])\/\/[^\n]*/g, (match, lead) => lead + " ".repeat(match.length - lead.length));
+}
+function resolveRelativeImport(fromFile, specifier) {
+  if (!specifier.startsWith("."))
+    return null;
+  const base = resolve3(dirname(fromFile), specifier);
+  const candidates = [
+    base,
+    base.replace(/\.js$/, ".ts"),
+    base.replace(/\.js$/, ".tsx"),
+    base.replace(/\.mjs$/, ".mts"),
+    base.replace(/\.cjs$/, ".cts"),
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.js`,
+    `${base}.mts`,
+    `${base}.mjs`,
+    join4(base, "index.ts"),
+    join4(base, "index.tsx"),
+    join4(base, "index.js"),
+    join4(base, "index.mjs")
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (existsSync2(candidate) && statSync2(candidate).isFile())
+        return candidate;
+    } catch {}
+  }
+  return null;
+}
+function walkSourceFiles(dir, out) {
+  let entries;
+  try {
+    entries = readdirSync2(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const full = join4(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (!IMPORT_GRAPH_SKIP_DIRS.has(entry.name))
+        walkSourceFiles(full, out);
+      continue;
+    }
+    if (!entry.isFile())
+      continue;
+    if (!SOURCE_FILE.test(entry.name) || TEST_FILE.test(entry.name) || DECLARATION_FILE.test(entry.name))
+      continue;
+    try {
+      if (statSync2(full).size > MAX_FILE_BYTES)
+        continue;
+    } catch {
+      continue;
+    }
+    out.push(full);
+  }
+}
+function analyzeSourceFile(path) {
+  let text;
+  try {
+    text = readFileSync3(path, "utf8");
+  } catch {
+    return null;
+  }
+  const masked = maskSourceComments(text);
+  const imports = [];
+  const externalImports = [];
+  let sqliteEvidence = null;
+  for (const match of masked.matchAll(IMPORT_SPECIFIER)) {
+    const specifier = match[1] ?? match[2] ?? match[3];
+    if (!specifier)
+      continue;
+    if (specifier.startsWith(".")) {
+      const resolved = resolveRelativeImport(path, specifier);
+      if (resolved && !imports.includes(resolved))
+        imports.push(resolved);
+    } else {
+      if (!externalImports.includes(specifier))
+        externalImports.push(specifier);
+      if (SQLITE_SPECIFIER_SET.has(specifier) && !sqliteEvidence)
+        sqliteEvidence = specifier;
+    }
+  }
+  if (!sqliteEvidence && NEW_DATABASE.test(masked))
+    sqliteEvidence = NEW_DATABASE_EVIDENCE;
+  return { path, imports, externalImports, sqlite: sqliteEvidence !== null, sqliteEvidence };
+}
+function buildImportGraph(repoRoot) {
+  const root = resolve3(repoRoot);
+  const files = [];
+  const sourceRoot = join4(root, "src");
+  if (existsSync2(sourceRoot))
+    walkSourceFiles(sourceRoot, files);
+  else
+    walkSourceFiles(root, files);
+  const binRoot = join4(root, "bin");
+  if (existsSync2(binRoot))
+    walkSourceFiles(binRoot, files);
+  const infos = new Map;
+  for (const file of files) {
+    const info = analyzeSourceFile(file);
+    if (info)
+      infos.set(file, info);
+  }
+  return { root, files: infos };
+}
+function resolveBinEntry(repoRoot, binTarget) {
+  const root = resolve3(repoRoot);
+  const direct = resolve3(root, binTarget);
+  const guesses = [];
+  const asSource = (path) => path.replace(/\/dist\//, "/src/").replace(/\.[cm]?js$/, ".ts");
+  guesses.push(asSource(direct), asSource(direct).replace(/\.ts$/, "/index.ts"));
+  if (existsSync2(direct) && statSync2(direct).isFile()) {
+    try {
+      const shim = maskSourceComments(readFileSync3(direct, "utf8"));
+      const match = /(?:from|import\(|require\()\s*["']([^"']+)["']/.exec(shim);
+      if (match?.[1]?.startsWith(".")) {
+        const resolved = resolveRelativeImport(direct, match[1]);
+        if (resolved)
+          guesses.unshift(resolved);
+        const shimTarget = asSource(resolve3(dirname(direct), match[1]));
+        guesses.push(shimTarget, shimTarget.replace(/\.ts$/, "/index.ts"));
+      }
+    } catch {}
+    if (SOURCE_FILE.test(direct) && !direct.includes("/dist/"))
+      guesses.push(direct);
+  }
+  const stem = basename2(binTarget).replace(/\.[cm]?js$/, "");
+  guesses.push(join4(root, "src", `${stem}.ts`), join4(root, "src", stem, "index.ts"), join4(root, "src", "cli", `${stem}.ts`));
+  if (/mcp/.test(stem))
+    guesses.push(join4(root, "src", "mcp", "index.ts"), join4(root, "src", "mcp.ts"));
+  if (/serve|server/.test(stem))
+    guesses.push(join4(root, "src", "server", "index.ts"), join4(root, "src", "server.ts"));
+  if (/^(?:index|cli)$/.test(stem) || stem === basename2(root)) {
+    guesses.push(join4(root, "src", "cli", "index.ts"), join4(root, "src", "cli.ts"), join4(root, "src", "index.ts"));
+  }
+  for (const guess of guesses) {
+    try {
+      if (existsSync2(guess) && statSync2(guess).isFile())
+        return guess;
+    } catch {}
+  }
+  return null;
+}
+function reachableFrom(graph, entry) {
+  const seen = new Set;
+  const queue = [resolve3(entry)];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (seen.has(current))
+      continue;
+    seen.add(current);
+    const info = graph.files.get(current) ?? analyzeSourceFile(current);
+    if (!info)
+      continue;
+    for (const next of info.imports)
+      if (!seen.has(next))
+        queue.push(next);
+  }
+  return seen;
+}
+function importPath(graph, from, to) {
+  const start = resolve3(from);
+  const goal = resolve3(to);
+  const previous = new Map([[start, null]]);
+  const queue = [start];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === goal) {
+      const chain = [];
+      for (let node = current;node; node = previous.get(node) ?? null)
+        chain.unshift(node);
+      return chain;
+    }
+    const info = graph.files.get(current) ?? analyzeSourceFile(current);
+    if (!info)
+      continue;
+    for (const next of info.imports) {
+      if (!previous.has(next)) {
+        previous.set(next, current);
+        queue.push(next);
+      }
+    }
+  }
+  return null;
+}
+function sqliteReachability(graph, entry) {
+  const reachable = reachableFrom(graph, entry);
+  const modules = [...reachable].filter((path) => (graph.files.get(path) ?? analyzeSourceFile(path))?.sqlite).sort();
+  const chains = {};
+  for (const module of modules) {
+    const chain = importPath(graph, entry, module) ?? [module];
+    chains[relative2(graph.root, module)] = chain.map((step) => relative2(graph.root, step));
+  }
+  return { modules, chains };
+}
+function importsLocalOptInGate(path) {
+  let text;
+  try {
+    text = maskSourceComments(readFileSync3(path, "utf8"));
+  } catch {
+    return false;
+  }
+  const gate = /import\s*(?:type\s+)?\{[^}]*\bselectsLocalStore\b[^}]*\}\s*from\s*["']@hasna\/contracts(?:\/client(?:\/local-opt-in)?)?(?:\.js)?["']/;
+  return gate.test(text);
+}
+
 // src/conformance.ts
-import { existsSync as existsSync2, readFileSync as readFileSync4, statSync as statSync3 } from "fs";
-import { join as join5, relative as relative3 } from "path";
+import { existsSync as existsSync4, readFileSync as readFileSync6, statSync as statSync5 } from "fs";
+import { join as join7, relative as relative5 } from "path";
 
 // src/auth/keys.ts
 import { createHash as createHash3, createHmac, randomBytes, timingSafeEqual } from "crypto";
@@ -16519,26 +17126,8 @@ function verifyApiKeyToken(token, options) {
 }
 
 // src/credential-seam.ts
-import { readFileSync as readFileSync3, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
-import { join as join4, relative as relative2 } from "path";
-
-// src/client/env-keys.ts
-function clientTransportEnvKeys(name) {
-  const envSegment = envToken(name);
-  return {
-    apiUrlKeys: [`HASNA_${envSegment}_API_URL`, `${envSegment}_API_URL`],
-    apiKeyKeys: [`HASNA_${envSegment}_API_KEY`, `${envSegment}_API_KEY`]
-  };
-}
-function credentialOverrideEnvKey(name) {
-  return `HASNA_${envToken(name)}_API_KEY_OVERRIDE`;
-}
-var CREDENTIAL_PROFILE_ENV_KEY = "HASNA_PROFILE";
-function credentialPointerEnvKey(name) {
-  return `HASNA_${envToken(name)}_API_KEY_REF`;
-}
-
-// src/credential-seam.ts
+import { readFileSync as readFileSync4, readdirSync as readdirSync3, statSync as statSync3 } from "fs";
+import { join as join5, relative as relative3 } from "path";
 var SKIP_DIRS2 = new Set([
   ".git",
   "node_modules",
@@ -16563,8 +17152,8 @@ function isInboundSurfacePath(path) {
   return segments.length > 2 && segments[0] === "src" && INBOUND_SURFACE_DIRS.has(segments[1]);
 }
 var SOURCE_EXTENSIONS = /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/i;
-var TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
-var MAX_FILE_BYTES = 2000000;
+var TEST_FILE2 = /\.(?:test|spec)\.[cm]?[jt]sx?$/i;
+var MAX_FILE_BYTES2 = 2000000;
 var WAIVER_MARKER = /hasna-credential-seam-waiver:\s*(.+)$/i;
 var MIN_WAIVER_REASON_LENGTH = 12;
 var EMPTY_REASONS = /^(?:todo|fixme|wip|n\/?a|later|temporary|temp|because|reasons?|legacy)\W*$/i;
@@ -16652,7 +17241,7 @@ function lineNumberAt(text, index) {
 }
 function packageName(repoRoot) {
   try {
-    const pkg = JSON.parse(readFileSync3(join4(repoRoot, "package.json"), "utf8"));
+    const pkg = JSON.parse(readFileSync4(join5(repoRoot, "package.json"), "utf8"));
     return typeof pkg.name === "string" ? pkg.name : null;
   } catch {
     return null;
@@ -16663,12 +17252,12 @@ function collectSourceFiles(root) {
   function walk(dir) {
     let entries;
     try {
-      entries = readdirSync2(dir, { withFileTypes: true });
+      entries = readdirSync3(dir, { withFileTypes: true });
     } catch {
       return;
     }
     for (const entry of entries) {
-      const full = join4(dir, entry.name);
+      const full = join5(dir, entry.name);
       if (entry.isDirectory()) {
         if (!SKIP_DIRS2.has(entry.name))
           walk(full);
@@ -16676,10 +17265,10 @@ function collectSourceFiles(root) {
       }
       if (!entry.isFile())
         continue;
-      if (!SOURCE_EXTENSIONS.test(entry.name) || TEST_FILE.test(entry.name))
+      if (!SOURCE_EXTENSIONS.test(entry.name) || TEST_FILE2.test(entry.name))
         continue;
       try {
-        if (statSync2(full).size > MAX_FILE_BYTES)
+        if (statSync3(full).size > MAX_FILE_BYTES2)
           continue;
       } catch {
         continue;
@@ -16701,11 +17290,11 @@ function scanCredentialSeam(repoRoot, options) {
   for (const file of files) {
     let text;
     try {
-      text = readFileSync3(file, "utf8");
+      text = readFileSync4(file, "utf8");
     } catch {
       continue;
     }
-    const path = relative2(repoRoot, file).replaceAll("\\", "/");
+    const path = relative3(repoRoot, file).replaceAll("\\", "/");
     if (!isOwnPackage) {
       for (const match of text.matchAll(SEAM_DEFINITION)) {
         findings.push({
@@ -16779,6 +17368,339 @@ function firstReadOnLine(masked, candidates) {
   return null;
 }
 
+// src/conformance-client.ts
+import { existsSync as existsSync3, readFileSync as readFileSync5, readdirSync as readdirSync4 } from "fs";
+import { spawnSync } from "child_process";
+import { mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "fs";
+import { tmpdir as tmpdir2 } from "os";
+import { join as join6, relative as relative4, resolve as resolve4 } from "path";
+var MAX_FINDINGS_IN_DETAIL = 8;
+function verdict(id, findings, passDetail, strict) {
+  if (findings.length === 0)
+    return { id, status: "pass", detail: passDetail };
+  const status = strict ? "fail" : "report";
+  const shown = findings.slice(0, MAX_FINDINGS_IN_DETAIL);
+  const more = findings.length > shown.length ? `; +${findings.length - shown.length} more` : "";
+  return { id, status, detail: `${shown.join("; ")}${more}` };
+}
+function readPackage(repoRoot) {
+  const path = join6(repoRoot, "package.json");
+  if (!existsSync3(path))
+    return { present: false, name: null, bins: {}, kitPin: null };
+  try {
+    const pkg = JSON.parse(readFileSync5(path, "utf8"));
+    const name = typeof pkg.name === "string" ? pkg.name : null;
+    const bins = {};
+    if (typeof pkg.bin === "string" && name)
+      bins[name.replace(/^@[^/]+\//, "")] = pkg.bin;
+    else if (pkg.bin && typeof pkg.bin === "object") {
+      for (const [bin, target] of Object.entries(pkg.bin))
+        if (typeof target === "string")
+          bins[bin] = target;
+    }
+    const pin = [pkg.dependencies, pkg.devDependencies, pkg.optionalDependencies].map((section) => section?.["@hasna/contracts"]).find((value) => typeof value === "string");
+    return { present: true, name, bins, kitPin: pin ?? null };
+  } catch {
+    return { present: true, name: null, bins: {}, kitPin: null };
+  }
+}
+function localByDesign(manifest) {
+  return manifest.client === null || manifest.placement?.hosted === "never";
+}
+function clientBins(manifest) {
+  const bins = [];
+  for (const surface of manifest.serviceSurfaces) {
+    if (surface.status !== "supported")
+      continue;
+    if (surface.kind === "cli" && surface.bin)
+      bins.push({ surface: surface.name, kind: "cli", bin: surface.bin, dataAccess: surface.dataAccess });
+    if (surface.kind === "mcp" && surface.mcpBin)
+      bins.push({ surface: surface.name, kind: "mcp", bin: surface.mcpBin, dataAccess: surface.dataAccess });
+  }
+  if (bins.length === 0) {
+    if (manifest.bins.includes(manifest.name))
+      bins.push({ surface: manifest.name, kind: "cli", bin: manifest.name, dataAccess: undefined });
+    if (manifest.bins.includes(`${manifest.name}-mcp`))
+      bins.push({ surface: `${manifest.name}-mcp`, kind: "mcp", bin: `${manifest.name}-mcp`, dataAccess: undefined });
+  }
+  return bins;
+}
+function clientTransportDeclaredCheck(manifest, options = {}) {
+  const id = "client_transport_declared";
+  const bins = clientBins(manifest);
+  if (bins.length === 0)
+    return { id, status: "skip", detail: "no CLI or MCP surface declared" };
+  if (!manifest.storage)
+    return { id, status: "skip", detail: "no storage declared; nothing to reach" };
+  if (localByDesign(manifest))
+    return { id, status: "pass", detail: "local-by-design: client is null or placement.hosted is never" };
+  const findings = [];
+  if (!manifest.client) {
+    findings.push(`hasna.contract.json declares ${bins.map((bin) => bin.bin).join(", ")} with storage but no client; declare client.transport: hosted (credentialChain: contracts), or client: null / placement.hosted: never for a local-by-design tool`);
+  } else {
+    for (const bin of bins) {
+      if (bin.dataAccess === undefined)
+        findings.push(`surface ${bin.surface} (${bin.bin}) declares no dataAccess; declare hosted, server-only or local-opt-in`);
+    }
+    if (!manifest.client.readProbe)
+      findings.push("client.readProbe is not declared, so the black-box fail-closed check cannot run");
+  }
+  return verdict(id, findings, `client.transport hosted via the contracts credential chain for ${bins.map((bin) => bin.bin).join(", ")}`, options.strict ?? false);
+}
+function clientSqliteIsolationCheck(repoRoot, manifest, options = {}, graph = buildImportGraph(repoRoot)) {
+  const id = "client_sqlite_isolation";
+  const bins = clientBins(manifest).filter((bin) => bin.dataAccess !== "server-only");
+  if (bins.length === 0)
+    return { id, status: "skip", detail: "no CLI or MCP surface declared" };
+  if (localByDesign(manifest))
+    return { id, status: "skip", detail: "local-by-design: client is null or placement.hosted is never" };
+  const pkg = readPackage(repoRoot);
+  if (!pkg.present)
+    return { id, status: "skip", detail: "no package.json found" };
+  const allowedModule = manifest.client?.localStoreModule ? resolve4(repoRoot, manifest.client.localStoreModule) : null;
+  const findings = [];
+  let reachableSqlite = 0;
+  for (const bin of bins) {
+    const target = pkg.bins[bin.bin];
+    if (!target) {
+      findings.push(`bin ${bin.bin} is declared in hasna.contract.json but not in package.json bin`);
+      continue;
+    }
+    const entry = resolveBinEntry(repoRoot, target);
+    if (!entry) {
+      findings.push(`bin ${bin.bin} (${target}) has no resolvable source entry; the import graph cannot be checked`);
+      continue;
+    }
+    const reach = sqliteReachability(graph, entry);
+    for (const module of reach.modules) {
+      const rel = relative4(repoRoot, module);
+      const chain = reach.chains[rel]?.join(" -> ") ?? rel;
+      if (allowedModule && module === allowedModule) {
+        reachableSqlite += 1;
+        if (!importsLocalOptInGate(module)) {
+          findings.push(`${bin.bin}: client.localStoreModule ${rel} opens a store without importing selectsLocalStore from @hasna/contracts/client`);
+        }
+        continue;
+      }
+      findings.push(`${bin.bin} (${bin.kind}) reaches a SQLite module outside client.localStoreModule: ${chain}`);
+    }
+  }
+  const pass = reachableSqlite > 0 ? `only client.localStoreModule opens a store from ${bins.map((bin) => bin.bin).join(", ")}, behind selectsLocalStore` : `no SQLite module is reachable from ${bins.map((bin) => bin.bin).join(", ")}`;
+  return verdict(id, findings, pass, options.strict ?? false);
+}
+var STORE_ARTIFACT = /\.(?:db|db-wal|db-shm|db-journal|sqlite|sqlite3|json)$/i;
+function filesUnder(root) {
+  const out = [];
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = readdirSync4(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join6(dir, entry.name);
+      if (entry.isDirectory())
+        walk(full);
+      else
+        out.push(full);
+    }
+  };
+  walk(root);
+  return out;
+}
+var defaultBlackboxRunner = (timeoutMs) => (argv, env, cwd) => {
+  const result = spawnSync(argv[0], argv.slice(1), { cwd, env, encoding: "utf8", timeout: timeoutMs, stdio: ["ignore", "pipe", "pipe"] });
+  return { status: result.status, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
+};
+function clientFailClosedBlackboxCheck(repoRoot, manifest, options = {}) {
+  const id = "client_fail_closed_blackbox";
+  if (options.blackbox === false)
+    return { id, status: "skip", detail: "disabled by caller" };
+  if (localByDesign(manifest))
+    return { id, status: "skip", detail: "local-by-design: client is null or placement.hosted is never" };
+  const probe = manifest.client?.readProbe;
+  if (!manifest.client || !probe)
+    return { id, status: "skip", detail: "client.readProbe is not declared" };
+  const pkg = readPackage(repoRoot);
+  const target = pkg.bins[manifest.name];
+  if (!target)
+    return { id, status: "skip", detail: `package.json declares no "${manifest.name}" bin` };
+  const binPath = resolve4(repoRoot, target);
+  const strict = options.strict ?? false;
+  if (!existsSync3(binPath)) {
+    return verdict(id, [`built bin ${relative4(repoRoot, binPath)} is missing; build before running the probe`], "", strict);
+  }
+  const timeoutMs = options.blackboxTimeoutMs ?? 60000;
+  const run = options.blackboxRunner ?? defaultBlackboxRunner(timeoutMs);
+  const optIn = manifest.client.localOptIn ?? null;
+  const scopeDir = manifest.scope === "internal" ? ".hasna-internal" : ".hasna";
+  const findings = [];
+  const probeOnce = (label, extra) => {
+    const home = mkdtempSync2(join6(tmpdir2(), "contracts-blackbox-"));
+    try {
+      const env = {
+        HOME: home,
+        HASNA_STATION: "no-such-station",
+        USER: "nobody",
+        PATH: process.env.PATH ?? "",
+        ...extra
+      };
+      const result = run([process.execPath, binPath, ...probe], env, repoRoot);
+      const created = filesUnder(home).filter((file) => STORE_ARTIFACT.test(file));
+      return { label, result, created: created.map((file) => relative4(home, file)), home };
+    } finally {
+      rmSync2(home, { recursive: true, force: true });
+    }
+  };
+  const absent = probeOnce("no credential", {});
+  if (absent.result.status !== 2)
+    findings.push(`${absent.label}: exit ${absent.result.status ?? "signal"}, expected 2`);
+  if (!absent.result.stderr.includes("CREDENTIAL_ABSENT"))
+    findings.push(`${absent.label}: stderr does not name CREDENTIAL_ABSENT`);
+  if (absent.created.length > 0)
+    findings.push(`${absent.label}: created ${absent.created.length} store/JSON file(s) under an empty HOME (${absent.created.slice(0, 3).join(", ")})`);
+  if (optIn) {
+    const local = probeOnce(`${optIn}=1`, { [optIn]: "1" });
+    const expectedStore = join6(scopeDir, manifest.name, `${manifest.name}.db`);
+    if (local.result.status !== 0)
+      findings.push(`${local.label}: exit ${local.result.status ?? "signal"}, expected 0`);
+    const stray = local.created.filter((file) => !file.startsWith(join6(scopeDir, manifest.name) + "/"));
+    if (stray.length > 0)
+      findings.push(`${local.label}: wrote outside ${scopeDir}/${manifest.name}/ (${stray.slice(0, 3).join(", ")})`);
+    if (!local.created.includes(expectedStore))
+      findings.push(`${local.label}: no store at ${expectedStore}`);
+    const apiKey = clientTransportEnvKeys(manifest.name).apiKeyKeys[0];
+    const conflict = probeOnce(`${optIn}=1 with ${apiKey}`, { [optIn]: "1", [apiKey]: "not-a-real-key" });
+    if (conflict.result.status !== 6)
+      findings.push(`${conflict.label}: exit ${conflict.result.status ?? "signal"}, expected 6`);
+    if (!conflict.result.stderr.includes("LOCAL_OPT_IN_CONFLICT"))
+      findings.push(`${conflict.label}: stderr does not name LOCAL_OPT_IN_CONFLICT`);
+  }
+  return verdict(id, findings, `${manifest.name} ${probe.join(" ")} exits 2 CREDENTIAL_ABSENT with no store created${optIn ? `; ${optIn}=1 keeps the store at ${scopeDir}/${manifest.name}/ and conflicts exit 6` : ""}`, strict);
+}
+function lit(...parts2) {
+  return parts2.join("");
+}
+function esc2(text) {
+  return text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+}
+function noModeVocabularyPatterns() {
+  const selfHosting = ["self", "hosted"];
+  return [
+    { label: "mode env var (*_MODE read)", pattern: new RegExp(`(?:process\\.env|\\benv)\\s*(?:\\.|\\[\\s*["'\`])[A-Z][A-Z0-9_]*_MODE\\b`) },
+    { label: "storage-mode env var", pattern: new RegExp(`_${lit("STORAGE", "_MODE")}\\b`) },
+    { label: "data-backend env var", pattern: new RegExp(`_${lit("DATA", "_BACKEND")}\\b`) },
+    { label: "deployment selector env var", pattern: new RegExp(`\\b[A-Z][A-Z0-9_]*_${lit("DEPLOY", "MENT")}\\s*=`) },
+    { label: "self-hosting word (underscore)", pattern: new RegExp(selfHosting.join("_"), "i") },
+    { label: "self-hosting word (dash)", pattern: new RegExp(selfHosting.join("-"), "i") },
+    { label: "mixed-placement word", pattern: new RegExp(`\\b${lit("hyb", "rid")}(?:\\b|_)`, "i") },
+    { label: "retired env-file credential tier", pattern: new RegExp(lit("fleet", "[-.]", "env"), "i") },
+    { label: "retired cloud runtime config dir", pattern: new RegExp(esc2(lit(".hasna", "/", "cloud"))), outsideContracts: true },
+    { label: "retired cloud runtime config env", pattern: new RegExp(lit("HASNA_", "CLOUD")), outsideContracts: true },
+    { label: "XDG base directory variable", pattern: new RegExp(`\\b${lit("XDG_")}(?:CONFIG|DATA|STATE|CACHE)_HOME\\b`) },
+    { label: "macOS library support root", pattern: new RegExp(lit("Application", " ", "Support")) },
+    { label: "retired paths package", pattern: new RegExp(esc2(lit("@hasna", "/paths")) + "|" + esc2(lit("@hasna-internal", "/paths"))) },
+    { label: "second local door (*_DB_PATH read)", pattern: new RegExp(`(?:process\\.env|\\benv)\\s*(?:\\.|\\[\\s*["'\`])[A-Z][A-Z0-9_]*_DB_PATH\\b`) },
+    { label: "own Keychain read outside the seam", pattern: new RegExp(lit("find-generic", "-password")), outsideContracts: true },
+    { label: "own credentials-file read outside the seam", pattern: new RegExp(esc2(lit("config", "/credentials"))), outsideContracts: true }
+  ];
+}
+function isContractsKit(repoRoot, manifest) {
+  return manifest.name === "contracts" && readPackage(repoRoot).name === "@hasna/contracts";
+}
+function scanSources(repoRoot, graph, patterns, skipOutsideContracts) {
+  const findings = [];
+  const active = patterns.filter((pattern) => !(pattern.outsideContracts && skipOutsideContracts));
+  for (const file of [...graph.files.keys()].sort()) {
+    let text;
+    try {
+      text = maskSourceComments(readFileSync5(file, "utf8"));
+    } catch {
+      continue;
+    }
+    const lines = text.split(`
+`);
+    for (const { label, pattern } of active) {
+      const index = lines.findIndex((line) => pattern.test(line));
+      if (index === -1)
+        continue;
+      const count = lines.filter((line) => pattern.test(line)).length;
+      findings.push(`${relative4(repoRoot, file)}:${index + 1} ${label}${count > 1 ? ` (x${count})` : ""}`);
+    }
+  }
+  return findings;
+}
+function noModeVocabularyCheck(repoRoot, manifest, options = {}, graph = buildImportGraph(repoRoot)) {
+  const id = "no_mode_vocabulary";
+  if (graph.files.size === 0)
+    return { id, status: "skip", detail: "no source files found" };
+  const findings = scanSources(repoRoot, graph, noModeVocabularyPatterns(), isContractsKit(repoRoot, manifest));
+  return verdict(id, findings, `${graph.files.size} source files carry no retired mode vocabulary or second local door`, options.strict ?? false);
+}
+function noLegacyHostnamePatterns() {
+  const originApex = ["hasna", "xyz"].join("\\.");
+  const internalApex = ["hasna", "internal"].join("\\.");
+  const loopbackHost = `(?:${lit("local", "host")}|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\])`;
+  return [
+    { label: "per-app origin hostname (legacy apex)", pattern: new RegExp(`[a-z0-9-]+\\.${originApex}\\b`, "i") },
+    { label: "internal apex hostname", pattern: new RegExp(`[a-z0-9-]+\\.${internalApex}\\b`, "i") },
+    { label: "loopback default endpoint", pattern: new RegExp(`https?:\\/\\/${loopbackHost}(?::\\d+)?`, "i") }
+  ];
+}
+function noLegacyHostnamesCheck(repoRoot, manifest, options = {}, graph = buildImportGraph(repoRoot)) {
+  const id = "no_legacy_hostnames";
+  if (graph.files.size === 0)
+    return { id, status: "skip", detail: "no source files found" };
+  const findings = scanSources(repoRoot, graph, noLegacyHostnamePatterns(), isContractsKit(repoRoot, manifest));
+  return verdict(id, findings, `${graph.files.size} source files name no legacy origin, internal apex, or loopback default`, options.strict ?? false);
+}
+var EXACT_SEMVER = /^\d+\.\d+\.\d+$/;
+function versionAtLeast(version2, floor) {
+  const a = version2.split(".").map(Number);
+  const b = floor.split(".").map(Number);
+  for (let index = 0;index < 3; index += 1) {
+    const left = a[index] ?? 0;
+    const right = b[index] ?? 0;
+    if (left !== right)
+      return left > right;
+  }
+  return true;
+}
+function kitVersionPinnedCheck(repoRoot, manifest, options = {}) {
+  const id = "kit_version_pinned";
+  if (isContractsKit(repoRoot, manifest))
+    return { id, status: "skip", detail: "the kit itself; its version is its kitVersion" };
+  const pkg = readPackage(repoRoot);
+  if (!pkg.present)
+    return { id, status: "skip", detail: "no package.json found" };
+  const findings = [];
+  if (!pkg.kitPin) {
+    findings.push("package.json declares no @hasna/contracts dependency; pin the exact kit version");
+  } else if (!EXACT_SEMVER.test(pkg.kitPin)) {
+    findings.push(`@hasna/contracts is pinned as a range (${pkg.kitPin}); pin the exact version`);
+  } else if (pkg.kitPin !== manifest.kitVersion) {
+    findings.push(`kitVersion ${manifest.kitVersion} differs from the @hasna/contracts pin ${pkg.kitPin}`);
+  }
+  if (EXACT_SEMVER.test(manifest.kitVersion) && !versionAtLeast(manifest.kitVersion, FLEET_MIN_KIT_VERSION)) {
+    findings.push(`kitVersion ${manifest.kitVersion} is below the fleet floor ${FLEET_MIN_KIT_VERSION}`);
+  } else if (!EXACT_SEMVER.test(manifest.kitVersion)) {
+    findings.push(`kitVersion ${manifest.kitVersion} is not an exact version`);
+  }
+  return verdict(id, findings, `kitVersion ${manifest.kitVersion} equals the exact pin and meets the fleet floor ${FLEET_MIN_KIT_VERSION}`, options.strict ?? false);
+}
+function clientContractChecks(repoRoot, manifest, options = {}) {
+  const graph = buildImportGraph(repoRoot);
+  return [
+    clientTransportDeclaredCheck(manifest, options),
+    clientSqliteIsolationCheck(repoRoot, manifest, options, graph),
+    clientFailClosedBlackboxCheck(repoRoot, manifest, options),
+    noModeVocabularyCheck(repoRoot, manifest, options, graph),
+    noLegacyHostnamesCheck(repoRoot, manifest, options, graph),
+    kitVersionPinnedCheck(repoRoot, manifest, options)
+  ];
+}
+
 // src/conformance.ts
 function collectExportTargets(value) {
   if (typeof value === "string")
@@ -16803,7 +17725,7 @@ function packageExportTargets(value) {
 }
 function isFile(path) {
   try {
-    return statSync3(path).isFile();
+    return statSync5(path).isFile();
   } catch {
     return false;
   }
@@ -16824,19 +17746,19 @@ function sourceCandidatesForExportTarget(target) {
 function exportTargetExists(repoRoot, target) {
   if (!target.startsWith("./"))
     return false;
-  const resolved = join5(repoRoot, target);
-  if (relative3(repoRoot, resolved).startsWith(".."))
+  const resolved = join7(repoRoot, target);
+  if (relative5(repoRoot, resolved).startsWith(".."))
     return false;
   if (isFile(resolved))
     return true;
-  return sourceCandidatesForExportTarget(target).some((candidate) => isFile(join5(repoRoot, candidate)));
+  return sourceCandidatesForExportTarget(target).some((candidate) => isFile(join7(repoRoot, candidate)));
 }
 function packageJsonInfo(repoRoot) {
-  const path = join5(repoRoot, "package.json");
-  if (!existsSync2(path))
+  const path = join7(repoRoot, "package.json");
+  if (!existsSync4(path))
     return { present: false, bins: [], exportSubpaths: [], exportTargets: {} };
   try {
-    const pkg = JSON.parse(readFileSync4(path, "utf8"));
+    const pkg = JSON.parse(readFileSync6(path, "utf8"));
     const defaultBinName = typeof pkg.name === "string" && pkg.name.length > 0 ? pkg.name.replace(/^@[^/]+\//, "") : "<default>";
     const bins = typeof pkg.bin === "string" ? [defaultBinName] : pkg.bin && typeof pkg.bin === "object" ? Object.keys(pkg.bin) : [];
     const exportTargets = packageExportTargets(pkg.exports);
@@ -17076,13 +17998,13 @@ function unpinnedPackageRunnerInvocations(body) {
   return unpinned;
 }
 function publishedArtifactGateCheck(repoRoot, manifest) {
-  const packagePath = join5(repoRoot, "package.json");
-  if (!existsSync2(packagePath)) {
+  const packagePath = join7(repoRoot, "package.json");
+  if (!existsSync4(packagePath)) {
     return { id: "published_artifact_gate", status: "skip", detail: "no package.json found" };
   }
   let pkg;
   try {
-    pkg = JSON.parse(readFileSync4(packagePath, "utf8"));
+    pkg = JSON.parse(readFileSync6(packagePath, "utf8"));
   } catch {
     return { id: "published_artifact_gate", status: "fail", detail: "package.json is not valid JSON" };
   }
@@ -17274,7 +18196,7 @@ function runRepoConformance(repoRoot, options = {}) {
     detail: requiresGeneratedServiceSdk ? apiTopologyFailures.length === 0 ? "supported API declares GET /health, GET /ready, and GET /version" : apiTopologyFailures.join("; ") : `${manifest.class} repo has no required service API topology`
   });
   if (requiresGeneratedServiceSdk) {
-    const presentArtifacts = SELF_HOST_ARTIFACTS.filter((artifact) => isFile(join5(repoRoot, artifact)));
+    const presentArtifacts = SELF_HOST_ARTIFACTS.filter((artifact) => isFile(join7(repoRoot, artifact)));
     checks3.push({
       id: "self_host_artifact",
       status: presentArtifacts.length > 0 ? "pass" : "fail",
@@ -17421,6 +18343,11 @@ function runRepoConformance(repoRoot, options = {}) {
       checks3.push({ id: "no_cloud_guard", status: "fail", detail: `no-cloud scan error: ${message}` });
     }
   }
+  checks3.push(...clientContractChecks(repoRoot, manifest, {
+    ...options.strict !== undefined ? { strict: options.strict } : {},
+    ...options.blackbox !== undefined ? { blackbox: options.blackbox } : {},
+    ...options.blackboxRunner ? { blackboxRunner: options.blackboxRunner } : {}
+  }));
   const ok = checks3.every((check2) => check2.status !== "fail");
   return { ok, repoRoot, name: manifest.name, class: manifest.class, checks: checks3 };
 }

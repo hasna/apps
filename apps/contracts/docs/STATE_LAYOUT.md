@@ -59,9 +59,17 @@ reads only the owner-safe app credentials file (see CONTRACT.md §3a; the
 
 ```text
 ~/.hasna/<name>/config/credentials             (HASNA_HOME replaces ~/.hasna)
+~/.hasna-internal/<name>/config/credentials    (scope: internal, @hasna-internal/*)
 <HASNA_CONFIG_HOME>/<name>/credentials         (when HASNA_CONFIG_HOME is set)
 ~/.hasna/<name>/config/credentials-<profile>   (profiles)
 ```
+
+Since 1.1.0 the path comes from the one home resolver, `resolveAppHome(name,
+env, { scope })`, which also names the app's other layers: `state/`, `cache/`,
+data at the home root and the opted-in local store at `<name>.db` there.
+`HASNA_DATA_HOME`, `HASNA_STATE_HOME` and `HASNA_CACHE_HOME` replace one layer
+each (`<override>/<name>`), exactly as `HASNA_CONFIG_HOME` does. Nothing else
+moves an app home.
 
 Files must be regular, current-user-owned, and mode 0400 or 0600; unsafe files
 fail closed. `XDG_CONFIG_HOME` is not consulted. Retired `~/.hasna/fleet-env/`,

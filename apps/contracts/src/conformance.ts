@@ -27,18 +27,23 @@ import {
   type ServiceContractManifest,
   type ServiceSurfaceKind,
   type StorageEngine
-} from "./schemas";
-import { loadServiceContractManifest, type LoadServiceContractResult } from "./service-contract";
+} from "./schemas.js";
+import { loadServiceContractManifest, type LoadServiceContractResult } from "./service-contract.js";
 import {
   resolveServerDataBackend,
   serverDataBackendEnvKeys,
   type Env,
-} from "./server-backend";
-import { API_KEY_TOKEN_PATTERN } from "./auth/keys";
-import { scanNoCloudTarget } from "./no-cloud";
-import { scanCredentialSeam } from "./credential-seam";
+} from "./server-backend.js";
+import { API_KEY_TOKEN_PATTERN } from "./auth/keys.js";
+import { scanNoCloudTarget } from "./no-cloud.js";
+import { scanCredentialSeam } from "./credential-seam.js";
+import { clientContractChecks, type BlackboxRunner } from "./conformance-client.js";
 
-export type ConformanceStatus = "pass" | "fail" | "skip";
+/**
+ * `report` (1.1.0): the check found violations but is not yet enforced for
+ * this repo — it never turns `ok` false. `strict` promotes `report` to `fail`.
+ */
+export type ConformanceStatus = "pass" | "fail" | "skip" | "report";
 
 export interface ConformanceCheck {
   id: string;
@@ -67,6 +72,17 @@ export interface RepoConformanceOptions {
   manifestTier?: "public" | "private";
   /** Clock used for time-boxed checks such as storage-waiver expiry. */
   now?: Date;
+  /**
+   * Promote the 1.1.0 client-contract checks (`client_transport_declared`,
+   * `client_sqlite_isolation`, `client_fail_closed_blackbox`,
+   * `no_mode_vocabulary`, `no_legacy_hostnames`, `kit_version_pinned`) from
+   * `report` to `fail`. Off by default in 1.1.x; the 1.2.0 default.
+   */
+  strict?: boolean;
+  /** Run the black-box fail-closed probe against the built bin when the manifest declares `client.readProbe`. Default true. */
+  blackbox?: boolean;
+  /** Process runner for the black-box probe (tests). */
+  blackboxRunner?: BlackboxRunner;
 }
 
 interface PackageJsonInfo {
@@ -1028,6 +1044,15 @@ export function runRepoConformance(repoRoot: string, options: RepoConformanceOpt
       checks.push({ id: "no_cloud_guard", status: "fail", detail: `no-cloud scan error: ${message}` });
     }
   }
+
+  // Checks 16-21 (1.1.0): the client contract, in REPORT mode unless strict.
+  checks.push(
+    ...clientContractChecks(repoRoot, manifest, {
+      ...(options.strict !== undefined ? { strict: options.strict } : {}),
+      ...(options.blackbox !== undefined ? { blackbox: options.blackbox } : {}),
+      ...(options.blackboxRunner ? { blackboxRunner: options.blackboxRunner } : {}),
+    }),
+  );
 
   const ok = checks.every((check) => check.status !== "fail");
   return { ok, repoRoot, name: manifest.name, class: manifest.class, checks };

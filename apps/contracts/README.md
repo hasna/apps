@@ -46,6 +46,61 @@ Project metadata and vendored-kit manifests remain project-local. See
 [State layout](docs/STATE_LAYOUT.md) for the audited path inventory and
 ownership boundaries.
 
+## Client contract (1.1.0)
+
+`@hasna/contracts/client` owns the whole client decision. An app's storage
+resolver makes exactly these calls, in this order, and nothing else:
+
+```ts
+import {
+  appPaths, clientResolutionExitCode, formatClientResolutionFailure,
+  isClientResolutionError, localStoreNotice, selectsLocalStore,
+} from "@hasna/contracts/client";
+import { resolveStorageClient } from "@hasna/contracts/client/storage";
+
+export function resolveStore(env = process.env) {
+  if (selectsLocalStore("todos", env)) {            // HASNA_TODOS_LOCAL=1, answered before any Keychain/disk read
+    const home = appPaths("todos", env);            // ~/.hasna/todos (scope: "internal" -> ~/.hasna-internal/todos)
+    process.stderr.write(localStoreNotice("todos", home.localDb) + "\n");
+    return openSqlite(home.localDb);                // the ONE module allowed to open a store
+  }
+  return resolveStorageClient("todos", env);        // throws ClientResolutionError codes; never opens a local store
+}
+
+// CLI top-level handler:
+catch (error) {
+  if (isClientResolutionError(error)) {
+    process.stderr.write(formatClientResolutionFailure(error) + "\n"); // "<app>: <CODE>: <message> <remedy>"
+    process.exit(clientResolutionExitCode(error));                      // 2 absent, 3 unreadable, 4 rejected, 5 authority, 6 opt-in conflict, 7 unreachable
+  }
+}
+```
+
+`describeClientTransport(name, env)` backs `status` / `doctor`: it never throws,
+never opens a store, and reports credential state, authority and the local
+opt-in without a single value. `resolveAppHome(name, env, { scope })` is the
+one home resolver (`HASNA_HOME`, `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` are the
+only overrides; no XDG). See CONTRACT.md §3b, and §9 for the manifest fields
+`scope`, `placement.hosted`, `client` and `serviceSurfaces[].dataAccess`.
+
+## Authenticated raw responses
+
+`createClientTransport` from `@hasna/contracts/client` exposes both parsed JSON
+methods and `client.fetch(input, init)` for CSV, downloads and event streams.
+The raw method accepts an absolute URL, `URL`, or `Request` inside the configured
+application root (the canonical base without its terminal `/v1`). For example,
+a configured `/todos` gateway prefix permits `/todos/api/...` and `/todos/v1/...`.
+Different origins, sibling prefixes, and ambiguous encoded path separators or
+nested escapes are refused before credentials are sent.
+
+Raw fetch returns the original unread `Response`, including non-success and
+redirect statuses; the caller owns status handling, body consumption and stream
+cancellation. It never retries, parses a response, or follows a redirect, and
+caller headers cannot replace the bound credential. The timeout covers waiting
+for response headers; the caller's signal continues to cancel its response
+stream afterward. Saved credentials resolve afresh at the same bound authority;
+authority changes or invalid/removed credentials require a new valid client.
+
 ## Todos contract
 
 `@hasna/contracts/todos` is the pure customer contract for Todos. Import it
@@ -241,6 +296,10 @@ ships the enforcement half as well as the runtime import:
    the script must match the directory chosen in step 3.
 5. Run `contracts no-cloud-scan .` from `prepublishOnly`. Merge it into the
    existing release gate; do not remove typecheck, test, build, or pack checks.
+6. Declare the client contract in `hasna.contract.json` (`client`,
+   `placement`, `scope`, `serviceSurfaces[].dataAccess`) and run
+   `contracts repo-conformance .`; the 1.1.0 client checks report until 1.2.0,
+   and `--strict` shows what will fail then.
 
 Copy the published starter fixtures after installing the dependency:
 

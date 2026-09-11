@@ -1,7 +1,14 @@
-import { DEPLOYMENT_SCHEMA_IDS } from "./deployment";
+import { DEPLOYMENT_SCHEMA_IDS } from "./deployment.js";
 import { z } from "zod";
 export declare const CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-export declare const CONTRACTS_PACKAGE_VERSION = "1.0.2";
+export declare const CONTRACTS_PACKAGE_VERSION = "1.1.0";
+/**
+ * The oldest `@hasna/contracts` a fleet member may pin and still pass the
+ * `kit_version_pinned` conformance check. Raised with each release that
+ * changes the client contract; 1.1.0 introduced the error taxonomy, the one
+ * local opt-in door, the scoped home resolver and the client manifest fields.
+ */
+export declare const FLEET_MIN_KIT_VERSION = "1.1.0";
 export declare const SCHEMA_IDS: {
     readonly actorRef: "hasna.actor_ref.v1";
     readonly resourceRef: "hasna.resource_ref.v1";
@@ -37323,6 +37330,110 @@ export declare const ServiceSurfaceStatusSchema: z.ZodEnum<["supported", "deferr
 export type ServiceSurfaceStatus = z.infer<typeof ServiceSurfaceStatusSchema>;
 export declare const ServiceAuthModeSchema: z.ZodEnum<["none", "local-only", "api-key", "session", "service-token", "custom"]>;
 export type ServiceAuthMode = z.infer<typeof ServiceAuthModeSchema>;
+/**
+ * Which home root an app owns (2026-09-04 home-layout ruling): `public` is
+ * `~/.hasna/<name>` for `@hasna/*`, `internal` is `~/.hasna-internal/<name>`
+ * for `@hasna-internal/*`. The credentials file follows the scope; Keychain
+ * item names do not change.
+ */
+export declare const APP_SCOPES: readonly ["public", "internal"];
+export declare const AppScopeSchema: z.ZodEnum<["public", "internal"]>;
+export type AppScope = z.infer<typeof AppScopeSchema>;
+/**
+ * How a surface, or one of its commands, reaches data.
+ * - `hosted`: through the authenticated `/v1` client only; never a local store.
+ * - `server-only`: lives in the serve/migrate/worker bins and is never
+ *   reachable from a CLI or MCP bin.
+ * - `local-opt-in`: opens the on-box store ONLY behind `HASNA_<NAME>_LOCAL=1`.
+ */
+export declare const DATA_ACCESS_MODES: readonly ["hosted", "server-only", "local-opt-in"];
+export declare const DataAccessSchema: z.ZodEnum<["hosted", "server-only", "local-opt-in"]>;
+export type DataAccess = z.infer<typeof DataAccessSchema>;
+/** One named command or tool of a surface whose data access differs from the surface default. */
+export declare const SurfaceCommandSchema: z.ZodObject<{
+    name: z.ZodString;
+    dataAccess: z.ZodEnum<["hosted", "server-only", "local-opt-in"]>;
+}, "strict", z.ZodTypeAny, {
+    name: string;
+    dataAccess: "hosted" | "server-only" | "local-opt-in";
+}, {
+    name: string;
+    dataAccess: "hosted" | "server-only" | "local-opt-in";
+}>;
+export type SurfaceCommand = z.infer<typeof SurfaceCommandSchema>;
+/**
+ * Where the app's data lives by default. `default`: the hosted service, so a
+ * client is required and a missing credential fails closed. `never`: a
+ * local-by-design tool that makes no hosted claim and keeps its own store.
+ */
+export declare const PLACEMENT_HOSTED_MODES: readonly ["default", "never"];
+export declare const PlacementHostedSchema: z.ZodEnum<["default", "never"]>;
+export type PlacementHosted = z.infer<typeof PlacementHostedSchema>;
+export declare const PlacementContractSchema: z.ZodObject<{
+    hosted: z.ZodEnum<["default", "never"]>;
+}, "strict", z.ZodTypeAny, {
+    hosted: "never" | "default";
+}, {
+    hosted: "never" | "default";
+}>;
+export type PlacementContract = z.infer<typeof PlacementContractSchema>;
+/** The only client transport a manifest may declare: the authenticated hosted `/v1` API. */
+export declare const CLIENT_CONTRACT_TRANSPORTS: readonly ["hosted"];
+export declare const ClientContractTransportSchema: z.ZodEnum<["hosted"]>;
+/** The only credential chain a manifest may declare: the one in `@hasna/contracts/client`. */
+export declare const CLIENT_CREDENTIAL_CHAINS: readonly ["contracts"];
+export declare const ClientCredentialChainSchema: z.ZodEnum<["contracts"]>;
+/**
+ * The hosted client contract a manifest declares (contracts 1.1.0).
+ *
+ * `transport` and `credentialChain` are closed enums so a manifest states,
+ * in one place a reviewer can read, that its CLI and MCP bins reach data only
+ * through the shared authenticated client. `localOptIn` names the ONE door to
+ * an on-box store and `localStoreModule` the ONE module that opens it; the
+ * `client_sqlite_isolation` check holds the import graph to exactly that.
+ * `readProbe` is the argv the black-box fail-closed check runs.
+ */
+export declare const ClientContractSchema: z.ZodEffects<z.ZodObject<{
+    transport: z.ZodEnum<["hosted"]>;
+    /** Absolute https, no credentials/query/fragment/trailing slash, never ending in /v1. Defaults to the fleet gateway. */
+    authority: z.ZodOptional<z.ZodString>;
+    credentialChain: z.ZodEnum<["contracts"]>;
+    /** `HASNA_<NAME>_LOCAL`, or null when the app has no on-box store at all. */
+    localOptIn: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+    /** Repo-relative source path of the one module allowed to open the on-box store. */
+    localStoreModule: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+    /** The read command the black-box fail-closed check runs, e.g. ["list", "--limit", "1"]. */
+    readProbe: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+}, "strict", z.ZodTypeAny, {
+    transport: "hosted";
+    credentialChain: "contracts";
+    authority?: string | undefined;
+    localOptIn?: string | null | undefined;
+    localStoreModule?: string | null | undefined;
+    readProbe?: string[] | undefined;
+}, {
+    transport: "hosted";
+    credentialChain: "contracts";
+    authority?: string | undefined;
+    localOptIn?: string | null | undefined;
+    localStoreModule?: string | null | undefined;
+    readProbe?: string[] | undefined;
+}>, {
+    transport: "hosted";
+    credentialChain: "contracts";
+    authority?: string | undefined;
+    localOptIn?: string | null | undefined;
+    localStoreModule?: string | null | undefined;
+    readProbe?: string[] | undefined;
+}, {
+    transport: "hosted";
+    credentialChain: "contracts";
+    authority?: string | undefined;
+    localOptIn?: string | null | undefined;
+    localStoreModule?: string | null | undefined;
+    readProbe?: string[] | undefined;
+}>;
+export type ClientContract = z.infer<typeof ClientContractSchema>;
 export declare const ServiceEndpointSchema: z.ZodObject<{
     method: z.ZodEnum<["GET", "POST", "PUT", "PATCH", "DELETE"]>;
     path: z.ZodString;
@@ -37568,6 +37679,19 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
             summary?: string | undefined;
         } | undefined;
     }>, "many">>;
+    /** How this surface reaches data (contracts 1.1.0). Absent asserts nothing. */
+    dataAccess: z.ZodOptional<z.ZodEnum<["hosted", "server-only", "local-opt-in"]>>;
+    /** Per-command data access where it differs from the surface default. */
+    commands: z.ZodOptional<z.ZodArray<z.ZodObject<{
+        name: z.ZodString;
+        dataAccess: z.ZodEnum<["hosted", "server-only", "local-opt-in"]>;
+    }, "strict", z.ZodTypeAny, {
+        name: string;
+        dataAccess: "hosted" | "server-only" | "local-opt-in";
+    }, {
+        name: string;
+        dataAccess: "hosted" | "server-only" | "local-opt-in";
+    }>, "many">>;
 }, "strict", z.ZodTypeAny, {
     name: string;
     status: "deferred" | "supported" | "unsupported";
@@ -37607,6 +37731,7 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
         description?: string | undefined;
     } | undefined;
     bin?: string | undefined;
+    dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
     mcpBin?: string | undefined;
     apiBasePath?: string | undefined;
     openApiPath?: string | undefined;
@@ -37614,6 +37739,10 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
     generatedFrom?: string | undefined;
     clientClassName?: string | undefined;
     deferReason?: string | undefined;
+    commands?: {
+        name: string;
+        dataAccess: "hosted" | "server-only" | "local-opt-in";
+    }[] | undefined;
 }, {
     name: string;
     status: "deferred" | "supported" | "unsupported";
@@ -37638,6 +37767,7 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
         description?: string | undefined;
     } | undefined;
     bin?: string | undefined;
+    dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
     mcpBin?: string | undefined;
     apiBasePath?: string | undefined;
     openApiPath?: string | undefined;
@@ -37659,6 +37789,10 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
             uri?: string | undefined;
             summary?: string | undefined;
         } | undefined;
+    }[] | undefined;
+    commands?: {
+        name: string;
+        dataAccess: "hosted" | "server-only" | "local-opt-in";
     }[] | undefined;
 }>, {
     name: string;
@@ -37699,6 +37833,7 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
         description?: string | undefined;
     } | undefined;
     bin?: string | undefined;
+    dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
     mcpBin?: string | undefined;
     apiBasePath?: string | undefined;
     openApiPath?: string | undefined;
@@ -37706,6 +37841,10 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
     generatedFrom?: string | undefined;
     clientClassName?: string | undefined;
     deferReason?: string | undefined;
+    commands?: {
+        name: string;
+        dataAccess: "hosted" | "server-only" | "local-opt-in";
+    }[] | undefined;
 }, {
     name: string;
     status: "deferred" | "supported" | "unsupported";
@@ -37730,6 +37869,7 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
         description?: string | undefined;
     } | undefined;
     bin?: string | undefined;
+    dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
     mcpBin?: string | undefined;
     apiBasePath?: string | undefined;
     openApiPath?: string | undefined;
@@ -37751,6 +37891,10 @@ export declare const ServiceSurfaceSchema: z.ZodEffects<z.ZodObject<{
             uri?: string | undefined;
             summary?: string | undefined;
         } | undefined;
+    }[] | undefined;
+    commands?: {
+        name: string;
+        dataAccess: "hosted" | "server-only" | "local-opt-in";
     }[] | undefined;
 }>;
 export type ServiceSurface = z.infer<typeof ServiceSurfaceSchema>;
@@ -40059,6 +40203,19 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
                 summary?: string | undefined;
             } | undefined;
         }>, "many">>;
+        /** How this surface reaches data (contracts 1.1.0). Absent asserts nothing. */
+        dataAccess: z.ZodOptional<z.ZodEnum<["hosted", "server-only", "local-opt-in"]>>;
+        /** Per-command data access where it differs from the surface default. */
+        commands: z.ZodOptional<z.ZodArray<z.ZodObject<{
+            name: z.ZodString;
+            dataAccess: z.ZodEnum<["hosted", "server-only", "local-opt-in"]>;
+        }, "strict", z.ZodTypeAny, {
+            name: string;
+            dataAccess: "hosted" | "server-only" | "local-opt-in";
+        }, {
+            name: string;
+            dataAccess: "hosted" | "server-only" | "local-opt-in";
+        }>, "many">>;
     }, "strict", z.ZodTypeAny, {
         name: string;
         status: "deferred" | "supported" | "unsupported";
@@ -40098,6 +40255,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             description?: string | undefined;
         } | undefined;
         bin?: string | undefined;
+        dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
         mcpBin?: string | undefined;
         apiBasePath?: string | undefined;
         openApiPath?: string | undefined;
@@ -40105,6 +40263,10 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
         generatedFrom?: string | undefined;
         clientClassName?: string | undefined;
         deferReason?: string | undefined;
+        commands?: {
+            name: string;
+            dataAccess: "hosted" | "server-only" | "local-opt-in";
+        }[] | undefined;
     }, {
         name: string;
         status: "deferred" | "supported" | "unsupported";
@@ -40129,6 +40291,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             description?: string | undefined;
         } | undefined;
         bin?: string | undefined;
+        dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
         mcpBin?: string | undefined;
         apiBasePath?: string | undefined;
         openApiPath?: string | undefined;
@@ -40150,6 +40313,10 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
                 uri?: string | undefined;
                 summary?: string | undefined;
             } | undefined;
+        }[] | undefined;
+        commands?: {
+            name: string;
+            dataAccess: "hosted" | "server-only" | "local-opt-in";
         }[] | undefined;
     }>, {
         name: string;
@@ -40190,6 +40357,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             description?: string | undefined;
         } | undefined;
         bin?: string | undefined;
+        dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
         mcpBin?: string | undefined;
         apiBasePath?: string | undefined;
         openApiPath?: string | undefined;
@@ -40197,6 +40365,10 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
         generatedFrom?: string | undefined;
         clientClassName?: string | undefined;
         deferReason?: string | undefined;
+        commands?: {
+            name: string;
+            dataAccess: "hosted" | "server-only" | "local-opt-in";
+        }[] | undefined;
     }, {
         name: string;
         status: "deferred" | "supported" | "unsupported";
@@ -40221,6 +40393,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             description?: string | undefined;
         } | undefined;
         bin?: string | undefined;
+        dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
         mcpBin?: string | undefined;
         apiBasePath?: string | undefined;
         openApiPath?: string | undefined;
@@ -40242,6 +40415,10 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
                 uri?: string | undefined;
                 summary?: string | undefined;
             } | undefined;
+        }[] | undefined;
+        commands?: {
+            name: string;
+            dataAccess: "hosted" | "server-only" | "local-opt-in";
         }[] | undefined;
     }>, "many">>;
     publishing: z.ZodOptional<z.ZodEffects<z.ZodObject<{
@@ -40411,6 +40588,57 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             provenance?: "none" | "required" | "best-effort" | undefined;
         }[] | undefined;
     }>>;
+    /** Which home root the app owns (`~/.hasna` or `~/.hasna-internal`); absent means public. */
+    scope: z.ZodOptional<z.ZodEnum<["public", "internal"]>>;
+    /** Where data lives by default; `hosted: "never"` marks a local-by-design tool. */
+    placement: z.ZodOptional<z.ZodObject<{
+        hosted: z.ZodEnum<["default", "never"]>;
+    }, "strict", z.ZodTypeAny, {
+        hosted: "never" | "default";
+    }, {
+        hosted: "never" | "default";
+    }>>;
+    /** The hosted client contract, or `null` to state explicitly that the repo ships no client. */
+    client: z.ZodOptional<z.ZodNullable<z.ZodEffects<z.ZodObject<{
+        transport: z.ZodEnum<["hosted"]>;
+        /** Absolute https, no credentials/query/fragment/trailing slash, never ending in /v1. Defaults to the fleet gateway. */
+        authority: z.ZodOptional<z.ZodString>;
+        credentialChain: z.ZodEnum<["contracts"]>;
+        /** `HASNA_<NAME>_LOCAL`, or null when the app has no on-box store at all. */
+        localOptIn: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+        /** Repo-relative source path of the one module allowed to open the on-box store. */
+        localStoreModule: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+        /** The read command the black-box fail-closed check runs, e.g. ["list", "--limit", "1"]. */
+        readProbe: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+    }, "strict", z.ZodTypeAny, {
+        transport: "hosted";
+        credentialChain: "contracts";
+        authority?: string | undefined;
+        localOptIn?: string | null | undefined;
+        localStoreModule?: string | null | undefined;
+        readProbe?: string[] | undefined;
+    }, {
+        transport: "hosted";
+        credentialChain: "contracts";
+        authority?: string | undefined;
+        localOptIn?: string | null | undefined;
+        localStoreModule?: string | null | undefined;
+        readProbe?: string[] | undefined;
+    }>, {
+        transport: "hosted";
+        credentialChain: "contracts";
+        authority?: string | undefined;
+        localOptIn?: string | null | undefined;
+        localStoreModule?: string | null | undefined;
+        readProbe?: string[] | undefined;
+    }, {
+        transport: "hosted";
+        credentialChain: "contracts";
+        authority?: string | undefined;
+        localOptIn?: string | null | undefined;
+        localStoreModule?: string | null | undefined;
+        readProbe?: string[] | undefined;
+    }>>>;
     metadata: z.ZodOptional<z.ZodObject<{
         conformance: z.ZodOptional<z.ZodObject<{
             waivedSurfaces: z.ZodDefault<z.ZodArray<z.ZodObject<{
@@ -41026,6 +41254,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             description?: string | undefined;
         } | undefined;
         bin?: string | undefined;
+        dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
         mcpBin?: string | undefined;
         apiBasePath?: string | undefined;
         openApiPath?: string | undefined;
@@ -41033,6 +41262,10 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
         generatedFrom?: string | undefined;
         clientClassName?: string | undefined;
         deferReason?: string | undefined;
+        commands?: {
+            name: string;
+            dataAccess: "hosted" | "server-only" | "local-opt-in";
+        }[] | undefined;
     }[];
     storage?: {
         backend: "sqlite" | "postgresql";
@@ -41236,6 +41469,15 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             }>>;
         }, z.ZodUnknown, "strip">>>;
     }, z.ZodUnknown, "strip"> | undefined;
+    scope?: "public" | "internal" | undefined;
+    client?: {
+        transport: "hosted";
+        credentialChain: "contracts";
+        authority?: string | undefined;
+        localOptIn?: string | null | undefined;
+        localStoreModule?: string | null | undefined;
+        readProbe?: string[] | undefined;
+    } | null | undefined;
     description?: string | undefined;
     $schema?: string | undefined;
     serving?: {
@@ -41260,6 +41502,9 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             } | undefined;
             access?: "public" | "restricted" | undefined;
         }[];
+    } | undefined;
+    placement?: {
+        hosted: "never" | "default";
     } | undefined;
 }, {
     name: string;
@@ -41470,6 +41715,15 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             }>>;
         }, z.ZodUnknown, "strip">>>;
     }, z.ZodUnknown, "strip"> | undefined;
+    scope?: "public" | "internal" | undefined;
+    client?: {
+        transport: "hosted";
+        credentialChain: "contracts";
+        authority?: string | undefined;
+        localOptIn?: string | null | undefined;
+        localStoreModule?: string | null | undefined;
+        readProbe?: string[] | undefined;
+    } | null | undefined;
     description?: string | undefined;
     bins?: string[] | undefined;
     $schema?: string | undefined;
@@ -41502,6 +41756,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             description?: string | undefined;
         } | undefined;
         bin?: string | undefined;
+        dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
         mcpBin?: string | undefined;
         apiBasePath?: string | undefined;
         openApiPath?: string | undefined;
@@ -41524,6 +41779,10 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
                 summary?: string | undefined;
             } | undefined;
         }[] | undefined;
+        commands?: {
+            name: string;
+            dataAccess: "hosted" | "server-only" | "local-opt-in";
+        }[] | undefined;
     }[] | undefined;
     publishing?: {
         status: "published" | "unpublished";
@@ -41542,6 +41801,9 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             flow?: "direct" | "staged" | undefined;
             provenance?: "none" | "required" | "best-effort" | undefined;
         }[] | undefined;
+    } | undefined;
+    placement?: {
+        hosted: "never" | "default";
     } | undefined;
 }>, {
     hosting: ("user-hosted" | "hasna-saas")[];
@@ -41590,6 +41852,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             description?: string | undefined;
         } | undefined;
         bin?: string | undefined;
+        dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
         mcpBin?: string | undefined;
         apiBasePath?: string | undefined;
         openApiPath?: string | undefined;
@@ -41597,6 +41860,10 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
         generatedFrom?: string | undefined;
         clientClassName?: string | undefined;
         deferReason?: string | undefined;
+        commands?: {
+            name: string;
+            dataAccess: "hosted" | "server-only" | "local-opt-in";
+        }[] | undefined;
     }[];
     storage?: {
         backend: "sqlite" | "postgresql";
@@ -41800,6 +42067,15 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             }>>;
         }, z.ZodUnknown, "strip">>>;
     }, z.ZodUnknown, "strip"> | undefined;
+    scope?: "public" | "internal" | undefined;
+    client?: {
+        transport: "hosted";
+        credentialChain: "contracts";
+        authority?: string | undefined;
+        localOptIn?: string | null | undefined;
+        localStoreModule?: string | null | undefined;
+        readProbe?: string[] | undefined;
+    } | null | undefined;
     description?: string | undefined;
     $schema?: string | undefined;
     serving?: {
@@ -41824,6 +42100,9 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             } | undefined;
             access?: "public" | "restricted" | undefined;
         }[];
+    } | undefined;
+    placement?: {
+        hosted: "never" | "default";
     } | undefined;
 }, {
     name: string;
@@ -42034,6 +42313,15 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             }>>;
         }, z.ZodUnknown, "strip">>>;
     }, z.ZodUnknown, "strip"> | undefined;
+    scope?: "public" | "internal" | undefined;
+    client?: {
+        transport: "hosted";
+        credentialChain: "contracts";
+        authority?: string | undefined;
+        localOptIn?: string | null | undefined;
+        localStoreModule?: string | null | undefined;
+        readProbe?: string[] | undefined;
+    } | null | undefined;
     description?: string | undefined;
     bins?: string[] | undefined;
     $schema?: string | undefined;
@@ -42066,6 +42354,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             description?: string | undefined;
         } | undefined;
         bin?: string | undefined;
+        dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
         mcpBin?: string | undefined;
         apiBasePath?: string | undefined;
         openApiPath?: string | undefined;
@@ -42088,6 +42377,10 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
                 summary?: string | undefined;
             } | undefined;
         }[] | undefined;
+        commands?: {
+            name: string;
+            dataAccess: "hosted" | "server-only" | "local-opt-in";
+        }[] | undefined;
     }[] | undefined;
     publishing?: {
         status: "published" | "unpublished";
@@ -42106,6 +42399,9 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             flow?: "direct" | "staged" | undefined;
             provenance?: "none" | "required" | "best-effort" | undefined;
         }[] | undefined;
+    } | undefined;
+    placement?: {
+        hosted: "never" | "default";
     } | undefined;
 }>;
 export type ServiceContractManifest = z.infer<typeof ServiceContractManifestSchema>;
@@ -70888,6 +71184,19 @@ declare const CoreContractSchemaRegistry: {
                     summary?: string | undefined;
                 } | undefined;
             }>, "many">>;
+            /** How this surface reaches data (contracts 1.1.0). Absent asserts nothing. */
+            dataAccess: z.ZodOptional<z.ZodEnum<["hosted", "server-only", "local-opt-in"]>>;
+            /** Per-command data access where it differs from the surface default. */
+            commands: z.ZodOptional<z.ZodArray<z.ZodObject<{
+                name: z.ZodString;
+                dataAccess: z.ZodEnum<["hosted", "server-only", "local-opt-in"]>;
+            }, "strict", z.ZodTypeAny, {
+                name: string;
+                dataAccess: "hosted" | "server-only" | "local-opt-in";
+            }, {
+                name: string;
+                dataAccess: "hosted" | "server-only" | "local-opt-in";
+            }>, "many">>;
         }, "strict", z.ZodTypeAny, {
             name: string;
             status: "deferred" | "supported" | "unsupported";
@@ -70927,6 +71236,7 @@ declare const CoreContractSchemaRegistry: {
                 description?: string | undefined;
             } | undefined;
             bin?: string | undefined;
+            dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
             mcpBin?: string | undefined;
             apiBasePath?: string | undefined;
             openApiPath?: string | undefined;
@@ -70934,6 +71244,10 @@ declare const CoreContractSchemaRegistry: {
             generatedFrom?: string | undefined;
             clientClassName?: string | undefined;
             deferReason?: string | undefined;
+            commands?: {
+                name: string;
+                dataAccess: "hosted" | "server-only" | "local-opt-in";
+            }[] | undefined;
         }, {
             name: string;
             status: "deferred" | "supported" | "unsupported";
@@ -70958,6 +71272,7 @@ declare const CoreContractSchemaRegistry: {
                 description?: string | undefined;
             } | undefined;
             bin?: string | undefined;
+            dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
             mcpBin?: string | undefined;
             apiBasePath?: string | undefined;
             openApiPath?: string | undefined;
@@ -70979,6 +71294,10 @@ declare const CoreContractSchemaRegistry: {
                     uri?: string | undefined;
                     summary?: string | undefined;
                 } | undefined;
+            }[] | undefined;
+            commands?: {
+                name: string;
+                dataAccess: "hosted" | "server-only" | "local-opt-in";
             }[] | undefined;
         }>, {
             name: string;
@@ -71019,6 +71338,7 @@ declare const CoreContractSchemaRegistry: {
                 description?: string | undefined;
             } | undefined;
             bin?: string | undefined;
+            dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
             mcpBin?: string | undefined;
             apiBasePath?: string | undefined;
             openApiPath?: string | undefined;
@@ -71026,6 +71346,10 @@ declare const CoreContractSchemaRegistry: {
             generatedFrom?: string | undefined;
             clientClassName?: string | undefined;
             deferReason?: string | undefined;
+            commands?: {
+                name: string;
+                dataAccess: "hosted" | "server-only" | "local-opt-in";
+            }[] | undefined;
         }, {
             name: string;
             status: "deferred" | "supported" | "unsupported";
@@ -71050,6 +71374,7 @@ declare const CoreContractSchemaRegistry: {
                 description?: string | undefined;
             } | undefined;
             bin?: string | undefined;
+            dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
             mcpBin?: string | undefined;
             apiBasePath?: string | undefined;
             openApiPath?: string | undefined;
@@ -71071,6 +71396,10 @@ declare const CoreContractSchemaRegistry: {
                     uri?: string | undefined;
                     summary?: string | undefined;
                 } | undefined;
+            }[] | undefined;
+            commands?: {
+                name: string;
+                dataAccess: "hosted" | "server-only" | "local-opt-in";
             }[] | undefined;
         }>, "many">>;
         publishing: z.ZodOptional<z.ZodEffects<z.ZodObject<{
@@ -71240,6 +71569,57 @@ declare const CoreContractSchemaRegistry: {
                 provenance?: "none" | "required" | "best-effort" | undefined;
             }[] | undefined;
         }>>;
+        /** Which home root the app owns (`~/.hasna` or `~/.hasna-internal`); absent means public. */
+        scope: z.ZodOptional<z.ZodEnum<["public", "internal"]>>;
+        /** Where data lives by default; `hosted: "never"` marks a local-by-design tool. */
+        placement: z.ZodOptional<z.ZodObject<{
+            hosted: z.ZodEnum<["default", "never"]>;
+        }, "strict", z.ZodTypeAny, {
+            hosted: "never" | "default";
+        }, {
+            hosted: "never" | "default";
+        }>>;
+        /** The hosted client contract, or `null` to state explicitly that the repo ships no client. */
+        client: z.ZodOptional<z.ZodNullable<z.ZodEffects<z.ZodObject<{
+            transport: z.ZodEnum<["hosted"]>;
+            /** Absolute https, no credentials/query/fragment/trailing slash, never ending in /v1. Defaults to the fleet gateway. */
+            authority: z.ZodOptional<z.ZodString>;
+            credentialChain: z.ZodEnum<["contracts"]>;
+            /** `HASNA_<NAME>_LOCAL`, or null when the app has no on-box store at all. */
+            localOptIn: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+            /** Repo-relative source path of the one module allowed to open the on-box store. */
+            localStoreModule: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+            /** The read command the black-box fail-closed check runs, e.g. ["list", "--limit", "1"]. */
+            readProbe: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+        }, "strict", z.ZodTypeAny, {
+            transport: "hosted";
+            credentialChain: "contracts";
+            authority?: string | undefined;
+            localOptIn?: string | null | undefined;
+            localStoreModule?: string | null | undefined;
+            readProbe?: string[] | undefined;
+        }, {
+            transport: "hosted";
+            credentialChain: "contracts";
+            authority?: string | undefined;
+            localOptIn?: string | null | undefined;
+            localStoreModule?: string | null | undefined;
+            readProbe?: string[] | undefined;
+        }>, {
+            transport: "hosted";
+            credentialChain: "contracts";
+            authority?: string | undefined;
+            localOptIn?: string | null | undefined;
+            localStoreModule?: string | null | undefined;
+            readProbe?: string[] | undefined;
+        }, {
+            transport: "hosted";
+            credentialChain: "contracts";
+            authority?: string | undefined;
+            localOptIn?: string | null | undefined;
+            localStoreModule?: string | null | undefined;
+            readProbe?: string[] | undefined;
+        }>>>;
         metadata: z.ZodOptional<z.ZodObject<{
             conformance: z.ZodOptional<z.ZodObject<{
                 waivedSurfaces: z.ZodDefault<z.ZodArray<z.ZodObject<{
@@ -71855,6 +72235,7 @@ declare const CoreContractSchemaRegistry: {
                 description?: string | undefined;
             } | undefined;
             bin?: string | undefined;
+            dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
             mcpBin?: string | undefined;
             apiBasePath?: string | undefined;
             openApiPath?: string | undefined;
@@ -71862,6 +72243,10 @@ declare const CoreContractSchemaRegistry: {
             generatedFrom?: string | undefined;
             clientClassName?: string | undefined;
             deferReason?: string | undefined;
+            commands?: {
+                name: string;
+                dataAccess: "hosted" | "server-only" | "local-opt-in";
+            }[] | undefined;
         }[];
         storage?: {
             backend: "sqlite" | "postgresql";
@@ -72065,6 +72450,15 @@ declare const CoreContractSchemaRegistry: {
                 }>>;
             }, z.ZodUnknown, "strip">>>;
         }, z.ZodUnknown, "strip"> | undefined;
+        scope?: "public" | "internal" | undefined;
+        client?: {
+            transport: "hosted";
+            credentialChain: "contracts";
+            authority?: string | undefined;
+            localOptIn?: string | null | undefined;
+            localStoreModule?: string | null | undefined;
+            readProbe?: string[] | undefined;
+        } | null | undefined;
         description?: string | undefined;
         $schema?: string | undefined;
         serving?: {
@@ -72089,6 +72483,9 @@ declare const CoreContractSchemaRegistry: {
                 } | undefined;
                 access?: "public" | "restricted" | undefined;
             }[];
+        } | undefined;
+        placement?: {
+            hosted: "never" | "default";
         } | undefined;
     }, {
         name: string;
@@ -72299,6 +72696,15 @@ declare const CoreContractSchemaRegistry: {
                 }>>;
             }, z.ZodUnknown, "strip">>>;
         }, z.ZodUnknown, "strip"> | undefined;
+        scope?: "public" | "internal" | undefined;
+        client?: {
+            transport: "hosted";
+            credentialChain: "contracts";
+            authority?: string | undefined;
+            localOptIn?: string | null | undefined;
+            localStoreModule?: string | null | undefined;
+            readProbe?: string[] | undefined;
+        } | null | undefined;
         description?: string | undefined;
         bins?: string[] | undefined;
         $schema?: string | undefined;
@@ -72331,6 +72737,7 @@ declare const CoreContractSchemaRegistry: {
                 description?: string | undefined;
             } | undefined;
             bin?: string | undefined;
+            dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
             mcpBin?: string | undefined;
             apiBasePath?: string | undefined;
             openApiPath?: string | undefined;
@@ -72353,6 +72760,10 @@ declare const CoreContractSchemaRegistry: {
                     summary?: string | undefined;
                 } | undefined;
             }[] | undefined;
+            commands?: {
+                name: string;
+                dataAccess: "hosted" | "server-only" | "local-opt-in";
+            }[] | undefined;
         }[] | undefined;
         publishing?: {
             status: "published" | "unpublished";
@@ -72371,6 +72782,9 @@ declare const CoreContractSchemaRegistry: {
                 flow?: "direct" | "staged" | undefined;
                 provenance?: "none" | "required" | "best-effort" | undefined;
             }[] | undefined;
+        } | undefined;
+        placement?: {
+            hosted: "never" | "default";
         } | undefined;
     }>, {
         hosting: ("user-hosted" | "hasna-saas")[];
@@ -72419,6 +72833,7 @@ declare const CoreContractSchemaRegistry: {
                 description?: string | undefined;
             } | undefined;
             bin?: string | undefined;
+            dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
             mcpBin?: string | undefined;
             apiBasePath?: string | undefined;
             openApiPath?: string | undefined;
@@ -72426,6 +72841,10 @@ declare const CoreContractSchemaRegistry: {
             generatedFrom?: string | undefined;
             clientClassName?: string | undefined;
             deferReason?: string | undefined;
+            commands?: {
+                name: string;
+                dataAccess: "hosted" | "server-only" | "local-opt-in";
+            }[] | undefined;
         }[];
         storage?: {
             backend: "sqlite" | "postgresql";
@@ -72629,6 +73048,15 @@ declare const CoreContractSchemaRegistry: {
                 }>>;
             }, z.ZodUnknown, "strip">>>;
         }, z.ZodUnknown, "strip"> | undefined;
+        scope?: "public" | "internal" | undefined;
+        client?: {
+            transport: "hosted";
+            credentialChain: "contracts";
+            authority?: string | undefined;
+            localOptIn?: string | null | undefined;
+            localStoreModule?: string | null | undefined;
+            readProbe?: string[] | undefined;
+        } | null | undefined;
         description?: string | undefined;
         $schema?: string | undefined;
         serving?: {
@@ -72653,6 +73081,9 @@ declare const CoreContractSchemaRegistry: {
                 } | undefined;
                 access?: "public" | "restricted" | undefined;
             }[];
+        } | undefined;
+        placement?: {
+            hosted: "never" | "default";
         } | undefined;
     }, {
         name: string;
@@ -72863,6 +73294,15 @@ declare const CoreContractSchemaRegistry: {
                 }>>;
             }, z.ZodUnknown, "strip">>>;
         }, z.ZodUnknown, "strip"> | undefined;
+        scope?: "public" | "internal" | undefined;
+        client?: {
+            transport: "hosted";
+            credentialChain: "contracts";
+            authority?: string | undefined;
+            localOptIn?: string | null | undefined;
+            localStoreModule?: string | null | undefined;
+            readProbe?: string[] | undefined;
+        } | null | undefined;
         description?: string | undefined;
         bins?: string[] | undefined;
         $schema?: string | undefined;
@@ -72895,6 +73335,7 @@ declare const CoreContractSchemaRegistry: {
                 description?: string | undefined;
             } | undefined;
             bin?: string | undefined;
+            dataAccess?: "hosted" | "server-only" | "local-opt-in" | undefined;
             mcpBin?: string | undefined;
             apiBasePath?: string | undefined;
             openApiPath?: string | undefined;
@@ -72917,6 +73358,10 @@ declare const CoreContractSchemaRegistry: {
                     summary?: string | undefined;
                 } | undefined;
             }[] | undefined;
+            commands?: {
+                name: string;
+                dataAccess: "hosted" | "server-only" | "local-opt-in";
+            }[] | undefined;
         }[] | undefined;
         publishing?: {
             status: "published" | "unpublished";
@@ -72935,6 +73380,9 @@ declare const CoreContractSchemaRegistry: {
                 flow?: "direct" | "staged" | undefined;
                 provenance?: "none" | "required" | "best-effort" | undefined;
             }[] | undefined;
+        } | undefined;
+        placement?: {
+            hosted: "never" | "default";
         } | undefined;
     }>;
     readonly "hasna.comms_event_envelope.v1": z.ZodEffects<z.ZodObject<{

@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.1.0
+
+Additive over 1.0.2: every 1.0.x import, class, message and manifest keeps
+working. This is the keystone release of the fleet-alignment plan (T4 §Target
+state): one client decision, one local door, one home resolver, one error
+taxonomy, and manifest fields plus report-mode conformance checks that let the
+fleet measure adoption before 1.2.0 enforces it.
+
+### Minor Changes
+
+- **Error taxonomy with stable exit codes.** `ClientResolutionError` (`@hasna/contracts/client`, also `./client/errors`) carries a discriminated `code` — `CREDENTIAL_ABSENT` (exit 2), `CREDENTIAL_UNREADABLE` (3), `CREDENTIAL_REJECTED` (4), `AUTHORITY_MISSING` / `AUTHORITY_INVALID` / `AUTHORITY_CONFLICT` (5), `LOCAL_OPT_IN_CONFLICT` (6), `TRANSPORT_UNAVAILABLE` (7), `NOT_AVAILABLE_HOSTED` (8) — plus `app`, `sources` (names, paths and Keychain references, never values), `remedy` and a value-free `toJSON()`. `CredentialResolutionError`, `CredentialFileUnsafeError` and `ClientTransportConfigurationError` are now subclasses with byte-stable messages; `HasnaHttpError` exposes `code` / `exitCode` for 401/403 and retryable statuses. `formatClientResolutionFailure()` and `clientResolutionExitCode()` give an adopter CLI its one stderr line and exit status. A Keychain `security` status other than 0 or 44 stays terminal (`CREDENTIAL_UNREADABLE`), never absent.
+- **The one local door.** `localOptInEnvKey(name)` → `HASNA_<NAME>_LOCAL` and `selectsLocalStore(name, env)` (also `./client/local-opt-in`) answer the on-box-store question from the process environment alone, BEFORE any Keychain or disk read. The flag on together with any hosted client key (`_API_URL`, `_API_KEY`, `_API_KEY_OVERRIDE`, `_API_KEY_REF`, their aliases, `HASNA_PROFILE`) throws `LOCAL_OPT_IN_CONFLICT`; so does `resolveClientTransport` / `createClientTransport` / `resolveStorageClient` when called under the flag — a process runs against exactly one store. The unprefixed `<NAME>_LOCAL` alias is accepted in 1.1.x only. `describeLocalOptIn()` and `localStoreNotice()` give `status` verbs and the one stderr notice their text.
+- **One home resolver.** `resolveAppHome(name, env, { scope: "public" | "internal" })` and `appPaths(...)` (also `./client/app-home`) return `~/.hasna/<name>` or `~/.hasna-internal/<name>` with `config/` (and the `credentials` file), `state/`, `cache/`, data at the root and `localDb` at `<data>/<name>.db`, honouring exactly `HASNA_HOME` and `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME`. No XDG variable, no macOS library folder. The credential chain's disk tier now reads through it (`CredentialChainOptions.scope`, default `public`), so `@hasna-internal/*` apps resolve `~/.hasna-internal/<name>/config/credentials` by passing `scope: "internal"`.
+- **`describeClientTransport(name, env, options)`** for `status` / `doctor`: never throws, never opens a store; reports `credential: present | absent | unreadable | not-consulted`, its tier and source, the authority and its source, the local opt-in state and every `ClientResolutionError` encountered, without a value.
+- **Manifest fields.** `scope`, `placement.hosted` (`default` | `never`), `client` (`transport: "hosted"`, `credentialChain: "contracts"`, `authority`, `localOptIn`, `localStoreModule`, `readProbe`, or `null` for a repo that ships no client) and `serviceSurfaces[].dataAccess` (`hosted` | `server-only` | `local-opt-in`) with per-command `commands[]`. All optional; cross-checks refuse a mismatched `localOptIn`, a client on a `library`, a client under `placement.hosted: never`, and `local-opt-in` access without a door. Both JSON Schema copies carry the same additions and stay closed.
+- **Report-mode conformance checks** `client_transport_declared`, `client_sqlite_isolation` (relative-import graph from each CLI/MCP bin, `src/conformance-import-graph.ts`), `client_fail_closed_blackbox` (runs the built bin with an empty `HOME` and `HASNA_STATION=no-such-station`; declared via `client.readProbe`), `no_mode_vocabulary`, `no_legacy_hostnames` and `kit_version_pinned`. New status `report` never fails a repo; `runRepoConformance(root, { strict: true })` / `contracts repo-conformance --strict` promotes it to `fail` (the 1.2.0 default). `FLEET_MIN_KIT_VERSION` is `1.1.0`. Findings name files, lines and labels, never matched text.
+- **Authenticated raw fetch.** `HasnaHttpTransport.fetch(input, init)` returns the original unread `Response` for CSV, downloads and event streams inside the bound application root, with the shared authority and credential binding, no retries, no parsing and no redirect following. Fakes implementing `HasnaHttpTransport` must add `fetch`.
+- Operator key lifecycle routes, app-scoped revocation, and a signing-secret
+  check command.
+
+  **Operator key lifecycle routes.** `createKeyLifecycleRoutes` (hasna/apps#1641)
+  adds the `/v1/admin/keys` surface — mint, list, read, revoke — as
+  framework-agnostic route handlers gated on a `keys.admin`-scoped operator key,
+  with a default 365-day client-key TTL. Revocation is scoped by app: a
+  `revoke` on a shared key store removes only the calling app's key, so an
+  operator for one app can no longer revoke another app's key by kid.
+
+  **`contracts check-signing-secret`.** The new CLI command validates a signing
+  secret through the shared `signing-secret` module (whitespace-wrapped secrets
+  are rejected with the trimmed value's location, not silently accepted), and
+  `--app`-based checks resolve the secret from the environment exactly as the
+  server reads it.
+
+  The key-store revoke path and the trim-on-read semantics of signing secrets
+  keep the guard rails of hasna/apps#1543 and #1638. This bump is additive over
+  1.0.1: the credential-tier and project-layout redesigns this work originally
+  carried are already released within 1.0.1, so nothing here re-breaks a 1.0.x
+  consumer.
+
+### Patch Changes
+
+- Fix extensionless imports in the public root declaration graph for strict NodeNext consumers, and require a fresh archive install with a strict root type check (`smoke:root-types-pack`) during release verification.
+
 ## 1.0.2
 
 ### Patch Changes

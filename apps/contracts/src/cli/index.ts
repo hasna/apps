@@ -93,7 +93,7 @@ function preflightJsonUsageErrors(argv: string[]) {
     validate: new Set(["--json", "-j", "--schema"]),
     conformance: new Set(["--json", "-j"]),
     "no-cloud-scan": new Set(["--json", "-j", "--manifest"]),
-    "repo-conformance": new Set(["--json", "-j"]),
+    "repo-conformance": new Set(["--json", "-j", "--strict"]),
     "vendor-kit": new Set(["--json", "-j", "--check", "--kit-version", "--no-contract"]),
     "artifact-scan": new Set([
       "--json",
@@ -382,10 +382,11 @@ export function createContractsProgram() {
     .description("Check a repo against the Hasna Service Contract v1 using its hasna.contract.json")
     .argument("[path]", "Repo root path", ".")
     .option("-j, --json", "Output JSON report")
-    .action((target: string, options: { json?: boolean }) => {
+    .option("--strict", "Promote the report-mode client-contract checks to failures (the 1.2.0 default)")
+    .action((target: string, options: { json?: boolean; strict?: boolean }) => {
       let report;
       try {
-        report = runRepoConformance(target);
+        report = runRepoConformance(target, options.strict ? { strict: true } : {});
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         reportCliError(options, `Repo conformance failed for ${target}: ${message}`, { path: target, code: "repo_conformance_error" });

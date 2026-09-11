@@ -2,15 +2,23 @@ import { createHash } from "node:crypto";
 import {
   createDeploymentSchemas,
   DEPLOYMENT_SCHEMA_IDS,
-} from "./deployment";
+} from "./deployment.js";
 import {
   createDeploymentEnvelopeSchema,
   DEPLOYMENT_ENVELOPE_SCHEMA_ID,
-} from "./deployment-envelope";
+} from "./deployment-envelope.js";
+import { localOptInEnvKey } from "./client/local-opt-in.js";
 import { z } from "zod";
 
 export const CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-export const CONTRACTS_PACKAGE_VERSION = "1.0.2";
+export const CONTRACTS_PACKAGE_VERSION = "1.1.0";
+/**
+ * The oldest `@hasna/contracts` a fleet member may pin and still pass the
+ * `kit_version_pinned` conformance check. Raised with each release that
+ * changes the client contract; 1.1.0 introduced the error taxonomy, the one
+ * local opt-in door, the scoped home resolver and the client manifest fields.
+ */
+export const FLEET_MIN_KIT_VERSION = "1.1.0";
 
 export const SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
@@ -5312,6 +5320,114 @@ export type ServiceSurfaceStatus = z.infer<typeof ServiceSurfaceStatusSchema>;
 export const ServiceAuthModeSchema = z.enum(["none", "local-only", "api-key", "session", "service-token", "custom"]);
 export type ServiceAuthMode = z.infer<typeof ServiceAuthModeSchema>;
 
+/**
+ * Which home root an app owns (2026-09-04 home-layout ruling): `public` is
+ * `~/.hasna/<name>` for `@hasna/*`, `internal` is `~/.hasna-internal/<name>`
+ * for `@hasna-internal/*`. The credentials file follows the scope; Keychain
+ * item names do not change.
+ */
+export const APP_SCOPES = ["public", "internal"] as const;
+export const AppScopeSchema = z.enum(APP_SCOPES);
+export type AppScope = z.infer<typeof AppScopeSchema>;
+
+/**
+ * How a surface, or one of its commands, reaches data.
+ * - `hosted`: through the authenticated `/v1` client only; never a local store.
+ * - `server-only`: lives in the serve/migrate/worker bins and is never
+ *   reachable from a CLI or MCP bin.
+ * - `local-opt-in`: opens the on-box store ONLY behind `HASNA_<NAME>_LOCAL=1`.
+ */
+export const DATA_ACCESS_MODES = ["hosted", "server-only", "local-opt-in"] as const;
+export const DataAccessSchema = z.enum(DATA_ACCESS_MODES);
+export type DataAccess = z.infer<typeof DataAccessSchema>;
+
+/** One named command or tool of a surface whose data access differs from the surface default. */
+export const SurfaceCommandSchema = z
+  .object({
+    name: z.string().trim().min(1),
+    dataAccess: DataAccessSchema
+  })
+  .strict();
+export type SurfaceCommand = z.infer<typeof SurfaceCommandSchema>;
+
+/**
+ * Where the app's data lives by default. `default`: the hosted service, so a
+ * client is required and a missing credential fails closed. `never`: a
+ * local-by-design tool that makes no hosted claim and keeps its own store.
+ */
+export const PLACEMENT_HOSTED_MODES = ["default", "never"] as const;
+export const PlacementHostedSchema = z.enum(PLACEMENT_HOSTED_MODES);
+export type PlacementHosted = z.infer<typeof PlacementHostedSchema>;
+export const PlacementContractSchema = z.object({ hosted: PlacementHostedSchema }).strict();
+export type PlacementContract = z.infer<typeof PlacementContractSchema>;
+
+/** The only client transport a manifest may declare: the authenticated hosted `/v1` API. */
+export const CLIENT_CONTRACT_TRANSPORTS = ["hosted"] as const;
+export const ClientContractTransportSchema = z.enum(CLIENT_CONTRACT_TRANSPORTS);
+/** The only credential chain a manifest may declare: the one in `@hasna/contracts/client`. */
+export const CLIENT_CREDENTIAL_CHAINS = ["contracts"] as const;
+export const ClientCredentialChainSchema = z.enum(CLIENT_CREDENTIAL_CHAINS);
+
+const CLIENT_AUTHORITY_PATTERN = /^https:\/\/[^\s/@?#]+(?:\/[^\s/?#]+)*$/;
+const LOCAL_OPT_IN_KEY_PATTERN = /^HASNA_[A-Z][A-Z0-9_]*_LOCAL$/;
+const RELATIVE_SOURCE_PATH_PATTERN = /^(?!\/)(?!\.\.)[A-Za-z0-9_./-]+\.[cm]?[jt]sx?$/;
+
+/**
+ * The hosted client contract a manifest declares (contracts 1.1.0).
+ *
+ * `transport` and `credentialChain` are closed enums so a manifest states,
+ * in one place a reviewer can read, that its CLI and MCP bins reach data only
+ * through the shared authenticated client. `localOptIn` names the ONE door to
+ * an on-box store and `localStoreModule` the ONE module that opens it; the
+ * `client_sqlite_isolation` check holds the import graph to exactly that.
+ * `readProbe` is the argv the black-box fail-closed check runs.
+ */
+export const ClientContractSchema = z
+  .object({
+    transport: ClientContractTransportSchema,
+    /** Absolute https, no credentials/query/fragment/trailing slash, never ending in /v1. Defaults to the fleet gateway. */
+    authority: z
+      .string()
+      .regex(CLIENT_AUTHORITY_PATTERN, "client.authority must be an absolute https URL with no credentials, query, fragment, or trailing slash")
+      .optional(),
+    credentialChain: ClientCredentialChainSchema,
+    /** `HASNA_<NAME>_LOCAL`, or null when the app has no on-box store at all. */
+    localOptIn: z.string().regex(LOCAL_OPT_IN_KEY_PATTERN, "client.localOptIn must be HASNA_<NAME>_LOCAL").nullable().optional(),
+    /** Repo-relative source path of the one module allowed to open the on-box store. */
+    localStoreModule: z
+      .string()
+      .regex(RELATIVE_SOURCE_PATH_PATTERN, "client.localStoreModule must be a repo-relative source path such as src/db/database.ts")
+      .nullable()
+      .optional(),
+    /** The read command the black-box fail-closed check runs, e.g. ["list", "--limit", "1"]. */
+    readProbe: z.array(z.string().min(1)).min(1).optional()
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.authority?.endsWith("/v1")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "client.authority must not end in /v1; the client appends the version segment itself",
+        path: ["authority"]
+      });
+    }
+    if (value.localOptIn && !value.localStoreModule) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "client.localOptIn names a door, so client.localStoreModule must name the one module that opens the on-box store",
+        path: ["localStoreModule"]
+      });
+    }
+    if (value.localStoreModule && !value.localOptIn) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "client.localStoreModule names an on-box store, so client.localOptIn must name its door",
+        path: ["localOptIn"]
+      });
+    }
+  });
+export type ClientContract = z.infer<typeof ClientContractSchema>;
+
 export const ServiceEndpointSchema = z
   .object({
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
@@ -5361,10 +5477,23 @@ export const ServiceSurfaceSchema = z
     generatedFrom: z.string().regex(/^\/[A-Za-z0-9_./:-]*$/, "SDK generatedFrom must reference an absolute OpenAPI path").optional(),
     clientClassName: z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/).optional(),
     deferReason: z.string().min(1).optional(),
-    readinessGates: z.array(DeploymentReadinessGateSchema).default([])
+    readinessGates: z.array(DeploymentReadinessGateSchema).default([]),
+    /** How this surface reaches data (contracts 1.1.0). Absent asserts nothing. */
+    dataAccess: DataAccessSchema.optional(),
+    /** Per-command data access where it differs from the surface default. */
+    commands: z.array(SurfaceCommandSchema).optional()
   })
   .strict()
   .superRefine((value, ctx) => {
+    if (value.commands) {
+      const seen = new Set<string>();
+      for (const [index, command] of value.commands.entries()) {
+        if (seen.has(command.name)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Duplicate command declaration "${command.name}"`, path: ["commands", index, "name"] });
+        }
+        seen.add(command.name);
+      }
+    }
     if (value.status === "supported") {
       if (!value.kind || value.kind === "api") {
         if (!value.bin) {
@@ -6162,6 +6291,12 @@ export const ServiceContractManifestSchema = z
     serving: ServingContractSchema.optional(),
     serviceSurfaces: z.array(ServiceSurfaceSchema).default([]),
     publishing: PublishingContractSchema.optional(),
+    /** Which home root the app owns (`~/.hasna` or `~/.hasna-internal`); absent means public. */
+    scope: AppScopeSchema.optional(),
+    /** Where data lives by default; `hosted: "never"` marks a local-by-design tool. */
+    placement: PlacementContractSchema.optional(),
+    /** The hosted client contract, or `null` to state explicitly that the repo ships no client. */
+    client: ClientContractSchema.nullable().optional(),
     metadata: ServiceContractMetadataSchema.optional()
   })
   .strict()
@@ -6335,6 +6470,50 @@ export const ServiceContractManifestSchema = z
           code: z.ZodIssueCode.custom,
           message: `Service surface MCP bin "${surface.mcpBin}" must be declared in bins`,
           path: ["serviceSurfaces", index, "mcpBin"]
+        });
+      }
+    }
+
+    // 1.1.0 client-contract cross-checks: one door, one store module, no
+    // contradiction between placement and the client declaration.
+    if (value.client) {
+      const expectedOptIn = localOptInEnvKey(value.name);
+      if (value.client.localOptIn && value.client.localOptIn !== expectedOptIn) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `client.localOptIn must be ${expectedOptIn}`,
+          path: ["client", "localOptIn"]
+        });
+      }
+      if (value.class === "library") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "library repos ship no client; declare client: null or omit it",
+          path: ["client"]
+        });
+      }
+      if (value.placement?.hosted === "never") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "placement.hosted is never, so the repo cannot also declare a hosted client; drop one of them",
+          path: ["client"]
+        });
+      }
+    }
+    for (const [index, surface] of value.serviceSurfaces.entries()) {
+      const accesses = [surface.dataAccess, ...(surface.commands ?? []).map((command) => command.dataAccess)];
+      if (accesses.includes("local-opt-in") && !value.client?.localOptIn) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "a local-opt-in surface or command requires client.localOptIn to name the door",
+          path: ["serviceSurfaces", index, "dataAccess"]
+        });
+      }
+      if (accesses.includes("hosted") && value.placement?.hosted === "never") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "placement.hosted is never, so no surface or command can declare hosted data access",
+          path: ["serviceSurfaces", index, "dataAccess"]
         });
       }
     }

@@ -1,5 +1,5 @@
-import { deploymentFixtureSetToContractSet } from "./deployment-fixtures";
-import { DEPLOYMENT_CONTRACT_VERSION, type DeploymentSchemaId } from "./deployment";
+import { deploymentFixtureSetToContractSet } from "./deployment-fixtures.js";
+import { DEPLOYMENT_CONTRACT_VERSION, type DeploymentSchemaId } from "./deployment.js";
 export declare const DEPLOYMENT_SCHEMA_BUNDLE_ID: "hasna.deployment.schema_bundle.v1";
 export declare const DEPLOYMENT_FIXTURE_BUNDLE_ID: "hasna.deployment.fixture_bundle.v1";
 export interface DeploymentSchemaBundle {

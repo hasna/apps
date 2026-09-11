@@ -1,4 +1,6 @@
 import type { Env } from "../env-token.js";
+import { ClientResolutionError, type ClientResolutionCode } from "./errors.js";
+import { HASNA_CONFIG_HOME_ENV_KEY, HASNA_HOME_ENV_KEY, type AppHomeScope } from "./app-home.js";
 /** Which link of the chain supplied the credential. */
 export type CredentialTier = "argument" | "override" | "pointer" | "profile" | "keychain" | "disk" | "env";
 export interface ResolvedCredential {
@@ -80,6 +82,13 @@ export interface CredentialChainOptions {
     profile?: string;
     /** Tier 3: Keychain controls — a fake `security` runner in tests, an opt-out on CI. */
     keychain?: KeychainTierOptions;
+    /**
+     * Tier 4: which home root the credentials file lives under — `~/.hasna/<app>`
+     * (`"public"`, the default) or `~/.hasna-internal/<app>` (`"internal"`).
+     * Internal apps pass the `scope` their `hasna.contract.json` declares. The
+     * Keychain item names are the same for both scopes.
+     */
+    scope?: AppHomeScope;
 }
 /**
  * A deliberate credential selection could not be honoured, or a credential
@@ -90,20 +99,26 @@ export interface CredentialChainOptions {
  * a different principal than the operator asked for. A corrupt credential file
  * throws for the same reason.
  */
-export declare class CredentialResolutionError extends Error {
+export declare class CredentialResolutionError extends ClientResolutionError {
     readonly appName: string;
     readonly attempted: readonly string[];
-    constructor(appName: string, message: string, attempted: readonly string[]);
+    /**
+     * Every failure this class reports is a tier that EXISTS but cannot be
+     * honoured, so the code defaults to `CREDENTIAL_UNREADABLE` (exit 3). The
+     * message is byte-stable with 1.0.x; the code and exit code are additive.
+     */
+    constructor(appName: string, message: string, attempted: readonly string[], code?: ClientResolutionCode, remedy?: string | null);
 }
 /** An existing credential/config file is unsafe and is never treated as absent. */
-export declare class CredentialFileUnsafeError extends Error {
+export declare class CredentialFileUnsafeError extends ClientResolutionError {
     readonly path: string;
     constructor(path: string, reason: string);
 }
-export declare const HASNA_HOME_ENV_KEY = "HASNA_HOME";
-export declare const HASNA_CONFIG_HOME_ENV_KEY = "HASNA_CONFIG_HOME";
+export { HASNA_HOME_ENV_KEY, HASNA_CONFIG_HOME_ENV_KEY };
 /** The Keychain account; absent, the short hostname is used, then `USER`. */
 export declare const KEYCHAIN_STATION_ENV_KEY = "HASNA_STATION";
+/** The Keychain service name of an app's credential item: `hasna.credentials.<app>.api-key`. A name, never a value. */
+export declare function keychainCredentialServiceName(name: string): string;
 /** One on-disk credential source: its absolute path and its tier. */
 export interface DiskCredentialSource {
     path: string;
@@ -117,14 +132,14 @@ export interface DiskCredentialSource {
  * HOME nor HASNA_HOME anchors the root, or when the app name is not safe to
  * place in a path.
  */
-export declare function credentialDiskSourceList(name: string, env: Env, profile?: string | null): DiskCredentialSource[];
+export declare function credentialDiskSourceList(name: string, env: Env, profile?: string | null, scope?: AppHomeScope): DiskCredentialSource[];
 /**
  * The disk files that may hold an app's credential, in precedence order.
  *
  * Exactly one disk layer exists. Exported so callers and error messages can
  * name the exact path consulted.
  */
-export declare function credentialDiskSources(name: string, env: Env): string[];
+export declare function credentialDiskSources(name: string, env: Env, scope?: AppHomeScope): string[];
 /**
  * True when a security-relevant file's permission bits are exactly owner-only
  * 0400 or 0600 across the FULL 07777 mask (setuid/setgid/sticky refused — a
@@ -178,7 +193,7 @@ export interface AppConfigDiskHit {
  * file's contents would take down every client on the fleet for a stale line
  * nobody reads.
  */
-export declare function appConfigDiskValue(name: string, env: Env, keys: readonly string[]): AppConfigDiskHit | null;
+export declare function appConfigDiskValue(name: string, env: Env, keys: readonly string[], scope?: AppHomeScope): AppConfigDiskHit | null;
 export declare const CALLER_SUPPLIED_CREDENTIAL_PROVIDER_SOURCE = "caller-supplied CredentialProvider";
 /**
  * Build the credential for a key a caller handed in DIRECTLY as a string.
