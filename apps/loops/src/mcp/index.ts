@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
+import { resolveLoopsMcpStartupGate } from "./startup-gate.js";
 import { z } from "zod/v3";
 import { daemonStatus } from "../daemon/control.js";
 import { runDoctor } from "../lib/doctor.js";
@@ -1112,6 +1113,12 @@ async function main(): Promise<void> {
 
 MCP server for @hasna/loops (Streamable HTTP by default; --stdio to select stdio).
 
+Requires a configured loops connection before it serves, in every mode:
+HASNA_LOOPS_API_KEY (or the macOS Keychain item hasna.credentials.loops.api-key,
+or ~/.hasna/loops/config/credentials), or the explicit local opt-in
+HASNA_LOOPS_CONNECTION=file. Without one it exits non-zero before binding or
+answering initialize.
+
 Options:
   -V, --version  output the version number
   -h, --help     display help for command
@@ -1124,6 +1131,19 @@ Options:
   if (process.argv[2] === "list-tools") {
     console.log(JSON.stringify(listToolsForCli(), null, 2));
     return;
+  }
+
+  // STARTUP GATE (owner ruling 2026-09-07, hasna/apps#1720 acceptance (c)):
+  // resolve the client connection ONCE, through the same chain every tool
+  // uses per call, BEFORE any transport exists. With no credential resolvable
+  // and no explicit HASNA_LOOPS_CONNECTION=file opt-in the process exits
+  // non-zero naming where the credential should live — before `initialize`
+  // can be answered on stdio and before the Streamable HTTP port is bound.
+  // Nothing is created. See ./startup-gate.ts.
+  const gate = await resolveLoopsMcpStartupGate();
+  if (!gate.ok) {
+    console.error(gate.message);
+    process.exit(1);
   }
 
   // Explicit stdio opt-out (--stdio / MCP_STDIO=1) keeps the legacy
