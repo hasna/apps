@@ -39,7 +39,9 @@ import {
   type CaptureProbeResult,
 } from "../lib/capture-probe.js";
 import {
+  activeStoreFailClosed,
   describeActiveStore,
+  describeActiveStoreLine,
   localStoreIsBehindSchema,
   probeRecordingPersistence,
   renderPersistenceMarker,
@@ -96,6 +98,7 @@ import {
   prepareReleaseInstallInputs,
 } from "../lib/release-install-policy.js";
 import { exportDesktopSnapshot } from "./desktop-snapshot.js";
+import { buildHostedCommand, reportHostedCLIError } from "./hosted.js";
 
 const program = new Command();
 
@@ -111,6 +114,7 @@ program
   .option("--session <id>", "Session ID");
 
 registerEventsCommands(program, { source: "recordings" });
+program.addCommand(buildHostedCommand());
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_HUMAN_LIST_LIMIT = 50;
@@ -1129,7 +1133,7 @@ appCommand
       installed: status.installed,
       legacy_install_paths: status.legacy_install_paths,
       // The grants below belong to this bundle, not to the terminal running this command.
-      permission_subject: describeTccAuthorizationSubject(status.installed_app_path),
+      permission_subject: describeTccAuthorizationSubject(status.installed ? status.installed_app_path : null),
       microphone: status.microphone_permission,
       accessibility: status.accessibility_permission,
       app_code_hash: status.app_code_hash,
@@ -1416,7 +1420,9 @@ program
         // `capture_probe` is null when no probe ran. No existing key changes name or meaning.
         trigger,
       }, null, 2));
-      if (probeFailed || triggerFailed) process.exitCode = 1;
+      if (probeFailed || triggerFailed || activeStoreFailClosed(activeStore)) {
+        process.exitCode = 1;
+      }
       return;
     }
 
@@ -1436,7 +1442,8 @@ program
     } else {
       console.log(
         chalk.red(
-          `✗ OpenAI API key not found. Set OPENAI_API_KEY env var or add to ~/.secrets`
+          `✗ OpenAI API key not found. Set OPENAI_API_KEY (e.g. ` +
+            `'secrets exec <key> --as OPENAI_API_KEY -- recordings …')`
         )
       );
     }
@@ -1453,13 +1460,16 @@ program
       );
     }
 
-    // Where a transcript will actually land. Named unconditionally: the failure
-    // this prevents is a human reading the wrong dataset, which no probe catches.
+    // Where a transcript will actually land — or the fail-closed refusal when
+    // nothing resolves (a machine with no credential has NO active store, and
+    // check must not render the on-box file as live: that false green is what
+    // let a missing credential read as a working installation).
     console.log(
-      chalk.green("✓") +
-        ` Active store: ${activeStore.transport}` +
-        (activeStore.base_url ? ` → ${activeStore.base_url}` : ` → ${activeStore.local_db_path}`) +
-        chalk.dim(` (selected by ${activeStore.mode_source})`)
+      describeActiveStoreLine(activeStore, {
+        pass: (text) => chalk.green(text),
+        warn: (text) => chalk.yellow(text),
+        fail: (text) => chalk.red(text),
+      })
     );
     if (activeStore.divergent) {
       console.log(
@@ -1607,7 +1617,7 @@ program
       console.log(persistenceMarker + ` Persistence round-trip: ${persistence.message}`);
     }
 
-    if (probeFailed || triggerFailed) process.exitCode = 1;
+    if (probeFailed || triggerFailed || activeStoreFailClosed(activeStore)) process.exitCode = 1;
   });
 
 /**
@@ -3069,6 +3079,10 @@ async function printJSON(value: unknown): Promise<void> {
 // ── Run ─────────────────────────────────────────────────────────────────────
 
 program.parseAsync().catch((error: unknown) => {
+  if (program.args[0] === "hosted") {
+    process.exitCode = reportHostedCLIError(error);
+    return;
+  }
   const msg = error instanceof Error ? error.message : String(error);
   console.error(`ERROR: ${msg}`);
   process.exit(1);

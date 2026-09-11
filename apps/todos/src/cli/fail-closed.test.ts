@@ -155,4 +155,21 @@ describe("fail-closed transport resolution", () => {
     expect(result.stdout).toContain("Usage:");
     expect(sqliteFilesUnder(tempRoot)).toEqual([]);
   });
+  test("machine help is store-free while machine reads and writes still require credentials", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "todos-machines-noenv-"));
+    tempRoots.push(tempRoot);
+    const env = hermeticEnv(tempRoot);
+    for (const args of [["machines", "--help"], ["machines", "register", "--help"]]) {
+      const result = await runCli(args, env);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Usage:");
+    }
+    for (const args of [["machines", "--json"], ["machines", "register", "fixture-machine", "--json"]]) {
+      const result = await runCli(args, env);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("HASNA_TODOS_API_KEY");
+    }
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
+  });
+
 });

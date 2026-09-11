@@ -273,9 +273,12 @@ describe("lockfile drift — members without own lockfile resolve inside declare
     // consolidations, test-guard, testers and paths left the tree (deletions +
     // hasna-internal move + @hasna/paths deletion, hasna/apps#1535) — the
     // expected list tracks main's committed lockfile state.
+    // trash joined the tree in the @hasna/trash bootstrap as an ordinary
+    // workspace member resolving through the root lockfile.
     expect(noOwnLockMembers(root)).toEqual([
       "connectors",
       "statusline",
+      "trash",
     ]);
   });
 

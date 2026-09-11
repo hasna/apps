@@ -45,7 +45,7 @@ import {
   type GitHubRemoteProtocol,
   type GitHubVisibility,
 } from "./workspace-github.js";
-import { doctorWorkspace } from "./workspace-doctor.js";
+import { doctorWorkspaceWithStore } from "./workspace-doctor.js";
 import { resolveProjectStore, type ProjectStore } from "../store/project-store.js";
 import { importRegisteredRoots, importWorkspace, importWorkspaceBulk, planWorkspaceImport } from "./workspace-import.js";
 import {
@@ -59,7 +59,12 @@ import {
   startProject,
 } from "./project-start.js";
 import { projectTmuxStatus } from "./project-tmux-status.js";
-import { ensureProjectChannel, resolveProjectChannelForProject } from "./project-channel.js";
+import {
+  assertProjectChannelIntegrationWritable,
+  ensureProjectChannel,
+  resolveProjectChannelForProject,
+  type ProjectChannelExistenceProbe,
+} from "./project-channel.js";
 import { filterProjectEvalArtifacts } from "./project-eval-artifacts.js";
 import { resolveRegisteredProjectTarget } from "./project-resolver.js";
 import {
@@ -82,6 +87,7 @@ import {
   hasProjectIntegrationFields,
   hasProjectManagementFields,
   mergeProjectIntegrationFields,
+  mergeProjectIntegrations,
   mergeProjectManagementMetadata,
   mergeProjectTags,
   projectExternalLinksSummary,
@@ -1137,6 +1143,13 @@ interface WorkspaceAgentToolContext {
   forcedRecipeId?: string;
   tmuxAllowed: boolean;
   createdWorkspaces: Workspace[];
+  /**
+   * Seam for the write-time conversations-channel guard (BUG-0063). Tests and
+   * embedders inject a probe here instead of spawning a CLI; when omitted the
+   * guard falls back to the very same env-driven conversations-CLI probe the
+   * CLI and MCP writers use, so production behaviour is unchanged.
+   */
+  channelProbe?: ProjectChannelExistenceProbe;
 }
 
 /**
@@ -1174,6 +1187,28 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
     } catch {
       return null;
     }
+  };
+  /**
+   * The write-time channel guard (BUG-0063) for the agent-tool surface.
+   *
+   * Three tools reachable from a prompt run can pin
+   * `integrations.conversations_channel`: projects_create (hosted AND local
+   * transport), projects_update, and projects_link (through
+   * linkWorkspaceExternalIntegrations). Their CLI and MCP twins already refuse
+   * a name the conversations app has no channel for; the prompt-agent twins did
+   * not, so a model could pin a non-channel name — the post then landed in an
+   * agent DM of the same name, or failed closed with HTTP 400, and nobody
+   * watching the project channel saw it.
+   *
+   * The rule itself (only a positive `missing` verdict refuses; an unavailable
+   * probe passes through) lives in project-channel.ts and is NOT re-implemented
+   * here — a second copy is how the two would drift.
+   */
+  const guardProjectChannelWritable = (
+    next: WorkspaceIntegrations | undefined,
+    previous: WorkspaceIntegrations | undefined,
+  ): void => {
+    assertProjectChannelIntegrationWritable(next, previous, { probe: ctx.channelProbe });
   };
   return {
     projects_roots_list: tool({
@@ -1577,10 +1612,14 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
       execute: async (input) => {
         const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
-        const doctor = () => doctorWorkspace(workspace, { fix: Boolean(input.fix && approve), dryRun: !approve, transport: store.transport });
-        return projectPayload(input.fix && approve && store.transport === "local"
+        // Through the Store: a hosted project resolves its root/recipe against
+        // the shared registry and never opens the on-box SQLite (#1720). The
+        // local path completes synchronously, so the synchronous lock below
+        // still covers the whole run.
+        const doctor = () => doctorWorkspaceWithStore(store, workspace, { fix: Boolean(input.fix && approve), dryRun: !approve });
+        return projectPayload(await (input.fix && approve && store.transport === "local"
           ? withAgentWorkspaceLock(workspace, actorAgent.id, "project doctor fix", doctor)
-          : doctor());
+          : doctor()));
       },
     }),
     projects_update: tool({
@@ -1639,6 +1678,9 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         const integrations = hasProjectIntegrationFields(integrationFields)
           ? mergeProjectIntegrationFields(integrationsBase, integrationFields)
           : input.integrations === undefined ? undefined : integrationsBase;
+        // An update can replace the whole integrations object, so it can pin
+        // `conversations_channel` exactly like the CLI/MCP update can (BUG-0063).
+        guardProjectChannelWritable(integrations, workspace.integrations);
         const updateInput = {
           name: input.name,
           slug: input.slug,
@@ -1939,15 +1981,22 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         const workspace = resolveProjectTarget(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
         const integrations = normalizeWorkspaceIntegrations(input.integrations as WorkspaceIntegrations);
+        // A link MERGES onto the record, so it can pin
+        // `conversations_channel` exactly like the CLI/MCP link can
+        // (BUG-0063). The guard sees the merged set — the same object the
+        // Store write persists — so nothing can be pinned that the guard did
+        // not inspect.
+        const linkedIntegrations = mergeProjectIntegrations(workspace.integrations, integrations);
+        guardProjectChannelWritable(linkedIntegrations, workspace.integrations);
         if (!approve) {
           return {
             status: "planned",
             project: compactProject(workspace),
-            integrations: { ...workspace.integrations, ...integrations },
+            integrations: linkedIntegrations,
             note: "Run again with --yes to link these integrations.",
           };
         }
-        return { status: "linked", project: compactProject(await linkWorkspaceExternalIntegrations(store, workspace, integrations, {
+        return { status: "linked", project: compactProject(await linkWorkspaceExternalIntegrations(store, workspace, linkedIntegrations, {
           agent_id: actorAgent.id,
           source: "agent",
           prompt: options.prompt,
@@ -2127,6 +2176,22 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         tmux_profile: z.string().optional().describe("Existing tmux profile id or slug to apply"),
       }),
       execute: async (input) => {
+        // Registry-level input is store-agnostic: merge it once so the hosted
+        // and the local create branch pin exactly the same integrations, and
+        // guard that one value (BUG-0063) instead of one copy per branch — a
+        // guard on a re-derived copy is a guard that can drift from the write.
+        const requestedIntegrations = mergeProjectIntegrationFields(input.integrations as WorkspaceIntegrations | undefined, {
+          todos_project_id: input.todos_project_id,
+          todos_task_list_id: input.todos_task_list_id,
+          brief_id: input.brief_id,
+          brief_path: input.brief_path,
+        }) ?? input.integrations as WorkspaceIntegrations | undefined;
+        // A create can pin `conversations_channel` through its integrations, and
+        // nothing downstream re-checks it: executeWorkspaceCreation's channel
+        // ensure is best-effort and can be switched off, so a create that pinned
+        // a non-channel name would leave the row pointing at a name nothing can
+        // post to. Refuse it before any row or directory exists.
+        guardProjectChannelWritable(requestedIntegrations, undefined);
         if (store.transport === "http") {
           // Hosted project rows are created through the Store so they land in
           // the shared registry (not the local sqlite island). Machine-local
@@ -2138,12 +2203,7 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
           const recipeId = forcedRecipeId ?? (input.recipe ? (await store.getRecipe(input.recipe))?.id : undefined);
           if (input.recipe && !recipeId) return { error: `Recipe not found: ${input.recipe}` };
 
-          const cloudIntegrations = mergeProjectIntegrationFields(input.integrations as WorkspaceIntegrations | undefined, {
-            todos_project_id: input.todos_project_id,
-            todos_task_list_id: input.todos_task_list_id,
-            brief_id: input.brief_id,
-            brief_path: input.brief_path,
-          }) ?? input.integrations as WorkspaceIntegrations | undefined;
+          const cloudIntegrations = requestedIntegrations;
           const cloudMetadata = mergeProjectManagementMetadata(input.metadata as JsonObject | undefined, {
             stage: input.stage,
             priority: input.priority,
@@ -2193,6 +2253,9 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
         if (tmuxAllowed && input.tmux_profile && !inspectedTmuxProfiles) {
           return { error: "Call projects_tmux_profiles_list before using a saved tmux_profile, then retry projects_create with the selected profile slug." };
         }
+        // The local transport writes the SAME guarded value as the hosted
+        // branch above; executeWorkspaceCreation's channel ensure is
+        // best-effort and disable-able, so the guard cannot live there.
         const createInput = {
           name: input.name,
           slug: input.slug,
@@ -2203,12 +2266,7 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
           primary_path: forcedRootId ? undefined : input.path,
           git_remote: input.git_remote,
           tags: input.tags,
-          integrations: mergeProjectIntegrationFields(input.integrations as WorkspaceIntegrations | undefined, {
-            todos_project_id: input.todos_project_id,
-            todos_task_list_id: input.todos_task_list_id,
-            brief_id: input.brief_id,
-            brief_path: input.brief_path,
-          }) ?? input.integrations as WorkspaceIntegrations | undefined,
+          integrations: requestedIntegrations,
           metadata: mergeProjectManagementMetadata(input.metadata as JsonObject | undefined, {
             stage: input.stage,
             priority: input.priority,

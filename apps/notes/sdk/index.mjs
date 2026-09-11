@@ -17,6 +17,23 @@
 // The package root exports this same remote-only client. Pure, non-authoritative
 // format helpers live only at the explicit ./compat/markdown-format subpath.
 
+/**
+ * @typedef {import('./types.js').JsonValue} JsonValue
+ * @typedef {import('./types.js').NotesTransportReport} NotesTransportReport
+ * @typedef {import('./types.js').NotesStoreConfiguration} NotesStoreConfiguration
+ * @typedef {import('./types.js').NotesErrorOptions} NotesErrorOptions
+ * @typedef {import('./types.js').NotesRequestOptions} NotesRequestOptions
+ * @typedef {import('./types.js').NotesEnvironment} NotesEnvironment
+ * @typedef {import('./types.js').Note} Note
+ * @typedef {import('./types.js').NoteInput} NoteInput
+ * @typedef {import('./types.js').NoteUpdate} NoteUpdate
+ * @typedef {import('./types.js').NotesListOptions} NotesListOptions
+ * @typedef {import('./types.js').NotesPage} NotesPage
+ * @typedef {import('./types.js').NotesExport} NotesExport
+ * @typedef {import('./types.js').NotesDeleteResult} NotesDeleteResult
+ * @typedef {import('./types.js').NotesHealth} NotesHealth
+ */
+
 import {
   NOTES_APP_SLUG,
   NOTES_API_URL_ENV,
@@ -55,9 +72,10 @@ export {
  * Resolve the authenticated HTTPS client from the environment through the
  * @hasna/contracts chain. The report names the sources (never values).
  */
+/** @param {NotesEnvironment} [env] */
 export function resolveNotesClientStore(env = process.env) {
   const report = resolveNotesClientTransport(env);
-  return { transport: 'http', report, httpStore: createNotesHttpStore(env) };
+  return { transport: /** @type {const} */ ('http'), report, httpStore: createNotesHttpStore(env) };
 }
 
 /**
@@ -71,15 +89,23 @@ export function resolveNotesClientStore(env = process.env) {
  * fleet credential (#1794).
  */
 export class NotesClient {
+  /** @param {NotesEnvironment} [env] @param {typeof fetch} [fetchImpl] */
   constructor(env = process.env, fetchImpl = fetch) {
     this.store = createNotesHttpStore(env, fetchImpl);
   }
 
+  /** @returns {Promise<NotesHealth>} */
   health() { return this.store.health(); }
+  /** @param {NotesListOptions} [params] @returns {Promise<NotesPage>} */
   list(params) { return this.store.listNotes(params); }
+  /** @param {string} id @returns {Promise<Note>} */
   get(id) { return this.store.getNote(id); }
+  /** @param {NoteInput} input @returns {Promise<Note>} */
   create(input) { return this.store.createNote(input); }
+  /** @param {string} id @param {NoteUpdate} input @returns {Promise<Note>} */
   update(id, input) { return this.store.updateNote(id, input); }
+  /** @param {string} id @returns {Promise<NotesDeleteResult>} */
   delete(id) { return this.store.deleteNote(id); }
+  /** @returns {Promise<NotesExport>} */
   export() { return this.store.exportNotes(); }
 }

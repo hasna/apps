@@ -1,11 +1,14 @@
-import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
+import { beforeAll, afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "convchanid-cli-"));
-const TEST_DB = join(TEST_DIR, "channels.db");
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 setDefaultTimeout(15_000);
 
@@ -14,8 +17,7 @@ function runCli(args: string[]) {
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
     env: {
-      ...process.env,
-      CONVERSATIONS_DB_PATH: TEST_DB,
+      ...fixture.env,
       CONVERSATIONS_AGENT_ID: "channel-id-test",
       FORCE_COLOR: "0",
     },

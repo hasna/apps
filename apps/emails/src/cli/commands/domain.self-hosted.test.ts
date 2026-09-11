@@ -63,6 +63,7 @@ afterAll(() => stub.stop());
 beforeEach(async () => {
   await stub.reset();
   stub.applyEnv();
+  await stub.seed({ providers: [{ id: "selfHosted", name: "Fixture SES", type: "ses", active: true }], "domain-connect-enabled": [{ id: "enabled" }] });
 });
 afterEach(() => stub.clearEnv());
 
@@ -74,8 +75,8 @@ afterEach(() => stub.clearEnv());
 describe("domain CLI — self-hosted (self_hosted) /v1 routing", () => {
   it("add writes to the self-hosted API (not a local provider)", async () => {
     const { data } = await runDomainCommand(["domain", "add", "cloudy.example.com", "--provider", "selfHosted", "--send-only"]);
-    const entity = data as { id: string; domain: string };
-    expect(entity.domain).toBe("cloudy.example.com");
+    expect(data).toMatchObject({ ok: true, domain: "cloudy.example.com", connection: { status: "verified", provider_id: "selfHosted" } });
+    expect(await stub.list("domain-connect-requests")).toHaveLength(1);
     const remote = await serverDomains();
     expect(remote.map((d) => d["domain"])).toEqual(["cloudy.example.com"]);
   });
@@ -206,6 +207,7 @@ describe("domain CLI — self-hosted (self_hosted) /v1 routing", () => {
   });
 
   it("reports older APIs without domain connect support without a local fallback", async () => {
+    await stub.reset();
     for (const noun of ["domain", "domains"]) {
       const result = await runDomainCommandExpectingExit([noun,"connect","ex.com","--provider","x"]);
       expect(result.error).toBe("process.exit:1");
@@ -228,7 +230,7 @@ describe("domain CLI — self-hosted (self_hosted) /v1 routing", () => {
     expect((await serverDomains()).length).toBe(0);
   });
 
-  it("domain adopt cannot run in the bare self-hosted client without a resolvable provider", async () => {
+  it("domain adopt rejects a provider missing from the shared account", async () => {
     // adopt is an operator command that resolves a provider from /v1/providers and
     // then wires live SES/S3. With no provider present it fails loud at resolution
     // instead of silently no-oping.

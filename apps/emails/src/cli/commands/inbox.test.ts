@@ -22,7 +22,7 @@ import { resetMailDataSource } from "../../lib/mail-data-source.js";
 import { PDFDocument } from "pdf-lib";
 import { filterAttachmentDetails } from "./inbox.remote.js";
 import { registerInboxCommands } from "./inbox.js";
-import { registerInboxCommands as registerLocalInboxCommands } from "./inbox.local.js";
+import { registerInboxCommands as registerLocalInboxCommands } from "./inbox.local.test-support.js";
 import { registerInboxCommands as registerRemoteInboxCommands } from "./inbox.remote.js";
 
 let stub: V1Stub;
@@ -1026,9 +1026,9 @@ describe("inbox attachments", () => {
       process.env.EMAILS_DB_PATH = poisonDbDir;
       resetSelfHostedConfigCache();
 
-      await expect(runInboxCommand(["--json", "inbox", "attachments"])).rejects.toThrow(
-        "two configured places to keep its mail",
-      );
+      const rejection = await runInboxCommandExpectingExit(["--json", "inbox", "attachments"]);
+      expect(rejection.error).toBe("process.exit:1");
+      expect(rejection.stderr).toContain("two configured places to keep its mail");
       expect(attachmentInventoryRequests).toHaveLength(0);
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
@@ -1103,9 +1103,9 @@ describe("inbox attachments", () => {
     const previousDbPath = process.env.EMAILS_DB_PATH;
     process.env.EMAILS_DB_PATH = poisonDbDir;
     try {
-      await expect(runInboxCommand(["--json", "inbox", "attachments"])).rejects.toThrow(
-        /two configured places[\s\S]*UNSET ONE/,
-      );
+      const rejection = await runInboxCommandExpectingExit(["--json", "inbox", "attachments"]);
+      expect(rejection.error).toBe("process.exit:1");
+      expect(rejection.stderr).toMatch(/two configured places[\s\S]*UNSET ONE/);
       expect(attachmentInventoryRequests).toHaveLength(0);
     } finally {
       if (previousDbPath === undefined) delete process.env.EMAILS_DB_PATH;

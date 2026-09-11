@@ -88,7 +88,6 @@ export {
 export {
   getStore,
   isCloudStore,
-  LocalStore,
   ApiStore,
   type DomainsStore,
 } from "./db/store.js";

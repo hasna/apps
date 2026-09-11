@@ -1,3 +1,5 @@
+import { adaptShellFixtureTools } from "./helpers/confined-shell-fixture";
+import { requirePublicationFixtureConfinement } from "./helpers/publication-fixture-confinement";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
@@ -18,7 +20,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { prepareSignedBuildFixture, configureSignedBuildFixture } from "./helpers/signed-build-fixture";
+import { signingFixtureCommand } from "./helpers/signing-fixture";
 import { ensureNativeFsGuardAddon } from "./helpers/native-fs-guard";
 import { expectOrder, sliceBetween, sliceBetweenUnique } from "./helpers/source-assertions";
 
@@ -34,7 +38,9 @@ process.env.RECORDINGS_TEST_FS_GUARD_ADDON = ensureNativeFsGuardAddon(repository
 // (overrides "structurally unreachable on Darwin"). Those tests therefore run on the
 // non-Darwin hosts the fixture was authored for (the repo's Linux CI gate) and skip on macOS,
 // where the code under test deliberately closes the seam they depend on. Pure source-assertion
-// tests below still run everywhere.
+// tests below still run everywhere. Active Darwin preflight cases instead adapt only
+// copied external tool capabilities inside the OS-confined fixture runner; the real
+// kernel probe, broker refusal, trust checks and disabled recovery hooks are unchanged.
 const testOnNonDarwin = process.platform === "darwin" ? test.skip : test;
 const bunExecutable = process.execPath;
 const targetPlatformIdentity = "11111111-1111-4111-8111-111111111111";
@@ -77,6 +83,24 @@ function writeExecutable(path: string, contents: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, contents);
   chmodSync(path, 0o755);
+}
+
+// Count-prefixed NUL records preserve every argv element, including empty
+// values and paths containing spaces/newlines. Human-readable "$*" is lossy.
+function readFixtureArgv(path: string): string[][] {
+  const text = readFileSync(path, "utf8");
+  if (!text.endsWith("\0")) throw new Error("Incomplete fixture argv record");
+  const fields = text.slice(0, -1).split("\0");
+  const invocations: string[][] = [];
+  for (let cursor = 0; cursor < fields.length;) {
+    const header = fields[cursor++]!;
+    if (!/^[1-9][0-9]*$/.test(header)) throw new Error("Invalid fixture argv count");
+    const count = Number(header);
+    if (!Number.isSafeInteger(count) || count > fields.length - cursor) throw new Error("Incomplete fixture argv record");
+    invocations.push(fields.slice(cursor, cursor + count));
+    cursor += count;
+  }
+  return invocations;
 }
 
 function createFifo(path: string): void {
@@ -144,7 +168,9 @@ function createLegacyState(fixture: ReturnType<typeof createInstallerFixture>): 
 }
 
 function createInstallerFixture() {
-  const root = temporaryDirectory("recordings-installer-");
+  requirePublicationFixtureConfinement();
+  const root = realpathSync(temporaryDirectory("recordings-installer-"));
+  chmodSync(root, 0o700);
   const home = join(root, "home");
   const bin = join(root, "bin");
   const markers = join(root, "markers");
@@ -153,7 +179,7 @@ function createInstallerFixture() {
   const manifest = join(root, "Hasna Recordings-0.2.12-macos.manifest.json");
   const installer = join(root, "scripts", "install_macos_app.sh");
   const tailscaleApp = join(root, "Tailscale.app");
-  mkdirSync(home, { recursive: true });
+  mkdirSync(home, { recursive: true, mode: 0o700 });
   mkdirSync(bin, { recursive: true });
   mkdirSync(markers, { recursive: true });
   createApp(candidate, "candidate");
@@ -162,6 +188,13 @@ function createInstallerFixture() {
   mkdirSync(dirname(installer), { recursive: true });
   cpSync(join(repositoryRoot, "scripts", "install_macos_app.sh"), installer);
   chmodSync(installer, 0o755);
+  // Darwin ignores the addon environment override. Keep the real descriptor
+  // guard at its packaged path in this isolated fixture, with its original bytes.
+  if (process.platform === "darwin") {
+    const addon = join(root, "scripts/native/prebuilds/darwin-universal/recordings_fs_guard.node");
+    mkdirSync(dirname(addon), { recursive: true });
+    cpSync(ensureNativeFsGuardAddon(repositoryRoot), addon);
+  }
   cpSync(join(repositoryRoot, "scripts", "macos_artifact.ts"), join(root, "scripts", "macos_artifact.ts"));
   cpSync(join(repositoryRoot, "scripts", "native_fs_guard.ts"), join(root, "scripts", "native_fs_guard.ts"));
   cpSync(
@@ -297,6 +330,7 @@ fi
     `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$MARKER_DIRECTORY/bun.log"
+printf '%s\\0' "$#" "$@" >> "$MARKER_DIRECTORY/bun-argv.nul"
 case "$*" in
   *" journal-write "*"--phase processes-stopped"*)
     "$REAL_BUN" "$@"
@@ -355,7 +389,10 @@ case "$*" in
     cp -R "$CANDIDATE_SOURCE" "$staging_target/Hasna Recordings.app"
     ;;
   *" verify-archive "*)
-    [ "\${FAIL_ARCHIVE_VERIFY:-0}" = 1 ] && exit 1
+    if [ "\${FAIL_ARCHIVE_VERIFY:-0}" = 1 ]; then
+      printf '%s\\n' 'fixture: deliberate archive verification refusal' >&2
+      exit 1
+    fi
     [[ "$*" == *"--team-id \${REQUIRED_TEAM_ID:-EXAMPLE123}"* ]] || exit 1
     [ -z "\${REQUIRED_ARTIFACT_POLICY:-}" ] || [[ "$*" == *"--artifact-policy $REQUIRED_ARTIFACT_POLICY"* ]] || exit 1
     [ -z "\${REQUIRED_APPROVED_TARGET:-}" ] || [[ "$*" == *"--approved-target $REQUIRED_APPROVED_TARGET"* ]] || exit 1
@@ -538,6 +575,16 @@ printf 'n%s\n' "$observed"
 `,
   );
 
+  writeExecutable(join(bin, "realpath"), `#!/bin/bash
+exec '${bunExecutable.replaceAll("'", "'\\''")}' -e 'import {realpathSync} from "node:fs"; process.stdout.write(realpathSync(process.argv.at(-1))+"\\n")' "$@"
+`);
+  writeExecutable(join(bin, "mktemp"), `#!/bin/bash
+set -euo pipefail
+if [ "$#" = 2 ] && [ "$1" = -d ] && [ "$2" = /tmp/recordings-install.XXXXXX ]; then
+  exec /usr/bin/mktemp -d '${root.replaceAll("'", "'\\''")}/recordings-install.XXXXXX'
+fi
+exec /usr/bin/mktemp "$@"
+`);
   return { root, home, bin, markers, candidate, artifact, manifest, tailscaleApp };
 }
 
@@ -569,7 +616,7 @@ function installerToolOverrides(fixture: ReturnType<typeof createInstallerFixtur
     RECORDINGS_TEST_INSTALL_LSOF_EXECUTABLE: join(fixture.bin, "lsof"),
     RECORDINGS_TEST_INSTALL_MDFIND_EXECUTABLE: join(fixture.bin, "mdfind"),
     RECORDINGS_TEST_INSTALL_MKDIR_EXECUTABLE: system("/bin/mkdir"),
-    RECORDINGS_TEST_INSTALL_MKTEMP_EXECUTABLE: system("/usr/bin/mktemp"),
+    RECORDINGS_TEST_INSTALL_MKTEMP_EXECUTABLE: join(fixture.bin, "mktemp"),
     RECORDINGS_TEST_INSTALL_MV_EXECUTABLE: join(fixture.bin, "mv"),
     RECORDINGS_TEST_INSTALL_OPEN_EXECUTABLE: join(fixture.bin, "open"),
     RECORDINGS_TEST_INSTALL_PS_EXECUTABLE: join(fixture.bin, "ps"),
@@ -595,7 +642,39 @@ async function runInstaller(
   args: string[] = [],
   environment: Record<string, string> = {},
   cwd?: string,
+  adaptDarwinCapabilities = true,
 ) {
+  requirePublicationFixtureConfinement();
+  if (process.platform === "darwin" && adaptDarwinCapabilities) {
+    const tools = Object.fromEntries(Object.entries(installerToolOverrides(fixture))
+      .filter(([key, value]) => key.startsWith("RECORDINGS_TEST_INSTALL_") && value.startsWith(`${fixture.bin}/`))
+      .map(([key, value]) => [key.slice("RECORDINGS_TEST_INSTALL_".length), value]));
+    writeFileSync(join(fixture.root, "scripts/install_macos_app.sh"), adaptShellFixtureTools(
+      readFileSync(join(repositoryRoot, "scripts/install_macos_app.sh"), "utf8"),
+      'BUN_EXECUTABLE="${RECORDINGS_BUN_EXECUTABLE:-}"', tools,
+    ));
+    // Redirect only external capabilities in the fixture copy. The pinned kernel
+    // probe, Darwin env -i path, signature arguments and all trust checks stay real.
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    let resolver = readFileSync(join(repositoryRoot, "scripts/resolve_tailscale_cli.sh"), "utf8");
+    const substitutions: [string, string, number][] = [
+      ["source_app='/Applications/Tailscale.app'", `source_app=${quote(environment.RECORDINGS_TEST_TRUSTED_TAILSCALE_APP ?? fixture.tailscaleApp)}`, 1],
+      ["codesign_executable='/usr/bin/codesign'", `codesign_executable=${quote(join(fixture.bin, "codesign"))}`, 2],
+      ["ditto_executable='/usr/bin/ditto'", `ditto_executable=${quote(join(fixture.bin, "ditto"))}`, 1],
+    ];
+    for (const [before, after, count] of substitutions) {
+      if (resolver.split(before).length !== count + 1) throw new Error("Tailscale fixture capability boundary changed");
+      resolver = resolver.replaceAll(before, after);
+    }
+    writeFileSync(join(fixture.root, "scripts/resolve_tailscale_cli.sh"), resolver);
+    // The official Darwin launcher strips caller env. Put fictional responses in
+    // the owned executables themselves instead of weakening that clean environment.
+    for (const tool of [join(fixture.bin, "codesign"), join(fixture.tailscaleApp, "Contents/MacOS/Tailscale")]) {
+      const bindings = { MARKER_DIRECTORY: fixture.markers, FAIL_TAILSCALE_STATUS: environment.FAIL_TAILSCALE_STATUS ?? "0", TAILSCALE_STATUS_JSON: environment.TAILSCALE_STATUS_JSON ?? "" };
+      const body = readFileSync(tool, "utf8");
+      writeFileSync(tool, body.replace("set -euo pipefail", `set -euo pipefail\n${Object.entries(bindings).map(([key, value]) => `${key}=${quote(value)}`).join("\n")}`));
+    }
+  }
   const app = join(fixture.home, "Applications", "Hasna Recordings.app");
   const state = join(fixture.home, ".hasna", "recordings");
   if (existsSync(state) && mode(state) === 0o775) chmodSync(state, 0o755);
@@ -610,9 +689,9 @@ async function runInstaller(
   };
   if (existsSync(state) && !lstatSync(state).isSymbolicLink()) normalizeFixtureDescendants(state);
   const localPolicy = args.includes("local-only") || args.includes("local_only");
-  const process = Bun.spawn(
+  const child = Bun.spawn(
     [
-      "bash",
+      "/bin/bash",
       join(fixture.root, "scripts", "install_macos_app.sh"),
       "--artifact",
       fixture.artifact,
@@ -628,7 +707,7 @@ async function runInstaller(
       ...args,
     ],
     {
-      cwd,
+      cwd: cwd ?? fixture.root,
       env: {
         ...Bun.env,
         RECORDINGS_TEST_ENABLE_RECOVERY_HOOKS: "1",
@@ -646,9 +725,9 @@ async function runInstaller(
     },
   );
   const [exitCode, stdout, stderr] = await Promise.all([
-    process.exited,
-    new Response(process.stdout).text(),
-    new Response(process.stderr).text(),
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
   ]);
   return { exitCode, stdout, stderr };
 }
@@ -715,6 +794,31 @@ async function runTailscaleLocalInstaller(
 }
 
 describe("macOS finalized artifact installer", () => {
+  test("fixture preserves complete manifest argv under a nested temporary root", () => {
+    const fixture = createInstallerFixture();
+    const snapshot = join(fixture.root, "recordings-install.fixture", basename(fixture.manifest));
+    const first = ["fixture-artifact-tool.ts", "verify-archive", "--archive", fixture.artifact,
+      "--manifest", snapshot, "--manifest-sha256", "a".repeat(64), "--team-id", "EXAMPLE123",
+      "--fixture-empty", "", "--fixture-special", "space 'quote'\nsecond line"];
+    const second = ["fixture-artifact-tool.ts", "verify-app", "--manifest", snapshot];
+    for (const args of [first, second]) {
+      const result = Bun.spawnSync([join(fixture.bin, "bun"), ...args], {
+        env: { HOME: fixture.home, PATH: `${fixture.bin}:/usr/bin:/bin`, MARKER_DIRECTORY: fixture.markers },
+        cwd: fixture.root, stdout: "pipe", stderr: "pipe", timeout: 2500,
+      });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+    }
+    const log = join(fixture.markers, "bun-argv.nul");
+    expect(readFixtureArgv(log)).toEqual([first, second]);
+    expect(readFixtureArgv(log)[0]![5]).toBe(snapshot);
+    // A truncated or malformed receipt must fail, never silently certify a
+    // partial manifest path or fewer verification calls.
+    writeFileSync(log, "2\0one\0");
+    expect(() => readFixtureArgv(log)).toThrow("Incomplete");
+    writeFileSync(log, "invalid\0one\0");
+    expect(() => readFixtureArgv(log)).toThrow("Invalid");
+  });
+
   testOnNonDarwin("rejects non-macOS invocation before inspecting artifact paths", async () => {
     const fixture = createInstallerFixture();
     writeExecutable(join(fixture.bin, "uname"), "#!/usr/bin/env bash\nprintf 'Linux\\n'\n");
@@ -746,6 +850,17 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(resolvedRelativeHome, ".hasna"))).toBeFalse();
     expect(existsSync(join(resolvedRelativeHome, "Applications"))).toBeFalse();
     expect(existsSync(join(fixture.markers, "bun.log"))).toBeFalse();
+  });
+
+  test("unadapted Darwin installer ignores inherited tool overrides before mutation", async () => {
+    if (process.platform !== "darwin") return; // This is a Darwin tool-selection control.
+    const fixture = createInstallerFixture();
+    const result = await runInstaller(fixture, ["--artifact-policy", "local-only"], {}, undefined, false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("CODESIGN_EXECUTABLE is missing or is not executable: /usr/bin/codesign");
+    expect(readdirSync(fixture.markers)).toEqual([]);
+    expect(existsSync(join(fixture.home, ".hasna"))).toBeFalse();
+    expect(existsSync(join(fixture.home, "Applications"))).toBeFalse();
   });
 
   test("has no package postinstall or target-build fallback", () => {
@@ -905,7 +1020,9 @@ describe("macOS finalized artifact installer", () => {
     ["publish-candidate", "after-destination-fsync"],
     ["publish-candidate", "after-source-fsync"],
   ] as const)(
-    "recovers the exact prior app after a %s %s crash boundary",
+    process.platform === "darwin"
+      ? "requires the broker without shell mutation for %s %s recovery hooks"
+      : "recovers the exact prior app after a %s %s crash boundary",
     async (operation, point) => {
       const fixture = createInstallerFixture();
       const applications = join(fixture.home, "Applications");
@@ -920,7 +1037,15 @@ describe("macOS finalized artifact installer", () => {
 
       const recovered = await runInstaller(fixture, [], { FAIL_ARCHIVE_VERIFY: "1" });
       expect(recovered.exitCode).not.toBe(0);
-      expect(recovered.stderr).toContain("Recovering incomplete");
+      if (process.platform === "darwin") {
+        expect(crashed.stderr).toContain("requires the root-owned Recordings updater broker");
+        expect(recovered.stderr).toContain("requires the root-owned Recordings updater broker");
+        expect(readdirSync(fixture.markers)).toEqual([]);
+        expect(readdirSync(applications)).toEqual(["Hasna Recordings.app"]);
+        expect(existsSync(join(fixture.home, ".hasna"))).toBeFalse();
+      } else {
+        expect(recovered.stderr).toContain("Recovering incomplete");
+      }
       expect(readFileSync(join(installed, "Contents", "MacOS", "Recordings"), "utf8")).toBe(
         "installed",
       );
@@ -958,28 +1083,26 @@ describe("macOS finalized artifact installer", () => {
     const result = await runInstaller(fixture);
     expect(result.exitCode, result.stderr).toBe(0);
 
-    const bunLog = readFileSync(join(fixture.markers, "bun.log"), "utf8").trim().split("\n");
-    const manifestConsumers = bunLog.filter((line) =>
-      [
-        " verify-archive ",
-        " extract-verified-archive ",
-        " verify-app ",
-        " verify-active ",
-        " assert-transition ",
-        " manifest-get ",
-      ].some((command) => line.includes(command))
-    );
-    const manifestPaths = manifestConsumers.map((line) => {
-      const match = line.match(/--manifest ([^ ]+)/);
-      expect(match, line).not.toBeNull();
-      return match?.[1] ?? "";
+    const invocations = readFixtureArgv(join(fixture.markers, "bun-argv.nul"));
+    const manifestConsumers = invocations.filter((args) => ["verify-archive", "extract-verified-archive",
+      "verify-app", "verify-active", "assert-transition", "manifest-get"].includes(args[1]!));
+    const manifestPaths = manifestConsumers.map((args) => {
+      expect(args.filter(value => value === "--manifest")).toHaveLength(1);
+      const path = args[args.indexOf("--manifest") + 1]!;
+      expect(path).toBe(resolve(path));
+      expect(basename(path)).toBe(basename(fixture.manifest));
+      // The fixture redirects mktemp into its private root. This proves the
+      // entire snapshot path, independently of the runner's TMPDIR spelling.
+      expect(dirname(dirname(path))).toBe(fixture.root);
+      expect(basename(dirname(path))).toMatch(/^recordings-install\.[A-Za-z0-9]+$/);
+      return path;
     });
     expect(manifestPaths.length).toBeGreaterThan(3);
     expect(new Set(manifestPaths).size).toBe(1);
     expect(manifestPaths[0]).not.toBe(fixture.manifest);
-    expect(manifestPaths[0]).toContain("/tmp/recordings-install.");
-    for (const line of manifestConsumers) {
-      expect(line).toContain(`--manifest-sha256 ${manifestDigest}`);
+    for (const args of manifestConsumers) {
+      expect(args.filter(value => value === "--manifest-sha256")).toHaveLength(1);
+      expect(args[args.indexOf("--manifest-sha256") + 1]).toBe(manifestDigest);
     }
 
     const installer = readFileSync(
@@ -1256,6 +1379,11 @@ describe("macOS finalized artifact installer", () => {
       ...environment,
     });
     expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(_label === "hash mismatch"
+      ? "does not match this Mac's approved machine identity"
+      : "Could not verify the live Tailscale identity");
+    expect(readFileSync(join(fixture.markers, "tailscale.log"), "utf8"))
+      .toContain("tailscale-identity-snapshot/Tailscale.app/Contents/MacOS/Tailscale");
     expect(existsSync(join(fixture.home, ".hasna"))).toBeFalse();
     expect(existsSync(join(fixture.home, "Applications"))).toBeFalse();
   });
@@ -2722,7 +2850,7 @@ describe("macOS finalized artifact installer", () => {
 
     const runRestartOrderingContract = async (restartBeforeRelease: boolean) => {
       const fixture = createInstallerFixture();
-      const { legacyApp, canonicalApp } = await prepareRunningLegacyRecovery(fixture);
+      const { journalPath, legacyApp, canonicalApp } = await prepareRunningLegacyRecovery(fixture);
       const fixtureInstaller = join(fixture.root, "scripts", "install_macos_app.sh");
       if (restartBeforeRelease) {
         const source = readFileSync(fixtureInstaller, "utf8");
@@ -2768,8 +2896,24 @@ printf '%s|%s\\n' "$marker_state" "$*" >> "$RECOVERY_OPEN_LOG"
         RECORDINGS_TEST_INSTALL_OPEN_EXECUTABLE: recoveryOpen,
         RECOVERY_OPEN_LOG: openLog,
       });
-      expect(recovered.exitCode).not.toBe(0);
-      expect(recovered.stderr).toContain("Recovering incomplete");
+      let journalPhase = "absent";
+      if (existsSync(journalPath)) {
+        try {
+          journalPhase = statSync(journalPath).size <= 64 * 1024
+            ? String((JSON.parse(readFileSync(journalPath, "utf8")) as { phase?: unknown }).phase).slice(0, 100)
+            : "oversize";
+        } catch { journalPhase = "unreadable"; }
+      }
+      const recoveryDiagnostic = JSON.stringify({ restartBeforeRelease, exitCode: recovered.exitCode,
+        journalPhase, legacyAppPresent: existsSync(legacyApp), canonicalAppPresent: existsSync(canonicalApp),
+        stderr: recovered.stderr.slice(-8_000) });
+      expect(recovered.exitCode, recoveryDiagnostic).not.toBe(0);
+      expect(recovered.stderr, recoveryDiagnostic).toContain("Recovering incomplete");
+      // Recovery must finish before the intentionally failing next install.
+      // Any earlier fail-closed recovery error must expose its own diagnostic,
+      // rather than collapsing into an unrelated missing-binary assertion.
+      expect(recovered.stderr, recoveryDiagnostic).toContain("fixture: deliberate archive verification refusal");
+      expect(journalPhase, recoveryDiagnostic).toBe("absent");
       expect(readFileSync(join(legacyApp, "Contents", "MacOS", "Recordings"), "utf8")).toBe(
         "legacy-installed",
       );
@@ -3838,8 +3982,93 @@ if [ "$pid" = "$state_pid" ]; then printf 'p%s\\nn%s\\n' "$pid" "$executable"; f
 });
 
 describe("macOS signed artifact build", () => {
+  const darwinSigningTest = process.platform === "darwin" ? test : test.skip;
+  test("native guard build readback accepts exactly the generated public exports", () => {
+    const root = realpathSync(temporaryDirectory("recordings-guard-exports-"));
+    const source = readFileSync(join(repositoryRoot, "src/native/Recordings/build.sh"), "utf8");
+    const region = sliceBetweenUnique(source, "generate_and_verify_native_fs_guard() {", "RUN_BUN_TEST_ENVIRONMENT=()");
+    const match = region.match(/run_bun -e '([\s\S]*?)' "\$addon"/);
+    expect(match).not.toBeNull();
+    const result = Bun.spawnSync(signingFixtureCommand(root, [process.execPath, "-e", match![1]!,
+      ensureNativeFsGuardAddon(repositoryRoot)]), { cwd: root, env: { HOME: root, TMPDIR: root, PATH: "/usr/bin:/bin" } });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    const extraExport = Bun.spawnSync(signingFixtureCommand(root, [process.execPath, "-e",
+      'require(process.argv[1]).fixtureUnexpectedExport = () => {};\n' + match![1]!,
+      ensureNativeFsGuardAddon(repositoryRoot)]), { cwd: root, env: { HOME: root, TMPDIR: root, PATH: "/usr/bin:/bin" } });
+    expect(extraExport.exitCode).toBe(66);
+    expect(extraExport.stderr.toString()).toContain("fixtureUnexpectedExport");
+  });
+
+  darwinSigningTest("signing fixture refuses host tools and writes outside its owned root", () => {
+    const root = realpathSync(temporaryDirectory("recordings-signing-boundary-"));
+    const outside = realpathSync(temporaryDirectory("recordings-signing-outside-"));
+    const run = (args: string[]) => Bun.spawnSync(signingFixtureCommand(root, args), {
+      cwd: root, env: { HOME: root, TMPDIR: root, PATH: "/usr/bin:/bin" },
+    });
+    for (const tool of ["/usr/bin/codesign", "/usr/bin/security", "/usr/bin/defaults", "/usr/bin/tccutil", "/usr/bin/open"]) {
+      const result = run([tool, "--help"]);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toMatch(/Operation not permitted|EPERM/);
+    }
+    const marker = join(outside, "must-not-exist");
+    run([bunExecutable, "-e", `require("fs").writeFileSync(${JSON.stringify(marker)},"forbidden")`]);
+    expect(existsSync(marker)).toBe(false);
+    const allowed = join(root, "allowed");
+    const positive = run([bunExecutable, "-e", `require("fs").writeFileSync(${JSON.stringify(allowed)},"owned")`]);
+    expect(positive.exitCode).toBe(0);
+    expect(readFileSync(allowed, "utf8")).toBe("owned");
+    const legacyRead = run([bunExecutable, "-e", 'try { require("fs").statSync("/Applications/Hasna Recordings.app"); process.exit(2); } catch (error) { console.log(error.code); }']);
+    expect(legacyRead.stdout.toString().trim()).toBe("EPERM");
+  });
+
+  darwinSigningTest("signing supervisor terminates only its owned process group at the deadline", async () => {
+    const fixture = createBuildFixture();
+    const supervisor = join(fixture.bin, "build-supervisor.ts");
+    const original = readFileSync(supervisor, "utf8");
+    expect(original.split("25000")).toHaveLength(2);
+    writeFileSync(supervisor, original.replace("25000", "300"));
+    const blocked = join(fixture.root, "blocked-child.sh");
+    writeExecutable(blocked, `#!/bin/bash\nexec '${bunExecutable}' -e 'console.log("fixture child started"); setInterval(() => {}, 1000);'\n`);
+    const foreign = Bun.spawn([bunExecutable, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
+    try {
+      const deniedSignal = Bun.spawnSync(signingFixtureCommand(fixture.root, [bunExecutable, "-e",
+        `try { process.kill(${foreign.pid}, "SIGTERM"); console.log("escaped"); } catch (error) { console.log(error.code); }`]),
+        { cwd: fixture.root, env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: "/usr/bin:/bin" } });
+      expect(deniedSignal.stdout.toString().trim()).toBe("EPERM");
+      const result = Bun.spawnSync(signingFixtureCommand(fixture.root, [bunExecutable, supervisor, blocked]), {
+        cwd: fixture.root, env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: "/usr/bin:/bin" },
+      });
+      expect(result.exitCode).toBe(124);
+      expect(result.stdout.toString()).toContain("fixture child started");
+      expect(result.stderr.toString()).toContain("signing fixture deadline exceeded");
+      expect(foreign.exitCode).toBeNull();
+    } finally { foreign.kill(); await foreign.exited; }
+  });
+
+  darwinSigningTest("Darwin signing rejects absent or dirty Git provenance before fixture signing", async () => {
+    for (const defect of ["dirty", "absent"]) {
+      const fixture = createBuildFixture();
+      if (defect === "dirty") writeFileSync(join(fixture.native, "RecordingsLib/Info.plist"), "changed source");
+      else rmSync(join(fixture.root, ".git"), { recursive: true });
+      const result = await runBuild(fixture);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain(defect === "dirty" ? "Source worktree must be clean" : "Could not resolve the source git revision");
+      expect(existsSync(join(fixture.markers, "codesign.log"))).toBe(false);
+    }
+  });
+
+  darwinSigningTest("Darwin signing enforces its isolated-builder attestation", async () => {
+    const fixture = createBuildFixture();
+    const attestation = join(fixture.root, "build-trust/isolated-builder-v1");
+    chmodSync(attestation, 0o600); writeFileSync(attestation, "untrusted fixture attestation"); chmodSync(attestation, 0o444);
+    const result = await runBuild(fixture);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("Managed isolated-builder attestation content is invalid");
+    expect(existsSync(join(fixture.markers, "codesign.log"))).toBe(false);
+  });
+
   function createBuildFixture() {
-    const root = temporaryDirectory("recordings-build-");
+    const root = realpathSync(temporaryDirectory("recordings-build-"));
     const native = join(root, "src", "native", "Recordings");
     const bin = join(root, "bin");
     const markers = join(root, "markers");
@@ -4326,17 +4555,10 @@ else
 fi
 `,
     );
-    return {
-      root,
-      native,
-      bin,
-      markers,
-      tailscaleApp,
-      envelopePrivateKey,
-      envelopePublicKey,
-      compatibleCohortManifest,
-      releaseBuildRoot,
-    };
+    return prepareSignedBuildFixture({
+      root, native, bin, markers, tailscaleApp, envelopePrivateKey,
+      envelopePublicKey, compatibleCohortManifest, releaseBuildRoot,
+    }, repositoryRoot);
   }
 
   function buildToolOverrides(fixture: ReturnType<typeof createBuildFixture>) {
@@ -4358,13 +4580,14 @@ fi
     subtype = "initial-bootstrap",
   ) {
     rmSync(join(fixture.releaseBuildRoot, "release-output"), { recursive: true, force: true });
-    const process = Bun.spawn(
-      ["bash", join(fixture.native, "build.sh"), "release", subtype],
+    configureSignedBuildFixture(fixture, environment);
+    const child = Bun.spawn(
+      signingFixtureCommand(fixture.root, [...(process.platform === "darwin" ? [bunExecutable, join(fixture.bin, "build-supervisor.ts")] : ["/bin/bash"]), join(fixture.native, "build.sh"), "release", subtype]),
       {
       cwd: fixture.native,
       env: {
-        ...Bun.env,
-        PATH: `${fixture.bin}:${Bun.env.PATH ?? ""}`,
+        HOME: fixture.root, TMPDIR: fixture.root,
+        PATH: `${fixture.bin}:/usr/bin:/bin:/usr/sbin:/sbin`,
         MARKER_DIRECTORY: fixture.markers,
         PLIST_BUDDY: join(fixture.bin, "plistbuddy"),
         PLUTIL: join(fixture.bin, "plutil"),
@@ -4387,9 +4610,9 @@ fi
       },
     );
     const [exitCode, stdout, stderr] = await Promise.all([
-      process.exited,
-      new Response(process.stdout).text(),
-      new Response(process.stderr).text(),
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
     ]);
     return { exitCode, stdout, stderr };
   }
@@ -4722,7 +4945,8 @@ fi
     const fixture = createBuildFixture();
     const missingIdentity = await runBuild(fixture, { RECORDINGS_CODESIGN_IDENTITY: "" });
     expect(missingIdentity.exitCode).not.toBe(0);
-    expect(missingIdentity.stderr).toContain("Release builds require RECORDINGS_CODESIGN_IDENTITY");
+    expect(missingIdentity.stderr).toContain("RECORDINGS_CODESIGN_IDENTITY");
+    expect(missingIdentity.stderr).toContain("Developer ID Application");
 
     const missingNotary = await runBuild(fixture, { RECORDINGS_NOTARY_KEYCHAIN_PROFILE: "" });
     expect(missingNotary.exitCode).not.toBe(0);
@@ -4756,7 +4980,7 @@ fi
     );
     expect(updateWithoutCohortOrInstaller.exitCode).not.toBe(0);
     expect(updateWithoutCohortOrInstaller.stderr).toContain(
-      "App-update test fixture requires one regular compatible-cohort manifest",
+      process.platform === "darwin" ? "root-preauthorized RECORDINGS_RELEASE_COMPATIBLE_COHORT_MANIFEST" : "App-update test fixture requires one regular compatible-cohort manifest",
     );
     expect(updateWithoutCohortOrInstaller.stderr).not.toContain(
       "RECORDINGS_INSTALLER_CODESIGN_IDENTITY",
@@ -4871,7 +5095,9 @@ fi
     expect(result.exitCode, result.stderr).toBe(0);
     const codesignLog = readFileSync(join(fixture.markers, "codesign.log"), "utf8");
     expect(codesignLog).toContain("--options runtime --timestamp");
-    expect(codesignLog).toContain("--entitlements RecordingsLib/RecordingsCLI.entitlements");
+    if (process.platform === "darwin") {
+      expect(codesignLog).toMatch(/--entitlements \S+\/source\/src\/native\/Recordings\/RecordingsLib\/RecordingsCLI\.entitlements /);
+    } else expect(codesignLog).toContain("--entitlements RecordingsLib/RecordingsCLI.entitlements");
     expect(codesignLog).toContain("Contents/Helpers/recordings");
     const bunLog = readFileSync(join(fixture.markers, "bun.log"), "utf8");
     expect(bunLog).toContain("provenance");

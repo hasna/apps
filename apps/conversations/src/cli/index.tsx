@@ -5,7 +5,7 @@ import chalk from "chalk";
 import { render } from "ink";
 import React from "react";
 import { resolveIdentity, IdentityError } from "../lib/identity.js";
-import { ConversationsStoreConfigError, isCloudStore, requireConversationsLocalStore } from "../lib/store/index.js";
+import { ConversationsStoreConfigError, getStore } from "../lib/store/index.js";
 import { App } from "./components/App.js";
 import { registerMessagingCommands } from "./commands/messaging.js";
 import { registerAttachmentCommands } from "./commands/attachments.js";
@@ -74,18 +74,16 @@ program
     await startMcpServer();
   });
 
-// ---- events-drain: Conversations→Events source outbox worker (local path) ----
-// The outbox table lives in the on-box SQLite store, so this worker is
-// local-only by nature — and local is an explicit opt-in, never a default.
-// Without HASNA_CONVERSATIONS_DB_PATH it refuses through the same config error
-// every other surface raises (non-zero exit, JSON error contract under --json,
-// nothing opened); with it, the LOCAL-mode notice is printed before the store
-// is touched. Calling getDb() straight away used to open (and create)
-// ~/.hasna/conversations/messages.db on a hosted station and exit 0 with
-// "scanned 0" (hasna/apps#1720 validation).
+// ---- events-drain: Conversations→Events source outbox worker ----
+// One command, one semantics on whichever store the resolver selected: the
+// on-box SQLite outbox spools into the on-box events durable spool inbox, and
+// the hosted API runs the server's own outbox worker over its Postgres store.
+// Routing through getStore() means a hosted station can never silently open
+// (or create) ~/.hasna/conversations/messages.db — the fail-closed property
+// hasna/apps#1720 demanded, kept by delegation instead of by a gate.
 program
   .command("events-drain")
-  .description("Drain the Conversations→Events source outbox into the Events durable spool inbox (local store only)")
+  .description("Drain the Conversations→Events source outbox into the Events durable spool inbox")
   .option("--limit <n>", "Maximum pending rows to transport per run", parseInt)
   // Declared so the refusal above can honour the JSON error contract: without
   // the option Commander rejected `--json` as unknown before the action ran,
@@ -93,11 +91,12 @@ program
   // (hasna/apps#1720 validation, round 2).
   .option("-j, --json", "Output the drain report as JSON")
   .action(async (opts) => {
-    requireConversationsLocalStore("events-drain");
-    const { getDb } = await import("../lib/db.js");
-    const { drainConversationEventOutbox } = await import("../lib/events-bridge.js");
-    const db = getDb();
-    const result = await drainConversationEventOutbox(db, { limit: Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : undefined });
+    // Generalized from the old local worker's guard: an unparseable `--limit`
+    // (commander's parseInt yields NaN, e.g. `--limit abc`) must not reach the
+    // stores — the hosted route tolerates it via positiveInteger() but the
+    // on-box worker would pass `LIMIT NaN` to SQLite. One spelling for both.
+    const limit = Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : undefined;
+    const result = await getStore().drainEventOutbox({ limit });
     if (opts.json) {
       printJsonLine({ scanned: result.scanned, transported: result.transported, skipped: result.skipped, spooled: result.spooled });
       return;
@@ -106,23 +105,12 @@ program
   });
 
 // ---- default: TUI ----
-// The interactive TUI reads/writes the on-box SQLite domain helpers directly
-// (real-time polling). That is the local Store's own backing, so it is correct
-// when the client is local. With the hosted API selected it would silently
-// show/mutate the LOCAL db instead of the cloud API — the split-brain bug this
-// architecture forbids. So when the API pair is set we refuse and route the
-// operator to the Store-backed subcommands instead of quietly serving stale
-// local data.
+// The interactive TUI is Store-backed exactly like every other surface: it
+// reads and writes through the store the resolver selected (hosted API or the
+// on-box SQLite store), so it works in either transport. It still needs a
+// real terminal — that is a TTY requirement, not a transport gate.
 program
   .action(() => {
-    if (isCloudStore()) {
-      printErrorLine(chalk.red("The interactive TUI is local-mode only."));
-      printErrorLine(
-        chalk.dim("This client resolved a hosted credential (HASNA_CONVERSATIONS_API_KEY or the shared chain)."),
-      );
-      printErrorLine(chalk.dim("Use the routed subcommands (send, read, sessions, channels, etc.) which talk to the cloud API."));
-      process.exit(1);
-    }
     if (!process.stdin.isTTY) {
       printErrorLine(chalk.red("Interactive mode requires a TTY terminal."));
       printErrorLine(chalk.dim("Use subcommands (send, read, sessions, etc.) for non-interactive use."));

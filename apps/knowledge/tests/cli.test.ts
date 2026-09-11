@@ -4203,6 +4203,45 @@ describe('Knowledge CLI transport selection', () => {
     expect(combined).not.toContain('local mode');
   });
 
+  test('a dark source reports source_unavailable structurally: exit 3 and a status on stdout (BUG-0044)', () => {
+    // The fleet update workflow consumes KNOWLEDGE as source 3 and, when it was
+    // dark on a host, had to hand-write status=unavailable because the CLI
+    // produced only prose. The fail-closed rejection is now a DISTINCT exit code
+    // plus a machine-readable status, so the run records it mechanically.
+    const result = runCliWithCleanRoute(['transport', '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_LOCAL: '',
+    });
+    expect(result.exitCode).toBe(3);
+    const payload = JSON.parse(decode(result.stdout)) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      ok: false,
+      code: 'source_unavailable',
+      status: 'unavailable',
+      credential_source: 'none',
+    });
+    expect(Array.isArray(payload.credential_file_candidates)).toBe(true);
+    expect(payload.credential_env_keys).toContain('HASNA_KNOWLEDGE_API_KEY');
+    // The structured path stays value-free: no credential value is rendered.
+    expect(decode(result.stdout) + decode(result.stderr)).not.toContain('k_fake_test_key');
+  });
+
+  test('a configured authority with no credential reports source_unavailable without echoing the URL', () => {
+    // The resolution refused the configured authority; it must not read it back
+    // into the diagnostic that reports the refusal.
+    const result = runCliWithCleanRoute(['transport', '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_API_URL: API_URL,
+    });
+    expect(result.exitCode).toBe(3);
+    expect(JSON.parse(decode(result.stdout))).toMatchObject({
+      ok: false,
+      code: 'source_unavailable',
+      status: 'unavailable',
+    });
+    expect(decode(result.stdout) + decode(result.stderr)).not.toContain(API_URL);
+  });
+
   test('the explicit HASNA_KNOWLEDGE_LOCAL opt-in selects the on-box store: exit zero, "local" on stderr', () => {
     // Local mode is legitimate for this package (it is an OSS local knowledge
     // base) but ONLY by explicit opt-in, and never silent.
@@ -4259,5 +4298,42 @@ describe('Knowledge CLI transport selection', () => {
     const combined = decode(result.stdout) + decode(result.stderr);
     expect(combined).toContain('HASNA_KNOWLEDGE_API_KEY');
     expect(combined).not.toContain(API_URL);
+  });
+
+  test('auth login --api-url without --api-key refuses to record the ambient credential against a foreign authority (#1794)', () => {
+    // The env tier stands in for the station Keychain here: an ambient key
+    // resolves, but it must NOT be persisted next to a caller-supplied URL —
+    // that would send the fleet key wherever the URL points.
+    const home = sandboxHome();
+    const result = runCliWithCleanRoute(['auth', 'login', '--api-url', API_URL, '--json'], {
+      ...home,
+      HASNA_KNOWLEDGE_LOCAL: '',
+      HASNA_KNOWLEDGE_API_KEY: 'k_ambient_env_key',
+    });
+    expect(result.exitCode).not.toBe(0);
+    const combined = decode(result.stdout) + decode(result.stderr);
+    expect(combined).toContain('--api-key');
+    expect(combined).toContain('never recorded against a caller-supplied API URL');
+    expect(combined).not.toContain('k_ambient_env_key');
+    expect(existsSync(join(home.HOME, '.hasna', 'knowledge', 'config', 'credentials'))).toBe(false);
+  });
+
+  test('auth login --api-url with an explicit --api-key records that pair, and nothing ambient', () => {
+    const home = sandboxHome();
+    const result = runCliWithCleanRoute(['auth', 'login', '--api-url', API_URL, '--api-key', 'k_explicit_login_key', '--json'], {
+      ...home,
+      HASNA_KNOWLEDGE_LOCAL: '',
+      HASNA_KNOWLEDGE_API_KEY: 'k_ambient_env_key',
+    });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(decode(result.stdout))).toMatchObject({ ok: true, authenticated: true, api_url: API_URL });
+    const credentials = join(home.HOME, '.hasna', 'knowledge', 'config', 'credentials');
+    expect(existsSync(credentials)).toBe(true);
+    const contents = readFileSync(credentials, 'utf8');
+    expect(contents).toContain(`HASNA_KNOWLEDGE_API_URL=${API_URL}`);
+    // The explicit (fake) fixture key lands in the file; the ambient one never does.
+    const explicitFixtureKey = ['k_explicit', 'login_key'].join('_');
+    expect(contents).toContain(`${KNOWLEDGE_API_KEY_ENV_KEYS[0]}=${explicitFixtureKey}`);
+    expect(contents).not.toContain('k_ambient_env_key');
   });
 });

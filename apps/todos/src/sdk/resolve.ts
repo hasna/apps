@@ -169,10 +169,12 @@ export function resolveTodosSdkTransport(
     resolution = resolveClientTransport("todos", env, chainOptions);
   } catch (error) {
     // ONLY "nothing is configured at all" degrades to the local serve. Every
-    // other refusal — a blank variable, a disagreeing pair, an unreadable
-    // credential file, a URL without a key — is a misconfiguration the operator
-    // has to see, and silently serving an empty local store instead is the
-    // false green this fails loudly to avoid.
+    // other refusal — a disagreeing pair, an unreadable credential file, a URL
+    // without a key — is a misconfiguration the operator has to see, and
+    // silently serving an empty local store instead is the false green this
+    // fails loudly to avoid. A declared-but-blank authority variable is not one
+    // of them: `todosResolverInputs` above removes it, so it resolves the next
+    // tier exactly as an unset variable would.
     if (
       error instanceof ClientTransportConfigurationError &&
       /is not set and no API key could be resolved/.test(error.message)

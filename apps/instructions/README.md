@@ -216,7 +216,7 @@ concern (`instructions-serve`), selected by `HASNA_INSTRUCTIONS_DATABASE_URL`.
 ## Data Directory
 
 Local data (the SQLite store and backups) lives under the configs store home,
-resolved through `@hasna/paths`. The legacy `~/.hasna/instructions/` default
+resolved by the in-package resolver. The legacy `~/.hasna/instructions/` default
 (with the `HASNA_CONFIGS_HOME` exact-app override) stays the effective store
 home until the store has actually been migrated to the XDG config home
 (`~/.config/hasna/configs` on Linux; `~/Library/Application

@@ -154,7 +154,7 @@ function makeMachineA(root: string): { src: string; wtPath: string } {
   git(src, ["remote", "add", "origin", src]);
 
   setWorktreeRootForTests(join(root, "wtroot"));
-  const wtPath = computeWorktreePath("demo", "wt1");
+  const wtPath = computeWorktreePath("acme", "demo", "wt1");
   mkdirSync(join(wtPath, ".."), { recursive: true });
   git(src, ["worktree", "add", "--quiet", "-b", "wt1", wtPath, "main"]);
 
@@ -169,7 +169,7 @@ function makeMachineB(root: string, sourceRepo: string): { parent: string; wtPat
   const parent = join(root, "parent");
   setWorktreeRootForTests(join(root, "wtroot"));
   git(root, ["clone", "--quiet", sourceRepo, parent]);
-  const wtPath = computeWorktreePath("demo", "wt1");
+  const wtPath = computeWorktreePath("acme", "demo", "wt1");
   return { parent, wtPath };
 }
 
@@ -285,11 +285,11 @@ describe("push and versions", () => {
     const root = tempRoot("push");
     const { wtPath } = makeMachineA(root);
     const remote = fakeRemote();
-    const first = await pushWorktree("demo", "wt1", { remote, version: "2026-01-01T00:00:00.000Z" });
+    const first = await pushWorktree("demo", "wt1", { org: "acme", remote, version: "2026-01-01T00:00:00.000Z" });
     expect(first.bundle_sha256).toMatch(/^[0-9a-f]{64}$/);
 
     writeFileSync(join(wtPath, "file.txt"), "line one\nline two v2\n");
-    const second = await pushWorktree("demo", "wt1", { remote, version: "2026-02-01T00:00:00.000Z" });
+    const second = await pushWorktree("demo", "wt1", { org: "acme", remote, version: "2026-02-01T00:00:00.000Z" });
     expect(second.version).not.toBe(first.version);
 
     const versions = await listWorktreeVersions("demo", "wt1", { remote });
@@ -304,7 +304,7 @@ describe("push and versions", () => {
     const { wtPath } = makeMachineA(root);
     const remote = new WorktreeSyncRemote({ client: new FakeS3() }); // bucket absent
     expect(remote.usesS3).toBe(false);
-    await expect(pushWorktree("demo", "wt1", { remote })).rejects.toMatchObject({
+    await expect(pushWorktree("demo", "wt1", { org: "acme", remote })).rejects.toMatchObject({
       code: "REMOTE_NOT_CONFIGURED",
     });
   });
@@ -347,7 +347,7 @@ describe("pull materialises a foreign worktree", () => {
     const remote = fakeRemote();
     process.env["HASNA_MACHINE_ID"] = "machine-a";
 
-    const pushed = await pushWorktree("demo", "wt1", { remote });
+    const pushed = await pushWorktree("demo", "wt1", { org: "acme", remote });
     expect(pushed.version).toBeTruthy();
 
     // Machine B: its own root and its own clone of the source repo.
@@ -355,7 +355,7 @@ describe("pull materialises a foreign worktree", () => {
     const { parent, wtPath } = makeMachineB(machineB, src);
     process.env["HASNA_MACHINE_ID"] = "machine-b";
 
-    const pulled = await pullWorktree("demo", "wt1", { remote, parentCheckout: parent, version: pushed.version });
+    const pulled = await pullWorktree("demo", "wt1", { org: "acme", remote, parentCheckout: parent, version: pushed.version });
     expect(pulled.path).toBe(wtPath);
     expect(pulled.branch).toBe("wt1");
     expect(pulled.patch_applied).toBe(true);
@@ -379,7 +379,7 @@ describe("pull materialises a foreign worktree", () => {
     const { src, wtPath } = makeMachineA(machineA);
     const s3 = new FakeS3();
     const remote = fakeRemote({ client: s3 });
-    const pushed = await pushWorktree("demo", "wt1", { remote });
+    const pushed = await pushWorktree("demo", "wt1", { org: "acme", remote });
 
     const bundleKey = [...s3.objects.keys()].find((key) => key.endsWith("/bundle.tar.gz"))!;
     const tampered = new Uint8Array(s3.objects.get(bundleKey)!);
@@ -390,7 +390,7 @@ describe("pull materialises a foreign worktree", () => {
     const { parent } = makeMachineB(machineB, src);
     process.env["HASNA_MACHINE_ID"] = "machine-b";
     await expect(
-      pullWorktree("demo", "wt1", { remote, parentCheckout: parent, version: pushed.version }),
+      pullWorktree("demo", "wt1", { org: "acme", remote, parentCheckout: parent, version: pushed.version }),
     ).rejects.toMatchObject({ code: "BUNDLE_VERIFICATION_FAILED" });
   });
 
@@ -398,13 +398,13 @@ describe("pull materialises a foreign worktree", () => {
     const root = tempRoot("pin");
     const { wtPath, src } = makeMachineA(root);
     const remote = fakeRemote();
-    const v1 = await pushWorktree("demo", "wt1", { remote, version: "2026-01-01T00:00:00.000Z" });
+    const v1 = await pushWorktree("demo", "wt1", { org: "acme", remote, version: "2026-01-01T00:00:00.000Z" });
     writeFileSync(join(wtPath, "file.txt"), "v2 content\n");
-    await pushWorktree("demo", "wt1", { remote, version: "2026-02-01T00:00:00.000Z" });
+    await pushWorktree("demo", "wt1", { org: "acme", remote, version: "2026-02-01T00:00:00.000Z" });
 
     const machineB = tempRoot("pin-b");
     const { parent, wtPath: wtB } = makeMachineB(machineB, src);
-    const pulled = await pullWorktree("demo", "wt1", { remote, parentCheckout: parent, version: v1.version });
+    const pulled = await pullWorktree("demo", "wt1", { org: "acme", remote, parentCheckout: parent, version: v1.version });
     expect(pulled.version).toBe("2026-01-01T00:00:00.000Z");
     expect(readFileSync(join(wtB, "file.txt"), "utf8")).toBe("line one\nline two (uncommitted)\n");
   });
@@ -427,11 +427,11 @@ describe("byte fidelity through pack and pull", () => {
     writeFileSync(join(wtPath, "legacy.txt"), modified);
 
     const remote = fakeRemote();
-    const pushed = await pushWorktree("demo", "wt1", { remote });
+    const pushed = await pushWorktree("demo", "wt1", { org: "acme", remote });
 
     const machineB = tempRoot("latin-b");
     const { parent, wtPath: wtB } = makeMachineB(machineB, src);
-    const pulled = await pullWorktree("demo", "wt1", { remote, parentCheckout: parent, version: pushed.version });
+    const pulled = await pullWorktree("demo", "wt1", { org: "acme", remote, parentCheckout: parent, version: pushed.version });
     expect(pulled.patch_applied).toBe(true);
     const restored = readFileSync(join(wtB, "legacy.txt"));
     expect(restored).toEqual(modified);
@@ -447,11 +447,11 @@ describe("byte fidelity through pack and pull", () => {
     writeFileSync(join(wtPath, " note.txt"), "leading space\n");
     writeFileSync(join(wtPath, "note.txt "), "trailing space\n");
     const remote = fakeRemote();
-    const pushed = await pushWorktree("demo", "wt1", { remote });
+    const pushed = await pushWorktree("demo", "wt1", { org: "acme", remote });
 
     const machineB = tempRoot("space-b");
     const { parent, wtPath: wtB } = makeMachineB(machineB, src);
-    const pulled = await pullWorktree("demo", "wt1", { remote, parentCheckout: parent, version: pushed.version });
+    const pulled = await pullWorktree("demo", "wt1", { org: "acme", remote, parentCheckout: parent, version: pushed.version });
     expect(pulled.untracked_restored).toBe(3);
     expect(readFileSync(join(wtB, " note.txt"), "utf8")).toBe("leading space\n");
     expect(readFileSync(join(wtB, "note.txt "), "utf8")).toBe("trailing space\n");
@@ -468,7 +468,7 @@ describe("pull refuses hostile bundles that would escape the worktree", () => {
     // parent clone can reach. The published objects are then REPLACED with
     // hostile bytes — in the design every station pushes to the same bucket,
     // so bundle and manifest bytes are fully writer-controlled.
-    const pushed = await pushWorktree("demo", "wt1", { remote });
+    const pushed = await pushWorktree("demo", "wt1", { org: "acme", remote });
     const bundleKey = remote.fileKeyFor("demo", "wt1", pushed.version, "bundle.tar.gz");
     const manifestKey = remote.fileKeyFor("demo", "wt1", pushed.version, "manifest.json");
 
@@ -506,7 +506,7 @@ describe("pull refuses hostile bundles that would escape the worktree", () => {
     manifest.includes = { patch: true, untracked: 3, stash: 0 };
     s3.objects.set(manifestKey, new TextEncoder().encode(JSON.stringify(manifest)));
 
-    const pulled = await pullWorktree("demo", "wt1", { remote, parentCheckout: parent, version: pushed.version });
+    const pulled = await pullWorktree("demo", "wt1", { org: "acme", remote, parentCheckout: parent, version: pushed.version });
     // The patch applied (the symlink exists), but neither untracked part that
     // crosses it was written: no file escaped, and the write AT the symlink
     // itself was refused rather than crashing the pull.
@@ -523,7 +523,7 @@ describe("sync", () => {
     const root = tempRoot("sync-ok");
     const { wtPath } = makeMachineA(root);
     const remote = fakeRemote();
-    const result = await syncWorktree("demo", "wt1", { remote });
+    const result = await syncWorktree("demo", "wt1", { org: "acme", remote });
     expect(result.conflict).toBe(false);
     expect(result.pushed_version).toBe(result.remote_latest);
   });
@@ -534,7 +534,7 @@ describe("sync", () => {
     const s3 = new FakeS3();
     const remote = fakeRemote({ client: s3 });
 
-    const result = await syncWorktree("demo", "wt1", { remote });
+    const result = await syncWorktree("demo", "wt1", { org: "acme", remote });
     expect(result.conflict).toBe(false);
 
     // A foreign version lands on the remote (simulating another station
@@ -552,7 +552,7 @@ describe("sync", () => {
       new TextEncoder().encode(JSON.stringify(phantom)),
     );
 
-    const second = await syncWorktree("demo", "wt1", { remote });
+    const second = await syncWorktree("demo", "wt1", { org: "acme", remote });
     expect(second.conflict).toBe(true);
     expect(second.conflict_detail).toContain("9999-12-31");
     // The phantom version is still the newest — nothing was overwritten.
@@ -569,7 +569,16 @@ describe("parseSyncRef", () => {
       worktreeName: "wt1",
       version: "2026-01-01T00:00:00.000Z",
     });
-    for (const bad of ["/abs/path", "wt1", "a/b/c", "demo/wt1@", "..", "demo/../x"]) {
+    // The fully qualified form spells the org of the canonical
+    // `<root>/<org>/<repo>/<worktree>` path (owner ruling 2026-09-10).
+    expect(parseSyncRef("acme/demo/wt1")).toEqual({ org: "acme", repoName: "demo", worktreeName: "wt1" });
+    expect(parseSyncRef("acme/demo/wt1@2026-01-01T00:00:00.000Z")).toEqual({
+      org: "acme",
+      repoName: "demo",
+      worktreeName: "wt1",
+      version: "2026-01-01T00:00:00.000Z",
+    });
+    for (const bad of ["/abs/path", "wt1", "a/b/c/d", "a//c", "demo/wt1@", "..", "demo/../x", "../demo/wt1"]) {
       expect(() => parseSyncRef(bad)).toThrow(WorktreeSyncError);
     }
   });

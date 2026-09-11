@@ -1,5 +1,8 @@
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  linkSync,
+  renameSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -431,4 +434,40 @@ describe("emails send-controlled", () => {
     expect(result.result.exitCode, text(result.result.stderr)).toBe(0);
     expect(text(result.result.stdout)).toContain("Email sent to inline@recipient.example");
   });
+});
+
+const darwinCase=process.platform === "darwin" ? it : it.skip;
+darwinCase("Darwin controlled send rejects ACL grants and hard links before provider contact, accepts deny-only ACL",async()=>{
+  for(const kind of ["descriptor","directory","hardlink"]){
+    const files=fixture();
+    if(kind==="descriptor")execFileSync("/bin/chmod",["+a","everyone allow read",files.descriptorPath]);
+    if(kind==="directory")execFileSync("/bin/chmod",["+a","everyone allow add_file",files.dir]);
+    if(kind==="hardlink")linkSync(files.descriptorPath,join(files.dir,"request-alias.json"));
+    try{
+      const result=runCli(["send-controlled","apply","--descriptor",files.descriptorPath,"--request-id",files.requestId,"--receipt",files.receiptPath]);
+      expect(result.result.exitCode).toBe(1);expect(await stub.sendStats()).toEqual({providerCalls:0});
+      assertNoPrivateSentinel(text(result.result.stdout)+text(result.result.stderr));
+    }finally{if(kind!=="hardlink")execFileSync("/bin/chmod",["-N",kind==="descriptor"?files.descriptorPath:files.dir]);}
+  }
+  const files=fixture();execFileSync("/bin/chmod",["+a","everyone deny delete",files.dir]);
+  try{
+    const result=runCli(["send-controlled","apply","--descriptor",files.descriptorPath,"--request-id",files.requestId,"--receipt",files.receiptPath]);
+    expect(result.result.exitCode).toBe(0);expect(await stub.sendStats()).toEqual({providerCalls:1});
+    expect(statSync(files.receiptPath).nlink).toBe(1);
+    const bytes=readFileSync(files.receiptPath);
+    const retry=runCli(["send-controlled","apply","--descriptor",files.descriptorPath,"--request-id",files.requestId,"--receipt",files.receiptPath]);
+    expect(retry.result.exitCode).toBe(1);expect(readFileSync(files.receiptPath)).toEqual(bytes);expect(await stub.sendStats()).toEqual({providerCalls:1});
+  }finally{execFileSync("/bin/chmod",["-N",files.dir]);}
+});
+darwinCase("Darwin receipt parent replacement during provider call cannot redirect publication or cause duplicate send",async()=>{
+  await stub.setSendBehavior("delayed_success");const files=fixture();
+  const attacker=privateDir("emails-controlled-attacker-");const sentinel=join(attacker,"receipt.json");writeFileSync(sentinel,"existing",{mode:0o600});
+  const child=spawnCli(["send-controlled","apply","--descriptor",files.descriptorPath,"--request-id",files.requestId,"--receipt",files.receiptPath]);
+  for(let attempt=0;attempt<100;attempt++){if((await stub.sendStats()).providerCalls===1)break;await Bun.sleep(10);}
+  expect((await stub.sendStats()).providerCalls).toBe(1);
+  const moved=files.dir+"-moved";renameSync(files.dir,moved);tempDirs.push(moved);symlinkSync(attacker,files.dir);
+  const [exit,stdout,stderr]=await Promise.all([child.process.exited,new Response(child.process.stdout).text(),new Response(child.process.stderr).text()]);
+  expect(exit).toBe(1);assertNoPrivateSentinel(stdout+stderr);expect(readFileSync(sentinel,"utf8")).toBe("existing");
+  expect(existsSync(join(moved,"receipt.json"))).toBe(false);expect(readdirSync(moved).some(name=>name.endsWith(".pending"))).toBe(true);
+  expect(await stub.sendStats()).toEqual({providerCalls:1});
 });

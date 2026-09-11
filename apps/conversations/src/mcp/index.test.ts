@@ -1,41 +1,39 @@
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../lib/store/test-support/client-environment.js";
+import { getStore } from "../lib/store/index.js";
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { server } from "./index.js";
-import { closeDb, getDb } from "../lib/db.js";
-import { sendMessage, readMessages } from "../lib/messages.js";
-import { createChannel } from "../lib/channels.js";
+import { server, disposeServer } from "./index.js";
 import { setSessionAgent } from "./channel.js";
-import { heartbeat } from "../lib/presence.js";
 import { resetStoreForTests } from "../lib/store/index.js";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
 import { join } from "path";
 import { createDisposableStore, hermeticSpawnEnv } from "../test/hermetic.js";
 
-const TEST_DB = join(tmpdir(), `conversations-test-mcp-${Date.now()}.db`);
 let client: Client;
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+let restoreClient: () => void;
 
 function syntheticDatabaseUrl(): string {
   return ["postgres", "://", "mcp_user:synthetic-password", "@db.example.invalid/app"].join("");
 }
 
-function insertLegacyChannelMessage(channel: string, content: string, opts?: { priority?: string; blocking?: boolean }): number {
-  const result = getDb().prepare(`
-    INSERT INTO messages (session_id, from_agent, to_agent, channel, content, priority, blocking)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(`channel:${channel}`, "legacy-from", channel, channel, content, opts?.priority ?? "normal", opts?.blocking ? 1 : 0);
-  return Number(result.lastInsertRowid);
+let legacyId = 900000;
+async function insertLegacyChannelMessage(channel: string, content: string, opts?: { priority?: string; blocking?: boolean }): Promise<number> {
+  const id = ++legacyId;
+  await fixture.seed({ messages: [{ id, uuid: crypto.randomUUID(), session_id: `channel:${channel}`, from_agent: "legacy-from", to_agent: channel, channel, content, priority: opts?.priority ?? "normal", blocking: opts?.blocking ? 1 : 0, created_at: new Date().toISOString(), read_at: null, reply_to: null, project_id: null }] });
+  return id;
 }
 
 beforeAll(async () => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
+  fixture = await startLoopbackApiFixture();
+  restoreClient = activateClientEnvironment(fixture.env);
   delete process.env.CONVERSATIONS_AGENT_ID;
   // Also cleared: an operator following the migration note may have exported
   // this globally, and it would silently turn the refusal assertions below into
   // failures that read like a real regression.
   delete process.env.CONVERSATIONS_USE_MACHINE_IDENTITY;
-  closeDb();
+
   resetStoreForTests();
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -47,10 +45,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await client.close();
-  closeDb();
-  try { unlinkSync(TEST_DB); } catch {}
-  try { unlinkSync(TEST_DB + "-wal"); } catch {}
-  try { unlinkSync(TEST_DB + "-shm"); } catch {}
+  await disposeServer(server);
+  restoreClient();
+  await fixture.stop();
+
 });
 
 function parseResult(result: { content: unknown[] }): unknown {
@@ -77,10 +75,9 @@ describe("MCP module lifecycle", () => {
         "--eval",
         script,
       ],
-      cwd: process.cwd(),
+      cwd: join(import.meta.dir, "../.."),
       env: hermeticSpawnEnv({
-        CONVERSATIONS_DB_PATH: disposable.dbPath,
-        HASNA_CONVERSATIONS_DB_PATH: disposable.dbPath,
+        ...fixture.env,
         FORCE_COLOR: "0",
         NO_COLOR: "1",
         ...options.env,
@@ -192,7 +189,8 @@ describe("send_message from parameter", () => {
     expect(result.isError).toBe(true);
     expect(text).toContain("sensitive content detected");
     expect(text).not.toContain(blocked);
-    expect(readMessages({ to: "agent-beta" }).some((message) => message.content.includes(blocked))).toBe(false);
+    expect(text).not.toContain(new URL(blocked).password);
+    expect((await getStore().readMessages({ to: "agent-beta" })).some((message) => message.content.includes(blocked))).toBe(false);
   });
 
   test("blocks sensitive session-target metadata without echoing the value", async () => {
@@ -202,11 +200,12 @@ describe("send_message from parameter", () => {
       arguments: { from: "agent-alpha", target_session_id: blocked, content: "metadata route should be checked" },
     }) as any;
     const text = (result.content[0] as { type: string; text: string }).text;
-    const persisted = JSON.stringify(readMessages());
+    const persisted = JSON.stringify((await getStore().readMessages()));
 
     expect(result.isError).toBe(true);
     expect(text).toContain("sensitive content detected");
     expect(text).not.toContain(blocked);
+    expect(text).not.toContain(new URL(blocked).password);
     expect(persisted).not.toContain(blocked);
   });
 });
@@ -215,7 +214,7 @@ describe("send_message from parameter", () => {
 
 describe("reply from parameter", () => {
   test("uses explicit from when replying", async () => {
-    const sent = sendMessage({ from: "alice", to: "bob", content: "original" });
+    const sent = await getStore().sendMessage({ from: "alice", to: "bob", content: "original" });
     const result = await client.callTool({
       name: "reply",
       arguments: { from: "bob", message_uuid: sent.uuid, content: "reply from bob" },
@@ -228,7 +227,7 @@ describe("reply from parameter", () => {
     // Read back through the shared store rather than trusting the MCP response
     // echo. This pins the MCP surface to the same persistence contract as the
     // CLI and HTTP API regression tests.
-    const stored = readMessages({ session_id: sent.session_id })
+    const stored = (await getStore().readMessages({ session_id: sent.session_id }))
       .find((message) => message.id === msg.id);
     expect(stored?.reply_to).toBe(sent.id);
   });
@@ -237,7 +236,7 @@ describe("reply from parameter", () => {
   // refuses instead. Attributing a write to a name the caller never chose is
   // what corrupted a day of message history on a multi-seat box.
   test("refuses to attribute the reply when from is omitted", async () => {
-    const sent = sendMessage({ from: "alice", to: "bob", content: "hey auto" });
+    const sent = await getStore().sendMessage({ from: "alice", to: "bob", content: "hey auto" });
     const result = await client.callTool({
       name: "reply",
       arguments: { message_uuid: sent.uuid, content: "reply without from" },
@@ -251,7 +250,7 @@ describe("reply from parameter", () => {
 
 describe("mark_read from parameter", () => {
   test("marks messages read for explicit agent", async () => {
-    const sent = sendMessage({ from: "alice", to: "bob", content: "unread msg" });
+    const sent = await getStore().sendMessage({ from: "alice", to: "bob", content: "unread msg" });
     const result = await client.callTool({
       name: "mark_read",
       arguments: { from: "bob", ids: [sent.id] },
@@ -264,7 +263,7 @@ describe("mark_read from parameter", () => {
   // refuses instead. Attributing a write to a name the caller never chose is
   // what corrupted a day of message history on a multi-seat box.
   test("refuses to mark another identity's mail read when from is omitted", async () => {
-    const sent = sendMessage({ from: "alice", to: "bob", content: "for auto" });
+    const sent = await getStore().sendMessage({ from: "alice", to: "bob", content: "for auto" });
     const result = await client.callTool({
       name: "mark_read",
       arguments: { ids: [sent.id] },
@@ -304,7 +303,7 @@ describe("create_channel from parameter", () => {
 
 describe("send_to_channel from parameter", () => {
   test("sends to channel with explicit from", async () => {
-    createChannel("msg-channel", "creator");
+    await getStore().createChannel("msg-channel", "creator");
     const result = await client.callTool({
       name: "send_to_channel",
       arguments: { from: "channel-sender", channel: "msg-channel", content: "hello channel" },
@@ -318,7 +317,7 @@ describe("send_to_channel from parameter", () => {
   // refuses instead. Attributing a write to a name the caller never chose is
   // what corrupted a day of message history on a multi-seat box.
   test("refuses to attribute the channel post when from is omitted", async () => {
-    createChannel("msg-channel-2", "creator");
+    await getStore().createChannel("msg-channel-2", "creator");
     const result = await client.callTool({
       name: "send_to_channel",
       arguments: { channel: "msg-channel-2", content: "no from" },
@@ -338,6 +337,7 @@ describe("send_to_channel from parameter", () => {
     expect(result.isError).toBe(true);
     expect(text).toContain("sensitive content detected");
     expect(text).not.toContain(blocked);
+    expect(text).not.toContain(new URL(blocked).password);
   });
 
   test("broadcast blocks sensitive channel input without echoing the value", async () => {
@@ -350,6 +350,7 @@ describe("send_to_channel from parameter", () => {
     const data = JSON.parse(text);
 
     expect(text).not.toContain(blocked);
+    expect(text).not.toContain(new URL(blocked).password);
     expect(data.sent).toHaveLength(0);
     expect(data.errors[0]).toContain("sensitive content detected");
   });
@@ -357,8 +358,8 @@ describe("send_to_channel from parameter", () => {
 
 describe("channel notification tools", () => {
   test("subscribe and read channel notifications return preview blurbs for new messages only", async () => {
-    createChannel("notify-channel-a", "creator");
-    const historical = sendMessage({
+    await getStore().createChannel("notify-channel-a", "creator");
+    const historical = await getStore().sendMessage({
       from: "alice",
       to: "notify-channel-a",
       channel: "notify-channel-a",
@@ -376,7 +377,7 @@ describe("channel notification tools", () => {
     expect(subscription.since_message_id).toBe(historical.id);
 
     const fullContent = "## deployment _finished_ after a very long validation run";
-    const live = sendMessage({
+    const live = await getStore().sendMessage({
       from: "alice",
       to: "notify-channel-a",
       channel: "notify-channel-a",
@@ -397,14 +398,14 @@ describe("channel notification tools", () => {
   });
 
   test("get_message returns the full message for later inspection", async () => {
-    createChannel("notify-channel-b", "creator");
+    await getStore().createChannel("notify-channel-b", "creator");
     await client.callTool({
       name: "subscribe_channel_notifications",
       arguments: { from: "notify-agent-b", channel: "notify-channel-b" },
     });
 
     const fullContent = "full body for on-demand inspection";
-    const sent = sendMessage({
+    const sent = await getStore().sendMessage({
       from: "bob",
       to: "notify-channel-b",
       channel: "notify-channel-b",
@@ -430,13 +431,13 @@ describe("channel notification tools", () => {
 
   test("read channel notifications redacts legacy sensitive preview content", async () => {
     const blocked = syntheticDatabaseUrl();
-    createChannel("notify-channel-redact", "creator");
+    await getStore().createChannel("notify-channel-redact", "creator");
     await client.callTool({
       name: "subscribe_channel_notifications",
       arguments: { from: "notify-agent-redact", channel: "notify-channel-redact", preview_chars: 120 },
     });
 
-    insertLegacyChannelMessage("notify-channel-redact", `legacy ${blocked}`);
+    await insertLegacyChannelMessage("notify-channel-redact", `legacy ${blocked}`);
     const result = parseResult(await client.callTool({
       name: "read_channel_notifications",
       arguments: { from: "notify-agent-redact", unread_only: true },
@@ -452,7 +453,7 @@ describe("channel notification tools", () => {
 
 describe("join_channel from parameter", () => {
   test("joins channel with explicit from", async () => {
-    createChannel("join-channel", "creator");
+    await getStore().createChannel("join-channel", "creator");
     const result = await client.callTool({
       name: "join_channel",
       arguments: { from: "joiner-agent", channel: "join-channel" },
@@ -466,7 +467,7 @@ describe("join_channel from parameter", () => {
   // refuses instead. Attributing a write to a name the caller never chose is
   // what corrupted a day of message history on a multi-seat box.
   test("refuses to join as an undeclared identity when from is omitted", async () => {
-    createChannel("join-channel-2", "creator");
+    await getStore().createChannel("join-channel-2", "creator");
     const result = await client.callTool({
       name: "join_channel",
       arguments: { channel: "join-channel-2" },
@@ -478,7 +479,7 @@ describe("join_channel from parameter", () => {
 
 describe("channel notification subscription tools", () => {
   test("subscribes and lists preview-only channel notifications", async () => {
-    createChannel("notify-channel", "creator");
+    await getStore().createChannel("notify-channel", "creator");
 
     const subscribeResult = await client.callTool({
       name: "subscribe_channel_notifications",
@@ -499,13 +500,13 @@ describe("channel notification subscription tools", () => {
   });
 
   test("reads preview-only notifications and leaves them unread after default read_channel", async () => {
-    createChannel("notify-channel-read", "creator");
+    await getStore().createChannel("notify-channel-read", "creator");
     await client.callTool({
       name: "subscribe_channel_notifications",
       arguments: { from: "watcher-agent", channel: "notify-channel-read", preview_chars: 24 },
     });
 
-    const sent = sendMessage({
+    const sent = await getStore().sendMessage({
       from: "alice",
       to: "notify-channel-read",
       channel: "notify-channel-read",
@@ -539,9 +540,9 @@ describe("channel notification subscription tools", () => {
 describe("channel review tools", () => {
   test("summarize_channel redacts legacy sensitive blocker and priority content", async () => {
     const blocked = syntheticDatabaseUrl();
-    createChannel("review-redact", "creator");
-    insertLegacyChannelMessage("review-redact", `blocking ${blocked}`, { blocking: true });
-    insertLegacyChannelMessage("review-redact", `urgent ${blocked}`, { priority: "urgent" });
+    await getStore().createChannel("review-redact", "creator");
+    await insertLegacyChannelMessage("review-redact", `blocking ${blocked}`, { blocking: true });
+    await insertLegacyChannelMessage("review-redact", `urgent ${blocked}`, { priority: "urgent" });
 
     const result = await client.callTool({
       name: "summarize_channel",
@@ -551,6 +552,7 @@ describe("channel review tools", () => {
 
     expect(text).toContain("[REDACTED:DATABASE_URL]");
     expect(text).not.toContain(blocked);
+    expect(text).not.toContain(new URL(blocked).password);
   });
 });
 
@@ -558,7 +560,7 @@ describe("channel review tools", () => {
 
 describe("leave_channel from parameter", () => {
   test("leaves channel with explicit from", async () => {
-    createChannel("leave-channel", "leaver-agent");
+    await getStore().createChannel("leave-channel", "leaver-agent");
     const result = await client.callTool({
       name: "leave_channel",
       arguments: { from: "leaver-agent", channel: "leave-channel" },
@@ -599,7 +601,7 @@ describe("create_project from parameter", () => {
 
 describe("delete_message from parameter", () => {
   test("deletes own message with explicit from", async () => {
-    const sent = sendMessage({ from: "deleter", to: "other", content: "to delete" });
+    const sent = await getStore().sendMessage({ from: "deleter", to: "other", content: "to delete" });
     const result = await client.callTool({
       name: "delete_message",
       arguments: { from: "deleter", id: sent.id },
@@ -609,7 +611,7 @@ describe("delete_message from parameter", () => {
   });
 
   test("cannot delete others message", async () => {
-    const sent = sendMessage({ from: "alice", to: "bob", content: "alice's msg" });
+    const sent = await getStore().sendMessage({ from: "alice", to: "bob", content: "alice's msg" });
     const result = await client.callTool({
       name: "delete_message",
       arguments: { from: "bob", id: sent.id },
@@ -622,7 +624,7 @@ describe("delete_message from parameter", () => {
 
 describe("edit_message from parameter", () => {
   test("edits own message with explicit from", async () => {
-    const sent = sendMessage({ from: "editor", to: "other", content: "original" });
+    const sent = await getStore().sendMessage({ from: "editor", to: "other", content: "original" });
     const result = await client.callTool({
       name: "edit_message",
       arguments: { from: "editor", id: sent.id, content: "edited" },
@@ -632,7 +634,7 @@ describe("edit_message from parameter", () => {
   });
 
   test("cannot edit others message", async () => {
-    const sent = sendMessage({ from: "alice", to: "bob", content: "alice's msg" });
+    const sent = await getStore().sendMessage({ from: "alice", to: "bob", content: "alice's msg" });
     const result = await client.callTool({
       name: "edit_message",
       arguments: { from: "bob", id: sent.id, content: "hacked" },
@@ -696,7 +698,7 @@ describe("heartbeat from parameter", () => {
 
 describe("read-only tools work without from", () => {
   test("read_messages returns messages", async () => {
-    sendMessage({ from: "a", to: "b", content: "readable" });
+    await getStore().sendMessage({ from: "a", to: "b", content: "readable" });
     const result = await client.callTool({
       name: "read_messages",
       arguments: { limit: 5 },
@@ -1202,7 +1204,7 @@ describe("acquire_lock auto-DM", () => {
     expect((result as any).acquired).toBe(false);
     expect((result as any).held_by).toBe("agent-lock-holder");
 
-    const dms = readMessages({ to: "agent-lock-holder", unread_only: false });
+    const dms = (await getStore().readMessages({ to: "agent-lock-holder", unread_only: false }));
     const conflictDm = dms.find(m => m.content.toLowerCase().includes("lock conflict"));
     expect(conflictDm).toBeTruthy();
     expect(conflictDm!.from_agent).toBe("agent-lock-requester");
@@ -1219,7 +1221,7 @@ describe("acquire_lock auto-DM", () => {
       arguments: { resource_type: "channel", resource_id: "dm-test-room-2", from: "agent-nodm-requester", auto_dm: false },
     });
 
-    const dms = readMessages({ to: "agent-nodm-holder", unread_only: false });
+    const dms = (await getStore().readMessages({ to: "agent-nodm-holder", unread_only: false }));
     expect(dms).toHaveLength(0);
   });
 });

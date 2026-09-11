@@ -11,6 +11,7 @@ useDefaultTestTimeout();
 
 const scratch = mkdtempSync(join(tmpdir(), "skills-member-actions-"));
 const binary = join(scratch, "skills.js"), mcp = join(scratch, "mcp.js"), guard = join(scratch, "guard.js");
+const actorId=randomUUID(),actorMid=randomUUID();
 const code = "132465", session = randomUUID(), durable = randomUUID(), ignoredKey = randomUUID();
 beforeAll(async () => {
   await buildCliFixture(resolve(import.meta.dir, "index.tsx"), binary);
@@ -27,7 +28,7 @@ function environment(root: string, origin: string) {
   mkdirSync(join(root, "config/skills"));
   for (const name of ["credentials", "credentials-selected", "credentials-unrelated"])
     writeFileSync(join(root, "config/skills", name), `HASNA_SKILLS_API_KEY=${durable}\nHASNA_SKILLS_API_URL=${name === "credentials-selected" ? origin : "http://127.0.0.1:1/unselected"}\n`, { mode: 0o600 });
-  writeFileSync(join(root, "config/skills/identity-selected.json"), JSON.stringify({ userId: "preserve", orgId: "preserve" }), { mode: 0o600 });
+  writeFileSync(join(root, "config/skills/identity-selected.json"), JSON.stringify({ userId: actorId }), { mode: 0o600 });
   writeFileSync(join(root, "project/keep.txt"), "owned caller content");
   return { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: join(root, "home"), HASNA_HOME: join(root, "hasna"),
     HASNA_CONFIG_HOME: join(root, "config"), HASNA_SKILLS_DIR: join(root, "data"), HASNA_PROFILE: "selected", TMPDIR: scratch,
@@ -48,11 +49,14 @@ async function setup() {
   const removed = { organizationId: changed.organizationId, membershipId: member.membershipId, removed: true, alreadyRemoved: false };
   let reply: Reply = { body: changed };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    const path = new URL(request.url).pathname + new URL(request.url).search, body = await request.json() as { email?: string; code?: string };
-    const authorized = request.headers.get("authorization") === `Bearer ${session}`;
+    const path = new URL(request.url).pathname + new URL(request.url).search, body = request.method === "GET" ? {} : await request.json() as { email?: string; code?: string; membershipId?: string };
+    const authorized = [session,durable].some(value=>request.headers.get("authorization") === `Bearer ${value}`);
     calls.push({ path, method: request.method, body, authorized });
+    const identity={user:{id:actorId,membershipId:actorMid,email:"owner@example.test",displayName:null,role:"owner"},organization:{id:changed.organizationId,slug:"selected",name:"Selected"}};
+    if(path==="/prefix/api/auth/whoami")return Response.json({...identity,authMethod:request.headers.get("authorization")===`Bearer ${durable}`?"api_key":"jwt"});
+    if(path==="/prefix/api/v1/account/workspaces/switch"){expect(body).toEqual({membershipId:actorMid});return Response.json({...identity,token:session});}
     if (path === "/prefix/api/auth/verify") return body.email === "owner@example.test" && body.code === code
-      ? Response.json({ token: session, apiKey: ignoredKey }) : Response.json({ error: durable }, { status: 401 });
+      ? Response.json({ token: session, apiKey: ignoredKey, user:{id:actorId} }) : Response.json({ error: durable }, { status: 401 });
     if (path !== `/prefix/api/v1/workspace/members/${member.membershipId}` || !["PATCH", "DELETE"].includes(request.method)) return Response.json({ error: durable }, { status: 404 });
     if (!authorized) return Response.json({ error: durable }, { status: 403 });
     return reply.raw ? new Response(String(reply.body), { status: reply.status ?? 200 }) : Response.json(reply.body, { status: reply.status ?? 200 });
@@ -101,7 +105,7 @@ test("built member CLI preserves explicit preconditions and truthful changed/rep
     if (json) expect(JSON.parse(result.stdout)).toEqual(expected);
     else expect(result.stdout).toContain(action === "role" ? (replay ? "already has role viewer" : "changed to viewer") : (replay ? "already removed" : "Membership removed"));
     expect(f.calls.slice(before).map(call => [call.path, call.method, call.authorized])).toEqual([
-      ["/prefix/api/auth/verify", "POST", false], [`/prefix/api/v1/workspace/members/${f.member.membershipId}`, action === "role" ? "PATCH" : "DELETE", true]]);
+      ["/prefix/api/auth/whoami", "GET", true], ["/prefix/api/auth/verify", "POST", false], ["/prefix/api/auth/whoami", "GET", true], ["/prefix/api/v1/account/workspaces/switch", "POST", true], ["/prefix/api/auth/whoami", "GET", true], [`/prefix/api/v1/workspace/members/${f.member.membershipId}`, action === "role" ? "PATCH" : "DELETE", true]]);
     expect(f.calls.at(-1)?.body).toEqual(action === "role" ? { role: "viewer", expectedRole: "member" } : { expectedRole: "member" });
     expect(state(f.root)).toEqual(f.before);
   }
@@ -114,12 +118,12 @@ test("built member CLI refuses unsafe inputs before verification and never hides
     const result = await run(f.root, f.env, [...args, "--json"]); expect(result.exitCode).toBe(1); noCanaries(result.stdout + result.stderr); expect(f.calls).toEqual([]);
   }
   expect((await run(f.root, f.env, common, "invalid")).exitCode).toBe(1); expect(f.calls).toEqual([]);
-  expect((await run(f.root, f.env, common, "000000")).exitCode).toBe(1); expect(f.calls).toHaveLength(1);
+  expect((await run(f.root, f.env, common, "000000")).exitCode).toBe(1); expect(f.calls).toHaveLength(2);
   for (const [status, errorCode] of [[403, "MEMBERSHIP_ACTION_FORBIDDEN"], [404, "MEMBERSHIP_NOT_FOUND"], [409, "MEMBERSHIP_ROLE_CHANGED"], [409, "LAST_OWNER_REQUIRED"], [503, "MEMBERSHIP_BUSY"], [404, "NOT_FOUND"], [500, "UNKNOWN"]] as const) {
     f.reply({ status, body: { code: errorCode, error: durable } });
     for (const json of [false, true]) {
       const before = f.calls.length, result = await run(f.root, f.env, [...common, ...(json ? ["--json"] : [])]);
-      expect(result.exitCode).toBe(1); noCanaries(result.stdout + result.stderr); expect(f.calls).toHaveLength(before + 2);
+      expect(result.exitCode).toBe(1); noCanaries(result.stdout + result.stderr); expect(f.calls).toHaveLength(before + 6);
       if (json) { const body = JSON.parse(result.stdout); expect(body.status).toBe(status); if (!["NOT_FOUND", "UNKNOWN"].includes(errorCode)) expect(body.code).toBe(errorCode); }
       else expect(result.stdout).toBe("");
     }
@@ -147,7 +151,7 @@ test("actual stdio member tools share safe client contracts and preserve credent
       for (const replay of [false, true]) {
         const expected = action === "role" ? { ...f.changed, changed: !replay } : { ...f.removed, alreadyRemoved: replay };
         f.reply({ body: expected }); const before = f.calls.length, result = await invoke(name, args);
-        expect(result.isError).not.toBe(true); noCanaries(JSON.stringify(result)); expect(f.calls).toHaveLength(before + 2);
+        expect(result.isError).not.toBe(true); noCanaries(JSON.stringify(result)); expect(f.calls).toHaveLength(before + 6);
         expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toEqual(expected);
       }
       for (const invalid of [{ ...args, expectedRole: undefined }, { ...args, expectedRole: "superuser" }, { ...args, organizationId: randomUUID() }]) {

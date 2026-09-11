@@ -6,6 +6,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { InputValidationError } from "../../types/index.js";
 import { listTasks, getTask } from "../../db/tasks.js";
 import { listProjects } from "../../db/projects.js";
 import { listAgents } from "../../db/agents.js";
@@ -864,7 +865,12 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       async (input) => {
         try {
           const backup = input.path ? readLocalBackupFile(input.path) : input.backup;
-          if (!backup) throw new Error("path or backup is required");
+          if (!backup) {
+            throw new InputValidationError(
+              "path or backup is required",
+              "Pass `path` (a local backup JSON file) or `backup` (the backup object).",
+            );
+          }
           const verification = verifyLocalBackup(backup);
           return { content: [{ type: "text" as const, text: JSON.stringify(verification, null, 2) }] };
         } catch (e) {
@@ -887,7 +893,12 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       async (input) => {
         try {
           const backup = input.path ? readLocalBackupFile(input.path) : input.backup;
-          if (!backup) throw new Error("path or backup is required");
+          if (!backup) {
+            throw new InputValidationError(
+              "path or backup is required",
+              "Pass `path` (a local backup JSON file) or `backup` (the backup object).",
+            );
+          }
           const result = restoreLocalBackup(backup as any, {
             apply: Boolean(input.apply),
             conflict_strategy: input.resolve_conflicts ? "safe_merge" : "skip",

@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { DEFAULT_PORT as DEFAULT_SERVER_PORT } from "../../server/port.js";
 import { getDatabase } from "../../db/database.js";
 import { listTasks } from "../../db/tasks.js";
-import { loadConfig } from "../../lib/config.js";
+import { isCredentialShapedConfigKey, loadConfig } from "../../lib/config.js";
 import { getTodosGlobalDir } from "../../lib/sync-utils.js";
 import { autoProject, handleError, output, formatTaskLine, parseEnumFlagList, resolveTaskId, TASK_STATUS_FLAG } from "../helpers.js";
 
@@ -53,6 +53,25 @@ export function registerConfigServeCommands(program: Command) {
         const dir = dirname(configPath);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
         writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+        // A credential- or authority-shaped key is written for backwards
+        // compatibility but read by nothing in 0.16.0, so report it instead of
+        // a silent success — and never echo the value back into a terminal,
+        // scrollback or log. The credential tiers are listed by
+        // `todos storage status`.
+        if (isCredentialShapedConfigKey(key)) {
+          const warning = `0.16.0 reads no credential or authority from ${configPath}: `
+            + `"${key}" was stored but nothing consults it. Put a credential in the macOS Keychain `
+            + `(service hasna.credentials.todos.api-key), ~/.hasna/todos/config/credentials (mode 0400/0600), `
+            + `or HASNA_TODOS_API_KEY, and the authority in HASNA_TODOS_API_URL. Run \`todos storage status\` to see what resolved.`;
+          if (globalOpts.json) {
+            output({ key, value: "[stored, not read by 0.16.0]", warning }, true);
+          } else {
+            console.log(chalk.green(`Set ${key}`) + chalk.dim(" (value stored, not echoed)"));
+            console.warn(chalk.yellow(`⚠  ${warning}`));
+          }
+          return;
+        }
 
         if (globalOpts.json) {
           output({ key, value: parsedValue }, true);

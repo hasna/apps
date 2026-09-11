@@ -33,6 +33,7 @@ import {
 } from './transport.mjs';
 
 export class NotesHttpStoreError extends Error {
+  /** @param {string} message @param {import('../sdk/types.js').NotesErrorOptions} [options] */
   constructor(message, { status, code, details } = {}) {
     super(message);
     this.name = 'NotesHttpStoreError';
@@ -42,8 +43,9 @@ export class NotesHttpStoreError extends Error {
   }
 }
 
+/** @param {{cause?: {message?: unknown} | string, message?: unknown} | null | undefined} err @param {string} apiUrl */
 function describeFetchError(err, apiUrl) {
-  const cause = typeof err?.cause?.message === 'string' ? err.cause.message
+  const cause = typeof /** @type {{message?: unknown} | undefined} */ (err?.cause)?.message === 'string' ? /** @type {{message: string}} */ (err?.cause).message
     : typeof err?.cause === 'string' ? err.cause : '';
   const host = safeHost(apiUrl);
   // macOS Local Network Privacy (sync/lnp.mjs documented the signature): a
@@ -54,6 +56,7 @@ function describeFetchError(err, apiUrl) {
   return `cannot reach the Notes API at ${host}: ${typeof err?.message === 'string' ? err.message : 'network error'}`;
 }
 
+/** @param {string} apiUrl */
 function safeHost(apiUrl) {
   try {
     const url = new URL(apiUrl);
@@ -63,15 +66,17 @@ function safeHost(apiUrl) {
   }
 }
 
+/** @param {unknown} value @param {string} apiKey @returns {unknown} */
 function redactCredential(value, apiKey) {
   if (!apiKey) return value;
   if (typeof value === 'string') return value.split(apiKey).join('[REDACTED]');
   if (!value || typeof value !== 'object') return value;
   const result = Array.isArray(value) ? [] : {};
+  /** @type {{source: object, target: object}[]} */
   const pending = [{ source: value, target: result }];
   // JSON error bodies can be deeply nested; do not recurse on untrusted depth.
   while (pending.length) {
-    const { source, target } = pending.pop();
+    const { source, target } = /** @type {{source: object, target: object}} */ (pending.pop());
     for (const [key, item] of Object.entries(source)) {
       let sanitized = typeof item === 'string' ? item.split(apiKey).join('[REDACTED]') : item;
       if (item && typeof item === 'object') {
@@ -92,6 +97,7 @@ function redactCredential(value, apiKey) {
  * resolves no credential. The key is never included in the returned object;
  * the transport re-resolves it per request.
  */
+/** @param {import('../sdk/types.js').NotesEnvironment} [env] @param {typeof fetch} [fetchImpl] */
 export function createNotesHttpStore(env = process.env, fetchImpl = fetch) {
   assertNoClientDatabaseDsn(env);
   const bound = createNotesClientTransport(env, fetchImpl);
@@ -104,6 +110,7 @@ export function createNotesHttpStore(env = process.env, fetchImpl = fetch) {
 }
 
 export class NotesHttpStore {
+  /** @type {import('@hasna/contracts/client').HasnaHttpTransport} */
   #transport;
   #redactionKey;
 
@@ -113,6 +120,7 @@ export class NotesHttpStore {
    * ambient fleet credential is never attached to an explicit authority
    * (#1794).
    */
+  /** @param {import('../sdk/types.js').NotesStoreConfiguration} config @param {typeof fetch} [fetchImpl] */
   constructor(config, fetchImpl = fetch) {
     let bound;
     if (config?.transport) {
@@ -123,7 +131,7 @@ export class NotesHttpStore {
       this.#redactionKey = String(readPlainClientValue(config, 'apiKey') ?? '').trim();
     }
     this.#transport = bound;
-    this.transport = 'http';
+    this.transport = /** @type {const} */ ('http');
   }
 
   /** The origin the store talks to (the /v1 suffix is added by the transport base). */
@@ -136,8 +144,10 @@ export class NotesHttpStore {
     return this.#transport.baseUrl;
   }
 
+  /** @param {unknown} error @param {string} method @param {string} path @returns {NotesHttpStoreError} */
   mapTransportError(error, method, path) {
-    const redact = (value) => redactCredential(value, this.#redactionKey);
+    /** @param {string} value */
+    const redact = (value) => /** @type {string} */ (redactCredential(value, this.#redactionKey));
     if (error instanceof HasnaHttpError) {
       const { status, body } = error;
       // Authenticated redirects are terminal: the transport never follows one
@@ -155,9 +165,9 @@ export class NotesHttpStore {
         return new NotesHttpStoreError(redact(error.message), { status });
       }
       if (body && typeof body === 'object' && !Array.isArray(body)) {
-        const sanitized = redact(body);
-        const envelope = sanitized?.error && typeof sanitized.error === 'object'
-          ? sanitized.error : sanitized;
+        const sanitized = /** @type {Record<string, unknown>} */ (redactCredential(body, this.#redactionKey));
+        const envelope = /** @type {Record<string, unknown>} */ (sanitized?.error && typeof sanitized.error === 'object'
+          ? sanitized.error : sanitized);
         const message = typeof envelope?.message === 'string' && envelope.message
           ? envelope.message : redact(`Notes API ${method} ${path} failed`);
         return new NotesHttpStoreError(message, {
@@ -178,14 +188,16 @@ export class NotesHttpStore {
       }
       return new NotesHttpStoreError(redact(`Notes API ${method} ${path} failed`), { status });
     }
-    const cause = typeof error?.cause === 'object' && error.cause ? error.cause : {};
+    const observed = /** @type {{cause?: object | string, message?: unknown} | null | undefined} */ (error);
+    const cause = /** @type {{code?: unknown}} */ (typeof observed?.cause === 'object' && observed.cause ? observed.cause : {});
     const causeCode = typeof cause.code === 'string' ? cause.code : 'fetch_failed';
     return new NotesHttpStoreError(
-      redact(describeFetchError(error, this.#transport.baseUrl)),
+      redact(describeFetchError(observed, this.#transport.baseUrl)),
       { code: redact(causeCode) },
     );
   }
 
+  /** @param {string} method @param {string} path @param {import('../sdk/types.js').NotesRequestOptions} [options] @returns {Promise<unknown>} */
   async request(method, path, { body, query } = {}) {
     let result;
     try {
@@ -197,35 +209,43 @@ export class NotesHttpStore {
     return result === undefined ? null : result;
   }
 
+  /** @returns {Promise<import('../sdk/types.js').NotesHealth>} */
   health() {
-    return this.request('GET', '/health');
+    return /** @type {Promise<import('../sdk/types.js').NotesHealth>} */ (this.request('GET', '/health'));
   }
 
+  /** @param {import('../sdk/types.js').NotesListOptions} [params] @returns {Promise<import('../sdk/types.js').NotesPage>} */
   listNotes(params = {}) {
+    /** @type {Record<string, string>} */
     const query = {};
     if (params.limit) query.limit = String(params.limit);
     if (params.includeDeleted) query.include_deleted = '1';
     if (params.cursor) query.cursor = String(params.cursor);
-    return this.request('GET', '/notes', { query });
+    return /** @type {Promise<import('../sdk/types.js').NotesPage>} */ (this.request('GET', '/notes', { query }));
   }
 
+  /** @param {string} id @returns {Promise<import('../sdk/types.js').Note>} */
   getNote(id) {
-    return this.request('GET', `/notes/${encodeURIComponent(id)}`);
+    return /** @type {Promise<import('../sdk/types.js').Note>} */ (this.request('GET', `/notes/${encodeURIComponent(id)}`));
   }
 
+  /** @param {import('../sdk/types.js').NoteInput} input @returns {Promise<import('../sdk/types.js').Note>} */
   createNote(input) {
-    return this.request('POST', '/notes', { body: input });
+    return /** @type {Promise<import('../sdk/types.js').Note>} */ (this.request('POST', '/notes', { body: input }));
   }
 
+  /** @param {string} id @param {import('../sdk/types.js').NoteUpdate} input @returns {Promise<import('../sdk/types.js').Note>} */
   updateNote(id, input) {
-    return this.request('PATCH', `/notes/${encodeURIComponent(id)}`, { body: input });
+    return /** @type {Promise<import('../sdk/types.js').Note>} */ (this.request('PATCH', `/notes/${encodeURIComponent(id)}`, { body: input }));
   }
 
+  /** @param {string} id @returns {Promise<import('../sdk/types.js').NotesDeleteResult>} */
   deleteNote(id) {
-    return this.request('DELETE', `/notes/${encodeURIComponent(id)}`);
+    return /** @type {Promise<import('../sdk/types.js').NotesDeleteResult>} */ (this.request('DELETE', `/notes/${encodeURIComponent(id)}`));
   }
 
+  /** @returns {Promise<import('../sdk/types.js').NotesExport>} */
   exportNotes() {
-    return this.request('POST', '/export');
+    return /** @type {Promise<import('../sdk/types.js').NotesExport>} */ (this.request('POST', '/export'));
   }
 }

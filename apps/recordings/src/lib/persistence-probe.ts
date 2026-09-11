@@ -72,7 +72,14 @@ export function safeBaseUrl(baseUrl: string | null): string | null {
 }
 
 export interface ActiveStoreDescription {
-  transport: "sqlite" | "http";
+  /**
+   * Which store this process would read and write: `"sqlite"` only under the
+   * deliberate local opt-in, `"http"` when the resolver succeeded, and
+   * `"none"` when the resolver REFUSED — a hosted run with no credential has
+   * no active store at all, and the diagnostic says so instead of reporting
+   * the on-box file as live (fail loud, hasna/apps#1720).
+   */
+  transport: "sqlite" | "http" | "none";
   /**
    * What decided the transport: `"local-opt-in"`, `"unresolved"`, or an env
    * key NAME / Keychain item reference / file PATH / `"default"` as the
@@ -159,22 +166,22 @@ export function describeActiveStore(
 ): ActiveStoreDescription {
   const localDbPath = config.db_path;
   const localDbPresent = existsSync(localDbPath);
-  const localDbRecordings = localDbPresent ? readLocalRecordingCount(localDbPath) : null;
 
   const status = getRecordingsTransportStatus(env, options);
 
-  if (!status.ok || !status.selected || status.transport !== "http") {
-    // Nothing resolved (fail-closed refusal), or the deliberate local opt-in.
-    // Either way the on-box file is NOT the live store without the opt-in, so
-    // the diagnostic says so instead of silently treating the file as active.
+  if (!status.ok) {
+    // The resolver REFUSED: a hosted run with no credential has no active
+    // store, and the on-box file is NOT opened to count it — a read-only open
+    // of a fail-closed refusal is still a touch this diagnostic must not make
+    // (it would be the same "looked at the wrong store" lie in a new shape).
     const issues = status.issues.length > 0 ? status.issues.join(" ") : null;
     return {
-      transport: "sqlite",
-      mode_source: status.ok ? "local-opt-in" : "unresolved",
+      transport: "none",
+      mode_source: "unresolved",
       base_url: null,
       local_db_path: localDbPath,
       local_db_present: localDbPresent,
-      local_db_recordings: localDbRecordings,
+      local_db_recordings: null,
       divergent: false,
       // The issues echo operator-visible text only; redacted like every other
       // warning in this module.
@@ -182,6 +189,22 @@ export function describeActiveStore(
     };
   }
 
+  if (!status.selected) {
+    // The deliberate local opt-in. The on-box file IS the live store, so its
+    // row count is legitimately reportable (read-only, as always).
+    return {
+      transport: "sqlite",
+      mode_source: "local-opt-in",
+      base_url: null,
+      local_db_path: localDbPath,
+      local_db_present: localDbPresent,
+      local_db_recordings: localDbPresent ? readLocalRecordingCount(localDbPath) : null,
+      divergent: false,
+      warning: null,
+    };
+  }
+
+  const localDbRecordings = localDbPresent ? readLocalRecordingCount(localDbPath) : null;
   const divergent = (localDbRecordings ?? 0) > 0;
 
   const warnings: string[] = [];
@@ -225,6 +248,56 @@ export function describeActiveStore(
     divergent,
     warning: warnings.length > 0 ? warnings.join(" ") : null,
   };
+}
+
+/**
+ * True when the resolver REFUSED: nothing resolved and the on-box store was
+ * not opted in. The one predicate `check` keys both its exit code and its
+ * glyph off, so a future renderer cannot turn a fail-closed report green
+ * without also changing the exit contract.
+ */
+export function activeStoreFailClosed(
+  description: ActiveStoreDescription,
+): boolean {
+  return description.transport === "none";
+}
+
+/** The glyph palette `check` supplies; injected so the mapping stays testable. */
+export interface StoreLinePalette {
+  pass: (text: string) => string;
+  warn: (text: string) => string;
+  fail: (text: string) => string;
+}
+
+/**
+ * The ONE rendered line for the active store — `check` keys its glyph,
+ * wording and (via {@link activeStoreFailClosed}) its exit code off this, so
+ * the text surface and the exit contract cannot drift apart:
+ *
+ * - unresolved refusal -> fail line naming the refusal and whether the on-box
+ *   file was present but NOT opened (or absent);
+ * - deliberate local opt-in -> pass line naming the file;
+ * - hosted resolution -> pass line naming the resolver's sources.
+ */
+export function describeActiveStoreLine(
+  description: ActiveStoreDescription,
+  paint: StoreLinePalette,
+): string {
+  if (activeStoreFailClosed(description)) {
+    const refusal = description.warning ? ` (${description.warning})` : "";
+    const file = description.local_db_present
+      ? `${description.local_db_path} is present but NOT opened`
+      : `${description.local_db_path} absent`;
+    return paint.fail(`✗ Active store: none — fail-closed${refusal}; ${file}`);
+  }
+  if (description.transport === "sqlite") {
+    return paint.pass(
+      `✓ Active store: sqlite → ${description.local_db_path} (selected by ${description.mode_source})`,
+    );
+  }
+  return paint.pass(
+    `✓ Active store: http → ${description.base_url ?? "?"} (selected by ${description.mode_source})`,
+  );
 }
 
 export interface PersistenceProbeResult {

@@ -13,6 +13,64 @@ afterEach(async () => {
 });
 
 describe("runDurableWorker", () => {
+  test("imports committed files when the watcher reports only a temporary publication name", async () => {
+    const dataDir = await temporaryDataDir();
+    // Isolate the watcher substitution in a child: other tests keep native fs.watch.
+    // macOS can coalesce hardlink publication into notifications for the temp inode.
+    const script = `
+      import { mock } from "bun:test";
+      import * as fs from "node:fs";
+      import { EventEmitter } from "node:events";
+      import { join } from "node:path";
+      let notify, closed = false;
+      mock.module("node:fs", () => ({ ...fs, watch: (_path, callback) => {
+        notify = callback;
+        return Object.assign(new EventEmitter(), { close() { closed = true; } });
+      }}));
+      const { DurableEventSpool } = await import(${JSON.stringify(join(import.meta.dir, "durable-spool.ts"))});
+      const { DurableEventsBroker } = await import(${JSON.stringify(join(import.meta.dir, "durable.ts"))});
+      const { runDurableWorker } = await import(${JSON.stringify(join(import.meta.dir, "durable-worker.ts"))});
+      const dataDir = ${JSON.stringify(dataDir)};
+      let attempts = 0, cycles = 0;
+      const broker = new DurableEventsBroker({ dataDir, secretResolver: () => "synthetic-watcher-fixture",
+        fetchImpl: async () => new Response("synthetic", { status: ++attempts === 1 ? 503 : 202 }) });
+      broker.addChannel({ id: "fixture", enabled: true, transport: "webhook",
+        webhook: { url: "https://example.invalid", secretRef: "env:HASNA_EVENTS_SYNTHETIC_REFERENCE" },
+        retry: { maxAttempts: 3, backoffMs: 20, multiplier: 1 } });
+      const controller = new AbortController();
+      const worker = runDurableWorker({ broker, signal: controller.signal, debounceMs: 5,
+        reconcileMs: 60000, onCycle: () => { cycles += 1; } });
+      const waitFor = async (check) => {
+        const deadline = Date.now() + 1500;
+        while (!check()) { if (Date.now() >= deadline) throw new Error("watcher fixture timed out"); await Bun.sleep(5); }
+      };
+      try {
+        await waitFor(() => cycles === 1);
+        const spool = new DurableEventSpool({ dataDir });
+        // Incomplete writes remain excluded by the real importer even after a wakeup.
+        fs.writeFileSync(join(spool.inboxDir, ".tmp-incomplete"), "not-json");
+        await spool.enqueue({ id: "watcher-fixture", source: "notes", type: "note.created", data: {} });
+        notify("rename", ".tmp-published-inode");
+        await waitFor(() => attempts === 2);
+        controller.abort();
+        const result = await worker;
+        console.log(JSON.stringify({ imported: result.imported, delivered: result.delivered,
+          retried: result.retried, counts: broker.status().counts, closed,
+          incompletePreserved: fs.existsSync(join(spool.inboxDir, ".tmp-incomplete")) }));
+      } finally { controller.abort(); await worker; broker.close(); }
+    `;
+    const child = Bun.spawn([process.execPath, "--no-env-file", "-e", script], {
+      env: { PATH: process.env.PATH!, HOME: dataDir, TMPDIR: tmpdir(), BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ imported: 1, delivered: 1, retried: 1,
+      counts: { events: 1, pending: 0, leased: 0, delivered: 1 }, closed: true, incompletePreserved: true });
+  });
+
   test("watches the spool and wakes from persisted retry time without polling notes", async () => {
     const dataDir = await temporaryDataDir();
     let attempts = 0;

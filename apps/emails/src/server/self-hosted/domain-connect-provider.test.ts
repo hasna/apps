@@ -165,3 +165,10 @@ test("SES domain reads use the actual binding helper and only authoritative not-
   expect(results[2]).toBe("refused");
   expect(results[3]).toBe(true);
 });
+
+test("SES sending evidence includes reject-on-failure MAIL FROM verification", () => {
+  const script = `import {mock} from "bun:test";let status="PENDING";const sdk=await import("@aws-sdk/client-sesv2");mock.module("@aws-sdk/client-sesv2",()=>({...sdk,SESv2Client:class{config={region:async()=>"eu-west-1"};async send(){return {IdentityType:"DOMAIN",VerifiedForSendingStatus:true,DkimAttributes:{Status:"SUCCESS",Tokens:["fixture"]},MailFromAttributes:{MailFromDomain:"mail.example.test",MailFromDomainStatus:status,BehaviorOnMxFailure:"REJECT_MESSAGE"}}}destroy(){}}}));const {readDomainConnection}=await import(${JSON.stringify(new URL("./domain-connect-provider.ts", import.meta.url).pathname)});const results=[];for(const next of ["PENDING","FAILED","TEMPORARY_FAILURE","SUCCESS"]){status=next;results.push((await readDomainConnection({type:"ses"},"example.test",AbortSignal.timeout(1000))).verified_for_sending)}console.log(JSON.stringify(results));`;
+  const child = Bun.spawnSync([process.execPath, "--no-env-file", "-e", script], { cwd: new URL("../../../", import.meta.url).pathname, env: process.env, stdout: "pipe", stderr: "pipe" });
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  expect(JSON.parse(child.stdout.toString())).toEqual([false, false, false, true]);
+});

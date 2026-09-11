@@ -26,7 +26,7 @@ import {
   type ProjectBudgetStatus,
 } from "../lib/budget.js";
 import { filterProjectEvalArtifacts } from "../lib/project-eval-artifacts.js";
-import { projectChannelSummary, resolveProjectChannelForProject } from "../lib/project-channel.js";
+import { assertProjectChannelIntegrationWritable, projectChannelSummary, resolveProjectChannelForProject } from "../lib/project-channel.js";
 import { repairProjectPermissions } from "../lib/project-permissions.js";
 import { redactProjectValue } from "../lib/redaction.js";
 import {
@@ -48,7 +48,7 @@ import {
   removeProjectTags,
   unlinkProjectIntegrationFields,
 } from "../lib/project-management.js";
-import { doctorWorkspace } from "../lib/workspace-doctor.js";
+import { doctorWorkspace, doctorWorkspaceWithStore } from "../lib/workspace-doctor.js";
 import {
   buildProjectAgentContext,
   buildProjectHandoff,
@@ -1272,6 +1272,10 @@ server.tool(
         // (directory/git/tmux) does not apply to a hosted project row. Root/
         // recipe are shared registry resources: resolve slug->id through the
         // Store so intent is honored (not silently dropped) in the hosted backend.
+        // Same write-time channel guard as the CLI create (BUG-0063): a hosted
+        // row is not a reason to store a channel name nothing can post to.
+        const hostedIntegrations = input.integrations as WorkspaceIntegrations | undefined;
+        assertProjectChannelIntegrationWritable(hostedIntegrations, undefined);
         const project = await store.createProject({
           name: input.name,
           slug: input.slug,
@@ -1280,7 +1284,7 @@ server.tool(
           root_id: await rootId(store, input.root),
           recipe_id: await recipeId(store, input.recipe),
           tags: input.tags,
-          integrations: input.integrations as WorkspaceIntegrations | undefined,
+          integrations: hostedIntegrations,
           metadata: input.metadata as JsonObject | undefined,
         });
         return jsonText({ project });
@@ -1304,6 +1308,8 @@ server.tool(
         brief_id: input.brief_id,
         brief_path: input.brief_path,
       }) ?? integrationsBase;
+      // Same write-time channel guard as the CLI create (BUG-0063).
+      assertProjectChannelIntegrationWritable(integrations, undefined);
       return jsonProjectText(await executeWorkspaceCreation({
         name: input.name,
         slug: input.slug,
@@ -1725,6 +1731,8 @@ server.tool(
       const integrations = hasProjectIntegrationFields(integrationFields)
         ? mergeProjectIntegrationFields(integrationsBase, integrationFields)
         : input.integrations === undefined ? undefined : integrationsBase;
+      // Same write-time channel guard as the CLI update/link (BUG-0063).
+      assertProjectChannelIntegrationWritable(integrations, project.integrations);
       // Root/recipe are shared registry resources; resolve slug->id through the
       // Store in BOTH transports so root/recipe are never silently dropped on a
       // flipped machine.
@@ -1769,11 +1777,14 @@ server.tool(
     try {
       const store = resolveProjectStore();
       const project = await store.resolveTarget(input.project);
+      const linkedIntegrations = mergeProjectIntegrations(
+        project.integrations,
+        normalizeWorkspaceIntegrations(input.integrations as WorkspaceIntegrations),
+      );
+      // Same write-time channel guard as the CLI link (BUG-0063).
+      assertProjectChannelIntegrationWritable(linkedIntegrations, project.integrations);
       const updated = await store.updateProject(project.id, {
-        integrations: mergeProjectIntegrations(
-          project.integrations,
-          normalizeWorkspaceIntegrations(input.integrations as WorkspaceIntegrations),
-        ),
+        integrations: linkedIntegrations,
         agent_id: mcpMutationAgent(store, input.agent),
         source: "mcp",
         command: "projects_link",
@@ -1927,14 +1938,16 @@ server.tool(
   },
   async (input) => {
     const store = resolveProjectStore();
-    const options = { fix: input.fix, dryRun: input.dry_run, transport: store.transport };
+    // Through the Store: a hosted project resolves its root/recipe against the
+    // shared registry and never opens the on-box SQLite (#1720).
+    const options = { fix: input.fix, dryRun: input.dry_run };
     if (input.id) {
       const project = await findProjectTarget(input.id, store);
       if (!project) return errorText(`Project not found: ${input.id}`);
       const owner = mcpMutationAgent(store);
       const result = input.fix && !input.dry_run
-        ? await withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspace(project, options))
-        : doctorWorkspace(project, options);
+        ? await withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspaceWithStore(store, project, options))
+        : await doctorWorkspaceWithStore(store, project, options);
       return jsonText(!input.compact || input.verbose
         ? [projectDoctorPayload(result)]
         : {
@@ -1950,8 +1963,8 @@ server.tool(
     const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
     const projects = await store.listProjects({ limit: input.compact && !input.verbose ? limit + 1 : input.limit ?? 500 });
     const results = await Promise.all(projects.map((project) => input.fix && !input.dry_run
-      ? withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspace(project, options))
-      : Promise.resolve(doctorWorkspace(project, options))));
+      ? withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspaceWithStore(store, project, options))
+      : doctorWorkspaceWithStore(store, project, options)));
     if (!input.compact || input.verbose) return jsonText(results.map(projectDoctorPayload));
     const visible = results.slice(0, limit);
     return jsonText({
@@ -2455,8 +2468,30 @@ server.tool(
 return server;
 }
 
+/**
+ * FAIL-CLOSED at startup (hasna/apps#1720, acceptance c; owner ruling
+ * 2026-09-04): the MCP server must not answer `initialize` unless a Projects
+ * store can be served. With no fleet credential resolvable from any tier
+ * (explicit override, HASNA_PROFILE, HASNA_PROJECTS_API_KEY_REF, the Keychain
+ * item hasna.credentials.projects.api-key, ~/.hasna/projects/config/credentials,
+ * HASNA_PROJECTS_API_KEY) and no explicit `HASNA_PROJECTS_LOCAL=1` opt-in,
+ * resolving the store THROWS: exit non-zero naming where the credential should
+ * live, BEFORE the stdio or HTTP transport starts, and create nothing on disk.
+ * The explicit local opt-in prints its one "local mode" line here, at startup.
+ * Mirrors the CLI, which resolves the store per command and exits the same way.
+ */
+function prepareMcpRuntime(): void {
+  try {
+    resolveProjectStore();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  prepareMcpRuntime();
   if (isHttpMode(args)) {
     startMcpHttpServer({ name: "projects", port: resolveMcpHttpPort(args), buildServer });
     return;

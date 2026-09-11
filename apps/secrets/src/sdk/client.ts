@@ -1,3 +1,4 @@
+import { validateEncryptionReceipt } from "../encryption-maintenance.js";
 // Typed client for the secrets serve API (@hasna/secrets/sdk).
 //
 // The method surface mirrors the serve OpenAPI document (src/server/openapi.ts).
@@ -117,12 +118,30 @@ export class SecretsClient {
 
   constructor(options: SecretsClientOptions) {
     if (!options.baseUrl) throw new Error("SecretsClient requires a baseUrl.");
+    // Loud refusal, never an unauthenticated transport (adversarial
+    // credential-seam audit, hasna/apps#1720): `apiKey` is the ONLY
+    // credential a direct client can carry, and a baseUrl with no key (or a
+    // blank one) would silently build a transport that sends NO auth header —
+    // an unauthenticated client that looks like a vault client. Callers who
+    // mean to use the ambient credential chain (Keychain
+    // hasna.credentials.secrets.api-key, ~/.hasna/secrets/config/credentials,
+    // HASNA_SECRETS_API_KEY) must go through {@link createSecretsClientFromEnv};
+    // a direct client names its own key (or a per-request CredentialProvider).
+    if (options.apiKey === undefined || options.apiKey === "") {
+      throw new Error(
+        "SECRETS_CLIENT_PIN_REQUIRED: a SecretsClient with an explicit baseUrl requires an explicit apiKey " +
+          "(or a CredentialProvider). The ambient fleet credential (Keychain hasna.credentials.secrets.api-key, " +
+          "~/.hasna/secrets/config/credentials, HASNA_SECRETS_API_KEY) is never sent to a caller-supplied " +
+          "authority: pass `apiKey` explicitly, or build the client with createSecretsClientFromEnv() and let " +
+          "HASNA_SECRETS_API_URL / the @hasna/contracts chain resolve the authority and the credential together.",
+      );
+    }
     // The transport validates the authority and canonicalises it to
     // `<origin-and-path>/v1`; every data route below is relative to that.
     this.transport = createHasnaHttpTransport({
       name: "secrets",
       baseUrl: options.baseUrl.replace(/\/+$/, ""),
-      apiKey: options.apiKey ?? "",
+      apiKey: options.apiKey,
       ...(options.fetch ? { fetchImpl: (input, init) => options.fetch!(input, init) } : {}),
       ...(options.headers ? { headers: options.headers } : {}),
     });
@@ -278,6 +297,19 @@ export class SecretsClient {
         query,
         init,
       });
+    }
+
+    async encryptionStatus(init?: RequestInit): Promise<import("../encryption-maintenance.js").EncryptionReceipt> {
+      return validateEncryptionReceipt(await this.request("GET", "/encryption/status", { init }));
+    }
+
+    async repairEncryption(init?: RequestInit): Promise<import("../encryption-maintenance.js").EncryptionReceipt> {
+      return validateEncryptionReceipt(await this.request("POST", "/encryption/repair", { body: {}, init }));
+    }
+
+    /** Atomically prune expired secrets in the authenticated tenant. */
+    async pruneExpiredSecrets(init?: RequestInit): Promise<{ pruned: number }> {
+      return this.request("POST", "/secrets/prune-expired", { body: {}, init });
     }
 
     /** Get a secret value by key */

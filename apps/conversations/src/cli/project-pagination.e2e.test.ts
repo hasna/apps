@@ -1,20 +1,22 @@
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
 
-const TEST_DB = join(tmpdir(), `conversations-project-pagination-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 function runCli(args: string[]) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: isolatedStoreChildEnv(TEST_DB, {
+    env: { ...fixture.env,
       CONVERSATIONS_AGENT_ID: "project-pagination-test",
       FORCE_COLOR: "0",
-    }),
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -32,11 +34,6 @@ beforeAll(() => {
   }
 });
 
-afterAll(() => {
-  try { unlinkSync(TEST_DB); } catch {}
-  try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-  try { unlinkSync(`${TEST_DB}-shm`); } catch {}
-});
 
 describe("project list cursor pagination", () => {
   test.each([

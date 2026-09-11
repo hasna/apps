@@ -1,20 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { conversationsCloudEnv, resolveConversationsCloud } from "./index.js";
 
-// -- Transport resolution by the API env pair --------------------------------
-//
-// Client transport is selected by the API env pair (owner ruling 2026-09-04,
-// fail-closed campaign; supersedes the 2026-07-29 directive):
-//
-//   both HASNA_CONVERSATIONS_API_URL + HASNA_CONVERSATIONS_API_KEY set  -> HTTP API
-//   neither set (and no explicit store path)                            -> THROW naming both vars
-//   exactly one set                                                      -> THROW naming the missing var
-//
-// Local SQLite is selected ONLY by an explicit store path
-// (HASNA_CONVERSATIONS_DB_PATH / CONVERSATIONS_DB_PATH) — never by absence.
-//
-// The server backend switch (`sqlite | postgresql`) is a server-side concern
-// selected by HASNA_CONVERSATIONS_DATABASE_URL.
+// Ordinary clients resolve shared credentials and reject retired database selectors.
 
 const CLOUD_ENV = {
   HASNA_CONVERSATIONS_API_URL: "https://conversations.hasna.xyz",
@@ -42,15 +29,10 @@ describe("transport resolution — API pair presence", () => {
     expect(resolveConversationsCloud(keyOnly)!.baseUrl).toBe("https://api.hasna.com/conversations/v1");
   });
 
-  test("a local DB path forces local without emitting anything else", () => {
-    const env = conversationsCloudEnv({
+  test("a retired DB path is rejected even with valid API routing", () => {
+    expect(() => conversationsCloudEnv({
       ...CLOUD_ENV,
       HASNA_CONVERSATIONS_DB_PATH: "/tmp/conversations-env-selection.db",
-    });
-
-    expect(resolveConversationsCloud(env)).toBeNull();
-    expect(env.HASNA_CONVERSATIONS_API_URL).toBeUndefined();
-    expect(env.HASNA_CONVERSATIONS_API_KEY).toBeUndefined();
-    expect(env.HASNA_CONVERSATIONS_DB_PATH).toBe("/tmp/conversations-env-selection.db");
+    })).toThrow(/HASNA_CONVERSATIONS_DB_PATH/);
   });
 });

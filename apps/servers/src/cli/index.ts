@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import { registerPreviewCommands } from "../preview/cli.js";
 import { registerEventsCommands } from "@hasna/events/commander";
 import { readFileSync } from "fs";
 import { join, dirname, resolve } from "path";
@@ -2120,5 +2121,7 @@ program
     const { startDashboard } = await import("../tui/dashboard.js");
     await startDashboard();
   });
+
+registerPreviewCommands(program);
 
 program.parseAsync();

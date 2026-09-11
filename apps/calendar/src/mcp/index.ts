@@ -1,7 +1,9 @@
+#!/usr/bin/env bun
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { getStore } from "../store/index.js";
+import { resolveStorageClient, type Env } from "../store/http-storage.js";
 import type { Org, Agent, Calendar, Event, EventAttendee, Availability, OrgMembership } from "../types/index.js";
 import { parseHttpArgv, resolveMcpHttpPort } from "./http.js";
 
@@ -404,6 +406,48 @@ function compactMembership(membership: OrgMembership) {
   return { id: membership.id, org_id: membership.org_id, agent_id: membership.agent_id, role: membership.role };
 }
 
+const APP_SLUG = "calendar" as const;
+const MCP_STARTUP_REFUSAL_PREFIX = "calendar-mcp: refusing to start";
+
+/**
+ * The MCP server's jump text for a startup refusal. First stderr line, no
+ * stack frame, no credential value — the refusal detail comes from the strict
+ * seam (`resolveStorageClient`), which names only tiers, paths and env key
+ * NAMES.
+ */
+export function calendarMcpRefusalMessage(detail: string): string {
+  return `${MCP_STARTUP_REFUSAL_PREFIX} — ${detail}`;
+}
+
+/**
+ * THE MCP STARTUP GATE (hasna/apps#1720, checklist item 2/3).
+ *
+ * The MCP server is a domain client: every tool goes through `getStore()` and
+ * therefore through the @hasna/contracts chain. An MCP process that binds the
+ * stdio or `--http` transport with NO resolvable credential would answer
+ * `initialize` and then fail every tool call — a live, seemingly-healthy
+ * server with no configuration behind it. This gate makes ONE strict pass down
+ * the chain (the same throwing seam every store-backed CLI command uses, so
+ * the refusal classes and wording are identical: no credential, a URL without
+ * a key, a retired placement selector, a secrets-vault pointer, an unsafe
+ * credentials file, a locked Keychain) BEFORE any transport connects or any
+ * port is bound, and returns the fail-closed diagnostic — or `null` when the
+ * MCP surface can actually serve.
+ *
+ * The live `process.env` is passed by identity: the Keychain tier stays
+ * AMBIENT and the normalisation rule of `calendarResolverInputs` (hasna/apps#1788)
+ * applies unchanged. Tool calls still re-resolve the chain per call — the gate
+ * is a startup posture check, not a cached credential.
+ */
+export function calendarMcpStartupRefusal(env: Env = process.env): string | null {
+  try {
+    resolveStorageClient(APP_SLUG, env);
+    return null;
+  } catch (error) {
+    return calendarMcpRefusalMessage(error instanceof Error ? error.message : String(error));
+  }
+}
+
 /**
  * Classify early-exit arguments before any http-mode parse, server build, or
  * stdio bind. --help/--version must answer with rc=0 and the MCP server never
@@ -439,10 +483,30 @@ async function main() {
     return;
   }
 
+  // FAIL CLOSED AT STARTUP. With no resolvable credential the MCP surface
+  // cannot serve a single tool — every one of them would throw the same
+  // refusal per call — so the process refuses BEFORE the stdio transport is
+  // connected or the `--http` port is bound: exit 1 with the first stderr
+  // line naming the tiers, `initialize` answered by nobody, no socket bound,
+  // nothing opened or created under the owning HOME.
+  const refusal = calendarMcpStartupRefusal();
+  if (refusal !== null) {
+    console.error(refusal);
+    process.exit(1);
+  }
+
   const { http, port } = parseHttpArgv();
   if (http) {
     const { serve } = await import("../server/serve.js");
-    serve(resolveMcpHttpPort(port));
+    try {
+      serve(resolveMcpHttpPort(port));
+    } catch (error) {
+      // The posture or backend refusal behind the client gate: print the
+      // actionable message and exit non-zero — a silent rc=0 would read as a
+      // started server ("listening" was never printed).
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
     return;
   }
 
@@ -451,4 +515,12 @@ async function main() {
   await server.connect(transport);
 }
 
-main().catch(console.error);
+// Entry-only invocation: the serve bundle includes this module (serve.ts ->
+// mcp/http.ts -> mcp/index.ts) and must NEVER run the MCP main loop or its
+// startup gate inside a server process.
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

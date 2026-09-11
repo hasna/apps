@@ -80,7 +80,7 @@ export interface ImageProfileRegistry {
 export function createImageProfileRegistry(config: ImageProfileRegistryConfig = DEFAULT_IMAGE_PROFILES): ImageProfileRegistry {
   const runtimes = new Map<RuntimeName, PinnedRuntime>();
   for (const pinned of config.runtimes) {
-    runtimes.set(pinned.runtime, pinned);
+    runtimes.set(pinned.runtime, { ...pinned });
   }
   const allowlist = new Map<string, string>(Object.entries(config.dependencyLayers));
 
@@ -94,13 +94,18 @@ export function createImageProfileRegistry(config: ImageProfileRegistryConfig = 
       if (systemDeps.length > 0 && dependencyLayerTag === null) {
         throw new ImageProfileResolutionError({ reason: "UNALLOWED_SYSTEM_DEPS", systemDeps });
       }
-      return { runtime: pinned, runtimeImageDigest: pinned.imageDigest, dependencyLayerTag };
+      return { runtime: { ...pinned }, runtimeImageDigest: pinned.imageDigest, dependencyLayerTag };
     },
   };
 }
 
 /** Canonical system_deps key: sorted, unique, comma-joined. */
 export function canonicalSystemDepsKey(systemDeps: string[]): string {
+  // Commas separate entries in existing deployment keys; accepting them inside
+  // one entry would let a different dependency tuple select the same layer.
+  if (systemDeps.some(dep => typeof dep !== "string" || dep.length === 0 || dep.includes(","))) {
+    throw new ImageProfileResolutionError({ reason: "UNALLOWED_SYSTEM_DEPS", systemDeps: [...systemDeps] });
+  }
   return Array.from(new Set(systemDeps)).sort().join(",");
 }
 

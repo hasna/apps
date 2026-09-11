@@ -1,3 +1,6 @@
+import { startPortfolioFixture } from "../test/portfolio-client-fixture.test-support.js";
+import { LocalStore } from "../db/store.js";
+const fixtures = new Map<string, Awaited<ReturnType<typeof startPortfolioFixture>>>();
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +20,9 @@ async function seedDomainDb(count: number): Promise<{ dbPath: string; dir: strin
 
   const { closeDatabase } = await import("../db/database.js");
   closeDatabase();
-  const { createDnsRecord, createDomain } = await import("../db/domains.js");
+  const store = new LocalStore();
+  const createDomain = store.createDomain.bind(store);
+  const createDnsRecord = store.createDnsRecord.bind(store);
   let firstDomainId = "";
 
   for (let i = 0; i < count; i += 1) {
@@ -40,6 +45,7 @@ async function seedDomainDb(count: number): Promise<{ dbPath: string; dir: strin
   }
 
   closeDatabase();
+  fixtures.set(dbPath, await startPortfolioFixture(dbPath));
   return { dbPath, dir, firstDomainId };
 }
 
@@ -48,11 +54,13 @@ function runDomains(args: string[], dbPath: string) {
     cmd: ["bun", "run", "src/cli/index.ts", ...args],
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, DOMAINS_DB_PATH: dbPath, NO_COLOR: "1" },
+    env: fixtures.get(dbPath)!.env,
   });
 }
 
 afterEach(async () => {
+  for (const fixture of fixtures.values()) fixture.stop();
+  fixtures.clear();
   const { closeDatabase } = await import("../db/database.js");
   closeDatabase();
   delete process.env["DOMAINS_DB_PATH"];

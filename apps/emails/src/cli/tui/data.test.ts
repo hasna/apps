@@ -4,6 +4,9 @@
 // (see src/test-support/v1-stub.ts). The old SQL-internal assertions (query
 // plans, index names, json_each, db handles) exercised a deleted SQLite layer
 // and are gone; this suite covers the observable behavior instead.
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { storeInboundEmail, setInboundReadFlag, setInboundStarredFlag } from "../../db/inbound.js";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
@@ -175,7 +178,7 @@ describe("tui data — mailboxes", () => {
     expect(sources).toHaveLength(1);
     expect(sources[0]).toMatchObject({ id: "all", total: 2, unread: 1 });
 
-    expect(listSources()[0]?.label).toContain("Self-hosted Emails");
+    expect(listSources()[0]?.label).toBe("All mailboxes");
   });
 });
 
@@ -381,7 +384,11 @@ describe("tui data — addresses / senders / domains", () => {
 });
 
 describe("tui data — settings (self-hosted)", () => {
-  it("returns default TUI settings and refuses local settings writes", () => {
+  it("persists device settings without a mail store", () => {
+    const previous = process.env.EMAILS_HOME;
+    const root = mkdtempSync(join(tmpdir(), "emails-settings-data-"));
+    process.env.EMAILS_HOME = root;
+    try {
     expect(getSettings()).toEqual({
       autoPull: false,
       dimRead: false,
@@ -390,6 +397,11 @@ describe("tui data — settings (self-hosted)", () => {
       defaultFrom: null,
       theme: "light",
     });
-    expect(() => setSetting("theme", "dark")).toThrow(/self_hosted API-only mode/);
+    setSetting("theme", "dark");
+    expect(getSettings().theme).toBe("dark");
+    } finally {
+      if (previous === undefined) delete process.env.EMAILS_HOME; else process.env.EMAILS_HOME = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

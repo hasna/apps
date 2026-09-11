@@ -60,6 +60,7 @@ export const NOTES_API_KEY_ENV_KEYS = [NOTES_API_KEY_ENV];
 export const NOTES_CLIENT_TRANSPORTS = ['http'];
 
 /** Read data properties only: credential getters must not be invoked on config. */
+/** @param {object} object @param {string} key @returns {string | undefined} */
 export function readPlainClientValue(object, key) {
   const descriptor = Object.getOwnPropertyDescriptor(object, key);
   if (!descriptor) return undefined;
@@ -70,6 +71,7 @@ export function readPlainClientValue(object, key) {
   return descriptor.value;
 }
 
+/** @param {import('../sdk/types.js').NotesEnvironment} env @param {string} key @returns {boolean} */
 export function isPresent(env, key) {
   if (!Object.prototype.hasOwnProperty.call(env, key)) return false;
   return (env[key] ?? '').trim().length > 0;
@@ -81,6 +83,7 @@ export function isPresent(env, key) {
  * client that believes it is configured. Presence is checked without copying
  * or normalising the env.
  */
+/** @param {import('../sdk/types.js').NotesEnvironment} [env] @returns {void} */
 export function assertNoClientDatabaseDsn(env = process.env) {
   if (Object.prototype.hasOwnProperty.call(env, NOTES_DATABASE_URL_ENV)) {
     throw new Error(
@@ -97,6 +100,7 @@ export function assertNoClientDatabaseDsn(env = process.env) {
  * `apiKey`/`profile` and the `keychain` tier controls tests inject). They are
  * passed through untouched — the env itself is never copied.
  */
+/** @param {import('../sdk/types.js').NotesEnvironment} [env] @param {import('@hasna/contracts/client').CredentialChainOptions} [credentials] @returns {import('../sdk/types.js').NotesTransportReport} */
 export function resolveNotesClientTransport(env = process.env, credentials = {}) {
   assertNoClientDatabaseDsn(env);
   const resolution = resolveClientTransport(NOTES_APP_SLUG, env, { credentials });
@@ -130,8 +134,10 @@ export function resolveNotesClientTransport(env = process.env, credentials = {})
  * a rotation without a restart. Retry is off: the notes store never retried
  * and its failure semantics are deterministic.
  */
+/** @param {import('../sdk/types.js').NotesEnvironment} [env] @param {typeof fetch} [fetchImpl] @param {import('@hasna/contracts/client').CredentialChainOptions} [credentials] */
 export function createNotesClientTransport(env = process.env, fetchImpl, credentials = {}) {
   assertNoClientDatabaseDsn(env);
+  /** @type {NonNullable<Parameters<typeof createClientTransport>[2]>} */
   const overrides = { retry: false };
   if (fetchImpl !== undefined) overrides.fetchImpl = fetchImpl;
   overrides.credentials = credentials;
@@ -145,6 +151,7 @@ export function createNotesClientTransport(env = process.env, fetchImpl, credent
  * the ambient fleet credential is never attached to an arbitrary baseUrl
  * (#1794).
  */
+/** @param {{apiUrl?: string, apiKey?: string}} [config] @param {typeof fetch} [fetchImpl] */
 export function createNotesExplicitTransport(config = {}, fetchImpl = fetch) {
   const apiUrl = readPlainClientValue(config, 'apiUrl');
   const apiKey = readPlainClientValue(config, 'apiKey');
@@ -175,6 +182,7 @@ export function createNotesExplicitTransport(config = {}, fetchImpl = fetch) {
  * Empty when nothing resolved (the store refuses to exist in that case, so a
  * caller of this function only ever sees empty during a deliberate pivot).
  */
+/** @param {import('../sdk/types.js').NotesEnvironment} [env] @param {import('@hasna/contracts/client').CredentialChainOptions} [credentials] @returns {string} */
 export function resolveNotesClientCredential(env = process.env, credentials = {}) {
   const resolved = resolveCredential(NOTES_APP_SLUG, env, credentials);
   return resolved ? resolved.apiKey : '';

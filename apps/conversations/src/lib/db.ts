@@ -1,6 +1,6 @@
 import { Database as BunDatabase } from "bun:sqlite";
 import type { Changes, SQLQueryBindings, Statement } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
+import { constants, copyFileSync, existsSync, lstatSync, mkdirSync } from "fs";
 import { join, dirname, resolve } from "path";
 import { homedir } from "os";
 // --- Local path resolver -------------------------------------------------
@@ -259,18 +259,15 @@ export function getDataDir(): string {
       : getLegacyDataRoot();
   const oldDir = join(getHomeDir(), ".conversations");
 
-  // Auto-migrate old dir to the effective data root
-  if (existsSync(oldDir) && !existsSync(effective)) {
-    mkdirSync(effective, { recursive: true });
-    for (const file of readdirSync(oldDir)) {
-      const oldPath = join(oldDir, file);
-      if (statSync(oldPath).isFile()) {
-        copyFileSync(oldPath, join(effective, file));
-      }
-    }
-  }
-
   mkdirSync(effective, { recursive: true });
+  // Preserve only the installation identity during config lookup. Databases,
+  // WAL/SHM files and arbitrary legacy files require explicit migration.
+  const identitySource = join(oldDir, "agent-id");
+  const identityTarget = join(effective, "agent-id");
+  if (existsSync(identitySource) && !existsSync(identityTarget) && lstatSync(identitySource).isFile()) {
+    try { copyFileSync(identitySource, identityTarget, constants.COPYFILE_EXCL); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  }
   return effective;
 }
 
