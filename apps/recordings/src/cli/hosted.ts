@@ -12,11 +12,16 @@ export interface HostedCLIOptions {
 }
 export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
   const write = options.write ?? ((value: string) => { process.stdout.write(value); });
-  const program = new Command("hosted").description("Read the hosted Library and paste history; private text is omitted by default.")
+  const program = new Command("hosted").description("Read hosted recordings, paste history and transcription providers; private text is omitted by default.")
     .requiredOption("--api-base <url>", "Complete hosted API base ending in /v1/")
     .requiredOption("--credential-env <name>", "Name of the environment variable containing this API's bearer session")
     .exitOverride().configureOutput({ writeOut: write, writeErr: () => {} });
   const library = () => new HostedLibrary(options.client ?? hostedProcessClient(program.opts(), options.env));
+  program.command("providers").description("Read the server's transcription providers, models and defaults")
+    .action(async () => {
+      const client = options.client ?? hostedProcessClient(program.opts(), options.env);
+      write(JSON.stringify(await client.providers()) + "\n");
+    });
   const list = program.command("list").description("Read one page of hosted recording metadata")
     .option("--limit <number>", "Page size, 1–100", "25")
     .option("--before <timestamp>", "UTC timestamp from the returned nextCursor")

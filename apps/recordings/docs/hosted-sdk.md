@@ -1,7 +1,7 @@
 # Hosted SDK
 
 `@hasna/recordings/hosted` provides `HostedRecordingsClient` for hosted recording
-metadata, account and paste-history operations. The existing `./sdk` retains its
+metadata, account, paste-history and provider-catalog operations. The existing `./sdk` retains its
 separate legacy API. This additive client neither translates legacy fields nor
 records audio, opens a login browser, manages credentials or starts a speech
 provider. Bun is the tested runtime; browser compatibility is not claimed.
@@ -51,7 +51,8 @@ Both lists require `before` and `beforeId` together or neither. `recordingCursor
 selects the last row's `createdAt` and ID; `pasteCursor` selects its `occurredAt`
 and ID. There is no inferred total or automatic pagination. A full page can be
 the last page. Inputs are validated before credentials or fetch; future JSON
-response fields are preserved. Advertised metadata must include a compatible
+response fields are preserved by the low-level recording/account operations; the
+provider catalog projects only its public fields. Advertised metadata must include a compatible
 version and all required capabilities; entirely absent metadata remains legacy
 compatible. This is stricter than an older hosted adapter that accepted empty
 capability advertisements.
@@ -103,7 +104,8 @@ recordings-mcp --hosted --stdio --api-base "$MY_RECORDINGS_API_BASE" --credentia
 ```
 
 This explicit mode exposes `recordings_hosted_list`, `recordings_hosted_get` and
-`recordings_hosted_paste_history`. All are read-only and accept `includeText: true`.
+`recordings_hosted_paste_history` for these reads; each accepts `includeText: true`.
+The read-only `recordings_hosted_providers` tool accepts no arguments.
 Stdio is required so the selected session cannot be shared through the legacy
 MCP HTTP listener. Legacy MCP mode is unchanged.
 
@@ -113,9 +115,9 @@ recordings-serve --hosted --api-base "$MY_RECORDINGS_API_BASE" --port 8874
 
 The read-only proxy binds to `127.0.0.1` by default; only `127.0.0.1` and `::1`
 are accepted. It supports `GET /v1/recordings`, `GET /v1/recordings/<id>` and
-`GET /v1/paste-history`.
+`GET /v1/paste-history` and `GET /v1/providers`.
 Both list routes accept `limit`, `before`, `beforeId` and `includeText=true|false`; get
-accepts only `includeText`. Every request supplies its own
+accepts only `includeText`. The providers route accepts no query parameters. Every request supplies its own
 `Authorization: Bearer <session>` header. Process credentials are never used,
 and a request cannot choose the upstream authority. Cookies, browser Origin
 headers, mutation methods and unknown query fields are refused. Responses are
@@ -182,3 +184,41 @@ const page = await history.list({ limit: 25 });
 The same class and its option, receipt and page types are exported from
 `@hasna/recordings/hosted`. This read operation neither creates/deletes receipts
 nor controls an app or attempts a paste.
+
+### Transcription provider catalog
+
+`HostedRecordingsClient.providers()` reads the selected API's `/providers`
+catalog. It shares the authenticated transport above and returns only public
+provider capabilities: `id`, `models`, `formats`, `execution`, `interim`,
+`cancellation`, `languageSelection`, `requiresAccount` and `ready`. New servers
+also provide optional `defaultProvider`, provider `name`, `defaultModel`,
+`modelDetails: [{id, name, task: 'transcription'}]` and
+`transcriptionMode: 'realtime' | 'segmented'`. Missing legacy fields remain
+absent; clients must not infer the first provider/model as the default.
+Unknown fields are omitted at every catalog level. Readiness is a server
+report, not a live transcription test. The client makes no provider request.
+Catalogs require nonempty provider/model/format lists, unique provider and model
+IDs, defaults that belong to the advertised lists, and complete model details
+when supplied. Labels cannot contain control characters or consist only of
+whitespace. Invalid catalogs fail instead of presenting ambiguous choices.
+Although the service exposes discovery publicly, these hosted client surfaces
+require the caller's configured bearer, consistently with the other hosted reads.
+
+```sh
+recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION providers
+```
+
+The same read is available as MCP `recordings_hosted_providers` and proxy
+`GET /v1/providers`, with no filters, provider endpoint, credential or model
+overrides. `HostedProvidersResponse`, `HostedTranscriptionProvider` and
+`HostedTranscriptionModel` types are exported from both `./sdk` and `./hosted`.
+
+The shared `./contracts/stream-v1` contract adds optional `provider` to
+`session.start`, alongside existing optional `model`. Provider IDs are lowercase
+slugs of at most 64 characters; models remain bounded to 100 characters and can
+include qualified names such as `vendor/model`. The server resolves omitted
+defaults and validates configured provider/model membership. Send a provider
+only when `/version` advertises `PROVIDER_SELECTION_CAPABILITY`
+(`provider-selection`). It is optional and does not change the four required
+capabilities, so older servers remain compatible. This client still does not
+open streaming sessions or implement provider execution.

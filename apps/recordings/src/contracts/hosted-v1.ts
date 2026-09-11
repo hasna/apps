@@ -20,6 +20,17 @@ export interface HostedAccountResponse { account: HostedAccount; wireVersion?: s
 export interface HostedVersionResponse { name: "recordings"; version: string; apiVersion: "v1"; wireVersion?: string; capabilities?: string[]; [key: string]: unknown }
 export interface HostedHealthResponse { status: "ok"; [key: string]: unknown }
 export interface HostedReadyResponse { status: "ready"; [key: string]: unknown }
+export interface HostedTranscriptionModel { id: string; name: string; task: "transcription" }
+/** Public capabilities only. Provider credentials and endpoints remain server-owned. */
+export interface HostedTranscriptionProvider {
+  id: string; models: string[]; formats: { encoding: "pcm_s16le"; sampleRateHz: number; channels: 1 }[];
+  execution: "hosted" | "fixture" | "local"; interim: boolean; cancellation: boolean;
+  languageSelection: boolean; requiresAccount: boolean; ready: boolean;
+  name?: string; defaultModel?: string; modelDetails?: HostedTranscriptionModel[];
+  transcriptionMode?: "realtime" | "segmented";
+}
+/** Older servers do not advertise defaults or model details; absence is preserved. */
+export interface HostedProvidersResponse { defaultProvider?: string; providers: HostedTranscriptionProvider[] }
 
 function parser<T>(schema: { parse(value: unknown): T }): ContractParser<T> {
   return {
@@ -60,6 +71,26 @@ export const accountResponseParser: ContractParser<HostedAccountResponse> = pars
 export const versionResponseParser: ContractParser<HostedVersionResponse> = parser(object({ name: z.literal("recordings"), version: z.string(), apiVersion: z.literal("v1"), ...advertised }).refine(compatible));
 export const healthResponseParser: ContractParser<HostedHealthResponse> = parser(object({ status: z.literal("ok") }));
 export const readyResponseParser: ContractParser<HostedReadyResponse> = parser(object({ status: z.literal("ready") }));
+const providerId = z.string().regex(/^[a-z][a-z0-9-]{0,63}$(?![\s\S])/);
+const visibleLabel = (value: string) => value.trim().length > 0 && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+const modelId = z.string().min(1).max(100).refine(visibleLabel);
+const label = z.string().min(1).max(200).refine(visibleLabel);
+const unique = (values: string[]) => new Set(values).size === values.length;
+// Strip unknown fields at every level so surface adapters cannot expose future private configuration.
+const provider = z.object({ id: providerId, models: z.array(modelId).min(1).max(100).refine(unique),
+  formats: z.array(z.object({ encoding: z.literal("pcm_s16le"), sampleRateHz: z.number().int().positive().max(192_000), channels: z.literal(1) })).min(1).max(16),
+  execution: z.enum(["hosted", "fixture", "local"]), interim: z.boolean(), cancellation: z.boolean(),
+  languageSelection: z.boolean(), requiresAccount: z.boolean(), ready: z.boolean(),
+  name: label.optional(), defaultModel: modelId.optional(),
+  modelDetails: z.array(z.object({ id: modelId, name: label, task: z.literal("transcription") })).max(100).optional(),
+  transcriptionMode: z.enum(["realtime", "segmented"]).optional() })
+  .refine(value => value.defaultModel === undefined || value.models.includes(value.defaultModel))
+  .refine(value => value.modelDetails === undefined || (value.modelDetails.length === value.models.length
+    && unique(value.modelDetails.map(model => model.id)) && value.modelDetails.every(model => value.models.includes(model.id))));
+export const providersResponseParser: ContractParser<HostedProvidersResponse> = parser(z.object({
+  defaultProvider: providerId.optional(), providers: z.array(provider).min(1).max(32),
+}).refine(value => unique(value.providers.map(provider => provider.id)))
+  .refine(value => value.defaultProvider === undefined || value.providers.some(provider => provider.id === value.defaultProvider)));
 export const recordingResponseParser: ContractParser<{ recording: HostedRecording; [key: string]: unknown }> = parser(object({ recording }));
 export const recordingListParser: ContractParser<{ recordings: HostedRecording[]; [key: string]: unknown }> = parser(object({ recordings: z.array(recording).max(100) }));
 export const pasteResponseParser: ContractParser<{ receipt: HostedPasteReceipt; [key: string]: unknown }> = parser(object({ receipt }));
