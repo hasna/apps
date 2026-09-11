@@ -200,7 +200,7 @@ switcher launch codex --provider openrouter --model anthropic/claude-sonnet-4.6
 
 An interactive terminal can choose or search the catalog when `--model` is omitted. Noninteractive launches require an explicit model. `--dry-run` resolves and saves the provider/profile and fresh catalog, then prints the launch plan without starting the harness or creating a run record. Existing `switcher launch PROFILE` commands remain supported. Direct launches create or reuse records without overwriting customized providers or profiles.
 
-When no remote API configuration is present, each CLI invocation starts an authenticated loopback API on an allocated port, stores SQLite data in `~/.hasna/switcher`, and closes its own listener on completion. Its random operator key remains in memory. Use `HASNA_SWITCHER_HOME` to choose another owner-only home, `HASNA_SWITCHER_SQLITE_PATH` for an explicit database, or `HASNA_SWITCHER_DATABASE_URL` for PostgreSQL. API and SDK data access remains HTTP.
+With no Switcher API credential configured, the CLI and `switcher-mcp` exit non-zero and name the sources they consulted (Keychain item `hasna.credentials.switcher.api-key`, `~/.hasna/switcher/config/credentials`, `HASNA_SWITCHER_API_KEY`); they never open local data by default. Set `HASNA_SWITCHER_LOCAL=1` (alias `SWITCHER_LOCAL=1`) to deliberately run on the box: each invocation then starts an authenticated loopback API on an allocated port, stores SQLite data in `~/.hasna/switcher`, prints one `switcher: LOCAL mode` line on stderr, and closes its own listener on completion. Its random operator key remains in memory. Under that opt-in, use `HASNA_SWITCHER_HOME` to choose another owner-only home, `HASNA_SWITCHER_SQLITE_PATH` for an explicit database, or `HASNA_SWITCHER_DATABASE_URL` for PostgreSQL. A configured API URL or key outranks the flag. API and SDK data access remains HTTP.
 
 Remote API configuration is resolved through Contracts, including canonical credential stores and the default gateway URL. Invalid, unavailable or unauthorized remote services fail without opening local SQLite.
 
@@ -214,7 +214,7 @@ The canonical file is `~/.hasna/switcher/config/credentials` (owner-only mode 06
 
 `HASNA_HOME` replaces `~/.hasna`; `HASNA_CONFIG_HOME` places credentials at `<root>/switcher/credentials` and `<root>/secrets/credentials`. These shared overrides must be absolute and nonblank. `HASNA_PROFILE` selects `credentials-<profile>`; API authority stays in the common credentials file. `HASNA_SWITCHER_HOME` changes Switcher's local database, bindings and launch state only, and does not relocate shared credentials. `HOME` is respected by both paths.
 
-Configured but missing, unsafe, conflicting or inaccessible remote credentials fail before local data is opened. Only complete absence of Switcher remote configuration retains the user-authorized automatic local API. The owned local API uses a random in-memory key. Server-side authentication remains configured separately through `HASNA_SWITCHER_API_KEY` on `switcher-serve`.
+Configured but missing, unsafe, conflicting or inaccessible remote credentials fail before local data is opened, and a Keychain item that exists but cannot be read is a terminal error, never treated as absent. Complete absence of Switcher remote configuration also fails closed; the owned local API is reachable only through `HASNA_SWITCHER_LOCAL=1` and uses a random in-memory key. Server-side authentication remains configured separately through `HASNA_SWITCHER_API_KEY` on `switcher-serve`.
 
 ## Credential bindings
 
