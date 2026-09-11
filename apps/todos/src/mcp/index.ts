@@ -33,7 +33,6 @@ import { registerTaskAdvTools } from "./tools/task-adv-tools.js";
 import { registerTaskMetaTools } from "./tools/task-meta-tools.js";
 import { registerTaskResources } from "./tools/task-resources.js";
 import { registerTaskRelTools } from "./tools/task-rel-tools.js";
-import { registerCodeTools } from "./tools/code-tools.js";
 import { registerMachineTools } from "./tools/machines.js";
 import { registerAgentTools } from "./tools/agents.js";
 import { registerTemplateTools } from "./tools/templates.js";
@@ -61,18 +60,18 @@ function printHelp(): void {
 Start the @hasna/todos MCP server.
 
 Options:
-  --stdio          Use stdio transport (default)
-  --http           Use Streamable HTTP transport
-  --port <port>    Use Streamable HTTP on the given port (implies --http)
+  --stdio          Use stdio transport (the only transport this binary serves)
   -V, --version    output the version number
   -h, --help       display help for command
 
 Environment:
   MCP_STDIO=1                Force stdio transport
-  MCP_HTTP=1                 Use Streamable HTTP transport
-  MCP_HTTP_PORT=<port>       HTTP port when using HTTP transport
   TODOS_PROFILE=<profile>    Tool profile filter
-  TODOS_TOOL_GROUPS=<list>   Comma-separated tool group filter`);
+  TODOS_TOOL_GROUPS=<list>   Comma-separated tool group filter
+
+The Streamable HTTP transport (POST /mcp) is served by \`todos-serve\`, which owns
+the HTTP listener and its auth posture; \`--http\`, \`--port\` and MCP_HTTP=1 are
+refused here (exit 2).`);
 }
 
 if (hasVersionFlag()) {
@@ -383,7 +382,6 @@ registerTaskAdvTools(server, toolContext);
 registerTaskMetaTools(server, toolContext);
 registerTaskResources(server, toolContext);
 registerTaskRelTools(server, toolContext);
-registerCodeTools(server, toolContext);
 registerAgentTools(server, { ...toolContext, agentFocusMap });
 registerTemplateTools(server, toolContext);
 registerEnvironmentSnapshotTools(server, toolContext);
@@ -447,59 +445,70 @@ export function hostedRouteLocalStoreRefusal(v1BaseUrl: string): string {
 
 // === START SERVER ===
 
+/** Exit code for a refused `todos-mcp --http` / `--port` / `MCP_HTTP=1` request. */
+export const MCP_HTTP_REFUSED_EXIT_CODE = 2;
+
+/**
+ * The one line `todos-mcp` prints when asked for the HTTP transport. The MCP
+ * bin is stdio-only: the Streamable HTTP transport is a listener with an auth
+ * posture, and that is `todos-serve`'s job (it mounts `POST /mcp` next to
+ * `/api/*`). This bin used to start the FULL `todos-serve` app here with
+ * `allowAnonymous: true` — a server-only code path reachable from a client
+ * binary that MCP clients spawn with no credential.
+ */
+export function mcpHttpRefusal(): string {
+  return (
+    "todos-mcp: the HTTP transport is not served by this binary (stdio only). " +
+    "Use `todos-serve` — it mounts the MCP Streamable HTTP endpoint at POST /mcp with its own auth " +
+    "posture (see README \"REST API\"). `--http`, `--port` and MCP_HTTP=1 are refused."
+  );
+}
+
 async function main() {
-  const { isHttpMode, resolveHttpPort } = await import("./http.js");
-  // HTTP is opt-in via --http, MCP_HTTP=1, or an explicit --port flag. Everything
-  // else defaults to stdio — that is what MCP clients (Claude/Codex/Gemini) speak
-  // when they spawn the bare `todos-mcp` binary, so stdio must be the default.
+  const { isHttpMode } = await import("./http.js");
+  // HTTP was opt-in via --http, MCP_HTTP=1, or an explicit --port flag. It is now
+  // refused outright: `todos-serve` owns the listener. Everything else is stdio —
+  // that is what MCP clients (Claude/Codex/Gemini) speak when they spawn the bare
+  // `todos-mcp` binary, so stdio is the default and the only transport here.
   const portRequested = process.argv.some((arg) => arg === "--port" || arg.startsWith("--port="));
-  if (!isHttpMode() && !portRequested) {
-    // Authority FIRST, transport LAST: with nothing resolved the process exits
-    // non-zero here, before the stdio transport exists, so `initialize` is
-    // never answered and no local file is created. The first stderr line is the
-    // REMOTE_API_* diagnostic naming where the credential should live.
-    let authority: TodosMcpAuthority;
-    try {
-      authority = resolveTodosMcpAuthority();
-    } catch (error) {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-      process.exit(1);
-    }
-    if (authority.route === "hosted") {
-      // Every `src/db/*` read funnels through getDatabase(): refusing it here
-      // is what keeps the hundreds of local-only tools and the `todos://`
-      // resources from answering an empty local file on the hosted route.
-      refuseLocalStore(hostedRouteLocalStoreRefusal(authority.v1_base_url));
-    }
-    const server = buildServer();
-    if (authority.route === "local") {
-      // Say it out loud: a local server must never be mistakable for a hosted
-      // one with an empty store (hasna/apps#1720).
-      process.stderr.write(`${authority.notice}\n`);
-      // Durable dual-write shadow: long-running stdio MCP drains the outbox.
-      // The ONLY place the stdio server opens the store, and only under the
-      // explicit local opt-in (where the startup cloud client is null by
-      // construction, which is the condition main's per-call gate guarded on).
-      try {
-        const { startRuntimeShadowDrain } = await import("../storage/shadow-runtime.js");
-        startRuntimeShadowDrain(getDatabase());
-      } catch { /* shadow disabled or unavailable — local writes stay durable */ }
-    }
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-    return;
+  if (isHttpMode() || portRequested) {
+    process.stderr.write(`${mcpHttpRefusal()}\n`);
+    process.exit(MCP_HTTP_REFUSED_EXIT_CODE);
   }
 
-  // Opt-in shared Streamable HTTP server (one process per MCP, many agents).
-  const { startServer } = await import("../server/serve.js");
-  const port = resolveHttpPort();
-  // This transport is loopback-pinned by contract (README: "Bind: 127.0.0.1
-  // only"), and MCP clients spawn it with no credential, so it keeps the
-  // anonymous local plane — but ONLY on loopback, and only when no credential is
-  // configured. Set HASNA_TODOS_SERVER_API_KEY (and send it from the client)
-  // to enforce auth.
-  await startServer(port, { host: "127.0.0.1", allowAnonymous: true });
-  console.error(`todos MCP HTTP mounted at http://127.0.0.1:${port}/mcp`);
+  // Authority FIRST, transport LAST: with nothing resolved the process exits
+  // non-zero here, before the stdio transport exists, so `initialize` is
+  // never answered and no local file is created. The first stderr line is the
+  // REMOTE_API_* diagnostic naming where the credential should live.
+  let authority: TodosMcpAuthority;
+  try {
+    authority = resolveTodosMcpAuthority();
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
+  if (authority.route === "hosted") {
+    // Every `src/db/*` read funnels through getDatabase(): refusing it here
+    // is what keeps the hundreds of local-only tools and the `todos://`
+    // resources from answering an empty local file on the hosted route.
+    refuseLocalStore(hostedRouteLocalStoreRefusal(authority.v1_base_url));
+  }
+  const server = buildServer();
+  if (authority.route === "local") {
+    // Say it out loud: a local server must never be mistakable for a hosted
+    // one with an empty store (hasna/apps#1720).
+    process.stderr.write(`${authority.notice}\n`);
+    // Durable dual-write shadow: long-running stdio MCP drains the outbox.
+    // The ONLY place the stdio server opens the store, and only under the
+    // explicit local opt-in (where the startup cloud client is null by
+    // construction, which is the condition main's per-call gate guarded on).
+    try {
+      const { startRuntimeShadowDrain } = await import("../storage/shadow-runtime.js");
+      startRuntimeShadowDrain(getDatabase());
+    } catch { /* shadow disabled or unavailable — local writes stay durable */ }
+  }
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
 }
 
 const isDirectRun = import.meta.main
