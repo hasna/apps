@@ -1,7 +1,6 @@
 import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-import { getDbPath, closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { windowItems } from "../../lib/compact-output.js";
 import { storeStatusLocation, type StoreStatusLocation } from "../../lib/store/status-location.js";
@@ -27,7 +26,6 @@ export function registerAnalyticsCommands(program: Command): void {
       } else {
         printLine(chalk.green(`Graph built: ${result.edges_created} created, ${result.edges_updated} updated`));
       }
-      closeDb();
     });
 
   graph
@@ -44,7 +42,6 @@ export function registerAnalyticsCommands(program: Command): void {
           printLine(`  ${chalk.cyan(relation.padEnd(20))} ${count}`);
         }
       }
-      closeDb();
     });
 
   graph
@@ -74,7 +71,6 @@ export function registerAnalyticsCommands(program: Command): void {
           printLine(chalk.bold("  Projects:") + " " + network.projects.join(", "));
         }
       }
-      closeDb();
     });
 
   // ---- summary ----
@@ -116,7 +112,6 @@ export function registerAnalyticsCommands(program: Command): void {
           }
         }
       }
-      closeDb();
     });
 
   // ---- topics ----
@@ -151,7 +146,6 @@ export function registerAnalyticsCommands(program: Command): void {
           }
         }
       }
-      closeDb();
     });
 
   // ---- hot ----
@@ -190,7 +184,6 @@ export function registerAnalyticsCommands(program: Command): void {
           }
         }
       }
-      closeDb();
     });
 
   // ---- context ----
@@ -308,7 +301,6 @@ export function registerAnalyticsCommands(program: Command): void {
           printLine(`${chalk.bold("Channel notifications:")} ${chalk.dim("none")}`);
         }
       }
-      closeDb();
     });
 
   // ---- sessions ----
@@ -356,7 +348,6 @@ export function registerAnalyticsCommands(program: Command): void {
           });
         }
       }
-      closeDb();
     });
 
   // ---- status ----
@@ -415,7 +406,6 @@ export function registerAnalyticsCommands(program: Command): void {
         printLine(`  Projects:   ${stats.total_projects}`);
         printLine(`  Unread:     ${stats.unread_messages}`);
       }
-      closeDb();
     });
 
   // ---- doctor ----
@@ -461,8 +451,8 @@ export function registerAnalyticsCommands(program: Command): void {
       const { homedir } = await import("os");
       const { existsSync } = await import("fs");
       const { join } = await import("path");
-      const { getDataDir } = await import("../../lib/db.js");
-      const configPath = process.env.CONVERSATIONS_CONFIG_PATH ?? join(getDataDir(), "config.json");
+      const { getConversationsHome } = await import("../../lib/home.js");
+      const configPath = process.env.CONVERSATIONS_CONFIG_PATH ?? join(getConversationsHome(), "config.json");
       if (existsSync(configPath)) {
         try {
           const { readFileSync } = await import("fs");
@@ -475,7 +465,6 @@ export function registerAnalyticsCommands(program: Command): void {
         checks.push({ name: "Webhook config", ok: true, message: "No webhook config (optional)" });
       }
 
-      closeDb();
 
       const allOk = checks.every((c) => c.ok);
 
@@ -522,7 +511,6 @@ export function registerAnalyticsCommands(program: Command): void {
         const verb = result.toggled === "added" ? "added to" : "removed from";
         printLine(chalk.green(`${emoji} reaction ${verb} message #${id}`));
       }
-      closeDb();
     });
 
   // ---- unreact ----
@@ -545,7 +533,6 @@ export function registerAnalyticsCommands(program: Command): void {
           printLine(chalk.dim(`No ${emoji} reaction found on message #${id}`));
         }
       }
-      closeDb();
     });
 
   // ---- reactions ----
@@ -569,7 +556,6 @@ export function registerAnalyticsCommands(program: Command): void {
           printLine(`Message #${id}: ${parts}`);
         }
       }
-      closeDb();
     });
 
   reactionsCmd
@@ -592,7 +578,6 @@ export function registerAnalyticsCommands(program: Command): void {
           printLine(chalk.dim(`No ${emoji} reaction found on message #${id}`));
         }
       }
-      closeDb();
     });
 }
 

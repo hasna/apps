@@ -19,8 +19,9 @@ import { selectsRecordingsLocalStore } from "../lib/local-opt-in.js";
 import { getRecordingsTransportStatus } from "../http/client.js";
 
 // ── Initialize ──────────────────────────────────────────────────────────────
-// Only constructing the legacy server loads provider configuration. Storage is
-// resolved lazily per call via `getStore()` so cloud mode never opens SQLite.
+// Only constructing the server loads provider configuration (transcription/enhancement
+// tools). Storage is resolved lazily per call via `getStore()` so the hosted transport
+// never opens SQLite.
 
 export function buildServer(): McpServer {
 const config = loadConfig();

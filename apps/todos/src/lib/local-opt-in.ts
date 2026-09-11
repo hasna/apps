@@ -38,6 +38,34 @@ export function isTodosLocalOptIn(env: TodosLocalOptInEnv = process.env): boolea
   return TODOS_LOCAL_OPT_IN_ENV_KEYS.some((key) => (env[key] ?? "").trim() !== "");
 }
 
+/**
+ * The one line a local run prints, and the reason it prints at all.
+ *
+ * An unhosted surface that says nothing looks exactly like a hosted one whose
+ * store happens to be empty — that is the false green the 2026-09-04 ruling
+ * (hasna/apps#1720) closes, and it is why the notice is unconditional rather
+ * than behind a verbosity flag. It goes to STDERR so `--json` output and the
+ * MCP stdio frames stay clean on stdout, and it names the credential the run
+ * did NOT find, so the fix is in the message rather than in the docs.
+ *
+ * It lives in this leaf module so the CLI, the MCP server and the SDK print
+ * the SAME line without the MCP bundle having to import the CLI's stage A.
+ */
+export function todosLocalModeNotice(reason: "local-opt-in" | "local-only-command" = "local-opt-in"): string {
+  if (reason === "local-only-command") {
+    return (
+      "todos: LOCAL mode — this command only ever runs against the on-box SQLite store, so this run " +
+      "does not reach the hosted fleet even though a Todos authority is configured."
+    );
+  }
+  return (
+    "todos: LOCAL mode — using the on-box SQLite store, not the hosted fleet " +
+    "(HASNA_TODOS_LOCAL is set). Unset it, and provide a credential via the Keychain item " +
+    "hasna.credentials.todos.api-key, ~/.hasna/todos/config/credentials, or HASNA_TODOS_API_KEY, " +
+    "to work against https://api.hasna.com/todos."
+  );
+}
+
 /** Every env name that can configure a Todos authority or credential, resolver-derived. */
 export function todosAuthorityEnvKeys(): string[] {
   const keys = clientTransportEnvKeys("todos");

@@ -36,3 +36,35 @@ test("saved-account repair and GC use server operations and reject incomplete ev
   state.malformed();const bad=await cli("encrypt-vault");expect(bad.exitCode).toBe(1);expect(bad.stdout).not.toContain("Encrypted");
  });
 },30000);
+// `encrypt-vault` reports one service outcome. The removed local branch used to
+// print "already encrypted" without the server's verification wording, which is
+// the only thing that distinguishes a verified repair from an unverified claim.
+test("encrypt-vault reports only the service-verified outcome",async()=>{
+ await fixture(async(cli,state)=>{
+  const repair=await cli("encrypt-vault");
+  expect(repair.exitCode,repair.stderr).toBe(0);
+  expect(repair.stdout).toContain("payload(s)");
+  expect(repair.stdout).toContain("already encrypted and verified");
+  expect(repair.stdout).not.toContain("secret(s).");
+  expect(state.requests).toEqual(["POST /v1/encryption/repair"]);
+ });
+},30000);
+// The ~/.secrets env-file bridge is removed: `export-env` wrote hosted secret
+// VALUES to plaintext files under a forbidden location and `import-env` read
+// them back. `path` was a vestigial "where is the vault" verb superseded by
+// `status`. None of the three may resolve to a command any more.
+test("the removed env-file bridge and `path` are not commands",async()=>{
+ await fixture(async(cli,state)=>{
+  for(const args of [["import-env"],["import-env","--dry-run"],["export-env"],["export-env","--dry-run"],["path"]]) {
+   const r=await cli(...args);
+   expect(r.exitCode,`${args.join(" ")} must not run`).toBe(1);
+   expect(r.stderr).toContain(`Unknown command: ${args[0]}`);
+  }
+  const docs=await cli("docs");
+  expect(docs.exitCode,docs.stderr).toBe(0);
+  expect(docs.stdout).not.toContain("import-env");
+  expect(docs.stdout).not.toContain("export-env");
+  // None of it touched the service, and nothing was written to ~/.secrets.
+  expect(state.requests).toEqual([]);
+ });
+},30000);

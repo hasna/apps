@@ -334,11 +334,11 @@ ${JSON.stringify(allResults.filter((r) => !r.failed).map((r) => ({ repo: r.repo,
 
 1. FINDINGS → ROWS + COMMENTS: MANDATORY MECHANICAL DEDUPE GATE — run for EVERY finding, IN ORDER, before any filing or commenting:
 FIRST: maintain a seen set of titles you have already filed or skipped THIS PASS. For EVERY finding, BEFORE the todos-list grep: if its normalized title (separator-normalized: em-dash and \\u2014 treated as ' | ') is already in your seen set, SKIP it (skippedDedup += 1) and move on. After filing a row, ADD its title to the seen set. The gate runs per finding, one at a time, never batched.
-1. todos list --project 3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8 --status pending --json --limit 5000 > /tmp/leak-dedupe-rows.json   (redirect to a file; NEVER pipe)
-2. grep -F "LEAK-FOUND: <org>/<name>@<short-sha>" /tmp/leak-dedupe-rows.json; rc=$?   (title prefix — the " | " separator after the sha may vary across transport; never match byte-exact titles)
+1. todos list --project 3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8 --status pending --json --limit 5000 > <scratch>/leak-dedupe-rows.json   (redirect to a file; NEVER pipe). <scratch> is $HOME/Workspace/scratch/leak-scan/ — mkdir -p it once, then use ordinary file I/O there (scratch-layout ruling: NEVER /tmp, NEVER an app home such as ~/.hasna/<app> or ~/.hasna-internal/<app>, never the repo tree).
+2. grep -F "LEAK-FOUND: <org>/<name>@<short-sha>" <scratch>/leak-dedupe-rows.json; rc=$?   (title prefix — the " | " separator after the sha may vary across transport; never match byte-exact titles)
    - rc=0 (match): the row EXISTS — DO NOT file, DO NOT comment. skippedDedup += 1. Continue to the next finding.
    - rc=1 (no match): proceed to step 3.
-3. gh api repos/<org>/<name>/commits/<full-sha>/comments --jq '.[].body' > /tmp/leak-dedupe-comments.txt 2>/dev/null; grep -F "[LEAK-FOUND]" /tmp/leak-dedupe-comments.txt; rc=$?
+3. gh api repos/<org>/<name>/commits/<full-sha>/comments --jq '.[].body' > <scratch>/leak-dedupe-comments.txt 2>/dev/null; grep -F "[LEAK-FOUND]" <scratch>/leak-dedupe-comments.txt; rc=$?
    - rc=0 (match): a [LEAK-FOUND] comment already stands — DO NOT file, DO NOT comment. skippedDedup += 1. Continue.
    - rc=1 (no match): file EXACTLY ONE row titled "LEAK-FOUND: <org>/<name>@<short-sha> | <detector>" (tags leak-scan,security; pipe separator, never em-dash) with body = repo, full sha, file:line, detector, evidence rule (NEVER the matched value, NEVER a credential), then post ONE comment gh api repos/<org>/<name>/commits/<full-sha>/comments -f body="[LEAK-FOUND] <detector> @ <file>:<line> | <org>/<name>@<short-sha>; row filed in hasna/todos (apps project)".
 Run the gate for EVERY finding, one at a time. Never skip, never batch, never assume. skippedDedup MUST equal the count the gate rejected. NEVER delete, cancel, or update any todos row or comment — this lane files and comments ONLY.

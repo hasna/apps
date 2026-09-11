@@ -1,14 +1,15 @@
 /**
- * Contract regression: backend resolution depends ONLY on database configuration,
- * and the retired mode variables fail closed.
+ * Contract regression: backend resolution depends ONLY on database configuration;
+ * stale deployment-mode variables are ignored, never a selector and never an error.
  *
- * CONTRACT.md section 2 (`@hasna/contracts` 0.9.0): "Retired `STORAGE_MODE` and
- * `MODE` variables are rejected with a migration hint, never normalized or
- * silently mapped." The `server_backend_configuration` conformance gate enforces
- * this by calling `resolveServerDataBackend`, which throws when one survives.
+ * CONTRACT.md section 2 (`@hasna/contracts` 0.9.0): retired `STORAGE_MODE` and
+ * `MODE` variables must never steer resolution — the `server_backend_configuration`
+ * conformance gate enforces this via `resolveServerDataBackend`.
  *
  * Pre-fix, `isCloudMode()` READ `HASNA_ECONOMY_STORAGE_MODE` and branched on it,
- * which is the exact "normalized or silently mapped" behaviour the contract bans.
+ * and a later guard made its survival a startup error. Both behaviours are gone:
+ * the variable is ignored entirely and the backend comes from the DSN alone
+ * (owner directive 2026-08-15).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { resolveEconomyServerBackend } from './cloud.js'
@@ -64,22 +65,23 @@ describe('server backend resolution depends only on database configuration', () 
     expect(resolveEconomyServerBackend()).toBe('postgresql')
   })
 
-  // Fail closed. The message match is load-bearing: asserting only `.toThrow()`
-  // would also be satisfied by a missing export throwing "is not a function",
-  // which is a broken import rather than the behaviour under test.
+  // Stale deployment-mode variables never gate the server (owner directive
+  // 2026-08-15): the backend is decided by the database configuration alone,
+  // and a retired `STORAGE_MODE` / `MODE` variable is ignored — never an
+  // error, never a selector. The pre-fix `isCloudMode()` branch is gone.
   it.each([
     ['HASNA_ECONOMY_STORAGE_MODE', 'cloud'],
     ['HASNA_ECONOMY_MODE', 'cloud'],
     ['ECONOMY_STORAGE_MODE', 'local'],
     ['ECONOMY_MODE', 'local'],
-  ])('rejects the retired %s with a migration hint', (key, value) => {
+  ])('ignores the retired %s and still defaults to sqlite without a database URL', (key, value) => {
     process.env[key] = value
-    expect(() => resolveEconomyServerBackend()).toThrow(/was removed/)
+    expect(resolveEconomyServerBackend()).toBe('sqlite')
   })
 
-  it('rejects a retired mode variable even when a valid database URL is present', () => {
+  it('ignores a retired mode variable when a valid database URL is present', () => {
     process.env['HASNA_ECONOMY_DATABASE_URL'] = 'postgres://user@host:5432/economy'
     process.env['HASNA_ECONOMY_STORAGE_MODE'] = 'cloud'
-    expect(() => resolveEconomyServerBackend()).toThrow(/was removed/)
+    expect(resolveEconomyServerBackend()).toBe('postgresql')
   })
 })

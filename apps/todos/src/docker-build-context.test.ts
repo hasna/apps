@@ -33,13 +33,27 @@ describe("server image build context", () => {
     expect(dockerfile).not.toContain("vendored tarball");
   });
 
-  test("pins the native AMD64 runner to the reviewed Bun musl manifest", () => {
+  test("pins the native ARM64 runner to the reviewed multi-arch Bun musl manifest", () => {
     const dockerfile = readFileSync(join(root, "Dockerfile"), "utf8");
 
+    // The multi-arch image INDEX, never one platform's manifest. This lane
+    // builds native linux/arm64 (deploy-todos.yml runs buildx with
+    // `--platform linux/arm64` on ubuntu-24.04-arm), and the linux/amd64 child
+    // manifest digest that used to sit here made that build pull amd64 layers:
+    // buildkit warned `was pulled with platform "linux/amd64", expected
+    // "linux/arm64"` and the first RUN died with `exec /bin/sh: exec format
+    // error`. The index resolves to
+    //   linux/amd64 efc5e42c7bedc1661ab0b7272c74c3ebf794f054297f530a62055f2d1a0eb662
+    //   linux/arm64 3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f
+    // so an arm64 build gets arm64 layers and an amd64 build still resolves to
+    // the amd64 child. Same pin apps/skills and apps/loops already carry.
     expect(dockerfile).toContain(
-      "ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:efc5e42c7bedc1661ab0b7272c74c3ebf794f054297f530a62055f2d1a0eb662",
+      "ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0",
     );
     expect(dockerfile).toContain("FROM ${BUN_IMAGE} AS base");
+    // The platform is chosen by the build's `--platform`, not forced on the
+    // FROM line: forcing it here is what left apps/loops declaring amd64 while
+    // carrying arm64 layers. Keep the pin platform-agnostic.
     expect(dockerfile).not.toContain("FROM --platform=linux/arm64");
     expect(dockerfile).not.toContain("# syntax=docker/dockerfile:");
     expect(dockerfile).toContain('test "$(bun --version)" = "1.3.14"');

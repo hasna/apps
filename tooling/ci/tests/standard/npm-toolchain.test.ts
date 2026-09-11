@@ -6,8 +6,8 @@ import { resolve } from "node:path";
 // independent CI job needs the same tested npm before builds, scans or tests.
 const root = resolve(import.meta.dir, "../../../..");
 const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
-const jobNames = ["gates", "test-suites", "affected-plan", "affected-shard", "build-test", "verify-generated", "publish-guard"];
-const executionJobs = ["gates", "test-suites", "affected-plan", "affected-shard", "verify-generated", "publish-guard"];
+const jobNames = ["gates", "test-suites", "affected-plan", "affected-shard", "build-test", "client-gates", "verify-generated", "publish-guard"];
+const executionJobs = ["gates", "test-suites", "affected-plan", "affected-shard", "client-gates", "verify-generated", "publish-guard"];
 const provision = [
   'set -euo pipefail',
   'npm_prefix="$(mktemp -d "${RUNNER_TEMP}/npm-toolchain.XXXXXX")"',

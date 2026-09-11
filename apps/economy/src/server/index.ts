@@ -77,8 +77,8 @@ if (sub === 'version') {
     console.log(JSON.stringify({ status: 'ok', version: packageMetadata.version, backend: resolveEconomyServerBackend() }))
     process.exit(0)
   } catch (error) {
-    // A retired storage-mode variable fails closed here too. Print the migration
-    // hint rather than a stack trace, which would bury the one actionable line.
+    // Print the backend resolution failure rather than a stack trace, which
+    // would bury the one actionable line.
     console.error(error instanceof Error ? error.message : String(error))
     process.exit(1)
   }

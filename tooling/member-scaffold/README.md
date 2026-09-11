@@ -61,8 +61,26 @@ template/
 ├── openapi.json         # the doc the sdk surface's generatedFrom references
 ├── LICENSE              # Apache-2.0
 ├── README.md
-└── src/                 # index (sdk), sdk, cli, mcp (stdio), serve, cli.test
+└── src/                 # index (sdk) + sdk, index.test, and the three bin entries
+    ├── cli/index.ts     #   → dist/cli/index.js    (`<name>` bin)
+    ├── mcp/index.ts     #   → dist/mcp/index.js    (`<name>-mcp` bin, stdio)
+    └── serve/index.ts   #   → dist/serve/index.js  (`<name>-serve` bin)
 ```
+
+The three bin entries live at `src/<kind>/index.ts` so `bun build
+src/<kind>/index.ts --outdir dist/<kind>` emits `dist/<kind>/index.js` — the
+exact path `package.json#bin` declares. An entry at `src/<kind>.ts` emits
+`dist/<kind>/<kind>.js` instead, so **all three declared bins miss the packed
+tarball** and `check-publish-guard` fails with "declares bin entries that the
+tarball does not pack". `apps/projects` is the template-shaped precedent.
 
 Placeholders substituted by the generator: `__MEMBER__` (kebab name),
 `__MEMBER_UPPER__` (env-prefix segment), `__MEMBER_DESC__` (description).
+
+The generated changeset is asserted before it is written
+(`tooling/member-scaffold/changeset.ts`): a pending changeset must open with
+`---`, and one that does not is rejected by
+`test/versioning/helpers.ts#parseChangesetFrontmatter` with "missing opening
+frontmatter delimiter". `tooling/ci/tests/standard/member-scaffold.test.ts`
+runs the generator into a temp dir and parses the product with the versioning
+suite's own parser, so the shape cannot regress silently.

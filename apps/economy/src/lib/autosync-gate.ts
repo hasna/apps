@@ -13,7 +13,7 @@
 // store immediately. The full ingest remains available on demand via the
 // explicit `economy sync` verb, which does not pass through this gate.
 //
-// In self_hosted/cloud (API) mode there is NO local store to flush: reads go
+// In hosted (API) mode there is NO local store to flush: reads go
 // straight to the shared API's GET routes, and the /v1/ingest push belongs to
 // the explicit `economy sync` verb only. The CLI's autoSync is a no-op there
 // (see cli/index.ts), so this gate is local-mode-only.
