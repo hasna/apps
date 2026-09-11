@@ -1,9 +1,11 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
-import { resolveDataDir } from "./paths.js";
+import { getFilesDataDir, resolveDataDir } from "./paths.js";
 
 export function getConfigPath(): string {
-  return join(resolveDataDir(), "config.json");
+  // Pure by design: hosted imports and reads must never migrate or create a
+  // local data root before transport selection.
+  return join(getFilesDataDir(), "config.json");
 }
 
 export interface FilesConfig {
