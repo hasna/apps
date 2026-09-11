@@ -74,7 +74,7 @@ import {
 import { parseWorkspaceAgentEvalCaseIds, runWorkspaceAgentEval } from "../../lib/workspace-agent-eval.js";
 import { cleanupProjectEvalArtifacts, filterProjectEvalArtifacts } from "../../lib/project-eval-artifacts.js";
 import { filterRegistryFixtures } from "../../lib/project-registry-fixtures.js";
-import { projectChannelSummary, resolveProjectChannelForProject } from "../../lib/project-channel.js";
+import { assertProjectChannelIntegrationWritable, projectChannelSummary, resolveProjectChannelForProject } from "../../lib/project-channel.js";
 import { buildProjectContextBundle } from "../../lib/project-context-bundle.js";
 import {
   parseProjectStartAgent,
@@ -2079,6 +2079,9 @@ function registerProjectCommands(program: Command): void {
           canvases_project_id: opts.canvasesProjectId,
           canvases_default_canvas_id: opts.canvasesDefaultCanvasId,
         }) ?? baseIntegrations;
+        // A create can pin `conversations_channel` through --integrations-json
+        // exactly like a link can; refuse a name that is not a channel (BUG-0063).
+        assertProjectChannelIntegrationWritable(integrations, undefined);
         // --dry-run must preview only and never persist. The hosted Store
         // has no plan/preview endpoint, so when a dry-run is requested we skip
         // the remote create entirely and fall through to the local planner,
@@ -2901,6 +2904,9 @@ function registerProjectCommands(program: Command): void {
         const mergedIntegrations = hasProjectIntegrationFields(integrationFields)
           ? mergeProjectIntegrationFields(integrationsBase, integrationFields)
           : opts.integrationsJson === undefined ? undefined : integrationsBase;
+        // Same write-time channel guard as `link` (BUG-0063): `--integrations-json`
+        // can pin `conversations_channel` just as directly.
+        assertProjectChannelIntegrationWritable(mergedIntegrations, project.integrations);
         // Root/recipe are shared registry resources; resolve slug->id through
         // the Store in BOTH transports so --root/--recipe are never silently
         // dropped on a flipped machine.
@@ -3449,6 +3455,9 @@ function registerProjectCommands(program: Command): void {
           integrations: parseIntegrationsJson(opts.integrationsJson),
         };
         if (Object.values(patch).every((value) => value === undefined)) throw new Error("Provide at least one guarded metadata field to update");
+        // `patch.integrations` REPLACES the object, so any channel it carries is
+        // a fresh claim — check it before the guarded write (BUG-0063).
+        assertProjectChannelIntegrationWritable(patch.integrations, undefined);
         const store = resolveProjectStore();
         const result = await store.guardedUpdateProject({
           project_id: projectId,
@@ -3682,8 +3691,13 @@ function registerProjectCommands(program: Command): void {
             .filter(([, value]) => value !== undefined)
             .map(([key]) => key),
         );
+        const linkedIntegrations = mergeProjectIntegrations(project.integrations, normalizeWorkspaceIntegrations(integrations));
+        // A pinned channel must be a channel (BUG-0063): a name that only
+        // resolves as an agent DM lands project posts in the wrong lane, or
+        // fails closed with HTTP 400.
+        assertProjectChannelIntegrationWritable(linkedIntegrations, project.integrations);
         const updated = await store.updateProject(project.id, {
-          integrations: mergeProjectIntegrations(project.integrations, normalizeWorkspaceIntegrations(integrations)),
+          integrations: linkedIntegrations,
           agent_id: mutationAgentId(store, opts.agent),
           source: "cli",
           command: process.argv.join(" "),

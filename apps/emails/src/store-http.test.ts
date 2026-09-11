@@ -4,7 +4,7 @@
 //
 // THREE THINGS THIS FILE HAS TO ESTABLISH, and they are separable:
 //
-// 1. THE STORE BEHAVES. The same 62 unmodified conformance cases the SQLite store
+// 1. THE STORE BEHAVES. The same unmodified `CONFORMANCE_CASES` the SQLite store
 //    runs, over real HTTP, against a `/v1` service backed by a real store. No case is
 //    skipped and no capability excuses one: a false capability still runs its case and
 //    still has to answer with the typed refusal.
@@ -65,8 +65,8 @@ function restoreInheritedProcessEnv(): void {
   Object.assign(process.env, INHERITED_PROCESS_ENV);
 }
 
-// Forty-eight cases, each one several HTTP round trips, run once clean plus once per
-// neutering. Well past the 5s default.
+// Every case in `CONFORMANCE_CASES` makes several HTTP round trips, and the suite runs
+// once clean plus once per neutering. Well past the 5s default.
 const SUITE_TIMEOUT_MS = 120_000;
 
 let db: Database;

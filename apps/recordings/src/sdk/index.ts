@@ -17,6 +17,11 @@
  * reachable only under the explicit `HASNA_RECORDINGS_LOCAL=1` opt-in and says
  * so on stderr.
  */
+// Additive SaaS interface; the generated legacy client below retains its contract.
+export { HostedRecordingsClient, HostedLibrary, recordingCursor, pasteCursor, RecordingsSDKError } from "../hosted/index.js";
+export type { ClientOptions as HostedClientOptions, CredentialProvider as HostedCredentialProvider,
+  HostedLibraryOptions, HostedLibraryRecording, HostedLibraryPage, Cursor as HostedCursor } from "../hosted/index.js";
+
 export {
   createRecordingsV1Client,
   resolveRecordingsSdkTransport,

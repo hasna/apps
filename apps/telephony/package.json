@@ -27,7 +27,9 @@
     "postinstall.mjs",
     "hasna.contract.json",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "!src/**/*.test.ts",
+    "!scripts/**/*.test.ts"
   ],
   "scripts": {
     "generate:sdk": "bun scripts/generate-sdk.mjs",

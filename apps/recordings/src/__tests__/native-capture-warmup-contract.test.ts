@@ -181,11 +181,15 @@ describe("native capture warm-up contract", () => {
     // `guard isRecording` that used to make them no-ops.
     const stop = region(
       engine,
-      "public func stopAndTranscribe() {",
+      "public func stopAndTranscribe(",
       "let pipelineTrace = RecordingPipelineTrace()",
     );
     expect(stop).toContain("if isWarmingUpCapture {");
     expect(stop).toContain("abandonWarmingCapture(");
+    expect(stop).toContain("pasteTarget: RecordingPasteTargetSelection? = nil");
+    expect(stop.indexOf("guard isRecording else { return }")).toBeGreaterThan(
+      stop.indexOf("abandonWarmingCapture("),
+    );
 
     const cancel = region(engine, "public func cancelRecording() {", 'log("cancelRecording")');
     expect(cancel).toContain("if isWarmingUpCapture {");

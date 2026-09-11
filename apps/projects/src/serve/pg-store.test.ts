@@ -1,4 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createPgPool, createQueryClient } from "../generated/storage-kit/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import type {
@@ -2105,4 +2108,225 @@ if (LIVE_URL) describe("pg-store live CRUD", () => {
       await store.deleteWorkspace(created.id, { hard: true });
     }
   });
+});
+
+/**
+ * The hosted transport's own projection site: a typed conversations channel
+ * link is authoritative for integrations.conversations_channel server-side too,
+ * so the same refusal has to land here and not only in the CLI/MCP/agent
+ * writers (BUG-0063, round 4). Driven through the store with a stub
+ * conversations CLI, exactly as the local-transport test in
+ * src/db/workspaces.test.ts is.
+ */
+describe("pg-store conversations channel projection guard (BUG-0063)", () => {
+  const CHANNELS = ["pg-projection-ok"];
+
+  function stubConversationsBin(root: string): string {
+    const bin = join(root, "conversations-projection-stub");
+    writeFileSync(
+      bin,
+      "#!/bin/sh\n"
+      + "if [ \"$1\" = \"channel\" ] && [ \"$2\" = \"list\" ]; then\n"
+      + `  printf '%s' '${JSON.stringify(CHANNELS.map((name) => ({ name })))}'\n`
+      + "  exit 0\n"
+      + "fi\n"
+      + "echo \"unexpected conversations invocation: $*\" >&2\n"
+      + "exit 1\n",
+    );
+    chmodSync(bin, 0o755);
+    return bin;
+  }
+
+  function channelLink(channelName: string) {
+    return {
+      authority: "conversations" as const,
+      service_instance: "urn:hasna:conversations:pg-projection-guard",
+      source_package: "@hasna/conversations" as const,
+      target_kind: "channel" as const,
+      locator: {
+        kind: "conversations_channel_id" as const,
+        value: "chn_0123456789abcdef0123456789abcdef",
+      },
+      scope: "resource" as const,
+      labels: { channel_name: channelName },
+    };
+  }
+
+  test("refuses a channel link naming no channel and writes nothing; accepts one that exists", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pg-project-channel-guard-"));
+    const bin = stubConversationsBin(root);
+    const previousVerify = process.env.HASNA_PROJECTS_CHANNEL_VERIFY;
+    const previousBin = process.env.HASNA_PROJECTS_CONVERSATIONS_BIN;
+    process.env.HASNA_PROJECTS_CHANNEL_VERIFY = "1";
+    process.env.HASNA_PROJECTS_CONVERSATIONS_BIN = bin;
+    try {
+      const harness = resourceLinkMutationClient();
+      const store = new ProjectsPgStore(harness.client);
+      const revision = harness.workspace().updated_at;
+
+      await expect(store.mutateProjectResourceLinks({
+        project_id: harness.workspace().id,
+        operation_id: "pg-projection-refused",
+        step_id: "add-channel-link",
+        mode: "add",
+        expected_revision: revision,
+        links: [channelLink("employee-contract-closing")],
+        max_items: 10,
+        response_byte_limit: 100_000,
+        time_budget_ms: 5_000,
+      })).rejects.toThrow(/Refusing to pin integrations\.conversations_channel/);
+
+      // Refused as validation, before any hosted write: no link row, no pin.
+      expect(harness.links()).toHaveLength(0);
+      expect(JSON.parse(harness.workspace().integrations)).toEqual({});
+      expect(harness.workspace().updated_at).toBe(revision);
+
+      const accepted = await store.mutateProjectResourceLinks({
+        project_id: harness.workspace().id,
+        operation_id: "pg-projection-accepted",
+        step_id: "add-channel-link",
+        mode: "add",
+        expected_revision: revision,
+        links: [channelLink("pg-projection-ok")],
+        max_items: 10,
+        response_byte_limit: 100_000,
+        time_budget_ms: 5_000,
+      });
+      expect(accepted.outcome).toBe("accepted");
+      expect(harness.links()).toHaveLength(1);
+      expect(JSON.parse(harness.workspace().integrations)).toMatchObject({
+        conversations_channel: "pg-projection-ok",
+      });
+    } finally {
+      if (previousVerify === undefined) delete process.env.HASNA_PROJECTS_CHANNEL_VERIFY;
+      else process.env.HASNA_PROJECTS_CHANNEL_VERIFY = previousVerify;
+      if (previousBin === undefined) delete process.env.HASNA_PROJECTS_CONVERSATIONS_BIN;
+      else process.env.HASNA_PROJECTS_CONVERSATIONS_BIN = previousBin;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+/**
+ * The two hosted write paths BUG-0063 round 4 left as a documented boundary
+ * are closed at the store's own write points (BUG-0076): a caller-supplied
+ * `integrations` blob on update, on the guarded-metadata patch and on create
+ * is refused when it pins a `conversations_channel` the conversations app has
+ * no channel for. Driven through the store with a stub conversations CLI,
+ * exactly as the projection-guard test above is.
+ *
+ * The create case also pins down what is deliberately NOT closed: the DERIVED
+ * channel is not probed (a new project's channel legitimately does not exist
+ * yet — local create ensures it after the write; the hosted create has no
+ * ensure), so a create that supplies no channel still succeeds.
+ */
+describe("pg-store caller-blob channel guard (BUG-0076)", () => {
+  const CHANNELS = ["pg-caller-blob-ok"];
+
+  function stubConversationsBin(root: string): string {
+    const bin = join(root, "conversations-caller-blob-stub");
+    writeFileSync(
+      bin,
+      "#!/bin/sh\n"
+      + "if [ \"$1\" = \"channel\" ] && [ \"$2\" = \"list\" ]; then\n"
+      + `  printf '%s' '${JSON.stringify(CHANNELS.map((name) => ({ name })))}'\n`
+      + "  exit 0\n"
+      + "fi\n"
+      + "echo \"unexpected conversations invocation: $*\" >&2\n"
+      + "exit 1\n",
+    );
+    chmodSync(bin, 0o755);
+    return bin;
+  }
+
+  async function withChannelProbe(
+    run: (root: string) => Promise<void>,
+  ): Promise<void> {
+    const root = mkdtempSync(join(tmpdir(), "pg-caller-blob-guard-"));
+    const bin = stubConversationsBin(root);
+    const previousVerify = process.env.HASNA_PROJECTS_CHANNEL_VERIFY;
+    const previousBin = process.env.HASNA_PROJECTS_CONVERSATIONS_BIN;
+    process.env.HASNA_PROJECTS_CHANNEL_VERIFY = "1";
+    process.env.HASNA_PROJECTS_CONVERSATIONS_BIN = bin;
+    try {
+      await run(root);
+    } finally {
+      if (previousVerify === undefined) delete process.env.HASNA_PROJECTS_CHANNEL_VERIFY;
+      else process.env.HASNA_PROJECTS_CHANNEL_VERIFY = previousVerify;
+      if (previousBin === undefined) delete process.env.HASNA_PROJECTS_CONVERSATIONS_BIN;
+      else process.env.HASNA_PROJECTS_CONVERSATIONS_BIN = previousBin;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  test("refuses a PATCH/PUT integrations blob naming no channel and writes nothing; accepts one that exists", async () => {
+    await withChannelProbe(async () => {
+      const harness = resourceLinkMutationClient();
+      const store = new ProjectsPgStore(harness.client);
+      const before = harness.workspace();
+
+      await expect(store.updateWorkspace(before.id, {
+        integrations: { conversations_channel: "employee-contract-closing" },
+      })).rejects.toBeInstanceOf(ValidationError);
+      await expect(store.updateWorkspace(before.id, {
+        integrations: { conversations_channel: "employee-contract-closing" },
+      })).rejects.toThrow(/Refusing to pin integrations\.conversations_channel/);
+      expect(harness.workspace()).toEqual(before);
+
+      const accepted = await store.updateWorkspace(before.id, {
+        integrations: { conversations_channel: "pg-caller-blob-ok" },
+      });
+      expect(accepted.integrations.conversations_channel).toBe("pg-caller-blob-ok");
+      expect(harness.workspace().integrations)
+        .toBe(JSON.stringify({ conversations_channel: "pg-caller-blob-ok" }));
+    });
+  });
+
+  test("refuses a guarded-metadata integrations patch naming no channel before the dry-run preview", async () => {
+    await withChannelProbe(async () => {
+      const harness = resourceLinkMutationClient();
+      const store = new ProjectsPgStore(harness.client);
+      const request = {
+        project_id: harness.workspace().id,
+        operation_id: "pg-caller-blob-guarded",
+        step_id: "integrations",
+        expected_revision: harness.workspace().updated_at,
+        patch: { integrations: { conversations_channel: "employee-contract-closing" } },
+        response_byte_limit: 100_000,
+        time_budget_ms: 5_000,
+      };
+
+      // The preview is refused too: an unwritable plan is never reported planned.
+      await expect(store.guardedUpdateWorkspace({ ...request, dry_run: true }))
+        .rejects.toThrow(/Refusing to pin integrations\.conversations_channel/);
+      await expect(store.guardedUpdateWorkspace(request))
+        .rejects.toThrow(/Refusing to pin integrations\.conversations_channel/);
+      expect(harness.receipts()).toHaveLength(0);
+      expect(JSON.parse(harness.workspace().integrations)).toEqual({});
+    });
+  });
+
+  test("refuses a caller-supplied channel on hosted create; a derived channel is not probed", async () => {
+    await withChannelProbe(async () => {
+      const store = new ProjectsPgStore(duplicateSlugClient());
+
+      await expect(store.createWorkspace({
+        id: "wks_duplicate_missing_channel",
+        name: "Duplicate Project",
+        slug: "duplicate-project",
+        root_id: "root_projects",
+        integrations: { conversations_channel: "employee-contract-closing" },
+      })).rejects.toThrow(/Refusing to pin integrations\.conversations_channel/);
+
+      // No caller channel: the slug-derived channel is pinned without a probe,
+      // and the create succeeds — the boundary stated in the store comment.
+      const derived = await store.createWorkspace({
+        id: "wks_duplicate_derived_channel",
+        name: "Duplicate Project",
+        slug: "duplicate-project",
+        root_id: "root_projects",
+      });
+      expect(derived.integrations.conversations_channel).toBe("duplicate-project-2");
+    });
+  }, 30_000);
 });

@@ -1,0 +1,15 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Reversible deletion for agents - deletes land in a trash store, sync to cloud, expire on a chosen retention",
+    "version": "0.0.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health probe",
+        "responses": { "200": { "description": "ok" } }
+      }
+    }
+  }
+}

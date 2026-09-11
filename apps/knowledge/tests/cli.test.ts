@@ -4203,6 +4203,45 @@ describe('Knowledge CLI transport selection', () => {
     expect(combined).not.toContain('local mode');
   });
 
+  test('a dark source reports source_unavailable structurally: exit 3 and a status on stdout (BUG-0044)', () => {
+    // The fleet update workflow consumes KNOWLEDGE as source 3 and, when it was
+    // dark on a host, had to hand-write status=unavailable because the CLI
+    // produced only prose. The fail-closed rejection is now a DISTINCT exit code
+    // plus a machine-readable status, so the run records it mechanically.
+    const result = runCliWithCleanRoute(['transport', '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_LOCAL: '',
+    });
+    expect(result.exitCode).toBe(3);
+    const payload = JSON.parse(decode(result.stdout)) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      ok: false,
+      code: 'source_unavailable',
+      status: 'unavailable',
+      credential_source: 'none',
+    });
+    expect(Array.isArray(payload.credential_file_candidates)).toBe(true);
+    expect(payload.credential_env_keys).toContain('HASNA_KNOWLEDGE_API_KEY');
+    // The structured path stays value-free: no credential value is rendered.
+    expect(decode(result.stdout) + decode(result.stderr)).not.toContain('k_fake_test_key');
+  });
+
+  test('a configured authority with no credential reports source_unavailable without echoing the URL', () => {
+    // The resolution refused the configured authority; it must not read it back
+    // into the diagnostic that reports the refusal.
+    const result = runCliWithCleanRoute(['transport', '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_API_URL: API_URL,
+    });
+    expect(result.exitCode).toBe(3);
+    expect(JSON.parse(decode(result.stdout))).toMatchObject({
+      ok: false,
+      code: 'source_unavailable',
+      status: 'unavailable',
+    });
+    expect(decode(result.stdout) + decode(result.stderr)).not.toContain(API_URL);
+  });
+
   test('the explicit HASNA_KNOWLEDGE_LOCAL opt-in selects the on-box store: exit zero, "local" on stderr', () => {
     // Local mode is legitimate for this package (it is an OSS local knowledge
     // base) but ONLY by explicit opt-in, and never silent.

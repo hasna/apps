@@ -13,7 +13,7 @@
   "source": {
     "kind": "repo",
     "id": "hasna_contracts",
-    "uri": "git+https://github.com/hasna/contracts.git"
+    "uri": "git+https://github.com/hasna/apps.git"
   },
   "output": {
     "packageManager": "bun",

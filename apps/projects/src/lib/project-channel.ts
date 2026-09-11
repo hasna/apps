@@ -3,6 +3,57 @@ import { getWorkspace, recordWorkspaceEvent } from "../db/workspaces.js";
 import type { EventSource, JsonObject, Workspace, WorkspaceIntegrations, WorkspaceKind } from "../types/workspace.js";
 import { resolveRegisteredProjectTargetOrThrow } from "./project-resolver.js";
 import { env } from "../lib/env.js";
+import {
+  CONVERSATIONS_CLI_TIMEOUT_MS,
+  PROJECT_CHANNEL_INTEGRATION_KEY,
+  assertProjectChannelIntegrationWritable,
+  assertProjectChannelWritable,
+  changedProjectChannel,
+  conversationsChannelExistence,
+  conversationsChannelListResult,
+  conversationsChannelProbe,
+  conversationsCliChannelProbe,
+  conversationsCliRunner,
+  normalizeProjectChannelName,
+  projectChannelWriteProbe,
+  shouldProbeConversationsChannel,
+} from "./project-channel-guard.js";
+import type {
+  ConversationsChannelRunner,
+  ConversationsRunResult,
+  ProjectChannelExistenceProbe,
+  ProjectChannelExistenceResult,
+  ProjectChannelExistenceVerdict,
+} from "./project-channel-guard.js";
+
+/**
+ * The channel-validity rule lives in `./project-channel-guard.js` — the half of
+ * this module with no database dependency, so a store that must not pull
+ * `bun:sqlite` (the PostgreSQL serve layer) can apply it too. Re-exported here
+ * so every existing importer of this module keeps working unchanged.
+ */
+export {
+  CONVERSATIONS_CLI_TIMEOUT_MS,
+  PROJECT_CHANNEL_INTEGRATION_KEY,
+  assertProjectChannelIntegrationWritable,
+  assertProjectChannelWritable,
+  changedProjectChannel,
+  conversationsChannelExistence,
+  conversationsChannelListResult,
+  conversationsChannelProbe,
+  conversationsCliChannelProbe,
+  conversationsCliRunner,
+  normalizeProjectChannelName,
+  projectChannelWriteProbe,
+  shouldProbeConversationsChannel,
+};
+export type {
+  ConversationsChannelRunner,
+  ConversationsRunResult,
+  ProjectChannelExistenceProbe,
+  ProjectChannelExistenceResult,
+  ProjectChannelExistenceVerdict,
+};
 
 /**
  * Project -> conversations channel linkage.
@@ -60,7 +111,6 @@ import { env } from "../lib/env.js";
 export const PROJECT_CHANNEL_CLASSES = ["package", "product", "work-project", "initiative", "loop-lane"] as const;
 export type ProjectChannelClass = (typeof PROJECT_CHANNEL_CLASSES)[number];
 
-export const PROJECT_CHANNEL_INTEGRATION_KEY = "conversations_channel";
 
 /**
  * Optional per-project override for the channel class. Set it on the project
@@ -124,13 +174,6 @@ export interface ProjectChannelResolution extends ProjectChannelDerivation {
   warnings: string[];
 }
 
-export interface ConversationsRunResult {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-}
-
-export type ConversationsChannelRunner = (args: string[]) => ConversationsRunResult;
 
 export type ProjectAgentOnlineNotificationStatus = "sent" | "planned" | "skipped" | "error";
 
@@ -205,15 +248,6 @@ export interface ProjectChannelEnsureResult extends ProjectChannelDerivation {
   project: Workspace;
 }
 
-export function normalizeProjectChannelName(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_]+/g, "-")
-    .replace(/[^a-z0-9.-]/g, "")
-    .replace(/-{2,}/g, "-")
-    .replace(/^[-.]+|[-.]+$/g, "");
-}
 
 /**
  * The project's channel class: an explicit `conversations_channel_class`
@@ -346,131 +380,7 @@ export function shouldNotifyProjectAgentOnline(env: Record<string, string | unde
   return true;
 }
 
-export const CONVERSATIONS_CLI_TIMEOUT_MS = 15_000;
 
-export function conversationsCliRunner(binary?: string): ConversationsChannelRunner {
-  const executable = binary?.trim() || env.conversationsBin()?.trim() || "conversations";
-  return (args) => {
-    try {
-      const result = Bun.spawnSync({
-        cmd: [executable, ...args],
-        stdout: "pipe",
-        stderr: "pipe",
-        stdin: "ignore",
-        timeout: CONVERSATIONS_CLI_TIMEOUT_MS,
-      });
-      return {
-        ok: result.exitCode === 0,
-        stdout: Buffer.from(result.stdout).toString("utf-8"),
-        stderr: Buffer.from(result.stderr).toString("utf-8"),
-      };
-    } catch (err) {
-      return { ok: false, stdout: "", stderr: err instanceof Error ? err.message : String(err) };
-    }
-  };
-}
-
-/**
- * A synchronous read-only probe of whether one conversations channel exists.
- *
- * Doctor and link surfaces use this to validate the channel a project ADVERTISES
- * through `integrations.conversations_channel` against the real conversations
- * app. Verdicts are deliberately tri-state: only a channel observed in a
- * successfully listed channel set is "missing"; anything that prevented the
- * listing (no CLI, auth, a parse failure) is "unknown" and never a false error.
- */
-export type ProjectChannelExistenceVerdict = "exists" | "missing" | "unknown";
-
-export interface ProjectChannelExistenceResult {
-  verdict: ProjectChannelExistenceVerdict;
-  /** Why an "unknown" verdict was reached (CLI failure, parse failure). */
-  detail?: string;
-}
-
-export type ProjectChannelExistenceProbe = (channel: string) => ProjectChannelExistenceResult;
-
-/** The channel-list surface the CLI prints as a bare JSON array on stdout (compact.ts). */
-export function conversationsChannelListResult(result: ConversationsRunResult): { ok: true; names: string[] } | { ok: false; detail: string } {
-  if (!result.ok) {
-    return { ok: false, detail: result.stderr.trim() || result.stdout.trim() || "conversations channel list failed" };
-  }
-  let rows: unknown;
-  try {
-    rows = JSON.parse(result.stdout);
-  } catch {
-    return { ok: false, detail: "could not parse conversations channel list JSON output" };
-  }
-  if (!Array.isArray(rows)) {
-    return { ok: false, detail: "conversations channel list JSON output was not an array" };
-  }
-  const names = rows
-    .map((row) => (row && typeof row === "object" && typeof (row as { name?: unknown }).name === "string" ? (row as { name: string }).name : ""))
-    .filter((name) => name.length > 0);
-  return { ok: true, names };
-}
-
-/** Exact (normalized) membership of one channel in a channel-name set. */
-export function conversationsChannelExistence(
-  names: readonly string[],
-  channel: string,
-): { verdict: "exists" } | { verdict: "missing" } {
-  const target = normalizeProjectChannelName(channel);
-  const exists = names.some((name) => normalizeProjectChannelName(name) === target);
-  return exists ? { verdict: "exists" } : { verdict: "missing" };
-}
-
-/**
- * An existence probe built from any {@link ConversationsChannelRunner}. The
- * channel listing is fetched once and cached for the lifetime of the probe, so
- * a multi-project doctor run performs one listing, not one per project.
- */
-export function conversationsChannelProbe(runner: ConversationsChannelRunner): ProjectChannelExistenceProbe {
-  let cached: { ok: true; names: string[] } | { ok: false; detail: string } | null = null;
-  return (channel) => {
-    if (cached === null) cached = conversationsChannelListResult(runner(["channel", "list", "-j"]));
-    if (!cached.ok) return { verdict: "unknown", detail: cached.detail };
-    return conversationsChannelExistence(cached.names, channel);
-  };
-}
-
-/**
- * Process-scoped channel-name cache shared across probe instances, so repeated
- * doctor entry points (CLI per-project calls, MCP/agent tool calls) perform one
- * `conversations channel list` per process instead of one per project.
- */
-const channelNameListCache = new Map<string, { ok: true; names: string[] } | { ok: false; detail: string }>();
-
-export function conversationsCliChannelProbe(binary?: string): ProjectChannelExistenceProbe {
-  const executable = binary?.trim() || env.conversationsBin()?.trim() || "conversations";
-  return (channel) => {
-    if (!channelNameListCache.has(executable)) {
-      channelNameListCache.set(
-        executable,
-        conversationsChannelListResult(conversationsCliRunner(executable)(["channel", "list", "-j"])),
-      );
-    }
-    const cached = channelNameListCache.get(executable)!;
-    if (!cached.ok) return { verdict: "unknown", detail: cached.detail };
-    return conversationsChannelExistence(cached.names, channel);
-  };
-}
-
-/**
- * Whether doctor/link surfaces should validate advertised conversations
- * channels against the conversations app on this box. Off in tests (a probe
- * would spawn a CLI that is not there); on by default where the conversations
- * CLI is expected (the fleet). Set HASNA_PROJECTS_CHANNEL_VERIFY (or
- * PROJECTS_CHANNEL_VERIFY) to force on/off.
- */
-export function shouldProbeConversationsChannel(envValue: Record<string, string | undefined> = process.env): boolean {
-  const flag = (envValue["HASNA_PROJECTS_CHANNEL_VERIFY"] ?? envValue["PROJECTS_CHANNEL_VERIFY"])?.trim().toLowerCase();
-  if (flag) {
-    if (["1", "true", "on", "yes"].includes(flag)) return true;
-    if (["0", "false", "off", "no"].includes(flag)) return false;
-  }
-  if (envValue["NODE_ENV"] === "test") return false;
-  return true;
-}
 
 function projectAgentOnlineMessage(project: Workspace, agentTool: string, sessionName: string): string {
   const label = project.name.trim() || project.slug;
