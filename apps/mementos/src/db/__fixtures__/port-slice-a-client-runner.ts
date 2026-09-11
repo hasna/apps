@@ -115,6 +115,47 @@ const scenarios: Record<string, () => Promise<void>> = {
     }
   },
 
+  // --- machines (MCP) ---
+  register_machine: async () => {
+    const { registerProjectTools } = await import("../../mcp/tools/project-tools.js");
+    await callTool(registerProjectTools, "register_machine", { name: "apple01" });
+  },
+  list_machines: async () => {
+    const { registerProjectTools } = await import("../../mcp/tools/project-tools.js");
+    await callTool(registerProjectTools, "list_machines", {});
+  },
+  rename_machine: async () => {
+    const { registerProjectTools } = await import("../../mcp/tools/project-tools.js");
+    await callTool(registerProjectTools, "rename_machine", { id: "machine-1", new_name: "renamed" });
+  },
+  set_primary_machine: async () => {
+    const { registerProjectTools } = await import("../../mcp/tools/project-tools.js");
+    await callTool(registerProjectTools, "set_primary_machine", { id: "machine-1" });
+  },
+  "machine-visibility-memo": async () => {
+    // getCurrentMachineId is on the memory_save / memory_inject / projects
+    // hot paths. The hosted arm must resolve ONCE per process: an unmemoized
+    // one would put an idempotent-register WRITE in front of every read.
+    const { getCurrentMachineId } = await import("../machines.js");
+    const a = getCurrentMachineId();
+    const b = getCurrentMachineId();
+    const c = getCurrentMachineId();
+    if (a !== b || b !== c || a !== "machine-1") {
+      throw new Error(`memoized machine id disagreed: ${a} ${b} ${c}`);
+    }
+  },
+  "machine-visibility": async () => {
+    // The filter the CLI `projects` / `inject` / `context` / `project-panel`
+    // commands apply: it used to fall back to null (= no machine filter, so
+    // another machine's memories became visible) because getCurrentMachineId
+    // could only read local SQLite.
+    const { resolveVisibleMachineId } = await import("../../lib/machine-visibility.js");
+    const id = resolveVisibleMachineId();
+    if (id !== "machine-1") {
+      throw new Error(`machine-visibility did not resolve the hosted machine id: ${String(id)}`);
+    }
+  },
+
   // --- memory locks (MCP) ---
   memory_lock: async () => {
     const { registerLockTools } = await import("../../mcp/tools/lock-tools.js");

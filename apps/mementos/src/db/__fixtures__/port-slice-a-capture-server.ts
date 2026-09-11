@@ -44,6 +44,16 @@ const RUN = {
   completed_at: "2026-09-11T00:01:00.000Z",
 };
 
+const MACHINE = {
+  id: "machine-1",
+  name: "apple01",
+  hostname: "apple01",
+  platform: "darwin",
+  is_primary: false,
+  created_at: "2026-09-11T00:00:00.000Z",
+  last_seen_at: "2026-09-11T00:00:00.000Z",
+};
+
 const JOB = {
   id: "job-1",
   session_id: "session-1",
@@ -77,6 +87,16 @@ function respond(method: string, path: string): unknown {
   if (method === "POST" && path === "/v1/profile/synthesize") {
     return { profile: "## Profile\nhosted-profile-body", memory_count: 7, from_cache: false };
   }
+  if (method === "POST" && path === "/v1/machines") return MACHINE;
+  if (method === "GET" && path.startsWith("/v1/machines/")) {
+    if (path.endsWith("/primary")) return { ...MACHINE, is_primary: true };
+    return MACHINE;
+  }
+  if (method === "PATCH" && path.startsWith("/v1/machines/")) return { ...MACHINE, name: "renamed" };
+  if (method === "POST" && path.endsWith("/primary")) return { ...MACHINE, is_primary: true };
+  if (method === "POST" && path.endsWith("/touch")) return { touched: true, id: MACHINE.id };
+  if (method === "DELETE" && path.startsWith("/v1/machines/")) return { deleted: true };
+  if (method === "GET" && path.startsWith("/v1/machines")) return { machines: [MACHINE], count: 1 };
   if (method === "POST" && path === "/v1/locks") return LOCK;
   if (method === "DELETE" && path.startsWith("/v1/locks/")) return { released: true };
   if (method === "GET" && path.startsWith("/v1/locks")) return [LOCK];

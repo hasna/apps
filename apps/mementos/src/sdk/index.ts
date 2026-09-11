@@ -174,6 +174,17 @@ export interface Agent {
   last_seen_at: string | null;
 }
 
+/** A registered machine in the shared machine registry. */
+export interface MementosMachine {
+  id: string;
+  name: string;
+  hostname: string;
+  platform: string;
+  is_primary: boolean;
+  created_at: string;
+  last_seen_at: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -1439,6 +1450,39 @@ export class MementosClient {
 
   listAgentsByProject(projectId: string): Promise<{ agents: Agent[]; count: number }> {
     return this.get(`/api/agents`, { project_id: projectId });
+  }
+
+  // --------------------------------------------------------------------------
+  // Machines
+  // --------------------------------------------------------------------------
+
+  listMachines(): Promise<{ machines: MementosMachine[]; count: number }> {
+    return this.get("/api/machines");
+  }
+
+  /**
+   * Register (or re-announce) a machine. The caller's identity is explicit:
+   * the server cannot observe the hostname of the machine talking to it.
+   * Idempotent by hostname.
+   */
+  registerMachine(input: { hostname: string; platform: string; name?: string }): Promise<MementosMachine> {
+    return this.post("/api/machines", input);
+  }
+
+  getMachine(idOrName: string): Promise<MementosMachine> {
+    return this.get(`/api/machines/${encodeURIComponent(idOrName)}`);
+  }
+
+  renameMachine(idOrName: string, name: string): Promise<MementosMachine> {
+    return this.patch(`/api/machines/${encodeURIComponent(idOrName)}`, { name });
+  }
+
+  setPrimaryMachine(idOrName: string): Promise<MementosMachine> {
+    return this.post(`/api/machines/${encodeURIComponent(idOrName)}/primary`);
+  }
+
+  deleteMachine(idOrName: string): Promise<{ deleted: boolean }> {
+    return this.delete(`/api/machines/${encodeURIComponent(idOrName)}`);
   }
 
   // --------------------------------------------------------------------------
