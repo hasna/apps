@@ -368,6 +368,25 @@ function stripUndefined(input: Record<string, unknown>): Record<string, unknown>
   return out;
 }
 
+/**
+ * Find the contact method the caller just appended inside the contact the
+ * `/v1` route echoes back, so `addEmailToContact` / `addPhoneToContact` keep
+ * returning the single record their callers print. Falls back to `undefined`
+ * when the server response does not carry the collection (the caller then
+ * returns the contact itself rather than inventing a record).
+ */
+function pickContactMethod(
+  contact: unknown,
+  collection: "emails" | "phones",
+  matchKey: "address" | "number",
+  value: string | undefined,
+): unknown {
+  const items = pick<unknown[]>(contact, collection);
+  if (!Array.isArray(items) || value === undefined) return undefined;
+  const wanted = String(value).toLowerCase();
+  return items.find((item) => String(pick<string>(item, matchKey) ?? "").toLowerCase() === wanted);
+}
+
 class ApiStore implements Store {
   readonly mode = "api" as const;
   constructor(private readonly client: StorageClient) {}
@@ -434,8 +453,28 @@ class ApiStore implements Store {
     return (pick<unknown[]>(res, "contacts") ?? []) as Contact[];
   }
   async mergeContacts(): Promise<never> { return unavailable("mergeContacts"); }
-  async addEmailToContact(): Promise<never> { return unavailable("addEmailToContact"); }
-  async addPhoneToContact(): Promise<never> { return unavailable("addPhoneToContact"); }
+  /**
+   * Append an email address through the existing contact route. `/v1` models
+   * contact methods as part of the contact resource: `PATCH /v1/contacts/:id`
+   * with `emails_add` inserts into `emails` (duplicate-safe, server side) and
+   * returns the contact with its full `emails` array. No dedicated
+   * `/v1/emails` route is needed, and none exists on the deployed server.
+   */
+  async addEmailToContact(contactId: string, email: CreateEmailInput) {
+    const res = await this.patch(`/contacts/${this.enc(contactId)}`, {
+      emails_add: [stripUndefined(email as unknown as Record<string, unknown>)],
+    });
+    const contact = (pick(res, "contact") ?? res) as Contact | null;
+    return pickContactMethod(contact, "emails", "address", email?.address) ?? contact;
+  }
+  /** Append a phone number through `PATCH /v1/contacts/:id` (`phones_add`). */
+  async addPhoneToContact(contactId: string, phone: CreatePhoneInput) {
+    const res = await this.patch(`/contacts/${this.enc(contactId)}`, {
+      phones_add: [stripUndefined(phone as unknown as Record<string, unknown>)],
+    });
+    const contact = (pick(res, "contact") ?? res) as Contact | null;
+    return pickContactMethod(contact, "phones", "number", phone?.number) ?? contact;
+  }
   async archiveContact(): Promise<never> { return unavailable("archiveContact"); }
   async unarchiveContact(): Promise<never> { return unavailable("unarchiveContact"); }
   async autoLinkContactToCompany(): Promise<never> { return unavailable("autoLinkContactToCompany"); }
