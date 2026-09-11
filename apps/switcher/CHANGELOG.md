@@ -9,6 +9,12 @@ status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
+## 0.1.10
+
+### Patch Changes
+
+- Preserve ChatGPT browser and computer tool sandbox commands instead of appending inference settings to the tool kernel. Keep native sandbox permissions intact and document extension and provider compatibility limits.
+
 ## 0.1.9
 
 ### Patch Changes

@@ -95,6 +95,20 @@ on-request approvals. These are startup defaults; the app's own permission
 controls and managed requirements still apply. Start a new conversation after
 changing launch defaults; existing conversations can retain their own settings.
 
+Browser and Computer Use are local app tools, separate from the inference
+provider. From 0.1.10, Switcher preserves the app's sandbox-helper arguments so
+the installed tool runtime can start. Enable the app's browser/computer plugins
+and the browser extension in the desired profile; website permissions, macOS
+Accessibility/Screen Recording permissions, workspace policy and model
+eligibility still apply. Full access does not override those controls.
+
+Models need function calling; screenshot workflows also need image input.
+DeepSeek's Responses API supports both for `deepseek-flash`, but ignores OpenAI's
+built-in `computer_use` tool. The desktop's local MCP tools are a separate path.
+Successful inference does not establish browser or computer compatibility for
+every provider. See the [browser extension guide](https://learn.chatgpt.com/docs/chrome-extension)
+and [DeepSeek compatibility details](https://api-docs.deepseek.com/guides/responses_api/).
+
 Switcher starts a separate app instance with persistent provider/model state
 under `~/.hasna/switcher/state/desktop/PROFILE`. Your regular ChatGPT app and its
 signed-in state are preserved. Each profile retains its own local conversations
@@ -121,6 +135,11 @@ It verifies selected-model configuration, direct responses, delegated task
 creation, follow-up delivery, and history replay against the real provider.
 It is separate from visual desktop acceptance.
 
+`test:native-chatgpt-tools` checks the installed browser/computer tool kernel
+through the generated launcher without provider calls or UI actions. Set
+`SWITCHER_TEST_CUA_CONFIG` to the installed unified-computer-use plugin's
+`.mcp.json`; the check uses disposable state and leaves that configuration intact.
+
 References: [OpenAI custom provider configuration](https://learn.chatgpt.com/docs/config-file/config-advanced),
 [community desktop custom-model profiles](https://github.com/ademisler/codex-desktop-custom-models),
 [reported signed-in provider routing issue](https://github.com/openai/codex/issues/37245),
@@ -128,6 +147,12 @@ and [Preview Edit routing limitation](https://github.com/openai/codex/issues/373
 and [DeepSeek thinking controls](https://api-docs.deepseek.com/guides/thinking_mode/).
 
 ## Claude desktop with a provider
+
+Claude Code's official Chrome integration requires direct Anthropic sign-in;
+API-key and third-party-provider sessions cannot use it. Routing Claude desktop
+inference through Switcher does not remove that restriction. A separately
+configured, provider-compatible browser MCP server is another integration path.
+See [Anthropic's Chrome prerequisites](https://code.claude.com/docs/en/chrome#prerequisites).
 
 ```sh
 switcher launch claude-desktop --provider deepseek --model deepseek-flash
