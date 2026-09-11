@@ -14,10 +14,10 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, unlinkSync
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
-import { getHook, getHookEvents, type HookEvent } from "./registry.js";
+import { getHook, getHookEvents, type HookEvent, type HookMeta } from "./registry.js";
 import { resolveHookDir, resolveHookMeta } from "./resolve.js";
 import { readCustomManifest, customHookDir } from "./manifest.js";
-import { findStaleRegistrations, type StaleRegistration } from "./registration.js";
+import { findStaleRegistrations, matchersOverlap, type StaleRegistration } from "./registration.js";
 import { removeHookFromStore } from "./store.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -210,6 +210,7 @@ function codewithTimeout(name: string): number {
     case "prompt-guard":
       return 3;
     case "worktree-guard":
+    case "trash-guard":
     case "stop-sync":
       return 5;
     default:
@@ -229,6 +230,8 @@ function codewithStatusMessage(name: string): string {
       return "Checking prompt safety";
     case "worktree-guard":
       return "Checking worktree safety";
+    case "trash-guard":
+      return "Redirecting rm into trash";
     case "stop-sync":
       return "Syncing turn-end heartbeat";
     default:
@@ -300,12 +303,40 @@ function detectConflict(name: string, scope: Scope, target: SingleTarget): strin
     const existing = getHook(existingName);
     if (!existing || !existing.matcher) continue;
     if (!getHookEvents(existing).some((event) => events.has(event))) continue;
-    // Check if matchers overlap (either is a substring/prefix of the other, or identical)
-    const a = meta.matcher.toLowerCase();
-    const b = existing.matcher.toLowerCase();
-    if (a === b || a.includes(b) || b.includes(a)) {
+    if (matchersOverlap(meta.matcher.toLowerCase(), existing.matcher.toLowerCase())) {
       return `conflicts with '${existingName}' (same event ${meta.event}, overlapping matcher '${existing.matcher}')`;
     }
+  }
+  return undefined;
+}
+
+/**
+ * The one conflict class that BLOCKS an install: two PreToolUse hooks on
+ * overlapping matchers that both rewrite the tool input
+ * (`hookSpecificOutput.updatedInput`). The harness keeps ONE rewrite per tool
+ * call — last writer wins — so whichever guard loses is silently disarmed
+ * with no error anywhere. `trash-guard` is the first such hook.
+ *
+ * Every other conflict stays advisory: it still installs, with the warning.
+ */
+export function detectRewriteConflict(
+  name: string,
+  scope: Scope,
+  target: SingleTarget,
+  /** Injected for tests: the rewrite claim is a registry concern, the overlap is not. */
+  lookup: (hookName: string) => HookMeta | undefined = getHook,
+): string | undefined {
+  const meta = resolveHookMeta(name);
+  if (!meta?.matcher || !meta.rewritesInput) return undefined;
+  if (!getHookEvents(meta).includes("PreToolUse")) return undefined;
+
+  for (const existingName of getRegisteredHooksForTarget(scope, target)) {
+    if (existingName === name) continue;
+    const existing = lookup(existingName);
+    if (!existing?.matcher || !existing.rewritesInput) continue;
+    if (!getHookEvents(existing).includes("PreToolUse")) continue;
+    if (!matchersOverlap(meta.matcher.toLowerCase(), existing.matcher.toLowerCase())) continue;
+    return `both '${name}' and '${existingName}' rewrite the tool input on overlapping PreToolUse matchers ('${meta.matcher}' / '${existing.matcher}'). Only one rewrite per tool call is applied, so one guard would silently disappear — install one of them, or narrow a matcher so they no longer overlap.`;
   }
   return undefined;
 }
@@ -384,6 +415,12 @@ function installForTarget(
 
   // Warn on conflicts (non-blocking — still installs)
   const conflict = detectConflict(shortName, scope, target);
+
+  // ...but REFUSE the one that silently disarms a guard.
+  const rewriteConflict = detectRewriteConflict(shortName, scope, target);
+  if (rewriteConflict) {
+    return { hook: shortName, success: false, error: `Refused: ${rewriteConflict}`, scope, target };
+  }
 
   try {
     registerHook(shortName, scope, target, profile);
@@ -471,8 +508,15 @@ function registerHook(name: string, scope: Scope = "global", target: WritableJso
   for (const eventKey of uniqueEventKeys) {
     if (!settings.hooks[eventKey]) settings.hooks[eventKey] = [];
 
+    const hookEntry: Record<string, any> = { type: "command", command: hookCommand };
+    if (typeof meta.timeoutSeconds === "number" && meta.timeoutSeconds > 0) {
+      // Seconds, per the harness's hook schema. The default is 600s, and a
+      // TIMED-OUT HOOK DOES NOT BLOCK — an explicit small timeout is the
+      // difference between a verdict and silence.
+      hookEntry.timeout = meta.timeoutSeconds;
+    }
     const entry: Record<string, any> = {
-      hooks: [{ type: "command", command: hookCommand }],
+      hooks: [hookEntry],
     };
     if (meta.matcher) {
       entry.matcher = meta.matcher;

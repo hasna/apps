@@ -37,9 +37,9 @@
 // `*_MODE` / `*_STORAGE_MODE` / `*_CLIENT_STORE` variable is read: the
 // transport is decided by what RESOLVES, never by a mode word.
 //
-// FAIL LOUD. Hosted mode with no credential throws (CLI/MCP surface: non-zero
-// exit, no SQLite, no local-fallback event). The on-box SQLite file is
-// reachable ONLY through the deliberate unhosted opt-in
+// FAIL LOUD. With no local opt-in and no credential, the surface throws
+// (CLI/MCP surface: non-zero exit, no SQLite, no local-fallback event). The
+// on-box SQLite file is reachable ONLY through the deliberate unhosted opt-in
 // `HASNA_RECORDINGS_LOCAL=1` (alias `RECORDINGS_LOCAL=1`), which is answered
 // BEFORE the resolver runs so an opted-in run reads neither the Keychain nor
 // any credential file.

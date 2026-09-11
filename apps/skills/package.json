@@ -116,7 +116,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/apps.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/skills"
   },
   "homepage": "https://github.com/hasna/skills",
   "bugs": {

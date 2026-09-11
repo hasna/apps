@@ -51,6 +51,12 @@ function hermeticEnv(env: Record<string, string> = {}): Record<string, string> {
     if (key === "CONVERSATIONS_AGENT_ID") continue;
     out[key] = value;
   }
+  // HOME and the keychain sentinel are forced AFTER the copy: a machine (or
+  // parent shell) credential must never leak into the spawn — the resolver
+  // reads `$HOME/.hasna/messages/config/credentials`, so a real HOME would
+  // resolve the station credential and the fail-closed gates below would
+  // silently pass instead of proving the error path (this is exactly what
+  // broke when the station credential landed).
   return { ...out, HOME: fakeHome, HASNA_STATION: NO_SUCH_STATION, ...env };
 }
 

@@ -20,10 +20,34 @@ export function registerSessionCommand(program: Command): void {
     .option("--source <source>", "Source (claude-code, codex, manual, open-sessions)", "manual")
     .action(async (transcriptFile: string, opts: { sessionId?: string; agent?: string; project?: string; source: string }) => {
       const { readFileSync: _rfs } = await import("node:fs");
-      const { createSessionJob } = await import("../../db/session-jobs.js");
-      const { enqueueSessionJob } = await import("../../lib/session-queue.js");
       const transcript = _rfs(transcriptFile, "utf-8");
       const sessionId = opts.sessionId ?? `cli-${Date.now()}`;
+      const { isApiMode, apiJson } = await import("../../db/api-mode.js");
+      if (isApiMode()) {
+        // Hosted ingest: the shared cloud owns the job queue and the extraction
+        // worker, so the transcript ships to the server (POST /sessions/ingest,
+        // mapped from the client's /v1 authority), which creates the job AND
+        // enqueues it for server-side extraction — the local code path would
+        // hit the getDatabase() split-brain guard instead of queueing anything.
+        const { data } = apiJson<{ job_id: string; status: string; message?: string }>("POST", "/sessions/ingest", {
+          session_id: sessionId,
+          transcript,
+          source: opts.source as "claude-code" | "codex" | "manual" | "open-sessions",
+          agent_id: opts.agent,
+          project_id: opts.project,
+        });
+        console.log(
+          chalk.green(
+            `✓ Session queued (hosted store): ${chalk.cyan(data.job_id)}` +
+              (data.message ? ` — ${data.message}` : ""),
+          ),
+        );
+        console.log(`  Session: ${sessionId}`);
+        console.log(`  Length:  ${transcript.length} chars`);
+        return;
+      }
+      const { createSessionJob } = await import("../../db/session-jobs.js");
+      const { enqueueSessionJob } = await import("../../lib/session-queue.js");
       const job = createSessionJob({
         session_id: sessionId,
         transcript,

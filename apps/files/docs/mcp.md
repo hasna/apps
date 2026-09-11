@@ -4,9 +4,15 @@
 tools. Stdio is the default transport.
 
 ```bash
-files-mcp
+files-mcp              # stdio (the default)
+files-mcp --stdio
 files-mcp --help
+files-mcp --version
 ```
+
+`--help` and `--version` answer before the credential gate and never bind a
+port; without a resolvable credential (or the explicit `HASNA_FILES_LOCAL=1`
+opt-in) the server exits non-zero before serving on either transport.
 
 ## Streamable HTTP
 

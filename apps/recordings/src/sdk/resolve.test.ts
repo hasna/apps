@@ -209,7 +209,7 @@ describe("local mode and fail-closed", () => {
     expect(transport.mode).toBe("local-serve");
     expect(transport.baseUrl).toBe(RECORDINGS_LOCAL_SERVE_URL);
     expect(transport.apiKey).toBeNull();
-    expect(lines.join("\n")).toContain("LOCAL mode");
+    expect(lines.join("\n")).toContain("local transport");
     expect(lines.join("\n")).toContain(RECORDINGS_LOCAL_SERVE_URL);
     // The isolation guarantee: the stores were never consulted.
     expect(keychain.calls).toEqual([]);
@@ -225,7 +225,7 @@ describe("local mode and fail-closed", () => {
     ).toThrow(/RECORDINGS_CREDENTIAL_MISSING/);
   });
 
-  test("createRecordingsV1Client refuses the local opt-in: hosted-only client", () => {
+  test("createRecordingsV1Client refuses the local opt-in: the /v1 client requires a resolved credential", () => {
     const home = tempHome("sdk-local-refused");
     expect(() =>
       createRecordingsV1Client({ env: { HOME: home, HASNA_RECORDINGS_LOCAL: "1" } }),

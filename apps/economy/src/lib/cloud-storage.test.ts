@@ -22,25 +22,40 @@ describe("resolveEconomyCloudStorage", () => {
     expect(() => resolveEconomyCloudStorage({})).toThrow(/fail\w*\s*closed/i);
   });
 
-  // Deployment modes no longer exist (owner directive 2026-07-29). A retired
-  // storage-mode variable is a hard error, never silently ignored: the station
-  // wrapper used to export HASNA_ECONOMY_STORAGE_MODE=cloud, and a CLI that
-  // accepted it quietly would keep serving the wrong dataset after the variable
-  // stops meaning anything.
-  it("throws when a retired storage-mode variable is set, even with a valid URL + key", () => {
+  // Deployment modes no longer exist (owner directive 2026-07-29/2026-08-15).
+  // A stale storage-mode variable is IGNORED outright — it never selects a
+  // store, never errors, and never re-routes: the station wrapper may still
+  // export HASNA_ECONOMY_STORAGE_MODE=cloud, and the CLI must keep resolving
+  // from the URL + key alone. Transport-conditional gating on `*_MODE` /
+  // `*_STORAGE_MODE` variables is forbidden.
+  it("ignores a retired storage-mode variable when a valid URL + key resolve", () => {
     for (const key of [
       "HASNA_ECONOMY_STORAGE_MODE",
       "HASNA_ECONOMY_MODE",
       "ECONOMY_STORAGE_MODE",
       "ECONOMY_MODE",
     ] as const) {
-      expect(() =>
-        resolveEconomyCloudStorage({
-          [key]: "cloud",
-          HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
-          HASNA_ECONOMY_API_KEY: KEY,
-        }),
-      ).toThrow(new RegExp(`${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} was removed`));
+      const r = resolveEconomyCloudStorage({
+        [key]: "cloud",
+        HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
+        HASNA_ECONOMY_API_KEY: KEY,
+      });
+      expect(r.active).toBe(true);
+      expect(r.client!.baseUrl).toBe("https://economy.hasna.xyz/v1");
+    }
+  });
+
+  it("ignores a retired storage-mode variable on the local opt-in lane", () => {
+    for (const key of [
+      "HASNA_ECONOMY_STORAGE_MODE",
+      "HASNA_ECONOMY_MODE",
+      "ECONOMY_STORAGE_MODE",
+      "ECONOMY_MODE",
+    ] as const) {
+      const r = resolveEconomyCloudStorage({ [key]: "local", HASNA_ECONOMY_LOCAL: "1" });
+      expect(r.active).toBe(false);
+      expect(r.client).toBeNull();
+      expect(() => resolveEconomyCloudStorage({ [key]: "local", HASNA_ECONOMY_LOCAL: "1" })).not.toThrow();
     }
   });
 
