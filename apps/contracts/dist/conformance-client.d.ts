@@ -25,7 +25,7 @@ export type ClientContractCheckId = (typeof CLIENT_CONTRACT_CHECK_IDS)[number];
 /**
  * `client_transport_declared`: a repo with a CLI or MCP surface and a store
  * must say how its client reaches data — `client.transport: hosted`, or an
- * explicit `client: null` / `placement.hosted: never` for a local-by-design tool.
+ * explicit `client: null` for a local-by-design tool.
  */
 export declare function clientTransportDeclaredCheck(manifest: ServiceContractManifest, options?: ClientContractCheckOptions): ConformanceCheck;
 /**

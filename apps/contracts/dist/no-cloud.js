@@ -13421,9 +13421,6 @@ var SurfaceCommandSchema = exports_external.object({
   name: exports_external.string().trim().min(1),
   dataAccess: DataAccessSchema
 }).strict();
-var PLACEMENT_HOSTED_MODES = ["default", "never"];
-var PlacementHostedSchema = exports_external.enum(PLACEMENT_HOSTED_MODES);
-var PlacementContractSchema = exports_external.object({ hosted: PlacementHostedSchema }).strict();
 var CLIENT_CONTRACT_TRANSPORTS = ["hosted"];
 var ClientContractTransportSchema = exports_external.enum(CLIENT_CONTRACT_TRANSPORTS);
 var CLIENT_CREDENTIAL_CHAINS = ["contracts"];
@@ -13926,7 +13923,6 @@ var ServiceContractManifestSchema = exports_external.object({
   serviceSurfaces: exports_external.array(ServiceSurfaceSchema).default([]),
   publishing: PublishingContractSchema.optional(),
   scope: AppScopeSchema.optional(),
-  placement: PlacementContractSchema.optional(),
   client: ClientContractSchema.nullable().optional(),
   metadata: ServiceContractMetadataSchema.optional()
 }).strict().superRefine((value, ctx) => {
@@ -14097,13 +14093,6 @@ var ServiceContractManifestSchema = exports_external.object({
         path: ["client"]
       });
     }
-    if (value.placement?.hosted === "never") {
-      ctx.addIssue({
-        code: exports_external.ZodIssueCode.custom,
-        message: "placement.hosted is never, so the repo cannot also declare a hosted client; drop one of them",
-        path: ["client"]
-      });
-    }
   }
   for (const [index, surface] of value.serviceSurfaces.entries()) {
     const accesses = [surface.dataAccess, ...(surface.commands ?? []).map((command) => command.dataAccess)];
@@ -14111,13 +14100,6 @@ var ServiceContractManifestSchema = exports_external.object({
       ctx.addIssue({
         code: exports_external.ZodIssueCode.custom,
         message: "a local-opt-in surface or command requires client.localOptIn to name the door",
-        path: ["serviceSurfaces", index, "dataAccess"]
-      });
-    }
-    if (accesses.includes("hosted") && value.placement?.hosted === "never") {
-      ctx.addIssue({
-        code: exports_external.ZodIssueCode.custom,
-        message: "placement.hosted is never, so no surface or command can declare hosted data access",
         path: ["serviceSurfaces", index, "dataAccess"]
       });
     }

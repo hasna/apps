@@ -7,7 +7,6 @@
   "description": "Invalid: a library ships no client, and the door key does not match the app name.",
   "bins": ["kit"],
   "hosting": ["user-hosted"],
-  "placement": { "hosted": "never" },
   "client": {
     "transport": "hosted",
     "credentialChain": "contracts",

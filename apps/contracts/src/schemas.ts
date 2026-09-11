@@ -5350,17 +5350,6 @@ export const SurfaceCommandSchema = z
   .strict();
 export type SurfaceCommand = z.infer<typeof SurfaceCommandSchema>;
 
-/**
- * Where the app's data lives by default. `default`: the hosted service, so a
- * client is required and a missing credential fails closed. `never`: a
- * local-by-design tool that makes no hosted claim and keeps its own store.
- */
-export const PLACEMENT_HOSTED_MODES = ["default", "never"] as const;
-export const PlacementHostedSchema = z.enum(PLACEMENT_HOSTED_MODES);
-export type PlacementHosted = z.infer<typeof PlacementHostedSchema>;
-export const PlacementContractSchema = z.object({ hosted: PlacementHostedSchema }).strict();
-export type PlacementContract = z.infer<typeof PlacementContractSchema>;
-
 /** The only client transport a manifest may declare: the authenticated hosted `/v1` API. */
 export const CLIENT_CONTRACT_TRANSPORTS = ["hosted"] as const;
 export const ClientContractTransportSchema = z.enum(CLIENT_CONTRACT_TRANSPORTS);
@@ -6293,9 +6282,7 @@ export const ServiceContractManifestSchema = z
     publishing: PublishingContractSchema.optional(),
     /** Which home root the app owns (`~/.hasna` or `~/.hasna-internal`); absent means public. */
     scope: AppScopeSchema.optional(),
-    /** Where data lives by default; `hosted: "never"` marks a local-by-design tool. */
-    placement: PlacementContractSchema.optional(),
-    /** The hosted client contract, or `null` to state explicitly that the repo ships no client. */
+    /** The hosted client contract, or `null` to state explicitly that the repo ships no client (a local-by-design tool). */
     client: ClientContractSchema.nullable().optional(),
     metadata: ServiceContractMetadataSchema.optional()
   })
@@ -6475,7 +6462,7 @@ export const ServiceContractManifestSchema = z
     }
 
     // 1.1.0 client-contract cross-checks: one door, one store module, no
-    // contradiction between placement and the client declaration.
+    // client on a library.
     if (value.client) {
       const expectedOptIn = localOptInEnvKey(value.name);
       if (value.client.localOptIn && value.client.localOptIn !== expectedOptIn) {
@@ -6492,13 +6479,6 @@ export const ServiceContractManifestSchema = z
           path: ["client"]
         });
       }
-      if (value.placement?.hosted === "never") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "placement.hosted is never, so the repo cannot also declare a hosted client; drop one of them",
-          path: ["client"]
-        });
-      }
     }
     for (const [index, surface] of value.serviceSurfaces.entries()) {
       const accesses = [surface.dataAccess, ...(surface.commands ?? []).map((command) => command.dataAccess)];
@@ -6506,13 +6486,6 @@ export const ServiceContractManifestSchema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "a local-opt-in surface or command requires client.localOptIn to name the door",
-          path: ["serviceSurfaces", index, "dataAccess"]
-        });
-      }
-      if (accesses.includes("hosted") && value.placement?.hosted === "never") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "placement.hosted is never, so no surface or command can declare hosted data access",
           path: ["serviceSurfaces", index, "dataAccess"]
         });
       }

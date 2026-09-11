@@ -37361,22 +37361,6 @@ export declare const SurfaceCommandSchema: z.ZodObject<{
     dataAccess: "hosted" | "server-only" | "local-opt-in";
 }>;
 export type SurfaceCommand = z.infer<typeof SurfaceCommandSchema>;
-/**
- * Where the app's data lives by default. `default`: the hosted service, so a
- * client is required and a missing credential fails closed. `never`: a
- * local-by-design tool that makes no hosted claim and keeps its own store.
- */
-export declare const PLACEMENT_HOSTED_MODES: readonly ["default", "never"];
-export declare const PlacementHostedSchema: z.ZodEnum<["default", "never"]>;
-export type PlacementHosted = z.infer<typeof PlacementHostedSchema>;
-export declare const PlacementContractSchema: z.ZodObject<{
-    hosted: z.ZodEnum<["default", "never"]>;
-}, "strict", z.ZodTypeAny, {
-    hosted: "never" | "default";
-}, {
-    hosted: "never" | "default";
-}>;
-export type PlacementContract = z.infer<typeof PlacementContractSchema>;
 /** The only client transport a manifest may declare: the authenticated hosted `/v1` API. */
 export declare const CLIENT_CONTRACT_TRANSPORTS: readonly ["hosted"];
 export declare const ClientContractTransportSchema: z.ZodEnum<["hosted"]>;
@@ -40590,15 +40574,7 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
     }>>;
     /** Which home root the app owns (`~/.hasna` or `~/.hasna-internal`); absent means public. */
     scope: z.ZodOptional<z.ZodEnum<["public", "internal"]>>;
-    /** Where data lives by default; `hosted: "never"` marks a local-by-design tool. */
-    placement: z.ZodOptional<z.ZodObject<{
-        hosted: z.ZodEnum<["default", "never"]>;
-    }, "strict", z.ZodTypeAny, {
-        hosted: "never" | "default";
-    }, {
-        hosted: "never" | "default";
-    }>>;
-    /** The hosted client contract, or `null` to state explicitly that the repo ships no client. */
+    /** The hosted client contract, or `null` to state explicitly that the repo ships no client (a local-by-design tool). */
     client: z.ZodOptional<z.ZodNullable<z.ZodEffects<z.ZodObject<{
         transport: z.ZodEnum<["hosted"]>;
         /** Absolute https, no credentials/query/fragment/trailing slash, never ending in /v1. Defaults to the fleet gateway. */
@@ -41503,9 +41479,6 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             access?: "public" | "restricted" | undefined;
         }[];
     } | undefined;
-    placement?: {
-        hosted: "never" | "default";
-    } | undefined;
 }, {
     name: string;
     contractVersion: "v1";
@@ -41801,9 +41774,6 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             flow?: "direct" | "staged" | undefined;
             provenance?: "none" | "required" | "best-effort" | undefined;
         }[] | undefined;
-    } | undefined;
-    placement?: {
-        hosted: "never" | "default";
     } | undefined;
 }>, {
     hosting: ("user-hosted" | "hasna-saas")[];
@@ -42101,9 +42071,6 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             access?: "public" | "restricted" | undefined;
         }[];
     } | undefined;
-    placement?: {
-        hosted: "never" | "default";
-    } | undefined;
 }, {
     name: string;
     contractVersion: "v1";
@@ -42399,9 +42366,6 @@ export declare const ServiceContractManifestSchema: z.ZodEffects<z.ZodObject<{
             flow?: "direct" | "staged" | undefined;
             provenance?: "none" | "required" | "best-effort" | undefined;
         }[] | undefined;
-    } | undefined;
-    placement?: {
-        hosted: "never" | "default";
     } | undefined;
 }>;
 export type ServiceContractManifest = z.infer<typeof ServiceContractManifestSchema>;
@@ -71571,15 +71535,7 @@ declare const CoreContractSchemaRegistry: {
         }>>;
         /** Which home root the app owns (`~/.hasna` or `~/.hasna-internal`); absent means public. */
         scope: z.ZodOptional<z.ZodEnum<["public", "internal"]>>;
-        /** Where data lives by default; `hosted: "never"` marks a local-by-design tool. */
-        placement: z.ZodOptional<z.ZodObject<{
-            hosted: z.ZodEnum<["default", "never"]>;
-        }, "strict", z.ZodTypeAny, {
-            hosted: "never" | "default";
-        }, {
-            hosted: "never" | "default";
-        }>>;
-        /** The hosted client contract, or `null` to state explicitly that the repo ships no client. */
+        /** The hosted client contract, or `null` to state explicitly that the repo ships no client (a local-by-design tool). */
         client: z.ZodOptional<z.ZodNullable<z.ZodEffects<z.ZodObject<{
             transport: z.ZodEnum<["hosted"]>;
             /** Absolute https, no credentials/query/fragment/trailing slash, never ending in /v1. Defaults to the fleet gateway. */
@@ -72484,9 +72440,6 @@ declare const CoreContractSchemaRegistry: {
                 access?: "public" | "restricted" | undefined;
             }[];
         } | undefined;
-        placement?: {
-            hosted: "never" | "default";
-        } | undefined;
     }, {
         name: string;
         contractVersion: "v1";
@@ -72782,9 +72735,6 @@ declare const CoreContractSchemaRegistry: {
                 flow?: "direct" | "staged" | undefined;
                 provenance?: "none" | "required" | "best-effort" | undefined;
             }[] | undefined;
-        } | undefined;
-        placement?: {
-            hosted: "never" | "default";
         } | undefined;
     }>, {
         hosting: ("user-hosted" | "hasna-saas")[];
@@ -73082,9 +73032,6 @@ declare const CoreContractSchemaRegistry: {
                 access?: "public" | "restricted" | undefined;
             }[];
         } | undefined;
-        placement?: {
-            hosted: "never" | "default";
-        } | undefined;
     }, {
         name: string;
         contractVersion: "v1";
@@ -73380,9 +73327,6 @@ declare const CoreContractSchemaRegistry: {
                 flow?: "direct" | "staged" | undefined;
                 provenance?: "none" | "required" | "best-effort" | undefined;
             }[] | undefined;
-        } | undefined;
-        placement?: {
-            hosted: "never" | "default";
         } | undefined;
     }>;
     readonly "hasna.comms_event_envelope.v1": z.ZodEffects<z.ZodObject<{

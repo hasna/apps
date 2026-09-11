@@ -19714,9 +19714,6 @@ var SurfaceCommandSchema = exports_external.object({
   name: exports_external.string().trim().min(1),
   dataAccess: DataAccessSchema
 }).strict();
-var PLACEMENT_HOSTED_MODES = ["default", "never"];
-var PlacementHostedSchema = exports_external.enum(PLACEMENT_HOSTED_MODES);
-var PlacementContractSchema = exports_external.object({ hosted: PlacementHostedSchema }).strict();
 var CLIENT_CONTRACT_TRANSPORTS = ["hosted"];
 var ClientContractTransportSchema = exports_external.enum(CLIENT_CONTRACT_TRANSPORTS);
 var CLIENT_CREDENTIAL_CHAINS = ["contracts"];
@@ -20212,7 +20209,6 @@ var ServiceContractManifestSchema = exports_external.object({
   serviceSurfaces: exports_external.array(ServiceSurfaceSchema).default([]),
   publishing: PublishingContractSchema.optional(),
   scope: AppScopeSchema.optional(),
-  placement: PlacementContractSchema.optional(),
   client: ClientContractSchema.nullable().optional(),
   metadata: ServiceContractMetadataSchema.optional()
 }).strict().superRefine((value, ctx) => {
@@ -20383,13 +20379,6 @@ var ServiceContractManifestSchema = exports_external.object({
         path: ["client"]
       });
     }
-    if (value.placement?.hosted === "never") {
-      ctx.addIssue({
-        code: exports_external.ZodIssueCode.custom,
-        message: "placement.hosted is never, so the repo cannot also declare a hosted client; drop one of them",
-        path: ["client"]
-      });
-    }
   }
   for (const [index, surface] of value.serviceSurfaces.entries()) {
     const accesses = [surface.dataAccess, ...(surface.commands ?? []).map((command) => command.dataAccess)];
@@ -20397,13 +20386,6 @@ var ServiceContractManifestSchema = exports_external.object({
       ctx.addIssue({
         code: exports_external.ZodIssueCode.custom,
         message: "a local-opt-in surface or command requires client.localOptIn to name the door",
-        path: ["serviceSurfaces", index, "dataAccess"]
-      });
-    }
-    if (accesses.includes("hosted") && value.placement?.hosted === "never") {
-      ctx.addIssue({
-        code: exports_external.ZodIssueCode.custom,
-        message: "placement.hosted is never, so no surface or command can declare hosted data access",
         path: ["serviceSurfaces", index, "dataAccess"]
       });
     }
@@ -22616,18 +22598,6 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
       enum: ["public", "internal"],
       description: "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*), internal is ~/.hasna-internal/<name> (@hasna-internal/*). Absent means public."
     },
-    placement: {
-      type: "object",
-      additionalProperties: false,
-      required: ["hosted"],
-      properties: {
-        hosted: {
-          enum: ["default", "never"],
-          description: "default: data lives in the hosted service and the client is required; never: a local-by-design tool that makes no hosted claim."
-        }
-      },
-      description: "Where the app's data lives by default."
-    },
     client: {
       oneOf: [
         { type: "null" },
@@ -23452,7 +23422,7 @@ function readPackage(repoRoot) {
   }
 }
 function localByDesign(manifest) {
-  return manifest.client === null || manifest.placement?.hosted === "never";
+  return manifest.client === null;
 }
 function clientBins(manifest) {
   const bins = [];
@@ -23480,10 +23450,10 @@ function clientTransportDeclaredCheck(manifest, options = {}) {
   if (!manifest.storage)
     return { id, status: "skip", detail: "no storage declared; nothing to reach" };
   if (localByDesign(manifest))
-    return { id, status: "pass", detail: "local-by-design: client is null or placement.hosted is never" };
+    return { id, status: "pass", detail: "local-by-design: client is null" };
   const findings = [];
   if (!manifest.client) {
-    findings.push(`hasna.contract.json declares ${bins.map((bin) => bin.bin).join(", ")} with storage but no client; declare client.transport: hosted (credentialChain: contracts), or client: null / placement.hosted: never for a local-by-design tool`);
+    findings.push(`hasna.contract.json declares ${bins.map((bin) => bin.bin).join(", ")} with storage but no client; declare client.transport: hosted (credentialChain: contracts), or client: null for a local-by-design tool`);
   } else {
     for (const bin of bins) {
       if (bin.dataAccess === undefined)
@@ -23500,7 +23470,7 @@ function clientSqliteIsolationCheck(repoRoot, manifest, options = {}, graph = bu
   if (bins.length === 0)
     return { id, status: "skip", detail: "no CLI or MCP surface declared" };
   if (localByDesign(manifest))
-    return { id, status: "skip", detail: "local-by-design: client is null or placement.hosted is never" };
+    return { id, status: "skip", detail: "local-by-design: client is null" };
   const pkg = readPackage(repoRoot);
   if (!pkg.present)
     return { id, status: "skip", detail: "no package.json found" };
@@ -23565,7 +23535,7 @@ function clientFailClosedBlackboxCheck(repoRoot, manifest, options = {}) {
   if (options.blackbox === false)
     return { id, status: "skip", detail: "disabled by caller" };
   if (localByDesign(manifest))
-    return { id, status: "skip", detail: "local-by-design: client is null or placement.hosted is never" };
+    return { id, status: "skip", detail: "local-by-design: client is null" };
   const probe = manifest.client?.readProbe;
   if (!manifest.client || !probe)
     return { id, status: "skip", detail: "client.readProbe is not declared" };
@@ -23641,7 +23611,7 @@ function noModeVocabularyPatterns() {
     { label: "deployment selector env var", pattern: new RegExp(`\\b[A-Z][A-Z0-9_]*_${lit("DEPLOY", "MENT")}\\s*=`) },
     { label: "self-hosting word (underscore)", pattern: new RegExp(selfHosting.join("_"), "i") },
     { label: "self-hosting word (dash)", pattern: new RegExp(selfHosting.join("-"), "i") },
-    { label: "mixed-placement word", pattern: new RegExp(`\\b${lit("hyb", "rid")}(?:\\b|_)`, "i") },
+    { label: "mixed-mode word", pattern: new RegExp(`\\b${lit("hyb", "rid")}(?:\\b|_)`, "i") },
     { label: "retired env-file credential tier", pattern: new RegExp(lit("fleet", "[-.]", "env"), "i") },
     { label: "retired cloud runtime config dir", pattern: new RegExp(esc2(lit(".hasna", "/", "cloud"))), outsideContracts: true },
     { label: "retired cloud runtime config env", pattern: new RegExp(lit("HASNA_", "CLOUD")), outsideContracts: true },

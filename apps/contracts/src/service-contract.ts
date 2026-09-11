@@ -441,19 +441,6 @@ export const SERVICE_CONTRACT_JSON_SCHEMA = {
       description:
         "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*), internal is ~/.hasna-internal/<name> (@hasna-internal/*). Absent means public."
     },
-    placement: {
-      type: "object",
-      additionalProperties: false,
-      required: ["hosted"],
-      properties: {
-        hosted: {
-          enum: ["default", "never"],
-          description:
-            "default: data lives in the hosted service and the client is required; never: a local-by-design tool that makes no hosted claim."
-        }
-      },
-      description: "Where the app's data lives by default."
-    },
     client: {
       oneOf: [
         { type: "null" },

@@ -537,9 +537,6 @@ backend, storage capabilities, and product surfaces are separate axes:
 - `scope` — optional (1.1.0). `public` (`~/.hasna/<name>`, the default) or
   `internal` (`~/.hasna-internal/<name>`); the home root the app owns, derived
   from its package scope.
-- `placement.hosted` — optional (1.1.0). `default`: data lives in the hosted
-  service, so a client is required and a missing credential fails closed.
-  `never`: a local-by-design tool that makes no hosted claim.
 - `client` — optional (1.1.0). The hosted client contract: `transport:
   "hosted"`, `credentialChain: "contracts"`, an optional `authority` (absolute
   https, never ending in `/v1`; defaults to the fleet gateway), `localOptIn`
@@ -547,7 +544,7 @@ backend, storage capabilities, and product surfaces are separate axes:
   repo-relative module allowed to open the on-box store; required with
   `localOptIn`) and `readProbe` (the argv the black-box check runs). `client:
   null` states explicitly that the repo ships no client. A `library` never
-  declares a client object, and a repo with `placement.hosted: never` cannot.
+  declares a client object.
 - `serviceSurfaces[].dataAccess` — optional (1.1.0). `hosted`, `server-only`
   or `local-opt-in` for the whole surface; `serviceSurfaces[].commands[]`
   overrides it per command (`{ "name": "db migrate", "dataAccess":
@@ -817,7 +814,7 @@ Checks:
 16. `client_transport_declared` (1.1.0, report) — a repo with a CLI or MCP
    surface and a store declares `client.transport: hosted` with a `dataAccess`
    per surface and a `readProbe`, or declares itself local-by-design
-   (`client: null` / `placement.hosted: never`).
+   (`client: null`).
 17. `client_sqlite_isolation` (1.1.0, report) — no CLI or MCP bin reaches a
    module that opens a SQLite store through its relative-import graph, except
    the one `client.localStoreModule`, which must import `selectsLocalStore`

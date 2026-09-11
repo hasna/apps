@@ -518,18 +518,6 @@ export declare const SERVICE_CONTRACT_JSON_SCHEMA: {
             readonly enum: readonly ["public", "internal"];
             readonly description: "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*), internal is ~/.hasna-internal/<name> (@hasna-internal/*). Absent means public.";
         };
-        readonly placement: {
-            readonly type: "object";
-            readonly additionalProperties: false;
-            readonly required: readonly ["hosted"];
-            readonly properties: {
-                readonly hosted: {
-                    readonly enum: readonly ["default", "never"];
-                    readonly description: "default: data lives in the hosted service and the client is required; never: a local-by-design tool that makes no hosted claim.";
-                };
-            };
-            readonly description: "Where the app's data lives by default.";
-        };
         readonly client: {
             readonly oneOf: readonly [{
                 readonly type: "null";

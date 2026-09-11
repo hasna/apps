@@ -104,9 +104,9 @@ function readPackage(repoRoot: string): PackageInfo {
   }
 }
 
-/** A repo that declares itself local-by-design makes no hosted claim; the client checks do not apply. */
+/** A repo that declares `client: null` is local-by-design: it makes no hosted claim, so the client checks do not apply. */
 function localByDesign(manifest: ServiceContractManifest): boolean {
-  return manifest.client === null || manifest.placement?.hosted === "never";
+  return manifest.client === null;
 }
 
 interface ClientBin {
@@ -134,18 +134,18 @@ function clientBins(manifest: ServiceContractManifest): ClientBin[] {
 /**
  * `client_transport_declared`: a repo with a CLI or MCP surface and a store
  * must say how its client reaches data — `client.transport: hosted`, or an
- * explicit `client: null` / `placement.hosted: never` for a local-by-design tool.
+ * explicit `client: null` for a local-by-design tool.
  */
 export function clientTransportDeclaredCheck(manifest: ServiceContractManifest, options: ClientContractCheckOptions = {}): ConformanceCheck {
   const id = "client_transport_declared";
   const bins = clientBins(manifest);
   if (bins.length === 0) return { id, status: "skip", detail: "no CLI or MCP surface declared" };
   if (!manifest.storage) return { id, status: "skip", detail: "no storage declared; nothing to reach" };
-  if (localByDesign(manifest)) return { id, status: "pass", detail: "local-by-design: client is null or placement.hosted is never" };
+  if (localByDesign(manifest)) return { id, status: "pass", detail: "local-by-design: client is null" };
   const findings: string[] = [];
   if (!manifest.client) {
     findings.push(
-      `hasna.contract.json declares ${bins.map((bin) => bin.bin).join(", ")} with storage but no client; declare client.transport: hosted (credentialChain: contracts), or client: null / placement.hosted: never for a local-by-design tool`,
+      `hasna.contract.json declares ${bins.map((bin) => bin.bin).join(", ")} with storage but no client; declare client.transport: hosted (credentialChain: contracts), or client: null for a local-by-design tool`,
     );
   } else {
     for (const bin of bins) {
@@ -171,7 +171,7 @@ export function clientSqliteIsolationCheck(
   const id = "client_sqlite_isolation";
   const bins = clientBins(manifest).filter((bin) => bin.dataAccess !== "server-only");
   if (bins.length === 0) return { id, status: "skip", detail: "no CLI or MCP surface declared" };
-  if (localByDesign(manifest)) return { id, status: "skip", detail: "local-by-design: client is null or placement.hosted is never" };
+  if (localByDesign(manifest)) return { id, status: "skip", detail: "local-by-design: client is null" };
   const pkg = readPackage(repoRoot);
   if (!pkg.present) return { id, status: "skip", detail: "no package.json found" };
   const allowedModule = manifest.client?.localStoreModule ? resolve(repoRoot, manifest.client.localStoreModule) : null;
@@ -252,7 +252,7 @@ export function clientFailClosedBlackboxCheck(
 ): ConformanceCheck {
   const id = "client_fail_closed_blackbox";
   if (options.blackbox === false) return { id, status: "skip", detail: "disabled by caller" };
-  if (localByDesign(manifest)) return { id, status: "skip", detail: "local-by-design: client is null or placement.hosted is never" };
+  if (localByDesign(manifest)) return { id, status: "skip", detail: "local-by-design: client is null" };
   const probe = manifest.client?.readProbe;
   if (!manifest.client || !probe) return { id, status: "skip", detail: "client.readProbe is not declared" };
   const pkg = readPackage(repoRoot);
@@ -339,7 +339,7 @@ export function noModeVocabularyPatterns(): VocabularyPattern[] {
     { label: "deployment selector env var", pattern: new RegExp(`\\b[A-Z][A-Z0-9_]*_${lit("DEPLOY", "MENT")}\\s*=`) },
     { label: "self-hosting word (underscore)", pattern: new RegExp(selfHosting.join("_"), "i") },
     { label: "self-hosting word (dash)", pattern: new RegExp(selfHosting.join("-"), "i") },
-    { label: "mixed-placement word", pattern: new RegExp(`\\b${lit("hyb", "rid")}(?:\\b|_)`, "i") },
+    { label: "mixed-mode word", pattern: new RegExp(`\\b${lit("hyb", "rid")}(?:\\b|_)`, "i") },
     { label: "retired env-file credential tier", pattern: new RegExp(lit("fleet", "[-.]", "env"), "i") },
     { label: "retired cloud runtime config dir", pattern: new RegExp(esc(lit(".hasna", "/", "cloud"))), outsideContracts: true },
     { label: "retired cloud runtime config env", pattern: new RegExp(lit("HASNA_", "CLOUD")), outsideContracts: true },

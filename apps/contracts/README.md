@@ -81,7 +81,7 @@ never opens a store, and reports credential state, authority and the local
 opt-in without a single value. `resolveAppHome(name, env, { scope })` is the
 one home resolver (`HASNA_HOME`, `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` are the
 only overrides; no XDG). See CONTRACT.md §3b, and §9 for the manifest fields
-`scope`, `placement.hosted`, `client` and `serviceSurfaces[].dataAccess`.
+`scope`, `client` and `serviceSurfaces[].dataAccess`.
 
 ## Authenticated raw responses
 
@@ -297,7 +297,7 @@ ships the enforcement half as well as the runtime import:
 5. Run `contracts no-cloud-scan .` from `prepublishOnly`. Merge it into the
    existing release gate; do not remove typecheck, test, build, or pack checks.
 6. Declare the client contract in `hasna.contract.json` (`client`,
-   `placement`, `scope`, `serviceSurfaces[].dataAccess`) and run
+   `scope`, `serviceSurfaces[].dataAccess`) and run
    `contracts repo-conformance .`; the 1.1.0 client checks report until 1.2.0,
    and `--strict` shows what will fail then.
 

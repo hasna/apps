@@ -49,7 +49,6 @@ function manifest(overrides: Record<string, unknown> = {}): Record<string, unkno
       pgTestGate: { envVar: "DEMO_TEST_DATABASE_URL", command: "bun test tests/pg.test.ts" },
     },
     scope: "public",
-    placement: { hosted: "default" },
     client: {
       transport: "hosted",
       credentialChain: "contracts",
@@ -180,7 +179,7 @@ describe("client-contract checks: violations are REPORTED, and FAIL only under s
   const violatingRepo = () =>
     repo({
       "package.json": pkg({ dependencies: { "@hasna/contracts": "^1.0.2" } }),
-      "hasna.contract.json": manifest({ kitVersion: "1.0.2", client: undefined, placement: undefined, serviceSurfaces: [
+      "hasna.contract.json": manifest({ kitVersion: "1.0.2", client: undefined, serviceSurfaces: [
         { name: "cli", kind: "cli", status: "supported", bin: "demo", authMode: "local-only" },
         { name: "mcp", kind: "mcp", status: "supported", mcpBin: "demo-mcp", authMode: "api-key" },
       ] }),
@@ -225,7 +224,7 @@ describe("client-contract checks: violations are REPORTED, and FAIL only under s
   test("a local-by-design tool (client: null) is exempt from the client checks", () => {
     const root = repo({
       "package.json": pkg({ bin: { demo: "bin/demo.ts" } }),
-      "hasna.contract.json": manifest({ bins: ["demo"], client: null, placement: { hosted: "never" }, serviceSurfaces: [
+      "hasna.contract.json": manifest({ bins: ["demo"], client: null, serviceSurfaces: [
         { name: "cli", kind: "cli", status: "supported", bin: "demo", authMode: "local-only" },
       ] }),
       "bin/demo.ts": `import "../src/cli/index.ts";\n`,
@@ -293,7 +292,7 @@ describe("the CLI exposes --strict and prints report lines", () => {
   test("report lines do not fail the run; --strict does", () => {
     const root = repo({
       "package.json": pkg({ bin: { demo: "bin/demo.ts" }, dependencies: { "@hasna/contracts": "^1.0.2" } }),
-      "hasna.contract.json": manifest({ bins: ["demo"], kitVersion: "1.0.2", client: undefined, placement: undefined, serviceSurfaces: [
+      "hasna.contract.json": manifest({ bins: ["demo"], kitVersion: "1.0.2", client: undefined, serviceSurfaces: [
         { name: "cli", kind: "cli", status: "supported", bin: "demo", authMode: "local-only" },
       ] }),
       "bin/demo.ts": `export {};\n`,
