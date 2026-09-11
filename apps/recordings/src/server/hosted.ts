@@ -1,5 +1,6 @@
 import { HostedRecordingsClient } from "../hosted/index.js";
 import { HostedLibrary, type HostedLibraryOptions } from "../hosted/library.js";
+import { HostedPasteHistory } from "../hosted/paste-history.js";
 import { RecordingsSDKError } from "../hosted/transport.js";
 import { hostedFailure } from "../hosted/process-options.js";
 
@@ -28,13 +29,16 @@ export function buildHostedFetch(options: { apiBase: string; fetch?: typeof glob
       if (request.headers.has("origin") || request.headers.has("cookie")) throw new RecordingsSDKError("forbidden");
       if (url.pathname === "/health" && request.method === "GET") return json({ status: "ok", mode: "hosted-library" });
       const match = /^\/v1\/recordings(?:\/([^/]+))?$/.exec(url.pathname);
-      if (!match) return json({ error: { code: "not_found", message: "This hosted Library route does not exist." } }, 404);
+      const isPasteHistory = url.pathname === "/v1/paste-history";
+      if (!match && !isPasteHistory) return json({ error: { code: "not_found", message: "This hosted Library route does not exist." } }, 404);
       if (request.method !== "GET") return json({ error: { code: "read_only", message: "Hosted Library mode supports GET only." } }, 405);
-      const page = readOptions(url, match[1] === undefined);
+      const page = readOptions(url, isPasteHistory || match?.[1] === undefined);
       const bearer = /^Bearer ([A-Za-z0-9._~+/-]{1,16000}={0,2})$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       if (!bearer) throw new RecordingsSDKError("unauthorized");
-      const library = new HostedLibrary(new HostedRecordingsClient({ apiBase, fetch: options.fetch, credentialProvider: () => bearer }));
-      const result = match[1] ? await library.get(decodeURIComponent(match[1]), page, { signal: request.signal })
+      const client = new HostedRecordingsClient({ apiBase, fetch: options.fetch, credentialProvider: () => bearer });
+      const library = new HostedLibrary(client);
+      const result = isPasteHistory ? await new HostedPasteHistory(client).list(page, { signal: request.signal })
+        : match?.[1] ? await library.get(decodeURIComponent(match[1]), page, { signal: request.signal })
         : await library.list(page, { signal: request.signal });
       return json(result);
     } catch (error) {
