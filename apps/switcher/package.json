@@ -60,7 +60,8 @@
     "test:native-opencode-legacy": "bun scripts/test-native-opencode-legacy.ts",
     "test:native-kilo": "bun scripts/test-native-kilo.ts",
     "test:native-kilo-lifecycle": "bun scripts/test-native-kilo-lifecycle.ts",
-    "test:native-chatgpt-runtime": "bun scripts/test-native-chatgpt-runtime.ts"
+    "test:native-chatgpt-runtime": "bun scripts/test-native-chatgpt-runtime.ts",
+    "test:native-chatgpt-tools": "bun scripts/test-native-chatgpt-tools.ts"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

@@ -27,6 +27,12 @@ test("desktop profiles pin the runtime/provider, isolate state, protect credenti
     expect(output.args.indexOf('model="wrong"')).toBeLessThan(output.args.indexOf('model="provider/model"'));
     expect(output.home).toBe(join(session,"codex"));
     expect(output.ambientKey).toBeUndefined();
+    const sandboxArgs=["sandbox","-c",'default_permissions="node_repl"',"-c",'permissions.node_repl={filesystem={":root"="read"},network={enabled=false}}',"--","/path with spaces/node","--experimental-vm-modules","/path with spaces/kernel.js","--session-id","fixture-session"];
+    const helper=Bun.spawn([prepared.env.CODEX_CLI_PATH,...sandboxArgs],{env:{PATH:process.env.PATH,OPENAI_API_KEY:"unrelated-fixture-key",...prepared.env},stdout:"pipe",stderr:"pipe"});
+    const helperOutput=JSON.parse(await new Response(helper.stdout).text());expect(await helper.exited).toBe(0);
+    expect(helperOutput.args).toEqual(sandboxArgs);
+    expect(helperOutput.home).toBe(join(session,"codex"));
+    expect(helperOutput.ambientKey).toBeUndefined();
     await expect(prepareChatGPTLaunch(native,app,state,session)).rejects.toMatchObject({code:"desktop_busy"});
     const saved=join(session,"codex/saved-conversation");await writeFile(saved,"keep");
     expect((await stat(join(session,"codex/auth.json"))).mode&0o777).toBe(0o600);
