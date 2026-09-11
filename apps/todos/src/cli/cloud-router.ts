@@ -1120,6 +1120,11 @@ function toListQuery(filter: TaskFilter = {}): Record<string, string | number> {
   if (filter.project_id) query["project_id"] = filter.project_id;
   if (filter.parent_id !== undefined) query["parent_id"] = filter.parent_id ?? "";
   if (filter.include_subtasks !== undefined) query["include_subtasks"] = filter.include_subtasks ? "true" : "false";
+  // `GET /v1/tasks` accepts include_archived (server: src/server/v1.ts) and the
+  // Postgres adapter only excludes archived rows when it is explicitly false.
+  // Without forwarding it there was no way to ask the hosted authority for the
+  // archived set, so `get_archived_tasks` had no route to call.
+  if (filter.include_archived !== undefined) query["include_archived"] = filter.include_archived ? "true" : "false";
   if (filter.plan_id) query["plan_id"] = filter.plan_id;
   if (filter.task_list_id) query["task_list_id"] = filter.task_list_id;
   if (filter.assigned_to) query["assigned_to"] = filter.assigned_to;
