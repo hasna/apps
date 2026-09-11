@@ -1,5 +1,5 @@
 /**
- * The credential the CLI signs in with, and the identity it displays.
+ * The credential the CLI runs with, and the identity it displays.
  *
  * READING is not done here. Every read goes through `fleet-credentials.ts` →
  * `@hasna/contracts/client`, so the argument, the env pointer, the macOS
@@ -8,27 +8,28 @@
  * credential is mutable state, and a value captured at process start is the
  * defect the ladder exists to remove (a shell that outlives a key rotation).
  *
- * WRITING lands in exactly one file — `~/.hasna/skills/config/credentials`,
- * mode 0600, the shared seam's disk tier — so `skills auth login` on this
- * machine and a station wrapper reading the same file cannot disagree.
- * `HASNA_HOME` / `HASNA_CONFIG_HOME` relocate it; `$HASNA_SKILLS_DIR` does not,
- * because that variable relocates this app's DATA (corpus, database, config),
- * and the fleet credential is not app data — it is the machine's, shared with
- * every other Hasna CLI.
+ * WRITING does not happen here — or anywhere in this package. Credential
+ * provisioning is a separate, owner-authorised workflow (fleet credential rule
+ * 2026-09-09; fail-closed ruling 2026-09-07, hasna/apps#1720): the Keychain
+ * item, the credentials file and the environment variable are placed by the
+ * operator's provisioning step, never by `skills auth login`. Until 0.5.10 this
+ * module wrote the credentials file (and an `identity.json` sidecar) on login,
+ * on `setup --api-url` and on workspace enrollment; those writers are gone. The
+ * verbs that used them now print WHERE the value belongs — see
+ * {@link credentialPlacement} — and never a value.
  *
- * The display identity (`email`, org, user ids) is NOT a credential and lives
- * beside it in `identity.json`. It is only ever what the server's `whoami`
- * returned; nothing here invents a field.
+ * The display identity (`email`, org, user ids) is NOT a credential. An
+ * `identity.json` written beside the credentials file by an earlier release is
+ * still read for display; nothing here writes or invents one.
  *
  * `~/.skills/auth.json` and `~/.hasna/skills/auth.json` are retired locations and
- * are not read. `skills auth login` writes the credentials file; an operator
- * still holding an old auth.json is told to sign in again.
+ * are not read.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { defaultFleetGatewayBaseUrl } from "@hasna/contracts/client";
-import { SKILLS_BOUND_API_URL, selectedSkillsProfile } from "./instance-credentials.js";
+import { SKILLS_BOUND_API_URL } from "./instance-credentials.js";
 
 import {
   requireSkillsApiOrigin,
@@ -37,27 +38,25 @@ import {
   skillsCredentialFilePath,
   SKILLS_API_KEY_ENV,
   SKILLS_API_URL_ENV,
+  SKILLS_APP,
   normalizeSkillsApiOrigin,
   resolveSkillsApiOrigin,
   type SkillsFleetOptions,
 } from "./fleet-credentials.js";
-import { resolveCredential } from "@hasna/contracts/client";
 
 export { normalizeSkillsApiOrigin } from "./fleet-credentials.js";
 
 type Env = Record<string, string | undefined>;
 
-/** The credentials file this package writes and the shared seam reads. */
+/** The credentials file the shared seam reads (this package only reads it too). */
 export function getAuthFilePath(env: Env = process.env): string {
   return skillsCredentialFilePath(env);
 }
 
 /**
- * Write-free path resolution for read-only paths (e.g. `sync --dry-run`).
- *
  * Identical to getAuthFilePath(): nothing in the credential path writes as a
- * side effect of resolving any more. Kept as a separate name so the read-only
- * callers keep reading as read-only.
+ * side effect of resolving. Kept as a separate name so the read-only callers
+ * keep reading as read-only.
  */
 export function getAuthFilePathReadOnly(env: Env = process.env): string {
   return skillsCredentialFilePath(env);
@@ -72,11 +71,9 @@ export function getIdentityFilePath(env: Env = process.env): string {
 /**
  * Stored credentials for a Skills API instance.
  *
- * `apiKey` is the credential the ladder resolved — not necessarily one this CLI
- * wrote. The identity fields are display metadata echoed back from the
- * instance's `whoami`, so they are optional: an instance that does not return
- * them leaves them unset. They are never invented locally — a placeholder
- * written here is indistinguishable from a value the server actually returned.
+ * `apiKey` is the credential the ladder resolved. The identity fields are
+ * display metadata echoed back from the instance's `whoami`, so they are
+ * optional: an instance that does not return them leaves them unset.
  */
 export interface AuthConfig {
   /**
@@ -94,15 +91,6 @@ export interface AuthConfig {
 
 /** The identity half, on its own: what `whoami` said, with no credential. */
 export type AuthIdentity = Omit<AuthConfig, "apiKey">;
-
-/**
- * What `saveAuthConfig` is handed: a key this CLI actually holds.
- *
- * Distinct from {@link AuthConfig}, whose `apiKey` may be null for a vault
- * pointer — there is nothing to write to disk in that case, and writing an
- * empty line would masquerade as a stored credential.
- */
-export type StoredAuthConfig = AuthIdentity & { apiKey: string };
 
 export function getAuthIdentity(env: Env = process.env): AuthIdentity {
   return readIdentity(env);
@@ -145,44 +133,6 @@ export function getAuthConfigReadOnly(env: Env = process.env, options: SkillsFle
   return getAuthConfig(env, options);
 }
 
-/** Merge `values` into the credentials file, atomically, at mode 0600. */
-function writeCredentialValues(values: Record<string, string | null>, env: Env = process.env): string {
-  const file = skillsCredentialFilePath(env);
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-
-  const lines: string[] = [];
-  const written = new Set<string>();
-  if (existsSync(file)) {
-    for (const raw of readFileSync(file, "utf-8").split(/\r?\n/)) {
-      const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(raw);
-      const key = match?.[1];
-      if (key && key in values) {
-        const next = values[key];
-        if (next !== null && next !== undefined) {
-          lines.push(`${key}=${next}`);
-          written.add(key);
-        }
-        // A null value deletes the line.
-        continue;
-      }
-      lines.push(raw);
-    }
-  }
-  for (const [key, value] of Object.entries(values)) {
-    if (value === null || value === undefined || written.has(key)) continue;
-    lines.push(`${key}=${value}`);
-  }
-
-  const body = lines.filter((line, index) => !(line.trim() === "" && index === lines.length - 1)).join("\n") + "\n";
-  // Written through a sibling temp file so a reader never sees a half-written
-  // credential, and created 0600 from the start so it is never briefly readable.
-  const temp = `${file}.tmp-${process.pid}`;
-  writeFileSync(temp, body, { mode: 0o600 });
-  chmodSync(temp, 0o600);
-  renameSync(temp, file);
-  return file;
-}
-
 /** Read one value out of the credentials file, or null. */
 function readCredentialValue(key: string, env: Env = process.env): string | null {
   let file: string;
@@ -209,82 +159,69 @@ function readCredentialValue(key: string, env: Env = process.env): string | null
   return null;
 }
 
-/**
- * Persist the credential (and any identity the server returned) for this user.
- *
- * Returns the file it wrote, so the CLI can name the real path rather than a
- * path it assumed.
- */
-export function saveAuthConfig(config: StoredAuthConfig, env: Env = process.env, authenticatedOrigin?: string): string {
-  const apiKey = config.apiKey.trim();
-  if (!apiKey) throw new Error("Refusing to store an empty Skills API key.");
-  if (/[^\t\x20-\x7e]/.test(apiKey)) {
-    throw new Error("Refusing to store a Skills API key containing control characters or non-ASCII bytes.");
-  }
-  const apiUrl = authenticatedOrigin ? normalizeSkillsApiOrigin(authenticatedOrigin) : resolveSkillsApiOrigin(env)?.origin ?? defaultFleetGatewayBaseUrl("skills");
-  const file = writeCredentialValues({ SKILLS_API_KEY: null, SKILLS_API_URL: null, [SKILLS_API_KEY_ENV]: apiKey, [SKILLS_BOUND_API_URL]: apiUrl, [SKILLS_API_URL_ENV]: apiUrl }, env);
-
-  const identity: AuthIdentity = {};
-  for (const field of ["email", "orgId", "orgSlug", "userId"] as const) {
-    const value = config[field];
-    if (typeof value === "string" && value.length > 0) identity[field] = value;
-  }
-  const identityFile = getIdentityFilePath(env);
-  if (Object.keys(identity).length > 0) {
-    writeFileSync(identityFile, JSON.stringify({ ...identity, apiUrl }, null, 2) + "\n", { mode: 0o600 });
-    chmodSync(identityFile, 0o600);
-  } else {
-    try { unlinkSync(identityFile); } catch {}
-  }
-  return file;
-}
-
-/** Store (or clear, with null) the API URL beside the credential. */
-export function saveApiUrl(apiUrl: string | null, env: Env = process.env): string {
-  const next = apiUrl === null ? null : normalizeSkillsApiOrigin(apiUrl);
-  const values: Record<string, string | null> = { [SKILLS_API_URL_ENV]: next, SKILLS_API_URL: null };
-  // Preserve the PREVIOUS file authority before editing a legacy unbound key.
-  // A new URL must never retroactively bind an old credential to another server.
-  if (!readCredentialValue(SKILLS_BOUND_API_URL, env) &&
-      (readCredentialValue(SKILLS_API_KEY_ENV, env) || readCredentialValue("SKILLS_API_KEY", env))) {
-    values[SKILLS_BOUND_API_URL] = normalizeSkillsApiOrigin(readStoredApiUrl(env) ?? defaultFleetGatewayBaseUrl("skills"));
-  }
-  return writeCredentialValues(values, env);
-}
-
 /** The API URL recorded in the credentials file, or null. */
 export function readStoredApiUrl(env: Env = process.env): string | null {
   return readCredentialValue(SKILLS_API_URL_ENV, env) ?? readCredentialValue("SKILLS_API_URL", env);
 }
 
 /**
- * Remove the credential this CLI wrote.
- *
- * Only the file is cleared: a key injected from the environment or held in the
- * Keychain belongs to the machine, not to this command, and silently appearing
- * to remove it would be a lie. The caller is told whether one still resolves.
+ * The stable code every former writer verb answers with. A script that used to
+ * rely on `skills auth login` or `skills setup --api-url` writing a file sees
+ * this code and the placement, never a silently unchanged exit 0.
  */
-export function clearAuthConfig(env: Env = process.env): { stillResolves: boolean } {
+export const CREDENTIAL_STORE_UNMANAGED = "CREDENTIAL_STORE_UNMANAGED";
+
+/** Where a Skills credential (and, for your own instance, its address) belongs. Names only. */
+export interface CredentialPlacement {
+  /** macOS Keychain generic-password item for the key. */
+  keychainItem: string;
+  /** macOS Keychain generic-password item for your own instance's address. */
+  keychainUrlItem: string;
+  /** The Keychain account rule the shared resolver applies. */
+  keychainAccount: string;
+  /** The credentials file this environment resolves, or null when HOME is unset. */
+  credentialsFile: string | null;
+  /** The lines that file takes (placeholders, never values). */
+  credentialsFileLines: string[];
+  /** The environment tier for the key. */
+  envKey: string;
+  /** The environment tier for the address. */
+  envUrlKey: string;
+}
+
+/**
+ * The three places the shared ladder reads a credential from, for a verb that
+ * has to tell the operator where to put one. Contains no value and names no
+ * vendor host.
+ */
+export function credentialPlacement(env: Env = process.env): CredentialPlacement {
+  let credentialsFile: string | null;
   try {
-    writeCredentialValues({ [SKILLS_API_KEY_ENV]: null, SKILLS_API_KEY: null, [SKILLS_BOUND_API_URL]: null }, env);
+    credentialsFile = skillsCredentialFilePath(env);
   } catch {
-    // No home, or nothing to clear.
+    credentialsFile = null;
   }
-  try { unlinkSync(getIdentityFilePath(env)); } catch {}
-  // "Does one still resolve", not "can this process read its value": a vault
-  // pointer resolves without yielding a key synchronously, and a credential
-  // that resolves but is refused (a broken deliberate selection) is still a
-  // credential the operator has configured somewhere. Both must keep the
-  // "clear it there to finish signing out" line honest.
-  let stillResolves: boolean;
-  try {
-    stillResolves = resolveCredential("skills", env) !== null;
-  } catch {
-    const emptyProfile = selectedSkillsProfile(env) && !env.HASNA_SKILLS_API_KEY_OVERRIDE && !env.HASNA_SKILLS_API_KEY_REF &&
-      !readCredentialValue(SKILLS_API_KEY_ENV, env) && !readCredentialValue("SKILLS_API_KEY", env);
-    stillResolves = !emptyProfile;
-  }
-  return { stillResolves };
+  return {
+    keychainItem: `hasna.credentials.${SKILLS_APP}.api-key`,
+    keychainUrlItem: `hasna.credentials.${SKILLS_APP}.api-url`,
+    keychainAccount: "HASNA_STATION, else the host name",
+    credentialsFile,
+    credentialsFileLines: [`${SKILLS_API_KEY_ENV}=<key>`, `${SKILLS_API_URL_ENV}=<origin>  # only for your own instance`],
+    envKey: SKILLS_API_KEY_ENV,
+    envUrlKey: SKILLS_API_URL_ENV,
+  };
+}
+
+/** One line naming where `subject` belongs, prefixed with the stable code. */
+export function credentialPlacementMessage(env: Env = process.env, subject = "the Skills API key"): string {
+  const p = credentialPlacement(env);
+  return (
+    `${CREDENTIAL_STORE_UNMANAGED}: this CLI does not write credentials. Place ${subject} where the shared ladder reads it: ` +
+    `the macOS Keychain item ${p.keychainItem} (account ${p.keychainAccount}), ` +
+    `a ${p.envKey}=<key> line in ${p.credentialsFile ?? "~/.hasna/skills/config/credentials"} (mode 0600), ` +
+    `or the ${p.envKey} environment variable. Your own instance's address goes in ${p.keychainUrlItem}, ` +
+    `a ${p.envUrlKey}=<origin> line in the same file, or ${p.envUrlKey}.`
+  );
 }
 
 /**
@@ -323,10 +260,10 @@ export function getApiKeyReadOnly(env: Env = process.env, options: SkillsFleetOp
  * Origin every credential-bearing request is sent to.
  *
  * The AUTHORITY, not the whole hosted resolution: `skills auth login` runs
- * before there is a credential, and requiring one here would make signing in
- * impossible. Throws when nothing names a service: an install that named none
- * must not decide on the user's behalf where their email address, login code,
- * or API key goes.
+ * before there is a credential, and requiring one here would make requesting a
+ * code impossible. Throws when nothing names a service: an install that named
+ * none must not decide on the user's behalf where their email address or login
+ * code goes.
  */
 export function getApiUrl(action?: string, env: Env = process.env, options: SkillsFleetOptions = {}): string {
   return requireSkillsApiOrigin(action, env, options);

@@ -9,7 +9,7 @@ import { publicPrincipal } from "../server/auth.js";
 import { ArtifactStorage, type ArtifactBody, type S3ClientLike } from "../server/artifact-storage.js";
 import { SqliteSkillsStore } from "../server/sqlite-store.js";
 import type { ServerRunRecord } from "../server/types.js";
-import { createGovernanceStore } from "./governance-store.js";
+import { createGovernanceStore } from "../server/sqlite-governance-store.js";
 import { createGovernedArtifactWriter } from "./outputs.js";
 
 useDefaultTestTimeout();

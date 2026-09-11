@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { registerRemoteCustomerTools } from "./remote-customer-tools.js";
-import { saveAuthConfig, getIdentityFilePath, getAuthFilePath } from "../lib/auth-store.js";
+import { getIdentityFilePath, getAuthFilePath } from "../lib/auth-store.js";
+import { writeSkillsCredentialFixture } from "../lib/credential-fixture.test-utils.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
@@ -42,8 +43,8 @@ test("MCP invocation captures named profile through concurrent fresh sign-in and
   for(const name of names)delete process.env[name];
   const env={HOME:home,HASNA_HOME:join(home,"fleet"),HASNA_SKILLS_API_URL:server.url.origin,HASNA_PROFILE:"b"};
   Object.assign(process.env,env);
-  saveAuthConfig({apiKey:keyB,userId:user,orgId:ob},env,server.url.origin);
-  saveAuthConfig({apiKey:keyA,userId:user,orgId:oa},{...env,HASNA_PROFILE:"a"},server.url.origin);
+  writeSkillsCredentialFixture(env,{apiKey:keyB,apiUrl:server.url.origin,identity:{userId:user,orgId:ob}});
+  writeSkillsCredentialFixture({...env,HASNA_PROFILE:"a"},{apiKey:keyA,apiUrl:server.url.origin,identity:{userId:user,orgId:oa}});
   const before=readFileSync(getAuthFilePath(env),"utf8");
   async function invoke(name:string,input:Record<string,unknown>={}) {
     const result=await handlers.get(name)!({email:"owned@example.test",code:"123456",...input});

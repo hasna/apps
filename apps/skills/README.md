@@ -100,8 +100,12 @@ Tier 5 sits below disk on purpose. A wrapper that injects `HASNA_SKILLS_API_KEY`
 into one child process re-reads its store every time and cannot go stale; a shell
 `export` can, and after a key rotation the file on disk is the correct one.
 
-`skills auth login` writes tier 4. A tier an operator set on purpose (1 and 2)
-never falls through to another identity: if it cannot be honoured, the command
+No command in this CLI writes tier 3 or 4. Credential provisioning is a
+separate, owner-authorised step (the Keychain item, the credentials file or the
+environment variable); `skills auth login --api-key` only verifies a key and
+names where it belongs, and `skills auth login`/`signup` only request the
+one-time code that `skills auth keys create` needs. A tier an operator set on
+purpose (1 and 2) never falls through to another identity: if it cannot be honoured, the command
 fails rather than acting as a different principal.
 
 `HASNA_SKILLS_API_KEY_REF` names a *vault item*, not a key, so it resolves in two
@@ -117,8 +121,10 @@ never falls through to another tier, and never to the local corpus.
 `~/.hasna/skills/config/credentials` → the fleet gateway
 `https://api.hasna.com/skills`. The gateway default applies only once a
 credential has resolved, so an install with no credential names no host at all.
-`skills setup --api-url <origin>` writes the credentials file; the address is
-per-user, never per-project.
+`skills setup --api-url <origin>` validates an origin and names where it belongs
+(the Keychain `api-url` item, a `HASNA_SKILLS_API_URL=` line in the credentials
+file, or the variable); it writes nothing. The address is per-user, never
+per-project.
 
 The internal gateway resource contract is `/skills/v1/...`; commercial and custom
 instances retain their `/api/v1/...` routes. A full gateway `/skills/v1` base is
@@ -189,7 +195,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills pin --category "Development Tools"` | | Pin all skills in a category |
 | `skills unpin <name>` | | Remove a project pin |
 | `skills pins list` | | List pinned skills |
-| `skills setup --api-url <url>` | | Point the CLI at a Skills API origin for remote runs |
+| `skills setup --api-url <url>` | | Validate a Skills API origin and show where to configure it (writes nothing) |
 | `skills setup` | | Show whether an API origin is configured; with none, running on this machine requires `HASNA_SKILLS_LOCAL=1` |
 | `skills setup agents` | | Register the Skills MCP server with all supported agents |
 | `skills list` | `ls` | List available skills (filter with `-c`, `--pinned`, `-t`, `--brief`) |
@@ -210,8 +216,8 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills env-check [name]` | `check-env` | Show required environment variables; `--set KEY=VALUE` updates the project's `.env` |
 | `skills test [name]` | | Test skill readiness (env, system, npm deps) |
 | `skills outdated` | | Compare pinned vs registry versions |
-| `skills auth login --api-key <key>` | | Verify and store a Skills API key |
-| `skills auth login` | | Sign in to a compatible API with browser/device-code auth or email code |
+| `skills auth login --api-key <key>` | | Verify a Skills API key and show where it belongs (nothing is stored) |
+| `skills auth login` | | Request a sign-in code for `skills auth keys create`; this CLI stores no credentials |
 | `skills billing status` | | Show server account plan and balance |
 | `skills billing checkout` | | Create a checkout session when billing is enabled |
 | `skills billing portal` | | Create a customer portal session when billing is enabled |
@@ -350,10 +356,10 @@ instance:
 
 ```bash
 export HASNA_SKILLS_API_URL=https://your-server.example
-# or persist it in the credentials file the shared ladder reads:
-skills setup --api-url https://your-server.example
-# and to stop using it:
-skills config unset apiUrl
+# or add a HASNA_SKILLS_API_URL=https://your-server.example line to
+# ~/.hasna/skills/config/credentials (mode 0600) in your provisioning step;
+# `skills setup --api-url <url>` validates the origin and names these places.
+# To stop using it, remove the variable or the line again.
 
 skills list --remote --json
 skills search transcribe --remote --json
@@ -362,12 +368,14 @@ skills tags --remote --json
 ```
 
 If the URL is an origin such as `https://your-server.example`, the CLI requests
-`/api/v1/skills`. If it already ends in `/api` or `/api/v1`, the CLI appends
-`/skills`.
+`/api/v1/skills`. If it already ends in `/api`, `/api/v1`, or the fleet `/v1`
+dialect, the CLI strips the base and appends `/skills` — every spelling of a
+base normalizes to the same routes.
 
 Authenticated registry listing and premium server-side execution use whichever
-credential the ladder resolves — most often the one saved by
-`skills auth login --api-key`.
+credential the ladder resolves — the one your provisioning step placed in the
+Keychain, the credentials file or the environment (`skills auth login --api-key`
+verifies it and names those places).
 
 The typed `RemoteSkillsClient` also exposes pin, tag, and cursor-based
 incremental-sync methods (`listPins`/`pin`/`unpin`, `listTags`/`skillsByTag`,
@@ -460,10 +468,12 @@ credits and data. Selecting one does not change another profile or the fleet
 resolver's existing defaults.
 
 ```bash
-# Configure the commercial instance before signing in.
+# Configure the commercial instance before signing in: the address and the key
+# go in the profile's credentials file or its Keychain items in your
+# provisioning step; `setup --api-url` only validates the origin and names them.
 skills --profile customer setup --api-url https://skills.example.com/api/v1 --json
-skills --profile customer auth signup --email you@example.com --json
-skills --profile customer auth login --email you@example.com --code <CODE> --json
+skills --profile customer auth signup --email you@example.com --json          # requests the one-time code
+skills --profile customer auth keys create cli --email you@example.com --code <CODE> --json   # key shown once
 skills --profile customer auth whoami --json
 skills --profile customer capabilities --json
 skills --profile customer list --remote --json
@@ -489,8 +499,8 @@ skills --profile customer auth keys create automation --email you@example.com --
 skills --profile customer auth logout --json
 ```
 
-An origin, a full `/api/v1` base and a base with a path prefix normalize to the
-same routes. `HASNA_PROFILE=customer` selects the same profile as `--profile`.
+An origin, a full `/api/v1` base, a fleet `/v1` base and a base with a path
+prefix normalize to the same routes. `HASNA_PROFILE=customer` selects the same profile as `--profile`.
 `HASNA_SKILLS_API_URL` (or the compatible `SKILLS_API_URL`) is an explicit URL
 override, not permission to send a saved key to a different instance. Stored
 keys retain their original instance binding; sign in to a separate profile to
@@ -979,8 +989,11 @@ HASNA_PROFILE=team-b skills auth login --membership-id <membership-id> --email y
 HASNA_PROFILE=team-b skills auth whoami --json
 ```
 
-This fresh sign-in creates one ordinary CLI API key in that workspace, verifies
-its identity, and saves it only in the named profile. Existing keys and other
+Since the fail-closed re-cut this verb no longer mints or saves a key: it names
+the profile's credentials file the key belongs in and exits 1. Create the key on
+the server and place it there in your provisioning step. Earlier releases
+created one ordinary CLI API key in that workspace, verified its identity, and
+saved it only in the named profile. Existing keys and other
 profiles stay bound to their original workspaces. Viewer memberships cannot
 create keys. Session JWTs are never saved. Remove injected API-key overrides
 before enrolling a profile so that later commands use the saved credential.

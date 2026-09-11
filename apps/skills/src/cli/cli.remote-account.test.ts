@@ -96,12 +96,13 @@ describe("built public CLI server account and spending", () => {
     expect(existsSync(join(created.cwd, "escape"))).toBe(false);
     expect(calls).toEqual([]);
   }));
-  test("a new unauthenticated profile can finish setup without making a request", async () => fixture(async (origin, calls) => {
+  test("setup names where a new profile's address belongs without making a request or writing", async () => fixture(async (origin, calls) => {
     const result = await cli(["setup", "--api-url", `${origin}/prefix/api/v1`, "--json"], `${origin}/prefix`, { key: false, profile: "new-customer" });
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
     const payload = JSON.parse(result.stdout);
-    expect(payload).toMatchObject({ saved: `${origin}/prefix`, apiUrl: `${origin}/prefix`, authenticated: false });
-    expect(payload.error).toBeUndefined();
+    expect(payload).toMatchObject({ saved: null, requested: `${origin}/prefix`, code: "CREDENTIAL_STORE_UNMANAGED" });
+    expect(payload.placement.credentialsFile).toContain("credentials-new-customer");
+    expect(existsSync(payload.placement.credentialsFile)).toBe(false);
     expect(calls).toEqual([]);
     const status = await cli(["billing", "status", "--json"], `${origin}/prefix`, { key: false, profile: "new-customer", data: result.cwd });
     expect(status.exitCode).toBe(1);

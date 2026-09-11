@@ -304,7 +304,7 @@ describe("governance outputs: privacy, redaction, size limits, TTLs, deletion re
     try {
       const store = new SqliteSkillsStore(join(dir, "server.db"));
       await store.ensureBootstrapApiKey?.("sk_governance_a", ORG_A);
-      const governance = new (await import("./governance-store.js")).SqliteGovernanceStore(join(dir, "server.db"));
+      const governance = new (await import("../server/sqlite-governance-store.js")).SqliteGovernanceStore(join(dir, "server.db"));
       const run = await newRun(store, principalA);
       const writer = createGovernedArtifactWriter({
         store,

@@ -4,7 +4,8 @@ useDefaultTestTimeout();
 
 import { createSubmitRunService, digestInput } from "./admission.js";
 import { createImageProfileRegistry } from "./image-profile.js";
-import { MemoryRunExecutionStore, SqliteRunExecutionStore, type RunExecutionStore } from "./storage.js";
+import { MemoryRunExecutionStore, type RunExecutionStore } from "./storage.js";
+import { SqliteRunExecutionStore } from "../../server/sqlite-run-execution-store.js";
 import { canonicalJson } from "./types.js";
 
 describe("canonical JSON input identity", () => {
