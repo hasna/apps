@@ -1655,7 +1655,9 @@ describe("the git ceiling", () => {
     // allowance, not applied as a fixed kill point.
     expect(Date.now() - started).toBeGreaterThanOrEqual(500);
     expect(existsSync(join(created, "README.md"))).toBe(true);
-    expect(created).toBe(join(worktreeRootDir(), repoName, "slow-git-ok"));
+    // Worktrees are org-segmented on main (`<root>/<org>/<repo>/<name>`); the
+    // fixture's indexed remote resolves to the `hasna` org.
+    expect(created).toBe(join(worktreeRootDir(), "hasna", repoName, "slow-git-ok"));
   });
 
   test("the ceiling is read at call time, not frozen at import", () => {
