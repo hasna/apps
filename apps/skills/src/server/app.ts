@@ -36,7 +36,7 @@ import {
   skillSummary,
 } from "./skills-api.js";
 import { createStore, type MemorySkillsStore } from "./store.js";
-import { SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError, type ApiPrincipal, type ServerRunRecord, type SkillsProductStore } from "./types.js";
+import { SERVER_FEEDBACK_CATEGORIES, SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError, type ApiPrincipal, type ServerFeedback, type ServerFeedbackCategory, type ServerRunRecord, type SkillsProductStore } from "./types.js";
 
 export interface SkillsServerOptions {
   /** Overrides the artifact storage (tests inject an in-memory S3 stand-in). */
@@ -392,6 +392,47 @@ async function handleApiV1(
     }
   }
 
+  if (resource === "feedback") {
+    // The hosted half of `skills feedback` / the MCP send_feedback tool. Before
+    // this route the client had nowhere to send a report: it wrote SQLite in
+    // local mode and a feedback.jsonl file on a keyed station, so every report
+    // from a hosted install stayed on the machine that made it.
+    if (request.method === "POST" && !id) {
+      const body = await readJson(request, config.requestBodyLimitBytes);
+      const message = stringField(body.message)?.trim();
+      if (!message) {
+        return json({ error: "`message` is required", code: "INVALID_FEEDBACK" }, { status: 400 });
+      }
+      if (message.length > FEEDBACK_MESSAGE_LIMIT) {
+        return json(
+          { error: `\`message\` is ${message.length} characters, over the ${FEEDBACK_MESSAGE_LIMIT} limit`, code: "FEEDBACK_TOO_LONG" },
+          { status: 400 },
+        );
+      }
+      const category = stringField(body.category) ?? "general";
+      if (!(SERVER_FEEDBACK_CATEGORIES as readonly string[]).includes(category)) {
+        return json(
+          { error: `unknown category '${category}'; use ${SERVER_FEEDBACK_CATEGORIES.join(", ")}`, code: "INVALID_FEEDBACK_CATEGORY" },
+          { status: 400 },
+        );
+      }
+      const record = await store.createFeedback({
+        principal,
+        message,
+        category: category as ServerFeedbackCategory,
+        ...(stringField(body.email) ? { email: stringField(body.email)! } : {}),
+        ...(stringField(body.agent) ? { agent: stringField(body.agent)! } : {}),
+        ...(stringField(body.version) ? { version: stringField(body.version)! } : {}),
+      });
+      return json(feedbackPayload(record), { status: 201 });
+    }
+
+    if (request.method === "GET" && !id) {
+      const limit = clampInt(new URL(request.url).searchParams.get("limit"), 20, 100);
+      return json((await store.listFeedback(principal, limit)).map(feedbackPayload));
+    }
+  }
+
   if (resource === "tags") {
     if (request.method === "GET" && !id) {
       return json(await listOrgTags(store, principal));
@@ -488,6 +529,24 @@ async function handleApiV1(
   }
 
   return json({ error: "not found", code: "NOT_FOUND" }, { status: 404 });
+}
+
+/**
+ * Feedback bodies are prose, not payloads: a bound keeps one pasted log file
+ * out of a column every operator reads. Well above any real report.
+ */
+const FEEDBACK_MESSAGE_LIMIT = 10_000;
+
+function feedbackPayload(record: ServerFeedback): Record<string, unknown> {
+  return {
+    id: record.id,
+    message: record.message,
+    category: record.category,
+    ...(record.email ? { email: record.email } : {}),
+    ...(record.agent ? { agent: record.agent } : {}),
+    ...(record.version ? { version: record.version } : {}),
+    createdAt: record.createdAt,
+  };
 }
 
 function identityPayload(principal: ApiPrincipal): Record<string, unknown> {

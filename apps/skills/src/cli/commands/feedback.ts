@@ -12,7 +12,7 @@ export function registerFeedback(parent: Command) {
     .option("--agent <name>", "Agent name sending feedback")
     .option("--json", "Output as JSON", false)
     .description("Send feedback from an agent or local CLI session")
-    .action((messageParts: string[], options: { category: string; email?: string; agent?: string; json: boolean }) => {
+    .action(async (messageParts: string[], options: { category: string; email?: string; agent?: string; json: boolean }) => {
       const category = options.category as FeedbackCategory;
       if (!["bug", "feature", "general"].includes(category)) {
         const error = `Invalid category: ${options.category}. Use bug, feature, or general.`;
@@ -23,7 +23,11 @@ export function registerFeedback(parent: Command) {
       }
 
       try {
-        const result = saveFeedback({
+        // Hosted by default: saveFeedback() posts to /api/v1/feedback on the
+        // configured instance and only writes this machine under the explicit
+        // local opt-in. A refusal from the credential ladder lands in the catch
+        // below and exits non-zero - never a local write standing in for a send.
+        const result = await saveFeedback({
           message: messageParts.join(" "),
           category,
           email: options.email,
@@ -31,7 +35,8 @@ export function registerFeedback(parent: Command) {
           version: pkg.version,
         });
         if (options.json) console.log(JSON.stringify(result, null, 2));
-        else console.log(chalk.green(`✓ Feedback saved (${result.category})`));
+        else if (result.target === "hosted") console.log(chalk.green(`✓ Feedback sent (${result.category}) — ${result.id}`));
+        else console.log(chalk.green(`✓ Feedback saved locally (${result.category})`));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (options.json) console.log(JSON.stringify({ saved: false, error: message }));

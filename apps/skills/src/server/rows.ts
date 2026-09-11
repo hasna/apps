@@ -17,6 +17,8 @@ import type {
   BlobStorageKind,
   ServerSkillVersion,
   ServerArtifact,
+  ServerFeedback,
+  ServerFeedbackCategory,
   ServerPin,
   ServerRunLog,
   ServerRunRecord,
@@ -49,6 +51,10 @@ export function runId(): string {
 
 export function artifactId(): string {
   return `art_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
+}
+
+export function feedbackId(): string {
+  return `fbk_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
 
 export function rowToRun(row: Record<string, unknown>): ServerRunRecord {
@@ -138,6 +144,21 @@ export function rowToPin(row: Record<string, unknown>): ServerPin {
     slug: String(row.slug),
     pinnedAt: dateString(row.pinned_at),
     metadata: parseJsonObject(row.metadata_json),
+  };
+}
+
+export function rowToFeedback(row: Record<string, unknown>): ServerFeedback {
+  return {
+    id: String(row.id),
+    orgId: String(row.org_id),
+    userId: String(row.user_id),
+    principal: String(row.principal),
+    message: String(row.message),
+    category: String(row.category) as ServerFeedbackCategory,
+    ...(row.email ? { email: String(row.email) } : {}),
+    ...(row.agent ? { agent: String(row.agent) } : {}),
+    ...(row.version ? { version: String(row.version) } : {}),
+    createdAt: dateString(row.created_at),
   };
 }
 

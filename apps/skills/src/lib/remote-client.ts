@@ -116,6 +116,28 @@ export interface RemotePin {
   metadata?: Record<string, unknown>;
 }
 
+/** The feedback categories the hosted route accepts, and the CLI/MCP send. */
+export type RemoteFeedbackCategory = "bug" | "feature" | "general";
+
+/** A feedback report the instance stored, as POST /api/v1/feedback answers it. */
+export interface RemoteFeedback {
+  id: string;
+  message: string;
+  category: RemoteFeedbackCategory;
+  email?: string;
+  agent?: string;
+  version?: string;
+  createdAt: string;
+}
+
+export interface SendRemoteFeedback {
+  message: string;
+  category?: RemoteFeedbackCategory;
+  email?: string;
+  agent?: string;
+  version?: string;
+}
+
 /** The minimal per-skill row the pin/tag/updated-since routes serve. */
 export interface RemoteSkillSummary {
   slug: string;
@@ -740,6 +762,39 @@ export class RemoteSkillsClient {
   }
 
   /**
+   * Send feedback to the instance.
+   *
+   * `requestNewRoute` on purpose: an instance that predates the feedback route
+   * answers 404/405, and that must surface as version skew, never as a
+   * successful send. The old client had no route at all and wrote the report to
+   * the machine it ran on (SQLite locally, `feedback.jsonl` on a keyed
+   * station) — a "saved" that nobody who could act on it would ever read.
+   */
+  async sendFeedback(input: SendRemoteFeedback): Promise<RemoteFeedback> {
+    const response = await this.requestNewRoute("/api/v1/feedback", {
+      method: "POST",
+      body: JSON.stringify({
+        message: input.message,
+        ...(input.category ? { category: input.category } : {}),
+        ...(input.email ? { email: input.email } : {}),
+        ...(input.agent ? { agent: input.agent } : {}),
+        ...(input.version ? { version: input.version } : {}),
+      }),
+    });
+    return normalizeFeedback(await response.json());
+  }
+
+  /** The feedback this organization has sent, newest first. */
+  async listFeedback(limit = 20): Promise<RemoteFeedback[]> {
+    const response = await this.requestNewRoute(`/api/v1/feedback?limit=${encodeURIComponent(String(limit))}`);
+    const payload: unknown = await response.json();
+    if (!Array.isArray(payload)) {
+      throw new Error("Remote feedback payload did not match the expected contract (expected an array)");
+    }
+    return payload.map(normalizeFeedback);
+  }
+
+  /**
    * Cursor-based incremental listing of skills updated after `since` (ISO 8601).
    * Each page carries an opaque `nextCursor`; null means the listing is complete.
    * This is the feed T9's sync reconciliation verb consumes.
@@ -751,6 +806,46 @@ export class RemoteSkillsClient {
     const response = await this.requestNewRoute(`/api/v1/skills/updated?${params.toString()}`);
     return normalizeUpdatedSincePage(await response.json());
   }
+}
+
+const REMOTE_FEEDBACK_CATEGORIES: readonly RemoteFeedbackCategory[] = ["bug", "feature", "general"];
+
+/**
+ * A feedback record, or a contract error. Nothing is defaulted: a response
+ * missing `id` or `createdAt` is a server that did not store what it claims to
+ * have stored, and silently inventing those fields would let the CLI print
+ * "saved" for a write that did not happen.
+ */
+function normalizeFeedback(value: unknown): RemoteFeedback {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Remote feedback payload did not match the expected contract (expected an object)");
+  }
+  const record = value as Record<string, unknown>;
+  const id = record.id;
+  const message = record.message;
+  const category = record.category;
+  const createdAt = record.createdAt;
+  if (typeof id !== "string" || !id.trim()) {
+    throw new Error("Remote feedback payload did not match the expected contract (id must be a non-empty string)");
+  }
+  if (typeof message !== "string") {
+    throw new Error("Remote feedback payload did not match the expected contract (message must be a string)");
+  }
+  if (typeof category !== "string" || !REMOTE_FEEDBACK_CATEGORIES.includes(category as RemoteFeedbackCategory)) {
+    throw new Error(`Remote feedback payload did not match the expected contract (category must be one of ${REMOTE_FEEDBACK_CATEGORIES.join(", ")})`);
+  }
+  if (typeof createdAt !== "string" || !createdAt.trim()) {
+    throw new Error("Remote feedback payload did not match the expected contract (createdAt must be a non-empty string)");
+  }
+  return {
+    id,
+    message,
+    category: category as RemoteFeedbackCategory,
+    ...(requireOptionalString(record, "email") ? { email: record.email as string } : {}),
+    ...(requireOptionalString(record, "agent") ? { agent: record.agent as string } : {}),
+    ...(requireOptionalString(record, "version") ? { version: record.version as string } : {}),
+    createdAt,
+  };
 }
 
 /** Present-but-wrong-typed optional fields fail the contract instead of being dropped. */
