@@ -8,7 +8,7 @@ import { registerBriefCommand } from './commands/brief.js'
 import { AGENTS, parseAgent } from '../lib/agents.js'
 import { syncAll } from '../lib/sync-all.js'
 import type { Agent } from '../lib/agents.js'
-import { openDatabase, getMachineId } from '../db/database.js'
+import { getMachineId } from '../db/database.js'
 import { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } from '../ingest/billing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
@@ -46,12 +46,16 @@ async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: bool
   // before answering. Auto-sync at most once per interval (default 10 min,
   // HASNA_ECONOMY_AUTOSYNC_INTERVAL seconds, 0 = always sync); the explicit
   // `economy sync` verb always runs the full ingest.
-  if (!autoSyncDue(undefined, process.env)) return
+  if (!(await autoSyncDue(undefined, process.env))) return
 
+  // The on-box lane is already decided above (`isCloudStore()` returned
+  // false), so the SQLite store is loaded here through ONE gated dynamic
+  // import — that is what keeps `bun:sqlite` out of dist/cli entirely.
+  const { openDatabase } = await import('../db/sqlite-store.js')
   const db = openDatabase()
   ensurePricingSeeded(db)
   await syncAll(db, opts)
-  markAutoSync(db, process.env)
+  await markAutoSync(db, process.env)
 }
 
 // ── Sparkline helper ──────────────────────────────────────────────────────────
@@ -292,7 +296,7 @@ program
   .option('--cursor', 'Only ingest Cursor usage')
   .option('--pi', 'Only ingest Pi sessions')
   .option('--hermes', 'Only ingest Hermes sessions')
-  .option('--loops', 'Only ingest OpenLoops orchestration/judge token usage')
+  .option('--loops', 'Only ingest OpenLoops orchestration/judge token usage (local lane only: a hosted client refuses this cross-app on-box read)')
   .option('-v, --verbose', 'Verbose output')
   .option('--force', 'Force re-process all files (ignore mtime cache)')
   .option('--backfill-machine', 'Tag existing records that have no machine_id with current hostname')
@@ -333,6 +337,7 @@ program
       console.log(chalk.bold.green('\n✓ Sync complete'))
       return
     }
+    const { openDatabase } = await import('../db/sqlite-store.js')
     const db = openDatabase()
     ensurePricingSeeded(db)
     const anySpecific = opts.claude || opts.takumi || opts.codex || opts.gemini || opts.opencode || opts.cursor || opts.pi || opts.hermes || opts.loops
@@ -1436,6 +1441,7 @@ billingCmd
       if (result.posted) console.log(chalk.green(`✓ pushed ${result.total} billing rows to the shared API`))
       return
     }
+    const { openDatabase } = await import('../db/sqlite-store.js')
     const db = openDatabase()
     const doAll = !opts.anthropic && !opts.openai && !opts.gemini
 

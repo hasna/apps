@@ -23,7 +23,7 @@
 // machine-local ingest-cache db in hosted mode. Callers that already hold the
 // store open pass it in; the helpers resolve it per mode when omitted.
 
-import { openDatabase, getIngestState, setIngestState } from '../db/database.js'
+import { getIngestState, setIngestState } from '../db/database.js'
 import { getIngestCachePath } from './cloud-ingest.js'
 import { isCloudStore } from './store/index.js'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
@@ -41,29 +41,37 @@ export function autosyncIntervalMs(env: NodeJS.ProcessEnv = process.env): number
   return Math.round(seconds * 1000)
 }
 
-/** The store that holds the autosync marker: the ingest cache in hosted mode, the local db otherwise. */
-export function autosyncMarkerStore(env: NodeJS.ProcessEnv = process.env): Database {
+/**
+ * The store that holds the autosync marker: the ingest cache in hosted mode,
+ * the local db otherwise.
+ *
+ * ASYNC because the SQLite lane is reached through ONE gated dynamic import
+ * (`db/sqlite-store.js`), which is what keeps `bun:sqlite` out of dist/cli and
+ * dist/mcp. Callers that already hold a handle pass it in and never pay for it.
+ */
+export async function autosyncMarkerStore(env: NodeJS.ProcessEnv = process.env): Promise<Database> {
+  const { openDatabase } = await import('../db/sqlite-store.js')
   if (isCloudStore(env)) return openDatabase(getIngestCachePath())
   return openDatabase()
 }
 
 /** Epoch ms of the last auto-sync, or 0 when the store has never auto-synced. */
-export function autosyncLastRun(db?: Database, env: NodeJS.ProcessEnv = process.env): number {
-  const store = db ?? autosyncMarkerStore(env)
+export async function autosyncLastRun(db?: Database, env: NodeJS.ProcessEnv = process.env): Promise<number> {
+  const store = db ?? (await autosyncMarkerStore(env))
   const value = getIngestState(store, AUTOSYNC_STATE_SOURCE, AUTOSYNC_STATE_KEY)
   const ts = value == null ? NaN : Number(value)
   return Number.isFinite(ts) && ts > 0 ? ts : 0
 }
 
 /** Record that an auto-sync just completed. */
-export function markAutoSync(db?: Database, env: NodeJS.ProcessEnv = process.env): void {
-  const store = db ?? autosyncMarkerStore(env)
+export async function markAutoSync(db?: Database, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const store = db ?? (await autosyncMarkerStore(env))
   setIngestState(store, AUTOSYNC_STATE_SOURCE, AUTOSYNC_STATE_KEY, String(Date.now()))
 }
 
 /** Whether the auto-sync should run now: always when the interval is 0, otherwise at most once per interval. */
-export function autoSyncDue(db?: Database, env: NodeJS.ProcessEnv = process.env): boolean {
+export async function autoSyncDue(db?: Database, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   const interval = autosyncIntervalMs(env)
   if (interval === 0) return true
-  return Date.now() - autosyncLastRun(db, env) >= interval
+  return Date.now() - (await autosyncLastRun(db, env)) >= interval
 }

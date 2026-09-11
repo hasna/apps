@@ -1,4 +1,9 @@
-import { SqliteAdapter as Database } from './sqlite-adapter.js'
+// TYPE-ONLY: the query layer below is pure SQL over a handle the caller
+// opens. `openDatabase()` (the one function that constructs a bun:sqlite
+// handle) lives in ./sqlite-store.ts so that a client bundle that never
+// takes the on-box lane never carries `bun:sqlite` at all (hasna/apps#1720,
+// fleet-alignment ruling d, 2026-09-11).
+import type { SqliteAdapter as Database } from './sqlite-adapter.js'
 import { execFileSync } from 'child_process'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'fs'
 import { hostname, platform } from 'os'
@@ -239,64 +244,6 @@ export function getDbPath(): string {
   return join(getDataDir(), 'economy.db')
 }
 
-function isSqliteBusyError(error: unknown): boolean {
-  const candidate = error as { code?: unknown; message?: unknown }
-  const code = typeof candidate.code === 'string' ? candidate.code : ''
-  const message = typeof candidate.message === 'string' ? candidate.message : String(error)
-  return code === 'SQLITE_BUSY' ||
-    code === 'SQLITE_BUSY_RECOVERY' ||
-    /database is locked|SQLITE_BUSY/i.test(message)
-}
-
-function retryDelayMs(attempt: number): number {
-  return Math.min(1000, 50 * (2 ** attempt))
-}
-
-function withSqliteBusyRetry<T>(operation: () => T, context: string): T {
-  const maxAttempts = 8
-  let lastError: unknown
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      return operation()
-    } catch (error) {
-      if (!isSqliteBusyError(error)) throw error
-      lastError = error
-      if (attempt === maxAttempts - 1) break
-      Bun.sleepSync(retryDelayMs(attempt))
-    }
-  }
-  throw new Error(
-    `SQLite database is locked after ${maxAttempts} attempts while ${context}. Another economy sync/merge may be recovering the database; retry shortly.`,
-    { cause: lastError },
-  )
-}
-
-export function openDatabase(dbPath?: string, skipSeed = false): Database {
-  const path = dbPath ?? getDbPath()
-  if (path !== ':memory:') {
-    const dir = path.substring(0, path.lastIndexOf('/'))
-    if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
-  }
-  const db = withSqliteBusyRetry(() => {
-    const opened = new Database(path)
-    try {
-      opened.exec('PRAGMA busy_timeout = 10000')
-      opened.exec('PRAGMA journal_mode = WAL')
-      opened.exec('PRAGMA foreign_keys = ON')
-      initSchema(opened)
-      return opened
-    } catch (error) {
-      try { opened.close() } catch { /* best effort */ }
-      throw error
-    }
-  }, `opening ${path}`)
-  if (!skipSeed) {
-    // Lazy import to avoid circular dep — pricing imports db, db seeds pricing
-    import('../lib/pricing.js').then(({ ensurePricingSeeded }) => ensurePricingSeeded(db)).catch(() => {})
-  }
-  return db
-}
-
 function quoteSqlIdent(identifier: string): string {
   return `"${identifier.replace(/"/g, '""')}"`
 }
@@ -318,7 +265,7 @@ function addColumnIfMissing(db: Database, table: string, column: string, definit
   }
 }
 
-function initSchema(db: Database): void {
+export function initSchema(db: Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS cost_centers (
       id TEXT PRIMARY KEY,

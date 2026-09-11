@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { openDatabase, upsertRequest, upsertSubscription, upsertUsageSnapshot } from '../db/database.js'
+import { openDatabase, upsertRequest, upsertSubscription, upsertUsageSnapshot } from '../db/sqlite-store.js'
 import { computeSavedUsd, querySavingsSummary } from './savings.js'
 import { AGENTS, isAgent } from './agents.js'
 

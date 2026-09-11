@@ -1,7 +1,10 @@
 import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join, basename } from 'path'
-import { Database as BunDatabase } from 'bun:sqlite'
+// TYPE-ONLY: the handle is opened through the gated dynamic import in
+// ../db/third-party-sqlite.js, so `bun:sqlite` never lands in dist/cli or
+// dist/mcp (fleet-alignment ruling d).
+import type { Database as BunDatabase } from 'bun:sqlite'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import {
   upsertRequest, upsertSession, rollupSession, getIngestState, setIngestState, getMachineId,
@@ -117,12 +120,13 @@ function buildThreadQuery(codexDb: BunDatabase): string {
   `
 }
 
-function openCodexDb(dbPath: string, verbose: boolean): BunDatabase | null {
+async function openCodexDb(dbPath: string, verbose: boolean): Promise<BunDatabase | null> {
+  const { openThirdPartySqlite } = await import('../db/third-party-sqlite.js')
   let lastError: unknown
   for (const readonly of [true, false]) {
     let codexDb: BunDatabase | null = null
     try {
-      codexDb = readonly ? new BunDatabase(dbPath, { readonly: true }) : new BunDatabase(dbPath)
+      codexDb = openThirdPartySqlite(dbPath, { readonly })
       codexDb.prepare('PRAGMA schema_version').get()
       return codexDb
     } catch (error) {
@@ -221,7 +225,7 @@ export async function ingestCodex(db: Database, verbose = false): Promise<{ sess
 
     let codexDb: BunDatabase | null = null
     try {
-      codexDb = openCodexDb(source.dbPath, verbose)
+      codexDb = await openCodexDb(source.dbPath, verbose)
       if (!codexDb) continue
 
       const threads = codexDb.prepare(buildThreadQuery(codexDb)).all() as CodexThread[]

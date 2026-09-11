@@ -449,7 +449,7 @@ program
 
 program
   .command("save <text>")
-  .description("Save raw text as a recording (no audio). Routes to the /v1 API when configured, else the on-box SQLite store.")
+  .description("Save raw text as a recording (no audio). Writes to the hosted /v1 API; with no credential it fails closed (the on-box SQLite store is reachable only via HASNA_RECORDINGS_LOCAL=1).")
   .option("-t, --tags <tags>", "Comma-separated tags")
   .option("--enhance", "Enhance the text via the configured model before saving")
   .option("--model <model>", "Value for model_used", "direct-input")
@@ -1315,9 +1315,9 @@ program
     // vars whose mere presence flips the transport, so `check` has to name it:
     // auditing the wrong store is what made two separate reviews conclude that
     // persistence had broken when it had only moved.
-    const activeStore = describeActiveStore(config);
+    const activeStore = await describeActiveStore(config);
     // Sampled here, before any probe runs, so it reflects the store as found.
-    const localStoreWasLegacy = localStoreIsBehindSchema(config.db_path);
+    const localStoreWasLegacy = await localStoreIsBehindSchema(config.db_path);
 
     let capture: CaptureProbeResult | null = null;
     let credential: CredentialProbeResult | null = null;

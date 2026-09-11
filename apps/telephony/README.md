@@ -135,6 +135,29 @@ Retired credential locations (`fleet-env`, the shared-cloud dirs, `~/.config/has
 `~/.telephony/config.json`) and every `*_MODE` / `*_STORAGE_MODE` switch are
 gone: routing follows what resolves, not a mode word.
 
+**The SQLite engine is not inside the client bins.** `telephony`
+(`dist/cli/index.js`) and `telephony-mcp` (`dist/mcp/index.js`) contain no
+`bun:sqlite` at all; the on-box store is emitted as its own module
+(`dist/local/local-store.js`) and loaded through a single runtime import that
+refuses unless the opt-in above actually selected local mode. A hosted station
+therefore cannot open a local database even by accident — the code is not
+linked into the process.
+
+### Surfaces that still call the provider from the client
+
+Reads, record writes, and the `number search-available`, `number twilio-list`
+and `voices` passthroughs (which go through the server-side proxy) behave
+identically on both transports.
+
+These commands, however, still perform the provider call from THIS process,
+with whatever Twilio / ElevenLabs / Cerebras credentials the local environment
+holds, because the telephony service has no `/v1` route for them yet:
+`sms send`, `whatsapp send`, `whatsapp send-audio`, `call make`,
+`number provision`, `number release`, `number configure`, `tts`, `stt`,
+`schedule ai`, `ai-message`, `schedule run`. On a hosted run the record lands
+in the fleet while the side effect happens locally, under a key the service
+never saw — porting them to the API is tracked separately.
+
 ## Data Directory
 
 In the explicit local mode (`HASNA_TELEPHONY_LOCAL=1`) telephony stores data in

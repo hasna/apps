@@ -1,6 +1,5 @@
 import chalk from 'chalk'
 import { watch } from 'fs'
-import { openDatabase } from '../../db/database.js'
 import { syncAll } from '../../lib/sync-all.js'
 import { getStore, isCloudStore } from '../../lib/store/index.js'
 import { getWatchPaths } from '../../lib/watch-paths.js'
@@ -45,7 +44,9 @@ export async function watchCosts(opts: WatchOptions): Promise<void> {
   const cloud = isCloudStore()
   // Local ingestion writes to the on-box db; hosted mode streams the
   // shared dataset from the API and never ingests local files.
-  const db = cloud ? null : openDatabase()
+  // On-box ingestion only: the SQLite lane is loaded through ONE gated
+  // dynamic import, so a hosted watch never pulls `bun:sqlite` in.
+  const db = cloud ? null : (await import('../../db/sqlite-store.js')).openDatabase()
   let lastCheck = new Date(Date.now() - opts.interval * 1000).toISOString()
   const lines: string[] = []
   const MAX_LINES = 20

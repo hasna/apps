@@ -1,5 +1,5 @@
 import { startPortfolioFixture } from "../test/portfolio-client-fixture.test-support.js";
-import { LocalStore } from "../db/store.js";
+import { LocalStore } from "../db/local-store.js";
 const fixtures = new Map<string, Awaited<ReturnType<typeof startPortfolioFixture>>>();
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

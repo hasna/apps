@@ -2,7 +2,10 @@
 //
 // EVERY CLI command and MCP tool reads/writes through a `Store`. There are two
 // transports behind the one interface:
-//   • LocalStore  — on-box SQLite (src/db/*), first-class, fully functional.
+//   • LocalStore  — on-box SQLite (src/db/*), first-class, fully functional,
+//     implemented in src/local/sqlite-store.ts and loaded ONLY through the
+//     gated dynamic import in src/local/load.ts. Nothing in this module (and
+//     therefore nothing in dist/cli or dist/mcp) links `bun:sqlite` statically.
 //   • ApiStore    — the server's HTTP `/v1` API with a bearer key.
 //
 // The transport is resolved by `resolveRecordingsCloudClient`
@@ -26,10 +29,7 @@ import type {
   Agent,
   Project,
 } from "./types/index.js";
-import * as recordingsDb from "./db/recordings.js";
-import * as agentsDb from "./db/agents.js";
-import * as projectsDb from "./db/projects.js";
-import { saveFeedback as saveFeedbackLocal, type FeedbackInput } from "./db/feedback.js";
+import type { FeedbackInput } from "./db/feedback.js";
 import {
   resolveRecordingsCloudClient,
   type RecordsCloudClient,
@@ -38,12 +38,8 @@ import {
 } from "./http/client.js";
 import { createHash, randomUUID } from "node:crypto";
 import { recordingCreateIdentity } from "./lib/recording-create-identity.js";
-import { withLocalStoreReaderLease } from "./lib/install-maintenance.js";
-import {
-  AudioArtifactStorage,
-  resolveAudioArtifactStorage,
-  uploadAudioAtCreation,
-} from "./lib/audio-artifact-storage.js";
+import { announceRecordingsLocalMode } from "./lib/local-opt-in.js";
+import { loadLocalSqliteStore } from "./local/load.js";
 
 export const APP = "recordings";
 
@@ -113,73 +109,71 @@ function unwrap<T>(res: unknown, key: string): T {
   return res as T;
 }
 
-// ── LocalStore (on-box SQLite) ────────────────────────────────────────────────
+// ── LocalStore (on-box SQLite, loaded only when it is selected) ──────────────
+//
+// The implementation lives in src/local/sqlite-store.ts and is reached through
+// the ONE gated dynamic import in src/local/load.ts. This facade exists so
+// `getStore()` can stay synchronous while `bun:sqlite` and the whole src/db
+// tree stay OUT of dist/cli/index.js and dist/mcp/index.js: a hosted or
+// unconfigured run never evaluates the import, and the bundler emits the
+// sqlite module as a chunk outside those directories.
+//
+// Every method is already async on the `Store` interface, so awaiting the
+// module here changes no caller's contract.
 
 const localStore: Store = {
   mode: "sqlite",
   baseUrl: null,
   async createRecording(input, idempotencyKey) {
-    return withLocalStoreReaderLease(async () => {
-      const recording = recordingsDb.createRecording(input, undefined, idempotencyKey);
-      if (!recording.audio_path) return recording;
-      const uploaded = await uploadAudioAtCreation(
-        recording.id,
-        recording.audio_path,
-        localArtifactStorageFor(),
-      );
-      if (!uploaded) return recording;
-      return recordingsDb.updateRecordingAudio(
-        recording.id,
-        uploaded.objectKey,
-        uploaded.sha256,
-        uploaded.bytes,
-      ) ?? recording;
-    });
+    return (await loadLocalSqliteStore()).localStore.createRecording(input, idempotencyKey);
   },
   async getRecording(id) {
-    return withLocalStoreReaderLease(() => recordingsDb.getRecording(id));
+    return (await loadLocalSqliteStore()).localStore.getRecording(id);
   },
   async listRecordings(filter) {
-    return withLocalStoreReaderLease(() => recordingsDb.listRecordings(filter));
+    return (await loadLocalSqliteStore()).localStore.listRecordings(filter);
   },
   async countRecordings(filter) {
-    return withLocalStoreReaderLease(() => recordingsDb.countRecordings(filter));
+    const store = (await loadLocalSqliteStore()).localStore;
+    return store.countRecordings
+      ? store.countRecordings(filter)
+      : countStoreRecordings(store, filter);
   },
   async searchRecordings(query, filter) {
-    return withLocalStoreReaderLease(() => recordingsDb.searchRecordings(query, filter));
+    return (await loadLocalSqliteStore()).localStore.searchRecordings(query, filter);
   },
   async deleteRecording(id) {
-    return withLocalStoreReaderLease(() => recordingsDb.deleteRecording(id));
+    return (await loadLocalSqliteStore()).localStore.deleteRecording(id);
   },
   async getRecordingStats() {
-    return withLocalStoreReaderLease(() => recordingsDb.getRecordingStats());
+    return (await loadLocalSqliteStore()).localStore.getRecordingStats();
   },
   async registerAgent(name, description, role) {
-    return withLocalStoreReaderLease(() => agentsDb.registerAgent(name, description, role));
+    return (await loadLocalSqliteStore()).localStore.registerAgent(name, description, role);
   },
   async getAgent(idOrName) {
-    return withLocalStoreReaderLease(() => agentsDb.getAgent(idOrName));
+    return (await loadLocalSqliteStore()).localStore.getAgent(idOrName);
   },
   async listAgents() {
-    return withLocalStoreReaderLease(() => agentsDb.listAgents());
+    return (await loadLocalSqliteStore()).localStore.listAgents();
   },
   async heartbeatAgent(idOrName) {
-    return withLocalStoreReaderLease(() => agentsDb.heartbeatAgent(idOrName));
+    return (await loadLocalSqliteStore()).localStore.heartbeatAgent(idOrName);
   },
   async setAgentFocus(idOrName, projectId) {
-    return withLocalStoreReaderLease(() => agentsDb.setAgentFocus(idOrName, projectId));
+    return (await loadLocalSqliteStore()).localStore.setAgentFocus(idOrName, projectId);
   },
   async registerProject(name, path, description) {
-    return withLocalStoreReaderLease(() => projectsDb.registerProject(name, path, description));
+    return (await loadLocalSqliteStore()).localStore.registerProject(name, path, description);
   },
   async getProject(idOrPath) {
-    return withLocalStoreReaderLease(() => projectsDb.getProject(idOrPath));
+    return (await loadLocalSqliteStore()).localStore.getProject(idOrPath);
   },
   async listProjects() {
-    return withLocalStoreReaderLease(() => projectsDb.listProjects());
+    return (await loadLocalSqliteStore()).localStore.listProjects();
   },
   async saveFeedback(input) {
-    await withLocalStoreReaderLease(() => saveFeedbackLocal(input));
+    await (await loadLocalSqliteStore()).localStore.saveFeedback(input);
   },
 };
 
@@ -398,24 +392,13 @@ export async function countStoreRecordings(
 
 let cached: Store | null = null;
 
-// Test seam: an explicit artifact storage that wins over env resolution for
-// the LocalStore upload-at-creation path. Mirrors __resetStore's contract —
-// tests that inject a storage must reset it in afterEach.
-let localArtifactStorageOverride: AudioArtifactStorage | null | undefined;
-
-function localArtifactStorageFor(): AudioArtifactStorage {
-  return localArtifactStorageOverride ?? resolveAudioArtifactStorage();
-}
-
-/** Test helper: force the LocalStore's artifact kit (e.g. an in-memory bucket). */
-export function __setLocalArtifactStorage(storage: AudioArtifactStorage | null): void {
-  localArtifactStorageOverride = storage;
-}
-
-/** Test helper: clear the artifact-storage override. */
-export function __resetLocalArtifactStorage(): void {
-  localArtifactStorageOverride = undefined;
-}
+// The LocalStore's artifact-kit test seam. State only, no `bun:sqlite`, so it
+// can be re-exported from here without dragging the local store back into the
+// hosted bundles (see src/local/artifact-storage.ts).
+export {
+  __setLocalArtifactStorage,
+  __resetLocalArtifactStorage,
+} from "./local/artifact-storage.js";
 
 /**
  * Resolve the active Store from the environment. Cached per-process after first
@@ -432,6 +415,10 @@ export function getStore(
 ): Store {
   if (env === process.env && cached && options.credentials === undefined) return cached;
   const client = resolveRecordingsCloudClient(env, options);
+  // Selecting the on-box store is a decision the operator must SEE. One line on
+  // stderr, once per process, whichever surface asked (the MCP server announces
+  // it at startup through the same helper, so a local MCP still says it once).
+  if (!client) announceRecordingsLocalMode();
   const store = client ? apiStore(client) : localStore;
   if (env === process.env && options.credentials === undefined) cached = store;
   return store;

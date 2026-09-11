@@ -21,10 +21,18 @@
  *    transport defaults @hasna/accounts shipped with, resolved through the
  *    shared client chain rather than by hand.
  *  - Transport selection is the resolved credential alone: the API when
- *    `@hasna/contracts` resolves an accounts credential for the environment,
- *    else the local JSON registry. Deployment modes no longer exist; a stale
- *    retired `*_STORAGE_MODE` / `*_MODE` variable is inert — ignored, never a
- *    selector and never an error (owner directive 2026-08-15).
+ *    `@hasna/contracts` resolves an accounts credential for the environment.
+ *    Deployment modes no longer exist; a stale retired `*_STORAGE_MODE` /
+ *    `*_MODE` variable is inert — ignored, never a selector and never an error
+ *    (owner directive 2026-08-15).
+ *  - FAIL-CLOSED GATE (fleet-alignment ruling d, 2026-09-11). When no accounts
+ *    credential resolves, the on-box JSON registry is served ONLY under
+ *    economy's explicit local opt-in (`HASNA_ECONOMY_LOCAL=1`, alias
+ *    `ECONOMY_LOCAL=1`) — the same gate economy's own store uses. Without it
+ *    (a hosted client, or a client with nothing configured at all) the registry
+ *    is NOT read: attribution is simply absent, announced once on stderr. A
+ *    hosted run that quietly attributed its spend from an on-box JSON file was
+ *    the last silent-local branch in this package.
  *
  * When @hasna-internal/subscriptions is published, this file can be replaced
  * by a thin adapter over its SubscriptionsStore (same shape, new env vars).
@@ -34,6 +42,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { resolveClientTransport, resolveCredential, type CredentialChainOptions } from '@hasna/contracts/client'
+import { LOCAL_STORAGE_OPT_IN_KEYS } from './cloud-storage.js'
 
 /** The accounts app slug for the @hasna/contracts credential chain. */
 const ACCOUNTS_APP = 'accounts'
@@ -81,11 +90,29 @@ export type Profile = z.infer<typeof profileSchema>
 export type ToolDef = z.infer<typeof toolDefSchema>
 
 /**
- * The minimal store surface economy uses for attribution. Both transports
- * (local JSON and accounts-serve API) implement it.
+ * Is the on-box JSON registry allowed for this run?
+ *
+ * The env dictionary ALONE, exactly like economy's own storage seam: answering
+ * it must not touch the Keychain or the filesystem. Reuses economy's opt-in
+ * keys rather than inventing a second spelling, so ONE flag governs every
+ * on-box read this package performs.
+ */
+function localRegistryAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return LOCAL_STORAGE_OPT_IN_KEYS.some((key) => {
+    const raw = env[key]
+    if (raw === undefined) return false
+    const value = raw.trim().toLowerCase()
+    return value !== '' && value !== '0' && value !== 'false' && value !== 'no' && value !== 'off'
+  })
+}
+
+/**
+ * The minimal store surface economy uses for attribution. All three transports
+ * (local JSON, accounts-serve API, and the refusing no-registry store)
+ * implement it.
  */
 export interface AccountsStore {
-  readonly transport: 'local' | 'api'
+  readonly transport: 'local' | 'api' | 'none'
   listProfiles(tool?: string): Promise<Profile[]>
   findProfile(name: string, tool?: string): Promise<Profile | undefined>
   currentProfile(tool: string): Promise<Profile | undefined>
@@ -120,6 +147,9 @@ const EMPTY_STORE: z.infer<typeof storeSchema> = {
 }
 
 function parseStoreFile(): z.infer<typeof storeSchema> {
+  // Defence in depth: no code path reads the on-box registry file outside the
+  // local opt-in, including the `applied` lookup that bypasses the store.
+  if (!localRegistryAllowed()) return structuredClone(EMPTY_STORE)
   const path = storePath()
   if (!existsSync(path)) return structuredClone(EMPTY_STORE)
   let raw: unknown
@@ -143,8 +173,15 @@ function loadAppliedMap(): Record<string, string> {
   return applied
 }
 
-/** The profile name last applied to a tool's live default paths, if any. */
+/**
+ * The profile name last applied to a tool's live default paths, if any.
+ *
+ * Reads the on-box registry directly (not through the store), so it carries
+ * the same gate: without economy's local opt-in there is no applied profile,
+ * because the file is not read at all.
+ */
 export function appliedProfileName(toolId: string): string | undefined {
+  if (!localRegistryAllowed()) return undefined
   return loadAppliedMap()[toolId]
 }
 
@@ -192,6 +229,37 @@ class LocalStore implements AccountsStore {
     for (const tool of BUILTIN_TOOLS) byId.set(tool.id, tool)
     for (const tool of custom) byId.set(tool.id, tool)
     return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id))
+  }
+}
+
+/**
+ * The no-registry store: what a run gets when no accounts credential resolves
+ * and economy's local opt-in is NOT set.
+ *
+ * It answers the attribution queries with "nothing known" — the built-in tool
+ * table (static data compiled into this package, not a local dataset) and no
+ * profiles — so spend attribution is simply absent instead of being silently
+ * filled in from an on-box JSON file that the hosted fleet never sees. The
+ * refusal is announced once on stderr; env overrides (`ECONOMY_ACCOUNT*`) are
+ * resolved before the store is consulted and keep working.
+ */
+class NoRegistryStore implements AccountsStore {
+  readonly transport = 'none' as const
+
+  async listProfiles(): Promise<Profile[]> {
+    return []
+  }
+
+  async findProfile(): Promise<Profile | undefined> {
+    return undefined
+  }
+
+  async currentProfile(): Promise<Profile | undefined> {
+    return undefined
+  }
+
+  async listTools(): Promise<ToolDef[]> {
+    return BUILTIN_TOOLS.slice().sort((a, b) => a.id.localeCompare(b.id))
   }
 }
 
@@ -381,13 +449,18 @@ class ApiStore implements AccountsStore {
 
 /**
  * Resolve the active registry store for this process — the credential chain
- * alone: the API transport when `@hasna/contracts` resolves an accounts
+ * first: the API transport when `@hasna/contracts` resolves an accounts
  * credential for this environment (env `HASNA_ACCOUNTS_API_KEY` / legacy
  * `ACCOUNTS_API_KEY`, the accounts credentials file, or the Keychain, with the
- * authority defaulted to the fleet gateway `https://api.hasna.com/accounts`),
- * else the local JSON registry. Stale `*_STORAGE_MODE` / `*_MODE` variables
- * are ignored — they never select a store and never error (owner directive
- * 2026-08-15).
+ * authority defaulted to the fleet gateway `https://api.hasna.com/accounts`).
+ * Stale `*_STORAGE_MODE` / `*_MODE` variables are ignored — they never select
+ * a store and never error (owner directive 2026-08-15).
+ *
+ * WITH NO CREDENTIAL the on-box JSON registry is served ONLY under economy's
+ * explicit local opt-in (`HASNA_ECONOMY_LOCAL=1` / `ECONOMY_LOCAL=1`); every
+ * other run gets {@link NoRegistryStore} — no on-box read, attribution absent,
+ * one stderr line. Serving the on-box registry to a hosted client was the last
+ * silent-local branch in economy (fleet-alignment ruling d, 2026-09-11).
  *
  * FAIL CLOSED ON MISCONFIGURATION (hasna/apps#1720): the local registry is
  * selected ONLY by "no credential AND no authority configure the API". A
@@ -419,15 +492,11 @@ export function resolveStore(
     try {
       resolveClientTransport(ACCOUNTS_APP, clientEnv, options.credentials ? { credentials: options.credentials } : {})
     } catch (err) {
-      if (isNoAccountsCredentialConfigurationError(err)) {
-        announceAccountsLocalMode()
-        return new LocalStore()
-      }
+      if (isNoAccountsCredentialConfigurationError(err)) return unconfiguredStore(env)
       throw err
     }
     // Unreachable: the transport throws whenever no credential resolves.
-    announceAccountsLocalMode()
-    return new LocalStore()
+    return unconfiguredStore(env)
   }
   if (credential.tier === 'pointer') {
     // The API store resolves its credential synchronously at construction and
@@ -468,13 +537,37 @@ function isNoAccountsCredentialConfigurationError(error: unknown): boolean {
   )
 }
 
+/**
+ * The store for "no accounts credential resolved": the on-box registry under
+ * economy's explicit local opt-in, otherwise the refusing no-registry store.
+ * Either way the run says on stderr, once, which one it got.
+ */
+function unconfiguredStore(env: NodeJS.ProcessEnv): AccountsStore {
+  if (localRegistryAllowed(env)) {
+    announceAccountsLocalMode()
+    return new LocalStore()
+  }
+  announceAccountsRefusal()
+  return new NoRegistryStore()
+}
+
 /** The one line a local run prints, so attribution from the local registry is never silent. */
 function accountsLocalModeNotice(): string {
   return (
-    'accounts: local mode — no Hasna Accounts credential resolved, so attribution reads the on-box JSON ' +
-    'registry (~/.hasna/accounts/accounts.json) instead of accounts-serve. To go hosted, put the fleet key ' +
-    'in the Keychain item hasna.credentials.accounts.api-key, write ~/.hasna/accounts/config/credentials, ' +
-    'or set HASNA_ACCOUNTS_API_KEY.'
+    `accounts: LOCAL mode (${LOCAL_STORAGE_OPT_IN_KEYS[0]}=1) — no Hasna Accounts credential resolved, so ` +
+    'attribution reads the on-box JSON registry (~/.hasna/accounts/accounts.json) instead of accounts-serve. ' +
+    'To go hosted, put the fleet key in the Keychain item hasna.credentials.accounts.api-key, write ' +
+    '~/.hasna/accounts/config/credentials, or set HASNA_ACCOUNTS_API_KEY.'
+  )
+}
+
+/** The one line a refused run prints: the on-box registry was NOT read. */
+function accountsRefusalNotice(): string {
+  return (
+    'accounts: no Hasna Accounts credential resolved (Keychain item hasna.credentials.accounts.api-key, ' +
+    '~/.hasna/accounts/config/credentials, HASNA_ACCOUNTS_API_KEY), so spend attribution is omitted. The ' +
+    `on-box registry (~/.hasna/accounts/accounts.json) is NOT read without ${LOCAL_STORAGE_OPT_IN_KEYS[0]}=1 — ` +
+    'economy fails closed instead of attributing hosted spend from an on-box file.'
   )
 }
 
@@ -490,4 +583,11 @@ function announceAccountsLocalMode(): void {
   if (accountsLocalNoticePrinted) return
   accountsLocalNoticePrinted = true
   process.stderr.write(`${accountsLocalModeNotice()}\n`)
+}
+
+/** Say — once per process, on stderr — that the on-box registry was refused. */
+function announceAccountsRefusal(): void {
+  if (accountsLocalNoticePrinted) return
+  accountsLocalNoticePrinted = true
+  process.stderr.write(`${accountsRefusalNotice()}\n`)
 }

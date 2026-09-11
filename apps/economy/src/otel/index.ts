@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
-import { openDatabase } from '../db/database.js'
+// `economy-otel` is a server-side sidecar bin: it owns the on-box lane, so it
+// imports the SQLite store statically (dist/otel, not a client bundle).
+import { openDatabase } from '../db/sqlite-store.js'
 import { ingestOtelRows, parseOtlpMetrics, parseSimpleIngest } from '../ingest/otel.js'
 import type { OtelIngestRow } from '../ingest/otel.js'
 import { pushIngestRows } from '../lib/cloud-ingest.js'

@@ -117,6 +117,37 @@ export function selectsRecordingsLocalStore(
 }
 
 /**
+ * The ONE line a process prints when it lands on the on-box store.
+ *
+ * Local mode is deliberate, but it is also invisible: the same command reads a
+ * different dataset, and nothing on the wire says so. Every surface announces
+ * it with this text, exactly once per process — the MCP server at startup, the
+ * CLI (and any `./sdk` consumer) the first time `getStore()` resolves — so an
+ * operator never has to infer which store answered.
+ */
+export const RECORDINGS_LOCAL_MODE_NOTICE =
+  "recordings: LOCAL mode — HASNA_RECORDINGS_LOCAL is set and nothing configures an authority; " +
+  "reading and writing the on-box SQLite store, not the hosted fleet. " +
+  "Set HASNA_RECORDINGS_API_KEY, add the Keychain item hasna.credentials.recordings.api-key, " +
+  "or write ~/.hasna/recordings/config/credentials to go hosted.";
+
+let localModeAnnounced = false;
+
+/** Print {@link RECORDINGS_LOCAL_MODE_NOTICE} on stderr, at most once per process. */
+export function announceRecordingsLocalMode(
+  write: (line: string) => void = (line) => console.error(line),
+): void {
+  if (localModeAnnounced) return;
+  localModeAnnounced = true;
+  write(RECORDINGS_LOCAL_MODE_NOTICE);
+}
+
+/** Test helper: forget that the notice was printed. */
+export function __resetRecordingsLocalModeAnnouncement(): void {
+  localModeAnnounced = false;
+}
+
+/**
  * The environment as the resolver should see it: every authority/credential
  * variable that is DECLARED BUT BLANK removed, plus the two carved unprefixed
  * names this package reserves for its older contract (`RECORDINGS_API_KEY` is

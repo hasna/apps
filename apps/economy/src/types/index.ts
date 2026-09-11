@@ -212,6 +212,14 @@ export interface SyncOptions {
   dedupe?: boolean
   /** Claude/Takumi JSONL root override (tests). */
   projectsDir?: string
+  /**
+   * Refuse collectors that read ANOTHER Hasna app's on-box SQLite (today: the
+   * `loops` collector, which reads `~/.hasna/loops/loops.db`). Set by the
+   * hosted push (`syncAllToCloud`): a client with a hosted credential never
+   * takes another app's local store as fleet truth — that data must come from
+   * the loops API. PORT-TO-API, tracked for W13 (fleet-alignment ruling d).
+   */
+  noCrossAppLocalReads?: boolean
 }
 
 export interface SessionFilter {

@@ -14,7 +14,7 @@ import {
   queryZeroCostTokenizedModels,
   dedupeRequests,
   upsertCostCenter, getCostCenter, queryCostCenterBreakdown,
-} from './database.js'
+} from './sqlite-store.js'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'

@@ -3,7 +3,7 @@ import { Database as BunDatabase } from 'bun:sqlite'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { openDatabase, getIngestState } from '../db/database.js'
+import { openDatabase, getIngestState } from '../db/sqlite-store.js'
 import { AUTOSYNC_STATE_SOURCE, AUTOSYNC_STATE_KEY } from '../lib/autosync-gate.js'
 
 const root = new URL('../../', import.meta.url).pathname.replace(/\/$/, '')

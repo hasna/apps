@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import type { Domain } from "./domain-records.js";
-import { ApiStore, LocalStore, getStore, isCloudStore } from "./store.js";
+import { ApiStore, getStore, isCloudStore } from "./store.js";
+import { LocalStore } from "./local-store.js";
 
 function domain(overrides: Partial<Domain> = {}): Domain {
   return {

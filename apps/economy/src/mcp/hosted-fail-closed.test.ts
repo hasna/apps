@@ -90,7 +90,7 @@ describe('economy-mcp in hosted mode (hasna/apps#1720)', () => {
     // sidecar) exists anywhere under the run's HOME, app home included.
     expect(sqliteFilesUnder(home)).toEqual([])
     expect(existsSync(join(home, 'economy-home', 'agent-registry.db'))).toBe(false)
-    expect(stderrChunks.join('')).not.toContain('local mode')
+    expect(stderrChunks.join('').toLowerCase()).not.toContain('local mode')
   })
 
   it('fails closed with the resolver diagnostic as the first stderr line when no credential resolves', async () => {
