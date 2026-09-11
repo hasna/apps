@@ -96,7 +96,7 @@ controls and managed requirements still apply. Start a new conversation after
 changing launch defaults; existing conversations can retain their own settings.
 
 Browser and Computer Use are local app tools, separate from the inference
-provider. From 0.1.10, Switcher preserves the app's sandbox-helper arguments so
+provider. Switcher preserves the app's sandbox-helper arguments so
 the installed tool runtime can start. Enable the app's browser/computer plugins
 and the browser extension in the desired profile; website permissions, macOS
 Accessibility/Screen Recording permissions, workspace policy and model
