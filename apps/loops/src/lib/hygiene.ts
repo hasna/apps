@@ -4,6 +4,21 @@ import type { Loop, LoopRun, ScheduleSpec } from "../types.js";
 import type { Store } from "./store.js";
 import { advanceLoop } from "./scheduler.js";
 
+/**
+ * The reads the loop-inventory hygiene checks need, named as a contract instead
+ * of a concrete sqlite {@link Store}.
+ *
+ * The local {@link Store} satisfies it structurally, so every existing caller is
+ * unchanged; a hosted source (see `hosted-hygiene.ts`) implements it over loops
+ * already fetched from `/v1`. `renameLoop` is OPTIONAL: a hosted source cannot
+ * rename synchronously, so the hosted path builds the report here and applies
+ * the renames itself through the async client.
+ */
+export interface HygieneLoopSource {
+  listLoops(opts?: { includeArchived?: boolean; limit?: number }): Loop[];
+  renameLoop?(id: string, name: string): unknown;
+}
+
 export interface NameHygieneChange {
   id: string;
   status: string;
@@ -178,7 +193,7 @@ function ensureUnique(changes: NameHygieneChange[], existingNames: Iterable<stri
   }
 }
 
-function managedLoops(store: Store, opts: { includeStopped?: boolean; includeInactive?: boolean; limit?: number }): Loop[] {
+function managedLoops(store: HygieneLoopSource, opts: { includeStopped?: boolean; includeInactive?: boolean; limit?: number }): Loop[] {
   const loops = store.listLoops({ includeArchived: Boolean(opts.includeInactive), limit: opts.limit ?? 1_000 });
   if (opts.includeInactive) return loops;
   if (opts.includeStopped) return loops.filter((loop) => loop.status !== "expired");
@@ -186,7 +201,7 @@ function managedLoops(store: Store, opts: { includeStopped?: boolean; includeIna
 }
 
 export function buildNameHygieneReport(
-  store: Store,
+  store: HygieneLoopSource,
   opts: { apply?: boolean; includeStopped?: boolean; includeInactive?: boolean; limit?: number } = {},
 ): NameHygieneReport {
   const allLoops = store.listLoops({ includeArchived: true, limit: 10_000 });
@@ -202,6 +217,9 @@ export function buildNameHygieneReport(
   const changed = changes.filter((change) => change.changed);
   const conflicts = changes.filter((change) => allLoops.some((loop) => loop.name === change.newName && loop.id !== change.id));
   if (opts.apply) {
+    if (!store.renameLoop) {
+      throw new Error("this hygiene source cannot apply renames; apply them through the caller's client");
+    }
     for (const change of changed) store.renameLoop(change.id, change.newName);
   }
   return {
@@ -234,7 +252,7 @@ function targetCwd(loop: Loop): string {
 }
 
 export function buildDuplicateOverlapReport(
-  store: Store,
+  store: HygieneLoopSource,
   opts: { includeInactive?: boolean; limit?: number } = {},
 ): DuplicateOverlapReport {
   const loops = managedLoops(store, { includeInactive: opts.includeInactive, includeStopped: true, limit: opts.limit });
@@ -295,7 +313,7 @@ function scriptNeedles(scriptsDir: string): string[] {
 }
 
 export function buildScriptInventoryReport(
-  store: Store,
+  store: HygieneLoopSource,
   opts: { scriptsDir?: string; includeInactive?: boolean; limit?: number } = {},
 ): ScriptInventoryReport {
   const scriptsDir = opts.scriptsDir ?? `${userHome()}/.hasna/loops/scripts`;
