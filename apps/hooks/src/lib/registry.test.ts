@@ -13,8 +13,8 @@ import {
 
 describe("registry", () => {
   describe("HOOKS", () => {
-    test("contains 51 hooks", () => {
-      expect(HOOKS).toHaveLength(51);
+    test("contains 52 hooks", () => {
+      expect(HOOKS).toHaveLength(52);
     });
 
     test("every hook has required fields", () => {
@@ -84,7 +84,7 @@ describe("registry", () => {
   describe("getHooksByCategory", () => {
     test("returns Git Safety hooks", () => {
       const hooks = getHooksByCategory("Git Safety");
-      expect(hooks).toHaveLength(6);
+      expect(hooks).toHaveLength(7);
       expect(hooks.map((h) => h.name)).toContain("gitguard");
       expect(hooks.map((h) => h.name)).toContain("branchprotect");
       expect(hooks.map((h) => h.name)).toContain("checkpoint");
@@ -316,7 +316,7 @@ describe("registry", () => {
     });
 
     test("correct count per event type", () => {
-      expect(HOOKS.filter((h) => h.event === "PreToolUse")).toHaveLength(16);
+      expect(HOOKS.filter((h) => h.event === "PreToolUse")).toHaveLength(17);
       expect(HOOKS.filter((h) => h.event === "PostToolUse")).toHaveLength(17);
       expect(HOOKS.filter((h) => h.event === "Stop")).toHaveLength(9);
       expect(HOOKS.filter((h) => h.event === "Notification")).toHaveLength(3);

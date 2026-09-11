@@ -39,7 +39,7 @@ import {
   type Scope,
   type Target,
 } from "../lib/installer.js";
-import { hookRegisteredInSettings, countSettingsWiring } from "../lib/registration.js";
+import { hookRegisteredInSettings, countSettingsWiring, findRewriteOverlaps } from "../lib/registration.js";
 import { projectEventRowForRead } from "../lib/redact.js";
 import {
   createProfile,
@@ -1112,6 +1112,19 @@ program
       if (hookHealthy) {
         healthy.push(name);
       }
+    }
+
+    // Two installed PreToolUse hooks that both rewrite the tool input cannot
+    // both win: the harness applies ONE rewrite per tool call, so the losing
+    // guard is silently disarmed (no error anywhere). Install refuses that
+    // pairing; this catches settings files written before the rule existed,
+    // or hand-edited ones.
+    for (const overlap of findRewriteOverlaps(registered, (name) => getHook(name))) {
+      issues.push({
+        hook: overlap.hooks.join(" + "),
+        issue: `Both rewrite the tool input on overlapping ${overlap.event} matchers ('${overlap.matchers[0]}' / '${overlap.matchers[1]}'); only one rewrite is applied per tool call, so one of these guards is silently disarmed. Remove one, or narrow a matcher so they no longer overlap.`,
+        severity: "error",
+      });
     }
 
     if (options.json) {

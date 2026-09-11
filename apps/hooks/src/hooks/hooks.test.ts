@@ -554,6 +554,7 @@ describe("hook package.json structure", () => {
     "hook-affected-tests", "hook-conflict-detect",
     "session-start", "pre-bash", "prompt-guard", "worktree-guard", "stop-sync",
     "hook-fleet-catchup", "hook-agent-rules-version-check", "hook-fleet-blockers-gate",
+    "hook-trash-guard",
   ];
 
   for (const hookDir of hookDirsForPkg) {
@@ -592,6 +593,7 @@ describe("hook source files exist", () => {
     "hook-affected-tests", "hook-conflict-detect",
     "session-start", "pre-bash", "prompt-guard", "worktree-guard", "stop-sync",
     "hook-fleet-catchup", "hook-agent-rules-version-check", "hook-fleet-blockers-gate",
+    "hook-trash-guard",
   ];
 
   for (const hookDir of hookDirs) {

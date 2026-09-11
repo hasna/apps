@@ -203,9 +203,9 @@ describe("MCP server", () => {
 
     test("hooks_list returns all hooks by category", async () => {
       const data = parseResult(await client.callTool({ name: "hooks_list", arguments: {} }));
-      expect(data.total).toBe(51);
+      expect(data.total).toBe(52);
       expect(data.count).toBe(25);
-      expect(data.omitted).toBe(26);
+      expect(data.omitted).toBe(27);
       expect(data.hooks[0]).toHaveProperty("name");
       expect(data.hooks[0]).not.toHaveProperty("description");
       expect(data.hint).toContain("compact:false");
@@ -213,7 +213,7 @@ describe("MCP server", () => {
 
     test("hooks_list compact false returns full grouped hooks", async () => {
       const data = parseResult(await client.callTool({ name: "hooks_list", arguments: { compact: false } }));
-      expect(data["Git Safety"]).toHaveLength(6);
+      expect(data["Git Safety"]).toHaveLength(7);
       expect(data["Code Quality"]).toHaveLength(9);
       expect(data["Security"]).toHaveLength(4);
       expect(data["Notifications"]).toHaveLength(5);
@@ -237,7 +237,7 @@ describe("MCP server", () => {
 
     test("hooks_list category is case-insensitive", async () => {
       const data = parseResult(await client.callTool({ name: "hooks_list", arguments: { category: "git safety" } }));
-      expect(listItems(data)).toHaveLength(6);
+      expect(listItems(data)).toHaveLength(7);
     });
 
     // --- hooks_search ---
@@ -368,9 +368,9 @@ describe("MCP server", () => {
 
     test("hooks_install_all installs default-compatible hooks", async () => {
       const data = parseResult(await client.callTool({ name: "hooks_install_all", arguments: {} }));
-      expect(data.total).toBe(51);
-      expect(data.success).toBe(49);
-      expect(data.installed).toHaveLength(49);
+      expect(data.total).toBe(52);
+      expect(data.success).toBe(50);
+      expect(data.installed).toHaveLength(50);
       expect(data.failed.map((f: any) => f.hook)).toEqual(["knowledge-context", "prompt-guard"]);
     });
 
@@ -483,7 +483,7 @@ describe("MCP server", () => {
     test("hooks_categories counts match", async () => {
       const data = parseResult(await client.callTool({ name: "hooks_categories", arguments: {} }));
       const gitSafety = data.find((c: any) => c.name === "Git Safety");
-      expect(gitSafety.count).toBe(6);
+      expect(gitSafety.count).toBe(7);
       const codeQuality = data.find((c: any) => c.name === "Code Quality");
       expect(codeQuality.count).toBe(9);
     });
@@ -597,13 +597,13 @@ describe("MCP server", () => {
     test("hooks_install_category with overwrite re-installs", async () => {
       await client.callTool({ name: "hooks_install_category", arguments: { category: "Git Safety" } });
       const data = parseResult(await client.callTool({ name: "hooks_install_category", arguments: { category: "Git Safety", overwrite: true } }));
-      expect(data.installed).toHaveLength(6);
+      expect(data.installed).toHaveLength(7);
     });
 
     test("hooks_install_all with overwrite after install", async () => {
       await client.callTool({ name: "hooks_install_all", arguments: {} });
       const data = parseResult(await client.callTool({ name: "hooks_install_all", arguments: { overwrite: true } }));
-      expect(data.success).toBe(49);
+      expect(data.success).toBe(50);
     });
 
     // --- docs for every hook ---
@@ -664,7 +664,7 @@ describe("MCP server", () => {
 
     test("install all compatible default hooks then remove a subset", async () => {
       const install = parseResult(await client.callTool({ name: "hooks_install_all", arguments: {} }));
-      expect(install.success).toBe(49);
+      expect(install.success).toBe(50);
 
       const allHooks = [
         "gitguard", "branchprotect", "checkpoint",
@@ -977,7 +977,7 @@ describe("MCP server", () => {
 
     test("hooks_list compact returns minimal fields", async () => {
       const data = parseResult(await client.callTool({ name: "hooks_list", arguments: { compact: true } }));
-      expect(data.total).toBe(51);
+      expect(data.total).toBe(52);
       expect(data.count).toBe(25);
       expect(data.hooks[0]).toHaveProperty("name");
       expect(data.hooks[0]).toHaveProperty("event");

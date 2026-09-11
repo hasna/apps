@@ -53,7 +53,7 @@ import {
 } from "../lib/profiles.js";
 import { readCustomManifest } from "../lib/manifest.js";
 import { resolveHookMeta } from "../lib/resolve.js";
-import { hookRegisteredInSettings } from "../lib/registration.js";
+import { hookRegisteredInSettings, findRewriteOverlaps } from "../lib/registration.js";
 import { sha256Of, checkScriptHash } from "../lib/store.js";
 import { projectEventRowForRead } from "../lib/redact.js";
 import { secureEqual } from "../lib/secure-compare.js";
@@ -410,6 +410,16 @@ export function createHooksServer(): McpServer {
         }
 
         if (hookHealthy) healthy.push(name);
+      }
+
+      // Two input-rewriting PreToolUse hooks on overlapping matchers: only one
+      // rewrite wins per tool call, so the other guard is silently disarmed.
+      for (const overlap of findRewriteOverlaps(registered, (name) => getHook(name))) {
+        issues.push({
+          hook: overlap.hooks.join(" + "),
+          issue: `Both rewrite the tool input on overlapping ${overlap.event} matchers ('${overlap.matchers[0]}' / '${overlap.matchers[1]}'); only one rewrite is applied per tool call, so one of these guards is silently disarmed. Remove one, or narrow a matcher so they no longer overlap.`,
+          severity: "error",
+        });
       }
 
       return { content: [{ type: "text", text: JSON.stringify({ healthy: issues.length === 0, healthy_hooks: healthy, issues, registered, scope }) }] };

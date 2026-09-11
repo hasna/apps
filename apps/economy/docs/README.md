@@ -1,6 +1,6 @@
 # Economy documentation
 
-Economy can run as an on-machine SQLite application or as a client of a shared self-hosted HTTP service. These guides describe the current command and network surfaces:
+Economy can run as an on-machine SQLite application or as a client of a shared HTTP service. These guides describe the current command and network surfaces:
 
 - [CLI reference](cli.md) — the `economy` command and the four installed binaries.
 - [Ingestion](ingestion.md) — supported sources, default paths, sync behavior, billing, and account attribution.
