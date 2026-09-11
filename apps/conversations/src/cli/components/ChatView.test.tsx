@@ -1,33 +1,29 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { readMessages } from "../../lib/messages.js";
-import { closeDb } from "../../lib/db.js";
+import { getStore } from "../../lib/store/index.js";
+import { startLoopbackApiFixture } from "../../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../../lib/store/test-support/client-environment.js";
 import { submitChatViewMessage } from "./ChatView.js";
 
-const TEST_DB = join(tmpdir(), `conversations-chat-view-${Date.now()}.db`);
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+let restoreClient: () => void;
 
 function syntheticDatabaseUrl(): string {
   return ["postgres", "://", "tui_user:synthetic-password", "@db.example.invalid/app"].join("");
 }
 
-beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-  closeDb();
+beforeEach(async () => {
+  fixture = await startLoopbackApiFixture();
+  restoreClient = activateClientEnvironment(fixture.env);
 });
-
-afterEach(() => {
-  closeDb();
-  try { unlinkSync(TEST_DB); } catch {}
-  try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-  try { unlinkSync(`${TEST_DB}-shm`); } catch {}
+afterEach(async () => {
+  restoreClient();
+  await fixture.stop();
 });
 
 describe("submitChatViewMessage", () => {
-  test("blocks sensitive content without throwing, echoing, or persisting", () => {
+  test("blocks sensitive content without throwing, echoing, or persisting", async () => {
     const blocked = syntheticDatabaseUrl();
-    const result = submitChatViewMessage(
+    const result = await submitChatViewMessage(
       { agent: "tui-sender", recipient: "tui-recipient" },
       `blocked ${blocked}`
     );
@@ -35,13 +31,14 @@ describe("submitChatViewMessage", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("blocked");
+      expect(result.blocked).toBe(true);
       expect(result.error).not.toContain(blocked);
     }
-    expect(readMessages({ to: "tui-recipient" })).toHaveLength(0);
+    expect(await getStore().readMessages({ to: "tui-recipient" })).toHaveLength(0);
   });
 
-  test("sends safe content", () => {
-    const result = submitChatViewMessage(
+  test("sends safe content", async () => {
+    const result = await submitChatViewMessage(
       { agent: "tui-sender", recipient: "tui-recipient" },
       "safe chat message"
     );
@@ -50,6 +47,6 @@ describe("submitChatViewMessage", () => {
     if (result.ok) {
       expect(result.message.content).toBe("safe chat message");
     }
-    expect(readMessages({ to: "tui-recipient" })).toHaveLength(1);
+    expect(await getStore().readMessages({ to: "tui-recipient" })).toHaveLength(1);
   });
 });

@@ -26,6 +26,8 @@ let input: DomainConnectInput,
   registrations: number,
   reads: number,
   registered: boolean;
+// A cold schema rebuild can exceed Bun's default 5s hook deadline. Match the
+// neighboring domain-DNS setup allowance; individual case deadlines stay intact.
 beforeAll(async () => {
   if (!url) return;
   pool = createPgPool({ connectionString: url, env: { PGSSLMODE: "disable" } });
@@ -40,7 +42,7 @@ beforeAll(async () => {
     "INSERT INTO tenants(id,slug,name) VALUES($1,'connect-a','A'),($2,'connect-b','B') ON CONFLICT(id) DO NOTHING",
     [tenantA, tenantB],
   );
-});
+}, 60_000);
 beforeEach(async () => {
   if (!url) return;
   await client.execute(

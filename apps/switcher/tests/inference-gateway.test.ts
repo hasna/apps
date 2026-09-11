@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { compileModelPolicy } from "../src/model-policy";
 import { createInferenceGateway } from "../src/inference-gateway";
+import { createServer } from "node:http";
 
 const models = [
   { id: "main", name: "Main", supportedParameters: ["tools"] },
@@ -13,6 +14,49 @@ const input = (protocol: any, baseUrl: string, events: any[]) => {
   return { harness: protocol === "gemini-generate-content" ? "gemini" : "pi", protocol, authStyle: protocol === "gemini-generate-content" ? "x-api-key" : "bearer", baseUrl, providerId: "fixture-provider", model: "main", models, credential, stateDir: "/Users/hasna/Workspace/scratch/universal-harness-switcher/model-routing-test-state", cwd: "/Users/hasna/Workspace/scratch/universal-harness-switcher", compiledPolicy, catalogPath: "/Users/hasna/Workspace/scratch/universal-harness-switcher/model-routing-test-catalog.json", onRoutingEvent: (event: any) => events.push(event) };
 };
 const auth = (protocol: string, token: string) => protocol === "gemini-generate-content" ? { "x-goog-api-key": token } : { authorization: `Bearer ${token}` };
+
+for (const [protocol, path, terminal] of [
+  ["anthropic-messages", "/messages", 'event: message_stop\ndata: {"type":"message_stop"}\n\n'],
+  ["openai-chat", "/chat/completions", "data: [DONE]\n\n"],
+  ["openai-responses", "/responses", 'event: response.completed\ndata: {"type":"response.completed","response":{"model":"main"}}\n\n'],
+] as const) test(`${protocol} completes a terminal SSE event without waiting for a broken HTTP tail`, async () => {
+  let calls = 0;
+  const upstream = createServer((_request, response) => {
+    calls++;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write('data: {"model":"main"}\n\n' + terminal);
+    setTimeout(() => response.destroy(), 25);
+  });
+  await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const events: any[] = [], gateway = createInferenceGateway(input(protocol, `http://127.0.0.1:${(upstream.address() as any).port}/v1`, events) as any);
+  try {
+    const response = await fetch(gateway.baseUrl + path, { method: "POST", headers: { ...auth(protocol, gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", messages: [], stream: true }) });
+    expect(await response.text()).toBe('data: {"model":"main"}\n\n' + terminal);
+    expect(calls).toBe(1);
+    expect(events).toHaveLength(1);
+    expect(events[0].reason).not.toBe("stream_interrupted");
+  } finally { await gateway.cleanup(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve())); }
+});
+
+test("a native client stopping after message_stop is not a provider interruption", async () => {
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    return new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"type":"message_stop"}\n\n'));
+    } }), { headers: { "content-type": "text/event-stream" } });
+  } });
+  const events: any[] = [], gateway = createInferenceGateway(input("anthropic-messages", upstream.url.origin + "/v1", events) as any);
+  try {
+    const client = new AbortController();
+    const response = await fetch(gateway.baseUrl + "/messages", { method: "POST", signal: client.signal, headers: { ...auth("anthropic-messages", gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", messages: [], stream: true }) });
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("message_stop");
+    await reader.cancel();
+    client.abort();
+    for (let attempt = 0; !events.length && attempt < 100; attempt++) await Bun.sleep(5);
+    expect(events).toHaveLength(1);
+    expect(events[0].reason).not.toBe("stream_interrupted");
+  } finally { await gateway.cleanup(); await upstream.stop(true); }
+});
 
 test("gateway handles all four protocols, preserves native request content, and injects guidance once", async () => {
   const seen: any[] = [];
@@ -69,6 +113,56 @@ test("gateway does not retry 400, 401, or 403 and redacts unknown reported model
     for (const status of [400, 401, 403]) { const response = await fetch(gateway.baseUrl + "/chat/completions", { method: "POST", headers, body: JSON.stringify({ model: "main", probe: status, messages: [] }) }); await response.text(); expect(response.status).toBe(status); }
     expect(seen).toHaveLength(3); expect(events.filter(e => e.reportedModel === "<unrecognized>")).toHaveLength(0);
   } finally { await gateway.cleanup(); await upstream.stop(true); }
+});
+
+test("gateway exposes a sanitized native context-overflow error without retrying or leaking provider text", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    calls++;
+    return Response.json({ error: { type: "invalid_request_error", message: `This model's maximum context length is 1048576 tokens. ${credential} private prompt text` } }, { status: 400 });
+  } });
+  const events: any[] = [], gateway = createInferenceGateway(input("anthropic-messages", upstream.url.origin + "/v1", events) as any);
+  try {
+    const response = await fetch(gateway.baseUrl + "/messages", { method: "POST", headers: { ...auth("anthropic-messages", gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", messages: [] }) });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ type: "error", error: { type: "invalid_request_error", code: "context_length_exceeded", message: "prompt is too long: the provider context window was exceeded. Compact the conversation or start a new session." } });
+    expect(calls).toBe(1);
+    expect(events).toHaveLength(1);
+    expect(events[0].reason).toBe("context_length_exceeded");
+    expect(JSON.stringify(events)).not.toContain(credential);
+    expect(JSON.stringify(events)).not.toContain("private prompt text");
+  } finally { await gateway.cleanup(); await upstream.stop(true); }
+});
+
+test("gateway keeps unrelated upstream validation errors sanitized", async () => {
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    return Response.json({ error: { message: `Invalid tools: ${credential}` } }, { status: 400 });
+  } });
+  const events: any[] = [], gateway = createInferenceGateway(input("anthropic-messages", upstream.url.origin + "/v1", events) as any);
+  try {
+    const response = await fetch(gateway.baseUrl + "/messages", { method: "POST", headers: { ...auth("anthropic-messages", gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", messages: [] }) });
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error.code).toBe("upstream_http_400");
+    expect(JSON.stringify(body)).not.toContain(credential);
+    expect(events[0].reason).not.toBe("context_length_exceeded");
+  } finally { await gateway.cleanup(); await upstream.stop(true); }
+});
+
+test("gateway rechecks expiry at request time without sending expired models upstream", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>{calls++;return Response.json({model:"main"});}});
+  const events: any[] = [], launchInput = {...input("anthropic-messages",upstream.url.origin+"/v1",events),models:structuredClone(models)};
+  const gateway = createInferenceGateway(launchInput as any);
+  try {
+    // The model expires after the gateway was prepared, as in a long-lived launch.
+    launchInput.models[0].expiresOn="2000-01-01";
+    const response=await fetch(gateway.baseUrl+"/messages",{method:"POST",headers:{authorization:`Bearer ${gateway.token}`,"content-type":"application/json"},body:JSON.stringify({model:"main",messages:[]})});
+    expect(response.status).toBe(422);
+    expect((await response.json()).error.code).toBe("model_expired");
+    expect(calls).toBe(0);
+    expect(events[0].reason).toBe("model_expired");
+  } finally {await gateway.cleanup();await upstream.stop(true);}
 });
 
 test("gateway does not retry after a stream has started and reports unknown provider models safely", async () => {

@@ -3,6 +3,7 @@ import type {
   AttachmentMeta,
   EmailsSelfHostClient,
   Message,
+  MessageListItem,
   SendKey,
   Tenant,
 } from "./selfhost.js";
@@ -50,4 +51,42 @@ export type BatchAttachmentMetadataRegression =
   Assert<Equal<
     BatchAttachmentsResult["by_message_id"],
     Record<string, Array<AttachmentBatchMeta>>
+  >>;
+
+type ApplyMethod = EmailsSelfHostClient["applyMailboxFilter"];
+type ApplyResult = Result<"applyMailboxFilter">;
+
+// FR-0001: the legacy 3-arg invocation (id + optional query/init, no body)
+// remains valid — its params keep their old shapes at positions 1 and 2, and
+// the body is an OPTIONAL 4th parameter, not a merged-in query field.
+export type ApplyLegacyQueryParamRegression =
+  Assert<Equal<
+    Parameters<ApplyMethod>[1],
+    { "limit"?: number; "offset"?: number } | undefined
+  >>;
+export type ApplyMutateBodyIsOptionalParamRegression =
+  Assert<Equal<Parameters<ApplyMethod>[3], { "mutate"?: boolean } | undefined>>;
+
+// FR-0001: the list-only apply response keeps the pre-existing required shape…
+export type ApplyListOnlyResponseShapeRegression =
+  Assert<Equal<
+    Pick<ApplyResult, "filter" | "items" | "limit" | "offset" | "truncated">,
+    {
+      filter: Record<string, unknown>;
+      items: Array<MessageListItem>;
+      limit: number;
+      offset: number;
+      truncated: boolean;
+    }
+  >>;
+// …and the mutate response widens it with mutate:true plus integer counters.
+export type ApplyMutateResponseShapeRegression =
+  Assert<Equal<
+    {
+      mutate: NonNullable<ApplyResult["mutate"]>;
+      matched: NonNullable<ApplyResult["matched"]>;
+      updated: NonNullable<ApplyResult["updated"]>;
+      unchanged: NonNullable<ApplyResult["unchanged"]>;
+    },
+    { mutate: true; matched: number; updated: number; unchanged: number }
   >>;

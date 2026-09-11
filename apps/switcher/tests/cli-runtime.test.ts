@@ -22,6 +22,34 @@ async function command(home: string, args: string[], extra: NodeJS.ProcessEnv = 
   } finally { clearTimeout(timer); }
 }
 
+test("models add persists expiry metadata while preserving discovery and rejects duplicate or invalid additions", async () => {
+  const dir=await directory();
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>Response.json({data:[{id:"stable",supported_parameters:["tools"]}]})});
+  try {
+    const file=join(dir,"provider.json");
+    await writeFile(file,JSON.stringify({id:"expiry-fixture",name:"Expiry fixture",baseUrl:upstream.url.origin,protocol:"anthropic-messages"}));
+    const created=await command(dir,["providers","add","expiry-fixture","--file",file]);
+    expect(created.code,created.stderr).toBe(0);
+    const added=await command(dir,["models","add","expiry-fixture","preview","--name","Preview","--expires-on","2000-01-01"]);
+    expect(added.code,added.stderr).toBe(0);
+    expect(JSON.parse(added.stdout)).toMatchObject({model:{id:"preview",expiresOn:"2000-01-01"},expired:true});
+    const listed=await command(dir,["models","expiry-fixture"]);
+    expect(listed.code,listed.stderr).toBe(0);
+    expect(JSON.parse(listed.stdout).data).toEqual([
+      expect.objectContaining({id:"stable",expired:false,codingEligible:true}),
+      expect.objectContaining({id:"preview",expiresOn:"2000-01-01",expired:true,codingEligible:false}),
+    ]);
+    const duplicate=await command(dir,["models","add","expiry-fixture","preview"]);
+    expect(duplicate.code).toBe(1);expect(duplicate.stderr).toContain("model_exists");
+    const invalid=await command(dir,["models","add","expiry-fixture","invalid","--expires-on","2026-02-29"]);
+    expect(invalid.code).toBe(1);
+    const expired=await command(dir,["launch","claude","--provider","expiry-fixture","--model","preview","--dry-run"]);
+    expect(expired.code).toBe(1);expect(expired.stderr).toContain("model_expired");
+    const provider=await command(dir,["providers","get","expiry-fixture"]);
+    expect(JSON.parse(provider.stdout)).toMatchObject({manualModels:[],additionalModels:[{id:"preview",name:"Preview",expiresOn:"2000-01-01"}]});
+  } finally {await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
+});
+
 test("the CLI launches Ori from a real OpenRouter preset with its complete catalog and keyless dry-run",async()=>{
   const dir=await directory(),executable=join(dir,"ori-fixture"),nativeExecutable=join(dir,"native-codex");
   await writeFile(nativeExecutable,"#!/bin/sh\necho codex-cli 0.153.4\n",{mode:0o700});
@@ -258,7 +286,10 @@ test("concurrent first-run CLI processes share SQLite without startup-lock failu
 }, 60_000);
 
 test("preset aliases cannot follow endpoint overrides to a different origin", () => {
-  expect(()=>providerFromPreset("deepseek",{harness:"codex"})).toThrow("compatible");
+  const responses=providerFromPreset("deepseek",{harness:"codex"});
+  expect(responses.protocol).toBe("openai-responses");
+  expect(providerCredential(responses,{DEEPSEEK_API_KEY:"fixture-alias"})).toBe("fixture-alias");
+  expect(providerCredential({...responses,baseUrl:"https://other.example/v1"},{DEEPSEEK_API_KEY:"fixture-alias"})).toBeUndefined();
   expect(()=>providerFromPreset("deepseek",{baseUrl:"https://other.example/v1"})).toThrow("credential-env");
   const original=providerFromPreset("deepseek",{harness:"claude"});
   expect(providerCredential(original,{DEEPSEEK_API_KEY:"fixture-alias"})).toBe("fixture-alias");

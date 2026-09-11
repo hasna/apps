@@ -1,6 +1,7 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getDatabase, lowerInClause, now, resolveAssignedToAliases, uuid } from "./database.js";
 import { redactEvidenceText } from "../lib/redaction.js";
+import { InputValidationError } from "../types/index.js";
 
 export interface Handoff {
   id: string;
@@ -202,7 +203,10 @@ export function importHandoffBundle(
   db?: Database,
 ): ImportHandoffBundleResult {
   if (!bundle || bundle.schemaVersion !== 1 || bundle.kind !== "hasna.todos.handoff" || !bundle.handoff?.id) {
-    throw new Error("Invalid handoff bundle");
+    throw new InputValidationError(
+      "Invalid handoff bundle",
+      "Pass a bundle with schemaVersion 1, kind 'hasna.todos.handoff' and a handoff.id.",
+    );
   }
   const d = db || getDatabase();
   const handoff = bundle.handoff;

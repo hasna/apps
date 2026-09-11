@@ -1356,7 +1356,7 @@ export class EmailsSelfHostClient {
     }
 
     /** List tenant-scoped mailbox-filters */
-    async listResourceMailboxFilters(query?: { "limit"?: number; "offset"?: number; "normalized_name"?: string | null; "mailbox"?: string | null }, init?: RequestInit): Promise<{ "items": Array<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> }> {
+    async listResourceMailboxFilters(query?: { "limit"?: number; "offset"?: number; "normalized_name"?: string | null; "mailbox"?: string | null }, init?: RequestInit): Promise<{ "items": Array<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "actions": unknown; "enabled": boolean; "order": number; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> }> {
       return this.request("GET", `/v1/mailbox-filters`, {
         body: undefined,
         query,
@@ -1365,7 +1365,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Create a tenant-scoped mailbox-filters row */
-    async createResourceMailboxFilters(body: { "name": string | null; "mailbox": string | null; "criteria": unknown }, init?: RequestInit): Promise<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+    async createResourceMailboxFilters(body: { "name": string | null; "mailbox": string | null; "criteria": unknown; "actions"?: unknown; "enabled"?: boolean; "order"?: number }, init?: RequestInit): Promise<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "actions": unknown; "enabled": boolean; "order": number; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
       return this.request("POST", `/v1/mailbox-filters`, {
         body,
         query: undefined,
@@ -1374,7 +1374,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Get a tenant-scoped mailbox-filters row */
-    async getResourceMailboxFilters(id: string, init?: RequestInit): Promise<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+    async getResourceMailboxFilters(id: string, init?: RequestInit): Promise<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "actions": unknown; "enabled": boolean; "order": number; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
       return this.request("GET", `/v1/mailbox-filters/${encodeURIComponent(String(id))}`, {
         body: undefined,
         query: undefined,
@@ -1383,7 +1383,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Replace mutable fields on a tenant-scoped mailbox-filters row */
-    async replaceResourceMailboxFilters(id: string, body: { "name": string | null; "mailbox": string | null; "criteria": unknown }, init?: RequestInit): Promise<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+    async replaceResourceMailboxFilters(id: string, body: { "name": string | null; "mailbox": string | null; "criteria": unknown; "actions"?: unknown; "enabled"?: boolean; "order"?: number }, init?: RequestInit): Promise<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "actions": unknown; "enabled": boolean; "order": number; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
       return this.request("PUT", `/v1/mailbox-filters/${encodeURIComponent(String(id))}`, {
         body,
         query: undefined,
@@ -1401,7 +1401,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Update a tenant-scoped mailbox-filters row */
-    async updateResourceMailboxFilters(id: string, body: { "name": string | null; "mailbox": string | null; "criteria": unknown }, init?: RequestInit): Promise<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+    async updateResourceMailboxFilters(id: string, body: { "name": string | null; "mailbox": string | null; "criteria": unknown; "actions"?: unknown; "enabled"?: boolean; "order"?: number }, init?: RequestInit): Promise<{ "name": string | null; "normalized_name": string | null; "mailbox": string | null; "criteria": unknown; "actions": unknown; "enabled": boolean; "order": number; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
       return this.request("PATCH", `/v1/mailbox-filters/${encodeURIComponent(String(id))}`, {
         body,
         query: undefined,
@@ -1410,9 +1410,9 @@ export class EmailsSelfHostClient {
     }
 
     /** Apply a saved mailbox filter */
-    async applyMailboxFilter(id: string, query?: { "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "filter": Record<string, unknown>; "items": Array<MessageListItem>; "limit": number; "offset": number; "truncated": boolean }> {
+    async applyMailboxFilter(id: string, query?: { "limit"?: number; "offset"?: number }, init?: RequestInit, body?: { "mutate"?: boolean }): Promise<{ "filter": Record<string, unknown>; "items": Array<MessageListItem>; "limit": number; "offset": number; "truncated": boolean; "mutate"?: true; "matched"?: number; "updated"?: number; "unchanged"?: number }> {
       return this.request("POST", `/v1/mailbox-filters/${encodeURIComponent(String(id))}/apply`, {
-        body: undefined,
+        body,
         query,
         init,
       });
@@ -1614,7 +1614,7 @@ export class EmailsSelfHostClient {
       });
     }
 
-    async replaceMessage(id: string, body: { "status"?: string; "provider_message_id"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "archived"?: boolean; "add_label"?: string; "remove_label"?: string; "body_text"?: string | null; "body_html"?: string | null; "headers"?: Record<string, unknown> }, init?: RequestInit): Promise<{ "message": Message }> {
+    async replaceMessage(id: string, body: { "status"?: string; "provider_message_id"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "archived"?: boolean; "is_spam"?: boolean; "is_trash"?: boolean; "add_label"?: string; "remove_label"?: string; "body_text"?: string | null; "body_html"?: string | null; "headers"?: Record<string, unknown> }, init?: RequestInit): Promise<{ "message": Message }> {
       return this.request("PUT", `/v1/messages/${encodeURIComponent(String(id))}`, {
         body,
         query: undefined,
@@ -1630,7 +1630,7 @@ export class EmailsSelfHostClient {
       });
     }
 
-    async updateMessage(id: string, body: { "status"?: string; "provider_message_id"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "archived"?: boolean; "add_label"?: string; "remove_label"?: string; "body_text"?: string | null; "body_html"?: string | null; "headers"?: Record<string, unknown> }, init?: RequestInit): Promise<{ "message": Message }> {
+    async updateMessage(id: string, body: { "status"?: string; "provider_message_id"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "archived"?: boolean; "is_spam"?: boolean; "is_trash"?: boolean; "add_label"?: string; "remove_label"?: string; "body_text"?: string | null; "body_html"?: string | null; "headers"?: Record<string, unknown> }, init?: RequestInit): Promise<{ "message": Message }> {
       return this.request("PATCH", `/v1/messages/${encodeURIComponent(String(id))}`, {
         body,
         query: undefined,

@@ -76,17 +76,17 @@ describe("remote registry", () => {
     // collapsed onto the gateway app root — a 404 — so a correctly credentialled
     // install on the default authority could not run `skills list` at all.
     expect(buildSkillsApiUrl("https://api.hasna.com/skills")).toBe(
-      "https://api.hasna.com/skills/api/v1/skills",
+      "https://api.hasna.com/skills/v1/skills",
     );
     expect(buildSkillsApiUrl("https://api.hasna.com/skills", "/skills/demo")).toBe(
-      "https://api.hasna.com/skills/api/v1/skills/demo",
+      "https://api.hasna.com/skills/v1/skills/demo",
     );
   });
 
   test("composes the same URL RemoteSkillsClient does, from the same origin", () => {
     // The two composition sites are handed the same origin by the same
     // resolver; when they disagree, one of them 404s and the other does not.
-    for (const origin of ["https://api.hasna.com/skills", "https://skills.example.com", "http://localhost:3505"]) {
+    for (const origin of ["https://skills.example.com", "http://localhost:3505"]) {
       expect(buildSkillsApiUrl(origin)).toBe(`${origin}/api/v1/skills`);
       expect(buildSkillsApiUrl(origin, "/skills/demo")).toBe(`${origin}/api/v1/skills/demo`);
     }
@@ -434,7 +434,7 @@ describe("remote registry", () => {
           return Response.json([]);
         },
       });
-      expect(seen).toEqual(["https://api.hasna.com/skills/api/v1/skills Bearer sk_ambient_never_leaves_its_origin"]);
+      expect(seen).toEqual(["https://api.hasna.com/skills/v1/skills Bearer sk_ambient_never_leaves_its_origin"]);
     });
 
     test("an explicit authToken, or authToken: null, is the caller's own decision and goes through", async () => {

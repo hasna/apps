@@ -27,6 +27,39 @@ todos completions fish > ~/.config/fish/completions/todos.fish
 The completion scripts include root commands, common nested commands, and
 global options such as `--project`, `--json`, `--agent`, and `--session`.
 
+## Route-dependent command list (0.16.0)
+
+`--help`, `manual` and the completions are generated from the same Commander
+tree, and that tree is filtered by the resolved route:
+
+| Posture | `--help` root commands | `manual --json` `commands` | `completions zsh` lines |
+| --- | --- | --- | --- |
+| hosted route, credential resolved (the documented default) | 76 | 122 | 24 |
+| hosted route, no credential configured | 75 | 121 | 24 |
+| `HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1` | 166 | 413 | 71 |
+
+The three columns count different things (root commands, the manual's nested
+catalog, completion script lines), so compare each column with itself, not
+across columns.
+
+The two hosted rows differ by exactly one verb, `stale-lock-handoff`: it is a
+shared-API command, so it is advertised only once the resolver has a credential
+(a key alone is enough — the fleet gateway is the default authority). The
+credential-gated row is the posture a README-following install reaches after
+step 1 ("Configure a credential"); the 75/121 row is what a fresh, unconfigured
+install prints.
+
+0.15.52 advertised all 166 to every caller because the local fallback was
+implicit. 0.16.0 advertises only the commands the resolved route exposes,
+because the on-box families fail closed without the local opt-in. No
+command was removed: every verb still resolves once its posture is configured,
+and the curation mechanism (`applyTodosCliHelpVisibility`) is unchanged from
+0.15.52 — only its trigger moved with the removal of the implicit local
+fallback. Use `HASNA_TODOS_LOCAL=1 todos --help` (or `todos manual --json`) to
+enumerate the on-box families. The same opt-in is ignored when
+`HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL` is set, because a configured
+environment outranks it.
+
 ## Manual
 
 ```bash

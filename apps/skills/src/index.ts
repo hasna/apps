@@ -195,6 +195,8 @@ export {
   createRemoteSkillsClient,
   RemoteRouteUnsupportedError,
   RemoteRequestError,
+  RemoteQuoteUnavailableError,
+  type RemoteQuoteUnavailableCode,
   RemoteWorkspaceMemberError,
   RemoteCapabilityUnavailableError,
   type RemotePin,
@@ -276,10 +278,19 @@ export {
 export {
   canonicalizeManifest,
   computeContentHash,
+  computeContentHashFromEntries,
+  verifyContentHashFromEntries,
+  CONTENT_HASH_LIMITS,
+  ContentHashInputError,
+  type ContentHashLimits,
+  type ContentHashOptions,
+  type ContentHashInputErrorCode,
   normalizeLineEndings,
   verifyContentHash,
   type ContentHashVerification,
 } from "./lib/skill-hash.js";
+
+export { revisionIdOf, type RevisionContent } from "./lib/revision.js";
 
 export {
   validatePortableManifestContract,
@@ -482,3 +493,20 @@ export type { RemoteWorkspaceContext, RemoteAccountWorkspace, RemoteAccountWorks
   RemoteWorkspaceSession, RemoteAccountWorkspaceDiscovery, RemoteWorkspaceSelectionErrorCode } from "./lib/remote-workspace-selection.js";
 export { WorkspaceContextInputError, WorkspaceIdentityMismatchError } from "./lib/remote-workspace-selection.js";
 export { RemoteWorkspaceSelectionError } from "./lib/remote-client.js";
+
+export type { LeaveRemoteWorkspace, RemoteWorkspaceLeaveResult, RemoteWorkspaceLeaveErrorCode } from "./lib/remote-workspace-leave.js";
+export { WorkspaceLeaveInputError, RemoteWorkspaceLeaveError, RemoteWorkspaceLeaveUnconfirmedError } from "./lib/remote-workspace-leave.js";
+
+export type { RemoteWorkspaceInvitation, RemoteWorkspaceInvitationsPage, RemoteWorkspaceInvitationResult,
+  RemoteWorkspaceInvitationAcceptance, ListRemoteWorkspaceInvitations, IssueRemoteWorkspaceInvitation,
+  ResendRemoteWorkspaceInvitation, RevokeRemoteWorkspaceInvitation, AcceptRemoteWorkspaceInvitation, RemoteWorkspaceInvitationErrorCode } from "./lib/remote-invitations.js";
+export { WorkspaceInvitationInputError, RemoteWorkspaceInvitationError, RemoteWorkspaceInvitationUnconfirmedError,
+  RemoteWorkspaceInvitationReadError } from "./lib/remote-invitations.js";
+
+export { InvitationEmailInputError, RemoteInvitationEmailError, RemoteInvitationEmailUnconfirmedError,
+  type RequestInvitationEmailChallenge, type AcceptInvitationEmailChallenge, type RemoteInvitationEmailChallenge,
+  type RemoteInvitationEmailAcceptance, type RemoteInvitationEmailErrorCode } from "./lib/remote-invitation-recovery.js";
+export { RemotePrivatePublicationsClient, PrivatePublicationError, PRIVATE_PUBLICATION_MAX_BYTES,
+  type PrivatePublicationDeclaration, type PrivatePublicationView, type PrivatePublicationState, type PrivatePublishingCapability } from "./lib/remote-private-publications.js";
+export { preparePrivatePublication, readPrivatePublicationRecovery, continuePrivatePublication, inspectPrivatePublication,
+  type PrivatePublicationRecovery, type PrivatePublicationResult } from "./lib/private-publication-recovery.js";

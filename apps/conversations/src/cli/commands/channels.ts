@@ -524,6 +524,14 @@ export function registerChannelCommands(program: Command): void {
     .argument("<message>", "Message content")
     .option("--from <agent>", "Sender agent ID")
     .option("--priority <level>", "Priority: low, normal, high, urgent", "normal")
+    // The top-level `send --channel X` carries these three; the dedicated
+    // channel verb lacked them, so a channel post could not carry the
+    // at-least-once idempotency key the fleet POST contract requires
+    // (post:<runId>:<slug>:<kind>:<n>) and tooling written against one form
+    // silently lost the key against the other (BUG-0045).
+    .option("--metadata <json>", "JSON metadata string (e.g. the fleet idempotency key)")
+    .option("--session <id>", "Session ID (defaults to channel:<name>)")
+    .option("--working-dir <path>", "Working directory context")
     .option("-j, --json", "Output as JSON")
     .action(async (channelName, message, opts) => {
       const from = resolveIdentity(opts.from).trim();
@@ -542,6 +550,19 @@ export function registerChannelCommands(program: Command): void {
         printErrorLine(chalk.red("Message content cannot be empty."));
         process.exit(1);
       }
+
+      let metadata: Record<string, unknown> | undefined;
+      if (opts.metadata !== undefined) {
+        try {
+          metadata = parseChannelMetadataOption(String(opts.metadata)) ?? undefined;
+        } catch (error) {
+          return failCommand(error, "Failed to send channel message.");
+        }
+      }
+
+      const session = typeof opts.session === "string" && opts.session.trim()
+        ? opts.session.trim()
+        : `channel:${channelArg}`;
 
       try {
         assertNoSensitiveContent(channelArg, "Message channel");
@@ -562,8 +583,12 @@ export function registerChannelCommands(program: Command): void {
           to: channelArg,
           content,
           channel: channelArg,
-          session_id: `channel:${channelArg}`,
+          session_id: session,
           priority: opts.priority,
+          metadata,
+          working_dir: typeof opts.workingDir === "string" && opts.workingDir.trim()
+            ? opts.workingDir.trim()
+            : undefined,
         });
       } catch (error) {
         return failCommand(error, "Failed to send channel message.");

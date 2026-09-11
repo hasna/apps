@@ -376,7 +376,7 @@ public-safe descriptor.
 
 ## Data Directory
 
-Local data resolves through the `@hasna/paths` resolver (XDG/macOS home
+Local data resolves via the in-package resolver (XDG/macOS home
 layout, XDG home-migration plan `0f49f56a`): `~/.local/share/hasna/files/`
 on Linux, `~/Library/Application Support/Hasna/files` on macOS. The legacy
 `~/.hasna/files/` stays the effective data root until the store has been

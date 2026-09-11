@@ -87,6 +87,22 @@ struct RecordingCaptureConfiguration: Sendable {
     /// Started at recording start and awaited only after the recorder has stopped, so
     /// capture latency can never delay microphone start.
     let startContext: Task<RecordingStartResolvedContext, Never>
+    var preservesStartSelection = true
+
+    func retargeted(to target: RecordingPasteTarget?, preservesSelection: Bool) -> Self {
+        Self(targetAppBundleIdentifier: target?.bundleIdentifier, targetAppPid: target?.processIdentifier,
+             startContext: startContext, preservesStartSelection: preservesStartSelection && preservesSelection)
+    }
+
+    func resolvedStartContext() async -> RecordingStartResolvedContext {
+        let context = await startContext.value
+        guard !preservesStartSelection else { return context }
+        // The recording keeps its start-time processing/project configuration, but
+        // another application's frozen AX selection must never reach the new target.
+        return RecordingStartResolvedContext(selectionToken: nil, canonicalProjectId: context.canonicalProjectId,
+            displayProjectId: context.displayProjectId, activeProjectName: context.activeProjectName,
+            processing: context.processing)
+    }
 }
 
 /// The frontmost-application identity `startRecording` freezes. Abstracted from
@@ -329,6 +345,16 @@ enum PasteDeliveryOutcome: Equatable, Sendable {
     case clipboardWriteFailed
     case eventPostFailed
 
+    /// Confirmed read-back proves the target has consumed the payload. Uncertain delivery
+    /// still needs its clipboard grace period in case the target processes the paste late.
+    var requiresClipboardGracePeriod: Bool {
+        switch self {
+        case .pasted: false
+        case .deliveryNotObserved, .deliveredUnverified, .secureInputActive, .targetUnavailable,
+             .clipboardOwnershipLost, .clipboardWriteFailed, .eventPostFailed: true
+        }
+    }
+
     /// The single place delivery evidence is allowed to become `.pasted`. Kept next to the
     /// outcome so a reader can check the whole mapping at once: two confirming reads, one
     /// contradicting read, everything else unverified.
@@ -381,8 +407,10 @@ final class PasteTransactionCoordinator {
     private let schedule: Scheduler
     private let writeAndVerify: PayloadWriter
     private let postPaste: PastePoster
-    /// Fires immediately before `hasPendingTransaction` changes value. The settlement hop
-    /// back to idle runs on its own scheduled turn with no other state write, so an owner
+    private let now: @MainActor @Sendable () -> TimeInterval
+    private var activationPollID: UUID?
+    /// Fires immediately before `hasPendingTransaction` changes value. Settlement can return
+    /// to idle without any other state write, so an owner
     /// deriving gates from this coordinator (e.g. `canStartRecording`) must publish here or
     /// its observers never recompute after settlement.
     var pendingTransactionWillChange: (@MainActor () -> Void)?
@@ -397,11 +425,13 @@ final class PasteTransactionCoordinator {
     init(
         schedule: @escaping Scheduler,
         writeAndVerify: @escaping PayloadWriter,
-        postPaste: @escaping PastePoster
+        postPaste: @escaping PastePoster,
+        now: @escaping @MainActor @Sendable () -> TimeInterval = { PasteActivation.continuousTime() }
     ) {
         self.schedule = schedule
         self.writeAndVerify = writeAndVerify
         self.postPaste = postPaste
+        self.now = now
     }
 
     var hasPendingTransaction: Bool {
@@ -414,6 +444,7 @@ final class PasteTransactionCoordinator {
         generation: UInt64?,
         delay: TimeInterval,
         settlementDelay: TimeInterval = 0,
+        activation: PasteActivation? = nil,
         targetIsReady: @escaping @MainActor @Sendable () -> Bool = { true },
         payloadIsReady: @escaping @MainActor @Sendable () -> Bool = { true },
         prepare: @escaping ScheduledOperation = {},
@@ -432,7 +463,7 @@ final class PasteTransactionCoordinator {
         guard state == .idle else { return false }
         let transaction = PasteDeliveryTransaction(id: UUID(), text: text, generation: generation)
         state = .scheduled(transaction.id)
-        schedule(delay) { [weak self] in
+        let deliver: ScheduledOperation = { [weak self] in
             guard let self, self.state == .scheduled(transaction.id) else { return }
             self.state = .settling(transaction.id)
             guard targetIsReady() else {
@@ -511,7 +542,93 @@ final class PasteTransactionCoordinator {
                 self.settleFromDeliveryEvidence(pending, readBackAttempt: 1)
             }
         }
+        if let activation {
+            beginActivation(activation, transaction: transaction, deliver: deliver,
+                            completion: completion, settlement: settlement)
+        } else {
+            schedule(delay, deliver)
+        }
         return true
+    }
+
+    private func beginActivation(
+        _ activation: PasteActivation, transaction: PasteDeliveryTransaction,
+        deliver: @escaping ScheduledOperation,
+        completion: @escaping Completion, settlement: @escaping Settlement
+    ) {
+        let started = now()
+        let attempt: PasteActivationAttempt
+        let initialReadiness = activation.readiness()
+        guard now() - started < PasteActivation.timeout else {
+            failActivation(activation, transaction: transaction, attempt: .notAttempted,
+                           reason: .timedOut, started: started, completion: completion, settlement: settlement)
+            return
+        }
+        switch initialReadiness {
+        case .unavailable(let reason):
+            failActivation(activation, transaction: transaction, attempt: .notAttempted,
+                           reason: reason, started: started, completion: completion, settlement: settlement)
+            return
+        case .ready:
+            attempt = .alreadyFrontmost
+        case .waitingForFocus:
+            guard activation.request() else {
+                failActivation(activation, transaction: transaction, attempt: .rejected,
+                               reason: .activationRejected, started: started,
+                               completion: completion, settlement: settlement)
+                return
+            }
+            attempt = .accepted
+        }
+        waitForActivation(activation, transaction: transaction, attempt: attempt, started: started,
+                          deliver: deliver, completion: completion, settlement: settlement)
+    }
+
+    private func waitForActivation(
+        _ activation: PasteActivation, transaction: PasteDeliveryTransaction,
+        attempt: PasteActivationAttempt, started: TimeInterval,
+        deliver: @escaping ScheduledOperation,
+        completion: @escaping Completion, settlement: @escaping Settlement
+    ) {
+        let ticket = UUID()
+        activationPollID = ticket
+        let remaining = max(0, PasteActivation.timeout - (now() - started))
+        schedule(min(PasteActivation.pollingInterval, remaining)) { [weak self] in
+            guard let self, self.state == .scheduled(transaction.id),
+                  self.activationPollID == ticket else { return }
+            self.activationPollID = nil
+            let readiness = activation.readiness()
+            let elapsed = self.now() - started
+            let failure: PasteActivationFailure
+            switch readiness {
+            case .unavailable(let reason): failure = reason
+            case .ready where elapsed <= PasteActivation.timeout:
+                activation.report(PasteActivationReport(attempt: attempt, failure: nil, elapsed: elapsed))
+                deliver()
+                return
+            case .waitingForFocus where elapsed < PasteActivation.timeout:
+                self.waitForActivation(activation, transaction: transaction, attempt: attempt,
+                    started: started, deliver: deliver, completion: completion, settlement: settlement)
+                return
+            case .ready, .waitingForFocus: failure = .timedOut
+            }
+            self.failActivation(activation, transaction: transaction, attempt: attempt,
+                reason: failure, started: started, completion: completion, settlement: settlement)
+        }
+    }
+
+    private func failActivation(
+        _ activation: PasteActivation, transaction: PasteDeliveryTransaction,
+        attempt: PasteActivationAttempt, reason: PasteActivationFailure, started: TimeInterval,
+        completion: Completion, settlement: Settlement
+    ) {
+        guard state == .scheduled(transaction.id) else { return }
+        activationPollID = nil
+        state = .settling(transaction.id)
+        activation.report(PasteActivationReport(attempt: attempt, failure: reason, elapsed: now() - started))
+        settlement(transaction, .targetUnavailable)
+        state = .idle
+        completion(transaction, .targetUnavailable)
     }
 
     /// Everything the read-back loop needs after the keystroke has been posted.
@@ -543,7 +660,9 @@ final class PasteTransactionCoordinator {
 
     private func complete(_ pending: PendingDelivery, outcome: PasteDeliveryOutcome) {
         pending.completion(pending.transaction, outcome)
-        guard pending.settlementDelay > 0 else {
+        guard outcome.requiresClipboardGracePeriod, pending.settlementDelay > 0 else {
+            // Keep the transaction occupied until restoration has rechecked clipboard
+            // ownership. Completion and settlement callbacks cannot admit another paste.
             pending.settlement(pending.transaction, outcome)
             state = .idle
             return
@@ -689,18 +808,19 @@ private final class PCMStreamPipe: @unchecked Sendable {
                 guard !Task.isCancelled else { break }
                 guard !data.isEmpty else { continue }
                 recordedPCM.append(data)
+                // Providers need every admitted packet before a pause can settle.
+                // Only the legacy realtime client waits for network-sized chunks.
+                providerSession?.appendPCM(data)
                 pendingChunk.append(data)
 
                 while pendingChunk.count >= chunkSize {
                     let chunk = pendingChunk.prefixData(count: chunkSize)
-                    providerSession?.appendPCM(chunk)
                     await client?.sendAudio(chunk)
                     pendingChunk.removeFirst(chunkSize)
                 }
             }
 
             if !Task.isCancelled && !pendingChunk.isEmpty {
-                providerSession?.appendPCM(pendingChunk)
                 await client?.sendAudio(pendingChunk)
             }
             return recordedPCM
@@ -1001,12 +1121,15 @@ public final class RecordingEngine: ObservableObject {
         RecordingEngine.focusedWindowTitle(pid: $0)
     }
     var commandCLI: @Sendable (_ args: [String], _ home: String, _ timeout: TimeInterval) -> String = { args, home, ceiling in
-        // The caller's timeout is the public ceiling on *observable* wall time. CLIRunner's
+        // The caller supplies the remaining public budget after queue admission. CLIRunner's
         // total deadline (execution, termination grace, kill grace, pipe drain) sits a full
         // return margin below it: spawn setup, waitid poll granularity, capture shutdown,
         // and the hop back to the caller all run outside CLIRunner's clamped waits and must
         // fit inside the reserved margin.
         let cliDeadline = ceiling - RecordingEngine.commandRewriteReturnMargin
+        guard cliDeadline > CLIRunner.wallClockCleanupReserve else {
+            return "ERROR: \(CLIRunner.ExecutionError.deadlineExhausted.localizedDescription)"
+        }
         return CLIRunner.run(args, home: home, timeout: cliDeadline, totalWallClockBudget: cliDeadline)
     }
     /// Resolves and revalidates the frozen rewrite target immediately before a rewrite:
@@ -1238,6 +1361,23 @@ public final class RecordingEngine: ObservableObject {
     /// *observable* rewrite time under the public ceiling even when the execution window,
     /// termination grace, and pipe drain all run to exhaustion.
     nonisolated static let commandRewriteReturnMargin: TimeInterval = 1
+
+    /// Create this operation synchronously before awaiting the blocking queue: creating
+    /// its deadline inside the submitted closure would give delayed work a fresh budget.
+    nonisolated static func makeCommandRewriteOperation(
+        args: [String],
+        home: String,
+        runCLI: @escaping @Sendable ([String], String, TimeInterval) -> String,
+        deadline: CLIRunner.WallClockDeadline = .init(after: commandRewriteTimeout)
+    ) -> @Sendable () -> String {
+        return {
+            let remaining = min(commandRewriteTimeout, deadline.remaining())
+            guard remaining > commandRewriteReturnMargin + CLIRunner.wallClockCleanupReserve else {
+                return "ERROR: \(CLIRunner.ExecutionError.deadlineExhausted.localizedDescription)"
+            }
+            return runCLI(args, home, remaining)
+        }
+    }
     /// Wait before each read-back of the target app's focused field. The window server
     /// delivers the posted keystroke asynchronously and the app then does its own work, so a
     /// read taken on the posting turn would report "unchanged" for a paste that is simply
@@ -1823,8 +1963,8 @@ public final class RecordingEngine: ObservableObject {
         // The selection is still frozen for every recording (not only an exposed "command
         // mode"), so a later command decision can only ever act on the exact text and
         // element that were selected when the user started speaking. The Accessibility IPC
-        // that reads it runs on a detached task, concurrently with recorder start: the
-        // microphone must never wait on a beachballing target app, and the MainActor stays
+        // that reads it runs on a blocking-work queue, concurrently with recorder start:
+        // neither the microphone nor a cooperative worker waits on a beachballing app. The MainActor stays
         // free to process the key-up that stops the recording. Skipped entirely when intent
         // detection is off — no command route exists to consume it.
         let shouldCaptureSelection = Self.shouldCaptureSelection(
@@ -1837,12 +1977,14 @@ public final class RecordingEngine: ObservableObject {
         let windowTitleLookup = focusedWindowTitleLookup
         let windowTitlePid = frontmostApp?.pid
         let axSnapshotTask = Task.detached(priority: .userInitiated) { () -> RecordingStartAXSnapshot in
-            let selectionToken = shouldCaptureSelection ? capturePid.flatMap { captureSelection($0) } : nil
-            let focusedWindowTitle = windowTitlePid.flatMap { windowTitleLookup($0) }
-            return RecordingStartAXSnapshot(
-                selectionToken: selectionToken,
-                focusedWindowTitle: focusedWindowTitle
-            )
+            await BlockingOperation.run {
+                let selectionToken = shouldCaptureSelection ? capturePid.flatMap { captureSelection($0) } : nil
+                let focusedWindowTitle = windowTitlePid.flatMap { windowTitleLookup($0) }
+                return RecordingStartAXSnapshot(
+                    selectionToken: selectionToken,
+                    focusedWindowTitle: focusedWindowTitle
+                )
+            }
         }
 
         // Project auto-selection and the processing configuration resolve with the
@@ -2460,7 +2602,27 @@ public final class RecordingEngine: ObservableObject {
         }
     }
 
-    public func stopAndTranscribe() {
+    private func validatedStopPasteTarget(_ selection: RecordingPasteTargetSelection) -> RecordingPasteTarget? {
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        switch selection {
+        case .frozen(let target):
+            guard let target, target.processIdentifier != currentPID,
+                  let observed = pasteTargetApplicationLookup(target.processIdentifier),
+                  target.matches(observed) else { return nil }
+            return target
+        case .frontmostApplication:
+            guard let frontmost = frontmostAppSnapshot(),
+                  let observed = pasteTargetApplicationLookup(frontmost.pid),
+                  observed.pid == frontmost.pid, observed.bundleIdentifier == frontmost.bundleIdentifier,
+                  observed.launchDate == frontmost.launchDate else { return nil }
+            return RecordingPasteTarget(observation: observed, currentPID: currentPID)
+        }
+    }
+
+    /// An explicit override selects and freezes the destination at an active Stop.
+    /// Omitting it preserves the Start-time target. Frozen nil means no destination;
+    /// duplicate, idle, cancelled, and warm-up Stops cannot retarget a pipeline.
+    public func stopAndTranscribe(pasteTarget: RecordingPasteTargetSelection? = nil) {
         // Stop during the warm-up window has nothing to transcribe — the microphone was opened
         // but has not delivered a sample. Abandon visibly instead of spending a transcription
         // pipeline (and a CLI round trip) on an empty buffer.
@@ -2481,7 +2643,7 @@ public final class RecordingEngine: ObservableObject {
         isRecording = false
         isTranscribing = true
 
-        guard let captureConfiguration = activeCaptureConfiguration else {
+        guard var captureConfiguration = activeCaptureConfiguration else {
             recorder?.stop()
             realtimeClient?.stop()
             realtimeClient = nil
@@ -2494,6 +2656,22 @@ public final class RecordingEngine: ObservableObject {
             resetRecordingIntent()
             finish("Recording configuration unavailable")
             return
+        }
+        if let pasteTarget {
+            let previousIdentity = pasteTargetProcessIdentityByGeneration[recordingGeneration]
+            let target = validatedStopPasteTarget(pasteTarget)
+            let identity = target.map {
+                PasteTargetProcessIdentity(pid: $0.processIdentifier, bundleIdentifier: $0.bundleIdentifier,
+                                           launchDate: $0.launchDate)
+            }
+            // Even an explicit frontmost request is now frozen: later focus or a
+            // missing/replaced process cannot substitute another destination.
+            frozenPasteTargetsByGeneration[recordingGeneration] = .frozen(target)
+            pasteTargetProcessIdentityByGeneration[recordingGeneration] = identity
+            self.targetAppBundleIdentifier = target?.bundleIdentifier
+            self.targetAppPid = target?.processIdentifier
+            captureConfiguration = captureConfiguration.retargeted(to: target,
+                preservesSelection: identity != nil && identity == previousIdentity)
         }
         activeCaptureConfiguration = nil
         let targetAppBundleIdentifier = captureConfiguration.targetAppBundleIdentifier
@@ -2550,7 +2728,7 @@ public final class RecordingEngine: ObservableObject {
             // The start context was captured concurrently at recording start; by the time
             // the realtime transcript has settled it is resolved in all but pathological
             // cases, and its Accessibility reads are bounded either way.
-            let startContext = await captureConfiguration.startContext.value
+            let startContext = await captureConfiguration.resolvedStartContext()
             let selectionToken = startContext.selectionToken
             let activeProjectId = startContext.displayProjectId
             let canonicalProjectId = startContext.canonicalProjectId
@@ -4101,10 +4279,12 @@ public final class RecordingEngine: ObservableObject {
                 activeProjectId: canonicalProjectId,
                 processingConfiguration: processingConfiguration
             )
-            let runCLI = self.commandCLI
-            let result = await Task.detached {
-                runCLI(rewriteArguments, homePath, Self.commandRewriteTimeout)
-            }.value
+            let rewriteOperation = Self.makeCommandRewriteOperation(
+                args: rewriteArguments,
+                home: homePath,
+                runCLI: self.commandCLI
+            )
+            let result = await BlockingOperation.run(rewriteOperation)
             if self.canOwnBusyState(pipelineGeneration: pipelineGeneration) {
                 self.isTranscribing = false
                 self.liveTranscriptionText = ""
@@ -4354,13 +4534,42 @@ public final class RecordingEngine: ObservableObject {
             return
         }
 
-        // Activate the exact app that owned focus when recording started, then paste after focus settles.
+        // Freeze the selected process before activation; polling must not select a replacement
+        // process or a different foreground app while the system processes the request.
         let alreadyFrontmost = app.processIdentifier == frontmostPid
-        if !alreadyFrontmost {
-            app.activate()
-        }
-
-        let pasteDelay: TimeInterval = alreadyFrontmost ? 0.15 : 0.5
+        let expectedApp = PasteApplicationObservation(
+            pid: requiredProcessIdentity?.pid ?? app.processIdentifier,
+            bundleIdentifier: requiredProcessIdentity?.bundleIdentifier ?? app.bundleIdentifier,
+            launchDate: requiredProcessIdentity?.launchDate ?? app.launchDate,
+            isRegular: app.activationPolicy == .regular
+        )
+        let activation = PasteActivation(
+            request: {
+                PasteActivation.requestOnce(
+                    recorderIsActive: NSApp?.isActive == true
+                        && NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier,
+                    yield: { NSApp?.yieldActivation(to: app) },
+                    activate: { cooperative in
+                        cooperative ? app.activate(from: .current, options: []) : app.activate(options: [])
+                    }
+                )
+            },
+            readiness: {
+                PasteActivation.readiness(
+                    expected: expectedApp,
+                    live: NSRunningApplication(processIdentifier: expectedApp.pid).map(PasteApplicationObservation.init),
+                    frontmost: NSWorkspace.shared.frontmostApplication.map(PasteApplicationObservation.init),
+                    accessibilityTrusted: AXIsProcessTrusted(),
+                    cancelled: Self.shouldAbandonDelivery(
+                        pipelineGeneration: pipelineGeneration,
+                        currentGeneration: self.recordingGeneration,
+                        isRecording: self.isRecording
+                    ),
+                    requiresProcessIdentity: pipelineGeneration != nil && targetAppPid != nil
+                )
+            },
+            report: { self.log($0.logLine) }
+        )
         var ownedPasteboardChangeCount: Int?
         var clipboardWrite: PasteboardWriteResult?
         var clipboardOwnershipWasLost = false
@@ -4377,21 +4586,11 @@ public final class RecordingEngine: ObservableObject {
         let accepted = pasteTransactionCoordinator.submit(
             text: text,
             generation: pipelineGeneration,
-            delay: pasteDelay,
+            delay: 0,
             settlementDelay: restoreClipboard ? 0.6 : 0,
+            activation: activation,
             targetIsReady: {
-                let frontmost = NSWorkspace.shared.frontmostApplication
-                let appIsReady = Self.pasteTargetIsReady(
-                    expectedPid: app.processIdentifier,
-                    expectedBundleIdentifier: app.bundleIdentifier,
-                    frontmostPid: frontmost?.processIdentifier,
-                    frontmostBundleIdentifier: frontmost?.bundleIdentifier,
-                    accessibilityTrusted: AXIsProcessTrusted(),
-                    expectedLaunchDate: requiredProcessIdentity?.launchDate,
-                    frontmostLaunchDate: frontmost?.launchDate,
-                    requiresProcessIdentity: pipelineGeneration != nil && targetAppPid != nil
-                )
-                guard appIsReady else { return false }
+                guard activation.readiness() == .ready else { return false }
                 return selectionToken?.matchesCurrentSelection(for: app.processIdentifier) ?? true
             },
             payloadIsReady: {
@@ -4431,6 +4630,18 @@ public final class RecordingEngine: ObservableObject {
             verificationDelay: Self.pasteReadBackInterval,
             verificationAttempts: Self.pasteReadBackAttempts
         ) { transaction, outcome in
+            // A cancelled generation must not copy a fallback payload after its readiness
+            // wait was abandoned. Ownership-checked settlement still runs unchanged.
+            if PasteActivation.abandonsFallback(
+                outcome: outcome,
+                generation: transaction.generation,
+                currentGeneration: self.recordingGeneration,
+                isRecording: self.isRecording
+            ) {
+                self.log("paste abandoned during activation or preparation reason=cancelled")
+                deliveryCompleted?()
+                return
+            }
             let accessibilityTrusted = AXIsProcessTrusted()
             // Same reason the two static predicates below switch instead of comparing: a `==`
             // test answers `false` for any outcome added later, and this feeds
@@ -4553,21 +4764,11 @@ public final class RecordingEngine: ObservableObject {
                 clipboardOwnershipWasLost = true
             }
             guard let previousClipboard else { return }
-            let shouldRestore = switch outcome {
-            case .clipboardWriteFailed:
-                stillOwnsChangeCount
-            // Never restore over secure input, even when `restoreClipboard` was requested.
-            // By the time this outcome is reachable the payload writer has already run, so the
-            // transcript IS the clipboard — and the status line has just told the owner to press
-            // Cmd-V. Restoring would delete the exact text the app told them to paste. This
-            // deliberately overrides an explicit opt-in, which is why the status message for
-            // this outcome says the clipboard was kept instead of restored.
-            case .secureInputActive:
-                false
-            case .targetUnavailable, .clipboardOwnershipLost, .eventPostFailed, .pasted,
-                 .deliveryNotObserved, .deliveredUnverified:
-                stillOwnsPayload
-            }
+            let shouldRestore = Self.shouldRestorePreviousClipboard(
+                outcome: outcome,
+                stillOwnsPayload: stillOwnsPayload,
+                stillOwnsChangeCount: stillOwnsChangeCount
+            )
             if shouldRestore {
                 previousClipboard.restore(to: pasteboard)
             }
@@ -4581,6 +4782,25 @@ public final class RecordingEngine: ObservableObject {
             )
             deliveryCompleted?()
             return
+        }
+    }
+
+    nonisolated static func shouldRestorePreviousClipboard(
+        outcome: PasteDeliveryOutcome,
+        stillOwnsPayload: Bool,
+        stillOwnsChangeCount: Bool
+    ) -> Bool {
+        switch outcome {
+        case .clipboardWriteFailed:
+            stillOwnsChangeCount
+        // Never restore over secure input, even when `restoreClipboard` was requested.
+        // The payload writer has already run and the status tells the user to press Cmd-V.
+        // Restoring would delete the exact transcript they were told to paste.
+        case .secureInputActive:
+            false
+        case .targetUnavailable, .clipboardOwnershipLost, .eventPostFailed, .pasted,
+             .deliveryNotObserved, .deliveredUnverified:
+            stillOwnsPayload
         }
     }
 
@@ -5092,12 +5312,15 @@ enum CLIRunner: Sendable {
 
     enum ExecutionError: Error, LocalizedError, Equatable {
         case timedOut(executable: String, seconds: TimeInterval)
+        case deadlineExhausted
         case captureFailed(operation: CaptureOperation, code: Int32)
 
         var errorDescription: String? {
             switch self {
             case let .timedOut(executable, seconds):
                 return "Command timed out after \(seconds.formatted()) seconds: \(executable)"
+            case .deadlineExhausted:
+                return "Command timed out: insufficient time remains to start safely."
             case let .captureFailed(operation, code):
                 return "Failed to capture command output while \(operation.description): \(String(cString: strerror(code)))"
             }
@@ -5126,27 +5349,76 @@ enum CLIRunner: Sendable {
         _ lifecycleObserver: ((ProcessLifecycleEvent) -> Void)?
     ) throws -> Int32
 
+    /// An explicit monotonic deadline can cross queue and preparation boundaries without
+    /// resetting the budget. The clock is injectable for deterministic boundary tests.
+    struct WallClockDeadline: Sendable {
+        private let expiresAt: UInt64
+        private let now: @Sendable () -> UInt64
+
+        init(
+            after seconds: TimeInterval,
+            now: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }
+        ) {
+            precondition(seconds.isFinite && seconds >= 0)
+            let startedAt = now()
+            let maximumDelay = min(UInt64(Int64.max), UInt64.max - startedAt)
+            let requested = seconds * 1_000_000_000
+            // Truncate fractional nanoseconds: rounding up could extend the configured
+            // budget and reject its own deadline at a subsequent handoff validation.
+            let delay = requested >= Double(maximumDelay)
+                ? maximumDelay : UInt64(requested)
+            expiresAt = startedAt + delay
+            self.now = now
+        }
+
+        func remaining(reserving reserve: TimeInterval = 0) -> TimeInterval {
+            let current = now()
+            guard expiresAt > current else { return 0 }
+            return max(0, Double(expiresAt - current) / 1_000_000_000 - reserve)
+        }
+    }
+
+    private static func requireStartBudget(_ deadline: WallClockDeadline?) throws {
+        if let deadline, deadline.remaining() <= wallClockCleanupReserve {
+            throw ExecutionError.deadlineExhausted
+        }
+    }
+
     static func run(
         _ args: [String],
         home: String,
         timeout: TimeInterval = 120,
         totalWallClockBudget: TimeInterval? = nil,
-        environment suppliedEnvironment: [String: String]? = nil
+        environment suppliedEnvironment: [String: String]? = nil,
+        wallClockDeadline suppliedDeadline: WallClockDeadline? = nil,
+        environmentProvider: (() throws -> [String: String])? = nil
     ) -> String {
-        let command = resolveCommand(home: home)
-        let arguments = command.argumentsPrefix + args
+        if let totalWallClockBudget {
+            precondition(totalWallClockBudget.isFinite && totalWallClockBudget > wallClockCleanupReserve)
+        }
+        precondition(suppliedDeadline == nil || totalWallClockBudget != nil)
+        let deadline = suppliedDeadline ?? totalWallClockBudget.map { WallClockDeadline(after: $0) }
+        if let suppliedDeadline, let totalWallClockBudget {
+            precondition(suppliedDeadline.remaining() <= totalWallClockBudget)
+        }
         do {
-            let environment = try suppliedEnvironment ?? ServiceAPIConfiguration.childEnvironment(
+            try requireStartBudget(deadline)
+            let command = resolveCommand(home: home)
+            let arguments = command.argumentsPrefix + args
+            try requireStartBudget(deadline)
+            let environment = try suppliedEnvironment ?? environmentProvider?() ?? ServiceAPIConfiguration.childEnvironment(
                 base: OpenAIAPIKeyStore.childEnvironment(base: ProcessInfo.processInfo.environment.merging([
                     "PATH": "\(home)/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
                 ]) { _, new in new }, homePath: home)
             )
+            try requireStartBudget(deadline)
             let output = try runExecutable(
                 command.executable,
                 arguments: arguments,
                 environment: environment,
                 executionTimeout: timeout,
-                totalWallClockBudget: totalWallClockBudget
+                totalWallClockBudget: totalWallClockBudget,
+                wallClockDeadline: deadline
             )
             if output.terminationStatus != 0 {
                 let details = output.stderr.isEmpty ? output.stdout : output.stderr
@@ -5194,6 +5466,7 @@ enum CLIRunner: Sendable {
         forceKillGracePeriod: TimeInterval = 1,
         pipeDrainTimeout: TimeInterval = 2,
         totalWallClockBudget: TimeInterval? = nil,
+        wallClockDeadline suppliedDeadline: WallClockDeadline? = nil,
         beforeExecutionDeadline: (() -> Void)? = nil,
         lifecycleObserver: ((ProcessLifecycleEvent) -> Void)? = nil,
         leaderReaper: LeaderReaper? = nil,
@@ -5207,23 +5480,24 @@ enum CLIRunner: Sendable {
             precondition(totalWallClockBudget.isFinite && totalWallClockBudget > wallClockCleanupReserve)
         }
 
-        // The budget clock starts before the spawn so setup latency cannot extend the
-        // observable wall time. Every wait below is clamped to what is left of it.
-        let wallClockDeadline = totalWallClockBudget.map { monotonicUptimeDeadline(after: $0) }
+        precondition(suppliedDeadline == nil || totalWallClockBudget != nil)
+        if let suppliedDeadline, let totalWallClockBudget {
+            precondition(suppliedDeadline.remaining() <= totalWallClockBudget)
+        }
+        // A caller that prepared the command supplies its original deadline. Direct
+        // executable callers begin here; neither path resets a previously spent budget.
+        let wallClockDeadline = suppliedDeadline ?? totalWallClockBudget.map { WallClockDeadline(after: $0) }
         func clampedToWallClockBudget(
             _ phaseTimeout: TimeInterval,
             reserving reserve: TimeInterval = 0
         ) -> TimeInterval {
             guard let wallClockDeadline else { return phaseTimeout }
-            let now = DispatchTime.now().uptimeNanoseconds
-            let remaining = wallClockDeadline > now
-                ? Double(wallClockDeadline - now) / 1_000_000_000 - reserve
-                : 0
-            return max(0, min(phaseTimeout, remaining))
+            return min(phaseTimeout, wallClockDeadline.remaining(reserving: reserve))
         }
         let contractualExecutionTimeout = totalWallClockBudget
             .map { min(executionTimeout, $0 - wallClockCleanupReserve) } ?? executionTimeout
 
+        try requireStartBudget(wallClockDeadline)
         let stdoutReader = try PipeCaptureReader(systemCalls: captureSystemCalls)
         let stderrReader: PipeCaptureReader
         do {
@@ -5237,6 +5511,7 @@ enum CLIRunner: Sendable {
 
         let processIdentifier: pid_t
         do {
+            try requireStartBudget(wallClockDeadline)
             processIdentifier = try spawnProcessGroup(
                 executable,
                 arguments: arguments,
@@ -5416,6 +5691,30 @@ enum CLIRunner: Sendable {
             )
         }
 
+        // CLOEXEC_DEFAULT also closes stdin unless it is explicitly inherited. Keep
+        // the existing stdin behavior, including an already closed/CLOEXEC stream;
+        // a capture pipe that reused fd 0 must still be closed by the actions above.
+        if !inheritedDescriptors.contains(STDIN_FILENO) {
+            var inputFlags: Int32
+            repeat {
+                inputFlags = Darwin.fcntl(STDIN_FILENO, F_GETFD)
+            } while inputFlags == -1 && errno == EINTR
+            let inputError = errno
+            if inputFlags == -1 && inputError != EBADF {
+                throw NSError(
+                    domain: NSPOSIXErrorDomain,
+                    code: Int(inputError),
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to inspect command standard input"]
+                )
+            }
+            if inputFlags >= 0 && inputFlags & FD_CLOEXEC == 0 {
+                try checkPOSIX(
+                    posix_spawn_file_actions_addinherit_np(&fileActions, STDIN_FILENO),
+                    operation: "inherit command standard input"
+                )
+            }
+        }
+
         var attributes: posix_spawnattr_t?
         try checkPOSIX(posix_spawnattr_init(&attributes), operation: "initialize spawn attributes")
         defer { posix_spawnattr_destroy(&attributes) }
@@ -5432,7 +5731,10 @@ enum CLIRunner: Sendable {
             posix_spawnattr_setsigmask(&attributes, &unblockedSignals),
             operation: "unblock command signals"
         )
-        let spawnFlags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK
+        // A different reader may still be between pipe() and FD_CLOEXEC setup.
+        // Inherit only our explicit standard streams, never that unrelated pipe.
+        let spawnFlags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF
+            | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT
         try checkPOSIX(
             posix_spawnattr_setflags(&attributes, Int16(spawnFlags)),
             operation: "configure command process group"

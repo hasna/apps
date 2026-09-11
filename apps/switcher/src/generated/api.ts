@@ -294,11 +294,27 @@ export interface components {
                 name: string;
                 description?: string;
                 available?: boolean;
+                expiresOn?: string;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
+                supportedGenerationMethods?: string[];
+            }[];
+            additionalModels?: {
+                id: string;
+                name: string;
+                description?: string;
+                available?: boolean;
+                expiresOn?: string;
+                contextWindow?: number;
+                maxOutputTokens?: number;
+                inputModalities?: string[];
+                outputModalities?: string[];
+                supportedParameters?: string[];
+                reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                 supportedGenerationMethods?: string[];
             }[];
         };
@@ -329,11 +345,27 @@ export interface components {
                 name: string;
                 description?: string;
                 available?: boolean;
+                expiresOn?: string;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
+                supportedGenerationMethods?: string[];
+            }[];
+            additionalModels?: {
+                id: string;
+                name: string;
+                description?: string;
+                available?: boolean;
+                expiresOn?: string;
+                contextWindow?: number;
+                maxOutputTokens?: number;
+                inputModalities?: string[];
+                outputModalities?: string[];
+                supportedParameters?: string[];
+                reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                 supportedGenerationMethods?: string[];
             }[];
             version: number;
@@ -410,11 +442,13 @@ export interface components {
             name: string;
             description?: string;
             available?: boolean;
+            expiresOn?: string;
             contextWindow?: number;
             maxOutputTokens?: number;
             inputModalities?: string[];
             outputModalities?: string[];
             supportedParameters?: string[];
+            reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
             supportedGenerationMethods?: string[];
         };
         ModelPolicy: {
@@ -449,6 +483,8 @@ export interface components {
             resolvedModel?: string;
             reportedModel?: string;
             /** @enum {string} */
+            reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            /** @enum {string} */
             decision: "allow" | "alias" | "reject" | "fallback";
             /** @enum {string} */
             role?: "main" | "subagent" | "fast" | "planning" | "review" | "summary" | "compaction" | "weak" | "editor";
@@ -461,13 +497,16 @@ export interface components {
                 name: string;
                 description?: string;
                 available?: boolean;
+                expiresOn?: string;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                 supportedGenerationMethods?: string[];
                 codingEligible: boolean;
+                expired: boolean;
             }[];
             total: number;
             limit: number;
@@ -482,11 +521,13 @@ export interface components {
                 name: string;
                 description?: string;
                 available?: boolean;
+                expiresOn?: string;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                 supportedGenerationMethods?: string[];
             }[];
             refreshedAt: string;
@@ -521,11 +562,27 @@ export interface components {
                     name: string;
                     description?: string;
                     available?: boolean;
+                    expiresOn?: string;
                     contextWindow?: number;
                     maxOutputTokens?: number;
                     inputModalities?: string[];
                     outputModalities?: string[];
                     supportedParameters?: string[];
+                    reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
+                    supportedGenerationMethods?: string[];
+                }[];
+                additionalModels?: {
+                    id: string;
+                    name: string;
+                    description?: string;
+                    available?: boolean;
+                    expiresOn?: string;
+                    contextWindow?: number;
+                    maxOutputTokens?: number;
+                    inputModalities?: string[];
+                    outputModalities?: string[];
+                    supportedParameters?: string[];
+                    reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                     supportedGenerationMethods?: string[];
                 }[];
                 version: number;
@@ -571,11 +628,13 @@ export interface components {
                     name: string;
                     description?: string;
                     available?: boolean;
+                    expiresOn?: string;
                     contextWindow?: number;
                     maxOutputTokens?: number;
                     inputModalities?: string[];
                     outputModalities?: string[];
                     supportedParameters?: string[];
+                    reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                     supportedGenerationMethods?: string[];
                 }[];
                 refreshedAt: string;
@@ -629,6 +688,8 @@ export interface components {
                 requestedModel: string;
                 resolvedModel?: string;
                 reportedModel?: string;
+                /** @enum {string} */
+                reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
                 /** @enum {string} */
                 decision: "allow" | "alias" | "reject" | "fallback";
                 /** @enum {string} */
@@ -688,6 +749,8 @@ export interface components {
                 requestedModel: string;
                 resolvedModel?: string;
                 reportedModel?: string;
+                /** @enum {string} */
+                reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
                 /** @enum {string} */
                 decision: "allow" | "alias" | "reject" | "fallback";
                 /** @enum {string} */

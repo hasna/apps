@@ -13,7 +13,7 @@ describe("gatewayApiV1Root (issue #1588)", () => {
     expect(gatewayApiV1Root("https://api.hasna.com/todos/v1/")).toBe("https://api.hasna.com/todos/v1");
   });
 
-  test("returns null for non-gateway forms (legacy origins, self-hosted, localhost)", () => {
+  test("returns null for non-gateway forms (legacy origins, custom/self-hosted deployments, localhost)", () => {
     expect(gatewayApiV1Root("https://secrets.hasna.xyz")).toBeNull();
     expect(gatewayApiV1Root("https://secrets.hasna.xyz/v1")).toBeNull();
     expect(gatewayApiV1Root("https://example.com/secrets")).toBeNull();

@@ -144,3 +144,67 @@ describe("doctorWorkspaceWithStore on the local transport", () => {
     expect(sqliteFilesUnder(scratch)).toEqual([]);
   });
 });
+
+describe("doctor conversations_channel check", () => {
+  const channelWorkspace = (channel?: string): Workspace => hostedWorkspace({
+    root_id: null,
+    recipe_id: null,
+    metadata: {},
+    integrations: channel === undefined ? {} : { conversations_channel: channel },
+  });
+
+  test("no pinned channel is ok and never spawns a probe", () => {
+    const result = doctorWorkspace(channelWorkspace(), { transport: "local" });
+    const check = result.checks.find((c) => c.code === "WORKSPACE_CHANNEL_NONE");
+    expect(check).toMatchObject({ name: "conversations_channel", status: "ok" });
+  });
+
+  test("a pinned channel with no probe is reported as not verified, never a fabricated error", () => {
+    const result = doctorWorkspace(channelWorkspace("work-management"), { transport: "local" });
+    const check = result.checks.find((c) => c.code === "WORKSPACE_CHANNEL_NOT_VERIFIED");
+    expect(check).toMatchObject({
+      name: "conversations_channel",
+      status: "warn",
+      fixable: false,
+      message: expect.stringContaining("work-management"),
+    });
+  });
+
+  test("a probe that finds the channel is ok", () => {
+    const result = doctorWorkspace(channelWorkspace("package-arrivals"), {
+      transport: "local",
+      channelProbe: () => ({ verdict: "exists" }),
+    });
+    const check = result.checks.find((c) => c.code === "WORKSPACE_CHANNEL_OK");
+    expect(check).toMatchObject({ status: "ok", message: expect.stringContaining("package-arrivals") });
+  });
+
+  test("a probe that does not find the advertised channel is an error", () => {
+    const result = doctorWorkspace(channelWorkspace("work-management"), {
+      transport: "local",
+      channelProbe: () => ({ verdict: "missing" }),
+    });
+    const check = result.checks.find((c) => c.code === "WORKSPACE_CHANNEL_MISSING");
+    expect(check).toMatchObject({ status: "error", fixable: false });
+  });
+
+  test("an inconclusive probe is a warn, never an error", () => {
+    const result = doctorWorkspace(channelWorkspace("work-management"), {
+      transport: "local",
+      channelProbe: () => ({ verdict: "unknown", detail: "conversations: command not found" }),
+    });
+    const check = result.checks.find((c) => c.code === "WORKSPACE_CHANNEL_UNVERIFIED");
+    expect(check).toMatchObject({ status: "warn", message: expect.stringContaining("command not found") });
+  });
+
+  test("doctorWorkspaceWithStore passes an explicit probe through on the hosted transport", async () => {
+    const lookups: string[] = [];
+    const result = await doctorWorkspaceWithStore(
+      hostedStore(lookups),
+      channelWorkspace("package-arrivals"),
+      { channelProbe: () => ({ verdict: "exists" }) },
+    );
+    expect(result.checks.find((c) => c.code === "WORKSPACE_CHANNEL_OK")).toMatchObject({ status: "ok" });
+    expect(lookups).toEqual([]);
+  });
+});

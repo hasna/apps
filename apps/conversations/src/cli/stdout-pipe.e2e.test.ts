@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let apiFixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
@@ -48,66 +49,15 @@ describe("conversations --json over a pipe", () => {
    * agents post between the two runs and `message_count` moves. A byte-equality
    * assertion needs an index that nothing else is writing to.
    */
-  function seedStore(): { dir: string; dbPath: string } {
-    const dir = mkdtempSync(join(tmpdir(), "conversations-json-pipe-"));
-    const dbPath = join(dir, "conversations.db");
-    // Let the CLI create and migrate the schema, so the fixture cannot drift
-    // from the real one.
-    const boot = Bun.spawnSync({
-      cmd: ["bun", "run", "src/cli/index.tsx", "channel", "list", "-j"],
-      stdout: "pipe",
-      stderr: "pipe",
-      env: cliEnv(dbPath),
-    });
-    expect(boot.exitCode).toBe(0);
-
-    const db = new Database(dbPath);
-    const insert = db.prepare(
-      "INSERT INTO channels (id, name, description, topic, project_id, created_by, metadata, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    );
-    db.exec("BEGIN");
-    for (let i = 0; i < CHANNEL_ROWS; i++) {
-      const name = `fixture-channel-${String(i).padStart(4, "0")}`;
-      insert.run(
-        backfilledChannelIdForName(name),
-        name,
-        `d`.repeat(200),
-        `t`.repeat(120),
-        null,
-        "agent:fixture",
-        JSON.stringify({ channel_schema: { class: "fixture" } }),
-        JSON.stringify(["fixture"]),
-      );
-    }
-    const insertMessage = db.prepare(
-      "INSERT INTO messages (session_id, from_agent, to_agent, channel, content) VALUES (?, ?, ?, ?, ?)",
-    );
-    for (let i = 0; i < BIG_MESSAGES; i++) {
-      // One unbounded body per message: this is what an agent posting an
-      // evidence dump looks like, and it is the plain-text surface that can
-      // exceed a pipe buffer in a single write.
-      insertMessage.run("sess-fixture", "agent:fixture", "channel", BIG_CHANNEL, `body-${i} ` + "m".repeat(120_000));
-    }
-    db.exec("COMMIT");
-    db.close();
-    return { dir, dbPath };
+  async function seedStore(): Promise<{dir:string;authority:string}> {
+    apiFixture=await startLoopbackApiFixture();
+    await apiFixture.seed({channels:Array.from({length:CHANNEL_ROWS},(_,i)=> {
+      const name=`fixture-channel-${String(i).padStart(4,"0")}`;
+      return {id:backfilledChannelIdForName(name),name,description:"d".repeat(200),topic:"t".repeat(120),project_id:null,created_by:"agent:fixture",metadata:JSON.stringify({channel_schema:{class:"fixture"}}),tags:JSON.stringify(["fixture"]),created_at:"2026-01-01T00:00:00.000Z",archived_at:null};
+    }),messages:Array.from({length:BIG_MESSAGES},(_,i)=>({session_id:"sess-fixture",from_agent:"agent:fixture",to_agent:"channel",channel:BIG_CHANNEL,content:`body-${i} `+"m".repeat(120000)}))});
+    return {dir:apiFixture.root,authority:apiFixture.url};
   }
-
-  function cliEnv(dbPath: string): Record<string, string | undefined> {
-    return {
-      ...process.env,
-      HASNA_CONVERSATIONS_DB_PATH: dbPath,
-      // The mere presence of an API pointer flips the client out of the local
-      // SQLite store, which would make this measure the wrong process.
-      HASNA_CONVERSATIONS_API_URL: undefined,
-      HASNA_CONVERSATIONS_API_KEY: undefined,
-      CONVERSATIONS_DB_PATH: undefined,
-      // chalk would otherwise colour by inherited TTY state, differing between
-      // the file run and the pipe run and defeating byte equality.
-      FORCE_COLOR: "0",
-      NO_COLOR: "1",
-    };
-  }
+  function cliEnv(_authority:string):Record<string,string> { return {...apiFixture.env,CONVERSATIONS_AGENT_ID:"pipe-fixture"}; }
 
   /**
    * `bash`, explicitly, and never `sh`.
@@ -119,30 +69,30 @@ describe("conversations --json over a pipe", () => {
    * status, so a producer that died mid-document would still read as success —
    * the exact class of lie this file exists to catch.
    */
-  function pipeline(script: string, dbPath: string) {
+  function pipeline(script: string, authority: string) {
     return Bun.spawnSync({
       cmd: ["bash", "-c", `set -o pipefail; ${script}`],
       stdout: "pipe",
       stderr: "pipe",
-      env: cliEnv(dbPath),
+      env: cliEnv(authority),
     });
   }
 
   const LIST_JSON = "bun run src/cli/index.tsx channel list -j";
 
-  let fixture: { dir: string; dbPath: string };
-  beforeAll(() => {
-    fixture = seedStore();
+  let fixture: { dir: string; authority: string };
+  beforeAll(async () => {
+    fixture = await seedStore();
   });
-  afterAll(() => {
-    if (fixture) rmSync(fixture.dir, { recursive: true, force: true });
+  afterAll(async () => {
+    await apiFixture?.stop();
   });
 
   test("channel list -j delivers byte-for-byte the same document through a pipe as to a file", () => {
-    const { dir, dbPath } = fixture;
+    const { dir, authority } = fixture;
     {
       const outFile = join(dir, "redirected.json");
-      const redirected = pipeline(`${LIST_JSON} > ${JSON.stringify(outFile)}`, dbPath);
+      const redirected = pipeline(`${LIST_JSON} > ${JSON.stringify(outFile)}`, authority);
       expect(redirected.exitCode).toBe(0);
       const expected = readFileSync(outFile);
 
@@ -153,7 +103,7 @@ describe("conversations --json over a pipe", () => {
       expect(expected.byteLength).toBeGreaterThan(PIPE_BUFFER_BYTES * 4);
 
       for (let trial = 0; trial < PIPE_TRIALS; trial++) {
-        const piped = pipeline(`${LIST_JSON} | cat`, dbPath);
+        const piped = pipeline(`${LIST_JSON} | cat`, authority);
         // With pipefail this is the *producer's* status, not `cat`'s.
         expect(piped.exitCode).toBe(0);
         // Measure BYTES. `String.length` counts UTF-16 code units, and 65536 is
@@ -182,17 +132,17 @@ describe("conversations --json over a pipe", () => {
     // BODIES are unbounded — agents post evidence dumps — and `--verbose`
     // prints them whole. That is the plain-text surface that can overflow, so
     // that is the one measured.
-    const { dir, dbPath } = fixture;
+    const { dir, authority } = fixture;
     const read = `bun run src/cli/index.tsx channel read ${BIG_CHANNEL} --verbose --limit 5`;
     {
       const outFile = join(dir, "redirected.txt");
-      const redirected = pipeline(`${read} > ${JSON.stringify(outFile)}`, dbPath);
+      const redirected = pipeline(`${read} > ${JSON.stringify(outFile)}`, authority);
       expect(redirected.exitCode).toBe(0);
       const expected = readFileSync(outFile);
       // Safe collection reads are bounded previews; exact bodies require show.
       expect(expected.byteLength).toBeLessThan(PIPE_BUFFER_BYTES);
 
-      const piped = pipeline(`${read} | cat`, dbPath);
+      const piped = pipeline(`${read} | cat`, authority);
       expect(piped.exitCode).toBe(0);
       expect(piped.stdout.byteLength).toBe(expected.byteLength);
       expect(Buffer.compare(Buffer.from(piped.stdout), expected)).toBe(0);
@@ -212,9 +162,9 @@ describe("conversations --json over a pipe", () => {
     // exit satisfy the contract, so the exit code itself is not asserted — what
     // is asserted is that the process terminated, emitted no unhandled failure,
     // and still produced the beginning of the real document.
-    const { dbPath } = fixture;
+    const { authority } = fixture;
     {
-      const result = pipeline(`${LIST_JSON} | head -1`, dbPath);
+      const result = pipeline(`${LIST_JSON} | head -1`, authority);
       // A hang is caught by the suite timeout; this asserts it exited rather
       // than being left for the runner to reap.
       expect(result.exitCode).not.toBeNull();

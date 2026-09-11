@@ -96,8 +96,8 @@ All user-supplied inputs are validated with Zod schemas (`src/validation.ts`) be
 
 ## Configuration Security
 
-- Config is stored in the effective monitor home (`~/.hasna/monitor/config.json` by default, resolved through `@hasna/paths` to the XDG data home once the store is migrated there or `HASNA_DATA_HOME` is set) — a user-owned location.
-- The SQLite database is stored in the effective monitor home (`~/.hasna/monitor/monitor.db` by default, resolved through `@hasna/paths`).
+- Config is stored in the effective monitor home (`~/.hasna/monitor/config.json` by default, resolved by the in-package resolver to the XDG data home once the store is migrated there or `HASNA_DATA_HOME` is set) — a user-owned location.
+- The SQLite database is stored in the effective monitor home (`~/.hasna/monitor/monitor.db` by default, resolved by the in-package resolver).
 - `MONITOR_CONFIG_DIR` (or the `HASNA_MONITOR_HOME` alias) may be set to isolate config and SQLite storage in CI,
   tests, or agent sandboxes.
 - Private-key contents are not stored in config. Optional SSH passwords are stored as plain JSON, so keep the config user-readable only and prefer key authentication.

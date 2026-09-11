@@ -29,8 +29,9 @@
 // [FACTS] this file depends on (verified 2026-08-26):
 // - testers CLI: testers run <url> --json --output <file>, testers quick-qa,
 //   testers repo prepare . / testers repo run . (repo-native), testers doctor,
-//   testers project list (cloud env required: ~/.hasna/fleet-env/todos|conversations|
-//   mementos|knowledge.env — the RECORD preamble sources them).
+//   testers project list (cloud env required: ~/.hasna/<app>/config/credentials — the
+//   live disk tier the RECORD preamble sources; the deprecated ~/.hasna/fleet-env/*.env and
+//   retired ~/.hasna/cloud/*.env are never sourced).
 // - E2B box (credential-zero): hasna/sandboxes (sandboxes create, sandboxes exec
 //   <id>, sandboxes files sync <id> <localDir> <remoteDir>, sandboxes logs
 //   <id> --json, sandboxes show <id>) or infinity env run (per-run; egress
@@ -89,7 +90,7 @@ const RECORD = 'RECORDING V2 — do this WHILE working, never batched at the end
   + '(4) KNOWLEDGE: on durable doctrine, file a follow-up task "KNOWLEDGE: <item>" for the knowledge lane — never silently add to knowledge.\n'
   + '(5) SKILLS: on a repeated procedure, file "SKILL: <name>" follow-up.\n'
   + '(6) INSTRUCTIONS: only when the workflow itself changes rules — then file "INSTRUCTIONS: <config>".\n'
-  + 'CLOUD ENV (source before any CLI call that reads the cloud; fleet-env primary): for f in todos conversations mementos knowledge; do if [ -f "$HOME/.hasna/fleet-env/$f.env" ]; then set -a; . "$HOME/.hasna/fleet-env/$f.env"; set +a; elif [ -f "$HOME/.hasna/cloud/$f.env" ]; then set -a; . "$HOME/.hasna/cloud/$f.env"; set +a; fi; done\n'
+  + 'CLOUD CREDENTIALS (source before any CLI call that reads the cloud; LIVE disk tier ~/.hasna/<app>/config/credentials — owner-only 0600, HASNA_<APP>_API_KEY / HASNA_<APP>_API_URL; the deprecated ~/.hasna/fleet-env/*.env and retired ~/.hasna/cloud/*.env are never sourced): for f in todos conversations mementos knowledge; do c="$HOME/.hasna/$f/config/credentials"; k="HASNA_$(printf %s "$f" | tr a-z A-Z)_API_KEY"; if [ -r "$c" ]; then set -a; . "$c"; set +a; elif printenv "$k" >/dev/null 2>&1; then :; else echo "FATAL: no credential for $f — consulted env $k and $c; ~/.hasna/fleet-env and ~/.hasna/cloud are retired and never read; provision $c (0600) or use the secrets vault" >&2; exit 1; fi; done\n'
   + 'NEVER print a credential value. Consume with secrets exec <key> --as VAR -- <cmd>; prove presence with secrets get <key> --check (length + sha256 only).';
 
 // ---- safeAgent hardening (fleet pattern, O15-00732 / wf_b4894f28-d61 lesson) ----

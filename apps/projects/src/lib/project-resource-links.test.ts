@@ -581,7 +581,7 @@ describe("project resource-link guarded lifecycle", () => {
     expect(reconciled.after?.project.integrations).toEqual({ conversations_channel: "renamed-channel" });
     expect(() => updateWorkspace(project.id, {
       integrations: { conversations_channel: "legacy-writer-drift" },
-    }, db)).toThrow(/must be changed through resource-links/);
+    }, db)).toThrow(/conflicts with the existing resource link/);
 
     const rolledBack = rollbackProjectResourceLinks({
       project_id: project.id,
@@ -669,6 +669,116 @@ describe("project resource-link guarded lifecycle", () => {
       response_byte_limit: 64_000,
       time_budget_ms: 5_000,
     }, db).links).toEqual(accepted.after!.links);
+    db.close();
+  });
+});
+
+describe("typed resource-link integration mutation assertion (BUG-0029 relaxation)", () => {
+  test("a linkless registry project can seed and correct typed keys via a plain updateWorkspace", () => {
+    const db = makeDb();
+    const project = createWorkspace({ name: "Linkless Backfill", slug: "linkless-backfill" }, db);
+    // The fleet backfills todos_task_list_id from a per-workspace .todos-link.json
+    // and repoints conversations_channel / mementos by a direct integrations
+    // write; a project with NO authoritative resource link must accept that.
+    const seeded = updateWorkspace(project.id, {
+      integrations: {
+        conversations_channel: "package-arrivals",
+        todos_project_id: "todo_main",
+        todos_task_list_id: "tasklist_backlog",
+        mementos_project_id: "memento_main",
+      },
+    }, db);
+    expect(seeded.integrations).toEqual({
+      conversations_channel: "package-arrivals",
+      todos_project_id: "todo_main",
+      todos_task_list_id: "tasklist_backlog",
+      mementos_project_id: "memento_main",
+    });
+    // Correcting one stale id and dropping others (full-replace semantics).
+    const corrected = updateWorkspace(project.id, {
+      integrations: {
+        conversations_channel: "package-arrivals",
+        todos_project_id: "todo_main",
+        todos_task_list_id: "tasklist_prod",
+      },
+    }, db);
+    expect(corrected.integrations).toEqual({
+      conversations_channel: "package-arrivals",
+      todos_project_id: "todo_main",
+      todos_task_list_id: "tasklist_prod",
+    });
+    db.close();
+  });
+
+  test("a write contradicting an existing authoritative link is still rejected", () => {
+    const db = makeDb();
+    const project = createWorkspace({ name: "Linked Drift", slug: "linked-drift" }, db);
+    const accepted = mutateProjectResourceLinks({
+      project_id: project.id,
+      operation_id: "op-drift",
+      step_id: "links",
+      mode: "add",
+      expected_revision: project.updated_at,
+      links: [todosProject()],
+      response_byte_limit: 64_000,
+      time_budget_ms: 5_000,
+    }, db);
+    expect(accepted.outcome).toBe("accepted");
+    // todosProject() projects todos_project_id = the link's canonical URN.
+    const canonical = accepted.after!.project.integrations.todos_project_id!;
+    expect(() => updateWorkspace(project.id, {
+      integrations: { todos_project_id: "todo_other" },
+    }, db)).toThrow(/conflicts with the existing resource link/);
+    // Writing the SAME projected value is fine.
+    expect(updateWorkspace(project.id, {
+      integrations: { todos_project_id: canonical },
+    }, db).integrations.todos_project_id).toBe(canonical);
+    // updateWorkspace FULL-REPLACES integrations, so an integrations write that
+    // OMITS a key a still-existing link projects would silently drop the
+    // authoritative projection — the assertion rejects that clearing too.
+    expect(() => updateWorkspace(project.id, {
+      integrations: { todos_task_list_id: "tasklist_backlog", mementos_project_id: "memento_main" },
+    }, db)).toThrow(/conflicts with the existing resource link/);
+    // Keys no link projects stay directly writable even while a link exists, as
+    // long as the write retains every projected key the link still supplies.
+    expect(updateWorkspace(project.id, {
+      integrations: {
+        todos_project_id: canonical,
+        todos_task_list_id: "tasklist_backlog",
+        mementos_project_id: "memento_main",
+      },
+    }, db).integrations).toEqual({
+      todos_project_id: canonical,
+      todos_task_list_id: "tasklist_backlog",
+      mementos_project_id: "memento_main",
+    });
+    db.close();
+  });
+
+  test("a conversations_channel link is authoritative for its label while other keys stay writable", () => {
+    const db = makeDb();
+    const project = createWorkspace({ name: "Channel Link", slug: "channel-link" }, db);
+    const accepted = mutateProjectResourceLinks({
+      project_id: project.id,
+      operation_id: "op-channel-link",
+      step_id: "links",
+      mode: "add",
+      expected_revision: project.updated_at,
+      links: [conversationsChannel("email-triage")],
+      response_byte_limit: 64_000,
+      time_budget_ms: 5_000,
+    }, db);
+    expect(accepted.outcome).toBe("accepted");
+    expect(() => updateWorkspace(project.id, {
+      integrations: { conversations_channel: "somewhere-else" },
+    }, db)).toThrow(/conflicts with the existing resource link/);
+    // todos_task_list_id is not projected by a channel link, so it is writable.
+    expect(updateWorkspace(project.id, {
+      integrations: { conversations_channel: "email-triage", todos_task_list_id: "tasklist_backlog" },
+    }, db).integrations).toEqual({
+      conversations_channel: "email-triage",
+      todos_task_list_id: "tasklist_backlog",
+    });
     db.close();
   });
 });

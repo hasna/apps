@@ -1,3 +1,5 @@
+import { authorizeCorpus, readCorpusBinding, corpusExpectationFromEnv, CorpusBindingError, type CorpusExpectation } from "./corpus-binding.js";
+import type { ApiKeyPrincipal } from "@hasna/contracts/auth";
 /**
  * conversations-serve — the HTTP API surface.
  *
@@ -25,6 +27,8 @@ import { openapiSpec } from "./openapi.js";
 import { decayedStatus, SINGLE_TOUCH_TOLERANCE_SECONDS, SINGLE_TOUCH_REAP_WINDOW_SECONDS } from "../lib/presence.js";
 import {
   normalizeChannelName,
+  recipientChannelCandidate,
+  channelListingMatchSql,
   unknownChannelMessage,
   archivedChannelMessage,
   reservedHistoricalChannelMessage,
@@ -39,6 +43,9 @@ import { normalizeExactIsoTimestamp } from "../lib/since.js";
 import { PROJECT_LIST_ORDER, pinnedOrderByClause, simpleOrderByClause } from "../lib/list-order.js";
 import { decodeAttachmentUploads } from "../lib/attachments.js";
 import { BAKED_BUILD_SHA } from "./build-sha.generated.js";
+import { drainServerEventOutbox } from "./events-outbox-pg.js";
+import { normalizeRedactMessagesBody, redactMessagesPg } from "./admin-redaction-pg.js";
+import { saveFeedbackPg } from "./feedback-pg.js";
 import {
   PROJECT_MESSAGE_LINKAGE_RECEIPTS_TABLE,
   buildProjectMessageLinkagePlan,
@@ -127,6 +134,7 @@ export const APP = "conversations";
 const SCOPE_READ = `${APP}:read`;
 const SCOPE_WRITE = `${APP}:write`;
 export const SCOPE_INCIDENT_PROJECT = `${APP}:incident-project`;
+export const SCOPE_ADMIN_REDACT = `${APP}:admin-redact`;
 
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -171,6 +179,7 @@ export interface ApiServerDeps {
   keys: ApiKeyStore;
   verifier: ApiKeyVerifier;
   incidentProjector?: IncidentProjectorContext | null;
+  corpusExpectation?: CorpusExpectation;
 }
 
 function incidentProjectorContextFromEnv(): IncidentProjectorContext | null {
@@ -209,7 +218,7 @@ export function buildDeps(): ApiServerDeps {
       }
     },
   });
-  return { client, keys, verifier, incidentProjector: incidentProjectorContextFromEnv() };
+  return { client, keys, verifier, incidentProjector: incidentProjectorContextFromEnv(), corpusExpectation: corpusExpectationFromEnv() };
 }
 
 // ---- helpers ----------------------------------------------------------------
@@ -233,6 +242,41 @@ async function readJson(req: Request): Promise<Record<string, unknown>> {
     throw new Error("Request body must be a JSON object");
   }
   return parsed as Record<string, unknown>;
+}
+
+/** Project JSON fields keep the public object/string-array contract on writes.
+ * Bounds apply to each encoded field, with a depth ceiling before stringify so
+ * pathological input fails as validation rather than overflowing the stack. */
+function projectJsonFields(body: Record<string, unknown>): {
+  values: Partial<Record<"metadata" | "tags" | "settings", string | null>>;
+  error?: undefined;
+} | { error: Response; values?: undefined } {
+  const values: Partial<Record<"metadata" | "tags" | "settings", string | null>> = {};
+  for (const field of ["metadata", "tags", "settings"] as const) {
+    if (!Object.hasOwn(body, field)) continue;
+    const value = body[field];
+    if (value === null) { values[field] = null; continue; }
+    const invalid = field === "tags"
+      ? !Array.isArray(value) || !value.every(item => typeof item === "string")
+      : typeof value !== "object" || Array.isArray(value);
+    if (invalid) return { error: json({ error: `${field} must be ${field === "tags" ? "an array of strings" : "a JSON object"} or null`, field }, 400) };
+    const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+    while (pending.length) {
+      const entry = pending.pop()!;
+      if (entry.depth > 64 || (typeof entry.value === "number" && !Number.isFinite(entry.value))) {
+        return { error: json({ error: `${field} must contain finite JSON values within 64 levels`, field }, 400) };
+      }
+      if (entry.value && typeof entry.value === "object") {
+        for (const child of Object.values(entry.value)) pending.push({ value: child, depth: entry.depth + 1 });
+      }
+    }
+    const encoded = JSON.stringify(value);
+    if (Buffer.byteLength(encoded, "utf8") > 64 * 1024) {
+      return { error: json({ error: `${field} exceeds the 65536-byte JSON limit`, field, limit_bytes: 65536 }, 400) };
+    }
+    values[field] = encoded;
+  }
+  return { values };
 }
 
 function str(v: unknown): string | undefined {
@@ -369,7 +413,7 @@ function remoteProjectRegistrationTarget(digest: string) {
   return {
     digest,
     withOwnedPath<T>(_consumer: (absolutePath: string) => T): T {
-      throw new Error("project registration target paths are not available to the Conversations service.");
+      throw new Error("project registration target paths cannot be materialized inside the Conversations service (digest-only target).");
     },
   };
 }
@@ -1531,9 +1575,10 @@ export function startApiServer(options: StartApiServerOptions = {}) {
         if (path === "/ready" && method === "GET") {
           try {
             await client.get<{ ok: number }>("SELECT 1 AS ok");
+            await readCorpusBinding(client, deps.corpusExpectation);
             return json({ status: "ok", version: pkgVersion, app: APP });
           } catch (e) {
-            return json({ status: "unavailable", version: pkgVersion, error: (e as Error).message }, 503);
+            return json({ status: "unavailable", version: pkgVersion, error: e instanceof CorpusBindingError ? e.message : "Corpus readiness check failed." }, 503);
           }
         }
 
@@ -1541,21 +1586,24 @@ export function startApiServer(options: StartApiServerOptions = {}) {
         if (path === "/v1" || path.startsWith("/v1/")) {
           const writing = method !== "GET" && method !== "HEAD";
           const incidentProjectionWrite = path === "/v1/incident-projections" && method === "POST";
+          const adminRedaction = path === "/v1/admin/redact-messages" && method === "POST";
           const decision = await verifier.authenticate(req.headers, {
             method,
             path,
-            requiredScopes: [incidentProjectionWrite ? SCOPE_INCIDENT_PROJECT : writing ? SCOPE_WRITE : SCOPE_READ],
+            requiredScopes: [adminRedaction ? SCOPE_ADMIN_REDACT : incidentProjectionWrite ? SCOPE_INCIDENT_PROJECT : writing ? SCOPE_WRITE : SCOPE_READ],
           });
           if (!decision.ok) {
             return json({ error: decision.message, reason: decision.reason }, decision.status, {
               "WWW-Authenticate": "Bearer",
             });
           }
-          return await handleV1(path, method, req, url, deps, decision.principal.agent);
+          await authorizeCorpus(client, decision.principal, deps.corpusExpectation);
+          return await handleV1(path, method, req, url, deps, decision.principal);
         }
 
         return json({ error: "Not found" }, 404);
       } catch (e) {
+        if (e instanceof CorpusBindingError) return json({error:e.message,code:"CORPUS_BINDING"},e.status);
         if (isProjectChannelCollectionChangedError(e)) {
           return json({
             error: e.message,
@@ -1667,10 +1715,36 @@ async function handleV1(
   req: Request,
   url: URL,
   deps: ApiServerDeps,
-  agent: string | null,
+  principal: ApiKeyPrincipal,
 ): Promise<Response> {
+  const { agent, kid: keyId } = principal;
   const { client } = deps;
   const sub = path.slice("/v1/".length);
+
+  // ---- events outbox worker (hosted path of `conversations events-drain`) ----
+  if (sub === "events/outbox/drain" && method === "POST") {
+    const rawLimit = url.searchParams.get("limit");
+    const limit = rawLimit === null ? undefined : positiveInteger(rawLimit);
+    return json(await drainServerEventOutbox(client, limit));
+  }
+
+  // ---- feedback (hosted path of the MCP `send_feedback` tool) --------------
+  if (sub === "feedback" && method === "POST") {
+    const body = (await readJson(req)) as Record<string, unknown>;
+    return json(await saveFeedbackPg(client, body), 201);
+  }
+
+  // ---- admin: audited message redaction (hosted path of `admin redact-messages`) ----
+  if (sub === "admin/redact-messages" && method === "POST") {
+    const body = (await readJson(req)) as Record<string, unknown>;
+    const options = normalizeRedactMessagesBody(body);
+    const actor = agent ?? `api-key:${keyId}`;
+    if (options.actor && options.actor !== actor) return json({ error: "Redaction actor must match the authenticated identity." }, 403);
+    options.actor = actor;
+    return json(options.apply
+      ? await client.transaction(tx => redactMessagesPg(tx, options))
+      : await redactMessagesPg(client, options));
+  }
 
   // ---- package-owned project channel registration authority ----------------
   if (sub === "project-registration/channels/capability" && method === "GET") {
@@ -1983,7 +2057,18 @@ async function handleV1(
     }
     if (to) { params.push(to); clauses.push(`to_agent = $${params.length}`); }
     if (from) { params.push(from); clauses.push(`from_agent = $${params.length}`); }
-    if (channel) { params.push(channel); clauses.push(`channel = $${params.length}`); }
+    if (channel) {
+      params.push(channel);
+      // Channel membership is not the `channel` column alone. A send whose body
+      // names the channel only in `to` (`{to: <channel>, content}` — the
+      // documented contract) is bound to the channel on write, but rows stored
+      // BEFORE that binding carry `channel = NULL` with the name in `to_agent`,
+      // and `channel = $n` alone leaves them unreachable from every channel read
+      // (BUG-0062: post 789923 invisible to `?channel=incidents` while its
+      // caller held a 201 and a message id). The predicate lives in
+      // channel-names.ts so the SQLite listing applies the same rule.
+      clauses.push(channelListingMatchSql("channel", `$${params.length}`));
+    }
     if (session) { params.push(session); clauses.push(`session_id = $${params.length}`); }
     if (projectId) { params.push(projectId); clauses.push(`project_id = $${params.length}`); }
     if (uuid) { params.push(uuid); clauses.push(`uuid = $${params.length}`); }
@@ -2085,10 +2170,20 @@ async function handleV1(
     // markMentionsRead: stamp notified_at on the agent's @mentions (optionally
     // scoped to one channel). Routed here because the client posts it to
     // /messages/read with mentions_only=true.
-    if (body.mentions_only) {
-      const mentionIds = Array.isArray(body.mention_ids)
-        ? (body.mention_ids as unknown[]).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0)
-        : [];
+    const hasMentionIds = Object.prototype.hasOwnProperty.call(body, "mention_ids");
+    if ((body.mentions_only !== undefined && typeof body.mentions_only !== "boolean") ||
+        (hasMentionIds && body.mentions_only !== true)) {
+      return json({ error: "mention_ids requires mentions_only=true." }, 400);
+    }
+    if (body.mentions_only === true) {
+      if (hasMentionIds && (!Array.isArray(body.mention_ids) ||
+          !body.mention_ids.every((id: unknown) => typeof id === "number" && Number.isSafeInteger(id) && id > 0))) {
+        return json({ error: "mention_ids must be an array of positive safe integers." }, 400);
+      }
+      const mentionIds = hasMentionIds ? [...new Set(body.mention_ids as number[])] : [];
+      // Explicit empty selections are no-ops. Only an omitted selector retains
+      // the broader legacy markMentionsRead operation; never filter bad IDs into it.
+      if (hasMentionIds && mentionIds.length === 0) return json({ marked: 0 });
       const res = mentionIds.length
         ? await client.query(
             `UPDATE message_mentions SET notified_at = NOW()::text
@@ -2588,6 +2683,12 @@ async function handleV1(
     if (body.tenant_id !== undefined) {
       return json({ error: "tenant_id is owned by the authenticated storage context and cannot be supplied." }, 400);
     }
+    // Validate the original identifier before normalization or channel lookup:
+    // normalization can turn credential-bearing text into an ordinary slug.
+    if (body.channel !== undefined && body.channel !== null) {
+      if (typeof body.channel !== "string") return json({ error: "channel must be a string when provided." }, 400);
+      assertNoSensitiveContent(body.channel, "Message channel");
+    }
     const from = str(body.from) ?? agent ?? undefined;
     const content = str(body.content);
     const requestedChannel = body.channel ? normalizeChannelName(String(body.channel)) : null;
@@ -2597,6 +2698,29 @@ async function handleV1(
         return json({ error: reservedHistoricalChannelMessage(requestedChannel, currentChannel) }, 409);
       }
     }
+    // `to` NAMES A CHANNEL under the documented send contract — the one the
+    // generic workflow scripts and the fleet runbooks post, `{to: <channel>,
+    // content}`. It is a DM recipient only when no channel of that name
+    // exists. Resolving it here, before the session id is derived, binds
+    // `channel` and `session_id = "channel:<name>"` together exactly as an
+    // explicit `channel` field does; without it the row was written
+    // channel-less under a session id no channel listing can reach, and the
+    // 201 hid the loss (BUG-0041). Precedence is unchanged: an explicit
+    // `channel` field still wins, and a reply still derives its channel from
+    // its parent.
+    const replyRequested = body.reply_to_uuid !== undefined && body.reply_to_uuid !== null;
+    const recipientCandidate = !replyRequested && requestedChannel === null
+      ? recipientChannelCandidate(body.to)
+      : null;
+    // Validate the original identifier before normalization or channel lookup,
+    // as the explicit-channel path above does: normalization can turn
+    // credential-bearing text into an ordinary slug.
+    if (recipientCandidate !== null && typeof body.to === "string") {
+      assertNoSensitiveContent(body.to, "Message recipient");
+    }
+    const recipientChannel = recipientCandidate === null
+      ? null
+      : (await client.get<{ name: string }>("SELECT name FROM channels WHERE name = $1", [recipientCandidate]))?.name ?? null;
     const requestedSession = str(body.session_id);
     const workingDir = str(body.working_dir);
     const repository = str(body.repository);
@@ -2678,7 +2802,7 @@ async function handleV1(
 
     const channelName = replyParent?.channel
       ? normalizeChannelName(replyParent.channel)
-      : requestedChannel;
+      : requestedChannel ?? recipientChannel;
     // A channel message addresses the channel itself; a DM needs an explicit `to`.
     const toAgent = channelName ?? str(body.to);
     if (!from || !toAgent || !content) return json({ error: "from, to (or channel), and content are required" }, 400);
@@ -3631,7 +3755,7 @@ async function handleV1(
     const rows = await client.many<Record<string, unknown>>(
       `SELECT c.*,
               (SELECT COUNT(*) FROM channel_members WHERE channel = c.name)::int AS member_count,
-              (SELECT COUNT(*) FROM messages WHERE channel = c.name)::int AS message_count
+              (SELECT COUNT(*) FROM messages WHERE ${channelListingMatchSql("channel", "c.name")})::int AS message_count
        FROM channels c ${where} ORDER BY c.name ASC`,
       params,
     );
@@ -3807,7 +3931,7 @@ async function handleV1(
       const row = await client.get<Record<string, unknown>>(
         `SELECT c.*,
                 (SELECT COUNT(*) FROM channel_members WHERE channel = c.name)::int AS member_count,
-                (SELECT COUNT(*) FROM messages WHERE channel = c.name)::int AS message_count
+                (SELECT COUNT(*) FROM messages WHERE ${channelListingMatchSql("channel", "c.name")})::int AS message_count
          FROM channels c WHERE c.name = $1`,
         [name],
       );
@@ -3910,6 +4034,8 @@ async function handleV1(
 
   if (sub === "projects" && method === "POST") {
     const body = await readJson(req);
+    const projectJson = projectJsonFields(body);
+    if (projectJson.error) return projectJson.error;
     const name = str(body.name);
     const createdBy = str(body.created_by) ?? agent ?? undefined;
     if (!name || !createdBy) return json({ error: "name and created_by are required" }, 400);
@@ -3917,9 +4043,9 @@ async function handleV1(
     if (dup) return json({ error: "Project name already exists" }, 409);
     const id = randomUUID();
     const row = await client.get(
-      `INSERT INTO projects (id, name, description, path, repository, created_by, status)
-       VALUES ($1,$2,$3,$4,$5,$6,'active') RETURNING id, name, description, path, repository, created_by, created_at, status`,
-      [id, name, str(body.description) ?? null, str(body.path) ?? null, str(body.repository) ?? null, createdBy],
+      `INSERT INTO projects (id, name, description, path, repository, created_by, status, metadata, tags, settings)
+       VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9) RETURNING *`,
+      [id, name, str(body.description) ?? null, str(body.path) ?? null, str(body.repository) ?? null, createdBy, projectJson.values.metadata ?? null, projectJson.values.tags ?? null, projectJson.values.settings ?? null],
     );
     return json({ project: row ? parseServerProject(row) : null }, 201);
   }
@@ -3938,10 +4064,15 @@ async function handleV1(
     }
     if (method === "PATCH") {
       const body = await readJson(req);
+      const projectJson = projectJsonFields(body);
+      if (projectJson.error) return projectJson.error;
       const sets: string[] = [];
       const params: unknown[] = [];
       for (const field of ["name", "description", "path", "repository", "status"] as const) {
         if (field in body) { params.push(str(body[field]) ?? null); sets.push(`${field} = $${params.length}`); }
+      }
+      for (const field of ["metadata", "tags", "settings"] as const) {
+        if (Object.hasOwn(projectJson.values, field)) { params.push(projectJson.values[field]); sets.push(`${field} = $${params.length}`); }
       }
       if (!sets.length) return json({ error: "No updatable fields provided" }, 400);
       params.push(id);

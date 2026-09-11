@@ -119,7 +119,7 @@ describe("test-vault isolation — hosted writes", () => {
     // then ask for a write the way src/env.ts and src/aws.ts do (bare
     // getStore(), no argument).
     process.env.HASNA_SECRETS_API_URL = "https://vault.invalid";
-    process.env.HASNA_SECRETS_API_KEY = "not-a-real-key-fixture";
+    process.env.HASNA_SECRETS_API_KEY = crypto.randomUUID();
 
     const spy = spyOnFetch();
     try {
@@ -138,7 +138,7 @@ describe("test-vault isolation — hosted writes", () => {
     // Resolution only — no method is called on the result, so this performs no
     // I/O against the real host under any version of the code.
     process.env.HASNA_SECRETS_API_URL = "https://secrets.hasna.xyz";
-    process.env.HASNA_SECRETS_API_KEY = "not-a-real-key-fixture";
+    process.env.HASNA_SECRETS_API_KEY = crypto.randomUUID();
 
     expect(() => getStore()).toThrow(/isolation/i);
   });
@@ -172,7 +172,7 @@ describe("test-vault isolation — hosted writes", () => {
     });
     try {
       process.env.HASNA_SECRETS_API_URL = `http://127.0.0.1:${server.port}`;
-      process.env.HASNA_SECRETS_API_KEY = "not-a-real-key-fixture";
+      process.env.HASNA_SECRETS_API_KEY = crypto.randomUUID();
 
       const store = getStore();
       const entry = await store.setSecret("example/app/prod/loopback", "fixture-value", "credential");
@@ -313,19 +313,19 @@ describe("test-vault isolation — the AWS client factory", () => {
     // because all four call sites happened to install a fake first. One forgotten
     // line and the suite talks to AWS.
     const { setAwsClientFactoryForTests, pushSecret } = await import("../src/aws.js");
-    const { LocalStore } = await import("../src/store/index.js");
-    const { resetDb } = await import("../src/db.js");
+    const { startLoopbackVault } = await import("./loopback-vault-fixture.mjs");
 
-    // The push must get PAST the local read, or the rejection below would be an
+    // The push must get PAST the authenticated API read, or rejection would be an
     // ordinary "Secret not found" and would prove nothing about the factory.
     const dir = mkdtempSync(join(tmpdir(), "secrets-isolation-aws-"));
-    const savedDb = process.env.OPEN_SECRETS_DB;
-    process.env.OPEN_SECRETS_DB = join(dir, "vault.db");
-    resetDb();
+    const savedEnv = { ...process.env };
+    const vault = await startLoopbackVault(dir);
+    for (const key of Object.keys(process.env)) if (/^(HASNA_|SECRETS_|OPEN_SECRETS_|AWS_|DATABASE_URL$|PG|XDG_)/.test(key)) delete process.env[key];
+    Object.assign(process.env, vault.env(), { HASNA_SECRETS_TEST_ISOLATION: "1" });
 
     const key = "example/app/prod/never-pushed";
     try {
-      await new LocalStore().setSecret(key, "fixture-value", "credential");
+      await getStore().setSecret(key, "fixture-value", "credential");
 
       setAwsClientFactoryForTests();
       await expect(pushSecret(key, { profile: "example-aws-profile" })).rejects.toThrow(/isolation/i);
@@ -361,10 +361,11 @@ describe("test-vault isolation — the AWS client factory", () => {
       expect(sent).toContain("CreateSecretCommand");
     } finally {
       setAwsClientFactoryForTests();
-      resetDb();
-      if (savedDb === undefined) delete process.env.OPEN_SECRETS_DB;
-      else process.env.OPEN_SECRETS_DB = savedDb;
-      rmSync(dir, { recursive: true, force: true });
+      try { await vault.stop(); } finally {
+        for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
+        Object.assign(process.env, savedEnv);
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   }, 20_000);
 });

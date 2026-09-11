@@ -1,3 +1,5 @@
+import { registerRemoteInvitationTools } from "./remote-invitation-tools.js";
+import { registerPrivatePublicationTools } from "./private-publication-tools.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { RemoteSkillsAuthClient } from "../lib/remote-auth.js";
@@ -5,12 +7,30 @@ import { captureProfileWorkspace } from "../lib/workspace-profile.js";
 import type { RemoteWorkspaceContext } from "../lib/remote-workspace-selection.js";
 import { REMOTE_CUSTOMER_OPERATIONS } from "../lib/remote-customer-operations.js";
 import { createRemoteSkillsClient, RemoteCapabilityUnavailableError, RemoteWorkspaceMemberError, type RemoteSkillsClient } from "../lib/remote-client.js";
+import { workspaceLeaveProfileContext, RemoteWorkspaceLeaveError, RemoteWorkspaceLeaveUnconfirmedError } from "../lib/remote-workspace-leave.js";
 import { mcpError, mcpJson } from "./helpers.js";
+import { decodeRemoteFiles, describeRemoteFiles } from "../lib/remote-files.js";
 
 export function registerRemoteCustomerTools(server: McpServer) {
+  registerRemoteInvitationTools(server);
+  registerPrivatePublicationTools(server);
   const memberRole = z.enum(["owner", "admin", "member", "viewer"]);
   const memberInput = { membershipId: z.string().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/),
     expectedRole: memberRole, email: z.string().email(), code: z.string().regex(/^\d{6}$/) };
+  server.registerTool("leave_workspace", {
+    title: "Leave Current Workspace",
+    description: "Leave exactly the observed user and membership with confirm=true and fresh verification. The server enforces last-owner and last-workspace safeguards. Sign in again afterwards; no automatic retry or saved-profile deletion.",
+    annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false },
+    inputSchema: z.object({ ...memberInput, userId: memberInput.membershipId, confirm: z.literal(true) }).strict(),
+  }, async ({ membershipId, userId, expectedRole, email, code, confirm }) => {
+    try { return mcpJson(await freshAccount("Leave workspace", (client, context) => client.leaveWorkspace(email, code,
+      workspaceLeaveProfileContext(membershipId, userId, context), { expectedRole, confirm }))); }
+    catch (error) {
+      return error instanceof RemoteWorkspaceLeaveError || error instanceof RemoteWorkspaceLeaveUnconfirmedError
+        ? mcpError(error.code, error.message)
+        : mcpError("WORKSPACE_LEAVE_UNCONFIRMED", "Leaving could not be confirmed. Check the selected profile and exact membership, sign in again and inspect available workspaces before another action. Do not retry automatically; saved credentials are unchanged.");
+    }
+  });
   server.registerTool("set_workspace_member_role", {
     title: "Set Current Workspace Member Role",
     description: "Change exactly this membership incarnation with its observed expectedRole and fresh verification. The server enforces owner/admin policy. No automatic refresh or retry; saved credentials stay unchanged.",
@@ -87,8 +107,12 @@ export function registerRemoteCustomerTools(server: McpServer) {
   });
   server.registerTool("quote_skill", {
     title: "Quote Remote Skill", description: "Get the configured server's credit quote without submitting a run.",
-    inputSchema: { name: z.string(), input: z.record(z.string(), z.unknown()).optional(), args: z.array(z.string()).optional() },
-  }, ({ name, input, args }) => callRemote(client => client.quoteRun(name, input, args)));
+    inputSchema: { name: z.string(), input: z.record(z.string(), z.unknown()).optional(), args: z.array(z.string()).optional(),
+      files: z.array(z.object({ name: z.string(), base64: z.string().max(1_398_104), contentType: z.string().optional() })).max(10).optional().describe("The same inline files to submit after approval; quoted descriptors bind their exact bytes, names and types.") },
+  }, ({ name, input, args, files }) => callRemote(client => {
+    const descriptors = describeRemoteFiles(decodeRemoteFiles(files ?? []));
+    return client.quoteRun(name, input, args, descriptors.length ? descriptors : undefined);
+  }));
   server.registerTool("download_run_artifact", {
     title: "Download Verified Run Artifact", description: "Return verified artifact bytes as base64 (at most 1 MiB); use the CLI for larger files.",
     inputSchema: { run_id: z.string(), artifact_id: z.string() },

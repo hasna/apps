@@ -2261,7 +2261,12 @@ describe("project-first CLI surface", () => {
     }
   }, 30000);
 
-  test("guarded-update rejects independent writes to typed resource-link compatibility scalars", () => {
+  test("guarded-update accepts direct writes to typed resource-link compatibility scalars on linkless projects", () => {
+    // A registry project created via the plain CLI has no authoritative resource
+    // links (only the derived conversations_channel + any --integrations-json),
+    // so rewriting its typed mapping keys directly is allowed. Only a write that
+    // contradicts an existing resource link is rejected (covered at the store
+    // layer in project-resource-links.test.ts).
     const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-integrations-"));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     try {
@@ -2297,14 +2302,22 @@ describe("project-first CLI surface", () => {
         "5000",
         "--json",
       ], env);
-      expect(update.exitCode).toBe(1);
-      expect(text(update.stderr)).toContain("must be changed through resource-links");
+      expect(update.exitCode).toBe(0);
+      const result = JSON.parse(text(update.stdout)) as {
+        outcome: string;
+        after: { integrations: Record<string, string> };
+      };
+      expect(result.outcome).toBe("accepted");
+      expect(result.after.integrations).toEqual({
+        todos_project_id: "todo_after",
+        conversations_channel: "package-arrivals",
+      });
       const shown = runProjects(["show", created.project.id, "--json"], env);
       expect(shown.exitCode).toBe(0);
       expect((JSON.parse(text(shown.stdout)) as { project: { integrations: Record<string, string> } })
         .project.integrations).toEqual({
-          conversations_channel: "guarded-integrations",
-          todos_project_id: "todo_before",
+          conversations_channel: "package-arrivals",
+          todos_project_id: "todo_after",
         });
     } finally {
       rmSync(root, { recursive: true, force: true });

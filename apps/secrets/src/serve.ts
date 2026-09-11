@@ -1,6 +1,6 @@
 import { join } from "path";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { ensureOperatorDataDir } from "./data-dir.js";
+import { ensureClientDataDir } from "./data-dir.js";
 import { getStore } from "./store/index.js";
 import { isTestVaultRedirectContext, testVaultDir } from "./test-isolation.js";
 import { VERSION } from "./version.js";
@@ -9,7 +9,7 @@ export const SERVE_PORT = 27462;
 const ALLOWED_EXTENSION_ORIGIN = process.env.HASNA_SECRETS_EXTENSION_ORIGIN?.trim() || "";
 
 export function getOrCreateServeToken(): string {
-  const dir = isTestVaultRedirectContext() ? testVaultDir() : ensureOperatorDataDir();
+  const dir = isTestVaultRedirectContext() ? testVaultDir() : ensureClientDataDir();
   const tokenPath = join(dir, ".serve-token");
   if (existsSync(tokenPath)) {
     return readFileSync(tokenPath, "utf-8").trim();

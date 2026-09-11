@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+// Spawns child processes (CLI/server/scripts); bun's 5s default is too tight on a loaded host.
+setDefaultTimeout(60_000);
+
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,7 +65,7 @@ async function runCli(args: string[], root: string, baseUrl: string, env: Record
       HOME: root,
       TMPDIR: root,
       LANG: "C.UTF-8",
-      TODOS_DB_PATH: join(root, "todos.db"),
+      ...(args.some(arg => arg === "lists" || arg === "templates" || /^templates?-/.test(arg)) ? {} : {TODOS_DB_PATH: join(root, "todos.db")}),
       TODOS_AUTO_PROJECT: "false",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,
@@ -118,13 +121,13 @@ describe("cloud CLI task-list filtering", () => {
             requests.push({ method: request.method, path: url.pathname, query: url.searchParams.toString(), body });
             if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
             if (url.pathname === "/v1/task-lists" && request.method === "GET") {
-              return Response.json({ task_lists: [taskList(LIST_ID, "release")] });
+              return Response.json({ task_lists: [taskList(LIST_ID, "release")], count:1 });
             }
             if (url.pathname === "/v1/task-lists" && request.method === "POST") {
               return Response.json({ task_list: { ...taskList(LIST_ID, "release"), ...(body as object) } }, { status: 201 });
             }
-            if (url.pathname === `/v1/task-lists/${LIST_ID}` && request.method === "DELETE") {
-              return Response.json({ deleted: true });
+            if (url.pathname === `/v1/task-lists/${LIST_ID}/delete-preserving` && request.method === "POST") {
+              return Response.json({schema_version:1,task_list_id:LIST_ID,deleted:true,detached_task_ids:[],detached_plan_ids:[],detached_tasks:0,detached_plans:0});
             }
             return Response.json({ error: "not found" }, { status: 404 });
           },
@@ -809,6 +812,7 @@ describe("cloud CLI task-list filtering", () => {
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
+        if (url.pathname === `/v1/projects/${PROJECT_ID}`) return Response.json({ project: project() });
         if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
         if (url.pathname === "/v1/task-lists") return Response.json({ task_lists: lists });
         if (url.pathname === "/v1/tasks") taskRequests++;

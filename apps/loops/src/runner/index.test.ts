@@ -38,14 +38,27 @@ function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>,
 // while CI stays green. Anchoring every home-layout root at a scratch dir —
 // no credentials file can exist there — makes the disk tier consult nothing,
 // identically on both kinds of machine.
+// The Keychain account is pinned alongside the home roots: `keychainAccount()`
+// in the shared resolver reads HASNA_STATION, else the short hostname, else
+// USER (apps/contracts/src/client/credentials.ts), so on a macOS station with
+// real `hasna.credentials.loops.*` items the AMBIENT tier would resolve the
+// real credential inside these in-process windows — the disk-tier class, one
+// tier up. A sentinel account no item uses keeps the tier a miss; the same
+// save/restore discipline applies, so nothing leaks after the window closes.
 const HOME_ROOT_KEYS = ["HOME", "HASNA_HOME", "HASNA_CONFIG_HOME"] as const;
+const KEYCHAIN_ACCOUNT_KEY = "HASNA_STATION";
+const TEST_KEYCHAIN_ACCOUNT = "loops-hermetic-no-such-station";
 
 function withScratchHome(root: string, fn: () => void): void {
   const saved = new Map(HOME_ROOT_KEYS.map((name) => [name, process.env[name]]));
+  const savedAccount = process.env[KEYCHAIN_ACCOUNT_KEY];
   try {
     for (const name of HOME_ROOT_KEYS) process.env[name] = root;
+    process.env[KEYCHAIN_ACCOUNT_KEY] = TEST_KEYCHAIN_ACCOUNT;
     fn();
   } finally {
+    if (savedAccount === undefined) delete process.env[KEYCHAIN_ACCOUNT_KEY];
+    else process.env[KEYCHAIN_ACCOUNT_KEY] = savedAccount;
     for (const name of HOME_ROOT_KEYS) {
       const value = saved.get(name);
       if (value === undefined) delete process.env[name];
@@ -885,7 +898,9 @@ describe("runner env-file integration", () => {
     // credentials file can exist there) keeps the disk tier inert on both
     // kinds of machine.
     const savedHomeRoots = new Map(HOME_ROOT_KEYS.map((name) => [name, process.env[name]]));
+    const savedAccount = process.env[KEYCHAIN_ACCOUNT_KEY];
     for (const name of HOME_ROOT_KEYS) process.env[name] = dataDir;
+    process.env[KEYCHAIN_ACCOUNT_KEY] = TEST_KEYCHAIN_ACCOUNT;
     mkdirSync(dataDir, { recursive: true });
     const path = join(dataDir, "runner.env");
     writeFileSync(path, contents, { mode: 0o600 });
@@ -902,6 +917,8 @@ describe("runner env-file integration", () => {
         if (value === undefined) delete process.env[name];
         else process.env[name] = value;
       }
+      if (savedAccount === undefined) delete process.env[KEYCHAIN_ACCOUNT_KEY];
+      else process.env[KEYCHAIN_ACCOUNT_KEY] = savedAccount;
       rmSync(dataDir, { recursive: true, force: true });
     };
   }

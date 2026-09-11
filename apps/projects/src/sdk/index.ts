@@ -39,10 +39,8 @@ import {
   completePointerCredential,
   resolveClientTransport,
   resolveCredential,
-  type CredentialChainOptions,
-  type KeychainTierOptions,
-  type ResolvedCredential,
 } from "@hasna/contracts/client";
+import type { CredentialChainOptions, KeychainTierOptions, ResolvedCredential } from "../types/client-types.js";
 import { ProjectsClient, type ProjectsClientOptions } from "./client.js";
 
 /** The app slug the shared client seam resolves credentials and authority for. */

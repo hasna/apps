@@ -20,6 +20,10 @@ function cleanEnv(overrides: Record<string, string>): Record<string, string> {
     // Blanked so a developer's own connection selection never leaks in; local
     // (no API env) spawns get the explicit file opt-in re-added below.
     HASNA_LOOPS_CONNECTION: "",
+    // Keychain tier pin (see cli/index.test.ts): a real macOS keychain item
+    // under this machine's hostname account would satisfy the blanked
+    // connection env; a sentinel account no item uses keeps the tier a miss.
+    HASNA_STATION: "loops-hermetic-no-such-station",
     ...overrides,
   };
   if (!merged.HASNA_LOOPS_CONNECTION?.trim() && !merged.HASNA_LOOPS_API_URL?.trim() && !merged.HASNA_LOOPS_API_KEY?.trim()) {

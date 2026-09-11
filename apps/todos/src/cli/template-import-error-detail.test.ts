@@ -1,4 +1,8 @@
-import { describe, expect, test, afterEach } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { describe, expect, test, afterEach, setDefaultTimeout } from "bun:test";
+// Spawns child processes (CLI/server/scripts); bun's 5s default is too tight on a loaded host.
+setDefaultTimeout(60_000);
+
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,7 +47,7 @@ async function runCli(args: string[], root: string, baseUrl: string) {
       HOME: root,
       TMPDIR: root,
       LANG: "C.UTF-8",
-      TODOS_DB_PATH: join(root, "todos.db"),
+      HASNA_STATION: `fixture-${randomUUID()}`,
       TODOS_AUTO_PROJECT: "false",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,
@@ -59,6 +63,7 @@ async function runCli(args: string[], root: string, baseUrl: string) {
 describe("template-import surfaces the server's own 400 reason", () => {
   test("a malformed task object's rejection reason reaches stderr, not just the status code", async () => {
     const server = Bun.serve({
+      hostname: "127.0.0.1",
       hostname: "127.0.0.1",
       port: 0,
       async fetch(request) {
@@ -96,6 +101,7 @@ describe("template-import surfaces the server's own 400 reason", () => {
 
   test("the same reason reaches the --json error envelope for machine callers", async () => {
     const server = Bun.serve({
+      hostname: "127.0.0.1",
       hostname: "127.0.0.1",
       port: 0,
       async fetch(request) {

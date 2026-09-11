@@ -1,10 +1,15 @@
+import { requestInvitationEmail, type RequestInvitationEmailChallenge, type AcceptInvitationEmailChallenge } from "./remote-invitation-recovery.js";
+import { RemotePrivatePublicationsClient } from "./remote-private-publications.js";
+import { invitationInput, type ListRemoteWorkspaceInvitations, type IssueRemoteWorkspaceInvitation,
+  type ResendRemoteWorkspaceInvitation, type RevokeRemoteWorkspaceInvitation, type AcceptRemoteWorkspaceInvitation } from "./remote-invitations.js";
+import { workspaceLeaveInput, type LeaveRemoteWorkspace } from "./remote-workspace-leave.js";
 import { workspaceContext, workspaceExpectedUserId, parseWorkspaceLogin,
   type RemoteWorkspaceContext, type RemoteWorkspaceSession, type RemoteAccountWorkspaceDiscovery } from "./remote-workspace-selection.js";
 import { readBoundedResponse } from "./remote-files.js";
 import { workspaceMembersQuery, type RemoteWorkspaceMembersOptions } from "./remote-workspace.js";
 import { workspaceMemberRoleInput, workspaceMemberRemovalInput, type SetRemoteWorkspaceMemberRole, type RemoveRemoteWorkspaceMember } from "./remote-workspace.js";
 import { RemoteSkillsClient } from "./remote-client.js";
-import { normalizeSkillsApiOrigin } from "./fleet-credentials.js";
+import { normalizeSkillsApiOrigin, skillsApiRequestUrl } from "./fleet-credentials.js";
 import { customerNamePatch, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
 
 const MAX_ERROR_DETAIL_LENGTH = 200;
@@ -35,10 +40,11 @@ async function requestAuthApi(instance: string, path: string, options?: RequestI
   // sent to a default host, so the command fails before any request is made.
   const url = normalizeSkillsApiOrigin(instance);
   const safeUrl = url;
-  const endpoint = `${(options?.method || "GET").toUpperCase()} ${safeUrl}${path}`;
+  const requestUrl = skillsApiRequestUrl(url, path);
+  const endpoint = `${(options?.method || "GET").toUpperCase()} ${requestUrl}`;
   let res: Response;
   try {
-    res = await fetch(`${url}${path}`, {
+    res = await fetch(requestUrl, {
       ...options,
       redirect: "error",
       signal: options?.signal ?? AbortSignal.timeout(15_000),
@@ -99,6 +105,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export class RemoteSkillsAuthClient {
   readonly apiOrigin: string;
   constructor(apiUrl: string) { this.apiOrigin = normalizeSkillsApiOrigin(apiUrl); }
+  /** One fresh workspace-bound session for an entire publication. No credentials are saved. */
+  async openPrivatePublications(email: string, code: string, context: RemoteWorkspaceContext): Promise<RemotePrivatePublicationsClient> {
+    const origin = this.apiOrigin, captured = workspaceContext(context);
+    return new RemotePrivatePublicationsClient(origin, await this.switchWorkspace(email, code, captured));
+  }
+  requestInvitationEmailChallenge(input: RequestInvitationEmailChallenge) { return requestInvitationEmail(this.apiOrigin, "challenge", input); }
+  acceptInvitationEmailChallenge(input: AcceptInvitationEmailChallenge) { return requestInvitationEmail(this.apiOrigin, "accept", input); }
   requestCode(email: string) { return this.request("/api/auth/login", { method: "POST", body: JSON.stringify({ email }) }); }
   verifyCode(email: string, code: string) { return this.request("/api/auth/verify", { method: "POST", body: JSON.stringify({ email, code }) }); }
   startDevice() { return this.request("/api/auth/device/start", { method: "POST", body: JSON.stringify({ client: "skills-sdk" }) }); }
@@ -132,9 +145,10 @@ export class RemoteSkillsAuthClient {
     const apiOrigin = this.apiOrigin;
     if (typeof email !== "string" || !email.includes("@") || typeof code !== "string" || !/^\d{6}$/.test(code))
       throw new Error("Fresh email and six-digit verification code are required to manage this account");
+    const requestUrl = skillsApiRequestUrl(apiOrigin, "/api/auth/verify");
     let response: Response;
     try {
-      response = await fetch(`${apiOrigin}/api/auth/verify`, { method: "POST", redirect: "error", credentials: "omit",
+      response = await fetch(requestUrl, { method: "POST", redirect: "error", credentials: "omit",
         signal: AbortSignal.timeout(15_000), headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, code }) });
     } catch { throw new HostedApiError("Unable to verify the Skills account."); }
     if (!response.ok) {
@@ -145,6 +159,33 @@ export class RemoteSkillsAuthClient {
     try { value = JSON.parse(new TextDecoder().decode(await readBoundedResponse(response, 64 * 1024))); }
     catch { throw new HostedApiError("The server returned an invalid account verification result."); }
     return { ...parseWorkspaceLogin(value, expected), apiOrigin };
+  }
+  async listWorkspaceInvitations(email: string, code: string, context: RemoteWorkspaceContext, options: ListRemoteWorkspaceInvitations = {}) {
+    const target = workspaceContext(context), captured = invitationInput("list", options);
+    return (await this.sessionClient(email, code, target)).listWorkspaceInvitations(target, captured);
+  }
+  async getWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, invitationId: string) {
+    const target = workspaceContext(context), captured = invitationInput("get", { invitationId });
+    return (await this.sessionClient(email, code, target)).getWorkspaceInvitation(target, captured.invitationId);
+  }
+  async issueWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, input: IssueRemoteWorkspaceInvitation) {
+    const target = workspaceContext(context), captured = invitationInput("issue", input);
+    return (await this.sessionClient(email, code, target)).issueWorkspaceInvitation(target, captured);
+  }
+  async resendWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, invitationId: string, input: ResendRemoteWorkspaceInvitation) {
+    const target = workspaceContext(context), captured = invitationInput("resend", { ...input, invitationId });
+    const { invitationId: id, ...options } = captured;
+    return (await this.sessionClient(email, code, target)).resendWorkspaceInvitation(target, id, options);
+  }
+  async revokeWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, invitationId: string, input: RevokeRemoteWorkspaceInvitation) {
+    const target = workspaceContext(context), captured = invitationInput("revoke", { ...input, invitationId });
+    const { invitationId: id, ...options } = captured;
+    return (await this.sessionClient(email, code, target)).revokeWorkspaceInvitation(target, id, options);
+  }
+  async acceptWorkspaceInvitation(email: string, code: string, context: RemoteWorkspaceContext, invitationId: string, input: AcceptRemoteWorkspaceInvitation) {
+    const target = workspaceContext(context), captured = invitationInput("accept", { ...input, invitationId });
+    const { invitationId: id, ...options } = captured;
+    return (await this.sessionClient(email, code, target)).acceptWorkspaceInvitation(target, id, options);
   }
   async createApiKey(email: string, code: string, name: string, scopes?: string[], context?: RemoteWorkspaceContext) {
     const capturedScopes = scopes === undefined ? undefined : [...scopes];
@@ -170,6 +211,11 @@ export class RemoteSkillsAuthClient {
   async setWorkspaceMemberRole(email: string, code: string, membershipId: string, input: SetRemoteWorkspaceMemberRole, context?: RemoteWorkspaceContext) {
     const captured = workspaceMemberRoleInput(membershipId, input);
     return (await this.sessionClient(email, code, context)).setWorkspaceMemberRole(captured.membershipId, captured.body);
+  }
+  /** Fresh verification binds the exact observed incarnation before a single confirmed leave. */
+  async leaveWorkspace(email: string, code: string, context: RemoteWorkspaceContext, input: LeaveRemoteWorkspace) {
+    const captured = workspaceLeaveInput(context, input);
+    return (await this.sessionClient(email, code, captured.context)).leaveWorkspace(captured.context, captured.input);
   }
   async removeWorkspaceMember(email: string, code: string, membershipId: string, input: RemoveRemoteWorkspaceMember, context?: RemoteWorkspaceContext) {
     const captured = workspaceMemberRemovalInput(membershipId, input);
