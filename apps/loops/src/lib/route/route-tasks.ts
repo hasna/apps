@@ -4,6 +4,7 @@ import {
   buildDuplicateOverlapReport,
   buildNameHygieneReport,
   buildScriptInventoryReport,
+  type HygieneLoopSource,
 } from "../hygiene.js";
 import { selectRouteItems, writeRouteCursor, writeRouteEvidence } from "./cursors.js";
 import { stableHash } from "./fields.js";
@@ -221,7 +222,7 @@ export function parseHygieneChecks(value: string | undefined): HygieneCheckKind[
 }
 
 export function buildHygieneRouteTasks(
-  store: Store,
+  store: HygieneLoopSource,
   opts: { checks: HygieneCheckKind[]; includeInactive?: boolean; limit?: number; scriptsDir?: string },
 ): { checked: Record<HygieneCheckKind, number>; findings: number; tasks: HygieneRouteTask[] } {
   const checked: Record<HygieneCheckKind, number> = { names: 0, duplicates: 0, scripts: 0 };

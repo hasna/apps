@@ -555,3 +555,38 @@ export async function buildHostedLoopDiagnosis(
     ],
   };
 }
+
+export interface HostedExpectationsResult {
+  backend: HostedBackend;
+  expectations: LoopExpectationResult[];
+  unchecked: UncheckedItem[];
+}
+
+/**
+ * `loops expectations` against the hosted control plane.
+ *
+ * Same classifier as the local path and as {@link buildHostedHealthReport}; the
+ * difference is only that the loops and their latest runs are fetched from `/v1`
+ * first and served to the synchronous classifier from an in-memory snapshot.
+ * A loop whose runs could not be read is reported in `unchecked` instead of
+ * being classified from an empty history.
+ */
+export async function buildHostedExpectations(
+  store: LoopStore,
+  opts: { idOrName?: string; limit?: number; now?: Date } = {},
+): Promise<HostedExpectationsResult> {
+  const limit = opts.limit ?? DEFAULT_LOOP_LIMIT;
+  const loops = opts.idOrName ? [await store.requireLoop(opts.idOrName)] : await store.listLoops({ limit });
+  const runs = new Map<string, LoopRun[]>();
+  const unreachable = await latestRunsFor(store, loops.map((loop) => loop.id), runs);
+  const snapshot = new HostedSnapshot(loops, runs);
+  const expectations = loops.map((loop) => expectationForLoop(snapshot, loop, { now: opts.now }));
+  const unchecked: UncheckedItem[] = [];
+  for (const loopId of new Set([...unreachable, ...snapshot.misses])) {
+    unchecked.push({
+      id: `runs:${loopId}`,
+      reason: "runs for this loop could not be read from the hosted API, so its expectation was evaluated without run history.",
+    });
+  }
+  return { backend: hostedBackend(store), expectations, unchecked };
+}

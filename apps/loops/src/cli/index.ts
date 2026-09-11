@@ -49,11 +49,25 @@ import { runDaemon, startDaemon, stripAnsi } from "../daemon/daemon.js";
 import { enableStartup, installStartup } from "../daemon/install.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
-import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScanReports } from "../lib/health.js";
-import { buildHostedDoctorReport, buildHostedHealthReport, buildHostedHealthScan } from "../lib/hosted-diagnostics.js";
+import {
+  buildHealthReport,
+  buildHealthScan,
+  expectationForLoop,
+  writeHealthScanReports,
+  type LoopExpectationResult,
+  type LoopsHealthReport,
+} from "../lib/health.js";
+import {
+  buildHostedDoctorReport,
+  buildHostedExpectations,
+  buildHostedHealthReport,
+  buildHostedHealthScan,
+  type HostedBackend,
+  type UncheckedItem,
+} from "../lib/hosted-diagnostics.js";
 import { isPrivateOperationEventType } from "../lib/operation-contract.js";
 import type { LoopMutationEnvelope } from "../lib/operation-contract.js";
-import { runLoopsUiApp } from "./ui.js";
+import { buildHostedLoopUiSnapshot, runLoopsUiApp } from "./ui.js";
 import {
   applyControlPlanePush,
   applyImportMigrationBundle,
@@ -72,7 +86,9 @@ import {
   buildNameHygieneReport,
   buildScriptInventoryReport,
   buildStuckRunReport,
+  type HygieneLoopSource,
 } from "../lib/hygiene.js";
+import { applyHostedRenames, hostedHygieneInventory } from "../lib/hosted-hygiene.js";
 import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 import { packageVersion } from "../lib/version.js";
 import {
@@ -2125,11 +2141,6 @@ program
   .description("open a live table of active loops")
   .option("--refresh <duration>", "refresh interval", "2s")
   .action(runAction(async (opts: { refresh?: string }) => {
-    // The live table reads this machine's local sqlite runtime directly (active
-    // loops, running runs, local counts via countRuns) on a refresh loop; it has
-    // no hosted /v1 equivalent, so it would show the on-box island's rows while
-    // flipped to the cloud API. Fail loudly instead of rendering the wrong store.
-    assertLocalOnlyCommand("ui");
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       console.error("Loops UI requires a TTY terminal.");
       console.error("Use `loops list`, `loops runs`, or `loops daemon status` non-interactively.");
@@ -2137,6 +2148,20 @@ program
       return;
     }
     const refreshMs = Math.max(500, parseDuration(opts.refresh ?? "2s"));
+    // Hosted connection: every frame is re-read from `/v1` (rows, running runs
+    // and the five counters), so the table shows the control plane's loops
+    // instead of this machine's island. A failed read fails the frame rather
+    // than leaving the last frame on screen looking current.
+    if (isCloudStore()) {
+      const store = getStore();
+      await runLoopsUiApp({
+        refreshMs,
+        snapshotProvider: () => buildHostedLoopUiSnapshot(store),
+        onClose: () => store.close(),
+      });
+      return;
+    }
+    assertLocalOnlyCommand("ui");
     await runLoopsUiApp({ refreshMs });
   }));
 
@@ -2283,11 +2308,51 @@ receipts
     }
   })));
 
+/**
+ * One printer for both transports, so a hosted expectation list is not a
+ * differently-shaped report. The hosted call additionally names the backend it
+ * read and what it could not read.
+ */
+function printExpectations(
+  values: LoopExpectationResult[],
+  opts: { single?: boolean; backend?: HostedBackend; unchecked?: UncheckedItem[] } = {},
+): void {
+  if (isJson()) {
+    const body = opts.single ? values[0] : values;
+    console.log(JSON.stringify(
+      opts.backend ? { expectations: opts.single ? undefined : values, expectation: opts.single ? values[0] : undefined, backend: opts.backend, unchecked: opts.unchecked ?? [] } : body,
+      null,
+      2,
+    ));
+    return;
+  }
+  if (opts.backend) {
+    console.log(`backend  hosted control plane ${opts.backend.apiUrl ?? "(url unavailable)"} (transport=${opts.backend.transport})`);
+  }
+  for (const value of values) {
+    console.log(`${value.ok ? "ok" : "fail"}  ${value.loop.name}  ${value.check.message}`);
+    if (value.failure) console.log(`  classification=${value.failure.classification} fingerprint=${value.failure.fingerprint}`);
+  }
+  if (opts.unchecked) printUnchecked(opts.unchecked);
+}
+
 program
   .command("expectations [idOrName]")
   .description("evaluate deterministic loop expectations without mutating external task systems")
   .option("--limit <n>", "maximum loops to inspect when no loop is specified", "200")
-  .action(runAction((idOrName, opts) => {
+  .action(runAction(async (idOrName, opts) => {
+    // Hosted connection: the same classifier, fed from `/v1` reads.
+    if (isCloudStore()) {
+      const hosted = await withStore((store) =>
+        buildHostedExpectations(store, {
+          idOrName,
+          limit: positiveInteger(opts.limit, "--limit") ?? 200,
+        }),
+      );
+      printExpectations(hosted.expectations, { single: Boolean(idOrName), backend: hosted.backend, unchecked: hosted.unchecked });
+      if (hosted.expectations.some((value) => !value.ok)) process.exitCode = 1;
+      return;
+    }
     assertLocalOnlyCommand("expectations");
     const store = new Store();
     try {
@@ -2534,11 +2599,30 @@ health
   .option("--route-project-path <path>", "fallback project path for --auto-route when the failed loop has no cwd")
   .option("--evidence-dir <path>", "write the route result JSON to this directory")
   .option("--dry-run", "print intended task upserts without mutating todos")
-  .action(runAction((opts) => {
-    assertLocalOnlyCommand("health route-tasks");
-    const store = new Store();
+  .action(runAction(async (opts) => {
+    // The READ side is the health report; on a hosted connection it comes from
+    // `/v1` instead of this machine's sqlite. The WRITE side (todos upserts) is
+    // an outbound CLI call and is identical on both transports.
+    let hostedBackendRead: HostedBackend | undefined;
+    let hostedUnchecked: UncheckedItem[] | undefined;
+    const store = isCloudStore() ? undefined : new Store();
     try {
-      const report = buildHealthReport(store, { limit: positiveInteger(opts.limit, "--limit") ?? 200, includeInactive: Boolean(opts.includeInactive) });
+      let report: LoopsHealthReport;
+      if (store) {
+        assertLocalOnlyCommand("health route-tasks");
+        report = buildHealthReport(store, { limit: positiveInteger(opts.limit, "--limit") ?? 200, includeInactive: Boolean(opts.includeInactive) });
+      } else {
+        const hosted = await withStore((hostedStore) =>
+          buildHostedHealthReport(hostedStore, {
+            limit: positiveInteger(opts.limit, "--limit") ?? 200,
+            includeInactive: Boolean(opts.includeInactive),
+          }),
+        );
+        report = hosted.report;
+        hostedBackendRead = hosted.backend;
+        hostedUnchecked = hosted.unchecked;
+        console.log(`backend  hosted control plane ${hosted.backend.apiUrl ?? "(url unavailable)"} (transport=${hosted.backend.transport})`);
+      }
       const failures = report.expectations.filter((entry) => !entry.ok && entry.recommendedTask);
       const result = upsertRouteTasks({
         project: opts.project,
@@ -2588,11 +2672,39 @@ health
         if (result.evidencePath) console.log(`evidence=${result.evidencePath}`);
         for (const action of actions) console.log(`${action.action} ${action.fingerprint}`);
       }
+      if (hostedUnchecked && !isJson()) printUnchecked(hostedUnchecked);
+      if (hostedBackendRead && isJson()) console.log(JSON.stringify({ backend: hostedBackendRead, unchecked: hostedUnchecked ?? [] }, null, 2));
       if (!result.ok) process.exitCode = 1;
     } finally {
-      store.close();
+      store?.close();
     }
   }));
+
+/**
+ * Run a hygiene classifier against the hosted loop inventory.
+ *
+ * The classifiers are shared with the local path; only the inventory's source
+ * differs. `fn` also receives the live store so `--apply` can rename through
+ * the hosted client (the snapshot itself deliberately cannot rename).
+ */
+async function withHostedHygiene<T>(
+  fn: (source: HygieneLoopSource, store: LoopStore, refresh: () => Promise<HygieneLoopSource>) => Promise<T> | T,
+): Promise<{ value: T; backend: HostedBackend; unchecked: UncheckedItem[]; fetched: number }> {
+  const store = getStore();
+  try {
+    const inventory = await hostedHygieneInventory(store);
+    const refresh = async () => (await hostedHygieneInventory(store)).source;
+    const value = await fn(inventory.source, store, refresh);
+    return { value, backend: inventory.backend, unchecked: inventory.unchecked, fetched: inventory.fetched };
+  } finally {
+    await store.close();
+  }
+}
+
+/** `backend  hosted control plane <url> (transport=api)` — one line, one place. */
+function printHostedBackend(backend: HostedBackend): void {
+  console.log(`backend  hosted control plane ${backend.apiUrl ?? "(url unavailable)"} (transport=${backend.transport})`);
+}
 
 const hygiene = program.command("hygiene").description("deterministic Loops hygiene checks and safe repairs");
 
@@ -2603,7 +2715,39 @@ hygiene
   .option("--include-stopped", "include stopped loops")
   .option("--include-inactive", "include stopped, expired, and archived loops")
   .option("--limit <n>", "maximum loops to inspect", "1000")
-  .action(runAction((opts) => {
+  .action(runAction(async (opts) => {
+    const hygieneOpts = {
+      includeStopped: Boolean(opts.includeStopped),
+      includeInactive: Boolean(opts.includeInactive),
+      limit: positiveInteger(opts.limit, "--limit") ?? 1000,
+    };
+    if (isCloudStore()) {
+      const hosted = await withHostedHygiene(async (source, hostedStore, refresh) => {
+        const planned = buildNameHygieneReport(source, { apply: false, ...hygieneOpts });
+        const changed = planned.changes.filter((entry) => entry.changed);
+        if (!opts.apply || changed.length === 0) {
+          return opts.apply ? { ...planned, applied: true } : planned;
+        }
+        await applyHostedRenames(hostedStore, changed);
+        // Re-read the inventory so the reported state is what the control plane
+        // now holds, not what we hoped it would hold.
+        return { ...buildNameHygieneReport(await refresh(), { apply: false, ...hygieneOpts }), applied: true };
+      });
+      const report = hosted.value;
+      if (isJson()) {
+        console.log(JSON.stringify({ ...report, backend: hosted.backend, unchecked: hosted.unchecked }, null, 2));
+      } else {
+        printHostedBackend(hosted.backend);
+        console.log(`hygiene_names checked=${report.checked} changed=${report.changed} applied=${report.applied}`);
+        if (opts.apply) console.log("note  a hosted rename has no local database backup to take; the control plane keeps the audit trail");
+        for (const change of report.changes.filter((entry) => entry.changed)) {
+          console.log(`${report.applied ? "renamed" : "would-rename"} ${change.id} ${change.oldName} -> ${change.newName}`);
+        }
+        printUnchecked(hosted.unchecked);
+      }
+      if (!report.ok && !report.applied) process.exitCode = 1;
+      return;
+    }
     assertLocalOnlyCommand("hygiene names");
     const store = new Store();
     try {
@@ -2645,7 +2789,27 @@ hygiene
   .description("detect duplicate/overlapping loops with the same canonical name, cwd, and schedule")
   .option("--include-inactive", "include stopped, expired, and archived loops")
   .option("--limit <n>", "maximum loops to inspect", "1000")
-  .action(runAction((opts) => {
+  .action(runAction(async (opts) => {
+    if (isCloudStore()) {
+      const hosted = await withHostedHygiene((source) =>
+        buildDuplicateOverlapReport(source, {
+          includeInactive: Boolean(opts.includeInactive),
+          limit: positiveInteger(opts.limit, "--limit") ?? 1000,
+        }),
+      );
+      const report = hosted.value;
+      if (isJson()) console.log(JSON.stringify({ ...report, backend: hosted.backend, unchecked: hosted.unchecked }, null, 2));
+      else {
+        printHostedBackend(hosted.backend);
+        console.log(`hygiene_duplicates checked=${report.checked} groups=${report.groups.length}`);
+        for (const group of report.groups) {
+          console.log(`${group.key}\t${group.loops.map((loop) => `${loop.id}:${loop.status}:${loop.name}`).join(",")}`);
+        }
+        printUnchecked(hosted.unchecked);
+      }
+      if (!report.ok) process.exitCode = 1;
+      return;
+    }
     assertLocalOnlyCommand("hygiene duplicates");
     const store = new Store();
     try {
@@ -2672,7 +2836,26 @@ hygiene
   .option("--scripts-dir <path>", "script directory to detect")
   .option("--include-inactive", "include stopped, expired, and archived loops")
   .option("--limit <n>", "maximum loops to inspect", "1000")
-  .action(runAction((opts) => {
+  .action(runAction(async (opts) => {
+    if (isCloudStore()) {
+      const hosted = await withHostedHygiene((source) =>
+        buildScriptInventoryReport(source, {
+          scriptsDir: opts.scriptsDir,
+          includeInactive: Boolean(opts.includeInactive),
+          limit: positiveInteger(opts.limit, "--limit") ?? 1000,
+        }),
+      );
+      const report = hosted.value;
+      if (isJson()) console.log(JSON.stringify({ ...report, backend: hosted.backend, unchecked: hosted.unchecked }, null, 2));
+      else {
+        printHostedBackend(hosted.backend);
+        console.log(`hygiene_scripts checked=${report.checked} script_backed=${report.scriptBacked}`);
+        for (const loop of report.loops) console.log(`${loop.id}\t${loop.status}\t${loop.name}\t${loop.command}`);
+        printUnchecked(hosted.unchecked);
+      }
+      if (!report.ok) process.exitCode = 1;
+      return;
+    }
     assertLocalOnlyCommand("hygiene scripts");
     const store = new Store();
     try {
@@ -2706,12 +2889,23 @@ hygiene
   .option("--route-project-path <path>", "fallback project path for --auto-route when the hygiene finding has no cwd")
   .option("--evidence-dir <path>", "write the route result JSON to this directory")
   .option("--dry-run", "print intended task upserts without mutating todos")
-  .action(runAction((opts) => {
-    assertLocalOnlyCommand("hygiene route-tasks");
-    const store = new Store();
+  .action(runAction(async (opts) => {
+    const hostedRoute = isCloudStore()
+      ? await withHostedHygiene((source) =>
+          buildHygieneRouteTasks(source, {
+            checks: parseHygieneChecks(opts.checks),
+            includeInactive: Boolean(opts.includeInactive),
+            limit: positiveInteger(opts.limit, "--limit") ?? 1000,
+            scriptsDir: opts.scriptsDir,
+          }),
+        )
+      : undefined;
+    if (hostedRoute && !isJson()) printHostedBackend(hostedRoute.backend);
+    if (!hostedRoute) assertLocalOnlyCommand("hygiene route-tasks");
+    const store = hostedRoute ? undefined : new Store();
     try {
       const checks = parseHygieneChecks(opts.checks);
-      const route = buildHygieneRouteTasks(store, {
+      const route = hostedRoute ? hostedRoute.value : buildHygieneRouteTasks(store!, {
         checks,
         includeInactive: Boolean(opts.includeInactive),
         limit: positiveInteger(opts.limit, "--limit") ?? 1000,
@@ -2753,9 +2947,10 @@ hygiene
         if (result.evidencePath) console.log(`evidence=${result.evidencePath}`);
         for (const action of actions) console.log(`${action.action} ${action.fingerprint}`);
       }
+      if (hostedRoute && !isJson()) printUnchecked(hostedRoute.unchecked);
       if (!result.ok) process.exitCode = 1;
     } finally {
-      store.close();
+      store?.close();
     }
   }));
 

@@ -1,5 +1,6 @@
-import type { Loop, LoopRun, LoopTarget, ScheduleSpec } from "../types.js";
+import type { Loop, LoopRun, LoopTarget, LoopStatus, RunStatus, ScheduleSpec } from "../types.js";
 import { Store } from "../lib/store.js";
+import type { LoopStore } from "../lib/store/index.js";
 
 const CLEAR_SCREEN = "\x1b[2J\x1b[H";
 const ENTER_ALT_SCREEN = "\x1b[?1049h";
@@ -63,9 +64,30 @@ export interface RunLoopsUiAppOptions {
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
   storeFactory?: () => Store;
+  /**
+   * Snapshot source for one frame. Defaults to the local sqlite store; the
+   * hosted table passes a provider that re-reads `/v1` per frame, so the table
+   * can never render the on-box island while the client is hosted.
+   */
+  snapshotProvider?: () => LoopUiSnapshot | Promise<LoopUiSnapshot>;
+  /** Called once when the app exits, for a hosted provider to close its client. */
+  onClose?: () => void | Promise<void>;
 }
 
-export function buildLoopUiSnapshot(store: Store, opts: BuildLoopUiSnapshotOptions = {}): LoopUiSnapshot {
+/**
+ * The reads the live table needs, named as a contract instead of a concrete
+ * sqlite {@link Store}. The local {@link Store} satisfies it structurally; the
+ * hosted table (see {@link buildHostedLoopUiSnapshot}) implements it over rows
+ * and counts already fetched from `/v1`, because the renderer is synchronous.
+ */
+export interface LoopUiSource {
+  listLoops(opts?: { status?: LoopStatus; limit?: number }): Loop[];
+  listRuns(opts?: { loopId?: string; status?: RunStatus; limit?: number }): LoopRun[];
+  countLoops(status?: LoopStatus): number;
+  countRuns(opts?: { status?: RunStatus }): number;
+}
+
+export function buildLoopUiSnapshot(store: LoopUiSource, opts: BuildLoopUiSnapshotOptions = {}): LoopUiSnapshot {
   const now = opts.now ?? new Date();
   const activeLoops = store.listLoops({ status: "active", limit: opts.limit ?? MAX_ACTIVE_LOOPS });
   const runningRuns = store.listRuns({ status: "running", limit: MAX_RUNNING_RUNS });
@@ -147,6 +169,7 @@ export async function runLoopsUiApp(opts: RunLoopsUiAppOptions = {}): Promise<vo
   const input = opts.input ?? process.stdin;
   const output = opts.output ?? process.stdout;
   const storeFactory = opts.storeFactory ?? (() => new Store());
+  const hostedProvider = opts.snapshotProvider;
   const rawInput = input as NodeJS.ReadStream & { setRawMode?: (mode: boolean) => void };
   const signalExitCodes: Partial<Record<NodeJS.Signals, number>> = { SIGINT: 130, SIGTERM: 143 };
   const signalHandlers: Array<[NodeJS.Signals, () => void]> = [];
@@ -159,15 +182,23 @@ export async function runLoopsUiApp(opts: RunLoopsUiAppOptions = {}): Promise<vo
   let stopApp: (() => void) | undefined;
   let renderHandler: (() => void) | undefined;
 
-  const render = () => {
-    if (closed || !store) return;
-    const snapshot = buildLoopUiSnapshot(store);
+  const paint = (snapshot: LoopUiSnapshot) => {
     output.write(`${CLEAR_SCREEN}${renderLoopUiFrame(snapshot, {
       columns: output.columns,
       rows: output.rows,
       refreshMs,
       color: true,
     })}`);
+  };
+
+  const render = async () => {
+    if (closed) return;
+    if (hostedProvider) {
+      paint(await hostedProvider());
+      return;
+    }
+    if (!store) return;
+    paint(buildLoopUiSnapshot(store));
   };
 
   const onData = (chunk: Buffer) => {
@@ -195,10 +226,16 @@ export async function runLoopsUiApp(opts: RunLoopsUiAppOptions = {}): Promise<vo
     } catch {
       /* closing an already-failed store should not hide the original error */
     }
+    try {
+      void opts.onClose?.();
+    } catch {
+      /* the hosted client's close must not hide the original error either */
+    }
   };
 
   try {
-    store = storeFactory();
+    // A hosted provider owns its own client; no local store is opened at all.
+    if (!hostedProvider) store = storeFactory();
     output.write(`${ENTER_ALT_SCREEN}${HIDE_CURSOR}${CLEAR_SCREEN}`);
     terminalEntered = true;
     await new Promise<void>((resolve, reject) => {
@@ -214,12 +251,10 @@ export async function runLoopsUiApp(opts: RunLoopsUiAppOptions = {}): Promise<vo
         cleanup();
         resolve();
       };
+      // A failed frame must surface, not leave the previous frame on screen
+      // looking current — that is how a dead control plane reads as healthy.
       const safeRender = () => {
-        try {
-          render();
-        } catch (error) {
-          fail(error);
-        }
+        void render().catch(fail);
       };
       stopApp = stop;
       renderHandler = safeRender;
@@ -398,4 +433,72 @@ function timeOnly(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toISOString().slice(11, 19);
+}
+
+/** Counts and rows for one hosted frame, served to the synchronous renderer. */
+class HostedUiSource implements LoopUiSource {
+  constructor(
+    private readonly activeLoops: Loop[],
+    private readonly runningRuns: LoopRun[],
+    private readonly latestByLoop: Map<string, LoopRun[]>,
+    private readonly counts: { active: number; paused: number; stopped: number; running: number; failed: number },
+  ) {}
+
+  listLoops(opts: { status?: LoopStatus; limit?: number } = {}): Loop[] {
+    const scoped = opts.status ? this.activeLoops.filter((loop) => loop.status === opts.status) : this.activeLoops;
+    return scoped.slice(0, opts.limit ?? scoped.length);
+  }
+
+  listRuns(opts: { loopId?: string; status?: RunStatus; limit?: number } = {}): LoopRun[] {
+    const source = opts.loopId ? (this.latestByLoop.get(opts.loopId) ?? []) : this.runningRuns;
+    const filtered = opts.status ? source.filter((run) => run.status === opts.status) : source;
+    return filtered.slice(0, opts.limit ?? filtered.length);
+  }
+
+  countLoops(status?: LoopStatus): number {
+    if (status === "active") return this.counts.active;
+    if (status === "paused") return this.counts.paused;
+    if (status === "stopped") return this.counts.stopped;
+    return this.counts.active + this.counts.paused + this.counts.stopped;
+  }
+
+  countRuns(opts: { status?: RunStatus } = {}): number {
+    if (opts.status === "running") return this.counts.running;
+    if (opts.status === "failed") return this.counts.failed;
+    return this.counts.running + this.counts.failed;
+  }
+}
+
+/**
+ * One frame of the live table from the hosted control plane.
+ *
+ * The renderer is synchronous, so everything it will ask for is fetched first:
+ * the active loops, the running runs, each active loop's latest run, and the
+ * five counters the status line shows. Counts come from `/v1/loops/count` and
+ * `/v1/runs/count` rather than from the length of a capped page, so the header
+ * cannot understate the fleet.
+ */
+export async function buildHostedLoopUiSnapshot(
+  store: LoopStore,
+  opts: BuildLoopUiSnapshotOptions = {},
+): Promise<LoopUiSnapshot> {
+  const limit = opts.limit ?? 200;
+  const [activeLoops, runningRuns, active, paused, stopped, running, failed] = await Promise.all([
+    store.listLoops({ status: "active", limit }),
+    store.listRuns({ status: "running", limit }),
+    store.countLoops("active"),
+    store.countLoops("paused"),
+    store.countLoops("stopped"),
+    store.countRuns({ status: "running" }),
+    store.countRuns({ status: "failed" }),
+  ]);
+  const latestByLoop = new Map<string, LoopRun[]>();
+  for (let index = 0; index < activeLoops.length; index += 8) {
+    const page = activeLoops.slice(index, index + 8);
+    await Promise.all(page.map(async (loop) => {
+      latestByLoop.set(loop.id, await store.listRuns({ loopId: loop.id, limit: 1 }));
+    }));
+  }
+  const source = new HostedUiSource(activeLoops, runningRuns, latestByLoop, { active, paused, stopped, running, failed });
+  return buildLoopUiSnapshot(source, opts);
 }

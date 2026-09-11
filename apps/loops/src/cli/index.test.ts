@@ -10777,14 +10777,13 @@ describe("local-only guards under a cloud-flipped client", () => {
   } as const;
   const FLIP_MESSAGE = "not available while flipped to the hosted Loops API";
 
-  test("route admission, drain, live UI, and tick fail loudly when flipped", () => {
+  test("route admission, drain and tick fail loudly when flipped", () => {
     const dataDir = freshDataDir("loops-cli-cloud-guard-");
     for (const args of [
       ["routes", "create", "todos-task"],
       ["routes", "drain", "todos-task"],
       ["events", "handle", "todos-task"],
       ["events", "drain", "todos-task"],
-      ["ui"],
       ["tick"],
     ]) {
       const result = runCli(dataDir, args, undefined, CLOUD_ENV);
@@ -10805,6 +10804,20 @@ describe("local-only guards under a cloud-flipped client", () => {
     const result = runCli(dataDir, ["--json", "run-now", "anything"], undefined, CLOUD_ENV);
     expect(result.status).toBe(1);
     expect(result.stderr).not.toContain(FLIP_MESSAGE);
+    expect(result.stdout).not.toContain("do-not-print-this-key");
+    expect(result.stderr).not.toContain("do-not-print-this-key");
+  });
+
+  test("the live UI reads the hosted control plane when flipped instead of refusing as local-only (W13)", () => {
+    // `ui` used to be in the refusal list above. It now re-reads every frame
+    // from /v1, so the local-only refusal must NOT fire. These tests run without
+    // a TTY, so it exits on the TTY requirement — which also proves it got past
+    // the guard without opening the local store.
+    const dataDir = freshDataDir("loops-cli-cloud-ui-");
+    const result = runCli(dataDir, ["ui"], undefined, CLOUD_ENV);
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain(FLIP_MESSAGE);
+    expect(result.stderr).toContain("requires a TTY");
     expect(result.stdout).not.toContain("do-not-print-this-key");
     expect(result.stderr).not.toContain("do-not-print-this-key");
   });
