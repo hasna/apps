@@ -1,5 +1,3 @@
-## 1.6.0
-
 ## 1.6.1
 
 ### Patch Changes
@@ -8,6 +6,7 @@
 - Bound expensive message searches with process admission and transaction-local time limits; busy searches return HTTP 429 with retry guidance.
 - Keep backend idle connections open longer than the proxy timeout to prevent reuse of closed sockets.
 
+## 1.6.0
 
 First publication since 1.4.10. The 1.5.0 section below was cut (hasna/apps#1867) but never published — its independent release review returned NO_GO on the deliberate-tier defect fixed in this release — so everything listed under 1.5.0 ships here for the first time, together with the changes below.
 
