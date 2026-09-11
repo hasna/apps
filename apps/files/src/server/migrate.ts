@@ -9,9 +9,13 @@
  * pre-created) is inventoried and never clobbered (all DDL is IF NOT EXISTS /
  * ADD COLUMN IF NOT EXISTS).
  */
+import { createRequire } from "module";
 import { createCloudPoolFromEnv } from "../generated/storage-kit/index.js";
 import { MigrationLedger } from "../generated/storage-kit/migrations.js";
 import { CLOUD_MIGRATIONS } from "../db/cloud-migrations.js";
+
+const require = createRequire(import.meta.url);
+const pkg = require("../../package.json") as { version: string };
 
 export function filesMigrateHelpText(): string {
   return `Usage: files-migrate [options]
@@ -20,10 +24,18 @@ Apply the cloud PostgreSQL schema migrations for open-files.
 
 Options:
   --check, --dry-run  Report pending migrations without applying them; exits 1 when pending
+  -V, --version       Print the package version
   -h, --help          Show this help text`;
 }
 
 async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  // `--version` / `--help` answer from argv alone, BEFORE the cloud pool is
+  // resolved, so they work with no HASNA_FILES_DATABASE_URL (the published
+  // 0.4.0 exited 1 on `files-migrate --version` for exactly that reason).
+  if (argv.includes("-V") || argv.includes("--version")) {
+    console.log(pkg.version);
+    return;
+  }
   if (argv.includes("-h") || argv.includes("--help")) {
     console.log(filesMigrateHelpText());
     return;

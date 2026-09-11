@@ -285,11 +285,26 @@ export interface SSEEvent {
 // ── Client Options ───────────────────────────────────────────────────────────
 
 export interface TodosClientOptions {
-  /** Base URL of the todos server. Default: http://localhost:19427 */
+  /**
+   * Base URL of the todos server (tier 1: a deliberate pin, never resolved
+   * around). Default: the authority the `@hasna/contracts` chain resolves —
+   * `HASNA_TODOS_API_URL`, the Keychain `hasna.credentials.todos.api-url`
+   * item, `~/.hasna/todos/config/credentials`, else the fleet gateway
+   * `https://api.hasna.com/todos` once a credential resolves. The unhosted
+   * `http://localhost:19427` is reached ONLY under `HASNA_TODOS_LOCAL=1`.
+   */
   baseUrl?: string;
   /** Request timeout in ms. Default: 10000 */
   timeout?: number;
-  /** API key for auth (sent as x-api-key header). Default: TODOS_API_KEY env */
+  /**
+   * API key for auth (sent as x-api-key header; tier 1, never re-resolved).
+   * Default: the credential the `@hasna/contracts` chain resolves, fresh on
+   * every request — `HASNA_TODOS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
+   * `HASNA_TODOS_API_KEY_REF`, then the macOS Keychain item
+   * `hasna.credentials.todos.api-key`, then `~/.hasna/todos/config/credentials`,
+   * then `HASNA_TODOS_API_KEY`. With none of them the constructor throws
+   * `TODOS_CREDENTIAL_MISSING`; there is no local fallback.
+   */
   apiKey?: string;
   /** Max retries on 5xx/429. Default: 0 */
   maxRetries?: number;

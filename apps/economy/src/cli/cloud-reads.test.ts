@@ -1,5 +1,5 @@
 // Regression tests for issue #1585: read-only CLI verbs (brief, efficiency)
-// must not issue a POST to /v1/ingest in self_hosted/cloud (API) mode.
+// must not issue a POST to /v1/ingest in hosted (API) mode.
 //
 // In API mode the reads come straight from the shared API's GET routes — there
 // is no local store to flush, and the /v1/ingest push belongs to the explicit

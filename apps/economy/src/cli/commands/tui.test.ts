@@ -31,9 +31,11 @@ describe('status line', () => {
     expect(line).toContain('machines')
   })
 
-  test('buildStatusLine reports self_hosted transport', () => {
+  test('buildStatusLine reports the hosted transport (no retired mode vocabulary)', () => {
     const line = buildStatusLine(sampleData({ transport: 'cloud-http' }))
-    expect(line).toContain('self_hosted')
+    expect(line).toContain('hosted')
+    expect(line).not.toContain('self_hosted')
+    expect(line).not.toContain('cloud')
   })
 
   test('buildWaybarJson surfaces savings and today spend', () => {

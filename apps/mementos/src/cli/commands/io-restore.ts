@@ -36,6 +36,61 @@ function readMemoriesFromBackup(source: string): {
   }
 }
 
+/**
+ * The LOCAL restore arm replaces the whole on-box database file, so the
+ * source must be a full local backup — a copy of the live migrated database.
+ * `mementos backup` in hosted mode writes a MEMORIES-ONLY CARRIER into the
+ * same backups directory (a single bespoke `memories` table plus the
+ * `_backup_carrier` format marker, no `_migrations` history, no
+ * agents/projects/entities/relations/memory_versions tables). Copying that
+ * file over the live DB would drop every non-memories table, strand restored
+ * rows without their join rows, and make the next migration run replay all
+ * migrations over the half-shaped table (the RENAME/rebuild steps collide).
+ *
+ * Gate the local arm on the marker and refuse any file that is not a readable
+ * mementos backup at all. Returns the backup's memories count for the
+ * preview when the source passes.
+ */
+function inspectLocalRestoreSource(source: string): { memories: number } {
+  const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+  let backupDb: import("bun:sqlite").Database;
+  try {
+    backupDb = new Database(source, { readonly: true });
+  } catch (error) {
+    throw new Error(
+      `Backup file is not a readable SQLite database: ${source} ` +
+        `(${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  try {
+    const tables = (
+      backupDb
+        .query("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .all() as Array<{ name: string }>
+    ).map((t) => t.name);
+    if (tables.includes("_backup_carrier")) {
+      throw new Error(
+        `${source} is a memories-only cloud backup (created by \`mementos backup\` in hosted mode), ` +
+          `not a full local database backup. Restoring it over the on-box database would drop every ` +
+          `non-memories table and its migration history, and the next migration run would collide with ` +
+          `the half-shaped schema. Restore it into the hosted store instead (run \`mementos restore\` with ` +
+          `a hosted credential), or re-import its memories with \`mementos import\`.`,
+      );
+    }
+    if (!tables.includes("memories")) {
+      throw new Error(
+        `Backup file has no mementos \`memories\` table: ${source} — it is not a mementos backup.`,
+      );
+    }
+    const row = backupDb
+      .query("SELECT COUNT(*) as count FROM memories")
+      .get() as { count: number } | null;
+    return { memories: row?.count ?? 0 };
+  } finally {
+    backupDb.close();
+  }
+}
+
 export function registerRestoreCommand(program: Command): void {
   const handleError = makeHandleError(program);
 
@@ -186,17 +241,11 @@ export function registerRestoreCommand(program: Command): void {
           }
         }
 
-        // Get backup memory count by opening it temporarily
-        let backupCount = 0;
-        try {
-          const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
-          const backupDb = new Database(source, { readonly: true });
-          const row = backupDb.query("SELECT COUNT(*) as count FROM memories").get() as { count: number } | null;
-          backupCount = row?.count ?? 0;
-          backupDb.close();
-        } catch {
-          // Can't read backup stats, that's ok
-        }
+        // Get backup memory count by opening it temporarily — and refuse the
+        // file up front when it is a memories-only cloud carrier or not a
+        // mementos backup at all (the local arm replaces the whole DB file, so
+        // a single-table source would destroy the schema).
+        const backupCount = inspectLocalRestoreSource(source).memories;
 
         if (!opts.force) {
           if (globalOpts.json) {

@@ -69,6 +69,69 @@ export function findStaleRegistrations(
   return stale;
 }
 
+/**
+ * Whether two tool matchers can select the same tool call. Deliberately loose
+ * (identical, or one a substring of the other) — a false positive costs one
+ * advisory warning, a false negative costs a silently disarmed guard.
+ */
+export function matchersOverlap(a: string, b: string): boolean {
+  return a === b || a.includes(b) || b.includes(a);
+}
+
+/** The metadata slice `findRewriteOverlaps` needs from a hook. */
+export interface RewriteHookInfo {
+  matcher?: string;
+  event?: string;
+  events?: string[];
+  rewritesInput?: boolean;
+}
+
+/** Two installed hooks that both rewrite the tool input on the same tool. */
+export interface RewriteOverlap {
+  hooks: [string, string];
+  event: string;
+  matchers: [string, string];
+}
+
+function hookEventsOf(info: RewriteHookInfo): string[] {
+  return info.events?.length ? info.events : info.event ? [info.event] : [];
+}
+
+/**
+ * Installed hooks that both rewrite the tool input
+ * (`hookSpecificOutput.updatedInput`) on an overlapping PreToolUse matcher.
+ *
+ * This is a real defect, not a style nit: the harness applies ONE rewrite per
+ * tool call, so one of the two guards is silently disarmed. The installer
+ * refuses the pairing up front; doctor reports it for settings files it did
+ * not write (hand-edited, or written before the rule existed).
+ */
+export function findRewriteOverlaps(
+  names: string[],
+  lookup: (name: string) => RewriteHookInfo | undefined,
+): RewriteOverlap[] {
+  const rewriting = names
+    .map((name) => ({ name, info: lookup(name) }))
+    .filter((row): row is { name: string; info: RewriteHookInfo } => Boolean(row.info?.rewritesInput && row.info.matcher));
+
+  const overlaps: RewriteOverlap[] = [];
+  for (let i = 0; i < rewriting.length; i++) {
+    for (let j = i + 1; j < rewriting.length; j++) {
+      const a = rewriting[i];
+      const b = rewriting[j];
+      const aEvents = hookEventsOf(a.info);
+      const bEvents = hookEventsOf(b.info);
+      const event = aEvents.find((name) => name === "PreToolUse" && bEvents.includes(name));
+      if (!event) continue;
+      const aMatcher = a.info.matcher as string;
+      const bMatcher = b.info.matcher as string;
+      if (!matchersOverlap(aMatcher.toLowerCase(), bMatcher.toLowerCase())) continue;
+      overlaps.push({ hooks: [a.name, b.name], event, matchers: [aMatcher, bMatcher] });
+    }
+  }
+  return overlaps;
+}
+
 function safeMatcherTest(pattern: string, value: string): boolean {
   try {
     return new RegExp(pattern).test(value);

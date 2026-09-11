@@ -97,10 +97,24 @@ afterEach(() => {
 /**
  * A hermetic env: every pointer to a real credential tier removed, the fixture
  * home applied, and nothing else that could route a resolution.
+ *
+ * HOME is moved (not merely scrubbed): the resolver's disk tier reads
+ * `$HOME/.hasna/mementos/config/credentials` (or `$HASNA_CONFIG_HOME` /
+ * `$HASNA_HOME` when those are set) and falls back to HOME when the override
+ * vars are absent — so an env that keeps this machine's real HOME while
+ * scrubbing the env pointers can still resolve the operator's REAL credential
+ * file. A fixture home makes the disk tier empty by construction. Callers that
+ * deliberately exercise the disk tier set `HOME` (and write their fixture
+ * credential file under it) via `extra`, which wins here.
  */
 function hermeticEnv(extra: Env = {}): Env {
   const env: Env = { ...process.env };
   for (const key of CLEAN_KEYS) delete env[key];
+  // An explicit `HOME`/`HASNA_HOME` in `extra` is the disk-tier fixture seam:
+  // keep it, otherwise point HOME at a throwaway fixture home.
+  if (!("HOME" in extra) && !("HASNA_HOME" in extra)) {
+    env["HOME"] = tempHome();
+  }
   for (const [key, value] of Object.entries(extra)) {
     if (value === undefined) delete env[key];
     else env[key] = value;

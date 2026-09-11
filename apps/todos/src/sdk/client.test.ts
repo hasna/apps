@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { TodosClient } from "./client.js";
-import { resolveTodosSdkTransport } from "./resolve.js";
+import { __resetTodosSdkLocalNotice, createTodosV1Client, resolveTodosSdkTransport } from "./resolve.js";
 import { resetConfig } from "../lib/config.js";
 import { getJsonContract, validateJsonContract } from "../json-contracts.js";
 
@@ -43,7 +43,10 @@ afterEach(() => {
 });
 
 describe("TodosClient local API config", () => {
-  test("uses local server URL by default", () => {
+  test("the explicit local opt-in (set process-wide by test/setup.ts) selects the local serve", () => {
+    // Self-validating: this arm is reachable ONLY through the opt-in now, so
+    // the test states the precondition it relies on instead of inheriting it.
+    expect((process.env["HASNA_TODOS_LOCAL"] ?? process.env["TODOS_LOCAL"] ?? "").trim()).not.toBe("");
     const client = new TodosClient();
     expect(client.baseUrl).toBe("http://localhost:19427");
     expect(client.apiKey).toBeNull();
@@ -360,6 +363,108 @@ describe("TodosClient local API config", () => {
  * it is the thing "the service authority is fixed for the life of a client"
  * exists to promise.
  */
+describe("TodosClient fails closed when nothing resolves (hasna/apps#1720 validation)", () => {
+  // The arm this replaces: `resolveTodosSdkTransport` mapped "nothing is
+  // configured" to `local-serve` with a stderr notice, so `new TodosClient()`
+  // under HASNA_STATION=no-such-station constructed at http://localhost:19427
+  // with exit 0 — local mode with no opt-in, the exact false green the
+  // 2026-09-04 ruling forbids.
+  const AMBIENT_NAMES = [
+    "HASNA_TODOS_API_URL",
+    "HASNA_TODOS_API_KEY",
+    "HASNA_TODOS_API_KEY_OVERRIDE",
+    "HASNA_TODOS_API_KEY_REF",
+    "HASNA_PROFILE",
+    "HASNA_TODOS_LOCAL",
+    "TODOS_LOCAL",
+    "HASNA_STATION",
+    "HASNA_HOME",
+  ] as const;
+  let savedAmbient: Map<string, string | undefined>;
+
+  beforeEach(() => {
+    savedAmbient = new Map(AMBIENT_NAMES.map((name) => [name, process.env[name]]));
+    for (const name of AMBIENT_NAMES) delete process.env[name];
+    // The Keychain tier still runs; it is pointed at an account no item uses
+    // so a developer Mac and a Linux runner read the same. The disk tier is
+    // anchored on the fake HOME the outer beforeEach installed, which holds no
+    // credentials file.
+    process.env["HASNA_STATION"] = "todos-sdk-test-account-that-does-not-exist";
+  });
+
+  afterEach(() => {
+    for (const [name, value] of savedAmbient) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  test("new TodosClient() throws TODOS_CREDENTIAL_MISSING instead of degrading to the local serve", () => {
+    expect(() => new TodosClient()).toThrow(/^TODOS_CREDENTIAL_MISSING:/);
+    expect(() => TodosClient.fromEnv()).toThrow(/^TODOS_CREDENTIAL_MISSING:/);
+  });
+
+  test("the refusal names every tier consulted and the opt-in, and prints no local-mode notice", () => {
+    const lines: string[] = [];
+    let message = "";
+    try {
+      resolveTodosSdkTransport({ notice: (line) => lines.push(line) });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toMatch(/^TODOS_CREDENTIAL_MISSING:/);
+    for (const tier of [
+      "HASNA_TODOS_API_KEY_OVERRIDE",
+      "HASNA_PROFILE",
+      "HASNA_TODOS_API_KEY_REF",
+      "hasna.credentials.todos.api-key",
+      "~/.hasna/todos/config/credentials",
+      "HASNA_TODOS_API_KEY",
+      "HASNA_TODOS_LOCAL=1",
+    ]) {
+      expect(message).toContain(tier);
+    }
+    expect(message).toMatch(/fail\w*\s*closed/i);
+    expect(lines).toEqual([]);
+  });
+
+  test("a caller-built env with neither HOME nor a credential is refused the same way", () => {
+    expect(() => resolveTodosSdkTransport({ env: {}, notice: () => {} })).toThrow(/^TODOS_CREDENTIAL_MISSING:/);
+    expect(() => resolveTodosSdkTransport({ env: { HOME: fakeHome }, notice: () => {} })).toThrow(
+      /^TODOS_CREDENTIAL_MISSING:/,
+    );
+  });
+
+  test("createTodosV1Client keeps refusing with the same code", () => {
+    expect(() => createTodosV1Client()).toThrow(/^TODOS_CREDENTIAL_MISSING:/);
+  });
+
+  test("the explicit local opt-in is the ONLY way to the local serve, and it says so once", () => {
+    const lines: string[] = [];
+    __resetTodosSdkLocalNotice();
+    const first = resolveTodosSdkTransport({
+      env: { HOME: fakeHome, HASNA_TODOS_LOCAL: "1" },
+      notice: (line) => lines.push(line),
+    });
+    expect(first.mode).toBe("local-serve");
+    expect(first.baseUrl).toBe("http://localhost:19427");
+    expect(first.apiKey).toBeNull();
+    resolveTodosSdkTransport({ env: { HOME: fakeHome, TODOS_LOCAL: "1" }, notice: (line) => lines.push(line) });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("LOCAL mode");
+    expect(lines[0]).toContain("HASNA_TODOS_LOCAL");
+    expect(lines[0]).toContain("http://localhost:19427");
+  });
+
+  test("a deliberate tier that cannot produce a key still throws rather than falling through", () => {
+    process.env["HASNA_TODOS_API_KEY_REF"] = "no/such/vault/item";
+    expect(() => new TodosClient()).toThrow();
+    delete process.env["HASNA_TODOS_API_KEY_REF"];
+    process.env["HASNA_PROFILE"] = "no-such-profile";
+    expect(() => new TodosClient()).toThrow();
+  });
+});
+
 describe("TodosClient explicit baseUrl credential pin", () => {
   const AMBIENT_NAMES = [
     "HASNA_TODOS_API_URL",

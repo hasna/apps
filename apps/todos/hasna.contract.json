@@ -51,14 +51,14 @@
       "kind": "mcp",
       "status": "supported",
       "mcpBin": "todos-mcp",
-      "authMode": "local-only"
+      "authMode": "api-key"
     },
     {
       "name": "cli",
       "kind": "cli",
       "status": "supported",
       "bin": "todos",
-      "authMode": "local-only"
+      "authMode": "api-key"
     }
   ],
   "storage": {
