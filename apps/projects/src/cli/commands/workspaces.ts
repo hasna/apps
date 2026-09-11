@@ -693,6 +693,25 @@ function mutationAgentId(store: ProjectStore, optAgent?: string): string | undef
   return optAgent ? resolveAgentId(optAgent) : ensureCliAgent().id;
 }
 
+/**
+ * Same contract as {@link mutationAgentId}, for the commands that accept an
+ * explicitly named attributing agent (`start --actor`, cleanup `--agent`).
+ *
+ * `resolveAgentId()` reads the on-box sqlite agent table, so calling it on a
+ * hosted station opens ~/.hasna/projects/projects.db for nothing but a name
+ * lookup. Here the hosted transport resolves the named agent through the
+ * shared `/v1/agents` registry instead (GET /v1/agents/{idOrSlug}); an unnamed
+ * agent stays `undefined` so the server derives attribution from the bearer
+ * key, exactly as every other hosted mutation already does.
+ */
+async function resolveMutationAgentId(store: ProjectStore, optAgent?: string): Promise<string | undefined> {
+  if (store.transport === "local") return optAgent ? resolveAgentId(optAgent) : ensureCliAgent().id;
+  if (!optAgent) return undefined;
+  const agent = await store.getAgent(optAgent);
+  if (!agent) throw new Error(`Agent not found: ${optAgent}`);
+  return agent.id;
+}
+
 function printRows(rows: Array<Record<string, unknown>>, columns: string[]): void {
   if (!rows.length) {
     console.log(chalk.dim("No records found."));
@@ -1787,7 +1806,7 @@ function registerProjectStartCommand(program: Command): void {
           throw new Error("--session/--name is only supported for a single project start");
         }
 
-        const agentId = opts.actor ? resolveAgentId(opts.actor) : ensureCliAgent().id;
+        const agentId = await resolveMutationAgentId(resolveProjectStore(), opts.actor);
         const requestedWindows = parseTmuxWindowsJson(opts.windowsJson, "--windows-json");
         const commonOptions = {
           agentTool: opts.agent ? parseProjectStartAgent(opts.agent) : undefined,
