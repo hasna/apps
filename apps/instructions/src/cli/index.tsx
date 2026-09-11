@@ -2042,6 +2042,28 @@ program
     }
   });
 
+/**
+ * Locate a TOML table by its header LINE, as a half-open `[start, end)` range
+ * of line indexes (the header line through the line before the next table
+ * header, or EOF). Returns null when the table is not really present.
+ *
+ * A textual `content.indexOf("[mcp_servers.configs]")` is not enough: that text
+ * also occurs inside a comment (`# [mcp_servers.configs] disabled for now` —
+ * the natural way a user parks an install) and inside quoted values. Splicing
+ * at such an offset ends the prefix mid-comment or mid-string, so the next
+ * table header is glued onto it — commenting out the user's OTHER server and
+ * leaving an unterminated TOML string.
+ */
+function findTomlTableLines(lines: string[], table: string): { start: number; end: number } | null {
+  const header = `[${table}]`;
+  const start = lines.findIndex((line) => line.trim() === header);
+  if (start === -1) return null;
+  // The table runs to the next line whose first non-space character opens a
+  // table (`[`). A commented-out header starts with `#`, so it does not end it.
+  const next = lines.slice(start + 1).findIndex((line) => line.trimStart().startsWith("["));
+  return { start, end: next === -1 ? lines.length : start + 1 + next };
+}
+
 // ── mcp ───────────────────────────────────────────────────────────────────────
 const mcpCmd = program.command("mcp").description("Install/remove MCP server for AI agents");
 
@@ -2081,7 +2103,7 @@ mcpCmd.command("install")
           const block = `\n[mcp_servers.configs]\ncommand = "${mcpBinary}"\nargs = []\n`;
           if (ex(configPath)) {
             const content = readFileSync(configPath, "utf-8");
-            if (content.includes("[mcp_servers.configs]")) {
+            if (findTomlTableLines(content.split("\n"), "mcp_servers.configs")) {
               console.log(chalk.dim("= Already installed in Codex"));
               continue;
             }
@@ -2148,18 +2170,17 @@ mcpCmd.command("uninstall")
             continue;
           }
           const content = readFileSync(configPath, "utf-8");
-          const marker = "[mcp_servers.configs]";
-          if (!content.includes(marker)) {
+          const lines = content.split("\n");
+          const table = findTomlTableLines(lines, "mcp_servers.configs");
+          if (!table) {
+            // Absent — or present only as a comment/quoted text, which is not an
+            // install and must never be spliced apart.
             console.log(chalk.dim("= Not installed in Codex"));
             continue;
           }
-          // Strip the [mcp_servers.configs] entry: drop its TOML block (header
-          // through the next top-level header or EOF), then clean up the blank
-          // line the block left behind.
-          const header = content.indexOf(marker);
-          const nextHeader = /(?:^|\n)\[/.exec(content.slice(header + marker.length));
-          const blockEnd = nextHeader ? header + marker.length + nextHeader.index + 1 : content.length;
-          let remaining = content.slice(0, header) + content.slice(blockEnd);
+          // Strip the [mcp_servers.configs] entry: drop its own lines, then
+          // clean up the blank lines the removal left behind.
+          let remaining = [...lines.slice(0, table.start), ...lines.slice(table.end)].join("\n");
           remaining = remaining.replace(/\n{3,}/g, "\n\n").trimEnd();
           wf(configPath, remaining.endsWith("\n") ? remaining : `${remaining}\n`, "utf-8");
           console.log(chalk.green("✓") + " Removed from Codex");

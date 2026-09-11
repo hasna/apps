@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
@@ -92,6 +92,68 @@ describe("mcp install/uninstall parity", () => {
     const gone = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
     expect(gone.status).toBe(0);
     expect(gone.stdout).toContain("Not installed in Codex");
+  });
+
+  /**
+   * The marker text also occurs where it is not an install: commented out, or
+   * inside a quoted value. Splicing on the first textual occurrence ends the
+   * prefix mid-comment/mid-string, which comments out the NEXT table and leaves
+   * an unterminated TOML string. Uninstall must leave such a file byte-identical.
+   */
+  test("codex uninstall never splices a commented-out or quoted marker", () => {
+    const home = makeTempRoot("mcp-codex-marker-");
+    const dbPath = join(home, "instructions.db");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const configPath = join(home, ".codex", "config.toml");
+
+    // The natural way a user parks an install instead of uninstalling.
+    const commented = `[model]\nprovider = "anthropic"\n\n# [mcp_servers.configs] disabled for now\n# command = "/configs-mcp"\n\n[mcp_servers.echo]\ncommand = "echo"\n`;
+    writeFileSync(configPath, commented, "utf-8");
+    const removed = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+    expect(removed.status).toBe(0);
+    expect(removed.stdout).toContain("Not installed in Codex");
+    expect(readFileSync(configPath, "utf-8")).toBe(commented);
+
+    const quoted = `[model]\nprovider = "anthropic"\nnote = "see [mcp_servers.configs] docs"\n\n[mcp_servers.echo]\ncommand = "echo"\n`;
+    writeFileSync(configPath, quoted, "utf-8");
+    const removedQuoted = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+    expect(removedQuoted.status).toBe(0);
+    expect(removedQuoted.stdout).toContain("Not installed in Codex");
+    expect(readFileSync(configPath, "utf-8")).toBe(quoted);
+  });
+
+  test("codex uninstall strips the real table with a comment nearby, and install re-enables it", () => {
+    const home = makeTempRoot("mcp-codex-nearby-");
+    const dbPath = join(home, "instructions.db");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const configPath = join(home, ".codex", "config.toml");
+
+    // A comment MENTIONS the marker before the real table: the real table is
+    // the target, the comment is not, and the next server survives.
+    writeFileSync(
+      configPath,
+      `# [mcp_servers.configs] was here\n[model]\nprovider = "anthropic"\n\n[mcp_servers.configs]\ncommand = "/configs-mcp"\nargs = []\n\n[mcp_servers.echo]\ncommand = "echo"\n`,
+      "utf-8",
+    );
+    const removed = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+    expect(removed.status).toBe(0);
+    expect(removed.stdout).toContain("Removed from Codex");
+    const remaining = readFileSync(configPath, "utf-8");
+    expect(remaining).not.toContain("\n[mcp_servers.configs]");
+    expect(remaining).toContain("# [mcp_servers.configs] was here");
+    expect(remaining).toContain("[mcp_servers.echo]");
+
+    // Install after a commented-out block must re-add the real table rather
+    // than reporting "already installed" off the comment text.
+    writeFileSync(
+      configPath,
+      `[model]\nprovider = "anthropic"\n\n# [mcp_servers.configs] disabled\n\n[mcp_servers.echo]\ncommand = "echo"\n`,
+      "utf-8",
+    );
+    const reinstalled = runCli(["mcp", "install", "--codex"], home, dbPath);
+    expect(reinstalled.status).toBe(0);
+    expect(reinstalled.stdout).toContain("Installed into Codex");
+    expect(readFileSync(configPath, "utf-8")).toContain("\n[mcp_servers.configs]\n");
   });
 
   test("antigravity install registers and uninstall removes only the configs entry", () => {

@@ -353,7 +353,9 @@ named `configs`. The current installer writes no `--stdio` argument even though
 the MCP binary now defaults to HTTP; for a stdio client, add `--stdio` to the
 registered server arguments or register the command manually. Uninstall is the
 per-agent inverse of install: `--codex` strips the `[mcp_servers.configs]`
-block from `~/.codex/config.toml` (creating nothing when the file is absent),
+table from `~/.codex/config.toml` (creating nothing when the file is absent),
+addressing the table by its header *line*, so a commented-out or quoted mention
+of that header is not an install and leaves the file byte-identical,
 `--antigravity` removes the `mcpServers.configs` entry from
 `~/.gemini/config/mcp_config.json`, `--claude` removes the `configs` server via
 `claude mcp remove`, and `--all` covers all three. Deeper configs are left
