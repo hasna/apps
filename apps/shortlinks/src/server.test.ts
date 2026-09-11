@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { __resetShortlinksLocalNotice } from "./client-store.js";
 import { createShortlinksHandler } from "./server.js";
 import { ShortlinksStore } from "./store.js";
 import type { Link } from "./types.js";
@@ -10,6 +11,7 @@ let tempHome = "";
 let dbPath = "";
 
 beforeEach(() => {
+  __resetShortlinksLocalNotice();
   tempHome = mkdtempSync(join(tmpdir(), "shortlinks-server-"));
   dbPath = join(tempHome, "shortlinks.db");
   process.env.SHORTLINKS_HOME = tempHome;
@@ -17,6 +19,8 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.SHORTLINKS_HOME;
+  delete process.env.HASNA_SHORTLINKS_LOCAL;
+  delete process.env.SHORTLINKS_LOCAL;
   rmSync(tempHome, { recursive: true, force: true });
 });
 
@@ -38,6 +42,41 @@ function createTestLink(): Link {
     short_url: "https://has.na/abc",
   };
 }
+
+describe("redirect handler authority", () => {
+  test("requires an injected store or explicit local opt-in", () => {
+    const env = { HOME: tempHome, SHORTLINKS_HOME: tempHome };
+    expect(() => createShortlinksHandler({ env })).toThrow(/requires an injected store/);
+    expect(existsSync(dbPath)).toBe(false);
+  });
+
+  test("dbPath alone is not a local opt-in", () => {
+    const env = { HOME: tempHome, SHORTLINKS_HOME: tempHome };
+    expect(() => createShortlinksHandler({ dbPath, env })).toThrow(/HASNA_SHORTLINKS_LOCAL=1/);
+    expect(existsSync(dbPath)).toBe(false);
+  });
+
+  test("explicit local opt-in opens the real resolved path and announces it", async () => {
+    const notices: string[] = [];
+    const nestedHome = join(tempHome, "relocated");
+    const expectedPath = join(nestedHome, "shortlinks.db");
+    const handler = createShortlinksHandler({
+      env: {
+        HOME: tempHome,
+        SHORTLINKS_HOME: nestedHome,
+        HASNA_SHORTLINKS_LOCAL: "1",
+      },
+      notice: (line) => notices.push(line),
+    });
+
+    const response = await handler(new Request("https://has.na/healthz"));
+    expect(response.status).toBe(200);
+    expect(existsSync(expectedPath)).toBe(true);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain(expectedPath);
+    expect(notices[0]).not.toContain("~/.hasna/shortlinks/shortlinks.db");
+  });
+});
 
 describe("redirect handler", () => {
   test("logs analytics failures by default while still redirecting", async () => {
