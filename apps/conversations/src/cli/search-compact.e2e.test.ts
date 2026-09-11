@@ -7,6 +7,7 @@ import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { backfilledChannelIdForName } from "../lib/channel-id.js";
+import { hermeticHomeEnv } from "../test/hermetic.js";
 
 const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 const CHANNEL = "policy-search-compact";
@@ -17,6 +18,7 @@ function runCli(args: string[]) {
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
     env: {
+      ...hermeticHomeEnv(),
       ...fixture.env,
       CONVERSATIONS_AGENT_ID: "search-compact-test",
       FORCE_COLOR: "0",

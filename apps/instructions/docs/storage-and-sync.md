@@ -6,7 +6,12 @@ feedback; filesystem apply/sync operations still run on the client machine.
 
 ## Local SQLite
 
-With no client API variables set, the store is SQLite:
+The on-box SQLite store is an explicit opt-in: `HASNA_INSTRUCTIONS_LOCAL=1`
+with no authority or credential configured anywhere. With no client API
+variables set and no opt-in, the CLI fails LOUD — non-zero exit naming the
+credential tiers consulted — and never opens the local store.
+
+With the opt-in (`HASNA_INSTRUCTIONS_LOCAL=1`), the store is SQLite:
 
 ```text
 ~/.hasna/instructions/instructions.db
@@ -54,7 +59,7 @@ API](http-api.md). A client never needs a database DSN.
 | Variable | Effect |
 | --- | --- |
 | `CONFIGS_HOME` | Home used to expand `~/` config targets and detect machine paths. Falls back to `HOME`. |
-| `HASNA_CONFIGS_HOME` | Raw session-render root. Defaults to `~/.hasna/configs`. |
+| `HASNA_CONFIGS_HOME` | Raw session-render root. Defaults to `~/.hasna/instructions`. |
 | `HASNA_INSTRUCTIONS_DB_PATH` | Local SQLite path only. |
 
 `CONFIGS_HOME` and `HASNA_CONFIGS_HOME` are intentionally separate and neither

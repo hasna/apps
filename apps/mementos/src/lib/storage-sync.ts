@@ -13,11 +13,42 @@ import {
   incrementalSyncPush,
   getSyncMetaAll,
   isSyncExcludedTable,
+  isServerContext,
   listSqliteTables,
 } from "../storage.js";
 import { getCurrentMachineId } from "../db/machines.js";
 import { uuid } from "../db/database.js";
 import { getDbPath } from "./config.js";
+import { MEMENTOS_DB_PATH_ENV_KEYS, MEMENTOS_LOCAL_OPT_IN_ENV_KEYS, selectsMementosLocalStore } from "./local-opt-in.js";
+
+/**
+ * The refusal `storage push|pull|sync|status` (CLI) and the `storage_*` MCP
+ * tools raise on the hosted route. Names only variables, never a value.
+ */
+export const STORAGE_SYNC_LOCAL_ONLY_MESSAGE =
+  "REMOTE_COMMAND_UNSUPPORTED: mementos storage push/pull/sync/status operate on the on-box SQLite store, " +
+  "which is opt-in only (" +
+  `${MEMENTOS_LOCAL_OPT_IN_ENV_KEYS[0]}=1 or an explicit ${MEMENTOS_DB_PATH_ENV_KEYS[0]}` +
+  ") and disabled by default. On the hosted route there is no local store to sync — refusing rather than " +
+  "creating one. Run these verbs where the on-box store deliberately lives (the local opt-in) or in mementos-serve.";
+
+/**
+ * Open the on-box store for a storage-sync operation — the ONLY place this
+ * module constructs a local adapter. Until this gate existed
+ * `new SqliteAdapter(getDbPath())` here bypassed `getDatabase()`'s fail-closed
+ * gate entirely (the "named residual" in src/db/database.ts): `mementos
+ * storage status` and the four `storage_*` MCP tools created
+ * `~/.hasna/mementos/mementos.db` on a hosted station whose credential had
+ * just resolved (T1 §3.5 mementos). The rule is the same as everywhere else:
+ * the on-box store exists only under the explicit local opt-in or inside the
+ * server; anything else is a refusal that names the opt-in.
+ */
+function openLocalSyncAdapter(): SqliteAdapter {
+  if (!isServerContext() && !selectsMementosLocalStore(process.env)) {
+    throw new Error(STORAGE_SYNC_LOCAL_ONLY_MESSAGE);
+  }
+  return new SqliteAdapter(getDbPath());
+}
 
 const MEMORY_TABLE = "memories";
 const MEMORY_SYNC_META_TABLE = "_mementos_storage_sync_meta";
@@ -639,7 +670,7 @@ function withManagedAdapters<T>(
 ): T {
   const localOwned = !options.local;
   const remoteOwned = !options.remote;
-  const local = options.local ?? new SqliteAdapter(getDbPath());
+  const local = options.local ?? openLocalSyncAdapter();
   const remote = options.remote ?? new PgAdapter(getStorageConnectionString("mementos"));
 
   try {
@@ -720,7 +751,7 @@ export function getStorageSyncStatus(
 ): MementosStorageStatus {
   const backend = getStorageBackend();
   const localOwned = !options.local;
-  const local = options.local ?? new SqliteAdapter(getDbPath());
+  const local = options.local ?? openLocalSyncAdapter();
 
   try {
     const currentMachineId = resolveCurrentMachineId(local, options.current_machine_id);

@@ -26,9 +26,10 @@ import {
   cloudApiUrl,
   ConversationsStoreConfigError,
   getStore,
-  LocalStore,
+  
   isCloudStore,
-} from "./index.js";
+ } from "./index.js";
+import { LocalStore } from "./local-store.js";
 
 const URL_VAR = "HASNA_CONVERSATIONS_API_URL";
 const KEY_VAR = "HASNA_CONVERSATIONS_API_KEY";

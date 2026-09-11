@@ -164,6 +164,10 @@ export function getDatabase(dbPath?: string): Database {
     // (b) has no cloud endpoint yet; in both cases we FAIL LOUDLY rather than
     // silently read/write a divergent local database. An explicit dbPath
     // (tests/tooling/import-export against a file) is always honored below.
+    //
+    // (The server process never reaches this guard: `isApiMode()` is false
+    // there — the server selects its own backend via its storage
+    // configuration, never the client resolver — see src/db/api-mode.ts.)
     if (isApiMode()) {
       throw new Error(
         "mementos is in API mode (HASNA_MEMENTOS_API_URL + HASNA_MEMENTOS_API_KEY set) " +
