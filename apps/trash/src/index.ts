@@ -6,10 +6,17 @@
  * path, and a retention sweep whose invariant is asserted in code
  * (`lib/retention.ts`) and pinned by tests.
  *
- * What is NOT here, and is phase 2/3 by design: the shell guard
- * (`hook-trash-guard`, `@hasna/hooks`), the always-on daemon that runs the
- * sweeper on an independent timer, and the remote transport. `trash doctor`
- * reports those absences rather than implying coverage.
+ * The shell guard (phase 2) is the `trash guard` verb plus `guard/scan.ts` —
+ * the source-span scanner that turns a command STRING into a rewrite, which is
+ * what a Bash hook needs and what a tokenizing decoder cannot provide (§15,
+ * correction: `shellWords`/`splitShellSegments` decode quoting and keep no byte
+ * offsets). It is exported from `./sdk`, not here, so the store plane stays
+ * free of shell semantics.
+ *
+ * What is NOT here, and is phase 3/4 by design: the always-on daemon that runs
+ * the sweeper on an independent timer, the remote transport, and the
+ * `hook-trash-guard` binding in `@hasna/hooks`. `trash doctor` reports those
+ * absences rather than implying coverage.
  */
 
 export { TrashStore, TrashStoreRefusalError } from "./lib/store.js";

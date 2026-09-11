@@ -45,6 +45,18 @@ export function resolveConfig(options: CreateTrashOptions = {}): TrashConfig {
 export { TrashStore, DEFAULT_TRASH_CONFIG };
 export type { TrashStoreOptions };
 
+// The guard's decision layer, for callers that hold a command STRING rather
+// than the shell's argv — a Bash hook is the intended one (§3: the rewrite is
+// a span edit, so `planGuardCommand` returns the command to run, and the same
+// call answers "may this even be routed"). `runGuard` is deliberately NOT
+// re-exported: it owns process-level concerns (stdin, the exit status, the
+// store handle) and belongs to the CLI, not to a library consumer.
+export { planGuardCommand, guardPlanDocument, guardPrefix } from "./guard/plan.js";
+export { scanDeleteVerbs, applySpanEdits, quoteForShell, REWRITE_VERBS } from "./guard/scan.js";
+export { EXIT_OK, EXIT_ERROR, EXIT_REFUSED } from "./guard/run.js";
+export type { GuardDecision, GuardDecisionKind, GuardPlanDocument, PlanOptions } from "./guard/plan.js";
+export type { ScannedWord, SourceSpan, Disposition, DeleteVerbHit, ScanResult, SpanEdit } from "./guard/scan.js";
+
 export { resolveTrashRoots } from "./paths.js";
 export { resolveTrashMode, describeMode } from "./lib/mode.js";
 export { planRetention } from "./lib/retention.js";

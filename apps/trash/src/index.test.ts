@@ -32,6 +32,20 @@ describe("@hasna/trash public surface", () => {
     expect(sdk.TrashStore).toBe(library.TrashStore);
   });
 
+  test("the ./sdk export carries the guard's decision layer", () => {
+    // The consumer is a Bash hook holding a command STRING; it needs the
+    // decision and the rewritten command, not the store handle.
+    expect(typeof sdk.planGuardCommand).toBe("function");
+    expect(typeof sdk.scanDeleteVerbs).toBe("function");
+    expect(typeof sdk.guardPlanDocument).toBe("function");
+    expect(typeof sdk.quoteForShell).toBe("function");
+    expect(sdk.REWRITE_VERBS).toEqual(["rm", "rmdir"]);
+    expect(sdk.EXIT_REFUSED).toBe(2);
+
+    const decision = sdk.planGuardCommand("rm -rf /", { spool: "/s", trashBin: "trash", home: "/home/u", cwd: "/work" });
+    expect(decision.kind).toBe("deny");
+  });
+
   test("no scaffold placeholder survives", () => {
     expect((library as Record<string, unknown>).hello).toBeUndefined();
   });

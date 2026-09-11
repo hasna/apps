@@ -28,7 +28,10 @@ import {
 } from "../lib/config.js";
 import { TrashStore, type DoctorCheck, type PutOutcome, type RemoteUploader, type RemoteVerifier } from "../lib/store.js";
 import { listRefusals } from "../lib/refusals.js";
-import type { TrashRootOverrides } from "../paths.js";
+import { resolve } from "node:path";
+import { getHomeDir, type TrashRootOverrides } from "../paths.js";
+import { guardPlanDocument, planGuardCommand } from "../guard/plan.js";
+import { runGuard } from "../guard/run.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -40,6 +43,11 @@ usage: trash [global flags] <verb> [args]
 
 verbs
   put <path...>            move paths into the trash store (rm grammar: -r, -f)
+  guard [-f|-i|-I|-v|-d|-r] <path...>
+                           THE REWRITE TARGET — what \`rm\` becomes. Reproduces
+                           rm's exit-code contract; captures instead of
+                           unlinking. \`--rmdir\` selects rmdir grammar,
+                           \`--plan <cmd>\` prints the rewrite decision as JSON.
   list                     list staged entries
   restore <id> [--to P]    move an entry back to its original path
   purge <id...>            remove entries and their payloads (needs --apply)
@@ -64,10 +72,14 @@ exit codes
   0 done   1 error   2 refused (capture failed on a non-excluded path, so the
                        delete was refused too — §11.7)
 
-The shell guard that rewrites \`rm\` into a trash call is phase 2
-(\`hook-trash-guard\`, in @hasna/hooks); it will invoke
-\`trash put --spool <abs> -rf <path>\`. The retention sweeper runs on an
-independent timer in phase 3 — in phase 1 it is this verb: \`trash sweep\`.
+\`trash guard\` is the rewrite target the phase-2 shell guard (\`hook-trash-guard\`,
+in @hasna/hooks) substitutes for the program token: \`rm -rf <path>\` becomes
+\`trash guard --spool <abs> -rf <path>\` — the spool travels in the COMMAND TEXT
+because a variable set in the hook child never reaches the process that runs
+the rewritten command. The guard owns rm's exit codes (0 done, 1 rm error,
+2 refused), so the user's \`&&\` chains behave exactly as rm's did. The
+retention sweeper runs on an independent timer in phase 3 — in phase 1 it is
+this verb: \`trash sweep\`.
 `;
 
 interface GlobalFlags {
@@ -229,6 +241,90 @@ function parseVerbFlags(rest: string[], globals: GlobalFlags): VerbFlags {
   return out;
 }
 
+interface GuardVerbConfig {
+  argv: string[];
+  allowUncaptured: boolean;
+  rmdir: boolean;
+  plan: string | null;
+}
+
+/**
+ * Split `trash guard ...` into guard config and rm argv.
+ *
+ * The rewrite emits the config FIRST (`trash guard --spool <abs> -rf <path>`),
+ * so only a LEADING run of config flags is consumed — everything from the
+ * first rm token onward belongs to rm. That ordering is load-bearing: a later
+ * `--spool` in the tail stays rm's argument, where rm reports it as an
+ * unrecognized option, instead of being silently swallowed as the guard's
+ * configuration.
+ */
+function takeGuardConfig(rest: string[], globals: GlobalFlags): GuardVerbConfig {
+  const out: GuardVerbConfig = { argv: [], allowUncaptured: false, rmdir: false, plan: null };
+  let index = 0;
+  const takeValue = (name: string): string => {
+    const value = rest[index + 1];
+    if (value === undefined) throw new UsageError(`${name} needs a value`);
+    index += 2;
+    return value;
+  };
+  while (index < rest.length) {
+    const arg = rest[index]!;
+    const eq = arg.startsWith("--") && arg.includes("=") ? arg.indexOf("=") : -1;
+    const name = eq === -1 ? arg : arg.slice(0, eq);
+    const inline = eq === -1 ? undefined : arg.slice(eq + 1);
+    if (name === "--spool" || name === "--files" || name === "--info" || name === "--config" || name === "--agent") {
+      const value = inline ?? takeValue(name);
+      if (inline !== undefined) index += 1;
+      if (name === "--spool") globals.spool = value;
+      else if (name === "--files") globals.files = value;
+      else if (name === "--info") globals.info = value;
+      else if (name === "--config") globals.config = value;
+      else globals.agent = value;
+      continue;
+    }
+    if (name === "--allow-uncaptured" && inline === undefined) {
+      out.allowUncaptured = true;
+      index += 1;
+      continue;
+    }
+    if (name === "--rmdir" && inline === undefined) {
+      out.rmdir = true;
+      index += 1;
+      continue;
+    }
+    if (name === "--json" && inline === undefined) {
+      globals.json = true;
+      index += 1;
+      continue;
+    }
+    if (name === "--plan") {
+      if (inline !== undefined) {
+        out.plan = inline;
+        index += 1;
+      } else {
+        const command = rest[index + 1];
+        if (command === undefined) throw new UsageError("--plan needs a command string");
+        out.plan = command;
+        index += 2;
+      }
+      continue;
+    }
+    break;
+  }
+  out.argv = rest.slice(index);
+  return out;
+}
+
+/**
+ * The spool path a plan embeds. Empty when the guard was given no explicit
+ * `--spool`: a rewrite that names no store is resolved by the rewritten
+ * command's own environment, which is exactly the case the hook avoids by
+ * always passing one (§4 "Two-context resolution").
+ */
+function resolveSpoolForPlan(globals: GlobalFlags): string {
+  return globals.spool ? resolve(globals.spool) : "";
+}
+
 function makeStore(globals: GlobalFlags, runtime: CliRuntime = {}): TrashStore {
   const roots: TrashRootOverrides = {};
   if (globals.spool) roots.root = globals.spool;
@@ -279,9 +375,51 @@ async function main(argv: string[], runtime: CliRuntime = {}): Promise<number> {
     return verb === null && !flags.help ? EXIT_ERROR : EXIT_OK;
   }
 
+  // `trash guard` carries its config AFTER the verb (that is where the rewrite
+  // emits it), so it is parsed before the store is built from the same flags.
+  let guardConfig: GuardVerbConfig | null = null;
+  if (verb === "guard") guardConfig = takeGuardConfig(rest, flags);
+
   const store = makeStore(flags, runtime);
 
   switch (verb) {
+    case "guard": {
+      // The rewrite target: `rm -rf x` becomes `trash guard --spool <abs> -rf x`.
+      // This process IS the user's rm, so its exit code and stderr are the
+      // contract (§3) — `runGuard` owns both, and this case only wires IO.
+      const parsed = guardConfig ?? takeGuardConfig(rest, flags);
+
+      if (parsed.plan !== null) {
+        // `--plan` exposes the scanner to consumers that cannot link the
+        // package. It is NOT the hook's decision path: §11.5 requires the
+        // hook's deny decision to be self-contained, so the hook must not
+        // depend on this binary being installed.
+        const decision = planGuardCommand(parsed.plan, {
+          spool: resolveSpoolForPlan(flags),
+          trashBin: "trash",
+          home: getHomeDir(process.env),
+          cwd: process.cwd(),
+          extraProtectedRoots: [store.roots.files, store.roots.info, store.roots.state, store.roots.config],
+        });
+        process.stdout.write(`${JSON.stringify(guardPlanDocument(decision), null, 2)}\n`);
+        return decision.kind === "deny" ? EXIT_REFUSED : EXIT_OK;
+      }
+
+      const result = runGuard({
+        argv: parsed.argv,
+        cwd: process.cwd(),
+        io: {
+          stdout: (text) => process.stdout.write(text),
+          stderr: (text) => process.stderr.write(text),
+        },
+        store,
+        agent: flags.agent,
+        allowUncaptured: parsed.allowUncaptured,
+        rmdir: parsed.rmdir,
+      });
+      return result.code;
+    }
+
     case "put": {
       const verbFlags = parseVerbFlags(rest, flags);
       if (verbFlags.positional.includes("--help")) {
