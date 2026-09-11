@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { hasInstructionsEnvAuthorityIntent } from "../lib/local-opt-in.js";
 import { getRawStoreRoot } from "../lib/raw-store-root.js";
 
 function getDbPath(): string {
@@ -115,6 +116,32 @@ let _db: Database | null = null;
 
 export function getDatabase(path?: string): Database {
   if (_db) return _db;
+  // The on-box SQLite store must never be opened by a process whose environment
+  // configures a hosted Instructions authority or credential. Opening it there
+  // is SILENT LOCAL DRIFT — every read and write lands in a different store
+  // than the one the run is configured against, and nothing about the run looks
+  // wrong — so it fails loudly instead.
+  //
+  // This is a data-safety invariant, NOT a transport gate. Routing already
+  // happens at resolveConfigStore() (which never returns LocalConfigStore once
+  // the environment configures an authority), so no command reaches here in a
+  // hosted run. The public `LocalConfigStore` class IS a public SDK export,
+  // however, so a consumer can call this directly and bypass that routing
+  // entirely (hasna/apps#1886 review finding P1). That is the case this guard
+  // exists for.
+  //
+  // The deliberate opt-out is explicit: pass a `path` (as the tests do) or an
+  // injected `Database`. The check reads the ENVIRONMENT alone — never the
+  // Keychain or the credential files, whose reads would break the hermetic
+  // opt-in short-circuit.
+  if (!path && hasInstructionsEnvAuthorityIntent(process.env)) {
+    throw new Error(
+      "instructions: refusing to open the on-box SQLite store — the environment configures a hosted " +
+        "Instructions authority or credential (HASNA_INSTRUCTIONS_*), and reading or writing the local store " +
+        "here would silently drift from the shared dataset. Pass an explicit database path (or an injected " +
+        "Database) to work against the on-box store deliberately.",
+    );
+  }
   const dbPath = path || getDbPath();
   const db = new Database(dbPath);
   db.run("PRAGMA journal_mode = WAL");
