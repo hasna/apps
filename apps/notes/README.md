@@ -67,6 +67,17 @@ const page = await notes.list({ limit: 10 });
 ```
 
 The package root exports the same authenticated remote client as `./sdk`.
+Both include TypeScript declarations generated from the canonical JavaScript.
+Classic `list()` returns `{ data, nextCursor }`; `export()` returns
+`{ exportId, notes }`. Classic `update()` uses last-write-wins PATCH semantics,
+without the browser SDK's `baseRevision` concurrency contract.
+
+Maintainers run `bun run build:sdk-types` after editing the classic SDK or
+HTTP store, and `bun run check:sdk-types` to detect stale declarations.
+`bun run test:sdk-package` packs and installs a fresh external npm consumer,
+checks both public imports with `strict: true` and `skipLibCheck: false`, and
+proves malformed usage and missing declarations fail. It uses the package's
+declared dependency graph without overrides and sends no application requests.
 Pure Markdown/frontmatter formatting helpers are available only at
 `@hasna/notes/compat/markdown-format`; that subpath exports no local CRUD.
 

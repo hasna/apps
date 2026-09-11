@@ -73,7 +73,7 @@ Target implementation routes every surface through one application contract with
 | Source | Evidence anchored here |
 | --- | --- |
 | `package.json` | Six declared binaries, 13 public export entries, and the public `./mode` compatibility surface. |
-| `hasna.contract.json` | Product metadata that currently declares mode-shaped runtime metadata (transitional: the contracts schema still requires `serviceSurfaces.deploymentModes` until the hotfix). |
+| `hasna.contract.json` | Product metadata that currently declares mode-shaped runtime metadata (the transitional `serviceSurfaces.deploymentModes` requirement is gone: `@hasna/contracts` 1.0.2 rejects the field). |
 | `src/index.ts` | Root export surface and compatibility exposure. |
 | `openapi/loops.json` | HTTP operation/generation contract, Foundation status/version responses (the former `Foundation.mode` property is removed), and missing operation-shape coverage. |
 | `src/api/index.ts` | Current HTTP adapter composition and application-boundary fragmentation. |
@@ -278,7 +278,7 @@ reintroduced as a deprecated compatibility field.
 | Current surface | Compatibility input/output behavior | Target mapping | Owner/test | Removal gate |
 | --- | --- | --- | --- | --- |
 | `src/lib/mode.ts` enum/resolver | Accepted and emitted mode-shaped values | Removed; mode exports renamed to the storage/connection model (breaking public export change in 0.5.0) | Resolver and status-output tests | Removal shipped in 0.5.0 |
-| `hasna.contract.json` modes | Declared product modes and mode-shaped runtime metadata (transitional: the contracts schema still requires `serviceSurfaces.deploymentModes` until the hotfix) | Declare capabilities, storage support, roles, auth/tenant contract, topology compatibility, and readiness separately | Contract-schema validation | Contracts hotfix ships; legacy schema window closed |
+| `hasna.contract.json` modes | Declared product modes and mode-shaped runtime metadata (the transitional `serviceSurfaces.deploymentModes` requirement is gone: `@hasna/contracts` 1.0.2 rejects the field) | Declare capabilities, storage support, roles, auth/tenant contract, topology compatibility, and readiness separately | Contract-schema validation | Shipped: `@hasna/contracts` 1.0.2 rejects `serviceSurfaces.deploymentModes` |
 | `openapi/loops.json` `Foundation.mode` and API status/version responses | Emitted mode-shaped service identity | `Foundation.mode` property removed; status/version responses carry storage/connection fields | OpenAPI validation, generation-drift check, generated SDK response tests | `mode` removed in 0.5.0; verified consumers migrated |
 | CLI `mode`, `self-hosted`, and `cloud` commands plus `src/cli/index.test.ts` | Accepted legacy commands/config and emitted mode-shaped status | `loops mode` and `loops cloud status` removed; `loops status` reports storage + connection; `migrate`/`push`/`pull` promoted to top level | CLI status-output and packed binary tests | Commands removed in 0.5.0; `loops status` documented |
 | SDK constructors/options | Embedded and remote clients can be selected through overlapping constructors/options | Explicit embedded and remote constructors/options feed one role resolver and one public SDK | SDK unit, generated-client, and resolver matrix tests | Ambiguous constructors removed only after typed migration path, verified consumer evidence, and deprecation gate |
