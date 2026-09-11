@@ -6,7 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAgentTools } from "./agents";
-import { getDataDir } from "../../lib/db";
+import { getConversationsHome } from "../../lib/home.js";
 import { getAutoName, readPersistedIdentity, _resetAutoName } from "../../lib/identity";
 import { getSessionAgent, setSessionAgent } from "../channel";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
@@ -350,8 +350,8 @@ describe("agent MCP tools", () => {
     let tempHome: string;
 
     function writeIdentity(name: string): void {
-      mkdirSync(getDataDir(), { recursive: true });
-      writeFileSync(join(getDataDir(), "agent-id"), name + "\n", "utf-8");
+      mkdirSync(getConversationsHome(), { recursive: true });
+      writeFileSync(join(getConversationsHome(), "agent-id"), name + "\n", "utf-8");
     }
 
     beforeEach(() => {

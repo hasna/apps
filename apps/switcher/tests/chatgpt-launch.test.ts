@@ -55,7 +55,7 @@ test.skipIf(process.platform!=="darwin")("exact desktop CLI selects an arbitrary
   await writeFile(join(contents,"Resources/codex"),"#!/bin/sh\necho 'codex-cli 0.153.4'\n",{mode:0o700});
   await writeFile(join(contents,"MacOS/ChatGPT"),`#!${process.execPath}\nconst config=Bun.TOML.parse(await Bun.file(process.env.CODEX_HOME+"/config.toml").text());await Bun.write(${JSON.stringify(join(root,"receipt.json"))},JSON.stringify({model:config.model,provider:config.model_provider,home:process.env.CODEX_HOME,reasoning:config.model_reasoning_effort,approval:config.approval_policy,sandbox:config.sandbox_mode}));console.log("private-gui-output");process.exit(7);\n`,{mode:0o700});
   const run=async(args:string[])=>{
-    const child=Bun.spawn([process.execPath,join(import.meta.dir,"../src/cli.ts"),...args],{cwd:root,env:{PATH:process.env.PATH,HOME:root,HASNA_STATION:"desktop-cli-fixture",HASNA_SWITCHER_HOME:join(root,"data")},stdin:"ignore",stdout:"pipe",stderr:"pipe"});
+    const child=Bun.spawn([process.execPath,join(import.meta.dir,"../src/cli.ts"),...args],{cwd:root,env:{PATH:process.env.PATH,HOME:root,HASNA_STATION:"desktop-cli-fixture",HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(root,"data")},stdin:"ignore",stdout:"pipe",stderr:"pipe"});
     const timer=setTimeout(()=>child.kill("SIGKILL"),15000);
     try{const [code,stdout,stderr]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);return {code,stdout,stderr};}finally{clearTimeout(timer);}
   };

@@ -6,11 +6,13 @@ import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { hermeticHomeEnv } from "../test/hermetic.js";
 
 const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 function runStatus() {
   const env: Record<string, string> = {
+    ...hermeticHomeEnv(),
     ...fixture.env,
     CONVERSATIONS_AGENT_ID: "status-contract-tester",
     FORCE_COLOR: "0",

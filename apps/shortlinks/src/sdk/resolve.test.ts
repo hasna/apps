@@ -129,7 +129,7 @@ describe("SDK credential resolution through the @hasna/contracts chain", () => {
     expect(reads.some((argv) => argv.join(" ").includes("api-key"))).toBe(true);
   });
 
-  test("no credential anywhere: the hosted-only SDK fails loudly", () => {
+  test("no credential anywhere: the HTTP-only SDK fails loudly", () => {
     const home = tempHome();
     expect(() => resolveShortlinksSdkTransport({ env: env(home) })).toThrow(
       /SHORTLINKS_CREDENTIAL_MISSING/,

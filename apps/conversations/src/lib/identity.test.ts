@@ -17,7 +17,7 @@ import { AGENT_NAMES } from "./names";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
-import { getDataDir } from "./db";
+import { getConversationsHome } from "./home.js";
 
 /**
  * These tests unlink and rewrite the identity file. They used to do that to the
@@ -33,7 +33,7 @@ let savedUserProfile: string | undefined;
 let tempHome: string;
 
 function agentIdFile(): string {
-  return join(getDataDir(), "agent-id");
+  return join(getConversationsHome(), "agent-id");
 }
 
 beforeEach(() => {
