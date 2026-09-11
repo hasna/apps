@@ -1028,3 +1028,79 @@ describe("service contract JSON schema and repo manifest", () => {
     expect(shipped.properties.hosting.items.enum).toEqual(["user-hosted", "hasna-saas"]);
   });
 });
+
+describe("client contract (1.1.0): scope, client and dataAccess cross-checks", () => {
+  const base = {
+    schema: SCHEMA_IDS.serviceContract,
+    name: "demo",
+    class: "cli-with-store",
+    contractVersion: SERVICE_CONTRACT_VERSION,
+    kitVersion: "1.1.0",
+    bins: ["demo", "demo-mcp"],
+    storage: {
+      backend: "postgresql",
+      engines: ["sqlite", "postgresql"],
+      envPrefix: "HASNA_DEMO_",
+      pgTestGate: { envVar: "DEMO_TEST_DATABASE_URL", command: "bun test tests/pg.test.ts" }
+    }
+  } as const;
+  const hostedClient = {
+    transport: "hosted",
+    credentialChain: "contracts",
+    localOptIn: "HASNA_DEMO_LOCAL",
+    localStoreModule: "src/db/database.ts",
+    readProbe: ["list", "--limit", "1"]
+  } as const;
+  const cli = (dataAccess?: string) => [{ name: "cli", kind: "cli", status: "supported", bin: "demo", authMode: "local-only", ...(dataAccess ? { dataAccess } : {}) }];
+  const paths = (value: unknown) => {
+    const result = validateServiceContractManifest(value);
+    return result.success ? [] : result.error.issues.map((issue) => issue.path.join("."));
+  };
+
+  test("the old shape validates and asserts nothing about the client", () => {
+    const parsed = ServiceContractManifestSchema.parse(base);
+    expect(parsed.scope).toBeUndefined();
+    expect(parsed.client).toBeUndefined();
+  });
+
+  test("a hosted client with the one door, its store module and a read probe validates", () => {
+    expect(paths({ ...base, scope: "public", client: hostedClient, serviceSurfaces: cli("hosted") })).toEqual([]);
+    expect(paths({ ...base, scope: "internal", client: { transport: "hosted", credentialChain: "contracts", localOptIn: null } })).toEqual([]);
+    expect(paths({ ...base, client: hostedClient, serviceSurfaces: cli("local-opt-in") })).toEqual([]);
+  });
+
+  test("the door must be HASNA_<NAME>_LOCAL and must name its store module (and vice versa)", () => {
+    expect(paths({ ...base, client: { ...hostedClient, localOptIn: "HASNA_OTHER_LOCAL" } })).toEqual(["client.localOptIn"]);
+    expect(paths({ ...base, client: { ...hostedClient, localStoreModule: undefined } })).toEqual(["client.localStoreModule"]);
+    expect(paths({ ...base, client: { transport: "hosted", credentialChain: "contracts", localStoreModule: "src/db/database.ts" } })).toEqual(["client.localOptIn"]);
+    expect(paths({ ...base, client: { ...hostedClient, authority: "https://api.hasna.com/demo/v1" } })).toEqual(["client.authority"]);
+  });
+
+  test("client: null is local-by-design: dataAccess is omitted or server-only, never hosted or local-opt-in", () => {
+    expect(paths({ ...base, client: null, serviceSurfaces: cli() })).toEqual([]);
+    expect(paths({ ...base, client: null, serviceSurfaces: cli("server-only") })).toEqual([]);
+    expect(paths({ ...base, client: null, serviceSurfaces: cli("hosted") })).toEqual(["serviceSurfaces.0.dataAccess"]);
+    expect(paths({ ...base, client: null, serviceSurfaces: cli("local-opt-in") })).toEqual(["serviceSurfaces.0.dataAccess"]);
+    // A per-command declaration is held to the same rule.
+    expect(paths({ ...base, client: null, serviceSurfaces: [{ ...cli()[0], commands: [{ name: "list", dataAccess: "hosted" }] }] })).toEqual(["serviceSurfaces.0.dataAccess"]);
+  });
+
+  test("local-opt-in access without a declared door, and a client on a library, are rejected", () => {
+    expect(paths({ ...base, serviceSurfaces: cli("local-opt-in") })).toEqual(["serviceSurfaces.0.dataAccess"]);
+    const library = { schema: SCHEMA_IDS.serviceContract, name: "kit", class: "library", contractVersion: SERVICE_CONTRACT_VERSION, kitVersion: "1.1.0", bins: ["kit"] } as const;
+    expect(paths(library)).toEqual([]);
+    expect(paths({ ...library, client: null })).toEqual([]);
+    expect(paths({ ...library, client: { transport: "hosted", credentialChain: "contracts" } })).toEqual(["client"]);
+  });
+
+  test("the retired placement axis stays rejected; scope and dataAccess are closed enums", () => {
+    const placement = validateServiceContractManifest({ ...base, placement: { hosted: "never" } });
+    expect(placement.success).toBe(false);
+    if (!placement.success) {
+      expect(placement.error.issues.some((issue) => issue.code === "unrecognized_keys" && JSON.stringify(issue).includes("placement"))).toBe(true);
+    }
+    expect(paths({ ...base, scope: "shared" })).toEqual(["scope"]);
+    expect(paths({ ...base, serviceSurfaces: cli("local") })).toEqual(["serviceSurfaces.0.dataAccess"]);
+    expect(paths({ ...base, client: { transport: "sqlite", credentialChain: "contracts" } })).toEqual(["client.transport"]);
+  });
+});

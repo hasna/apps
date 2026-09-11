@@ -20389,6 +20389,13 @@ var ServiceContractManifestSchema = exports_external.object({
         path: ["serviceSurfaces", index, "dataAccess"]
       });
     }
+    if (value.client === null && accesses.includes("hosted")) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "client is null (local-by-design), so no surface or command can declare hosted data access; omit dataAccess or declare server-only",
+        path: ["serviceSurfaces", index, "dataAccess"]
+      });
+    }
   }
   const waivedKinds = value.metadata?.conformance?.waivedSurfaces ?? [];
   const seenWaivers = new Set;

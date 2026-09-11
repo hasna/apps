@@ -6489,6 +6489,16 @@ export const ServiceContractManifestSchema = z
           path: ["serviceSurfaces", index, "dataAccess"]
         });
       }
+      // `client: null` is local-by-design: there is no hosted alternative, so
+      // its store is simply the storage, never a hosted or opt-in choice. Such a
+      // repo omits dataAccess, or declares server-only where that is true.
+      if (value.client === null && accesses.includes("hosted")) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "client is null (local-by-design), so no surface or command can declare hosted data access; omit dataAccess or declare server-only",
+          path: ["serviceSurfaces", index, "dataAccess"]
+        });
+      }
     }
 
     const waivedKinds = value.metadata?.conformance?.waivedSurfaces ?? [];

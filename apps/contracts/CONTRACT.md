@@ -543,8 +543,9 @@ backend, storage capabilities, and product surfaces are separate axes:
   (exactly `HASNA_<NAME>_LOCAL`, or null), `localStoreModule` (the ONE
   repo-relative module allowed to open the on-box store; required with
   `localOptIn`) and `readProbe` (the argv the black-box check runs). `client:
-  null` states explicitly that the repo ships no client. A `library` never
-  declares a client object.
+  null` states explicitly that the repo ships no client. Under `client: null` the repo is local-by-design: its store is simply the
+  storage, so it omits `dataAccess` or declares `server-only`; `hosted` and
+  `local-opt-in` are rejected. A `library` never declares a client object.
 - `serviceSurfaces[].dataAccess` — optional (1.1.0). `hosted`, `server-only`
   or `local-opt-in` for the whole surface; `serviceSurfaces[].commands[]`
   overrides it per command (`{ "name": "db migrate", "dataAccess":
