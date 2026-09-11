@@ -51,6 +51,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  // clearEnv restores exactly the snapshot applyEnv took, and the local opt-in is one
+  // of the stub's managed keys — so a direct set inside a case is put back here too.
   stub.clearEnv();
 });
 
@@ -370,7 +372,6 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
       process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
       process.env.HASNA_EMAILS_API_KEY = "attachment-inventory-test-key";
       process.env.EMAILS_DB_PATH = poisonDbDir;
-      process.env["HASNA_EMAILS_LOCAL"] = "1";
       resetSelfHostedConfigCache();
 
       const result = await runInboxTool("list_attachments", {});
@@ -447,7 +448,6 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
     const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-no-local-inventory-"));
     const previousDbPath = process.env.EMAILS_DB_PATH;
     process.env.EMAILS_DB_PATH = poisonDbDir;
-    process.env["HASNA_EMAILS_LOCAL"] = "1";
     try {
       const result = await runInboxTool("list_attachments", {});
       expect(result.isError).toBe(true);

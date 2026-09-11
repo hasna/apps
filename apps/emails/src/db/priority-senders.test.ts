@@ -11,9 +11,11 @@ import { createSqliteEmailStore } from "../store-sqlite/index.js";
 
 let db: Database;
 let inheritedDbPath: string | undefined;
+let inheritedLocalOptIn: string | undefined;
 
 beforeEach(() => {
   inheritedDbPath = process.env.EMAILS_DB_PATH;
+  inheritedLocalOptIn = process.env["HASNA_EMAILS_LOCAL"];
   process.env.EMAILS_DB_PATH = ":memory:";
   process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
@@ -24,6 +26,10 @@ afterEach(() => {
   closeDatabase();
   if (inheritedDbPath === undefined) delete process.env.EMAILS_DB_PATH;
   else process.env.EMAILS_DB_PATH = inheritedDbPath;
+  // Restore the local opt-in like the path (a leaked flag configures a local store
+  // for every later file in this shared bun process).
+  if (inheritedLocalOptIn === undefined) delete process.env["HASNA_EMAILS_LOCAL"];
+  else process.env["HASNA_EMAILS_LOCAL"] = inheritedLocalOptIn;
 });
 
 function storeInbound(id: string, from: string): string {
