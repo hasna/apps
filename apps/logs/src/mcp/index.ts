@@ -295,7 +295,7 @@ export function buildServer(): McpServer {
     get_health: { desc: "Server health + DB stats", params: "()" },
     log_stats: {
       desc: "Aggregate DB-level log statistics for a project",
-      params: "(project_id?)",
+      params: "(project_id?) — fixed 7-day histogram for compatibility",
     },
     search_tools: {
       desc: "Search tools by keyword — returns names, descriptions, param signatures",
@@ -1285,39 +1285,20 @@ export function buildServer(): McpServer {
         .describe("Project name or ID (scope stats to a project)"),
     },
     async (args) => {
-      const rows = await store.listLogs({
+      const stats = await store.stats({
         project_id: await rid(args.project_id),
-        limit: 100000,
+        days: 7,
       });
-      const total = rows.length;
-      const byLevel: Record<string, number> = {};
-      const byService: Record<string, number> = {};
-      const byDay: Record<string, number> = {};
-      const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
-      let oldest: string | null = null;
-      let newest: string | null = null;
-      for (const r of rows) {
-        byLevel[r.level] = (byLevel[r.level] ?? 0) + 1;
-        const svc = r.service ?? "-";
-        byService[svc] = (byService[svc] ?? 0) + 1;
-        if (r.timestamp) {
-          if (oldest === null || r.timestamp < oldest) oldest = r.timestamp;
-          if (newest === null || r.timestamp > newest) newest = r.timestamp;
-          const t = new Date(r.timestamp).getTime();
-          if (Number.isFinite(t) && t >= weekAgo) {
-            const day = r.timestamp.slice(0, 10);
-            byDay[day] = (byDay[day] ?? 0) + 1;
-          }
-        }
-      }
-      const errors = (byLevel.error ?? 0) + (byLevel.fatal ?? 0);
+      const errors = stats.errors + stats.fatals;
       const error_rate_pct =
-        total > 0 ? Number.parseFloat(((errors / total) * 100).toFixed(2)) : 0;
-      const top_services = Object.entries(byService)
+        stats.total > 0
+          ? Number.parseFloat(((errors / stats.total) * 100).toFixed(2))
+          : 0;
+      const top_services = Object.entries(stats.by_service)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 5)
         .map(([service, c]) => ({ service, c }));
-      const last_7_days = Object.entries(byDay)
+      const last_7_days = Object.entries(stats.by_day)
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([day, c]) => ({ day, c }));
       return {
@@ -1325,10 +1306,10 @@ export function buildServer(): McpServer {
           {
             type: "text" as const,
             text: JSON.stringify({
-              total,
-              oldest,
-              newest,
-              by_level: byLevel,
+              total: stats.total,
+              oldest: stats.oldest,
+              newest: stats.newest,
+              by_level: stats.by_level,
               top_services,
               last_7_days,
               error_rate_pct,
