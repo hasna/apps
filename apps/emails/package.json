@@ -1,6 +1,6 @@
 {
   "name": "@hasna/emails",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Email management through a shared API: CLI, terminal UI, MCP server, and library",
   "keywords": [
     "email",
@@ -48,7 +48,9 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "!dist/test-support/**",
+    "!dist/**/*test-support.d.ts"
   ],
   "scripts": {
     "clean": "rm -rf dist",
@@ -85,7 +87,7 @@
   },
   "overrides": {
     "brace-expansion": "2.1.2",
-    "fast-uri": "3.1.5",
+    "fast-uri": "3.1.7",
     "ip-address": "10.3.1"
   },
   "author": "Andrei Hasna <andrei@hasna.com>",
@@ -106,7 +108,7 @@
     "@opentui/core": "0.5.10",
     "chalk": "^5.4.1",
     "commander": "^15.0.0",
-    "mailparser": "3.9.15",
+    "mailparser": "3.9.16",
     "marked": "18.0.5",
     "pdf-lib": "^1.17.1",
     "pg": "^8.22.0",

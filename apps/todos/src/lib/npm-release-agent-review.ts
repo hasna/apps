@@ -90,13 +90,11 @@ const PAYLOAD_KEYS = [
   "openReachableInScopeBlockers",
 ];
 
-export function isNativeCodewithSubagentLineage(value: string): boolean {
-  if (value.length > 1024) return false;
-  const segments = value.split("/");
-  return segments.length >= 3
-    && segments[0] === ""
-    && segments[1] === "root"
-    && segments.slice(2).every((segment) => /^[a-z0-9][a-z0-9_]{0,127}$/.test(segment));
+// Syntax only. Registration and session attribution are checked when the
+// reviewer/key binding is provisioned; the receipt proves key possession.
+export function isReleaseReviewAgentId(value: string): boolean {
+  return value === value.trim()
+    && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
 }
 
 export function validateNpmReleaseAgentReviewReceipt(
@@ -243,21 +241,21 @@ export function validateNpmReleaseAgentReviewReceipt(
   );
   addIf(
     failures,
-    !isNativeCodewithSubagentLineage(expected.reviewerAgentId),
+    !isReleaseReviewAgentId(expected.reviewerAgentId),
     "release-agent-review-reviewer-config",
-    "RELEASE_REVIEWER_AGENT must name the exact native Codewith sub-agent lineage fixed for this release candidate",
+    "RELEASE_REVIEWER_AGENT must name the canonical registered coding agent fixed for this release candidate",
   );
   addIf(
     failures,
-    !isNativeCodewithSubagentLineage(payload.reviewer.agent),
+    !isReleaseReviewAgentId(payload.reviewer.agent),
     "release-agent-review-reviewer-runtime",
-    "reviewer.agent must name the native Codewith sub-agent lineage that performed the review",
+    "reviewer.agent must name the registered coding agent that performed the review",
   );
   addIf(
     failures,
     payload.reviewer.agent.trim().toLowerCase() === payload.publisher.agent.trim().toLowerCase(),
     "release-agent-review-independence",
-    "the native Codewith reviewer lineage must differ from the publisher agent",
+    "the independent reviewer agent must differ from the publisher agent",
   );
   addIf(
     failures,

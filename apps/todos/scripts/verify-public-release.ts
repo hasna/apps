@@ -33,6 +33,7 @@ import {
   type TrackedWorktreeProof,
 } from "../src/lib/public-release-gate";
 import { scanExtractedPackedFiles } from "../src/lib/release-packed-scan";
+import { captureCommand } from "./release-command-capture";
 
 type PackResult = {
   filename: string;
@@ -54,15 +55,6 @@ const args = new Set(rawArgs);
 // call: a later const sits in the temporal dead zone when main() runs at
 // import time (#103 shipped exactly that ReferenceError).
 const SERVE_PROBE_TIMEOUT_SECONDS = "15";
-
-// spawnSync's DEFAULT maxBuffer is 1MB, and when a captured command exceeds it
-// the child is KILLED (status null) with stdout truncated mid-stream. The
-// release gate captures `git ls-tree -r --full-tree -z HEAD`, which on the
-// monorepo-scale tree is 3.5MB and growing (measured 2026-08-17 on hasna/apps),
-// so the default made every publish fail "release-tracked-proof: could not
-// enumerate HEAD" (OPE2-00174). Explicit ceiling, same pattern as
-// apps/mementos/scripts/release-provenance.ts (MAX_COMMAND_OUTPUT_BYTES).
-const CAPTURE_MAX_BUFFER = 256 * 1024 * 1024;
 
 if (import.meta.main) {
   main();
@@ -100,6 +92,21 @@ function main(): void {
     const expectedCommitFailures = validateExpectedReleaseCommit(authority.expectedCommit!, sourceIdentity.gitCommit);
     if (expectedCommitFailures.length > 0) failReleaseGate(expectedCommitFailures);
     runOrExit("bun", ["run", "scripts/verify-npm-release-agent-review.ts"]);
+    // Test safety net. `package.json`'s prepublishOnly string is asserted
+    // byte-for-byte by validateRootPackageMetadata (and release-workflow.test.ts),
+    // so the suite is run HERE rather than by editing the command. Without it a
+    // publish can ship a tree whose own tests never ran — the exact gap a red
+    // CI run leaves, where `@hasna/todos:test` was never reached. `bun test`
+    // runs the package suite from the package root and exits non-zero on any
+    // failure, which fails the gate before anything is packed.
+    const suite = run("bun", ["test"]);
+    if (suite.status !== 0) {
+      failReleaseGate([{
+        check: "release-test-suite",
+        message: "the package test suite must pass before publish "
+          + `(bun test exited ${suite.status ?? "on a signal"}); run \`bun test\` to see the failures`,
+      }]);
+    }
   }
   const commitEpochResult = runCapture("git", ["show", "-s", "--format=%ct", "HEAD"]);
   if (commitEpochResult.status !== 0) failReleaseGate([{ check: "release-commit-time", message: commitEpochResult.stderr || "could not read commit timestamp" }]);
@@ -220,11 +227,7 @@ function writeReleaseProvenance(
 function readReleaseSourceIdentity(): ReleaseSourceIdentity {
   const commit = runCapture("git", ["rev-parse", "HEAD"]);
   const tree = runCapture("git", ["rev-parse", "HEAD^{tree}"]);
-  const listing = spawnSync("git", ["ls-tree", "-r", "--full-tree", "-z", "HEAD"], {
-    cwd: root,
-    env: process.env,
-    maxBuffer: CAPTURE_MAX_BUFFER,
-  });
+  const listing = runCaptureBuffer("git", ["ls-tree", "-r", "--full-tree", "-z", "HEAD"]);
   if (commit.status !== 0 || tree.status !== 0 || listing.status !== 0 || !listing.stdout) {
     failReleaseGate([{
       check: "release-source-identity",
@@ -485,24 +488,14 @@ function run(command: string, commandArgs: string[], env: NodeJS.ProcessEnv = pr
 }
 
 export function runCapture(command: string, commandArgs: string[], env: NodeJS.ProcessEnv = process.env, cwd: string = root): { status: number; stdout: string; stderr: string } {
-  const result = spawnSync(command, commandArgs, {
-    cwd,
-    encoding: "utf8",
-    env,
-    maxBuffer: CAPTURE_MAX_BUFFER,
-  });
+  const result = captureCommand(command, commandArgs, { cwd, env });
   return {
-    status: result.status ?? 1,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
+    status: result.status,
+    stdout: result.stdout.toString('utf8'),
+    stderr: result.stderr.toString('utf8'),
   };
 }
 
 export function runCaptureBuffer(command: string, commandArgs: string[], cwd: string = root): { status: number; stdout: Buffer; stderr: Buffer } {
-  const result = spawnSync(command, commandArgs, { cwd, env: process.env, maxBuffer: CAPTURE_MAX_BUFFER });
-  return {
-    status: result.status ?? 1,
-    stdout: result.stdout ?? Buffer.alloc(0),
-    stderr: result.stderr ?? Buffer.alloc(0),
-  };
+  return captureCommand(command, commandArgs, { cwd });
 }

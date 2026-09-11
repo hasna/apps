@@ -126,7 +126,7 @@ export {
   ProjectResourceLinkLocatorSchema,
   ProjectResourceLinkSchema,
   ProjectResourceTargetKindSchema,
-} from "@hasna/contracts/schemas";
+} from "./types/project-resource-schemas.js";
 export {
   PROJECT_CONTACT_LINK_STEPS,
   PROJECT_CONTACT_RESOURCE_LINK_TYPE,
@@ -534,12 +534,16 @@ export {
   PROJECT_CHANNEL_CLASSES,
   PROJECT_CHANNEL_CLASS_INTEGRATION_KEY,
   PROJECT_CHANNEL_INTEGRATION_KEY,
+  assertProjectChannelIntegrationWritable,
+  assertProjectChannelWritable,
+  changedProjectChannel,
   conversationsCliRunner,
   deriveProjectChannel,
   ensureProjectChannel,
   notifyProjectAgentOnline,
   normalizeProjectChannelName,
   projectChannelSummary,
+  projectChannelWriteProbe,
   resolveProjectChannel,
   resolveProjectChannelClass,
   resolveProjectChannelClassDetailed,
@@ -557,6 +561,7 @@ export type {
   ProjectChannelClass,
   ProjectChannelDerivation,
   ProjectChannelEnsureResult,
+  ProjectChannelExistenceProbe,
   ProjectChannelResolution,
   ProjectChannelSideEffects,
 } from "./lib/project-channel.js";

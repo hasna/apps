@@ -1,9 +1,17 @@
 # Native Storage Boundary
 
-`@hasna/todos` stays local-first where it is a local product. The MCP server,
-`todos-serve`, the native storage tooling, and the plan-artifact surface run on
-local SQLite and local artifact files without network access, hosted
-credentials, SaaS accounts, or a shared cloud runtime package.
+`@hasna/todos` stays local-first where it is a local product. `todos-serve`, the
+native storage tooling, and the plan-artifact files run on local SQLite and
+local artifact files without network access, hosted credentials, SaaS accounts,
+or a shared cloud runtime package.
+
+The MCP server and the CLI are NOT wholly local. Their plan and task-list
+command families — and the CLI's stateful template commands — are served by the
+authenticated shared API, and the MCP tools that still read the on-box store are
+served only under the explicit local opt-in (`HASNA_TODOS_LOCAL=1`) — see "MCP
+tools and the on-box store" below. The plan-artifact surface is the local half
+of a shared record: the Markdown companion file is local, the plan it describes
+is not.
 
 The CLI's client transport is NOT implicitly local. Since the fleet fail-closed
 ruling (2026-09-04, hasna/apps#1613), a CLI run with neither API variable
@@ -173,18 +181,21 @@ platform billing, tenant tables, deployment code, or a cloud SDK. Internal
 deployments and wrappers can provide `pg` clients, credentials, and secret
 loading from their own runtime.
 
-## Local Plan Markdown Artifacts
+## Plan Markdown Artifacts
 
-Project-scoped plans now have a local Markdown companion file. When the CLI
-creates or completes a plan with a project scope, it writes:
+Plan records are served by the authenticated shared API; a project-scoped plan
+also has an optional local Markdown companion file that this CLI writes on this
+machine. The root is always chosen by the caller with
+`--artifact-root <directory>` — a real local project directory. A path returned
+by the API is never used. The companion lives at:
 
 ```text
-<project-root>/.hasna/todos/plans/<project-id>/<plan-slug>--<id8>.md
+<artifact-root>/.hasna/todos/plans/<project-id>/<plan-slug>--<id8>.md
 ```
 
-The SQLite plan row remains the registry source of truth. The Markdown file is
-an offline-readable artifact for agents, reviews, handoffs, and branch work. It
-does not use hosted APIs or SaaS tenant state.
+The Markdown file is an offline-readable artifact for agents, reviews, handoffs,
+and branch work. It is not the registry: the shared plan record is the source of
+truth, and the file is a client-side copy.
 
 Each file uses the `hasna.todos.plan/v1` schema in frontmatter:
 
@@ -212,40 +223,123 @@ artifact_updated_at: "2026-06-30T00:00:00.000Z"
   <!-- todos: task_id=<task-id> status=pending priority=medium -->
 ```
 
-The path resolver only accepts safe project and plan path segments and resolves
-projects from local SQLite by project ID, registered path, task-list slug, or
-project-name slug. Unscoped plans keep the previous DB-only behavior because
-the artifact layout is explicitly under `<project-id>`.
+The path resolver only accepts safe project and plan path segments and requires
+a project-scoped plan; an unscoped plan has no artifact because the layout is
+explicitly under `<project-id>`.
 
-`todos plans --show <id-or-slug>` reads the companion file when present and
-includes the parsed artifact metadata and body in JSON output. The text view
-prints the artifact path. If a file is missing, the command still shows the
-SQLite plan so older local databases remain compatible.
+`todos plans --show <id-or-slug> --artifact-root <directory>` reads the
+companion file when present and includes the parsed artifact metadata and body
+in JSON output. The text view prints the artifact path. If the file is missing,
+the command still shows the shared plan record.
 
 For backwards compatibility, artifact readers also check the legacy UUID path:
 
 ```text
-<project-root>/.hasna/todos/plans/<project-id>/<plan-id>.md
+<artifact-root>/.hasna/todos/plans/<project-id>/<plan-id>.md
 ```
 
 When both files exist, the slugged `<plan-slug>--<id8>.md` artifact wins. A
-future write or `--write-artifacts` run materializes the slugged artifact while
-leaving legacy files untouched for operator review.
+later `--write-artifacts` run materializes the slugged artifact while leaving
+legacy files untouched for operator review.
 
 For migration and diagnostics:
 
 ```bash
-todos plans --write-artifacts
-todos plans --artifact <id-or-slug> --json
+todos plans --write-artifacts --artifact-root <directory>
+todos plans --artifact <id-or-slug> --artifact-root <directory> --json
 ```
+
+Before 0.16.0 the artifact root was implicit: the plan was read from local
+SQLite and its recorded project path supplied the root, so the form was
+`todos plans --artifact <id-or-slug> --json`. That invocation now exits
+non-zero with `--artifact-root is required`. The root is always the caller's
+choice, because a path returned by the shared API never authorizes client
+filesystem access.
 
 `--write-artifacts` materializes Markdown files for every project-scoped plan in
 the current project scope using readable slug filenames. `--artifact` reports
 the resolved file path, whether the file exists, parse errors, task references,
-and deterministic conflicts between the SQLite row and Markdown
+and deterministic conflicts between the shared plan record and Markdown
 frontmatter/task comments. The CLI does not silently treat the Markdown file as
 authoritative when conflicts exist; agents should resolve the conflict through
 the CLI or an explicit migration task.
+
+## MCP tools and the on-box store
+
+The MCP server no longer opens the on-box SQLite store implicitly. `getDatabase()`
+throws `API_DATABASE_FALLBACK_FORBIDDEN` unless the call supplies an explicit
+path or the environment selects the local store
+(`selectsTodosLocalStore()` — the deliberate `HASNA_TODOS_LOCAL=1` /
+`TODOS_LOCAL=1` opt-in on an environment that configures no authority or
+credential of its own).
+
+Tools that read the store through the shared API or read no store at all are
+unaffected. Tools that still call into the local data layer directly answer with
+the typed `{"code":"API_DATABASE_FALLBACK_FORBIDDEN"}` payload on the default
+posture, whose `suggestion` names the opt-in; the server logs the same code. The
+ten plan/task-list tools (`create_plan`, `list_plans`, `get_plan`, `update_plan`,
+`delete_plan`, `create_task_list`, `list_task_lists`, `get_task_list`,
+`update_task_list`, `delete_task_list`) return the typed
+`REMOTE_API_CONFIG_MISSING` refusal that names the missing configuration.
+
+Measured at 0.16.0 with `TODOS_PROFILE=full` on the default (no-credential)
+posture (361 tools, 125 of them taking no required arguments), 68 of the 125
+returned `API_DATABASE_FALLBACK_FORBIDDEN`:
+
+- templates: `list_templates`, `init_templates` (the rest of the family —
+  `create_template`, `preview_template`, `export_template`, `import_template`,
+  `create_task_from_template` — takes arguments, so it is outside the
+  zero-argument census and reads the same store; `list_template_library` and
+  `write_template_library` are bundled-only and unaffected)
+- tags and labels: `list_tags`, `list_labels`
+- agent work: `get_org_chart`, `suggest_agent_name`, `get_usage_ledger`,
+  `get_leaderboard`, `list_agent_run_queue`, `run_next_agent_dispatch`,
+  `list_task_runs`, `finish_task_run`, `list_task_findings`
+- health and reporting: `run_doctor`, `todos_retro`, `todos_inbox`,
+  `build_local_report`, `get_planning_forecast`, `get_activity_timeline`,
+  `get_time_report`, `export_agent_reliability_scorecards`
+- stale, blocked and archived work: `get_stale_tasks`, `get_blocked_tasks`,
+  `get_blocking_tasks`, `get_critical_path`, `patrol_tasks`,
+  `archive_completed`, `get_archived_tasks`, `notify_upcoming_deadlines`,
+  `get_sla_breaches`, `rebalance_workload`
+- boards, calendar and review: `list_boards`, `list_calendar_events`,
+  `export_calendar_ics`, `get_review_queue`, `list_review_queue`
+- knowledge, risk and search: `list_knowledge_records`,
+  `export_knowledge_records`, `list_risks`, `export_risk_register`,
+  `list_retrospectives`, `create_retrospective`, `export_retrospectives`,
+  `sync_kg`, `find_duplicate_tasks`, `list_search_views`,
+  `query_tasks_by_fields`, `migrate_workflow_states`
+- files, locks and handoffs: `list_file_locks`, `list_handoffs`,
+  `get_latest_handoff`, `get_file_heat_map`, `list_active_files`,
+  `list_inbox_items`, `import_external_issues`
+- backups, integrity and fixtures: `create_local_backup`,
+  `check_local_integrity`, `poll_local_snapshots`, `import_onboarding_fixture`
+- focus and audit: `start_focus_session`, `list_focus_sessions`,
+  `get_idle_focus_prompts`, `get_audit_ledger`
+- projects, notifications and dispatch: `bootstrap_project`,
+  `check_local_notifications`, `list_dispatches`, `run_due_dispatches`,
+  `generate_release_notes`
+
+The shared-API MCP tools that need a credential — `list_tasks`, `list_projects`,
+`get_status`, `get_my_tasks`, `get_health`, `standup`, `list_agents`,
+`machines_*` — answer the typed `REMOTE_API_CONFIG_MISSING` on the default
+posture: the documented fail-closed behaviour rather than a lost local surface.
+Five more zero-argument tools refuse caller input or local state with the typed
+`INVALID_INPUT` / `ENCRYPTION_KEY_UNAVAILABLE` / `ENCRYPTED_PAYLOAD_INVALID`,
+and five answer a readable text refusal. Measured on the same 125-tool census, no
+zero-argument tool returns an opaque `UNKNOWN_ERROR` — neither on this default
+posture nor under the `HASNA_TODOS_LOCAL=1` opt-in below, where
+`create_retrospective` and `finish_task_run` now answer the typed
+`INVALID_INPUT` for their missing scope / run id instead of the opaque
+`UNKNOWN_ERROR` they returned earlier in 0.16.0.
+
+Run the MCP server with `HASNA_TODOS_LOCAL=1` to serve these tools from the
+on-box store. That opt-in is honoured only when the environment configures no
+authority or credential: with `HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL`
+set, a configured environment outranks the opt-in and these tools are
+unreachable in 0.16.0. Converting them to the shared API is tracked separately;
+this document records the boundary rather than claiming the surface is
+converted.
 
 ## Hybrid Sync Shape (explicit migration machinery)
 

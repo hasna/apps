@@ -24,7 +24,7 @@ const DB_VAR = "HASNA_CONVERSATIONS_DB_PATH";
 /** Not a credential: a syntactically plausible but deliberately invalid stub. */
 const FAKE_KEY = ["hasna", "conversations", "FAKE", "NOT", "A", "REAL", "KEY"].join("_");
 
-/** A self-hosted origin the resolver ACCEPTS (no userinfo, query, or fragment). */
+/** An arbitrary custom origin the resolver ACCEPTS (no userinfo, query, or fragment). */
 const SELF_HOSTED =
   "https://conv.example.invalid:8443";
 
@@ -35,12 +35,11 @@ const MARKERS = ["SYNTHUSER", "SYNTHPASS", "SYNTHPATH", "SYNTHQUERY", "SYNTHFRAG
 
 describe("storeStatusLocation", () => {
   test("status payloads expose exactly the connection-location field, never both", () => {
-    const local = storeStatusLocation({ [DB_VAR]: "/tmp/conversations-status-contract.db" });
+    expect(() => storeStatusLocation({ [DB_VAR]: "/tmp/conversations-status-contract.db" })).toThrow(/no longer supported/);
     const hosted = storeStatusLocation({ [URL_VAR]: SELF_HOSTED, [KEY_VAR]: FAKE_KEY });
 
     // The exact key sets ARE the contract: one connection field, never both,
     // and no other selector fields can ride along in the payload.
-    expect(Object.keys(local).sort()).toEqual(["db_path"]);
     expect(Object.keys(hosted).sort()).toEqual(["api_url"]);
   });
 
@@ -91,26 +90,16 @@ describe("storeStatusLocation", () => {
   // a status response instead of having to be inferred from a channel count.
   test("it still says which store answered", () => {
     const probeDb = "/tmp/conversations-status-location-probe.db";
-    const local = storeStatusLocation({ [DB_VAR]: probeDb });
-    expect("db_path" in local).toBe(true);
-    expect("api_url" in local).toBe(false);
-    // Asserting the injected path comes back, not merely that the field exists.
-    // Until `getDbPath` took an env, this injection was inert — it reached
-    // nothing, and a test that asserted only presence could not have noticed.
-    expect("db_path" in local ? local.db_path : null).toBe(probeDb);
+    expect(() => storeStatusLocation({ [DB_VAR]: probeDb })).toThrow(/no longer supported/);
 
     const cloud = storeStatusLocation({ [URL_VAR]: SELF_HOSTED, [KEY_VAR]: FAKE_KEY });
     expect("api_url" in cloud).toBe(true);
     expect("db_path" in cloud).toBe(false);
   });
 
-  test("an explicit local DB path reports the SQLite connection even with API credentials present", () => {
-    const local = storeStatusLocation({ [DB_VAR]: "/tmp/conversations-status-location-probe.db", [URL_VAR]: MARKER_BEARING_URL, [KEY_VAR]: FAKE_KEY });
-    expect("db_path" in local).toBe(true);
-    expect("api_url" in local).toBe(false);
-    expect(MARKERS.filter((m) => JSON.stringify(local).includes(m))).toEqual([]);
+  test("a retired DB selector never produces a status payload, even beside API credentials", () => {
+    expect(() => storeStatusLocation({ [DB_VAR]: "/tmp/conversations-status-location-probe.db", [URL_VAR]: MARKER_BEARING_URL, [KEY_VAR]: FAKE_KEY })).toThrow(/no longer supported/);
   });
-
   // A URL with NO resolvable credential is refused rather than downgraded, and
   // the refusal is a message an operator reads. Asserted here because this is
   // the one status-adjacent path that emits text about the configuration: it
@@ -172,7 +161,7 @@ describe("storeStatusLocation", () => {
     }
   });
 
-  test("legacy and self-hosted origins keep the scheme/host/port redaction", () => {
+  test("legacy and custom origins keep the scheme/host/port redaction", () => {
     const legacy = storeStatusLocation({ [URL_VAR]: "https://conversations.hasna.xyz", [KEY_VAR]: FAKE_KEY });
     expect("api_url" in legacy ? legacy.api_url : null).toBe("https://conversations.hasna.xyz");
 

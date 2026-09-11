@@ -122,7 +122,7 @@ function harness(addressRecord: { display_name: string | null } | null): Harness
   return { deps, sentFroms, reservedFromAddrs, policyFroms, payloadHashes };
 }
 
-function sendRequest(deps: SelfHostedServiceDeps): Promise<Response> {
+function sendRequest(deps: SelfHostedServiceDeps, from = "sender@example.com"): Promise<Response> {
   const token = mintApiKey({ app: "emails", scopes: ["emails:*"], signingSecret: SIGNING_SECRET }).token;
   return handleSelfHostedRequest(
     deps,
@@ -130,7 +130,7 @@ function sendRequest(deps: SelfHostedServiceDeps): Promise<Response> {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": token },
       body: JSON.stringify({
-        from: "sender@example.com",
+        from,
         to: ["recipient@example.net"],
         subject: "display name regression",
         text: "hello",
@@ -172,6 +172,51 @@ describe("POST /v1/messages/send — From display-name decoration", () => {
   test("unregistered sender address: bare canonical address (no record to read)", async () => {
     const h = harness(null);
     const res = await sendRequest(h.deps);
+    expect(res.status).toBe(202);
+    expect(h.sentFroms).toEqual(["sender@example.com"]);
+  });
+
+  test("caller-supplied inline display name with no address record: provider receives the quoted RFC 5322 form", async () => {
+    // bug 0006: `"Andrei Hasna" <sender@example.com>` used to be stripped to
+    // the bare addr-spec by `canonicalSender` at parse time and the display
+    // name was lost even though no registered address overrode it.
+    const h = harness(null);
+    const res = await sendRequest(h.deps, "Andrei Hasna <sender@example.com>");
+    expect(res.status).toBe(202);
+    expect(h.sentFroms).toEqual(['"Andrei Hasna" <sender@example.com>']);
+    // Ledger, policy, and idempotency inputs stay canonical.
+    expect(h.reservedFromAddrs).toEqual(["sender@example.com"]);
+    expect(h.policyFroms).toEqual(["sender@example.com"]);
+  });
+
+  test("quoted inline display name is unquoted once and re-rendered quoted", async () => {
+    const h = harness(null);
+    const res = await sendRequest(h.deps, '"Andrei Hasna" <sender@example.com>');
+    expect(res.status).toBe(202);
+    expect(h.sentFroms).toEqual(['"Andrei Hasna" <sender@example.com>']);
+  });
+
+  test("diacritic inline display name reaches the provider intact (UTF-8)", async () => {
+    const h = harness(null);
+    const res = await sendRequest(h.deps, "Andrei Hăsnaș <sender@example.com>");
+    expect(res.status).toBe(202);
+    expect(h.sentFroms).toEqual(['"Andrei Hăsnaș" <sender@example.com>']);
+    expect(h.reservedFromAddrs).toEqual(["sender@example.com"]);
+  });
+
+  test("registered address display name is preferred over the caller-supplied inline name", async () => {
+    const h = harness({ display_name: "Hasna Accounting" });
+    const res = await sendRequest(h.deps, "Ops <sender@example.com>");
+    expect(res.status).toBe(202);
+    expect(h.sentFroms).toEqual(['"Hasna Accounting" <sender@example.com>']);
+    expect(h.reservedFromAddrs).toEqual(["sender@example.com"]);
+  });
+
+  test("inline display name with control characters is rejected: bare address, send still succeeds", async () => {
+    // A CRLF smuggled in the display-name phrase would be header injection in
+    // the raw-MIME `From:` path; it must fall back to the canonical address.
+    const h = harness(null);
+    const res = await sendRequest(h.deps, "Evil\r\nBcc: attacker@evil.test <sender@example.com>");
     expect(res.status).toBe(202);
     expect(h.sentFroms).toEqual(["sender@example.com"]);
   });

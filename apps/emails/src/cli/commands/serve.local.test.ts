@@ -133,7 +133,7 @@ describe("emails serve backend selection", () => {
 
     expect(result.exitCode).toBe(0);
     expect(stderr).toBe("");
-    expect(stdout).toContain("Start the self-hosted HTTP service");
+    expect(stdout).toContain("Start the Emails API service");
     expect(stdout).toContain('default: "8080"');
     expect(stdout).not.toContain("Start the HTTP server and dashboard");
   });

@@ -5,7 +5,9 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  readlink,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -392,6 +394,7 @@ describe("inbox bounded cursor recovery", () => {
     const stateDir = join(harness.stateRoot, "seat-seat+seat-alias");
     await seedState(stateDir, "1");
     await writeFile(join(stateDir, ".identity-migrated-v1"), "", { mode: 0o600 });
+    await writeFile(join(stateDir, "identities.json"), '["seat","seat-alias"]', { mode: 0o600 });
     const signature = "[inbox:seat:regression]";
     const signedPrimary = {
       ...channelMessage(2, "alpha"),
@@ -561,6 +564,7 @@ describe("inbox bounded cursor recovery", () => {
     const stateDir = join(harness.stateRoot, "seat-primary+secondary");
     await seedState(stateDir, "1");
     await writeFile(join(stateDir, ".identity-migrated-v1"), "", { mode: 0o600 });
+    await writeFile(join(stateDir, "identities.json"), '["primary","secondary"]', { mode: 0o600 });
     const fixtures = {
       windowMessages: [channelMessage(2, "beta")],
     };
@@ -732,7 +736,7 @@ describe("inbox bounded cursor recovery", () => {
       fixtures,
     );
 
-    expect(migrated.exitCode).toBe(3);
+    expect(migrated.exitCode, migrated.stderr).toBe(3);
     expect(await readCursor(canonical)).toBe("4");
     expect(await readCursor(firstLegacy)).toBe("6");
     expect(await readCursor(secondLegacy)).toBe("1");
@@ -752,7 +756,6 @@ describe("inbox bounded cursor recovery", () => {
   test("preserves the exact legacy state path for a single mixed-case identity", async () => {
     const harness = await createHarness();
     const legacy = join(harness.stateRoot, "CaseSeat");
-    const forked = join(harness.stateRoot, "caseseat");
     await seedState(legacy, "1");
 
     const result = runInbox(
@@ -765,13 +768,14 @@ describe("inbox bounded cursor recovery", () => {
     expect(result.stdout).toContain("message-2");
     expect(result.stdout).toContain("message-3");
     expect(await readCursor(legacy)).toBe("3");
-    expect(await pathExists(join(forked, "last-msg"))).toBe(false);
+    // Inspect actual entries: a differently cased path aliases the same file
+    // on case-insensitive APFS, so path existence cannot detect a fork.
+    expect((await readdir(harness.stateRoot)).filter((name) => name.toLowerCase() === "caseseat")).toEqual(["CaseSeat"]);
   });
 
   test("reuses a single legacy state path when identity casing changes", async () => {
     const harness = await createHarness();
     const legacy = join(harness.stateRoot, "CaseSeat");
-    const forked = join(harness.stateRoot, "caseseat");
     await seedState(legacy, "1");
 
     const result = runInbox(
@@ -784,7 +788,9 @@ describe("inbox bounded cursor recovery", () => {
     expect(result.stdout).toContain("message-2");
     expect(result.stdout).toContain("message-3");
     expect(await readCursor(legacy)).toBe("3");
-    expect(await pathExists(join(forked, "last-msg"))).toBe(false);
+    // Inspect actual entries: a differently cased path aliases the same file
+    // on case-insensitive APFS, so path existence cannot detect a fork.
+    expect((await readdir(harness.stateRoot)).filter((name) => name.toLowerCase() === "caseseat")).toEqual(["CaseSeat"]);
   });
 
   test("finds legacy alias state case-insensitively during canonical migration", async () => {
@@ -933,5 +939,137 @@ describe("package-owned inbox installation", () => {
     const backups = files.filter((name) => name.startsWith("conversations-inbox.bak-"));
     expect(backups).toHaveLength(1);
     expect(await readFile(join(installDir, backups[0]), "utf8")).toBe("old-conversations-inbox\n");
+  });
+});
+
+
+describe("inbox atomic directory publication", () => {
+  test("migration refuses symlinked canonical state and corrupt marked winners without touching legacy data", async () => {
+    const harness = await createHarness();
+    const legacy = join(harness.stateRoot, "alias");
+    await seedState(legacy, "5");
+    const outside = join(harness.root, "outside");
+    await seedState(outside, "100");
+    await writeFile(join(outside, ".identity-migrated-v1"), "");
+    await writeFile(join(outside, "identities.json"), '["previous"]');
+    const canonical = join(harness.stateRoot, "seat-fixture");
+    await symlink(outside, canonical);
+    const refused = runInbox(harness, ["check", "--seat", "fixture", "--as", "alias", "--no-todos"]);
+    expect(refused.exitCode).toBe(2);
+    expect(refused.stderr).toContain("symlink");
+    expect(await readCursor(outside)).toBe("100");
+    expect(await readFile(join(outside, "identities.json"), "utf8")).toBe('["previous"]');
+    expect(await readCursor(legacy)).toBe("5");
+    const single = join(harness.stateRoot, "single");
+    await symlink(outside, single);
+    const singleRefused = runInbox(harness, ["check", "--as", "single", "--no-todos"]);
+    expect(singleRefused.exitCode).toBe(2);
+    expect(singleRefused.stderr).toContain("symlink");
+    expect(await readCursor(outside)).toBe("100");
+    await rm(canonical);
+    await mkdir(canonical);
+    await writeFile(join(canonical, ".identity-migrated-v1"), "");
+    const incomplete = runInbox(harness, ["check", "--seat", "fixture", "--as", "alias", "--no-todos"]);
+    expect(incomplete.exitCode).toBe(2);
+    expect(incomplete.stderr).toContain("incomplete or unsafe");
+    expect(await readdir(canonical)).toEqual([".identity-migrated-v1"]);
+    expect(await readCursor(legacy)).toBe("5");
+  });
+
+  test("full migration accepts only a complete matching concurrent winner", async () => {
+    for (const kind of ["complete", "unrelated", "symlink", "explicit"]) {
+      const harness = await createHarness();
+      const canonical = join(harness.stateRoot, kind === "explicit" ? "seat-fixture" : "seat-alias+peer");
+      const outside = join(harness.root, "outside");
+      await seedState(join(harness.stateRoot, "alias"), "5");
+      await seedState(outside, "100");
+      await writeFile(join(outside, ".identity-migrated-v1"), "");
+      await writeFile(join(outside, "identities.json"), '["alias","peer"]');
+      await writeFile(join(harness.binDir, "bun"), `#!/usr/bin/env bash
+set -eu
+canonical="$INBOX_CANONICAL"
+if [ "$INBOX_WINNER" = symlink ]; then
+  ln -s "$INBOX_OUTSIDE" "$canonical"
+else
+  mkdir "$canonical"
+  : > "$canonical/.identity-migrated-v1"
+  : > "$canonical/.seeded"
+  : > "$canonical/seen-tasks"
+  printf '100\\n' > "$canonical/last-msg"
+  if [ "$INBOX_WINNER" = complete ]; then
+    printf '["alias","peer"]' > "$canonical/identities.json"
+  else
+    printf '["unrelated"]' > "$canonical/identities.json"
+  fi
+fi
+exec "$INBOX_REAL_BUN" "$@"
+`, { mode: 0o755 });
+      const result = runInbox(harness, ["check", "--as", "alias,peer", "--no-todos", ...(kind === "explicit" ? ["--seat", "fixture"] : [])], {}, {
+        INBOX_WINNER: kind, INBOX_OUTSIDE: outside, INBOX_REAL_BUN: process.execPath, INBOX_CANONICAL: canonical,
+      });
+      expect(result.exitCode, result.stderr).toBe(kind === "complete" || kind === "explicit" ? 0 : 2);
+      expect(await readCursor(canonical)).toBe(kind === "explicit" ? "5" : "100");
+      if (kind === "explicit") expect(JSON.parse(await readFile(join(canonical, "identities.json"), "utf8"))).toEqual(["alias", "peer", "unrelated"]);
+      expect(await readCursor(outside)).toBe("100");
+      expect(await readCursor(join(harness.stateRoot, "alias"))).toBe("5");
+      expect((await readdir(harness.stateRoot)).some(name => name.includes(".migrate."))).toBe(false);
+      expect((await readdir(canonical)).some(name => name.includes(".migrate."))).toBe(false);
+      if (kind === "unrelated" || kind === "symlink") {
+        const repeated = runInbox(harness, ["check", "--as", "alias,peer", "--no-todos"]);
+        expect(repeated.exitCode).toBe(2);
+        expect(await readCursor(canonical)).toBe("100");
+      }
+    }
+  });
+
+  async function publisher() {
+    const source = await readFile(PACKAGE_INBOX, "utf8");
+    const start = source.indexOf("install_state_directory() {");
+    const end = source.indexOf("\n# Shared by single identities", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    return source.slice(start, end);
+  }
+
+  async function publish(body: string, from: string, to: string) {
+    const child = Bun.spawn(["bash", "-c", `${body}\ninstall_state_directory "$1" "$2"`, "inbox-test", from, to], {
+      env: { ...process.env, PATH: `${process.execPath.slice(0, process.execPath.lastIndexOf("/"))}:${process.env.PATH}` },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    return { exitCode, stderr };
+  }
+
+  test("atomically installs exactly one complete concurrent candidate without nesting", async () => {
+    const harness = await createHarness();
+    const body = await publisher();
+    const destination = join(harness.stateRoot, "canonical");
+    const candidates = [join(harness.stateRoot, "candidate-a"), join(harness.stateRoot, "candidate-b")];
+    for (const [i, candidate] of candidates.entries()) await seedState(candidate, String(i + 1));
+    const results = await Promise.all(candidates.map((candidate) => publish(body, candidate, destination)));
+    expect(results.map((result) => result.exitCode).sort()).toEqual([0, 1]);
+    const winner = results.findIndex((result) => result.exitCode === 0);
+    expect(await readCursor(destination)).toBe(String(winner + 1));
+    expect(await pathExists(candidates[winner])).toBe(false);
+    expect(await readCursor(candidates[1 - winner])).toBe(String(2 - winner));
+    expect((await readdir(destination)).some((name) => name.startsWith("candidate"))).toBe(false);
+  });
+
+  test("preserves empty, populated and symlink destinations without replacing or nesting", async () => {
+    const harness = await createHarness();
+    const body = await publisher();
+    const candidate = join(harness.stateRoot, "candidate");
+    await seedState(candidate, "7");
+    for (const kind of ["empty", "populated", "symlink"]) {
+      const destination = join(harness.stateRoot, kind);
+      if (kind === "symlink") await symlink(join(harness.root, "absent"), destination);
+      else await mkdir(destination);
+      if (kind === "populated") await writeFile(join(destination, "keep"), "untouched");
+      const result = await publish(body, candidate, destination);
+      expect(result.exitCode, result.stderr).toBe(1);
+      expect(await readCursor(candidate)).toBe("7");
+      if (kind !== "symlink") expect(await readdir(destination)).toEqual(kind === "empty" ? [] : ["keep"]);
+      else expect(await readlink(destination)).toBe(join(harness.root, "absent"));
+    }
   });
 });

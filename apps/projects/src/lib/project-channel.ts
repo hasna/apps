@@ -3,6 +3,57 @@ import { getWorkspace, recordWorkspaceEvent } from "../db/workspaces.js";
 import type { EventSource, JsonObject, Workspace, WorkspaceIntegrations, WorkspaceKind } from "../types/workspace.js";
 import { resolveRegisteredProjectTargetOrThrow } from "./project-resolver.js";
 import { env } from "../lib/env.js";
+import {
+  CONVERSATIONS_CLI_TIMEOUT_MS,
+  PROJECT_CHANNEL_INTEGRATION_KEY,
+  assertProjectChannelIntegrationWritable,
+  assertProjectChannelWritable,
+  changedProjectChannel,
+  conversationsChannelExistence,
+  conversationsChannelListResult,
+  conversationsChannelProbe,
+  conversationsCliChannelProbe,
+  conversationsCliRunner,
+  normalizeProjectChannelName,
+  projectChannelWriteProbe,
+  shouldProbeConversationsChannel,
+} from "./project-channel-guard.js";
+import type {
+  ConversationsChannelRunner,
+  ConversationsRunResult,
+  ProjectChannelExistenceProbe,
+  ProjectChannelExistenceResult,
+  ProjectChannelExistenceVerdict,
+} from "./project-channel-guard.js";
+
+/**
+ * The channel-validity rule lives in `./project-channel-guard.js` — the half of
+ * this module with no database dependency, so a store that must not pull
+ * `bun:sqlite` (the PostgreSQL serve layer) can apply it too. Re-exported here
+ * so every existing importer of this module keeps working unchanged.
+ */
+export {
+  CONVERSATIONS_CLI_TIMEOUT_MS,
+  PROJECT_CHANNEL_INTEGRATION_KEY,
+  assertProjectChannelIntegrationWritable,
+  assertProjectChannelWritable,
+  changedProjectChannel,
+  conversationsChannelExistence,
+  conversationsChannelListResult,
+  conversationsChannelProbe,
+  conversationsCliChannelProbe,
+  conversationsCliRunner,
+  normalizeProjectChannelName,
+  projectChannelWriteProbe,
+  shouldProbeConversationsChannel,
+};
+export type {
+  ConversationsChannelRunner,
+  ConversationsRunResult,
+  ProjectChannelExistenceProbe,
+  ProjectChannelExistenceResult,
+  ProjectChannelExistenceVerdict,
+};
 
 /**
  * Project -> conversations channel linkage.
@@ -60,7 +111,6 @@ import { env } from "../lib/env.js";
 export const PROJECT_CHANNEL_CLASSES = ["package", "product", "work-project", "initiative", "loop-lane"] as const;
 export type ProjectChannelClass = (typeof PROJECT_CHANNEL_CLASSES)[number];
 
-export const PROJECT_CHANNEL_INTEGRATION_KEY = "conversations_channel";
 
 /**
  * Optional per-project override for the channel class. Set it on the project
@@ -124,13 +174,6 @@ export interface ProjectChannelResolution extends ProjectChannelDerivation {
   warnings: string[];
 }
 
-export interface ConversationsRunResult {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-}
-
-export type ConversationsChannelRunner = (args: string[]) => ConversationsRunResult;
 
 export type ProjectAgentOnlineNotificationStatus = "sent" | "planned" | "skipped" | "error";
 
@@ -205,15 +248,6 @@ export interface ProjectChannelEnsureResult extends ProjectChannelDerivation {
   project: Workspace;
 }
 
-export function normalizeProjectChannelName(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_]+/g, "-")
-    .replace(/[^a-z0-9.-]/g, "")
-    .replace(/-{2,}/g, "-")
-    .replace(/^[-.]+|[-.]+$/g, "");
-}
 
 /**
  * The project's channel class: an explicit `conversations_channel_class`
@@ -346,29 +380,7 @@ export function shouldNotifyProjectAgentOnline(env: Record<string, string | unde
   return true;
 }
 
-export const CONVERSATIONS_CLI_TIMEOUT_MS = 15_000;
 
-export function conversationsCliRunner(binary?: string): ConversationsChannelRunner {
-  const executable = binary?.trim() || env.conversationsBin()?.trim() || "conversations";
-  return (args) => {
-    try {
-      const result = Bun.spawnSync({
-        cmd: [executable, ...args],
-        stdout: "pipe",
-        stderr: "pipe",
-        stdin: "ignore",
-        timeout: CONVERSATIONS_CLI_TIMEOUT_MS,
-      });
-      return {
-        ok: result.exitCode === 0,
-        stdout: Buffer.from(result.stdout).toString("utf-8"),
-        stderr: Buffer.from(result.stderr).toString("utf-8"),
-      };
-    } catch (err) {
-      return { ok: false, stdout: "", stderr: err instanceof Error ? err.message : String(err) };
-    }
-  };
-}
 
 function projectAgentOnlineMessage(project: Workspace, agentTool: string, sessionName: string): string {
   const label = project.name.trim() || project.slug;

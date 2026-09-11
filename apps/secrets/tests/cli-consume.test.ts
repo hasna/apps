@@ -1,3 +1,5 @@
+import { startLoopbackVault } from "./loopback-vault-fixture.mjs";
+let api: Awaited<ReturnType<typeof startLoopbackVault>>;
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -32,13 +34,7 @@ let awsConfigPath: string;
 // CLI children would otherwise see two different vaults (and two different
 // encryption keys) and a set→get round trip could never work.
 function cliEnv(): Record<string, string | undefined> {
-  return {
-    ...process.env,
-    HASNA_SECRETS_DB_PATH: join(vaultDir, "vault.db"),
-    HASNA_SECRETS_KEY_DIR: join(vaultDir, "keys"),
-    AWS_CONFIG_FILE: awsConfigPath,
-    NO_COLOR: "1",
-  };
+  return { ...api.env(), AWS_CONFIG_FILE: awsConfigPath };
 }
 
 async function runCli(args: string[], opts: { stdin?: string } = {}) {
@@ -62,6 +58,7 @@ async function runCli(args: string[], opts: { stdin?: string } = {}) {
 
 beforeAll(async () => {
   vaultDir = mkdtempSync(join(tmpdir(), "secrets-consume-test-"));
+  api = await startLoopbackVault(vaultDir);
   awsConfigPath = join(vaultDir, "aws-config");
   writeFileSync(
     awsConfigPath,
@@ -83,7 +80,8 @@ beforeAll(async () => {
   }
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await api?.stop();
   rmSync(vaultDir, { recursive: true, force: true });
 });
 
@@ -281,5 +279,12 @@ describe("CLI set --stdin — value off argv", () => {
       expect(check.stdout, `${shape.name}: stored length`).toContain(`length=${FIXTURE_VALUE.length}`);
       expect(check.stdout, `${shape.name}: stored digest`).toContain(`sha256=${FIXTURE_SHA256}`);
     }
-  });
+  }, 20_000);
+});
+
+it("exec preserves child selection-like options after the passthrough separator", async () => {
+  const result=await runCli(["exec",FIXTURE_KEY,"--as","CHILD_SECRET","--","/bin/sh","-c",'test "$1" = "--local" && test -n "$CHILD_SECRET" && printf child-options-preserved',"fixture","--local"]);
+  expect(result.exitCode,result.stderr).toBe(0);
+  expect(result.stdout).toBe("child-options-preserved");
+  expect(result.stdout+result.stderr).not.toContain(FIXTURE_VALUE);
 });

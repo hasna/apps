@@ -215,11 +215,13 @@ resolve_state_dir() {
     if [ ${#matches[@]} -eq 1 ]; then
       STATE_DIR="${matches[0]}"
       STATE_KEY="${STATE_DIR##*/}"
+      validate_state_paths || { err "state directory or ledger must not be a symlink or special file."; return 1; }
       return 0
     fi
     STATE_KEY="$AGENT"
   fi
   STATE_DIR="$STATE_ROOT/$STATE_KEY"
+  validate_state_paths || { err "state directory or ledger must not be a symlink or special file."; return 1; }
   return 0
 }
 
@@ -305,10 +307,88 @@ merge_new_seat_aliases() {
   return 0
 }
 
+# Publish a complete directory with the kernel no-replace primitive. Unlike mv
+# (including GNU -T), this also refuses an existing empty destination directory.
+# Bun is the existing Conversations runtime; unsupported libc/filesystems fail
+# closed. No shell path interpolation, copy fallback, or destination nesting.
+install_state_directory() {
+  bun --no-env-file -e '
+    import { dlopen, ptr } from "bun:ffi";
+    const [source, destination] = process.argv.slice(1);
+    if (!source || !destination) process.exit(1);
+    const from = Buffer.from(source + "\0");
+    const to = Buffer.from(destination + "\0");
+    let library;
+    try {
+      if (process.platform === "darwin") {
+        library = dlopen("/usr/lib/libSystem.B.dylib", {
+          renamex_np: { args: ["ptr", "ptr", "u32"], returns: "i32" },
+        });
+        // Darwin stdio.h: RENAME_EXCL = 0x00000004.
+        process.exitCode = library.symbols.renamex_np(ptr(from), ptr(to), 4) === 0 ? 0 : 1;
+      } else if (process.platform === "linux") {
+        const arch = process.arch === "arm64" ? "aarch64" : process.arch === "x64" ? "x86_64" : "";
+        const candidates = ["libc.so.6", ...(arch ? [`/lib/ld-musl-${arch}.so.1`] : [])];
+        for (const path of candidates) {
+          try {
+            library = dlopen(path, {
+              renameat2: { args: ["i32", "ptr", "i32", "ptr", "u32"], returns: "i32" },
+            });
+            break;
+          } catch {}
+        }
+        if (!library) process.exit(1);
+        // Linux AT_FDCWD = -100; RENAME_NOREPLACE = 1.
+        process.exitCode = library.symbols.renameat2(-100, ptr(from), -100, ptr(to), 1) === 0 ? 0 : 1;
+      } else process.exitCode = 1;
+    } catch { process.exitCode = 1; }
+    finally { library?.close(); }
+  ' -- "$1" "$2"
+}
+
+# Shared by single identities, status/peek and canonical migration paths.
+validate_state_paths() {
+  local file
+  [ ! -L "$STATE_ROOT" ] && [ ! -L "$STATE_DIR" ] || return 1
+  [ ! -e "$STATE_DIR" ] || [ -d "$STATE_DIR" ] || return 1
+  for file in .identity-migrated-v1 identities.json seen-tasks .seeded last-msg; do
+    [ ! -L "$STATE_DIR/$file" ] || return 1
+    [ ! -e "$STATE_DIR/$file" ] || [ -f "$STATE_DIR/$file" ] || return 1
+  done
+}
+
+# A marker alone is not authority to adopt a winner. Reject symlinked state or
+# ledgers before reads/writes; a complete implicit-seat winner must name exactly
+# the requested identity set. Explicit seats may later add aliases deliberately.
+validate_migrated_state() {
+  local file known
+  [ ! -L "$STATE_ROOT" ] && [ ! -L "$STATE_DIR" ] && [ -d "$STATE_DIR" ] || return 1
+  for file in .identity-migrated-v1 identities.json seen-tasks; do
+    [ ! -L "$STATE_DIR/$file" ] && [ -f "$STATE_DIR/$file" ] && [ -r "$STATE_DIR/$file" ] || return 1
+  done
+  known="$(jq -ce 'select(type == "array" and length > 0 and all(.[]; type == "string" and length > 0)) | map(ascii_downcase) | sort' "$STATE_DIR/identities.json" 2>/dev/null)" || return 1
+  if [ -z "$SEAT_KEY" ]; then
+    [ "$known" = "$(printf '%s' "$AGENTS_LC_JSON" | jq -c 'sort')" ] || return 1
+  fi
+  for file in .seeded last-msg; do
+    [ ! -L "$STATE_DIR/$file" ] || return 1
+  done
+  if [ -e "$STATE_DIR/.seeded" ]; then
+    [ -f "$STATE_DIR/.seeded" ] && [ -f "$STATE_DIR/last-msg" ] && [ -r "$STATE_DIR/last-msg" ] || return 1
+    IFS= read -r known < "$STATE_DIR/last-msg" || return 1
+    case "$known" in ''|*[!0-9]*) return 1 ;; esac
+  fi
+}
+
 migrate_legacy_state() {
   [ "${PEEK:-0}" = 1 ] && return 0
   { [ ${#AGENTS[@]} -gt 1 ] || [ -n "$SEAT_KEY" ]; } || return 0
+  if [ -L "$STATE_ROOT" ] || [ -L "$STATE_DIR" ]; then
+    err "canonical state must not be a symlink -- refusing migration."
+    return $EX_USAGE
+  fi
   if [ -f "$STATE_DIR/.identity-migrated-v1" ]; then
+    validate_migrated_state || { err "canonical migration marker or identity ledger is incomplete or unsafe."; return $EX_USAGE; }
     [ -n "$SEAT_KEY" ] || return 0
     merge_new_seat_aliases
     return $?
@@ -365,13 +445,15 @@ migrate_legacy_state() {
   fi
   chmod 700 "$tmp"
   chmod 600 "$tmp"/* "$tmp"/.[!.]* 2>/dev/null || true
-  # -T makes an already-created destination a collision, not a directory into
-  # which mv silently nests our candidate. A concurrent winner with the same
-  # marker is safe to adopt; any other destination remains a hard refusal.
-  if ! mv -T "$tmp" "$STATE_DIR" 2>/dev/null; then
-    if [ -f "$STATE_DIR/.identity-migrated-v1" ]; then
+  # A concurrent complete winner is safe to adopt; any other collision stays
+  # untouched and is refused. The kernel never replaces or nests directories.
+  if ! install_state_directory "$tmp" "$STATE_DIR" 2>/dev/null; then
+    if validate_migrated_state; then
       rm -rf "$tmp"
       STATE_MKDIR_DONE=1
+      # A valid explicit-seat winner may contain a different alias set. Fold
+      # this invocation into it before polling, just like initial adoption.
+      if [ -n "$SEAT_KEY" ]; then merge_new_seat_aliases; return $?; fi
       return 0
     fi
     rm -rf "$tmp"

@@ -1,6 +1,8 @@
 {
   "$comment": [
-    "Fleet client-API-key inventory (hasna/apps#1595).",
+    "Hosted app inventory and authentication checks (hasna/apps#1595).",
+    "User-oauth entries use per-user identity, no shared client key. Daily checks",
+    "observe public health and anonymous refusal only, never signed-in acceptance.",
     "",
     "Every hosted Hasna service that gates /v1/* with an API key needs exactly one",
     "CLIENT key in Secrets Manager at hasna/oss/<app>/api-key (AWS account",
@@ -10,6 +12,8 @@
     "hooks, skills, emails and notes.",
     "",
     "Defaults, so an entry only records what is exceptional:",
+    "  authMode    fleet-api-key; user-oauth must be explicit",
+    "  targetClientBase https://api.hasna.com/<app> (clients append /v1)",
     "  baseUrl     https://api.hasna.com/<app>       (the Cloudflare gateway)",
     "  keySecretId hasna/oss/<app>/api-key",
     "  probePath   /v1/__fleet-key-probe__           (a path no service implements)",
@@ -26,9 +30,9 @@
     "",
     "'source' says where the service is built. 'monorepo' entries are members of",
     "this repository and are provisioned by their own deploy lane; 'external'",
-    "entries are built elsewhere (hasna-internal/internal-apps) and are covered by",
-    "the daily drift check only -- their keys live in the same Secrets Manager",
-    "namespace and go dead in exactly the same way.",
+    "entries are built elsewhere and are covered by the daily drift check only.",
+    "Fleet-api-key entries use the same Secrets Manager namespace; user-oauth",
+    "entries instead declare issuer, healthPath and unauthenticatedPath.",
     "",
     "Adding a hosted app: add it here in the same change that routes it through the",
     "gateway. tooling/ci/tests/standard/fleet-key-provisioning.test.ts refuses an",
@@ -128,7 +132,9 @@
     {
       "app": "skills",
       "source": "monorepo",
-      "probePath": "/api/v1/skills"
+      "probeAuth": "bearer",
+      "probePath": "/v1/skills",
+      "notes": "Internal ecosystem target; independent Skills origin registration and authenticated live acceptance remain required. Commercial skills.md uses a separately selected instance."
     },
     {
       "app": "telephony",
@@ -156,6 +162,17 @@
       "source": "external",
       "probePath": "/v1/machines",
       "notes": "Built in hasna-internal/internal-apps; origin alias for the stations rename."
+    },
+    {
+      "app": "nest",
+      "source": "external",
+      "authMode": "user-oauth",
+      "baseUrl": "https://api.getnest.sh",
+      "targetClientBase": "https://api.hasna.com/nest",
+      "issuer": "https://getnest.sh/api/auth",
+      "healthPath": "/v1/health",
+      "unauthenticatedPath": "/v1/auth/me",
+      "notes": "Built in hasna-products/nest. Direct Google OAuth and email/password authorize each user through current membership; there is no shared fleet API key or mint target. The origin override remains until the Nest gateway route is published and verified. The reserved disabled legacy Nest route needs a canonical ownership handoff before enablement. The issuer remains getnest.sh/api/auth when the API base moves; public boundary probes do not prove sign-in or tenant isolation."
     },
     {
       "app": "sandboxes",

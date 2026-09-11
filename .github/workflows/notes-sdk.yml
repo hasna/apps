@@ -1,0 +1,59 @@
+name: Notes SDK conformance
+
+on:
+  pull_request:
+    paths: ['apps/notes/**', 'bun.lock', 'package.json', '.github/workflows/notes-sdk.yml']
+  push:
+    branches: [main]
+    paths: ['apps/notes/**', 'bun.lock', 'package.json', '.github/workflows/notes-sdk.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  swift-http:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Swift SDK against real HTTP and shared fixtures
+        working-directory: apps/notes
+        run: bun run test:swift-sdk
+
+  classic-package-types:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+      - name: Install the declared Notes graph
+        run: bun install --frozen-lockfile --ignore-scripts --filter @hasna/notes
+      - name: Check canonical declarations and HTTP client behavior
+        working-directory: apps/notes
+        run: |
+          bun run check:sdk-types
+          bun test test/http-store.test.mjs test/transport.test.mjs test/resolver.test.mjs test/package-boundary.test.mjs test/pack-output.test.mjs
+      - name: Fresh packed external strict consumer and refusal controls
+        working-directory: apps/notes
+        run: bun scripts/test-sdk-package.mjs "$RUNNER_TEMP/notes-sdk-package"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: notes-sdk-package
+          path: |
+            ${{ runner.temp }}/notes-sdk-package/*.log
+            ${{ runner.temp }}/notes-sdk-package/receipt.json
+            ${{ runner.temp }}/notes-sdk-package/pack.json
+            ${{ runner.temp }}/notes-sdk-package/consumer/package.json
+            ${{ runner.temp }}/notes-sdk-package/consumer/package-lock.json
+            ${{ runner.temp }}/notes-sdk-package/consumer/tsconfig.json
+            ${{ runner.temp }}/notes-sdk-package/consumer/consumer.mts
+          if-no-files-found: error

@@ -153,6 +153,15 @@ export class ConversationsClient {
       });
     }
 
+    /** Audited admin message-redaction over the hosted store (hosted path of admin redact-messages) */
+    async redactMessages(body: { "ids": Array<number>; "actor": string; "reason"?: string; "apply"?: boolean; "authority"?: string; "backup_confirmed"?: boolean; "dry_run_confirmed"?: boolean; "purge_attachments"?: boolean; "replacement_content"?: string; "now"?: string }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/admin/redact-messages`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     async listAgents(query?: { "online_only"?: boolean }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("GET", `/v1/agents`, {
         body: undefined,
@@ -248,6 +257,24 @@ export class ConversationsClient {
     /** Plan or apply guarded project linkage for every message in one exact project-linked channel */
     async applyChannelProjectMessageLinkage(name: string, body: { "project_id": string; "apply": boolean; "expected_revision"?: string; "idempotency_key"?: string }, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/channels/${encodeURIComponent(String(name))}/project-message-linkage`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Run the Conversations→Events outbox worker (hosted path of the events-drain command) */
+    async drainEventOutbox(query?: { "limit"?: number }, init?: RequestInit): Promise<{ "scanned"?: number; "transported"?: number; "skipped"?: number; "spooled"?: number }> {
+      return this.request("POST", `/v1/events/outbox/drain`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Persist a feedback entry (hosted path of the MCP send_feedback tool) */
+    async submitFeedback(body: { "message": string; "email"?: string; "category"?: string }, init?: RequestInit): Promise<{ "id"?: string; "sent"?: boolean; "error"?: string | null }> {
+      return this.request("POST", `/v1/feedback`, {
         body,
         query: undefined,
         init,

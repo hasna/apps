@@ -134,7 +134,7 @@ describe("secrets-mcp answers --version/--help without entering stdio (row afd9e
     // this side.
     const result = await runBin("src/mcp-server.ts", []);
     expect(result.timedOut).toBe(false);
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
     expect(result.stdout).not.toContain(PROBE_VERSION);
     expect(result.stdout).not.toContain("Usage:");
   });

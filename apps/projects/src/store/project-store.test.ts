@@ -1159,7 +1159,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
         path: url.pathname,
       });
       return Response.json({
-        error: "integration 'conversations_channel' is a typed resource-link compatibility projection and must be changed through resource-links",
+        error: "integration 'conversations_channel' is a typed resource-link compatibility projection and conflicts with the existing resource link ('a-real-channel'); change it through resource-links",
       }, { status: 400 });
     };
     __resetProjectStore();
@@ -1174,7 +1174,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     // errors are matched by shape (name + status), never by instanceof.
     expect(err).toMatchObject({ name: "HasnaHttpError", status: 400 });
     expect((err as HasnaHttpError).body).toEqual({
-      error: "integration 'conversations_channel' is a typed resource-link compatibility projection and must be changed through resource-links",
+      error: "integration 'conversations_channel' is a typed resource-link compatibility projection and conflicts with the existing resource link ('a-real-channel'); change it through resource-links",
     });
 
     expect(calls).toEqual([{
@@ -1192,7 +1192,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
         path: url.pathname,
       });
       return Response.json({
-        error: "integration 'conversations_channel' is a typed resource-link compatibility projection and must be changed through resource-links",
+        error: "integration 'conversations_channel' is a typed resource-link compatibility projection and conflicts with the existing resource link ('a-real-channel'); change it through resource-links",
       }, { status: 400 });
     };
     __resetProjectStore();
@@ -1212,7 +1212,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     }).catch((error: unknown) => error);
     expect(err).toMatchObject({ name: "HasnaHttpError", status: 400 });
     expect((err as HasnaHttpError).body).toEqual({
-      error: "integration 'conversations_channel' is a typed resource-link compatibility projection and must be changed through resource-links",
+      error: "integration 'conversations_channel' is a typed resource-link compatibility projection and conflicts with the existing resource link ('a-real-channel'); change it through resource-links",
     });
 
     expect(calls).toEqual([{

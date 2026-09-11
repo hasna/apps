@@ -17,6 +17,7 @@ import { fileURLToPath } from "url";
 import { getHook, getHookEvents, type HookEvent } from "./registry.js";
 import { resolveHookDir, resolveHookMeta } from "./resolve.js";
 import { readCustomManifest, customHookDir } from "./manifest.js";
+import { findStaleRegistrations, type StaleRegistration } from "./registration.js";
 import { removeHookFromStore } from "./store.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -576,6 +577,105 @@ function removeHookForTarget(name: string, scope: Scope, target: WritableJsonTar
   }
   unregisterHook(name, scope, target);
   return true;
+}
+
+/**
+ * The JSON settings files `hooks install`/`hooks remove` write to. Codewith is
+ * TOML and deliberately out of scope: install emits fragments by default and
+ * removal refuses lossy TOML edits, so a stale entry there is reported by the
+ * fragment path, never rewritten by this one.
+ */
+const JSON_SETTINGS_TARGETS = ["claude", "gemini"] as const;
+
+function readSettingsAt(path: string): { raw: string; settings: Record<string, any> } | undefined {
+  try {
+    if (!existsSync(path)) return undefined;
+    const raw = readFileSync(path, "utf-8");
+    return { raw, settings: JSON.parse(raw) };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Every settings registration for the scope whose hook name does not resolve.
+ *
+ * A stale registration makes the agent spawn `hooks run <name>` on every event
+ * it is wired to, and each spawn fails — the failure is invisible to `hooks
+ * install`/`hooks remove` because nothing re-checks names already written.
+ */
+export function scanStaleRegistrations(scope: Scope = "global"): StaleRegistration[] {
+  const stale: StaleRegistration[] = [];
+  for (const target of JSON_SETTINGS_TARGETS) {
+    const path = getSettingsPath(scope, target);
+    const parsed = readSettingsAt(path);
+    if (!parsed) continue;
+    stale.push(...findStaleRegistrations(parsed.settings, path));
+  }
+  return stale;
+}
+
+export interface PruneStaleResult {
+  /** Settings file edited. */
+  file: string;
+  /** The registrations removed from it. */
+  removed: StaleRegistration[];
+  /** Sibling backup of the pre-edit bytes (`<settings>.bak`). */
+  backupPath: string;
+}
+
+/**
+ * Remove every stale registration the scope carries, and nothing else.
+ *
+ * Edits only the entries whose own command is stale: sibling hooks in the same
+ * entry, unrelated event keys, matchers and every non-hook settings key are
+ * preserved, the file stays valid JSON, and a `.bak` sibling is written before
+ * the edit. Idempotent — a second call finds nothing stale and writes nothing.
+ * A registration whose hook resolves is never touched.
+ */
+export function pruneStaleRegistrations(scope: Scope = "global"): PruneStaleResult[] {
+  const results: PruneStaleResult[] = [];
+  for (const target of JSON_SETTINGS_TARGETS) {
+    const path = getSettingsPath(scope, target);
+    const parsed = readSettingsAt(path);
+    if (!parsed) continue;
+    const stale = findStaleRegistrations(parsed.settings, path);
+    if (stale.length === 0) continue;
+
+    const staleCommandsByEvent = new Map<string, Set<string>>();
+    for (const finding of stale) {
+      const commands = staleCommandsByEvent.get(finding.event) ?? new Set<string>();
+      commands.add(finding.command);
+      staleCommandsByEvent.set(finding.event, commands);
+    }
+
+    const settings = parsed.settings;
+    for (const [eventKey, commands] of staleCommandsByEvent) {
+      const entries = settings.hooks?.[eventKey];
+      if (!Array.isArray(entries)) continue;
+      const keptEntries: any[] = [];
+      for (const entry of entries) {
+        if (!Array.isArray(entry?.hooks)) {
+          keptEntries.push(entry);
+          continue;
+        }
+        const keptHooks = entry.hooks.filter(
+          (hook: any) => !(typeof hook?.command === "string" && commands.has(hook.command)),
+        );
+        if (keptHooks.length === entry.hooks.length) keptEntries.push(entry);
+        else if (keptHooks.length > 0) keptEntries.push({ ...entry, hooks: keptHooks });
+      }
+      if (keptEntries.length > 0) settings.hooks[eventKey] = keptEntries;
+      else delete settings.hooks[eventKey];
+    }
+    if (settings.hooks && Object.keys(settings.hooks).length === 0) delete settings.hooks;
+
+    const backupPath = `${path}.bak`;
+    writeFileSync(backupPath, parsed.raw);
+    writeSettings(settings, scope, target);
+    results.push({ file: path, removed: stale, backupPath });
+  }
+  return results;
 }
 
 export interface UninstallResult {

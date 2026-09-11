@@ -77,6 +77,12 @@ todos fail <id> --reason "Auth bug in middleware" --retry  # Auto-creates retry 
   item `hasna.credentials.todos.api-key`, or `~/.hasna/todos/config/credentials`
   is enough; the authority defaults to `https://api.hasna.com/todos`. Set
   `HASNA_TODOS_API_URL` only to point somewhere else.
+- **Raw HTTP from scripts** (python `urllib`/`requests` or similar): the hosted
+  `/v1` plane is behind a Cloudflare gateway that returns 403 (error 1010) for
+  library-default User-Agents such as `Python-urllib/3.x`, while the same call
+  via `curl` succeeds. Send an explicit neutral `User-Agent` header on every
+  `/v1` request — see the "Hosted `/v1` writes need a neutral `User-Agent`"
+  note in the README REST API section.
 - **Local** (on-box `todos-serve`, default port **19427**): set
   `HASNA_TODOS_LOCAL=1` with no authority and no credential configured. The run
   prints one line on stderr saying it is local.

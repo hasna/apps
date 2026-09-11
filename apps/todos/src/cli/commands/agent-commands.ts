@@ -1,28 +1,20 @@
+import {registerTaskListCommands} from "./task-list-commands.js";
 import type { Command } from "commander";
 import chalk from "chalk";
 import { execSync } from "node:child_process";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
 import { releaseAgent, listAgents, normalizeGeneratedAgentNames, suggestAgentNames } from "../../db/agents.js";
 import { normalizeAgentNameInput } from "../../lib/agent-name-normalize.js";
-import { createTaskList, getTaskList, listTaskLists, updateTaskList, deleteTaskList } from "../../db/task-lists.js";
 import { listTasks } from "../../db/tasks.js";
-import { getPackageVersion, handleError, autoProject, output, outputRecord } from "../helpers.js";
+import { getPackageVersion, handleError, output } from "../helpers.js";
 import { clearPersistedIdentity, detectIdentityCollision, persistIdentity, readPersistedIdentity } from "../../lib/creator-identity.js";
 import {
   getTodosCloudClient,
-  cloudCreateTaskList,
-  cloudDeleteTaskList,
-  cloudGetTaskList,
-  cloudUpdateTaskList,
   cloudHeartbeatAgent,
   cloudListAgents,
-  cloudListTaskLists,
   cloudListTasks,
   cloudRegisterAgent,
   cloudReleaseAgent,
-  cloudResolveProjectRef,
-  cloudResolveTaskListForUpdate,
-  cloudResolveTaskListRef,
 } from "../cloud-router.js";
 
 /**
@@ -527,114 +519,7 @@ export function registerAgentCommands(program: Command) {
       render(tree);
     });
 
-  // lists
-  program
-    .command("lists")
-    .aliases(["task-lists", "tl"])
-    .description("List and manage task lists")
-    .option("--add <name>", "Create a task list")
-    .option("--show <id>", "Resolve and show a task list")
-    .option("--update <id>", "Update a task list")
-    .option("--name <name>", "Name (with --update)")
-    .option("--slug <slug>", "Custom slug (with --add or --update)")
-    .option("-d, --description <text>", "Description (with --add or --update)")
-    .option("--delete <id>", "Delete a task list")
-    .action(async (opts) => {
-      try {
-        const globalOpts = program.opts();
-        const cloud = getTodosCloudClient();
-        const projectId = cloud
-          ? (globalOpts.project ? await cloudResolveProjectRef(cloud, globalOpts.project) : undefined)
-          : autoProject(globalOpts);
-
-        if (opts.add) {
-          const input = { name: opts.add, slug: opts.slug, description: opts.description, project_id: projectId };
-          const list = cloud ? await cloudCreateTaskList(cloud, input) : createTaskList(input);
-          if (globalOpts.json) {
-            output(list, true);
-            return;
-          }
-          console.log(chalk.green("Task list created:"));
-          console.log(`  ${chalk.dim("ID:")}   ${list.id.slice(0, 8)}`);
-          console.log(`  ${chalk.dim("Slug:")} ${list.slug}`);
-          console.log(`  ${chalk.dim("Name:")} ${list.name}`);
-          return;
-        }
-
-        if (opts.show || opts.update) {
-          const ref = opts.show || opts.update;
-          // `--project` rebinds the list to a project scope. It must be an
-          // EXPLICIT ref — the auto-detected cwd project must never silently
-          // re-scope an existing list on a rename.
-          const explicitProject = typeof globalOpts.project === "string" && globalOpts.project.trim() !== "";
-          const resolved = cloud
-            ? await cloudResolveTaskListForUpdate(cloud, ref, projectId, opts.update && explicitProject)
-            : resolvePartialId(getDatabase(), "task_lists", ref);
-          if (!resolved) throw new Error(`Task list not found or ambiguous: ${ref}`);
-          if (opts.show) {
-            const list = cloud ? await cloudGetTaskList(cloud, resolved) : getTaskList(resolved);
-            if (!list) throw new Error(`Task list not found: ${ref}`);
-            // outputRecord, not output: `output` prints only under --json, so this
-            // exited 0 with completely empty stdout in human mode.
-            outputRecord(list, Boolean(globalOpts.json), "Task list:");
-            return;
-          }
-          const patch = {
-            ...(explicitProject ? { project_id: projectId } : {}),
-            ...(opts.name !== undefined ? { name: opts.name } : {}),
-            ...(opts.slug !== undefined ? { slug: opts.slug } : {}),
-            ...(opts.description !== undefined ? { description: opts.description } : {}),
-          };
-          if (Object.keys(patch).length === 0) throw new Error("lists --update requires --project, --name, --slug, or --description");
-          const list = cloud
-            ? await cloudUpdateTaskList(cloud, resolved, patch)
-            : updateTaskList(resolved, patch);
-          // A successful mutation must say so; this printed nothing in human mode.
-          outputRecord(list, Boolean(globalOpts.json), "Task list updated:");
-          return;
-        }
-
-        if (opts.delete) {
-          if (cloud) {
-            const resolved = await cloudResolveTaskListRef(cloud, opts.delete, projectId ?? undefined);
-            if (!resolved) throw new Error(`Task list not found or ambiguous: ${opts.delete}`);
-            const deleted = await cloudDeleteTaskList(cloud, resolved);
-            if (globalOpts.json) {
-              output({ deleted }, true);
-              if (!deleted) process.exitCode = 1;
-            } else if (deleted) {
-              console.log(chalk.green("Task list deleted."));
-            } else {
-              handleError(new Error("Task list not found"));
-            }
-            return;
-          }
-          const db = getDatabase();
-          const resolved = resolvePartialId(db, "task_lists", opts.delete);
-          if (!resolved) {
-            handleError(new Error("Task list not found"));
-          }
-          deleteTaskList(resolved);
-          console.log(chalk.green("Task list deleted."));
-          return;
-        }
-
-        const lists = cloud ? await cloudListTaskLists(cloud, projectId ?? undefined) : listTaskLists(projectId);
-        if (globalOpts.json) {
-          output(lists, true);
-          return;
-        }
-        if (lists.length === 0) {
-          console.log(chalk.dim("No task lists. Use 'todos lists --add <name>' to create one."));
-          return;
-        }
-        for (const l of lists) {
-          console.log(`  ${chalk.dim(l.id.slice(0, 8))} ${chalk.bold(l.name)} ${chalk.dim(`(${l.slug})`)}`);
-        }
-      } catch (e) {
-        handleError(e);
-      }
-    });
+  registerTaskListCommands(program);
 
   // upgrade (self-update)
   program

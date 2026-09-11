@@ -1,30 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { startApiServer, type ApiServerDeps } from "../server/api.js";
 import { mintApiKey, verifyApiKey, ApiKeyStore, type ApiKeyStatus } from "@hasna/contracts/auth";
-import { STORE_SELECTING_KEYS } from "../lib/store/isolated-test-env.js";
+import { STORE_SELECTING_KEYS, diskTierSandboxEnv } from "../lib/store/isolated-test-env.js";
 import { HERMETIC_STATION } from "../test/hermetic.js";
-
-// Ambient credential isolation (DISK tier): the shared resolver reads
-// `~/.hasna/conversations/config/credentials` rooted at the child env's
-// HOME/HASNA_HOME/HASNA_CONFIG_HOME, and a provisioned station's real file
-// outranks the fixture authority below — the loopback URL is then REFUSED as
-// written for a different authority (green on CI, red on the station).
-// Anchoring every home-layout root at a scratch dir — no credentials file
-// can exist there — makes the disk tier consult nothing, identically on both
-// kinds of machine.
-const scratchHome = mkdtempSync(join(tmpdir(), "conversations-e2e-home-"));
-
-afterAll(() => {
-  rmSync(scratchHome, { recursive: true, force: true });
-});
 
 const SIGNING = ["test", "signing", "material", "0123456789"].join("-");
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
 
 function makeFakeClient() {
+  const binding = {corpus_id:`cor_${crypto.randomUUID().replaceAll("-", "")}`,tenant_id:"default",authority_id:"conversations",receipt_id:crypto.randomUUID(),actor:"fixture-operator",adopted_at:new Date().toISOString(),legacy_receipt_count:0,legacy_receipt_digest:"0".repeat(64)};
   const channels: Record<string, any> = {};
   const projects: Record<string, any> = {
     "proj-valid": { id: "proj-valid", name: "Chief of Harness" },
@@ -37,6 +21,7 @@ function makeFakeClient() {
       return [];
     },
     async get(sql: string, p: readonly unknown[] = []): Promise<any> {
+      if (sql.includes("FROM conversations_corpus_binding b JOIN project_channel_registration_identity")) return {...binding};
       if (/SELECT 1 AS ok/i.test(sql)) return { ok: 1 };
       if (/SELECT id FROM projects WHERE id/i.test(sql)) return projects[(p as any[])[0]] ?? null;
       if (/SELECT name FROM channels WHERE name/i.test(sql)) return channels[(p as any[])[0]] ? { name: (p as any[])[0] } : null;
@@ -115,9 +100,10 @@ async function runCli(args: string[], env: Record<string, string | undefined>) {
   // account to one no real item uses, or the operator's real key and api-url
   // items win over the fixture pair a case exports.
   childEnv.HASNA_STATION = HERMETIC_STATION;
-  childEnv.HOME = scratchHome;
-  childEnv.HASNA_HOME = scratchHome;
-  childEnv.HASNA_CONFIG_HOME = scratchHome;
+  // The disk tier (`~/.hasna/<app>/config/credentials`) is an ambient input:
+  // point the child's HOME at a scratch root so the station credential cannot
+  // answer beside the fixture's synthetic API URL.
+  Object.assign(childEnv, diskTierSandboxEnv());
   for (const [key, value] of Object.entries(env)) {
     if (value !== undefined) childEnv[key] = value;
   }
@@ -148,7 +134,7 @@ describe("cloud CLI channel create (e2e)", () => {
   beforeAll(() => {
     server = startApiServer({ port: 0, host: "127.0.0.1", deps: makeDeps() });
     const envName = ["HASNA_CONVERSATIONS_API", String.fromCharCode(75, 69, 89)].join("_");
-    const bearer = mintApiKey({
+    const bearer = mintApiKey({ tid: "default",
       app: "conversations",
       agent: "cli-e2e",
       scopes: ["conversations:read", "conversations:write"],

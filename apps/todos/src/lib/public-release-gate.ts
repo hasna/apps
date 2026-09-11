@@ -78,9 +78,9 @@ export type InstallSmokeCommand = {
 };
 
 const PACKAGE_NAME = "@hasna/todos";
-const REPOSITORY_URL = "https://github.com/hasna/todos.git";
-const HOMEPAGE_URL = "https://github.com/hasna/todos";
-const ISSUES_URL = "https://github.com/hasna/todos/issues";
+const REPOSITORY_URL = "https://github.com/hasna/apps.git";
+const HOMEPAGE_URL = "https://github.com/hasna/apps";
+const ISSUES_URL = "https://github.com/hasna/apps/issues";
 
 const FORBIDDEN_DEPENDENCY_PARTS = [
   "aws",
@@ -385,7 +385,27 @@ export function validateRootPackageMetadata(packageJson: PackageJson): ReleaseGa
   for (const required of ["dist", "LICENSE", "README.md"]) {
     addIf(failures, !files.includes(required), "package-files", `files must include ${required}`);
   }
-  const allowedFiles = ["dist", "postinstall.js", "LICENSE", "README.md"];
+  // 0.16.0 ships the migration notes with the artifact instead of leaving them
+  // repo-only, so the allowlist below is the reviewed set of non-build paths the
+  // tarball may carry. Every entry is a public text surface already scanned by
+  // validatePublicTextSurfaces (isPublicReleaseTextSurface treats `docs/` and
+  // CHANGELOG.md as public), so adding one here does not widen what can leak —
+  // it only stops the gate from rejecting a file the release intends to ship.
+  // Keep in step with package.json `files`: the
+  // `public-release-gate.test.ts` test that validates the real manifest fails if
+  // the two drift apart again.
+  const allowedFiles = [
+    "dist",
+    "postinstall.js",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    "docs/PLAN_API.md",
+    "docs/TASK_LIST_API.md",
+    "docs/TEMPLATE_API.md",
+    "docs/TASK_QUERY_API.md",
+    "docs/native-storage.md",
+  ];
   for (const file of files) {
     addIf(failures, !allowedFiles.includes(file), "package-files-extra", `files must not include unbuilt or unreviewed path ${file}`);
   }

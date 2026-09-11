@@ -14,10 +14,9 @@ describe("upstream sync workflow", () => {
   const scriptPath = join(process.cwd(), "scripts/check_upstream_sync.sh");
   const script = readFileSync(scriptPath, "utf8");
 
-  test("documents a no-worktree branch and cherry-pick workflow", () => {
-    expect(doc).toContain("Do not use git worktrees");
-    expect(doc).toContain("git switch -c public/<topic> origin/main");
-    expect(doc).toContain("git cherry-pick <generic-commit-sha>");
+  test("documents a worktree branch and cherry-pick workflow", () => {
+    expect(doc).toContain("repos worktree add skills --name public-<topic> --branch public/<topic> --base origin/main");
+    expect(doc).toContain("cherry-pick <generic-commit-sha>");
   });
 
   test("documents preflight and required package gates", () => {

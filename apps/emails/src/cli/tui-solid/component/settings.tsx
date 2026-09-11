@@ -92,6 +92,7 @@ export function SettingsDialog(props: { close: () => void }) {
         <text fg={theme.text} attributes={TextAttributes.BOLD}>Settings</text>
         <Button label="Close" onPress={props.close} />
       </box>
+      <Show when={emails.state.preferenceError}><text fg={theme.error} wrapMode="word">{emails.state.preferenceError}</text></Show>
       <box width="100%" flexGrow={1} minHeight={0} flexDirection="row" columnGap={narrow() ? 1 : 3}>
         <box width={narrow() ? 17 : 21} flexShrink={0} flexDirection="column" rowGap={1}>
           <text fg={theme.textMuted}>Preferences</text>
@@ -148,7 +149,7 @@ export function SettingsDialog(props: { close: () => void }) {
         </scrollbox>
       </box>
       <text fg={theme.textMuted} flexShrink={0} marginTop={1} wrapMode="word">
-        {section() === "Priority Inbox" ? "Priority rules are saved to your account." : section() === "Attachments" ? "Attachment preferences are saved on this computer." : section() === "Shortcuts" ? "Single-letter shortcuts are off while typing." : "View preferences apply until you close Emails."}
+        {section() === "Priority Inbox" ? "Priority rules are saved to your account." : section() === "Attachments" ? "Attachment preferences are saved on this computer." : section() === "Shortcuts" ? "Single-letter shortcuts are off while typing." : "View preferences are saved on this computer."}
       </text>
       <text fg={theme.textMuted} flexShrink={0} wrapMode="word">{section() === "Priority Inbox" ? "Enter Add · Ctrl+←/→ Sections · Esc Close" : "Ctrl+←/→ Sections · Tab Controls · Esc Close"}</text>
     </box>

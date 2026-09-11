@@ -4,7 +4,16 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { configCommand } from "./config";
 import { setConfigPath, setConfig, getConfig } from "../../core/config";
-const savedHome = process.env.HASNA_HOME;
+// Home-layout roots and the Keychain account pin, saved once at load and
+// restored delete-if-undefined after each test: the resolver's disk tier
+// roots at HASNA_HOME else $HOME/.hasna (HASNA_CONFIG_HOME overriding the
+// config root), and `keychainAccount()` reads HASNA_STATION else the short
+// hostname else USER. On a provisioned station those anchor the REAL
+// `~/.hasna/attachments/config/credentials` (and on macOS a real keychain
+// item under this machine's hostname), so the fail-closed probe below must
+// run with every ambient root detached.
+const AMBIENT_ROOT_KEYS = ["HOME", "HASNA_HOME", "HASNA_CONFIG_HOME", "HASNA_STATION"] as const;
+const savedAmbient = new Map<string, string | undefined>(AMBIENT_ROOT_KEYS.map((key) => [key, process.env[key]]));
 let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "attachments-config-"));
@@ -12,9 +21,19 @@ beforeEach(() => {
   // Hermetic: the shared seam's disk tier anchors here, so a station's real
   // ~/.hasna/attachments/config/credentials cannot satisfy the 'config test'
   // fail-closed probe (or flip any resolver decision) during the suite.
-  process.env.HASNA_HOME = dir;
+  for (const key of AMBIENT_ROOT_KEYS) {
+    if (key === "HASNA_STATION") process.env[key] = "attachments-hermetic-test";
+    else process.env[key] = dir;
+  }
 });
-afterEach(() => { process.env.HASNA_HOME = savedHome; rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => {
+  for (const key of AMBIENT_ROOT_KEYS) {
+    const value = savedAmbient.get(key);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  rmSync(dir, { recursive: true, force: true });
+});
 async function run(args: string[]) { let output = ""; const spy = spyOn(process.stdout, "write").mockImplementation(c => { output += String(c); return true; }); try { const cmd = configCommand().exitOverride(); for (const sub of cmd.commands) sub.exitOverride(); await cmd.parseAsync(args, { from: "user" }); return output; } finally { spy.mockRestore(); } }
 test("show reports preferences without creating state or leaking historical S3 credentials", async () => {
  expect(await run(["show"])).toContain("defaults"); expect(existsSync(join(dir, "config.json"))).toBe(false);

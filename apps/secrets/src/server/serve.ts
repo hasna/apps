@@ -1,3 +1,4 @@
+import { EncryptionMaintenanceError } from "./encryption-maintenance.js";
 /**
  * secrets-serve — the deployed HTTP API (PURE REMOTE, Amendment A1).
  *
@@ -21,12 +22,16 @@ import {
   type PoolQueryClient,
 } from "../generated/storage-kit/index.js";
 import { APP_NAME, bootstrapCloudEnv, resolvePort, resolveSigningSecret } from "./cloud-env.js";
+import { tenantStore, assertTenantSecurity, backfillTenantVersions } from "./tenant-client.js";
 import { CloudSecretsStore } from "./cloud-store.js";
 import { buildOpenApiDocument } from "./openapi.js";
 import { getCloudMasterKey, VaultDecryptionError } from "./cloud-crypto.js";
 import { VERSION } from "../version.js";
 import type { SecretType, VaultItemKind } from "../types.js";
 import { MetadataValidationError, VersionConflictError, VersionNotFoundError } from "../store/types.js";
+
+import { migrationCapability, importVault, readMigrationBody } from "./vault-migration.js";
+import { MigrationError } from "../migration/snapshot.js";
 
 const READ = ["secrets:read"];
 const WRITE = ["secrets:write"];
@@ -58,7 +63,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
   const { client, store, verifier } = deps;
 
   async function auth(req: Request, requiredScopes: string[]): Promise<
-    { ok: true; actor: string; tenantId: string } | { ok: false; res: Response }
+    { ok: true; actor: string; tenantId: string; kid: string; store: CloudSecretsStore } | { ok: false; res: Response }
   > {
     const url = new URL(req.url);
     const decision = await verifier.authenticate((name: string) => req.headers.get(name), {
@@ -77,7 +82,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
     if (!assignment?.tenant_id) {
       return { ok: false, res: json({ error: "API key has no tenant assignment" }, 403) };
     }
-    return { ok: true, actor, tenantId: assignment.tenant_id };
+    return { ok: true, actor, tenantId: assignment.tenant_id, kid: decision.principal.kid, store: store instanceof CloudSecretsStore ? tenantStore(client, assignment.tenant_id, decision.principal.kid, requiredScopes) : store };
   }
 
   return async function handle(req: Request): Promise<Response> {
@@ -99,6 +104,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         // migration ledger. The service role must not need DDL or
         // schema_migrations read access just to pass its liveness gate.
         const ready = await checkHealth(client);
+        try { await assertTenantSecurity(client); } catch { return json({status:"not_ready",reason:"tenant_security_not_ready",version:VERSION},503); }
         return json(
           { status: ready.ok ? "ok" : "not_ready", version: VERSION, mode: "cloud", pendingMigrations: [] },
           ready.ok ? 200 : 503,
@@ -108,16 +114,41 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         return json(buildOpenApiDocument(VERSION));
       }
 
+      if ((path === "/v1/encryption/status" && method === "GET") || (path === "/v1/encryption/repair" && method === "POST")) {
+        const repair = method === "POST";
+        const a = await auth(req, repair ? ["secrets:migrate"] : READ);
+        if (!a.ok) return a.res;
+        try {
+          return json(repair ? await a.store.repairEncryption(a.actor, a.tenantId) : await a.store.encryptionStatus(a.tenantId));
+        } catch (error) {
+          return json({error:error instanceof EncryptionMaintenanceError ? error.code : "encryption_verification_unavailable"}, error instanceof EncryptionMaintenanceError ? error.status : 503);
+        }
+      }
+
+      if (path === "/v1/migrations/vault" && (method === "GET" || method === "POST")) {
+        const a = await auth(req, ["secrets:migrate"]);
+        if (!a.ok) return a.res;
+        const store = a.store;
+        if(method === "POST" && (req.headers.get("x-secrets-migration-tenant") !== a.tenantId || req.headers.get("x-secrets-migration-kid") !== a.kid)) return json({error:"migration_destination_changed",deletion_authorized:false},403);
+        try {
+          return json(method === "GET" ? await migrationCapability(client, a) : await importVault(client, a, await readMigrationBody(req), req.signal));
+        } catch (e) {
+          return json({ error: e instanceof MigrationError ? e.code : "migration_unavailable_or_failed", deletion_authorized: false }, e instanceof MigrationError ? e.status : 503);
+        }
+      }
+
       // ---- /v1 secrets ----
       if (path === "/v1/secrets" && method === "GET") {
         const a = await auth(req, READ);
         if (!a.ok) return a.res;
+        const store = a.store;
         const namespace = url.searchParams.get("namespace") ?? undefined;
         return json({ secrets: await store.listSecretMetadata(namespace) });
       }
       if (path === "/v1/secrets" && method === "POST") {
         const a = await auth(req, WRITE);
         if (!a.ok) return a.res;
+        const store = a.store;
         const body = (await req.json().catch(() => null)) as
           | {
               key?: string;
@@ -169,14 +200,21 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       if (path === "/v1/secrets" && method === "DELETE") {
         const a = await auth(req, WRITE);
         if (!a.ok) return a.res;
+        const store = a.store;
         const key = url.searchParams.get("key");
         if (!key) return json({ error: "Missing key" }, 400);
         const ok = await store.deleteSecret(key, a.actor, a.tenantId);
         return json({ deleted: ok }, ok ? 200 : 404);
       }
+      if (path === "/v1/secrets/prune-expired" && method === "POST") {
+        const a = await auth(req, WRITE);
+        if (!a.ok) return a.res;
+        return json({ pruned: await a.store.pruneExpired(a.actor, a.tenantId) });
+      }
       if (path === "/v1/secrets/get" && method === "GET") {
         const a = await auth(req, READ);
         if (!a.ok) return a.res;
+        const store = a.store;
         const key = url.searchParams.get("key");
         if (!key) return json({ error: "Missing key" }, 400);
         const entry = await store.getSecret(key, a.actor, a.tenantId);
@@ -186,6 +224,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       if (path === "/v1/secrets/search" && method === "GET") {
         const a = await auth(req, READ);
         if (!a.ok) return a.res;
+        const store = a.store;
         const q = url.searchParams.get("q");
         if (!q) return json({ error: "Missing q" }, 400);
         return json({ results: await store.searchSecretMetadata(q) });
@@ -195,6 +234,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       if (path === "/v1/secrets/versions" && method === "GET") {
         const a = await auth(req, READ);
         if (!a.ok) return a.res;
+        const store = a.store;
         const key = url.searchParams.get("key");
         if (!key) return json({ error: "Missing key" }, 400);
         const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : 20;
@@ -206,6 +246,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       if (path === "/v1/secrets/versions/check" && method === "GET") {
         const a = await auth(req, READ);
         if (!a.ok) return a.res;
+        const store = a.store;
         const key = url.searchParams.get("key");
         const version = url.searchParams.get("version");
         if (!key || !version) return json({ error: "key and version are required" }, 400);
@@ -216,6 +257,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       if (path === "/v1/secrets/restore" && method === "POST") {
         const a = await auth(req, WRITE);
         if (!a.ok) return a.res;
+        const store = a.store;
         const body = (await req.json().catch(() => null)) as
           | { key?: string; version?: number; reason?: string; expected_current_version?: number }
           | null;
@@ -248,12 +290,14 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       if (path === "/v1/items" && method === "GET") {
         const a = await auth(req, READ);
         if (!a.ok) return a.res;
+        const store = a.store;
         const kind = (url.searchParams.get("kind") as VaultItemKind) || undefined;
         return json({ items: await store.listVaultItemMetadata(kind) });
       }
       if (path === "/v1/items" && method === "POST") {
         const a = await auth(req, WRITE);
         if (!a.ok) return a.res;
+        const store = a.store;
         const body = (await req.json().catch(() => null)) as
           | { kind?: VaultItemKind; title?: string; data?: Record<string, unknown>; id?: string; subtitle?: string; domains?: string[]; tags?: string[]; favorite?: boolean }
           | null;
@@ -268,6 +312,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       if (path === "/v1/items/search" && method === "GET") {
         const a = await auth(req, READ);
         if (!a.ok) return a.res;
+        const store = a.store;
         const q = url.searchParams.get("q");
         if (!q) return json({ error: "Missing q" }, 400);
         return json({ results: await store.searchVaultItemMetadata(q) });
@@ -278,6 +323,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         if (method === "GET") {
           const a = await auth(req, READ);
           if (!a.ok) return a.res;
+        const store = a.store;
           const item = await store.getVaultItem(id, a.actor, a.tenantId);
           if (!item) return json({ error: "Not found" }, 404);
           return json(item);
@@ -285,6 +331,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         if (method === "DELETE") {
           const a = await auth(req, WRITE);
           if (!a.ok) return a.res;
+        const store = a.store;
           const ok = await store.deleteVaultItem(id, a.actor, a.tenantId);
           return json({ deleted: ok }, ok ? 200 : 404);
         }
@@ -294,6 +341,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       if (path === "/v1/audit" && method === "GET") {
         const a = await auth(req, READ);
         if (!a.ok) return a.res;
+        const store = a.store;
         const key = url.searchParams.get("key") ?? undefined;
         const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : 50;
         return json({ entries: await store.getAuditLog(key, limit) });
@@ -301,12 +349,14 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       if (path === "/v1/users" && method === "GET") {
         const a = await auth(req, READ);
         if (!a.ok) return a.res;
+        const store = a.store;
         const type = (url.searchParams.get("type") as "human" | "agent") || undefined;
         return json({ users: await store.listUsers(type) });
       }
       if (path === "/v1/users" && method === "POST") {
         const a = await auth(req, WRITE);
         if (!a.ok) return a.res;
+        const store = a.store;
         const body = (await req.json().catch(() => null)) as { id?: string; name?: string; type?: "human" | "agent" } | null;
         if (!body?.id || !body.name) return json({ error: "id and name are required" }, 400);
         return json(await store.registerUser(body.id, body.name, body.type ?? "human", a.tenantId));
@@ -315,6 +365,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       if (userMatch && method === "DELETE") {
         const a = await auth(req, WRITE);
         if (!a.ok) return a.res;
+        const store = a.store;
         const id = decodeURIComponent(userMatch[1]!);
         const ok = await store.deleteUser(id);
         return json({ deleted: ok }, ok ? 200 : 404);
@@ -324,6 +375,7 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
       if (path === "/v1/feedback" && method === "POST") {
         const a = await auth(req, WRITE);
         if (!a.ok) return a.res;
+        const store = a.store;
         const body = (await req.json().catch(() => null)) as { message?: string; email?: string; category?: string } | null;
         if (!body?.message) return json({ error: "message is required" }, 400);
         await store.addFeedback(body.message, body.email, body.category ?? "general", VERSION, a.tenantId);
@@ -397,7 +449,7 @@ export async function startCloudServer(): Promise<void> {
   // Idempotent version baseline: every existing value becomes version 1
   // (change_kind=migration) exactly once. Runs at boot before serving; a second
   // run is a no-op (UNIQUE(key, version)).
-  const backfilled = await store.runVersionBackfill();
+  const backfilled = await backfillTenantVersions(client);
   if (backfilled > 0) console.log(`secrets-serve: version baseline backfilled ${backfilled} key(s)`);
   const verifier = createCloudVerifier(client, signingSecret);
 

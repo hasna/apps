@@ -402,6 +402,24 @@ export interface TodosConfig {
 export function getConfigPath(): string {
   return join(getTodosGlobalDir(), "config.json");
 }
+
+/**
+ * Config keys that look like a credential or an authority.
+ *
+ * 0.16.0 removed the last reader of a credential from `config.json` (the SDK's
+ * `getLocalApiConfig()`), so a key named here is written and never read — an
+ * operator migrating from 0.15.52 can be told a credential was accepted while
+ * nothing will ever consult it. `todos config --set` uses this to warn instead
+ * of reporting a silent success, and to avoid echoing the value.
+ */
+export function isCredentialShapedConfigKey(key: string): boolean {
+  const leaf = key.split(".").pop() ?? key;
+  const normalized = leaf.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  if (["apikey", "apiurl", "token", "secret", "password", "passwd", "credential", "credentials", "auth", "authorization"].includes(normalized)) {
+    return true;
+  }
+  return /(apikey|token|secret|password|credential|authorization)$/.test(normalized);
+}
 let cached: TodosConfig | null = null;
 
 export function resetConfig() {

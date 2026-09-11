@@ -4,7 +4,7 @@
 //
 // THREE THINGS THIS FILE HAS TO ESTABLISH, and they are separable:
 //
-// 1. THE STORE BEHAVES. The same 62 unmodified conformance cases the SQLite store
+// 1. THE STORE BEHAVES. The same unmodified `CONFORMANCE_CASES` the SQLite store
 //    runs, over real HTTP, against a `/v1` service backed by a real store. No case is
 //    skipped and no capability excuses one: a false capability still runs its case and
 //    still has to answer with the typed refusal.
@@ -65,8 +65,8 @@ function restoreInheritedProcessEnv(): void {
   Object.assign(process.env, INHERITED_PROCESS_ENV);
 }
 
-// Forty-eight cases, each one several HTTP round trips, run once clean plus once per
-// neutering. Well past the 5s default.
+// Every case in `CONFORMANCE_CASES` makes several HTTP round trips, and the suite runs
+// once clean plus once per neutering. Well past the 5s default.
 const SUITE_TIMEOUT_MS = 120_000;
 
 let db: Database;
@@ -1013,4 +1013,42 @@ describe("the conformance suite can fail for the HTTP store", () => {
     },
     SUITE_TIMEOUT_MS,
   );
+});
+
+describe("HttpEmailStore explicit spam/trash folder moves", () => {
+  it("PATCH is_spam / is_trash round-trip through the hosted wire and move folder counts", async () => {
+    // BUG-0028 regression at the transport boundary: the hosted PATCH body now carries
+    // is_spam/is_trash (quarantine / delete-to-trash) and the server applies them.
+    const created = await store().messages.createMessage({
+      direction: "inbound",
+      from_addr: `http-spam-${uuid()}@example.test`,
+      to_addrs: ["me@example.test"],
+      subject: "quarantine via http",
+      received_at: new Date().toISOString(),
+    });
+    if (!created.ok) throw new Error("createMessage failed");
+    const id = created.value.id;
+    const before = await store().messages.messageCounts();
+    if (!before.ok) throw new Error("messageCounts failed");
+
+    const quarantined = await store().messages.updateMessageStatus(id, { is_spam: true });
+    if (!quarantined.ok || quarantined.value === null) throw new Error("is_spam write failed");
+    expect(quarantined.value.labels).toContain("spam");
+    const read = await store().messages.getMessage(id);
+    if (!read.ok || read.value === null) throw new Error("getMessage failed");
+    expect(read.value.labels).toContain("spam");
+
+    const inSpam = await store().messages.messageCounts();
+    if (!inSpam.ok) throw new Error("messageCounts (spam) failed");
+    expect(inSpam.value.inbox).toBe(before.value.inbox - 1);
+    expect(inSpam.value.spam).toBe(before.value.spam + 1);
+
+    const restored = await store().messages.updateMessageStatus(id, { is_spam: false });
+    if (!restored.ok || restored.value === null) throw new Error("restore write failed");
+    expect(restored.value.labels).not.toContain("spam");
+    const back = await store().messages.messageCounts();
+    if (!back.ok) throw new Error("messageCounts (restored) failed");
+    expect(back.value.inbox).toBe(before.value.inbox);
+    expect(back.value.spam).toBe(before.value.spam);
+  });
 });

@@ -1545,10 +1545,33 @@ const mailboxFilterApplyPath = {
   post: {
     operationId: "applyMailboxFilter",
     summary: "Apply a saved mailbox filter",
+    description:
+      "List-only apply (read scope): no body, `{}`, or `{\"mutate\":false}` returns the matching mailbox page exactly as before. " +
+      "Mutate apply (write scope): `{\"mutate\":true}` transactionally applies the filter's actions (add_labels / archive / mark_read) " +
+      "to the COMPLETE matching set — `offset` must be 0, the filter must be `enabled:true`, and the response reports " +
+      "`matched`/`updated`/`unchanged` counts with an empty `items` list (`updated` counts messages that actually changed; " +
+      "already-satisfied actions are no-ops). Malformed JSON and non-boolean `mutate` values are refused (400 invalid_input).",
     parameters: [
       ...idParam,
       ...listParams,
     ],
+    requestBody: {
+      required: false,
+      content: {
+        "application/json": {
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              mutate: {
+                type: "boolean",
+                description: "true performs a transactional backfill applying the filter's actions; false (or absent) lists matching messages.",
+              },
+            },
+          },
+        },
+      },
+    },
     responses: {
       "200": {
         content: {
@@ -1561,12 +1584,22 @@ const mailboxFilterApplyPath = {
                 limit: { type: "integer" },
                 offset: { type: "integer" },
                 truncated: { type: "boolean" },
+                // Present only in mutate mode, where `items` is empty and the
+                // counts describe the backfilled matching set.
+                mutate: { type: "boolean", enum: [true] },
+                matched: { type: "integer", minimum: 0 },
+                updated: { type: "integer", minimum: 0 },
+                unchanged: { type: "integer", minimum: 0 },
               },
               required: ["filter", "items", "limit", "offset", "truncated"],
             },
           },
         },
       },
+      "400": errorResponse("Filter is disabled, offset must be 0, or the apply body is malformed"),
+      "401": errorResponse("Authentication required"),
+      "403": errorResponse("Mutate apply requires write scope"),
+      "404": errorResponse("Mailbox filter not found"),
     },
   },
 } as const;
@@ -3787,9 +3820,15 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                   track_clicks: {type:"boolean",description:"Observe unique message click requests using configured server tracking."},
                   tracking_url: {type:"string",format:"uri",description:"Exact tenant-approved HTTPS tracking base; requires a tracking switch."},
                   unsubscribe_url: { type: "string", format: "uri", description: "HTTP(S) unsubscribe URL emitted as List-Unsubscribe headers." },
+
                   headers: { type: "object", maxProperties: 20, additionalProperties: { type: "string", minLength: 1, maxLength: 900 }, description: "Nonreserved X-* extension headers only; printable ASCII values, no controls, authentication, transport, forwarding or tracking overrides. Total at most 8192 bytes." },
                   tags: { type: "object", maxProperties: 50, additionalProperties: { type: "string", minLength: 1, maxLength: 256, pattern: "^[A-Za-z0-9_-]+$" }, description: "Names and values contain 1–256 ASCII letters, digits, underscores or hyphens. Persisted and passed to the selected provider." },
-                  from: { type: "string" },
+
+                  from: {
+                    type: "string",
+                    description:
+                      "Sender mailbox. Either a bare address (`addr@example.com`) or the RFC 5322 display-name form (`\"Andrei Hasna\" <andrei@example.com>`). Authorization, the stored outbound record's from_addr, and idempotency all key on the bare addr-spec; the display name — unless overridden by the registered address record's display_name — is shown to recipients as the From sender.",
+                  },
                   to: { type: "array", items: { type: "string" } },
                   cc: { type: "array", items: { type: "string" } },
                   bcc: { type: "array", items: { type: "string" } },
@@ -4112,7 +4151,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
       patch: {
         operationId: "updateMessage",
         parameters: [...idParam],
-        requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: { status: { type: "string" }, provider_message_id: { type: "string", nullable: true }, is_read: { type: "boolean" }, is_starred: { type: "boolean" }, archived: { type: "boolean" }, add_label: { type: "string" }, remove_label: { type: "string" }, body_text: { type: "string", nullable: true }, body_html: { type: "string", nullable: true }, headers: { type: "object", additionalProperties: true } } } } } },
+        requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: { status: { type: "string" }, provider_message_id: { type: "string", nullable: true }, is_read: { type: "boolean" }, is_starred: { type: "boolean" }, archived: { type: "boolean", description: "Move the message into (true) or out of (false) the archived folder. Equivalent to adding or removing the reserved folder label \"archived\"." }, is_spam: { type: "boolean", description: "Move the message into (true) or out of (false) the spam folder (quarantine / un-quarantine). True adds the reserved folder label \"spam\", which is what makes the message appear under the spam folder." }, is_trash: { type: "boolean", description: "Move the message into (true) or out of (false) the trash folder (delete to trash / restore). True adds the reserved folder label \"trash\", which is what makes the message appear under the trash folder." }, add_label: { type: "string", description: "Add a label. The folder labels archived, spam and trash are RESERVED folder moves: add_label naming one of them moves the message INTO that folder (it sets the same state as archived / is_spam / is_trash), it is not stored as a plain label." }, remove_label: { type: "string", description: "Remove a label. The folder labels archived, spam and trash are RESERVED folder moves: remove_label naming one of them moves the message OUT of that folder." }, body_text: { type: "string", nullable: true }, body_html: { type: "string", nullable: true }, headers: { type: "object", additionalProperties: true } } } } } },
         responses: {
           "200": {
             content: {
@@ -4131,7 +4170,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
       put: {
         operationId: "replaceMessage",
         parameters: [...idParam],
-        requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: { status: { type: "string" }, provider_message_id: { type: "string", nullable: true }, is_read: { type: "boolean" }, is_starred: { type: "boolean" }, archived: { type: "boolean" }, add_label: { type: "string" }, remove_label: { type: "string" }, body_text: { type: "string", nullable: true }, body_html: { type: "string", nullable: true }, headers: { type: "object", additionalProperties: true } } } } } },
+        requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: { status: { type: "string" }, provider_message_id: { type: "string", nullable: true }, is_read: { type: "boolean" }, is_starred: { type: "boolean" }, archived: { type: "boolean", description: "Move the message into (true) or out of (false) the archived folder. Equivalent to adding or removing the reserved folder label \"archived\"." }, is_spam: { type: "boolean", description: "Move the message into (true) or out of (false) the spam folder (quarantine / un-quarantine). True adds the reserved folder label \"spam\", which is what makes the message appear under the spam folder." }, is_trash: { type: "boolean", description: "Move the message into (true) or out of (false) the trash folder (delete to trash / restore). True adds the reserved folder label \"trash\", which is what makes the message appear under the trash folder." }, add_label: { type: "string", description: "Add a label. The folder labels archived, spam and trash are RESERVED folder moves: add_label naming one of them moves the message INTO that folder (it sets the same state as archived / is_spam / is_trash), it is not stored as a plain label." }, remove_label: { type: "string", description: "Remove a label. The folder labels archived, spam and trash are RESERVED folder moves: remove_label naming one of them moves the message OUT of that folder." }, body_text: { type: "string", nullable: true }, body_html: { type: "string", nullable: true }, headers: { type: "object", additionalProperties: true } } } } } },
         responses: {
           "200": {
             content: {

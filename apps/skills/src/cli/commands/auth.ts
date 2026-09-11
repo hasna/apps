@@ -1,3 +1,5 @@
+import { loginWorkspace } from "./workspace-selection.js";
+import { captureProfileWorkspace } from "../../lib/workspace-profile.js";
 import { Command } from "commander";
 import chalk from "chalk";
 import { createInterface } from "readline";
@@ -451,7 +453,7 @@ export function registerAuth(parent: Command) {
     .requiredOption("--email <email>", "Account email for fresh reauthentication")
     .requiredOption("--code <code>", "Fresh OTP requested through auth signup/login")
     .action(async (options: { json: boolean; email: string; code: string }) => {
-      try { console.log(JSON.stringify(await new RemoteSkillsAuthClient(getApiUrl("List API keys")).listApiKeys(options.email, options.code), null, 2)); }
+      try { const target = await captureProfileWorkspace("List API keys"); target.unchanged(); console.log(JSON.stringify(await new RemoteSkillsAuthClient(target.origin).listApiKeys(options.email, options.code, target.context), null, 2)); }
       catch (error) { writeCommandError(error, "Failed to list API keys", options.json); }
     });
   keys.command("create").argument("<name>").option("--scope <scope>", "Limit key scope (repeatable)", (value: string, all: string[]) => [...all, value], [] as string[])
@@ -461,8 +463,9 @@ export function registerAuth(parent: Command) {
     .description("Create a key; the returned secret is shown once and must be stored securely")
     .action(async (name: string, options: { json: boolean; scope: string[]; email: string; code: string }) => {
       try {
-        const client = new RemoteSkillsAuthClient(getApiUrl("Create API key"));
-        const created = await client.createApiKey(options.email, options.code, name, options.scope.length ? options.scope : undefined);
+        const target = await captureProfileWorkspace("Create API key");
+        const client = new RemoteSkillsAuthClient(target.origin); target.unchanged();
+        const created = await client.createApiKey(options.email, options.code, name, options.scope.length ? options.scope : undefined, target.context);
         console.log(JSON.stringify(created, null, 2));
       } catch (error) { writeCommandError(error, "Failed to create API key", options.json); }
     });
@@ -470,7 +473,7 @@ export function registerAuth(parent: Command) {
     .requiredOption("--email <email>", "Account email for fresh reauthentication")
     .requiredOption("--code <code>", "Fresh OTP requested through auth signup/login")
     .action(async (id: string, options: { json: boolean; email: string; code: string }) => {
-      try { console.log(JSON.stringify(await new RemoteSkillsAuthClient(getApiUrl("Revoke API key")).revokeApiKey(options.email, options.code, id), null, 2)); }
+      try { const target = await captureProfileWorkspace("Revoke API key"); target.unchanged(); console.log(JSON.stringify(await new RemoteSkillsAuthClient(target.origin).revokeApiKey(options.email, options.code, id, target.context), null, 2)); }
       catch (error) { writeCommandError(error, "Failed to revoke API key", options.json); }
     });
 
@@ -479,13 +482,22 @@ export function registerAuth(parent: Command) {
     .description("Sign in with browser/device code or email code")
     .option("--email <email>", "Email address (non-interactive)")
     .option("--code <code>", "Verification code (non-interactive)")
+    .option("--membership-id <id>", "Enroll an exact workspace membership into an explicit HASNA_PROFILE")
+    .option("--code-stdin", "Read a fresh six-digit code for workspace enrollment from stdin")
     .option("--api-key <key>", "Verify and store an API key")
     .option("--device", "Use browser/device-code login", false)
     .option("--no-open", "Do not open a browser for device-code login")
     .option("--poll", "Poll until browser authentication completes in non-interactive mode", false)
     .option("--poll-timeout-ms <ms>", "Maximum time to wait for device-code login")
     .option("--json", "Output result as JSON", false)
-    .action(async (options: { email?: string; code?: string; apiKey?: string; device?: boolean; open?: boolean; poll?: boolean; pollTimeoutMs?: string; json?: boolean }) => {
+    .action(async (options: { membershipId?: string; codeStdin?: boolean; email?: string; code?: string; apiKey?: string; device?: boolean; open?: boolean; poll?: boolean; pollTimeoutMs?: string; json?: boolean }) => {
+      if (options.membershipId !== undefined) {
+        if (options.apiKey || options.device || options.code || options.poll) {
+          writeCommandError(new Error("Workspace login uses email and --code-stdin; do not combine it with device, API key or --code login."), "Invalid login options", options.json); return;
+        }
+        await loginWorkspace({ ...options, membershipId: options.membershipId }); return;
+      }
+      if (options.codeStdin) { writeCommandError(new Error("--code-stdin requires --membership-id for this login flow."), "Invalid login options", options.json); return; }
       if (options.apiKey) {
         await doApiKeyLogin(options.apiKey, options.json);
         return;

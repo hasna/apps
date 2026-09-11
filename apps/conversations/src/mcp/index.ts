@@ -12,8 +12,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ConversationsStoreConfigError, assertUnambiguousStoreEnv, getStore } from "../lib/store/index.js";
-import { announceConversationsLocalMode, isConversationsLocalOptIn } from "../lib/contracts-env.js";
-import { getDbPath } from "../lib/db.js";
 
 import { registerMessagingTools } from "./tools/messaging.js";
 import { registerChannelTools } from "./tools/channels.js";
@@ -60,6 +58,7 @@ async function resolveProjectId(explicitProjectId: string | undefined, agentId: 
  * changing the shape every other caller depends on.
  */
 const serverDisposers = new WeakMap<McpServer, Array<() => Promise<void>>>();
+const serverDrains = new WeakMap<McpServer, Promise<void>>();
 
 /**
  * Stop the background loops owned by a server built here, and wait until they
@@ -69,10 +68,14 @@ const serverDisposers = new WeakMap<McpServer, Array<() => Promise<void>>>();
  * build their own server and outlive it.
  */
 export async function disposeServer(srv: McpServer): Promise<void> {
+  const existing = serverDrains.get(srv);
+  if (existing) return existing;
   const disposers = serverDisposers.get(srv);
   if (!disposers) return;
   serverDisposers.delete(srv);
-  await Promise.allSettled(disposers.map((dispose) => dispose()));
+  const drain = Promise.allSettled(disposers.map((dispose) => dispose())).then(() => {});
+  serverDrains.set(srv, drain);
+  try { await drain; } finally { serverDrains.delete(srv); }
 }
 
 export function buildServer(forHttp = false): McpServer {
@@ -91,8 +94,34 @@ export function buildServer(forHttp = false): McpServer {
   registerThreadTools(srv);
 
   if (!forHttp) {
-    serverDisposers.set(srv, [registerChannelBridge(srv)]);
-    registerTelegramChannel(srv);
+    // Building/importing a tool registry must not start account reads. Register
+    // capabilities immediately before connecting, then own and drain the loops.
+    let connectionAttempted = false;
+    const connect = srv.connect.bind(srv);
+    const close = srv.close.bind(srv);
+    const onclose = srv.server.onclose;
+    srv.server.onclose = () => {
+      void disposeServer(srv);
+      onclose?.();
+    };
+    srv.connect = async (...args: Parameters<McpServer["connect"]>) => {
+      if (connectionAttempted) throw new Error("MCP stdio server instances support one transport connection; build a new server to reconnect.");
+      connectionAttempted = true;
+      try {
+        await serverDrains.get(srv);
+        if (!serverDisposers.has(srv)) {
+          const disposers: Array<() => Promise<void>> = [];
+          serverDisposers.set(srv, disposers);
+          disposers.push(registerChannelBridge(srv));
+          disposers.push(registerTelegramChannel(srv));
+        }
+        await connect(...args);
+      } catch (error) { await disposeServer(srv); throw error; }
+    };
+    srv.close = async () => {
+      const drain = disposeServer(srv);
+      try { await close(); } finally { await drain; }
+    };
   }
 
   return srv;
@@ -112,29 +141,12 @@ export const server = buildServer();
  * registered `conversations-mcp` without a credential saw a healthy server
  * and a wall of tool errors instead of one startup refusal naming the fix.
  *
- * So the store selection is decided HERE, once, before either transport is
- * connected. The decision is the shared chain's (`assertUnambiguousStoreEnv`):
- * the explicit local opt-in (`HASNA_CONVERSATIONS_DB_PATH` /
- * `CONVERSATIONS_DB_PATH`) passes and is announced on stderr once, exactly as
- * `getStore()` would announce it on the first call; anything the chain cannot
- * resolve throws {@link ConversationsStoreConfigError}, whose message names
- * every tier consulted and the opt-in — never a value. The tool-level
- * refusals stay in place behind this gate (the chain is re-read per call by
- * design, so a credential revoked mid-session still fails loud).
- *
- * Nothing is opened here: the opt-in path only reads the configured store
- * path for the notice, and the hosted path only decides. The first SQLite
- * open, if any, still happens inside the store on the first tool call.
- *
- * `env` defaults to the live `process.env` by identity, so the chain's
- * ambient tiers (Keychain, credentials file) stay live (#1788); a test that
- * hands in its own object gets a hermetic decision.
+ * Shared account configuration is checked before either transport connects.
+ * Retired database selectors and missing credentials fail without opening a
+ * database. Each tool re-resolves credentials so revocation remains effective.
  */
 export function assertMcpStoreConfigured(env: Record<string, string | undefined> = process.env): void {
   assertUnambiguousStoreEnv(env);
-  if (isConversationsLocalOptIn(env)) {
-    announceConversationsLocalMode(getDbPath(env));
-  }
 }
 
 async function connectStdio(): Promise<void> {

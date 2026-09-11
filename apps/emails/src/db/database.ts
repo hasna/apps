@@ -2088,6 +2088,9 @@ const MIGRATIONS = [
     normalized_name TEXT NOT NULL,
     mailbox TEXT NOT NULL,
     criteria_json TEXT NOT NULL DEFAULT '{}',
+    actions_json TEXT NOT NULL DEFAULT '{}',
+    enabled INTEGER NOT NULL DEFAULT 0,
+    "order" INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(tenant_id, normalized_name)
@@ -2950,6 +2953,16 @@ function ensureSchema(db: Database): void {
   )`);
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_forwarding_deliveries_rule ON forwarding_deliveries(rule_id, created_at)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_forwarding_deliveries_inbound ON forwarding_deliveries(inbound_email_id)");
+
+  // Migration 50 idempotent guarantee (FR-0001): mailbox filter ACTIONS. Fresh
+  // databases get the columns from the CREATE statement above; this upgrades
+  // existing databases whose mailbox_filters table predates the columns. Runs
+  // on every open, tolerating "duplicate column" once the column exists.
+  ensureColumn("ALTER TABLE mailbox_filters ADD COLUMN actions_json TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn("ALTER TABLE mailbox_filters ADD COLUMN enabled INTEGER NOT NULL DEFAULT 0");
+  ensureColumn('ALTER TABLE mailbox_filters ADD COLUMN "order" INTEGER NOT NULL DEFAULT 0');
+  ensureIndex(`CREATE INDEX IF NOT EXISTS idx_mailbox_filters_enabled_order
+    ON mailbox_filters (tenant_id, "order", id) WHERE enabled = 1`);
 }
 
 export function closeDatabase(): void {

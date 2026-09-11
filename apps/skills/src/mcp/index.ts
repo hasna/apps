@@ -12,8 +12,6 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import pkg from "../../package.json" with { type: "json" };
 
-import { buildServer } from "./server.js";
-import { isMcpStdioMode, parseMcpHttpPort, startSkillsMcpHttpServer } from "./http.js";
 import { isSkillsFleetCredentialError, resolveSkillsFleet } from "../lib/fleet-credentials.js";
 
 const args = process.argv.slice(2);
@@ -26,17 +24,18 @@ MCP server for ${pkg.name}
 Options:
   -V, --version  output the version number
   -h, --help     display help for command
+  --invitation-recovery --stdio  expose only anonymous invitation recovery tools
   --stdio        run newline-delimited JSON-RPC for agent hosts
   --http         run Streamable HTTP transport on 127.0.0.1 (default; port 8836)
   --port <n>     HTTP port (--http or MCP_HTTP=1)`);
 }
 
-if (args.includes("--help") || args.includes("-h")) {
+if (!args.some(value => value.startsWith("--invitation-recovery")) && (args.includes("--help") || args.includes("-h"))) {
   printHelp();
   process.exit(0);
 }
 
-if (args.includes("--version") || args.includes("-V")) {
+if (!args.some(value => value.startsWith("--invitation-recovery")) && (args.includes("--version") || args.includes("-V"))) {
   console.log(pkg.version);
   process.exit(0);
 }
@@ -77,11 +76,18 @@ export function assertSkillsMcpConfigured(env: Record<string, string | undefined
  */
 export async function startMcpStdio(): Promise<void> {
   assertSkillsMcpConfigured();
+  const { buildServer } = await import("./server.js");
   const server = buildServer();
   await server.connect(new StdioServerTransport());
 }
 
 async function main() {
+  if (args.some(value => value.startsWith("--invitation-recovery"))) {
+    try { const { startInvitationRecoveryMcp } = await import("./invitation-recovery.js"); await startInvitationRecoveryMcp(args); }
+    catch { console.error("Invitation recovery requires only --invitation-recovery --stdio and an explicit Skills API URL, without incompatible modes. No session was initialized."); process.exitCode = 1; }
+    return;
+  }
+  const { isMcpStdioMode, parseMcpHttpPort, startSkillsMcpHttpServer } = await import("./http.js");
   if (isMcpStdioMode(args)) {
     await startMcpStdio();
     return;
@@ -99,4 +105,4 @@ if (import.meta.main) {
   });
 }
 
-export { buildServer } from "./server.js";
+// Ordinary server construction remains in server.ts; recovery must not import it.

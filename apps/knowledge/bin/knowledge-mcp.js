@@ -4270,7 +4270,8 @@ var package_default = {
     serve: "bun src/serve-entry.ts",
     "verify:generated": "bun scripts/verify-generated-artifacts.mjs",
     "contracts:conformance": "contracts conformance fixtures",
-    build: "bun scripts/check-bun-version.mjs && rm -rf dist && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts ./src/sdk.ts --outdir ./dist --external @hasna/contracts --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bun run tsc -p tsconfig.build.json",
+    "typecheck:conformance": "tsc -p tsconfig.conformance.json",
+    build: "bun scripts/check-bun-version.mjs && rm -rf dist && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts ./src/sdk.ts --outdir ./dist --external @hasna/contracts --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bun run tsc -p tsconfig.build.json && bun run typecheck:conformance",
     prepublishOnly: "bun run contracts:conformance && contracts no-cloud-scan . && bun run build && node scripts/validate-public-package.mjs",
     prepack: "bun run build && bun run scan:artifact",
     "scan:artifact": 'bun pm pack --ignore-scripts --quiet --filename "$PWD/knowledge-artifact-scan.tgz" && contracts artifact-scan knowledge-artifact-scan.tgz; rc=$?; rm -f "$PWD/knowledge-artifact-scan.tgz"; exit $rc'
@@ -4802,6 +4803,17 @@ function announceLocalMode(env) {
 function knowledgeFailClosedMessage(original) {
   return `knowledge: client credential resolution failed \u2014 ${original} ` + `There is no local fallback: the on-box store is opt-in only (${KNOWLEDGE_LOCAL_OPT_IN_ENV}=1) ` + "and disabled by default \u2014 failing closed instead of serving local data.";
 }
+
+class KnowledgeSourceUnavailableError extends Error {
+  code = "source_unavailable";
+  status = "unavailable";
+  detail;
+  constructor(detail, options) {
+    super(knowledgeFailClosedMessage(detail.reason), options);
+    this.name = "KnowledgeSourceUnavailableError";
+    this.detail = detail;
+  }
+}
 function resolveKnowledgeClientTransport(env = process.env, options = {}) {
   assertNoRetiredKnowledgeStorageSelector(env);
   const keychain = options.keychain ?? knowledgeKeychainTierOptions(env);
@@ -4844,9 +4856,16 @@ function resolveKnowledgeClientTransport(env = process.env, options = {}) {
       ...base
     };
   } catch (error) {
-    throw new Error(knowledgeFailClosedMessage(error instanceof Error ? error.message : String(error)), {
-      cause: error
-    });
+    throw new KnowledgeSourceUnavailableError({
+      status: "unavailable",
+      credential_source: "none",
+      credential_file_candidates: base.credential_file_candidates,
+      credential_env_keys: Object.freeze([...KNOWLEDGE_API_KEY_ENV_KEYS]),
+      keychain_tier_enabled: base.keychain_tier_enabled,
+      local_opt_in_present: base.local_opt_in_present,
+      network_guard_active: base.network_guard_active,
+      reason: error instanceof Error ? error.message : String(error)
+    }, { cause: error });
   }
 }
 function keychainTierLive(env, options) {

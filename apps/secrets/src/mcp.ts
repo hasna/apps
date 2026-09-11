@@ -19,12 +19,8 @@ export function buildServer(): McpServer {
     version: VERSION,
   });
 
-  // Every DATA tool routes through the resolved Store (LocalStore or ApiStore).
-  // No tool touches sqlite or fetch directly. Resolution FAILS CLOSED when no
-  // credential resolves from any @hasna/contracts tier, and a local run says so
-  // once on stderr — stdout is the MCP protocol stream and stays untouched.
+  // Every data tool uses the shared authenticated API; no local selector exists.
   const resolved = getStoreWithResolution();
-  if (resolved.notice) console.error(resolved.notice);
   const store = resolved.store;
 
   server.tool(
