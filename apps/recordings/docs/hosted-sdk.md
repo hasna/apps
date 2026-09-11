@@ -73,7 +73,8 @@ tenant storage, usage admission or provider execution.
 ## Hosted Library across interfaces
 
 The additive `HostedLibrary` adapter provides read-only `list` and `get`
-operations through CLI, MCP, serve and SDK. Output includes only `id`, `title`,
+operations through CLI, MCP, serve and SDK. `HostedPasteHistory` provides a
+read-only receipt page across the same interfaces. Library output includes only `id`, `title`,
 `createdAt` and `durationMs`; `transcript` requires an explicit option. Unknown
 upstream fields are omitted. Metadata can itself be private. The upstream
 currently returns transcript text before projection, so this minimizes output
@@ -101,8 +102,8 @@ pagination. Limits are 1–100, default 25.
 recordings-mcp --hosted --stdio --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION
 ```
 
-This explicit mode exposes only `recordings_hosted_list` and
-`recordings_hosted_get`. Both are read-only and accept `includeText: true`.
+This explicit mode exposes `recordings_hosted_list`, `recordings_hosted_get` and
+`recordings_hosted_paste_history`. All are read-only and accept `includeText: true`.
 Stdio is required so the selected session cannot be shared through the legacy
 MCP HTTP listener. Legacy MCP mode is unchanged.
 
@@ -111,8 +112,9 @@ recordings-serve --hosted --api-base "$MY_RECORDINGS_API_BASE" --port 8874
 ```
 
 The read-only proxy binds to `127.0.0.1` by default; only `127.0.0.1` and `::1`
-are accepted. It supports `GET /v1/recordings` and `GET /v1/recordings/<id>`.
-List accepts `limit`, `before`, `beforeId` and `includeText=true|false`; get
+are accepted. It supports `GET /v1/recordings`, `GET /v1/recordings/<id>` and
+`GET /v1/paste-history`.
+Both list routes accept `limit`, `before`, `beforeId` and `includeText=true|false`; get
 accepts only `includeText`. Every request supplies its own
 `Authorization: Bearer <session>` header. Process credentials are never used,
 and a request cannot choose the upstream authority. Cookies, browser Origin
@@ -140,3 +142,43 @@ expose fixed codes/messages without response bodies, credentials or arbitrary
 causes. This addition does not implement sign-in, refresh, writes, microphone
 control, audio transfer or transcription; those hosted parity gates remain
 separate.
+
+### Hosted paste history
+
+```sh
+recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION paste-history --limit 25
+```
+
+`HostedPasteHistory.list()` and the matching CLI, MCP and HTTP operation return
+`{receipts, nextCursor}`. Each receipt includes `id`, nullable `recordingId`,
+`occurredAt`, optional `destinationAppId` and `destinationAppName`, `status` and
+`evidenceSource`. Status remains `attempted`, `confirmed` or `failed`; evidence
+remains `client_reported`. A confirmed client report does not mean the server
+observed delivery to the target app.
+
+Private pasted text is omitted unless `--include-text`, MCP `includeText: true`,
+or HTTP `includeText=true` is supplied. Explicit inclusion preserves an empty
+string when retained text is empty. Unknown upstream fields are omitted.
+Destination metadata can itself be private; avoid logging responses. The API
+currently returns text before projection, so omission minimizes output rather
+than providing server-side redaction.
+
+Pagination uses `occurredAt` plus the receipt ID. Supply the returned `before`
+and `beforeId` together; CLI uses `--before` and `--before-id`. Limits are 1–100,
+default 25. A full page permits another request without promising more rows.
+No offset, total, extra request, automatic pagination or retry is introduced.
+The existing selected-authority, per-request credentials, cancellation, deadline,
+redirect-refusal and fixed-error behavior is shared with Library reads.
+
+```ts
+import { HostedPasteHistory, HostedRecordingsClient } from "@hasna/recordings/sdk";
+const history = new HostedPasteHistory(new HostedRecordingsClient({
+  apiBase: configuration.completeV1Base,
+  credentialProvider: ({ apiBase, signal }) => session.accessTokenFor(apiBase, signal),
+}));
+const page = await history.list({ limit: 25 });
+```
+
+The same class and its option, receipt and page types are exported from
+`@hasna/recordings/hosted`. This read operation neither creates/deletes receipts
+nor controls an app or attempts a paste.

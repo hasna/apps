@@ -13,7 +13,9 @@ if (!info.isDirectory() || info.isSymbolicLink() || realpathSync(home) !== home 
   throw new Error("Hosted entry fixture requires an owned private HOME");
 }
 const counts = { denied: 0, requests: 0 };
-process.on("exit", () => writeFileSync(join(home, "boundary.json"), JSON.stringify(counts), { mode: 0o600 }));
+const writeBoundary = () => writeFileSync(join(home, "boundary.json"), JSON.stringify(counts), { mode: 0o600 });
+process.on("exit", writeBoundary);
+writeBoundary();
 const refuse = () => { counts.denied++; throw new Error("Hosted entry fixture blocked unrelated access"); };
 mock.module("node:child_process", () => ({ ...childProcess, spawnSync: refuse, spawn: refuse,
   exec: refuse, execSync: refuse, execFile: refuse, execFileSync: refuse, fork: refuse }));
@@ -23,8 +25,13 @@ Bun.serve = refuse as typeof Bun.serve;
 const row = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", title: "Fictional", transcript: "Hidden fictional transcript.",
   durationMs: 1000, createdAt: "2026-01-01T12:00:00Z", updatedAt: "2026-01-01T12:00:00Z" };
 globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
-  if (String(input) !== "https://fictional.example.test/api/v1/recordings?limit=1" ||
+  const url = String(input);
+  if (!["https://fictional.example.test/api/v1/recordings?limit=1", "https://fictional.example.test/api/v1/paste-history?limit=1"].includes(url) ||
       init?.method !== "GET" || new Headers(init.headers).get("authorization") !== "Bearer fictional-entry-session" ||
       init.redirect !== "manual" || init.credentials !== "omit") return refuse();
-  counts.requests++; return Response.json({ recordings: [row] });
+  counts.requests++; writeBoundary();
+  return url.includes("/paste-history?") ? Response.json({ receipts: [{ id: row.id, recordingId: row.id,
+    text: "Hidden fictional paste.", destinationAppId: "test.fictional.editor", destinationAppName: "Fictional editor",
+    status: "confirmed", occurredAt: row.createdAt, createdAt: row.createdAt, updatedAt: row.updatedAt,
+    evidenceSource: "client_reported", futurePrivateField: "Hidden future detail" }] }) : Response.json({ recordings: [row] });
 }, { preconnect: refuse }) as typeof fetch;

@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { signingFixtureCommand } from "./helpers/signing-fixture.js";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runStartupFixture, startupFixtureEnv } from "./helpers/startup-fixture.js";
@@ -11,6 +14,7 @@ async function entry(surface: "cli" | "mcp" | "server", args: string[], token = 
     const result = await runStartupFixture(home, [process.execPath, "--preload",
       join(import.meta.dir, "helpers/hosted-entry-preload.ts"), join(import.meta.dir, "../" + surface + "/index.ts"), ...args],
       startupFixtureEnv(home, token ? { SELECTED_SESSION: "fictional-entry-session" } : {}));
+    expect(existsSync(join(home, "boundary.json")), result.stderr).toBe(true);
     const counts = JSON.parse(readFileSync(join(home, "boundary.json"), "utf8"));
     expect(counts.denied).toBe(0);
     return { ...result, requests: counts.requests };
@@ -51,3 +55,41 @@ test("hosted process entry refusals stay fixed and cannot route to legacy modes"
     expect(output).not.toContain("fictional-do-not-echo");
   }
 });
+
+
+test("real CLI hosted paste-history emits reported evidence and only explicitly requested text", async () => {
+  for (const includeText of [false, true]) {
+    const result = await entry("cli", ["hosted", "--api-base", "https://fictional.example.test/api/v1/",
+      "--credential-env", "SELECTED_SESSION", "paste-history", "--limit", "1", ...(includeText ? ["--include-text"] : [])], true);
+    expect(result.exitCode).toBe(0); expect(result.requests).toBe(1); expect(result.stderr).toBe("");
+    const page = JSON.parse(result.stdout);
+    expect(page.receipts[0]).toMatchObject({ destinationAppName: "Fictional editor", status: "confirmed", evidenceSource: "client_reported" });
+    expect(Object.hasOwn(page.receipts[0], "text")).toBe(includeText);
+    if (includeText) expect(page.receipts[0].text).toBe("Hidden fictional paste.");
+    expect(result.stdout).not.toContain("Hidden future detail");
+  }
+});
+
+test("real MCP stdio entry discovers without requests then serves one hosted paste-history page", async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "recordings-hosted-entry-"))); chmodSync(home, 0o700);
+  const command = signingFixtureCommand(home, [process.execPath, "--preload", join(import.meta.dir, "helpers/hosted-entry-preload.ts"),
+    join(import.meta.dir, "../mcp/index.ts"), "--hosted", "--stdio", "--api-base", "https://fictional.example.test/api/v1/",
+    "--credential-env", "SELECTED_SESSION"]);
+  const transport = new StdioClientTransport({ command: command[0]!, args: command.slice(1), cwd: home,
+    env: startupFixtureEnv(home, { SELECTED_SESSION: "fictional-entry-session" }), stderr: "pipe" });
+  const client = new Client({ name: "fictional-paste-process", version: "1" });
+  const counts = () => JSON.parse(readFileSync(join(home, "boundary.json"), "utf8"));
+  let stderr = "";
+  try {
+    await client.connect(transport, { timeout: 3000 });
+    transport.stderr?.on("data", chunk => { stderr += String(chunk); if (stderr.length > 65536) void transport.close(); });
+    const { tools } = await client.listTools({}, { timeout: 3000 });
+    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history"]);
+    expect(counts()).toEqual({ denied: 0, requests: 0 });
+    const result = await client.callTool({ name: "recordings_hosted_paste_history", arguments: { limit: 1 } }, undefined, { timeout: 3000 });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({ receipts: [{ status: "confirmed", evidenceSource: "client_reported", destinationAppName: "Fictional editor" }] });
+    expect(JSON.stringify(result)).not.toContain("Hidden fictional paste."); expect(JSON.stringify(result)).not.toContain("Hidden future detail");
+    expect(counts()).toEqual({ denied: 0, requests: 1 }); expect(stderr).toBe("");
+  } finally { await client.close(); await transport.close(); rmSync(home, { recursive: true, force: true }); }
+}, 15000);
