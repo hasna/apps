@@ -1,17 +1,20 @@
 import { proxyProviderStream } from "./provider-stream";
+import { createProviderRequest, type ProviderRequestTiming } from "./provider-request";
 import { isContextOverflow } from "./provider-error";
+import { normalizeCodexDelegation } from "./codex-delegation";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { authHeader } from "./auth";
 import { endpoint, Fault, modelExpired } from "./domain";
+import { reasoningEffortSchema, type ReasoningEffort } from "./reasoning";
 import type { HarnessLaunchInput } from "./harness-types";
 import { injectModelGuidance, renderModelGuidance, resolvePolicyModel, type CompiledModelPolicy } from "./model-policy";
 
-export type RoutingEvent = {at:string;requestId:string;requestedModel:string;resolvedModel?:string;reportedModel?:string;decision:"allow"|"alias"|"reject"|"fallback";reason?:string;upstreamStatus?:number};
+export type RoutingEvent = {at:string;requestId:string;requestedModel:string;resolvedModel?:string;reportedModel?:string;reasoningEffort?:ReasoningEffort;decision:"allow"|"alias"|"reject"|"fallback";reason?:string;upstreamStatus?:number};
 type GatewayInput = HarnessLaunchInput & {compiledPolicy:CompiledModelPolicy;catalogPath:string;onRoutingEvent?:(event:RoutingEvent)=>void};
 const routingFields = ["models", "fallbacks", "model_list", "deployment_id", "deployment", "router", "route", "extra_body", "plugins"];
 
 /** A per-launch credential boundary: the native client never receives the provider key. */
-export function createInferenceGateway(input: GatewayInput) {
+export function createInferenceGateway(input: GatewayInput, timing: ProviderRequestTiming = {}) {
   const token=crypto.randomUUID()+crypto.randomUUID();
   const digest=(value:string)=>createHash("sha256").update(value).digest();
   const expected=digest(token), policy=input.compiledPolicy;
@@ -20,7 +23,7 @@ export function createInferenceGateway(input: GatewayInput) {
   const fail=(status:number,code:string)=>Response.json({error:{type:"switcher_model_policy",code,message:code==="model_not_allowed"?"This model is outside the launch policy. Select it with switcher launch --model or explicitly assign an allowed role model.":`Switcher inference gateway: ${code}.`}},{status});
   let closing=false,stopped:Promise<void>|undefined;
   const active=new Set<{abort:AbortController;done:Promise<void>;cancel?:()=>Promise<void>}>();
-  const server=Bun.serve({hostname:"127.0.0.1",port:0,maxRequestBodySize:4*1024*1024,idleTimeout:255,async fetch(request) {
+  const server=Bun.serve({hostname:"127.0.0.1",port:0,maxRequestBodySize:4*1024*1024,idleTimeout:255,async fetch(request, server) {
     if(closing)return fail(503,"closing");
     const credential=request.headers.get("x-goog-api-key")??request.headers.get("x-api-key")??request.headers.get("authorization")?.replace(/^Bearer /,"")??"";
     if(!timingSafeEqual(expected,digest(credential)))return fail(401,"unauthorized");
@@ -41,6 +44,8 @@ export function createInferenceGateway(input: GatewayInput) {
     if(gemini)try{requested=decodeURIComponent(match![1]);}catch{return fail(400,"invalid_model_path");}
     const requestId=crypto.randomUUID();
     const event:RoutingEvent={at:new Date().toISOString(),requestId,requestedModel:safeModel(requested),decision:"reject"};
+    const effort=reasoningEffortSchema.safeParse(body.reasoning?.effort);
+    if(effort.success)event.reasoningEffort=effort.data;
     const emit=()=>input.onRoutingEvent?.(event);
     let resolved:string;
     try {
@@ -56,8 +61,10 @@ export function createInferenceGateway(input: GatewayInput) {
     const flush=()=>{if(!emitted.has(current)){emitted.add(current);input.onRoutingEvent?.({...current});}};
     const abort=new AbortController();let complete!:()=>void;
     const record:{abort:AbortController;done:Promise<void>;cancel?:()=>Promise<void>}={abort,done:new Promise<void>(r=>complete=r)};
-    const release=()=>{flush();active.delete(record);complete();};active.add(record);
-    const signal=AbortSignal.any([request.signal,abort.signal,AbortSignal.timeout(240000)]);
+    const activity=createProviderRequest(request.signal,abort.signal,timing);
+    const release=()=>{activity.finish();flush();active.delete(record);complete();};active.add(record);
+    const signal=activity.fetchOptions.signal;
+    server.timeout(request,0); // Authenticated inference is bounded by upstream activity.
     const headers:Record<string,string>={"content-type":"application/json"};
     if(input.credential){const [name,value]=gemini?["x-goog-api-key",input.credential]:authHeader(input.authStyle??"bearer",input.credential);headers[name]=value;}
     if(input.protocol==="anthropic-messages") {headers["anthropic-version"]=request.headers.get("anthropic-version")??"2023-06-01";if(request.headers.has("anthropic-beta"))headers["anthropic-beta"]=request.headers.get("anthropic-beta")!;}
@@ -68,17 +75,18 @@ export function createInferenceGateway(input: GatewayInput) {
         if(signal.aborted)throw new Error("aborted");
         const model=candidates[attempt];
         if(input.models.some(entry=>entry.id===model&&modelExpired(entry)))throw new Fault(422,"model_expired","Selected model has expired.");
-        if(attempt){flush();current={at:new Date().toISOString(),requestId,requestedModel:safeModel(requested),resolvedModel:model,decision:"fallback",reason:"explicit_transient_fallback"};}
+        if(attempt){flush();current={at:new Date().toISOString(),requestId,requestedModel:safeModel(requested),resolvedModel:model,decision:"fallback",reason:"explicit_transient_fallback",...(effort.success?{reasoningEffort:effort.data}:{})};}
         const payload=structuredClone(body);
         if(gemini) {if(payload.model!==undefined)payload.model=`models/${model}`;if(payload.generateContentRequest?.model!==undefined)payload.generateContentRequest.model=`models/${model}`;}
         else payload.model=model;
         const guidance=renderModelGuidance({harness:input.harness,providerId:input.providerId,baseUrl:input.baseUrl,model,compiled:policy,catalogPath:input.catalogPath});
-        const outgoing=injectModelGuidance(input.protocol,payload,guidance,match?.[2]);
+        const compatible=input.harness==="codex"&&input.protocol==="openai-responses"&&new URL(input.baseUrl).hostname!=="api.openai.com"?normalizeCodexDelegation(payload):payload;
+        const outgoing=injectModelGuidance(input.protocol,compatible,guidance,match?.[2]);
         const path=gemini?`/models/${encodeURIComponent(model)}:${match![2]}${url.search}`:suffix+(betaQuery?"?beta=true":"");
-        try {response=await fetch(endpoint(input.baseUrl)+path,{method:"POST",headers,body:JSON.stringify(outgoing),redirect:"manual",signal});}
-        catch {current.reason=signal.aborted?"request_cancelled":"network_error";if(!signal.aborted&&attempt+1<candidates.length)continue;throw new Error("provider_request_failed");}
+        try {response=await activity.run(()=>fetch(endpoint(input.baseUrl)+path,{method:"POST",headers,body:JSON.stringify(outgoing),redirect:"manual",...activity.fetchOptions}));}
+        catch {current.reason=activity.timedOut()?"provider_idle_timeout":signal.aborted?"request_cancelled":"network_error";if(!signal.aborted&&attempt+1<candidates.length)continue;throw new Error("provider_request_failed");}
         current.upstreamStatus=response.status;
-        if((response.status===429||response.status>=500)&&attempt+1<candidates.length){await response.body?.cancel();response=undefined;continue;}
+        if((response.status===429||response.status>=500)&&attempt+1<candidates.length){void response.body?.cancel().catch(() => undefined);response=undefined;continue;}
         break;
       }
       if(!response)throw new Error("provider_request_failed");
@@ -100,10 +108,10 @@ export function createInferenceGateway(input: GatewayInput) {
         else if(buffer.length>131072)buffer="";
         if(done&&buffer)observe(buffer);
       };
-      const {stream,cancel}=proxyProviderStream({response,protocol:input.protocol,requestSignal:request.signal,abort,closing:()=>closing,release,inspect,interrupted:()=>{current.reason="stream_interrupted";}});
+      const {stream,cancel}=proxyProviderStream({response,protocol:input.protocol,requestSignal:request.signal,abort,closing:()=>closing,release,activity,inspect,interrupted:reason=>{current.reason=reason;}});
       record.cancel=cancel;
       return new Response(stream,{status:response.status,headers:{"content-type":response.headers.get("content-type")??"application/json","cache-control":"no-store"}});
-    }catch(error) {if(error instanceof Fault)current.reason=error.code;release();return fail(error instanceof Fault?error.status:502,error instanceof Fault?error.code:"provider_request_failed");}
+    }catch(error) {if(error instanceof Fault)current.reason=error.code;else if(activity.timedOut())current.reason="provider_idle_timeout";release();return fail(error instanceof Fault?error.status:activity.timedOut()?504:502,error instanceof Fault?error.code:activity.timedOut()?"provider_idle_timeout":"provider_request_failed");}
   }});
   return {baseUrl:new URL(input.protocol==="gemini-generate-content"?"v1beta":"v1",server.url).href,token,cleanup:()=>stopped??=(async()=>{closing=true;const pending=[...active];for(const request of pending)request.abort.abort();await Promise.allSettled(pending.map(async request=>{await request.cancel?.();await request.done;}));await server.stop(true);})()};
 }

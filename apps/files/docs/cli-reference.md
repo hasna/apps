@@ -248,10 +248,13 @@ Supported files config keys are `auto_watch`, `hash_skip_bytes`,
 ## Other Shipped Executables
 
 ```txt
-files-mcp [--http] [--port <number>]
+files-mcp [--stdio|--http] [--port <number>]
 files-serve [--port <number>]
 files-migrate [--check|--dry-run]
 ```
+
+Each of them answers `--version` and `--help` before touching a credential, a
+database, or a port.
 
 See [MCP](mcp.md) and [service and SDK](service-and-sdk.md) for their complete
 runtime contracts.

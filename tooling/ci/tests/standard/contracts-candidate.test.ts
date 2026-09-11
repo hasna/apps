@@ -21,7 +21,16 @@ test("the in-tree release candidate validates real manifests before registry pub
   } finally {rmSync(fixture, {recursive: true, force: true});}
 }, 30_000);
 
-test("older pins, ranges and latest cannot silently use the in-tree validator", () => {
-  for (const requested of ["0.11.1", `^${manifest.version}`, "latest"])
-    expect(conformanceCommand(requested)).toEqual({executable: "bunx", args: ["--bun", `@hasna/contracts@${requested}`]});
+test("every requested version resolves to the IN-TREE validator run by this bun — never a registry install through PATH (2026-09-11)", () => {
+  // Until 2026-09-11 an older pin, a range or `latest` selected
+  // `bunx --bun @hasna/contracts@<requested>`: a per-member registry install
+  // through whichever bun was first on PATH (homebrew 1.4.0 on the stations,
+  // not the pinned 1.3.14), with `--force --no-cache`, unserialised across
+  // concurrent suite runs. The producer validates with the kit it ships.
+  for (const requested of ["0.11.1", `^${manifest.version}`, "latest", manifest.version]) {
+    const command = conformanceCommand(requested);
+    expect(command.executable).toBe(process.execPath);
+    expect(command.args).toEqual([join(APPS_DIR, "contracts", "src/cli/index.ts")]);
+    expect(command.executable).not.toBe("bunx");
+  }
 });

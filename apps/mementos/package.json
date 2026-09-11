@@ -77,7 +77,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/mementos.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/mementos"
   },
   "homepage": "https://github.com/hasna/mementos",
   "bugs": {

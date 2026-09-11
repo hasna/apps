@@ -194,8 +194,8 @@ export function registerExtendedCommands(program: Command): void {
       const store = getStore()
       const checks: Array<{ ok: boolean; msg: string }> = []
 
-      // Agent log directories and the Cursor token are inputs to LOCAL ingestion
-      // only; in cloud mode this client never ingests, so these checks do not apply.
+      // Agent log directories and the Cursor token are inputs to ON-BOX ingestion
+      // only; in hosted mode this client never ingests, so these checks do not apply.
       if (!cloud) {
         const paths: Array<[string, string]> = [
           ['claude', agentPaths().claudeProjects],
@@ -214,8 +214,8 @@ export function registerExtendedCommands(program: Command): void {
 
       // The storage check announces the resolved `/v1` authority when the
       // configured URL is the api.hasna.com gateway form, so the line
-      // identifies the app behind the shared gateway (issue #1588). Legacy and
-      // self-hosted origins keep the message above, unchanged.
+      // identifies the app behind the shared gateway (issue #1588). Custom
+      // origins keep the message above, unchanged.
       if (cloud) {
         const gatewayRoot = gatewayApiV1Root(process.env.HASNA_ECONOMY_API_URL ?? process.env.ECONOMY_API_URL)
         if (gatewayRoot) checks.push({ ok: true, msg: `api: ${gatewayRoot}` })
@@ -228,8 +228,8 @@ export function registerExtendedCommands(program: Command): void {
       }
 
       // Zero-cost tokenized-request detection and dedupe are LOCAL-DB maintenance
-      // operations; the cloud serve owns dedup + pricing for its dataset, so run
-      // them only against the local SQLite in local mode.
+      // operations; the hosted serve owns dedup + pricing for its dataset, so run
+      // them only against the local SQLite when that is the resolved transport.
       if (!cloud) {
         const db = openDatabase()
         ensurePricingSeeded(db)
@@ -317,7 +317,7 @@ export function registerExtendedCommands(program: Command): void {
       console.log('  6. OTel sidecar:    economy-otel --port 4318')
       console.log('  7. Linux status:    economy tui --watch  |  economy waybar')
       console.log()
-      console.log('  Self-hosted/cloud mode (shared cloud API — reads/writes route to it):')
+      console.log('  Hosted API mode (shared economy API — reads/writes route to it):')
       console.log('  a. API URL:         export HASNA_ECONOMY_API_URL=https://your-economy-host.example.com/v1')
       console.log('  b. API key:         export HASNA_ECONOMY_API_KEY=<bearer key>   (never a DB DSN)')
       console.log()

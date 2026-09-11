@@ -149,23 +149,25 @@ chmod 600 ~/.hasna/todos/config/credentials
 ```
 
 **Hosted mode fails closed.** With no credential the CLI exits non-zero
-(`REMOTE_API_CONFIG_MISSING`) and names the tiers it consulted. The MCP server
-stays up so a client can read the refusal, and each call fails instead of serving
-local rows — the credential-gated tools with the typed
-`REMOTE_API_CONFIG_MISSING` and the on-box tools with the typed
-`API_DATABASE_FALLBACK_FORBIDDEN`, both described under
+(`REMOTE_API_CONFIG_MISSING`) and names the tiers it consulted; the stdio MCP
+server exits the same way before answering `initialize`. Once a hosted
+authority resolves, each call fails instead of serving local rows — the
+credential-gated tools with the typed `REMOTE_API_CONFIG_MISSING` and the
+on-box tools with the typed `REMOTE_COMMAND_UNSUPPORTED` (or
+`API_DATABASE_FALLBACK_FORBIDDEN` on surfaces without a startup refusal), both
+described under
 [Upgrading From 0.15.52](#upgrading-from-01552). Neither surface falls back to
 the local SQLite store, because serving local rows while authentication is broken
 prints healthy output for a broken system.
 
-The `./sdk` surface answers "nothing is configured" differently *on purpose*,
-and only for that one case: `new TodosClient()` targets the on-box
-`todos-serve` at `http://localhost:19427` and prints the local-mode line, since
-that client speaks the same `/api/*` plane a workstation serve exposes and local
-is a real mode for it. `createTodosV1Client()` is hosted-only and throws
-(`TODOS_CREDENTIAL_MISSING`). Every *other* refusal is a throw on all three
-surfaces — aliases that disagree, an unreadable credential file, a URL with no
-key — because those are misconfigurations, not an absence of configuration.
+The `./sdk` surface fails closed the same way: with nothing resolved,
+`new TodosClient()` and `createTodosV1Client()` both throw
+`TODOS_CREDENTIAL_MISSING` naming every tier they consulted. `TodosClient` can
+speak to the on-box `todos-serve` at `http://localhost:19427` — that is a real
+mode for it — but only under the explicit opt-in below, never as a fallback.
+Every other refusal is a throw on all three surfaces too — aliases that
+disagree, an unreadable credential file, a URL with no key — because those are
+misconfigurations, not an absence of configuration.
 
 A **declared-but-blank** authority variable is deliberately *not* one of those
 refusals. At the Todos seam a blank has always meant "unset" — helpers in the
@@ -177,6 +179,14 @@ from a wrapper, set `HASNA_TODOS_LOCAL=1` — a blank authority variable counts 
 absent for the opt-in too, so the opt-in is still honoured when
 `HASNA_TODOS_API_KEY` is present but empty — instead of blanking a credential
 variable.
+
+On the hosted route the MCP server never opens the local store either: the
+tools and `todos://` resources that only exist for the on-box SQLite file
+(dispatch, templates, handoffs, boards, runs, `todos://projects`, …) answer
+`REMOTE_COMMAND_UNSUPPORTED` naming the opt-in, instead of reading an empty
+local file and reporting it as the fleet. Machine and task tools are
+shared-API routed on that route and refuse under their own `REMOTE_API_*`
+code when the authority cannot serve them.
 
 **Local mode is deliberate, and it says so.** `@hasna/todos` is usable entirely
 offline against an on-box SQLite store — set `HASNA_TODOS_LOCAL=1` (alias
@@ -475,8 +485,10 @@ todos extract-watch . --dry-run --max-runs 1 --json
 ```
 
 Created tasks are tagged with `extracted` and linked back to the source file.
-MCP clients can call `extract_todos` and `watch_source_todos` for the same
-offline workflow; no hosted code search, hosted sync, or telemetry is used.
+The source index is CLI-only: the former `extract_todos` / `watch_source_todos`
+MCP tools were removed (a filesystem watcher is not an MCP tool call, and the
+scan runs against the local checkout, not the hosted fleet). No hosted code
+search, hosted sync, or telemetry is used.
 
 ## Local Editor Integrations
 
@@ -1703,14 +1715,17 @@ todos-mcp
 
 ## HTTP mode
 
-Shared Streamable HTTP transport for long-lived local MCP (stdio remains the default). MCP is mounted on the existing `todos-serve` HTTP server — no second server:
+The Streamable HTTP transport is served by `todos-serve`, never by `todos-mcp`
+(stdio only). `todos-mcp --http`, `todos-mcp --port <n>` and `MCP_HTTP=1` are
+refused with exit code 2 — the listener and its auth posture are server-only
+code and do not ship in a client binary that MCP clients spawn without a
+credential. Start the server instead:
 
 ```bash
-todos-mcp --http              # starts todos-serve with MCP mounted; or MCP_HTTP=1
-todos-mcp --port 8881         # explicit HTTP port (default MCP HTTP port is 8881)
+todos-serve                   # mounts POST /mcp next to /api/*; see "REST API" for the auth gate
 ```
 
-- Bind: `127.0.0.1` only
+- Bind: `127.0.0.1` by default
 - Health: `GET /health` → `{"status":"ok","name":"todos"}`
 - MCP: `POST /mcp` on the same server as the REST API (Streamable HTTP, stateless)
 
@@ -1749,9 +1764,10 @@ todos serve --allow-anonymous           # local dev only; refused for a non-loop
 `--allow-anonymous` (or `TODOS_ALLOW_ANONYMOUS=1`) is refused for any non-loopback
 bind host, and even when enabled it only serves requests whose transport peer is
 itself loopback — so it can never publish an anonymous task read/write plane
-off-box. `todos-mcp --http` sets it implicitly because that transport is pinned to
-`127.0.0.1`; set `HASNA_TODOS_SERVER_API_KEY` (and send it from your MCP client)
-to require a credential there too.
+off-box. (`todos-mcp --http` used to set it implicitly; that path is gone — the MCP
+bin is stdio-only and `todos-serve` is the only process that serves `/mcp`.) Set
+`HASNA_TODOS_SERVER_API_KEY` (and send it from your MCP client) to require a
+credential there too.
 
 Pass the generated key from your app as `x-api-key` or `Authorization: Bearer`.
 

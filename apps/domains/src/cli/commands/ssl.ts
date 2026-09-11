@@ -8,7 +8,7 @@ export function registerSslCommand(program: Command): void {
 
   ssl
     .command("check <domain>")
-    .description("Check SSL certificate for a domain and update the local DB record")
+    .description("Check SSL certificate for a domain and update the portfolio record")
     .option("--json", "Output JSON")
     .action(async (domain: string, opts: { json?: boolean }) => {
       try {

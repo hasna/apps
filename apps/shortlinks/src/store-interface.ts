@@ -12,7 +12,7 @@
 //
 // `resolveStore()` (./client-store.ts) picks the transport from the client env:
 // `HASNA_SHORTLINKS_API_URL` + `HASNA_SHORTLINKS_API_KEY` select the hosted API;
-// otherwise it FAILS CLOSED unless local mode was explicitly opted into
+// otherwise it FAILS CLOSED unless the local backend was explicitly opted into
 // (SHORTLINKS_LOCAL=1 or --db). Callers NEVER branch on the transport
 // themselves and NEVER touch sqlite or fetch directly — that split-brain path
 // is the bug this abstraction eliminates.

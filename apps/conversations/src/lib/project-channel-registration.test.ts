@@ -16,7 +16,7 @@ import {
   type ProjectChannelRegistrationRequest,
   validateProjectChannelRegistrationLookup,
 } from "./project-channel-registration.js";
-import { LocalStore } from "./store/index.js";
+import { LocalStore } from "./store/local-store.js";
 import { sendMessage } from "./messages.js";
 import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
 

@@ -1883,16 +1883,32 @@ function printHelp(): void {
 Runs the open-files MCP server (stdio by default).
 
 Options:
-  --http            Serve MCP over Streamable HTTP (127.0.0.1)
+  --stdio           Serve MCP over stdio (the default; env: MCP_STDIO=1)
+  --http            Serve MCP over Streamable HTTP on 127.0.0.1 (env: MCP_HTTP=1)
   --port <number>   HTTP port (default: ${DEFAULT_MCP_HTTP_PORT}, env: MCP_HTTP_PORT)
+  -V, --version     Print the package version
   -h, --help        Show this help text`);
 }
 
-async function main(): Promise<void> {
-  if (process.argv.includes("-h") || process.argv.includes("--help")) {
-    printHelp();
-    return;
+/**
+ * `--version` / `--help` are informational: answered from argv alone, BEFORE
+ * the credential gate and before any transport connects or any port binds.
+ * (The published 0.4.0 ignored `--version` and bound Streamable HTTP.)
+ */
+function answerInformationalFlags(argv: readonly string[] = process.argv.slice(2)): boolean {
+  if (argv.includes("-V") || argv.includes("--version")) {
+    console.log(pkg.version);
+    return true;
   }
+  if (argv.includes("-h") || argv.includes("--help")) {
+    printHelp();
+    return true;
+  }
+  return false;
+}
+
+async function main(): Promise<void> {
+  if (answerInformationalFlags()) return;
 
   // Transport gate (fail closed): refuse to serve without a credential the
   // @hasna/contracts chain can resolve (the Keychain item
@@ -1909,21 +1925,23 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } = await import("./http.js");
+  const { resolveMcpHttpPort, selectsMcpHttpTransport, startMcpHttpServer } = await import("./http.js");
 
-  if (isStdioMode()) {
-    const server = buildServer();
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
+  if (selectsMcpHttpTransport()) {
+    // Opt-in (`--http` / MCP_HTTP=1): shared Streamable HTTP server (one
+    // process per MCP, many agents).
+    const handle = await startMcpHttpServer(buildServer, {
+      port: resolveMcpHttpPort(),
+    });
+    process.on("SIGINT", () => void handle.close().finally(() => process.exit(0)));
+    process.on("SIGTERM", () => void handle.close().finally(() => process.exit(0)));
     return;
   }
 
-  // Default: shared Streamable HTTP server (one process per MCP, many agents).
-  const handle = await startMcpHttpServer(buildServer, {
-    port: resolveMcpHttpPort(),
-  });
-  process.on("SIGINT", () => void handle.close().finally(() => process.exit(0)));
-  process.on("SIGTERM", () => void handle.close().finally(() => process.exit(0)));
+  // Default: stdio — the fleet convention, and what --help documents.
+  const server = buildServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
 }
 
 if (import.meta.main) {

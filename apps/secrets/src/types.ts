@@ -106,7 +106,7 @@ export interface SetSecretOptions {
   reason?: string;
   /** Explicit change kind; defaults to `set` (or `initial` for a new key). */
   changeKind?: VersionChangeKind;
-  /** Groups a bulk operation (e.g. import-env --push) for audit. */
+  /** Groups a bulk operation (e.g. `import <json-file>`) for audit. */
   batchId?: string;
 }
 

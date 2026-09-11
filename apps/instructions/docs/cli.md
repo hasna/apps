@@ -345,16 +345,21 @@ a nonzero exit code for CI.
 ```text
 instructions mcp install|add [--claude] [--codex] [--antigravity] [--all]
   [--profile <minimal|standard|full>]
-instructions mcp uninstall|remove [--claude] [--all]
+instructions mcp uninstall|remove [--claude] [--codex] [--antigravity] [--all]
 ```
 
 Install defaults to the `standard` MCP profile and writes/registers a server
 named `configs`. The current installer writes no `--stdio` argument even though
 the MCP binary now defaults to HTTP; for a stdio client, add `--stdio` to the
-registered server arguments or register the command manually. Current
-uninstall behavior removes only the Claude
-registration, including when `--all` is supplied; Codex and Antigravity entries
-must be removed from their config files separately.
+registered server arguments or register the command manually. Uninstall is the
+per-agent inverse of install: `--codex` strips the `[mcp_servers.configs]`
+table from `~/.codex/config.toml` (creating nothing when the file is absent),
+addressing the table by its header *line*, so a commented-out or quoted mention
+of that header is not an install and leaves the file byte-identical,
+`--antigravity` removes the `mcpServers.configs` entry from
+`~/.gemini/config/mcp_config.json`, `--claude` removes the `configs` server via
+`claude mcp remove`, and `--all` covers all three. Deeper configs are left
+intact: uninstall removes only the `configs` entries.
 
 The `instructions-mcp`/`configs-mcp` binary has its own transport flags:
 
@@ -372,8 +377,13 @@ exits. See [MCP reference](mcp.md).
 - `init [--force]` syncs known configs, seeds managed reference configs,
   creates `my-setup`, and ensures platform profiles. `--force` wipes the local
   SQLite DB and is refused in API mode.
-- `status [--json]` reports the metadata-only status contract, including drift,
-  missing targets, unredacted findings, retired-agent rows, and counts.
+- `status [--json] [--deep]` reports the metadata-only status contract,
+  including drift, missing targets, unredacted findings, retired-agent rows,
+  and counts. `counts.profileLinks` and `counts.snapshots` need one API read
+  per profile and per config, so against a hosted store they are reported as
+  `null` unless `--deep` is passed; the on-box SQLite store always counts them
+  (measured 2026-09-11 on a 258-config hosted store: default 2.2 s, `--deep`
+  ~35 s, and the old always-deep behaviour took over two minutes).
 - `whoami` prints active storage and a compact category/profile summary.
 - `doctor` checks known paths, JSON syntax, and stored secret findings.
 - `report [--json] [--markdown]` prints an ecosystem summary. Both format flags

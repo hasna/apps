@@ -9,8 +9,15 @@ import { openCliRuntime } from "./runtime";
 import { providerFromPreset, type PresetOptions } from "./presets";
 import { resolveLaunchProvider, selectModel, ensureLaunchProfile } from "./direct-launch";
 import { CredentialResolver, bindingTarget, credentialReference, credentialBindingSchema, deliverVaultCredential, repairVaultExecutablePermissions } from "./credentials";
-const HELP = `switcher — launch a coding harness with a provider and its model catalog
+import { detectChatGPTApp, detectClaudeDesktopApp } from "./desktop-apps";
+import { reasoningEffortSchema, codexReasoning } from "./reasoning";
+const HELP = `switcher — launch coding harnesses and desktop apps with your provider and model
 
+  switcher launch chatgpt --provider PROVIDER --model MODEL [--reasoning EFFORT]
+    [--dangerously-bypass-approvals-and-sandbox] [--app-path /absolute/ChatGPT.app]
+                         [--dry-run] [--cwd DIR] [--timeout SECONDS]
+  switcher launch claude-desktop --provider PROVIDER --model MODEL
+                         [--app-path /absolute/Claude.app] [--dry-run]
   switcher providers presets [ID]
   switcher providers list [--search TEXT] [--limit N] [--offset N]
   switcher providers add ID --url URL --protocol PROTOCOL [--credential-env NAME]
@@ -42,12 +49,22 @@ const HELP = `switcher — launch a coding harness with a provider and its model
   switcher doctor
 
 HARNESS: claude, codex, grok, opencode, opencode2, pi, omp, dsh, cline, hermes, prime-agent, gemini, aider, kilo
+chatgpt launches the installed macOS desktop app in an isolated provider profile.
+Its local Codex conversations use the selected Responses-compatible provider.
+claude-desktop launches Claude in its separate Claude-3p gateway profile with a
+Messages-compatible provider. Quit that instance before switching providers.
+Keep Switcher running while using the app; quit that app instance to end the launch.
+--reasoning: none, minimal, low, medium, high, xhigh, max, ultra (provider support required).
+--dangerously-bypass-approvals-and-sandbox: full access without prompts or command sandboxing.
 PROTOCOL: anthropic-messages, openai-responses, openai-chat, gemini-generate-content
-Without remote API configuration, the CLI owns a local authenticated API and
-stores data in ~/.hasna/switcher (override HASNA_SWITCHER_HOME).
-Remote API URL/key resolve through @hasna/contracts: overrides, Keychain,
-~/.hasna/switcher/config/credentials, then environment. A key alone uses the gateway.
-A configured remote API never falls back to local data.
+Data access is HTTP against the configured Switcher API. Its URL/key resolve
+through @hasna/contracts: overrides, Keychain (hasna.credentials.switcher.api-key),
+~/.hasna/switcher/config/credentials, then environment (HASNA_SWITCHER_API_KEY).
+A key alone uses the gateway. With nothing configured the command exits 1 and
+names those sources; it never falls back to local data.
+HASNA_SWITCHER_LOCAL=1 (alias SWITCHER_LOCAL=1) deliberately selects the on-box
+store in ~/.hasna/switcher (override HASNA_SWITCHER_HOME) behind an owned
+per-command loopback API; a configured remote API outranks the flag.
 Provider credential references must start SWITCHER_PROVIDER_.
 --models-file accepts a JSON array of model metadata; --model adds one starter.
 Use --catalog-format none for a manual catalog; otherwise discovery stays active.
@@ -88,6 +105,7 @@ export async function main(args = process.argv.slice(2)) {
   const split = args.indexOf("--"); const nativeArgs = split >= 0 ? args.slice(split+1) : [];
   const {values,positionals} = parseArgs({args:split>=0?args.slice(0,split):args,allowPositionals:true,options:{
     help:{type:"boolean"},version:{type:"string"},json:{type:"boolean"},url:{type:"string"},sha256:{type:"string"},
+    "app-path":{type:"string"},reasoning:{type:"string"},"dangerously-bypass-approvals-and-sandbox":{type:"boolean"},
     protocol:{type:"string"},preset:{type:"string"},name:{type:"string"},file:{type:"string"},"models-file":{type:"string"},
     "credential-env":{type:"string"},"auth-style":{type:"string"},
     "catalog-url":{type:"string"},"catalog-format":{type:"string"},"catalog-auth-style":{type:"string"},
@@ -101,6 +119,18 @@ export async function main(args = process.argv.slice(2)) {
   if (values.help || !positionals.length) { console.log(HELP); return; }
   const [command,action,id] = positionals;
   const output = (value: unknown) => console.log(JSON.stringify(value,null,2));
+  const reasoning=values.reasoning===undefined?undefined:parse(reasoningEffortSchema,values.reasoning);
+  const dangerouslyBypassApprovalsAndSandbox=values["dangerously-bypass-approvals-and-sandbox"];
+  if((reasoning||dangerouslyBypassApprovalsAndSandbox)&&(command!=="launch"||(values.provider&&!["chatgpt","codex"].includes(action))||(values.backend&&values.backend!=="direct")))
+    throw new Fault(400,"conflicting_options","--reasoning and --dangerously-bypass-approvals-and-sandbox require a direct Codex or ChatGPT launch.");
+  const chatgpt = command === "launch" && action === "chatgpt" && values.provider !== undefined;
+  const claudeDesktop = command === "launch" && action === "claude-desktop" && values.provider !== undefined;
+  if (values["app-path"] !== undefined && !chatgpt && !claudeDesktop)
+    throw new Fault(400,"conflicting_options","--app-path belongs to launch chatgpt or claude-desktop --provider PROVIDER --model MODEL.");
+  if ((chatgpt || claudeDesktop) && (nativeArgs.length || positionals.length !== 2 || values.executable !== undefined || values.backend !== undefined || values["ori-executable"] !== undefined))
+    throw new Fault(400,"conflicting_options","Desktop apps use their own runtime; native CLI arguments, --executable and --backend are not accepted.");
+  const desktop = chatgpt ? await detectChatGPTApp(values["app-path"]) : undefined;
+  const claudeApp = claudeDesktop ? await detectClaudeDesktopApp(values["app-path"]) : undefined;
   if (!["doctor", "launch", "models", "runs", "providers", "profiles", "credentials"].includes(command))
     throw new Error("Unknown command. Run switcher --help.");
   const providerFlags = ["url", "protocol", "preset", "credential-env", "auth-style", "catalog-url", "catalog-format", "catalog-auth-style", "catalog-credential-env", "catalog-account-id", "models-path"] as const;
@@ -190,7 +220,7 @@ export async function main(args = process.argv.slice(2)) {
   if (command === "launch" && provided(["name", "harness", "file"]))
     throw new Fault(400, "conflicting_options", "Launch takes its harness from the positional argument or saved profile; edit named records through providers/profiles.");
   if (command === "launch" && values.provider) {
-    const harness=parse(harnessSchema,action);assertHarnessArguments(harness,nativeArgs);
+    const harness=parse(harnessSchema,chatgpt ? "codex" : claudeDesktop ? "claude" : action);assertHarnessArguments(harness,nativeArgs);
     await validateHarnessConfiguration(harness,values.cwd??process.cwd(),nativeArgs);
   }
   const runtime = await openCliRuntime(process.env,provider=>credentials.resolve(provider));
@@ -218,7 +248,7 @@ export async function main(args = process.argv.slice(2)) {
     if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) throw new Error("--timeout must be positive seconds.");
     let profileId = action;
     if (values.provider) {
-      const harness = parse(harnessSchema, action);
+      const harness = parse(harnessSchema, chatgpt ? "codex" : claudeDesktop ? "claude" : action);
       const modelPolicy = await readModelPolicy(values["model-policy-file"], values["role-model"]);
       const provider = await resolveLaunchProvider(client, values.provider, {...presetOptions(), harness});
       validateHarnessProvider(harness, provider);
@@ -228,6 +258,7 @@ export async function main(args = process.argv.slice(2)) {
       if (!selected) throw new Fault(422, "model_missing", "Selected model is not in the provider catalog.");
       if (modelExpired(selected)) throw new Fault(422,"model_expired","Selected model has passed its configured expiry date. Select an unexpired model.");
       if (!harnessEligible(selected,harness)) throw new Fault(422, "model_ineligible", "Selected model explicitly lacks text output or tool support.");
+      if(harness==="codex")codexReasoning(selected,provider.baseUrl,reasoning);
       profileId = (await ensureLaunchProfile(client, provider, harness, model, modelPolicy)).id;
     } else {
       if (values.model || values.protocol || values.url || values["credential-env"] || values["model-policy-file"] || values["role-model"])
@@ -240,14 +271,16 @@ export async function main(args = process.argv.slice(2)) {
     }
     if (values["dry-run"]) {
       const plan = await client.launchPlan(profileId);
+      if((reasoning||dangerouslyBypassApprovalsAndSandbox)&&plan.profile.harness!=="codex")throw new Fault(400,"conflicting_options","Reasoning and full-access options require Codex or ChatGPT.");
+      if(reasoning){const model=plan.catalog.models.find(model=>model.id===plan.profile.model);if(model)codexReasoning(model,plan.provider.baseUrl,reasoning);}
       assertHarnessArguments(plan.profile.harness,nativeArgs);
       if (backend === "ori") {
         const {contract,warnings} = await validateOriForPlan(plan, {oriExecutable: values["ori-executable"], args: nativeArgs, cwd: values.cwd});
         output({...plan, backend: {kind: "ori", executable: contract.executable, version: contract.version, target: plan.profile.harness, provider: "openrouter", model: plan.profile.model, warnings: [...plan.warnings,...warnings]}});
-      } else output(plan);
+      } else output({...plan,...(desktop?{desktop:{...desktop,mode:"isolated-provider",sessionProfile:profileId}}:{}),...(claudeApp?{desktop:{...claudeApp,mode:"claude-3p-gateway",sessionProfile:profileId}}:{}),...(reasoning?{reasoning}:{}),...(dangerouslyBypassApprovalsAndSandbox?{permissions:{approvalPolicy:"never",sandboxMode:"danger-full-access"}}:{})});
       return;
     }
-    process.exitCode = await launch(client, profileId, {backend: backend as LaunchBackend, oriExecutable: values["ori-executable"], cwd: values.cwd, executable: values.executable, stateDir: values["state-dir"], args: nativeArgs, timeoutMs, refresh: false, resolveCredential: provider=>credentials.resolve(provider)});
+    process.exitCode = await launch(client, profileId, {desktop, claudeDesktop:claudeApp, reasoning,dangerouslyBypassApprovalsAndSandbox,backend: backend as LaunchBackend, oriExecutable: values["ori-executable"], cwd: values.cwd, executable: values.executable, stateDir: values["state-dir"], args: nativeArgs, timeoutMs, refresh: false, resolveCredential: provider=>credentials.resolve(provider)});
     return;
   }
   if (editingModel) {

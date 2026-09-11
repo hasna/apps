@@ -37,7 +37,7 @@ export { boundedReadPage, normalizeBoundedReadOptions } from "./lib/bounded-read
 
 // Machine + slug helpers (pure)
 export { currentHostname, currentOs, currentArch } from "./db/machines.js";
-export { uuid, now, slugify } from "./db/database.js";
+export { uuid, now, slugify } from "./lib/ids.js";
 
 // Status contract
 export { getConfigsStatus } from "./status.js";

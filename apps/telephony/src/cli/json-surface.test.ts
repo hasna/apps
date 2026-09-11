@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hermeticChildEnv } from "../../tests/support/hermetic-store-env.js";
@@ -165,6 +165,50 @@ describe("telephony data commands accept --json (#1602)", () => {
       expect(existsSync(join(home, ".hasna", "telephony", "telephony.db"))).toBe(true);
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("the canonical station credentials file alone selects the hosted transport (no env sourced)", async () => {
+    // The station contract: ~/.hasna/telephony/config/credentials (0600) with
+    // HASNA_TELEPHONY_API_URL + HASNA_TELEPHONY_API_KEY lines is a COMPLETE
+    // hosted configuration. A login shell with no telephony variable sourced
+    // (no fleet.env, no HASNA_TELEPHONY_* in env) must resolve it and route
+    // store commands over HTTP — never fail closed, never fall to SQLite.
+    // The file's URL points at a loopback server so the probe is hermetic.
+    const paths: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        paths.push(new URL(req.url).pathname);
+        return Response.json({ items: [] });
+      },
+    });
+    try {
+      const home = scratchHome();
+      try {
+        const dir = join(home, ".hasna", "telephony", "config");
+        mkdirSync(dir, { recursive: true, mode: 0o700 });
+        const file = join(dir, "credentials");
+        writeFileSync(
+          file,
+          `HASNA_TELEPHONY_API_URL=http://127.0.0.1:${(server as unknown as { port: number }).port}\nHASNA_TELEPHONY_API_KEY=test-only-key\n`,
+          { mode: 0o600 },
+        );
+        chmodSync(file, 0o600);
+
+        const result = await runEntry(CLI_ENTRY, ["sms", "list"], home);
+        expect(result.timedOut).toBe(false);
+        expect(result.code).toBe(0);
+        // Hosted transport hit the API — no fail-closed error, no local banner.
+        expect(result.stderr).not.toContain("LOCAL mode");
+        expect(result.stderr).not.toContain("fails closed");
+        expect(() => JSON.parse(result.stdout)).not.toThrow();
+        expect(paths.some((p) => p.includes("/v1/messages"))).toBe(true);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    } finally {
+      server.stop(true);
     }
   });
 });

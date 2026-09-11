@@ -1,4 +1,5 @@
 import { proxyProviderStream } from "./provider-stream";
+import { createProviderRequest, type ProviderRequestTiming } from "./provider-request";
 import {compileHermesModelPolicy} from "./hermes-model-policy";
 import { authHeader } from "./auth";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -28,7 +29,7 @@ const apiMode: Record<HermesProtocol, string> = hermesApiMode;
  * Hermes' custom provider client uses Bearer locally; this bridge translates
  * that local credential into the provider's declared upstream header style.
  */
-export function createHermesBridge(input: Pick<HarnessLaunchInput, "baseUrl" | "protocol" | "authStyle" | "model" | "models" | "credential">) {
+export function createHermesBridge(input: Pick<HarnessLaunchInput, "baseUrl" | "protocol" | "authStyle" | "model" | "models" | "credential">, timing: ProviderRequestTiming = {}) {
   const protocol = input.protocol as HermesProtocol;
   const token = crypto.randomUUID() + crypto.randomUUID();
   const modelIds = new Set(input.models.map(model => model.id));
@@ -42,7 +43,7 @@ export function createHermesBridge(input: Pick<HarnessLaunchInput, "baseUrl" | "
     port: 0,
     maxRequestBodySize: 4 * 1024 * 1024,
     idleTimeout: 255,
-    async fetch(request) {
+    async fetch(request, server) {
       if (closing) return Response.json({ error: { message: "Hermes bridge is closing" } }, { status: 503 });
       // Hermes' Anthropic client sends `x-api-key`; its OpenAI-compatible
       // clients send Bearer. Accept only the header belonging to the selected
@@ -87,7 +88,8 @@ export function createHermesBridge(input: Pick<HarnessLaunchInput, "baseUrl" | "
         abort: abortController,
         done: new Promise<void>(resolve => { complete = resolve; }),
       };
-      const release = () => { active.delete(record); complete(); };
+      const activity = createProviderRequest(request.signal, abortController.signal, timing);
+      const release = () => { activity.finish(); active.delete(record); complete(); };
       active.add(record);
       record.cancel = async () => {
         abortController.abort();
@@ -105,21 +107,22 @@ export function createHermesBridge(input: Pick<HarnessLaunchInput, "baseUrl" | "
         if (beta) headers["anthropic-beta"] = beta;
       }
 
+      server.timeout(request, 0);
       try {
-        const upstream = await fetch(`${input.baseUrl}${routePath[protocol].replace(/^\/v1/, "")}`, {
+        const upstream = await activity.run(() => fetch(`${input.baseUrl}${routePath[protocol].replace(/^\/v1/, "")}`, {
           method: "POST",
           headers,
           body: JSON.stringify(body),
           redirect: "manual",
-          signal: AbortSignal.any([abortController.signal, request.signal, AbortSignal.timeout(240_000)]),
-        });
+          ...activity.fetchOptions,
+        }));
         if (!upstream.ok) {
-          await upstream.body?.cancel();
+          void upstream.body?.cancel().catch(() => undefined);
           release();
           return Response.json({ error: { message: `Provider returned HTTP ${upstream.status}` } }, { status: upstream.status });
         }
         if (!upstream.body) { release(); return new Response(null, { status: upstream.status }); }
-        const {stream, cancel} = proxyProviderStream({response: upstream, protocol: input.protocol, requestSignal: request.signal, abort: abortController, closing: () => closing, release});
+        const {stream, cancel} = proxyProviderStream({response: upstream, protocol: input.protocol, requestSignal: request.signal, abort: abortController, closing: () => closing, release, activity});
         record.cancel = cancel;
         return new Response(stream, {
           status: upstream.status,
@@ -130,7 +133,7 @@ export function createHermesBridge(input: Pick<HarnessLaunchInput, "baseUrl" | "
         });
       } catch {
         release();
-        return Response.json({ error: { message: "Provider request failed" } }, { status: 502 });
+        return Response.json({ error: { message: activity.timedOut() ? "Provider request timed out waiting for activity" : "Provider request failed" } }, { status: activity.timedOut() ? 504 : 502 });
       }
     },
   });

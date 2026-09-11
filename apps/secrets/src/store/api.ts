@@ -229,7 +229,7 @@ export class ApiStore implements Store {
   /**
    * Fetch full entries for a list of metadata rows, best-effort. A single secret
    * that the server cannot return (e.g. a value that fails server-side decryption
-   * → 500) must not abort a bulk read like `export-env` or `list --values`. Such
+   * → 500) must not abort a bulk read like `export` or `list --values`. Such
    * rows are skipped with a value-free warning; 404s (deleted between calls) are
    * dropped silently. Single-key `getSecret` stays strict.
    */

@@ -1,10 +1,11 @@
 import { z } from "zod";
+import { reasoningEffortSchema } from "./reasoning";
 import { modelPolicySchema, routingEventsSchema, type ModelPolicy, type RoutingEvent } from "./model-policy-schema";
 export { modelPolicySchema, routingEventSchema, routingEventsSchema } from "./model-policy-schema";
 export type { ModelPolicy, RoutingEvent } from "./model-policy-schema";
 export type { AuthStyle } from "./auth";
 
-export const VERSION = "0.1.8";
+export const VERSION = "0.1.9";
 export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode", "opencode2", "pi", "omp", "dsh", "cline", "hermes", "prime-agent", "gemini", "aider", "kilo"]);
 export const protocolSchema = z.enum(["anthropic-messages", "openai-responses", "openai-chat", "gemini-generate-content"]);
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
@@ -33,6 +34,7 @@ export const modelSchema = z.object({
   inputModalities: z.array(z.string().max(50)).max(20).optional(),
   outputModalities: z.array(z.string().max(50)).max(20).optional(),
   supportedParameters: z.array(z.string().max(100)).max(100).optional(),
+  reasoningEfforts: z.array(reasoningEffortSchema).max(8).optional(),
   supportedGenerationMethods: z.array(z.string().min(1).max(100)).max(100).optional(),
 }).strict();
 export const providerInputSchema = z.object({

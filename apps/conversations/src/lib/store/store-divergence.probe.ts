@@ -12,7 +12,8 @@
 //
 // Prints one JSON line to stdout. Exits non-zero when store resolution refuses.
 
-import { getStore, LocalStore } from "./index.js";
+import {getStore } from "./index.js";
+import { LocalStore } from "./local-store.js";
 import { resolveConversationsCloud } from "./index.js";
 import { createChannel } from "../channels.js";
 

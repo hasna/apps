@@ -21,7 +21,10 @@
 // appends `/v1`). Retired locations (~/.hasna/fleet-env, ~/.hasna/cloud,
 // ~/.config/hasna, $XDG_CONFIG_HOME) are never read, and no `*_MODE` /
 // `*_STORAGE_MODE` variable selects anything: the transport is decided by URL
-// + key alone.
+// + key alone. Stale storage-mode variables (e.g. a wrapper still exporting
+// HASNA_ECONOMY_STORAGE_MODE=cloud) are ignored outright — they gate no
+// command, error no command, and never re-route a store (owner directive
+// 2026-08-15).
 //
 // FAIL-CLOSED DEFAULT (owner directive 2026-09-04). A run WITHOUT a credential
 // and WITHOUT the explicit local opt-in is a HARD ERROR naming every tier that
@@ -60,28 +63,6 @@ export const ECONOMY_APP = "economy";
  * (`--api-key` / `--profile` and the injectable `security` runner tests use).
  */
 export type EconomyStorageClientOverrides = Parameters<typeof createClientTransport>[2];
-
-/** Retired client storage-mode variables — naming one in an error is the guard. */
-const RETIRED_STORAGE_MODE_KEYS = [
-  "HASNA_ECONOMY_STORAGE_MODE",
-  "HASNA_ECONOMY_MODE",
-  "ECONOMY_STORAGE_MODE",
-  "ECONOMY_MODE",
-] as const;
-
-function assertNoRetiredStorageMode(env: NodeJS.ProcessEnv): void {
-  const legacyKey = RETIRED_STORAGE_MODE_KEYS.find(
-    (key) => Object.hasOwn(env, key) && env[key] !== undefined,
-  );
-  if (!legacyKey) return;
-  throw new Error(
-    `${legacyKey} was removed. Deployment modes no longer exist: delete the storage-mode variable. ` +
-      `The client routes through the HTTP API resolved by @hasna/contracts ` +
-      `(HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY, the Keychain, or ` +
-      `~/.hasna/economy/config/credentials), or serves the local SQLite store only when ` +
-      `HASNA_ECONOMY_LOCAL=1 is set.`,
-  );
-}
 
 export type EconomyCloudStorage =
   | {
@@ -331,7 +312,6 @@ export function resolveEconomyCloudStorage(
   env: NodeJS.ProcessEnv = process.env,
   overrides?: EconomyStorageClientOverrides,
 ): EconomyCloudStorage {
-  assertNoRetiredStorageMode(env);
   const clientEnv = env as Record<string, string | undefined>;
 
   // The local lane is checked first ONLY to answer "is this an unhosted run?" —
@@ -480,7 +460,6 @@ export function economyTransportReport(
   overrides?: EconomyStorageClientOverrides,
 ): EconomyTransportReport {
   const clientEnv = env as Record<string, string | undefined>;
-  assertNoRetiredStorageMode(env);
 
   if (localStorageExplicitlyOptedIn(env) && !hasEconomyEnvAuthorityIntent(clientEnv)) {
     return {

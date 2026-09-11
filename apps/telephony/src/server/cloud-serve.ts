@@ -1306,7 +1306,7 @@ export function telephonyOpenApi(version: string): Record<string, unknown> {
   };
   return {
     openapi: "3.0.3",
-    info: { title: "Telephony", version, description: "@hasna/telephony self-hosted HTTP API" },
+    info: { title: "Telephony", version, description: "@hasna/telephony HTTP API" },
     components: {
       securitySchemes: { apiKey: { type: "apiKey", in: "header", name: "x-api-key" } },
       schemas: {

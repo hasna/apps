@@ -31,7 +31,7 @@ program
 // ── Auto-sync helper ──────────────────────────────────────────────────────────
 
 async function autoSync(opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; dedupe?: boolean } = {}): Promise<void> {
-  // self_hosted/cloud (API) mode: the reads that follow already come straight
+  // Hosted (API) mode: the reads that follow already come straight
   // from the shared API's GET routes, so there is no local store to flush
   // before answering. The /v1/ingest push belongs to the explicit `economy
   // sync` verb only; running it from a read-only verb both walks every on-box
@@ -298,9 +298,9 @@ program
   .option('--backfill-machine', 'Tag existing records that have no machine_id with current hostname')
   .option('--recalculate', 'Recalculate costs for all requests with cost_usd = 0')
   .action(async (opts: { claude?: boolean; takumi?: boolean; codex?: boolean; gemini?: boolean; opencode?: boolean; cursor?: boolean; pi?: boolean; hermes?: boolean; loops?: boolean; verbose?: boolean; force?: boolean; backfillMachine?: boolean; recalculate?: boolean }) => {
-    // self_hosted/cloud mode: the on-box provider files exist on THIS machine,
+    // Hosted (API) mode: the on-box provider files exist on THIS machine,
     // so the client reads them and pushes the ingested rows to the shared API
-    // (/v1/ingest) instead of a local SQLite the cloud transport never reads.
+    // (/v1/ingest) instead of a local SQLite the hosted transport never reads.
     if (isCloudStore()) {
       const cloud = economyCloudStorage()
       if (!cloud.active) {
@@ -1419,9 +1419,9 @@ billingCmd
   .action(async (opts: { days?: string; anthropic?: boolean; openai?: boolean; gemini?: boolean }) => {
     const days = parsePositiveCliInteger(opts.days ?? '31', '--days')
     if (days > 366) fail('--days must be between 1 and 366')
-    // self_hosted/cloud mode: the provider credentials live on this machine, so
+    // Hosted (API) mode: the provider credentials live on this machine, so
     // the client fetches the billing and pushes the rows to the shared API
-    // (/v1/ingest) instead of a local SQLite the cloud transport never reads.
+    // (/v1/ingest) instead of a local SQLite the hosted transport never reads.
     if (isCloudStore()) {
       const cloud = economyCloudStorage()
       if (!cloud.active) {
@@ -1511,15 +1511,15 @@ registerFleetCommands(program)
 registerEventsCommands(program, { source: 'economy' })
 
 // Render any command failure as a single clean line + exit 1 — never leak a raw
-// bundle stack trace. Cloud (self_hosted) API failures surface as HasnaHttpError;
-// a 404 there means the server is missing the endpoint (stale deploy) rather than
-// a client bug, so we say so instead of dumping the transport internals.
+// bundle stack trace. Hosted API failures surface as HasnaHttpError; a 404 there
+// means the server is missing the endpoint (stale deploy) rather than a client
+// bug, so we say so instead of dumping the transport internals.
 function reportCliError(err: unknown): never {
   if (err instanceof HasnaHttpError) {
     if (err.status === 404) {
       fail(
         `economy: the cloud API has no endpoint for this command (${err.method} ${err.path} -> 404). ` +
-          `The self-hosted server is likely running an older build — it needs an ECS redeploy of the current version.`,
+          `The economy API server is likely running an older build — it needs a redeploy of the current version.`,
       )
     }
     if (err.status === 401 || err.status === 403) {

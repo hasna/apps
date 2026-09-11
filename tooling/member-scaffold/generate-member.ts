@@ -6,9 +6,12 @@
  *
  *   - four surfaces: `<name>` CLI bin, `<name>-mcp` bin, `<name>-serve` bin,
  *     `./sdk` export (repo law 4 in AGENTS.md);
- *   - hasna.contract.json at contracts kit 0.11.1 (schema
- *     hasna.service_contract.v1) with api/mcp/cli/sdk serviceSurfaces and a
- *     sqlite-only storage block;
+ *   - hasna.contract.json at contracts kit 1.0.2 (schema
+ *     hasna.service_contract.v1), class `service`, with api/mcp/cli/sdk
+ *     serviceSurfaces on `api-key` auth and a PostgreSQL-only storage block —
+ *     never `storage.backend: sqlite`, a `sqlitePath` or a `local-only`
+ *     surface (fleet-alignment rulings d/f, 2026-09-11: a new member is born
+ *     hosted and fail-closed; a local store is an explicit, later decision);
  *   - self-contained tsconfig.json mirroring the repo-root
  *     tsconfig.base.json options, so the generated member builds standalone
  *     (its Dockerfile build sees only package.json + tsconfig.json + src);
@@ -28,6 +31,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertChangesetFrontmatter } from "./changeset.js";
 
 const NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SCAFFOLD_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -96,16 +100,19 @@ writeTree(target);
 // new package (version-without-changeset is a hard gate in test:versioning).
 const changesetDir = path.join(repoRoot, ".changeset");
 if (fs.existsSync(changesetDir)) {
-  const changeset = `"@hasna/${name}": minor
+  const changesetFile = `${name}-bootstrap.md`;
+  const changeset = `---
+"@hasna/${name}": minor
 ---
 
 Bootstrap @hasna/${name} as a new hasna/apps member (generated from tooling/member-scaffold):
 
 - Four surfaces: \`${name}\` CLI bin, \`${name}-mcp\` bin, \`${name}-serve\` bin, \`./sdk\` export.
-- hasna.contract.json at contracts kit 0.11.1 (schema hasna.service_contract.v1).
+- hasna.contract.json at contracts kit 1.0.2 (schema hasna.service_contract.v1): class service, api-key surfaces, PostgreSQL-only storage.
 - tsconfig extending tsconfig.base.json; contract:check + verify gates wired.
 `;
-  fs.writeFileSync(path.join(changesetDir, `${name}-bootstrap.md`), changeset);
+  assertChangesetFrontmatter(changeset, changesetFile);
+  fs.writeFileSync(path.join(changesetDir, changesetFile), changeset);
 }
 
 console.log(`generated ${path.relative(repoRoot, target)}`);

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import type { Message } from "../types.js";
-import { getDataDir } from "./db.js";
+import { getConversationsHome } from "./home.js";
 import dns from "dns";
 import net from "net";
 
@@ -34,7 +34,7 @@ export function _setWebhookDnsLookupForTest(lookup: DnsLookup | null): void {
 }
 
 function getConfigPath(): string {
-  return process.env.CONVERSATIONS_CONFIG_PATH || join(getDataDir(), "config.json");
+  return process.env.CONVERSATIONS_CONFIG_PATH || join(getConversationsHome(), "config.json");
 }
 
 function loadConfig(): ConversationsConfig {

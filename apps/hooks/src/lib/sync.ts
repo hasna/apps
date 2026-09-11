@@ -12,7 +12,7 @@ import { readFileSync } from "fs";
 import { HOOKS } from "./registry.js";
 import { resolveHooksTransport } from "./transport.js";
 import type { HooksCredentialOptions } from "./resolver-types.js";
-import { getDb } from "../db/index.js";
+import { getDb, isLocalStoreRefused } from "../db/index.js";
 import {
   type LockEntry,
   readLock,
@@ -310,7 +310,9 @@ export async function commitSyncArtifacts(
   apiUrl: string,
   remoteLock: RemoteLock,
 ): Promise<void> {
-  const db = getDb();
+  // Hosted route (hasna/apps#1720): the on-box store is refused, so the lock
+  // written in phase B is the whole pin store and phase C is skipped.
+  const db = isLocalStoreRefused() ? null : getDb();
 
   // Phase A — files first, verified before any pin moves.
   for (const item of staged) {
@@ -337,7 +339,8 @@ export async function commitSyncArtifacts(
   }
   writeLock(lock);
 
-  // Phase C — DB records in one transaction.
+  // Phase C — DB records in one transaction (local store only).
+  if (!db) return;
   db.exec("BEGIN");
   try {
     for (const item of staged) {
@@ -365,7 +368,8 @@ export interface PinnedHookInstall {
   sha256: string;
   source: string;
   source_ref: string;
-  artifact: ArtifactResponse;
+  /** The registry artifact for remote pins; null for bundled-registry pins. */
+  artifact: ArtifactResponse | null;
   scriptPath: string;
 }
 
@@ -445,19 +449,22 @@ export async function fetchPinnedHook(
       `sha256 mismatch after write for '${name}@${version}': expected ${expectedSha}, on disk ${actual}`,
     );
   }
-  const db = getDb();
   // P2-9: an exact-pin install/update marks the lock entry as an EXPLICIT
   // pin, so a later sync preserves an older pinned version instead of
   // silently bumping it to the latest.
   setPinnedHook(name, { version, sha256: expectedSha, source: entry.source ?? "remote", pinned: true });
-  upsertHookRecord(db, {
-    name,
-    version,
-    sha256: expectedSha,
-    source_type: entry.source ?? "remote",
-    source_ref: apiUrl,
-    last_verified_at: new Date().toISOString(),
-  });
+  // The hooks-table row mirrors the lock pin and exists only in local mode;
+  // on the hosted route the store is refused and the lock is authoritative.
+  if (!isLocalStoreRefused()) {
+    upsertHookRecord(getDb(), {
+      name,
+      version,
+      sha256: expectedSha,
+      source_type: entry.source ?? "remote",
+      source_ref: apiUrl,
+      last_verified_at: new Date().toISOString(),
+    });
+  }
   return {
     name,
     version,
@@ -465,6 +472,55 @@ export async function fetchPinnedHook(
     source: entry.source ?? "remote",
     source_ref: apiUrl,
     artifact,
+    scriptPath,
+  };
+}
+
+/**
+ * Pin an exact hook version from the BUNDLED registry (the on-box catalog).
+ * Powers `hooks install <name>@<version>` / `hooks update <name>@<version>`
+ * under the explicit local opt-in (HASNA_HOOKS_LOCAL=1) — the only route on
+ * which `resolveHooksTransport` returns `mode: "local"`; with nothing
+ * configured the CLI gate has already failed closed, and on the hosted route
+ * the remote registry answers the pin. The exact version named must be the
+ * bundled one, and the script stays at its bundled path — the pin (lock + DB
+ * record) is the trust anchor, exactly as local `hooks sync` pins the catalog.
+ * Carried from hasna/apps#1888 (its good half).
+ *
+ * A name or version the bundled registry does not carry is a DATA error with
+ * the available version named — the same shape as a remote pin miss.
+ */
+export async function installPinnedFromBundled(name: string, version: string): Promise<PinnedHookInstall> {
+  const bundled = collectBundledCatalog().find((entry) => entry.name === name);
+  if (!bundled) {
+    throw new Error(`Hook '${name}' is not in the bundled registry`);
+  }
+  if (bundled.version !== version) {
+    throw new Error(
+      `Hook '${name}' version ${version} is not in the bundled registry (available: ${bundled.version})`,
+    );
+  }
+  const scriptPath = resolveScriptPath(name);
+  if (!scriptPath) {
+    throw new Error(`Hook '${name}' has no script in the bundled registry`);
+  }
+  const db = getDb();
+  setPinnedHook(name, { version, sha256: bundled.sha256, source: "bundled", pinned: true });
+  upsertHookRecord(db, {
+    name,
+    version,
+    sha256: bundled.sha256,
+    source_type: "bundled",
+    source_ref: "bundled registry",
+    last_verified_at: new Date().toISOString(),
+  });
+  return {
+    name,
+    version,
+    sha256: bundled.sha256,
+    source: "bundled",
+    source_ref: "bundled registry",
+    artifact: null,
     scriptPath,
   };
 }

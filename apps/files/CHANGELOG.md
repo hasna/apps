@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.4.1
+
+### Patch Changes
+
+- 9f8653f: Resolver validation fixes, round 3 (hasna/apps#1720, station03 release verification of 0.4.0): every declared bin now answers `--version` / `-V` and `--help` / `-h` from argv alone, before the credential gate and before any port is probed or bound. `files-mcp --version` on 0.4.0 ignored the flag and bound Streamable HTTP on 127.0.0.1, because the code served HTTP unless `--stdio` was passed while `--help` and the README promised stdio by default — stdio is now the default (the fleet convention), Streamable HTTP is the opt-in (`--http` / `MCP_HTTP=1`, with an explicit `--stdio` always winning), and the help text lists `--stdio` and `--version`. `files-serve --version` no longer probes and binds 127.0.0.1:19432 first, and `files-migrate --version` no longer exits 1 on a missing `HASNA_FILES_DATABASE_URL`. The fail-closed startup gate is unchanged: with no credential the MCP server still exits non-zero before the stdio transport connects or the HTTP port binds, never answers `initialize`, the first stderr line names where the credential should live (the Keychain item, the credentials-file path, `HASNA_FILES_API_KEY`), and nothing is created under the app home. The spawned startup tests now pin `HASNA_STATION` to a sentinel account so they stay hermetic on a Mac whose login keychain holds `hasna.credentials.files.api-key`.
+- 6aa3917: `createFilesClientFromEnv` refuses loudly when a caller pins an explicit
+  `baseUrl` without an explicit `apiKey` (hasna/apps#1720, adversarial
+  credential-seam audit). Before, that combination silently built an
+  UNAUTHENTICATED `FilesClient` pointed at the named authority: the ambient
+  fleet key was correctly never attached, but the caller was left with a client
+  that looks like a fleet client and sends no credential at all. The factory
+  now throws `FILES_CREDENTIAL_PINNED` BEFORE any resolver tier is read and
+  before any request can go out, naming the expected env sources
+  (`HASNA_FILES_API_URL` / `HASNA_FILES_API_KEY`) and never carrying a key
+  value.
+
+  CONSUMER-VISIBLE BEHAVIOR CHANGE for the public `@hasna/files/sdk`: a call
+  that previously returned an (unauthenticated) client now throws. A blank key
+  is not a pin — `apiKey: ""` or a whitespace-only value, the shape a
+  set-but-blank `.env` variable takes, refuses exactly like a missing key, so
+  the unauthenticated path is closed rather than merely narrowed. For a pinned
+  authority the key may be supplied either as the top-level `apiKey` or as
+  `credentials: { apiKey }` — the same tier-1 shapes the sibling
+  `@hasna/secrets` SDK accepts — so a caller who pins the key in either slot is
+  not falsely refused. WITHOUT an explicit `baseUrl` both slots behave exactly
+  as they did before this release: the top-level `apiKey` is the client-option
+  pin, and `credentials.apiKey` stays a resolver tier-1 input that resolves the
+  authority and the credential together (never a bare pin the constructor would
+  reject). The explicit `baseUrl` + explicit `apiKey` pin and the from-env chain
+  path keep working unchanged; the regression suite pins all of these shapes.
+
+- 06f2b86: Switch @hasna/files local path reads/writes through the in-package resolver (XDG/macOS home layout). The legacy `~/.hasna/files` data root (with the `HASNA_FILES_DATA_DIR` / `FILES_DATA_DIR` and `HASNA_FILES_HOME` / `FILES_HOME` exact-app overrides) stays the effective data root until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The SQLite store (`files.db`), `config.json`, the Google Drive connector token store, the ops-loop snapshot root, and the postinstall data-dir provisioning all resolve through the effective data root, and the one-time `~/.files` auto-migration now targets the effective root. The wave-wide resolver dependency (`@hasna/paths@0.1.0`) was deleted 2026-09-03 (hasna/apps#1535); the resolver is now implemented locally in-package.
+- 73a98fa: Record the strong reason for the organization local-transport guard (local-only-capability-removal workflow 2026-08-18): organization reviews operate on Google-Drive-imported metadata that only exists on-box; the hosted server has no schema, routes, or producer for that data plane. Gate comments now carry the dated evidence chain, and a behavior-lock test asserts the api-mode refusal fires with the documented reason. No runtime behavior change.
+
 ## 0.4.0
 
 ### Minor Changes
