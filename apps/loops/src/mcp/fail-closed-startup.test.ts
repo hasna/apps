@@ -159,7 +159,7 @@ describe("loops-mcp without a connection fails closed at startup, in every mode"
     expect(firstLine).toContain(KEYCHAIN_ITEM);
     expect(firstLine).toContain(join(result.tempHome, "loops", "config", "credentials"));
     expect(firstLine).toContain("HASNA_LOOPS_API_KEY");
-    expect(firstLine).toContain("HASNA_LOOPS_CONNECTION=file");
+    expect(firstLine).toContain("HASNA_LOOPS_LOCAL=1");
   }, 20_000);
 
   test("--http --port 0 exits non-zero without binding a port", async () => {
@@ -278,17 +278,18 @@ describe("loops-mcp controls: a configured connection still serves", () => {
     expect(readdirSync(result.tempHome)).toEqual([]);
   }, 20_000);
 
-  test("the explicit HASNA_LOOPS_CONNECTION=file opt-in serves over stdio and announces local mode once on stderr", async () => {
+  test("the explicit HASNA_LOOPS_LOCAL=1 opt-in serves over stdio and announces local mode once on stderr", async () => {
     const result = await runMcp({
       args: ["--stdio"],
-      overrides: { HASNA_LOOPS_CONNECTION: "file" },
+      overrides: { HASNA_LOOPS_LOCAL: "1" },
       stdinText: INITIALIZE,
     });
     expect(result.timedOut).toBe(false);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('"result"');
     expect(result.stderr).not.toContain(REFUSAL_MARKER);
-    expect(result.stderr.match(/loops: local mode/g)?.length ?? 0).toBe(1);
-    expect(result.stderr).toContain("HASNA_LOOPS_CONNECTION=file");
+    expect(result.stderr.match(/loops: LOCAL mode/g)?.length ?? 0).toBe(1);
+    expect(result.stderr).toContain("HASNA_LOOPS_LOCAL");
+    expect(result.stderr).toContain("hasna.credentials.loops.api-key");
   }, 20_000);
 });

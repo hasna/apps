@@ -65,9 +65,9 @@ function cliSpawnOptions(
     HASNA_LOOPS_API_KEY: "",
     // Blanked so a developer's own connection selection never leaks into a
     // spawn. Local tests get the explicit file opt-in back below; tests that
-    // exercise the fail-closed path pass HASNA_LOOPS_CONNECTION explicitly
+    // exercise the fail-closed path pass HASNA_LOOPS_LOCAL explicitly
     // (e.g. "") so the opt-in is not re-added.
-    HASNA_LOOPS_CONNECTION: "",
+    HASNA_LOOPS_CONNECTION: "", HASNA_LOOPS_LOCAL: "", LOOPS_LOCAL: "",
     LOOPS_MACHINE_ID: "cli-test-machine",
     // Ambient credential isolation: the shared resolver's disk tier
     // (`~/.hasna/loops/config/credentials`) outranks the env tier, so a
@@ -100,14 +100,14 @@ function cliSpawnOptions(
     LOOPS_DATA_DIR: dataDir,
   } as Record<string, string | undefined>;
   if (
-    !("HASNA_LOOPS_CONNECTION" in env) &&
+    !("HASNA_LOOPS_LOCAL" in env) &&
     !merged.HASNA_LOOPS_API_URL?.trim() &&
     !merged.HASNA_LOOPS_API_KEY?.trim()
   ) {
     // No API env and no caller-selected connection: this spawn is a local test,
     // so select the file connection explicitly (fail-closed policy means an
     // unconfigured spawn must exit non-zero instead of silently going local).
-    merged.HASNA_LOOPS_CONNECTION = "file";
+    merged.HASNA_LOOPS_LOCAL = "1";
   }
   return {
     env: merged,
@@ -131,14 +131,14 @@ function runCli(dataDir: string, args: string[], input?: string, env: Record<str
 
 /**
  * stderr without the local-mode announcement the resolver prints (once, per
- * process) on an explicit `HASNA_LOOPS_CONNECTION=file` run. Assertions about
+ * process) on an explicit `HASNA_LOOPS_LOCAL=1` run. Assertions about
  * a command's OWN stderr strip it, mirroring what an operator sees below the
  * notice.
  */
 function cliStderr(result: { stderr: string }): string {
   return result.stderr
     .split("\n")
-    .filter((line) => !line.includes("loops: local mode"))
+    .filter((line) => !line.includes("loops: LOCAL mode"))
     .join("\n");
 }
 
@@ -692,12 +692,12 @@ describe("loops CLI", () => {
 
   test("fails closed for status when no connection is configured", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-status-unconfigured-"));
-    // HASNA_LOOPS_CONNECTION is passed (blank) so the local-test harness does
+    // HASNA_LOOPS_LOCAL is passed (blank) so the local-test harness does
     // not re-add the file opt-in: this spawn must fail closed.
     const status = runCli(dataDir, ["--json", "status"], undefined, {
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_API_KEY: "",
-      HASNA_LOOPS_CONNECTION: "",
+      HASNA_LOOPS_CONNECTION: "", HASNA_LOOPS_LOCAL: "", LOOPS_LOCAL: "",
       HASNA_LOOPS_DATABASE_URL: "",
     });
 
@@ -706,12 +706,12 @@ describe("loops CLI", () => {
     expect(output).toContain("no loops client connection is configured");
     expect(output).toContain("HASNA_LOOPS_API_URL");
     expect(output).toContain("HASNA_LOOPS_API_KEY");
-    expect(output).toContain("HASNA_LOOPS_CONNECTION=file");
+    expect(output).toContain("HASNA_LOOPS_LOCAL=1");
 
     const human = runCli(dataDir, ["status"], undefined, {
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_API_KEY: "",
-      HASNA_LOOPS_CONNECTION: "",
+      HASNA_LOOPS_CONNECTION: "", HASNA_LOOPS_LOCAL: "", LOOPS_LOCAL: "",
     });
     expect(human.status).not.toBe(0);
     expect(`${human.stdout}\n${human.stderr}`).toContain("no loops client connection is configured");
@@ -722,7 +722,7 @@ describe("loops CLI", () => {
     const status = runCli(dataDir, ["--json", "status"], undefined, {
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_API_KEY: "",
-      HASNA_LOOPS_CONNECTION: "file",
+      HASNA_LOOPS_LOCAL: "1",
       HASNA_LOOPS_DATABASE_URL: "",
     });
 
@@ -740,7 +740,7 @@ describe("loops CLI", () => {
     const human = runCli(dataDir, ["status"], undefined, {
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_API_KEY: "",
-      HASNA_LOOPS_CONNECTION: "file",
+      HASNA_LOOPS_LOCAL: "1",
     });
     expect(human.status).toBe(0);
     expect(human.stdout).toContain("storage=sqlite connection=file");
@@ -909,16 +909,28 @@ describe("loops CLI", () => {
     expect(missing.stderr).toContain("--file");
   });
 
-  test("migrate preview reports blocked unsupported rows without tokens", () => {
+  test("migrate preview reports blocked unsupported rows without tokens, and refuses on the hosted route", () => {
     const dataDir = freshDataDir("loops-cli-migrate-");
     const create = runCli(dataDir, ["create", "command", "remote-loop", "--at", futureAt(), "--cmd", "true"]);
     expect(create.status).toBe(0);
 
-    const preview = runCli(dataDir, ["--json", "migrate", "--dry-run"], undefined, {
+    // A hosted credential in the environment puts the process on the hosted
+    // route, where the row backfill's read of the on-box store is
+    // REMOTE_COMMAND_UNSUPPORTED (owner ruling 2026-09-07): on 0.7.0 this
+    // command opened the local sqlite file beside a live hosted key. The
+    // token never appears in either stream on the refusal path.
+    const hosted = runCli(dataDir, ["--json", "migrate", "--dry-run"], undefined, {
       HASNA_LOOPS_API_KEY: "do-not-print-this-token",
     });
+    expect(hosted.status).toBe(1);
+    expect(hosted.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+    expect(hosted.stderr).toContain("HASNA_LOOPS_LOCAL=1");
+    expect(hosted.stdout + hosted.stderr).not.toContain("do-not-print-this-token");
+
+    // On the explicit local route (the harness's HASNA_LOOPS_LOCAL=1) the
+    // preview still runs and reports the unsupported rows as blocked.
+    const preview = runCli(dataDir, ["--json", "migrate", "--dry-run"]);
     expect(preview.status).toBe(0);
-    expect(preview.stdout).not.toContain("do-not-print-this-token");
     const plan = JSON.parse(preview.stdout);
     expect(plan.operation).toBe("migrate");
     expect(plan.dryRun).toBe(true);
@@ -10775,7 +10787,7 @@ describe("local-only guards under a cloud-flipped client", () => {
     HASNA_LOOPS_API_URL: "https://loops.example.test",
     HASNA_LOOPS_API_KEY: "do-not-print-this-key",
   } as const;
-  const FLIP_MESSAGE = "not available while flipped to the hosted Loops API";
+  const FLIP_MESSAGE = "REMOTE_COMMAND_UNSUPPORTED";
 
   test("route admission, drain, live UI, and tick fail loudly when flipped", () => {
     const dataDir = freshDataDir("loops-cli-cloud-guard-");

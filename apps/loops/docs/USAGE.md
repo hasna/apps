@@ -25,7 +25,7 @@ credential through the shared `@hasna/contracts` resolver (macOS Keychain
 `hasna.credentials.loops.api-key`, the file
 `~/.hasna/loops/config/credentials`, or `HASNA_LOOPS_API_KEY`), with the fleet
 gateway defaulting the authority; the local file connection is the explicit
-`HASNA_LOOPS_CONNECTION=file` opt-in only, and an unconfigured invocation
+`HASNA_LOOPS_LOCAL=1` opt-in only (the retired `HASNA_LOOPS_CONNECTION` switch is refused), and an unconfigured invocation
 fails closed with a non-zero exit.
 
 `loops status` reports the storage backend and the client connection

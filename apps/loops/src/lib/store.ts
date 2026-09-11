@@ -1119,6 +1119,52 @@ function ensurePrivateStorePath(file: string): void {
   chmodIfExists(`${file}-shm`, 0o600);
 }
 
+// ── Process-wide local-store refusal (owner ruling 2026-09-07, hasna/apps#1720) ──
+//
+// The ONE choke point every on-box SQLite open passes through. A client
+// entrypoint (the `loops` CLI, `loops-mcp`, `loops-daemon`) that is NOT on the
+// explicit `HASNA_LOOPS_LOCAL=1` route installs a refusal at startup; from then
+// on every `new Store()` in the process — the two dozen local-only command
+// bodies, the daemon, the route-event helpers, the UI — throws instead of
+// opening (and creating) `~/.hasna/loops/loops.db`. The refusal is lazy so the
+// message can be decided at the moment of the attempted open: the fail-closed
+// "no loops client connection is configured" line naming the tiers and the
+// opt-in when nothing is configured, or `REMOTE_COMMAND_UNSUPPORTED` naming
+// the opt-in when a hosted credential resolved. Server processes
+// (`loops-serve`, which opens an explicit path) never install one.
+
+type LocalStoreRefusal = string | (() => Error);
+let localStoreRefusal: LocalStoreRefusal | null = null;
+
+/** Refuse every local-store open for the rest of this process. */
+export function refuseLocalStore(reason: LocalStoreRefusal): void {
+  localStoreRefusal = reason;
+}
+
+/** Lift a refusal installed by {@link refuseLocalStore}. Test seam. */
+export function allowLocalStore(): void {
+  localStoreRefusal = null;
+}
+
+/** True while {@link refuseLocalStore} is in force for this process. */
+export function isLocalStoreRefused(): boolean {
+  return localStoreRefusal !== null;
+}
+
+/** Thrown by {@link Store} while a process-wide refusal is in force; carries the fail-closed code. */
+export class LocalStoreRefusedError extends Error {
+  readonly code = "REMOTE_COMMAND_UNSUPPORTED";
+  constructor(message: string) {
+    super(message);
+    this.name = "LocalStoreRefusedError";
+  }
+}
+
+function throwLocalStoreRefusal(refusal: LocalStoreRefusal): never {
+  if (typeof refusal === "function") throw refusal();
+  throw new LocalStoreRefusedError(refusal);
+}
+
 export class Store {
   private db: Database;
   private rootDir: string;
@@ -1126,6 +1172,9 @@ export class Store {
   private memoryRootDir?: string;
 
   constructor(path?: string) {
+    // The choke point: nothing below runs — no directory, no file, no
+    // `Database` — while a client entrypoint has refused the local store.
+    if (localStoreRefusal !== null) throwLocalStoreRefusal(localStoreRefusal);
     const file = path ?? dbPath();
     if (file !== ":memory:") ensurePrivateStorePath(file);
     this.rootDir = file === ":memory:" ? mkdtempSync(join(tmpdir(), "open-loops-store-")) : dirname(file);
@@ -6515,6 +6564,16 @@ export class Store {
       }
       throw error;
     }
+  }
+
+  /**
+   * `PRAGMA wal_checkpoint(TRUNCATE)` on this connection. The `gc` maintenance
+   * verb's checkpoint lives here so the CLI bundle owns no `bun:sqlite` import
+   * of its own and the open goes through the same gated constructor as every
+   * other local access.
+   */
+  walCheckpoint(): Record<string, unknown> | null {
+    return (this.db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as Record<string, unknown> | null) ?? null;
   }
 
   close(): void {

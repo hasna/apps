@@ -1,0 +1,13 @@
+---
+"@hasna/loops": minor
+---
+
+Fail-closed on-box store: `HASNA_LOOPS_LOCAL=1` replaces `HASNA_LOOPS_CONNECTION=file`, and no code path opens SQLite outside it (owner ruling 2026-09-07, hasna/apps#1720; supersedes #1905).
+
+- The on-box SQLite store is reachable ONLY through the standard boolean opt-in `HASNA_LOOPS_LOCAL=1` (alias `LOOPS_LOCAL=1`), answered from the environment before any Keychain or disk read and honoured only when the environment configures no loops authority; a configured environment outranks the flag. Local mode prints one stderr line, `loops: LOCAL mode — …`, naming the credential tiers it did not find.
+- The value-based selector `HASNA_LOOPS_CONNECTION` is retired for every value (`=file` as well as the earlier-retired `=api`). It is read only to refuse loudly with a migration hint (`… is retired and no longer selects a store … set HASNA_LOOPS_LOCAL=1 … regenerate any daemon unit with 'loops daemon install --local'`) and never selects a store.
+- A process-wide choke point in the local `Store` constructor (`refuseLocalStore()`) is armed by the `loops` CLI, `loops-mcp` and `loops-daemon` whenever the process is not on the explicit local route. Every formerly ungated `new Store()` — `loops export`, `loops import`, `loops migrate|push|pull` (row backfill), the `loops-daemon` bin — and every guarded local-only command now fails closed: with nothing configured the resolver's own one-line refusal names `HASNA_LOOPS_API_KEY`, the Keychain item `hasna.credentials.loops.api-key`, `~/.hasna/loops/config/credentials` and the opt-in; under a hosted credential the refusal is `REMOTE_COMMAND_UNSUPPORTED` naming the opt-in. Nothing is created under the app home in either case.
+- `loops gc` checkpoints the WAL through the store (`Store.walCheckpoint()`); the CLI no longer imports `bun:sqlite` itself.
+- `loops-daemon` (the on-box scheduler) gains a startup gate: it starts only under `HASNA_LOOPS_LOCAL=1`; with a hosted credential resolvable it exits 1 with `REMOTE_COMMAND_UNSUPPORTED` pointing at `loops-runner`; with nothing configured it exits 1 with the fail-closed line. `--help`/`--version` answer ahead of the gate. On 0.7.0/0.8.0 every daemon subcommand opened (and created) `~/.hasna/loops/loops.db` with no credential check.
+- `loops daemon install` / `loops-daemon install` no longer bake `HASNA_LOOPS_CONNECTION=file` into the systemd unit or launchd plist. They write `HASNA_LOOPS_LOCAL=1` only when the operator passes the new explicit `--local` flag; otherwise the unit carries no store selection and the instructions say so.
+- Messages that named `HASNA_LOOPS_CONNECTION=file` (CLI guard, MCP local-tool guard and startup-gate hint, `CloudUnsupportedError`, runtime-config) now name `HASNA_LOOPS_LOCAL=1`.

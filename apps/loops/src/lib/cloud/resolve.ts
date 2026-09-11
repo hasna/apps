@@ -13,34 +13,50 @@
 // relocate it; XDG is never consulted), and defaults to the fleet gateway
 // `https://api.hasna.com/loops` once a credential has resolved from any tier.
 //
-// FAIL-CLOSED DEFAULT (owner ruling 2026-09-04): the client data path NEVER
-// silently falls back to the on-box SQLite file when no credential resolves.
-// A process with no credential and no explicit selection throws an actionable
-// error instead of serving ~/.hasna/loops/loops.db at exit 0. The local file
-// connection remains available ONLY as an explicit opt-in:
-//   HASNA_LOOPS_CONNECTION=file
-// and it announces itself on stderr ("local mode") so an unconfigured run that
-// someone expected to be hosted is visible, not silent.
+// FAIL-CLOSED DEFAULT (owner rulings 2026-09-04 and 2026-09-07): the client
+// data path NEVER silently falls back to the on-box SQLite file when no
+// credential resolves. A process with no credential and no explicit selection
+// throws an actionable error instead of serving ~/.hasna/loops/loops.db at
+// exit 0. The local store remains available ONLY through the standard boolean
+// opt-in:
+//   HASNA_LOOPS_LOCAL=1   (alias LOOPS_LOCAL=1)
+// answered from the environment BEFORE any Keychain or disk read, honoured
+// only when the environment configures no loops authority (a configured
+// environment outranks the flag), and announced once on stderr
+// ("loops: LOCAL mode") so an unconfigured run that someone expected to be
+// hosted is visible, not silent.
 //
-// The old `HASNA_LOOPS_CONNECTION=api` value is retired: the hosted connection
-// is selected by the shared resolver itself (env, Keychain, credential file),
-// and any other value is a hard error naming the valid one.
-//
-// The connection-switch reading and the resolver's env inputs follow the
-// todos pattern (local-opt-in.ts): the opt-in is answered WITHOUT consulting
-// the resolver when the ENVIRONMENT configures nothing — so no Keychain item
-// and no credential file is read — and a configured environment (any
-// authority/credential intent in env) outranks the opt-in and goes through
-// the resolver, failing loudly when it is half-configured.
+// The former value-based selector `HASNA_LOOPS_CONNECTION` (`=file`, and the
+// earlier-retired `=api`) is RETIRED: it is read only to refuse it loudly with
+// the migration hint (see ../local-opt-in.ts) and never selects a store.
 
 import {
-  CREDENTIAL_PROFILE_ENV_KEY,
   clientTransportEnvKeys,
   createClientTransport,
-  credentialOverrideEnvKey,
-  credentialPointerEnvKey,
 } from "@hasna/contracts/client";
 import { createHasnaStorageClient } from "@hasna/contracts/client/storage";
+import {
+  assertNoRetiredLoopsConnectionSwitch,
+  hasLoopsEnvAuthorityIntent,
+  loopsAuthorityEnvKeys,
+  loopsLocalModeNotice,
+  loopsNoConnectionRefusal,
+  selectsLoopsLocalStore,
+} from "../local-opt-in.js";
+
+// The opt-in preamble is owned by ../local-opt-in.ts; re-exported here so the
+// surfaces that already import the routing helpers from the resolver keep one
+// import path.
+export {
+  LOOPS_LOCAL_OPT_IN_ENV_KEYS,
+  RETIRED_LOOPS_CONNECTION_ENV_KEY,
+  assertNoRetiredLoopsConnectionSwitch,
+  hasLoopsEnvAuthorityIntent,
+  hasRetiredLoopsConnectionSwitch,
+  isLoopsLocalOptIn,
+  loopsAuthorityEnvKeys,
+  selectsLoopsLocalStore,
+} from "../local-opt-in.js";
 
 // TYPE BOUNDARY (hasna/apps#1782): the published .d.ts must never import
 // @hasna/contracts, so every contracts type that crosses this module's own
@@ -98,73 +114,12 @@ export type CloudStorageResolution =
 
 export type Env = Record<string, string | undefined>;
 
-/** The explicit local opt-in env key; `=file` selects the on-box SQLite store. */
-export const LOOPS_CONNECTION_ENV_KEY = "HASNA_LOOPS_CONNECTION";
-const FILE_CONNECTION = "file";
-
 export interface CloudStorageOptions {
   /** Tier-1 credential inputs and Keychain-tier controls (an injected runner in tests). */
   credentials?: LoopsCredentialChainOptions;
 }
 
 const APP = "loops";
-
-/** Every env name that can configure a loops authority or credential, resolver-derived. */
-export function loopsAuthorityEnvKeys(): string[] {
-  const keys = clientTransportEnvKeys(APP);
-  return [
-    ...keys.apiUrlKeys,
-    ...keys.apiKeyKeys,
-    credentialOverrideEnvKey(APP),
-    credentialPointerEnvKey(APP),
-    CREDENTIAL_PROFILE_ENV_KEY,
-  ];
-}
-
-/**
- * Does the ENVIRONMENT itself configure a loops authority or credential?
- *
- * Deliberately env-only: answering it must not touch the Keychain or the
- * filesystem, because doing so would defeat the isolation the opt-in
- * short-circuit exists to provide. A DECLARED-BUT-BLANK variable counts as
- * absent here — blank has always been this package's spelling for "not
- * configured" — but it is NOT absent once we do go hosted: the resolver
- * refuses a declared blank loudly rather than resolving around it.
- */
-export function hasLoopsEnvAuthorityIntent(env: Env): boolean {
-  return loopsAuthorityEnvKeys().some((key) => (env[key] ?? "").trim() !== "");
-}
-
-/** True when the operator spelled the explicit local opt-in (`=file`). */
-export function isLoopsFileOptIn(env: Env): boolean {
-  return (env[LOOPS_CONNECTION_ENV_KEY] ?? "").trim() === FILE_CONNECTION;
-}
-
-/** True when this environment should be served by the on-box SQLite store. */
-export function selectsLoopsLocalStore(env: Env): boolean {
-  return !hasLoopsEnvAuthorityIntent(env) && isLoopsFileOptIn(env);
-}
-
-/**
- * The connection switch accepts exactly one value now: the explicit local
- * opt-in `file`. The retired `api` raster was the app's own selection logic;
- * the shared resolver selects the hosted connection.
- */
-function assertConnectionSwitchValue(env: Env): void {
-  const raw = env[LOOPS_CONNECTION_ENV_KEY];
-  if (raw === undefined) return;
-  const value = raw.trim();
-  if (value === "" || value === FILE_CONNECTION) return;
-  if (value === "api") {
-    throw new Error(
-      `${LOOPS_CONNECTION_ENV_KEY}=api is retired: the shared credential resolver selects the hosted loops API ` +
-        `(${clientTransportEnvKeys(APP).apiUrlKeys[0]} + ${clientTransportEnvKeys(APP).apiKeyKeys[0]}, the macOS Keychain ` +
-        `item hasna.credentials.${APP}.api-key, or ~/.hasna/${APP}/config/credentials). ` +
-        `Unset ${LOOPS_CONNECTION_ENV_KEY}, or set it to 'file' for the explicit local connection.`,
-    );
-  }
-  throw new Error(`${LOOPS_CONNECTION_ENV_KEY} must be 'file'; got "${value}".`);
-}
 
 /**
  * @hasna/contracts marks the LIVE process environment with this symbol so its
@@ -241,9 +196,10 @@ export function loopsResolverInputs<T extends Env>(env: T, credentials: LoopsCre
 /**
  * Translate a `@hasna/contracts` resolution refusal into this package's
  * fail-closed diagnostic. The no-credential refusal keeps the classic message
- * (actionable, names the env keys and the explicit local opt-in, never a
+ * (actionable, names the tiers consulted and the explicit local opt-in, never a
  * credential value); every other refusal keeps the resolver's own message,
- * which already names the tier it consulted.
+ * which already names the tier it consulted. A Keychain read ERROR (as opposed
+ * to an absent item) is such a refusal: it is terminal, never "absent".
  */
 function translateResolverFailure(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
@@ -252,12 +208,7 @@ function translateResolverFailure(error: unknown): never {
   const keyKey = keys.apiKeyKeys[0];
   if (/no API key could be resolved/.test(message)) {
     if (/is not set and no API key could be resolved/.test(message)) {
-      throw new Error(
-        `no loops client connection is configured: set ${urlKey} and ${keyKey} to connect to the hosted loops API ` +
-          `(or store the key in the macOS Keychain item hasna.credentials.${APP}.api-key or ~/.hasna/${APP}/config/credentials), ` +
-          `or set ${LOOPS_CONNECTION_ENV_KEY}=file to explicitly use this machine's local file store. ${message}`,
-        { cause: error },
-      );
+      throw new Error(loopsNoConnectionRefusal(message), { cause: error });
     }
     throw new Error(
       `${urlKey} is set but no API key could be resolved for '${APP}': an API connection requires both ${urlKey} and ${keyKey} ` +
@@ -272,7 +223,7 @@ let localNoticePrinted = false;
 
 /**
  * Say — once per process, on stderr — that this install is running against the
- * on-box file store.
+ * on-box SQLite store.
  *
  * Local mode is legitimate for loops (a persistent local loop runner), but it
  * is still announced: "no credential resolved" and "deliberately offline"
@@ -282,11 +233,7 @@ let localNoticePrinted = false;
 export function noticeLocalLoopsMode(write: (line: string) => void = (line) => console.error(line)): void {
   if (localNoticePrinted) return;
   localNoticePrinted = true;
-  write(
-    `loops: local mode — ${LOOPS_CONNECTION_ENV_KEY}=file selected this machine's local file store ` +
-      `(no ${clientTransportEnvKeys(APP).apiUrlKeys[0]} / ${clientTransportEnvKeys(APP).apiKeyKeys[0]} resolved, ` +
-      `and no macOS Keychain item or credential file holds a loops key).`,
-  );
+  write(loopsLocalModeNotice());
 }
 
 /** Test seam: forget that the local-mode line was printed. */
@@ -306,7 +253,7 @@ export function resetLocalLoopsModeNotice(): void {
  * credential resolves — the client never falls back to the on-box file.
  */
 export function resolveCloudStorage(name: string, env: Env = process.env, options: CloudStorageOptions = {}): CloudStorageResolution {
-  assertConnectionSwitchValue(env);
+  assertNoRetiredLoopsConnectionSwitch(env);
   if (selectsLoopsLocalStore(env)) {
     if (env === process.env) noticeLocalLoopsMode();
     return { transport: "file", client: null };

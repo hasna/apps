@@ -8,7 +8,7 @@ import { Store } from "../lib/store.js";
 import { sanitizeCliErrorContext } from "./safe-error-context.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
-const FLIP_MESSAGE = "not available while flipped to the hosted Loops API";
+const FLIP_MESSAGE = "REMOTE_COMMAND_UNSUPPORTED";
 
 interface CliResult {
   status: number;
@@ -26,14 +26,14 @@ async function runCli(
     HOME: dataDir,
     HASNA_LOOPS_API_URL: "",
     HASNA_LOOPS_API_KEY: "",
-    HASNA_LOOPS_CONNECTION: "",
+    HASNA_LOOPS_CONNECTION: "", HASNA_LOOPS_LOCAL: "", LOOPS_LOCAL: "",
     LOOPS_DATA_DIR: dataDir,
     ...env,
   };
-  if (!merged.HASNA_LOOPS_CONNECTION?.trim() && !merged.HASNA_LOOPS_API_URL?.trim() && !merged.HASNA_LOOPS_API_KEY?.trim()) {
+  if (!merged.HASNA_LOOPS_LOCAL?.trim() && !merged.HASNA_LOOPS_API_URL?.trim() && !merged.HASNA_LOOPS_API_KEY?.trim()) {
     // No API env: this spawn runs against the local file store, which requires
     // the explicit opt-in (fail-closed policy).
-    merged.HASNA_LOOPS_CONNECTION = "file";
+    merged.HASNA_LOOPS_LOCAL = "1";
   }
   const child = Bun.spawn([process.execPath, cliPath, ...args], {
     env: merged,
@@ -151,7 +151,7 @@ describe("CLI P1 safety regressions", () => {
       // line itself is byte-identical to the JSON message.
       const err = result.stderr
         .split("\n")
-        .filter((line) => !line.includes("loops: local mode"))
+        .filter((line) => !line.includes("loops: LOCAL mode"))
         .join("\n");
       expect(err.trim()).toBe(`error: ${value.error.message}`);
       expect(result.stdout).not.toContain(syntheticSecret);

@@ -19,17 +19,17 @@ function cleanEnv(overrides: Record<string, string>): Record<string, string> {
     HASNA_LOOPS_API_KEY: "",
     // Blanked so a developer's own connection selection never leaks in; local
     // (no API env) spawns get the explicit file opt-in re-added below.
-    HASNA_LOOPS_CONNECTION: "",
+    HASNA_LOOPS_CONNECTION: "", HASNA_LOOPS_LOCAL: "", LOOPS_LOCAL: "",
     // Keychain tier pin (see cli/index.test.ts): a real macOS keychain item
     // under this machine's hostname account would satisfy the blanked
     // connection env; a sentinel account no item uses keeps the tier a miss.
     HASNA_STATION: "loops-hermetic-no-such-station",
     ...overrides,
   };
-  if (!merged.HASNA_LOOPS_CONNECTION?.trim() && !merged.HASNA_LOOPS_API_URL?.trim() && !merged.HASNA_LOOPS_API_KEY?.trim()) {
+  if (!merged.HASNA_LOOPS_LOCAL?.trim() && !merged.HASNA_LOOPS_API_URL?.trim() && !merged.HASNA_LOOPS_API_KEY?.trim()) {
     // No API env: this spawn runs against the local file store, which requires
     // the explicit opt-in (fail-closed policy).
-    merged.HASNA_LOOPS_CONNECTION = "file";
+    merged.HASNA_LOOPS_LOCAL = "1";
   }
   return merged;
 }
@@ -919,7 +919,8 @@ describe("Loops MCP server", () => {
         const result = await client.callTool({ name, arguments: args });
         expect(result.isError).toBe(true);
         const text = JSON.stringify(result.content);
-        expect(text).toContain("not available while flipped");
+        expect(text).toContain("REMOTE_COMMAND_UNSUPPORTED");
+        expect(text).toContain("HASNA_LOOPS_LOCAL=1");
         // It must NOT have silently returned the seeded local loop.
         expect(text).not.toContain("local-only-loop");
       }

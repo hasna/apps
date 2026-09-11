@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
 import { daemonLogPath, ensureDataDir, launchdPlistPath, systemdServicePath } from "../lib/paths.js";
 import { normalizeExecutionPath } from "../lib/env.js";
+import { LOOPS_LOCAL_OPT_IN_ENV_KEYS, RETIRED_LOOPS_CONNECTION_ENV_KEY } from "../lib/local-opt-in.js";
 
 export interface StartupEnableResult {
   command: string;
@@ -15,7 +16,19 @@ export interface InstallStartupResult {
   platform: NodeJS.Platform;
   path: string;
   instructions: string[];
+  /** True when the unit pins the on-box store (`HASNA_LOOPS_LOCAL=1` written into it). */
+  local: boolean;
   enableResults?: StartupEnableResult[];
+}
+
+export interface InstallStartupOptions {
+  /**
+   * Write `HASNA_LOOPS_LOCAL=1` into the unit so the daemon it starts is on the
+   * explicit on-box route. ONLY set from an operator's explicit `--local` flag:
+   * a unit never carries a store selection the operator did not spell. The
+   * retired `HASNA_LOOPS_CONNECTION=file` is never written any more.
+   */
+  local?: boolean;
 }
 
 function systemdEscapeExecPart(part: string): string {
@@ -53,18 +66,34 @@ function launchctlCommands(path: string): string[] {
   ];
 }
 
+/** The note printed when a unit is written without the on-box opt-in. */
+function noOptInInstruction(): string {
+  return (
+    `note: this unit carries no store selection; the daemon it starts refuses unless its environment sets ` +
+    `${LOOPS_LOCAL_OPT_IN_ENV_KEYS[0]}=1. Re-run with --local to pin the on-box store into the unit ` +
+    `(the retired ${RETIRED_LOOPS_CONNECTION_ENV_KEY}=file is no longer written or honoured).`
+  );
+}
+
 export function installStartup(
   cliEntry: string,
   execPath: string = process.execPath,
   args: string[] = ["daemon", "run"],
   platform: NodeJS.Platform = process.platform,
+  options: InstallStartupOptions = {},
 ): InstallStartupResult {
   const pathEnv = normalizeExecutionPath(process.env);
   const dataDirPath = ensureDataDir();
+  const local = Boolean(options.local);
   if (platform === "linux") {
     const path = systemdServicePath();
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const execStart = [execPath, cliEntry, ...args].map(systemdEscapeExecPart).join(" ");
+    const environment = [
+      systemdEnvironmentLine("PATH", pathEnv),
+      systemdEnvironmentLine("LOOPS_DATA_DIR", dataDirPath),
+      ...(local ? [systemdEnvironmentLine(LOOPS_LOCAL_OPT_IN_ENV_KEYS[0], "1")] : []),
+    ];
     writeFileSync(
       path,
       `[Unit]
@@ -77,9 +106,7 @@ ExecStart=${execStart}
 WorkingDirectory=${systemdPathValue(dataDirPath)}
 Restart=always
 RestartSec=5
-${systemdEnvironmentLine("PATH", pathEnv)}
-${systemdEnvironmentLine("LOOPS_DATA_DIR", dataDirPath)}
-${systemdEnvironmentLine("HASNA_LOOPS_CONNECTION", "file")}
+${environment.join("\n")}
 
 [Install]
 WantedBy=default.target
@@ -88,10 +115,12 @@ WantedBy=default.target
     return {
       platform,
       path,
+      local,
       instructions: [
         "systemctl --user daemon-reload",
         "systemctl --user enable --now loops-daemon.service",
         "loginctl enable-linger $USER",
+        ...(local ? [] : [noOptInInstruction()]),
       ],
     };
   }
@@ -99,6 +128,11 @@ WantedBy=default.target
   if (platform === "darwin") {
     const path = launchdPlistPath();
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const environment = [
+      `    <key>PATH</key><string>${xmlEscape(pathEnv)}</string>`,
+      `    <key>LOOPS_DATA_DIR</key><string>${xmlEscape(dataDirPath)}</string>`,
+      ...(local ? [`    <key>${LOOPS_LOCAL_OPT_IN_ENV_KEYS[0]}</key><string>1</string>`] : []),
+    ];
     writeFileSync(
       path,
       `<?xml version="1.0" encoding="UTF-8"?>
@@ -117,9 +151,7 @@ ${args.map((arg) => `    <string>${xmlEscape(arg)}</string>`).join("\n")}
   <key>WorkingDirectory</key><string>${xmlEscape(dataDirPath)}</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
-    <key>LOOPS_DATA_DIR</key><string>${xmlEscape(dataDirPath)}</string>
-    <key>HASNA_LOOPS_CONNECTION</key><string>file</string>
+${environment.join("\n")}
   </dict>
   <key>StandardOutPath</key><string>${xmlEscape(daemonLogPath())}</string>
   <key>StandardErrorPath</key><string>${xmlEscape(daemonLogPath())}</string>
@@ -131,7 +163,8 @@ ${args.map((arg) => `    <string>${xmlEscape(arg)}</string>`).join("\n")}
     return {
       platform,
       path,
-      instructions: launchctlCommands(path),
+      local,
+      instructions: [...launchctlCommands(path), ...(local ? [] : [noOptInInstruction()])],
     };
   }
 
