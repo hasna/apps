@@ -27,7 +27,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "./db/database.js";
 import { uuid } from "./db/runtime.js";
-import { EMAILS_SELF_HOSTED_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./lib/client-env.js";
+import { EMAILS_SESSION_TOKEN_ENV } from "./lib/client-env.js";
+import { EMAILS_API_KEY_ENV } from "./lib/emails-credentials.js";
 import { emailsSelfHostedOpenApi } from "./server/self-hosted/openapi.js";
 import { SELF_HOSTED_RESOURCES } from "./server/self-hosted/resources.js";
 import { CAPABILITY_KEYS, capabilityRefusal, isCapabilityRefusal } from "./store/capabilities.js";
@@ -75,6 +76,7 @@ let api: V1StoreApi;
 beforeEach(() => {
   captureInheritedProcessEnv();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   db = getDatabase();
   // The service the client talks to. It stores nothing itself — every row it serves
@@ -87,6 +89,7 @@ afterEach(() => {
   api.stop();
   closeDatabase();
   delete process.env["EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_LOCAL"];
   restoreInheritedProcessEnv();
 });
 
@@ -578,7 +581,7 @@ describe("the HTTP transport's bounds", () => {
       credential: "session-token-placeholder",
       credentialSetting: EMAILS_SESSION_TOKEN_ENV,
       credentialFallbacks: [
-        { setting: EMAILS_SELF_HOSTED_API_KEY_ENV, value: "api-key-placeholder" },
+        { setting: EMAILS_API_KEY_ENV, value: "api-key-placeholder" },
       ],
       fetchImpl,
     });

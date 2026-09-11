@@ -18,8 +18,8 @@ const MODE_ENV_KEYS = [
   "HASNA_EMAILS_STORAGE_MODE",
   "MAILERY_STORAGE_MODE",
   "HASNA_MAILERY_STORAGE_MODE",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_SESSION_TOKEN",
   "MAILERY_API_URL",
   "MAILERY_API_KEY",
@@ -46,8 +46,8 @@ function selfHostedEnv(): NodeJS.ProcessEnv {
   // isolatedEnv() already scrubbed every retired deployment-mode spelling.
   return {
     ...isolatedEnv(),
-    EMAILS_SELF_HOSTED_URL: stub.baseUrl,
-    EMAILS_SELF_HOSTED_API_KEY: stub.apiKey,
+    HASNA_EMAILS_API_URL: stub.baseUrl,
+    HASNA_EMAILS_API_KEY: stub.apiKey,
   };
 }
 
@@ -82,8 +82,8 @@ function vaultEntryCarryingRetiredModeVariable(): {
   const invalidMode = JSON.stringify({ credential: sentinel });
   const payload = JSON.stringify({
     [MODE_ENV_KEYS[1]]: invalidMode,
-    EMAILS_SELF_HOSTED_URL: "https://emails.example.invalid",
-    EMAILS_SELF_HOSTED_API_KEY: "not-a-real-key",
+    HASNA_EMAILS_API_URL: "https://emails.example.invalid",
+    HASNA_EMAILS_API_KEY: "not-a-real-key",
   });
   writeFileSync(secretsBin, `#!/bin/sh
 if [ "$1" = "get" ]; then
@@ -122,6 +122,7 @@ function localModeWithStructuredClientEnv(): {
       EMAILS_CLIENT_ENV_SECRET: clientEnv,
       EMAILS_DB_PATH: undefined,
       HASNA_EMAILS_DB_PATH: undefined,
+      HASNA_EMAILS_LOCAL: undefined,
     },
     sentinel,
     clientEnv,
@@ -345,8 +346,8 @@ describe("CLI self-hosted bootstrap failures", () => {
         // local store.
         name: "bad-url",
         env: {
-          EMAILS_SELF_HOSTED_URL: "ftp://emails.example.invalid",
-          EMAILS_SELF_HOSTED_API_KEY: "not-a-real-key",
+          HASNA_EMAILS_API_URL: "ftp://emails.example.invalid",
+          HASNA_EMAILS_API_KEY: "not-a-real-key",
         },
         withDbPath: false,
         message: "must use http or https",
@@ -366,7 +367,7 @@ describe("CLI self-hosted bootstrap failures", () => {
         {
           ...env,
           ...testCase.env,
-          ...(testCase.withDbPath ? { EMAILS_DB_PATH: dbPath, HASNA_EMAILS_DB_PATH: dbPath } : {}),
+          ...(testCase.withDbPath ? { EMAILS_DB_PATH: dbPath, HASNA_EMAILS_LOCAL: "1", HASNA_EMAILS_DB_PATH: dbPath } : {}),
         },
       );
 

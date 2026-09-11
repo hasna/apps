@@ -15,6 +15,7 @@ let inheritedDbPath: string | undefined;
 beforeEach(() => {
   inheritedDbPath = process.env.EMAILS_DB_PATH;
   process.env.EMAILS_DB_PATH = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   db = getDatabase();
 });

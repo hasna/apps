@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { emailsKeychainItem } from "../../lib/emails-credentials.js";
 import { z } from "zod";
 
 const MAX_MCP_REPLY_LIMIT = 100;
@@ -24,9 +25,9 @@ async function assertSelfHostedApiRouteReady(toolName: string): Promise<void> {
   if (!isSelfHostedMode()) {
     throw new Error(
       `MCP tool ${toolName} is API-backed, but this process's API client configuration is not ` +
-        "ready: set EMAILS_SELF_HOSTED_URL and one of EMAILS_SESSION_TOKEN, EMAILS_IDP_TOKEN or " +
-        "EMAILS_SELF_HOSTED_API_KEY (or point EMAILS_CLIENT_ENV_SECRET at a vault entry that " +
-        "carries them).",
+        "ready: set HASNA_EMAILS_API_URL and one of EMAILS_SESSION_TOKEN, EMAILS_IDP_TOKEN or " +
+        `HASNA_EMAILS_API_KEY (or store the key in the Keychain item ${emailsKeychainItem("api-key")} ` +
+        "or ~/.hasna/emails/config/credentials).",
     );
   }
 }

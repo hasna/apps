@@ -105,8 +105,8 @@ describe("published self-hosted client smoke", () => {
       // The hosted client resolves the service origin and key through the shared
       // credential resolver (the one-release aliases here — accepted beneath the
       // canonical HASNA_EMAILS_API_URL / HASNA_EMAILS_API_KEY names).
-      EMAILS_SELF_HOSTED_URL: stub.baseUrl,
-      EMAILS_SELF_HOSTED_API_KEY: stub.apiKey,
+      HASNA_EMAILS_API_URL: stub.baseUrl,
+      HASNA_EMAILS_API_KEY: stub.apiKey,
       EMAILS_SMOKE_CLI: wrapper,
       NO_COLOR: "1",
     };
@@ -154,10 +154,11 @@ describe("published self-hosted client smoke", () => {
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? "",
       HOME: home,
-      EMAILS_SELF_HOSTED_URL: stub.baseUrl,
-      EMAILS_SELF_HOSTED_API_KEY: stub.apiKey,
+      HASNA_EMAILS_API_URL: stub.baseUrl,
+      HASNA_EMAILS_API_KEY: stub.apiKey,
       EMAILS_SMOKE_CLI: wrapper,
       EMAILS_DB_PATH: "",
+      HASNA_EMAILS_LOCAL: "",
     };
     const result = await runSmoke(env);
     expect(result.exitCode).not.toBe(0);

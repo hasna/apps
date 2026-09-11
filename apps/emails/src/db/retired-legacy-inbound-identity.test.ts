@@ -47,12 +47,14 @@ beforeEach(() => {
   closeDatabase();
   resetDatabase();
   process.env["EMAILS_DB_PATH"] = path;
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
 });
 
 afterEach(() => {
   closeDatabase();
   resetDatabase();
   delete process.env["EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_LOCAL"];
   rmSync(root, { recursive: true, force: true });
   restoreInheritedProcessEnv();
 });

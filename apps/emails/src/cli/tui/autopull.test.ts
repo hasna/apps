@@ -8,10 +8,12 @@ const ENV_KEYS = [
   "HOME",
   "EMAILS_DB_PATH",
   "HASNA_EMAILS_DB_PATH",
+  "HASNA_EMAILS_LOCAL",
+  "EMAILS_LOCAL",
   "EMAILS_MODE",
   "HASNA_EMAILS_MODE",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "MAILERY_MODE",
   "HASNA_MAILERY_MODE",
   "MAILERY_STORAGE_MODE",
@@ -108,8 +110,8 @@ describe("TUI autopull in self_hosted mode", () => {
       const env: Record<string, string> = {
         PATH: process.env["PATH"] ?? "",
         HOME: home,
-        EMAILS_SELF_HOSTED_URL: "https://emails.example.test",
-        EMAILS_SELF_HOSTED_API_KEY: "test-api-key",
+        HASNA_EMAILS_API_URL: "https://emails.example.test",
+        HASNA_EMAILS_API_KEY: "test-api-key",
         NO_COLOR: "1",
       };
       for (const key of ENV_KEYS) {

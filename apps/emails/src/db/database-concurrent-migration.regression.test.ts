@@ -46,6 +46,7 @@ function seedRewoundDatabase(): string {
   closeDatabase();
   resetDatabase();
   process.env["EMAILS_DB_PATH"] = path;
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   getDatabase();
   closeDatabase();
   resetDatabase();
@@ -94,6 +95,7 @@ describe("concurrent migration safety", () => {
       closeDatabase();
       resetDatabase();
       process.env["EMAILS_DB_PATH"] = path;
+      process.env["HASNA_EMAILS_LOCAL"] = "1";
       const db = getDatabase();
 
       // The pass must have actually run. A rewound sentinel that is still
@@ -114,6 +116,7 @@ describe("concurrent migration safety", () => {
     closeDatabase();
     resetDatabase();
     process.env["EMAILS_DB_PATH"] = path;
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     const db = getDatabase();
 
     const level = db.query("SELECT MAX(id) as max_id FROM _migrations").get() as { max_id: number | null } | null;

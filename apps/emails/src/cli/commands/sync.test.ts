@@ -10,8 +10,8 @@ import { registerSyncCommands as registerRemoteSyncCommands } from "./sync.remot
 const MODE_ENV_KEYS = [
   "EMAILS_MODE",
   "HASNA_EMAILS_MODE",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
 ] as const;
 
 let originalModeEnv: Partial<Record<typeof MODE_ENV_KEYS[number], string>> = {};
@@ -22,8 +22,8 @@ function enableSelfHostedMode() {
   // set — because a set word trips the retired-variable guard.
   delete process.env["EMAILS_MODE"];
   delete process.env["HASNA_EMAILS_MODE"];
-  process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example.test";
-  process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-api-key";
+  process.env["HASNA_EMAILS_API_URL"] = "https://emails.example.test";
+  process.env["HASNA_EMAILS_API_KEY"] = "test-api-key";
 }
 
 async function runSyncCommandExpectingExit(args: string[]): Promise<string> {

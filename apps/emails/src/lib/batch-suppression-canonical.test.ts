@@ -26,6 +26,7 @@ function realStore(): EmailStore {
 beforeEach(async () => {
   INHERITED_PROCESS_ENV = { ...process.env };
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   db = getDatabase();
   const store = realStore();

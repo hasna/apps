@@ -44,6 +44,7 @@ import {
   API_CREDENTIAL_SETTINGS,
   API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
 } from "../store-resolution.js";
 import {
   createWebhookServer,
@@ -77,13 +78,14 @@ function clearStoreSettings(): void {
   for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
     delete process.env[setting];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+  for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
 }
 
 /** Storage configured as a local in-memory database, which is what the receiver needs. */
 function configureLocalStore(): void {
   clearStoreSettings();
   process.env[DATABASE_PATH_SETTINGS[1]] = ":memory:";
+  process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
 }
 
 /** Storage configured as an Emails API, and NO database path. */
@@ -254,6 +256,7 @@ describe("createWebhookServer storage gate", () => {
     // Without this, that absence would also pass for a path that is simply wrong.
     clearStoreSettings();
     process.env[DATABASE_PATH_SETTINGS[1]] = join(dataDirectory, "emails.db");
+    process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
     // Drop the beforeEach in-memory handle so the receiver opens the configured FILE rather than
     // the memoised `:memory:` connection nothing configured it to use.
     closeDatabase();
@@ -277,7 +280,8 @@ describe("createWebhookServer storage gate", () => {
     // Non-vacuous: the refusal names the API setting an operator has to provide...
     expect(message).toContain(API_BASE_URL_SETTING);
     // ...and the explicit path that does opt into the local database.
-    expect(message).toContain(DATABASE_PATH_SETTINGS[1]!);
+    // The all-unset refusal names the ONE way to a local store — the opt-in — never a path.
+    expect(message).toContain(LOCAL_OPT_IN_SETTINGS[0]);
     expect(existsSync(dataDirectory), "refusing created a local data directory anyway").toBe(false);
   });
 
@@ -322,6 +326,7 @@ describe("createWebhookServer storage gate", () => {
     clearStoreSettings();
     process.env[DATABASE_PATH_SETTINGS[0]] = join(home, "one.db");
     process.env[DATABASE_PATH_SETTINGS[1]] = join(home, "two.db");
+    process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
     const message = refusalMessage();
     expect(message).toContain("cannot tell where this installation's delivery events would be stored");
     for (const setting of DATABASE_PATH_SETTINGS) expect(message).toContain(setting);
@@ -332,6 +337,7 @@ describe("createWebhookServer storage gate", () => {
     const path = join(home, "same.db");
     process.env[DATABASE_PATH_SETTINGS[0]] = path;
     process.env[DATABASE_PATH_SETTINGS[1]] = path;
+    process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
     expect(refusalMessage()).toBe("");
   });
 
@@ -355,6 +361,7 @@ describe("createWebhookServer storage gate", () => {
     clearStoreSettings();
     const localPath = join(home, "local.db");
     process.env[DATABASE_PATH_SETTINGS[1]] = localPath;
+    process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
     process.env[API_BASE_URL_SETTING] = "https://mail.example.test";
     process.env[API_CREDENTIAL_SETTINGS[0]] = "not-a-real-credential";
     const message = refusalMessage();
@@ -394,6 +401,7 @@ describe("createWebhookServer storage gate", () => {
     clearStoreSettings();
     const path = join(home, "on-disk.db");
     process.env[DATABASE_PATH_SETTINGS[1]] = path;
+    process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
     resetDatabase();
     db = getDatabase();
     db.run(

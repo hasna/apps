@@ -24,8 +24,8 @@ import { EMAILS_IDP_TOKEN_ENV, EMAILS_SESSION_TOKEN_ENV } from "./emails-credent
 
 export const EMAILS_CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
 
-/** The app's own principals, plus the one-release key alias, re-exported from the credential seam. */
-export { EMAILS_IDP_TOKEN_ENV, EMAILS_SELF_HOSTED_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./emails-credentials.js";
+/** The app's own principals, re-exported from the credential seam. */
+export { EMAILS_IDP_TOKEN_ENV, EMAILS_SESSION_TOKEN_ENV } from "./emails-credentials.js";
 
 /**
  * The settings the vault entry may still carry: the app's own principals. The

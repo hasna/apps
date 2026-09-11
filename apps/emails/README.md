@@ -33,17 +33,23 @@ exposes that registry without registering the same resources again.
 Configure API access through the shared credential resolver: canonical
 `HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY` settings, the macOS Keychain
 items for this app (`api-url` / `api-key`), or the
-`~/.hasna/emails/config/credentials` file. Existing
-`EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` aliases remain accepted.
+`~/.hasna/emails/config/credentials` file. The retired
+`EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` aliases are no longer read
+(1.6.1) and are refused by name if still exported.
 A live user session (`EMAILS_SESSION_TOKEN`) or agent identity token
 (`EMAILS_IDP_TOKEN`) takes precedence as the bearer credential. Missing or
 invalid credentials produce an error; an empty mailbox is not a substitute for
 a failed connection.
 
-Nonblank `HASNA_EMAILS_DB_PATH` or `EMAILS_DB_PATH` settings are rejected by
-ordinary CLI, terminal UI, and MCP clients. Remove those legacy settings and
-configure API access instead. Explicit storage consumers retain their separate
-compatibility contract.
+Ordinary CLI, terminal UI, and MCP clients are hosted-only: a nonblank
+`HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` or the local opt-in `HASNA_EMAILS_LOCAL`
+is rejected by name. Remove those settings and configure API access instead.
+The `@hasna/emails/storage` library reaches the on-box SQLite store ONLY behind
+the standard opt-in `HASNA_EMAILS_LOCAL=1` (alias `EMAILS_LOCAL=1`), answered from the
+environment before any Keychain or credentials-file read and only when the
+environment configures no API authority or credential — a configured environment
+outranks the flag. A database path alone selects nothing (it is only the file
+location); nothing configured is a boot error, never a local fallback.
 
 Provider credentials and inbound infrastructure belong to the API service.
 An operator may run that service on their own PostgreSQL and object storage;
@@ -56,8 +62,10 @@ need account access, not independent provider registrations or mail databases.
 |---|---|
 | `HASNA_EMAILS_API_URL` | Emails API origin (canonical). Overrides the Keychain `api-url` item and the credentials file. |
 | `HASNA_EMAILS_API_KEY` | Emails API key (canonical). One of the five resolver tiers. |
-| `EMAILS_SELF_HOSTED_URL` | Accepted alias for `HASNA_EMAILS_API_URL` for one release (one rung below canonical). |
-| `EMAILS_SELF_HOSTED_API_KEY` | Accepted alias for `HASNA_EMAILS_API_KEY` for one release (one rung below canonical). |
+| `EMAILS_SELF_HOSTED_URL` | RETIRED (1.6.1). Refused by name; set `HASNA_EMAILS_API_URL`. |
+| `EMAILS_SELF_HOSTED_API_KEY` | RETIRED (1.6.1). Refused by name; set `HASNA_EMAILS_API_KEY`. |
+| `HASNA_EMAILS_LOCAL` / `EMAILS_LOCAL` | The ONLY local opt-in, for the storage library and `emails-serve`; honoured only when no API authority or credential is configured. Rejected by the CLI/MCP clients. |
+| `HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` | Location of the local SQLite file under the opt-in. Alone it selects nothing and is refused. |
 | `EMAILS_SESSION_TOKEN` | The app's own user session (issued by `emails auth login`). Wins as the bearer credential. |
 | `EMAILS_IDP_TOKEN` | The app's own agent identity token (ADR-0002). Wins over the resolved key. |
 | `EMAILS_CLIENT_ENV_SECRET` | Secrets-vault pointer that persists `EMAILS_SESSION_TOKEN` / `EMAILS_IDP_TOKEN` across processes. No longer delivers the URL or API key. |
@@ -539,9 +547,9 @@ allowlists before it confirms or syncs a notification.
 
 The server uses operator-owned Postgres and provider accounts. A client
 resolves the hosted API through the shared credential resolver — the canonical
-`HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY` (or the one-release
-`EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` aliases), the macOS
-Keychain, or `~/.hasna/emails/config/credentials`. The service requires `EMAILS_DATABASE_URL`,
+`HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`, the macOS
+Keychain, or `~/.hasna/emails/config/credentials` (the retired
+`EMAILS_SELF_HOSTED_*` aliases are refused). The service requires `EMAILS_DATABASE_URL`,
 `EMAILS_API_SIGNING_KEY`, `EMAILS_SEND_PROVIDER=ses|resend`,
 `EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS`, and `EMAILS_AUTH_FROM`. SES uses the
 deployment IAM role; Resend uses `RESEND_API_KEY`. See

@@ -14,7 +14,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
-import { EMAILS_CLIENT_ENV_SECRET_ENV, EMAILS_SELF_HOSTED_API_KEY_ENV } from "./client-env.js";
+import { EMAILS_CLIENT_ENV_SECRET_ENV } from "./client-env.js";
+import { EMAILS_API_KEY_ENV } from "./emails-credentials.js";
 import { clientModeLabel, getClientMode, resolveClientMode, resolveClientModeSelection } from "./mode.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
@@ -42,6 +43,8 @@ const ENV_KEYS = [
   EMAILS_CLIENT_ENV_SECRET_ENV,
   "HASNA_EMAILS_DB_PATH",
   "EMAILS_DB_PATH",
+  "HASNA_EMAILS_LOCAL",
+  "EMAILS_LOCAL",
   "HASNA_EMAILS_API_URL",
   "HASNA_EMAILS_API_KEY",
   "EMAILS_SELF_HOSTED_URL",
@@ -55,8 +58,8 @@ const SELF_HOSTED_URL = "https://emails.example.invalid";
 const SELF_HOSTED_KEY = "not-a-real-key";
 
 function setSelfHostedCredentials(): void {
-  process.env["EMAILS_SELF_HOSTED_URL"] = SELF_HOSTED_URL;
-  process.env[EMAILS_SELF_HOSTED_API_KEY_ENV] = SELF_HOSTED_KEY;
+  process.env["HASNA_EMAILS_API_URL"] = SELF_HOSTED_URL;
+  process.env[EMAILS_API_KEY_ENV] = SELF_HOSTED_KEY;
 }
 
 // Install a `secrets` shim on PATH that returns a client-env payload carrying the
@@ -127,12 +130,13 @@ describe("clientModeLabel", () => {
 });
 
 describe("resolveClientModeSelection — the storage-plan mapping", () => {
-  it("maps an explicit database path to the local arm, naming the setting", () => {
+  it("maps the local opt-in plus a database path to the local arm, naming the path setting", () => {
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     process.env["EMAILS_DB_PATH"] = ":memory:";
-    // Local is EXPLICIT only (fail-closed ruling, 2026-09-04): a configured
-    // database path is the local choice the store seam reads, so a DB-path-only
-    // environment resolves local without any API settings and without consulting
-    // a client credential.
+    // Local is EXPLICIT only (fail-closed ruling, 2026-09-04; standard opt-in 1.6.1):
+    // the HASNA_EMAILS_LOCAL flag is the local choice the store seam reads, the
+    // path only says where the file lives, and the answer comes from the env
+    // alone — no API settings and no client credential are consulted.
     expect(resolveClientModeSelection()).toEqual({
       mode: "local",
       label: "Local",
@@ -140,6 +144,22 @@ describe("resolveClientModeSelection — the storage-plan mapping", () => {
       warning: null,
     });
     expect(getClientMode()).toBe("local");
+  });
+
+  it("a database path WITHOUT the opt-in is refused, naming the opt-in (the 1.6.1 door)", () => {
+    process.env["EMAILS_DB_PATH"] = ":memory:";
+    expect(() => resolveClientModeSelection()).toThrow("HASNA_EMAILS_LOCAL");
+    expect(() => getClientMode()).toThrow("HASNA_EMAILS_LOCAL");
+  });
+
+  it("the opt-in alone (no path) is the local arm at the default file, naming the flag", () => {
+    process.env["EMAILS_LOCAL"] = "1";
+    expect(resolveClientModeSelection()).toEqual({
+      mode: "local",
+      label: "Local",
+      source: { kind: "env", name: "EMAILS_LOCAL", value: null },
+      warning: null,
+    });
   });
 
   it("maps the canonical API URL plus a credential to the API arm, without any mode variable", () => {
@@ -157,28 +177,24 @@ describe("resolveClientModeSelection — the storage-plan mapping", () => {
     expect(getClientMode()).toBe("self_hosted");
   });
 
-  it("accepts the ONE-RELEASE legacy aliases beneath the canonical names", () => {
-    // EMAILS_SELF_HOSTED_URL / EMAILS_SELF_HOSTED_API_KEY stay accepted for one
-    // release (skills kept SKILLS_API_* the same way), one rung below the
-    // canonical HASNA_EMAILS_API_URL / HASNA_EMAILS_API_KEY.
+  it("a configured environment OUTRANKS the local opt-in", () => {
+    // A stale HASNA_EMAILS_LOCAL beside a configured API is a hosted run, never a
+    // local one — the flag is honoured only when the env configures nothing.
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     setSelfHostedCredentials();
-    expect(resolveClientModeSelection()).toEqual({
-      mode: "self_hosted",
-      label: "Server API",
-      source: { kind: "env", name: "HASNA_EMAILS_API_URL", value: SELF_HOSTED_URL },
-      warning: null,
-    });
-  });
-
-  it("prefers the canonical names over the aliases when both are set", () => {
-    process.env["HASNA_EMAILS_API_URL"] = "https://canonical.example.invalid";
-    process.env["EMAILS_SELF_HOSTED_URL"] = SELF_HOSTED_URL;
-    process.env["HASNA_EMAILS_API_KEY"] = "canonical-key";
-    process.env[EMAILS_SELF_HOSTED_API_KEY_ENV] = SELF_HOSTED_KEY;
     const plan = resolveClientModeSelection();
     expect(plan.mode).toBe("self_hosted");
     expect(plan.source.name).toBe("HASNA_EMAILS_API_URL");
-    expect(plan.source.value).toBe("https://canonical.example.invalid");
+  });
+
+  it("REFUSES the retired EMAILS_SELF_HOSTED_* aliases by name instead of reading them", () => {
+    process.env["EMAILS_SELF_HOSTED_URL"] = SELF_HOSTED_URL;
+    process.env["EMAILS_SELF_HOSTED_API_KEY"] = SELF_HOSTED_KEY;
+    expect(() => resolveClientModeSelection()).toThrow("EMAILS_SELF_HOSTED_URL");
+    // Beside the canonical names the alias is still refused — never a silent no-op.
+    process.env["HASNA_EMAILS_API_URL"] = "https://canonical.example.invalid";
+    process.env["HASNA_EMAILS_API_KEY"] = "canonical-key";
+    expect(() => resolveClientModeSelection()).toThrow("EMAILS_SELF_HOSTED_URL");
   });
 
   it("refuses an environment that configures BOTH storage rows (contradiction row)", () => {
@@ -196,7 +212,7 @@ describe("resolveClientModeSelection — the storage-plan mapping", () => {
   });
 
   it("fails closed on an API URL without a credential, naming the credential routes", () => {
-    process.env["EMAILS_SELF_HOSTED_URL"] = SELF_HOSTED_URL;
+    process.env["HASNA_EMAILS_API_URL"] = SELF_HOSTED_URL;
     let thrown: unknown;
     try {
       resolveClientModeSelection();
@@ -206,7 +222,7 @@ describe("resolveClientModeSelection — the storage-plan mapping", () => {
     const message = String(thrown);
     expect(message).toContain("no API credential resolved");
     expect(message).toContain("HASNA_EMAILS_API_KEY");
-    expect(message).toContain("EMAILS_SELF_HOSTED_API_KEY");
+    expect(message).toContain("HASNA_EMAILS_API_KEY");
     expect(message.toLowerCase()).toContain("refusing");
   });
 
@@ -226,7 +242,7 @@ describe("resolveClientModeSelection — the storage-plan mapping", () => {
       // The required API environment (canonical names) and the credential routes...
       expect(message).toContain("HASNA_EMAILS_API_URL");
       expect(message).toContain("HASNA_EMAILS_API_KEY");
-      expect(message).toContain("EMAILS_SELF_HOSTED_API_KEY");
+      expect(message).toContain("HASNA_EMAILS_API_KEY");
       // Ordinary clients must never be advised to select SQLite.
       expect(message).not.toContain("HASNA_EMAILS_DB_PATH");
       expect(message).not.toContain("EMAILS_DB_PATH");
@@ -234,8 +250,8 @@ describe("resolveClientModeSelection — the storage-plan mapping", () => {
   });
 
   it("never carries the credential value on the resolution", () => {
-    process.env["EMAILS_SELF_HOSTED_URL"] = SELF_HOSTED_URL;
-    process.env[EMAILS_SELF_HOSTED_API_KEY_ENV] = SELF_HOSTED_KEY;
+    process.env["HASNA_EMAILS_API_URL"] = SELF_HOSTED_URL;
+    process.env[EMAILS_API_KEY_ENV] = SELF_HOSTED_KEY;
     const resolution = resolveClientMode();
     expect(JSON.stringify(resolution)).not.toContain(SELF_HOSTED_KEY);
     expect(resolution.source.value).toBe(SELF_HOSTED_URL);
@@ -257,8 +273,11 @@ describe("resolveClientMode / resolveClientModeSelection — the app's own princ
     // The pointer expands ONLY the app's own principals — never a URL or an API
     // key, which come from the shared resolver tiers.
     expect(process.env["EMAILS_SESSION_TOKEN"]).toBe("emss_from_vault");
+    // The vault delivers principals ONLY: never an authority or an operator key, under
+    // the canonical name or the retired alias (the authority above is the test's own).
+    expect(process.env[EMAILS_API_KEY_ENV]).toBeUndefined();
     expect(process.env["EMAILS_SELF_HOSTED_URL"]).toBeUndefined();
-    expect(process.env[EMAILS_SELF_HOSTED_API_KEY_ENV]).toBeUndefined();
+    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBeUndefined();
   });
 
   it("a vault session with no authority is a hosted run without an endpoint — refused", () => {
@@ -277,8 +296,8 @@ describe("resolveClientMode / resolveClientModeSelection — the app's own princ
       EMAILS_SESSION_TOKEN: "emss_from_vault",
       EMAILS_IDP_TOKEN: "emid_from_vault",
     });
-    process.env["EMAILS_SELF_HOSTED_URL"] = SELF_HOSTED_URL;
-    process.env[EMAILS_SELF_HOSTED_API_KEY_ENV] = SELF_HOSTED_KEY;
+    process.env["HASNA_EMAILS_API_URL"] = SELF_HOSTED_URL;
+    process.env[EMAILS_API_KEY_ENV] = SELF_HOSTED_KEY;
     // The plan reports which credential setting the store will send, and it is the
     // live session — the app's own principal — never the operator key.
     const plan = resolveClientMode();
@@ -288,8 +307,8 @@ describe("resolveClientMode / resolveClientModeSelection — the app's own princ
   });
 
   it("never reads the vault when no pointer is configured", () => {
-    process.env["EMAILS_SELF_HOSTED_URL"] = SELF_HOSTED_URL;
-    process.env[EMAILS_SELF_HOSTED_API_KEY_ENV] = SELF_HOSTED_KEY;
+    process.env["HASNA_EMAILS_API_URL"] = SELF_HOSTED_URL;
+    process.env[EMAILS_API_KEY_ENV] = SELF_HOSTED_KEY;
     expect(resolveClientMode().mode).toBe("self_hosted");
   });
 });

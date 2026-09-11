@@ -131,7 +131,7 @@ describe("public package entrypoint", () => {
     emails.closeDatabase();
     const db = emails.getDatabase(":memory:");
     const savedClientEnv = new Map(
-      ["EMAILS_MODE", "EMAILS_SELF_HOSTED_URL", "EMAILS_SELF_HOSTED_API_KEY", "EMAILS_SESSION_TOKEN"]
+      ["EMAILS_MODE", "HASNA_EMAILS_API_URL", "HASNA_EMAILS_API_KEY", "EMAILS_SESSION_TOKEN"]
         .map((key) => [key, process.env[key]] as const),
     );
     try {
@@ -141,8 +141,8 @@ describe("public package entrypoint", () => {
       // the explicit-database helpers need neither a mode nor an API
       // configuration to serve a caller-owned database.
       delete process.env["EMAILS_MODE"];
-      delete process.env["EMAILS_SELF_HOSTED_URL"];
-      delete process.env["EMAILS_SELF_HOSTED_API_KEY"];
+      delete process.env["HASNA_EMAILS_API_URL"];
+      delete process.env["HASNA_EMAILS_API_KEY"];
       delete process.env["EMAILS_SESSION_TOKEN"];
 
       const provider = emails.runInTransaction(db, () =>

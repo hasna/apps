@@ -22,7 +22,7 @@ import { normalizeSendMetadata } from "./send-metadata.js";
 
 import { resolveSelfHostedConfig } from "../db/self-hosted-store.js";
 import {
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  EMAILS_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   type EmailsClientCredentialCandidate,
 } from "./emails-credentials.js";
@@ -1105,7 +1105,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     this.apiKey = options.apiKey;
     this.credentials = options.credentials?.length
       ? options.credentials
-      : [{ setting: EMAILS_SELF_HOSTED_API_KEY_ENV, value: options.apiKey }];
+      : [{ setting: EMAILS_API_KEY_ENV, value: options.apiKey }];
     this.now = options.now ?? Date.now;
     this.timeoutMs = selfHostedTransportLimit(options.timeoutMs, selfHostedTimeoutMs(), "timeoutMs");
     this.maxResponseBytes = selfHostedTransportLimit(
@@ -2391,7 +2391,7 @@ export function resolveSelfHostedMailDataSource(fetchImpl?: SelfHostedFetch): Se
     baseUrl: config.baseUrl,
     apiKey: config.credential,
     credentials: [
-      { setting: config.credentialSetting ?? EMAILS_SELF_HOSTED_API_KEY_ENV, value: config.credential },
+      { setting: config.credentialSetting ?? EMAILS_API_KEY_ENV, value: config.credential },
       ...(config.credentialFallbacks ?? []),
     ],
     fetchImpl,

@@ -383,6 +383,7 @@ describe("emails batch keeps its (already correct) skip-unless-force shape", () 
     // own configuration.
     const priorDbPath = process.env["EMAILS_DB_PATH"];
     process.env["EMAILS_DB_PATH"] = ":memory:";
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     resetDatabase();
     try {
       const { batchSend } = await import("../../lib/batch.js");

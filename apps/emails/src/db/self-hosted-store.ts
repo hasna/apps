@@ -23,7 +23,7 @@ import {
   resolveEmailsApiUrl,
   resolveEmailsHostedTransport,
   emailsKeychainItem,
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  EMAILS_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   type EmailsClientCredentialCandidate,
   type EmailsClientCredentialSetting,
@@ -84,8 +84,7 @@ function toV1BaseUrl(apiUrl: string): string {
 }
 
 const CONFIG_HELP =
-  "Set HASNA_EMAILS_API_URL and HASNA_EMAILS_API_KEY (or the legacy " +
-  "EMAILS_SELF_HOSTED_URL / EMAILS_SELF_HOSTED_API_KEY aliases), store the key in " +
+  "Set HASNA_EMAILS_API_URL and HASNA_EMAILS_API_KEY, store the key in " +
   `the Keychain item ${emailsKeychainItem("api-key")}, or write ` +
   "~/.hasna/emails/config/credentials to use the API.";
 
@@ -209,7 +208,7 @@ function curlProcessEnv(): NodeJS.ProcessEnv {
 function credentialsForConfig(config: SelfHostedConfig): readonly EmailsClientCredentialCandidate[] {
   return [
     {
-      setting: config.credentialSetting ?? EMAILS_SELF_HOSTED_API_KEY_ENV,
+      setting: config.credentialSetting ?? EMAILS_API_KEY_ENV,
       value: config.credential,
     },
     ...(config.credentialFallbacks ?? []),

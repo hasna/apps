@@ -11,12 +11,14 @@
 // The URL and the API key now resolve through `@hasna/contracts/client`, the same
 // five tiers every hosted Hasna CLI uses, fresh on every call.
 //
-// CANONICAL NAMES AND THE ONE-RELEASE ALIASES. The canonical names are
-// `HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`, exactly what the shared seam
-// reads for the app slug `emails`. The legacy `EMAILS_SELF_HOSTED_URL` /
-// `EMAILS_SELF_HOSTED_API_KEY` spellings remain accepted, silently, one rung
-// BELOW the canonical names — the same compatibility window skills gave its
-// `SKILLS_API_*` names. They are read nowhere else in this package.
+// CANONICAL NAMES ONLY. The canonical names are `HASNA_EMAILS_API_URL` /
+// `HASNA_EMAILS_API_KEY`, exactly what the shared seam reads for the app slug
+// `emails`. The legacy `EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY`
+// spellings had a one-release compatibility window in 1.6.0; as of 1.6.1 they
+// are RETIRED — read nowhere in this package — and an environment that still
+// exports one is REFUSED by name (`assertNoRetiredEmailsClientAliases`), because
+// silently ignoring a configured authority would hand that intent to whatever the
+// ambient tiers happen to hold.
 //
 // THE APP'S OWN PRINCIPALS STAY ABOVE THE RESOLVER. `emails auth login` issues a
 // user SESSION token and agents may carry an identity token (ADR-0002). Those are
@@ -34,8 +36,9 @@
 //   - a URL configured but NO credential → LOUD failure naming what is missing.
 //     There is no local fallback: serving local rows while authentication is
 //     unconfigured is a false green (owner ruling 2026-09-04).
-//   - neither → the caller decides: an explicit database path is the only way
-//     back to local SQLite, and it must say so on stderr.
+//   - neither → the caller decides: the explicit opt-in `HASNA_EMAILS_LOCAL=1`
+//     (src/lib/local-opt-in.ts) is the only way to local SQLite, and it must say so
+//     on stderr. A database path alone is not that choice.
 //
 // WHY THE TYPES BELOW ARE SPELLED HERE RATHER THAN IMPORTED. This package builds
 // with `--packages external` (the AWS SDK and the MCP SDK stay external), so the
@@ -165,9 +168,34 @@ export const EMAILS_API_KEY_ENV_KEYS: readonly string[] = ENV_KEYS.apiKeyKeys;
 export const EMAILS_API_URL_ENV = EMAILS_API_URL_ENV_KEYS[0] as string;
 export const EMAILS_API_KEY_ENV = EMAILS_API_KEY_ENV_KEYS[0] as string;
 
-/** The one-release legacy aliases this package still accepts (one rung below canonical). */
-export const EMAILS_SELF_HOSTED_URL_ENV = "EMAILS_SELF_HOSTED_URL";
-export const EMAILS_SELF_HOSTED_API_KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
+/**
+ * The RETIRED client aliases, paired with the canonical name each one used to
+ * stand in for. Read nowhere; refused by `assertNoRetiredEmailsClientAliases`.
+ */
+export const RETIRED_EMAILS_CLIENT_ENV_KEYS: ReadonlyArray<readonly [retired: string, canonical: string]> =
+  Object.freeze([
+    ["EMAILS_SELF_HOSTED_URL", EMAILS_API_URL_ENV] as const,
+    ["EMAILS_SELF_HOSTED_API_KEY", EMAILS_API_KEY_ENV] as const,
+  ]);
+
+/**
+ * Refuse an environment that still exports a retired alias. Pure env read — no
+ * Keychain, no disk — so a caller can run it before deciding anything else. A
+ * declared-but-blank alias counts as absent, like every other blank in this seam.
+ */
+export function assertNoRetiredEmailsClientAliases(env: Env = process.env): void {
+  for (const [retired, canonical] of RETIRED_EMAILS_CLIENT_ENV_KEYS) {
+    if ((env[retired] ?? "").trim() === "") continue;
+    throw new ClientTransportConfigurationError(
+      EMAILS_APP,
+      `${retired} is retired and is no longer read by this client (the one-release alias ` +
+        `window closed in @hasna/emails 1.6.1). Set ${canonical} instead — or store the value in ` +
+        `the Keychain item ${keychainService(canonical === EMAILS_API_URL_ENV ? "api-url" : "api-key")} ` +
+        `or ~/.hasna/${EMAILS_APP}/config/credentials — and unset ${retired}.`,
+      [retired, canonical],
+    );
+  }
+}
 
 /**
  * The DELIBERATE tiers of the shared chain, as the resolver spells them for this
@@ -257,17 +285,16 @@ function appPrincipalCredential(env: Env): { setting: string; value: string } | 
 }
 
 /**
- * Capture the configuration this package and the resolver read, translating the
- * one-release aliases onto the canonical names during the copy.
+ * Capture the configuration this package and the resolver read.
  *
  * The returned object is a COPY — but the copy is handed to the resolver with
  * the Keychain tier explicitly enabled (see {@link snapshotEmailsOptions}), which
  * is the #1788-sanctioned shape: the Keychain/disk tiers stay AMBIENT by default
- * and are never silently disabled for a caller-built environment. The aliases
- * are translated here (not in `process.env`) so nothing else in the package has
- * to know about the compatibility window.
+ * and are never silently disabled for a caller-built environment.
  */
 export function snapshotEmailsEnvironment(env: Env = process.env): Env {
+  // The retired aliases are refused, never translated (see the module header).
+  assertNoRetiredEmailsClientAliases(env);
   const snapshot: Env = {};
   const ownKeys = new Set([
     ...ENV_KEYS.apiUrlKeys,
@@ -278,8 +305,6 @@ export function snapshotEmailsEnvironment(env: Env = process.env): Env {
     EMAILS_API_KEY_OVERRIDE_ENV,
     EMAILS_API_KEY_REF_ENV,
     EMAILS_PROFILE_ENV,
-    EMAILS_SELF_HOSTED_URL_ENV,
-    EMAILS_SELF_HOSTED_API_KEY_ENV,
     EMAILS_SESSION_TOKEN_ENV,
     EMAILS_IDP_TOKEN_ENV,
     "HOME",
@@ -293,16 +318,6 @@ export function snapshotEmailsEnvironment(env: Env = process.env): Env {
     if (!descriptor || !("value" in descriptor)) continue;
     const raw = String(descriptor.value ?? "");
     snapshot[key] = raw;
-  }
-  // Alias -> canonical, one rung below: a canonical value always wins; a blank
-  // canonical is treated as unset so an alias can supply it.
-  const urlAlias = snapshot[EMAILS_SELF_HOSTED_URL_ENV]?.trim();
-  if (urlAlias && !(snapshot[ENV_KEYS.apiUrlKeys[0]!] ?? "").trim()) {
-    snapshot[ENV_KEYS.apiUrlKeys[0]!] = urlAlias;
-  }
-  const keyAlias = snapshot[EMAILS_SELF_HOSTED_API_KEY_ENV]?.trim();
-  if (keyAlias && !(snapshot[ENV_KEYS.apiKeyKeys[0]!] ?? "").trim()) {
-    snapshot[ENV_KEYS.apiKeyKeys[0]!] = keyAlias;
   }
   return Object.freeze(snapshot);
 }
@@ -476,9 +491,8 @@ export function resolveEmailsHostedTransport(
         `${configured.source} points this client at an Emails service but no API credential ` +
           `resolved — refusing to start. Looked in the Keychain item ` +
           `${keychainService("api-key")}${emailsCredentialFiles(snapshot).length > 0 ? `, in ` +
-          `${emailsCredentialFiles(snapshot).join(" or ")}` : ""}, and in ${EMAILS_API_KEY_ENV} ` +
-          `(or its alias ${EMAILS_SELF_HOSTED_API_KEY_ENV}). ` +
-          `Set ${EMAILS_API_KEY_ENV} (or ${EMAILS_SELF_HOSTED_API_KEY_ENV}), store the key in the ` +
+          `${emailsCredentialFiles(snapshot).join(" or ")}` : ""}, and in ${EMAILS_API_KEY_ENV}. ` +
+          `Set ${EMAILS_API_KEY_ENV}, store the key in the ` +
           `Keychain item ${keychainService("api-key")}, or write ` +
           `~/.hasna/${EMAILS_APP}/config/credentials.`,
         [EMAILS_API_KEY_ENV],
@@ -487,8 +501,9 @@ export function resolveEmailsHostedTransport(
     throw new ClientTransportConfigurationError(
       EMAILS_APP,
       `No Emails API credential resolved and no authority is configured — refusing to start. ` +
-        `Set ${EMAILS_API_KEY_ENV} and ${EMAILS_API_URL_ENV} (or ${EMAILS_SELF_HOSTED_API_KEY_ENV} and ` +
-        `${EMAILS_SELF_HOSTED_URL_ENV}), store the key in the Keychain item ` +
+        `Looked in the Keychain item ${keychainService("api-key")}, in ` +
+        `~/.hasna/${EMAILS_APP}/config/credentials, and in ${EMAILS_API_KEY_ENV}. ` +
+        `Set ${EMAILS_API_KEY_ENV} and ${EMAILS_API_URL_ENV}, store the key in the Keychain item ` +
         `${keychainService("api-key")}, or write ~/.hasna/${EMAILS_APP}/config/credentials.`,
       [EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV],
     );
@@ -498,7 +513,7 @@ export function resolveEmailsHostedTransport(
     throw new ClientTransportConfigurationError(
       EMAILS_APP,
       `A credential resolves but no Emails API URL is configured — refusing to guess an endpoint. ` +
-        `Set ${EMAILS_API_URL_ENV} (or ${EMAILS_SELF_HOSTED_URL_ENV}), store the api-url in the Keychain item ` +
+        `Set ${EMAILS_API_URL_ENV}, store the api-url in the Keychain item ` +
         `${keychainService("api-url")}, or write ~/.hasna/${EMAILS_APP}/config/credentials.`,
       [EMAILS_API_URL_ENV],
     );

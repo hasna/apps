@@ -9,6 +9,7 @@ afterEach(() => { api?.stop(); api = undefined; closeDatabase(); });
 it("preserves provider provenance and scopes every statistic over HTTP", async () => {
   const previous = process.env.EMAILS_DB_PATH;
   process.env.EMAILS_DB_PATH = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   try {
     resetDatabase();
     const backing = createSqliteEmailStore({ database: getDatabase(), detail: "provider statistics fixture" });

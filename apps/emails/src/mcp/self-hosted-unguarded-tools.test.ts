@@ -49,7 +49,7 @@ import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "../db/database.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
-import { API_BASE_URL_SETTING, API_CREDENTIAL_SETTINGS, DATABASE_PATH_SETTINGS } from "../store-resolution.js";
+import { API_BASE_URL_SETTING, API_CREDENTIAL_SETTINGS, DATABASE_PATH_SETTINGS, LOCAL_OPT_IN_SETTINGS } from "../store-resolution.js";
 import { buildServer } from "./server.js";
 import { runDomainTool } from "./tools/domains-impl.js";
 
@@ -152,6 +152,7 @@ describe("MCP alias tools in self_hosted mode (twins of `emails alias …`)", ()
     // configured store (the API) and still read one dataset.
     for (const setting of [API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS]) delete process.env[setting];
     process.env["EMAILS_DB_PATH"] = ":memory:";
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     resetDatabase();
     db = getDatabase();
     // The migration seeds a protected global catch-all with an EMPTY target. It is deleted here
@@ -159,7 +160,7 @@ describe("MCP alias tools in self_hosted mode (twins of `emails alias …`)", ()
     // (src/db/aliases.test.ts) is where that row's presence is pinned.
     db.run("DELETE FROM aliases");
     api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "mcp alias fixture" }) });
-    for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+    for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
     process.env[API_BASE_URL_SETTING] = api.baseUrl;
     process.env[API_CREDENTIAL_SETTINGS[2] as string] = api.apiKey;
   });

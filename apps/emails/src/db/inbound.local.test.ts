@@ -51,6 +51,7 @@ type StoreInput = Parameters<typeof storeInboundEmail>[0];
 beforeEach(() => {
   originalDbPath = process.env.EMAILS_DB_PATH;
   process.env.EMAILS_DB_PATH = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   db = getDatabase();
   sequence = 0;

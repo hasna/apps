@@ -43,25 +43,28 @@ const SELF_HOSTED_ENV_KEYS = [
   MODE_ENV_KEY,
   `HASNA_${MODE_ENV_KEY}`,
   "EMAILS_CLIENT_ENV_SECRET",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_SESSION_TOKEN",
   "EMAILS_IDP_TOKEN",
   "HASNA_EMAILS_DB_PATH",
   "EMAILS_DB_PATH",
+  "HASNA_EMAILS_LOCAL",
+  "EMAILS_LOCAL",
 ] as const;
 
 /** Select the LOCAL arm: an explicit database path with the API settings unset. */
 function enableLocalArm(): void {
   for (const key of SELF_HOSTED_ENV_KEYS) delete process.env[key];
   process.env.HASNA_EMAILS_DB_PATH = join(TMP_HOME, "local.db");
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
 }
 
 /** Select the API arm: an API origin plus a credential with no database path. */
 function enableApiArm(): void {
   for (const key of SELF_HOSTED_ENV_KEYS) delete process.env[key];
-  process.env.EMAILS_SELF_HOSTED_URL = SELF_HOSTED_URL;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = SELF_HOSTED_KEY;
+  process.env.HASNA_EMAILS_API_URL = SELF_HOSTED_URL;
+  process.env.HASNA_EMAILS_API_KEY = SELF_HOSTED_KEY;
 }
 
 beforeEach(() => {

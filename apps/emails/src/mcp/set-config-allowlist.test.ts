@@ -88,6 +88,7 @@ beforeEach(() => {
   // Configuration tools do not need a mail database.
   delete process.env["EMAILS_DB_PATH"];
   delete process.env["HASNA_EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_LOCAL"];
   api.applyEnv();
 });
 

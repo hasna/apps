@@ -58,8 +58,8 @@ function useAttachmentInventoryPages(
   pages: Array<[cursor: string, page: { items: Array<Record<string, unknown>>; next_cursor: string | null }]>,
 ): void {
   attachmentInventoryPages = new Map(pages);
-  process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
+  process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
+  process.env.HASNA_EMAILS_API_KEY = "attachment-inventory-test-key";
   resetSelfHostedConfigCache();
 }
 
@@ -356,8 +356,8 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
     const previousDbPath = process.env.EMAILS_DB_PATH;
     const previousClientEnvSecret = process.env.EMAILS_CLIENT_ENV_SECRET;
     const previousSessionToken = process.env.EMAILS_SESSION_TOKEN;
-    const previousSelfHostedUrl = process.env.EMAILS_SELF_HOSTED_URL;
-    const previousSelfHostedApiKey = process.env.EMAILS_SELF_HOSTED_API_KEY;
+    const previousSelfHostedUrl = process.env.HASNA_EMAILS_API_URL;
+    const previousSelfHostedApiKey = process.env.HASNA_EMAILS_API_KEY;
     try {
       process.env.HOME = configHome;
       // A stale config-file mode key selects nothing and is never read.
@@ -367,9 +367,10 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
       }
       delete process.env.EMAILS_CLIENT_ENV_SECRET;
       delete process.env.EMAILS_SESSION_TOKEN;
-      process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-      process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
+      process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
+      process.env.HASNA_EMAILS_API_KEY = "attachment-inventory-test-key";
       process.env.EMAILS_DB_PATH = poisonDbDir;
+      process.env["HASNA_EMAILS_LOCAL"] = "1";
       resetSelfHostedConfigCache();
 
       const result = await runInboxTool("list_attachments", {});
@@ -385,10 +386,10 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
       else process.env.EMAILS_CLIENT_ENV_SECRET = previousClientEnvSecret;
       if (previousSessionToken === undefined) delete process.env.EMAILS_SESSION_TOKEN;
       else process.env.EMAILS_SESSION_TOKEN = previousSessionToken;
-      if (previousSelfHostedUrl === undefined) delete process.env.EMAILS_SELF_HOSTED_URL;
-      else process.env.EMAILS_SELF_HOSTED_URL = previousSelfHostedUrl;
-      if (previousSelfHostedApiKey === undefined) delete process.env.EMAILS_SELF_HOSTED_API_KEY;
-      else process.env.EMAILS_SELF_HOSTED_API_KEY = previousSelfHostedApiKey;
+      if (previousSelfHostedUrl === undefined) delete process.env.HASNA_EMAILS_API_URL;
+      else process.env.HASNA_EMAILS_API_URL = previousSelfHostedUrl;
+      if (previousSelfHostedApiKey === undefined) delete process.env.HASNA_EMAILS_API_KEY;
+      else process.env.HASNA_EMAILS_API_KEY = previousSelfHostedApiKey;
       rmSync(configHome, { recursive: true, force: true });
       rmSync(poisonDbDir, { recursive: true, force: true });
       resetSelfHostedConfigCache();
@@ -446,6 +447,7 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
     const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-no-local-inventory-"));
     const previousDbPath = process.env.EMAILS_DB_PATH;
     process.env.EMAILS_DB_PATH = poisonDbDir;
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     try {
       const result = await runInboxTool("list_attachments", {});
       expect(result.isError).toBe(true);

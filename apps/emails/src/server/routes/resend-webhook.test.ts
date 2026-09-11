@@ -20,6 +20,7 @@ const SECRET = `whsec_${Buffer.from("resend-route-test-secret").toString("base64
 beforeEach(() => {
   captureInheritedProcessEnv();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   process.env["RESEND_WEBHOOK_SECRET"] = SECRET;
   resetDatabase();
   createProvider({ name: "Resend", type: "resend", active: true });
@@ -27,6 +28,7 @@ beforeEach(() => {
 afterEach(() => {
   closeDatabase();
   delete process.env["EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_LOCAL"];
   delete process.env["RESEND_WEBHOOK_SECRET"];
   delete process.env["HASNA_EMAILS_DATABASE_URL"];
   restoreInheritedProcessEnv();

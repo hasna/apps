@@ -90,11 +90,14 @@ checks may refuse an operation that the selected store cannot perform.
 `emails inbox attachments` (cursor-based attachment inventory) is present only
 for the hosted client; `emails inbox attachment <email-id>` exists in both
 modes. Hosted mode is selected by the shared credential resolver
-(`HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY` or the one-release
-`EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` aliases, the macOS
-Keychain items for this app, or `~/.hasna/emails/config/credentials`); local
-mode is reached ONLY by an explicit `HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH`,
-and a local run prints `emails: local mode` on stderr. `emails serve` defaults
+(`HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`, the macOS
+Keychain items for this app, or `~/.hasna/emails/config/credentials`; the retired
+`EMAILS_SELF_HOSTED_*` aliases are refused by name); the local store is reached
+ONLY through the standard opt-in `HASNA_EMAILS_LOCAL=1` (alias `EMAILS_LOCAL=1`) with
+no API authority or credential configured — a `HASNA_EMAILS_DB_PATH` /
+`EMAILS_DB_PATH` alone only names the file and is refused — and a local run
+prints one `emails: LOCAL mode — …` line on stderr. The `emails` and
+`emails-mcp` bins are hosted-only and reject both settings. `emails serve` defaults
 to the local dashboard API at `127.0.0.1:3900` in local mode and the
 self-hosted `/v1` service at `0.0.0.0:8080` in hosted mode.
 
@@ -127,12 +130,13 @@ shared `@hasna/contracts` resolver, fresh on every request:
 |---|---|
 | `HASNA_EMAILS_API_URL` | Canonical hosted API origin. Overrides the Keychain `api-url` item and the credentials file. |
 | `HASNA_EMAILS_API_KEY` | Canonical hosted API key (one of the resolver's credential tiers). |
-| `EMAILS_SELF_HOSTED_URL` | One-release alias for `HASNA_EMAILS_API_URL` (one rung below canonical). |
-| `EMAILS_SELF_HOSTED_API_KEY` | One-release alias for `HASNA_EMAILS_API_KEY` (one rung below canonical). |
+| `EMAILS_SELF_HOSTED_URL` | RETIRED (1.6.1): refused by name; set `HASNA_EMAILS_API_URL`. |
+| `EMAILS_SELF_HOSTED_API_KEY` | RETIRED (1.6.1): refused by name; set `HASNA_EMAILS_API_KEY`. |
 | `EMAILS_SESSION_TOKEN` | The app's own user session; wins as the bearer credential. |
 | `EMAILS_IDP_TOKEN` | The app's own agent identity token; wins over the resolved key. |
 | `EMAILS_CLIENT_ENV_SECRET` | Secrets-vault pointer persisting the session/identity tokens (no longer delivers URL or key). |
-| `HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` | Explicit local SQLite file — the ONLY way into local mode. |
+| `HASNA_EMAILS_LOCAL` / `EMAILS_LOCAL` | The ONLY local opt-in (storage library and `emails-serve`); honoured only with no API authority or credential configured. |
+| `HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` | Location of the local SQLite file under the opt-in; alone it selects nothing. |
 | `HASNA_HOME` / `HASNA_CONFIG_HOME` | Relocate `~/.hasna/emails/config/credentials`. |
 | `HASNA_STATION` | Keychain account (falls back to `hostname -s`, then `$USER`). |
 

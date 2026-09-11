@@ -18,7 +18,7 @@ describe("canonical prepublish test isolation", () => {
       EMAILS_MODE: "local", EMAILS_DB_PATH: ":memory:", HASNA_EMAILS_MODE: "local",
       HASNA_EMAILS_DB_PATH: "/operator/db", EMAILS_DATABASE_URL: "operator-database",
       HASNA_EMAILS_API_URL: "https://emails.example.test", HASNA_EMAILS_API_KEY: "synthetic-api-key",
-      EMAILS_SELF_HOSTED_URL: "https://emails.example.test", EMAILS_SELF_HOSTED_API_KEY: "synthetic-api-key",
+      HASNA_EMAILS_API_URL: "https://emails.example.test", HASNA_EMAILS_API_KEY: "synthetic-api-key",
       EMAILS_CLIENT_ENV_SECRET: "synthetic/client-env", EMAILS_SESSION_TOKEN: "synthetic-session",
       EMAILS_IDP_TOKEN: "synthetic-idp", MAILERY_MODE: "local", HASNA_MAILERY_API_URL: "https://legacy.example.test",
       HASNA_DATA_HOME: "/operator/data", HASNA_EMAILS_HOME: "/operator/emails", EMAILS_HOME: "/operator/legacy",
