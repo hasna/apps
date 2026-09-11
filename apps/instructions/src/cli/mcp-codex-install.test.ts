@@ -260,6 +260,57 @@ describe("mcp install/uninstall parity", () => {
   });
 
   /**
+   * The cleanup after the splice must be confined to the SEAM. A whole-file
+   * "collapse runs of 3+ newlines" sweep rewrites bytes the removal has no
+   * business touching — and a newline run inside a TOML multi-line string is
+   * string CONTENT, so the user's `note` silently takes a different value while
+   * the CLI still prints "Removed from Codex" and exits 0.
+   */
+  test("codex uninstall leaves blank runs outside the removed table untouched", () => {
+    const home = makeTempRoot("mcp-codex-blankrun-");
+    const dbPath = join(home, "instructions.db");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const configPath = join(home, ".codex", "config.toml");
+
+    // A 3-newline run INSIDE a multi-line string, in a table far from the
+    // removed one.
+    const inString = `[model]\nnote = """\nfirst\n\n\nsecond\n"""\n\n[mcp_servers.configs]\ncommand = "/configs-mcp"\nargs = []\n\n[mcp_servers.echo]\ncommand = "echo"\n`;
+    writeFileSync(configPath, inString, "utf-8");
+    const removed = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+    expect(removed.status).toBe(0);
+    expect(removed.stdout).toContain("Removed from Codex");
+    const after = readFileSync(configPath, "utf-8");
+    expect(after).not.toContain("mcp_servers.configs");
+    // The string's VALUE is unchanged: the blank run is still there.
+    expect(after).toContain('note = """\nfirst\n\n\nsecond\n"""');
+    expect(after).toBe(
+      `[model]\nnote = """\nfirst\n\n\nsecond\n"""\n[mcp_servers.echo]\ncommand = "echo"\n`,
+    );
+
+    // A 3-blank run between two OTHER tables (nothing to do with the removal)
+    // must survive verbatim too.
+    const spaced = `[model]\nprovider = "anthropic"\n\n\n\n[other]\nkey = "v"\n\n[mcp_servers.configs]\ncommand = "/configs-mcp"\nargs = []\n\n[mcp_servers.echo]\ncommand = "echo"\n`;
+    writeFileSync(configPath, spaced, "utf-8");
+    const removedSpaced = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+    expect(removedSpaced.status).toBe(0);
+    expect(readFileSync(configPath, "utf-8")).toBe(
+      `[model]\nprovider = "anthropic"\n\n\n\n[other]\nkey = "v"\n[mcp_servers.echo]\ncommand = "echo"\n`,
+    );
+
+    // Uninstall stays the exact inverse of install: strip the block install
+    // appended and the file is byte-for-byte what it was before.
+    const original = `[model]\nprovider = "anthropic"\n\n\n\n[mcp_servers.echo]\ncommand = "echo"\n`;
+    writeFileSync(configPath, original, "utf-8");
+    const installed = runCli(["mcp", "install", "--codex"], home, dbPath);
+    expect(installed.status).toBe(0);
+    expect(installed.stdout).toContain("Installed into Codex");
+    const uninstalled = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+    expect(uninstalled.status).toBe(0);
+    expect(uninstalled.stdout).toContain("Removed from Codex");
+    expect(readFileSync(configPath, "utf-8")).toBe(original);
+  });
+
+  /**
    * A TOML value may span lines as an ARRAY. A nested element line such as
    * `[1, 2],` — and the closing element `[3, 4]` of an array written without a
    * trailing comma — starts with `[` after trimming, so a table-end scan that

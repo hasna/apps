@@ -2406,10 +2406,18 @@ mcpCmd.command("uninstall")
             console.log(chalk.dim("= Not installed in Codex"));
             continue;
           }
-          // Strip the [mcp_servers.configs] entry: drop its own lines, then
-          // clean up the blank lines the removal left behind.
-          let remaining = [...lines.slice(0, table.start), ...lines.slice(table.end)].join("\n");
-          remaining = remaining.replace(/\n{3,}/g, "\n\n").trimEnd();
+          // Strip the [mcp_servers.configs] entry: drop its own lines, plus the
+          // single blank separator line the installer writes in front of the
+          // header (its block is `\n[<table>]\n...`). Nothing else is touched.
+          //
+          // A whole-file cleanup is NOT safe here: this removal has no business
+          // rewriting blank runs anywhere else in the file. A 3+-newline run
+          // inside a TOML multi-line string is string CONTENT, so a global
+          // collapse silently changes the value of a user's `note` while still
+          // printing "Removed from Codex" and exiting 0.
+          const before = lines.slice(0, table.start);
+          if (before.length > 0 && before[before.length - 1] === "") before.pop();
+          const remaining = [...before, ...lines.slice(table.end)].join("\n");
           wf(configPath, remaining.endsWith("\n") ? remaining : `${remaining}\n`, "utf-8");
           console.log(chalk.green("✓") + " Removed from Codex");
         } else if (target === "antigravity") {
