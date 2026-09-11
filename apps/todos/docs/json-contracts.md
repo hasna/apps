@@ -357,8 +357,9 @@ service.
 ## Source Index
 
 `source_todo_comment` and `source_code_index` are emitted by
-`todos extract --dry-run --index --json`, `todos extract-watch --json`,
-`extract_todos`, and `watch_source_todos`. They describe local code comments,
+`todos extract --dry-run --index --json` and `todos extract-watch --json`
+(CLI-only; the `extract_todos` / `watch_source_todos` MCP tools were removed).
+They describe local code comments,
 dedupe fingerprints, nearest symbol context, checksums, and gitignore/exclude
 behavior without calling hosted code search or telemetry.
 
