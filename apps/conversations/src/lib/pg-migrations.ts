@@ -1207,4 +1207,107 @@ export const PG_MIGRATIONS: string[] = [
 
   INSERT INTO _migrations (id) VALUES (13) ON CONFLICT DO NOTHING;
   `,
+  // Migration 14: audit log for hosted message redaction (`admin
+  // redact-messages` through the API). Mirrors the on-box
+  // `message_redaction_audit` table so both stores carry the same evidence for
+  // a security remediation.
+  `
+  CREATE TABLE IF NOT EXISTS message_redaction_audit (
+    id TEXT PRIMARY KEY,
+    message_id BIGINT NOT NULL,
+    message_uuid TEXT,
+    actor TEXT NOT NULL,
+    authority TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    redacted_at TEXT NOT NULL,
+    fields TEXT NOT NULL,
+    secret_classes TEXT NOT NULL,
+    before_hashes TEXT NOT NULL,
+    attachment_file_count BIGINT NOT NULL DEFAULT 0,
+    attachment_file_path_hashes TEXT NOT NULL,
+    attachment_files_deleted BIGINT NOT NULL DEFAULT 0,
+    attachment_file_delete_errors BIGINT NOT NULL DEFAULT 0,
+    unsafe_attachment_file_count BIGINT NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_message_redaction_audit_message_id
+    ON message_redaction_audit(message_id);
+
+  INSERT INTO _migrations (id) VALUES (14) ON CONFLICT DO NOTHING;
+  `,
+  // Migration 15: explicit single-corpus ownership. No caller or environment
+  // initializes ownership; the administrative adoption command does so.
+  `
+  CREATE OR REPLACE FUNCTION conversations_registration_receipt_digest(r project_channel_registration_receipts)
+  RETURNS TEXT LANGUAGE SQL STABLE AS $$
+    SELECT encode(sha256(convert_to(jsonb_build_object(
+      'receipt_id', r.receipt_id,
+      'authority', r.authority,
+      'route', r.route,
+      'package_version', r.package_version,
+      'authority_id', r.authority_id,
+      'tenant_id', r.tenant_id,
+      'corpus_id', r.corpus_id,
+      'operation_id', r.operation_id,
+      'step_id', r.step_id,
+      'resource_kind', r.resource_kind,
+      'direction', r.direction,
+      'idempotency_key', r.idempotency_key,
+      'request_digest', r.request_digest,
+      'precondition_digest', r.precondition_digest,
+      'outcome', r.outcome,
+      'reason', r.reason,
+      'target_id', r.target_id,
+      'result_revision', r.result_revision,
+      'result_digest', r.result_digest,
+      'duplicate_of_receipt_id', r.duplicate_of_receipt_id,
+      'accepted_receipt_id', r.accepted_receipt_id,
+      'created_by_operation', r.created_by_operation,
+      'prior_state', r.prior_state,
+      'created_at', to_char(r.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+    )::text,'UTF8')),'hex');
+  $$;
+  CREATE TABLE IF NOT EXISTS conversations_corpus_binding (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    corpus_id TEXT NOT NULL UNIQUE REFERENCES project_channel_registration_identity(corpus_id),
+    tenant_id TEXT NOT NULL CHECK (length(tenant_id) BETWEEN 1 AND 128),
+    authority_id TEXT NOT NULL CHECK (length(authority_id) BETWEEN 1 AND 128),
+    receipt_id TEXT NOT NULL UNIQUE,
+    actor TEXT NOT NULL,
+    adopted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    legacy_receipt_count BIGINT NOT NULL CHECK (legacy_receipt_count >= 0),
+    legacy_receipt_digest TEXT NOT NULL CHECK (legacy_receipt_digest ~ '^[a-f0-9]{64}$')
+  );
+  CREATE TABLE IF NOT EXISTS conversations_corpus_legacy_receipts (
+    receipt_id TEXT PRIMARY KEY REFERENCES project_channel_registration_receipts(receipt_id),
+    adoption_receipt_id TEXT NOT NULL REFERENCES conversations_corpus_binding(receipt_id),
+    receipt_digest TEXT NOT NULL CHECK (receipt_digest ~ '^[a-f0-9]{64}$')
+  );
+  CREATE OR REPLACE FUNCTION conversations_guard_corpus_binding()
+  RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN
+    IF TG_OP <> 'INSERT' THEN
+      RAISE EXCEPTION 'corpus ownership and adoption mappings are immutable';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE oid = TG_RELID AND relowner = current_user::regrole) THEN
+      RAISE EXCEPTION 'corpus adoption requires the binding table owner role';
+    END IF;
+    RETURN NEW;
+  END;
+  $$;
+  DROP TRIGGER IF EXISTS conversations_corpus_binding_guard ON conversations_corpus_binding;
+  CREATE TRIGGER conversations_corpus_binding_guard BEFORE INSERT OR UPDATE OR DELETE ON conversations_corpus_binding
+    FOR EACH ROW EXECUTE FUNCTION conversations_guard_corpus_binding();
+  DROP TRIGGER IF EXISTS conversations_corpus_legacy_guard ON conversations_corpus_legacy_receipts;
+  CREATE TRIGGER conversations_corpus_legacy_guard BEFORE INSERT OR UPDATE OR DELETE ON conversations_corpus_legacy_receipts
+    FOR EACH ROW EXECUTE FUNCTION conversations_guard_corpus_binding();
+  DROP TRIGGER IF EXISTS conversations_corpus_binding_no_truncate ON conversations_corpus_binding;
+  CREATE TRIGGER conversations_corpus_binding_no_truncate BEFORE TRUNCATE ON conversations_corpus_binding
+    FOR EACH STATEMENT EXECUTE FUNCTION conversations_guard_corpus_binding();
+  DROP TRIGGER IF EXISTS conversations_corpus_legacy_no_truncate ON conversations_corpus_legacy_receipts;
+  CREATE TRIGGER conversations_corpus_legacy_no_truncate BEFORE TRUNCATE ON conversations_corpus_legacy_receipts
+    FOR EACH STATEMENT EXECUTE FUNCTION conversations_guard_corpus_binding();
+  REVOKE ALL ON conversations_corpus_binding, conversations_corpus_legacy_receipts FROM PUBLIC;
+  INSERT INTO _migrations (id) VALUES (15) ON CONFLICT DO NOTHING;
+  `,
+
 ];

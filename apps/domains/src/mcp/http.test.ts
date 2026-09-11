@@ -1,3 +1,5 @@
+import { useLocalStoreFixture } from "../test/local-store-fixture.test-support.js";
+useLocalStoreFixture();
 import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "fs";
 import { join } from "path";

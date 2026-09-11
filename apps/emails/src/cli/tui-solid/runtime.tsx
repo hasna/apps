@@ -11,10 +11,10 @@ export async function runSolidOpenTuiApp(initialMailbox?: Mailbox): Promise<void
     else process.env["OTUI_USE_ALTERNATE_SCREEN"] = previousAlternateScreen;
   };
 
-  const [{ createCliRenderer }, { render }, { createDefaultOpenTuiKeymap }, { KeymapProvider }, { App }] = await Promise.all([
+  const [{ createCliRenderer }, { render }, { createEmailsKeymap }, { KeymapProvider }, { App }] = await Promise.all([
     import("@opentui/core"),
     import("@opentui/solid"),
-    import("@opentui/keymap/opentui"),
+    import("./keymap-input.js"),
     import("@opentui/keymap/solid"),
     import("./App.js"),
   ]);
@@ -32,7 +32,7 @@ export async function runSolidOpenTuiApp(initialMailbox?: Mailbox): Promise<void
       enableMouseMovement: true,
       backgroundColor: "#0a0a0a",
     });
-    const keymap = createDefaultOpenTuiKeymap(renderer);
+    const keymap = createEmailsKeymap(renderer);
     for (const signal of ["SIGINT", "SIGTERM"] as const) {
       const handler = () => {
         process.exitCode = signalExitCodes[signal] ?? 1;

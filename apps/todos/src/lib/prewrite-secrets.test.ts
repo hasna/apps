@@ -53,3 +53,44 @@ describe("pre-write secret scanner", () => {
       .toThrow(PreWriteSecretError);
   });
 });
+
+describe("currency text survives pre-write sanitization (BUG-0004 in-repo guard)", () => {
+  // BUG-0004 (hosted todos, 2026-09-07): POST /v1/tasks create silently stripped
+  // `$<digit>` sequences (a $27,658.51 payoff amount and a $300 payment came back
+  // empty) while PATCH preserved them — the classic signature of a text pass that
+  // treats `$N` in a replacement string as a capture-group reference. That strip is
+  // NOT reproducible in this source tree: the hosted Postgres create path
+  // (server/v1.ts -> storage/postgres-adapter.ts createTask) copies title/description
+  // verbatim and applies no text transform. This sanitizer is the only text transform
+  // on the in-repo SQLite create/update lanes (db/task-crud.ts), so these cases pin
+  // that in-repo sanitizer only — BUG-0004's deployed-layer cause remains open. It
+  // must never consume or rewrite currency text.
+  const samples = [
+    "Pay the $27,658.51 payoff amount",
+    "Send $300 payment today",
+    "Refund $1 and $12 and $27568",
+    "Invoice total $27568.00 due",
+    "$300 deposit, $27,658.51 balance, $1 fee",
+  ];
+
+  for (const context of ["task.title", "task.description"]) {
+    test(`preserves dollar samples verbatim in ${context}`, () => {
+      for (const sample of samples) {
+        expect(sanitizePreWriteText(sample, context)).toBe(sample);
+        expect(scanPreWriteText(sample, context).clean).toBe(true);
+      }
+    });
+  }
+
+  test("does not confuse currency with credential-key redaction placeholders", () => {
+    // A task title that quotes a credential-shaped env line is still redacted, but
+    // plain money text next to it survives untouched (the credential redactors'
+    // `$1=`/`$1 ` replacement strings must never be able to reach currency text).
+    const mixed = "Record payout of $27,658.51 for TOKEN=abc12345secret then $300";
+    const out = sanitizePreWriteText(mixed, "task.description");
+    expect(out).toContain("$27,658.51");
+    expect(out).toContain("$300");
+    expect(out).toContain("TOKEN=[REDACTED]");
+    expect(out).not.toContain("abc12345secret");
+  });
+});

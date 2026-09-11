@@ -16,10 +16,14 @@
  * cannot see them. That fails on bytes without the preload and passes with it,
  * identically on a loaded workstation and on a clean CI runner.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+
+// Launches a nested `bun test`; bun's 5s default is too tight for a cold start
+// on a loaded host.
+setDefaultTimeout(60_000);
 
 const repoRoot = resolve(import.meta.dir, "..", "..");
 const probeFile = join("src", "test", "store-isolation-probe.test.ts");

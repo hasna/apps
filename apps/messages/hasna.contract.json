@@ -48,14 +48,14 @@
       "kind": "cli",
       "status": "supported",
       "bin": "messages",
-      "authMode": "local-only"
+      "authMode": "api-key"
     },
     {
       "name": "messages-mcp",
       "kind": "mcp",
       "status": "supported",
       "mcpBin": "messages-mcp",
-      "authMode": "local-only"
+      "authMode": "api-key"
     }
   ],
   "storage": {

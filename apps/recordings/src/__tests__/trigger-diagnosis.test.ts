@@ -18,7 +18,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -30,13 +30,18 @@ import {
   readAppLogTail,
   resolveHotkeyBinding,
 } from "../cli/trigger-probe.js";
+import { signingFixtureCommand } from "./helpers/signing-fixture";
 import { sliceBetweenUnique } from "./helpers/source-assertions";
 
 const temporaryDirectories: string[] = [];
 /** `check` must make no network call, and only strace can settle that; see the test below. */
-const testWithStrace = Bun.spawnSync(["strace", "-V"]).exitCode === 0 ? test : test.skip;
+const testWithStrace = Bun.which("strace") && Bun.spawnSync(["strace", "-V"]).exitCode === 0 ? test : test.skip;
 const repoRoot = join(import.meta.dir, "..", "..");
-const cliEntry = join("src", "cli", "index.ts");
+const cliEntry = join(import.meta.dir, "helpers", "trigger-cli-fixture.ts");
+// A child sandbox is necessary: an outer release-gate sandbox cannot nest it.
+// Deny network, signals to outside processes, writes outside HOME, and actual
+// host apps/preferences/Keychain/TCC reads as well as pinned native commands.
+const cliCommand = (home: string) => signingFixtureCommand(home, [process.execPath, cliEntry]);
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -45,7 +50,8 @@ afterEach(() => {
 });
 
 function scratchHome(label: string): string {
-  const home = mkdtempSync(join(tmpdir(), `recordings-trigger-${label}-`));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), `recordings-trigger-${label}-`)));
+  chmodSync(home, 0o700);
   temporaryDirectories.push(home);
   return home;
 }
@@ -346,6 +352,33 @@ function renderSwiftInterpolatedString(source: string, values: Array<[string, st
 }
 
 describe("a stored trigger that the running app has not picked up", () => {
+  test("fixture blocks macOS defaults even when production ignores the test override", () => {
+    const home = scratchHome("pinning");
+    const defaultsPath = join(home, "fake-defaults");
+    const marker = join(home, "override-ran");
+    writeFileSync(defaultsPath, `#!/bin/sh\nprintf invoked > "${marker}"\n`);
+    chmodSync(defaultsPath, 0o700);
+    const result = Bun.spawnSync([...cliCommand(home), "--verify-darwin-pinning"], {
+      cwd: home, timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
+      env: { HOME: home, TMPDIR: tmpdir(), PATH: "/usr/bin:/bin", RECORDINGS_TEST_DEFAULTS_EXECUTABLE: defaultsPath },
+    });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(JSON.parse(result.stdout.toString())).toEqual({
+      defaults: "/usr/bin/defaults", blocked: true,
+      denied: ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork", "bunSpawn", "bunSpawnSync"],
+    });
+    expect(existsSync(marker)).toBe(false);
+    if (process.platform === "darwin") {
+      // Verify the independent OS backstop without asking to read or write
+      // the installed app's domain, even if this negative control regresses.
+      const denied = Bun.spawnSync(signingFixtureCommand(home, [
+        "/usr/bin/defaults", "read", "org.example.recordings.fixture", "fictional-key",
+      ]), { env: { HOME: home, TMPDIR: tmpdir(), PATH: "/usr/bin:/bin" } });
+      expect(denied.exitCode).not.toBe(0);
+      expect(denied.stderr.toString()).toContain("Operation not permitted");
+      expect(denied.stdout.toString()).toBe("");
+    }
+  });
   test("says the stored fn setting is not armed", () => {
     const diagnosis = diagnoseTrigger({
       trigger: storedState(STORED_F5, true),
@@ -406,9 +439,9 @@ describe("a stored trigger that the running app has not picked up", () => {
 describe("a trigger write that the running app will not pick up", () => {
   test("is not armed while an instance is running, and armed when none is", () => {
     expect(describeTriggerPickup([]).armed).toBe(true);
-    const pickup = describeTriggerPickup(["/Applications/HasnaRecordings.app"]);
+    const pickup = describeTriggerPickup(["/Applications/Hasna Recordings.app"]);
     expect(pickup.armed).toBe(false);
-    expect(pickup.runningBundlePaths).toEqual(["/Applications/HasnaRecordings.app"]);
+    expect(pickup.runningBundlePaths).toEqual(["/Applications/Hasna Recordings.app"]);
   });
 
   /**
@@ -418,7 +451,7 @@ describe("a trigger write that the running app will not pick up", () => {
    */
   test("recordings shortcut exits non-zero when it writes while an instance runs", () => {
     const home = scratchHome("pickup");
-    const bundle = join(home, "Applications", "HasnaRecordings.app");
+    const bundle = join(home, "Applications", "Hasna Recordings.app");
     mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
     writeFileSync(join(bundle, "Contents", "Info.plist"), "<plist/>");
 
@@ -444,18 +477,19 @@ exit 1
     writeFileSync(psPath, `#!/bin/sh\nprintf '%s\\n' "${bundle}/Contents/MacOS/Recordings"\n`);
     chmodSync(psPath, 0o755);
 
-    const result = Bun.spawnSync([process.execPath, cliEntry, "shortcut", "--fn", "on"], {
-      cwd: repoRoot,
+    const result = Bun.spawnSync([...cliCommand(home), "shortcut", "--fn", "on"], {
+      cwd: home, timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
+        TMPDIR: tmpdir(),
         RECORDINGS_TEST_DEFAULTS_EXECUTABLE: defaultsPath,
         RECORDINGS_TEST_PS_EXECUTABLE: psPath,
       },
     });
     const stdout = result.stdout.toString();
     // The write itself must still have happened — this is not a refusal to write.
-    expect(readFileSync(writesPath, "utf8")).toContain("useFnKey");
+    expect(readFileSync(writesPath, "utf8")).toBe("write com.hasna.recordings useFnKey -bool true\n");
     expect(stdout).toContain("still holds the previous trigger");
     expect(stdout).toContain(bundle);
     expect(result.exitCode).toBe(1);
@@ -471,21 +505,21 @@ describe("the running-bundle scan does not re-ask questions it has answered", ()
   test("reads each distinct candidate path exactly once across the whole listing", () => {
     const reads: string[] = [];
     const listing = [
-      "/Applications/HasnaRecordings.app/Contents/MacOS/Recordings",
+      "/Applications/Hasna Recordings.app/Contents/MacOS/Recordings",
       "/Applications/Safari.app/Contents/MacOS/Safari",
       "/Applications/Mail.app/Contents/MacOS/Mail",
-      "/Applications/HasnaRecordings.app/Contents/MacOS/Recordings",
+      "/Applications/Hasna Recordings.app/Contents/MacOS/Recordings",
     ].join("\n");
 
     const found = runningAppBundlePaths({
       listProcesses: () => listing,
       readBundleIdentifier: (path) => {
         reads.push(path);
-        return path === "/Applications/HasnaRecordings.app" ? "com.hasna.recordings" : null;
+        return path === "/Applications/Hasna Recordings.app" ? "com.hasna.recordings" : null;
       },
     });
 
-    expect(found).toEqual(["/Applications/HasnaRecordings.app"]);
+    expect(found).toEqual(["/Applications/Hasna Recordings.app"]);
     // Each line contributes its own "/..." prefixes; the shared ones must be asked once.
     expect(reads.length).toBe(new Set(reads).size);
     // Without the cache the two Recordings lines and the two decoys re-ask "/Applications"
@@ -495,21 +529,27 @@ describe("the running-bundle scan does not re-ask questions it has answered", ()
 });
 
 /**
- * End-to-end, through the real CLI process, because the exit code is the contract. The stand-in
- * `defaults` is honoured only off macOS (`TRIGGER_DEFAULTS_EXECUTABLE`), which is the same rule
- * `scripts/macos_artifact.ts` uses for codesign — and it is the only way to exercise this at
- * all, since the fleet's one Mac is the owner's production machine.
+ * End-to-end through the real CLI command graph and host platform branches.
+ * The test-only entry point intercepts pinned macOS tools at the process
+ * boundary; production continues to ignore environment overrides on Darwin.
  */
 describe("recordings check exit contract", () => {
   const runCheck = (home: string, fake: Record<string, string> | null) => {
-    const result = Bun.spawnSync([process.execPath, cliEntry, "--json", "check"], {
-      cwd: repoRoot,
+    const result = Bun.spawnSync([...cliCommand(home), "--json", "check"], {
+      cwd: home, timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
+        TMPDIR: tmpdir(),
         HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
         RECORDINGS_AUDIO_DIR: join(home, "audio"),
         OPENAI_API_KEY: "test-openai-key",
+        // `check` fails closed (report "none", exit 1) when no credential
+        // resolves, so these spawns pin an env-tier fixture key against a
+        // fixture station: the exact native Keychain lookup is intercepted
+        // as item-not-found, so the real resolver reaches this env tier.
+        HASNA_STATION: "recordings-fixture",
+        HASNA_RECORDINGS_API_KEY: "fixture-check-trigger-key",
         ...(fake ?? {}),
       },
     });
@@ -564,23 +604,31 @@ printf '%s\\n' "$value"
     // useFnKey=0 with bare F5 bound — the state station03 was in. Reported, not failed.
     const { exitCode, stdout } = runCheck(home, fakeDefaults(home, STORED_F5, "0"));
     expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout).active_store.transport).toBe("http");
     const report = JSON.parse(stdout) as {
       trigger: { can_fire: boolean; hotkey: { chord: string }; fn: { use_fn_key: boolean } };
     };
     expect(report.trigger.can_fire).toBe(true);
     expect(report.trigger.hotkey.chord).toBe("F5");
     expect(report.trigger.fn.use_fn_key).toBe(false);
+    if (process.platform === "darwin") {
+      // The fixture must exercise the real Darwin diagnostic branch.
+      expect((JSON.parse(stdout) as { microphone_permission: string | null }).microphone_permission).toBe("not_determined");
+    }
   });
 
   test("the human readout names the trigger too, not only --json", () => {
     const home = scratchHome("text");
-    const result = Bun.spawnSync([process.execPath, cliEntry, "check"], {
-      cwd: repoRoot,
+    const result = Bun.spawnSync([...cliCommand(home), "check"], {
+      cwd: home, timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
+        TMPDIR: tmpdir(),
         HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
         OPENAI_API_KEY: "test-openai-key",
+        HASNA_STATION: "recordings-fixture",
+        HASNA_RECORDINGS_API_KEY: "fixture-check-trigger-key",
         ...fakeDefaults(home, "0", "0"),
       },
     });
@@ -659,11 +707,12 @@ printf '%s\\n' "$value"
         "microphone=allowed accessibility=allowed blocked=none\n",
     );
     // Storage now says fn is ON; the running app registered with it OFF.
-    const result = Bun.spawnSync([process.execPath, cliEntry, "--json", "app", "status"], {
-      cwd: repoRoot,
+    const result = Bun.spawnSync([...cliCommand(home), "--json", "app", "status"], {
+      cwd: home, timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
+        TMPDIR: tmpdir(),
         ...fakeDefaults(home, STORED_F5, "1"),
       },
     });
@@ -705,18 +754,24 @@ printf '%s\\n' "$value"
         "trace=connect",
         "-o",
         tracePath,
-        process.execPath,
-        cliEntry,
+        ...cliCommand(home),
         "--json",
         "check",
       ],
       {
-        cwd: repoRoot,
+        cwd: home, timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
         env: {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
           HOME: home,
-            HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
+          TMPDIR: tmpdir(),
+          HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
           OPENAI_API_KEY: "test-openai-key",
+          // A credential must resolve so `check` exits 0 (it fails closed —
+          // "none", exit 1 — when nothing resolves); the assertion is that
+          // the command makes NO connect(2) syscall even though it resolves
+          // the hosted store.
+          HASNA_STATION: "recordings-fixture",
+          HASNA_RECORDINGS_API_KEY: "fixture-check-trigger-key",
           ...fakeDefaults(home, STORED_F5, "1"),
         },
       },

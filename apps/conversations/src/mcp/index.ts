@@ -11,7 +11,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { getStore } from "../lib/store/index.js";
+import { ConversationsStoreConfigError, assertUnambiguousStoreEnv, getStore } from "../lib/store/index.js";
 
 import { registerMessagingTools } from "./tools/messaging.js";
 import { registerChannelTools } from "./tools/channels.js";
@@ -58,6 +58,7 @@ async function resolveProjectId(explicitProjectId: string | undefined, agentId: 
  * changing the shape every other caller depends on.
  */
 const serverDisposers = new WeakMap<McpServer, Array<() => Promise<void>>>();
+const serverDrains = new WeakMap<McpServer, Promise<void>>();
 
 /**
  * Stop the background loops owned by a server built here, and wait until they
@@ -67,10 +68,14 @@ const serverDisposers = new WeakMap<McpServer, Array<() => Promise<void>>>();
  * build their own server and outlive it.
  */
 export async function disposeServer(srv: McpServer): Promise<void> {
+  const existing = serverDrains.get(srv);
+  if (existing) return existing;
   const disposers = serverDisposers.get(srv);
   if (!disposers) return;
   serverDisposers.delete(srv);
-  await Promise.allSettled(disposers.map((dispose) => dispose()));
+  const drain = Promise.allSettled(disposers.map((dispose) => dispose())).then(() => {});
+  serverDrains.set(srv, drain);
+  try { await drain; } finally { serverDrains.delete(srv); }
 }
 
 export function buildServer(forHttp = false): McpServer {
@@ -89,8 +94,34 @@ export function buildServer(forHttp = false): McpServer {
   registerThreadTools(srv);
 
   if (!forHttp) {
-    serverDisposers.set(srv, [registerChannelBridge(srv)]);
-    registerTelegramChannel(srv);
+    // Building/importing a tool registry must not start account reads. Register
+    // capabilities immediately before connecting, then own and drain the loops.
+    let connectionAttempted = false;
+    const connect = srv.connect.bind(srv);
+    const close = srv.close.bind(srv);
+    const onclose = srv.server.onclose;
+    srv.server.onclose = () => {
+      void disposeServer(srv);
+      onclose?.();
+    };
+    srv.connect = async (...args: Parameters<McpServer["connect"]>) => {
+      if (connectionAttempted) throw new Error("MCP stdio server instances support one transport connection; build a new server to reconnect.");
+      connectionAttempted = true;
+      try {
+        await serverDrains.get(srv);
+        if (!serverDisposers.has(srv)) {
+          const disposers: Array<() => Promise<void>> = [];
+          serverDisposers.set(srv, disposers);
+          disposers.push(registerChannelBridge(srv));
+          disposers.push(registerTelegramChannel(srv));
+        }
+        await connect(...args);
+      } catch (error) { await disposeServer(srv); throw error; }
+    };
+    srv.close = async () => {
+      const drain = disposeServer(srv);
+      try { await close(); } finally { await drain; }
+    };
   }
 
   return srv;
@@ -98,9 +129,39 @@ export function buildServer(forHttp = false): McpServer {
 
 export const server = buildServer();
 
-export async function startMcpServer() {
+/**
+ * FAIL CLOSED BEFORE SERVING (owner ruling 2026-09-04, hasna/apps#1720
+ * acceptance (c); the same gate @hasna/mementos received in #1868).
+ *
+ * Until now nothing evaluated the store selection before `server.connect`:
+ * every tool call resolved the store fresh and refused on its own, so a
+ * hosted station with no credential got an MCP server that answered
+ * `initialize`, advertised 40+ tools, and returned an `isError` result for
+ * each of them — fail-loud PER CALL, never fail-closed. A coding agent that
+ * registered `conversations-mcp` without a credential saw a healthy server
+ * and a wall of tool errors instead of one startup refusal naming the fix.
+ *
+ * Shared account configuration is checked before either transport connects.
+ * Retired database selectors and missing credentials fail without opening a
+ * database. Each tool re-resolves credentials so revocation remains effective.
+ */
+export function assertMcpStoreConfigured(env: Record<string, string | undefined> = process.env): void {
+  assertUnambiguousStoreEnv(env);
+}
+
+async function connectStdio(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+}
+
+/**
+ * Start the stdio server for the CLI's `conversations mcp` subcommand. The
+ * startup gate throws rather than exiting so the CLI's own error surface
+ * (and its `--json` error contract) reports the refusal.
+ */
+export async function startMcpServer() {
+  assertMcpStoreConfigured();
+  await connectStdio();
 }
 
 const isDirectRun =
@@ -128,8 +189,22 @@ Environment:
     console.log(pkg.version);
     return;
   }
+  // The startup gate runs BEFORE either transport exists, so a hosted run
+  // with no credential exits non-zero without ever answering `initialize`
+  // (stdio) or binding a port (HTTP). The refusal is the chain's own message
+  // on stderr — tier names and the local opt-in, never a value — and the
+  // exit code is 1, the same contract the CLI's error surface honours.
+  try {
+    assertMcpStoreConfigured();
+  } catch (error) {
+    if (error instanceof ConversationsStoreConfigError) {
+      console.error(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
   if (isStdioMode(args)) {
-    await startMcpServer();
+    await connectStdio();
     return;
   }
   // Default: shared Streamable HTTP server (one process per MCP, many agents).

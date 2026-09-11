@@ -62,8 +62,8 @@ describe("configured store resolution — the quadrants and the boot-error rows"
     expect(error.message).toContain(API_BASE_URL_SETTING);
     expect(error.message).toContain("HASNA_EMAILS_API_KEY");
     expect(error.message).toContain(EMAILS_SELF_HOSTED_API_KEY_ENV);
-    // ...and the explicit way back to local, so the refusal is not a dead end.
-    for (const setting of DATABASE_PATH_SETTINGS) expect(error.message).toContain(setting);
+    // ...without recommending a SQLite setting that ordinary clients reject.
+    for (const setting of DATABASE_PATH_SETTINGS) expect(error.message).not.toContain(setting);
     // The machine-readable half carries the hosted-env and local keys at fault — never
     // a value, because a value in this row can be a credential.
     expect([...error.settings].sort()).toEqual(
@@ -567,9 +567,9 @@ describe("fail-closed resolution (incident 715712 → the fail-closed ruling)", 
       expect(thrown).toBeInstanceOf(StoreConfigurationError);
       const error = thrown as StoreConfigurationError;
       // The boot error itself is the notice now — refusing beats announcing a
-      // fallback and exiting 0 — and it names the way back to local.
+      // fallback and exiting 0 — and it names the API configuration.
       expect(error.message).toContain(API_BASE_URL_SETTING);
-      for (const setting of DATABASE_PATH_SETTINGS) expect(error.message).toContain(setting);
+      for (const setting of DATABASE_PATH_SETTINGS) expect(error.message).not.toContain(setting);
       expect(errSpy).not.toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();

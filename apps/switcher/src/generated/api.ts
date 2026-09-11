@@ -294,11 +294,27 @@ export interface components {
                 name: string;
                 description?: string;
                 available?: boolean;
+                expiresOn?: string;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
+                supportedGenerationMethods?: string[];
+            }[];
+            additionalModels?: {
+                id: string;
+                name: string;
+                description?: string;
+                available?: boolean;
+                expiresOn?: string;
+                contextWindow?: number;
+                maxOutputTokens?: number;
+                inputModalities?: string[];
+                outputModalities?: string[];
+                supportedParameters?: string[];
+                reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                 supportedGenerationMethods?: string[];
             }[];
         };
@@ -329,11 +345,27 @@ export interface components {
                 name: string;
                 description?: string;
                 available?: boolean;
+                expiresOn?: string;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
+                supportedGenerationMethods?: string[];
+            }[];
+            additionalModels?: {
+                id: string;
+                name: string;
+                description?: string;
+                available?: boolean;
+                expiresOn?: string;
+                contextWindow?: number;
+                maxOutputTokens?: number;
+                inputModalities?: string[];
+                outputModalities?: string[];
+                supportedParameters?: string[];
+                reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                 supportedGenerationMethods?: string[];
             }[];
             version: number;
@@ -346,6 +378,30 @@ export interface components {
             /** @enum {string} */
             harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
             model: string;
+            modelPolicy?: {
+                /**
+                 * @default 1
+                 * @enum {number}
+                 */
+                version: 1;
+                roles?: {
+                    subagent?: string;
+                    fast?: string;
+                    planning?: string;
+                    review?: string;
+                    summary?: string;
+                    compaction?: string;
+                    weak?: string;
+                    editor?: string;
+                };
+                allowedModels?: string[];
+                aliases?: {
+                    [key: string]: string;
+                };
+                fallbacks?: {
+                    [key: string]: string[];
+                };
+            };
         };
         Profile: {
             id: string;
@@ -354,6 +410,30 @@ export interface components {
             /** @enum {string} */
             harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
             model: string;
+            modelPolicy?: {
+                /**
+                 * @default 1
+                 * @enum {number}
+                 */
+                version: 1;
+                roles?: {
+                    subagent?: string;
+                    fast?: string;
+                    planning?: string;
+                    review?: string;
+                    summary?: string;
+                    compaction?: string;
+                    weak?: string;
+                    editor?: string;
+                };
+                allowedModels?: string[];
+                aliases?: {
+                    [key: string]: string;
+                };
+                fallbacks?: {
+                    [key: string]: string[];
+                };
+            };
             version: number;
             updatedAt: string;
         };
@@ -362,12 +442,54 @@ export interface components {
             name: string;
             description?: string;
             available?: boolean;
+            expiresOn?: string;
             contextWindow?: number;
             maxOutputTokens?: number;
             inputModalities?: string[];
             outputModalities?: string[];
             supportedParameters?: string[];
+            reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
             supportedGenerationMethods?: string[];
+        };
+        ModelPolicy: {
+            /**
+             * @default 1
+             * @enum {number}
+             */
+            version: 1;
+            roles?: {
+                subagent?: string;
+                fast?: string;
+                planning?: string;
+                review?: string;
+                summary?: string;
+                compaction?: string;
+                weak?: string;
+                editor?: string;
+            };
+            allowedModels?: string[];
+            aliases?: {
+                [key: string]: string;
+            };
+            fallbacks?: {
+                [key: string]: string[];
+            };
+        };
+        RoutingEvent: {
+            /** Format: date-time */
+            at: string;
+            requestId: string;
+            requestedModel: string;
+            resolvedModel?: string;
+            reportedModel?: string;
+            /** @enum {string} */
+            reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            /** @enum {string} */
+            decision: "allow" | "alias" | "reject" | "fallback";
+            /** @enum {string} */
+            role?: "main" | "subagent" | "fast" | "planning" | "review" | "summary" | "compaction" | "weak" | "editor";
+            reason?: string;
+            upstreamStatus?: number;
         };
         ModelPage: {
             data: {
@@ -375,13 +497,16 @@ export interface components {
                 name: string;
                 description?: string;
                 available?: boolean;
+                expiresOn?: string;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                 supportedGenerationMethods?: string[];
                 codingEligible: boolean;
+                expired: boolean;
             }[];
             total: number;
             limit: number;
@@ -396,11 +521,13 @@ export interface components {
                 name: string;
                 description?: string;
                 available?: boolean;
+                expiresOn?: string;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                 supportedGenerationMethods?: string[];
             }[];
             refreshedAt: string;
@@ -435,11 +562,27 @@ export interface components {
                     name: string;
                     description?: string;
                     available?: boolean;
+                    expiresOn?: string;
                     contextWindow?: number;
                     maxOutputTokens?: number;
                     inputModalities?: string[];
                     outputModalities?: string[];
                     supportedParameters?: string[];
+                    reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
+                    supportedGenerationMethods?: string[];
+                }[];
+                additionalModels?: {
+                    id: string;
+                    name: string;
+                    description?: string;
+                    available?: boolean;
+                    expiresOn?: string;
+                    contextWindow?: number;
+                    maxOutputTokens?: number;
+                    inputModalities?: string[];
+                    outputModalities?: string[];
+                    supportedParameters?: string[];
+                    reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                     supportedGenerationMethods?: string[];
                 }[];
                 version: number;
@@ -452,6 +595,30 @@ export interface components {
                 /** @enum {string} */
                 harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
                 model: string;
+                modelPolicy?: {
+                    /**
+                     * @default 1
+                     * @enum {number}
+                     */
+                    version: 1;
+                    roles?: {
+                        subagent?: string;
+                        fast?: string;
+                        planning?: string;
+                        review?: string;
+                        summary?: string;
+                        compaction?: string;
+                        weak?: string;
+                        editor?: string;
+                    };
+                    allowedModels?: string[];
+                    aliases?: {
+                        [key: string]: string;
+                    };
+                    fallbacks?: {
+                        [key: string]: string[];
+                    };
+                };
                 version: number;
                 updatedAt: string;
             };
@@ -461,11 +628,13 @@ export interface components {
                     name: string;
                     description?: string;
                     available?: boolean;
+                    expiresOn?: string;
                     contextWindow?: number;
                     maxOutputTokens?: number;
                     inputModalities?: string[];
                     outputModalities?: string[];
                     supportedParameters?: string[];
+                    reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                     supportedGenerationMethods?: string[];
                 }[];
                 refreshedAt: string;
@@ -476,22 +645,91 @@ export interface components {
             warnings: string[];
         };
         RunInput: {
+            /** @enum {number} */
+            modelPolicyVersion: 1;
             profileId: string;
             /** @enum {string} */
             harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
             model: string;
+            modelPolicy?: {
+                /**
+                 * @default 1
+                 * @enum {number}
+                 */
+                version: 1;
+                roles?: {
+                    subagent?: string;
+                    fast?: string;
+                    planning?: string;
+                    review?: string;
+                    summary?: string;
+                    compaction?: string;
+                    weak?: string;
+                    editor?: string;
+                };
+                allowedModels?: string[];
+                aliases?: {
+                    [key: string]: string;
+                };
+                fallbacks?: {
+                    [key: string]: string[];
+                };
+            };
             planToken: string;
         };
         RunUpdate: {
             /** @enum {string} */
             status: "exited" | "failed" | "interrupted";
             exitCode: number;
+            routingEvents?: {
+                /** Format: date-time */
+                at: string;
+                requestId: string;
+                requestedModel: string;
+                resolvedModel?: string;
+                reportedModel?: string;
+                /** @enum {string} */
+                reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+                /** @enum {string} */
+                decision: "allow" | "alias" | "reject" | "fallback";
+                /** @enum {string} */
+                role?: "main" | "subagent" | "fast" | "planning" | "review" | "summary" | "compaction" | "weak" | "editor";
+                reason?: string;
+                upstreamStatus?: number;
+            }[];
+            routingEventsDropped?: number;
         };
         Run: {
+            /** @enum {number} */
+            modelPolicyVersion?: 1;
             profileId: string;
             /** @enum {string} */
             harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
             model: string;
+            modelPolicy?: {
+                /**
+                 * @default 1
+                 * @enum {number}
+                 */
+                version: 1;
+                roles?: {
+                    subagent?: string;
+                    fast?: string;
+                    planning?: string;
+                    review?: string;
+                    summary?: string;
+                    compaction?: string;
+                    weak?: string;
+                    editor?: string;
+                };
+                allowedModels?: string[];
+                aliases?: {
+                    [key: string]: string;
+                };
+                fallbacks?: {
+                    [key: string]: string[];
+                };
+            };
             planToken: string;
             version: number;
             updatedAt: string;
@@ -504,6 +742,23 @@ export interface components {
             startedAt: string;
             endedAt?: string;
             exitCode?: number;
+            routingEvents?: {
+                /** Format: date-time */
+                at: string;
+                requestId: string;
+                requestedModel: string;
+                resolvedModel?: string;
+                reportedModel?: string;
+                /** @enum {string} */
+                reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+                /** @enum {string} */
+                decision: "allow" | "alias" | "reject" | "fallback";
+                /** @enum {string} */
+                role?: "main" | "subagent" | "fast" | "planning" | "review" | "summary" | "compaction" | "weak" | "editor";
+                reason?: string;
+                upstreamStatus?: number;
+            }[];
+            routingEventsDropped?: number;
         };
         Health: {
             /** @enum {string} */

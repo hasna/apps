@@ -20,7 +20,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
-import { createPgPool, createQueryClient, MigrationLedger, type PoolQueryClient } from "../../storage-kit/index.js";
+import { createPgPool, createQueryClient, MigrationLedger, type PoolQueryClient, type TypedQueryClient } from "../../storage-kit/index.js";
 import { emailsSelfHostedMigrations } from "./migrations.js";
 import { EmailsSelfHostedStore, TenantScopedStore } from "./store.js";
 import { handleSelfHostedRequest, type SelfHostedServiceDeps } from "./service.js";
@@ -220,10 +220,106 @@ beforeAll(async () => {
   await pgClient.execute("DROP SCHEMA IF EXISTS public CASCADE");
   await pgClient.execute("CREATE SCHEMA public");
   await new MigrationLedger(pgClient, emailsSelfHostedMigrations()).migrate();
-});
+}, 60_000);
 
 afterAll(async () => {
   await pgClient?.close();
+});
+
+describe.skipIf(!pgClient)("scoped authority applies before send intent replay or mutation", () => {
+  async function fixture() {
+    let sends = 0;
+    const deps = makeDeps({ provider: "ses", send: async () => { sends++; return "scoped-provider-receipt"; } });
+    const tenant = await makeTenant(`scoped-${crypto.randomUUID()}`);
+    const domain = `${crypto.randomUUID()}.example.test`;
+    const from = `scoped@${domain}`;
+    await registerSender(deps, tenant.token, domain, from);
+    const owners = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+    for (const owner of owners) await pgClient!.execute("INSERT INTO owners (id, name, type, tenant_id) VALUES ($1, 'Fixture owner', 'agent', $2)", [owner, tenant.tenantId]);
+    await pgClient!.execute("UPDATE addresses SET owner_id = $1, administrator_id = $2 WHERE tenant_id = $3", [owners[0], owners[1], tenant.tenantId]);
+    const store = deps.store.forTenant(tenant.tenantId);
+    const keys = await Promise.all(owners.map(owner_id => store.mintSendKey({ owner_id })));
+    const member = `emss_${crypto.randomUUID()}`;
+    deps.authStore.resolveSession = async token => token === member
+      ? { tenantId: tenant.tenantId, userId: crypto.randomUUID(), role: "member", globalRole: null } : null;
+    const input = { from, to: ["recipient@example.net"], subject: "Scoped replay", text: "Fixture", idempotency_key: crypto.randomUUID() };
+    return { deps, tenant, keys, member, input, sends: () => sends };
+  }
+
+  it("rejects invalid, revoked, foreign-owner and missing member keys on a sent replay while valid owner/admin retries stay idempotent", async () => {
+    const f = await fixture();
+    const first = await call(f.deps, "POST", "/v1/messages/send", { token: f.member, body: { ...f.input, send_key: f.keys[0]!.token } });
+    expect(first.status).toBe(202);
+    expect(first.body.sent).toBe(true);
+    // Replaying historical success must not re-run current suppression/quota policy.
+    await pgClient!.execute("INSERT INTO contacts (id, email, suppressed, tenant_id) VALUES ($1, $2, true, $3)", [crypto.randomUUID(), f.input.to[0], f.tenant.tenantId]);
+    await pgClient!.execute("UPDATE addresses SET daily_quota = 0 WHERE tenant_id = $1", [f.tenant.tenantId]);
+    for (const key of f.keys.slice(0, 2)) {
+      const replay = await call(f.deps, "POST", "/v1/messages/send", { token: f.member, body: { ...f.input, send_key: key.token } });
+      expect(replay.status).toBe(200);
+      expect(replay.body).toMatchObject({ sent: true, idempotent_replay: true });
+    }
+    await pgClient!.execute("UPDATE send_keys SET revoked_at = now() WHERE id = $1", [f.keys[0]!.key.id]);
+    for (const [token, sendKey, reason] of [
+      [f.tenant.token, `esk_${crypto.randomUUID()}`, "send_key_invalid"],
+      [f.tenant.token, f.keys[0]!.token, "send_key_invalid"],
+      [f.tenant.token, f.keys[2]!.token, "send_key_forbidden"],
+      [f.member, undefined, "send_key_required"],
+    ] as const) {
+      const replay = await call(f.deps, "POST", "/v1/messages/send", { token, body: { ...f.input, ...(sendKey ? { send_key: sendKey } : {}) } });
+      expect(replay.status).toBe(403);
+      expect(replay.body).toMatchObject({ reason });
+      expect(replay.body).not.toHaveProperty("message");
+      expect(replay.body).not.toHaveProperty("provider_message_id");
+    }
+    expect(f.sends()).toBe(1);
+    expect((await ledgerRow(f.input.idempotency_key))?.send_state).toBe("sent");
+  });
+
+  it("refuses malformed keys before reserve and unauthorized retries before rearm or lease mutation", async () => {
+    const f = await fixture();
+    for (const send_key of ["", "   ", 42, null]) {
+      const response = await call(f.deps, "POST", "/v1/messages/send", { token: f.tenant.token, body: { ...f.input, send_key } });
+      expect(response.status).toBe(403);
+      expect(response.body.reason).toBe("send_key_invalid");
+      expect(await ledgerRow(f.input.idempotency_key)).toBeNull();
+    }
+    const first = await call(f.deps, "POST", "/v1/messages/send", { token: f.tenant.token, body: f.input });
+    expect(first.status).toBe(202);
+    for (const state of ["pending", "failed", "sending"]) {
+      await pgClient!.execute("UPDATE messages SET send_state = $1, send_started_at = now() - interval '1 hour', provider_message_id = NULL WHERE idempotency_key = $2", [state, f.input.idempotency_key]);
+      const response = await call(f.deps, "POST", "/v1/messages/send", { token: f.tenant.token, body: { ...f.input, send_key: f.keys[2]!.token } });
+      expect(response.status).toBe(403);
+      expect(response.body.reason).toBe("send_key_forbidden");
+      expect((await ledgerRow(f.input.idempotency_key))?.send_state).toBe(state);
+    }
+    expect(f.sends()).toBe(1);
+  });
+
+  it("does not return a key revoked between the lookup and last-used stamp", async () => {
+    const f = await fixture();
+    let revoked = false;
+    const client = new Proxy(pgClient!, { get(target, property) {
+      if (property === "transaction") return <T>(fn: (tx: TypedQueryClient) => Promise<T>) => target.transaction(tx => fn(new Proxy(tx, {
+        get(transaction, method) {
+          if (method === "get") return async (sql: string, params?: readonly unknown[]) => {
+            if (sql.includes("UPDATE send_keys SET last_used_at")) {
+              await target.execute("UPDATE send_keys SET revoked_at = now() WHERE id = $1", [f.keys[0]!.key.id]);
+              revoked = true;
+            }
+            return transaction.get(sql, params);
+          };
+          const value = Reflect.get(transaction, method, transaction);
+          return typeof value === "function" ? value.bind(transaction) : value;
+        },
+      })));
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const verified = await new EmailsSelfHostedStore(client).forTenant(f.tenant.tenantId).verifySendKey(f.keys[0]!.token);
+    expect(revoked).toBe(true);
+    expect(verified).toBeNull();
+  });
 });
 
 // ── Direction A: accepted must never read as failed ─────────────────────────
@@ -612,4 +708,344 @@ describe.skipIf(!pgClient)("C: uncertain sends can be found and closed out on ev
     expect(remaining.body.count).toBe(0);
     for (const key of keys) expect((await ledgerRow(key))?.send_state).toBe("failed");
   });
+});
+
+describe.skipIf(!pgClient)("D: explicit tenant provider dispatch", () => {
+  it("uses the selected sender over the client/API path and cannot cross tenants or replay another provider", async () => {
+    let defaultCalls = 0;
+    const calls: Array<{ provider_id?: string; unsubscribe_url?: string }> = [];
+    const deps = makeDeps({ provider: "ses", send: async () => { defaultCalls++; return "wrong-default"; } });
+    const tenant = await makeTenant("honesty-provider-owner");
+    const outsider = await makeTenant("honesty-provider-outsider");
+    await registerSender(deps, tenant.token, "provider-owner.example", "sender@provider-owner.example");
+    const first = await call(deps, "POST", "/v1/providers", { token: tenant.token, body: { name: "first-bound", type: "resend", active: true } });
+    const second = await call(deps, "POST", "/v1/providers", { token: tenant.token, body: { name: "second-bound", type: "resend", active: true } });
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    const providerId = first.body.id;
+    deps.resolveSender = (tenantId, selected) => tenantId === tenant.tenantId && [providerId, second.body.id].includes(selected)
+      ? { provider: "resend", send: async (input) => { calls.push(input); return "selected-provider-accepted"; } } : null;
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (req) => (await handleSelfHostedRequest(deps, req)) ?? new Response("missing", { status: 404 }) });
+    try {
+      const { SelfHostedMailDataSource } = await import("../../lib/self-hosted-mail-data-source.js");
+      const client = new SelfHostedMailDataSource({ baseUrl: `http://127.0.0.1:${server.port}/v1`, apiKey: tenant.token });
+      const key = `provider-selection-${crypto.randomUUID()}`;
+      const sent = await client.send({ from: "sender@provider-owner.example", to: "target@external.example", subject: "selected", body: "fixture", providerId, unsubscribeUrl: "https://example.com/unsubscribe", idempotencyKey: key });
+      expect(sent.id).toBeTruthy();
+      expect(defaultCalls).toBe(0);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({ provider_id: providerId, unsubscribe_url: "https://example.com/unsubscribe" });
+      const row = await pgClient!.one<{ provider_id: string }>("SELECT provider_id FROM messages WHERE id = $1", [sent.id]);
+      expect(row.provider_id).toBe(providerId);
+      await expect(client.send({ from: "sender@provider-owner.example", to: "target@external.example", subject: "selected", body: "fixture", providerId: second.body.id, unsubscribeUrl: "https://example.com/unsubscribe", idempotencyKey: key })).rejects.toThrow();
+      expect(calls).toHaveLength(1);
+      const cross = await call(deps, "POST", "/v1/messages/send", { token: outsider.token, body: { from: "sender@provider-owner.example", to: ["target@external.example"], subject: "cross-tenant", idempotency_key: crypto.randomUUID(), provider_id: providerId } });
+      expect(cross.status).toBe(404);
+      expect(calls).toHaveLength(1);
+    } finally { server.stop(true); }
+  }, 20_000);
+});
+
+
+describe.skipIf(!pgClient)("domain lifecycle API policy", () => {
+  it("disables ready-address sending, verifies a bound provider, and restores outbound explicitly", async () => {
+    let sends = 0;
+    const sender: SelfHostedSender = { provider: "resend", send: async () => { sends++; return "accepted"; }, verifyDomain: async () => ({ dkim: "verified", spf: "verified", dmarc: "pending" }) };
+    const deps = makeDeps(sender);
+    const tenant = await makeTenant("domain-lifecycle-owner");
+    const outsider = await makeTenant("domain-lifecycle-other");
+    await registerSender(deps, tenant.token, "lifecycle.example", "sender@lifecycle.example");
+    const provider = await call(deps, "POST", "/v1/providers", { token: tenant.token, body: { name: "bound", type: "resend", active: true } });
+    deps.resolveSender = (tid, pid) => tid === tenant.tenantId && pid === provider.body.id ? sender : null;
+    const route = "/v1/domains/lifecycle.example/";
+    expect((await call(deps, "POST", route + "disable-outbound", { token: outsider.token, body: {} })).status).toBe(404);
+    for (const provider_id of ["", "  ", null]) expect((await call(deps, "POST", route + "verify", { token: tenant.token, body: { provider_id } })).status).toBe(400);
+    const disabled = await call(deps, "POST", route + "disable-outbound", { token: tenant.token, body: {} });
+    expect(disabled.status).toBe(200);
+    expect(disabled.body.domain.status).toBe("outbound_disabled");
+    expect(await pgClient!.get("SELECT tenant_id FROM inbound_domain_routes WHERE domain = $1", ["lifecycle.example"])).toMatchObject({ tenant_id: tenant.tenantId });
+    const sendBody = { from: "sender@lifecycle.example", to: ["target@external.example"], subject: "fixture", idempotency_key: crypto.randomUUID() };
+    expect((await call(deps, "POST", "/v1/messages/send", { token: tenant.token, body: sendBody })).status).toBe(403);
+    expect(sends).toBe(0);
+    expect((await call(deps, "POST", route + "verify", { token: tenant.token, body: { provider_id: provider.body.id } })).body.domain.status).toBe("outbound_disabled");
+    const enabled = await call(deps, "POST", route + "enable-outbound", { token: tenant.token, body: {} });
+    expect(enabled.status).toBe(200);
+    expect(enabled.body.domain).toMatchObject({ status: "active", verified: true, provisioning_status: "verified" });
+    const sent = await call(deps, "POST", "/v1/messages/send", { token: tenant.token, body: { ...sendBody, idempotency_key: crypto.randomUUID() } });
+    expect(sent.status).toBe(202);
+    expect(sent.body.sent).toBe(true);
+    expect(sends).toBe(1);
+  });
+});
+
+describe.skipIf(!pgClient)("provider health API", () => {
+  it("probes tenant-bound server credentials and never probes another tenant's provider", async () => {
+    let calls = 0;
+    const deps = makeDeps({ provider: "ses", send: async () => { throw new Error("never send"); } });
+    const owner = await makeTenant("provider-health-owner");
+    const other = await makeTenant("provider-health-other");
+    const provider = await call(deps, "POST", "/v1/providers", { token: owner.token, body: { name: "health", type: "ses", active: true } });
+    const path = `/v1/providers/${provider.body.id}/health`;
+    expect((await call(deps, "GET", path + "?live=true", { token: owner.token })).body.status).toBe("unconfigured");
+    deps.resolveSender = (tid, pid) => tid === owner.tenantId && pid === provider.body.id ? { provider: "ses", credentialSource: "deployment_role", send: async () => "never", probe: async () => { calls++; return { sendingEnabled: true, productionAccessEnabled: false }; } } : null;
+    expect((await call(deps, "GET", path, { token: owner.token })).body.status).toBe("configured");
+    expect(calls).toBe(0);
+    expect((await call(deps, "GET", path + "?live=true", { token: other.token })).status).toBe(404);
+    expect(calls).toBe(0);
+    const result = await call(deps, "GET", path + "?live=true", { token: owner.token });
+    expect(result.body).toMatchObject({ status: "healthy", checked: true, productionAccessEnabled: false });
+    expect(calls).toBe(1);
+    expect((await call(deps, "GET", path + "?live=true")).status).toBe(401);
+  });
+});
+
+
+describe.skipIf(!pgClient)("inbound readiness survives lifecycle ordering", () => {
+  it("claims a pending domain and preserves both readiness directions across toggles", async () => {
+    const { runDomainOperation } = await import("./domain-operations.js");
+    const deps = makeDeps({ provider: "ses", send: async () => "never" });
+    const owner = await makeTenant("domain-inbound-order");
+    const provider = await call(deps, "POST", "/v1/providers", { token: owner.token, body: { name: "inbound", type: "ses", active: true } });
+    const dom = await call(deps, "POST", "/v1/domains", { token: owner.token, body: { domain: "inbound-order.example", provider: provider.body.id, status: "pending", verified: false } });
+    const store = deps.store.forTenant(owner.tenantId);
+    const opts = { resolveSender: () => ({ provider: "ses" as const, region: "us-east-1", send: async () => "never", verifyDomain: async () => ({ dkim: "verified" as const, spf: "verified" as const, dmarc: "pending" as const }), checkInboundDomain: async () => ({ ready: true, reason: "fixture" }) }), env: { EMAILS_INGEST_S3_BUCKET: "fixture", EMAILS_INGEST_QUEUE_URL: "fixture" }, mx: async () => [{ exchange: "inbound-smtp.us-east-1.amazonaws.com", priority: 10 }] };
+    await runDomainOperation(store, owner.tenantId, dom.body.domain.id, "enable-inbound", opts);
+    expect(await pgClient!.get("SELECT tenant_id FROM inbound_domain_routes WHERE domain = $1", ["inbound-order.example"])).toMatchObject({ tenant_id: owner.tenantId });
+    expect((await runDomainOperation(store, owner.tenantId, dom.body.domain.id, "enable-outbound", opts)).domain?.provisioning_status).toBe("verified_inbound_ready");
+    expect((await runDomainOperation(store, owner.tenantId, dom.body.domain.id, "enable-inbound", opts)).domain?.provisioning_status).toBe("verified_inbound_ready");
+    await runDomainOperation(store, owner.tenantId, dom.body.domain.id, "disable-outbound", opts);
+    expect(await pgClient!.get("SELECT tenant_id FROM inbound_domain_routes WHERE domain = $1", ["inbound-order.example"])).toMatchObject({ tenant_id: owner.tenantId });
+  });
+});
+
+describe.skipIf(!pgClient)("provider delivery reconciliation", () => {
+  it("atomically deduplicates observations and recipient effects within tenant/provider scope", async () => {
+    const deps = makeDeps({ provider: "resend", send: async () => "never" });
+    const tenant = await makeTenant("sync-owner");
+    const other = await makeTenant("sync-other");
+    const provider = await call(deps, "POST", "/v1/providers", { token: tenant.token, body: { name: "sync", type: "resend", active: true } });
+    const second = await call(deps, "POST", "/v1/providers", { token: tenant.token, body: { name: "other-sync", type: "resend", active: true } });
+    const store = deps.store.forTenant(tenant.tenantId);
+    const recipient = "target@sync.example";
+    const contact = await call(deps, "POST", "/v1/contacts", { token: tenant.token, body: { email: recipient } });
+    expect(contact.status).toBe(201);
+    const message = await store.createMessage({ from_addr: "sender@sync.example", to_addrs: [recipient], provider_id: provider.body.id, provider_message_id: "remote-sync", direction: "outbound", status: "sent", send_state: "sent" });
+    await store.createMessage({ from_addr: "sender@sync.example", to_addrs: [recipient], provider_id: second.body.id, provider_message_id: "do-not-read", direction: "outbound", status: "sent", send_state: "sent" });
+    let calls = 0;
+    deps.resolveSender = (tid, pid) => tid === tenant.tenantId && pid === provider.body.id ? { provider: "resend", send: async () => "never", readDelivery: async id => { expect(id).toBe("remote-sync"); calls++; return { observations: [{ type: "complained", recipient }], evidence: "current_status" }; } } : null;
+    const path = `/v1/providers/${provider.body.id}/sync`;
+    const limited = mintApiKey({ app: "emails", scopes: ["emails:write"], signingSecret: SIGNING_SECRET });
+    await pgClient!.execute("INSERT INTO api_key_tenants (kid,tenant_id) VALUES ($1,$2)", [limited.kid, tenant.tenantId]);
+    expect((await call(deps, "POST", path, { token: limited.token, body: {} })).status).toBe(403);
+
+    expect((await call(deps, "POST", path, { token: other.token, body: {} })).status).toBe(404);
+    expect(calls).toBe(0);
+    const results = await Promise.all([call(deps, "POST", path, { token: tenant.token, body: {} }), call(deps, "POST", path, { token: tenant.token, body: {} })]);
+    expect(results.map(item => item.status)).toEqual([200, 200]);
+    expect(results.reduce((sum, item) => sum + item.body.synced, 0)).toBe(1);
+    expect(await pgClient!.get("SELECT complaint_count, suppressed FROM contacts WHERE tenant_id = $1 AND email = $2", [tenant.tenantId, recipient])).toMatchObject({ complaint_count: 1, suppressed: true });
+    expect((await store.getMessage(message.id))?.status).toBe("complained");
+    expect(await pgClient!.get("SELECT type, metadata->>'event_time_known' AS known FROM events WHERE tenant_id = $1 AND email_id = $2", [tenant.tenantId, message.id])).toMatchObject({ type: "status_observed", known: "false" });
+    const actual = await store.applyDeliveryObservations(provider.body.id, message.id, { evidence: "event_history", observations: [{ type: "complained", recipient, occurredAt: "2026-01-01T00:00:00Z" }] });
+    expect(actual.contacts_updated).toBe(0);
+    expect(await pgClient!.get("SELECT complaint_count FROM contacts WHERE tenant_id = $1 AND email = $2", [tenant.tenantId, recipient])).toMatchObject({ complaint_count: 1 });
+    await expect(store.applyDeliveryObservations(second.body.id, message.id, { evidence: "current_status", observations: [{ type: "bounced", recipient }] })).rejects.toThrow("not owned");
+    await expect(store.applyDeliveryObservations(provider.body.id, message.id, { evidence: "event_history", observations: [{ type: "bounced", recipient, occurredAt: "2026-01-01T00:00:00Z" }, { type: "complained", recipient, occurredAt: "invalid-timestamp" }] })).rejects.toThrow();
+    expect(await pgClient!.get("SELECT bounce_count FROM contacts WHERE tenant_id = $1 AND email = $2", [tenant.tenantId, recipient])).toMatchObject({ bounce_count: 0 });
+    expect((await call(deps, "POST", path, { token: tenant.token, body: { provider_id: second.body.id } })).status).toBe(400);
+    const mixed = await store.applyDeliveryObservations(provider.body.id, message.id, { evidence: "event_history", observations: [
+      { type: "delivered", recipient, occurredAt: "2026-02-02T00:00:00Z" },
+      { type: "bounced", recipient: "private-bcc@sync.example", permanentBounce: true, occurredAt: "2026-02-02T00:00:00Z" },
+    ] });
+    expect(mixed).toMatchObject({ inserted: 1, unattributed: 1, contacts_updated: 0 });
+    expect(await pgClient!.get("SELECT id FROM contacts WHERE tenant_id = $1 AND email = $2", [tenant.tenantId, "private-bcc@sync.example"])).toBeNull();
+    expect(await pgClient!.get("SELECT id FROM events WHERE tenant_id = $1 AND recipient = $2", [tenant.tenantId, "private-bcc@sync.example"])).toBeNull();
+    const unrelatedRecipient = "new-contact@sync.example";
+    const fresh = await store.createMessage({ from_addr: "sender@sync.example", to_addrs: [unrelatedRecipient], provider_id: provider.body.id, provider_message_id: "fresh-sync", direction: "outbound", status: "sent", send_state: "sent" });
+    const snapshot = await store.applyDeliveryObservations(provider.body.id, fresh.id, { evidence: "current_status", observations: [{ type: "bounced" }] });
+    expect(snapshot.unattributed).toBe(1);
+    expect(snapshot.contacts_updated).toBe(0);
+    await store.createWebhookDeliveryEvent("sns", "fixture-webhook", { email_id: fresh.id, type: "bounced", recipient: unrelatedRecipient, metadata: {}, occurred_at: "2026-02-01T00:00:00Z" });
+    const reconciled = await store.applyDeliveryObservations(provider.body.id, fresh.id, { evidence: "event_history", observations: [{ type: "bounced", recipient: unrelatedRecipient, permanentBounce: true, occurredAt: "2026-02-01T00:00:00Z" }] });
+    expect(reconciled).toMatchObject({ inserted: 0, contacts_updated: 1 });
+    expect(await pgClient!.get("SELECT bounce_count, suppressed FROM contacts WHERE tenant_id = $1 AND email = $2", [tenant.tenantId, unrelatedRecipient])).toMatchObject({ bounce_count: 1, suppressed: true });
+
+  });
+});
+
+describe.skipIf(!pgClient)("tenant-bound inbox ingestion API", () => {
+  it("imports and deduplicates with real routing/provenance while rejecting foreign envelopes and nonoperators", async () => {
+    const deps = makeDeps({ provider: "ses", send: async () => { throw new Error("never send"); } });
+    const owner = await makeTenant("ingest-owner"); const other = await makeTenant("ingest-other");
+    await registerSender(deps, owner.token, "ingest.example", "recipient@ingest.example");
+    await registerSender(deps, other.token, "foreign-ingest.example", "recipient@foreign-ingest.example");
+    const provider = await call(deps, "POST", "/v1/providers", { token: owner.token, body: { name: "ingest", type: "ses", active: true } });
+    const source = await call(deps, "POST", "/v1/sources", { token: owner.token, body: { name: "ingest", type: "ses_s3", status: "active", mailbox_id: "inbox", settings_json: {} } });
+    expect(source.status).toBe(201);
+    const binding = { tenant_id: owner.tenantId, source_id: source.body.id, bucket: "fixture-inbound", prefix: "inbound/ingest.example/", domain: "ingest.example", region: "us-east-1", provider_id: provider.body.id, queue_url: "https://sqs.us-east-1.amazonaws.com/123456789012/ingest" };
+    deps.env = { ...deps.env, EMAILS_INGEST_BINDINGS: JSON.stringify([binding]) };
+    let fetched = 0, acknowledged = 0, cloudCalls = 0;
+    let recipients = ["recipient@ingest.example"];
+    deps.ingestCloud = () => { cloudCalls++; return {
+      list: async () => ({ keys: [binding.prefix + "one"] }),
+      fetch: async () => { fetched++; return Buffer.from("From: sender@outside.example\r\nTo: private@foreign-ingest.example\r\nSubject: Fixture\r\nMessage-ID: <ingest-fixture@example>\r\n\r\nbody\r\n"); },
+      receive: async () => [{ receipt: "fixture", body: JSON.stringify({ notificationType: "Received", mail: { messageId: "two" }, receipt: { recipients, action: { type: "S3", bucketName: binding.bucket, objectKey: binding.prefix + "two" } } }) }],
+      acknowledge: async () => { acknowledged++; }, queueState: async () => ({ visible: 0, in_flight: 0 }), close: () => {},
+    }; };
+    const limited = mintApiKey({ app: "emails", scopes: ["emails:write"], signingSecret: SIGNING_SECRET });
+    await pgClient!.execute("INSERT INTO api_key_tenants (kid,tenant_id) VALUES ($1,$2)", [limited.kid, owner.tenantId]);
+    expect((await call(deps, "POST", "/v1/inbox/sync-s3", { token: limited.token, body: {} })).status).toBe(403);
+    expect((await call(deps, "POST", "/v1/inbox/sync-s3", { token: other.token, body: { source_id: binding.source_id } })).status).toBe(503);
+    expect((await call(deps, "POST", "/v1/inbox/sync-s3", { token: owner.token, body: { bucket: "another-bucket" } })).status).toBe(400);
+    expect(cloudCalls).toBe(0);
+    const imported = await call(deps, "POST", "/v1/inbox/sync-s3", { token: owner.token, body: {} });
+    expect(imported.status).toBe(200); expect(imported.body.sources[0]).toMatchObject({ ingested: 1, complete: true, error: 0 });
+    expect((await call(deps, "POST", "/v1/inbox/sync-s3", { token: owner.token, body: {} })).body.sources[0].duplicate).toBe(1);
+    expect(fetched).toBe(2);
+    const rows = await pgClient!.many("SELECT provider_id, to_addrs FROM messages WHERE tenant_id = $1", [owner.tenantId]);
+    expect(rows).toHaveLength(1); expect(rows[0]).toMatchObject({ provider_id: provider.body.id, to_addrs: ["catchall@ingest.example"] });
+    recipients = ["recipient@ingest.example", "recipient@foreign-ingest.example"];
+    const foreign = await call(deps, "POST", "/v1/inbox/watch", { token: owner.token, body: {} });
+    expect(foreign.body.ok).toBe(false); expect(acknowledged).toBe(0); expect(fetched).toBe(2);
+    recipients = ["recipient@ingest.example"];
+    expect((await call(deps, "POST", "/v1/inbox/watch", { token: owner.token, body: {} })).body.sources[0]).toMatchObject({ ingested: 1, acknowledged: 1 });
+    expect((await call(deps, "POST", "/v1/inbox/watch", { token: owner.token, body: {} })).body.sources[0]).toMatchObject({ duplicate: 1, acknowledged: 1 });
+    expect(acknowledged).toBe(2);
+    expect(await pgClient!.many("SELECT id FROM messages WHERE tenant_id = $1", [other.tenantId])).toHaveLength(0);
+  });
+});
+
+describe.skipIf(!pgClient)("shared API source registry CLI", () => {
+  it("persists between fresh clients and isolates tenants while preserving lifecycle options", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const deps = makeDeps({ provider: "ses", send: async () => { throw new Error("never send"); } });
+    const owner = await makeTenant("source-cli-owner"), other = await makeTenant("source-cli-other");
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async req => await handleSelfHostedRequest(deps, req) ?? new Response("missing", { status: 404 }) });
+    async function cli(token: string, ...args: string[]) {
+      const home = mkdtempSync(join(tmpdir(), "emails-source-fresh-"));
+      const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("EMAILS_") && !name.startsWith("HASNA_EMAILS_")));
+      Object.assign(env, { HOME: home, HASNA_HOME: home, EMAILS_HOME: home, HASNA_EMAILS_HOME: home, HASNA_EMAILS_API_URL: server.url.origin, EMAILS_SESSION_TOKEN: token, HASNA_EMAILS_API_KEY: token, NO_COLOR: "1" });
+      const child = Bun.spawn({ cmd: [process.execPath, "run", "src/cli/index.tsx", "inbox", "source", ...args, "--json"], env, stdout: "pipe", stderr: "pipe" });
+      try {
+        const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+        return { code, data: stdout.trim() ? JSON.parse(stdout) : null, stderr };
+      } finally { child.kill(); rmSync(home, { recursive: true, force: true }); }
+    }
+    try {
+      const added = await cli(owner.token, "add-s3", "--bucket", "shared-source-bucket", "--prefix", "inbound/", "--region", "eu-west-1", "--no-live-sync");
+      expect(added.code).toBe(0); expect(added.stderr).toBe(""); expect(added.data).toMatchObject({ bucket: "shared-source-bucket", prefix: "inbound/", region: "eu-west-1", live_sync_enabled: false });
+      const listed = await cli(owner.token, "list"); expect(listed.data).toHaveLength(1); expect(listed.data[0].id).toBe(added.data.id);
+      expect((await cli(other.token, "list")).data).toEqual([]);
+      expect((await cli(other.token, "retire", added.data.id)).code).toBe(1);
+      const updated = await cli(owner.token, "add-s3", "--bucket", "shared-source-bucket", "--prefix", "inbound/", "--status", "import");
+      expect(updated.data).toMatchObject({ id: added.data.id, status: "import", live_sync_enabled: false });
+      expect((await cli(owner.token, "list")).data).toHaveLength(1);
+      const retired = await cli(owner.token, "retire", added.data.id); expect(retired.data).toMatchObject({ status: "retired", live_sync_enabled: false });
+      expect((await cli(owner.token, "status")).data[0].status).toBe("retired");
+      expect(await pgClient!.get("SELECT status, settings_json->>'live_sync_enabled' AS live FROM mailbox_sources WHERE tenant_id=$1 AND id=$2", [owner.tenantId, added.data.id])).toMatchObject({ status: "retired", live: "false" });
+    } finally { server.stop(true); }
+  }, 30000);
+});
+
+describe.skipIf(!pgClient)("first-party tracking API",()=>{
+ it("preserves original content, isolates tokens and deduplicates concurrent engagement without altering provider evidence",async()=>{
+  const {randomBytes}=await import("node:crypto");
+  const {openTrackingToken}=await import("./tracking.js");
+  const owner=await makeTenant("tracking-owner"), other=await makeTenant("tracking-other");
+  const captured:any[]=[];
+  const deps=makeDeps({provider:"ses",send:async input=>{captured.push(input);return "tracking-provider-receipt";}});
+  deps.tracking={activeKey:"current",keys:{current:randomBytes(32)},tenants:{[owner.tenantId]:["https://tracking.example"]},ttlSeconds:3600};
+  await registerSender(deps,owner.token,"tracking.example","sender@tracking.example");
+  const original='<a href="https://example.com/path">go</a>';
+  const input={from:"sender@tracking.example",to:["reader@example.com"],subject:"Tracked fixture",html:original,idempotency_key:"tracking-idempotent",track_opens:true,track_clicks:true};
+  const first=await call(deps,"POST","/v1/messages/send",{token:owner.token,body:input});expect(first.status).toBe(202);expect(first.body.sent).toBe(true);
+  const message=first.body.message.id;
+  expect(captured).toHaveLength(1);expect(captured[0].html).toContain("/v1/tracking/");expect(first.body.message.body_html).toBe(original);
+  const ledger=await pgClient!.get<{document:any}>("SELECT document FROM message_tracking WHERE tenant_id=$1 AND message_id=$2",[owner.tenantId,message]);
+  const links=Object.values(ledger!.document.links) as Array<{kind:string;token:string}>;
+  const opened=links.find(x=>x.kind==="opened")!,clicked=links.find(x=>x.kind==="clicked")!;
+  expect(openTrackingToken(deps.tracking,opened.token)?.tenant).toBe(owner.tenantId);
+  expect(await deps.store.forTenant(other.tenantId).observeTracking(message,Object.keys(ledger!.document.links)[0]!,opened.token)).toBeNull();
+  const get=(token:string)=>handleSelfHostedRequest(deps,new Request(`https://tracking.example/v1/tracking/${token}`));
+  const requests=await Promise.all(Array.from({length:12},()=>get(opened.token)));expect(requests.every(r=>r?.status===200)).toBe(true);
+  expect((await get(clicked.token))?.status).toBe(302);expect((await get(clicked.token))?.headers.get("Location")).toBe("https://example.com/path");
+  expect((await get(opened.token.slice(0,-8)+"tampered"))?.status).toBe(404);
+  const events=await pgClient!.many<{type:string;recipient:string|null}>("SELECT type,recipient FROM events WHERE tenant_id=$1 AND email_id=$2",[owner.tenantId,message]);
+  expect(events).toHaveLength(2);expect(events.every(e=>e.recipient===null)).toBe(true);
+  expect((await deps.store.forTenant(owner.tenantId).getMessage(message))?.status).toBe(first.body.message.status);
+  await deps.store.forTenant(owner.tenantId).createWebhookDeliveryEvent("ses","native-open-fixture",{email_id:message,type:"opened",recipient:"reader@example.com",metadata:{source:"provider_webhook"},occurred_at:new Date().toISOString()});
+  await get(opened.token);
+  expect((await pgClient!.get<{count:string}>("SELECT count(*)::text AS count FROM events WHERE tenant_id=$1 AND email_id=$2",[owner.tenantId,message]))?.count).toBe("3");
+  const role="tracking_rls_"+crypto.randomUUID().replaceAll("-","");
+  await pgClient!.execute(`CREATE ROLE "${role}" NOLOGIN; GRANT USAGE ON SCHEMA public TO "${role}"; GRANT SELECT,INSERT,UPDATE ON message_tracking TO "${role}"`);
+  try {
+    await pgClient!.transaction(async tx=>{
+      await tx.execute(`SET LOCAL ROLE "${role}"`); await tx.execute("SELECT set_config('app.current_tenant',$1,true)",[other.tenantId]);
+      expect(await tx.many("SELECT message_id FROM message_tracking WHERE message_id=$1",[message])).toEqual([]);
+      expect(await tx.many("UPDATE message_tracking SET document=document WHERE message_id=$1 RETURNING message_id",[message])).toEqual([]);
+    });
+    await expect(pgClient!.transaction(async tx=>{
+      await tx.execute(`SET LOCAL ROLE "${role}"`); await tx.execute("SELECT set_config('app.current_tenant',$1,true)",[other.tenantId]);
+      await tx.execute("INSERT INTO message_tracking(tenant_id,message_id,document) VALUES($1,$2,'{}')",[owner.tenantId,"forged-message"]);
+    })).rejects.toThrow(/row.level security/i);
+  } finally { await pgClient!.execute(`DROP OWNED BY "${role}"; DROP ROLE "${role}"`); }
+  deps.tracking.activeKey="new";deps.tracking.keys.new=randomBytes(32);
+  const replay=await call(deps,"POST","/v1/messages/send",{token:owner.token,body:input});expect(replay.body.idempotent_replay).toBe(true);expect(captured).toHaveLength(1);expect((await get(opened.token))?.status).toBe(200);
+  expect((await call(deps,"POST","/v1/messages/send",{token:owner.token,body:{...input,idempotency_key:"bad-url",tracking_url:"https://evil.example"}})).status).toBe(400);expect(captured).toHaveLength(1);
+ });
+ it("persists tracking choices across scheduled enqueue and worker execution",async()=>{
+  const {randomBytes}=await import("node:crypto");const owner=await makeTenant("tracking-schedule");const captured:any[]=[];
+  const deps=makeDeps({provider:"ses",send:async input=>{captured.push(input);return "tracking-scheduled-receipt";}});
+  deps.tracking={activeKey:"current",keys:{current:randomBytes(32)},tenants:{[owner.tenantId]:["https://tracking.example"]},ttlSeconds:3600};
+  await registerSender(deps,owner.token,"tracking-schedule.example","sender@tracking-schedule.example");
+  const enqueued=await call(deps,"POST","/v1/scheduled/enqueue",{token:owner.token,body:{from:"sender@tracking-schedule.example",to:["reader@example.com"],subject:"Scheduled tracking",text:"hello",track_opens:true,tracking_url:"https://tracking.example",idempotency_key:"tracking-scheduled",scheduled_at:new Date(Date.now()+60000).toISOString()}});
+  expect(enqueued.status).toBe(201);expect(captured).toHaveLength(0);
+  await pgClient!.execute("UPDATE scheduled_emails SET scheduled_at=now()-interval '1 minute' WHERE tenant_id=$1 AND id=$2",[owner.tenantId,enqueued.body.scheduled.id]);
+  const run=await call(deps,"POST","/v1/scheduled/run",{token:owner.token,body:{limit:5}});expect(run.status).toBe(200);expect(captured).toHaveLength(1);expect(captured[0].html).toContain("/v1/tracking/");
+ });
+ it("validates metadata before provider I/O and preserves hashed headers/tags in tenant readback", async () => {
+  const owner = await makeTenant("send-metadata"), other = await makeTenant("send-metadata-other");
+  const captured: any[] = [];
+  const deps = makeDeps({ provider: "ses", send: async input => { captured.push(input); return "metadata-receipt"; } });
+  await registerSender(deps, owner.token, "metadata.example", "sender@metadata.example");
+  const input = { from: "sender@metadata.example", to: ["reader@example.com"], subject: "Metadata", text: "hello", idempotency_key: "metadata-send", headers: { "X-Campaign": "spring" }, tags: { campaign: "spring" }, unsubscribe_url: "https://metadata.example/unsubscribe" };
+  for (const headers of [{ From: "spoof@example.com" }, { "X-Hasna-Inbound-Id": "forged" }, { "X-SES-CONFIGURATION-SET": "forged" }, { "X-Campaign": "ok\r\nBcc: hidden@example.com" }]) {
+    expect((await call(deps, "POST", "/v1/messages/send", { token: owner.token, body: { ...input, headers } })).status).toBe(400);
+  }
+  expect(captured).toHaveLength(0);
+  const sent = await call(deps, "POST", "/v1/messages/send", { token: owner.token, body: input });
+  expect(sent.status).toBe(202); expect(sent.body.sent).toBe(true); expect(captured).toHaveLength(1);
+  expect(captured[0]).toMatchObject({ headers: { "x-campaign": "spring" }, tags: { campaign: "spring" }, unsubscribe_url: input.unsubscribe_url });
+  expect(sent.body.message).toMatchObject({ headers: { "x-campaign": "spring" }, tags: { campaign: "spring" } });
+  const id = sent.body.message.id;
+  expect((await call(deps, "GET", `/v1/messages/${id}`, { token: owner.token })).body.message.tags).toEqual({ campaign: "spring" });
+  expect((await call(deps, "GET", `/v1/messages/${id}`, { token: other.token })).status).toBe(404);
+  const replay = await call(deps, "POST", "/v1/messages/send", { token: owner.token, body: { ...input, headers: { "x-campaign": "spring" } } });
+  expect(replay.body.idempotent_replay).toBe(true); expect(captured).toHaveLength(1);
+  for (const delta of [{ tags: { campaign: "winter" } }, { headers: { "X-Campaign": "winter" } }]) {
+    expect((await call(deps, "POST", "/v1/messages/send", { token: owner.token, body: { ...input, ...delta } })).status).toBe(409);
+  }
+  expect(captured).toHaveLength(1);
+ });
+ it("preserves metadata with tracking through scheduled enqueue and shared worker dispatch", async () => {
+  const { randomBytes } = await import("node:crypto");
+  const owner = await makeTenant("metadata-scheduled"), captured: any[] = [];
+  const deps = makeDeps({ provider: "ses", send: async input => { captured.push(input); return "metadata-scheduled-receipt"; } });
+  deps.tracking = { activeKey: "current", keys: { current: randomBytes(32) }, tenants: { [owner.tenantId]: ["https://tracking.example"] }, ttlSeconds: 3600 };
+  await registerSender(deps, owner.token, "metadata-scheduled.example", "sender@metadata-scheduled.example");
+  const body = { from: "sender@metadata-scheduled.example", to: ["reader@example.com"], subject: "Scheduled metadata", text: "hello", html: "<p>hello</p>", headers: { "X-Campaign": "scheduled" }, tags: { campaign: "scheduled" }, track_opens: true, tracking_url: "https://tracking.example", idempotency_key: "metadata-scheduled", scheduled_at: new Date(Date.now()+60000).toISOString() };
+  const queued = await call(deps, "POST", "/v1/scheduled/enqueue", { token: owner.token, body });
+  expect(queued.status).toBe(201); expect(captured).toHaveLength(0);
+  expect((await call(deps, "POST", "/v1/scheduled/enqueue", { token: owner.token, body: { ...body, tags: { campaign: "changed" } } })).status).toBe(409);
+  await pgClient!.execute("UPDATE scheduled_emails SET scheduled_at=now()-interval '1 minute' WHERE tenant_id=$1 AND id=$2", [owner.tenantId, queued.body.scheduled.id]);
+  const ran = await call(deps, "POST", "/v1/scheduled/run", { token: owner.token, body: { limit: 5 } });
+  expect(ran.status).toBe(200); expect(captured).toHaveLength(1);
+  expect(captured[0]).toMatchObject({ headers: { "x-campaign": "scheduled" }, tags: { campaign: "scheduled" } });
+  expect(captured[0].html).toContain("/v1/tracking/");
+  const recorded = await pgClient!.get<{ tags: unknown }>("SELECT tags FROM messages WHERE tenant_id=$1 AND provider_message_id='metadata-scheduled-receipt'", [owner.tenantId]);
+  expect(recorded?.tags).toEqual({ campaign: "scheduled" });
+ });
+
 });

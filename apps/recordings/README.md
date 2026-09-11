@@ -13,26 +13,58 @@ npm install -g @hasna/recordings
 
 ## macOS App
 
-Recordings ships a **full native macOS app** (SwiftUI, macOS 26 / Liquid Glass) with a
-companion menu-bar control. It opens to a **Recordings workspace**: a narrow violet
-Liquid-Glass sidebar (Workspace · Library · Projects · Modes · Machines) beside one
-continuous canvas with the record hero, transcript library, and detail view. The menu bar
-provides recording controls and access to the main window while it is in the background.
+**Hasna Recordings** is a native macOS 26 app with a companion menu bar control.
+The app opens a compact glass recorder with a microphone/stop/play control and timer.
+The clock opens searchable history and the gear opens Settings inside the same retained app window. A shared title bar and back navigation keep the recorder, transcripts, and settings together. The recorder uses a compact 224 × 244 point layout; normal interface text uses macOS-sized 11–13 point type. Glass backgrounds use one live native blur per surface, with matching translucent controls.
+A floating transcription bar shows live words, the microphone waveform, pause/resume,
+playback, and an Auto-paste switch. Recent pastes show delivery evidence from this session.
+There is no sidebar or project UI. New app recordings are unassigned; existing recordings and their metadata
+are preserved.
 
-- **Record** — large push-to-talk / dictation / command hero with live transcription,
-  duration, the active project, and a "just now" strip. Global shortcut (default F5, or
-  hold fn) works while the window is in the background.
-- **Library** — every past transcript (read straight from the active local or HTTP Store
-  the CLI and MCP write), searchable and filterable by project, mode, and machine, with a
-  detail pane (copy, paste-into-front-app, audio playback, metadata).
-- **Projects** — app projects are registered through the same canonical Store before a
-  recording can reference them, preserving referential integrity on either store.
-- **Settings** (⌘,) — OpenAI key, language, recording shortcut, permissions, projects,
-  and voice shortcuts.
+- Click Record, or hold the global shortcut (F5 by default).
+- Click the clock or press **⌘L** for recordings; select a row to read its transcript.
+  Audio playback is available when its file is retained on this Mac.
+- Press **⇧⌘B** for the floating transcription bar, or choose **Keep bar visible** from
+  the menu bar’s More menu. Its play control opens Recent pastes.
+- Pause/resume from the bar or the recorder’s context menu. Paused microphone samples
+  are excluded from the transcript and recording duration.
+- Turn **Auto-paste** off to keep transcripts available without typing into another app.
+  Recordings still save through the configured API. Clearing Recent pastes only clears
+  this session’s delivery list; it does not delete recordings.
+- Open **Settings** (⌘,), then **API & Advanced…** to configure the service connection,
+  transcription cleanup, shortcuts, and permissions. The input follows the macOS default
+  microphone; audio remains uncompressed 24 kHz PCM.
+
+New installations default to dictation. Question and edit-command detection is
+optional in Settings; enabling it can add a model request before delivery. For
+verbatim dictation with the shortest delivery path, keep intent detection off and
+set Transcription Cleanup to Raw (Off). Settled realtime text can paste while the API save
+continues in the background. Capture shutdown runs off the UI thread, and the
+recording panel avoids animated glass so rendering does not stall live transcription.
+
+In **Settings → API & Advanced… → General → Recordings API**, enter your API URL and service key,
+then choose **Save Connection** and **Test Connection**. There is no compiled-in API
+hostname. Both a service prefix such as `https://api.example.com/recordings` and its
+versioned form `https://api.example.com/recordings/v1/` work; requests append the
+resource to exactly one `/v1`. The service key stays in macOS Keychain, scoped to the
+normalized endpoint, and is separate from the OpenAI transcription key.
+
+An explicitly configured launch environment takes precedence over saved connection
+settings: `HASNA_RECORDINGS_API_URL` plus the existing Hasna credential chain, or
+`HASNA_RECORDINGS_CLIENT_STORE=sqlite` for an intentional local store. The native app
+passes the connection to its embedded CLI, so recording persistence, history, and
+deletion use the same API client as the CLI and MCP. No local fallback is selected
+when an API connection is missing or fails.
+
+The bundle filename is **Hasna Recordings.app** for both full and menu bar builds.
+Older unspaced bundles remain discoverable as legacy installations. The managed
+updater's canonical path is part of its immutable cohort; an existing cohort bound
+to the old filename requires managed reprovisioning before receiving bundles under
+the new name. This change does not rename an already installed managed app.
 
 The app embeds a same-version `recordings` CLI as its data layer, so the CLI, MCP, and app
 share one store without depending on a possibly stale global CLI installation. Production
-release installs use a one-time managed bootstrap at `/Applications/HasnaRecordings.app`; later
+release installs use a one-time managed bootstrap at `/Applications/Hasna Recordings.app`; later
 release updates replace only that app through the installed root-owned broker.
 
 ```bash
@@ -62,7 +94,7 @@ recordings app status         # show install state
 recordings app snapshot       # write ./desktop-snapshot.png for local UI debugging
 # From this repository, optionally choosing another output path:
 bun run desktop:snapshot -- /tmp/recordings-desktop.png
-/Applications/HasnaRecordings.app/Contents/Helpers/recordings-update-client status
+"/Applications/Hasna Recordings.app/Contents/Helpers/recordings-update-client" status
 
 # Release builds run only as the isolated _recordingsbuild account. Provision these first:
 # - /private/var/recordings-build owned by _recordingsbuild, mode 0700, beneath a
@@ -165,13 +197,13 @@ recordings app install \
 swift test                    # run the native test suite
 ```
 
-The production release location is `/Applications/HasnaRecordings.app`. The managed bootstrap installs
+The production release location is `/Applications/Hasna Recordings.app`. The managed bootstrap installs
 one signed/notarized PKG exactly once, including the root broker, no-login verifier, launchd policy,
 release key, and initial app. That root cohort is intentionally immutable:
 `lifecycle=bootstrap-v1-app-updates-only`,
 `root_maintenance_supported=false`, and `key_rotation_supported=false`. Subsequent release
 envelopes must bind the exact installed broker/verifier cohort, protocol version, and pinned key
-epoch, and may replace only `/Applications/HasnaRecordings.app`. A second bootstrap PKG, a broker or
+epoch, and may replace only `/Applications/Hasna Recordings.app`. A second bootstrap PKG, a broker or
 verifier mismatch, a broker-protocol incompatibility, or a key-epoch change fails before app
 activation with `unsupported_lifecycle`. Root updater maintenance and release-key rotation require a
 separate managed reprovisioning lifecycle; the current tooling does not run Installer or overwrite
@@ -227,7 +259,7 @@ private, fsynced root journal and anti-rollback state recover interrupted app re
 next install attempt.
 
 The explicit `local-only` development path remains separate and installs
-`~/Applications/HasnaRecordings.app`; it never provisions or imitates the production root cohort.
+`~/Applications/Hasna Recordings.app`; it never provisions or imitates the production root cohort.
 For a station-specific deployment, pass `--expected-hostname` so the installer proves the live
 short hostname before taking a lock or mutating state while the release artifact itself remains
 fleet-distributable. Obtain `AUTHENTICATED_MANIFEST_SHA256` from independently authenticated
@@ -285,7 +317,7 @@ The app's **Transcription Cleanup** setting controls the same post-processing pi
 the CLI and MCP server. Use **Raw** to keep verbatim text only, **Auto** to clean up only
 when trigger phrases or instruction patterns are detected, or **Always** to run the
 transcriber cleanup prompt for every recording. Global cleanup instructions can be set in
-Settings, and project-specific instructions are appended when a project is active.
+Settings. The native app applies only those global instructions.
 
 The native app uses OpenAI realtime transcription for the stop-and-paste path: settled
 `gpt-realtime-whisper` text is saved and pasted immediately, while full-file
@@ -469,6 +501,24 @@ neither the Keychain nor any credential file. `RECORDINGS_API_KEY` remains the
 OpenAI transcription-key override only — it is carved out of the resolver
 environment and never selects or fails client transport.
 
+The same gate runs before anything else connects: `recordings-mcp` refuses to
+answer `initialize` (exit 1, first stderr line `ERROR: REMOTE_API_…`) when no
+credential resolves and no opt-in is set, and `recordings check` renders
+`✗ Active store: none — fail-closed (REMOTE_API_…); <db path> is present but
+NOT opened` (or `absent`) and exits non-zero instead of displaying the on-box
+file as the live store. With the opt-in set, `recordings-mcp` prints one
+`recordings: LOCAL mode` line on stderr before serving the on-box store.
+
+Native Settings saves new OpenAI transcription keys in macOS Keychain under
+service `hasna.credentials.openai.api-key`, account `openai/api_key`. Finder
+launches read that entry and pass it to the embedded helper in memory. Use
+`RECORDINGS_OPENAI_API_KEY` for an explicit provider-key override, separate
+from the Hasna service credential. The CLI no longer walks
+`~/.secrets/**/*.env` for the OpenAI key (retired in the #1720 validation
+wave): the declared stores are the env vars above, the config file, and the
+macOS Keychain entry.
+
+
 ```bash
 recordings-serve --port 8874          # start the API
 recordings-serve migrate              # apply the cloud schema, then exit
@@ -526,6 +576,13 @@ resolves `HASNA_RECORDINGS_MIGRATE_DATABASE_URL` /
   healthy; the role posture is not. Remediate by re-owning the tables and
   sequences to the owner role and granting the DML set above.
 
+The table owner must also retain the privileges used by PostgreSQL's foreign
+key cleanup: SELECT/UPDATE on `recording_idempotency.recording_id` and
+SELECT/DELETE on `recording_tags`. Revoking the owner's DML privileges can
+make recording deletion fail even when the runtime grants are correct.
+Readiness checks both owner cleanup permissions. Restore these grants to the
+affected table's owner; the runtime role remains SELECT/INSERT on both tables.
+
 ## SDK
 
 The typed `/v1` client is generated from the serve OpenAPI document
@@ -566,17 +623,18 @@ only when post-processing actually produced enhanced output.
 
 ## Releasing
 
-The release version is hand-maintained in four places: `package.json`, `src/version.ts`, and both
-`CFBundleShortVersionString` and `CFBundleVersion` in
-`src/native/Recordings/RecordingsLib/Info.plist`. Bump them together, never by hand:
+Apply the applicable Changesets in a release worktree first. `package.json` is
+the version authority; `src/version.ts` derives its value at runtime. Synchronize
+both native bundle version fields in `src/native/Recordings/RecordingsLib/Info.plist`
+and regenerate the SDK after the Changesets bump:
 
 ```bash
-bun run version:set 0.3.0   # rewrites every hand-maintained site
+bun run version:set 0.4.0   # use the version selected by Changesets
 bun run generate:sdk        # restamps the generated SDK's header
 bun run version:check       # exits 1 if any site disagrees with package.json
 ```
 
-A fifth copy is **generated**, not written: `src/server/openapi.ts` stamps `VERSION` into the
+The SDK version stamp is **generated**, not written: `src/server/openapi.ts` stamps `VERSION` into the
 OpenAPI document and `bun run generate:sdk` bakes it into the `// Source: …` header of
 `src/sdk/v1.generated.ts`. `version:set` leaves that file alone — the generator owns it, and
 patching the stamp by hand would hide real regeneration drift — so regenerate after every bump.
@@ -594,7 +652,7 @@ suite on every push through the turbo `build-test` job (this app's `test` script
 what makes the two guards below actually block a branch rather than wait for someone to run
 them locally. `prepack` runs `build:native-fs-guard` first (the
 fail-closed macOS gate), then `version:check`, so a partial bump stops before the build
-rather than deep inside it. And `prepublishOnly` runs `bun test`, which covers the sites
+rather than deep inside it. And `prepublishOnly` runs the complete gated release suite, which covers the sites
 through `src/__tests__/native-bundle-version.test.ts` and
 `src/__tests__/version-site-guard.test.ts`.
 
@@ -633,3 +691,98 @@ warning is logged, matching the fail-soft contract of the app-side fix.
 ## License
 
 Apache-2.0 -- see [LICENSE](LICENSE)
+
+## Reusing the native recorder
+
+The Swift package at `src/native/Recordings` exports the `RecordingsLib` library.
+A separate macOS application can depend on that package and reuse `RecordingEngine`
+for real PCM capture, pause, meters, recording state, clipboard and verified paste:
+
+```swift
+import RecordingsLib
+
+let configuration = try RecordingEngineConfiguration(
+    isolatedHomePath: candidateStateHome.path,
+    preferencesSuiteName: "com.example.recorder.preferences"
+)
+let engine = RecordingEngine(configuration: configuration, transcriptionProvider: provider)
+```
+
+The isolated initializer never installs global shortcuts or fn monitors and does
+not read the legacy provider credentials, service URL, launch environment or CLI.
+It rejects the installed recorder's home and preferences suite. Its audio and logs
+live below `<isolatedHomePath>/.hasna/recordings`; preferences use only the named
+suite. The original `RecordingEngine(homePath:installsGlobalHandlers:)` initializer
+retains the legacy application's behavior.
+
+Implement `RecordingTranscriptionProvider.makeSession(configuration:onPartialTranscript:)`
+to create one session per recording. Construction must return promptly. Its
+`appendPCM` method receives ordered 24 kHz mono PCM16LE chunks during recording;
+paused samples are excluded. Publish partial callbacks as the complete current
+transcript. `finish` receives the finalized WAV URL, duration, language and capture
+ID, and returns `RecordingProviderResult`. `cancel` must safely interrupt a pending
+connection or finish; any in-flight append must be ignored after cancellation.
+Providers own their bounded networking queues and credential namespace. A local
+file recognizer may ignore streaming chunks and recognize the WAV at finish.
+
+Completed results appear in `recentTranscriptions` with `captureID` and `audioURL`
+before automatic paste starts, allowing the consumer to persist them asynchronously.
+This publication is not a storage acknowledgement; `persistedRecordingRevision`
+continues to describe only legacy CLI persistence. Call `cancelRecording()` to
+discard capture or cancel an isolated provider that is still finalizing.
+
+Completed paste transactions publish `RecentPaste.captureID` and the typed
+`deliveryStatus` (`confirmed`, `unconfirmed`, or `notDelivered`). A posted
+keystroke is never a confirmed delivery. Pass a `captureID` to
+`pasteIntoFrontApp` when manually pasting a saved recording. Early permission
+or target failures remain visible in the engine status without a completed
+transaction receipt.
+
+
+### Native dependency receipts
+
+An npm archive includes the complete Swift package at `src/native/Recordings`,
+including `RecordingsLib`, its resources, updater targets, and resolved dependency
+pins. An application can extract the verified archive into its dependency cache
+and use that Swift package as a local SwiftPM dependency. This is consumption of
+published package bytes; a development checkout alone is not release evidence.
+
+Create a sidecar receipt for the exact reviewed npm archive after committing the
+release metadata. The helper checks the shipped native bytes and package version
+against the specified public Git revision. It does not extract into the working
+app, access credentials, install software, or publish anything:
+
+```sh
+python3 scripts/native-core-receipt.py /path/to/recordings-0.4.0.tgz \
+  --source-revision <full-public-release-commit> \
+  --repository /path/to/hasna-apps \
+  --output /path/to/recordings-0.4.0.prepared.json
+```
+
+After the separately authorized npm publication, run the same command with
+`--verify-registry` and a new output filename. That explicit read-only step checks
+the version and integrity in public registry metadata, downloads the registry
+archive, and requires byte equality with the reviewed archive. It never upgrades
+a prepared receipt merely because a version exists. Existing receipt files are
+never overwritten.
+
+The external JSON format has `schemaVersion: 1` and
+`kind: "hasna.recordings.native-core"`. It records:
+
+- `package`: exact npm name and version.
+- `source`: public repository URL and full verified Git revision.
+- `distribution`: `status: "prepared"`, or `status: "published"` with registry
+  authority and verification time after the actual registry archive matches.
+- `archive`: fixed npm URL, byte count, SHA-256, and npm SHA-512 integrity.
+- `native`: package path, `RecordingsLib` product, Swift 6.2/macOS 26 requirements,
+  and each shipped native file's relative path, mode, byte count, and SHA-256.
+  `treeSHA256` hashes UTF-8 lines sorted by path, each formatted as
+  `path + NUL + octalMode + NUL + decimalBytes + NUL + sha256 + LF`.
+
+A receipt is integrity evidence, not a signature or permission to release. A
+consumer must pin the reviewed receipt digest through its own trusted release
+configuration, require `distribution.status == "published"`, and compare the
+archive and extracted source bytes before building. Co-delivered metadata must
+not supply its own trusted expected digest. The receipt stays outside the npm
+archive so its archive hash has no circular dependency. Notarization, signing,
+and end-user acceptance of the consuming application remain separate checks.

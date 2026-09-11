@@ -26,7 +26,7 @@
 // either measured from a real source or `null` with a machine-readable reason in
 // `gaps` — see src/lib/status-availability.ts for why `null` and not `0`/`[]`.
 
-import { resolveMailDataSource } from "./mail-data-source.js";
+import { resolveMailDataSource, SqliteMailDataSource } from "./mail-data-source.js";
 import { getClientMode, resolveClientMode, type ClientMode } from "./mode.js";
 import { collectStatusFacts } from "./status-facts.js";
 import { isCommandAvailableInMode } from "./status-commands.js";
@@ -139,7 +139,8 @@ function buildNextActions(
 
 async function buildSystemStatus(): Promise<EmailSystemStatus> {
   const mode = resolveClientMode();
-  const ds = resolveMailDataSource();
+  // The exported library retains explicit SQLite compatibility; public client entrypoints reject it.
+  const ds = mode.mode === "local" ? new SqliteMailDataSource() : resolveMailDataSource();
   const [counts, mailboxes, mailboxSources] = await Promise.all([
     ds.mailboxCounts(),
     ds.listMailboxStatus(),

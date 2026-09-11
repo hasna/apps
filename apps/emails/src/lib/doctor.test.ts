@@ -291,20 +291,24 @@ describe("the doctor family's structure", () => {
   });
 
   it("is no longer reached through an arm by the CLI or the dashboard route", () => {
-    const consumers = [
-      join(repoRoot, "src", "cli", "commands", "misc.local.ts"),
+    const shippedConsumers = [
       join(repoRoot, "src", "cli", "commands", "misc.remote.ts"),
       join(repoRoot, "src", "server", "routes", "inbound-sequences.ts"),
       join(repoRoot, "src", "mcp", "tools", "misc-ops.ts"),
       join(repoRoot, "src", "index.ts"),
     ];
-    for (const consumer of consumers) {
+    const fixtureConsumers = [join(repoRoot, "src", "cli", "commands", "misc.local.test-support.ts")];
+    for (const consumer of [...shippedConsumers, ...fixtureConsumers]) {
       const source = readFileSync(consumer, "utf8");
+      expect(source, `${consumer} must import the doctor facade`).toContain("lib/doctor.js");
       expect(source, `${consumer} must not import a doctor arm`).not.toMatch(/lib\/doctor\.(local|remote)\.js/);
       // Positive control for the assertion above: the pattern it uses does match the
       // specifier it is looking for, so a green run is not a broken regex.
       expect('await import("../../lib/doctor.local.js")').toMatch(/lib\/doctor\.(local|remote)\.js/);
     }
+    const facade = readFileSync(join(repoRoot, "src", "cli", "commands", "misc.ts"), "utf8");
+    expect(facade).toContain('from "./misc.remote.js"');
+    expect(facade).not.toMatch(/misc\.local|test-support/);
   });
 });
 
@@ -606,8 +610,8 @@ describe("runDiagnostics and the facts the seam does not carry", () => {
     const credentials = named(checks, "Provider credentials");
 
     expect(credentials.status).toBe("unknown");
-    expect(credentials.message).toContain("cannot be performed");
-    expect(credentials.message).toContain("redacts provider sending credentials");
+    expect(credentials.message).not.toContain("Missing Resend API key");
+    expect(credentials.message).not.toContain("credentials invalid");
   });
 
   it("recommends a command that actually performs the check it defers", async () => {

@@ -1,7 +1,7 @@
 process.env["MEMENTOS_DB_PATH"] = ":memory:";
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -42,7 +42,7 @@ describe("getDbPath - MEMENTOS_DB_SCOPE=project with git root (line 61)", () => 
     // Create a temp dir with a .git directory (simulates a git repo).
     // No .mementos/mementos.db in this path, so findNearestMementosDb returns null.
     // MEMENTOS_DB_SCOPE=project + git root found → triggers line 61.
-    const tmpDir = mkdtempSync(join(tmpdir(), "test-db-path-"));
+    const tmpDir = realpathSync(mkdtempSync(join(tmpdir(), "test-db-path-")));
     mkdirSync(join(tmpDir, ".git"));
     process.chdir(tmpDir);
 

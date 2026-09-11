@@ -34,6 +34,7 @@
 // This is the ONE transport resolver for the CLI, MCP server, and SDK.
 
 import {
+  DEFAULT_AUTHORITY_SOURCE,
   createClientTransport,
   createHasnaHttpTransport,
   resolveClientTransport,
@@ -67,6 +68,7 @@ export const RETIRED_SELECTOR_ENV_KEYS = [
 export const NOTES_CLIENT_TRANSPORTS = ['http'];
 
 /** Read data properties only: credential getters must not be invoked on config. */
+/** @param {object} object @param {string} key @returns {string | undefined} */
 export function readPlainClientValue(object, key) {
   const descriptor = Object.getOwnPropertyDescriptor(object, key);
   if (!descriptor) return undefined;
@@ -77,11 +79,13 @@ export function readPlainClientValue(object, key) {
   return descriptor.value;
 }
 
+/** @param {import('../sdk/types.js').NotesEnvironment} env @param {string} key @returns {boolean} */
 export function isPresent(env, key) {
   if (!Object.prototype.hasOwnProperty.call(env, key)) return false;
   return (env[key] ?? '').trim().length > 0;
 }
 
+/** @param {import('../sdk/types.js').NotesEnvironment} env @param {readonly string[]} keys */
 function firstDefined(env, keys) {
   for (const key of keys) {
     if (Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined) return key;
@@ -90,6 +94,7 @@ function firstDefined(env, keys) {
 }
 
 export class RetiredNotesStorageSelectorError extends Error {
+  /** @param {string} envKey */
   constructor(envKey) {
     super(
       `notes: ${envKey} was retired and must be unset. `
@@ -103,6 +108,7 @@ export class RetiredNotesStorageSelectorError extends Error {
 }
 
 /** Reject stale selector variables even when their value is blank. */
+/** @param {import('../sdk/types.js').NotesEnvironment} [env] @returns {void} */
 export function assertNoRetiredNotesStorageSelector(env = process.env) {
   const retired = firstDefined(env, RETIRED_SELECTOR_ENV_KEYS);
   if (retired) throw new RetiredNotesStorageSelectorError(retired);
@@ -114,6 +120,7 @@ export function assertNoRetiredNotesStorageSelector(env = process.env) {
  * client that believes it is configured. Presence is checked without copying
  * or normalising the env.
  */
+/** @param {import('../sdk/types.js').NotesEnvironment} [env] @returns {void} */
 export function assertNoClientDatabaseDsn(env = process.env) {
   if (Object.prototype.hasOwnProperty.call(env, NOTES_DATABASE_URL_ENV)) {
     throw new Error(
@@ -130,6 +137,7 @@ export function assertNoClientDatabaseDsn(env = process.env) {
  * `apiKey`/`profile` and the `keychain` tier controls tests inject). They are
  * passed through untouched — the env itself is never copied.
  */
+/** @param {import('../sdk/types.js').NotesEnvironment} [env] @param {import('@hasna/contracts/client').CredentialChainOptions} [credentials] @returns {import('../sdk/types.js').NotesTransportReport} */
 export function resolveNotesClientTransport(env = process.env, credentials = {}) {
   assertNoClientDatabaseDsn(env);
   assertNoRetiredNotesStorageSelector(env);
@@ -144,7 +152,10 @@ export function resolveNotesClientTransport(env = process.env, credentials = {})
     apiUrlSource: resolution.apiUrlSource,
     apiKeySource: resolution.apiKeySource,
     apiKeyTier: resolution.apiKeyTier,
-    api_url_present: resolution.apiKeyPresent,
+    // True when an operator configured the authority (HASNA_NOTES_API_URL,
+    // the Keychain api-url item, or the credentials file); false when the
+    // default fleet gateway applied. Never a copy of the key flag.
+    api_url_present: resolution.apiUrlSource !== DEFAULT_AUTHORITY_SOURCE,
     api_key_present: resolution.apiKeyPresent,
     scheme: protocol === 'https:' ? 'https' : protocol.slice(0, -1),
     localFallback: false,
@@ -161,9 +172,11 @@ export function resolveNotesClientTransport(env = process.env, credentials = {})
  * a rotation without a restart. Retry is off: the notes store never retried
  * and its failure semantics are deterministic.
  */
+/** @param {import('../sdk/types.js').NotesEnvironment} [env] @param {typeof fetch} [fetchImpl] @param {import('@hasna/contracts/client').CredentialChainOptions} [credentials] */
 export function createNotesClientTransport(env = process.env, fetchImpl, credentials = {}) {
   assertNoClientDatabaseDsn(env);
   assertNoRetiredNotesStorageSelector(env);
+  /** @type {NonNullable<Parameters<typeof createClientTransport>[2]>} */
   const overrides = { retry: false };
   if (fetchImpl !== undefined) overrides.fetchImpl = fetchImpl;
   overrides.credentials = credentials;
@@ -177,6 +190,7 @@ export function createNotesClientTransport(env = process.env, fetchImpl, credent
  * the ambient fleet credential is never attached to an arbitrary baseUrl
  * (#1794).
  */
+/** @param {{apiUrl?: string, apiKey?: string}} [config] @param {typeof fetch} [fetchImpl] */
 export function createNotesExplicitTransport(config = {}, fetchImpl = fetch) {
   const apiUrl = readPlainClientValue(config, 'apiUrl');
   const apiKey = readPlainClientValue(config, 'apiKey');
@@ -207,6 +221,7 @@ export function createNotesExplicitTransport(config = {}, fetchImpl = fetch) {
  * Empty when nothing resolved (the store refuses to exist in that case, so a
  * caller of this function only ever sees empty during a deliberate pivot).
  */
+/** @param {import('../sdk/types.js').NotesEnvironment} [env] @param {import('@hasna/contracts/client').CredentialChainOptions} [credentials] @returns {string} */
 export function resolveNotesClientCredential(env = process.env, credentials = {}) {
   const resolved = resolveCredential(NOTES_APP_SLUG, env, credentials);
   return resolved ? resolved.apiKey : '';

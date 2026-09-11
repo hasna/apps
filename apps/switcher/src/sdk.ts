@@ -1,13 +1,17 @@
 import type { components } from "./generated/api";
-import { endpoint } from "./domain";
+import { endpoint, modelSchema, parse } from "./domain";
 import { boundedJson } from "./http";
-import { resolveCredential } from "@hasna/contracts/client";
+import { createClientTransport, type CredentialChainOptions, type HasnaHttpTransport } from "@hasna/contracts/client";
 export { providerFromPreset } from "./presets";
+export { detectChatGPTApp, detectClaudeDesktopApp } from "./desktop-apps";
+export type { ChatGPTInstallation, ClaudeDesktopInstallation } from "./desktop-apps";
 export type ProviderPreset = components["schemas"]["ProviderPreset"];
 export type ProviderInput = components["schemas"]["ProviderInput"];
 export type Provider = components["schemas"]["Provider"];
 export type ProfileInput = components["schemas"]["ProfileInput"];
 export type Profile = components["schemas"]["Profile"];
+export type ModelPolicy = components["schemas"]["ModelPolicy"];
+export type RoutingEvent = components["schemas"]["RoutingEvent"];
 export type Model = components["schemas"]["Model"];
 export type Catalog = components["schemas"]["Catalog"];
 export type LaunchPlan = components["schemas"]["LaunchPlan"];
@@ -45,16 +49,51 @@ function apiError(status: number, data: unknown, apiKey: string): SwitcherError 
 }
 
 export type ClientOptions = {baseUrl: string; apiKey: string | (() => string); fetch?: typeof fetch; timeoutMs?: number};
+export type EnvironmentClientOptions = {credentials?: CredentialChainOptions; fetch?: typeof fetch; timeoutMs?: number};
 export class SwitcherClient {
   private readonly options: ClientOptions;
+  private transport?: HasnaHttpTransport;
   readonly baseUrl: string;
   constructor(options: ClientOptions) {
     this.baseUrl = endpoint(options.baseUrl).replace(/\/v1$/, "");
     if (typeof options.apiKey === "string" && (!options.apiKey || /[\r\n]/.test(options.apiKey))) throw new Error("Switcher API key is required.");
     this.options = {...options};
   }
+  /** Use Contracts' paired authority/credential resolution on every request. */
+  static fromEnvironment(env: Record<string,string|undefined> = process.env, options: EnvironmentClientOptions = {}) {
+    const shared = createClientTransport("switcher", env, {
+      credentials:options.credentials, timeoutMs:options.timeoutMs ?? 120000, retry:false,
+      fetchImpl:async (input, init) => {
+        // The shared transport uses v1-relative routes; these public probes are
+        // served beside v1. Only the final, known route segment is rewritten.
+        const address = String(input).replace(/\/v1\/(health|ready|version)$/, "/$1");
+        const key = new Headers(init?.headers).get("x-api-key") ?? "";
+        let response: Response;
+        try { response = await (options.fetch ?? fetch)(address, init); }
+        catch { throw new SwitcherError(0,"connection_failed","Switcher API request failed; check endpoint and service availability."); }
+        // Auth failure bodies are never consumed or retained by a canonical client.
+        if (response.status === 401 || response.status === 403) {
+          await response.body?.cancel().catch(()=>{});
+          throw new SwitcherError(response.status,"api_error",`Switcher API returned HTTP ${response.status}. Check the configured credential; no alternate identity was selected.`);
+        }
+        let data: unknown;
+        try { data = await boundedJson(response); }
+        catch { throw new SwitcherError(response.status,"invalid_response","Switcher API returned invalid JSON."); }
+        if (!response.ok) throw apiError(response.status,data,key);
+        // Preserve Switcher's response size limit before Contracts parses JSON.
+        return Response.json(data);
+      },
+    });
+    const client = new SwitcherClient({baseUrl:shared.resolution.baseUrl,apiKey:()=>{throw new Error("Shared credential transport was not invoked.");}});
+    client.transport = shared.client;
+    return client;
+  }
   async request<T>(method: string, path: string, body?: unknown, options: {version?: number; idempotencyKey?: string} = {}): Promise<T> {
     if ((!/^\/v1\/[a-zA-Z0-9/?&=._%+-]+$/.test(path) && !["/health", "/ready", "/version"].includes(path)) || path.includes("..")) throw new Error("Invalid API path.");
+    if (this.transport) return this.transport.request<T>(method,path.startsWith("/v1/") ? path.slice(3) : path,body,{
+      idempotencyKey:method === "GET" ? undefined : options.idempotencyKey ?? crypto.randomUUID(),
+      headers:options.version === undefined ? undefined : {"if-match":String(options.version)}, retry:false,
+    });
     const apiKey = typeof this.options.apiKey === "function" ? this.options.apiKey() : this.options.apiKey;
     if (!apiKey || /[\r\n]/.test(apiKey)) throw new Error("Switcher API key is required.");
     const headers: Record<string, string> = {authorization: `Bearer ${apiKey}`, accept: "application/json"};
@@ -82,6 +121,32 @@ export class SwitcherClient {
   createProvider(input: ProviderInput, idempotencyKey?: string) { return this.request<Provider>("POST", "/v1/providers", input, {idempotencyKey}); }
   updateProvider(input: ProviderInput, version: number, idempotencyKey?: string) { return this.request<Provider>("PUT", `/v1/providers/${encodeURIComponent(input.id)}`, input, {version, idempotencyKey}); }
   deleteProvider(id: string, version: number, idempotencyKey?: string) { return this.request<{deleted: string}>("DELETE", `/v1/providers/${encodeURIComponent(id)}`, undefined, {version, idempotencyKey}); }
+  /** Configure model metadata through the existing versioned provider API.
+   * Discovery stays active unless the provider explicitly uses a manual catalog.
+   * A concurrent edit returns 409; it is never silently overwritten or retried. */
+  private async editModel(providerId: string, operation: "add" | "update" | "remove", value: Model | string) {
+    const model = typeof value === "string" ? undefined : parse(modelSchema, value);
+    const id = model?.id ?? parse(modelSchema.shape.id, value);
+    const provider = await this.getProvider(providerId);
+    const {version, updatedAt, ...input} = provider;
+    const manual = provider.manualModels.some(item => item.id === id);
+    const additional = (provider.additionalModels ?? []).some(item => item.id === id);
+    if (operation === "add" && (manual || additional))
+      throw new SwitcherError(409, "model_exists", "This model is already configured. Use models update to replace its metadata.");
+    if (operation !== "add" && !manual && !additional)
+      throw new SwitcherError(404, "model_not_configured", "This model has no saved metadata. Use models add to configure a catalog model; remote catalog entries cannot be deleted locally.");
+    // Updating legacy duplicate metadata collapses both copies into the manual
+    // entry. Removing an overlay reveals the unchanged remote catalog entry.
+    const useManual = manual || (!additional && (provider.manualModels.length > 0 || provider.catalogFormat === "none"));
+    const manualModels = provider.manualModels.filter(item => item.id !== id);
+    const additionalModels = (provider.additionalModels ?? []).filter(item => item.id !== id);
+    if (operation !== "remove") (useManual ? manualModels : additionalModels).push(model!);
+    return this.updateProvider({...input, manualModels, additionalModels}, version);
+  }
+  addModel(providerId: string, model: Model) { return this.editModel(providerId, "add", model); }
+  /** Replace all saved metadata for one model, including clearing omitted fields. */
+  updateModel(providerId: string, model: Model) { return this.editModel(providerId, "update", model); }
+  removeModel(providerId: string, modelId: string) { return this.editModel(providerId, "remove", modelId); }
   refreshModels(id: string, idempotencyKey?: string) { return this.request<Catalog>("POST", `/v1/providers/${encodeURIComponent(id)}/refresh`, {}, {idempotencyKey}); }
   listModels(id: string, options = {}) { return this.request<components["schemas"]["ModelPage"]>("GET", `/v1/providers/${encodeURIComponent(id)}/models?${this.query(options)}`); }
   listProfiles(options = {}) { return this.request<Page<Profile>>("GET", `/v1/profiles?${this.query(options)}`); }
@@ -92,13 +157,9 @@ export class SwitcherClient {
   launchPlan(profileId: string, idempotencyKey?: string) { return this.request<LaunchPlan>("POST", "/v1/launch-plans", {profileId}, {idempotencyKey}); }
   listRuns(options = {}) { return this.request<Page<Run>>("GET", `/v1/runs?${this.query(options)}`); }
   getRun(id: string) { return this.request<Run>("GET", `/v1/runs/${encodeURIComponent(id)}`); }
-  createRun(input: components["schemas"]["RunInput"], idempotencyKey?: string) { return this.request<Run>("POST", "/v1/runs", input, {idempotencyKey}); }
-  finishRun(id: string, version: number, input: {status: "exited"|"failed"|"interrupted"; exitCode: number}, idempotencyKey?: string) { return this.request<Run>("PATCH", `/v1/runs/${encodeURIComponent(id)}`, input, {version, idempotencyKey}); }
+  createRun(input: Omit<components["schemas"]["RunInput"],"modelPolicyVersion"> & {modelPolicyVersion?:1}, idempotencyKey?: string) { return this.request<Run>("POST", "/v1/runs", {...input,modelPolicyVersion:1}, {idempotencyKey}); }
+  finishRun(id: string, version: number, input: components["schemas"]["RunUpdate"], idempotencyKey?: string) { return this.request<Run>("PATCH", `/v1/runs/${encodeURIComponent(id)}`, input, {version, idempotencyKey}); }
 }
-export function clientFromEnv(env: Record<string, string | undefined> = process.env) {
-  // Fleet policy requires per-process injection. Deliberately omit HOME and disk
-  // pointers from this resolver environment; never consult a plaintext key file.
-  const credential = () => resolveCredential("switcher", Object.fromEntries(Object.entries(env).filter(([name]) => name === "HASNA_SWITCHER_API_KEY")), {keychain:{enabled:false}})?.apiKey ?? "";
-  if (!env.HASNA_SWITCHER_API_URL || !credential()) throw new Error("Set HASNA_SWITCHER_API_URL and HASNA_SWITCHER_API_KEY; no local database fallback is available.");
-  return new SwitcherClient({baseUrl: env.HASNA_SWITCHER_API_URL, apiKey: credential});
+export function clientFromEnv(env: Record<string, string | undefined> = process.env, options: EnvironmentClientOptions = {}) {
+  return SwitcherClient.fromEnvironment(env, options);
 }

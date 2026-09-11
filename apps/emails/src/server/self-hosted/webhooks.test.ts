@@ -69,8 +69,11 @@ function normalize(sql: string): string {
 /** Build an inserted row from `INSERT INTO t (cols) VALUES (placeholders)`. */
 function insertRow(sql: string, params: readonly unknown[]): { table: string; row: Row } {
   const table = /INSERT INTO ([a-z_]+)/i.exec(sql)?.[1] ?? "";
+  // Generic-resource columns are double-quoted (keeps the reserved word `order`
+  // valid on mailbox_filters); strip the surrounding quotes so the fake stores
+  // rows under the same keys Postgres would return.
   const cols = (/INSERT INTO [a-z_]+ \(([^)]*)\)/i.exec(sql)?.[1] ?? "")
-    .split(",").map((value) => value.trim()).filter(Boolean);
+    .split(",").map((value) => value.trim().replace(/^"|"$/g, "")).filter(Boolean);
   const tokens = (/VALUES \(([^)]*)\)/i.exec(sql)?.[1] ?? "")
     .split(",").map((value) => value.trim());
   if (cols.length === 0 || cols.length !== tokens.length) {
@@ -118,6 +121,10 @@ function fakeDb(): FakeDb {
 
     // Layer-2 tenant GUC + readiness probes: no-ops for the double.
     if (/set_config\('app\.current_tenant'/i.test(flat)) return [];
+    // The inbound content fence's serialization point (BUG-0050): a transaction-scoped
+    // advisory lock. It orders concurrent ingests of one message; it returns no rows
+    // and has no effect on the row state the caller then re-reads.
+    if (/^SELECT pg_advisory_xact_lock\(/i.test(flat)) return [];
     if (/^SELECT 1\b/i.test(flat)) return [{ ok: 1 }];
     if (/^SELECT id, checksum FROM schema_migrations/i.test(flat)) return [];
 
@@ -175,6 +182,25 @@ function fakeDb(): FakeDb {
         .map((row) => ({ id: row["id"] }));
     }
 
+    // createInboundMessageWithProvenance content fence (BUG-0050): the canonical row
+    // this delivery is a copy of, matched exactly as the SQL matches it — the RFC
+    // Message-ID normalized out of the header map, plus the envelope-visible content.
+    if (/FROM messages[\s\S]*direction = 'inbound'[\s\S]*FOR UPDATE/i.test(flat)) {
+      const [tenantId, rfcMessageId, fromAddr, subject, receivedAt] = params as [
+        string, string, string, string, string | null,
+      ];
+      return rowsOf(tables, "messages").filter((row) => {
+        if (row["tenant_id"] !== tenantId || row["direction"] !== "inbound") return false;
+        const headers = row["headers"] as Record<string, unknown> | undefined;
+        const storedMessageId = String(headers?.["message-id"] ?? "")
+          .toLowerCase().replace(/^[<>]+|[<>]+$/g, "");
+        return storedMessageId === rfcMessageId
+          && String(row["from_addr"] ?? "").toLowerCase() === fromAddr
+          && String(row["subject"] ?? "") === subject
+          && String(row["received_at"] ?? "") === String(receivedAt ?? "");
+      });
+    }
+
     // createInboundMessageWithProvenance conflict re-read
     if (/FROM messages WHERE tenant_id = \$1::uuid AND source_id = \$2/i.test(flat)) {
       const [tenantId, sourceId] = params as [string, string];
@@ -194,12 +220,24 @@ function fakeDb(): FakeDb {
         .filter((row) => row["tenant_id"] === tenantId && row["message_id"] === messageId);
     }
 
+    // enabledMailboxFilters (FR-0001 inbound auto-apply): the hermetic harness
+    // seeds no filters, so this answers an empty page; keep the tenant/enabled
+    // semantics so a future test that seeds filters behaves like Postgres.
+    if (/FROM mailbox_filters WHERE tenant_id = \$1 AND enabled = true ORDER BY/i.test(flat)) {
+      const tenantId = params[0];
+      return rowsOf(tables, "mailbox_filters")
+        .filter((row) => row["tenant_id"] === tenantId && row["enabled"] === true)
+        .sort((a, b) => Number(a["order"] ?? 0) - Number(b["order"] ?? 0));
+    }
+
     // Generic resource list: SELECT * FROM <t> WHERE tenant_id = $1 [AND col = $n] ...
     const resourceList = /^SELECT \* FROM ([a-z_]+) WHERE (.+?) ORDER BY/i.exec(flat);
     if (resourceList) {
       const table = resourceList[1]!;
       const predicates = resourceList[2]!.split(/\s+AND\s+/i).map((clause) => {
-        const match = /^([a-z_]+) = \$(\d+)$/.exec(clause.trim());
+        // Columns may be double-quoted (generic-resource identifiers are quoted to
+        // keep the reserved word `order` valid on mailbox_filters).
+        const match = /^"?([a-z_]+)"? = \$(\d+)$/.exec(clause.trim());
         if (!match) throw new Error(`fake pg: unsupported list predicate "${clause}"`);
         return { column: match[1]!, value: params[Number(match[2]) - 1] };
       });
@@ -456,7 +494,7 @@ describe("self-hosted webhook mount", () => {
     const documented = Object.keys(emailsSelfHostedOpenApi.paths as Record<string, unknown>)
       .filter((path) => path.startsWith("/v1/webhooks/"))
       .sort();
-    expect(documented).toEqual([SES_INBOUND_V1_WEBHOOK_PATH, RESEND_INBOUND_V1_WEBHOOK_PATH].sort());
+    expect(documented).toEqual([SES_INBOUND_V1_WEBHOOK_PATH, RESEND_INBOUND_V1_WEBHOOK_PATH, "/v1/webhooks/relay", "/v1/webhooks/relay/ses", "/v1/webhooks/relay/resend"].sort());
     for (const path of documented) {
       const { deps } = harness({ verifySns: alwaysVerified, resendSecret: RESEND_SECRET });
       // Claimed by the service (not a 404 fall-through) with an empty POST body.

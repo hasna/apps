@@ -57,29 +57,28 @@ export function scanCliRefusals(): CliRefusal[] {
   for (const entry of readdirSync(COMMANDS_DIR, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) continue;
     const text = readFileSync(join(COMMANDS_DIR, entry.name), "utf8");
-    for (const match of text.matchAll(REFUSAL_CALL)) {
-      const helper = match[1] as RefusalHelper;
-      const command = match[2];
-      if (!command || !command.startsWith("emails ")) continue;
-      found.push({
-        command,
-        file: entry.name,
-        shared: !entry.name.endsWith(".remote.ts") && !entry.name.endsWith(".local.ts"),
-        helper,
-      });
-    }
+    found.push(...scanCliRefusalSource(text, entry.name));
   }
   cached = found;
+  return found;
+}
+
+/** Parse a source fixture through the same scanner used for real commands. */
+export function scanCliRefusalSource(text: string, file: string): CliRefusal[] {
+  const found: CliRefusal[] = [];
+  for (const match of text.matchAll(REFUSAL_CALL)) {
+    const command = match[2];
+    if (!command?.startsWith("emails ")) continue;
+    found.push({ command, file, shared: !file.endsWith(".remote.ts") && !file.endsWith(".local.ts"), helper: match[1] as RefusalHelper });
+  }
   return found;
 }
 
 /**
  * How many refusals this oracle currently sees, per helper.
  *
- * A control asserts every entry is non-zero, because that is the ONLY way this
- * oracle's own blindness is detectable: every downstream assertion is of the form
- * "this proposed command must NOT refuse", and an oracle that sees fewer refusals
- * only ever RELAXES those. Going blind is silently green.
+ * Parser controls use synthetic source so removing the last legacy refusal
+ * does not require keeping a broken command for test coverage.
  */
 export function refusalHelpersObserved(): Record<RefusalHelper, number> {
   const counts = Object.fromEntries(REFUSAL_HELPERS.map((h) => [h, 0])) as Record<RefusalHelper, number>;

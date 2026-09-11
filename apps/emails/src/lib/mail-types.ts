@@ -176,6 +176,7 @@ export interface AttachmentInfo {
 
 /** Attachment path metadata as persisted with a message (from src/db/inbound.ts). */
 export interface AttachmentPath {
+  content_id?: string;
   /** Stable 0-based identity for newly persisted attachment paths. */
   index?: number;
   filename: string;

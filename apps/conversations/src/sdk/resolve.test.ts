@@ -168,7 +168,7 @@ describe("SDK credential resolution through the @hasna/contracts chain", () => {
     expect(reads.length).toBeGreaterThan(0);
   });
 
-  test("no credential anywhere: the hosted-only SDK fails loudly, naming every tier and the local opt-in", () => {
+  test("no credential anywhere: the /v1 SDK fails loudly, naming every tier and the local opt-in", () => {
     const home = tempHome();
     let caught: unknown;
     try {
@@ -294,5 +294,29 @@ describe("createConversationsClient: the chain behind the generated client", () 
     await client.getVersion();
 
     expect(seen[0]!.apiKey).toBe("constructed-key");
+  });
+
+  test("the per-request refresh spends exactly ONE Keychain read — the api-key item, never the authority", async () => {
+    // Round-2 validator note on hasna/apps#1864: the refresh re-ran the whole
+    // transport resolution, so a Keychain-backed station paid two `security`
+    // spawns (api-key + api-url) on every HTTP call. The authority is fixed in
+    // the constructed client; only the credential is worth re-reading.
+    const reads: Array<readonly string[]> = [];
+    const seen: Array<{ url: string; apiKey: string | null }> = [];
+    const client = createConversationsClient({
+      env: env(tempHome(), { HASNA_STATION: "test-station", USER: "hasna" }),
+      credentials: { keychain: { platform: "darwin", run: keychainRunner(reads) } },
+      fetch: recordingFetch(seen),
+    });
+    // Construction decides both the credential and the authority.
+    expect(reads.some((argv) => argv.join(" ").includes("api-key"))).toBe(true);
+    expect(reads.some((argv) => argv.join(" ").includes("api-url"))).toBe(true);
+    reads.length = 0;
+
+    await client.getVersion();
+
+    expect(reads).toHaveLength(1);
+    expect(reads[0]!.join(" ")).toContain("api-key");
+    expect(seen[0]!.apiKey).toBe("keychain-key");
   });
 });

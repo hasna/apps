@@ -18,7 +18,7 @@ const packageRoot = resolve(import.meta.dir, "..");
 const databaseUrl = "postgresql://emails_test:emails_test@127.0.0.1:5432/emails_test";
 const suite = "store-conformance.integration.test.ts";
 const passLines = (count: number) => Array.from({ length: count }, (_, i) => `(pass) actual database case ${i}`).join("\n");
-const summary = (body = passLines(7), passed = 7, skipped = 0) =>
+const summary = (body = passLines(8), passed = 8, skipped = 0) =>
   `${body}\n ${passed} pass\n ${skipped} skip\n 0 fail\n 4 expect() calls\nRan ${passed + skipped} tests across 1 file. [1.00s]\n`;
 
 describe("isolated PostgreSQL gate input", () => {
@@ -95,7 +95,7 @@ describe("PostgreSQL evidence must be complete", () => {
   test("requires the exact nonempty server integration inventory", () => {
     const actual = readdirSync(resolve(packageRoot, "src/server/self-hosted"))
       .filter((name) => name.endsWith(".integration.test.ts"));
-    expect(actual.length).toBe(11);
+    expect(actual.length).toBe(23);
     expect(() => assertSuiteInventory(actual)).not.toThrow();
     expect(() => assertSuiteInventory([])).toThrow();
     expect(() => assertSuiteInventory(actual.slice(1))).toThrow();
@@ -104,8 +104,8 @@ describe("PostgreSQL evidence must be complete", () => {
     expect(LIVE_POSTGRES_SUITES).toContain(suite);
     expect(Object.keys(MINIMUM_PASS_COUNTS)).toEqual(LIVE_POSTGRES_SUITES);
     expect(MINIMUM_PASS_COUNTS["multi-tenancy.integration.test.ts"]).toBe(34);
-    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0)).toBe(162);
-    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0) + Object.keys(OPTIONAL_SKIPS).length).toBe(164);
+    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0)).toBe(261);
+    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0) + Object.keys(OPTIONAL_SKIPS).length).toBe(263);
   });
 
   test("accepts complete non-skipped successful evidence", () => {
@@ -121,7 +121,7 @@ describe("PostgreSQL evidence must be complete", () => {
     { status: 0, stdout: "", stderr: summary("(skip) database missing", 0, 1) },
     { status: 0, stdout: "", stderr: summary().replace("0 fail", "1 fail") },
     { status: 0, stdout: "", stderr: summary().replace("1 file", "2 files") },
-    { status: 0, stdout: "", stderr: summary().replace("Ran 7 tests", "Ran 8 tests") },
+    { status: 0, stdout: "", stderr: summary().replace("Ran 8 tests", "Ran 9 tests") },
     { status: 0, stdout: "", stderr: `${summary()}${summary()}` },
     { status: 0, stdout: "", stderr: summary("(pass) one\n(skip) surprise", 1, 1) },
   ])("refuses failures, early exits, empty runs and unexpected skips", (result) => {
@@ -200,7 +200,7 @@ describe("PostgreSQL evidence must be complete", () => {
     }
   });
 
-  test("attempts all eleven subprocesses after an early failure without overriding case deadlines", () => {
+  test("attempts all registered subprocesses after an early failure without overriding case deadlines", () => {
     const calls: string[] = [];
     const env = buildLivePostgresEnv({ EMAILS_TEST_DATABASE_URL: databaseUrl }, "/isolated/home");
     const results = executeSuiteProcesses(packageRoot, env, (_executable, args, options) => {
@@ -215,7 +215,7 @@ describe("PostgreSQL evidence must be complete", () => {
       return { status: 0, stderr: summary(`${passLines(passed)}${optional ? `\n(skip) ${optional}` : ""}`, passed, optional ? 1 : 0) };
     }, () => {});
     expect(calls).toEqual(LIVE_POSTGRES_SUITES);
-    expect(results.filter((result) => result.ok)).toHaveLength(10);
+    expect(results.filter((result) => result.ok)).toHaveLength(LIVE_POSTGRES_SUITES.length - 1);
     expect(results.filter((result) => !result.ok)).toHaveLength(1);
   });
 

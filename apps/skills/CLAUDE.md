@@ -139,7 +139,7 @@ There is no `dashboard/` directory and no `src/server/serve.ts`.
 | Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/index.ts`) |
 | Instruction-kind skills | 20 | `SKILLS` entries with `kind: "instruction"` |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 58 | `tools/list` against a live `buildServer()` |
+| MCP tools | 72 | `tools/list` against a live `buildServer()` |
 | MCP resources | 4 | `resources/list` + `resources/templates/list` (3 static + 1 template) |
 | Published bins | 6 | `bin` in `package.json` |
 | bun build invocations | 6 | the `build` script in `package.json` |
@@ -187,7 +187,7 @@ Top-level commands, grouped by registrar:
 
 **TTY detection.** `const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false)`
 at the top of `index.tsx`. The default `interactive` command renders the Ink TUI when
-that is true; when false it prints the compact basic-profile registry as one line of
+that is true (after the read gate below); when false it prints the compact basic-profile registry as one line of
 JSON and exits 0. (It does not print help — piping `skills` gives you machine-readable
 output.)
 
@@ -210,6 +210,18 @@ registrars in order. Tool counts per registrar:
 `127.0.0.1:8836`; stdio requires `--stdio` or `MCP_STDIO=1`. Port precedence is
 `--port <n>` → `MCP_HTTP_PORT` → 8836. The HTTP transport builds a fresh server per
 request and closes it when the response closes, and exposes `GET /health`.
+
+**Fail closed at startup.** On both transports `skills-mcp` resolves the fleet
+ladder (`assertSkillsMcpConfigured()` in `src/mcp/index.ts`) before it connects
+anything: with no credential, no authority and no `HASNA_SKILLS_LOCAL=1` it exits 1
+with the ladder's one line on stderr — before `initialize` is answered, before a port
+is bound. Every data tool (`list_skills`, `search_skills`, `get_skill_info`,
+`get_skill_docs`, `list_categories`, `list_tags`, `get_requirements`) also runs the
+same per-call gate as the CLI read verbs through `src/lib/read-access.ts`
+(`readSurface()` in `src/mcp/helpers.ts` turns the refusal into `AUTH_REQUIRED`), so
+`buildServer()` embedded in-process refuses on its own. Guards:
+`src/mcp/fail-closed-startup.test.ts`, `src/mcp/read-gate.test.ts`,
+`src/cli/cli.fail-closed-reads.test.ts`.
 
 **Known wart — the agent-session tools are stateless over the default transport.**
 `register_agent` / `heartbeat` / `set_focus` / `list_agents` share a `Map` that is a

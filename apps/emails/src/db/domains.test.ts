@@ -276,7 +276,7 @@ describe("updateDomain", () => {
     const updated = updateDomain(d.id, { dkim_status: "verified", spf_status: "verified", dmarc_status: "verified" });
     expect(updated.dkim_status).toBe("verified");
     expect(updated.spf_status).toBe("verified");
-    expect(updated.dmarc_status).toBe("verified");
+    expect(updated.dmarc_status).toBe("pending"); // API identity verification is not a DMARC observation.
     expect(updated.verified_at).not.toBeNull();
   });
 
@@ -360,7 +360,7 @@ describe("updateDnsStatus", () => {
     const updated = updateDnsStatus(d.id, "verified", "verified", "verified");
     expect(updated.dkim_status).toBe("verified");
     expect(updated.spf_status).toBe("verified");
-    expect(updated.dmarc_status).toBe("verified");
+    expect(updated.dmarc_status).toBe("pending"); // API identity verification is not a DMARC observation.
     expect(updated.verified_at).not.toBeNull();
   });
 
@@ -373,4 +373,16 @@ describe("updateDnsStatus", () => {
   it("throws DomainNotFoundError for unknown id", () => {
     expect(() => updateDnsStatus("nonexistent", "verified", "verified", "verified")).toThrow(DomainNotFoundError);
   });
+});
+
+
+it("reports explicit domain readiness without inventing DNS observations", async () => {
+  await stub.seed({ domains: [
+    { id: "disabled-domain", domain: "disabled.example", verified: true, status: "outbound_disabled", provisioning_status: "ready" },
+    { id: "ready-domain", domain: "ready.example", verified: true, status: "active", provisioning_status: "verified" },
+    { id: "inbound-domain", domain: "inbound.example", verified: true, status: "active", provisioning_status: "inbound_ready" },
+  ] });
+  expect(getDomain("disabled-domain")).toMatchObject({ outbound_status: "disabled", dmarc_status: "pending" });
+  expect(getDomain("ready-domain")).toMatchObject({ outbound_status: "ready", inbound_status: "pending" });
+  expect(getDomain("inbound-domain")).toMatchObject({ inbound_status: "ready" });
 });

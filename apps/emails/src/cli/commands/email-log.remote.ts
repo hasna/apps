@@ -75,21 +75,10 @@ interface SelfHostedEmailDetail extends SelfHostedEmailSummary {
   flags: string[];
 }
 
-// The local test-send and the local webhook/event listener have no /v1
-// equivalent in this self-hosted-only client: one drives the local provider
-// pipeline, the other binds a local HTTP port to receive provider callbacks that
-// are addressed to the operator's server. Both are kept for discoverability but
-// fail loud.
-//
-// `emails export` is NOT one of them: src/lib/export.ts reads through the routed
-// `db/emails.js` and `db/events.js` repositories, which are `/v1/messages` and
-// `/v1/events` clients in this mode — the same path the MCP `export_emails` /
-// `export_events` tools already take.
-function serverOnly(command: string): never {
-  throw new Error(
-    `${command} is not available in the self-hosted client; it runs on the self-hosted server.`,
-  );
-}
+// The webhook listener still requires a service ingestion operation. Test sends
+// compose through the same authenticated send API as ordinary mail; export reads
+// through the configured message/event repositories.
+
 
 function parseReplyPage(opts: ReplyPageOpts): { limit: number; offset: number } {
   return {
@@ -98,18 +87,6 @@ function parseReplyPage(opts: ReplyPageOpts): { limit: number; offset: number } 
   };
 }
 
-function assertSupportedSelfHostedSentFilters(command: string, opts: SentLogPageOpts): void {
-  const unsupported = [
-    opts.provider ? "--provider" : null,
-    opts.status ? "--status" : null,
-    opts.from ? "--from" : null,
-  ].filter(Boolean);
-  if (unsupported.length === 0) return;
-  handleError(new Error(
-    `\`${command}\` is API-backed and does not support local sent-log filter(s): ${unsupported.join(", ")}. ` +
-      "Use `emails inbox search` for mailbox search, or retry without those filters.",
-  ));
-}
 
 function splitRecipients(value: string): string[] {
   return value.split(",").map((entry) => entry.trim()).filter(Boolean);
@@ -295,16 +272,39 @@ async function selfHostedSentList(
   ds: MailDataSource,
   opts: SentLogPageOpts,
   output: (data: unknown, formatted: string) => void,
-  command: string,
+  _command: string,
 ): Promise<void> {
-  assertSupportedSelfHostedSentFilters(command, opts);
-  const rows = await ds.listMailbox("sent", {
-    limit: parseCliPositiveIntOption(opts.limit, 20),
-    offset: parseCliNonNegativeIntOption(opts.offset),
-    since: opts.since,
-  });
+  if (opts.provider !== undefined && !opts.provider.trim()) throw new Error("Provider ID must not be empty.");
+  const source = opts.provider ? { providerId: resolveId("providers", opts.provider) } : undefined;
+  if (opts.status && !["sent", "delivered", "bounced", "complained", "failed", "queued", "blocked", "uncertain"].includes(opts.status)) {
+    throw new Error(`Invalid email status: ${opts.status}`);
+  }
+  const limit = parseCliPositiveIntOption(opts.limit, 20, 1000);
+  const offset = parseCliNonNegativeIntOption(opts.offset);
+  let rows: TuiMessage[];
+  if (opts.from?.trim() || opts.status) {
+    const { canonicalSender } = await import("../../lib/email-address.js");
+    const wantedFrom = opts.from?.trim() ? canonicalSender(opts.from) ?? opts.from.trim().toLowerCase() : undefined;
+    const matches: TuiMessage[] = [];
+    const seen = new Set<string>();
+    let complete = false;
+    for (let cursor = 0; cursor < 10000; cursor += 500) {
+      const page = await ds.listMailbox("sent", { limit: 500, offset: cursor, since: opts.since, source, from: wantedFrom });
+      for (const message of page) {
+        if (seen.has(message.id)) throw new Error("Sent mail changed while paging; retry the filtered query");
+        seen.add(message.id);
+        const sender = canonicalSender(message.from) ?? message.from.trim().toLowerCase();
+        if ((!wantedFrom || sender === wantedFrom) && (!opts.status || message.status === opts.status)) matches.push(message);
+      }
+      if (page.length < 500 || matches.length >= offset + limit) { complete = true; break; }
+    }
+    if (!complete) throw new Error("Filtered sent-mail scan exceeded 10000 messages; narrow --since before retrying");
+    rows = matches.slice(offset, offset + limit);
+  } else {
+    rows = await ds.listMailbox("sent", { limit, offset, since: opts.since, source });
+  }
   const summaries = rows.map(toSelfHostedSummary);
-  output(summaries, formatSelfHostedSummaries(summaries, "Self-hosted sent mail"));
+  output(summaries, formatSelfHostedSummaries(summaries, "Sent mail"));
 }
 
 async function selfHostedSentSearch(
@@ -320,7 +320,7 @@ async function selfHostedSentSearch(
     offset: parseCliNonNegativeIntOption(opts.offset),
   });
   const summaries = rows.map(toSelfHostedSummary);
-  output(summaries, formatSelfHostedSummaries(summaries, `Self-hosted sent search "${query}"`));
+  output(summaries, formatSelfHostedSummaries(summaries, `Sent search "${query}"`));
 }
 
 // ── mailbox-wide search (task db244cd4) ──────────────────────────────────────
@@ -639,9 +639,16 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
 
   // ─── TEST ────────────────────────────────────────────────────────────────────
   program.command("test [provider-id]").description("Send a test email")
-    .option("--to <email>", "Recipient email address")
-    .action(async () => {
-      try { serverOnly("emails test"); } catch (e) { handleError(e); }
+    .option("--to <email>", "Recipient email address (defaults to sender)")
+    .option("--from <email>", "Sender address (defaults to a configured active address)")
+    .option("--idempotency-key <key>", "Retry a test send without sending it twice")
+    .action(async (provider: string | undefined, opts: { from?: string; to?: string; idempotencyKey?: string }) => {
+      try {
+        const { sendApiTest } = await import("./api-send-composition.js");
+        const result = await sendApiTest({ ...opts, provider });
+        if (result.inProgress) process.exitCode = 1;
+        output(result, result.inProgress ? `Test send is still processing: ${result.id}` : `Test email sent to ${result.to} (${result.id})${result.warning ? `\nWarning: ${result.warning}` : ""}`);
+      } catch (e) { handleError(e); }
     });
 
   // ─── EXPORT ──────────────────────────────────────────────────────────────────
@@ -664,6 +671,7 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
 
         const { exportEmailsCsv, exportEmailsJson, exportEventsCsv, exportEventsJson, EXPORT_DEFAULT_LIMIT } =
           await import("../../lib/export.js");
+        if (opts.provider !== undefined && !opts.provider.trim()) throw new Error("Provider ID must not be empty.");
         const providerId = opts.provider ? resolveId("providers", opts.provider) : undefined;
         const fmt = opts.format ?? "json";
         const hasPage = opts.limit !== undefined || opts.offset !== undefined;
@@ -710,7 +718,16 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
     .description("Start webhook listener server")
     .option("--port <port>", "Port to listen on", "9877")
     .option("--provider <id>", "Provider ID to associate events with")
-    .action(async () => {
-      try { serverOnly("emails webhook listen"); } catch (e) { handleError(e); }
+    .action(async (opts: { port: string; provider?: string }) => {
+      try {
+        if (!/^\d+$/.test(opts.port)) throw new Error("Webhook port must be an integer between 0 and 65535.");
+        const { startApiWebhookListener } = await import("../../lib/webhook-api.js");
+        const listener = await startApiWebhookListener(Number(opts.port), opts.provider);
+        output({ listening: true, host: "127.0.0.1", port: listener.port, provider_id: listener.provider_id, type: listener.type, foreground: true }, `Webhook relay listening on http://127.0.0.1:${listener.port}/webhook/${listener.type}. Provider signatures are verified by the Emails API. Press Ctrl-C to stop.`);
+        await new Promise<void>(resolve => {
+          const stop = () => { process.off("SIGINT", stop); process.off("SIGTERM", stop); void listener.stop().finally(resolve); };
+          process.once("SIGINT", stop); process.once("SIGTERM", stop);
+        });
+      } catch (e) { handleError(e); }
     });
 }

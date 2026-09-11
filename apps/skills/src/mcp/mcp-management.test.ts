@@ -402,7 +402,7 @@ describe("MCP Server management and resources", () => {
       }, 87);
       expect(storageSearchResponse).not.toBeNull();
       const storageSearch = JSON.parse(storageSearchResponse.result.content[0].text);
-      expect(storageSearch.tools).toEqual(["storage_status", "storage_sync_plan"]);
+      expect(storageSearch.tools).toEqual(["cancel_private_publication", "get_private_publication", "publish_private_skill", "resume_private_publication", "storage_status", "storage_sync_plan"]);
 
       const detailedSearchResponse = await client.request("tools/call", {
         name: "search_tools",

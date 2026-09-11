@@ -262,7 +262,7 @@ describe("Emails self-hosted service", () => {
       is_starred: false,
       labels: [],
       headers: { Before: "yes" },
-      attachments: [],
+      attachments: [{ filename: "chart.png", content_type: "image/png", size: 128, content_id: "<chart@example.test>" }],
       source_id: null,
       idempotency_key: null,
       send_payload_hash: null,
@@ -286,6 +286,10 @@ describe("Emails self-hosted service", () => {
       },
     } as unknown as TenantScopedStore;
     d.store = { forTenant: () => scoped } as unknown as EmailsSelfHostedStore;
+
+    const detail = await handleSelfHostedRequest(d, req("GET", `/v1/messages/${original.id}`, { token }));
+    expect(detail?.status).toBe(200);
+    expect((await detail!.json()).message.attachments).toEqual(original.attachments);
 
     const updated = await handleSelfHostedRequest(d, req("PATCH", `/v1/messages/${original.id}`, {
       token,
@@ -316,6 +320,88 @@ describe("Emails self-hosted service", () => {
     expect(refused?.status).toBe(400);
     expect(await refused!.json()).toMatchObject({ reason: "unknown_field" });
     expect(writes).toHaveLength(1);
+  });
+
+  test("PATCH /v1/messages/{id} accepts and forwards the explicit spam/trash folder-move flags", async () => {
+    // BUG-0028: quarantine/un-quarantine was not expressible — the PATCH body had no
+    // is_spam/is_trash field and add_label folder moves were undocumented. These fields
+    // are the explicit spelling and must reach the store unchanged.
+    const d = deps();
+    const token = mintApiKey({
+      app: "emails",
+      scopes: ["emails:*"],
+      signingSecret: SIGNING_SECRET,
+    }).token;
+    const original: MessageRecord = {
+      id: "22222222-2222-4222-8222-222222222222",
+      direction: "inbound",
+      from_addr: "sender@example.test",
+      to_addrs: ["recipient@example.test"],
+      cc_addrs: [],
+      subject: "folder move route",
+      body_text: null,
+      body_html: null,
+      status: "",
+      provider_message_id: null,
+      message_id: null,
+      in_reply_to: null,
+      received_at: "2026-08-01T00:00:00.000Z",
+      is_read: false,
+      is_starred: false,
+      labels: [],
+      headers: {},
+      attachments: [],
+      source_id: null,
+      idempotency_key: null,
+      send_payload_hash: null,
+      send_state: "none",
+      send_started_at: null,
+      created_at: "2026-08-01T00:00:00.000Z",
+      updated_at: "2026-08-01T00:00:00.000Z",
+    };
+    const statusWrites: Array<Record<string, unknown>> = [];
+    let current = original;
+    const scoped = {
+      resolveMessageId: async () => ({ id: original.id }),
+      getMessage: async () => current,
+      updateMessageStatus: async (_id: string, patch: Record<string, unknown>) => {
+        statusWrites.push({ ...patch });
+        return current;
+      },
+    } as unknown as TenantScopedStore;
+    d.store = { forTenant: () => scoped } as unknown as EmailsSelfHostedStore;
+
+    const quarantine = await handleSelfHostedRequest(d, req("PATCH", `/v1/messages/${original.id}`, {
+      token,
+      body: { is_spam: true },
+    }));
+    expect(quarantine?.status).toBe(200);
+    expect(await quarantine!.json()).toMatchObject({ message: { id: original.id } });
+    expect(statusWrites).toEqual([{ is_spam: true }]);
+
+    const trash = await handleSelfHostedRequest(d, req("PUT", `/v1/messages/${original.id}`, {
+      token,
+      body: { is_trash: true, is_spam: false },
+    }));
+    expect(trash?.status).toBe(200);
+    expect(statusWrites).toHaveLength(2);
+    expect(statusWrites[1]).toEqual({ is_trash: true, is_spam: false });
+
+    const restore = await handleSelfHostedRequest(d, req("PATCH", `/v1/messages/${original.id}`, {
+      token,
+      body: { is_spam: false, is_trash: false, archived: false },
+    }));
+    expect(restore?.status).toBe(200);
+    expect(statusWrites).toHaveLength(3);
+    expect(statusWrites[2]).toEqual({ is_spam: false, is_trash: false, archived: false });
+
+    const unknown = await handleSelfHostedRequest(d, req("PATCH", `/v1/messages/${original.id}`, {
+      token,
+      body: { is_hame: true },
+    }));
+    expect(unknown?.status).toBe(400);
+    expect(await unknown!.json()).toMatchObject({ reason: "unknown_field" });
+    expect(statusWrites).toHaveLength(3);
   });
 
   test("/v1 with a bad-signature key is rejected 401", async () => {

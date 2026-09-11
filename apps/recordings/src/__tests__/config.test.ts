@@ -22,6 +22,7 @@ const savedEnv: Record<string, string | undefined> = {};
 const envKeys = [
   "OPENAI_API_KEY",
   "RECORDINGS_API_KEY",
+  "RECORDINGS_OPENAI_API_KEY",
   "RECORDINGS_ENHANCEMENT_KEY",
   "RECORDINGS_MODEL",
   "RECORDINGS_REALTIME_SESSION_MODEL",
@@ -113,6 +114,17 @@ describe("DEFAULT_CONFIG", () => {
 });
 
 describe("loadConfig", () => {
+  test("native provider override wins without supplying service authentication", () => {
+    const configPath = join(tempDir, "provider-config.json");
+    writeFileSync(configPath, JSON.stringify({ openai_api_key: "test-old-provider" }));
+    setEnv("RECORDINGS_OPENAI_API_KEY", "test-keychain-provider");
+    expect(loadConfig(configPath).openai_api_key).toBe("test-keychain-provider");
+    expect(() => getStore({
+      HASNA_RECORDINGS_API_URL: "https://api.example.test/recordings/v1",
+      RECORDINGS_OPENAI_API_KEY: "test-keychain-provider",
+    })).toThrow();
+  });
+
   test("returns defaults when no config file or env vars", () => {
     const config = loadConfig(join(tempDir, "nonexistent.json"));
     expect(config.transcription_model).toBe("gpt-4o-transcribe");
@@ -577,21 +589,33 @@ function withHomeAndCwd(home: string, cwd: string, callback: () => void): void {
   }
 }
 
-describe("loadSecretKey (via loadConfig)", () => {
-  test("loads API key from ~/.secrets with double quotes", () => {
-    const config = loadConfig(join(tempDir, "nonexistent.json"));
-    // The key is either loaded from ~/.secrets or empty
-    expect(typeof config.openai_api_key).toBe("string");
-  });
-
-  test("loads secret key with single quotes format", () => {
-    // We can't easily mock ~/.secrets, but we test the regex patterns directly
-    // by testing the config loading with different env overrides
-    // The loadSecretKey function is internal, so we test its effect indirectly
-    // When no env var is set and no ~/.secrets has the key, it returns ""
-    const config = loadConfig(join(tempDir, "nonexistent.json"));
-    // At minimum, the function doesn't crash
-    expect(config).toBeDefined();
+describe("the retired ~/.secrets walk (validation lane)", () => {
+  test("a ~/.secrets openai.env file under HOME never reaches the config", () => {
+    // The pre-adoption loadConfig() walked $HOME/.secrets/**/*.env for
+    // OPENAI_API_KEY. The walk is retired: key stores for the OpenAI provider
+    // key are env vars, the config file, and the macOS Keychain entry the
+    // native Settings screen writes — never a scan of $HOME. A planted env
+    // file must have no effect, and the enhancement key must not inherit from
+    // it either.
+    const previousHome = process.env.HOME;
+    const secretsHome = join(tempDir, "secrets-home");
+    mkdirSync(join(secretsHome, ".secrets", "nested"), { recursive: true });
+    const openaiLine =
+      "export " + "OPENAI_API_KEY" + '="fixture-sentinel-key-not-real"\n';
+    writeFileSync(join(secretsHome, ".secrets", "openai.env"), openaiLine);
+    writeFileSync(
+      join(secretsHome, ".secrets", "nested", "other.env"),
+      "OPENAI_API_KEY=" + "also-sentinel\n"
+    );
+    setEnv("HOME", secretsHome);
+    try {
+      const config = loadConfig(join(tempDir, "nonexistent.json"));
+      expect(config.openai_api_key).toBe("");
+      expect(config.enhancement_api_key).toBe("");
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else setEnv("HOME", previousHome);
+    }
   });
 });
 

@@ -219,6 +219,7 @@ export {
   KNOWLEDGE_LOCAL_OPT_IN_ENV,
   KNOWLEDGE_LOCAL_OPT_IN_ENV_KEYS,
   RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS,
+  KnowledgeSourceUnavailableError,
   RetiredKnowledgeStorageSelectorError,
   assertNoRetiredKnowledgeStorageSelector,
   hasKnowledgeEnvAuthorityIntent,
@@ -232,6 +233,7 @@ export {
   type KnowledgeClientTransport,
   type KnowledgeClientTransportOptions,
   type KnowledgeClientTransportReport,
+  type KnowledgeSourceUnavailableDetail,
 } from './client-transport.js';
 export {
   NETWORK_GUARD_ENV,

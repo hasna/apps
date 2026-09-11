@@ -2,7 +2,7 @@
  * OpenAPI 3 description of the shortlinks serve HTTP API.
  *
  * This is the single source of truth for the generated SDK
- * (`@hasna/shortlinks-sdk`) — run `bun run sdk:generate` after changing it —
+ * (`@hasna/shortlinks/sdk`) — run `bun run sdk:generate` after changing it —
  * and is also served live at `GET /openapi.json`.
  */
 

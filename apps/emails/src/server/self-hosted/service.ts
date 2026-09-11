@@ -1,3 +1,30 @@
+import { setupBoundSesInbound, type SesInboundSetupCloudFactory, type SesInboundSetupInput } from "./ses-inbound-setup.js";
+import { readDomainDnsRecords, DomainDnsReadError } from "./domain-dns-read.js";
+import { normalizeSendMetadata } from "../../lib/send-metadata.js";
+import { normalizeFeedback } from "./feedback.js";
+import { WorkerError, workerFence, workerId } from "./worker-supervisor.js";
+import { runtimeLogQuery, withRuntimeLog } from "./runtime-log.js";
+import { writeManagedProvider, type ManagedCredentialValidator } from "./managed-provider-write.js";
+import { runProviderSecretOperation } from "./provider-secret-operations.js";
+import { ManagedProviderSecretError } from "./managed-provider-secrets.js";
+import { ManagedSenderUnavailableError } from "./managed-provider-sender.js";
+import type {ManagedProviderSecrets} from "./managed-provider-secrets.js";
+import { provisionUpApi } from "./provision-up-api.js";
+import { ProvisionUpError } from "./provision-up.js";
+import { publishDomainDns, normalizeDomainDns } from "./domain-dns.js";
+import { DomainDnsError, type DomainDnsBinding, type BoundDnsClient } from "./domain-dns-provider.js";
+import {readProviderSecretStatus} from "./provider-secret-status.js";
+import { importSmtpMessage, smtpImportCapability, SmtpImportError, SMTP_IMPORT_JSON_BYTES } from "./smtp-import.js";
+import { relayWebhook, resolveWebhookRelay, providerWebhookRequest, WebhookRelayError, type WebhookRelayDeps } from "./webhook-relay.js";
+import { setupBoundRealtime, type RealtimeSetupCloudFactory, type RealtimeSetupInput } from "./realtime-setup.js";
+import { normalizeDomainConnect, connectDomain, DomainConnectError } from "./domain-connect.js";
+import { executeIngestBatch, IngestApiError, type IngestApiInput, type IngestCloudFactory } from "./ingest-api.js";
+import { normalizeAddressProvisioning, planAddressProvisioning, runAddressProvisioningJob, AddressProvisioningError, type ProvisioningJob } from "./address-provisioning.js";
+import { syncProviderDelivery, ProviderSyncError } from "./provider-sync.js";
+import { resolveTracking, renderTracking, serveTracking, openTrackingToken, type TrackingConfig } from "./tracking.js";
+import { readProviderHealth } from "./provider-health.js";
+import { runForwardingBatch, normalizeForwardingOptions, normalizeForwardingRule } from "./forwarding.js";
+import { runDomainOperation, DomainOperationError, type DomainOperation } from "./domain-operations.js";
 // HTTP request handler for the Emails self-hosted service.
 //
 // Surfaces operational probes (/health, /ready, /version)
@@ -41,6 +68,7 @@ import {
   MailboxFilterConflictError,
   MailboxFilterInputError,
   MailboxFilterNotFoundError,
+  normalizeMailboxFilterApplyBody,
 } from "../../lib/mailbox-filters.js";
 import {
   humanLimitBytes,
@@ -72,6 +100,7 @@ import {
   classifyProviderSendError,
   providerSendLogFields,
   type SelfHostedSender,
+  type SenderResolver,
 } from "./sender.js";
 import {
   isTenantOperator,
@@ -85,7 +114,7 @@ import type { AuthStore } from "./auth/store.js";
 import type { RateLimiter } from "./auth/rate-limit.js";
 import type { AuthMailerConfig } from "./auth/mailer.js";
 import type { SelfHostedKeyStore } from "./keys.js";
-import { canonicalSender, formatSenderDisplayName } from "../../lib/email-address.js";
+import { canonicalSender, formatSenderDisplayName, senderDisplayName } from "../../lib/email-address.js";
 import { normalizeAttachmentByteLimit } from "../../lib/attachment-download.js";
 import { canonicalizeSelfHostedPathname } from "../../lib/self-hosted-paths.js";
 
@@ -124,6 +153,8 @@ const MESSAGE_PATCH_FIELDS = new Set([
   "is_read",
   "is_starred",
   "archived",
+  "is_spam",
+  "is_trash",
   "add_label",
   "remove_label",
   "body_text",
@@ -170,10 +201,22 @@ async function readinessCheck(deps: SelfHostedServiceDeps): Promise<ReadyResult>
 }
 
 export interface SelfHostedServiceDeps {
+  managedProviderSecrets?: (tenant:string)=>ManagedProviderSecrets;
+  domainDns?: { client: (binding: DomainDnsBinding, env: NodeJS.ProcessEnv, signal: AbortSignal) => BoundDnsClient };
+  tracking?: TrackingConfig;
+  webhookRelay?: WebhookRelayDeps;
+  provisioning?: { resolveMx?: typeof import("node:dns/promises").resolveMx };
   client: TypedQueryClient;
   store: EmailsSelfHostedStore;
   verifier: ApiKeyVerifier;
   sender: SelfHostedSender;
+  resolveSender?: SenderResolver;
+  /** Metadata-only reference resolver; never decrypts managed envelopes. */
+  resolveExternalSender?: SenderResolver;
+  validateManagedCredentials?: ManagedCredentialValidator;
+  ingestCloud?: IngestCloudFactory;
+  realtimeSetupCloud?: RealtimeSetupCloudFactory;
+  sesInboundSetupCloud?: SesInboundSetupCloudFactory;
   migrations: readonly Migration[];
   version: string;
   // ---- multi-tenancy + auth (WI-2) ----
@@ -673,6 +716,7 @@ function messageWriteInput(body: Record<string, unknown>): { input: MessageInput
       body_text: body.text === undefined ? asOptStringOrNull(body.body_text) : asOptStringOrNull(body.text),
       body_html: body.html === undefined ? asOptStringOrNull(body.body_html) : asOptStringOrNull(body.html),
       status: body.status ? String(body.status) : undefined,
+      provider_id: asOptStringOrNull(body.provider_id),
       provider_message_id: asOptStringOrNull(body.provider_message_id),
       direction,
       message_id: asOptStringOrNull(body.message_id),
@@ -860,10 +904,31 @@ export interface SelfHostedRequestContext {
   socketAddress?: string | null;
 }
 
+async function executeScheduledRequest(deps: SelfHostedServiceDeps, req: Request, context: SelfHostedRequestContext, store: TenantScopedStore, limit: number, sequenceLimit: number): Promise<Response> {
+  const { runScheduledBatch } = await import("./scheduler.js");
+  const send = async (payload: Record<string, unknown>) => {
+    const sendUrl = new URL("/v1/messages/send", req.url);
+    const headers = new Headers(req.headers);
+    headers.set("Content-Type", "application/json");
+    headers.delete("Content-Length");
+    const response = await handleSelfHostedRequest(deps, new Request(sendUrl, { method: "POST", headers, body: JSON.stringify(payload) }), context);
+    if (!response) throw new Error("Send handler was not available");
+    return response;
+  };
+  return await withRuntimeLog(store, "scheduler", "scheduled_run", async () => {
+    const result = await runScheduledBatch(store, send, limit);
+    const { runSequenceBatch } = await import("./sequence-worker.js");
+    const sequenceResult = sequenceLimit === 0 ? { sequences: { attempted: 0, sent: 0, failed: 0, pending: 0, skipped: 0 }, sequence_items: [] } : await runSequenceBatch(store.sequenceWorker(), send, sequenceLimit);
+    return json(200, { ...result, ...sequenceResult, sequence_execution: sequenceLimit === 0 ? "not_requested" : "executed" });
+  });
+}
+
 export async function handleSelfHostedRequest(
   deps: SelfHostedServiceDeps,
   req: Request,
   context: SelfHostedRequestContext = {},
+  // Server-owned automation metadata; HTTP body/header fields never populate this argument.
+  trustedSendHeaders?: Record<string, string>,
 ): Promise<Response | null> {
   const url = new URL(req.url);
   // Normalize the `/api/v1` alias to `/v1` ONCE, at this single entry point that
@@ -874,6 +939,12 @@ export async function handleSelfHostedRequest(
   if (canonicalPathname !== url.pathname) url.pathname = canonicalPathname;
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const method = req.method.toUpperCase();
+
+  const trackingMatch = path.match(/^\/v1\/tracking\/([\w.-]+)$/);
+  if (trackingMatch && method === "GET") {
+    try { return await serveTracking(deps.tracking, trackingMatch[1]!, tenant => deps.store.forTenant(tenant)); }
+    catch { return new Response(null, {status:503,headers:{"Cache-Control":"no-store"}}); }
+  }
 
   // ---- operational probes (unauthenticated) ------------------------------
   if (path === "/health") {
@@ -948,6 +1019,74 @@ export async function handleSelfHostedRequest(
     const authResponse = await handleAuthRoutes(deps, req, url, { socketAddress: context.socketAddress ?? null });
     if (authResponse) return authResponse;
 
+    if (path === "/v1/domains/setup" || path === "/v1/domains/setup-cloudflare" || path === "/v1/domains/provision" || /^\/v1\/domain-dns-jobs\/[^/]+$/.test(path)) {
+      const inspect = path.startsWith("/v1/domain-dns-jobs/");
+      if (method !== (inspect ? "GET" : "POST")) return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, inspect ? read : write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "domain DNS provisioning");
+      if (denied) return denied;
+      try {
+        if (inspect) {
+          const result = await auth.store.domainDnsJobs().read(decodeURIComponent(path.split("/").at(-1)!));
+          return result ? json(200, result) : json(404, { error: "Domain DNS job not found" });
+        }
+        const body = await readJsonBody(req), input = normalizeDomainDns(body, path === "/v1/domains/setup" ? "setup_owned" : path.endsWith("/provision") ? "provision_domain" : "setup_cloudflare");
+        return json(200, await publishDomainDns(auth.store, auth.ctx.tenantId, input, body.dry_run === true, deps.resolveSender, deps.env ?? process.env, auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator", deps.domainDns?.client));
+      } catch (error) {
+        if (error instanceof DomainDnsError || error instanceof DomainConnectError) return json(error.status, { error: error.message });
+        return json(503, { error: "DNS provisioning did not confirm completion. Inspect the durable job before retrying." });
+      }
+    }
+
+    if (
+      path === "/v1/domains/connect" ||
+      /^\/v1\/domain-connections\/[^/]+$/.test(path)
+    ) {
+      const auth = await authenticate(
+        deps,
+        req,
+        url,
+        method === "GET" ? read : write,
+      );
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "domain connection");
+      if (denied) return denied;
+      try {
+        if (path === "/v1/domains/connect") {
+          if (method !== "POST")
+            return json(405, { error: "method not allowed" });
+          const body = await readJsonBody(req),
+            input = normalizeDomainConnect(body);
+          return json(
+            200,
+            await connectDomain(
+              auth.store,
+              auth.ctx.tenantId,
+              input,
+              body.dry_run === true,
+              deps.resolveSender,
+              auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator",
+            ),
+          );
+        }
+        if (method !== "GET") return json(405, { error: "method not allowed" });
+        const result = await auth.store.getDomainConnection(
+          decodeURIComponent(path.split("/").at(-1)!),
+        );
+        return result
+          ? json(200, result)
+          : json(404, { error: "Domain connection not found" });
+      } catch (error) {
+        if (error instanceof DomainConnectError)
+          return json(error.status, {
+            error: error.message,
+            reason: error.reason,
+          });
+        throw error;
+      }
+    }
+
     // /v1/domains
     if (path === "/v1/domains") {
       if (method === "GET") {
@@ -1005,6 +1144,131 @@ export async function handleSelfHostedRequest(
         return (await auth.store.deleteDomain(id)) ? json(200, { deleted: true, id }) : json(404, { error: "domain not found" });
       }
       return json(405, { error: "method not allowed" });
+    }
+
+    if (["/v1/provision/up", "/v1/provision/tick", "/v1/provision/retry"].includes(path) || /^\/v1\/provision\/runs\/[^/]+(?:\/run)?$/.test(path)) {
+      const auth = await authenticate(deps, req, url, method === "GET" ? read : write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "provisioning orchestration");
+      if (denied) return denied;
+      try {
+        const body = method === "POST" ? await readJsonBody(req) : {};
+        const execute = async () => json(200, await provisionUpApi(path, method, body, { deps, store: auth.store, tenant: auth.ctx.tenantId,
+          actor: auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator",
+          request: async (internalPath, payload, boundSender, signal) => {
+            const allowed = internalPath === "/v1/messages/send" || internalPath === "/v1/inbox/sync-s3" || /^\/v1\/messages(?:\?|\/)/.test(internalPath);
+            if (!allowed) throw new ProvisionUpError("Unexpected provisioning subrequest.");
+            const headers = new Headers(req.headers); headers.delete("Content-Length"); headers.set("Content-Type", "application/json");
+            const internalDeps = boundSender ? { ...deps, resolveSender: (tenant: string, provider: string) => tenant === auth.ctx.tenantId && provider === payload?.provider_id ? boundSender : null } : deps;
+            const response = await handleSelfHostedRequest(internalDeps, new Request(new URL(internalPath, req.url), { method: payload ? "POST" : "GET", headers, signal, ...(payload ? { body: JSON.stringify(payload) } : {}) }), context);
+            if (!response) throw new ProvisionUpError("Provisioning subrequest unavailable.", 503);
+            return response;
+          }
+        }));
+        return method === "POST" && (path === "/v1/provision/tick" || path.endsWith("/run"))
+          ? await withRuntimeLog(auth.store, "daemon", "provision_job", execute)
+          : await execute();
+      } catch (error) {
+        if (error instanceof ProvisionUpError || error instanceof DomainDnsError || error instanceof DomainConnectError) return json(error.status, { error: error.message });
+        return json(503, { error: "Provisioning did not confirm completion. Inspect the durable run before retrying." });
+      }
+    }
+
+    // Provisioning orchestration is operator-owned; generic address CRUD does not execute it.
+    if (
+      path === "/v1/provision/address" ||
+      /^\/v1\/provision\/jobs\/[^/]+(?:\/run)?$/.test(path)
+    ) {
+      const auth = await authenticate(
+        deps,
+        req,
+        url,
+        method === "GET" ? read : write,
+      );
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "address provisioning");
+      if (denied) return denied;
+      const publicJob = (job: ProvisioningJob) => ({
+        id: job.id,
+        kind: job.kind,
+        status: job.status,
+        input: job.input,
+        receipt: job.receipt,
+        created_at: job.created_at,
+        updated_at: job.updated_at,
+      });
+      try {
+        if (path === "/v1/provision/address") {
+          if (method !== "POST")
+            return json(405, { error: "method not allowed" });
+          const body = await readJsonBody(req),
+            input = normalizeAddressProvisioning(body);
+          const options = {
+            resolveSender: deps.resolveSender,
+            env: deps.env,
+            mx: deps.provisioning?.resolveMx,
+          };
+          if (body.dry_run === true)
+            return json(
+              200,
+              await planAddressProvisioning(
+                auth.store,
+                auth.ctx.tenantId,
+                input,
+                options,
+              ),
+            );
+          if (typeof body.idempotency_key !== "string")
+            return json(400, { error: "idempotency_key is required" });
+          const refs = await auth.store.resolveAddressProvisioning(input);
+          const job = await auth.store.startProvisioningJob(
+            refs.input,
+            body.idempotency_key,
+            auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator",
+          );
+          return await withRuntimeLog(auth.store, "daemon", "provision_address", async () => {
+            const result = await runAddressProvisioningJob(
+              auth.store,
+              auth.ctx.tenantId,
+              job.id,
+              options,
+            );
+            return json(200, { job: publicJob(result) });
+          });
+        }
+        const match = path.match(/^\/v1\/provision\/jobs\/([^/]+)(\/run)?$/)!;
+        if (match[2]) {
+          if (method !== "POST")
+            return json(405, { error: "method not allowed" });
+          const body = await readJsonBody(req);
+          if (Object.keys(body).length)
+            return json(400, { error: "Provisioning job inputs are immutable" });
+          return await withRuntimeLog(auth.store, "daemon", "provision_job", async () => {
+            const result = await runAddressProvisioningJob(
+              auth.store,
+              auth.ctx.tenantId,
+              decodeURIComponent(match[1]!),
+              {
+                resolveSender: deps.resolveSender,
+                env: deps.env,
+                mx: deps.provisioning?.resolveMx,
+              },
+            );
+            return json(200, { job: publicJob(result) });
+          });
+        }
+        if (method !== "GET") return json(405, { error: "method not allowed" });
+        const job = await auth.store.getProvisioningJob(
+          decodeURIComponent(match[1]!),
+        );
+        return job
+          ? json(200, { job: publicJob(job) })
+          : json(404, { error: "Provisioning job not found" });
+      } catch (error) {
+        if (error instanceof AddressProvisioningError)
+          return json(error.status, { error: error.message, reason: error.code });
+        throw error;
+      }
     }
 
     // /v1/addresses
@@ -1293,14 +1557,39 @@ export async function handleSelfHostedRequest(
     // /v1/messages/send — the only outbound create path. It invokes the
     // operator-selected provider only after atomically persisting and claiming
     // an idempotent send intent.
-    if (path === "/v1/messages/send") {
+    if (path === "/v1/messages/send" || path === "/v1/scheduled/enqueue") {
       if (method !== "POST") return json(405, { error: "method not allowed" });
       const auth = await authenticate(deps, req, url, write);
       if (!auth.ok) return auth.response;
+      const enqueue = path === "/v1/scheduled/enqueue";
+      if (enqueue) {
+        const operatorError = requireTenantOperator(auth, "enqueuing scheduled sends");
+        if (operatorError) return operatorError;
+      }
       // The one route whose body legitimately carries base64 attachment
       // content, so it reads against the attachment-derived budget rather than
       // the 1MiB default every other route keeps.
       const body = await readJsonBody(req, MAX_SEND_JSON_BODY_BYTES);
+      let metadata: ReturnType<typeof normalizeSendMetadata>;
+      try { metadata = normalizeSendMetadata(body.headers, body.tags); }
+      catch (error) { return json(400, { error: error instanceof Error ? error.message : "Invalid send metadata", reason: "invalid_send_metadata" }); }
+      const sendHeaders = metadata.headers || trustedSendHeaders ? { ...metadata.headers, ...trustedSendHeaders } : undefined;
+      let scheduledAt: string | undefined;
+      if (enqueue) {
+        try {
+          const { parseScheduledSendTime } = await import("../../lib/scheduled-send-time.js");
+          scheduledAt = parseScheduledSendTime(body.scheduled_at, Number.NEGATIVE_INFINITY);
+          for (const field of ["to", "cc", "bcc", "attachments"]) {
+            if (body[field] !== undefined && !Array.isArray(body[field])) return json(400, { error: `${field} must be an array` });
+          }
+          for (const field of ["from", "subject", "text", "html", "reply_to", "provider_id", "unsubscribe_url"]) {
+            if (body[field] !== undefined && typeof body[field] !== "string") return json(400, { error: `${field} must be a string` });
+          }
+          if (body.send_key || req.headers.get("x-emails-send-key")) return json(403, { error: "Scoped send-key delegation cannot be persisted in a scheduled job; use a tenant operator credential" });
+          if (body.allow_suppressed_recipients !== undefined && typeof body.allow_suppressed_recipients !== "boolean") return json(400, { error: "allow_suppressed_recipients must be boolean" });
+          if (body.reply_to !== undefined && (typeof body.reply_to !== "string" || body.reply_to.split(",").some(value => !canonicalSender(value)))) return json(400, { error: "reply_to must contain valid mailbox addresses" });
+        } catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid scheduled_at" }); }
+      }
       const rawFrom = String(body.from ?? "").trim();
       const rawTo = asStringArray(body.to);
       if (!rawFrom) return json(400, { error: "from is required" });
@@ -1363,7 +1652,37 @@ export async function handleSelfHostedRequest(
       } catch (error) {
         return json(400, { error: error instanceof Error ? error.message : "invalid attachment" });
       }
+      const requestedProviderId = typeof body.provider_id === "string" ? body.provider_id.trim() : "";
+      if (body.provider_id !== undefined && (!requestedProviderId || typeof body.provider_id !== "string")) {
+        return json(400, { error: "provider_id must be a non-empty provider identifier", reason: "invalid_provider" });
+      }
+      let sender = deps.sender;
+      let providerId = `self-hosted-${sender.provider}`;
+      if (requestedProviderId) {
+        const registry = resourceSpecForPath("providers");
+        const provider = registry ? await auth.store.getResource(registry, requestedProviderId) : null;
+        if (!provider) return json(404, { error: "provider not found in this tenant", reason: "provider_not_found" });
+        if (provider.active === false) return json(409, { error: "provider is inactive", reason: "provider_inactive" });
+        const bound = await deps.resolveSender?.(auth.ctx.tenantId, requestedProviderId);
+        if (!bound) return json(503, { error: "This provider has no server sender binding. Configure EMAILS_SENDER_BINDINGS for this tenant and provider using credential environment variable names.", reason: "provider_sender_unconfigured" });
+        if (provider.type !== bound.provider) return json(409, { error: "The sender binding type does not match the provider registry.", reason: "provider_sender_type_mismatch" });
+        sender = bound;
+        providerId = requestedProviderId;
+      }
+      let tracking;
+      try { tracking = resolveTracking(body, auth.ctx.tenantId, deps.tracking); }
+      catch(error) { return json(400,{error:error instanceof Error ? error.message : "Invalid tracking options",reason:"tracking_configuration_required"}); }
+      let unsubscribeUrl: string | undefined;
+      if (body.unsubscribe_url !== undefined) {
+        if (typeof body.unsubscribe_url !== "string" || /[\r\n<>]/.test(body.unsubscribe_url)) return json(400, { error: "unsubscribe_url must be an HTTP(S) URL", reason: "invalid_unsubscribe_url" });
+        try {
+          const parsed = new URL(body.unsubscribe_url);
+          if (!["https:", "http:"].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error("invalid");
+          unsubscribeUrl = parsed.toString();
+        } catch { return json(400, { error: "unsubscribe_url must be an HTTP(S) URL", reason: "invalid_unsubscribe_url" }); }
+      }
       const payload = {
+        ...(tracking ?? {}),
         from,
         to,
         cc,
@@ -1373,21 +1692,70 @@ export async function handleSelfHostedRequest(
         text: typeof body.text === "string" ? body.text : null,
         html: typeof body.html === "string" ? body.html : null,
         attachments,
-        provider: deps.sender.provider,
+        provider: sender.provider,
+        ...(sendHeaders ? { headers: sendHeaders } : {}),
+        ...(metadata.tags ? { tags: metadata.tags } : {}),
+        ...(requestedProviderId ? { provider_id: providerId } : {}),
+        ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
       };
-      const sendKeyToken = typeof body.send_key === "string"
-        ? body.send_key.trim()
-        : req.headers.get("x-emails-send-key")?.trim() ?? "";
+      if (enqueue && scheduledAt) {
+        const queuedPayload = {
+          ...(tracking ?? {}),
+          from: rawFrom, to, cc, bcc, reply_to: payload.reply_to, subject,
+          text: payload.text, html: payload.html, attachments,
+          ...(requestedProviderId ? { provider_id: providerId } : {}),
+          ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
+          ...metadata,
+          allow_suppressed_recipients: body.allow_suppressed_recipients === true,
+        };
+        try {
+          safeHeaderValue("from", rawFrom);
+          const queued = await auth.store.enqueueScheduled({
+            key: idempotencyKey, scheduledAt, payload: queuedPayload,
+            hash: sendPayloadHash({ scheduled_at: scheduledAt, payload: queuedPayload }),
+          });
+          return json(queued.created ? 201 : 200, {
+            enqueued: true, scheduled: { id: queued.id, status: queued.status, scheduled_at: queued.scheduled_at },
+            idempotent_replay: !queued.created,
+          });
+        } catch (error) {
+          if (error instanceof IdempotencyKeyConflictError) return json(409, { error: error.message, retry_safe: false });
+          if (error instanceof RangeError) return json(400, { error: error.message });
+          throw error;
+        }
+      }
+      const rawSendKey = Object.hasOwn(body, "send_key") ? body.send_key : req.headers.get("x-emails-send-key");
+      const sendKeyProvided = Object.hasOwn(body, "send_key") || req.headers.has("x-emails-send-key");
+      if (sendKeyProvided && (typeof rawSendKey !== "string" || !rawSendKey.trim())) {
+        return json(403, { error: "send key is invalid or revoked", reason: "send_key_invalid", retry_safe: false });
+      }
+      const sendKeyToken = typeof rawSendKey === "string" ? rawSendKey.trim() : "";
+      const allowTenantWideSend =
+        auth.ctx.principalType === "apikey" ||
+        (auth.ctx.principalType === "idp" && hasAllScopes(auth.ctx.scopes, ["emails:write"])) ||
+        auth.ctx.role === "owner" || auth.ctx.role === "admin";
+      // A retry is still an authenticated operation. Check scoped authority
+      // before reserving, revealing a receipt, expiring a lease or rearming an
+      // intent. Historical successes do not re-run quotas or suppression.
+      if (sendKeyProvided || !allowTenantWideSend) {
+        const authority = await auth.store.evaluateSendAuthority({ from, sendKeyToken, allowTenantWideSend });
+        if (!authority.allowed) return json(authority.status, {
+          error: authority.message, reason: authority.code, retry_safe: false,
+        });
+      }
       let reserved;
       try {
         reserved = await auth.store.reserveSendIntent({
           direction: "outbound",
+          provider_id: providerId,
           from_addr: from,
           to_addrs: to,
           cc_addrs: cc,
           subject,
           body_text: payload.text,
           body_html: payload.html,
+          headers: sendHeaders,
+          tags: metadata.tags,
           attachments: attachments.map(({ filename, content_type, content }) => ({
             filename,
             content_type,
@@ -1418,7 +1786,7 @@ export async function handleSelfHostedRequest(
           }
           return json(200, {
             message: publicMessage(reserved.record),
-            provider: deps.sender.provider,
+            provider: sender.provider,
             idempotent_replay: true,
             // The original attempt succeeded: say so at the top level, exactly
             // like a fresh success, so callers have ONE place to check.
@@ -1435,7 +1803,7 @@ export async function handleSelfHostedRequest(
               retry_safe: false,
             });
           }
-          return json(202, { message: publicMessage(reserved.record), provider: deps.sender.provider, in_progress: true });
+          return json(202, { message: publicMessage(reserved.record), provider: sender.provider, in_progress: true });
         }
         if (reserved.record.send_state === "blocked") {
           return json(409, {
@@ -1488,10 +1856,7 @@ export async function handleSelfHostedRequest(
         // ordinary write scope — IdP principals have no role and no path to a
         // send key (minting is operator-gated), so omitting the class here
         // made every federated send an unfixable 403 send_key_required.
-        allowTenantWideSend:
-          auth.ctx.principalType === "apikey" ||
-          (auth.ctx.principalType === "idp" && hasAllScopes(auth.ctx.scopes, ["emails:write"])) ||
-          auth.ctx.role === "owner" || auth.ctx.role === "admin",
+        allowTenantWideSend,
         // Explicit per-send suppression override. The policy gate honors it
         // only together with tenant-wide authority above; a bare body field is
         // never authority on its own.
@@ -1507,6 +1872,18 @@ export async function handleSelfHostedRequest(
         });
       }
 
+      let trackedHtml: string | undefined;
+      if (tracking) {
+        try {
+          const document = await auth.store.prepareTracking(reserved.record.id, renderTracking(deps.tracking!, tracking, auth.ctx.tenantId, reserved.record.id, {
+            html: typeof body.html === "string" ? body.html : undefined,
+            text: typeof body.text === "string" ? body.text : undefined,
+            unsubscribe: unsubscribeUrl,
+          }));
+          if (document.expires <= Date.now() || Object.values(document.links).some(link => !openTrackingToken(deps.tracking!, link.token))) return json(409,{error:"Prepared tracking links expired or their signing key was retired; restore retained keys or create a new send intent",reason:"tracking_expired"});
+          trackedHtml = document.html;
+        } catch { return json(503,{error:"Tracking preparation failed; retry only with the same idempotency key",reason:"tracking_preparation_failed"}); }
+      }
       const claimed = await auth.store.claimSendIntent(reserved.record.id);
       if (!claimed) {
         const latest = await auth.store.getMessage(reserved.record.id);
@@ -1516,7 +1893,7 @@ export async function handleSelfHostedRequest(
           }
           return json(200, {
             message: publicMessage(latest),
-            provider: deps.sender.provider,
+            provider: sender.provider,
             idempotent_replay: true,
             sent: true,
             provider_message_id: latest.provider_message_id,
@@ -1541,30 +1918,47 @@ export async function handleSelfHostedRequest(
         }
         return json(202, {
           message: publicMessage(latest ?? reserved.record),
-          provider: deps.sender.provider,
+          provider: sender.provider,
           in_progress: true,
         });
       }
 
       let messageId: string;
       try {
-        // The provider call is the ONLY surface that may carry the address
-        // record's display name (bug e2578a8a). Authorization, the ledger
-        // (`from_addr`), the idempotency hash and the policy gate all keep the
-        // bare canonical address; a display name is presentational and must not
-        // change what the send is attributed to.
+        // The provider call is the ONLY surface that may carry a display name
+        // (bug e2578a8a). Authorization, the ledger (`from_addr`), the
+        // idempotency hash and the policy gate all keep the bare canonical
+        // address; a display name is presentational and must not change what
+        // the send is attributed to.
         const fromRecord = await auth.store.getAddressByEmail(from);
-        // The display name is an unvalidated address-record field, so it must
-        // not be allowed to carry control characters into the provider call
-        // (the raw-MIME path writes `From:` verbatim; CR/LF would be header
+        // Two display-name sources may decorate the provider From. The address
+        // record's display_name (the configured identity name, bug e2578a8a)
+        // wins when present and safe; otherwise the display name the caller
+        // supplied INLINE in `from` — `"Andrei Hasna" <andrei@example.com>` —
+        // is used. `canonicalSender` strips that phrase to the bare address at
+        // parse time, so without this fallback an inline display name was
+        // silently dropped and recipients saw only the raw addr-spec
+        // (bug 0006). The display-name phrase is an unvalidated input, so it
+        // must not carry control characters into the provider call (the
+        // raw-MIME path writes `From:` verbatim; CR/LF would be header
         // injection). A hostile name falls back to the canonical address —
         // the send still succeeds, attributed to the bare sender.
-        const fromForProvider =
+        const recordName =
           fromRecord?.display_name && isSafeFromDisplayName(fromRecord.display_name)
-            ? formatSenderDisplayName(fromRecord.display_name, from)
-            : from;
-        messageId = await deps.sender.send({
-          provider_id: `self-hosted-${deps.sender.provider}`,
+            ? fromRecord.display_name
+            : null;
+        const inlineName = senderDisplayName(rawFrom);
+        const displayName =
+          recordName ??
+          (inlineName && isSafeFromDisplayName(inlineName) ? inlineName : null);
+        const fromForProvider = displayName
+          ? formatSenderDisplayName(displayName, from)
+          : from;
+        messageId = await sender.send({
+          provider_id: providerId,
+          unsubscribe_url: unsubscribeUrl,
+          headers: sendHeaders,
+          tags: metadata.tags,
           from: fromForProvider,
           to,
           cc: cc.length ? cc : undefined,
@@ -1572,7 +1966,7 @@ export async function handleSelfHostedRequest(
           reply_to: typeof body.reply_to === "string" ? body.reply_to : undefined,
           subject,
           text: typeof body.text === "string" ? body.text : undefined,
-          html: typeof body.html === "string" ? body.html : undefined,
+          html: trackedHtml ?? (typeof body.html === "string" ? body.html : undefined),
           attachments: attachments.length ? attachments : undefined,
         });
       } catch (error) {
@@ -1581,7 +1975,7 @@ export async function handleSelfHostedRequest(
         const outcome = classifyProviderSendError(error);
         console.error("[emails-self-hosted] provider send failed", {
           message_id: claimed.id,
-          provider: deps.sender.provider,
+          provider: sender.provider,
           ...providerSendLogFields(outcome),
         });
         if (outcome.kind === "rejected") {
@@ -1617,7 +2011,7 @@ export async function handleSelfHostedRequest(
         // guess what happened from the HTTP status alone.
         return json(202, {
           message: publicMessage(completed),
-          provider: deps.sender.provider,
+          provider: sender.provider,
           sent: true,
           provider_message_id: messageId,
         });
@@ -1628,7 +2022,7 @@ export async function handleSelfHostedRequest(
         // client mail on 2026-07-25.
         console.error("[emails-self-hosted] ledger finalization failed after provider accept", {
           message_id: claimed.id,
-          provider: deps.sender.provider,
+          provider: sender.provider,
           provider_message_id: messageId,
           error: error instanceof Error ? `${error.name}: ${error.message}` : "UnknownError",
         });
@@ -1640,7 +2034,7 @@ export async function handleSelfHostedRequest(
         const uncertain = await auth.store.markSendUncertain(claimed.id, messageId).catch(() => null);
         return json(202, {
           message: publicMessage(uncertain ?? claimed),
-          provider: deps.sender.provider,
+          provider: sender.provider,
           provider_message_id: messageId,
           sent: true,
           warning: "the provider ACCEPTED this message (it was sent) but recording the final state failed; " +
@@ -1683,6 +2077,7 @@ export async function handleSelfHostedRequest(
           return json(400, { error: "offset is limited to 100000; use cursor pagination for deep pages" });
         }
         const page = await auth.store.listMessages({
+          provider_id: url.searchParams.get("provider_id") ?? undefined,
           limit: queryInt(url, "limit"),
           offset,
           direction,
@@ -1897,6 +2292,8 @@ export async function handleSelfHostedRequest(
           body.is_read !== undefined ||
           body.is_starred !== undefined ||
           body.archived !== undefined ||
+          body.is_spam !== undefined ||
+          body.is_trash !== undefined ||
           body.add_label !== undefined ||
           body.remove_label !== undefined;
         let rec = statusTouched
@@ -1906,6 +2303,8 @@ export async function handleSelfHostedRequest(
               is_read: typeof body.is_read === "boolean" ? body.is_read : undefined,
               is_starred: typeof body.is_starred === "boolean" ? body.is_starred : undefined,
               archived: typeof body.archived === "boolean" ? body.archived : undefined,
+              is_spam: typeof body.is_spam === "boolean" ? body.is_spam : undefined,
+              is_trash: typeof body.is_trash === "boolean" ? body.is_trash : undefined,
               add_label: typeof body.add_label === "string" ? body.add_label : undefined,
               remove_label: typeof body.remove_label === "string" ? body.remove_label : undefined,
             })
@@ -2322,12 +2721,32 @@ export async function handleSelfHostedRequest(
       const isApply = path.endsWith("/apply");
       if (isApply) {
         if (method !== "POST") return json(405, { error: "method not allowed" });
-        const auth = await authenticate(deps, req, url, read);
+        // An absent/empty body or `{"mutate":false}` keeps the existing
+        // list-only apply (read authorization). `{"mutate":true}` performs a
+        // write and is therefore checked against write authorization BEFORE any
+        // message changes. Malformed non-object bodies and non-boolean `mutate`
+        // values are refused by the body reader / normalizer (400 invalid_input).
+        const { mutate } = normalizeMailboxFilterApplyBody(await readJsonBody(req));
+        const auth = await authenticate(deps, req, url, mutate ? write : read);
         if (!auth.ok) return auth.response;
         const result = await auth.store.applyMailboxFilter(identifier, {
           limit: queryInt(url, "limit"),
           offset: queryInt(url, "offset"),
+          mutate,
         });
+        if (result.mutate === true) {
+          return json(200, {
+            filter: result.filter,
+            items: [],
+            limit: result.limit,
+            offset: 0,
+            truncated: false,
+            mutate: true,
+            matched: result.matched ?? 0,
+            updated: result.updated ?? 0,
+            unchanged: result.unchanged ?? 0,
+          });
+        }
         return json(200, {
           filter: result.filter,
           items: result.page.items.slice(0, result.limit).map(publicMessageListItem),
@@ -2416,6 +2835,263 @@ export async function handleSelfHostedRequest(
       }
     }
 
+    const workerControl = path.match(/^\/v1\/workers\/([^/]+)\/control$/);
+    if (path === "/v1/workers" || workerControl) {
+      if (method !== (workerControl ? "POST" : "GET")) return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, workerControl ? write : read);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "supervising workers"); if (denied) return denied;
+      try {
+        const backend = auth.store.workerSupervisor();
+        if (!workerControl) { const items = await backend.list(); return json(200, { items: items.slice(0,500), complete: items.length <= 500 }); }
+        const id=workerId(decodeURIComponent(workerControl[1]!)), body=await readJsonBody(req,8192), action=body.action;
+        const fields: Record<string,string[]> = {register:["owner_token","component","interval_ms"],heartbeat:["owner_token","generation"],started:["owner_token","generation"],restart:["request_id"],"restart-status":["request_id"],drain:["owner_token","generation"],"stop-request":["owner_token","generation"],stop:["owner_token","generation"],tick:["owner_token","generation","request_id"],operation:["owner_token","generation","request_id"]};
+        if(typeof action!=="string"||!Object.hasOwn(fields,action)||Object.keys(body).some(key=>key!=="action"&&!fields[action]!.includes(key)))throw new WorkerError("Invalid worker control action or fields",400);
+        if(action==="register")return json(200,{worker:await backend.register(id,body)});
+        if(action==="restart"||action==="restart-status"){const key=workerId(body.request_id);const restart=action==="restart"?await backend.restart(id,key):await backend.restartStatus(id,key);return json(restart.status==="complete"?200:202,{restart});}
+        const fence=workerFence(id,body);
+        if(action==="heartbeat")return json(200,{worker:await backend.heartbeat(fence)});
+        if(action==="started")return json(200,{worker:await backend.started(fence)});
+        if(action==="drain"||action==="stop")return json(200,{worker:await backend.drain(fence,action==="stop")});
+        if(action==="stop-request")return json(200,{worker:await backend.stopRequest(fence)});
+        const operationId=workerId(body.request_id);
+        if(action==="operation"){const operation=await backend.operation(fence,operationId);return json(operation.status==="complete"?200:202,{operation});}
+        const begun=await backend.beginOperation(fence,operationId);
+        if(!begun.claimed)return json(begun.operation.status==="complete"?200:202,{operation:begun.operation});
+        let result: Record<string,unknown>;
+        try {
+          const response=await executeScheduledRequest(deps,req,context,auth.store.withWorkerFence(fence),1,1);
+          const value=await response.json() as Record<string,unknown>;
+          const counts=(input:unknown)=>{const record=input&&typeof input==='object'?input as Record<string,unknown>:{};return Object.fromEntries(["attempted","sent","failed","pending","skipped"].map(key=>[key,Number.isSafeInteger(record[key])?record[key]:0]));};
+          result={outcome:"returned",http_status:response.status,scheduled:counts(value.scheduled),sequences:counts(value.sequences)};
+        } catch { result={outcome:"threw"}; }
+        return json(200,{operation:await backend.finishOperation(fence,operationId,result)});
+      } catch(error) {
+        if(error instanceof WorkerError)return json(error.status,{error:error.message});
+        return json(503,{error:"Worker control could not be confirmed; retain the worker/request identity and inspect its status."});
+      }
+    }
+
+    if (path === "/v1/runtime/logs") {
+      if (method !== "GET") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, read);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "reading runtime logs");
+      if (denied) return denied;
+      let query;
+      try {
+        if ([...url.searchParams.keys()].some(key => key !== "component" && key !== "lines") || url.searchParams.getAll("component").length > 1 || url.searchParams.getAll("lines").length > 1) throw Error("Only component and lines are supported");
+        query = runtimeLogQuery(url.searchParams.get("component") ?? "daemon", url.searchParams.get("lines") ?? "80");
+      } catch (error) { return json(400, { error: (error as Error).message }); }
+      const items = await auth.store.tailRuntimeLogs(query.component, query.limit);
+      return json(200, { scope: "tenant_api_operations", component: query.component, items, container_stdout: false, worker_liveness: "not_measured" });
+    }
+
+    if (path === "/v1/scheduled/run") {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const operatorError = requireTenantOperator(auth, "running scheduled sends");
+      if (operatorError) return operatorError;
+      const body = await readJsonBody(req);
+      const limit = body.limit === undefined ? 10 : body.limit;
+      if (Object.keys(body).some(key => key !== "limit" && key !== "sequence_limit")) return json(400, { error: "Only limit and sequence_limit may be specified" });
+      const sequenceLimit = body.sequence_limit === undefined ? 10 : body.sequence_limit;
+      if (typeof sequenceLimit !== "number" || !Number.isSafeInteger(sequenceLimit) || sequenceLimit < 0 || sequenceLimit > 100) return json(400, { error: "sequence_limit must be an integer from 0 to 100" });
+      if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) return json(400, { error: "limit must be an integer from 1 to 100" });
+      return await executeScheduledRequest(deps, req, context, auth.store, limit, sequenceLimit);
+    }
+
+    if (path === "/v1/inbox/smtp") {
+      if (method !== "GET" && method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "importing SMTP messages");
+      if (denied) return denied;
+      try {
+        if (method === "GET") return json(200, await smtpImportCapability(auth.store, url.searchParams.has("provider_id") ? url.searchParams.get("provider_id") : undefined));
+        const body = await readJsonBody(req, SMTP_IMPORT_JSON_BYTES);
+        return await withRuntimeLog(auth.store, "inbound", "smtp_import", async () => {
+            const result = await importSmtpMessage(deps.store, auth.store, auth.ctx.tenantId, body);
+            return json(result.duplicate ? 200 : 201, result);
+        });
+      } catch (error) { if (error instanceof SmtpImportError) return json(error.status, { error: error.message }); throw error; }
+    }
+
+    const relayMatch = path.match(/^\/v1\/webhooks\/relay(?:\/(ses|resend))?$/);
+    if (relayMatch) {
+      if (method !== (relayMatch[1] ? "POST" : "GET")) return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "relaying provider webhooks");
+      if (denied) return denied;
+      const selector = url.searchParams.has("provider_id") ? url.searchParams.get("provider_id") : undefined;
+      try {
+        if (!relayMatch[1]) return json(200, (await resolveWebhookRelay(auth.store, auth.ctx.tenantId, selector, deps.env ?? process.env)).capability);
+        const provider = relayMatch[1];
+        const inbound = providerWebhookRequest(req.url, await readJsonBody(req, 2 * 1048576));
+        return await withRuntimeLog(auth.store, "inbound", "webhook_relay", async () => relayWebhook(deps.store, auth.store, auth.ctx.tenantId, selector, provider, inbound, deps.env ?? process.env, deps.webhookRelay));
+      } catch (error) {
+        if (error instanceof WebhookRelayError) return json(error.status, { error: error.message });
+        return json(503, { error: "Webhook relay did not confirm durable completion; retry the original event." });
+      }
+    }
+
+    if (path === "/v1/inbox/setup-ses-inbound") {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "configuring SES inbound storage");
+      if (denied) return denied;
+      try {
+        const result = await setupBoundSesInbound(auth.store, auth.ctx.tenantId, await readJsonBody(req) as unknown as SesInboundSetupInput, deps.env ?? process.env, async () => {
+          const current = await authenticate(deps, req, url, write);
+          return current.ok && current.ctx.tenantId === auth.ctx.tenantId && isTenantOperator(current.ctx);
+        }, deps.sesInboundSetupCloud, req.signal);
+        return json(200, result);
+      } catch (error) { if (error instanceof IngestApiError) return json(error.status, { error: error.message }); throw error; }
+    }
+
+    if (path === "/v1/inbox/setup-realtime") {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "configuring realtime ingestion");
+      if (denied) return denied;
+      try {
+        const result = await setupBoundRealtime(auth.store, auth.ctx.tenantId, await readJsonBody(req) as unknown as RealtimeSetupInput, deps.env ?? process.env, deps.realtimeSetupCloud);
+        return json(result.ok ? 200 : 502, result);
+      } catch (error) { if (error instanceof IngestApiError) return json(error.status, { error: error.message }); throw error; }
+    }
+
+    const ingestOperation = path.match(/^\/v1\/inbox\/(sync-s3|watch)$/);
+    if (ingestOperation) {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "running inbound ingestion");
+      if (denied) return denied;
+      const body = await readJsonBody(req);
+      const stringFields = ["source_id", "bucket", "prefix", "region", "provider_id", "queue_url", "profile", "cursor"];
+      if (Object.keys(body).some(key => ![...stringFields, "force", "all_buckets", "limit"].includes(key)) || stringFields.some(key => body[key] !== undefined && (typeof body[key] !== "string" || !(body[key] as string).trim())) || ["force", "all_buckets"].some(key => body[key] !== undefined && typeof body[key] !== "boolean")) return json(400, { error: "Invalid ingest operation options" });
+      try { return await withRuntimeLog(auth.store, ingestOperation[1] === "watch" ? "inbound" : "sync", ingestOperation[1] === "watch" ? "watch" : "sync_s3", async () => json(200, await executeIngestBatch(deps.store, auth.store, auth.ctx.tenantId, ingestOperation[1] as "sync-s3" | "watch", body as IngestApiInput, deps.env ?? process.env, deps.ingestCloud, req.signal))); }
+      catch (error) { if (error instanceof IngestApiError) return json(error.status, { error: error.message }); throw error; }
+    }
+
+    const providerSync = path.match(/^\/v1\/providers\/([^/]+)\/sync$/);
+    if (providerSync) {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "synchronizing provider delivery observations");
+      if (denied) return denied;
+      const body = await readJsonBody(req);
+      if (Object.keys(body).some(key => !["after", "limit"].includes(key)) || (body.after !== undefined && (typeof body.after !== "string" || !body.after.trim())) || (body.limit !== undefined && (typeof body.limit !== "number" || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 10))) return json(400, { error: "Use optional non-empty after cursor and integer limit from 1 to 10." });
+      try {
+        return await withRuntimeLog(auth.store, "sync", "provider_sync", async () => json(200, await syncProviderDelivery(auth.store, auth.ctx.tenantId, decodeURIComponent(providerSync[1]!), { after: body.after as string | undefined, limit: body.limit as number | undefined, resolveSender: deps.resolveSender })));
+      } catch (error) {
+        if (error instanceof ProviderSyncError) return json(error.status, { error: error.message });
+        throw error;
+      }
+    }
+
+    const secretLifecycle = path.match(/^\/v1\/providers\/secrets\/(rewrap|rotate-root|revoke-root)$/);
+    const secretJob = path.match(/^\/v1\/providers\/secrets\/jobs\/([^/]+)(\/advance)?$/);
+    const credentialInstall = path.match(/^\/v1\/providers\/([^/]+)\/credentials$/);
+    const managedProviderWrite = path.match(/^\/v1\/providers\/([^/]+)\/managed$/);
+    if (secretLifecycle || secretJob || credentialInstall || managedProviderWrite) {
+      const isRead = !!secretJob && !secretJob[2];
+      const expectedMethod = isRead ? "GET" : (credentialInstall || managedProviderWrite) ? "PUT" : "POST";
+      if (method !== expectedMethod) return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, isRead ? read : write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "managing tenant provider credentials");
+      if (denied) return denied;
+      const backend = deps.managedProviderSecrets?.(auth.ctx.tenantId);
+      if (!backend || backend.configured === false) return json(503, { error: "Managed provider credentials require deployment KMS configuration.", reason: "provider_credential_backend_unconfigured" });
+      const operation = (credentialInstall || managedProviderWrite) ? "install" : secretJob ? (isRead ? "job" : "advance") : secretLifecycle![1] as "rewrap" | "rotate-root" | "revoke-root";
+      const id = credentialInstall?.[1] ?? secretJob?.[1];
+      try {
+        if (managedProviderWrite) return json(200, await writeManagedProvider(backend, decodeURIComponent(managedProviderWrite[1]!), await readJsonBody(req), auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator", deps.validateManagedCredentials));
+        const receipt = await runProviderSecretOperation(backend, operation, isRead ? {} : await readJsonBody(req), auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator", id ? decodeURIComponent(id) : undefined);
+        return json("status" in receipt && receipt.status === "pending" ? 202 : 200, receipt);
+      } catch (error) {
+        if (error instanceof ManagedProviderSecretError) return json(error.status, { error: error.message });
+        if (error && typeof error === "object" && "code" in error && error.code === "23505") return json(409, {error:"Provider ID already exists; inspect its credential status before retrying."});
+        return json(503, { error: "Provider credential operation could not be confirmed. Retry with the same idempotency key or inspect the job and credential status.", reason: "provider_credential_operation_unavailable" });
+      }
+    }
+
+    if(path==="/v1/providers/secrets/status"){
+      if(method!=="GET") return json(405,{error:"method not allowed"});
+      const auth=await authenticate(deps,req,url,read);if(!auth.ok)return auth.response;
+      const denied=requireTenantOperator(auth,"reading provider credential status");if(denied)return denied;
+      return json(200,await readProviderSecretStatus(auth.store,auth.ctx.tenantId,deps.resolveExternalSender ?? (deps.managedProviderSecrets ? undefined : deps.resolveSender),deps.sender,deps.managedProviderSecrets?.(auth.ctx.tenantId)));
+    }
+
+    const providerHealth = path.match(/^\/v1\/providers\/([^/]+)\/health$/);
+    if (providerHealth) {
+      if (method !== "GET") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, read);
+      if (!auth.ok) return auth.response;
+      const result = await readProviderHealth(auth.store, auth.ctx.tenantId, decodeURIComponent(providerHealth[1]!), url.searchParams.get("live") === "true", deps.resolveSender);
+      return result ? json(200, result) : json(404, { error: "Provider not found in this tenant." });
+    }
+
+    const domainDnsRead = path.match(/^\/v1\/domains\/([^/]+)\/dns-records$/);
+    if (domainDnsRead) {
+      if (method !== "GET") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, read);
+      if (!auth.ok) return auth.response;
+      if ([...url.searchParams.keys()].some(key => key !== "provider_id")) return json(400, { error: "Unknown DNS-record query option" });
+      try { return json(200, await readDomainDnsRecords(auth.store, auth.ctx.tenantId, decodeURIComponent(domainDnsRead[1]!), url.searchParams.has("provider_id") ? url.searchParams.get("provider_id")! : undefined, deps.resolveSender, req.signal)); }
+      catch (error) { if (error instanceof DomainDnsReadError) return json(error.status, { error: error.message }); throw error; }
+    }
+
+    const domainOperation = path.match(/^\/v1\/domains\/([^/]+)\/(verify|enable-outbound|disable-outbound|enable-inbound)$/);
+    if (domainOperation) {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "domain lifecycle changes");
+      if (denied) return denied;
+      const body = await readJsonBody(req);
+      if (body.provider_id !== undefined && (typeof body.provider_id !== "string" || !body.provider_id.trim())) return json(400, { error: "provider_id must be a non-empty provider identifier" });
+      if (body.force === true) return json(400, { error: "Domain readiness checks cannot be bypassed." });
+      try {
+        return json(200, await runDomainOperation(auth.store, auth.ctx.tenantId, decodeURIComponent(domainOperation[1]!), domainOperation[2] as DomainOperation, {
+          providerId: typeof body.provider_id === "string" ? body.provider_id : undefined,
+          resolveSender: deps.resolveSender,
+          env: deps.env,
+        }));
+      } catch (error) {
+        if (error instanceof DomainOperationError) return json(error.status, { error: error.message, reason: "domain_not_ready" });
+        throw error;
+      }
+    }
+
+    if (path === "/v1/forwarding/run" || path === "/v1/forwarding-rules/run") {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "running forwarding rules");
+      if (denied) return denied;
+      let options;
+      try { options = normalizeForwardingOptions(await readJsonBody(req)); }
+      catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid forwarding options" }); }
+      return await withRuntimeLog(auth.store, "scheduler", "forwarding_run", async () => {
+        const result = await runForwardingBatch(auth.store, async (payload, forwardingHeaders) => {
+          const headers = new Headers(req.headers);
+          headers.set("Content-Type", "application/json"); headers.delete("Content-Length");
+          const response = await handleSelfHostedRequest(deps,
+            new Request(new URL("/v1/messages/send",req.url), { method: "POST",headers,body: JSON.stringify(payload) }), context, forwardingHeaders);
+          if (!response) throw new Error("Forwarding send handler unavailable");
+          return response;
+        }, options);
+        return json(200, result);
+      });
+    }
+
     // ---- generic resources (contacts/providers/templates/groups/…) --------
     const resourceMatch = path.match(/^\/v1\/([^/]+)(?:\/([^/]+))?$/);
     if (resourceMatch) {
@@ -2443,7 +3119,15 @@ export async function handleSelfHostedRequest(
             if (!auth.ok) return auth.response;
             const specError = requireResourceWriteAuthority(auth, spec);
             if (specError) return specError;
-            const body = await readJsonBody(req);
+            let body = await readJsonBody(req);
+            if (spec.path === "feedback") {
+              try { body = normalizeFeedback(body, true); }
+              catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid feedback" }); }
+            }
+            if (spec.path === "forwarding") {
+              try { body = normalizeForwardingRule(body, true); }
+              catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid forwarding rule" }); }
+            }
             return json(201, await auth.store.createResource(spec, body));
           }
           return json(405, { error: "method not allowed" });
@@ -2459,7 +3143,15 @@ export async function handleSelfHostedRequest(
           if (!auth.ok) return auth.response;
           const specError = requireResourceWriteAuthority(auth, spec);
           if (specError) return specError;
-          const body = await readJsonBody(req);
+          let body = await readJsonBody(req);
+          if (spec.path === "feedback") {
+            try { body = normalizeFeedback(body, false); }
+            catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid feedback" }); }
+          }
+          if (spec.path === "forwarding") {
+            try { body = normalizeForwardingRule(body, false); }
+            catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid forwarding rule" }); }
+          }
           const rec = await auth.store.updateResource(spec, id, body);
           return rec ? json(200, rec) : json(404, { error: `${spec.path} not found` });
         }
@@ -2478,6 +3170,7 @@ export async function handleSelfHostedRequest(
 
     return json(404, { error: "not found" });
   } catch (err) {
+    if (err instanceof ManagedSenderUnavailableError) return json(503, { error: err.message, reason: "provider_credentials_unavailable" });
     if (err instanceof RequestBodyTooLargeError) {
       return json(413, { error: "request body too large" });
     }

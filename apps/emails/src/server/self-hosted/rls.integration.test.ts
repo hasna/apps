@@ -25,7 +25,7 @@ import { createPgPool, createQueryClient, MigrationLedger } from "../../storage-
 import type { PoolQueryClient, TypedQueryClient } from "../../storage-kit/index.js";
 import { DEFAULT_TENANT_ID, emailsSelfHostedMigrations } from "./migrations.js";
 import { assertServingRoleCannotBypassRls } from "./serve.js";
-import { EmailsSelfHostedStore, LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL } from "./store.js";
+import { EmailsSelfHostedStore, INBOUND_MESSAGE_IDENTITY_LOOKUP_SQL, LEGACY_INBOUND_MISSING_PAYLOAD_SCAN_SQL } from "./store.js";
 
 const databaseUrl = process.env["EMAILS_TEST_POSTGRES_URL"];
 const pg: PoolQueryClient | null = databaseUrl
@@ -47,6 +47,10 @@ const TABLES = ["domains", "contacts", "messages", "mailbox_filters", "email_age
 const ROLLUP_TABLES = ["message_recipients", "message_counters"] as const;
 const REPAIR_TABLES = ["attachment_repair_runs", "attachment_repair_entries"] as const;
 const REPAIR_ALIAS_TABLES = ["attachment_repair_idempotency_keys"] as const;
+// The SES→S3 fence writes its provenance row in the same transaction (0017), and in
+// production the serving role owns that table exactly like `messages`. Reparenting it
+// with the rest lets the fence itself run end to end as the probe.
+const PROVENANCE_TABLES = ["inbound_message_sources"] as const;
 const REPAIR_RUN_A = "11111111-1111-4111-8111-111111111111";
 const REPAIR_RUN_B = "22222222-2222-4222-8222-222222222222";
 const REPAIR_ALIAS_HASH_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -65,6 +69,7 @@ async function countAsProbe(tenantId: string | null, table: string): Promise<num
   return asProbe(tenantId, async (tx) => (await tx.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)).n);
 }
 
+// Run the complete migration ledger before assertions; CI can exceed the default 5s hook limit.
 beforeAll(async () => {
   if (!pg) return;
   // Fresh schema (drops any table a crashed prior run left owned by the probe),
@@ -166,10 +171,10 @@ beforeAll(async () => {
   // production `emails_app` owns that table, so the probe needs the read grant
   // to stand in for it.
   await pg.execute(`GRANT SELECT ON tenants TO ${PROBE}`);
-  for (const t of [...TABLES, ...ROLLUP_TABLES, ...REPAIR_TABLES, ...REPAIR_ALIAS_TABLES]) {
+  for (const t of [...TABLES, ...ROLLUP_TABLES, ...REPAIR_TABLES, ...REPAIR_ALIAS_TABLES, ...PROVENANCE_TABLES]) {
     await pg.execute(`ALTER TABLE ${t} OWNER TO ${PROBE}`);
   }
-});
+}, 60_000);
 
 afterAll(async () => {
   if (!pg) return;
@@ -533,5 +538,223 @@ describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", ()
     const aCount = (await pg!.one<{ n: number }>(`SELECT count(*)::int AS n FROM domains WHERE tenant_id = $1`, [TENANT_A])).n;
     expect(await countAsProbe(TENANT_A, "domains")).toBe(aCount);
     expect(aCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("FR-0001 filter evaluation and mutate backfill cannot read or mutate another tenant's messages under the NOBYPASSRLS probe", async () => {
+    // Two IDENTICAL rows (one per tenant) share a sender, so only tenant_id
+    // separates them. Tenant A also owns an ENABLED filter (with actions/enabled/
+    // "order" — migration 0041 columns) that matches that sender.
+    const rlsMsgA = "fr-rls-msg-a";
+    const rlsMsgB = "fr-rls-msg-b";
+    const filterId = crypto.randomUUID();
+    await pg!.execute(
+      `INSERT INTO messages (id, from_addr, direction, status, labels, is_read, tenant_id) VALUES
+         ($1, 'shared@example.test', 'inbound', 'received', '[]'::jsonb, false, $3),
+         ($2, 'shared@example.test', 'inbound', 'received', '[]'::jsonb, false, $4)`,
+      [rlsMsgA, rlsMsgB, TENANT_A, TENANT_B],
+    );
+    await pg!.execute(
+      `INSERT INTO mailbox_filters
+         (id, tenant_id, name, normalized_name, mailbox, criteria, actions, enabled, "order")
+       VALUES ($1, $2, 'Rls Sweep', 'rls-sweep', 'inbox', $3::jsonb, $4::jsonb, true, 0)`,
+      [filterId, TENANT_A,
+        JSON.stringify({ from: "shared@example.test" }),
+        JSON.stringify({ add_labels: ["swept"], mark_read: true })],
+    );
+    try {
+      // Fail-closed control: the probe under GUC=A sees exactly A's shared-sender
+      // row; under GUC=B exactly B's. RLS (not Layer 1) is doing the hiding here.
+      const aVisible = await asProbe(TENANT_A, (tx) =>
+        tx.many<{ id: string }>(`SELECT id FROM messages WHERE from_addr = 'shared@example.test' ORDER BY id`));
+      expect(aVisible.map((r) => r.id)).toEqual([rlsMsgA]);
+      const bVisible = await asProbe(TENANT_B, (tx) =>
+        tx.many<{ id: string }>(`SELECT id FROM messages WHERE from_addr = 'shared@example.test' ORDER BY id`));
+      expect(bVisible.map((r) => r.id)).toEqual([rlsMsgB]);
+
+      // The store running under the probe (NOBYPASSRLS + FORCE RLS, GUC set per
+      // operation exactly as production sets it) backfills A's filter and can
+      // ONLY reach A's row — B's byte-identical row is invisible and untouched.
+      const probeClient: PoolQueryClient = {
+        ...pg!,
+        async transaction<T>(fn: (tx: TypedQueryClient) => Promise<T>): Promise<T> {
+          return pg!.transaction(async (tx) => {
+            await tx.execute(`SET LOCAL ROLE ${PROBE}`);
+            return fn(tx);
+          });
+        },
+      };
+      const storeA = new EmailsSelfHostedStore(probeClient).forTenant(TENANT_A);
+      const swept = await storeA.applyMailboxFilter("Rls Sweep", { mutate: true });
+      expect(swept.mutate).toBe(true);
+      expect(swept.matched).toBe(1);
+      expect(swept.updated).toBe(1);
+      expect(swept.unchanged).toBe(0);
+      const aRow = await pg!.one<{ labels: string[]; is_read: boolean }>(
+        `SELECT labels, is_read FROM messages WHERE id = $1`, [rlsMsgA]);
+      expect(aRow.labels).toEqual(["swept"]);
+      expect(aRow.is_read).toBe(true);
+      const bRow = await pg!.one<{ labels: string[]; is_read: boolean }>(
+        `SELECT labels, is_read FROM messages WHERE id = $1`, [rlsMsgB]);
+      expect(bRow.labels).toEqual([]);
+      expect(bRow.is_read).toBe(false);
+
+      // Tenant B cannot even resolve A's filter (RLS hides the row), so a wrong-
+      // tenant mutate is a plain not-found, never a leak of A's definition.
+      const storeB = new EmailsSelfHostedStore(probeClient).forTenant(TENANT_B);
+      await expect(storeB.applyMailboxFilter("Rls Sweep", { mutate: true })).rejects.toThrow(/not found/i);
+
+      // Direct UPDATE that would mutate B's row while scoped to A matches nothing.
+      const update = await asProbe(TENANT_A, (tx) =>
+        tx.query(`UPDATE messages SET labels = '["x"]'::jsonb, updated_at = now() WHERE id = $1`, [rlsMsgB]));
+      expect(update.rowCount).toBe(0);
+      // Cross-tenant INSERT is rejected by the policy's WITH CHECK.
+      await expect(
+        asProbe(TENANT_A, (tx) =>
+          tx.execute(`INSERT INTO messages (id, from_addr, tenant_id) VALUES ('fr-rls-x', 'x@example.test', $1)`, [TENANT_B]),
+        ),
+      ).rejects.toThrow(/row-level security policy/i);
+    } finally {
+      await pg!.execute(`DELETE FROM messages WHERE id = ANY($1)`, [[rlsMsgA, rlsMsgB, "fr-rls-x"]]);
+      await pg!.execute(`DELETE FROM mailbox_filters WHERE id = $1`, [filterId]);
+    }
+  });
+
+  it("the inbound identity lookup is promotable under FORCE RLS: its plan names the stored-column index", async () => {
+    // BUG-0050 third verification. The fence used to key on
+    // `lower(btrim(COALESCE(headers->>'message-id', ''), '<>')) = $2`: every function in
+    // that clause is non-leakproof, and 0013 FORCEs RLS onto this NOSUPERUSER
+    // NOBYPASSRLS owner, so `match_clause_to_index` refuses it as an index qual
+    // (`restriction_is_securely_promotable` -> `contain_leaked_vars`). Measured under
+    // exactly this posture, the lookup planned as a Seq Scan (165666 rows removed,
+    // ~13ms) and, with `enable_seqscan = off`, as an `Index Scan using
+    // messages_direction_idx` — never on the 0042 expression index written for it. As
+    // superuser (RLS bypassed) the same query used that index in 0.02ms, which is how
+    // the previous attempt "proved" a fix that changed nothing production runs.
+    //
+    // This asserts the PLAN, not the query text: a regression back to an expression key
+    // fails here even though the lookup would still answer correctly. `enable_seqscan`
+    // is off so the assertion is about PROMOTABILITY — under RLS a non-promotable qual
+    // can never be chosen at any price.
+    await pg!.execute(
+      `INSERT INTO messages (id, from_addr, direction, status, headers, received_at, tenant_id)
+       SELECT 'rls-identity-' || g, 'kpmg@example.test', 'inbound', 'received',
+              jsonb_build_object('message-id', '<rls-identity-' || g || '@example.test>'),
+              now() - (g || ' seconds')::interval, $1
+       FROM generate_series(1, 400) g`,
+      [TENANT_A],
+    );
+    await pg!.execute("ANALYZE messages");
+    try {
+      const plan = await asProbe(TENANT_A, async (tx) => {
+        await tx.execute("SET LOCAL enable_seqscan = off");
+        const rows = await tx.many<Record<string, string>>(
+          `EXPLAIN ${INBOUND_MESSAGE_IDENTITY_LOOKUP_SQL}`,
+          [TENANT_A, "rls-identity-7@example.test", "kpmg@example.test", "", new Date().toISOString()],
+        );
+        return rows.map((row) => Object.values(row)[0] ?? "").join("\n");
+      });
+      expect(plan, plan).toContain("messages_inbound_rfc_message_id_col_idx");
+      expect(plan).not.toContain("Seq Scan on messages");
+    } finally {
+      await pg!.execute(`DELETE FROM messages WHERE tenant_id = $1 AND id LIKE 'rls-identity-%'`, [TENANT_A]);
+    }
+  });
+
+  it("the fence adopts a second object of one message under the RLS serving role (the stored key is written and read)", async () => {
+    // End-to-end under the production posture: migration 0043's generated column must
+    // actually be POPULATED by the ingest insert, or the second object of one message
+    // would insert a duplicate instead of adopting the row that already holds it — the
+    // reconciliation defect BUG-0050 is about.
+    const probeClient: PoolQueryClient = {
+      ...pg!,
+      async transaction<T>(fn: (tx: TypedQueryClient) => Promise<T>): Promise<T> {
+        return pg!.transaction(async (tx) => {
+          await tx.execute(`SET LOCAL ROLE ${PROBE}`);
+          return fn(tx);
+        });
+      },
+    };
+    const store = new EmailsSelfHostedStore(probeClient).forTenant(TENANT_A);
+    const rfcMessageId = "rls-fence-0001@example.test";
+    const input = {
+      from_addr: "KPMG <probe@kpmg.example>",
+      to_addrs: ["accounting@example.test"],
+      subject: "RE: fence",
+      direction: "inbound",
+      status: "received",
+      headers: { "message-id": `<${rfcMessageId}>` },
+      received_at: "2026-09-10T07:31:42.000Z",
+      source_id: "inbound/example.test/rls-object-1",
+      message_id: "inbound/example.test/rls-object-1",
+    };
+    const provenanceFor = (objectKey: string, digest: string) => ({
+      bucket: "emails-rls-fixture",
+      objectKey,
+      rawSha256: digest,
+      establishedVia: "normal_ingest" as const,
+    });
+    try {
+      const first = await store.createInboundMessageWithProvenance(
+        input,
+        provenanceFor(input.source_id, "a".repeat(64)),
+      );
+      expect(first.inserted).toBe(true);
+      const second = await store.createInboundMessageWithProvenance(
+        {
+          ...input,
+          to_addrs: ["payroll@example.test"],
+          source_id: "inbound/example.test/rls-object-2",
+          message_id: "inbound/example.test/rls-object-2",
+        },
+        provenanceFor("inbound/example.test/rls-object-2", "b".repeat(64)),
+      );
+      expect(second.inserted, "second object of one message is adopted").toBe(false);
+      expect(second.provenance).toBe("existing_match");
+      expect(second.record.id).toBe(first.record.id);
+      expect(second.record.to_addrs).toEqual(["accounting@example.test", "payroll@example.test"]);
+      const rows = await pg!.many<{ id: string }>(
+        `SELECT id FROM messages WHERE tenant_id = $1 AND rfc_message_id = $2`,
+        [TENANT_A, rfcMessageId],
+      );
+      expect(rows.map((row) => row.id)).toEqual([first.record.id]);
+      const provenanceRow = await pg!.one<{ object_key: string }>(
+        `SELECT object_key FROM inbound_message_sources WHERE tenant_id = $1 AND message_id = $2`,
+        [TENANT_A, first.record.id],
+      );
+      expect(provenanceRow.object_key).toBe("inbound/example.test/rls-object-1");
+
+      // Mail with no Message-ID has NO key (the generated column is NULL), so two such
+      // deliveries must both insert: the dangerous merge the previous attempts already
+      // made impossible has to stay impossible at the DB layer, not just in the caller.
+      const noId = { ...input, headers: { subject: "no identity" } };
+      const noIdFirst = await store.createInboundMessageWithProvenance(
+        { ...noId, source_id: "inbound/example.test/rls-object-3", message_id: "inbound/example.test/rls-object-3" },
+        provenanceFor("inbound/example.test/rls-object-3", "c".repeat(64)),
+      );
+      const noIdSecond = await store.createInboundMessageWithProvenance(
+        { ...noId, source_id: "inbound/example.test/rls-object-4", message_id: "inbound/example.test/rls-object-4" },
+        provenanceFor("inbound/example.test/rls-object-4", "d".repeat(64)),
+      );
+      expect(noIdFirst.inserted).toBe(true);
+      expect(noIdSecond.inserted).toBe(true);
+      expect(noIdSecond.record.id).not.toBe(noIdFirst.record.id);
+      const noIdRows = await pg!.one<{ n: number }>(
+        `SELECT count(*)::int AS n FROM messages WHERE tenant_id = $1 AND source_id = ANY($2)`,
+        [TENANT_A, ["inbound/example.test/rls-object-3", "inbound/example.test/rls-object-4"]],
+      );
+      expect(noIdRows.n).toBe(2);
+    } finally {
+      await pg!.execute(
+        `DELETE FROM messages
+          WHERE tenant_id = $1
+            AND (rfc_message_id = $2 OR source_id = ANY($3))`,
+        [TENANT_A, rfcMessageId, [
+          "inbound/example.test/rls-object-1",
+          "inbound/example.test/rls-object-2",
+          "inbound/example.test/rls-object-3",
+          "inbound/example.test/rls-object-4",
+        ]],
+      );
+    }
   });
 });

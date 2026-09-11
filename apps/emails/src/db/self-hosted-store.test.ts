@@ -150,6 +150,58 @@ printf '\\n%s' ${JSON.stringify(String(second.status))}
   };
 }
 
+/**
+ * Install a fake `curl` that replays a scripted sequence of transport outcomes —
+ * one entry per invocation, giving that call's body, trailing http_code and exit
+ * code. It mirrors the real transport's `-w "\n%{http_code}"` shape, so a step
+ * with no `status` reproduces the BUG-0047 flake exactly: curl exits 0 while no
+ * (or an unparseable) HTTP status is emitted.
+ */
+function installFakeCurlScript(
+  steps: readonly { body?: string; status?: string | number; exitCode?: number }[],
+): { calls: () => number } {
+  const dir = mkdtempSync(join(tmpdir(), "emails-curl-script-test-"));
+  tempDirs.push(dir);
+  const countPath = join(dir, "curl-count.txt");
+  const bin = join(dir, "curl");
+  const branches = steps
+    .map((step, index) => {
+      const lines = [`  ${index + 1})`, `    printf '%s' ${JSON.stringify(step.body ?? "")}`];
+      if (step.status !== undefined) {
+        // A literal `\n` in the FORMAT string is what printf turns into the
+        // separator the transport splits on.
+        lines.push(`    printf '\\n%s' ${JSON.stringify(String(step.status))}`);
+      }
+      lines.push(`    exit ${step.exitCode ?? 0}`, "    ;;");
+      return lines.join("\n");
+    })
+    .join("\n");
+  writeFileSync(bin, `#!/bin/sh
+COUNT_PATH=${JSON.stringify(countPath)}
+COUNT="$(cat "$COUNT_PATH" 2>/dev/null || printf '0')"
+COUNT=$((COUNT + 1))
+printf '%s' "$COUNT" > "$COUNT_PATH"
+cat > /dev/null
+case "$COUNT" in
+${branches}
+  *)
+    exit 7
+    ;;
+esac
+`);
+  chmodSync(bin, 0o700);
+  process.env["PATH"] = `${dir}:${process.env["PATH"] ?? ORIGINAL_PATH ?? ""}`;
+  return {
+    calls: () => {
+      try {
+        return Number.parseInt(readFileSync(countPath, "utf8"), 10);
+      } catch {
+        return 0;
+      }
+    },
+  };
+}
+
 describe("Emails self-hosted client resolver", () => {
   beforeEach(() => {
     captureInheritedProcessEnv();
@@ -170,7 +222,7 @@ describe("Emails self-hosted client resolver", () => {
     let thrown: unknown;
     try { isSelfHostedMode(); } catch (error) { thrown = error; }
     expect(String(thrown)).toContain("HASNA_EMAILS_API_URL");
-    expect(String(thrown)).toContain("HASNA_EMAILS_DB_PATH");
+    expect(String(thrown)).toContain("HASNA_EMAILS_API_KEY");
     // Direct self-hosted resolution still fails loud on its own terms: no API settings,
     // no client.
     expect(() => resolveSelfHostedConfig()).toThrow("refusing to start");
@@ -292,6 +344,66 @@ describe("Emails self-hosted client resolver", () => {
     }
     expect(thrown).toBeInstanceOf(SelfHostedTransportError);
     expect(String(thrown)).not.toContain("test-secret-value");
+  });
+
+  test("retries once when curl exits 0 with no http_code, then returns the real response", () => {
+    // BUG-0047: a one-off lost response reached the transport as curl exit 0 with an
+    // empty/unparseable http_code. That one shape is retried ONCE; the second attempt
+    // is the real answer, so the read succeeds instead of failing the caller.
+    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
+    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-secret-value";
+    resetSelfHostedConfigCache();
+    const curl = installFakeCurlScript([
+      { status: "000", exitCode: 0 }, // the flake: exit 0, http_code 000 (no response)
+      { body: JSON.stringify({ domains: [] }), status: 200, exitCode: 0 },
+    ]);
+
+    const rows = selfHostedStoreFor("domains")!.list({ limit: 1 });
+
+    expect(rows).toEqual([]);
+    expect(curl.calls()).toBe(2);
+  });
+
+  test("a repeated flake still fails loud after exactly one retry (never an empty success)", () => {
+    // The retry must not weaken the fail-loud transport: if the lost response happens
+    // twice, the transport throws rather than reporting an empty list as success.
+    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
+    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-secret-value";
+    resetSelfHostedConfigCache();
+    const curl = installFakeCurlScript([
+      { status: "000", exitCode: 0 },
+      { status: "000", exitCode: 0 },
+    ]);
+
+    let thrown: unknown;
+    try {
+      selfHostedStoreFor("domains")!.list({ limit: 1 });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(SelfHostedTransportError);
+    expect(String(thrown)).toContain("curl exited 0");
+    expect(curl.calls()).toBe(2);
+  });
+
+  test("a real reachability failure (curl exit 7) is not retried", () => {
+    // Only the exit-0/no-http_code shape is retryable: a refused connection is a real
+    // reachability failure and is surfaced on the first attempt, not papered over.
+    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
+    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-secret-value";
+    resetSelfHostedConfigCache();
+    const curl = installFakeCurlScript([{ status: "000", exitCode: 7 }]);
+
+    let thrown: unknown;
+    try {
+      selfHostedStoreFor("domains")!.list({ limit: 1 });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(SelfHostedTransportError);
+    expect(curl.calls()).toBe(1);
   });
 
   test("curl bridge passes API key and request body through stdin config instead of temp files or argv", () => {

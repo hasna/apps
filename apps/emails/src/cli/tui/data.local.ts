@@ -138,6 +138,7 @@ export interface TuiThreadBody {
 }
 
 export interface AttachmentInfo {
+  content_id?: string;
   filename: string;
   content_type: string;
   size: number;

@@ -31,10 +31,7 @@ import { join, resolve } from "path";
 import { homedir as pathsResolverHomedir } from "os";
 import { join as pathsResolverJoin } from "path";
 var PATHS_RESOLVER_KIND_ENV = {
-  config: "HASNA_CONFIG_HOME",
-  data: "HASNA_DATA_HOME",
-  state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME"
+  data: "HASNA_DATA_HOME"
 };
 var PATHS_RESOLVER_APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 function pathsResolverAssertApp(app) {
@@ -59,26 +56,9 @@ function pathsResolverBaseDir(kind, options) {
   const home = options.home ?? pathsResolverHomedir();
   const platform = options.platform ?? process.platform;
   if (platform === "darwin") {
-    switch (kind) {
-      case "config":
-      case "data":
-        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
-      case "state":
-        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
-    }
+    return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
   }
-  switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
-    case "data":
-      return pathsResolverJoin(home, ".local", "share", "hasna");
-    case "state":
-      return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
-  }
+  return pathsResolverJoin(home, ".local", "share", "hasna");
 }
 function pathsResolverResolve(kind, options) {
   pathsResolverAssertApp(options.app);
@@ -517,6 +497,17 @@ function announceLocalMode(env) {
 function knowledgeFailClosedMessage(original) {
   return `knowledge: client credential resolution failed \u2014 ${original} ` + `There is no local fallback: the on-box store is opt-in only (${KNOWLEDGE_LOCAL_OPT_IN_ENV}=1) ` + "and disabled by default \u2014 failing closed instead of serving local data.";
 }
+
+class KnowledgeSourceUnavailableError extends Error {
+  code = "source_unavailable";
+  status = "unavailable";
+  detail;
+  constructor(detail, options) {
+    super(knowledgeFailClosedMessage(detail.reason), options);
+    this.name = "KnowledgeSourceUnavailableError";
+    this.detail = detail;
+  }
+}
 function resolveKnowledgeClientTransport(env = process.env, options = {}) {
   assertNoRetiredKnowledgeStorageSelector(env);
   const keychain = options.keychain ?? knowledgeKeychainTierOptions(env);
@@ -559,9 +550,16 @@ function resolveKnowledgeClientTransport(env = process.env, options = {}) {
       ...base
     };
   } catch (error) {
-    throw new Error(knowledgeFailClosedMessage(error instanceof Error ? error.message : String(error)), {
-      cause: error
-    });
+    throw new KnowledgeSourceUnavailableError({
+      status: "unavailable",
+      credential_source: "none",
+      credential_file_candidates: base.credential_file_candidates,
+      credential_env_keys: Object.freeze([...KNOWLEDGE_API_KEY_ENV_KEYS]),
+      keychain_tier_enabled: base.keychain_tier_enabled,
+      local_opt_in_present: base.local_opt_in_present,
+      network_guard_active: base.network_guard_active,
+      reason: error instanceof Error ? error.message : String(error)
+    }, { cause: error });
   }
 }
 function keychainTierLive(env, options) {

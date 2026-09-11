@@ -77,9 +77,10 @@ describe("agent documentation contract", () => {
     expect(auth).toContain("EMAILS_SELF_HOSTED_API_KEY");
     expect(auth).toContain("0021_idp_principal_tenants");
 
-    expect(provisioning).toContain("the stateful provisioning workflow is not implemented");
+    expect(provisioning).toContain("Address provisioning is available for configured SES inbound domains");
+    expect(provisioning).toContain("authenticated API jobs with durable receipts and retry");
     expect(provisioning).toContain("There is no\n`emails config` command");
-    expect(openTui).toContain("@opentui/solid` 0.4.1");
+    expect(openTui).toContain("@opentui/solid` 0.5.10");
     expect(openTui).toContain("There is no `src/cli/tui/App.tsx` compatibility component");
     expect(macos).toContain("not shipped and not buildable");
     expect(cutover).toContain("0020_attachment_repair_ledger");

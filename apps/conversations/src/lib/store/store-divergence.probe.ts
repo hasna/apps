@@ -12,7 +12,7 @@
 //
 // Prints one JSON line to stdout. Exits non-zero when store resolution refuses.
 
-import { getStore } from "./index.js";
+import { getStore, LocalStore } from "./index.js";
 import { resolveConversationsCloud } from "./index.js";
 import { createChannel } from "../channels.js";
 
@@ -22,10 +22,10 @@ if (mode === "seed") {
   const total = Number(arg);
   for (let i = 0; i < total; i++) createChannel(`fixture-channel-${i}`, "fixture-agent");
   console.log(JSON.stringify({ seeded: total }));
-} else if (mode === "count") {
+} else if (mode === "count" || mode === "library-count") {
   let store;
   try {
-    store = getStore(process.env);
+    store = mode === "library-count" ? new LocalStore() : getStore(process.env);
   } catch (error) {
     // The refusal path. Report it as data so the test can assert on the message
     // without depending on how the CLI happens to format errors.

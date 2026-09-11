@@ -51,7 +51,7 @@ async function runProviderCommandExpectingExit(args: string[]) {
 }
 
 beforeAll(async () => {
-  stub = await startV1Stub();
+  stub = await startV1Stub({ openapi: true });
 });
 afterAll(() => stub.stop());
 beforeEach(async () => {
@@ -68,7 +68,7 @@ describe("provider check command", () => {
     const result = await runProviderCommand(["provider", "check"]);
 
     expect(result.out).toContain("No providers configured.");
-    expect(result.out).toContain("emails provider add --type ses");
+    expect(result.data).toEqual([]);
   });
 });
 
@@ -115,13 +115,13 @@ describe("provider list command", () => {
   });
 });
 
-describe("provider add credential honesty (self_hosted)", () => {
+describe("provider add credential honesty against older APIs", () => {
   // 2026-07-25: `emails provider add --type ses --access-key … --secret-key …`
   // reported "Provider credentials are invalid" and sending kept using the ECS
   // task role. Both statements were false: the credentials were stripped by the
-  // client before they ever reached the server, and the server has nowhere to
-  // put them. The command must now say exactly that, and must NOT create a row.
-  it("refuses SES credentials and names where they belong", async () => {
+  // client before they reached the server. An older API must receive no secret
+  // payload or metadata mutation when managed credential storage is unavailable.
+  it("requires an API update before submitting SES credentials", async () => {
     const before = await runProviderCommand(["provider", "list"]);
     expect(before.out).toContain("No providers configured");
 
@@ -131,9 +131,7 @@ describe("provider add credential honesty (self_hosted)", () => {
     ]);
 
     expect(result.error).toBe("process.exit:1");
-    expect(result.stderr).toContain("does not store per-provider credentials");
-    expect(result.stderr).toContain("EMAILS_SES_ACCESS_KEY_ID");
-    expect(result.stderr).toContain("EMAILS_SES_SECRET_ACCESS_KEY");
+    expect(result.stderr).toContain("API needs an update");
     // The false accusation is gone.
     expect(result.stderr).not.toContain("credentials are invalid");
     // …and the supplied secret is never echoed back.
@@ -144,13 +142,12 @@ describe("provider add credential honesty (self_hosted)", () => {
     expect(after.out).toContain("No providers configured");
   });
 
-  it("refuses a Resend API key the same way", async () => {
+  it("requires an API update before submitting a Resend API key", async () => {
     const result = await runProviderCommandExpectingExit([
       "provider", "add", "--name", "resend", "--type", "resend", "--api-key", "re_example",
     ]);
     expect(result.error).toBe("process.exit:1");
-    expect(result.stderr).toContain("does not store per-provider credentials (api_key)");
-    expect(result.stderr).toContain("RESEND_API_KEY");
+    expect(result.stderr).toContain("API needs an update");
     expect(result.stderr).not.toContain("re_example");
   });
 
@@ -161,8 +158,8 @@ describe("provider add credential honesty (self_hosted)", () => {
       "provider", "add", "--name", "server-side-ses", "--type", "ses", "--region", "us-east-1",
     ]);
 
-    expect(result.out).toContain("Provider created: server-side-ses");
-    expect(result.out).toContain("credentials were not validated");
+    expect(result.out).toContain("Provider registered: server-side-ses");
+    expect(result.out).toContain("No credential validation was performed");
     expect(result.out).not.toContain("Credentials validated");
   });
 });

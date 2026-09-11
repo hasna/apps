@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 import {
   type AgentEventsClient,
+  createEphemeralRegistryDb,
+  createPersistentRegistryDb,
   registerAgentTools,
 } from "./agent-registry.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -16,7 +18,8 @@ import {
   type UniversalEventType,
 } from "../lib/universal-ingest.ts";
 import {
-  localStoreIfAvailable,
+  assertHostedCredentialResolvable,
+  LocalStore,
   resolveStore,
 } from "../store/index.ts";
 import type { LogLevel, LogRow } from "../types/index.ts";
@@ -30,14 +33,6 @@ exitIfMetadataRequest({
   ],
 });
 
-// Best-effort local store for internal self-telemetry (agent lifecycle + tool
-// calls). It is `null` when the API transport is live — MCP tool-call telemetry
-// is deliberately not mirrored into the shared hosted sink (volume), so it is
-// silently skipped there. Telemetry must NEVER change tool behavior. The event
-// catalog itself is a transport-resolved data-plane feature: `event_watch`
-// below works on both tiers through the unified Store.
-const telemetryStore = localStoreIfAvailable();
-
 // register_agent / heartbeat / set_focus / list_agents are the canonical,
 // persistent agent-lifecycle tools (SQLite-backed registry) — implemented
 // locally in src/mcp/agent-registry.ts since the @hasna/agent-registry
@@ -45,52 +40,67 @@ const telemetryStore = localStoreIfAvailable();
 // Map. `send_feedback` stays local (see
 // below) since it persists into logs' own `feedback` table with a category
 // enum. Lifecycle activity is still mirrored into logs' own durable event
-// store via `agentRegistryEvents` below, preserving prior self-telemetry.
-const agentRegistryEvents: AgentEventsClient = {
-  emit(input) {
-    try {
-      const phase = input.type.startsWith("agent.")
-        ? input.type.slice("agent.".length)
-        : input.type;
-      const displayPhase = phase === "focus_changed" ? "focus" : phase;
-      const name = input.subject ?? "unknown";
-      const data = (input.data ?? {}) as Record<string, unknown>;
-      const sessionId =
-        typeof data.session_id === "string" ? data.session_id : undefined;
-      const agentId =
-        typeof data.agent_id === "string" ? data.agent_id : undefined;
-      const projectId =
-        typeof data.project_id === "string" ? data.project_id : undefined;
-      telemetryStore?.ingestUniversalEvent({
-        type: "agent",
-        source: "mcp",
-        severity: "info",
-        privacy: "internal",
-        message: input.message ?? `MCP agent ${displayPhase}: ${name}`,
-        session_id: sessionId,
-        attributes: {
-          category: "mcp_agent_session",
-          phase: displayPhase,
-          agent_id: agentId,
-          agent_name: name,
+// store via the events client built here, preserving prior self-telemetry.
+//
+// `telemetryStore` is the best-effort local store for that self-telemetry
+// (agent lifecycle + tool calls): `null` when the API transport is live — MCP
+// tool-call telemetry is deliberately not mirrored into the shared hosted sink
+// (volume), so it is silently skipped there. Telemetry must NEVER change tool
+// behavior. It is resolved by buildServer(), per server, NEVER at module load:
+// importing this entry consults no credential tier, so a deliberate tier that
+// cannot be honoured (HASNA_PROFILE naming a profile with no key) is diagnosed
+// by the startup gate in main() — remedy first on stderr — instead of being
+// thrown from the module's top level behind a Bun source frame (hasna/apps#1720
+// validation, round 2).
+function createAgentRegistryEvents(
+  telemetryStore: LocalStore | null,
+): AgentEventsClient {
+  return {
+    emit(input) {
+      try {
+        const phase = input.type.startsWith("agent.")
+          ? input.type.slice("agent.".length)
+          : input.type;
+        const displayPhase = phase === "focus_changed" ? "focus" : phase;
+        const name = input.subject ?? "unknown";
+        const data = (input.data ?? {}) as Record<string, unknown>;
+        const sessionId =
+          typeof data.session_id === "string" ? data.session_id : undefined;
+        const agentId =
+          typeof data.agent_id === "string" ? data.agent_id : undefined;
+        const projectId =
+          typeof data.project_id === "string" ? data.project_id : undefined;
+        telemetryStore?.ingestUniversalEvent({
+          type: "agent",
+          source: "mcp",
+          severity: "info",
+          privacy: "internal",
+          message: input.message ?? `MCP agent ${displayPhase}: ${name}`,
           session_id: sessionId,
-          project_id: projectId,
-        },
-        body: {
-          agent: {
-            id: agentId ?? null,
-            name,
-            session_id: sessionId ?? null,
-            project_id: projectId ?? null,
+          attributes: {
+            category: "mcp_agent_session",
             phase: displayPhase,
+            agent_id: agentId,
+            agent_name: name,
+            session_id: sessionId,
+            project_id: projectId,
           },
-        },
-      });
-    } catch {
-      // Agent registry telemetry must not affect MCP tool behavior.
-    }
-  },
-};
+          body: {
+            agent: {
+              id: agentId ?? null,
+              name,
+              session_id: sessionId ?? null,
+              project_id: projectId ?? null,
+              phase: displayPhase,
+            },
+          },
+        });
+      } catch {
+        // Agent registry telemetry must not affect MCP tool behavior.
+      }
+    },
+  };
+}
 
 export function buildServer(): McpServer {
   const server = new McpServer({ name: "logs", version: PACKAGE_VERSION });
@@ -139,6 +149,14 @@ export function buildServer(): McpServer {
   // ~/.hasna/logs/config/credentials / HASNA_LOGS_API_KEY) or unset the key
   // vars and set HASNA_LOGS_LOCAL=1.
   const store = resolveStore();
+
+  // Self-telemetry sink: the explicit-opt-in LocalStore itself (stateless —
+  // every method opens the db lazily), `null` on the hosted transport. See
+  // createAgentRegistryEvents above for why this is resolved here and not at
+  // module load. The event catalog itself is a transport-resolved data-plane
+  // feature: `event_watch` below works on both tiers through the unified Store.
+  const telemetryStore = store instanceof LocalStore ? store : null;
+  const agentRegistryEvents = createAgentRegistryEvents(telemetryStore);
 
   // Resolve a project name-or-id through the live store (local db or /v1).
   const rid = (idOrName?: string): Promise<string | undefined> =>
@@ -1501,21 +1519,61 @@ export function buildServer(): McpServer {
   }
 
   // --- Agent Tools ---
-  // register_agent / heartbeat / set_focus / list_agents via the local,
-  // persistent SQLite-backed registry in src/mcp/agent-registry.ts (inlined
-  // from the deleted @hasna/agent-registry package, hasna/apps#1529).
-  // `send_feedback` stays local below since it persists into logs'
-  // own `feedback` table with a category enum. Lifecycle activity is
-  // mirrored into logs' own durable event store via `agentRegistryEvents`.
+  // register_agent / heartbeat / set_focus / list_agents via the registry in
+  // src/mcp/agent-registry.ts (inlined from the deleted @hasna/agent-registry
+  // package, hasna/apps#1529). The backing store FOLLOWS THE TRANSPORT
+  // (hasna/apps#1720 validation): only the explicit local opt-in — the store
+  // above resolved to the on-box LocalStore — may use the persistent
+  // `agent-registry.db` beside logs' data (opened lazily, on the first tool
+  // call); a hosted process keeps a per-process in-memory registry and its
+  // tool descriptions say so, because the hosted /v1 API has no
+  // agent-registry surface and a hosted `logs-mcp` must never create a
+  // SQLite file under the app home. `send_feedback` stays local below since
+  // it persists into logs' own `feedback` table with a category enum.
+  // Lifecycle activity is mirrored into logs' own durable event store via
+  // `agentRegistryEvents`.
+  const localMode = store instanceof LocalStore;
   registerAgentTools(server, {
     service: "logs",
     events: agentRegistryEvents,
+    db: localMode ? createPersistentRegistryDb() : createEphemeralRegistryDb(),
+    ephemeral: !localMode,
   });
 
   return server;
 }
 
+/**
+ * STARTUP GATE (owner ruling 2026-09-04, hasna/apps#1720 acceptance (c)): the
+ * MCP server resolves its store ONCE before any transport is opened. With no
+ * fleet credential resolvable and no explicit local opt-in it exits non-zero
+ * naming where the credential should live — before `initialize` is answered
+ * on stdio and before the Streamable-HTTP listener binds (the HTTP harness
+ * builds a server per session, so without this gate a misconfigured process
+ * would sit listening and refuse every session instead of failing at start).
+ * Nothing is created: no local store, no registry file. Local mode announces
+ * itself once on stderr from the resolver.
+ *
+ * A DELIBERATE tier that cannot be honoured is refused here too (#1720
+ * validation, round 2): a HASNA_PROFILE with no key throws from the resolver
+ * and is printed as the one remedy line, and a HASNA_LOGS_API_KEY_REF vault
+ * pointer — which `resolveStore` accepts on shape alone and the transport
+ * completes per request — is completed ONCE so a pointer this process cannot
+ * dereference exits now, not on the first tool call.
+ */
+async function assertStoreConfiguredOrExit(): Promise<void> {
+  try {
+    resolveStore();
+    await assertHostedCredentialResolvable();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
+
 async function main(): Promise<void> {
+  await assertStoreConfiguredOrExit();
+
   const { isHttpMode, isStdioMode, resolveMcpHttpPort, startMcpHttpServer } =
     await import("./http.ts");
 
@@ -1542,7 +1600,9 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
   main().catch((err) => {
-    console.error(err);
+    // A refusal is a message, not a crash: the first stderr line must name
+    // the remedy (where the credential should live), never a stack frame.
+    console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   });
 }

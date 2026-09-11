@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-09-08T10:43:36.455003+00:00",
+  "archive": {
+    "sha256": "a7a342c2a206e1ee2f06c957d6a654d7d54f92cdad626bc89958593f6cb73d68",
+    "bytes": 950710,
+    "integrity": "sha512-FlrqgbeXysDBREKK1I74WeTMXBang1xsvmMEausVaakodEmBck2DzopnP1SGKzqbdzHjCk8o8SUeXe0LHx+sWw==",
+    "fileCount": 267,
+    "expandedBytes": 4018024
+  },
+  "receiptSHA256": "4a4afb0d9e816734a39764a71cee6eb22d1bab9425f411b4e8e3e707aed7de7b",
+  "sourceRevision": "490b64f360e8baa0b4d49d1e17b3140e064242e5",
+  "distributionStatus": "prepared",
+  "archiveAudit": {
+    "regularFilesOnly": true,
+    "excludedPathsAbsent": [
+      "node_modules/",
+      ".git/",
+      ".env",
+      ".private/",
+      ".local/",
+      "dist/__tests__/",
+      "src/__tests__/",
+      "__pycache__",
+      ".pyc",
+      "test-recorder-fixtures.ts"
+    ],
+    "privateMarkerMatches": {
+      "privateScope": 0,
+      "privateHost": 0,
+      "awsAccountARN": 0
+    },
+    "allPackageBytesAndModesUnchangedAfterRuntime": true
+  },
+  "native": {
+    "fileCount": 112,
+    "treeSHA256": "ffbd54eec6031d89a684164454946a083fff428403558c737f223c604324e349",
+    "sourceBytesAndModesMatch": true,
+    "declarationsPresent": [
+      "RecordingEngine",
+      "RecordingTranscriptionProvider",
+      "inputEnded",
+      "RecordingPasteTargetTracker"
+    ],
+    "compiledOrRun": false
+  },
+  "dependencySetup": {
+    "method": "Copied existing external consumer registry dependency tree; candidate archive replaced locally",
+    "freshInstall": false,
+    "networkInstall": false,
+    "lifecycleScriptsRun": false,
+    "versions": {
+      "typescript": "5.9.3",
+      "@types/bun": "1.3.14",
+      "@types/node": "26.4.1",
+      "@hasna/contracts": "1.0.2",
+      "@hasna/events": "0.1.11",
+      "@modelcontextprotocol/sdk": "1.30.0"
+    }
+  },
+  "platform": {
+    "system": "Darwin",
+    "macOS": "26.3.1",
+    "architecture": "arm64",
+    "python": "3.9.6",
+    "bun": "1.3.14"
+  },
+  "boundaries": {
+    "ownedWriteAllowed": true,
+    "outsideWriteDenied": true,
+    "hostExecutablesDenied": 6,
+    "allowedExecutables": [
+      "Bun"
+    ],
+    "maintenanceLeaseFixture": "Only exact /bin/ps own-PID start-identity call is answered with fictional text; every other child_process operation denied",
+    "selfSignalAllowed": true,
+    "supervisorSignalDenied": true,
+    "networkPolicy": "Loopback only (runtime uses IPv4)",
+    "realUserHomeReadDenied": true,
+    "freshStrippedEnvironment": true,
+    "deadlineSeconds": 50
+  },
+  "typecheck": {
+    "strict": true,
+    "skipLibCheck": false,
+    "pass": true
+  },
+  "runtime": {
+    "checks": [
+      "sdk_missing_credential_factory_fails_closed",
+      "sdk_real_loopback_list_without_ambient_authorization",
+      "cli_binary_version",
+      "mcp_binary_version",
+      "server_binary_version",
+      "cli_explicit_local_empty_library",
+      "mcp_real_stdio_initialize",
+      "mcp_real_stdio_tool_discovery",
+      "mcp_real_stdio_local_list",
+      "serve_health_actual_http",
+      "serve_version_actual_http",
+      "serve_openapi_actual_http",
+      "serve_ready_default_sqlite_health_only",
+      "serve_v1_recordings_unconfigured_fails_closed",
+      "serve_mcp_unconfigured_fails_closed"
+    ],
+    "passCount": 15,
+    "mcpToolCount": 18,
+    "providerRequests": 0
+  },
+  "limits": [
+    "Prepared local archive; no registry publication claim",
+    "Dependencies reused rather than freshly installed",
+    "CLI/MCP maintenance process-identity lookup uses an explicit fictional fixture because macOS sandbox refuses setuid ps",
+    "No native runtime, microphone, clipboard, permissions, or installed app actions",
+    "No provider, external network, PostgreSQL backend, or hosted authentication exercised",
+    "Public declaration inventory is not Swift compilation"
+  ]
+}

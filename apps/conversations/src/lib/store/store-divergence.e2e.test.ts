@@ -35,7 +35,7 @@ let cloudUrl: string;
  */
 async function probe(mode: string, arg: string, env: Record<string, string>) {
   const proc = Bun.spawn({
-    cmd: ["bun", "run", PROBE, mode, arg],
+    cmd: [process.execPath, "--no-env-file", "run", PROBE, mode, arg],
     cwd: process.cwd(),
     env: {
       PATH: process.env.PATH ?? "",
@@ -99,8 +99,8 @@ afterAll(() => {
 });
 
 describe("store divergence — the two stores really do hold different data", () => {
-  test("the local store reports its own channel count", async () => {
-    const { exitCode, result, stderr } = await probe("count", "", {
+  test("the explicit LocalStore library reports the preserved source channel count", async () => {
+    const { exitCode, result, stderr } = await probe("library-count", "", {
       HASNA_CONVERSATIONS_DB_PATH: join(sandboxHome, ".hasna", "conversations", "messages.db"),
     });
 
@@ -169,7 +169,7 @@ describe("store divergence — a half-configured cloud client refuses instead of
   });
 });
 
-describe("store divergence — legitimate local use is explicit opt-in only", () => {
+describe("store divergence — ordinary clients never select preserved local data", () => {
   // THE 2026-09-04 FAIL-CLOSED FLIP. An unconfigured client previously fell back
   // to the local store at the default ~/.hasna path and exited 0 — a CLI run
   // without its API env presented a different, stale dataset as the fleet's with
@@ -186,15 +186,17 @@ describe("store divergence — legitimate local use is explicit opt-in only", ()
     expect(result.channels).toBeUndefined();
   });
 
-  test("an explicit local DB path still wins over exported cloud credentials", async () => {
+  test("a retired local DB path refuses even with exported cloud credentials", async () => {
     const { exitCode, result, stderr } = await probe("count", "", {
       HASNA_CONVERSATIONS_DB_PATH: join(sandboxHome, ".hasna", "conversations", "messages.db"),
       HASNA_CONVERSATIONS_API_URL: cloudUrl,
       HASNA_CONVERSATIONS_API_KEY: FAKE_KEY,
     });
 
-    expect(exitCode, stderr).toBe(0);
-    expect(result.transport).toBe("local");
-    expect(result.channels).toBe(LOCAL_CHANNELS);
+    expect(exitCode, stderr).not.toBe(0);
+    expect(result.refused).toBe(true);
+    expect(result.message).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    expect(result.transport).toBeUndefined();
+    expect(result.channels).toBeUndefined();
   });
 });

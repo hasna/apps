@@ -173,6 +173,7 @@ function normalizeCliMailbox(value: string | undefined): Mailbox {
 }
 
 function mailboxSourceFromOptions(opts: { source?: string; provider?: string; address?: string; domain?: string }): MailboxSource | undefined {
+  if (opts.provider !== undefined && !opts.provider.trim()) throw new Error("Provider ID must not be empty.");
   const sourceId = opts.source?.trim();
   const providerId = opts.provider?.trim();
   const address = opts.address?.trim().toLowerCase();
@@ -209,11 +210,6 @@ async function runAutoPull(_opts: { s3?: boolean; limit?: number }) {
 // what this comment named. It has collapsed to one implementation: it was never
 // storage, so the deployment word had nothing to decide between the two copies. The
 // ingestion is still mode-routed.
-function serverOnly(command: string): never {
-  throw new Error(
-    `emails inbox ${command} is not available in the self-hosted client; it runs on the self-hosted server.`,
-  );
-}
 
 interface CodeOptions {
   from?: string;
@@ -236,6 +232,53 @@ interface InboundLinksResult {
 }
 
 export function registerInboxCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
+  const ingestAction = (operation: "sync-s3" | "watch") => async (opts: Record<string, unknown>) => {
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.once("SIGINT", stop); process.once("SIGTERM", stop);
+    try {
+      const limit = Number(opts.limit ?? 100);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10000) throw new Error("Sync limit must be between 1 and 10000 objects.");
+      const body: Record<string, unknown> = {};
+      for (const [option, key] of [["source", "source_id"], ["bucket", "bucket"], ["prefix", "prefix"], ["region", "region"], ["provider", "provider_id"], ["queueUrl", "queue_url"], ["profile", "profile"], ["force", "force"], ["allBuckets", "all_buckets"], ["cursor", "cursor"]] as const) if (opts[option] !== undefined) body[key] = opts[option];
+      const { createInboxIngestClient } = await import("../../lib/inbox-ingest-api.js");
+      const run = await createInboxIngestClient(operation, controller.signal);
+      let aggregate: import("../../lib/inbox-ingest-api.js").IngestBatchReport | undefined;
+      const emit = (report: import("../../lib/inbox-ingest-api.js").IngestBatchReport) => output(report, report.sources.map(source => `${source.source_id}: ${source.scanned} scanned, ${source.ingested} imported, ${source.duplicate} duplicates, ${source.error} errors${operation === "watch" ? `; ${source.acknowledged}/${source.notifications} queue notifications acknowledged` : ""}${source.next_cursor ? "; more objects remain" : ""}`).join("\n"));
+      let remaining = limit;
+      let cursor = opts.cursor as string | undefined;
+      do {
+        const report = await run({ ...body, ...(cursor ? { cursor } : {}), limit: operation === "watch" ? 10 : Math.min(10, remaining) });
+        if (operation === "watch") emit(report);
+        else if (!aggregate) aggregate = structuredClone(report);
+        else {
+          aggregate.ok &&= report.ok;
+          for (const page of report.sources) {
+            const total = aggregate.sources.find(source => source.source_id === page.source_id);
+            if (!total) { aggregate.sources.push(page); continue; }
+            const combined = { ...page };
+            for (const key of ["scanned", "ingested", "duplicate", "error", "notifications", "acknowledged"] as const) combined[key] += total[key];
+            Object.assign(total, combined);
+          }
+        }
+        if (!report.ok) { process.exitCode = 1; break; }
+        if (operation === "sync-s3") {
+          const source = report.sources[0];
+          if (!source) break;
+          remaining -= source.scanned;
+          if (!source.next_cursor || remaining <= 0) break;
+          if (source.next_cursor === cursor || source.scanned === 0) throw new Error("S3 sync cursor did not advance.");
+          cursor = source.next_cursor;
+        } else {
+          if (opts.once) break;
+          await new Promise<void>(resolve => { const done = () => { clearTimeout(timer); controller.signal.removeEventListener("abort", done); resolve(); }; const timer = setTimeout(done, 250); controller.signal.addEventListener("abort", done, { once: true }); if (controller.signal.aborted) done(); });
+        }
+      } while (!controller.signal.aborted);
+      if (aggregate) emit(aggregate);
+    } catch (error) { if (!controller.signal.aborted) handleError(error); }
+    finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); }
+  };
+
   const inboxCmd = program
     .command("inbox")
     .description("Sync and browse inbound emails (SES/S3, Cloudflare, Resend, SMTP)")
@@ -474,7 +517,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .command("list")
     .description("List local mailbox mail")
     .option("-j, --json", "Print JSON output", false)
-    .option("--provider <id>", "Not supported in self_hosted mode: /v1 messages carry no provider provenance")
+    .option("--provider <id>", "Filter by registered provider ID")
     .option("--source <id>", "Ingestion source ID from `emails inbox sources` (self_hosted exposes exactly one: self_hosted)")
     .option("--folder <folder>", "Folder to list: inbox, unread, starred, sent, archived, spam, trash", "inbox")
     .option("--address <address>", "Mailbox scope: exact recipient/sender address")
@@ -577,10 +620,15 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
 
   inboxCmd
     .command("explain <email-id>")
-    .description("Explain local routing, recipient ownership, and source readiness for an inbound email")
+    .description("Explain recipient routing, ownership and delivery evidence from the API")
     .option("-j, --json", "Print JSON output", false)
-    .action(() => {
-      try { serverOnly("explain"); } catch (e) { handleError(e); }
+    .action(async (emailId: string) => {
+      try {
+        const { explainApiMessage } = await import("./api-diagnostics.js");
+        const { formatDeliveryDoctorReport } = await import("../../lib/delivery-doctor.js");
+        const report = await explainApiMessage(emailId);
+        output(report, `Routing for ${report.email_id}\n${report.recipients.map(formatDeliveryDoctorReport).join("\n\n")}`);
+      } catch (e) { handleError(e); }
     });
 
   // ─── SEARCH ───────────────────────────────────────────────────────────────
@@ -588,7 +636,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .command("search <query>")
     .description("Search local mailbox mail")
     .option("-j, --json", "Print JSON output", false)
-    .option("--provider <id>", "Not supported in self_hosted mode: /v1 messages carry no provider provenance")
+    .option("--provider <id>", "Filter by registered provider ID")
     .option("--folder <folder>", "Folder to search: inbox, unread, starred, sent, archived, spam, trash", "inbox")
     .option("--address <address>", "Mailbox scope: exact recipient/sender address")
     .option("--domain <domain>", "Mailbox scope: recipient/sender domain")
@@ -648,7 +696,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .description("List folder counts for a mailbox scope or ingestion source")
     .option("-j, --json", "Print JSON output", false)
     .option("--source <id>", "Ingestion source ID from `emails inbox sources` (self_hosted exposes exactly one: self_hosted)")
-    .option("--provider <id>", "Not supported in self_hosted mode: /v1 messages carry no provider provenance")
+    .option("--provider <id>", "Filter by registered provider ID")
     .option("--address <address>", "Mailbox scope: exact recipient/sender address")
     .option("--domain <domain>", "Mailbox scope: recipient/sender domain")
     .action(async (opts: { source?: string; provider?: string; address?: string; domain?: string }) => {
@@ -716,8 +764,8 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("-j, --json", "Print JSON output", false)
     .action(async () => {
       try {
-        const { listS3Sources } = await import("../../lib/s3-sync.js");
-        const sources = listS3Sources();
+        const { listRegisteredS3Sources } = await import("../../lib/inbox-source-registry.js");
+        const sources = await listRegisteredS3Sources();
         output(sources, formatSourceList(sources));
       } catch (e) {
         handleError(e);
@@ -737,17 +785,11 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--no-live-sync", "Register source but disable live sync")
     .action(async (opts: { bucket: string; prefix?: string; region?: string; provider?: string; name?: string; status?: string; liveSync?: boolean }) => {
       try {
-        // `addInboundBucket` is NOT called in this arm. It writes the
-        // `inbound_s3_buckets` config that drives LOCAL ingestion, and this client
-        // performs none: `inbox sync-s3` and `inbox watch` both refuse here, and
-        // `emails status` deliberately reports `inbox.inbound_buckets` as
-        // unavailable because "an empty list here would falsely claim no bucket is
-        // configured". Writing to that key from a client that cannot ingest turned a
-        // declared gap into a half-truth.
-        const { registerS3Source } = await import("../../lib/s3-sync.js");
+        const { registerApiS3Source } = await import("../../lib/inbox-source-registry.js");
         const status = parseSourceStatus(opts.status);
+        if (opts.provider !== undefined && !opts.provider.trim()) throw new Error("Provider ID must not be blank.");
         const providerId = opts.provider ? resolveId("providers", opts.provider) : undefined;
-        const source = registerS3Source({
+        const source = await registerApiS3Source({
           bucket: opts.bucket,
           prefix: opts.prefix,
           region: opts.region,
@@ -756,16 +798,9 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
           status,
           liveSyncEnabled: opts.liveSync !== false && status === "live",
         });
-        // Do NOT say "live sync enabled". The `live_sync_enabled` column is recorded
-        // faithfully, but nothing in THIS client acts on it — ingestion runs on the
-        // operator's server — so echoing it as an enabled capability claimed an
-        // effect that cannot occur here. Say what actually happened: a registry entry
-        // was written, and where the ingestion it describes has to be configured.
         output(source, [
-          chalk.green(`✓ Recorded S3 source ${source.id} (status ${source.status}) in this machine's source registry.`),
-          chalk.dim("  This registry is client-side provenance only. This client performs no S3 ingestion:"),
-          chalk.dim("  `emails inbox sync-s3` and `emails inbox watch` run on the self-hosted server, which"),
-          chalk.dim("  owns the SES -> S3 -> mailbox pipeline and must be configured there."),
+          chalk.green(`✓ Registered S3 source ${source.id} (status ${source.status}) in the API registry.`),
+          chalk.dim("  Configure the server ingest binding with this source ID before syncing or watching."),
         ].join("\n"));
       } catch (e) {
         handleError(e);
@@ -778,8 +813,8 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("-j, --json", "Print JSON output", false)
     .action(async (sourceRef: string) => {
       try {
-        const { retireS3Source } = await import("../../lib/s3-sync.js");
-        const retired = retireS3Source(sourceRef);
+        const { retireApiS3Source } = await import("../../lib/inbox-source-registry.js");
+        const retired = await retireApiS3Source(sourceRef);
         output(retired, chalk.green(`✓ Retired S3 source ${retired.id}`));
       } catch (e) {
         handleError(e);
@@ -911,7 +946,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
   // ─── ATTACHMENTS INVENTORY ────────────────────────────────────────────────
   inboxCmd
     .command("attachments")
-    .description("List one checkpointable page of self-hosted attachment metadata")
+    .description("List one checkpointable page of attachment metadata")
     .option("-j, --json", "Print JSON output", false)
     .option("--limit <n>", `Attachments per page (1-${MAX_ATTACHMENT_INVENTORY_LIMIT})`, String(DEFAULT_ATTACHMENT_INVENTORY_LIMIT))
     .option("--cursor <cursor>", "Opaque next_cursor from a previous page")
@@ -1033,15 +1068,6 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
       try {
         const ds = resolveMailDataSource();
         const target = opts.provider ? `for provider ${opts.provider}` : "for all providers";
-        // Self-hosted deletes on the server: drains a bulk delete over the inbox
-        // folder. A provider-scoped clear is REFUSED there (a /v1 message carries
-        // no provider dimension) — surface that BEFORE the confirmation prompt, so
-        // the operator is not asked to confirm a destructive action that cannot run.
-        if (opts.provider) {
-          const { SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED } = await import("../../lib/mail-types.js");
-          const { getClientMode } = await import("../../lib/mode.js");
-          if (getClientMode() === "self_hosted") handleError(new Error(SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED));
-        }
         await confirmDestructiveAction(`Clear inbox emails ${target}?`, opts.yes);
         const { cleared } = await ds.clear({ providerId: opts.provider });
         output(
@@ -1056,56 +1082,65 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
   // ─── SYNC S3 ──────────────────────────────────────────────────────────────
   inboxCmd
     .command("sync-s3")
-    .description("Sync inbound emails from S3 bucket (stored by SES receipt rules). Defaults --bucket/--region to config inbound_s3_bucket/region.")
+    .description("Import inbound email through a registered server S3 binding")
     .option("-j, --json", "Print JSON output", false)
     .option("--source <id>", "Explicit S3 source id")
-    .option("--bucket <name>", "S3 bucket name (defaults to config inbound_s3_bucket)")
+    .option("--bucket <name>", "Validate the configured server S3 bucket")
     .option("--prefix <prefix>", "S3 key prefix to scan (e.g. inbound/example.com/)")
-    .option("--region <region>", "AWS region (defaults to config inbound_s3_region or us-east-1)")
-    .option("--provider <id>", "Associate emails with this provider ID")
+    .option("--region <region>", "Validate the configured server AWS region")
+    .option("--provider <id>", "Validate the configured server provider ID")
     .option("--limit <n>", "Max emails per run", "100")
     .option("--profile <profile>", "AWS profile")
     .option("--force", "Allow syncing a retired or disabled S3 source")
-    .action(() => {
-      try { serverOnly("sync-s3"); } catch (e) { handleError(e); }
-    });
+    .option("--cursor <cursor>", "Resume from a reported server S3 cursor")
+    .action(ingestAction("sync-s3"));
 
   // ─── REAL-TIME INBOUND ────────────────────────────────────────────────────
   inboxCmd
     .command("setup-realtime <domain>")
-    .description("Wire SES→SNS→SQS so inbound mail auto-syncs (no manual sync-s3)")
+    .description("Configure and verify the bound SES→SNS→SQS notification path through the API")
     .option("-j, --json", "Print JSON output", false)
-    .option("--rule-set <name>", "SES receipt rule set name", "emails-inbound")
+    .option("--rule-set <name>", "Validate the server-bound SES receipt rule set")
     .option("--rule <name>", "SES receipt rule name (defaults to inbound-<domain>)")
     .option("--region <region>", "AWS region (defaults to config inbound_s3_region)")
     .option("--profile <profile>", "AWS profile")
-    .action(() => {
-      try { serverOnly("setup-realtime"); } catch (e) { handleError(e); }
+    .option("--source <id>", "Registered server-bound S3 source")
+    .action(async (domain: string, opts: { source?: string; ruleSet?: string; rule?: string; region?: string; profile?: string }) => {
+      try {
+        const { setupInboxRealtime } = await import("../../lib/realtime-setup-api.js");
+        if (!domain.trim() || Object.values(opts).some(value => typeof value === "string" && !value.trim())) throw new Error("Realtime setup selectors must not be blank.");
+        const result = await setupInboxRealtime({ domain, ...(opts.source !== undefined ? { source_id: opts.source } : {}), ...(opts.ruleSet !== undefined ? { rule_set: opts.ruleSet } : {}), ...(opts.rule !== undefined ? { rule_name: opts.rule } : {}), ...(opts.region !== undefined ? { region: opts.region } : {}), ...(opts.profile !== undefined ? { profile: opts.profile } : {}) });
+        output(result, result.ok ? `Realtime notification configuration verified for ${domain}.\nRun emails inbox watch --source ${result.source_id} to poll the API. No worker was started or delivery test sent.` : `Realtime setup did not verify (${result.stage}). Confirmed steps: ${(result.changed as string[]).join(", ") || "none confirmed"}. Cloud changes may have applied despite a missing acknowledgement. Inspect the bound cloud configuration and retry.`);
+        if (!result.ok) process.exitCode = 1;
+      } catch (error) { handleError(error); }
     });
 
   inboxCmd
     .command("realtime-status")
-    .description("Show real-time inbound queue, bucket, and sync health")
+    .description("Show API ingestion sources, last-sync evidence and worker-health availability")
     .option("-j, --json", "Print JSON output", false)
-    .action(() => {
-      try { serverOnly("realtime-status"); } catch (e) { handleError(e); }
+    .action(async () => {
+      try {
+        const { apiIngestionStatus, formatApiIngestionStatus } = await import("./api-diagnostics.js");
+        const status = apiIngestionStatus();
+        output(status, formatApiIngestionStatus(status));
+      } catch (e) { handleError(e); }
     });
 
   inboxCmd
     .command("watch")
     .description("Watch the SQS queue and auto-sync inbound mail in real-time (no manual sync-s3)")
     .option("-j, --json", "Print JSON output", false)
-    .option("--queue-url <url>", "SQS queue URL (defaults to config inbound_realtime_queue_url)")
-    .option("--bucket <name>", "S3 bucket (defaults to config inbound_s3_bucket)")
+    .option("--queue-url <url>", "Validate the configured server SQS queue URL")
+    .option("--bucket <name>", "Validate the configured server S3 bucket")
     .option("--prefix <prefix>", "S3 key prefix to sync")
     .option("--region <region>", "AWS region")
-    .option("--provider <id>", "Associate emails with this provider ID")
+    .option("--provider <id>", "Validate the configured server provider ID")
     .option("--profile <profile>", "AWS profile")
     .option("--once", "Poll a single time then exit (for testing)")
-    .option("--all-buckets", "When a notification arrives, sync every configured inbound S3 bucket")
-    .action(() => {
-      try { serverOnly("watch"); } catch (e) { handleError(e); }
-    });
+    .option("--all-buckets", "Poll every registered server-bound source queue")
+    .option("--source <id>", "Registered server-bound S3 source")
+    .action(ingestAction("watch"));
 
   // ─── LISTEN (SMTP) ────────────────────────────────────────────────────────
   inboxCmd
@@ -1114,8 +1149,17 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("-j, --json", "Print JSON output", false)
     .option("--port <port>", "SMTP port to listen on", "2525")
     .option("--provider <id>", "Associate received emails with this provider ID")
-    .action(() => {
-      try { serverOnly("listen"); } catch (e) { handleError(e); }
+    .action(async (opts: { port: string; provider?: string }) => {
+      try {
+        if (!/^\d+$/.test(opts.port)) throw new Error("SMTP port must be an integer between 0 and 65535.");
+        const { startApiSmtpListener } = await import("../../lib/smtp-api.js");
+        const listener = await startApiSmtpListener(Number(opts.port), opts.provider);
+        output({ listening: true, host: "127.0.0.1", port: listener.port, provider_id: opts.provider ?? null, storage: "api", foreground: true }, `SMTP listening on 127.0.0.1:${listener.port}; messages persist through the Emails API. Press Ctrl-C to stop.`);
+        await new Promise<void>(resolve => {
+          const stop = () => { process.off("SIGINT", stop); process.off("SIGTERM", stop); void listener.stop().finally(resolve); };
+          process.once("SIGINT", stop); process.once("SIGTERM", stop);
+        });
+      } catch (e) { handleError(e); }
     });
 
   // ─── OPEN HTML ────────────────────────────────────────────────────────────

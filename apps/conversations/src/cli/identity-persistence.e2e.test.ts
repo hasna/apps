@@ -1,4 +1,8 @@
-import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); HOME_DIR = fixture.home; AGENT_ID_FILE = join(HOME_DIR, ".hasna", "conversations", "agent-id"); });
+afterAll(async () => { await fixture?.stop(); });
+import { beforeAll, afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -6,7 +10,7 @@ import { join } from "path";
 /**
  * Regression coverage for the identity-revert bug.
  *
- * Presence rows live in the store (local SQLite or the cloud API), but *this
+ * Presence rows live in the shared API, but *this
  * installation's* identity lives in a local file, $HOME/.hasna/conversations/agent-id,
  * read by getAutoName(). `agents register` and `agents rename` used to mutate the
  * store without touching that file, so they reported success and the very next
@@ -16,33 +20,14 @@ import { join } from "path";
  * assertion would pass on the cached name and miss the bug entirely.
  */
 
-const HOME_DIR = mkdtempSync(join(tmpdir(), "conversations-identity-home-"));
-const TEST_DB = join(tmpdir(), `conversations-identity-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
-const AGENT_ID_FILE = join(HOME_DIR, ".hasna", "conversations", "agent-id");
+let HOME_DIR: string;
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
+let AGENT_ID_FILE: string;
 
 setDefaultTimeout(15_000);
 
 function cliEnv(overrides: Record<string, string> = {}): Record<string, string> {
-  const env: Record<string, string> = { ...process.env, ...{} } as Record<string, string>;
-
-  // Never inherit the developer's identity or transport: CONVERSATIONS_AGENT_ID
-  // and CONVERSATIONS_SESSION_ID short-circuit the sources we are testing, and
-  // the HASNA_CONVERSATIONS_* keys would point the test at the real cloud
-  // deployment.
-  for (const key of Object.keys(env)) {
-    if (
-      key === "CONVERSATIONS_AGENT_ID"
-      || key === "CONVERSATIONS_SESSION_ID"
-      || key.startsWith("HASNA_CONVERSATIONS_")
-    ) {
-      delete env[key];
-    }
-  }
-
-  env.HOME = HOME_DIR;
-  env.USERPROFILE = HOME_DIR;
-  env.CONVERSATIONS_DB_PATH = TEST_DB;
+  const env = { ...fixture.env };
   env.FORCE_COLOR = "0";
   // This suite is *about* the machine identity file, and a throwaway HOME with
   // one identity in it is exactly the single-identity context the file is for.
@@ -77,10 +62,7 @@ function storedIdentity(): string {
 
 describe("CLI identity persistence (e2e)", () => {
   afterAll(() => {
-    try { rmSync(HOME_DIR, { recursive: true, force: true }); } catch {}
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try { rmSync(`${TEST_DB}${suffix}`, { force: true }); } catch {}
-    }
+
   });
 
   test("a machine with no identity refuses to invent one", () => {

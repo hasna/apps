@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
-import { getStoreWithResolution } from "./store/index.js";
+import { getStoreWithResolution, assertSharedStoreArguments } from "./store/index.js";
 import type { Store } from "./store/types.js";
-import { getMasterKey, initKms, getKeyStatus } from "./crypto.js";
 import { VERSION } from "./version.js";
 import type { SecretEntry, SecretMetadata, VaultItemKind, VaultItemMetadata, VaultItemPayload } from "./types.js";
 import { getSecretReferenceStatus } from "./status.js";
@@ -32,6 +31,8 @@ Options:
   -h, --help              show this help and exit
 
 Commands:
+  migrate-vault --source <absolute-db-path> --key-file <existing-key-path> --source-id <uuid> --migration-id <uuid> --tenant <uuid>
+                              lossless authenticated transfer; metadata receipt only; never deletes source
   docs                        show a practical usage guide
   set <key> [<value>] [--stdin] [--type <type>] [--label <label>] [--ttl <ttl>] [--reason <text>] [--rotation]
   get <key> [--show|--plaintext|--check]   redacted by default; --check prints length+sha256
@@ -77,10 +78,10 @@ Commands:
   users register <id> <name> [--type human|agent]
   users delete <id>
 
-  encrypt-vault               encrypt all plaintext secrets in the vault
-  key                         show master key status
-  key init                    generate master key if missing
-  key path                    show master key file path
+  encrypt-vault               verify/encrypt vault payloads (API: requires secrets:migrate)
+  key                         verify runtime key and tenant payload encryption
+  key init                    verify the existing service runtime key (creates no local file)
+  key path                    show verified API key ownership
 
   aws configure               interactive AWS setup
   aws push [key]              push secret(s) to AWS Secrets Manager [--dry-run|--plan]
@@ -115,8 +116,8 @@ HASNA_SECRETS_API_KEY_REF; the macOS Keychain item hasna.credentials.secrets.api
 ~/.hasna/secrets/config/credentials; then HASNA_SECRETS_API_KEY. The API base URL
 follows HASNA_SECRETS_API_URL, the Keychain api-url item, the credentials file,
 and otherwise defaults to https://api.hasna.com/secrets. With no credential the
-CLI fails closed unless the local vault is explicitly opted into with
-HASNA_SECRETS_LOCAL_VAULT=1.
+CLI fails closed. Ordinary commands never open a local vault; migrate-vault
+requires an explicit existing --source and --key-file.
 `);
 }
 
@@ -277,12 +278,19 @@ Credentials (five tiers, resolved fresh on every call by @hasna/contracts)
   credentials file, else the fleet gateway https://api.hasna.com/secrets (the
   client appends /v1).
 
-  With NO credential from any tier the CLI FAILS CLOSED unless the local vault is
-  explicitly opted into (HASNA_SECRETS_LOCAL_VAULT=1, which prints one line
-  saying the run is local); it never silently falls back to local SQLite (owner
-  ruling 2026-09-04). A raw database URL is NEVER used on the client.
+  Without an account credential the CLI fails closed. Ordinary commands reject
+  legacy local-vault and database-path selectors. Existing vaults are opened
+  only through explicit migration or storage-library handles; raw database URLs
+  are never used on the client.
   The retired fleet-env, cloud and XDG credential locations are never read, and
   no *_MODE / *_STORAGE_MODE variable selects anything.
+
+  Maintenance commands use the active authority. API key status authenticates
+  the configured server key and inspects all tenant payload tables. Encryption
+  repair requires secrets:migrate and atomically encrypts legacy plaintext;
+  unreadable ciphertext fails closed. Server KMS backing is not attested, and
+  KMS setup requires an operator-managed capability this API does not provide.
+  Garbage collection uses server time and a tenant-scoped transaction.
 
 Safety
   NO command prints a secret value to stdout without an explicit --show or
@@ -406,6 +414,29 @@ function formatVaultItem(item: VaultItemMetadata): string {
   const subtitle = item.subtitle ? ` - ${item.subtitle}` : "";
   const favorite = item.favorite ? " *" : "";
   return `${item.id} [${item.kind}]${favorite} ${item.title}${subtitle}${domains}`;
+}
+
+/** Runtime state is verified by the authenticated service; no local keys are read. */
+async function printApiKeyState(sub: string | undefined, args: string[]): Promise<void> {
+  if (sub && !["init", "path", "exists", "kms"].includes(sub)) throw new Error("Unknown key operation");
+  if (args.length > 1) {
+    if (sub === "kms" && args[1] === "setup") throw new Error("KMS setup requires an operator-managed server binding; this API has no KMS setup capability. No changes were made.");
+    throw new Error("Unexpected key operation arguments");
+  }
+  const active = store();
+  if (!active.encryptionStatus) throw new Error("The Secrets API does not support encryption verification; upgrade the server");
+  const evidence = await active.encryptionStatus();
+  if (sub === "exists") { console.log("yes"); return; }
+  if (sub === "path") { console.log(`Service-owned key: ${active.describe().location} (no client key file)`); return; }
+  if (sub === "kms") {
+    console.log("Verified key mechanism: injected master key. KMS backing is not attested by this service.");
+    return;
+  }
+  console.log("Runtime key: verified by the service (injected master key)");
+  if (sub === "init") console.log("Existing runtime key verified; created: false. Missing server keys require operator bootstrap.");
+  for (const [table, counts] of Object.entries(evidence.tables)) console.log(`${table}: ${counts.total} inspected, ${counts.plaintext} plaintext, ${counts.unreadable} unreadable`);
+  console.log(`Payload verification: ${evidence.verified ? "complete and encrypted" : "complete; repair or key recovery required"}`);
+  if (!evidence.verified) process.exitCode = 1;
 }
 
 function parseAwsOptions(flags: Record<string, string>) {
@@ -553,25 +584,31 @@ if (helpScanArgs.includes("--help") || helpScanArgs.includes("-h")) {
   process.exit(0);
 }
 
+if (command === "migrate-vault") {
+  try {
+    const { migrateVault } = await import("./migration/client.js");
+    console.log(JSON.stringify(await migrateVault(rest)));
+  } catch {
+    console.error("Vault migration was not verified. Keep the source and reuse the same migration/source IDs after resolving capability, schema, key or conflict requirements. No source deletion was performed.");
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+try { assertSharedStoreArguments(rest); }
+catch (error) { console.error(error instanceof Error ? error.message : "Unsupported vault selector"); process.exit(1); }
+
 const { flags, positional } = parseArgs(rest);
 
-// Resolve the active Store (LocalStore or ApiStore) lazily and once. Only data
-// commands trigger resolution; utility commands (docs/key/mcp install) do not.
+// Resolve the shared API lazily; utility commands do not require vault access.
 let _store: Store | undefined;
 function store(): Store {
   if (_store) return _store;
   try {
     const resolved = getStoreWithResolution();
-    // A local run says so, once, on stderr. An unhosted run must never be
-    // mistaken for a hosted one that came back empty (owner ruling 2026-09-04).
-    if (resolved.notice) console.error(resolved.notice);
     _store = resolved.store;
   } catch (e: any) {
-    // FAIL CLOSED (owner ruling 2026-09-04; incident 715558): no credential from
-    // any resolver tier and no explicit local-vault opt-in, or a misconfigured
-    // authority. Exit non-zero with a clean actionable message naming every tier
-    // that was consulted — never a silent rc=0 local-vault read, never a
-    // `secrets-local-fallback` event.
+    // No credential or a retired selector is an actionable error, never local access.
     console.error(e?.message ?? String(e));
     process.exit(1);
   }
@@ -1238,13 +1275,26 @@ switch (command) {
   }
 
   case "status": {
-    const status = await getSecretReferenceStatus();
+    // Same fail-closed shape as every data verb (see store()): a missing
+    // credential is ONE actionable line on stderr and exit 1 — never an
+    // uncaught throw whose first stderr line is a bundle snippet.
+    let status: Awaited<ReturnType<typeof getSecretReferenceStatus>>;
+    try {
+      status = await getSecretReferenceStatus();
+    } catch (e: any) {
+      console.error(e?.message ?? String(e));
+      process.exit(1);
+    }
     if ("json" in flags) {
       await writeStdout(JSON.stringify(status, null, 2) + "\n");
     } else {
       console.log(`secrets ${status.package.version}`);
       console.log(`mode: ${status.mode}`);
       console.log(`location: ${status.location}`);
+      if (status.transport) {
+        console.log(`api url source: ${status.transport.api_url_source ?? "default"}`);
+        console.log(`api key source: ${status.transport.api_key_source ?? "none"} (${status.transport.api_key_tier})`);
+      }
       console.log(`secrets: ${status.counts.secrets}`);
       console.log(`users: ${status.counts.users}`);
       console.log("values: not included");
@@ -1628,10 +1678,12 @@ switch (command) {
   }
 
   case "encrypt-vault": {
-    // Migrate all plaintext secrets to encrypted (local vault maintenance).
     try {
-      const { migrated, alreadyEncrypted } = await store().encryptVault();
-      console.log(`✓ Encrypted ${migrated} secret(s). ${alreadyEncrypted} already encrypted.`);
+      const active = store();
+      const { migrated, alreadyEncrypted } = await active.encryptVault();
+      console.log(active.mode === "api"
+        ? `✓ Encrypted ${migrated} payload(s). ${alreadyEncrypted} already encrypted and verified.`
+        : `✓ Encrypted ${migrated} secret(s). ${alreadyEncrypted} already encrypted.`);
     } catch (e: any) {
       console.error(e.message);
       process.exit(1);
@@ -1640,70 +1692,8 @@ switch (command) {
   }
 
   case "key": {
-    // The `key` family (init, kms setup, status) manages the LOCAL encryption
-    // master key. In api mode the server owns encryption at rest, so these are
-    // meaningless and must not create a local key file. Guard like encrypt-vault.
-    if (store().mode === "api") {
-      console.error("`secrets key` is a local-vault operation; in api mode the server owns encryption at rest.");
-      process.exit(1);
-    }
-    const [sub] = positional;
-    const { statSync } = await import("fs");
-
-    if (sub === "kms") {
-      const [kmsAction] = positional.slice(1);
-      if (kmsAction === "setup") {
-        const keyId = flags["key-id"] ?? flags.key;
-        if (!keyId) { console.error("Usage: secrets key kms setup --key-id <KMS key ID or alias> [--region <region>] [--profile <profile>]"); process.exit(1); }
-        const region = flags.region ?? "us-east-1";
-        initKms(keyId, region, flags.profile);
-        console.log(`✓ KMS configured: ${keyId} (${region})`);
-        // Trigger migration if local key exists
-        getMasterKey();
-        const status = getKeyStatus();
-        if (status.mode === "kms") {
-          console.log(`✓ Data key wrapped with KMS and stored at ${status.keyPath}`);
-        }
-      } else {
-        const status = getKeyStatus();
-        if (status.mode === "kms") {
-          console.log(`Mode:       KMS (envelope encryption)`);
-          console.log(`KMS Key:    ${status.kmsKeyId}`);
-          console.log(`Data key:   ${status.keyPath} (encrypted with KMS)`);
-        } else {
-          console.log(`KMS not configured.`);
-          console.log(`\nSetup: secrets key kms setup --key-id <KMS key ID or alias> [--region us-east-1] [--profile example-aws-profile]`);
-        }
-      }
-    } else if (sub === "path") {
-      const status = getKeyStatus();
-      console.log(status.keyPath);
-    } else if (sub === "exists") {
-      const status = getKeyStatus();
-      console.log(status.exists ? "yes" : "no");
-    } else if (sub === "init") {
-      getMasterKey();
-      const status = getKeyStatus();
-      console.log(`✓ Master key ready (${status.mode} mode) at ${status.keyPath}`);
-    } else {
-      const status = getKeyStatus();
-      console.log(`Mode:       ${status.mode}`);
-      if (status.kmsKeyId) console.log(`KMS Key:    ${status.kmsKeyId}`);
-      console.log(`Key file:   ${status.keyPath}`);
-      console.log(`Exists:     ${status.exists ? "✓ yes" : "✗ no"}`);
-      if (status.exists) {
-        try {
-          const stat = statSync(status.keyPath);
-          const mode = (stat.mode & 0o777).toString(8);
-          console.log(`Permissions: ${mode}${mode === "600" ? " (correct)" : " ⚠ should be 600"}`);
-        } catch { /* skip */ }
-      }
-      console.log(`\nCommands:`);
-      console.log(`  secrets key init                     Generate/load key`);
-      console.log(`  secrets key path                     Show key file path`);
-      console.log(`  secrets key kms setup --key-id <id>  Enable KMS envelope encryption`);
-      console.log(`  secrets key kms                      Show KMS status`);
-    }
+    try { await printApiKeyState(positional[0], positional); }
+    catch (error) { console.error(error instanceof Error ? error.message : "Key verification failed"); process.exitCode = 1; }
     break;
   }
 

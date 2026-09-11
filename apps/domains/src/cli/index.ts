@@ -15,6 +15,7 @@ import { registerServeCommand } from "./commands/serve.js";
 import { registerDbCommands } from "./commands/db.js";
 import { registerRoute53Commands } from "./commands/route53.js";
 import { registerReconcileExpiryCommand } from "./commands/reconcile-expiry.js";
+import { assertDomainsClientStorage } from "../lib/client-storage-policy.js";
 import { getPackageVersion } from "../lib/version.js";
 
 import { printLine, printErrorLine } from "../lib/stdout.js";
@@ -117,6 +118,8 @@ function registerOptionalHelp(program: Command): void {
 
 const program = new Command();
 
+program.hook("preAction", () => assertDomainsClientStorage());
+
 program
   .name("domains")
   .description("Domain portfolio and DNS management for AI agents")
@@ -143,4 +146,16 @@ registerRoute53Commands(program); // domains r53 <...>
 registerOptionalHelp(program);
 
 await registerOptionalCommands(program, enabledOptionalGroups());
-program.parse(process.argv);
+
+// The CLI boundary: an error that escapes a command action (the shared
+// resolver's fail-closed refusal is the important one — "domains fails closed:
+// …" naming the Keychain item, the credentials file and HASNA_DOMAINS_API_KEY)
+// is reported as ONE stderr line and a non-zero exit, so an operator reads the
+// actionable message first instead of a Bun source-context stack dump.
+try {
+  await program.parseAsync(process.argv);
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  printErrorLine(message.startsWith("domains ") ? message : `domains: ${message}`);
+  process.exit(1);
+}

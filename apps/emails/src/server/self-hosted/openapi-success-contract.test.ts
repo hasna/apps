@@ -4,6 +4,7 @@ import { SELF_HOSTED_RESOURCES } from "./resources.js";
 
 type Schema = {
   type?: string;
+  format?: string;
   $ref?: string;
   properties?: Record<string, Schema>;
   required?: string[];
@@ -19,6 +20,7 @@ type Operation = {
   requestBody?: unknown;
   responses?: Record<string, {
     content?: Record<string, { schema?: Schema }>;
+    headers?: Record<string, {schema?: Schema}>;
   }>;
 };
 
@@ -500,13 +502,19 @@ describe("self-hosted OpenAPI success-response schemas", () => {
     expect(missing).toEqual([]);
   });
 
-  it("declares a JSON schema for every non-2xx response status", () => {
+  it("declares JSON error schemas except the exact bodyless tracking capability responses", () => {
     const missing: string[] = [];
+    const bodyless = new Set(["GET /v1/tracking/{token} 302", "GET /v1/tracking/{token} 404", "GET /v1/tracking/{token} 503"]);
+    const observed = new Set<string>();
     for (const [path, pathItem] of Object.entries(paths)) {
       for (const [method, operation] of Object.entries(pathItem)) {
         if (!["get", "post", "put", "patch", "delete"].includes(method)) continue;
         for (const [status, response] of Object.entries(operation.responses ?? {})) {
           if (/^2\d\d$/.test(status)) continue;
+          const key = `${method.toUpperCase()} ${path} ${status}`;
+          if (bodyless.has(key)) {
+            expect(response.content, key).toBeUndefined(); observed.add(key); continue;
+          }
           if (!response.content?.["application/json"]?.schema) {
             missing.push(`${method.toUpperCase()} ${path} ${status}`);
           }
@@ -514,6 +522,13 @@ describe("self-hosted OpenAPI success-response schemas", () => {
       }
     }
     expect(missing).toEqual([]);
+    expect([...observed].sort()).toEqual([...bodyless].sort());
+  });
+
+  it("publishes binary tracking pixels and a stored-destination redirect without JSON bodies",()=>{
+    const responses=paths["/v1/tracking/{token}"]!.get!.responses!;
+    expect(responses["200"]!.content).toEqual({"image/gif":{schema:{type:"string",format:"binary"}}});
+    expect(responses["302"]!.headers?.Location?.schema).toEqual({type:"string",format:"uri"});
   });
 
   it("publishes a fail-safe provider-outcome-uncertain 502 schema", () => {

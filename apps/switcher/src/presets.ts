@@ -13,8 +13,9 @@ const preset = (id: string, name: string, protocols: Route[], sources: string[],
 export const providerPresets: readonly ProviderPreset[] = [
   preset("deepseek", "DeepSeek", [
     route("openai-chat", "https://api.deepseek.com", {catalogBaseUrl: "https://api.deepseek.com"}),
+    route("openai-responses", "https://api.deepseek.com", {catalogBaseUrl: "https://api.deepseek.com"}),
     route("anthropic-messages", "https://api.deepseek.com/anthropic/v1", {catalogBaseUrl: "https://api.deepseek.com"}),
-  ], ["https://api-docs.deepseek.com/guides/anthropic_api", "https://api-docs.deepseek.com/api/list-models"], "DEEPSEEK_API_KEY"),
+  ], ["https://api-docs.deepseek.com/guides/anthropic_api", "https://api-docs.deepseek.com/api/list-models", "https://api-docs.deepseek.com/updates/", "https://api-docs.deepseek.com/guides/responses_api/"], "DEEPSEEK_API_KEY"),
   preset("openrouter", "OpenRouter", ["openai-chat", "openai-responses", "anthropic-messages"].map(protocol =>
     route(protocol as Protocol, "https://openrouter.ai/api/v1", {catalogAuthStyle: "none"})),
     ["https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties", "https://openrouter.ai/docs/guides/overview"], "OPENROUTER_API_KEY"),
@@ -106,7 +107,7 @@ export function providerFromPreset(presetId: string, options: PresetOptions = {}
   // Endpoint overrides must not leave discovery pointed at the original provider.
   if (presetId === "fireworks" && !options.catalogBaseUrl && !options.catalogAccountId)
     throw new Fault(400, "catalog_account_required", "Fireworks model discovery requires --catalog-account-id or an explicit --catalog-url.");
-  if (selected.catalogFormat === "none" && options.catalogFormat && !options.catalogBaseUrl)
+  if (selected.catalogFormat === "none" && options.catalogFormat && options.catalogFormat !== "none" && !options.catalogBaseUrl)
     throw new Fault(400, "catalog_url_required", "This preset requires an explicit --catalog-url when enabling a catalog parser.");
   const catalogBaseUrl = options.catalogBaseUrl ?? (presetId === "fireworks" && options.catalogAccountId
     ? `https://api.fireworks.ai/v1/accounts/${encodeURIComponent(options.catalogAccountId)}`
@@ -118,6 +119,12 @@ export function providerFromPreset(presetId: string, options: PresetOptions = {}
     catalogAuthStyle: options.catalogAuthStyle ?? selected.catalogAuthStyle,
     catalogFormat: options.catalogFormat ?? selected.catalogFormat, catalogAccountId: options.catalogAccountId,
     modelsPath: options.modelsPath ?? selected.modelsPath,
+    additionalModels: presetId === "deepseek" && new URL(baseUrl).origin === "https://api.deepseek.com" ? [{
+      // Official 2026-09-10 release: the model version is V4.1 Flash but
+      // the API ID is deepseek-flash. Do not keep the retired preview alias.
+      id: "deepseek-flash", name: "DeepSeek V4.1 Flash",
+      inputModalities: ["text", "image"], outputModalities: ["text"], supportedParameters: ["tools"],
+    }] : [],
   });
 }
 

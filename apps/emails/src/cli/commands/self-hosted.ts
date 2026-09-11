@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import chalk from "../../lib/chalk-lite.js";
 import { closeSelfHostedPool, getSelfHostedPool, requireSigningSecret } from "../../server/self-hosted/env.js";
 import { issueSelfHostedApiKey, listSelfHostedApiKeys, revokeSelfHostedApiKey, rotateToEmailsApiKey } from "../../server/self-hosted/keys.js";
+import { registerDbCommands } from "./db.js";
 import { registerIdpPrincipalCommands } from "./idp-principal.js";
 import { handleError } from "../utils.js";
 
@@ -14,9 +15,10 @@ async function keyStore(): Promise<{ store: ApiKeyStore; signingSecret: string }
 }
 
 export function registerSelfHostedCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
-  const selfHosted = program.command("self-hosted").description("Operate your self-hosted Emails deployment");
+  const selfHosted = program.command("server").alias("self-hosted").description("Operate the Emails API server (requires server database credentials)");
   registerIdpPrincipalCommands(selfHosted, output);
-  const key = selfHosted.command("key").description("Create, list, and revoke self-hosted API keys");
+  registerDbCommands(selfHosted, output);
+  const key = selfHosted.command("key").description("Create, list, and revoke server API keys");
 
   key.command("create")
     .description("Mint and persist an API key; the plaintext token is shown once")

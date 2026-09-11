@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { resolveClientTransport } from "@hasna/contracts/client";
+import { shortlinksResolverInputs } from "../client-resolver-inputs.js";
 import { resolveStore, type Store } from "../client-store.js";
 import { projectDestinationUrl, projectForOutput } from "./projection.js";
 import type { TotalStats } from "../store-interface.js";
@@ -1127,10 +1128,18 @@ program
       const data = await withRuntimeStore(async (store) => {
         // The hosted transport report comes from the contracts client seam —
         // the same resolver that built the store — never a hand-rolled env
-        // read of the API key. In explicit local mode there is no hosted
-        // transport to report, so the sources are null rather than resolved
-        // and discarded.
-        const hosted = store.kind === "http" ? resolveClientTransport("shortlinks", process.env) : null;
+        // read of the API key. It must also see the SAME inputs the store was
+        // resolved with: a declared-but-blank authority variable is normalised
+        // away at the app seam before @hasna/contracts sees it
+        // (client-resolver-inputs.ts), and the resolver itself refuses a
+        // declared-but-blank variable loudly — a blank alongside a valid key
+        // must not make `doctor` fail while every store-backed command works.
+        // In explicit local mode there is no hosted transport to report, so the
+        // sources are null rather than resolved and discarded.
+        const { env: reportEnv, credentials: reportCredentials } = shortlinksResolverInputs(process.env);
+        const hosted = store.kind === "http"
+          ? resolveClientTransport("shortlinks", reportEnv, { credentials: reportCredentials })
+          : null;
         return {
           service: "shortlinks",
           ok: true,

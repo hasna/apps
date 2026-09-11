@@ -13,7 +13,7 @@ const scratch = process.env.SWITCHER_TEST_ROOT ?? join(homedir(), "Workspace/scr
 async function directory() { await mkdir(scratch, {recursive:true}); return mkdtemp(join(scratch, "cli-runtime-")); }
 async function command(home: string, args: string[], extra: NodeJS.ProcessEnv = {}) {
   const child = Bun.spawn([process.execPath, cli, ...args], {cwd: home, env: {
-    PATH: process.env.PATH, HOME: process.env.HOME, USER: process.env.USER, HASNA_SWITCHER_HOME: join(home, "data"), ...extra,
+    PATH: process.env.PATH, HOME: home, USER: "fixture", HASNA_STATION: "switcher-runtime-fixture", HASNA_SWITCHER_HOME: join(home, "data"), ...extra,
   }, stdout: "pipe", stderr: "pipe", stdin: "ignore"});
   const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
   try {
@@ -21,6 +21,34 @@ async function command(home: string, args: string[], extra: NodeJS.ProcessEnv = 
     return {code, stdout, stderr};
   } finally { clearTimeout(timer); }
 }
+
+test("models add persists expiry metadata while preserving discovery and rejects duplicate or invalid additions", async () => {
+  const dir=await directory();
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>Response.json({data:[{id:"stable",supported_parameters:["tools"]}]})});
+  try {
+    const file=join(dir,"provider.json");
+    await writeFile(file,JSON.stringify({id:"expiry-fixture",name:"Expiry fixture",baseUrl:upstream.url.origin,protocol:"anthropic-messages"}));
+    const created=await command(dir,["providers","add","expiry-fixture","--file",file]);
+    expect(created.code,created.stderr).toBe(0);
+    const added=await command(dir,["models","add","expiry-fixture","preview","--name","Preview","--expires-on","2000-01-01"]);
+    expect(added.code,added.stderr).toBe(0);
+    expect(JSON.parse(added.stdout)).toMatchObject({model:{id:"preview",expiresOn:"2000-01-01"},expired:true});
+    const listed=await command(dir,["models","expiry-fixture"]);
+    expect(listed.code,listed.stderr).toBe(0);
+    expect(JSON.parse(listed.stdout).data).toEqual([
+      expect.objectContaining({id:"stable",expired:false,codingEligible:true}),
+      expect.objectContaining({id:"preview",expiresOn:"2000-01-01",expired:true,codingEligible:false}),
+    ]);
+    const duplicate=await command(dir,["models","add","expiry-fixture","preview"]);
+    expect(duplicate.code).toBe(1);expect(duplicate.stderr).toContain("model_exists");
+    const invalid=await command(dir,["models","add","expiry-fixture","invalid","--expires-on","2026-02-29"]);
+    expect(invalid.code).toBe(1);
+    const expired=await command(dir,["launch","claude","--provider","expiry-fixture","--model","preview","--dry-run"]);
+    expect(expired.code).toBe(1);expect(expired.stderr).toContain("model_expired");
+    const provider=await command(dir,["providers","get","expiry-fixture"]);
+    expect(JSON.parse(provider.stdout)).toMatchObject({manualModels:[],additionalModels:[{id:"preview",name:"Preview",expiresOn:"2000-01-01"}]});
+  } finally {await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
+});
 
 test("the CLI launches Ori from a real OpenRouter preset with its complete catalog and keyless dry-run",async()=>{
   const dir=await directory(),executable=join(dir,"ori-fixture"),nativeExecutable=join(dir,"native-codex");
@@ -203,14 +231,14 @@ test("actual CLI auto-configures split DeepSeek catalog, launches a harness, reu
   }});
   try {
     const executable = join(dir,"claude-fixture");
-    await writeFile(executable, `#!${process.execPath}\nif(process.argv.includes('--version')) { console.log('2.1.261 (Claude Code)'); } else {\nconst args=process.argv.slice(2); const file=args[args.indexOf('--settings')+1]; const settings=await Bun.file(file).json();\nconsole.log(JSON.stringify({model:process.env.ANTHROPIC_MODEL,base:process.env.ANTHROPIC_BASE_URL,catalog:settings.modelPicker.options.map(m=>m.model),authCorrect:process.env.ANTHROPIC_AUTH_TOKEN==='fixture-deepseek-key',operatorPresent:!!process.env.HASNA_SWITCHER_API_KEY,unrelatedPresent:!!process.env.UNRELATED_API_KEY,args}));\n}\n`, {mode:0o700});
+    await writeFile(executable, `#!${process.execPath}\nif(process.argv.includes('--version')) { console.log('2.1.261 (Claude Code)'); } else {\nconst args=process.argv.slice(2); const file=args[args.indexOf('--settings')+1]; const settings=await Bun.file(file).json();\nconsole.log(JSON.stringify({model:process.env.ANTHROPIC_MODEL,base:process.env.ANTHROPIC_BASE_URL,catalog:settings.modelPicker.options.map(m=>m.model),authCorrect:!!process.env.ANTHROPIC_AUTH_TOKEN&&process.env.ANTHROPIC_AUTH_TOKEN!=='fixture-deepseek-key',operatorPresent:!!process.env.HASNA_SWITCHER_API_KEY,unrelatedPresent:!!process.env.UNRELATED_API_KEY,args}));\n}\n`, {mode:0o700});
     const args = ["launch","claude","--provider","deepseek","--model","fixture-pro","--url",upstream.url.origin+"/anthropic/v1","--catalog-url",upstream.url.origin,"--credential-env","SWITCHER_PROVIDER_FIXTURE","--executable",executable];
     for (let i=0; i<2; i++) {
       const result = await command(dir,args,{SWITCHER_PROVIDER_FIXTURE:"fixture-deepseek-key",UNRELATED_API_KEY:"fixture-unrelated"});
       expect(result.code, result.stderr).toBe(0);
       const output = JSON.parse(result.stdout);
       expect(output.model).toBe("fixture-pro"); expect(output.catalog).toEqual(["fixture-pro","fixture-flash"]);
-      expect(output.base).toBe(upstream.url.origin+"/anthropic");
+      expect(output.base).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
       expect(output.authCorrect).toBe(true); expect(output.operatorPresent).toBe(false); expect(output.unrelatedPresent).toBe(false);
       expect(result.stdout).not.toContain("fixture-deepseek-key");
     }
@@ -230,10 +258,10 @@ test("remote configuration never creates local data, including missing keys and 
   const offline = Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>new Response()});
   const url = offline.url.href; await offline.stop(true);
   try {
-    for (const env of [{HASNA_SWITCHER_API_URL:url},{HASNA_SWITCHER_API_KEY:"fixture-operator-key-that-is-not-real"},{HASNA_SWITCHER_API_URL:url,HASNA_SWITCHER_API_KEY:"fixture-operator-key-that-is-not-real"}]) {
+    for (const env of [{HASNA_SWITCHER_API_URL:url},{HASNA_SWITCHER_API_URL:url,HASNA_SWITCHER_API_KEY:"fixture-operator-key-that-is-not-real"}]) {
       const result = await command(dir,["providers","list"],env);
       expect(result.code).toBe(1); expect(result.stderr).not.toContain("fixture-operator-key-that-is-not-real");
-      expect(await readdir(dir)).toEqual([]);
+      expect((await readdir(dir)).filter(name=>!["Library",".bun"].includes(name))).toEqual([]); // Bun caches under Library on macOS and .bun on Linux; app data must remain absent.
     }
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
@@ -258,7 +286,10 @@ test("concurrent first-run CLI processes share SQLite without startup-lock failu
 }, 60_000);
 
 test("preset aliases cannot follow endpoint overrides to a different origin", () => {
-  expect(()=>providerFromPreset("deepseek",{harness:"codex"})).toThrow("compatible");
+  const responses=providerFromPreset("deepseek",{harness:"codex"});
+  expect(responses.protocol).toBe("openai-responses");
+  expect(providerCredential(responses,{DEEPSEEK_API_KEY:"fixture-alias"})).toBe("fixture-alias");
+  expect(providerCredential({...responses,baseUrl:"https://other.example/v1"},{DEEPSEEK_API_KEY:"fixture-alias"})).toBeUndefined();
   expect(()=>providerFromPreset("deepseek",{baseUrl:"https://other.example/v1"})).toThrow("credential-env");
   const original=providerFromPreset("deepseek",{harness:"claude"});
   expect(providerCredential(original,{DEEPSEEK_API_KEY:"fixture-alias"})).toBe("fixture-alias");
@@ -279,7 +310,7 @@ test.skipIf(!process.env.SWITCHER_TEST_DATABASE_URL)("CLI-owned PostgreSQL API p
     const read = await command(dir,["providers","get","pg-deepseek"],env);
     expect(read.code,read.stderr).toBe(0);
     expect(JSON.parse(read.stdout).catalogBaseUrl).toBe("https://api.deepseek.com");
-    expect(await readdir(dir)).toEqual([]);
+    expect((await readdir(dir)).filter(name=>!["Library",".bun"].includes(name))).toEqual([]); // Bun caches under Library on macOS and .bun on Linux; app data must remain absent.
     const runtime = await openCliRuntime(env);
     try { expect((await runtime.client.health()).backend).toBe("postgresql"); expect((await runtime.client.listProviders()).total).toBe(1); }
     finally { await runtime.close(); }
@@ -301,7 +332,7 @@ test("CLI remote mode writes to the chosen API and leaves local data absent", as
       expect(result.code,result.stderr).toBe(0);
       const client = new SwitcherClient({baseUrl:service.url,apiKey:"fixture-remote-operator-token-not-real"});
       expect((await client.getProvider("remote-provider")).baseUrl).toBe("https://openrouter.ai/api/v1");
-      expect(await readdir(remoteDir)).toEqual([]);
+      expect((await readdir(remoteDir)).filter(name=>!["Library",".bun"].includes(name))).toEqual([]);
     } finally { await service.close(); }
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
@@ -316,6 +347,6 @@ test("CLI rejects conflicting file and saved-profile overrides before opening an
     }
     const result = await command(dir,["providers","add","fixture","--file","absent.json","--url","https://other.example"]);
     expect(result.code).toBe(1); expect(JSON.parse(result.stderr).error.code).toBe("conflicting_options");
-    expect(await readdir(dir)).toEqual([]);
+    expect((await readdir(dir)).filter(name=>!["Library",".bun"].includes(name))).toEqual([]); // Bun caches under Library on macOS and .bun on Linux; app data must remain absent.
   } finally { await rm(dir,{recursive:true,force:true}); }
 });

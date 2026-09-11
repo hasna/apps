@@ -33,7 +33,7 @@ export async function validateKiloConfiguration(cwd:string,args:string[]=[]):Pro
 export async function prepareKilo(input:HarnessLaunchInput,providerBaseUrl:string):Promise<PreparedLaunch>{
  if(input.protocol==="gemini-generate-content") throw new Error("Kilo is incompatible with this protocol.");
  const args=[...(input.args??[])];validateKiloArgs(args);
- const authority=endpoint(input.baseUrl);
+ const authority=endpoint(input.providerBaseUrl??input.baseUrl);
  const providerID="switcher-"+createHash("sha256").update(authority+input.protocol).digest("hex").slice(0,12),model=`${providerID}/${input.model}`;
  const sessionDir=input.sessionDir??join(input.stateDir,"sessions");
  const dbPath=join(sessionDir,"data","kilo","kilo.db");
@@ -48,7 +48,7 @@ export async function prepareKilo(input:HarnessLaunchInput,providerBaseUrl:strin
  const globalDir=join(env.XDG_CONFIG_HOME,"kilo");await mkdir(globalDir,{mode:0o700});
  const globalFile=join(globalDir,"kilo.json");await writeFile(globalFile,kiloConfigText(settings.global),{mode:0o600,flag:"wx"});
  const npm={"anthropic-messages":"@ai-sdk/anthropic","openai-responses":"@ai-sdk/openai","openai-chat":"@ai-sdk/openai-compatible"}[input.protocol];
- const config={...settings.config,model,small_model:model,subagent_model:model,enabled_providers:[providerID],disabled_providers:[],instructions:settings.instructions,share:"disabled",provider:{[providerID]:{name:"Switcher",npm,options:{baseURL:providerBaseUrl,apiKey:"generated at serialization"},whitelist:input.models.map(m=>m.id),models:Object.fromEntries(input.models.map(m=>[m.id,{
+ const config={...settings.config,model,small_model:`${providerID}/${input.compiledPolicy?.roles.weak??input.model}`,subagent_model:`${providerID}/${input.compiledPolicy?.roles.subagent??input.model}`,enabled_providers:[providerID],disabled_providers:[],instructions:settings.instructions,share:"disabled",provider:{[providerID]:{name:"Switcher",npm,options:{baseURL:providerBaseUrl,apiKey:"generated at serialization"},whitelist:input.models.map(m=>m.id),models:Object.fromEntries(input.models.map(m=>[m.id,{
   id:m.id,name:m.name,tool_call:m.supportedParameters?.includes("tools")??true,modalities:{input:m.inputModalities??["text"],output:m.outputModalities??["text"]},...(m.contextWindow&&m.maxOutputTokens?{limit:{context:m.contextWindow,output:m.maxOutputTokens}}:{}),
  }]))}}};
  const text=kiloConfigText(config,providerID,KEY),file=join(input.stateDir,"kilo.json");await writeFile(file,text,{mode:0o600,flag:"wx"});

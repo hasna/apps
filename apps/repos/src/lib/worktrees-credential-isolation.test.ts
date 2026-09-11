@@ -277,7 +277,7 @@ describe("the worktree plane needs no GitHub credential", () => {
 
     expect(report.error).toBeUndefined();
     expect(report.ok).toBe(true);
-    expect(report.added_path).toBe(join(seeded.root, "open-credfree", "credfree-check"));
+    expect(report.added_path).toBe(join(seeded.root, "hasna", "open-credfree", "credfree-check"));
     expect(report.base_source).toBe("origin");
     expect(report.removed).toBe(true);
   });
@@ -374,7 +374,7 @@ describe("the limit of the claim", () => {
       expect(report.ok).toBe(false);
       expect(report.error).toContain("BASE_REF_UNRESOLVABLE");
       // Nothing was created for the failed claim.
-      expect(existsSync(join(seeded.root, "open-credfree", "credfree-check"))).toBe(false);
+      expect(existsSync(join(seeded.root, "hasna", "open-credfree", "credfree-check"))).toBe(false);
     } finally {
       server.kill();
     }

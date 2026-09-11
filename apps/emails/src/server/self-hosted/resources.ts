@@ -105,6 +105,14 @@ export interface SelfHostedResourceSpec {
 
 export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   {
+    path: "feedback",
+    table: "service_feedback",
+    orderBy: "created_at DESC",
+    filters: ["category"],
+    columns: [{ name: "message" }, { name: "email" }, { name: "category" }, { name: "status", readOnly: true }],
+    requiredColumns: ["message"],
+  },
+  {
     path: "mailbox-filters",
     table: "mailbox_filters",
     orderBy: "updated_at DESC",
@@ -114,6 +122,9 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
       { name: "normalized_name", readOnly: true },
       { name: "mailbox" },
       { name: "criteria", json: true },
+      { name: "actions", json: true },
+      { name: "enabled", bool: true },
+      { name: "order", int: true },
     ],
     requiredColumns: ["name", "mailbox", "criteria"],
   },
@@ -155,6 +166,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   },
   {
     path: "templates",
+    writeRequiresOperator: true,
     table: "templates",
     orderBy: "created_at DESC",
     columns: [
@@ -173,6 +185,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   },
   {
     path: "sequences",
+    writeRequiresOperator: true,
     table: "sequences",
     orderBy: "created_at DESC",
     columns: [{ name: "name" }, { name: "description" }, { name: "status" }],
@@ -218,6 +231,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   },
   {
     path: "scheduled",
+    writeRequiresOperator: true,
     table: "scheduled_emails",
     orderBy: "scheduled_at ASC",
     filters: ["status"],
@@ -259,6 +273,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   {
     // App-level inbound forwarding rules (local table `forwarding_rules`).
     path: "forwarding",
+    writeRequiresOperator: true,
     table: "forwarding_rules",
     orderBy: "source_address ASC, target_address ASC",
     filters: ["source_address", "target_address", "mode"],
@@ -464,6 +479,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   {
     // Steps of a drip sequence (local table `sequence_steps`).
     path: "sequence-steps",
+    writeRequiresOperator: true,
     table: "sequence_steps",
     orderBy: "step_number ASC",
     filters: ["sequence_id"],
@@ -481,6 +497,8 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   {
     // Contact enrollments in a sequence (local table `sequence_enrollments`).
     path: "sequence-enrollments",
+    redactColumns: ["execution_payload"],
+    writeRequiresOperator: true,
     table: "sequence_enrollments",
     orderBy: "enrolled_at DESC",
     filters: ["sequence_id", "status"],
@@ -538,6 +556,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
     // Webhook idempotency ledger (local table `webhook_receipts`). Append-only;
     // the client dedupes by (provider, event_id) via a bounded list scan.
     path: "webhook-receipts",
+    writeRequiresOperator: true,
     table: "webhook_receipts",
     orderBy: "completed_at DESC",
     filters: ["provider", "event_id"],

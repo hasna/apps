@@ -1,24 +1,9 @@
-// Self-hosted-ONLY.
-//
-// Reading and cancelling the schedule, and running diagnostics, are NOT
-// server-only: `GET/PATCH /v1/scheduled` exists and src/db/scheduled.remote.ts
-// is a complete client for it (the MCP `list_scheduled` / `cancel_scheduled`
-// tools already take exactly that path), and src/lib/doctor.ts reads its facts
-// through whichever store the configuration names. Those commands are driven
-// here against an out-of-process /v1 stub (see src/test-support/v1-stub.ts).
-//
-// What stays server-only is the scheduler LOOP and the batch sender (both need
-// the local provider send pipeline) and `doctor delivery`. That last one is now a
-// property of THIS command family alone: src/lib/delivery-doctor.ts has collapsed to a
-// single implementation that reads whichever store the storage configuration names, so
-// the diagnosis itself no longer refuses. This arm's `serverOnly` refusal stands until
-// the misc family is collapsed too, and the MCP `diagnose_inbound_delivery` tool — which
-// goes through the module rather than through this arm — already answers. `completion`
-// and `verify-email` remain pure local commands.
+// API-backed schedule reads/cancellation and diagnostics. Scheduler execution
+// has its own authenticated HTTP regression suite in scheduler-api.test.ts.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { Command } from "commander";
 import { startV1Stub, type V1Stub, type V1StubResources } from "../../test-support/v1-stub.js";
-import { registerMiscCommands, runSchedulerTick } from "./misc.remote.js";
+import { registerMiscCommands } from "./misc.remote.js";
 
 let stub: V1Stub;
 
@@ -35,6 +20,7 @@ afterAll(() => stub.stop());
 beforeEach(async () => {
   await stub.reset();
   stub.applyEnv();
+  process.env.EMAILS_SESSION_TOKEN = stub.apiKey; // Fixture wins over this machine's Keychain.
 });
 afterEach(() => stub.clearEnv());
 
@@ -256,34 +242,5 @@ describe("doctor runs the diagnostics against the configured store", () => {
     expect(named("Templates")).toMatchObject({ status: "pass", message: "0 template(s)" });
     expect(named("Provider credentials")).toMatchObject({ status: "unknown" });
     expect(output).not.toContain("not available in the self-hosted client");
-  });
-});
-
-describe("server-only scheduling, batch and diagnostics commands", () => {
-  const SERVER_ONLY = [
-    { name: "schedule run", args: ["schedule", "run"] },
-    { name: "scheduler", args: ["scheduler"] },
-    {
-      name: "batch",
-      args: ["batch", "--csv", "recipients.csv", "--template", "welcome", "--from", "sender@example.com"],
-    },
-    { name: "doctor delivery", args: ["doctor", "delivery", "ops@example.com"] },
-  ] as const;
-
-  for (const { name, args } of SERVER_ONLY) {
-    it(`blocks emails ${name} in the self-hosted client`, async () => {
-      const errors = await runMiscCommandExpectingExit(args as unknown as string[]);
-      expect(errors).toContain(`emails ${name}`);
-      expect(errors).toContain("is not available in the self-hosted client");
-      expect(errors).toContain("it runs on the self-hosted server");
-    });
-  }
-});
-
-describe("runSchedulerTick", () => {
-  it("is server-only in the self-hosted client", async () => {
-    await expect(runSchedulerTick()).rejects.toThrow(
-      "emails schedule run is not available in the self-hosted client; it runs on the self-hosted server.",
-    );
   });
 });

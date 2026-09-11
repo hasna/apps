@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -32,6 +32,10 @@ import {
   validateSdkPackageMetadata,
   type PackageJson,
 } from "./public-release-gate";
+
+// Spawns the package build, npm pack and an isolated install; bun's 5s default
+// is far too tight for those on any host.
+setDefaultTimeout(60_000);
 
 const releaseArtifactTest = process.env.HASNA_TODOS_RELEASE_ARTIFACT_TEST === "1" ? test : test.skip;
 
@@ -70,9 +74,9 @@ const rootPackage: PackageJson = {
   files: ["dist", "LICENSE", "README.md"],
   workspaces: ["ai"],
   publishConfig: { registry: "https://registry.npmjs.org", access: "public" },
-  repository: { type: "git", url: "https://github.com/hasna/todos.git" },
-  homepage: "https://github.com/hasna/todos",
-  bugs: { url: "https://github.com/hasna/todos/issues" },
+  repository: { type: "git", url: "https://github.com/hasna/apps.git" },
+  homepage: "https://github.com/hasna/apps",
+  bugs: { url: "https://github.com/hasna/apps/issues" },
   dependencies: { chalk: "^5.4.1" },
   packageManager: "bun@1.3.14",
   scripts: {
@@ -83,17 +87,83 @@ const rootPackage: PackageJson = {
 };
 
 describe("public release gate", () => {
+  test("accepts the real shipped manifest, not just the fixture", () => {
+    // The fixture above never carried the docs this release ships, so the gate
+    // could reject the real package.json while this file stayed green (0.16.0
+    // round 3: `bun run verify:release` failed on six package-files-extra
+    // entries). Validate the manifest that would actually be published, so a
+    // files[] addition that the allowlist does not know about fails here too.
+    const shipped = JSON.parse(
+      readFileSync(resolve(import.meta.dir, "../../package.json"), "utf8"),
+    ) as PackageJson;
+
+    expect(shipped.files).toEqual([
+      "dist",
+      "postinstall.js",
+      "LICENSE",
+      "README.md",
+      "CHANGELOG.md",
+      "docs/PLAN_API.md",
+      "docs/TASK_LIST_API.md",
+      "docs/TEMPLATE_API.md",
+      "docs/TASK_QUERY_API.md",
+      "docs/native-storage.md",
+    ]);
+    expect(validateRootPackageMetadata(shipped)).toEqual([]);
+  });
+
+  test("rejects a files[] entry the allowlist has not reviewed", () => {
+    const failures = validateRootPackageMetadata({
+      ...rootPackage,
+      files: [...(rootPackage.files ?? []), "docs/INTERNAL_NOTES.md"],
+    });
+
+    expect(failures.map((failure) => failure.check)).toContain("package-files-extra");
+  });
+
+  test("the README's account of what the tarball ships matches files[]", () => {
+    // Regression (0.16.0 round 3): package.json started packing CHANGELOG.md
+    // and docs/, and the CHANGELOG said so, but the README still told readers
+    // "the npm tarball ships this README and `dist/` only". A shipped document
+    // that misdescribes the shipped artifact is a doc-vs-behaviour break, so
+    // pin the two together.
+    const readme = readFileSync(resolve(import.meta.dir, "../../README.md"), "utf8").replace(/\s+/g, " ");
+    const shipped = JSON.parse(
+      readFileSync(resolve(import.meta.dir, "../../package.json"), "utf8"),
+    ) as PackageJson;
+
+    expect(readme).not.toContain("ships this README and `dist/` only");
+    expect(readme).toContain("`CHANGELOG.md`");
+    for (const entry of (shipped.files ?? []).filter((file) => file.startsWith("docs/"))) {
+      expect(readme).toContain(`\`${entry.slice("docs/".length)}\``);
+    }
+  });
+
   test("accepts the expected public package metadata", () => {
     expect(validateRootPackageMetadata(rootPackage)).toEqual([]);
     expect(
       validateSdkPackageMetadata({
         name: "@hasna/todos-sdk",
         publishConfig: { access: "public" },
-        repository: { type: "git", url: "https://github.com/hasna/todos.git", directory: "sdk" },
-        homepage: "https://github.com/hasna/todos",
-        bugs: { url: "https://github.com/hasna/todos/issues" },
+        repository: { type: "git", url: "https://github.com/hasna/apps.git", directory: "apps/todos/sdk" },
+        homepage: "https://github.com/hasna/apps",
+        bugs: { url: "https://github.com/hasna/apps/issues" },
       }),
     ).toEqual([]);
+  });
+
+  test("rejects repository metadata outside the publishing repository", () => {
+    const wrongRepository = { type: "git", url: "https://github.com/hasna/other.git" };
+    expect(validateRootPackageMetadata({
+      ...rootPackage, repository: wrongRepository,
+    }).map((failure) => failure.check)).toContain("repository-url");
+    expect(validateSdkPackageMetadata({
+      name: "@hasna/todos-sdk",
+      publishConfig: { access: "public" },
+      repository: wrongRepository,
+      homepage: rootPackage.homepage,
+      bugs: rootPackage.bugs,
+    }).map((failure) => failure.check)).toContain("sdk-repository-url");
   });
 
   test("rejects private package names, hosted bins, and cloud dependencies", () => {
@@ -382,11 +452,21 @@ describe("public release gate", () => {
       expect(boundaryFailures([{ path, text: ratchetDts }])).toEqual([]);
     }
 
-    // The admitted-local redaction assignment shape (src/cli/stage-a.ts emit) passes only
-    // in the module that bundles it, and only in that exact shape.
+    // The admitted-local redaction DELETE statement (src/cli/stage-a.ts emit) passes only
+    // in the module that bundles it, and only in that exact shape. The gate strips the
+    // emitted delete and re-tests what remains (release-review P1, 0d22a7aa2 — the gate
+    // used to strip only the retired blanking assignment shape while stage-a deleted).
     expect(
-      boundaryFailures([{ path: "package/dist/cli/index.js", text: 'env.TODOS_API_URL = "";' }]),
+      boundaryFailures([{ path: "package/dist/cli/index.js", text: 'delete env.TODOS_API_URL;' }]),
     ).toEqual([]);
+
+    // The retired blanking assignment is NOT exempt any more: stage-a deletes the alias
+    // (never blanks — declared-but-blank is refused loudly downstream), so a blanking
+    // emission means the source drifted from the gate and must fail.
+    const blankingDrift = boundaryFailures([
+      { path: "package/dist/cli/index.js", text: 'env.TODOS_API_URL = "";' },
+    ]);
+    expect(blankingDrift.map((failure) => failure.check)).toContain("public-text-boundary");
 
     // The runbook retirement sentence passes as a docs surface.
     expect(
@@ -485,7 +565,7 @@ describe("public release gate", () => {
     expect(validateReleaseProvenanceMetadata({
       packageName: "@hasna/todos",
       packageVersion: "0.11.41",
-      repository: "https://github.com/hasna/todos.git",
+      repository: "https://github.com/hasna/apps.git",
       gitCommit: "0123456789abcdef0123456789abcdef01234567",
       gitTree: "89abcdef0123456789abcdef0123456789abcdef",
       sourceTreeSha256: "a".repeat(64),
@@ -726,7 +806,7 @@ describe("public release gate", () => {
     const provenance = {
       packageName: "@hasna/todos",
       packageVersion: rootPackage.version,
-      repository: "https://github.com/hasna/todos.git",
+      repository: "https://github.com/hasna/apps.git",
       gitCommit: "0".repeat(40),
       gitTree: "1".repeat(40),
       sourceTreeSha256: "2".repeat(64),

@@ -8,6 +8,7 @@ let package = Package(
         .macOS(.v26)
     ],
     products: [
+        .library(name: "RecordingsLib", targets: ["RecordingsLib"]),
         .executable(name: "App", targets: ["App"]),
         .library(name: "RecordingsUpdateProtocol", targets: ["RecordingsUpdateProtocol"]),
         .executable(name: "recordings-update-broker", targets: ["RecordingsUpdateBroker"]),

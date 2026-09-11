@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { getDatabasePath } from "./config.js";
+import { getDatabasePath, type ConfigEnv } from "./config.js";
 
 export function now(): string {
   return new Date().toISOString();
@@ -82,8 +82,8 @@ export class ShortlinksDatabase {
   readonly db: Database;
   readonly path: string;
 
-  constructor(path?: string) {
-    this.path = getDatabasePath(path);
+  constructor(path?: string, env: ConfigEnv = process.env) {
+    this.path = getDatabasePath(path, env);
     mkdirSync(dirname(this.path), { recursive: true });
     this.db = new Database(this.path);
     this.db.exec("PRAGMA foreign_keys = ON;");

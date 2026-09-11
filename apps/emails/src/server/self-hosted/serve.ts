@@ -1,8 +1,12 @@
+import {buildManagedSenderResolver} from "./managed-provider-sender.js";
+import {ManagedProviderSecrets} from "./managed-provider-secrets.js";
+import {buildProviderRootKms,unconfiguredProviderRootKms} from "./provider-root-kms.js";
 // Bootstraps and runs the Emails self-hosted service (Bun.serve).
 //
 // Wires the product-owned Postgres pool, the API-key verifier
 // (@hasna/contracts/auth), the migration set, and the request handler together.
 
+import { readTrackingConfig } from "./tracking.js";
 import { ApiKeyStore, type ApiKeyVerifier } from "@hasna/contracts/auth";
 import { assertServingRoleCannotBypassRls } from "./rls-guard.js";
 import { getSelfHostedPool, requireSigningSecret, SELF_HOSTED_APP, SELF_HOSTED_APP_ALIASES } from "./env.js";
@@ -10,7 +14,7 @@ import { formatApiAuthAuditLine, verifyApiKeyWithAliases } from "./api-key-verif
 import { emailsSelfHostedMigrations } from "./migrations.js";
 import { EmailsSelfHostedStore } from "./store.js";
 import { handleSelfHostedRequest, type SelfHostedServiceDeps } from "./service.js";
-import { buildSelfHostedSender } from "./sender.js";
+import { buildSelfHostedSender, buildSenderResolver } from "./sender.js";
 import { AuthStore } from "./auth/store.js";
 import { RateLimiter } from "./auth/rate-limit.js";
 import { buildAuthMailerConfig } from "./auth/mailer.js";
@@ -63,6 +67,9 @@ export function buildSelfHostedService(version: string): SelfHostedServiceDeps {
     `[emails-self-hosted] idp auth ${idpAuthenticator ? `jwks=${new URL(idpAuthenticator.jwksUrl).host}` : "disabled (no JWKS configured; idp tokens refused)"}`,
   );
   const sender = buildSelfHostedSender();
+  const providerRootKms = buildProviderRootKms() ?? unconfiguredProviderRootKms;
+  const managedProviderSecrets = (tenant: string) => new ManagedProviderSecrets(client,tenant,providerRootKms);
+  const externalSender = buildSenderResolver(sender);
   // Secret-free boot line: WHICH identity outbound mail is signed with. Without
   // it, "the SES credentials are configured" was unverifiable from the running
   // service — the 2026-07-25 sends went out under the deployment role while an
@@ -75,6 +82,10 @@ export function buildSelfHostedService(version: string): SelfHostedServiceDeps {
     store: new EmailsSelfHostedStore(client),
     verifier,
     sender,
+    resolveSender: buildManagedSenderResolver(externalSender,managedProviderSecrets),
+    managedProviderSecrets,
+    resolveExternalSender: externalSender,
+    tracking: readTrackingConfig(),
     migrations: emailsSelfHostedMigrations(),
     version,
     // ---- multi-tenancy + auth (WI-2) ----

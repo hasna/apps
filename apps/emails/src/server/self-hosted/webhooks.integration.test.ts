@@ -11,8 +11,8 @@
 // tenant-scoped store `/v1` serves. A 200 from the handler proves nothing here.
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { randomUUID } from "node:crypto";
-import { verifyApiKey } from "@hasna/contracts/auth";
+import { createHash, randomUUID } from "node:crypto";
+import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { createPgPool, createQueryClient, MigrationLedger, type PoolQueryClient } from "../../storage-kit/index.js";
 import { emailsSelfHostedMigrations } from "./migrations.js";
 import { EmailsSelfHostedStore } from "./store.js";
@@ -575,5 +575,191 @@ describe.skipIf(!pgClient)("cross-tenant isolation of the receivers", () => {
     expect(await deps.store.forTenant(tenantB).getMessage(String(body["id"]))).toBeNull();
     expect(await count("messages", tenantB)).toBe(0);
     expect(await count("webhook_receipts", tenantB)).toBe(0);
+  });
+});
+
+describe.skipIf(!pgClient)("authenticated relay persistence", () => {
+  it("concurrent inbound receipts preserve the first message, edits and deletion", async () => {
+    const tenant = await makeRoutedTenant("relay-inbound", "relay-inbound.test");
+    const store = new EmailsSelfHostedStore(pgClient!).forTenant(tenant);
+    const provider = await store.createResource(resourceSpecForPath("providers")!, { name: "relay-provider", type: "resend" });
+    const providerId = String(provider.id), namespace = `relay:resend:${providerId}`;
+    const input = { from_addr: "sender@example.net", to_addrs: ["inbox@relay-inbound.test"], provider_id: providerId, source_id: "relay-source", status: "received", direction: "inbound" as const, body_html: "<p>full</p>", attachments: [{ filename: "fixture.txt", size: 3, content_type: "text/plain", content_base64: "YWJj" }] };
+    const replies = await Promise.all(Array.from({ length: 8 }, () => store.createRelayInbound(namespace, "event", input)));
+    expect(new Set(replies.map(reply => reply.id)).size).toBe(1);
+    expect(await count("messages", tenant)).toBe(1); expect(await count("webhook_receipts", tenant)).toBe(1);
+    const id = replies[0]!.id;
+    expect((await store.getMessage(id))!.attachments).toMatchObject([{ content_available: true }]);
+    expect(await pgClient!.one("SELECT attachments->0->>'content_base64' AS content FROM messages WHERE id=$1", [id])).toEqual({ content: "YWJj" });
+    await pgClient!.execute("UPDATE messages SET body_html='User edited' WHERE id=$1", [id]);
+    await store.createRelayInbound(namespace, "event", input);
+    expect((await store.getMessage(id))!.body_html).toBe("User edited");
+    await pgClient!.execute("DELETE FROM messages WHERE id=$1", [id]);
+    expect(await store.createRelayInbound(namespace, "event", input)).toMatchObject({ id });
+    expect(await count("messages", tenant)).toBe(0);
+    await expect(store.createRelayInbound(namespace, "broken", { ...input, received_at: "invalid" })).rejects.toThrow();
+    expect(await store.findRelayReceipt(namespace, "broken")).toBeNull();
+  });
+  it("delivery receipts require the exact tenant/provider message and record once atomically", async () => {
+    const tenant = await makeRoutedTenant("relay-delivery", "relay-delivery.test");
+    const store = new EmailsSelfHostedStore(pgClient!).forTenant(tenant);
+    const provider = await store.createResource(resourceSpecForPath("providers")!, { name: "delivery-provider", type: "resend" });
+    const id = String(provider.id), namespace = `relay:resend:${id}`;
+    const message = await store.createMessage({ from_addr: "sender@relay-delivery.test", to_addrs: ["recipient@example.com"], direction: "outbound", provider_id: id, provider_message_id: "upstream", status: "sent", send_state: "sent" });
+    const event = { email_id: null, type: "delivered", recipient: "recipient@example.com", metadata: {}, occurred_at: new Date().toISOString() };
+    await expect(store.createRelayDelivery(namespace, "event", "foreign-provider", "upstream", event)).rejects.toThrow("selected tenant/provider");
+    const replies = await Promise.all(Array.from({ length: 8 }, () => store.createRelayDelivery(namespace, "event", id, "upstream", event)));
+    expect(new Set(replies.map(reply => reply.id)).size).toBe(1); expect(await count("events", tenant)).toBe(1); expect(await count("webhook_receipts", tenant)).toBe(1);
+    const row = await pgClient!.one("SELECT email_id,provider_id FROM events WHERE id=$1", [replies[0]!.id]); expect(row).toEqual({ email_id: message.id, provider_id: id });
+  });
+});
+
+async function relayRequest(tenant: string, provider: string, kind: "ses" | "resend", body: unknown, id = randomUUID()): Promise<Request> {
+  const minted = mintApiKey({ app: "emails", scopes: ["emails:*"], signingSecret: SIGNING_SECRET });
+  await pgClient!.execute("INSERT INTO api_key_tenants(kid,tenant_id) VALUES($1,$2)", [minted.kid, tenant]);
+  const signed = kind === "resend" ? await resendPost(body, { id }) : snsPost(body);
+  return new Request(`http://svc/v1/webhooks/relay/${kind}?provider_id=${provider}`, {
+    method: "POST", headers: { "x-api-key": minted.token, "content-type": "application/json" },
+    body: JSON.stringify({ raw_body_base64: Buffer.from(await signed.arrayBuffer()).toString("base64"), signature_headers: Object.fromEntries(signed.headers) }),
+  });
+}
+
+describe.skipIf(!pgClient)("relay authorization and atomic lifecycle regressions", () => {
+  it("the actual signed handler accepts send-only outcomes once without any inbound domain route", async () => {
+    for (const kind of ["resend", "ses"] as const) {
+      const domain = `relay-send-only-${kind}.test`, tenant = await makeRoutedTenant(`relay-send-only-${kind}`, domain);
+      await pgClient!.execute("DELETE FROM inbound_domain_routes WHERE tenant_id=$1", [tenant]);
+      const { deps } = makeDeps(); const store = deps.store.forTenant(tenant);
+      const provider = String((await store.createResource(resourceSpecForPath("providers")!, { name: "send-only", type: kind })).id);
+      const message = await store.createMessage({ direction: "outbound", from_addr: `sender@${domain}`, to_addrs: ["recipient@example.net"], provider_id: provider, provider_message_id: "outbound-only", status: "sent", send_state: "sent" });
+      deps.env = { ...deps.env, FIXTURE_RELAY_SECRET: RESEND_SECRET, FIXTURE_RECEIVING_KEY: "fixture-only", EMAILS_WEBHOOK_BINDINGS: JSON.stringify([{ tenant_id: tenant, provider_id: provider, type: kind, ...(kind === "resend" ? { secret_env: "FIXTURE_RELAY_SECRET", api_key_env: "FIXTURE_RECEIVING_KEY" } : { topic_arn: TOPIC_ARN }) }]) };
+      deps.webhookRelay = { verifySns: alwaysVerified, fetch: async () => { throw new Error("Delivery must not fetch Receiving content"); } };
+      const body = kind === "resend" ? { type: "email.delivered", data: { email_id: "outbound-only", from: `sender@${domain}`, to: ["recipient@example.net"] } }
+        : snsEnvelope({ Type: "Notification", Message: JSON.stringify({ notificationType: "Delivery", mail: { messageId: "outbound-only", source: `sender@${domain}` }, delivery: { recipients: ["recipient@example.net"], timestamp: new Date().toISOString() } }) });
+      const eventId = randomUUID();
+      for (let i = 0; i < 2; i++) {
+        const result = await handleSelfHostedRequest(deps, await relayRequest(tenant, provider, kind, body, eventId));
+        expect(result!.status).toBe(200); expect(await json(result)).toMatchObject({ completed: true });
+      }
+      expect(await count("events", tenant)).toBe(1); expect(await count("webhook_receipts", tenant)).toBe(1);
+      expect(await pgClient!.one("SELECT email_id FROM events WHERE tenant_id=$1", [tenant])).toEqual({ email_id: message.id });
+      // An already recorded event still needs a currently owned outbound identity.
+      await pgClient!.execute("UPDATE messages SET provider_message_id='other' WHERE id=$1", [message.id]);
+      expect((await handleSelfHostedRequest(deps, await relayRequest(tenant, provider, kind, body, eventId)))!.status).toBe(403);
+      expect(await count("events", tenant)).toBe(1);
+    }
+  });
+  it("SES persistence accepts a sending-disabled provider but fences route, tenant and receive lifecycle changes", async () => {
+    for (const mutation of ["none", "route", "tenant", "source-status", "source-type", "source-provider", "provider-type"] as const) {
+      const domain = `relay-fence-${mutation}.test`, tenant = await makeRoutedTenant(`relay-fence-${mutation}`, domain);
+      const foreign = await makeRoutedTenant(`relay-foreign-${mutation}`, `foreign-${mutation}.test`);
+      const { deps } = makeDeps(); const store = deps.store.forTenant(tenant);
+      const provider = String((await store.createResource(resourceSpecForPath("providers")!, { name: "SES receive", type: "ses", active: false })).id);
+      const source = String((await store.createResource(resourceSpecForPath("sources")!, { name: "bound", mailbox_id: "inbox", type: "s3", status: "active", provider_id: provider })).id);
+      await store.createDomain({ domain });
+      deps.env = { ...deps.env, EMAILS_WEBHOOK_BINDINGS: JSON.stringify([{ tenant_id: tenant, provider_id: provider, type: "ses", topic_arn: TOPIC_ARN, source_id: source }]), EMAILS_INGEST_BINDINGS: JSON.stringify([{ tenant_id: tenant, source_id: source, provider_id: provider, domain, bucket: BUCKET, prefix: PREFIX, region: "us-east-1", topic_arn: TOPIC_ARN }]) };
+      let fetched = 0;
+      deps.webhookRelay = { verifySns: alwaysVerified, fetchObject: async () => {
+        fetched++;
+        if (mutation === "route") await pgClient!.execute("UPDATE inbound_domain_routes SET tenant_id=$1 WHERE domain=$2", [foreign, domain]);
+        if (mutation === "tenant") await pgClient!.execute("UPDATE tenants SET status='suspended' WHERE id=$1", [tenant]);
+        if (mutation === "source-status") await pgClient!.execute("UPDATE mailbox_sources SET status='retired' WHERE id=$1", [source]);
+        if (mutation === "source-type") await pgClient!.execute("UPDATE mailbox_sources SET type='imap' WHERE id=$1", [source]);
+        if (mutation === "source-provider") await pgClient!.execute("UPDATE mailbox_sources SET provider_id='changed' WHERE id=$1", [source]);
+        if (mutation === "provider-type") await pgClient!.execute("UPDATE self_hosted_providers SET type='resend' WHERE id=$1", [provider]);
+        return Buffer.from(rawEmail("must not persist"));
+      } };
+      const body = snsEnvelope({ Type: "Notification", Message: JSON.stringify({ notificationType: "Received", mail: { messageId: `upstream-${mutation}`, destination: [`inbox@${domain}`] }, receipt: { recipients: [`inbox@${domain}`], action: { type: "S3", bucketName: BUCKET, objectKey: `${PREFIX}${mutation}` } } }) });
+      const response = await handleSelfHostedRequest(deps, await relayRequest(tenant, provider, "ses", body));
+      expect(fetched).toBe(1);
+      if (mutation === "none") { expect(response!.status).toBe(200); expect(await json(response)).toMatchObject({ completed: true }); }
+      else expect(response!.status).toBeGreaterThanOrEqual(400);
+      const expected = mutation === "none" ? 1 : 0;
+      expect(await count("messages", tenant)).toBe(expected); expect(await count("inbound_message_sources", tenant)).toBe(expected); expect(await count("webhook_receipts", tenant)).toBe(expected);
+    }
+  });
+  it("Resend provider type changes during raw content fetch are fenced before persistence", async () => {
+    const domain = "relay-resend-fence.test", tenant = await makeRoutedTenant("relay-resend-fence", domain);
+    const { deps } = makeDeps(); const store = deps.store.forTenant(tenant);
+    const provider = String((await store.createResource(resourceSpecForPath("providers")!, { name: "receive", type: "resend" })).id);
+    deps.env = { ...deps.env, FIXTURE_RELAY_SECRET: RESEND_SECRET, FIXTURE_RECEIVING_KEY: "fixture-only", EMAILS_WEBHOOK_BINDINGS: JSON.stringify([{ tenant_id: tenant, provider_id: provider, type: "resend", secret_env: "FIXTURE_RELAY_SECRET", api_key_env: "FIXTURE_RECEIVING_KEY" }]) };
+    deps.webhookRelay = { fetch: async (url: any) => {
+      if (String(url).startsWith("https://api.resend.com/")) return Response.json({ id: "inbound", raw: { download_url: "https://cdn.resend.com/raw" } });
+      await pgClient!.execute("UPDATE self_hosted_providers SET type='ses' WHERE id=$1", [provider]);
+      return new Response(rawEmail("must not persist"));
+    } };
+    const body = { type: "email.received", data: { email_id: "inbound", from: "sender@example.net", to: [`inbox@${domain}`] } };
+    const response = await handleSelfHostedRequest(deps, await relayRequest(tenant, provider, "resend", body));
+    expect(response!.status).toBeGreaterThanOrEqual(400);
+    expect(await count("messages", tenant)).toBe(0); expect(await count("webhook_receipts", tenant)).toBe(0);
+  });
+});
+
+async function ingestFenceFixture(operation: "sync-s3" | "watch", mutation: string, options: { force?: boolean; existing?: "legacy" | "provenanced" } = {}) {
+  const suffix = randomUUID(), domain = `ingest-${suffix}.test`, tenant = await makeRoutedTenant(`ingest-${suffix}`, domain);
+  const foreign = await makeRoutedTenant(`foreign-${suffix}`, `foreign-${suffix}.test`);
+  const { deps } = makeDeps(); const store = deps.store.forTenant(tenant);
+  const provider = String((await store.createResource(resourceSpecForPath("providers")!, { name: "receive", type: "ses", active: false })).id);
+  const source = String((await store.createResource(resourceSpecForPath("sources")!, { name: "source", mailbox_id: "inbox", type: "s3", status: options.force ? "retired" : "active", provider_id: provider })).id);
+  const key = `${PREFIX}${suffix}`, raw = Buffer.from(rawEmail("preserved"));
+  if (options.existing) {
+    const input = { from_addr: "sender@example.net", to_addrs: [`catchall@${domain}`], source_id: key, direction: "inbound" as const, status: "received", body_text: "User edited", provider_id: provider };
+    if (options.existing === "legacy") await store.createMessage(input);
+    else await store.createInboundMessageWithProvenance(input, { bucket: BUCKET, objectKey: key, rawSha256: createHash("sha256").update(raw).digest("hex"), establishedVia: "normal_ingest" });
+  }
+  deps.env = { ...deps.env, EMAILS_INGEST_BINDINGS: JSON.stringify([{ tenant_id: tenant, source_id: source, provider_id: provider, domain, bucket: BUCKET, prefix: PREFIX, region: "us-east-1", queue_url: "https://sqs.us-east-1.amazonaws.com/123456789012/fixture" }]) };
+  let fetched = 0, acknowledged = 0;
+  deps.ingestCloud = () => ({
+    list: async () => ({ keys: [key] }),
+    receive: async () => [{ receipt: "receipt", body: JSON.stringify({ Records: [{ s3: { bucket: { name: BUCKET }, object: { key } } }] }) }],
+    fetch: async () => {
+      fetched++;
+      if (mutation === "route") await pgClient!.execute("UPDATE inbound_domain_routes SET tenant_id=$1 WHERE domain=$2", [foreign, domain]);
+      if (mutation === "tenant") await pgClient!.execute("UPDATE tenants SET status='suspended' WHERE id=$1", [tenant]);
+      if (mutation === "source-status") await pgClient!.execute("UPDATE mailbox_sources SET status='paused' WHERE id=$1", [source]);
+      if (mutation === "source-type") await pgClient!.execute("UPDATE mailbox_sources SET type='imap' WHERE id=$1", [source]);
+      if (mutation === "source-provider") await pgClient!.execute("UPDATE mailbox_sources SET provider_id=NULL WHERE id=$1", [source]);
+      if (mutation === "provider-type") await pgClient!.execute("UPDATE self_hosted_providers SET type='resend' WHERE id=$1", [provider]);
+      if (mutation === "watch-disabled") await pgClient!.execute(`UPDATE mailbox_sources SET settings_json='{"live_sync_enabled":false}'::jsonb WHERE id=$1`, [source]);
+      return raw;
+    },
+    acknowledge: async () => { acknowledged++; },
+    queueState: async () => ({ visible: 0, in_flight: 1 }), close: () => {},
+  });
+  const minted = mintApiKey({ app: "emails", scopes: ["emails:*"], signingSecret: SIGNING_SECRET });
+  await pgClient!.execute("INSERT INTO api_key_tenants(kid,tenant_id) VALUES($1,$2)", [minted.kid, tenant]);
+  const response = await handleSelfHostedRequest(deps, new Request(`http://svc/v1/inbox/${operation}`, { method: "POST", headers: { "x-api-key": minted.token, "content-type": "application/json" }, body: JSON.stringify({ source_id: source, force: options.force ?? false }) }));
+  expect(response!.status).toBe(200); expect(fetched).toBe(1);
+  return { tenant, acknowledged, result: await json(response) };
+}
+
+describe.skipIf(!pgClient)("authenticated S3/watch persistence fences", () => {
+  it("actual sync-s3 and watch handlers reject fetch-time routing and lifecycle changes without persistence or ACK", async () => {
+    for (const operation of ["sync-s3", "watch"] as const) for (const mutation of ["none", "route", "tenant", "source-status", "source-type", "source-provider", "provider-type", ...(operation === "watch" ? ["watch-disabled"] : [])]) {
+      const f = await ingestFenceFixture(operation, mutation);
+      const accepted = mutation === "none";
+      expect(f.result.ok).toBe(accepted);
+      expect(await count("messages", f.tenant)).toBe(accepted ? 1 : 0);
+      expect(await count("inbound_message_sources", f.tenant)).toBe(accepted ? 1 : 0);
+      expect(f.acknowledged).toBe(accepted && operation === "watch" ? 1 : 0);
+    }
+  });
+  it("force authorizes the original inactive source snapshot but never a subsequent lifecycle change", async () => {
+    for (const operation of ["sync-s3", "watch"] as const) for (const mutation of ["none", "source-status", "route"]) {
+      const f = await ingestFenceFixture(operation, mutation, { force: true });
+      const accepted = mutation === "none";
+      expect(f.result.ok).toBe(accepted); expect(await count("messages", f.tenant)).toBe(accepted ? 1 : 0);
+      expect(f.acknowledged).toBe(accepted && operation === "watch" ? 1 : 0);
+    }
+  });
+  it("legacy provenance backfill and completed duplicates revalidate current routing without rewriting user mail", async () => {
+    for (const existing of ["legacy", "provenanced"] as const) for (const mutation of ["none", "route", "watch-disabled"]) {
+      const f = await ingestFenceFixture("watch", mutation, { existing });
+      const accepted = mutation === "none";
+      expect(f.result.ok).toBe(accepted); expect(f.acknowledged).toBe(accepted ? 1 : 0);
+      expect(await count("messages", f.tenant)).toBe(1);
+      expect(await count("inbound_message_sources", f.tenant)).toBe(existing === "provenanced" || accepted ? 1 : 0);
+      expect(await pgClient!.one("SELECT body_text FROM messages WHERE tenant_id=$1", [f.tenant])).toEqual({ body_text: "User edited" });
+    }
   });
 });

@@ -1,7 +1,6 @@
+import {assertPlanApiEnvironment} from "../../lib/plan-client-boundary.js";
 import type { Command } from "commander";
 import chalk from "chalk";
-import { getDatabase } from "../../db/database.js";
-import { createLocalPrGroupLedger } from "../../pr-groups/index.js";
 import { cloudGetPrGroup, cloudPrGroupEvents, getTodosCloudClient } from "../cloud-router.js";
 import { handleError, output } from "../helpers.js";
 
@@ -32,10 +31,9 @@ export function registerPrGroupCommands(program: Command): void {
     .option("-j, --json", "Output as JSON")
     .action(async (groupId: string, opts: { json?: boolean }) => {
       try {
-        const remote = getTodosCloudClient();
-        const view = remote
-          ? await cloudGetPrGroup(remote, groupId)
-          : await createLocalPrGroupLedger(getDatabase()).get(groupId);
+        assertPlanApiEnvironment();
+        const remote = getTodosCloudClient();if(!remote)throw new Error("Plan views require the authenticated shared API");
+        const view = await cloudGetPrGroup(remote, groupId);
         if (opts.json || globalOptions(program)["json"]) {
           output(view, true);
           return;
@@ -59,10 +57,9 @@ export function registerPrGroupCommands(program: Command): void {
           limit: parseInteger(opts.limit, "--limit", 1, 500),
           after_sequence: parseInteger(opts.afterSequence, "--after-sequence", 0, Number.MAX_SAFE_INTEGER),
         };
-        const remote = getTodosCloudClient();
-        const history = remote
-          ? await cloudPrGroupEvents(remote, groupId, options)
-          : await createLocalPrGroupLedger(getDatabase()).events(groupId, options);
+        assertPlanApiEnvironment();
+        const remote = getTodosCloudClient();if(!remote)throw new Error("Plan views require the authenticated shared API");
+        const history = await cloudPrGroupEvents(remote, groupId, options);
         if (opts.json || globalOptions(program)["json"]) {
           output(history, true);
           return;

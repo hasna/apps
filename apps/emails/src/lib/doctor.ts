@@ -44,19 +44,9 @@
 //     PRINT the store's identity — which is the use src/store/descriptor.ts declares it
 //     for, "logs and `doctor` output" — and there is no comparison, no `switch` and no
 //     narrowing on it anywhere in this file.
-//  2. It does not validate provider sending credentials. It cannot: the seam REDACTS
-//     credential columns from the generic resource read by contract (see
-//     `REDACTED_COLUMNS` in src/store-sqlite/resources.ts, and the API's resource routes
-//     are summary-only for the same reason). Reporting "credentials invalid" from rows
-//     that never carry credentials would be a fabricated negative, so the check says it
-//     is not observable here and names the command that owns the question.
-//  3. It does not touch the deployment-mode axis module, the dispatch layer, the curl
-//     bridge, or any mode-gated branch in another family. Those are phase 9's, and only
-//     once the ratchet in src/mode-axis-ratchet.test.ts reads zero.
-//
-// The local machine facts — the config file, the AWS sandbox probe, the provisioning
-// credential scan — are NOT store questions and stay where they were. They are facts
-// about this box, and they are the same facts whichever store the box is configured with.
+//  2. Sending credentials remain on the server. Live checks call the tenant-bound
+//     provider health endpoint; redacted registry rows are never treated as proof
+//     of missing credentials. Local provisioning configuration is reported separately.
 
 import { existsSync } from "fs";
 import { join } from "path";
@@ -367,66 +357,16 @@ function capabilitiesCheck(store: EmailStore): DoctorCheck {
   };
 }
 
-/**
- * Provider sending credentials — the one check whose data the seam deliberately withholds.
- *
- * Stated plainly because it is a REDUCTION in what `emails doctor` does: the deleted local
- * arm called `checkAllProviders()` and, with `--live`, made a real API call per provider.
- * That is not reproducible here. The provider rows the seam serves have their credential
- * columns redacted in BOTH stores by design, so this file can neither validate a key nor
- * honestly report one missing — and calling the local provider repository directly instead
- * would read local SQLite rows under a configuration that names an API, which is the exact
- * fabrication the deleted remote arm existed to avoid.
- *
- * So the check is `unknown` and names `emails provider status`, which is one command, in
- * one file, in both configurations (src/cli/commands/provider.ts — no arm, no mode gate,
- * and absent from `SELF_HOSTED_REFUSED_COMMANDS` in src/lib/status-commands.ts), and which
- * DOES perform the live validation. Recommending a command that refuses would be the same
- * defect class as reporting a count nobody measured.
- */
-function providerCredentialsCheck(liveRequested: boolean): DoctorCheck {
-  return {
-    name: "Provider credentials",
-    status: "unknown",
-    message:
-      (liveRequested
-        ? "A live provider credential check was requested and cannot be performed by these diagnostics. "
-        : "Not checked here. ") +
-      "The store seam redacts provider sending credentials from the generic resource read in both " +
-      "stores, so this diagnostic can neither validate a key nor report one as missing without " +
-      "fabricating the answer. Run 'emails provider status' — it validates credentials against each " +
-      "provider's API and works in every configuration.",
-  };
-}
-
-/**
- * SES sandbox / production access.
- *
- * Gated on AWS credentials being present in the environment, because that is what the
- * probe needs and their absence is an observable fact rather than a guess. The failure
- * path is the change worth noting: the deleted arm swallowed it (`catch {}`) and emitted
- * NO check, so "we could not ask AWS" looked identical to "AWS is fine" — an absent check
- * reads as nothing wrong. It is an explicit `unknown` now.
- */
-async function sesSandboxChecks(): Promise<DoctorCheck[]> {
-  if (!process.env["AWS_ACCESS_KEY_ID"] && !process.env["AWS_PROFILE"]) return [];
+/** Sending credential checks run on the server using its tenant provider bindings. */
+async function providerCredentialsCheck(liveRequested: boolean): Promise<DoctorCheck> {
+  if (!liveRequested) return { name: "Provider credentials", status: "unknown", message: "Server provider credentials have not been probed. Run emails doctor --live or emails provider status." };
   try {
-    const { getSandboxStatus, describeSandboxStatus } = await import("./ses-sandbox.js");
-    const status = await getSandboxStatus({ region: process.env["AWS_REGION"] ?? "us-east-1" });
-    return [{
-      name: "SES Sending",
-      status: status.sendingEnabled ? "pass" : "fail",
-      message: describeSandboxStatus(status),
-    }];
-  } catch (error) {
-    return [{
-      name: "SES Sending",
-      status: "unknown",
-      message:
-        "AWS credentials are present in the environment but the SES account-status probe could not be " +
-        `performed: ${detailOf(error)}`,
-    }];
-  }
+    const { listServerProviderHealth, formatServerProviderHealth } = await import("./provider-server-health.js");
+    const results = await listServerProviderHealth(true);
+    const failed = results.some((item) => ["unhealthy", "misconfigured", "restricted"].includes(item.status));
+    const unknown = results.length === 0 || results.some((item) => !item.checked);
+    return { name: "Provider credentials", status: failed ? "fail" : unknown ? "unknown" : "pass", message: results.length ? results.map(formatServerProviderHealth).join("\n") : "No server providers are configured." };
+  } catch (error) { return { name: "Provider credentials", status: "unknown", message: error instanceof Error ? error.message : "Server provider health could not be checked." }; }
 }
 
 /**
@@ -679,16 +619,16 @@ export async function runDiagnostics(
       readinessCheck(),
       ...storelessChecks(failure),
       configCheck(),
-      providerCredentialsCheck(opts.liveProviderChecks === true),
-      ...(await sesSandboxChecks()),
+      await providerCredentialsCheck(opts.liveProviderChecks === true),
+
       ...(await provisioningChecks()),
     ];
   }
 
   const checks = await storeChecks(store);
   checks.push(configCheck());
-  checks.push(providerCredentialsCheck(opts.liveProviderChecks === true));
-  checks.push(...(await sesSandboxChecks()));
+  checks.push(await providerCredentialsCheck(opts.liveProviderChecks === true));
+
   checks.push(...(await provisioningChecks()));
   return checks;
 }

@@ -75,6 +75,7 @@ describe("central outbound policy", () => {
       owner_id: null, administrator_id: null, provisioning_status: "ready", domain: "example.com",
       domain_status: "active", domain_verified: true, domain_provisioning_status: "ready",
     } satisfies PolicyAddress;
+    expect((await policyStore({ address: { ...base, domain_status: "outbound_disabled" } }).evaluateOutboundPolicy({ from: base.email, recipients: [], allowTenantWideSend: true }))).toMatchObject({ allowed: false, code: "sender_not_ready", status: 403 });
     expect((await policyStore({ address: { ...base, status: "suspended" } }).evaluateOutboundPolicy({ from: base.email, recipients: [] }))).toMatchObject({ code: "sender_inactive" });
     expect((await policyStore({ address: { ...base, verified: false } }).evaluateOutboundPolicy({ from: base.email, recipients: [] }))).toMatchObject({ code: "sender_unverified" });
     expect((await policyStore({ address: {

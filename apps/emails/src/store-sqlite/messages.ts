@@ -11,8 +11,10 @@
 import type { SQLQueryBindings } from "bun:sqlite";
 import type { Database } from "../db/database.js";
 import { sqlEmailAddress } from "../db/email-address-sql.js";
+import { applyEnabledMailboxFiltersToNewMessage } from "../db/mailbox-filter-runtime.local.js";
 import { cappedLimit, safeOffset } from "../db/pagination.js";
 import { now, uuid } from "../db/runtime.js";
+import type { MailboxFilterActions } from "../lib/mailbox-filters.js";
 import type { StoreCapabilities } from "../store/capabilities.js";
 import type {
   AttachmentInventoryItem,
@@ -121,6 +123,7 @@ interface MessageQuery {
 function messageFilters(opts: ListMessagesOptions | undefined): MessageQuery {
   const conditions: string[] = [];
   const params: SQLQueryBindings[] = [];
+  if (opts?.provider_id) { conditions.push("m.provider_id = ?"); params.push(opts.provider_id); }
   if (opts?.direction) conditions.push(DIRECTION_PREDICATES[opts.direction]);
   // A folder the record type does not name would otherwise be a TypeError rather
   // than an answer; a JS caller reaches this even though TypeScript cannot.
@@ -206,6 +209,7 @@ function insertValues(input: MessageInput, timestamp: string): Record<string, SQ
     text_body: input.body_text ?? null,
     html_body: input.body_html ?? null,
     status: input.status ?? null,
+    provider_id: input.provider_id ?? null,
     provider_message_id: input.provider_message_id ?? null,
     message_id: input.message_id ?? null,
     label_ids_json: JSON.stringify(labels.filter((label) => !isFolderLabel(label))),
@@ -249,6 +253,7 @@ function updateValues(input: MessageInput, timestamp: string): Record<string, SQ
   if (input.body_text !== undefined) put("text_body", input.body_text);
   if (input.body_html !== undefined) put("html_body", input.body_html);
   if (input.status !== undefined) put("status", input.status);
+  if (input.provider_id !== undefined) put("provider_id", input.provider_id);
   if (input.provider_message_id !== undefined) put("provider_message_id", input.provider_message_id);
   if (input.message_id !== undefined) put("message_id", input.message_id);
   if (input.headers !== undefined || input.in_reply_to !== undefined) put("headers_json", headersFor(input));
@@ -280,6 +285,14 @@ function insertUnifiedMessage(db: Database, input: MessageInput): string {
      VALUES (?, ?, 0, '[]', ${columns.map(() => "?").join(", ")})`,
     [id, timestamp, ...columns.map((column) => values[column] as SQLQueryBindings)],
   );
+  // Automatic mailbox-filter ACTIONS run on NEW rows only (FR-0001): the caller
+  // (createMessage / the inserted branch of upsertMessage) already holds an
+  // immediate write lock, and the writer joins that transaction so a filter
+  // write failure rolls the insert back. Existing-row updates never re-run them.
+  applyEnabledMailboxFiltersToNewMessage(db, id, {
+    apply: (messageId: string, actions: MailboxFilterActions): boolean =>
+      applyFilterActionsToUnified(db, messageId, actions),
+  });
   return id;
 }
 
@@ -350,13 +363,15 @@ function applyStatusPatch(db: Database, row: MessageRow, patch: MessageStatusPat
     patch.is_read !== undefined ||
     patch.is_starred !== undefined ||
     patch.archived !== undefined ||
+    patch.is_spam !== undefined ||
+    patch.is_trash !== undefined ||
     patch.add_label !== undefined ||
     patch.remove_label !== undefined;
 
   if (table === LEDGER_TABLE) {
     if (touchesFlags) {
       return invalidInput(
-        `message ${id} is a row of the legacy sent ledger, which stores no read, star, archive or label state; ` +
+        `message ${id} is a row of the legacy sent ledger, which stores no read, star, archive, spam, trash or label state; ` +
           "this store will not pretend the write landed",
       );
     }
@@ -372,6 +387,11 @@ function applyStatusPatch(db: Database, row: MessageRow, patch: MessageStatusPat
   }
   if (patch.is_starred !== undefined) set("is_starred", patch.is_starred ? 1 : 0);
   if (patch.archived !== undefined) set("is_archived", patch.archived ? 1 : 0);
+  // Explicit folder moves, parallel to `archived` above: these are the unambiguous
+  // spelling of a quarantine (spam) or delete-to-trash action. They write the same
+  // boolean columns an `add_label: "spam"` / `add_label: "trash"` folder move would.
+  if (patch.is_spam !== undefined) set("is_spam", patch.is_spam ? 1 : 0);
+  if (patch.is_trash !== undefined) set("is_trash", patch.is_trash ? 1 : 0);
 
   // Labels are edited ONE AT A TIME, never by replacing the caller's whole array,
   // because a whole-array write loses a concurrent label change instead of merging
@@ -406,6 +426,57 @@ function applyStatusPatch(db: Database, row: MessageRow, patch: MessageStatusPat
   set("updated_at", now());
   db.run(`UPDATE ${UNIFIED_TABLE} SET ${sets.join(", ")} WHERE id = ?`, [...params, id]);
   return ok(null);
+}
+
+function unifiedFlagValue(value: unknown): boolean {
+  return value === 1 || value === true;
+}
+
+/**
+ * Store-seam action writer for mailbox-filter ACTIONS (FR-0001). Re-applies only
+ * unsatisfied actions, re-reading the row before EACH write so multiple label
+ * adds cannot clobber one another (the blob is a full-column replacement).
+ * Legacy sent-ledger rows are skipped — `applyStatusPatch` refuses label/flag
+ * writes there and no filter action could ever change one. A refusal elsewhere
+ * is thrown so the enclosing insertion transaction rolls back.
+ */
+function applyFilterActionsToUnified(db: Database, messageId: string, actions: MailboxFilterActions): boolean {
+  const row = selectRow(db, messageId);
+  if (!row) return false;
+  if (rowTable(row) === LEDGER_TABLE) return false;
+  const isRead = unifiedFlagValue(row["is_read"]);
+  const isArchived = unifiedFlagValue(row["is_archived"]);
+  const isSpam = unifiedFlagValue(row["is_spam"]);
+  const isTrash = unifiedFlagValue(row["is_trash"]);
+  const storedLabels = new Set<string>();
+  for (const label of JSON.parse(textValue(row["labels_json"]) || "[]") as unknown[]) {
+    storedLabels.add(normalizeLabel(String(label)));
+  }
+  const alreadyArchived = isArchived || storedLabels.has("archived");
+  let changed = false;
+  const apply = (patch: MessageStatusPatch): void => {
+    const fresh = selectRow(db, messageId);
+    if (!fresh || rowTable(fresh) === LEDGER_TABLE) return;
+    const outcome = applyStatusPatch(db, fresh, patch);
+    if (!outcome.ok) throw new Error(outcome.message);
+    changed = true;
+  };
+  if (actions.mark_read && !isRead) apply({ is_read: true });
+  if (actions.archive && !alreadyArchived) apply({ archived: true });
+  for (const rawLabel of actions.add_labels) {
+    const label = normalizeLabel(rawLabel);
+    if (label === "archived") {
+      if (!alreadyArchived) apply({ archived: true });
+    } else if (label === "spam") {
+      if (!isSpam) apply({ is_spam: true });
+    } else if (label === "trash") {
+      if (!isTrash) apply({ is_trash: true });
+    } else if (!storedLabels.has(label)) {
+      apply({ add_label: label });
+      storedLabels.add(label);
+    }
+  }
+  return changed;
 }
 
 function patchMessage(db: Database, id: string, patch: MessageStatusPatch): Outcome<MessageRecord | null> {
@@ -737,7 +808,16 @@ export function createEmailContentRepository(db: Database, capabilities: StoreCa
         const rows = db
           .query(
             `SELECT m.id AS message_id, att.key AS attachment_index, att.value AS element,
-                    m.direction AS direction, m.received_at AS received_at, m.sort_ts AS sort_ts
+                    m.direction AS direction,
+                    -- NEVER NULL (BUG-0053): this scan is ordered by m.sort_ts, which is
+                    -- COALESCE(received_at, created_at), so a row that carries no stored
+                    -- instant still has the one it is ordered by to report. Answering the
+                    -- raw column made an outbound row's received_at null while its own
+                    -- ordering key said otherwise, and a caller windowing this surface on
+                    -- received_at dropped it silently. Same rule as the record mapper in
+                    -- the PostgreSQL arm.
+                    COALESCE(m.received_at, m.created_at) AS received_at,
+                    m.sort_ts AS sort_ts
                FROM ${UNIFIED_MESSAGES_SQL} m, json_each(m.attachments_json) att
                ${where}
               ORDER BY m.sort_ts DESC, m.id DESC, att.key ASC

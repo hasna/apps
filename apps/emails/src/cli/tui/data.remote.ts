@@ -15,6 +15,7 @@
  * fallback, while malformed successful server responses remain explicit
  * contract failures and are never presented as an empty mailbox.
  */
+import { loadTuiPreferences, saveTuiPreference, type TuiPreferences } from "../../lib/tui-preferences.js";
 import { uuid } from "../../db/runtime.js";
 import { selfHostedStoreFor, type SelfHostedResourceStore } from "../../db/self-hosted-store.js";
 import { SELF_HOSTED_SERVER_PAGE_MAX, enumerateSelfHostedRows } from "../../db/self-hosted-page.js";
@@ -29,15 +30,14 @@ import {
   removePrioritySenderRuleRemote,
 } from "../../db/priority-senders.js";
 import { listDomains } from "../../db/domains.js";
-import { findAddressesByEmail, listAddresses } from "../../db/addresses.js";
+import { findAddressesByEmail, listAddresses, listActiveAddressCountsByDomains, getPreferredActiveAddressEmail } from "../../db/addresses.js";
 import { getLatestActiveProviderId } from "../../db/providers.js";
-import { getInboundBuckets, loadConfig, saveConfig } from "../../lib/config.js";
+import { getInboundBuckets } from "../../lib/config.js";
 import { assessDomainReadiness } from "../../lib/domain-readiness.js";
 import { resolveClientMode } from "../../lib/mode.js";
 import { rethrowSelfHostedResponseFailure } from "../../lib/self-hosted-wire.js";
 import { describeIdentity, fetchIdentitySafe, type IdentityContext } from "../../lib/whoami.js";
 import { listS3Sources } from "../../lib/s3-sync.js";
-import { normalizeThemeMode, type TuiThemeMode } from "./theme.js";
 import {
   type AttachmentInfo,
   type ComposeInput,
@@ -198,6 +198,7 @@ function v1AttachmentInfos(row: Record<string, unknown>): AttachmentInfo[] {
     const o = cobj(attachment);
     return {
       filename: cstr(o["filename"]) || `attachment-${index + 1}`,
+      ...(typeof o["content_id"] === "string" ? { content_id: o["content_id"] as string } : {}),
       content_type: cstr(o["content_type"]) || "application/octet-stream",
       size: cnum(o["size"]),
     };
@@ -305,17 +306,6 @@ function normalizeSubjectKey(subject: string): string {
 }
 
 // ── mode / config helpers (unchanged; read config, not the DB) ─────────────
-
-function isSelfHostedTuiMode(): boolean {
-  try {
-    return resolveClientMode().mode === "self_hosted";
-  } catch {
-    // A display helper never throws for an environment that cannot resolve to a
-    // store: boot paths refuse that configuration loudly in their own words, and
-    // here "not an API deployment" is the safe answer.
-    return false;
-  }
-}
 
 function pageFromOptions(opts: { limit?: number; offset?: number } | undefined, fallbackLimit: number): { limit: number; offset: number } | undefined {
   if (!opts) return undefined;
@@ -474,9 +464,9 @@ export function listMailboxSources(opts?: ListMailboxSourcesOptions): MailboxSou
   const stats = scanMailboxStats(undefined);
   const source: MailboxSourceSummary = {
     id: "all",
-    label: "Self-hosted Emails",
+    label: "All mailboxes",
     kind: "all",
-    badges: ["self_hosted"],
+    badges: [],
     counts: stats.counts,
     countsComplete: stats.countsComplete,
     total: stats.total,
@@ -683,15 +673,14 @@ export function providerIdForSender(address: string): string | null {
 
 /** Pick the best configured sender for a new TUI compose. */
 export function defaultFromAddress(opts?: { source?: MailboxSource; fallback?: string }): string {
-  if (opts?.source?.address) return opts.source.address;
+  if (opts?.source?.address) {
+    const registrations = findAddressesByEmail(opts.source.address);
+    if (registrations.some((address) => address.status !== "suspended")) return opts.source.address;
+  }
   if (opts?.fallback) return opts.fallback;
   try {
     const domain = opts?.source?.domain?.toLowerCase();
-    const candidates = listAddresses(undefined, { limit: 200 })
-      .map((address) => extractEmail(address.email))
-      .filter((address): address is string => !!address)
-      .filter((address) => !domain || address.endsWith(`@${domain}`));
-    return candidates[0] ?? "";
+    return getPreferredActiveAddressEmail({ domain }) ?? "";
   } catch (error) {
     rethrowSelfHostedResponseFailure(error);
     return "";
@@ -754,14 +743,7 @@ export async function listDomainSummaries(opts?: ListDomainSummaryOptions): Prom
   const page = pageFromOptions(opts, 50);
   try {
     const domains = listDomains(undefined, page);
-    const addresses = listAddresses(undefined, { limit: 1000 });
-    const addressCountByDomain = new Map<string, number>();
-    for (const item of addresses) {
-      const address = extractEmail(item.email);
-      const domain = address?.split("@")[1];
-      if (!domain || (item.status ?? "active") !== "active") continue;
-      addressCountByDomain.set(domain, (addressCountByDomain.get(domain) ?? 0) + 1);
-    }
+    const addressCountByDomain = listActiveAddressCountsByDomains(domains.map((domain) => domain.domain));
     const mode = resolveClientMode();
     return domains
       .map((domain) => {
@@ -817,40 +799,43 @@ export interface ListInboxAddressOptions {
 
 /** User-facing mailbox choices: all mailboxes plus the configured addresses. */
 export function listInboxAddresses(opts?: ListInboxAddressOptions): InboxAddressChoice[] {
-  try {
-    const limit = opts ? positiveInt(opts.limit, 200) : 200;
-    const q = opts?.search?.trim().toLowerCase();
-    const choices = listAddresses(undefined, { limit: Math.max(limit, 200) })
-      .filter((item) => (item.status ?? "active") === "active")
-      .map((item): InboxAddressChoice | null => {
-        const address = extractEmail(item.email);
-        if (!address) return null;
-        return {
-          id: `a:${address}`,
-          label: item.display_name ? `${item.display_name} <${address}>` : address,
-          address,
-          domain: address.split("@")[1],
-          providerId: item.provider_id || undefined,
-          provider: item.provider_id || undefined,
-          receiveStatus: item.verified ? "ready" : "pending",
-          configured: true,
-          observed: false,
-        };
-      })
-      .filter((item): item is InboxAddressChoice => item !== null)
-      .filter((item) => !q || [item.address, item.label, item.domain].some((value) => String(value ?? "").toLowerCase().includes(q)))
-      .slice(0, limit);
-    return opts?.search?.trim() ? choices : [ALL_ADDRESSES, ...choices];
-  } catch (error) {
-    rethrowSelfHostedResponseFailure(error);
-    return opts?.search?.trim() ? [] : [ALL_ADDRESSES];
+  const limit = opts?.limit === undefined ? undefined : positiveInt(opts.limit, 200);
+  const q = opts?.search?.trim().toLowerCase();
+  const rows = listAddresses()
+    .map((item): InboxAddressChoice | null => {
+      const address = extractEmail(item.email);
+      if (!address) return null;
+      return {
+        id: `a:${address}`,
+        label: item.display_name ? `${item.display_name} <${address}>` : address,
+        address,
+        domain: address.split("@")[1],
+        providerId: item.provider_id || undefined,
+        provider: item.provider_id || undefined,
+        receiveStatus: item.status === "suspended" ? "suspended" : item.verified ? "ready" : "pending",
+        configured: true,
+        observed: false,
+      };
+    })
+    .filter((item): item is InboxAddressChoice => item !== null);
+  // A mailbox is selected by address, even when several provider records bind it.
+  // Keep one choice per selection id and prefer an available binding for its label.
+  const mailboxes = new Map<string, InboxAddressChoice>();
+  const rank = (choice: InboxAddressChoice) => choice.receiveStatus === "ready" ? 2 : choice.receiveStatus === "pending" ? 1 : 0;
+  for (const choice of rows) {
+    const current = mailboxes.get(choice.id);
+    if (!current || rank(choice) > rank(current)) mailboxes.set(choice.id, choice);
   }
+  const choices = [...mailboxes.values()]
+    .filter((item) => !q || [item.address, item.label, item.domain].some((value) => String(value ?? "").toLowerCase().includes(q)))
+    .slice(0, limit);
+  return opts?.search?.trim() ? choices : [ALL_ADDRESSES, ...choices];
 }
 
 export function addressChoiceByAddress(address: string | null | undefined): InboxAddressChoice {
   const normalized = extractEmail(address);
   if (!normalized) return ALL_ADDRESSES;
-  return listInboxAddresses({ search: normalized, limit: 20 })
+  return listInboxAddresses({ search: normalized })
     .find((choice) => choice.address?.toLowerCase() === normalized)
     ?? {
       id: `a:${normalized}`,
@@ -875,54 +860,16 @@ export function listSources(): InboxSource[] {
   }));
 }
 
-// ── settings (persisted to config.json) ────────────────────────────────────────
+// ── device preferences (dedicated JSON, no mail store) ────────────────────────────────────────
 
-export interface TuiSettings {
-  autoPull: boolean;
-  dimRead: boolean;
-  defaultMailbox: Mailbox;
-  defaultAddress: string | null;
-  defaultFrom: string | null;
-  theme: TuiThemeMode;
-}
-
-const DEFAULT_TUI_SETTINGS: TuiSettings = {
-  autoPull: false,
-  dimRead: false,
-  defaultMailbox: "inbox",
-  defaultAddress: null,
-  defaultFrom: null,
-  theme: "light",
-};
+export type TuiSettings = Pick<TuiPreferences, "autoPull" | "dimRead" | "defaultMailbox" | "defaultAddress" | "defaultFrom" | "theme">;
 
 export function getSettings(): TuiSettings {
-  if (isSelfHostedTuiMode()) return { ...DEFAULT_TUI_SETTINGS };
-  const c = loadConfig();
-  return {
-    autoPull: c["tui_autopull"] === true,
-    dimRead: c["tui_dim_read"] === true, // default false = high contrast
-    defaultMailbox: normalizeMailbox(c["default_mailbox"]),
-    defaultAddress: extractEmail(c["tui_default_address"]) ?? null,
-    defaultFrom: extractEmail(c["tui_default_from"]) ?? null,
-    theme: c["tui_theme"] == null ? "light" : normalizeThemeMode(c["tui_theme"]),
-  };
+  const { autoPull, dimRead, defaultMailbox, defaultAddress, defaultFrom, theme } = loadTuiPreferences();
+  return { autoPull, dimRead, defaultMailbox, defaultAddress, defaultFrom, theme };
 }
-
 export function setSetting<K extends keyof TuiSettings>(key: K, value: TuiSettings[K]): void {
-  if (isSelfHostedTuiMode()) {
-    throw new Error("TUI settings write local config and are disabled in self_hosted API-only mode.");
-  }
-  const c = loadConfig();
-  const map: Record<keyof TuiSettings, string> = {
-    autoPull: "tui_autopull",
-    dimRead: "tui_dim_read",
-    defaultMailbox: "default_mailbox",
-    defaultAddress: "tui_default_address",
-    defaultFrom: "tui_default_from",
-    theme: "tui_theme",
-  };
-  c[map[key]] = value as never;
-  saveConfig(c);
+  saveTuiPreference<keyof TuiSettings>(key, value);
 }
 
 // ── tenant / identity context (TUI header) ──────────────────────────────────

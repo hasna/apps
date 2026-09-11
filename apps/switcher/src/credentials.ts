@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { constants } from "node:fs";
-import { open, readdir, unlink, link, lstat, access, stat, realpath, readlink } from "node:fs/promises";
+import { open, readdir, unlink, link, lstat, access, stat, realpath, readlink, rename } from "node:fs/promises";
 import { join, isAbsolute, dirname, parse as pathParts, resolve as resolvePath, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { resolveCredential } from "@hasna/contracts/client";
+import { resolveCredential, resolveClientTransport, toV1BaseUrl, clientTransportEnvKeys, keychainConfigValue, appConfigDiskValue, type CredentialChainOptions } from "@hasna/contracts/client";
 import { endpoint, Fault, CommandInterrupted, parse, type ProviderInput } from "./domain";
 import { getProviderPreset, providerCredential } from "./presets";
 import { privateDirectory, switcherHome } from "./runtime";
@@ -16,17 +16,21 @@ const item = z.string().min(1).max(500).regex(/^[^\x00-\x1f\x7f]+$/);
 const vaultKey = z.string().max(500).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9][A-Za-z0-9_.-]*)*$/, "Use a vault key path, not an option or secret value");
 const keychain = z.object({kind:z.literal("keychain"), service:item, account:item}).strict();
 const operator = z.discriminatedUnion("kind", [
+  z.object({kind:z.literal("contracts")}).strict(),
   z.object({kind:z.literal("env")}).strict(),
-  z.object({kind:z.literal("keychain"), account:item}).strict(),
+  z.object({kind:z.literal("keychain"), account:item.refine(value=>value.trim().length>0 && value===value.trim(),"Vault account must be nonblank without surrounding whitespace")}).strict(),
 ]);
 const origin = z.string().transform(value => new URL(endpoint(value)).origin);
 export const credentialBindingSchema = z.object({
   schema:z.literal(1), credentialEnv:reference, origins:z.array(origin).min(1).max(30),
   source:z.discriminatedUnion("kind", [keychain, z.object({
-    kind:z.literal("vault"), key:vaultKey, url:z.string().max(2000).transform(endpoint),
+    kind:z.literal("vault"), key:vaultKey, url:z.string().max(2000).transform(endpoint).optional(),
     executable:z.string().max(4096).regex(/^[^\x00-\x1f\x7f]+$/).refine(isAbsolute,"Secrets executable must be an absolute path"), operator,
   }).strict()]),
-}).strict();
+}).strict().superRefine((binding,ctx)=>{
+  if (binding.source.kind === "vault" && binding.source.operator.kind !== "contracts" && !binding.source.url)
+    ctx.addIssue({code:"custom",path:["source","url"],message:"An explicit env or Keychain operator binding requires a vault URL."});
+});
 export type CredentialBinding = z.infer<typeof credentialBindingSchema>;
 const fingerprint = (binding: CredentialBinding) => createHash("sha256").update(JSON.stringify(binding)).digest("hex");
 export class CredentialBindings {
@@ -101,7 +105,7 @@ export function credentialReference(selector: string) {
   return parse(reference,name);
 }
 
-export async function validateVaultExecutable(path: string) {
+async function inspectVaultExecutable(path: string, permitWritableFile = false) {
   let info, resolved: string;
   try {
     resolved = await realpath(path);
@@ -110,8 +114,8 @@ export async function validateVaultExecutable(path: string) {
     if (!info.isFile()) throw new Error();
   }
   catch { throw new Fault(422,"vault_exec_unavailable","The configured secrets CLI must be an installed executable file. Use --vault-cli with its absolute path."); }
-  if (process.platform !== "win32" && ((info.mode & 0o022) || (info.uid !== 0 && info.uid !== process.getuid?.())))
-    throw new Fault(422,"vault_exec_permissions","The secrets executable must be owned by this user or root and not writable by other users. Remove group/public write permission from its resolved file or choose a trusted installation.");
+  if (process.platform !== "win32" && ((!permitWritableFile && (info.mode & 0o022)) || (info.uid !== 0 && info.uid !== process.getuid?.())))
+    throw new Fault(422,"vault_exec_permissions","The secrets executable must be owned by this user or root and not writable by other users. Choose a trusted installation, or use credentials repair-executable REFERENCE --sha256 EXPECTED with the executable digest from a verified package artifact. Launch never repairs permissions automatically.");
   if (process.platform !== "win32") {
     const seen = new Set<string>();
     const inspect = async (candidate: string): Promise<void> => {
@@ -123,7 +127,8 @@ export async function validateVaultExecutable(path: string) {
         seen.add(prefix);
         if (seen.size > 256) throw new Fault(422,"vault_exec_permissions","The secrets executable path has too many symlink components.");
         const entry = await lstat(prefix);
-        if ((entry.uid !== 0 && entry.uid !== process.getuid?.()) || (!entry.isSymbolicLink() && (entry.mode & 0o022)))
+        const permittedFile = permitWritableFile && prefix === resolved && entry.isFile();
+        if ((entry.uid !== 0 && entry.uid !== process.getuid?.()) || (!entry.isSymbolicLink() && !permittedFile && (entry.mode & 0o022)))
           throw new Fault(422,"vault_exec_permissions","The secrets executable and its ancestor directories must not be replaceable by other users. Choose an installation owned by this user or root without group/public write permissions.");
         if (entry.isSymbolicLink()) await inspect(resolvePath(dirname(prefix),await readlink(prefix)));
       }
@@ -132,6 +137,61 @@ export async function validateVaultExecutable(path: string) {
     catch (error) { if (error instanceof Fault) throw error; throw new Fault(422,"vault_exec_unavailable","The secrets executable path changed or could not be verified. Retry with a trusted installation."); }
   }
   return resolved;
+}
+
+export async function validateVaultExecutable(path: string) { return inspectVaultExecutable(path); }
+
+/** Explicit install finalization. The caller supplies a digest from a verified
+ * artifact, never a digest computed from the currently installed executable.
+ * No credential is resolved and the executable is never started. */
+export async function repairVaultExecutablePermissions(path: string, expectedSha256: string) {
+  if (!/^[a-f0-9]{64}$/.test(expectedSha256)) throw new Fault(400,"invalid_request","--sha256 requires the SHA256 of the executable member from a verified package artifact.");
+  if (!isAbsolute(path) || path.length > 4096 || /[\x00-\x1f\x7f]/.test(path)) throw new Fault(400,"invalid_request","Secrets executable must be an absolute path without control characters.");
+  if (process.platform === "win32") throw new Fault(422,"vault_exec_repair_unsafe","Executable permission repair requires POSIX file permissions.");
+  const resolved = await inspectVaultExecutable(path,true);
+  const file = await open(resolved,constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const unsafe = () => new Fault(422,"vault_exec_repair_unsafe","Executable ownership, type, links or contents changed; no trusted repair can be confirmed.");
+  let temporary: string | undefined;
+  try {
+    const before = await file.stat();
+    const limit = 256 * 1024 * 1024;
+    if (!before.isFile() || before.uid !== process.getuid?.() || before.size > limit || (before.mode & 0o7000)) throw unsafe();
+    const sameFile = (info: typeof before) => info.dev === before.dev && info.ino === before.ino && info.size === before.size && info.uid === before.uid && info.nlink === before.nlink && info.mode === before.mode && info.mtimeMs === before.mtimeMs && info.ctimeMs === before.ctimeMs;
+    const hash = async (target?: typeof file) => {
+      const digest = createHash("sha256"); const buffer = Buffer.alloc(1024 * 1024); let position = 0;
+      while (true) {
+        const {bytesRead} = await file.read(buffer,0,buffer.length,position);
+        if (!bytesRead) break;
+        position += bytesRead; if (position > limit) throw unsafe();
+        const bytes = buffer.subarray(0,bytesRead); digest.update(bytes);
+        if (target) await target.writeFile(bytes);
+      }
+      if (position !== before.size || !sameFile(await file.stat())) throw unsafe();
+      if (digest.digest("hex") !== expectedSha256) throw new Fault(422,"vault_exec_digest_mismatch","Installed executable differs from the trusted artifact digest. Reinstall the verified package; no credential was accessed.");
+    };
+    await hash();
+    const mode = (before.mode & 0o777) & ~0o022;
+    const changed = mode !== (before.mode & 0o777);
+    if (await inspectVaultExecutable(path,true) !== resolved || !sameFile(await lstat(resolved))) throw unsafe();
+    if (!changed) { await validateVaultExecutable(path); return {changed,mode:mode.toString(8).padStart(4,"0"),sha256:expectedSha256}; }
+    // Every writable inode is replaced, including nlink=1: chmod cannot revoke
+    // an already-open writer fd. Cache hardlinks retain their original inode.
+    temporary = join(dirname(resolved),`.switcher-repair-${randomUUID()}`);
+    const replacement = await open(temporary,"wx",0o600);
+    try {
+      await hash(replacement);
+      await replacement.chmod(mode); await replacement.sync();
+      const ready = await replacement.stat();
+      if (!ready.isFile() || ready.nlink !== 1 || ready.uid !== before.uid || ready.size !== before.size) throw unsafe();
+      if (await inspectVaultExecutable(path,true) !== resolved || !sameFile(await lstat(resolved))) throw unsafe();
+      await rename(temporary,resolved); temporary = undefined;
+      const installed = await lstat(resolved);
+      if (installed.dev !== ready.dev || installed.ino !== ready.ino || await validateVaultExecutable(path) !== resolved) throw unsafe();
+      const directory = await open(dirname(resolved),constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      try { await directory.sync(); } finally { await directory.close(); }
+    } finally { await replacement.close(); }
+    return {changed,mode:mode.toString(8).padStart(4,"0"),sha256:expectedSha256};
+  } finally { await file.close(); if (temporary) await unlink(temporary); }
 }
 
 export function bindingTarget(selector: string, override?: string, allowedOrigins?: string[]) {
@@ -192,22 +252,61 @@ export class CredentialInterrupted extends CommandInterrupted {
 }
 
 /** Select an operator through the shared credential seam, then pin that choice. */
-function vaultEnvironment(binding: CredentialBinding, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export async function vaultEnvironment(binding: CredentialBinding, env: NodeJS.ProcessEnv, options: Pick<CredentialChainOptions,"keychain"> = {}): Promise<NodeJS.ProcessEnv> {
   if (binding.source.kind !== "vault") throw new Fault(500,"credential_resolution","Unexpected credential source.");
-  let credential;
+  const source = binding.source;
+  let credential, url = source.url;
   try {
-    credential = binding.source.operator.kind === "keychain"
-      ? resolveCredential("secrets",{HASNA_STATION:binding.source.operator.account},{keychain:{enabled:true}})
-      : resolveCredential("secrets",Object.fromEntries(Object.entries(env).filter(([name])=>name==="HASNA_SECRETS_API_KEY")),{keychain:{enabled:false}});
-  } catch { throw new Fault(422,"vault_operator_unavailable","The configured vault operator credential is inaccessible; no alternate account was selected."); }
-  if (!credential?.apiKey) throw new Fault(422,"vault_operator_missing","Configure the vault operator Keychain account or inject HASNA_SECRETS_API_KEY for this process.");
+    if (source.operator.kind === "contracts") {
+      // Validate the untouched canonical environment first. A binding URL may
+      // replace the gateway default, but never a different configured authority.
+      const pair = () => {
+        const keys = clientTransportEnvKeys("secrets");
+        const configuredUrl = keys.apiUrlKeys.map(name=>env[name]).find(value=>value !== undefined)
+          ?? keychainConfigValue("secrets",env,options.keychain)?.value
+          ?? appConfigDiskValue("secrets",env,keys.apiUrlKeys)?.value;
+        const resolution = resolveClientTransport("secrets",env,{credentials:options});
+        const key = resolveCredential("secrets",env,options);
+        if (key?.tier === "pointer") throw new Fault(422,"vault_operator_pointer","A Secrets operator cannot bootstrap itself through HASNA_SECRETS_API_KEY_REF. Configure its operator in Keychain, canonical config/credentials, or an explicit key override.");
+        if (!key?.apiKey || key.source !== resolution.apiKeySource || key.tier !== resolution.apiKeyTier)
+          throw new Fault(422,"vault_operator_changed","The vault operator changed during resolution; no credential was sent. Retry after configuration is stable.");
+        const boundUrl = source.url ? toV1BaseUrl(source.url) : resolution.baseUrl;
+        if (resolution.apiUrlSource !== "default" && boundUrl !== resolution.baseUrl)
+          throw new Fault(422,"vault_operator_authority","The binding vault URL conflicts with the canonical Secrets API URL; no credential was sent.");
+        if (configuredUrl !== undefined && toV1BaseUrl(configuredUrl) !== resolution.baseUrl)
+          throw new Fault(422,"vault_operator_changed","The vault authority changed during resolution; no credential was sent.");
+        // Preserve the configured spelling: the child's shared resolver also
+        // compares literal authorities, including an explicitly written /v1.
+        return {key,url:configuredUrl?.trim() ?? source.url ?? boundUrl.replace(/\/v1$/,"")};
+      };
+      const first = pair(), second = pair();
+      if (first.key.apiKey !== second.key.apiKey || first.key.source !== second.key.source || first.key.tier !== second.key.tier || first.url !== second.url)
+        throw new Fault(422,"vault_operator_changed","The vault operator or authority changed during resolution; no credential was sent. Retry after configuration is stable.");
+      credential = second.key; url = second.url;
+    } else {
+      // Legacy bindings deliberately select one exact source. Never reinterpret
+      // them as the shared chain or rescue a locked/missing named account.
+      credential = source.operator.kind === "keychain"
+        ? resolveCredential("secrets",{HASNA_STATION:source.operator.account},{keychain:{...options.keychain,enabled:true}})
+        : resolveCredential("secrets",Object.fromEntries(Object.entries(env).filter(([name])=>name==="HASNA_SECRETS_API_KEY")),{keychain:{enabled:false}});
+    }
+  } catch (error) {
+    if (error instanceof Fault) throw error;
+    const kind = error instanceof Error ? error.name : "";
+    const reason = kind === "CredentialFileUnsafeError" ? "unsafe canonical config/credentials file"
+      : kind === "ClientTransportConfigurationError" ? "invalid or missing canonical API URL/key"
+      : source.operator.kind === "keychain" ? "unavailable pinned Keychain account"
+      : "credential selection refused by Contracts (Keychain, canonical file, profile, or environment)";
+    throw new Fault(422,"vault_operator_unavailable",`Cannot resolve the Secrets vault operator: ${reason}. Check the selected source in this terminal session; no alternate account was selected.`);
+  }
+  if (!credential?.apiKey) throw new Fault(422,"vault_operator_missing","The selected vault operator has no credential. Use a canonical Contracts binding, restore its named Keychain account, or inject HASNA_SECRETS_API_KEY for an explicit env binding.");
   // Pass only execution/config context, not unrelated fleet/provider credentials or
   // deliberate profile/pointer overrides. The explicit override prevents the
   // Secrets CLI from reselecting an ambient Keychain/disk operator. Its shared URL
   // resolver may still reject a conflicting local authority; that remains terminal.
-  const allowed = /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LC_[A-Z_]+|TMPDIR|TEMP|TMP|HASNA_SECRETS_HOME|HASNA_STATION)$/;
+  const allowed = /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LC_[A-Z_]+|TMPDIR|TEMP|TMP|HASNA_HOME|HASNA_CONFIG_HOME|HASNA_SECRETS_HOME|HASNA_STATION)$/;
   const next: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(env).filter(([name])=>allowed.test(name)));
-  next.HASNA_SECRETS_API_URL = binding.source.url;
+  next.HASNA_SECRETS_API_URL = url;
   next.HASNA_SECRETS_API_KEY = credential.apiKey;
   next.HASNA_SECRETS_API_KEY_OVERRIDE = credential.apiKey;
   if (binding.source.operator.kind === "keychain") next.HASNA_STATION = binding.source.operator.account;
@@ -219,7 +318,7 @@ async function runVaultCommand(binding: CredentialBinding, args: string[], env: 
   if (binding.source.kind !== "vault") throw new Fault(500,"credential_resolution","Unexpected credential source.");
   if (process.platform === "win32") throw new Fault(422,"vault_exec_unavailable","Vault CLI bindings currently require POSIX process groups; use runtime environment injection on Windows.");
   const executable = await validateVaultExecutable(binding.source.executable);
-  const childEnv = {...vaultEnvironment(binding,env),...delivery};
+  const childEnv = {...await vaultEnvironment(binding,env),...delivery};
   return new Promise((resolveResult,reject) => {
     const child = spawn(executable,args,{env:childEnv,stdio:["ignore",captureCheck ? "pipe" : "ignore","ignore"],detached:true,shell:false});
     let failure: Fault | undefined;

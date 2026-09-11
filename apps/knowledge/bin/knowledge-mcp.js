@@ -4207,7 +4207,7 @@ import { existsSync as existsSync16, readFileSync as readFileSync13, writeFileSy
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.3.1",
+  version: "0.3.2",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -4270,7 +4270,8 @@ var package_default = {
     serve: "bun src/serve-entry.ts",
     "verify:generated": "bun scripts/verify-generated-artifacts.mjs",
     "contracts:conformance": "contracts conformance fixtures",
-    build: "bun scripts/check-bun-version.mjs && rm -rf dist && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts ./src/sdk.ts --outdir ./dist --external @hasna/contracts --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bun run tsc -p tsconfig.build.json",
+    "typecheck:conformance": "tsc -p tsconfig.conformance.json",
+    build: "bun scripts/check-bun-version.mjs && rm -rf dist && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts ./src/sdk.ts --outdir ./dist --external @hasna/contracts --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bun run tsc -p tsconfig.build.json && bun run typecheck:conformance",
     prepublishOnly: "bun run contracts:conformance && contracts no-cloud-scan . && bun run build && node scripts/validate-public-package.mjs",
     prepack: "bun run build && bun run scan:artifact",
     "scan:artifact": 'bun pm pack --ignore-scripts --quiet --filename "$PWD/knowledge-artifact-scan.tgz" && contracts artifact-scan knowledge-artifact-scan.tgz; rc=$?; rm -f "$PWD/knowledge-artifact-scan.tgz"; exit $rc'
@@ -4339,10 +4340,7 @@ import { join, resolve } from "path";
 import { homedir as pathsResolverHomedir } from "os";
 import { join as pathsResolverJoin } from "path";
 var PATHS_RESOLVER_KIND_ENV = {
-  config: "HASNA_CONFIG_HOME",
-  data: "HASNA_DATA_HOME",
-  state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME"
+  data: "HASNA_DATA_HOME"
 };
 var PATHS_RESOLVER_APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 function pathsResolverAssertApp(app) {
@@ -4367,26 +4365,9 @@ function pathsResolverBaseDir(kind, options) {
   const home = options.home ?? pathsResolverHomedir();
   const platform = options.platform ?? process.platform;
   if (platform === "darwin") {
-    switch (kind) {
-      case "config":
-      case "data":
-        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
-      case "state":
-        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
-    }
+    return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
   }
-  switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
-    case "data":
-      return pathsResolverJoin(home, ".local", "share", "hasna");
-    case "state":
-      return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
-  }
+  return pathsResolverJoin(home, ".local", "share", "hasna");
 }
 function pathsResolverResolve(kind, options) {
   pathsResolverAssertApp(options.app);
@@ -4822,6 +4803,17 @@ function announceLocalMode(env) {
 function knowledgeFailClosedMessage(original) {
   return `knowledge: client credential resolution failed \u2014 ${original} ` + `There is no local fallback: the on-box store is opt-in only (${KNOWLEDGE_LOCAL_OPT_IN_ENV}=1) ` + "and disabled by default \u2014 failing closed instead of serving local data.";
 }
+
+class KnowledgeSourceUnavailableError extends Error {
+  code = "source_unavailable";
+  status = "unavailable";
+  detail;
+  constructor(detail, options) {
+    super(knowledgeFailClosedMessage(detail.reason), options);
+    this.name = "KnowledgeSourceUnavailableError";
+    this.detail = detail;
+  }
+}
 function resolveKnowledgeClientTransport(env = process.env, options = {}) {
   assertNoRetiredKnowledgeStorageSelector(env);
   const keychain = options.keychain ?? knowledgeKeychainTierOptions(env);
@@ -4864,9 +4856,16 @@ function resolveKnowledgeClientTransport(env = process.env, options = {}) {
       ...base
     };
   } catch (error) {
-    throw new Error(knowledgeFailClosedMessage(error instanceof Error ? error.message : String(error)), {
-      cause: error
-    });
+    throw new KnowledgeSourceUnavailableError({
+      status: "unavailable",
+      credential_source: "none",
+      credential_file_candidates: base.credential_file_candidates,
+      credential_env_keys: Object.freeze([...KNOWLEDGE_API_KEY_ENV_KEYS]),
+      keychain_tier_enabled: base.keychain_tier_enabled,
+      local_opt_in_present: base.local_opt_in_present,
+      network_guard_active: base.network_guard_active,
+      reason: error instanceof Error ? error.message : String(error)
+    }, { cause: error });
   }
 }
 function keychainTierLive(env, options) {
@@ -20568,11 +20567,13 @@ class KnowledgeService {
     return this.ensureWorkspace().jsonStorePath;
   }
   itemStore() {
-    const workspace = this.ensureWorkspace();
-    return resolveItemStore({
-      storePath: workspace.jsonStorePath,
+    const store = resolveItemStore({
+      storePath: this.workspace.jsonStorePath,
       storePathOverridden: false
     });
+    if (store.kind === "local")
+      this.ensureWorkspace();
+    return store;
   }
   projectLinksAuthority() {
     if (this.options.projectLinksAuthority)
@@ -23825,12 +23826,26 @@ Runs the @hasna/knowledge MCP server (stdio by default).
 Options:
   --http            Serve MCP over Streamable HTTP (127.0.0.1)
   --port <number>   HTTP port (default: 8819, env: MCP_HTTP_PORT)
+  --version         Print the package version and exit (no server is started)
   -h, --help        Show this help text`);
+}
+function assertKnowledgeMcpTransportResolvable(env = process.env) {
+  return resolveKnowledgeClientTransport(env);
 }
 async function main() {
   if (process.argv.includes("-h") || process.argv.includes("--help")) {
     printHelp();
     return;
+  }
+  if (process.argv.includes("--version")) {
+    console.log(package_default.version);
+    return;
+  }
+  try {
+    assertKnowledgeMcpTransportResolvable(process.env);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
   }
   const { isHttpMode: isHttpMode2, resolveMcpHttpPort: resolveMcpHttpPort2, startMcpHttpServer: startMcpHttpServer2 } = await Promise.resolve().then(() => (init_mcp_http(), exports_mcp_http));
   if (isHttpMode2()) {
@@ -23854,5 +23869,6 @@ if (import.meta.main) {
 }
 export {
   main,
-  buildServer
+  buildServer,
+  assertKnowledgeMcpTransportResolvable
 };

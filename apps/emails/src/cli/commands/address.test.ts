@@ -70,7 +70,7 @@ beforeEach(async () => {
 afterEach(() => stub.clearEnv());
 
 describe("address list command", () => {
-  it("uses a compact implicit default and honors explicit limits", async () => {
+  it("lists all registered addresses by default and honors explicit limits", async () => {
     const addresses = [];
     for (let i = 1; i <= 25; i++) {
       const stamp = `2026-01-${String(i).padStart(2, "0")}T00:00:00.000Z`;
@@ -87,9 +87,9 @@ describe("address list command", () => {
     await stub.seed({ addresses });
 
     const compact = await runAddressCommand(["address", "list", "--provider", "prov-1"]);
-    expect(compact.data).toHaveLength(20);
+    expect(compact.data).toHaveLength(25);
     expect(compact.out).toContain("use --verbose");
-    expect(compact.out).toContain("--offset 20");
+    expect(compact.out).not.toContain("page with --offset");
 
     const explicit = await runAddressCommand(["address", "list", "--provider", "prov-1", "--limit", "25"]);
     expect(explicit.data).toHaveLength(25);
@@ -284,25 +284,11 @@ describe("address remove / lifecycle commands", () => {
   });
 });
 
-describe("address server-only lifecycle commands still block", () => {
-  // Only the local provisioning orchestration (S3/SES receive setup + the
-  // provisioning ledger) is server-owned. Ownership is NOT — see below.
-  const blocked: Array<[string, string[]]> = [
-    ["emails address provision", ["address", "provision", "svc@example.com", "--provider", "prov-1"]],
-  ];
-
-  for (const [label, args] of blocked) {
-    it(`${label} says it is unimplemented and names what to run instead`, async () => {
-      const result = await runAddressCommandExpectingExit(args);
-      expect(result.error).toBe("process.exit:1");
-      expect(result.stderr).toContain(`${label} is not implemented in this build`);
-      expect(result.stderr).toContain("emails address add <email> --provider <id>");
-      // The message that shipped named a server route that does not exist, and
-      // named it unconditionally — so it lied in local mode too.
-      expect(result.stderr).not.toContain("not available in the self-hosted client");
-      expect(result.stderr).not.toContain("runs on the self-hosted server");
-    });
-  }
+describe("address provisioning server compatibility", () => {
+  it("fails clearly when the API cannot execute provisioning", async () => {
+    const result=await runAddressCommandExpectingExit(["address","provision","svc@example.com","--provider","prov-1"]);
+    expect(result.error).toBe("process.exit:1");expect(result.stderr).toContain("POST /v1/provision/address");expect(result.stderr).toContain("HTTP 405");
+  });
 });
 
 describe("address ownership commands over /v1", () => {
@@ -452,7 +438,7 @@ describe("address list reports real ownership", () => {
 //   * `verify` only READS it — the name is the trap,
 //   * `add` had no --verified option,
 //   * `activate` reactivates a SUSPENDED address, a different field,
-//   * `provision` refuses in every mode.
+//   * `provision` requires an API that implements address orchestration.
 // The only route left was a hand-rolled PATCH /v1/addresses/{id}. Every layer
 // beneath the CLI already supported the write (db/addresses.ts markVerified, routed
 // to both arms, and the generated SDK's updateAddress) — only the verb was missing.

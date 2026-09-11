@@ -13,6 +13,11 @@
 //   - Before writing, we also skip anything already present under the same key
 //     in `message_id` (the local→self_hosted history backfill stored the object key
 //     there), so the live drain never duplicates imported history.
+//   - The object key fences a DELIVERY, not the message (BUG-0050). SES archives one
+//     message under a fresh object for every recipient group it delivers to, so the
+//     write itself additionally adopts a row the tenant already holds for the same
+//     RFC `Message-ID` + sender + subject + receipt instant, unioning the envelope
+//     recipients. See `createInboundMessageWithProvenance`.
 //
 // Failure handling: any fetch/parse/DB error leaves the message on the queue
 // for SQS redelivery; after the queue's maxReceiveCount it lands in the DLQ
@@ -42,6 +47,10 @@ import {
   type AttachmentRepairResult,
 } from "./attachment-repair.js";
 
+type IngestTenantStore = Pick<TenantScopedStore,
+  "findMessageIdByKey" | "getInboundSourceProvenance" | "recordInboundSourceProvenance" | "createInboundMessageWithProvenance"
+> & { validateInboundAcceptance?: () => Promise<void> };
+
 /** Minimal store surface the worker needs (kept narrow for testability). */
 export interface IngestStore {
   resolveInboundRecipients(recipients: string[]): Promise<InboundRouteResolution>;
@@ -53,13 +62,12 @@ export interface IngestStore {
     reason: string;
     detail?: string | null;
   }): Promise<void>;
-  forTenant(tenantId: string): Pick<
-    TenantScopedStore,
-    "findMessageIdByKey" | "getInboundSourceProvenance" | "recordInboundSourceProvenance" | "createInboundMessageWithProvenance"
-  >;
+  forTenant(tenantId: string, recipients?: string[]): IngestTenantStore;
 }
 
 export interface IngestDeps {
+  /** Trusted server binding provenance, never a notification field. */
+  providerId?: string;
   store: IngestStore;
   /** Fetch a raw RFC822 object from S3 as bytes. */
   fetchObject: (bucket: string, key: string) => Promise<Buffer>;
@@ -200,15 +208,12 @@ export async function ingestS3Object(
 
     const targets: Array<{
       group: InboundRouteResolution["groups"][number];
-      scoped: Pick<
-        TenantScopedStore,
-        "findMessageIdByKey" | "getInboundSourceProvenance" | "recordInboundSourceProvenance" | "createInboundMessageWithProvenance"
-      >;
+      scoped: IngestTenantStore;
       existing: string | null;
       provenance: InboundSourceProvenance | null;
     }> = [];
     for (const group of route.groups) {
-      const scoped = deps.store.forTenant(group.tenantId);
+      const scoped = deps.store.forTenant(group.tenantId, group.recipients);
       const existing = await scoped.findMessageIdByKey(key);
       targets.push({
         group,
@@ -234,6 +239,7 @@ export async function ingestS3Object(
     // Preserve the fast exit here: matching duplicates are never parsed or
     // passed through any message/provenance write path.
     if (targets.every((target) => target.existing !== null && target.provenance !== null)) {
+      for (const target of targets) await target.scoped.validateInboundAcceptance?.();
       return {
         status: "duplicate",
         key,
@@ -290,6 +296,7 @@ export async function ingestS3Object(
       }
       const input: MessageInput = {
         from_addr: parsed.from_addr || "(unknown sender)",
+        ...(deps.providerId ? { provider_id: deps.providerId } : {}),
         // MIME To/Cc headers are sender-controlled. Tenant selection and the
         // stored recipient list come only from the trusted SES envelope.
         to_addrs: group.recipients,

@@ -120,8 +120,8 @@ function localModeWithStructuredClientEnv(): {
     env: {
       ...env,
       EMAILS_CLIENT_ENV_SECRET: clientEnv,
-      EMAILS_DB_PATH: join(env.HOME!, "local.db"),
-      HASNA_EMAILS_DB_PATH: join(env.HOME!, "local.db"),
+      EMAILS_DB_PATH: undefined,
+      HASNA_EMAILS_DB_PATH: undefined,
     },
     sentinel,
     clientEnv,

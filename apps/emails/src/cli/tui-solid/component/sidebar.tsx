@@ -13,6 +13,7 @@ import {
 import { MAILBOXES, useEmails } from "../context/emails-state.js";
 import { labelColor, selectedForeground, useTheme } from "../context/theme.js";
 import { Button, Row, SectionHeader } from "../ui/primitives.js";
+import { formatSidebarCount } from "./sidebar-count.js";
 
 const SIDEBAR_WIDE = 34;
 const SYSTEM_LABEL_KEYS = new Set(["inbox", "sent", "spam", "trash", "unread", "starred", "archived", "draft", "drafts"]);
@@ -26,7 +27,7 @@ function CountText(props: { value: number; selected?: boolean; lowerBound?: bool
   // O15-00350: a truncated self-hosted scan reports lower bounds (countsComplete
   // false); rendering them as exact totals re-creates the collapse the scan was
   // made honest to prevent. `≥` matches the CLI formatters (renderStatusCount).
-  return <text fg={props.selected ? selectedForeground(theme, theme.primary) : theme.textMuted}>{props.lowerBound ? `≥${props.value}` : String(props.value)}</text>;
+  return <text flexShrink={0} wrapMode="none" fg={props.selected ? selectedForeground(theme, theme.primary) : theme.textMuted}>{formatSidebarCount(props.value, props.lowerBound)}</text>;
 }
 
 export function Sidebar() {
@@ -90,8 +91,8 @@ export function Sidebar() {
             const fg = () => active() ? selectedForeground(theme, theme.primary) : theme.text;
             return (
             <Row active={active()} onPress={() => emails.actions.setMailbox(box)}>
-              <box flexDirection="row" justifyContent="space-between" width="100%">
-                <text fg={fg()} attributes={box === "unread" && mailboxCount(box) > 0 ? TextAttributes.BOLD : 0}>
+              <box flexDirection="row" justifyContent="space-between" columnGap={1} width="100%">
+                <text flexShrink={1} minWidth={0} wrapMode="none" fg={fg()} attributes={box === "unread" && mailboxCount(box) > 0 ? TextAttributes.BOLD : 0}>
                   {mailboxLabel(box)}
                 </text>
                 <CountText value={mailboxCount(box)} selected={active()} lowerBound={!emails.state.counts.countsComplete} />
@@ -111,9 +112,9 @@ export function Sidebar() {
             return (
               <Row active={active()} onPress={() => emails.actions.filterLabel(category.name)}>
                 <box flexDirection="row" width="100%" columnGap={1}>
-                  <text fg={active() ? fg() : labelColor(theme, category.name)}>■</text>
-                  <box flexGrow={1}>
-                    <text fg={fg()}>{category.title}</text>
+                  <text flexShrink={0} fg={active() ? fg() : labelColor(theme, category.name)}>■</text>
+                  <box flexGrow={1} flexShrink={1} minWidth={0}>
+                    <text wrapMode="none" fg={fg()}>{category.title}</text>
                   </box>
                   <CountText value={labelCount(category.name)} selected={active()} />
                 </box>
@@ -132,9 +133,9 @@ export function Sidebar() {
             return (
               <Row active={active()} onPress={() => emails.actions.filterLabel(label.name)}>
                 <box flexDirection="row" width="100%" columnGap={1}>
-                  <text fg={active() ? fg() : labelColor(theme, label.name)}>■</text>
-                  <box flexGrow={1}>
-                    <text fg={fg()}>{labelDisplayName(label.name)}</text>
+                  <text flexShrink={0} fg={active() ? fg() : labelColor(theme, label.name)}>■</text>
+                  <box flexGrow={1} flexShrink={1} minWidth={0}>
+                    <text wrapMode="none" fg={fg()}>{labelDisplayName(label.name)}</text>
                   </box>
                   <CountText value={label.count} selected={active()} />
                 </box>
@@ -180,6 +181,7 @@ export function Sidebar() {
           <Button label="Settings" onPress={() => emails.actions.openDialog("settings")} />
           <text fg={theme.textMuted}>{emails.state.loading ? "Loading" : "Ready"}</text>
         </box>
+        <Show when={emails.state.preferenceError}><text fg={theme.error} wrapMode="word">{emails.state.preferenceError}</text></Show>
         <Show when={emails.state.lastError}>
           <text fg={theme.error}>{emails.state.lastError}</text>
         </Show>

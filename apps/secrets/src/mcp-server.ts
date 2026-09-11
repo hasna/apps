@@ -3,6 +3,7 @@
  * secrets-mcp bin entrypoint. Defaults to stdio (the MCP transport agents use);
  * pass `--http [--port N]` for the Streamable HTTP transport.
  */
+import { assertSharedStoreArguments } from "./store/index.js";
 import { buildServer, startMcpServer } from "./mcp.js";
 import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer, DEFAULT_MCP_HTTP_PORT } from "./mcp-http.js";
 import { VERSION } from "./version.js";
@@ -32,6 +33,7 @@ MCP_HTTP_PORT sets its port. The default is stdio for MCP clients.`);
     console.log(VERSION);
     process.exit(0);
   }
+  assertSharedStoreArguments(args);
   if (isHttpMode(args)) {
     startMcpHttpServer({ name: "secrets", port: resolveMcpHttpPort(args), buildServer });
     await new Promise<never>(() => {});

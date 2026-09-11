@@ -5,13 +5,13 @@
 // (see src/test-support/v1-stub.ts). The manual "Pull" affordance was LOCAL
 // S3→SQLite ingestion and no longer exists in the self-hosted-only client, so the
 // former local-Pull tests are gone and the self-hosted case simply asserts Pull is
-// absent. API-only view preferences live in the App session; priority rules
-// are persisted through the server. No local settings store is used.
+// absent. Device preferences use dedicated JSON; priority rules remain in the API.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
+import { getDataRoot } from "../../paths.js";
+import { createEmailsKeymap } from "../tui-solid/keymap-input.js";
 import { KeymapProvider } from "@opentui/keymap/solid";
 import { testRender, useRenderer, type TestRendererSetup } from "@opentui/solid";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { onCleanup } from "solid-js";
@@ -19,12 +19,14 @@ import { createAddress, markVerified } from "../../db/addresses.js";
 import { createDomain } from "../../db/domains.js";
 import { storeInboundEmail } from "../../db/inbound.js";
 import { createProvider } from "../../db/providers.js";
+import * as mailboxData from "./data.js";
 import { toggleRead, type TuiMessage } from "./data.js";
 import { App } from "../tui-solid/App.js";
 import { resolveAddressChoice } from "../tui-solid/context/emails-state.js";
+import { sidebarWidth } from "../tui-solid/component/sidebar.js";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
 import { resolveMailDataSource } from "../../lib/mail-data-source.js";
-import { TextRenderable, TextTableRenderable, type Renderable, type TextChunk } from "@opentui/core";
+import { RGBA, ImageRenderable, TextRenderable, TextTableRenderable, type Renderable, type TextChunk } from "@opentui/core";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 function captureInheritedProcessEnv(): void {
@@ -42,6 +44,7 @@ let savedHome: string | undefined;
 let tmpHome = "";
 let providerId = "";
 let setup: TestRendererSetup | null = null;
+let keymapErrors: unknown[] = [];
 
 // data.ts caches the full message scan for a short window; direct seeding does not
 // invalidate it, so bust it between tests (a data.ts mutation nulls the cache; the
@@ -56,7 +59,8 @@ function bustScanCache(): void {
 
 function Harness(props: { initialMailbox?: "inbox" | "unread" | "starred" | "sent" | "archived" | "spam" | "trash" }) {
   const renderer = useRenderer();
-  const keymap = createDefaultOpenTuiKeymap(renderer);
+  const keymap = createEmailsKeymap(renderer);
+  keymap.on("error", (error) => keymapErrors.push(error));
   onCleanup(() => keymap.clearPendingSequence());
   return (
     <KeymapProvider keymap={keymap}>
@@ -71,6 +75,7 @@ beforeAll(async () => {
 afterAll(() => stub.stop());
 
 beforeEach(async () => {
+  keymapErrors = [];
   captureInheritedProcessEnv();
   process.env["EMAILS_TUI_DISABLE_THEME_PROBE"] = "1";
   process.env["EMAILS_TUI_CLIPBOARD_DRY_RUN"] = "1";
@@ -189,6 +194,36 @@ async function typeText(value: string) {
 }
 
 describe("Emails Solid TUI", () => {
+  it("keeps comma-grouped folder, category and label counts on one sidebar row", async () => {
+    const ds = resolveMailDataSource();
+    const counts = spyOn(ds, "mailboxCounts").mockResolvedValue({
+      inbox: 132193, unread: 7, priority: 1000, starred: 999, sent: 1234567,
+      archived: 0, spam: 12, trash: 5, countsComplete: false,
+    });
+    const labels = spyOn(ds, "listLabelSummaries").mockResolvedValue([
+      { name: "category_promotions", count: 132193 },
+      { name: "Ledger operational announcements", count: 1234567890 },
+    ]);
+    try {
+      await renderApp();
+      for (const width of [120, 80, 60]) {
+        setup?.resize(width, 33);
+        await flush();
+        const sidebar = frame().split("\n").map((line) => line.slice(0, sidebarWidth(width)));
+        for (const [label, count] of [
+          ["Inbox", "≥132,193"], ["Unread", "≥7"], ["Priority", "≥1,000"],
+          ["Starred", "≥999"], ["Sent", "≥1,234,567"], ["Archived", "≥0"],
+          ["Spam", "≥12"], ["Trash", "≥5"], ["Promotions", "132,193"],
+          ["Ledger", "1,234,567,890"],
+        ]) {
+          const row = sidebar.find((line) => line.includes(label!));
+          expect(row).toBeDefined();
+          expect(row).toContain(count!);
+        }
+      }
+    } finally { counts.mockRestore(); labels.mockRestore(); }
+  });
+
   it("shows a useful empty inbox without message actions or unavailable pagination", async () => {
     await renderApp();
     await setup?.waitForFrame((value) => value.includes("Your inbox is clear"));
@@ -269,6 +304,40 @@ describe("Emails Solid TUI", () => {
     expect(frame()).not.toContain("self_hosted API-only mode");
   });
 
+  it("reloads saved appearance and reading preferences in a new App", async () => {
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Appearance");
+    await clickText("Color scheme");
+    await clickText("Reading");
+    await clickText("Expand code blocks");
+    setup?.renderer.destroy(); setup = null;
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Appearance");
+    expect(frame()).toContain("Dark");
+    await clickText("Reading");
+    expect(frame()).toContain("On");
+    expect(frame()).not.toContain("until you close");
+  });
+
+  it("keeps preference actions immediate and shows save failures", async () => {
+    const root = getDataRoot();
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    writeFileSync(join(root, "config"), "synthetic config obstruction");
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Appearance");
+    await clickText("Color scheme");
+    expect(frame()).toContain("Dark");
+    expect(frame()).toContain("Could not save your preference");
+    await clickText("Attachments");
+    await clickText("When selecting an attachment");
+    expect(frame()).toContain("Copy link");
+    expect(frame()).toContain("Could not save your preference");
+    expect(readFileSync(join(root, "config"), "utf8")).toBe("synthetic config obstruction");
+  });
+
   it("shows recoverable connection errors instead of an empty mailbox or message actions", async () => {
     const ds = resolveMailDataSource();
     const list = spyOn(ds, "listMailbox").mockRejectedValue(new Error("Connection unavailable"));
@@ -315,6 +384,48 @@ describe("Emails Solid TUI", () => {
     } finally { body.mockRestore(); }
   });
 
+  it("keeps focused priority text readable in the light theme", async () => {
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Appearance");
+    for (let attempt = 0; attempt < 3 && !frame().includes("Light ▾"); attempt++) await clickText("Color scheme");
+    await clickText("Priority Inbox");
+    await typeText("contrast@example.com");
+    const span = setup!.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("contrast@example.com"));
+    expect(span).toBeDefined();
+    expect(span!.fg.equals(RGBA.fromHex("#4c4f69"))).toBe(true);
+    expect(span!.fg.equals(span!.bg)).toBe(false);
+  });
+
+  it("closes light settings with Escape after unnamed terminal events without logging keymap errors", async () => {
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Appearance");
+    for (let attempt = 0; attempt < 3 && !frame().includes("Light ▾"); attempt++) await clickText("Color scheme");
+    await clickText("Priority Inbox");
+    await typeText("review@example.com");
+    setup!.mockInput.pressKey("\x1b[999~");
+    await flush();
+    expect(frame()).toContain("review@example.com");
+    await key("escape");
+    expect(frame()).not.toContain("Preferences");
+    expect(keymapErrors).toEqual([]);
+  });
+
+  it("saves the attachment default without a local mail database and restores it in a new app", async () => {
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Attachments");
+    expect(frame()).toContain("Download ▾");
+    await clickText("When selecting an attachment");
+    expect(frame()).toContain("Copy link ▾");
+    setup!.renderer.destroy(); setup = null;
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Attachments");
+    expect(frame()).toContain("Copy link ▾");
+  });
+
   it("saves and removes priority rules through the settings page", async () => {
     await renderApp();
     await clickText("Settings");
@@ -328,6 +439,24 @@ describe("Emails Solid TUI", () => {
     expect(frame()).not.toContain("Preferences");
   });
 
+  it("preserves mailbox choices when opening or searching fails and recovers on retry", async () => {
+    await renderApp();
+    const list = spyOn(mailboxData, "listInboxAddresses").mockImplementation(() => { throw new Error("Mailbox connection unavailable"); });
+    try {
+      await clickText("All mailboxes ▾");
+      expect(frame()).toContain("Mailbox connection unavailable");
+      expect(frame()).toContain("ops@example.com");
+      await typeText("ops");
+      await Bun.sleep(200); await flush();
+      expect(frame()).toContain("Mailbox connection unavailable");
+      expect(frame()).toContain("ops@example.com");
+    } finally { list.mockRestore(); }
+    await typeText("@example.com");
+    await Bun.sleep(200); await flush();
+    expect(frame()).not.toContain("Mailbox connection unavailable");
+    expect(frame()).toContain("ops@example.com");
+  });
+
   it("switches from the mailbox title, scopes messages, and returns from a reader to All mailboxes", async () => {
     const billing = createAddress({ provider_id: providerId, email: "billing@example.com" });
     markVerified(billing.id);
@@ -337,6 +466,7 @@ describe("Emails Solid TUI", () => {
     await clickText("All mailboxes ▾");
     await typeText("ops@example.com");
     await key("enter");
+    await setup?.waitForFrame(value => value.includes("ops@example.com ▾") && value.includes("Operations update") && !value.includes("Billing update"));
     expect(frame()).toContain("ops@example.com ▾");
     expect(frame()).toContain("Operations update");
     expect(frame()).not.toContain("Billing update");
@@ -348,6 +478,7 @@ describe("Emails Solid TUI", () => {
     expect(frame()).toContain("ops@example.com ▾");
     await clickText("ops@example.com ▾");
     await clickText("All mailboxes", 0);
+    await setup?.waitForFrame(value => value.includes("All mailboxes ▾") && value.includes("Billing update"));
     expect(frame()).toContain("All mailboxes ▾");
     expect(frame()).toContain("Billing update");
     expect(frame()).not.toContain("No message selected");
@@ -378,6 +509,30 @@ describe("Emails Solid TUI", () => {
     expect(frame()).toContain("Earlier message text");
     await clickText("Quoted message");
     expect(frame()).not.toContain("Earlier message text");
+  });
+
+  it("expands and collapses embedded image previews with keyboard in the actual App", async () => {
+    seedMessage("Image keyboard", undefined, undefined, [], [], {
+      html: '<p>Attached chart</p><img alt="Keyboard chart" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAQCAYAAABQrvyxAAADtklEQVR4nBXPIQ7qBgAA0J1kYgKBQCAQiAoEAtEsCEQFolkQFRUIsiAQFQjyU4GoQDQLAlGBID+IigoEWRAVFQgyvWtsD/EO8H759fef//1Gjz4DhowYEzBhyoyQOQsilsSsSEhZs2HLjow9B3KOFJwoOXOh4sqNOzUND568aOl48+GXXyMBevQZMGTEmIAJU2aEzFkQsSRmRULKmg1bdmTsOZBzpOBEyZkLFVdu3KlpePDkRUvHm0/0DfwhQI8+A4aMGBMwYcqMkDkLIpbErEhIWbNhy46MPQdyjhScKDlzoeLKjTs1DQ+evGjpePP54xtIBejRZ8CQEWMCJkyZETJnQcSSmBUJKWs2bNmRsedAzpGCEyVnLlRcuXGnpuHBkxctHW8+6TfwpwA9+gwYMmJMwIQpM0LmLIhYErMiIWXNhi07MvYcyDlScKLkzIWKKzfu1DQ8ePKipePN589vIBOgR58BQ0aMCZgwZUbInAURS2JWJKSs2bBlR8aeAzlHCk6UnLlQceXGnZqGB09etHS8+WTfwA8BevQZMGTEmIAJU2aEzFkQsSRmRULKmg1bdmTsOZBzpOBEyZkLFVdu3KlpePDkRUvHm8+Pb6AQoEefAUNGjAmYMGVGyJwFEUtiViSkrNmwZUfGngM5RwpOlJy5UHHlxp2ahgdPXrR0vPkU38BfAvToM2DIiDEBE6bMCJmzIGJJzIqElDUbtuzI2HMg50jBiZIzFyqu3LhT0/DgyYuWjjefv76BSoAefQYMGTEmYMKUGSFzFkQsiVmRkLJmw5YdGXsO5BwpOFFy5kLFlRt3ahoePHnR0vHmU30DPwXo0WfAkBFjAiZMmREyZ0HEkpgVCSlrNmzZkbHnQM6RghMlZy5UXLlxp6bhwZMXLR1vPj+/gUaAHn0GDBkxJmDClBkhcxZELIlZkZCyZsOWHRl7DuQcKThRcuZCxZUbd2oaHjx50dLx5tN8A38L0KPPgCEjxgRMmDIjZM6CiCUxKxJS1mzYsiNjz4GcIwUnSs5cqLhy405Nw4MnL1o63nz+/gY6AXr0GTBkxJiACVNmhMxZELEkZkVCypoNW3Zk7DmQc6TgRMmZCxVXbtypaXjw5EVLx5tP9w38I0CPPgOGjBgTMGHKjJA5CyKWxKxISFmzYcuOjD0Hco4UnCg5c6Hiyo07NQ0Pnrxo6Xjz+ecb+FeAHn0GDBkxJmDClBkhcxZELIlZkZCyZsOWHRl7DuQcKThRcuZCxZUbd2oaHjx50dLx5sP/xj5eeU54dY8AAAAASUVORK5CYII=">',
+    });
+    await renderApp();
+    await clickText("Image keyboard");
+    await key("enter");
+    expect(frame()).toContain("Image: Keyboard chart");
+    const images = (): Renderable[] => {
+      const visit = (node: Renderable): Renderable[] => [node, ...node.getChildren().flatMap(visit)];
+      return visit(setup!.renderer.root).filter((node) => node instanceof ImageRenderable);
+    };
+    expect(images()).toHaveLength(0);
+    await key("tab");
+    await key("enter");
+    for (let attempt = 0; attempt < 20 && images().length === 0; attempt++) {
+      await Bun.sleep(10);
+      await flush();
+    }
+    expect(images()).toHaveLength(1);
+    await key(" ");
+    expect(images()).toHaveLength(0);
   });
 
   it("scrolls the entire reader with keys, preserving the selected message and reflowing after resize", async () => {
@@ -584,7 +739,12 @@ describe("Emails Solid TUI", () => {
     expect(frame()).toContain("invoice.pdf");
     expect(frame()).toContain("application/pdf");
     expect(frame()).toContain("2 KB");
-    expect(frame()).toContain("Copy all attachment links");
+    expect(frame()).toContain("Download to Downloads");
+    expect(frame()).toContain("Copy link");
+    await clickText("Copy link");
+    await key("enter");
+    expect(frame()).toContain("Attachment link copied");
+    expect(frame()).toContain("Requires authenticated API access");
   });
 
   // NOTE: the former "renders AI summaries below the email body" test was removed.

@@ -102,6 +102,11 @@ export function loadConfig(configPath?: string): RecordingsConfig {
   if (process.env.RECORDINGS_API_KEY) { // hasna-credential-seam-waiver: RECORDINGS_API_KEY is the OpenAI transcription-key override for config.openai_api_key; a third-party OpenAI key, not a Hasna service-client credential, so the @hasna/contracts client chain does not apply to it.
     config.openai_api_key = process.env.RECORDINGS_API_KEY;
   }
+  // Unambiguous provider override used by native Keychain launches. The legacy
+  // RECORDINGS_API_KEY alias can also be consumed by service authentication.
+  if (process.env.RECORDINGS_OPENAI_API_KEY) {
+    config.openai_api_key = process.env.RECORDINGS_OPENAI_API_KEY;
+  }
   if (process.env.RECORDINGS_ENHANCEMENT_KEY) {
     config.enhancement_api_key = process.env.RECORDINGS_ENHANCEMENT_KEY;
   }
@@ -176,13 +181,13 @@ export function loadConfig(configPath?: string): RecordingsConfig {
     );
   }
 
-  // 3. Load API key from ~/.secrets if not set
-  if (!config.openai_api_key) {
-    config.openai_api_key = loadSecretKey("OPENAI_API_KEY");
-  }
+  // 3. The enhancement key defaults to the transcription key. The retired
+  // ~/.secrets walk is gone: key stores for the OpenAI provider key are the
+  // env vars above, the config file, and the macOS Keychain entry the native
+  // Settings screen writes (hasna/apps#1720 validation lane) — never a walk
+  // of $HOME for *.env files.
   if (!config.enhancement_api_key) {
-    config.enhancement_api_key =
-      config.openai_api_key || loadSecretKey("OPENAI_API_KEY");
+    config.enhancement_api_key = config.openai_api_key;
   }
   if (!explicitTranscriberModel) {
     config.transcriber_model = config.enhancement_model;
@@ -421,60 +426,6 @@ function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
     } else if (!existsSync(targetPath)) {
       copyFileSync(sourcePath, targetPath);
     }
-  }
-}
-
-function loadSecretKey(keyName: string): string {
-  const secretsPath = join(getHomeDir(), ".secrets");
-  if (!existsSync(secretsPath)) return "";
-
-  for (const candidate of listSecretFiles(secretsPath)) {
-    try {
-      const content = readFileSync(candidate, "utf-8");
-      const match = content.match(
-        new RegExp(`export\\s+${keyName}\\s*=\\s*"([^"]+)"`)
-      );
-      const doubleQuotedValue = match?.[1];
-      if (doubleQuotedValue !== undefined) return doubleQuotedValue;
-
-      const match2 = content.match(
-        new RegExp(`export\\s+${keyName}\\s*=\\s*'([^']+)'`)
-      );
-      const singleQuotedValue = match2?.[1];
-      if (singleQuotedValue !== undefined) return singleQuotedValue;
-
-      const match3 = content.match(new RegExp(`${keyName}\\s*=\\s*(.+)`));
-      const unquotedValue = match3?.[1];
-      if (unquotedValue !== undefined) return unquotedValue.trim().replace(/^["']|["']$/g, "");
-    } catch {
-      // Ignore unreadable secret files
-    }
-  }
-
-  return "";
-}
-
-function listSecretFiles(path: string): string[] {
-  try {
-    const stats = statSync(path);
-    if (stats.isFile()) return [path];
-    if (!stats.isDirectory()) return [];
-
-    return readdirSync(path)
-      .sort()
-      .flatMap((entry) => {
-        const child = join(path, entry);
-        try {
-          const childStats = statSync(child);
-          if (childStats.isDirectory()) return listSecretFiles(child);
-          if (childStats.isFile() && child.endsWith(".env")) return [child];
-        } catch {
-          // Ignore entries that disappear or are unreadable
-        }
-        return [];
-      });
-  } catch {
-    return [];
   }
 }
 

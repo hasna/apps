@@ -2133,4 +2133,463 @@ describe("self-hosted Postgres integration", () => {
       "priority:domain:example.com",
     ]);
   });
+
+  // FR-0001: migration 0041 surfaces the actions/enabled/order columns with
+  // defaults, the enabled partial index exists, and CRUD round-trips every new
+  // field through real Postgres (create / get-by-name / PATCH merge / PUT
+  // replace / update enabled+order / delete).
+  postgresTest(!client)("0041 mailbox-filter actions migration, defaults, index, and CRUD round trip (FR-0001)", async () => {
+    await resetPublicSchema();
+    await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
+    const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
+
+    expect(await columnType("mailbox_filters", "actions")).toBe("jsonb");
+    expect(await columnType("mailbox_filters", "enabled")).toBe("boolean");
+    expect(await columnType("mailbox_filters", "order")).toBe("integer");
+    const defaults = await client!.many<{ column_name: string; column_default: string | null }>(
+      `SELECT column_name, column_default FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'mailbox_filters'
+         AND column_name IN ('actions', 'enabled', 'order') ORDER BY column_name`,
+    );
+    const byName = Object.fromEntries(defaults.map((row) => [row.column_name, row.column_default]));
+    expect(byName["actions"]).toBe("'{}'::jsonb");
+    expect(byName["enabled"]).toBe("false");
+    expect(byName["order"]).toBe("0");
+    const index = await client!.get<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes
+       WHERE schemaname = 'public' AND tablename = 'mailbox_filters'
+         AND indexname = 'mailbox_filters_enabled_order_idx'`,
+    );
+    expect(index?.indexdef).toMatch(/mailbox_filters_enabled_order_idx/);
+    expect(index?.indexdef).toMatch(/WHERE \(enabled = true\)/);
+
+    // CRUD round trip with every new field.
+    const created = await store.createMailboxFilter({
+      name: "Invoice Sweep", mailbox: "inbox", criteria: { from: "billing@example.test" },
+      actions: { add_labels: ["Invoice"], archive: true, mark_read: true }, enabled: true, order: 7,
+    });
+    expect(created.actions).toEqual({ add_labels: ["invoice"], archive: true, mark_read: true });
+    expect(created.enabled).toBe(true);
+    expect(created.order).toBe(7);
+
+    const byId = await store.getMailboxFilter(created.id);
+    expect(byId?.name).toBe("Invoice Sweep");
+    expect(byId?.actions).toEqual({ add_labels: ["invoice"], archive: true, mark_read: true });
+    const byNameFilter = await store.getMailboxFilter("invoice sweep");
+    expect(byNameFilter?.id).toBe(created.id);
+    expect(byNameFilter?.enabled).toBe(true);
+
+    // PATCH merges an actions MEMBER over the stored canonical object.
+    const patched = await store.updateMailboxFilter("Invoice Sweep", { actions: { mark_read: false } });
+    expect(patched.actions).toEqual({ add_labels: ["invoice"], archive: true, mark_read: false });
+    expect(patched.enabled).toBe(true);
+    expect(patched.order).toBe(7);
+
+    // PUT (replaceCriteria) replaces the whole actions object; omitted members
+    // normalize back to their defaults.
+    const replaced = await store.updateMailboxFilter("invoice-sweep", {
+      criteria: {}, actions: { add_labels: ["Only"] },
+    }, { replaceCriteria: true });
+    expect(replaced.actions).toEqual({ add_labels: ["only"], archive: false, mark_read: false });
+    expect(replaced.criteria).toEqual({});
+
+    // enabled + order are individually persisted.
+    const reprioritized = await store.updateMailboxFilter("invoice sweep", { enabled: false, order: 3 });
+    expect(reprioritized.enabled).toBe(false);
+    expect(reprioritized.order).toBe(3);
+    expect((await store.getMailboxFilter("invoice sweep"))?.enabled).toBe(false);
+
+    expect(await store.deleteMailboxFilter("invoice sweep")).toBe(true);
+    expect(await store.getMailboxFilter("invoice sweep")).toBeNull();
+    expect(await store.deleteMailboxFilter("invoice sweep")).toBe(false);
+  });
+
+  // FR-0001: an ENABLED filter auto-applies its actions to a genuinely new
+  // message on EVERY new-insert path, and a replayed/duplicate delivery of the
+  // same source NEVER re-applies (existing state and user edits are preserved).
+  postgresTest(!client)("0041 enabled filters auto-apply on every new-insert path and never on replay (FR-0001)", async () => {
+    await resetPublicSchema();
+    await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
+    const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
+    // Routing/provenance scaffolding the transactional insert paths require.
+    const providerId = crypto.randomUUID();
+    await client!.execute(
+      `INSERT INTO inbound_domain_routes (domain, tenant_id) VALUES
+         ('example.com', $1::uuid), ('relay-import.example', $1::uuid)`,
+      [DEFAULT_TENANT_ID],
+    );
+    await client!.execute(
+      `INSERT INTO self_hosted_providers (id, name, type, tenant_id)
+       VALUES ($1, 'fr-relay', 'resend', $2::uuid)`,
+      [providerId, DEFAULT_TENANT_ID],
+    );
+
+    const read = async (id: string) => (await store.getMessage(id))!;
+    // Widen the "Auto" filter's add_labels list so a wrongly re-applied replay
+    // (which would add the newest label to an already-processed row) is visible.
+    const setActions = async (...labels: string[]) => {
+      await store.updateMailboxFilter("Auto", { actions: { add_labels: [...labels] } });
+    };
+
+    const auto = await store.createMailboxFilter({
+      name: "Auto", mailbox: "inbox", criteria: { from: "billing@example.test" },
+      actions: { add_labels: ["Invoice"], mark_read: true }, enabled: true, order: 0,
+    });
+    expect(auto.enabled).toBe(true);
+
+    // 1) createMessage auto-applies (new row, no replay concept) and keeps pre-existing labels.
+    const keep = await store.createMessage({
+      direction: "inbound", from_addr: "billing@example.test", to_addrs: ["owner@example.test"],
+      subject: "keep", status: "received", labels: ["keep"],
+    });
+    expect((await read(keep.id)).labels).toEqual(["keep", "invoice"]);
+    expect((await read(keep.id)).is_read).toBe(true);
+    // 2) A message outside the filter's criteria is untouched.
+    const noise = await store.createMessage({
+      direction: "inbound", from_addr: "other@example.test", to_addrs: ["owner@example.test"],
+      subject: "noise", status: "received",
+    });
+    expect((await read(noise.id)).labels).toEqual([]);
+    expect((await read(noise.id)).is_read).toBe(false);
+
+    // 3) upsertMessage applies ONLY when inserted; a replayed source never re-applies.
+    const firstUpsert = await store.upsertMessage({
+      direction: "inbound", from_addr: "billing@example.test", to_addrs: ["owner@example.test"],
+      subject: "up-1", status: "received", source_id: "src/up-1", labels: [],
+    });
+    expect(firstUpsert.inserted).toBe(true);
+    expect((await read(firstUpsert.record.id)).labels).toEqual(["invoice"]);
+    // Widen the filter's action so a WRONGLY re-applied replay would be visible.
+    await setActions("Invoice", "Late");
+    // Replay omits labels (as real ingest payloads do): the conflict path must
+    // refresh content WITHOUT re-running the filter and without wiping what the
+    // first insert's auto-apply added.
+    const replayed = await store.upsertMessage({
+      direction: "inbound", from_addr: "billing@example.test", to_addrs: ["owner@example.test"],
+      subject: "up-1-edited", status: "received", source_id: "src/up-1",
+    });
+    expect(replayed.inserted).toBe(false);
+    // The replay updated the row but the new "Late" action was NOT re-applied.
+    const upRow = await read(firstUpsert.record.id);
+    expect(upRow.subject).toBe("up-1-edited");
+    expect(upRow.labels).toEqual(["invoice"]);
+    expect(upRow.labels).not.toContain("late");
+
+    // 4) createInboundMessageWithProvenance applies only on the inserted winner;
+    //    a duplicate delivery of the same object key observes the row unchanged.
+    const provKey = "src/prov-1";
+    const provInput = (subject: string) => ({
+      direction: "inbound" as const, from_addr: "billing@example.test", to_addrs: ["owner@example.test"],
+      subject, status: "received" as const, source_id: provKey, message_id: provKey, is_read: false, labels: [],
+    });
+    const provWinner = await store.createInboundMessageWithProvenance(provInput("prov-1"), {
+      bucket: "fr-bucket", objectKey: provKey, rawSha256: "a".repeat(64), establishedVia: "normal_ingest",
+    });
+    expect(provWinner.inserted).toBe(true);
+    expect((await read(provWinner.record.id)).labels).toEqual(["invoice", "late"]);
+    await setActions("Invoice", "Late", "Provenance");
+    const provDup = await store.createInboundMessageWithProvenance(provInput("prov-1-edited"), {
+      bucket: "fr-bucket", objectKey: provKey, rawSha256: "a".repeat(64), establishedVia: "normal_ingest",
+    });
+    expect(provDup.inserted).toBe(false);
+    const provRow = await read(provDup.record.id);
+    expect(provRow.labels).toEqual(["invoice", "late"]);
+    expect(provRow.labels).not.toContain("provenance");
+
+    // 5) submitSmtpMessage applies on the first receipt; a duplicate transaction
+    //    replay keeps the original row state.
+    const txId = crypto.randomUUID();
+    const hash = "b".repeat(64);
+    const smtpInput = () => ({
+      direction: "inbound" as const, from_addr: "billing@example.test", to_addrs: ["inbox@example.com"],
+      subject: "smtp-1", status: "received" as const,
+    });
+    const smtpFirst = await store.submitSmtpMessage(smtpInput(), txId, hash);
+    expect(smtpFirst.duplicate).toBe(false);
+    expect((await read(smtpFirst.id)).labels).toEqual(["invoice", "late", "provenance"]);
+    await setActions("Invoice", "Late", "Provenance", "Smtp");
+    expect(await store.submitSmtpMessage(smtpInput(), txId, hash)).toEqual({ stored: true, id: smtpFirst.id, duplicate: true });
+    expect((await read(smtpFirst.id)).labels).toEqual(["invoice", "late", "provenance"]);
+    expect((await read(smtpFirst.id)).labels).not.toContain("smtp");
+
+    // 6) createRelayInbound applies on the first webhook import; a replayed
+    //    event id for the same source does not re-apply.
+    const namespace = `relay:resend:${providerId}`;
+    const relayInput = () => ({
+      direction: "inbound" as const, from_addr: "billing@example.test", to_addrs: ["inbox@relay-import.example"],
+      subject: "relay-1", status: "received" as const, provider_id: providerId, source_id: "src/relay-1",
+    });
+    const relayFirst = await store.createRelayInbound(namespace, "relay-ev", relayInput());
+    expect(relayFirst.id).toBeTruthy();
+    expect((await read(relayFirst.id)).labels).toEqual(["invoice", "late", "provenance", "smtp"]);
+    await setActions("Invoice", "Late", "Provenance", "Smtp", "Relay");
+    const relayReplay = await store.createRelayInbound(namespace, "relay-ev", relayInput());
+    expect(relayReplay.id).toBe(relayFirst.id);
+    expect((await read(relayFirst.id)).labels).toEqual(["invoice", "late", "provenance", "smtp"]);
+    expect((await read(relayFirst.id)).labels).not.toContain("relay");
+
+    // Execution ORDER is real: an archive action (order 0) must run before an
+    // archived-scoped filter (order 1) or the second filter would never match.
+    await store.updateMailboxFilter("Auto", { enabled: false });
+    await store.createMailboxFilter({
+      name: "Archive Step", mailbox: "inbox", criteria: { from: "billing@example.test" },
+      actions: { archive: true }, enabled: true, order: 0,
+    });
+    await store.createMailboxFilter({
+      name: "Deep Step", mailbox: "archived", criteria: { from: "billing@example.test" },
+      actions: { add_labels: ["DeepArchive"], mark_read: true }, enabled: true, order: 1,
+    });
+    const ordered = await store.createMessage({
+      direction: "inbound", from_addr: "billing@example.test", to_addrs: ["owner@example.test"],
+      subject: "ordered", status: "received",
+    });
+    expect((await read(ordered.id)).labels).toEqual(["archived", "deeparchive"]);
+    expect((await read(ordered.id)).is_read).toBe(true);
+
+    // A disabled filter does not auto-apply even on a matching new insert.
+    const disabled = await store.createMailboxFilter({
+      name: "Off", mailbox: "inbox", criteria: { from: "billing@example.test" },
+      actions: { add_labels: ["Never"] }, enabled: false, order: 9,
+    });
+    expect(disabled.enabled).toBe(false);
+    const offMessage = await store.createMessage({
+      direction: "inbound", from_addr: "billing@example.test", to_addrs: ["owner@example.test"],
+      subject: "off", status: "received",
+    });
+    expect((await read(offMessage.id)).labels).toEqual(["archived", "deeparchive"]);
+    expect((await read(offMessage.id)).labels).not.toContain("never");
+  });
+
+  // FR-0001: mutate-mode apply transactionally backfills over 1,000 rows, is a
+  // no-op on re-apply, preserves pre-existing labels, rejects disabled filters
+  // and nonzero offsets, and aborts atomically on a mid-way failure.
+  postgresTest(!client)("0041 mutate-mode apply backfills 1,000+ rows atomically (FR-0001)", async () => {
+    await resetPublicSchema();
+    await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
+    const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
+
+    // 1,005 pre-existing inbox rows from the billing sender (direct SQL: they
+    // predate the filter, so no ingest hook could have seen them).
+    await client!.execute(
+      `INSERT INTO messages (id, from_addr, direction, status, labels, tenant_id)
+       SELECT 'fr-bulk-' || gs, 'billing@example.test', 'inbound', 'received', '[]'::jsonb, $1::uuid
+         FROM generate_series(1, 1005) AS gs`,
+      [DEFAULT_TENANT_ID],
+    );
+    // A handful already carry a user label that must be retained.
+    await client!.execute(
+      `UPDATE messages SET labels = '["keep"]'::jsonb
+        WHERE id IN ('fr-bulk-1', 'fr-bulk-2', 'fr-bulk-3')`,
+    );
+
+    await store.createMailboxFilter({
+      name: "Bulk Billing", mailbox: "inbox", criteria: { from: "billing@example.test" },
+      actions: { add_labels: ["Billed"], mark_read: true }, enabled: false, order: 0,
+    });
+    // A disabled filter cannot be mutated; plain list-apply still works.
+    await expect(store.applyMailboxFilter("Bulk Billing", { mutate: true })).rejects.toThrow(/disabled/i);
+    const disabled = await store.createMailboxFilter({
+      name: "Never On", mailbox: "inbox", criteria: { from: "never@example.test" },
+      actions: { add_labels: ["Nope"] }, enabled: false, order: 5,
+    });
+    expect(disabled.enabled).toBe(false);
+    await expect(store.applyMailboxFilter("Never On", { mutate: true })).rejects.toThrow(/disabled/i);
+    const listOnly = await store.applyMailboxFilter("Never On", { limit: 5 });
+    expect(listOnly.mutate).toBeUndefined();
+    expect(listOnly.page.items).toEqual([]);
+
+    await store.updateMailboxFilter("Bulk Billing", { enabled: true });
+    // Mutate does not paginate (offset must be 0).
+    await expect(store.applyMailboxFilter("Bulk Billing", { mutate: true, offset: 5 })).rejects.toThrow(/offset/i);
+    const first = await store.applyMailboxFilter("Bulk Billing", { mutate: true });
+    expect(first.mutate).toBe(true);
+    expect(first.matched).toBe(1005);
+    expect(first.updated).toBe(1005);
+    expect(first.unchanged).toBe(0);
+    // Existing labels retained on the bulk rows; reads flipped.
+    const keptRow = await client!.one<{ labels: string[]; is_read: boolean }>(
+      `SELECT labels, is_read FROM messages WHERE id = 'fr-bulk-1'`,
+    );
+    expect(keptRow.labels).toEqual(["keep", "billed"]);
+    expect(keptRow.is_read).toBe(true);
+
+    // Re-applying the same filter is a full no-op.
+    const second = await store.applyMailboxFilter("Bulk Billing", { mutate: true });
+    expect(second.matched).toBe(1005);
+    expect(second.updated).toBe(0);
+    expect(second.unchanged).toBe(1005);
+
+    // Atomic rollback: a BEFORE UPDATE trigger fails one row; the transaction
+    // must leave NO partial backfill behind (matched rows stay untouched).
+    await client!.execute(
+      `INSERT INTO messages (id, from_addr, direction, status, labels, tenant_id)
+       SELECT 'fr-poi-' || gs, 'poison@example.test', 'inbound', 'received',
+              CASE WHEN gs = 1 THEN '["poison"]'::jsonb ELSE '[]'::jsonb END, $1::uuid
+         FROM generate_series(1, 6) AS gs`,
+      [DEFAULT_TENANT_ID],
+    );
+    await store.createMailboxFilter({
+      name: "Poison Queue", mailbox: "inbox", criteria: { from: "poison@example.test" },
+      actions: { add_labels: ["Billed2"], mark_read: true }, enabled: true, order: 1,
+    });
+    await client!.execute(
+      `CREATE FUNCTION fr0001_boom() RETURNS trigger LANGUAGE plpgsql AS
+       $$ BEGIN RAISE EXCEPTION 'fr0001 atomic fail'; END $$`,
+    );
+    await client!.execute(
+      `CREATE TRIGGER fr0001_boom BEFORE UPDATE ON messages
+       FOR EACH ROW WHEN (NEW.id = 'fr-poi-1') EXECUTE FUNCTION fr0001_boom()`,
+    );
+    await expect(store.applyMailboxFilter("Poison Queue", { mutate: true })).rejects.toThrow(/fr0001 atomic fail/);
+    const partial = await client!.one<{ n: number }>(
+      `SELECT count(*)::int AS n FROM messages WHERE labels @> '["billed2"]'::jsonb`,
+    );
+    expect(partial.n).toBe(0);
+    const untouched = await client!.one<{ labels: string[]; is_read: boolean }>(
+      `SELECT labels, is_read FROM messages WHERE id = 'fr-poi-1'`,
+    );
+    expect(untouched.labels).toEqual(["poison"]);
+    expect(untouched.is_read).toBe(false);
+    await client!.execute("DROP TRIGGER fr0001_boom ON messages");
+    await client!.execute("DROP FUNCTION fr0001_boom()");
+
+    // After the abort the same backfill succeeds and keeps the pre-existing label.
+    const recovered = await store.applyMailboxFilter("Poison Queue", { mutate: true });
+    expect(recovered.matched).toBe(6);
+    expect(recovered.updated).toBe(6);
+    expect(recovered.unchanged).toBe(0);
+    const poisonRow = await client!.one<{ labels: string[]; is_read: boolean }>(
+      `SELECT labels, is_read FROM messages WHERE id = 'fr-poi-1'`,
+    );
+    expect(poisonRow.labels).toEqual(["poison", "billed2"]);
+    expect(poisonRow.is_read).toBe(true);
+  });
+
+  // BUG-0040 DEFECT 1 (FR-0001 follow-up): the insert hooks applied enabled
+  // filters AFTER building their returned record, so POST /v1/messages and the
+  // record-returning insert paths handed callers a PRE-apply snapshot
+  // (archived=false / read=false / no labels) for a message a just-enabled
+  // filter auto-archived, marked read, or labelled. The RETURNED record must
+  // already reflect the auto-applied actions (not just a later re-read).
+  postgresTest(!client)("BUG-0040 insert hooks return POST-apply records when an enabled filter auto-applies", async () => {
+    await resetPublicSchema();
+    await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
+    const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
+
+    await store.createMailboxFilter({
+      name: "Return Stale", mailbox: "inbox", criteria: { from: "billing@example.test" },
+      actions: { add_labels: ["billed"], archive: true, mark_read: true }, enabled: true, order: 0,
+    });
+
+    // createMessage: the record RETURNED by the call already carries the action.
+    const created = await store.createMessage({
+      direction: "inbound", from_addr: "billing@example.test", to_addrs: ["owner@billing.example"],
+      subject: "def1-create", status: "received", labels: [],
+    });
+    expect(created.is_read).toBe(true);
+    expect(created.labels).toEqual(expect.arrayContaining(["billed", "archived"]));
+    const storedCreated = await store.getMessage(created.id);
+    expect(storedCreated?.is_read).toBe(true);
+    expect(storedCreated?.labels).toEqual(created.labels);
+
+    // upsertMessage NEW insert: returned record reflects the auto-apply.
+    const upserted = await store.upsertMessage({
+      direction: "inbound", from_addr: "billing@example.test", to_addrs: ["owner@billing.example"],
+      subject: "def1-upsert", status: "received", source_id: "src/def1-upsert", labels: [],
+    });
+    expect(upserted.inserted).toBe(true);
+    expect(upserted.record.is_read).toBe(true);
+    expect(upserted.record.labels).toEqual(expect.arrayContaining(["billed", "archived"]));
+
+    // createInboundMessageWithProvenance inserted winner: returned record reflects the auto-apply.
+    const key = "src/def1-inbound";
+    const prov = await store.createInboundMessageWithProvenance(
+      {
+        direction: "inbound", from_addr: "billing@example.test", to_addrs: ["owner@billing.example"],
+        subject: "def1-inbound", status: "received", source_id: key, message_id: key, is_read: false, labels: [],
+      },
+      { bucket: "b0040", objectKey: key, rawSha256: "c".repeat(64), establishedVia: "normal_ingest" },
+    );
+    expect(prov.inserted).toBe(true);
+    expect(prov.record.is_read).toBe(true);
+    expect(prov.record.labels).toEqual(expect.arrayContaining(["billed", "archived"]));
+  });
+
+  // BUG-0040 DEFECT 2 (FR-0001 follow-up): mutate-mode backfill SELECTed the
+  // entire matching set with no LIMIT and applied row-by-row in one unbounded
+  // transaction. The apply route's clamped `limit` must control the backfill
+  // write-batch size instead: a batch smaller than the total still covers the
+  // COMPLETE matching set (bounded id-keyset batches inside one transaction),
+  // never double-applies on a second pass, and never skips a row that an
+  // earlier batch's action removed from the criteria (mark_read shrinks an
+  // unread result set).
+  postgresTest(!client)("BUG-0040 mutate backfill honours a small batch limit yet still covers the full matching set", async () => {
+    await resetPublicSchema();
+    await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
+    const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
+
+    // 210 pre-existing inbox rows from the billing sender (direct SQL: they
+    // predate the filter, so no ingest hook could have seen them). The filter's
+    // criteria ({ from }) is NOT shrunk by its own mark_read action, so a
+    // re-apply is a legitimate no-op over the same 210 rows.
+    await client!.execute(
+      `INSERT INTO messages (id, from_addr, direction, status, labels, tenant_id)
+       SELECT 'bug0040-bulk-' || gs, 'billing@example.test', 'inbound', 'received', '[]'::jsonb, $1::uuid
+         FROM generate_series(1, 210) AS gs`,
+      [DEFAULT_TENANT_ID],
+    );
+    await store.createMailboxFilter({
+      name: "Batch Billing", mailbox: "inbox", criteria: { from: "billing@example.test" },
+      actions: { add_labels: ["batch"], mark_read: true }, enabled: true, order: 0,
+    });
+
+    // Batch size of 7 (< total 210) must still process every matching row.
+    const small = await store.applyMailboxFilter("Batch Billing", { mutate: true, limit: 7 });
+    expect(small.mutate).toBe(true);
+    expect(small.limit).toBe(7);
+    expect(small.matched).toBe(210);
+    expect(small.updated).toBe(210);
+    expect(small.unchanged).toBe(0);
+
+    // Every row actually got the write (not just counted).
+    const counted = await client!.one<{ n: number }>(
+      `SELECT count(*)::int AS n FROM messages WHERE labels @> '["batch"]'::jsonb`,
+    );
+    expect(counted.n).toBe(210);
+
+    // Re-applying the same filter with a tiny limit is a full no-op — no row is
+    // processed twice across batches.
+    const noop = await store.applyMailboxFilter("Batch Billing", { mutate: true, limit: 7 });
+    expect(noop.matched).toBe(210);
+    expect(noop.updated).toBe(0);
+    expect(noop.unchanged).toBe(210);
+
+    // The route clamp (1-1000) still governs the write-batch size.
+    const clamped = await store.applyMailboxFilter("Batch Billing", { mutate: true, limit: 5000 });
+    expect(clamped.limit).toBe(1000);
+    expect(clamped.matched).toBe(210);
+    expect(clamped.updated).toBe(0);
+
+    // Shrink-safety: a mark_read backfill over an UNREAD criteria set removes
+    // each processed row from the result as it goes; a small batch must still
+    // advance through the whole set exactly once (keyset on id, never offsets).
+    await client!.execute(
+      `INSERT INTO messages (id, from_addr, direction, status, labels, tenant_id)
+       SELECT 'bug0040-shrink-' || gs, 'shrink@example.test', 'inbound', 'received', '[]'::jsonb, $1::uuid
+         FROM generate_series(1, 60) AS gs`,
+      [DEFAULT_TENANT_ID],
+    );
+    await store.createMailboxFilter({
+      name: "Shrink Unread", mailbox: "unread", criteria: { from: "shrink@example.test" },
+      actions: { mark_read: true }, enabled: true, order: 1,
+    });
+    const shrink = await store.applyMailboxFilter("Shrink Unread", { mutate: true, limit: 7 });
+    expect(shrink.matched).toBe(60);
+    expect(shrink.updated).toBe(60);
+    expect(shrink.unchanged).toBe(0);
+    const readCount = await client!.one<{ n: number }>(
+      `SELECT count(*)::int AS n FROM messages WHERE from_addr = 'shrink@example.test' AND is_read = true`,
+    );
+    expect(readCount.n).toBe(60);
+  });
 });

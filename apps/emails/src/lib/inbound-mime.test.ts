@@ -76,3 +76,8 @@ describe("flattenHeaders", () => {
     expect(flattenHeaders(null)).toEqual({});
   });
 });
+
+it("preserves MIME Content-ID for authenticated inline image lookup",async()=>{
+ const raw=["From: sender@example.com","To: recipient@example.com","Subject: Embedded image","MIME-Version: 1.0",'Content-Type: multipart/related; boundary="image-fixture"',"","--image-fixture","Content-Type: text/html","",'<img src="cid:badge-fixture" alt="Badge">',"--image-fixture",'Content-Type: image/png; name="badge.png"',"Content-ID: <badge-fixture>",'Content-Disposition: inline; filename="badge.png"',"Content-Transfer-Encoding: base64","","aW1hZ2UtZml4dHVyZQ==","--image-fixture--",""].join("\r\n");
+ const message=await parseInboundMime(raw);expect(message.attachments[0]?.content_id).toBe("badge-fixture");expect(message.attachments[0]?.content_base64).toBe("aW1hZ2UtZml4dHVyZQ==");
+});

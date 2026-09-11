@@ -1,60 +1,25 @@
+import { registerWorkspaceInvitationCommands } from "./workspace-invitations.js";
 import type { Command } from "commander";
-import { getApiUrl } from "../../lib/auth-store.js";
+import { prepareProfileWorkspace } from "../../lib/workspace-profile.js";
+import { registerWorkspaceListCommand } from "./workspace-selection.js";
 import { RemoteSkillsAuthClient } from "../../lib/remote-auth.js";
 import { customerNamePatch } from "../../lib/remote-profile.js";
-import { emitKeypressEvents, type Key } from "node:readline";
-
-class NameInputError extends Error {}
-
-/** OTP enters through stdin, never a new command-line credential argument. */
-async function readCode(): Promise<string> {
-  if (process.stdin.isTTY) throw new NameInputError("Pipe a fresh six-digit verification code when using --code-stdin.");
-  let text = "";
-  for await (const chunk of process.stdin) {
-    text += chunk.toString();
-    if (text.length > 32) throw new NameInputError("Supply only a six-digit verification code on stdin.");
-  }
-  const code = text.trim();
-  if (!/^\d{6}$/.test(code)) throw new NameInputError("Supply only a six-digit verification code on stdin.");
-  return code;
-}
-
-function promptCode(): Promise<string | null> {
-  const stdin = process.stdin, output = process.stderr;
-  const wasRaw = stdin.isRaw, wasFlowing = stdin.readableFlowing;
-  return new Promise(resolve => {
-    let value = "", settled = false;
-    const finish = (answer: string | null) => {
-      if (settled) return;
-      settled = true; clearTimeout(timer);
-      stdin.off("keypress", keypress); stdin.off("end", cancel); process.off("SIGINT", cancel);
-      stdin.setRawMode(wasRaw); if (wasFlowing !== true) stdin.pause();
-      output.write("\n");
-      if (answer === null) process.exitCode = 130;
-      resolve(answer);
-    };
-    const cancel = () => finish(null);
-    const keypress = (text: string, key: Key) => {
-      if ((key.ctrl && ["c", "d"].includes(key.name ?? "")) || key.name === "escape") return cancel();
-      if (key.name === "return" || key.name === "enter") {
-        if (value.length === 6) return finish(value);
-        output.write("\nEnter all six digits: "); value = ""; return;
-      }
-      if (key.name === "backspace") {
-        if (value) { value = value.slice(0, -1); output.write("\b \b"); }
-      } else if (/^[0-9]$/.test(text) && value.length < 6) { value += text; output.write("*"); }
-    };
-    const timer = setTimeout(cancel, 5 * 60 * 1000);
-    emitKeypressEvents(stdin); stdin.setRawMode(true);
-    stdin.on("keypress", keypress); stdin.once("end", cancel); process.once("SIGINT", cancel);
-    output.write("Enter the six-digit code sent to your email: "); stdin.resume();
-  });
-}
+import { NameInputError, promptCode, readCode } from "./customer-verification.js";
+import { registerWorkspaceLeaveCommand } from "./workspace-leave.js";
+import { registerWorkspaceMembersCommand } from "./workspace-members.js";
+import { registerWorkspaceMemberMutationCommands } from "./workspace-member-mutations.js";
 
 export function registerCustomerProfileCommands(program: Command) {
+  const account = program.command("account").description("Manage your account on the selected Skills server");
+  const workspace = program.command("workspace").description("Manage the current workspace on the selected Skills server");
+  registerWorkspaceListCommand(workspace);
+  registerWorkspaceMembersCommand(workspace);
+  registerWorkspaceMemberMutationCommands(workspace);
+  registerWorkspaceLeaveCommand(workspace);
+  registerWorkspaceInvitationCommands(workspace);
   const commands = [
-    { kind: "account", command: program.command("account").description("Manage your account on the selected Skills server").command("update") },
-    { kind: "workspace", command: program.command("workspace").description("Manage the current workspace on the selected Skills server").command("update") },
+    { kind: "account", command: account.command("update") },
+    { kind: "workspace", command: workspace.command("update") },
   ] as const;
   for (const { kind, command } of commands) {
     command.allowExcessArguments(false)
@@ -65,7 +30,8 @@ export function registerCustomerProfileCommands(program: Command) {
       .option("--json", "Output JSON")
       .action(async (options: { email: string; displayName?: string; name?: string; json?: boolean; codeStdin?: boolean }) => {
         try {
-          const client = new RemoteSkillsAuthClient(getApiUrl(`Update ${kind} name`));
+          const pending = prepareProfileWorkspace(`Update ${kind} name`);
+          const client = new RemoteSkillsAuthClient(pending.origin);
           customerNamePatch(kind === "account" ? { displayName: options.displayName } : { name: options.name }, kind === "account" ? "displayName" : "name");
           if (!options.codeStdin && (options.json || !process.stdin.isTTY || !process.stderr.isTTY)) {
             throw new NameInputError("Use --code-stdin with a fresh verification code for JSON or noninteractive updates.");
@@ -74,9 +40,11 @@ export function registerCustomerProfileCommands(program: Command) {
           if (options.codeStdin) code = await readCode();
           else { await client.requestCode(options.email); code = await promptCode(); }
           if (code === null) return;
+          const target = await pending.resolve();
+          target.unchanged();
           const result = kind === "account"
-            ? await client.updateProfile(options.email, code, { displayName: options.displayName! })
-            : await client.updateCurrentWorkspace(options.email, code, { name: options.name! });
+            ? await client.updateProfile(options.email, code, { displayName: options.displayName! }, target.context)
+            : await client.updateCurrentWorkspace(options.email, code, { name: options.name! }, target.context);
           if (options.json) console.log(JSON.stringify(result));
           else console.log(kind === "account" ? "Display name saved." : "Workspace name saved.");
         } catch (error) {

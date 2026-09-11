@@ -83,7 +83,7 @@ interface PackageJson {
 }
 
 const EXPECTED_PACKAGE_NAME = "@hasna/todos";
-const EXPECTED_REPOSITORY = "https://github.com/hasna/todos.git";
+const EXPECTED_REPOSITORY = "https://github.com/hasna/apps.git";
 const EXPECTED_BINS = ["todos", "todos-mcp", "todos-serve"];
 const EXPECTED_EXPORTS = [".", "./sdk", "./mcp", "./registry", "./contracts", "./storage"];
 const REQUIRED_SCRIPTS = ["build", "test:no-cloud", "verify:release", "prepublishOnly"];
@@ -200,8 +200,8 @@ function checkPackage(packageJson: PackageJson): ReleaseCompatibilityCheck[] {
     ? pass("publish-access", "Package publish access is public.")
     : fail("publish-access", "Package publish access must be public.", { actual: packageJson.publishConfig?.access ?? null }));
   checks.push(packageJson.repository?.url === EXPECTED_REPOSITORY
-    ? pass("repository", "Repository points at hasna/todos.")
-    : fail("repository", "Repository must point at hasna/todos.", { actual: packageJson.repository?.url ?? null }));
+    ? pass("repository", "Repository points at hasna/apps.")
+    : fail("repository", "Repository must point at hasna/apps.", { actual: packageJson.repository?.url ?? null }));
 
   const dependencyNames = Object.keys(packageJson.dependencies ?? {});
   const privateStudio = `hasna${"studio"}`;

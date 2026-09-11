@@ -1,11 +1,10 @@
-// Self-hosted-ONLY: provider event ingestion, sent-log stats/analytics and the
-// live monitor are owned by the self-hosted server. This client keeps the
-// commands for discoverability but fails loud — there is no local island to
-// sync/aggregate and no /v1 equivalent to route them through.
+// Statistics use the configured API store; remaining ingestion handlers are
+// exercised separately until their API replacements land.
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { Command } from "commander";
+import { startV1Stub } from "../../test-support/v1-stub.js";
 import { registerSyncCommands } from "./sync.js";
-import { registerSyncCommands as registerLocalSyncCommands } from "./sync.local.js";
+import { registerSyncCommands as registerLocalSyncCommands } from "./sync.local.test-support.js";
 import { registerSyncCommands as registerRemoteSyncCommands } from "./sync.remote.js";
 
 const MODE_ENV_KEYS = [
@@ -72,41 +71,21 @@ afterEach(() => {
   }
 });
 
-describe("sync CLI commands (server-only in the self-hosted client)", () => {
-  const cases: Array<{ args: string[]; command: string }> = [
-    { args: ["provider", "sync"], command: "emails provider sync" },
-    { args: ["pull"], command: "emails pull" },
-    { args: ["stats"], command: "emails stats" },
-    { args: ["stats", "--inbox"], command: "emails stats" },
-    { args: ["monitor"], command: "emails monitor" },
-    { args: ["analytics"], command: "emails analytics" },
-  ];
-
-  for (const { args, command } of cases) {
-    it(`fails loud for emails ${args.join(" ")}`, async () => {
+describe("sync CLI provider selection", () => {
+  for (const args of [["provider", "sync", "--provider", " "], ["pull", "--provider", " "]]) {
+    it(`rejects a blank selector for ${args[0]} before contacting a provider`, async () => {
       enableSelfHostedMode();
-
-      const error = await runSyncCommandExpectingExit(args);
-
-      expect(error).toContain(`${command} is not available in the self-hosted client; it runs on the self-hosted server.`);
+      expect(await runSyncCommandExpectingExit(args)).toContain("--provider must name a provider identifier");
     });
   }
 });
 
 describe("sync JSON output", () => {
   it("prints one parseable stats document when -j follows the command", async () => {
-    const env = {
-      ...process.env,
-      EMAILS_DB_PATH: ":memory:",
-      NO_COLOR: "1",
-    };
-    // Local is chosen by the explicit database path alone; every API and
-    // retired deployment-mode key is scrubbed so the child sees one store.
-    delete env[MODE_ENV_KEYS[0]];
-    delete env[MODE_ENV_KEYS[1]];
-    delete env[MODE_ENV_KEYS[2]];
-    delete env.EMAILS_SELF_HOSTED_API_KEY;
-
+    const api = await startV1Stub({ openapi: true });
+    api.applyEnv();
+    try {
+    const env = { ...process.env, NO_COLOR: "1" };
     const child = Bun.spawn({
       cmd: [process.execPath, "run", "src/cli/index.tsx", "stats", "-j"],
       cwd: process.cwd(),
@@ -123,12 +102,13 @@ describe("sync JSON output", () => {
     expect(exitCode).toBe(0);
     expect(stderr).toBe("");
     expect(JSON.parse(stdout)).toMatchObject({ provider_id: "all", period: "30d", sent: 0 });
+    } finally { api.clearEnv(); api.stop(); }
   });
 
   it("prints parseable JSON errors with a non-zero exit", async () => {
     enableSelfHostedMode();
     const child = Bun.spawn({
-      cmd: [process.execPath, "run", "src/cli/index.tsx", "pull", "--json"],
+      cmd: [process.execPath, "run", "src/cli/index.tsx", "pull", "--provider", " ", "--json"],
       cwd: process.cwd(),
       env: { ...process.env, NO_COLOR: "1" },
       stdout: "pipe",
@@ -143,7 +123,7 @@ describe("sync JSON output", () => {
     expect(exitCode).toBe(1);
     expect(stdout).toBe("");
     expect(JSON.parse(stderr)).toMatchObject({
-      error: { message: expect.stringContaining("emails pull is not available") },
+      error: { message: expect.stringContaining("--provider must name a provider identifier") },
     });
   });
 });

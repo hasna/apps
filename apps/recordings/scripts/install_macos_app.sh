@@ -126,18 +126,18 @@ require_absolute_canonical_owned_home() {
   local canonical
   case "$candidate" in
     /*) ;;
-    *) echo "HasnaRecordings.app installation requires HOME to be an absolute canonical path." >&2; exit 1 ;;
+    *) echo "Hasna Recordings.app installation requires HOME to be an absolute canonical path." >&2; exit 1 ;;
   esac
   [ -d "$candidate" ] && [ ! -L "$candidate" ] || {
-    echo "HasnaRecordings.app installation requires HOME to be an absolute canonical path to a non-symlink directory." >&2
+    echo "Hasna Recordings.app installation requires HOME to be an absolute canonical path to a non-symlink directory." >&2
     exit 1
   }
   canonical="$(cd "$candidate" 2>/dev/null && builtin pwd -P)" || {
-    echo "HasnaRecordings.app installation could not resolve HOME canonically." >&2
+    echo "Hasna Recordings.app installation could not resolve HOME canonically." >&2
     exit 1
   }
   [ "$candidate" = "$canonical" ] || {
-    echo "HasnaRecordings.app installation requires HOME to be an absolute canonical path." >&2
+    echo "Hasna Recordings.app installation requires HOME to be an absolute canonical path." >&2
     exit 1
   }
   [ "$("$STAT_EXECUTABLE" -f '%u' "$candidate")" = "$("$ID_EXECUTABLE" -u)" ] || {
@@ -352,7 +352,7 @@ require_absolute_executable "BUN_EXECUTABLE" "$BUN_EXECUTABLE"
 require_absolute_canonical_owned_home
 
 if [ "$("$UNAME_EXECUTABLE" -s)" != "Darwin" ]; then
-  echo "HasnaRecordings.app installation is only supported on macOS." >&2
+  echo "Hasna Recordings.app installation is only supported on macOS." >&2
   exit 1
 fi
 
@@ -546,7 +546,7 @@ fi
 "$BUN_EXECUTABLE" "$ARTIFACT_TOOL" native-fs-guard-check
 DATA_DIR="${HOME}/.hasna/recordings"
 DATA_PARENT="$("$DIRNAME_EXECUTABLE" "$DATA_DIR")"
-MANIFEST_BUNDLE_NAME="HasnaRecordings.app"
+MANIFEST_BUNDLE_NAME="Hasna Recordings.app"
 APP_DEST="${HOME}/Applications/${MANIFEST_BUNDLE_NAME}"
 APP_PARENT="$("$DIRNAME_EXECUTABLE" "$APP_DEST")"
 ROLLBACK_DIR="${DATA_DIR}/rollbacks"
@@ -794,7 +794,7 @@ acquire_install_lock() {
         if kill -0 "$owner_pid" 2>/dev/null; then
           actual_start="$("$PS_EXECUTABLE" -o lstart= -p "$owner_pid" 2>/dev/null | "$TR_EXECUTABLE" -s ' ' | "$SED_EXECUTABLE" 's/^ //;s/ $//' || true)"
           if [ -z "$owner_start" ] || [ -z "$actual_start" ] || [ "$owner_start" = "$actual_start" ]; then
-            echo "Another HasnaRecordings.app installer owns the active install lock." >&2
+            echo "Another Hasna Recordings.app installer owns the active install lock." >&2
             exit 1
           fi
         fi
@@ -807,17 +807,17 @@ acquire_install_lock() {
       now="$("$DATE_EXECUTABLE" +%s)"
       lock_age=$((now - $("$STAT_EXECUTABLE" -f '%m' "$LOCK_DIR")))
       if [ "$lock_age" -lt "$stale_seconds" ]; then
-        echo "HasnaRecordings.app install lock is incomplete and too recent to reclaim safely." >&2
+        echo "Hasna Recordings.app install lock is incomplete and too recent to reclaim safely." >&2
         exit 1
       fi
     fi
     stale_claim="${LOCK_DIR}.stale.$$"
     if ! "$MV_EXECUTABLE" "$LOCK_DIR" "$stale_claim" 2>/dev/null; then
-      echo "HasnaRecordings.app install lock changed during stale-owner recovery." >&2
+      echo "Hasna Recordings.app install lock changed during stale-owner recovery." >&2
       exit 1
     fi
     "$RM_EXECUTABLE" -rf "$stale_claim"
-    "$MKDIR_EXECUTABLE" -m 700 "$LOCK_DIR" || { echo "Could not acquire HasnaRecordings.app install lock." >&2; exit 1; }
+    "$MKDIR_EXECUTABLE" -m 700 "$LOCK_DIR" || { echo "Could not acquire Hasna Recordings.app install lock." >&2; exit 1; }
   fi
   LOCK_OWNED=1
   local start
@@ -1263,13 +1263,13 @@ stop_uncommitted_candidate() {
   done <<< "$remaining"
   "$SLEEP_EXECUTABLE" 0.1
   [ -z "$(pids_for_exact_executable "$expected")" ] || {
-    echo "Uncommitted HasnaRecordings.app process could not be stopped before recovery." >&2
+    echo "Uncommitted Hasna Recordings.app process could not be stopped before recovery." >&2
     return 1
   }
 }
 
 if [ -f "$JOURNAL_PATH" ]; then
-  echo "Recovering incomplete HasnaRecordings.app installation transaction." >&2
+  echo "Recovering incomplete Hasna Recordings.app installation transaction." >&2
   if ! RECOVER_WAS_RUNNING="$("$BUN_EXECUTABLE" "$ARTIFACT_TOOL" journal-get --journal "$JOURNAL_PATH" --field was_running)" || \
      ! RECOVER_PHASE="$("$BUN_EXECUTABLE" "$ARTIFACT_TOOL" journal-get --journal "$JOURNAL_PATH" --field phase)" || \
      ! RECOVER_RUNNING_APP_PATHS_JSON="$("$BUN_EXECUTABLE" "$ARTIFACT_TOOL" journal-get --journal "$JOURNAL_PATH" --field prior_running_app_paths)"; then
@@ -1376,7 +1376,7 @@ if ! "$BUN_EXECUTABLE" -e '
     if ((actual[i] ?? 0) < (minimum[i] ?? 0)) process.exit(1);
   }
 ' "$CURRENT_MACOS" "$MINIMUM_MACOS"; then
-  echo "HasnaRecordings.app requires macOS ${MINIMUM_MACOS} or later; target is ${CURRENT_MACOS}." >&2
+  echo "Hasna Recordings.app requires macOS ${MINIMUM_MACOS} or later; target is ${CURRENT_MACOS}." >&2
   exit 1
 fi
 TARGET_ARCH="$("$UNAME_EXECUTABLE" -m)"
@@ -1386,7 +1386,7 @@ MANIFEST_ARCHITECTURES="$("$BUN_EXECUTABLE" "$ARTIFACT_TOOL" manifest-get \
   --field architectures)"
 case " ${MANIFEST_ARCHITECTURES} " in
   *" ${TARGET_ARCH} "*) ;;
-  *) echo "HasnaRecordings.app artifact does not support target architecture ${TARGET_ARCH}." >&2; exit 1 ;;
+  *) echo "Hasna Recordings.app artifact does not support target architecture ${TARGET_ARCH}." >&2; exit 1 ;;
 esac
 
 verify_secure_parent "$APP_PARENT"
@@ -1412,7 +1412,7 @@ add_unique_app() {
   local existing
   if [ -e "$candidate" ] || [ -L "$candidate" ]; then
     [ -d "$candidate" ] && [ ! -L "$candidate" ] || {
-      echo "HasnaRecordings.app path is not a secure directory: ${candidate}" >&2
+      echo "Hasna Recordings.app path is not a secure directory: ${candidate}" >&2
       exit 1
     }
   fi
@@ -1524,7 +1524,7 @@ stop_old_processes() {
     "$SLEEP_EXECUTABLE" 0.1
   done
   if [ "$remaining" -ne 0 ]; then
-    echo "Existing HasnaRecordings.app process did not stop before replacement." >&2
+    echo "Existing Hasna Recordings.app process did not stop before replacement." >&2
     exit 1
   fi
 }
@@ -1545,7 +1545,7 @@ quiesce_old_processes() {
     fi
     "$SLEEP_EXECUTABLE" 0.1
   done
-  echo "Existing HasnaRecordings.app processes did not remain quiescent before replacement." >&2
+  echo "Existing Hasna Recordings.app processes did not remain quiescent before replacement." >&2
   exit 1
 }
 
@@ -1706,11 +1706,14 @@ fi
 DISCOVERED_APPS=()
 add_unique_app "$APP_DEST"
 add_unique_app "${DATA_DIR}/Recordings.app"
+add_unique_app "${DATA_DIR}/Hasna Recordings.app"
 add_unique_app "${DATA_DIR}/HasnaRecordings.app"
-for candidate in "${HOME}"/Applications/Recordings.app.* "${HOME}"/Applications/HasnaRecordings.app.*; do
+add_unique_app "${HOME}/Applications/HasnaRecordings.app"
+for candidate in "${HOME}"/Applications/Recordings.app.* "${HOME}/Applications/Hasna Recordings.app."* "${HOME}/Applications/HasnaRecordings.app."*; do
   add_unique_app "$candidate"
 done
 add_unique_app "/Applications/Recordings.app"
+add_unique_app "/Applications/Hasna Recordings.app"
 add_unique_app "/Applications/HasnaRecordings.app"
 if [ -x "$MDFIND_EXECUTABLE" ]; then
   while IFS= read -r candidate; do
@@ -1722,12 +1725,12 @@ fi
 MANAGEABLE_APPS=()
 for existing_app in ${DISCOVERED_APPS[@]+"${DISCOVERED_APPS[@]}"}; do
   case "$existing_app" in
-    "$APP_DEST"|"${DATA_DIR}/Recordings.app"|"${DATA_DIR}/HasnaRecordings.app"|"${HOME}/Applications/Recordings.app."*|"${HOME}/Applications/HasnaRecordings.app."*)
+    "$APP_DEST"|"${DATA_DIR}/Recordings.app"|"${DATA_DIR}/Hasna Recordings.app"|"${DATA_DIR}/HasnaRecordings.app"|"${HOME}/Applications/HasnaRecordings.app"|"${HOME}/Applications/Recordings.app."*|"${HOME}/Applications/Hasna Recordings.app."*|"${HOME}/Applications/HasnaRecordings.app."*)
       echo "Duplicate disposition: archive transactionally, remove after activation: ${existing_app}"
       MANAGEABLE_APPS+=("$existing_app")
       ;;
     *)
-      echo "Duplicate HasnaRecordings.app at ${existing_app} is outside the transactional user install paths; archive or remove it before installing." >&2
+      echo "Duplicate Hasna Recordings.app at ${existing_app} is outside the transactional user install paths; archive or remove it before installing." >&2
       exit 1
       ;;
   esac
@@ -1954,7 +1957,7 @@ for ((refresh_attempt = 1; refresh_attempt <= 5; refresh_attempt++)); do
   fi
 done
 [ "$STOPPED_REFRESH_STABLE" -eq 1 ] || {
-  echo "Existing HasnaRecordings.app writers did not remain quiescent around the stopped-state refresh." >&2
+  echo "Existing Hasna Recordings.app writers did not remain quiescent around the stopped-state refresh." >&2
   exit 1
 }
 
@@ -2004,7 +2007,7 @@ for ((move_index = 0; move_index < MOVED_ORIGINAL_COUNT; move_index++)); do
   existing_app="${MOVED_ORIGINALS[$move_index]}"
   moved_path="${MOVED_PATHS[$move_index]}"
   [ "$("$BUN_EXECUTABLE" "$ARTIFACT_TOOL" tree-digest --path "$existing_app")" = "${MOVED_DIGESTS[$move_index]}" ] || {
-    echo "Installed HasnaRecordings.app changed after transactional backup planning." >&2
+    echo "Installed Hasna Recordings.app changed after transactional backup planning." >&2
     exit 1
   }
   RECORDINGS_TEST_INSTALLER_PID="$$" \
@@ -2117,7 +2120,7 @@ if [ "$LAUNCH_APP" -eq 1 ] || [ "$was_running" -eq 1 ]; then
 fi
 
 if [ "$ARTIFACT_POLICY" = "local_only" ]; then
-  echo "Installed local-only HasnaRecordings.app for ${APPROVED_TARGET}; this artifact is ad-hoc signed and non-notarized."
+  echo "Installed local-only Hasna Recordings.app for ${APPROVED_TARGET}; this artifact is ad-hoc signed and non-notarized."
   if [ "$identity_migration" -eq 1 ]; then
     # Not a maybe: the designated requirement did change, under an explicit approval.
     echo "Code identity changed under --allow-adhoc-identity-migration; the Microphone and Accessibility grants held by the replaced app no longer apply and must be reauthorized."
@@ -2127,5 +2130,5 @@ if [ "$ARTIFACT_POLICY" = "local_only" ]; then
 elif [ "$identity_migration" -eq 1 ]; then
   echo "Installed a new signing identity; macOS will require one-time permission approval for this migration."
 else
-  echo "Installed verified HasnaRecordings.app release artifact: ${APP_DEST}"
+  echo "Installed verified Hasna Recordings.app release artifact: ${APP_DEST}"
 fi
