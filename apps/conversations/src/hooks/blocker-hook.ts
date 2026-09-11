@@ -13,7 +13,6 @@
  *   0 = always (no output if no blockers, JSON warning if blockers found)
  */
 import { getStore } from "../lib/store/index.js";
-import { closeDb } from "../lib/db.js";
 import { resolveIdentity } from "../lib/identity.js";
 import { printLine } from "../lib/stdout.js";
 
@@ -39,7 +38,6 @@ try {
 // Routed through the Store: local sqlite or the HTTP API.
 const blockers = await getStore().getUnreadBlockers(agent, { limit: 10 });
 
-closeDb();
 
 if (blockers.length === 0) {
   process.exit(0);

@@ -3,7 +3,7 @@ import { readFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { getDataDir } from "../lib/db.js";
+import { getConversationsHome } from "../lib/home.js";
 import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
 import { activateClientEnvironment } from "../lib/store/test-support/client-environment.js";
 import { createChannel } from "../lib/channels.js";
@@ -201,7 +201,7 @@ describe("session agent tracking", () => {
     // whole machine's identity — including this very test suite, whose
     // "rename-old" fixture (src/mcp/tools/agents.test.ts) repeatedly hijacked
     // station01's identity just by running `bun test`.
-    const agentIdFile = join(getDataDir(), "agent-id");
+    const agentIdFile = join(getConversationsHome(), "agent-id");
 
     let before: string | null;
     try {

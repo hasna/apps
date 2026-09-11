@@ -23,9 +23,8 @@ export class MessageNotFoundError extends Error {
  * so composed/decomposed spellings (and any other NFKC-equivalent variants)
  * dedupe to a single row under the UNIQUE(message_id, agent, emoji) key.
  */
-export function normalizeEmoji(emoji: string): string {
-  return emoji.normalize("NFKC");
-}
+export { normalizeEmoji } from "./emoji.js";
+import { normalizeEmoji } from "./emoji.js";
 
 /**
  * Slack-style toggle: adding an emoji the SAME actor already added for this
