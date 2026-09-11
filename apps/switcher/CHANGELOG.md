@@ -9,6 +9,13 @@ status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
+## 0.2.1
+
+### Patch Changes
+
+- Align the exact `@hasna/contracts` pin with the 1.0.2 optional secrets peer release.
+- Add OpenCode Zen and Go provider presets with their complete live model catalogs and Claude Messages translation to model-native Chat Completions, Responses, and Gemini endpoints. Preserve native tools, streaming, images, usage and scoped session headers. Retain OpenRouter reasoning choices and explicitly clear conflicting Claude authentication variables.
+
 ## 0.2.0
 
 ### Minor Changes

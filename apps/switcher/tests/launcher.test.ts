@@ -201,11 +201,13 @@ await Bun.write(${JSON.stringify(started)},'started');process.exit(7);
   const client={
     getProfile:async()=>({providerId:'fixture',harness:'codex',model:'fixture-model'}),refreshModels:async()=>{},
     launchPlan:async()=>({planToken:'${"b".repeat(64)}',profile:{harness:'codex',model:'fixture-model'},provider:{baseUrl:'http://127.0.0.1:1/v1',protocol:'openai-responses'},catalog:{models:[{id:'fixture-model',name:'Fixture'}],refreshedAt:new Date().toISOString(),source:'manual'},warnings:[]}),
-    createRun:async()=>{await Bun.sleep(700);return {id:'late-run',version:3};},finishRun:async(_id:string,_version:number,body:any)=>{records.push(body);},
+    // Leave time for native configuration discovery on loaded workstations;
+    // cancellation must happen during createRun, not during preparation.
+    createRun:async()=>{await Bun.sleep(2500);return {id:'late-run',version:3};},finishRun:async(_id:string,_version:number,body:any)=>{records.push(body);},
   } as unknown as SwitcherClient;
   try {
     let error:any;
-    try { await launch(client,'fixture',{executable,cwd:dir,stateDir:join(dir,'state'),resolveCredential:async()=> 'fixture-key',timeoutMs:500,refresh:false}); }
+    try { await launch(client,'fixture',{executable,cwd:dir,stateDir:join(dir,'state'),resolveCredential:async()=> 'fixture-key',timeoutMs:2000,refresh:false}); }
     catch (caught) { error=caught; }
     expect(error).toMatchObject({code:'interrupted',exitCode:143});
     expect(records).toEqual([{status:'interrupted',exitCode:143,routingEvents:[],routingEventsDropped:0}]);

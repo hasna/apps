@@ -21,7 +21,8 @@
 export { HostedRecordingsClient, HostedLibrary, HostedPasteHistory, recordingCursor, pasteCursor, RecordingsSDKError } from "../hosted/index.js";
 export type { ClientOptions as HostedClientOptions, CredentialProvider as HostedCredentialProvider,
   HostedLibraryOptions, HostedLibraryRecording, HostedLibraryPage,
-  HostedPasteHistoryOptions, HostedPasteHistoryReceipt, HostedPasteHistoryPage, Cursor as HostedCursor } from "../hosted/index.js";
+  HostedPasteHistoryOptions, HostedPasteHistoryReceipt, HostedPasteHistoryPage, Cursor as HostedCursor,
+  HostedProvidersResponse, HostedTranscriptionProvider, HostedTranscriptionModel } from "../hosted/index.js";
 
 export {
   createRecordingsV1Client,
