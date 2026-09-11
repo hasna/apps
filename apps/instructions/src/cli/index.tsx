@@ -51,7 +51,7 @@ import {
   type ProjectContextRuntime,
 } from "../lib/project-context.js";
 import { getConfigsStatus } from "../status.js";
-import { resolveConfigStore, formatCliError, type ConfigStore } from "../data/config-store.js";
+import { resolveConfigStore, formatCliError, CloudConfigStore, type ConfigStore } from "../data/config-store.js";
 import {
   normalizeEndpointOrigin,
   PROVIDER_CONTEXT_DIR,
@@ -2042,6 +2042,250 @@ program
     }
   });
 
+/** Drop a TOML line comment, ignoring `#` inside a quoted key or value. */
+function stripTomlComment(line: string): string {
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (quote) {
+      if (quote === '"' && ch === "\\") i++;
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === "#") {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
+/**
+ * Parse a TOML table header line into its dotted key PARTS, or null when the
+ * line is not a table header. Covers the equivalent ways a real header may be
+ * written — `[a.b]`, `[a.b] # comment`, `[ a . b ]`, `["a"."b"]`, `[[a.b]]` —
+ * while rejecting lines that merely mention the text (comments, quoted values)
+ * and the quoted single key `["a.b"]`, which names ONE key and is not the
+ * nested table `a.b`.
+ */
+function tomlTableHeaderParts(line: string): string[] | null {
+  let body = stripTomlComment(line).trim();
+  if (body.startsWith("[[")) {
+    if (!body.endsWith("]]")) return null;
+    body = body.slice(2, -2);
+  } else if (body.startsWith("[")) {
+    if (!body.endsWith("]")) return null;
+    body = body.slice(1, -1);
+  } else {
+    return null;
+  }
+  const inner = body.trim();
+  if (!inner) return null;
+  const parts: string[] = [];
+  let i = 0;
+  while (i < inner.length) {
+    while (i < inner.length && /\s/.test(inner[i]!)) i++;
+    if (i >= inner.length) break;
+    const quote = inner[i] === '"' || inner[i] === "'" ? inner[i] : null;
+    let part = "";
+    if (quote) {
+      i++;
+      while (i < inner.length && inner[i] !== quote) {
+        if (quote === '"' && inner[i] === "\\") {
+          i++;
+          if (i >= inner.length) break;
+        }
+        part += inner[i]!;
+        i++;
+      }
+      if (i >= inner.length) return null; // unterminated quoted key
+      i++; // closing quote
+    } else {
+      while (i < inner.length && inner[i] !== "." && !/\s/.test(inner[i]!)) {
+        part += inner[i]!;
+        i++;
+      }
+    }
+    if (!part) return null;
+    parts.push(part);
+    while (i < inner.length && /\s/.test(inner[i]!)) i++;
+    if (i < inner.length) {
+      if (inner[i] !== ".") return null;
+      i++;
+    }
+  }
+  return parts.length > 0 ? parts : null;
+}
+
+/** An open TOML multi-line string delimiter, or null when outside every string. */
+type TomlMultilineOpen = '"""' | "'''" | null;
+
+/** Scanner state at a line boundary: open multi-line string, open `[` depth. */
+interface TomlScanState {
+  open: TomlMultilineOpen;
+  depth: number;
+}
+
+/**
+ * Advance the TOML scanner state across one line, starting from `state`.
+ * `"""` is a multi-line BASIC string, whose backslash escapes apply; `'''` is
+ * a multi-line LITERAL string, where a backslash is an ordinary character.
+ *
+ * Both fields are tracked because a line inside either construct is CONTENT,
+ * not syntax. A line inside a multi-line string is string content:
+ * `[mcp_servers.other]` between `"""` fences is a description, not a table
+ * header. A line inside a multi-line array is array content: the nested
+ * element `[1, 2],` (or a trailing `[3, 4]`) is a VALUE, not the header of the
+ * next table. Splicing at either corrupts the file — the second case writes
+ * invalid TOML (`[1, 2],` left at top level) while still reporting success.
+ *
+ * Brackets inside strings and comments are skipped, so `x = ["a]b"]` and
+ * `# ]` never perturb `depth`.
+ */
+function advanceTomlScan(line: string, state: TomlScanState): TomlScanState {
+  let { open, depth } = state;
+  let i = 0;
+  while (i < line.length) {
+    if (open === null) {
+      const ch = line[i]!;
+      // A `#` outside every string opens a comment that runs to end of line.
+      if (ch === "#") return { open, depth };
+      if (ch === '"' || ch === "'") {
+        if (line.startsWith(ch.repeat(3), i)) {
+          // Multi-line delimiter: open here and scan for its close below.
+          open = ch.repeat(3) as TomlMultilineOpen;
+          i += 3;
+          continue;
+        }
+        // Single-line string: skip to its closing delimiter. Only a basic
+        // string honours a backslash escape (a literal one takes it verbatim).
+        const basic = ch === '"';
+        i++;
+        while (i < line.length) {
+          if (basic && line[i] === "\\") {
+            i += 2;
+            continue;
+          }
+          if (line[i] === ch) {
+            i++;
+            break;
+          }
+          i++;
+        }
+        continue;
+      }
+      if (ch === "[") {
+        depth++;
+        i++;
+        continue;
+      }
+      // A stray `]` never drives the depth negative: only brackets the scanner
+      // itself opened are balanced, so unparseable input cannot shift a later
+      // table header out of view.
+      if (ch === "]" && depth > 0) {
+        depth--;
+        i++;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    // Inside a multi-line string: the next unescaped delimiter closes it, and
+    // scanning resumes outside every string on the same line.
+    if (open === '"""') {
+      let closed = false;
+      while (i < line.length) {
+        if (line[i] === "\\") {
+          i += 2; // an escaped character, including a line-ending continuation
+          continue;
+        }
+        if (line.startsWith('"""', i)) {
+          i += 3;
+          closed = true;
+          break;
+        }
+        i++;
+      }
+      if (!closed) return { open, depth }; // still open at end of line
+      open = null;
+      continue;
+    }
+    const close = line.indexOf("'''", i);
+    if (close === -1) return { open, depth }; // still open at end of line
+    i = close + 3;
+    open = null;
+  }
+  return { open, depth };
+}
+
+/** Scanner state at the START of each line. */
+function tomlScanByLine(lines: string[]): TomlScanState[] {
+  const states: TomlScanState[] = [];
+  let state: TomlScanState = { open: null, depth: 0 };
+  for (const line of lines) {
+    states.push(state);
+    state = advanceTomlScan(line, state);
+  }
+  return states;
+}
+
+/**
+ * Is the first character of this line real syntax — outside every multi-line
+ * string and outside every array — so a `[` there opens a table?
+ */
+function tomlLineStartsSyntax(state: TomlScanState): boolean {
+  return state.open === null && state.depth === 0;
+}
+
+/**
+ * Locate a TOML table by its header LINE, as a half-open `[start, end)` range
+ * of line indexes (the header line through the line before the next table
+ * header, or EOF). Returns null when the table is not really present.
+ *
+ * A textual `content.indexOf("[mcp_servers.configs]")` is not enough: that text
+ * also occurs inside a comment (`# [mcp_servers.configs] disabled for now` —
+ * the natural way a user parks an install) and inside quoted values. Splicing
+ * at such an offset ends the prefix mid-comment or mid-string, so the next
+ * table header is glued onto it — commenting out the user's OTHER server and
+ * leaving an unterminated TOML string.
+ *
+ * Matching the header by exact text is not enough either: TOML allows a
+ * trailing comment on the header line (`[mcp_servers.configs] # hasna
+ * managed`). A miss there makes install append a SECOND `[mcp_servers.configs]`
+ * table — invalid TOML, so Codex can no longer parse its config — while
+ * uninstall reports "not installed" and leaves the server registered.
+ *
+ * Both the header and the table's END are read only on lines that start
+ * OUTSIDE a multi-line string and outside every array, so neither a
+ * `[mcp_servers.configs]`-looking line inside a `"""` description nor a
+ * `[1, 2],` array element inside a multi-line `matrix = [` value is mistaken
+ * for a header, nor allowed to terminate the range. Splicing at either cuts
+ * the file mid-literal/mid-array and writes invalid TOML while still reporting
+ * success.
+ */
+function findTomlTableLines(lines: string[], table: string): { start: number; end: number } | null {
+  const want = table.split(".");
+  const states = tomlScanByLine(lines);
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (!tomlLineStartsSyntax(states[i]!)) continue; // string/array content, not a header
+    const parts = tomlTableHeaderParts(lines[i]!);
+    if (parts !== null && parts.length === want.length && parts.every((p, k) => p === want[k])) {
+      start = i;
+      break;
+    }
+  }
+  if (start === -1) return null;
+  // The table runs to the next REAL table header, read on a line that starts
+  // outside every multi-line string and outside every array. A commented-out
+  // header starts with `#`, and an array element like `[1, 2],` is not a
+  // header, so neither ends it.
+  for (let i = start + 1; i < lines.length; i++) {
+    if (!tomlLineStartsSyntax(states[i]!)) continue; // string/array content, not a boundary
+    if (tomlTableHeaderParts(lines[i]!) !== null) return { start, end: i };
+  }
+  return { start, end: lines.length };
+}
+
 // ── mcp ───────────────────────────────────────────────────────────────────────
 const mcpCmd = program.command("mcp").description("Install/remove MCP server for AI agents");
 
@@ -2075,17 +2319,20 @@ mcpCmd.command("install")
           await proc.exited;
           console.log(chalk.green("✓") + " Installed into Claude Code");
         } else if (target === "codex") {
-          const { appendFileSync, existsSync: ex } = await import("node:fs");
-          const { join: j } = await import("node:path");
+          const { appendFileSync, existsSync: ex, mkdirSync: md } = await import("node:fs");
+          const { dirname: dn, join: j } = await import("node:path");
           const configPath = j(homedir(), ".codex", "config.toml");
           const block = `\n[mcp_servers.configs]\ncommand = "${mcpBinary}"\nargs = []\n`;
           if (ex(configPath)) {
             const content = readFileSync(configPath, "utf-8");
-            if (content.includes("[mcp_servers.configs]")) {
+            if (findTomlTableLines(content.split("\n"), "mcp_servers.configs")) {
               console.log(chalk.dim("= Already installed in Codex"));
               continue;
             }
           }
+          // A fresh machine has no ~/.codex yet; install must create it the
+          // same way the Antigravity installer creates ~/.gemini/config.
+          md(dn(configPath), { recursive: true });
           appendFileSync(configPath, block);
           console.log(chalk.green("✓") + " Installed into Codex");
         } else if (target === "antigravity") {
@@ -2117,13 +2364,87 @@ mcpCmd.command("uninstall")
   .alias("remove")
   .description("Remove configs MCP server from agents")
   .option("--claude", "remove from Claude Code")
+  .option("--codex", "remove from Codex")
+  .option("--antigravity", "remove from Google Antigravity")
   .option("--all", "remove from all agents")
   .action(async (opts) => {
-    if (opts.claude || opts.all) {
-      const proc = Bun.spawn(["claude", "mcp", "remove", "configs"], { stdout: "inherit", stderr: "inherit" });
-      await proc.exited;
-      console.log(chalk.green("✓") + " Removed from Claude Code");
+    const targets = opts.all ? ["claude", "codex", "antigravity"] : [
+      ...(opts.claude ? ["claude"] : []),
+      ...(opts.codex ? ["codex"] : []),
+      ...(opts.antigravity ? ["antigravity"] : []),
+    ];
+    if (targets.length === 0) {
+      console.log(chalk.dim("Specify --claude, --codex, --antigravity, or --all"));
+      return;
     }
+    // Every target is attempted (so `--all` reports each one), but a target
+    // that threw is a real failure: exit non-zero. Swallowing it would make a
+    // failed removal — a missing `claude` binary, an unwritable ~/.codex, an
+    // unparseable ~/.gemini config — look like success to any script or CI
+    // step that only checks the exit code.
+    let failed = false;
+    for (const target of targets) {
+      try {
+        if (target === "claude") {
+          const proc = Bun.spawn(["claude", "mcp", "remove", "configs"], { stdout: "inherit", stderr: "inherit" });
+          await proc.exited;
+          console.log(chalk.green("✓") + " Removed from Claude Code");
+        } else if (target === "codex") {
+          const { existsSync: ex, writeFileSync: wf } = await import("node:fs");
+          const { join: j } = await import("node:path");
+          const configPath = j(homedir(), ".codex", "config.toml");
+          if (!ex(configPath)) {
+            console.log(chalk.dim("= Not installed in Codex (no config.toml)"));
+            continue;
+          }
+          const content = readFileSync(configPath, "utf-8");
+          const lines = content.split("\n");
+          const table = findTomlTableLines(lines, "mcp_servers.configs");
+          if (!table) {
+            // Absent — or present only as a comment/quoted text, which is not an
+            // install and must never be spliced apart.
+            console.log(chalk.dim("= Not installed in Codex"));
+            continue;
+          }
+          // Strip the [mcp_servers.configs] entry: drop its own lines, plus the
+          // single blank separator line the installer writes in front of the
+          // header (its block is `\n[<table>]\n...`). Nothing else is touched.
+          //
+          // A whole-file cleanup is NOT safe here: this removal has no business
+          // rewriting blank runs anywhere else in the file. A 3+-newline run
+          // inside a TOML multi-line string is string CONTENT, so a global
+          // collapse silently changes the value of a user's `note` while still
+          // printing "Removed from Codex" and exiting 0.
+          const before = lines.slice(0, table.start);
+          if (before.length > 0 && before[before.length - 1] === "") before.pop();
+          const remaining = [...before, ...lines.slice(table.end)].join("\n");
+          wf(configPath, remaining.endsWith("\n") ? remaining : `${remaining}\n`, "utf-8");
+          console.log(chalk.green("✓") + " Removed from Codex");
+        } else if (target === "antigravity") {
+          const { existsSync: ex, readFileSync: rf, writeFileSync: wf } = await import("node:fs");
+          const configPath = join(homedir(), ".gemini", "config", "mcp_config.json");
+          if (!ex(configPath)) {
+            console.log(chalk.dim("= Not installed in Antigravity (no mcp_config.json)"));
+            continue;
+          }
+          let settings: Record<string, unknown> = {};
+          try { settings = JSON.parse(rf(configPath, "utf-8") || "{}"); } catch { /* leave as-is */ }
+          const mcpServers = (settings["mcpServers"] ?? {}) as Record<string, unknown>;
+          if (!(mcpServers["configs"] !== undefined)) {
+            console.log(chalk.dim("= Not installed in Antigravity"));
+            continue;
+          }
+          delete mcpServers["configs"];
+          settings["mcpServers"] = mcpServers;
+          wf(configPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+          console.log(chalk.green("✓") + " Removed from Antigravity");
+        }
+      } catch (e) {
+        failed = true;
+        console.error(chalk.red(`✗ Failed to remove from ${target}: ${formatCliError(e)}`));
+      }
+    }
+    if (failed) process.exitCode = 1;
   });
 
 // ── init ──────────────────────────────────────────────────────────────────────
@@ -2136,8 +2457,20 @@ program
     if (opts.force) {
       // Routes through the Store: LocalConfigStore wipes the on-disk SQLite db;
       // CloudConfigStore refuses (you can't force-wipe the shared cloud store).
-      await store.reset();
-      console.log(chalk.dim("Reset local store."));
+      //
+      // Only that refusal is a warning — it is a deliberate, expected answer
+      // and the rest of initialization still makes sense against the hosted
+      // store. A LocalConfigStore failure is NOT: it means the requested fresh
+      // start did not happen (a root-owned db, a read-only or NFS home, the
+      // immutable bit), so it must abort and exit non-zero rather than warn and
+      // report a successful init over a db that still holds the old data.
+      try {
+        await store.reset();
+        console.log(chalk.dim("Reset local store."));
+      } catch (e) {
+        if (!(store instanceof CloudConfigStore)) throw e;
+        console.warn(chalk.yellow(`init --force: ${e instanceof Error ? e.message : String(e)}`));
+      }
     }
     console.log(chalk.bold("@hasna/instructions — initializing\n"));
 
