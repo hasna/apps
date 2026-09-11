@@ -1,5 +1,11 @@
 # @hasna/notes
 
+## 0.6.2
+
+### Patch Changes
+
+- Ship generated TypeScript declarations for the existing package root and `./sdk` HTTP client, including typed note inputs, pagination, exports, transport reports, and errors. Keep both runtime entrypoints and the separate browser SDK unchanged. Add a fresh packed strict consumer that checks inferred positive and negative types without skipping dependency declaration checks.
+
 ## 0.6.1
 
 ### Patch Changes

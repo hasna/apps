@@ -73,7 +73,7 @@ on the external ref or lower relationship `confidence`.
 ## Storage Compatibility
 
 The native store lives in the effective orgs data root, resolved by the
-`@hasna/paths` resolver. The legacy default is `~/.hasna/orgs/orgs.json`; the
+in-package resolver. The legacy default is `~/.hasna/orgs/orgs.json`; the
 resolver (XDG) data home `~/.local/share/hasna/orgs/orgs.json` is adopted once
 `HASNA_DATA_HOME` is set or the store already exists there. `HASNA_ORGS_HOME`
 sets an exact data root that wins over both. Some local environments may also

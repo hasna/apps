@@ -19,7 +19,7 @@ enum:
 
 | Backend | Selection | Notes |
 | --- | --- | --- |
-| `sqlite` | Default. Local file at the effective Loops data home — `~/.hasna/loops/loops.db` by default, resolved through `@hasna/paths` to the XDG data home once the store is migrated there or `HASNA_DATA_HOME` is set, or `$LOOPS_DATA_DIR/loops.db` when `LOOPS_DATA_DIR` is set | Zero-configuration on-box default; `loops` and `loops-daemon` use it |
+| `sqlite` | Default. Local file at the effective Loops data home — `~/.hasna/loops/loops.db` by default, resolved by the in-package resolver to the XDG data home once the store is migrated there or `HASNA_DATA_HOME` is set, or `$LOOPS_DATA_DIR/loops.db` when `LOOPS_DATA_DIR` is set | Zero-configuration on-box default; `loops` and `loops-daemon` use it |
 | `postgresql` | `HASNA_LOOPS_DATABASE_URL` on `loops-serve` | The control-plane server's store |
 
 `sqlite` is the default. It must keep working without network access, tokens,
@@ -292,9 +292,11 @@ service is live by default.
 
 ## Contracts Note
 
-Until the in-flight `hasna/contracts` hotfix ships, the currently installed
-contracts schema still REQUIRES `serviceSurfaces[].deploymentModes` on service
-manifests, so a working `hasna.contract.json` must keep that field (dormant) or
-it fails validation. Treat it as transitional: do not hand-strip it from
-working manifests, and do not add mode vocabulary to new configuration. The
-field is removed once the hotfix schema lands.
+`serviceSurfaces[].deploymentModes` is gone from the service contract schema:
+the removal shipped in `@hasna/contracts`, which this package depends on at
+1.0.2, and no published version of the package carries the field any more.
+Surface objects are closed with `additionalProperties: false`, so a
+`hasna.contract.json` that still carries the field is now REJECTED rather than
+tolerated. Do not add mode vocabulary to new configuration, and drop the
+dormant field from a manifest when you next touch it. The contract kit's
+canonical source is `apps/contracts` in the `hasna/apps` monorepo.

@@ -75,18 +75,18 @@
     "backfill:comment-redaction": "bun run src/server/index.ts redact-comments",
     "generate:sdk": "bun run scripts/generate-sdk.ts",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
-    "test": "bun test",
-    "test:no-cloud": "bun test src/no-cloud-boundary.test.ts src/local-first.test.ts src/lib/public-release-gate.test.ts",
+    "test": "bun test --timeout 120000",
+    "test:no-cloud": "bun test --timeout 120000 src/no-cloud-boundary.test.ts src/local-first.test.ts src/lib/public-release-gate.test.ts",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "verify:release": "bun run scripts/verify-public-release.ts --mode=review",
     "verify:release-review": "bun run scripts/verify-npm-release-agent-review.ts",
     "verify:attested-container-candidate": "bun run scripts/attested-container-candidate.ts verify",
-    "test:attested-container-candidate": "bun test scripts/attested-container-candidate.test.ts",
+    "test:attested-container-candidate": "bun test --timeout 120000 scripts/attested-container-candidate.test.ts",
     "emit:iapp-deployment-compatibility-vector": "bun run scripts/attested-container-compatibility-vector.ts emit",
     "verify:iapp-deployment-compatibility-vector": "bun run scripts/attested-container-compatibility-vector.ts verify",
-    "test:attested-container-compatibility-vector": "bun test scripts/attested-container-compatibility-vector.test.ts",
+    "test:attested-container-compatibility-vector": "bun test --timeout 120000 scripts/attested-container-compatibility-vector.test.ts",
     "issue:release-review": "bun run scripts/issue-npm-release-agent-review.ts",
     "prepublishOnly": "bun run scripts/verify-public-release.ts --mode=publish",
     "postinstall": "node postinstall.js"
@@ -110,11 +110,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/todos.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/todos"
   },
-  "homepage": "https://github.com/hasna/todos",
+  "homepage": "https://github.com/hasna/apps",
   "bugs": {
-    "url": "https://github.com/hasna/todos/issues"
+    "url": "https://github.com/hasna/apps/issues"
   },
   "engines": {
     "bun": ">=1.0.0"

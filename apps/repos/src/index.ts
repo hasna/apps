@@ -286,3 +286,6 @@ export type {
   EmittedEvent,
   MonitorStateEntry,
 } from "./lib/pr-monitor-emit.js";
+
+export { normalizeWorktree, WORKTREE_NORMALIZE_SCHEMA } from "./lib/worktree-normalize.js";
+export type { NormalizeWorktreeRequest, NormalizeWorktreeResult } from "./lib/worktree-normalize.js";

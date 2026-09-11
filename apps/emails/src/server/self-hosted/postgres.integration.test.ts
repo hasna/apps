@@ -2464,4 +2464,132 @@ describe("self-hosted Postgres integration", () => {
     expect(poisonRow.labels).toEqual(["poison", "billed2"]);
     expect(poisonRow.is_read).toBe(true);
   });
+
+  // BUG-0040 DEFECT 1 (FR-0001 follow-up): the insert hooks applied enabled
+  // filters AFTER building their returned record, so POST /v1/messages and the
+  // record-returning insert paths handed callers a PRE-apply snapshot
+  // (archived=false / read=false / no labels) for a message a just-enabled
+  // filter auto-archived, marked read, or labelled. The RETURNED record must
+  // already reflect the auto-applied actions (not just a later re-read).
+  postgresTest(!client)("BUG-0040 insert hooks return POST-apply records when an enabled filter auto-applies", async () => {
+    await resetPublicSchema();
+    await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
+    const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
+
+    await store.createMailboxFilter({
+      name: "Return Stale", mailbox: "inbox", criteria: { from: "billing@example.test" },
+      actions: { add_labels: ["billed"], archive: true, mark_read: true }, enabled: true, order: 0,
+    });
+
+    // createMessage: the record RETURNED by the call already carries the action.
+    const created = await store.createMessage({
+      direction: "inbound", from_addr: "billing@example.test", to_addrs: ["owner@billing.example"],
+      subject: "def1-create", status: "received", labels: [],
+    });
+    expect(created.is_read).toBe(true);
+    expect(created.labels).toEqual(expect.arrayContaining(["billed", "archived"]));
+    const storedCreated = await store.getMessage(created.id);
+    expect(storedCreated?.is_read).toBe(true);
+    expect(storedCreated?.labels).toEqual(created.labels);
+
+    // upsertMessage NEW insert: returned record reflects the auto-apply.
+    const upserted = await store.upsertMessage({
+      direction: "inbound", from_addr: "billing@example.test", to_addrs: ["owner@billing.example"],
+      subject: "def1-upsert", status: "received", source_id: "src/def1-upsert", labels: [],
+    });
+    expect(upserted.inserted).toBe(true);
+    expect(upserted.record.is_read).toBe(true);
+    expect(upserted.record.labels).toEqual(expect.arrayContaining(["billed", "archived"]));
+
+    // createInboundMessageWithProvenance inserted winner: returned record reflects the auto-apply.
+    const key = "src/def1-inbound";
+    const prov = await store.createInboundMessageWithProvenance(
+      {
+        direction: "inbound", from_addr: "billing@example.test", to_addrs: ["owner@billing.example"],
+        subject: "def1-inbound", status: "received", source_id: key, message_id: key, is_read: false, labels: [],
+      },
+      { bucket: "b0040", objectKey: key, rawSha256: "c".repeat(64), establishedVia: "normal_ingest" },
+    );
+    expect(prov.inserted).toBe(true);
+    expect(prov.record.is_read).toBe(true);
+    expect(prov.record.labels).toEqual(expect.arrayContaining(["billed", "archived"]));
+  });
+
+  // BUG-0040 DEFECT 2 (FR-0001 follow-up): mutate-mode backfill SELECTed the
+  // entire matching set with no LIMIT and applied row-by-row in one unbounded
+  // transaction. The apply route's clamped `limit` must control the backfill
+  // write-batch size instead: a batch smaller than the total still covers the
+  // COMPLETE matching set (bounded id-keyset batches inside one transaction),
+  // never double-applies on a second pass, and never skips a row that an
+  // earlier batch's action removed from the criteria (mark_read shrinks an
+  // unread result set).
+  postgresTest(!client)("BUG-0040 mutate backfill honours a small batch limit yet still covers the full matching set", async () => {
+    await resetPublicSchema();
+    await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
+    const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
+
+    // 210 pre-existing inbox rows from the billing sender (direct SQL: they
+    // predate the filter, so no ingest hook could have seen them). The filter's
+    // criteria ({ from }) is NOT shrunk by its own mark_read action, so a
+    // re-apply is a legitimate no-op over the same 210 rows.
+    await client!.execute(
+      `INSERT INTO messages (id, from_addr, direction, status, labels, tenant_id)
+       SELECT 'bug0040-bulk-' || gs, 'billing@example.test', 'inbound', 'received', '[]'::jsonb, $1::uuid
+         FROM generate_series(1, 210) AS gs`,
+      [DEFAULT_TENANT_ID],
+    );
+    await store.createMailboxFilter({
+      name: "Batch Billing", mailbox: "inbox", criteria: { from: "billing@example.test" },
+      actions: { add_labels: ["batch"], mark_read: true }, enabled: true, order: 0,
+    });
+
+    // Batch size of 7 (< total 210) must still process every matching row.
+    const small = await store.applyMailboxFilter("Batch Billing", { mutate: true, limit: 7 });
+    expect(small.mutate).toBe(true);
+    expect(small.limit).toBe(7);
+    expect(small.matched).toBe(210);
+    expect(small.updated).toBe(210);
+    expect(small.unchanged).toBe(0);
+
+    // Every row actually got the write (not just counted).
+    const counted = await client!.one<{ n: number }>(
+      `SELECT count(*)::int AS n FROM messages WHERE labels @> '["batch"]'::jsonb`,
+    );
+    expect(counted.n).toBe(210);
+
+    // Re-applying the same filter with a tiny limit is a full no-op — no row is
+    // processed twice across batches.
+    const noop = await store.applyMailboxFilter("Batch Billing", { mutate: true, limit: 7 });
+    expect(noop.matched).toBe(210);
+    expect(noop.updated).toBe(0);
+    expect(noop.unchanged).toBe(210);
+
+    // The route clamp (1-1000) still governs the write-batch size.
+    const clamped = await store.applyMailboxFilter("Batch Billing", { mutate: true, limit: 5000 });
+    expect(clamped.limit).toBe(1000);
+    expect(clamped.matched).toBe(210);
+    expect(clamped.updated).toBe(0);
+
+    // Shrink-safety: a mark_read backfill over an UNREAD criteria set removes
+    // each processed row from the result as it goes; a small batch must still
+    // advance through the whole set exactly once (keyset on id, never offsets).
+    await client!.execute(
+      `INSERT INTO messages (id, from_addr, direction, status, labels, tenant_id)
+       SELECT 'bug0040-shrink-' || gs, 'shrink@example.test', 'inbound', 'received', '[]'::jsonb, $1::uuid
+         FROM generate_series(1, 60) AS gs`,
+      [DEFAULT_TENANT_ID],
+    );
+    await store.createMailboxFilter({
+      name: "Shrink Unread", mailbox: "unread", criteria: { from: "shrink@example.test" },
+      actions: { mark_read: true }, enabled: true, order: 1,
+    });
+    const shrink = await store.applyMailboxFilter("Shrink Unread", { mutate: true, limit: 7 });
+    expect(shrink.matched).toBe(60);
+    expect(shrink.updated).toBe(60);
+    expect(shrink.unchanged).toBe(0);
+    const readCount = await client!.one<{ n: number }>(
+      `SELECT count(*)::int AS n FROM messages WHERE from_addr = 'shrink@example.test' AND is_read = true`,
+    );
+    expect(readCount.n).toBe(60);
+  });
 });
