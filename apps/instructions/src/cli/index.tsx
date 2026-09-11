@@ -51,7 +51,7 @@ import {
   type ProjectContextRuntime,
 } from "../lib/project-context.js";
 import { getConfigsStatus } from "../status.js";
-import { resolveConfigStore, formatCliError, type ConfigStore } from "../data/config-store.js";
+import { resolveConfigStore, formatCliError, CloudConfigStore, type ConfigStore } from "../data/config-store.js";
 import {
   normalizeEndpointOrigin,
   PROVIDER_CONTEXT_DIR,
@@ -2119,23 +2119,36 @@ function tomlTableHeaderParts(line: string): string[] | null {
 /** An open TOML multi-line string delimiter, or null when outside every string. */
 type TomlMultilineOpen = '"""' | "'''" | null;
 
+/** Scanner state at a line boundary: open multi-line string, open `[` depth. */
+interface TomlScanState {
+  open: TomlMultilineOpen;
+  depth: number;
+}
+
 /**
- * Advance the "inside a multi-line string" state across one line, starting
- * from `open` (null when the line begins outside every string). `"""` is a
- * multi-line BASIC string, whose backslash escapes apply; `'''` is a
- * multi-line LITERAL string, where a backslash is an ordinary character.
+ * Advance the TOML scanner state across one line, starting from `state`.
+ * `"""` is a multi-line BASIC string, whose backslash escapes apply; `'''` is
+ * a multi-line LITERAL string, where a backslash is an ordinary character.
  *
- * Tracked because a line inside such a block is string CONTENT, not syntax:
- * `[mcp_servers.other]` appearing between `"""` fences is a description, not a
- * table header, and splicing at it corrupts the file.
+ * Both fields are tracked because a line inside either construct is CONTENT,
+ * not syntax. A line inside a multi-line string is string content:
+ * `[mcp_servers.other]` between `"""` fences is a description, not a table
+ * header. A line inside a multi-line array is array content: the nested
+ * element `[1, 2],` (or a trailing `[3, 4]`) is a VALUE, not the header of the
+ * next table. Splicing at either corrupts the file — the second case writes
+ * invalid TOML (`[1, 2],` left at top level) while still reporting success.
+ *
+ * Brackets inside strings and comments are skipped, so `x = ["a]b"]` and
+ * `# ]` never perturb `depth`.
  */
-function advanceTomlMultiline(line: string, open: TomlMultilineOpen): TomlMultilineOpen {
+function advanceTomlScan(line: string, state: TomlScanState): TomlScanState {
+  let { open, depth } = state;
   let i = 0;
   while (i < line.length) {
     if (open === null) {
       const ch = line[i]!;
       // A `#` outside every string opens a comment that runs to end of line.
-      if (ch === "#") return null;
+      if (ch === "#") return { open, depth };
       if (ch === '"' || ch === "'") {
         if (line.startsWith(ch.repeat(3), i)) {
           // Multi-line delimiter: open here and scan for its close below.
@@ -2160,36 +2173,67 @@ function advanceTomlMultiline(line: string, open: TomlMultilineOpen): TomlMultil
         }
         continue;
       }
+      if (ch === "[") {
+        depth++;
+        i++;
+        continue;
+      }
+      // A stray `]` never drives the depth negative: only brackets the scanner
+      // itself opened are balanced, so unparseable input cannot shift a later
+      // table header out of view.
+      if (ch === "]" && depth > 0) {
+        depth--;
+        i++;
+        continue;
+      }
       i++;
       continue;
     }
-    // Inside a multi-line string: the next unescaped delimiter closes it.
-    let j = i;
+    // Inside a multi-line string: the next unescaped delimiter closes it, and
+    // scanning resumes outside every string on the same line.
     if (open === '"""') {
-      while (j < line.length) {
-        if (line[j] === "\\") {
-          j += 2; // an escaped character, including a line-ending continuation
+      let closed = false;
+      while (i < line.length) {
+        if (line[i] === "\\") {
+          i += 2; // an escaped character, including a line-ending continuation
           continue;
         }
-        if (line.startsWith('"""', j)) return null;
-        j++;
+        if (line.startsWith('"""', i)) {
+          i += 3;
+          closed = true;
+          break;
+        }
+        i++;
       }
-      return open; // still open at end of line
+      if (!closed) return { open, depth }; // still open at end of line
+      open = null;
+      continue;
     }
-    return line.includes("'''", j) ? null : open;
+    const close = line.indexOf("'''", i);
+    if (close === -1) return { open, depth }; // still open at end of line
+    i = close + 3;
+    open = null;
   }
-  return open;
+  return { open, depth };
 }
 
-/** Per-line flag: is this line already inside a multi-line string when it starts? */
-function tomlMultilineOpenByLine(lines: string[]): TomlMultilineOpen[] {
-  const opens: TomlMultilineOpen[] = [];
-  let open: TomlMultilineOpen = null;
+/** Scanner state at the START of each line. */
+function tomlScanByLine(lines: string[]): TomlScanState[] {
+  const states: TomlScanState[] = [];
+  let state: TomlScanState = { open: null, depth: 0 };
   for (const line of lines) {
-    opens.push(open);
-    open = advanceTomlMultiline(line, open);
+    states.push(state);
+    state = advanceTomlScan(line, state);
   }
-  return opens;
+  return states;
+}
+
+/**
+ * Is the first character of this line real syntax — outside every multi-line
+ * string and outside every array — so a `[` there opens a table?
+ */
+function tomlLineStartsSyntax(state: TomlScanState): boolean {
+  return state.open === null && state.depth === 0;
 }
 
 /**
@@ -2211,17 +2255,19 @@ function tomlMultilineOpenByLine(lines: string[]): TomlMultilineOpen[] {
  * uninstall reports "not installed" and leaves the server registered.
  *
  * Both the header and the table's END are read only on lines that start
- * OUTSIDE a multi-line string, so a `[mcp_servers.configs]`-looking line
- * inside a `"""` description is neither mistaken for an install nor allowed to
- * terminate the range. Splicing there would cut mid-string and write invalid
- * TOML while still reporting success.
+ * OUTSIDE a multi-line string and outside every array, so neither a
+ * `[mcp_servers.configs]`-looking line inside a `"""` description nor a
+ * `[1, 2],` array element inside a multi-line `matrix = [` value is mistaken
+ * for a header, nor allowed to terminate the range. Splicing at either cuts
+ * the file mid-literal/mid-array and writes invalid TOML while still reporting
+ * success.
  */
 function findTomlTableLines(lines: string[], table: string): { start: number; end: number } | null {
   const want = table.split(".");
-  const opens = tomlMultilineOpenByLine(lines);
+  const states = tomlScanByLine(lines);
   let start = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (opens[i] !== null) continue; // string content, not a header
+    if (!tomlLineStartsSyntax(states[i]!)) continue; // string/array content, not a header
     const parts = tomlTableHeaderParts(lines[i]!);
     if (parts !== null && parts.length === want.length && parts.every((p, k) => p === want[k])) {
       start = i;
@@ -2229,12 +2275,13 @@ function findTomlTableLines(lines: string[], table: string): { start: number; en
     }
   }
   if (start === -1) return null;
-  // The table runs to the next line that starts outside every multi-line
-  // string and whose first non-space character opens a table (`[`). A
-  // commented-out header starts with `#`, so it does not end it.
+  // The table runs to the next REAL table header, read on a line that starts
+  // outside every multi-line string and outside every array. A commented-out
+  // header starts with `#`, and an array element like `[1, 2],` is not a
+  // header, so neither ends it.
   for (let i = start + 1; i < lines.length; i++) {
-    if (opens[i] !== null) continue; // string content, not a table boundary
-    if (lines[i]!.trimStart().startsWith("[")) return { start, end: i };
+    if (!tomlLineStartsSyntax(states[i]!)) continue; // string/array content, not a boundary
+    if (tomlTableHeaderParts(lines[i]!) !== null) return { start, end: i };
   }
   return { start, end: lines.length };
 }
@@ -2330,6 +2377,12 @@ mcpCmd.command("uninstall")
       console.log(chalk.dim("Specify --claude, --codex, --antigravity, or --all"));
       return;
     }
+    // Every target is attempted (so `--all` reports each one), but a target
+    // that threw is a real failure: exit non-zero. Swallowing it would make a
+    // failed removal — a missing `claude` binary, an unwritable ~/.codex, an
+    // unparseable ~/.gemini config — look like success to any script or CI
+    // step that only checks the exit code.
+    let failed = false;
     for (const target of targets) {
       try {
         if (target === "claude") {
@@ -2379,9 +2432,11 @@ mcpCmd.command("uninstall")
           console.log(chalk.green("✓") + " Removed from Antigravity");
         }
       } catch (e) {
+        failed = true;
         console.error(chalk.red(`✗ Failed to remove from ${target}: ${formatCliError(e)}`));
       }
     }
+    if (failed) process.exitCode = 1;
   });
 
 // ── init ──────────────────────────────────────────────────────────────────────
@@ -2393,13 +2448,19 @@ program
     const store = resolveConfigStore();
     if (opts.force) {
       // Routes through the Store: LocalConfigStore wipes the on-disk SQLite db;
-      // CloudConfigStore refuses (you can't force-wipe the shared cloud store),
-      // and the refusal is a warning here so the rest of initialization still
-      // runs against the hosted store.
+      // CloudConfigStore refuses (you can't force-wipe the shared cloud store).
+      //
+      // Only that refusal is a warning — it is a deliberate, expected answer
+      // and the rest of initialization still makes sense against the hosted
+      // store. A LocalConfigStore failure is NOT: it means the requested fresh
+      // start did not happen (a root-owned db, a read-only or NFS home, the
+      // immutable bit), so it must abort and exit non-zero rather than warn and
+      // report a successful init over a db that still holds the old data.
       try {
         await store.reset();
         console.log(chalk.dim("Reset local store."));
       } catch (e) {
+        if (!(store instanceof CloudConfigStore)) throw e;
         console.warn(chalk.yellow(`init --force: ${e instanceof Error ? e.message : String(e)}`));
       }
     }

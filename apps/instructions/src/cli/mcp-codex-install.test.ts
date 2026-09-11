@@ -259,6 +259,84 @@ describe("mcp install/uninstall parity", () => {
     expect(readFileSync(configPath, "utf-8")).toBe(inString);
   });
 
+  /**
+   * A TOML value may span lines as an ARRAY. A nested element line such as
+   * `[1, 2],` — and the closing element `[3, 4]` of an array written without a
+   * trailing comma — starts with `[` after trimming, so a table-end scan that
+   * reads "the next line whose first non-space character is `[`" ends the range
+   * mid-array and splices the file at a VALUE. The array tail is left at top
+   * level and Codex can no longer parse its config (`Expected ']' at the end of
+   * a table declaration`) while the CLI prints "Removed from Codex" and exits 0.
+   * The scan must track array depth exactly as it already tracks strings.
+   */
+  test("codex uninstall never splices inside a TOML multi-line array", () => {
+    const home = makeTempRoot("mcp-codex-array-");
+    const dbPath = join(home, "instructions.db");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const configPath = join(home, ".codex", "config.toml");
+
+    for (const matrix of ["[\n  [1, 2],\n  [3, 4],\n]", "[\n  [1, 2],\n  [3, 4]\n]"]) {
+      writeFileSync(
+        configPath,
+        `[mcp_servers.configs]\ncommand = "/configs-mcp"\nmatrix = ${matrix}\n\n[mcp_servers.echo]\ncommand = "echo"\n`,
+        "utf-8",
+      );
+      const removed = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+      expect(removed.status).toBe(0);
+      expect(removed.stdout).toContain("Removed from Codex");
+      // Exactly the other server: the whole configs table (array included) went,
+      // and no array fragment was left behind at top level.
+      expect(readFileSync(configPath, "utf-8")).toBe(`[mcp_servers.echo]\ncommand = "echo"\n`);
+    }
+
+    // A `]` inside a string or a comment is not array structure.
+    writeFileSync(
+      configPath,
+      `[mcp_servers.configs]\ncommand = "/configs-mcp"\nargs = ["]", "[", "x"] # ]\n\n[mcp_servers.echo]\ncommand = "echo"\n`,
+      "utf-8",
+    );
+    const bracketed = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+    expect(bracketed.status).toBe(0);
+    expect(readFileSync(configPath, "utf-8")).toBe(`[mcp_servers.echo]\ncommand = "echo"\n`);
+
+    // An array element that only LOOKS like the next header must not hide a real
+    // one: the table runs to the next genuine header, whichever comes first.
+    writeFileSync(
+      configPath,
+      `[mcp_servers.configs]\ncommand = "/configs-mcp"\nnotes = [\n  "[mcp_servers.other]",\n]\n\n[mcp_servers.echo]\ncommand = "echo"\n`,
+      "utf-8",
+    );
+    const quoted = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+    expect(quoted.status).toBe(0);
+    expect(readFileSync(configPath, "utf-8")).toBe(`[mcp_servers.echo]\ncommand = "echo"\n`);
+  });
+
+  /**
+   * A target that fails must make the command exit non-zero. `--all` is the
+   * documented removal path, so a failed removal — an unwritable or unreadable
+   * ~/.codex, a missing `claude` binary, an unparseable ~/.gemini config — that
+   * still exits 0 reads as success to any script or CI step that checks the exit
+   * code. Every target is still attempted, so all failures are reported first.
+   */
+  test("codex uninstall exits non-zero when a target fails", () => {
+    const home = makeTempRoot("mcp-uninstall-fail-");
+    const dbPath = join(home, "instructions.db");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    // A config.toml that exists but cannot be read as a file: the codex target
+    // throws instead of removing anything.
+    mkdirSync(join(home, ".codex", "config.toml"), { recursive: true });
+
+    const failed = runCli(["mcp", "uninstall", "--codex"], home, dbPath);
+    expect(failed.status).not.toBe(0);
+    expect(failed.stderr).toContain("Failed to remove from codex");
+
+    // The failure does not stop the loop: antigravity is still visited, and the
+    // exit code still reports the failure.
+    const both = runCli(["mcp", "uninstall", "--codex", "--antigravity"], home, dbPath);
+    expect(both.status).not.toBe(0);
+    expect(both.stdout).toContain("Not installed in Antigravity");
+  });
+
   test("antigravity install registers and uninstall removes only the configs entry", () => {
     const home = makeTempRoot("mcp-antigravity-");
     const dbPath = join(home, "instructions.db");
