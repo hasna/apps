@@ -51221,11 +51221,24 @@ export const SELF_HOSTED_RESPONSE_COMPONENTS: Readonly<Record<string, unknown>> 
       "message_id": {
         "type": "string",
         "nullable": true,
-        "description": "RFC 5322 Message-ID"
+        "description": "RFC 5322 Message-ID. Every outbound send mints one — deterministic in the idempotency key, so an idempotent retry rebuilds the same headers and the same payload hash; inbound mail carries the sender's."
       },
       "in_reply_to": {
         "type": "string",
-        "nullable": true
+        "nullable": true,
+        "description": "RFC 5322 In-Reply-To: the Message-ID of the message this one answers, or null when this message starts a conversation."
+      },
+      "thread_id": {
+        "type": "string",
+        "nullable": true,
+        "description": "Conversation identity: the root message's RFC 5322 Message-ID for a thread this service started, or the inherited value for a reply. Enumerate a conversation with GET /v1/messages/threads, which groups by this id when present. OPTIONAL, like policy_denial: a client that required it would refuse every response from a server older than this field. NULL means 'unknown for this row' (it predates threading, or arrived without a resolvable References chain), NOT 'not part of a thread'."
+      },
+      "references": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "RFC 5322 References chain (oldest→newest Message-IDs), derived from headers.References. OPTIONAL for the same reason as thread_id."
       },
       "received_at": {
         "type": "string",
@@ -51425,6 +51438,11 @@ export const SELF_HOSTED_RESPONSE_COMPONENTS: Readonly<Record<string, unknown>> 
       "in_reply_to": {
         "type": "string",
         "nullable": true
+      },
+      "thread_id": {
+        "type": "string",
+        "nullable": true,
+        "description": "Conversation identity (root Message-ID or inherited value); see the Message schema. OPTIONAL."
       },
       "received_at": {
         "type": "string",

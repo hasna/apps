@@ -72,9 +72,11 @@ export function registerReplyCommand(program: Command, output: (data: unknown, f
     .action(async (id: string, opts: { body: string; html?: boolean; provider?: string; all?: boolean; from?: string }) => {
       try {
         // Read the parent through the seam and reply via the server send API.
-        // NOTE: the server /messages/send endpoint carries no in-reply-to/references, so
-        // the reply is delivered as a new message and is not thread-linked server-side.
-        // We report the parent's real thread id (when present) rather than fabricating one.
+        // `replyToId` rides along as `parent_message_id`, so the server derives
+        // In-Reply-To/References from the parent and files the reply in the
+        // parent's conversation (FR-0002) — this command never builds a header
+        // itself, and reports the thread the server assigned rather than
+        // fabricating one.
         const ds = resolveMailDataSource();
         const msg = await ds.getMessage(id);
         if (!msg) return handleError(new Error(`Email not found: ${id}`));

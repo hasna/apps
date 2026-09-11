@@ -24,6 +24,7 @@ import type { SelfHostedResourceSpec, ResourceColumn } from "./resources.js";
 import { resourceKeyColumn, resourceListOrderBy } from "./resources.js";
 import { canonicalSender } from "../../lib/email-address.js";
 import { inboundMessageIdentity, mergeRecipientLists } from "../../lib/inbound-identity.js";
+import { parseReferences } from "../../lib/threading.js";
 import {
   MAX_ATTACHMENT_DOWNLOAD_BYTES,
   decodeAttachmentPayload,
@@ -236,6 +237,10 @@ export interface MessageRecord {
   provider_message_id: string | null;
   message_id: string | null;
   in_reply_to: string | null;
+  /** Conversation identity (FR-0002); NULL when unknown, never "no thread". */
+  thread_id?: string | null;
+  /** RFC 5322 References chain derived from headers.References. */
+  references?: string[];
   received_at: string | null;
   is_read: boolean;
   is_starred: boolean;
@@ -553,6 +558,8 @@ export interface MessageInput {
   direction?: string;
   message_id?: string | null;
   in_reply_to?: string | null;
+  /** Conversation identity; persisted verbatim, inherited from the parent on a reply. */
+  thread_id?: string | null;
   received_at?: string | null;
   is_read?: boolean;
   is_starred?: boolean;
@@ -585,7 +592,7 @@ export interface WebhookDeliveryEventInput {
 /** Columns selected for a message row (explicit so new columns are intentional). */
 const MESSAGE_COLUMNS =
   "id, direction, from_addr, to_addrs, cc_addrs, subject, body_text, body_html, status, " +
-  "provider_id, tags, provider_message_id, message_id, in_reply_to, received_at, is_read, is_starred, labels, " +
+  "provider_id, tags, provider_message_id, message_id, in_reply_to, thread_id, received_at, is_read, is_starred, labels, " +
   "headers, attachments, source_id, idempotency_key, send_payload_hash, send_state, send_started_at, " +
   "created_at, updated_at";
 
@@ -1099,6 +1106,23 @@ function toObject(value: unknown): Record<string, unknown> {
   return {};
 }
 
+/**
+ * Read ONE mail header case-insensitively out of a stored `headers` object.
+ * Header names are case-insensitive (RFC 5322 §2.2), and the rows on this table
+ * were written by more than one importer, so `References` and `references` both
+ * have to answer. Values are normalized to a single string; an array (a header
+ * repeated) is joined, matching how `parseReferences` reads a chain.
+ */
+function threadingHeader(headers: Record<string, unknown>, name: string): string | undefined {
+  const wanted = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== wanted) continue;
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string").join(" ");
+  }
+  return undefined;
+}
+
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value && typeof value === "object") {
@@ -1258,13 +1282,20 @@ function mapMessageRow(row: Record<string, unknown>): MessageRecord {
     // must be able to tell the two apart without attempting a download (#36).
     return { ...metadata, content_available: attachmentContentAvailable(item, index) };
   });
+  const headers = toObject(row["headers"]);
+  const threadId = row["thread_id"];
   return {
     ...(row as unknown as MessageRecord),
     to_addrs: toStringArray(row["to_addrs"]),
     cc_addrs: toStringArray(row["cc_addrs"]),
     labels: toStringArray(row["labels"]),
     attachments,
-    headers: toObject(row["headers"]),
+    headers,
+    // Conversation identity (FR-0002). `thread_id` is a real column; the
+    // References CHAIN is derived from the mail header that carries it, so a row
+    // written before this column existed still reports its ancestry.
+    thread_id: typeof threadId === "string" && threadId.trim() ? threadId.trim() : null,
+    references: parseReferences(threadingHeader(headers, "references")),
     is_read: Boolean(row["is_read"]),
     is_starred: Boolean(row["is_starred"]),
     // NEVER NULL (BUG-0043). An outbound row stores no `received_at` — nothing was
@@ -1563,17 +1594,18 @@ async function reconcileAttachmentRepairRun(
 // Extracted from the store classes so the unscoped base and the TenantScopedStore
 // share ONE implementation of encoding/SQL-shaping (no duplication drift).
 
-/** 25-column message insert list (tenant_id is appended by the scoped variant). */
+/** 26-column message insert list (tenant_id is appended by the scoped variant). */
 const MESSAGE_INSERT_COLS =
   "id, direction, from_addr, to_addrs, cc_addrs, subject, body_text, body_html, status, " +
   "provider_message_id, message_id, in_reply_to, received_at, is_read, is_starred, labels, " +
-  "headers, attachments, source_id, idempotency_key, send_payload_hash, send_state, send_started_at, provider_id, tags";
+  "headers, attachments, source_id, idempotency_key, send_payload_hash, send_state, send_started_at, provider_id, tags, " +
+  "thread_id";
 
 const MESSAGE_INSERT_VALUES =
   "$1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, " +
-  "$16::jsonb, $17::jsonb, $18::jsonb, $19, $20, $21, $22, $23, $24, $25::jsonb";
+  "$16::jsonb, $17::jsonb, $18::jsonb, $19, $20, $21, $22, $23, $24, $25::jsonb, $26";
 
-/** Positional insert params (25) shared by createMessage/upsertMessage/reserveSendIntent. */
+/** Positional insert params (26) shared by createMessage/upsertMessage/reserveSendIntent. */
 function messageInsertParams(input: MessageInput): unknown[] {
   return [
     randomUUID(),
@@ -1601,6 +1633,7 @@ function messageInsertParams(input: MessageInput): unknown[] {
     input.send_started_at ?? null,
     input.provider_id?.trim() || null,
     input.tags == null ? null : JSON.stringify(input.tags),
+    input.thread_id ?? null,
   ];
 }
 
@@ -2612,7 +2645,7 @@ export class TenantScopedStore {
       if (receipt?.resource_id) return { id: receipt.resource_id, receiptRecorded: true as const };
       await this.lockInboundPersistenceFence(tx, { recipients: input.to_addrs, providerId: input.provider_id!, providerType: "resend" });
       const params = messageInsertParams(input);
-      const inserted = await tx.get<{ id: string }>(`INSERT INTO messages(${MESSAGE_INSERT_COLS},tenant_id) VALUES(${MESSAGE_INSERT_VALUES},$26) ON CONFLICT(tenant_id,source_id) WHERE source_id IS NOT NULL DO NOTHING RETURNING id`, [...params, this.tenantId]);
+      const inserted = await tx.get<{ id: string }>(`INSERT INTO messages(${MESSAGE_INSERT_COLS},tenant_id) VALUES(${MESSAGE_INSERT_VALUES},$27) ON CONFLICT(tenant_id,source_id) WHERE source_id IS NOT NULL DO NOTHING RETURNING id`, [...params, this.tenantId]);
       const message = inserted ?? await tx.one<{ id: string }>(`SELECT id FROM messages WHERE tenant_id=$1 AND source_id=$2 AND provider_id=$3`, [this.tenantId, input.source_id, input.provider_id]);
       await tx.execute(`INSERT INTO webhook_receipts(id,tenant_id,provider,event_id,resource_id) VALUES($1,$2,$3,$4,$5)`, [randomUUID(), this.tenantId, provider, eventId, message.id]);
       // `inserted` is non-null only for a genuinely new message; a replayed
@@ -4745,6 +4778,27 @@ export class TenantScopedStore {
     return { id: rows[0]!.id };
   }
 
+  /**
+   * Find a message by its RFC 5322 Message-ID (FR-0002), tenant-scoped.
+   *
+   * A REPLY names its parent by Message-ID, and the two spellings a caller may
+   * hold (`<a@b>` from a mail client, `a@b` from a log line) must resolve to the
+   * same row. Matches the `message_id` column an outbound reply records, and the
+   * generated `rfc_message_id` an inbound row carries. Never crosses tenants:
+   * the lookup is filtered on `tenant_id = $1` exactly like every other read.
+   */
+  async findMessageByRfcMessageId(messageId: string): Promise<MessageRecord | null> {
+    const bare = messageId.trim().replace(/^</, "").replace(/>$/, "").trim();
+    if (!bare) return null;
+    const row = await this.client.get<Record<string, unknown>>(
+      `SELECT ${MESSAGE_COLUMNS} FROM messages
+       WHERE tenant_id = $1 AND (message_id = $2 OR message_id = $3 OR rfc_message_id = $4)
+       ORDER BY created_at DESC LIMIT 1`,
+      [this.tenantId, messageId.trim(), `<${bare}>`, bare.toLowerCase()],
+    );
+    return row ? mapMessageRow(row) : null;
+  }
+
   async getMessage(id: string): Promise<MessageRecord | null> {
     const row = await this.client.get<Record<string, unknown>>(
       `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = $1 AND tenant_id = $2`,
@@ -4990,7 +5044,7 @@ export class TenantScopedStore {
         [this.tenantId, transactionId, payloadHash, params[0]],
       );
       if (inserted) {
-        await tx.execute(`INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id) VALUES (${MESSAGE_INSERT_VALUES}, $26)`, [...params, this.tenantId]);
+        await tx.execute(`INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id) VALUES (${MESSAGE_INSERT_VALUES}, $27)`, [...params, this.tenantId]);
         await this.applyEnabledMailboxFiltersToMessage(tx, inserted.message_id);
         return { stored: true as const, id: inserted.message_id, duplicate: false };
       }
@@ -5005,7 +5059,7 @@ export class TenantScopedStore {
   async createMessage(input: MessageInput): Promise<MessageRecord> {
     const row = await this.client.one<Record<string, unknown>>(
       `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
-       VALUES (${MESSAGE_INSERT_VALUES}, $26)
+       VALUES (${MESSAGE_INSERT_VALUES}, $27)
        RETURNING ${MESSAGE_COLUMNS}`,
       [...messageInsertParams(input), this.tenantId],
     );
@@ -5100,7 +5154,7 @@ export class TenantScopedStore {
       }
       const insertedRow = await tx.get<Record<string, unknown>>(
         `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
-         VALUES (${MESSAGE_INSERT_VALUES}, $26)
+         VALUES (${MESSAGE_INSERT_VALUES}, $27)
          ON CONFLICT (tenant_id, source_id) WHERE source_id IS NOT NULL DO NOTHING
          RETURNING ${MESSAGE_COLUMNS}`,
         [...messageInsertParams(input), this.tenantId],
@@ -5427,7 +5481,7 @@ export class TenantScopedStore {
       }
       const inserted = await client.get<Record<string, unknown>>(
         `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
-         VALUES (${MESSAGE_INSERT_VALUES}, $26)
+         VALUES (${MESSAGE_INSERT_VALUES}, $27)
          ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
          RETURNING ${MESSAGE_COLUMNS}`,
         [...messageInsertParams({ ...input, direction: "outbound", status: "queued", send_state: "pending" }), this.tenantId],
@@ -5677,7 +5731,7 @@ export class TenantScopedStore {
     }
     const row = await this.client.one<Record<string, unknown>>(
       `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
-       VALUES (${MESSAGE_INSERT_VALUES}, $26)
+       VALUES (${MESSAGE_INSERT_VALUES}, $27)
        ON CONFLICT (tenant_id, source_id) WHERE source_id IS NOT NULL DO UPDATE SET
          ${messageUpsertAssignments(input)}
        RETURNING ${MESSAGE_COLUMNS}, (xmax = 0) AS inserted`,
@@ -5787,16 +5841,25 @@ export class TenantScopedStore {
   // ---- mail-views (threads / mailboxes / raw) ----------------------------
   //
   // The self-hosted `messages` table is a single unified inbound+outbound
-  // ledger, so these are read-only rollups over it (not simple CRUD). Threads
-  // are grouped by a normalized (Re:/Fwd:-stripped) subject key — the server
-  // keeps no thread_id column. Every rollup filters by tenant (design M3).
+  // ledger, so these are read-only rollups over it (not simple CRUD). Every
+  // rollup filters by tenant (design M3).
+  //
+  // THREADS PREFER THE REAL IDENTITY (FR-0002). Rows written from now on carry
+  // a `thread_id` (the root message's RFC 5322 Message-ID, inherited by every
+  // reply), so a conversation is enumerated EXACTLY. Rows written before the
+  // column existed — and inbound mail whose References chain we could not
+  // resolve — fall back to the normalized (Re:/Fwd:-stripped) subject key that
+  // this rollup has always used, so nothing disappears from the list.
 
-  /** Subject-rolled-up conversation list, newest activity first. */
+  /** Conversation list, newest activity first; real thread_id where known. */
   async listThreads(opts: ListOptions = {}): Promise<ThreadRollup[]> {
     const rows = await this.client.many<Record<string, unknown>>(
       `WITH t AS (
          SELECT
-           NULLIF(btrim(regexp_replace(lower(COALESCE(subject, '')), '^(\\s*(re|fwd|fw)\\s*:\\s*)+', '', 'g')), '') AS thread_key,
+           COALESCE(
+             NULLIF(btrim(thread_id), ''),
+             NULLIF(btrim(regexp_replace(lower(COALESCE(subject, '')), '^(\\s*(re|fwd|fw)\\s*:\\s*)+', '', 'g')), '')
+           ) AS thread_key,
            subject, from_addr, is_read, direction,
            COALESCE(received_at, created_at) AS ts
          FROM messages

@@ -891,7 +891,7 @@ describe("self-hosted parity: mailbox-filter actions, enabled/order and mutate a
     expect(index.checksum).toBe("sha256:8a4993106ae807beee656330992745a668395a973a155283f3cda44590f5c710");
   });
 
-  test("0043 inbound message-identity column appends last: a stored key the RLS role can use", () => {
+  test("0043 inbound message-identity column keeps its position: a stored key the RLS role can use", () => {
     const migrations = emailsSelfHostedMigrations();
     const ids = migrations.map((m) => m.id);
     // BUG-0050 third verification: the lookup must compare a plain stored column with
@@ -901,8 +901,12 @@ describe("self-hosted parity: mailbox-filter actions, enabled/order and mutate a
     // `proleakproof = f`), so it Seq Scans on every ingest. Same repair as 0019's
     // sort_ts. The NULLIF is load-bearing: mail with no Message-ID keys NULL and can
     // never match another such row.
-    expect(ids.at(-1)).toBe("0043_inbound_message_identity_column");
-    const column = migrations.at(-1)!;
+    // 0044 appends after this one; 0043 keeps its position (and therefore its
+    // recorded checksum) so the ledger still boots on an upgraded deployment.
+    expect(ids.indexOf("0043_inbound_message_identity_column")).toBe(
+      ids.indexOf("0042_inbound_message_identity_index") + 1,
+    );
+    const column = migrations[ids.indexOf("0043_inbound_message_identity_column")]!;
     expect(column.sql).toContain("ADD COLUMN IF NOT EXISTS rfc_message_id text");
     expect(column.sql).toContain(
       "GENERATED ALWAYS AS (NULLIF(lower(btrim(COALESCE(headers->>'message-id', ''), '<>')), '')) STORED",
@@ -910,6 +914,23 @@ describe("self-hosted parity: mailbox-filter actions, enabled/order and mutate a
     expect(column.sql).toContain("messages_inbound_rfc_message_id_col_idx");
     expect(column.sql).toContain("WHERE direction = 'inbound' AND rfc_message_id IS NOT NULL");
     expect(column.sql).toContain("CREATE INDEX IF NOT EXISTS");
+  });
+
+  test("0044 message threading appends last: the thread a conversation is enumerated by", () => {
+    const migrations = emailsSelfHostedMigrations();
+    const ids = migrations.map((m) => m.id);
+    // FR-0002 requirement 3: a conversation needs an identifier. It appends last so
+    // every earlier migration keeps the position and checksum its deployment recorded.
+    expect(ids.at(-1)).toBe("0044_message_threading");
+    const threading = migrations.at(-1)!;
+    expect(threading.sql).toContain("ADD COLUMN IF NOT EXISTS thread_id TEXT");
+    // Partial index: only rows that actually carry a thread are indexed, and the
+    // tenant is the leading key so an RLS-scoped thread listing stays a range scan.
+    expect(threading.sql).toContain("messages_thread_id_idx");
+    expect(threading.sql).toContain("ON messages (tenant_id, thread_id)");
+    expect(threading.sql).toContain("WHERE thread_id IS NOT NULL");
+    expect(threading.sql).toContain("CREATE INDEX IF NOT EXISTS");
+    expect(threading.checksum).toBe("sha256:25be314b8d4d9418234df0f641d6bfec5d5e2e4496ea511bc2bded4119fb142d");
   });
 
   test("self-hosted mailbox-filter CRUD round-trips actions, enabled and order, with legacy defaults", async () => {

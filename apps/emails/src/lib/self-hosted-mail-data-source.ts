@@ -101,6 +101,15 @@ interface V1Message {
   provider_id?: string | null;
   message_id?: string | null;
   in_reply_to?: string | null;
+  /**
+   * FR-0002 conversation identity. Undefined/null means "not known for this row"
+   * — a message from a server older than the column, or one whose conversation
+   * cannot be resolved — NOT "this message has no thread"; `threadKeyOfSubject`
+   * is the fallback for exactly those rows.
+   */
+  thread_id?: string | null;
+  /** RFC 5322 References chain, when the server exposes it. */
+  references?: string[] | null;
   received_at?: string | null;
   is_read?: boolean;
   is_starred?: boolean;
@@ -429,15 +438,19 @@ function bareMessageId(value: string | null | undefined): string {
   return String(value ?? "").replace(/[<>]/g, "").trim();
 }
 
-// The conversation key of a subject. The self-hosted store has NO thread_id
-// column: its one server-side notion of a conversation is the normalized
-// (Re:/Fwd:-stripped, lower-cased, trimmed) subject that
-// `GET /v1/messages/threads` groups by — see store.listThreads, whose SQL this
-// mirrors expression-for-expression:
+// The FALLBACK conversation key of a subject.
+//
+// Since FR-0002 the self-hosted store has a real `thread_id` column and
+// `GET /v1/messages/threads` groups by `COALESCE(thread_id, <this key>)`. This
+// function is the second half of that COALESCE — the answer for the rows that
+// predate the column, or whose conversation the server could not resolve. It
+// mirrors store.listThreads' subject expression-for-expression:
 //   NULLIF(btrim(regexp_replace(lower(COALESCE(subject,'')),
 //                               '^(\s*(re|fwd|fw)\s*:\s*)+', '', 'g')), '')
 // Keeping the two in lock-step is what makes this client's thread view agree
 // with the server's own thread rollup instead of inventing a third answer.
+// Callers must prefer a row's own `thread_id` when it has one; this never
+// overrides it.
 const THREAD_SUBJECT_PREFIX_RE = /^(?:\s*(?:re|fwd|fw)\s*:\s*)+/;
 
 /** Normalized conversation key, or null when the subject is empty (no key exists). */
@@ -803,12 +816,13 @@ function v1ToTuiMessage(m: V1Message, rules: PrioritySenderRule[] = []): TuiMess
     labels: visibleLabels(labelsOf(m), isRead),
     snippet: snippetOf(m.snippet ?? m.body_text),
     // The conversation this row belongs to, named the way the server names it
-    // (the `thread_key` of GET /v1/messages/threads). Derived from the subject
-    // the row already carries, so it costs no extra round-trip and is present on
-    // list rows as well as detail reads. Null only when the subject is empty —
-    // there is genuinely no conversation key then, and lumping every empty
-    // subject under one id would be a fabricated grouping.
-    thread_id: threadKeyOfSubject(m.subject),
+    // (the `thread_key` of GET /v1/messages/threads). Since FR-0002 the server
+    // keeps a real `thread_id` and that is its grouping key; the subject key is
+    // the FALLBACK, for rows that predate the column or whose conversation the
+    // server could not resolve — never a competing answer. Null only when
+    // neither exists: there is genuinely no conversation key then, and lumping
+    // every keyless message under one id would be a fabricated grouping.
+    thread_id: m.thread_id ?? threadKeyOfSubject(m.subject),
     // Genuinely absent: the self-hosted store keeps no upstream/provider thread
     // id column, so there is nothing truthful to project here.
     provider_thread_id: null,
@@ -1593,10 +1607,11 @@ export class SelfHostedMailDataSource implements MailDataSource {
   /**
    * Every message in the conversation `target` belongs to, oldest first.
    *
-   * Two grouping rules, both grounded in data the serve actually returns:
-   *  1. the normalized subject key — the server's OWN conversation key (see
-   *     threadKeyOfSubject / store.listThreads), and
-   *  2. the RFC 5322 Message-ID <-> In-Reply-To links carried on every row, which
+   * Three grouping rules, all grounded in data the serve actually returns:
+   *  1. the row's own `thread_id` — the server's conversation identity (FR-0002),
+   *  2. the normalized subject key, which is what the server falls back to for
+   *     rows without one (see threadKeyOfSubject / store.listThreads), and
+   *  3. the RFC 5322 Message-ID <-> In-Reply-To links carried on every row, which
    *     keep a reply attached even when its subject was edited.
    *
    * Candidates are narrowed SERVER-side by `?subject=` (a case-folded substring
@@ -1605,17 +1620,20 @@ export class SelfHostedMailDataSource implements MailDataSource {
    * equality. That keeps one conversation read at one or two requests instead of
    * the full-store scan the label/oldest paths pay.
    *
-   * A message with an empty subject has no conversation key at all, so it stands
-   * alone — collapsing every empty-subject message into one thread would be a
-   * fabrication, not a thread.
+   * A message with neither a thread_id nor a subject key stands alone —
+   * collapsing every keyless message into one thread would be a fabrication,
+   * not a thread.
    */
   private async conversationRows(target: V1Message): Promise<V1Message[]> {
-    const key = threadKeyOfSubject(target.subject);
+    // A row's own thread_id wins; the subject key covers rows without one. Both
+    // sides of the comparison use the same rule, so the grouping agrees with the
+    // server's COALESCE(thread_id, subject-key).
+    const key = target.thread_id ?? threadKeyOfSubject(target.subject);
     const members = new Map<string, V1Message>([[target.id, target]]);
     if (!key) return [...members.values()];
 
     const candidates: V1Message[] = [];
-    for await (const page of this.listPages(PAGE_LIMIT, { subject: key })) {
+    for await (const page of this.listPages(PAGE_LIMIT, { subject: threadKeyOfSubject(target.subject) ?? key })) {
       candidates.push(...page);
       if (candidates.length >= MAX_THREAD_CANDIDATE_ROWS) {
         candidates.length = MAX_THREAD_CANDIDATE_ROWS;
@@ -1626,7 +1644,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     const unlinked: V1Message[] = [];
     for (const candidate of candidates) {
       if (candidate.id === target.id) continue;
-      if (threadKeyOfSubject(candidate.subject) === key) members.set(candidate.id, candidate);
+      if ((candidate.thread_id ?? threadKeyOfSubject(candidate.subject)) === key) members.set(candidate.id, candidate);
       else unlinked.push(candidate);
     }
 
@@ -2286,11 +2304,16 @@ export class SelfHostedMailDataSource implements MailDataSource {
     const trackingRequested = input.trackOpens === true || input.trackClicks === true;
     for (const value of [input.trackOpens,input.trackClicks]) if (value !== undefined && typeof value !== "boolean") throw new Error("Tracking switches must be boolean");
     if (input.trackingUrl !== undefined && (typeof input.trackingUrl !== "string" || !input.trackingUrl.trim() || !trackingRequested)) throw new Error("trackingUrl requires a nonempty URL and trackOpens or trackClicks");
-    if (input.providerId || input.unsubscribeUrl || input.sendKey || trackingRequested || input.headers !== undefined || input.tags !== undefined) {
+    if (input.providerId || input.unsubscribeUrl || input.sendKey || input.replyToId || trackingRequested || input.headers !== undefined || input.tags !== undefined) {
       const contract = await this.request("GET", "/openapi.json");
       const doc = contract.json as { paths?: Record<string, { post?: { requestBody?: { content?: Record<string, { schema?: { properties?: Record<string, unknown> } }> } } }> };
       const properties = doc?.paths?.[input.scheduledAt ? "/v1/scheduled/enqueue" : "/v1/messages/send"]?.post?.requestBody?.content?.["application/json"]?.schema?.properties;
       if ((input.headers !== undefined && !properties?.headers) || (input.tags !== undefined && !properties?.tags)) throw new Error("The Emails API needs an update to support custom send headers and tags; no message was sent.");
+      // FR-0002: a reply is named by the parent's hosted id and the SERVER derives
+      // In-Reply-To/References from it. Against a server that predates the field,
+      // sending anyway would deliver a reply that claims no parent — exactly the
+      // bug — so refuse instead.
+      if (input.replyToId && !properties?.parent_message_id) throw new Error("The Emails API needs an update to support in-thread replies (parent_message_id); no message was sent.");
       if (input.sendKey && !properties?.send_key) throw new Error("The Emails API needs an update to support scoped send keys; no message was sent.");
       if (trackingRequested && (!properties?.track_opens || !properties?.track_clicks || !properties?.tracking_url)) throw new Error("The Emails API needs an update to support tracking; no message was sent.");
       if (contract.status !== 200 || (input.providerId && !properties?.provider_id) || (input.unsubscribeUrl && !properties?.unsubscribe_url)) {
@@ -2308,6 +2331,10 @@ export class SelfHostedMailDataSource implements MailDataSource {
     if (input.cc) body["cc"] = input.cc.split(",").map((v) => v.trim()).filter(Boolean);
     if (input.bcc) body["bcc"] = input.bcc.split(",").map((v) => v.trim()).filter(Boolean);
     if (input.replyTo) body["reply_to"] = input.replyTo;
+    // The parent, by hosted id: the server resolves it, derives In-Reply-To and
+    // References from the parent's own Message-ID and chain, mints this reply's
+    // Message-ID, and files the reply in the parent's conversation (FR-0002).
+    if (input.replyToId) body["parent_message_id"] = input.replyToId;
     // The `--force` suppression override: the server honors it only for
     // tenant-wide send authority and refuses it otherwise (403
     // suppression_override_forbidden), so the CLI never needs to know its own

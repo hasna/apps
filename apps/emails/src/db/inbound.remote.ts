@@ -5,9 +5,10 @@
 // and outbound mail:
 //   from_address <-> from_addr, to_addresses <-> to_addrs, cc_addresses <-> cc_addrs,
 //   text_body <-> body_text, html_body <-> body_html, label_ids <-> labels,
-//   is_sent <-> (direction === "outbound"). There is NO thread_id column
-//   (threads are server-derived by normalized subject), and no provider/owner
-//   dimension on a message — those local-only fields map to null/default.
+//   is_sent <-> (direction === "outbound"). A conversation is the row's
+//   thread_id (FR-0002), falling back to the server's normalized-subject key for
+//   rows that predate the column; there is no provider/owner dimension on a
+//   message — those local-only fields map to null/default.
 //
 // Filters/sorts with no direct query surface are applied in JS over an honestly
 // enumerated page window. Scalar mailbox counts and watermarks use the server's

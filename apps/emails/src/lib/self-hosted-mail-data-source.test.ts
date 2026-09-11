@@ -2476,10 +2476,12 @@ describe("resolveMailDataSource — self-hosted seam selection", () => {
 
 // ── conversation / thread projection ────────────────────────────────────────
 //
-// The self-hosted store has no thread_id column, so getConversation() used to
-// answer with the single message it was handed. Everything above that seam then
-// lied: `emails email replies <sent-id>` printed "No replies." for a message
-// that had them, and every thread header read "(1 message)".
+// The self-hosted store had no conversation identity at all, so getConversation()
+// used to answer with the single message it was handed. Everything above that
+// seam then lied: `emails email replies <sent-id>` printed "No replies." for a
+// message that had them, and every thread header read "(1 message)". The
+// grouping it uses now is the server's own: thread_id (FR-0002) with the
+// normalized subject as the fallback for rows that predate the column.
 
 function threadRow(id: string, over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
