@@ -1,6 +1,6 @@
 {
   "name": "@hasna/trash",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "description": "Reversible deletion for agents - deletes land in a trash store, sync to cloud, expire on a chosen retention",
   "license": "Apache-2.0",
