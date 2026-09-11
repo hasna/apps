@@ -48,7 +48,8 @@
     "dist",
     "LICENSE",
     "README.md",
-    "postinstall.js"
+    "postinstall.js",
+    "!dist/test/**"
   ],
   "scripts": {
     "clean": "rm -rf dist",

@@ -136,13 +136,21 @@ describe('resolveAccountForAgent', () => {
     })
   })
 
-  test('rejects a retired storage-mode variable on the client accounts store', async () => {
-    await expect(resolveAccountForAgent('codex', {
-      HASNA_ACCOUNTS_STORAGE_MODE: 'cloud',
-    })).rejects.toThrow(/HASNA_ACCOUNTS_STORAGE_MODE was removed/)
-    await expect(resolveAccountForAgent('codex', {
-      ACCOUNTS_MODE: 'local',
-    })).rejects.toThrow(/ACCOUNTS_MODE was removed/)
+  test('ignores a retired storage-mode variable on the client accounts store', async () => {
+    // Stale `*_STORAGE_MODE` / `*_MODE` variables are inert (owner directive
+    // 2026-08-15): they never select a store and never throw. An otherwise
+    // unconfigured environment resolves the local JSON registry exactly as it
+    // would without the stale variable.
+    const clean = await resolveAccountForAgent('codex', {})
+    expect(clean).toBeNull()
+    for (const stale of [
+      { HASNA_ACCOUNTS_STORAGE_MODE: 'cloud' },
+      { ACCOUNTS_MODE: 'local' },
+      { HASNA_ACCOUNTS_STORAGE_MODE: 'cloud', ACCOUNTS_MODE: 'local' },
+    ]) {
+      const result = await resolveAccountForAgent('codex', stale)
+      expect(result).toEqual(clean)
+    }
   })
 
   test('routes to the API from URL + key alone, without any mode variable', async () => {

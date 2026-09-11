@@ -463,7 +463,16 @@ describe("native app companion contract", () => {
     // pipeline awaits it only after the recorder stopped.
     expect(startBody).toContain("Task.detached(priority: .userInitiated)");
     expect(startBody).not.toContain("AccessibilitySelectionToken.capture(for:");
-    expect(engine).toContain("await captureConfiguration.startContext.value");
+    expect(engine).toContain("await captureConfiguration.resolvedStartContext()");
+    const contextResolverStart = engine.indexOf("func resolvedStartContext() async");
+    expect(contextResolverStart).toBeGreaterThan(-1);
+    const contextResolverEnd = engine.indexOf("\n    }\n", contextResolverStart);
+    expect(contextResolverEnd).toBeGreaterThan(contextResolverStart);
+    const contextResolver = engine.slice(contextResolverStart, contextResolverEnd);
+    expect(contextResolver).toContain("let context = await startContext.value");
+    expect(contextResolver).toContain("guard !preservesStartSelection else { return context }");
+    expect(contextResolver).toContain("RecordingStartResolvedContext(selectionToken: nil,");
+    expect(contextResolver).toContain("processing: context.processing");
     expect(engine).toContain("generation == self.recordingGeneration");
   });
 

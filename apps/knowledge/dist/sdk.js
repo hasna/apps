@@ -5024,6 +5024,17 @@ function announceLocalMode(env) {
 function knowledgeFailClosedMessage(original) {
   return `knowledge: client credential resolution failed \u2014 ${original} ` + `There is no local fallback: the on-box store is opt-in only (${KNOWLEDGE_LOCAL_OPT_IN_ENV}=1) ` + "and disabled by default \u2014 failing closed instead of serving local data.";
 }
+
+class KnowledgeSourceUnavailableError extends Error {
+  code = "source_unavailable";
+  status = "unavailable";
+  detail;
+  constructor(detail, options) {
+    super(knowledgeFailClosedMessage(detail.reason), options);
+    this.name = "KnowledgeSourceUnavailableError";
+    this.detail = detail;
+  }
+}
 function resolveKnowledgeClientTransport(env = process.env, options = {}) {
   assertNoRetiredKnowledgeStorageSelector(env);
   const keychain = options.keychain ?? knowledgeKeychainTierOptions(env);
@@ -5066,9 +5077,16 @@ function resolveKnowledgeClientTransport(env = process.env, options = {}) {
       ...base
     };
   } catch (error) {
-    throw new Error(knowledgeFailClosedMessage(error instanceof Error ? error.message : String(error)), {
-      cause: error
-    });
+    throw new KnowledgeSourceUnavailableError({
+      status: "unavailable",
+      credential_source: "none",
+      credential_file_candidates: base.credential_file_candidates,
+      credential_env_keys: Object.freeze([...KNOWLEDGE_API_KEY_ENV_KEYS]),
+      keychain_tier_enabled: base.keychain_tier_enabled,
+      local_opt_in_present: base.local_opt_in_present,
+      network_guard_active: base.network_guard_active,
+      reason: error instanceof Error ? error.message : String(error)
+    }, { cause: error });
   }
 }
 function keychainTierLive(env, options) {
@@ -19711,10 +19729,12 @@ var package_default = {
   },
   repository: {
     type: "git",
-    url: "git+https://github.com/hasna/knowledge.git"
+    url: "https://github.com/hasna/apps.git",
+    directory: "apps/knowledge"
   },
+  homepage: "https://github.com/hasna/apps",
   bugs: {
-    url: "https://github.com/hasna/knowledge/issues"
+    url: "https://github.com/hasna/apps/issues"
   },
   author: "Hasna Inc. <hasna@example.com>",
   engines: {

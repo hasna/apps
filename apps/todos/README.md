@@ -149,23 +149,25 @@ chmod 600 ~/.hasna/todos/config/credentials
 ```
 
 **Hosted mode fails closed.** With no credential the CLI exits non-zero
-(`REMOTE_API_CONFIG_MISSING`) and names the tiers it consulted. The MCP server
-stays up so a client can read the refusal, and each call fails instead of serving
-local rows — the credential-gated tools with the typed
-`REMOTE_API_CONFIG_MISSING` and the on-box tools with the typed
-`API_DATABASE_FALLBACK_FORBIDDEN`, both described under
+(`REMOTE_API_CONFIG_MISSING`) and names the tiers it consulted; the stdio MCP
+server exits the same way before answering `initialize`. Once a hosted
+authority resolves, each call fails instead of serving local rows — the
+credential-gated tools with the typed `REMOTE_API_CONFIG_MISSING` and the
+on-box tools with the typed `REMOTE_COMMAND_UNSUPPORTED` (or
+`API_DATABASE_FALLBACK_FORBIDDEN` on surfaces without a startup refusal), both
+described under
 [Upgrading From 0.15.52](#upgrading-from-01552). Neither surface falls back to
 the local SQLite store, because serving local rows while authentication is broken
 prints healthy output for a broken system.
 
-The `./sdk` surface answers "nothing is configured" differently *on purpose*,
-and only for that one case: `new TodosClient()` targets the on-box
-`todos-serve` at `http://localhost:19427` and prints the local-mode line, since
-that client speaks the same `/api/*` plane a workstation serve exposes and local
-is a real mode for it. `createTodosV1Client()` is hosted-only and throws
-(`TODOS_CREDENTIAL_MISSING`). Every *other* refusal is a throw on all three
-surfaces — aliases that disagree, an unreadable credential file, a URL with no
-key — because those are misconfigurations, not an absence of configuration.
+The `./sdk` surface fails closed the same way: with nothing resolved,
+`new TodosClient()` and `createTodosV1Client()` both throw
+`TODOS_CREDENTIAL_MISSING` naming every tier they consulted. `TodosClient` can
+speak to the on-box `todos-serve` at `http://localhost:19427` — that is a real
+mode for it — but only under the explicit opt-in below, never as a fallback.
+Every other refusal is a throw on all three surfaces too — aliases that
+disagree, an unreadable credential file, a URL with no key — because those are
+misconfigurations, not an absence of configuration.
 
 A **declared-but-blank** authority variable is deliberately *not* one of those
 refusals. At the Todos seam a blank has always meant "unset" — helpers in the
@@ -177,6 +179,14 @@ from a wrapper, set `HASNA_TODOS_LOCAL=1` — a blank authority variable counts 
 absent for the opt-in too, so the opt-in is still honoured when
 `HASNA_TODOS_API_KEY` is present but empty — instead of blanking a credential
 variable.
+
+On the hosted route the MCP server never opens the local store either: the
+tools and `todos://` resources that only exist for the on-box SQLite file
+(dispatch, templates, handoffs, boards, runs, `todos://projects`, …) answer
+`REMOTE_COMMAND_UNSUPPORTED` naming the opt-in, instead of reading an empty
+local file and reporting it as the fleet. Machine and task tools are
+shared-API routed on that route and refuse under their own `REMOTE_API_*`
+code when the authority cannot serve them.
 
 **Local mode is deliberate, and it says so.** `@hasna/todos` is usable entirely
 offline against an on-box SQLite store — set `HASNA_TODOS_LOCAL=1` (alias

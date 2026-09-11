@@ -34,18 +34,17 @@
  * throws before any client is built, no SQLite file is opened, and no
  * `*-local-fallback` event exists.
  *
- * LOCAL MODE IS A DELIBERATE OPT-IN, NEVER A FALLBACK FROM FAILURE. The
+ * THE ON-BOX STORE IS A DELIBERATE OPT-IN, NEVER A FALLBACK FROM FAILURE. The
  * on-box SQLite store is reachable ONLY when the environment configures no
  * authority and no credential AND the operator set `HASNA_MESSAGES_LOCAL=1`
  * (alias `MESSAGES_LOCAL=1`). It is answered BEFORE the resolver runs, so an
  * unhosted run reads neither the Keychain nor the credential file, and it
  * announces itself once, on stderr, so "local" is never a silent state.
  *
- * REMOVED, and never inputs again: the `*_MODE` / `*_STORAGE_MODE` selectors,
- * the `HASNA_MESSAGES_LOCAL_MODE_ENV` spelling of the opt-in, and every
- * `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna` location — the
- * shared resolver refuses those paths on the app's behalf, and the disk tier
- * reads exactly one file: `~/.hasna/messages/config/credentials`.
+ * REMOVED, and never inputs again: the legacy mode-selector opt-in spellings,
+ * and every `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`
+ * location — the shared resolver refuses those paths on the app's behalf, and
+ * the disk tier reads exactly one file: `~/.hasna/messages/config/credentials`.
  */
 import {
   clientTransportEnvKeys,
@@ -93,9 +92,8 @@ export const MESSAGES_DEFAULT_API_URL = defaultFleetGatewayBaseUrl(MESSAGES_APP_
  * Removed selector names, preserved only as documentation. The old chain had
  * exactly one opt-in switch, `HASNA_MESSAGES_LOCAL`; it is reprised below as
  * {@link MESSAGES_LOCAL_OPT_IN_ENV_KEYS} with the same semantics — an EXPLICIT
- * unhosted opt-in, not a mode switch — and its `*_MODE_ENV` constant name is
- * gone. The fleet's `*_MODE` / `*_STORAGE_MODE` family never existed in this
- * app and selects nothing.
+ * unhosted opt-in, not a mode switch. The storage-mode selector family never
+ * existed in this app and selects nothing.
  */
 export { MESSAGES_LOCAL_OPT_IN_ENV_KEYS } from "./client-types.js";
 

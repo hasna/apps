@@ -7,7 +7,7 @@
 // starves pg's socket IO and always times out.
 //
 // It lets the entire existing synchronous query layer (database.ts) run
-// unchanged against RDS Postgres for the self-hosted serve (Amendment A1: PURE
+// unchanged against RDS Postgres for the deployed serve (Amendment A1: PURE
 // REMOTE — direct reads/writes, no cache, no sync engine).
 import { Worker, MessageChannel, receiveMessageOnPort, type MessagePort } from 'node:worker_threads'
 import { fileURLToPath } from 'node:url'
@@ -59,11 +59,22 @@ export function translateSqliteDates(sql: string): string {
   return s
 }
 
+/**
+ * Resolve the pg-sync-worker path for THIS module layout, deterministically:
+ * a bundled module (`import.meta.url` ends in `.js`) must prefer the bundled
+ * `.js` sibling FIRST — a stray `.ts` file next to a dist bundle (or the
+ * dev-source layout) must never be picked from a production bundle, where a
+ * `pg-sync-worker.ts` entry point cannot load and every Postgres-backed query
+ * dies with "Worker has been terminated". Source runs (`.ts`) prefer the
+ * source worker first, exactly as before.
+ */
 function resolveWorkerPath(): string {
   const here = dirname(fileURLToPath(import.meta.url))
+  const selfExt = fileURLToPath(import.meta.url).endsWith('.js') ? 'js' : 'ts'
+  const otherExt = selfExt === 'js' ? 'ts' : 'js'
   const candidates = [
-    join(here, 'pg-sync-worker.ts'), // dev (bun run src)
-    join(here, 'pg-sync-worker.js'), // bundled sibling (dist/server, dist/db)
+    join(here, `pg-sync-worker.${selfExt}`),
+    join(here, `pg-sync-worker.${otherExt}`),
     join(here, '..', 'db', 'pg-sync-worker.js'),
   ]
   for (const candidate of candidates) if (existsSync(candidate)) return candidate

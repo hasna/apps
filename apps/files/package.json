@@ -34,7 +34,12 @@
     "docs",
     "scripts",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "!dist/test/**",
+    "!scripts/**/*.test.ts",
+    "!dist/**/*fixtures.d.ts",
+    "!dist/**/*fixtures.d.ts.map",
+    "!dist/**/test-fixtures/**"
   ],
   "scripts": {
     "clean": "rm -rf dist",

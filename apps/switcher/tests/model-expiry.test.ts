@@ -51,14 +51,14 @@ test("additional expiring models preserve discovery and override remote metadata
   } finally { await upstream.stop(true); }
 });
 
-test("DeepSeek presets add the exact preview without replacing the discovered stable catalog", () => {
+test("DeepSeek presets add the official Flash model without replacing the discovered catalog", () => {
   const provider = providerFromPreset("deepseek",{harness:"claude"});
   expect(provider.manualModels).toEqual([]);
-  expect(provider.additionalModels).toEqual([{id:"deepseek-v4.1-flash-expires-on-0910",name:"DeepSeek V4.1 Flash preview",expiresOn:"2026-09-10"}]);
+  expect(provider.additionalModels).toEqual([{id:"deepseek-flash",name:"DeepSeek V4.1 Flash",inputModalities:["text","image"],outputModalities:["text"],supportedParameters:["tools"]}]);
   expect(providerFromPreset("deepseek",{baseUrl:"https://custom.example/v1",credentialEnv:"SWITCHER_PROVIDER_CUSTOM"}).additionalModels).toEqual([]);
 });
 
-test("preset aliases retain existing additive models without treating new preview defaults as transport conflicts", async () => {
+test("preset aliases retain existing additive models without treating new model defaults as transport conflicts", async () => {
   const {additionalModels, ...legacy} = providerFromPreset("deepseek",{harness:"claude"});
   for (const additions of [undefined,[{id:"custom-preview",name:"Custom",expiresOn:"9999-01-01"}]]) {
     const saved={...legacy,...(additions?{additionalModels:additions}:{}),version:1,updatedAt:new Date().toISOString()};

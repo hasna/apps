@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { closeDatabase } from "../db/database.js";
 import { createWorkspace } from "../db/workspaces.js";
 import type { ProjectStore } from "../store/project-store.js";
+import type { ProjectChannelExistenceProbe } from "./project-channel.js";
 import type { Agent, Workspace, WorkspaceEvent } from "../types/workspace.js";
 import {
   auditProjectAgentToolCalls,
@@ -260,7 +261,7 @@ function makeFakeApiStore() {
   return { store: store as unknown as ProjectStore, calls, project };
 }
 
-function apiTools(store: ProjectStore) {
+function apiTools(store: ProjectStore, channelProbe?: ProjectChannelExistenceProbe) {
   return buildWorkspaceAgentTools({
     store,
     actorAgent: { id: "agt_local", slug: "local", name: "Local", kind: "cli" } as unknown as Agent,
@@ -269,6 +270,7 @@ function apiTools(store: ProjectStore) {
     command: "projects --yes 'cloud split-brain test'",
     tmuxAllowed: false,
     createdWorkspaces: [],
+    channelProbe,
   });
 }
 
@@ -507,5 +509,126 @@ describe("prompt-agent mutations route through the Store in the hosted backend",
     expect(result.status).toBe("registered");
     expect((result.location as { path: string }).path).toBe("/tmp/x");
     expect(result.error).toBeUndefined();
+  });
+});
+
+// --------------------------------------------------------------------------
+// BUG-0063, round 3: the prompt-agent TOOLS that can pin
+// integrations.conversations_channel must refuse a name the conversations app
+// has no channel for, exactly like their CLI and MCP twins. These are the
+// tools a model reaches through the registered MCP tool projects_agent_prompt
+// (yes:true) and through `projects "<prompt>" --yes`, so the model — not a
+// human — supplies the string. The probe is injected here; production falls
+// back to the same env-driven projectChannelWriteProbe the CLI/MCP guards use.
+// --------------------------------------------------------------------------
+
+const LISTED_CHANNELS = ["product-mvp-launch"];
+
+const missingUnlessListed: ProjectChannelExistenceProbe = (channel) =>
+  (LISTED_CHANNELS.includes(channel) ? { verdict: "exists" } : { verdict: "missing" });
+
+describe("prompt-agent conversations-channel guard (BUG-0063)", () => {
+  afterEach(() => {
+    closeDatabase();
+    delete process.env["HASNA_PROJECTS_DB_PATH"];
+  });
+
+  test("projects_update refuses a channel that is not a channel and writes nothing", async () => {
+    const { store, calls } = makeFakeApiStore();
+    const tools = apiTools(store, missingUnlessListed);
+
+    await expect(invoke(tools.projects_update, {
+      project: "cloud-proj",
+      integrations: { conversations_channel: "employee-contract-closing" },
+    })).rejects.toThrow(/Refusing to pin integrations\.conversations_channel "employee-contract-closing"/);
+    expect(calls.some((call) => call.method === "updateProject")).toBe(false);
+
+    const accepted = await invoke(tools.projects_update, {
+      project: "cloud-proj",
+      integrations: { conversations_channel: "product-mvp-launch" },
+    });
+    expect(accepted.error).toBeUndefined();
+    const update = calls.find((call) => call.method === "updateProject");
+    expect(update).toBeDefined();
+    expect((update!.args[1] as { integrations?: Record<string, string> }).integrations?.conversations_channel)
+      .toBe("product-mvp-launch");
+  });
+
+  test("projects_update accepts an unchanged value carried forward", async () => {
+    const { store, calls } = makeFakeApiStore();
+    (store.resolveTarget as unknown as (target: string) => Promise<Workspace>) = async () =>
+      makeCloudProject({ integrations: { conversations_channel: "employee-contract-closing" } });
+    const tools = apiTools(store, missingUnlessListed);
+
+    // Writing the existing value back is not a new claim, so the guard must
+    // not turn a full-integrations write into a refusal (the repair stays a
+    // deliberate, separate act) — see changedProjectChannel.
+    const carried = await invoke(tools.projects_update, {
+      project: "cloud-proj",
+      integrations: { conversations_channel: "employee-contract-closing" },
+    });
+    expect(carried.status).toBe("updated");
+    expect(calls.some((call) => call.method === "updateProject")).toBe(true);
+  });
+
+  test("projects_create refuses a pinned channel before creating anything", async () => {
+    const { store, calls } = makeFakeApiStore();
+    const tools = apiTools(store, missingUnlessListed);
+
+    await expect(invoke(tools.projects_create, {
+      name: "Agent Channel Create",
+      integrations: { conversations_channel: "employee-contract-closing" },
+    })).rejects.toThrow(/Refusing to pin integrations\.conversations_channel "employee-contract-closing"/);
+    expect(calls.some((call) => call.method === "createProject")).toBe(false);
+
+    const accepted = await invoke(tools.projects_create, {
+      name: "Agent Channel Create",
+      integrations: { conversations_channel: "product-mvp-launch" },
+    });
+    expect(accepted.error).toBeUndefined();
+    const create = calls.find((call) => call.method === "createProject");
+    expect(create).toBeDefined();
+    expect((create!.args[0] as { integrations?: Record<string, string> }).integrations?.conversations_channel)
+      .toBe("product-mvp-launch");
+  });
+
+  test("projects_link refuses to pin a channel that is not a channel", async () => {
+    const root = mkdtempSync(join(tmpdir(), "project-agent-channel-link-"));
+    process.env["HASNA_PROJECTS_DB_PATH"] = join(root, "projects.db");
+    const row = createWorkspace({
+      name: "Agent Channel Link",
+      slug: "agent-channel-link",
+      kind: "generic",
+      integrations: { todos_project_id: "todos-77" },
+    });
+    const { store, calls } = makeFakeApiStore();
+    const tools = apiTools(store, missingUnlessListed);
+
+    await expect(invoke(tools.projects_link, {
+      project: row.id,
+      integrations: { conversations_channel: "employee-contract-closing" },
+    })).rejects.toThrow(/Refusing to pin integrations\.conversations_channel "employee-contract-closing"/);
+    expect(calls.some((call) => call.method === "updateProject")).toBe(false);
+
+    const linked = await invoke(tools.projects_link, {
+      project: row.id,
+      integrations: { conversations_channel: "product-mvp-launch" },
+    });
+    expect(linked.status).toBe("linked");
+    const update = calls.find((call) => call.method === "updateProject");
+    expect((update!.args[1] as { integrations?: Record<string, string> }).integrations)
+      .toMatchObject({ todos_project_id: "todos-77", conversations_channel: "product-mvp-launch" });
+  });
+
+  test("an unavailable probe never invents a refusal", async () => {
+    const { store, calls } = makeFakeApiStore();
+    const tools = apiTools(store, () => ({ verdict: "unknown", detail: "conversations CLI unavailable" }));
+
+    const updated = await invoke(tools.projects_update, {
+      project: "cloud-proj",
+      integrations: { conversations_channel: "employee-contract-closing" },
+    });
+    expect(updated.status).toBe("updated");
+    expect(calls.some((call) => call.method === "updateProject")).toBe(true);
   });
 });

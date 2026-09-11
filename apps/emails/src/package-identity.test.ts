@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { ServiceContractManifestSchema } from "@hasna/contracts";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { Glob } from "bun";
 import pkg from "../package.json" with { type: "json" };
 import contract from "../hasna.contract.json" with { type: "json" };
 import { resolveClientModeSelection } from "./lib/mode.js";
@@ -96,8 +97,21 @@ describe("published package identity", () => {
     // "dist" is produced by `bun run build`; every other packed path must exist
     // in the tree. `dashboard/dist` satisfied neither: no script or CI step ever
     // produced it and no code read it.
+    //
+    // "!"-prefixed entries are npm-packlist negation globs: they exclude built
+    // test-support artifacts ("!dist/test-support/**",
+    // "!dist/**/*test-support.d.ts") from paths the build produces, so they can
+    // never exist as literal paths. Each must instead match at least one real
+    // path under the built tree, or the exclusion is dead weight.
     for (const entry of pkg.files) {
       if (entry === "dist") continue;
+      if (entry.startsWith("!")) {
+        // The negation's target must exist under the built tree, otherwise the
+        // exclusion never removes anything from the tarball.
+        const matches = [...new Glob(entry.slice(1)).scanSync(root)];
+        expect({ entry, exists: matches.length > 0 }).toEqual({ entry, exists: true });
+        continue;
+      }
       expect({ entry, exists: existsSync(join(root, entry)) }).toEqual({ entry, exists: true });
     }
   });

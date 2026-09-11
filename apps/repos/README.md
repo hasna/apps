@@ -146,8 +146,9 @@ without a local checkout, including `@hasna/wallets`, which declares the retired
 ### Worktrees
 
 `repos` owns the worktree lifecycle. The canonical layout —
-`~/.hasna/repos/worktrees/<repo-name>/<worktree-name>`, no machine segment, named after the
-todos task where one exists — has been ratified for weeks and has not held. Measured on this
+`~/.hasna/repos/worktrees/<org>/<repo-name>/<worktree-name>` (owner ruling 2026-09-10), no
+machine segment, named after the todos task where one exists — has been ratified for weeks and
+its flat predecessor (`<repo-name>/<worktree-name>`, no org) had not held. Measured on this
 station on 2026-07-29, `repos worktree list` reconciled **1468** directories under that root:
 **303** checkouts sitting flat at the root, **218** buried under an extra segment (the
 forbidden `station01/` machine directory among them), **245** that are not worktrees at all,
@@ -157,13 +158,37 @@ Prose did not hold the layout because every caller re-derived the path. So **`ad
 path option**:
 
 ```bash
-repos worktree add repos --task a321ba13         # -> <root>/repos/a321ba13
-repos worktree add repos --name pr36-review   # the sanctioned fallback when no task exists
+repos worktree add repos --task a321ba13                  # -> <root>/hasna/repos/a321ba13
+repos worktree add hasna-products/mailery --name l09-fix  # -> <root>/hasna-products/mailery/l09-fix
+repos worktree add repos --name pr36-review               # the sanctioned fallback when no task exists
 ```
 
-The destination is computed from the repo name and the worktree name. A name must be a
-single path segment, and the computed path is re-checked against the root after symlink
-resolution, so `--name ../../elsewhere` is refused before anything touches the filesystem.
+The destination is computed from the registry row's GitHub org, the repo name and the
+worktree name. The org is the row's `org` column — the scanner fills it from the owner
+segment of the origin remote — falling back to the owner of the sanitized `remote_url`; a
+row with neither is `REPO_ORG_UNRESOLVABLE`, never filed under an invented segment.
+Repository names collide across orgs (`hasna/apps` next to `hasna-products/*` on the same
+station), which is why the org is a path segment and not a convention. Every segment must
+be a single plain path segment, and the computed path is re-checked against the root after
+symlink resolution, so `--name ../../elsewhere` is refused before anything touches the
+filesystem.
+
+**`<org>/<repo>` is the unambiguous spelling.** When one remote has several usable checkouts
+on the station (the canonical clone next to an older `platform-<name>` checkout, as measured
+for `hasna-products/mailery`), `add <org>/<repo>` prefers, in order: the row whose path is
+the canonical clone path `<clones-root>/<org>/<repo>`; otherwise the single row whose
+registry `org` and `name` equal the reference; otherwise it stays `AMBIGUOUS_REPO`. A bare
+`<repo>` name is never disambiguated this way.
+
+**Existing flat worktrees are reported, not moved.** `repos worktree list` names a worktree
+still at the pre-ruling `<root>/<repo>/<worktree>` as `legacy-flat-layout` — not an error
+that blocks anything — with `suggested_path`, the org-nested path it would have today when
+the registry knows its parent checkout. A three-segment path whose registered parent
+computes to a different path is `layout-mismatch` (the old `station01/<repo>/<worktree>`
+machine-segment corpus lands there), anything deeper is `nested-layout`, and a checkout
+directly under the root is still `flat-layout`. To migrate a legacy worktree: land or park
+its work, `repos worktree remove <repo>/<worktree>`, and `repos worktree add` it again.
+`remove`, `adopt`, `push` and `sync` all reach the flat path in the meantime.
 
 Caller-supplied refs (`--base`, `--branch`) are validated before they reach git. `git fetch
 origin <ref>` parses options anywhere on the line and `--upload-pack=<cmd>` names a program to
@@ -187,20 +212,25 @@ left exactly as they were.
 git's own remote refuses to carry — uncommitted tracked changes, untracked files, the stash
 list — plus the branch/HEAD refs, into a deterministic, content-addressed bundle, and
 publishes it as an immutable version on the app's S3 artifact remote
-(`REPOS_S3_BUCKET`, objects under `worktrees/<repo>/<worktree>/<version>/`). `repos worktree
-pull <repo>/<name>[@version]` fetches a version, verifies the bundle's sha256 against the
-manifest, and materialises the worktree in the canonical path on the new machine; `repos
+(`REPOS_S3_BUCKET`, objects under `worktrees/<repo>/<worktree>/<version>/` — the remote key
+carries no org). `repos worktree pull <repo>/<name>[@version]` (or `<org>/<repo>/<name>`;
+otherwise the org comes from the registry row, or from the parent checkout's origin remote
+with `--parent-checkout`) fetches a version, verifies the bundle's sha256 against the
+manifest, and materialises the worktree in the canonical org-nested path on the new machine; `repos
 worktree sync` pushes then refuses instead of overwriting if a newer version appeared, and
 `repos worktree versions` lists the history. The bucket and its task role are the follow-up
 infra; without `REPOS_S3_BUCKET` every sync verb fails closed.
 
-**The destructive verbs cannot be handed a path.** `remove` and `release` take a lease id or
-a `<repo>/<worktree>` pair; an absolute path, a relative path, a `..` component and a tilde
-are all rejected on argument shape, before resolution:
+**The destructive verbs cannot be handed a path.** `remove` takes a lease id, a
+`<repo>/<worktree>` pair (tried at its canonical org-nested path first, then at the legacy
+flat path) or the fully qualified `<org>/<repo>/<worktree>`; `release` takes a lease id. An
+absolute path, a relative path, a `..` component, an empty segment and a tilde are all
+rejected on argument shape, before resolution:
 
 ```bash
 repos worktree remove wt_ebeae57c9eb805ae7f0e44ef
 repos worktree remove repos/a321ba13
+repos worktree remove hasna/repos/a321ba13                # fully qualified, no registry lookup
 repos worktree remove repos/a321ba13 --discard-changes   # archives first, then forces
 ```
 
@@ -713,3 +743,8 @@ migrated.
 ## License
 
 Apache-2.0
+
+For existing legacy worktrees, `repos worktree normalize <org>/<repo> --name <name>`
+prepares a dry-run migration plan. Apply with its exact `--expected-plan-hash`;
+files and Git metadata are checkpointed, registry/lease paths are updated, and
+an old-path compatibility link is retained. See [normalization and rollback](docs/cli.md#normalize-a-legacy-worktree).
