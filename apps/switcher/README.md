@@ -74,6 +74,12 @@ Use `switcher models PROVIDER` to find exact model IDs. Custom providers can be
 registered with `switcher providers add NAME --url URL --protocol openai-responses`.
 There is no automatic conversion from Chat Completions or Anthropic Messages.
 
+For third-party Responses endpoints, Switcher converts the desktop's unpaired
+`codex_app` task-message outputs to ordinary user input, preserving their full
+text and images. This supports creating a task and sending follow-up messages
+without the missing-`call_id` errors from strict providers. Paired tool results
+keep their original format; OpenAI's own endpoint receives native messages.
+
 `--reasoning EFFORT` sets the initial effort (also supported for direct terminal
 Codex launches). DeepSeek's picker exposes none, low, high and max; its Responses
 API maps minimal to low and medium/xhigh to high. Other models can declare an
@@ -111,8 +117,9 @@ provider/profile/catalog operations continue to use the existing HTTP API.
 The opt-in `test:native-chatgpt-runtime` script exercises the installed app's
 bundled runtime against a real provider using a fresh isolated profile. Set
 `SWITCHER_NATIVE_CHATGPT_PROVIDER` and `SWITCHER_NATIVE_CHATGPT_MODEL` to run it.
-It verifies selected-model configuration, a completed response and a successful
-gateway routing event. It is separate from visual desktop acceptance.
+It verifies selected-model configuration, direct responses, delegated task
+creation, follow-up delivery, and history replay against the real provider.
+It is separate from visual desktop acceptance.
 
 References: [OpenAI custom provider configuration](https://learn.chatgpt.com/docs/config-file/config-advanced),
 [community desktop custom-model profiles](https://github.com/ademisler/codex-desktop-custom-models),

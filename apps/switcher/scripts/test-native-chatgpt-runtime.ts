@@ -44,7 +44,6 @@ try {
   const pending=new Map<number,{resolve:(value:any)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
   let id=0,completion:(value:any)=>void=()=>{};
   let answer="";
-  const completed=new Promise<any>(resolve=>completion=resolve);
   reader=createInterface({input:child.stdout!});
   reader.on("line",line=>{
     let message:any;try{message=JSON.parse(line);}catch{return;}
@@ -71,13 +70,29 @@ try {
   if(configuration.config.model!==model||configuration.config.model_provider!=="switcher")throw new Error("The installed desktop runtime did not load the selected route.");
   if(reasoning&&configuration.config.model_reasoning_effort!==reasoning)throw new Error("The installed runtime did not load the selected reasoning effort.");
   if(fullAccess&&(configuration.config.approval_policy!=="never"||configuration.config.sandbox_mode!=="danger-full-access"))throw new Error("The installed runtime did not load full access.");
+  async function checkTurn(stage:string,params:Record<string,unknown>,expected:string[]){
+    answer="";const firstEvent=events.length;
+    const completed=new Promise<any>(resolve=>completion=resolve);
+    await request("turn/start",params);
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    const result=await Promise.race([completed,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error("Native provider turn timed out.")),120_000);})]).finally(()=>{if(timer)clearTimeout(timer);});
+    const turnEvents=events.slice(firstEvent);
+    if((result as any).turn.status!=="completed"||!expected.every(text=>answer.includes(text))||!turnEvents.some((event:any)=>event.resolvedModel===model&&event.upstreamStatus===200))throw new Error(`Native provider acceptance failed: ${stage}.`);
+    if(reasoning&&!turnEvents.some((event:any)=>event.reasoningEffort===reasoning))throw new Error("The selected reasoning effort did not reach the provider gateway.");
+    console.log(JSON.stringify({stage,provider:provider.id,model,threadId:params.threadId,answer,routingEvents:turnEvents},null,2));
+  }
   const thread=await request("thread/start",{cwd:state,approvalPolicy:null,sandbox:null,model:null,modelProvider:null,experimentalRawEvents:false,persistExtendedHistory:false});
-  await request("turn/start",{threadId:thread.thread.id,input:[{type:"text",text:"Reply exactly SWITCHER_CHATGPT_PROVIDER_OK. Do not use tools.",text_elements:[]}]});
-  let timer:ReturnType<typeof setTimeout>|undefined;
-  const result=await Promise.race([completed,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error("Native provider turn timed out.")),120_000);})]).finally(()=>{if(timer)clearTimeout(timer);});
-  if((result as any).turn.status!=="completed"||!answer.includes("SWITCHER_CHATGPT_PROVIDER_OK")||!events.some((event:any)=>event.resolvedModel===model&&event.upstreamStatus===200))throw new Error("Native provider acceptance failed.");
-  if(reasoning&&!events.some((event:any)=>event.reasoningEffort===reasoning))throw new Error("The selected reasoning effort did not reach the provider gateway.");
-  console.log(JSON.stringify({stage:"passed",provider:provider.id,model,threadId:thread.thread.id,answer,routingEvents:events},null,2));
+  await checkTurn("direct",{threadId:thread.thread.id,input:[{type:"text",text:"Reply exactly SWITCHER_CHATGPT_PROVIDER_OK. Do not use tools.",text_elements:[]}]},["SWITCHER_CHATGPT_PROVIDER_OK"]);
+  const delegated=await request("thread/start",{cwd:state,experimentalRawEvents:false,persistExtendedHistory:false});
+  const token=crypto.randomUUID();
+  // Mirrors the installed desktop's create_thread/send_message turnToolOutput
+  // transport. The follow-up must recover a token present only in the first
+  // delegated message, proving both delivery and history replay.
+  const toolOutput=(name:string,text:string)=>({name,namespace:"codex_app",output:`<codex_delegation>\n  <source_thread_id>${thread.thread.id}</source_thread_id>\n  <input>${text}</input>\n</codex_delegation>`});
+  await checkTurn("create_thread",{threadId:delegated.thread.id,input:[],toolOutput:toolOutput("create_thread",`Remember verification token ${token}. Reply exactly SWITCHER_CHATGPT_CREATE_OK. Do not use tools.`)},["SWITCHER_CHATGPT_CREATE_OK"]);
+  await checkTurn("send_message",{threadId:delegated.thread.id,input:[],toolOutput:toolOutput("send_message","Reply with the verification token from the earlier task message, followed by SWITCHER_CHATGPT_MESSAGE_OK. Do not use tools.")},[token,"SWITCHER_CHATGPT_MESSAGE_OK"]);
+  await checkTurn("replay",{threadId:delegated.thread.id,input:[{type:"text",text:"Reply exactly SWITCHER_CHATGPT_REPLAY_OK. Do not use tools.",text_elements:[]}]},["SWITCHER_CHATGPT_REPLAY_OK"]);
+  console.log(JSON.stringify({stage:"passed",checks:["direct","create_thread","send_message","replay"]}));
 }finally{
   reader?.close();child?.kill("SIGTERM");
   if(child)await new Promise<void>(resolve=>{if(child!.exitCode!==null)return resolve();child!.once("exit",()=>resolve());});

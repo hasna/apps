@@ -1,5 +1,6 @@
 import { proxyProviderStream } from "./provider-stream";
 import { isContextOverflow } from "./provider-error";
+import { normalizeCodexDelegation } from "./codex-delegation";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { authHeader } from "./auth";
 import { endpoint, Fault, modelExpired } from "./domain";
@@ -76,7 +77,8 @@ export function createInferenceGateway(input: GatewayInput) {
         if(gemini) {if(payload.model!==undefined)payload.model=`models/${model}`;if(payload.generateContentRequest?.model!==undefined)payload.generateContentRequest.model=`models/${model}`;}
         else payload.model=model;
         const guidance=renderModelGuidance({harness:input.harness,providerId:input.providerId,baseUrl:input.baseUrl,model,compiled:policy,catalogPath:input.catalogPath});
-        const outgoing=injectModelGuidance(input.protocol,payload,guidance,match?.[2]);
+        const compatible=input.harness==="codex"&&input.protocol==="openai-responses"&&new URL(input.baseUrl).hostname!=="api.openai.com"?normalizeCodexDelegation(payload):payload;
+        const outgoing=injectModelGuidance(input.protocol,compatible,guidance,match?.[2]);
         const path=gemini?`/models/${encodeURIComponent(model)}:${match![2]}${url.search}`:suffix+(betaQuery?"?beta=true":"");
         try {response=await fetch(endpoint(input.baseUrl)+path,{method:"POST",headers,body:JSON.stringify(outgoing),redirect:"manual",signal});}
         catch {current.reason=signal.aborted?"request_cancelled":"network_error";if(!signal.aborted&&attempt+1<candidates.length)continue;throw new Error("provider_request_failed");}
