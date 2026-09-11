@@ -30,7 +30,7 @@ Authorization: Bearer <token>
 X-Economy-Token: <token>
 ```
 
-In self-hosted Postgres mode, send a valid Economy API key as `x-api-key` or a bearer token. All non-probe routes require a valid key when the server has an authenticator. Bulk ingest and feedback additionally request the `economy:write` scope.
+With a Postgres backend (database URL configured), send a valid Economy API key as `x-api-key` or a bearer token. All non-probe routes require a valid key when the server has an authenticator. Bulk ingest and feedback additionally request the `economy:write` scope.
 
 ## Read routes
 

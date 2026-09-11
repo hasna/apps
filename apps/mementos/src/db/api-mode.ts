@@ -94,6 +94,7 @@ import {
   mementosResolverInputs,
   selectsMementosLocalStore,
 } from "../lib/local-opt-in.js";
+import { isServerContext } from "../storage.js";
 
 export interface ApiConfig {
   baseUrl: string; // normalized, includes the /v1 prefix, no trailing slash
@@ -360,9 +361,20 @@ export function getApiConfig(
  * True when the client should route memory operations to the cloud API.
  * Fail-closed against a client-side DSN: if DATABASE_URL is present, API mode
  * refuses to engage so the two transports never mix.
+ *
+ * The SERVER PROCESS never routes through the client transport
+ * (`isApiMode()` is false there): mementos-serve selects its own backend via
+ * its storage configuration (HASNA_MEMENTOS_DATABASE_URL for PostgreSQL, or
+ * the on-box store), and the client API vars its operator shell may inherit
+ * (the fleet resolver's aliases are deliberately permissive) must not re-route
+ * server domain calls to the shared cloud — that would make a local serve read
+ * and write the fleet store. markServerContext() at server startup makes the
+ * distinction, and the same gate keeps the split-brain guard and every domain
+ * module's api arm inert inside the server process.
  */
 export function isApiMode(): boolean {
   if (hasDatabaseUrl()) return false;
+  if (isServerContext()) return false;
   return getApiConfig() !== null;
 }
 

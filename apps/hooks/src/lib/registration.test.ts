@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { findStaleRegistrations } from "./registration.js";
+import { findStaleRegistrations, findRewriteOverlaps } from "./registration.js";
 
 const FILE = "/tmp/hooks-test-home/.claude/settings.json";
 
@@ -83,5 +83,50 @@ describe("findStaleRegistrations", () => {
     expect(
       findStaleRegistrations(settingsWith("hooks run fast-preview-hook"), FILE).map((finding) => finding.hook),
     ).toEqual(["fast-preview-hook"]);
+  });
+});
+
+/**
+ * Input-rewrite overlap scan.
+ *
+ * The harness applies ONE `updatedInput` rewrite per tool call (last writer
+ * wins), so two PreToolUse guards that both rewrite on overlapping matchers
+ * cannot coexist: one of them is silently disarmed. Install refuses the
+ * pairing; this scan is what doctor reports.
+ */
+describe("findRewriteOverlaps", () => {
+  const rewriting = (matcher: string, event = "PreToolUse") => ({ matcher, event, rewritesInput: true });
+  const reading = (matcher: string, event = "PreToolUse") => ({ matcher, event });
+
+  test("reports two input-rewriting hooks on overlapping PreToolUse matchers", () => {
+    const overlaps = findRewriteOverlaps(["trash-guard", "other-guard"], (name) =>
+      name === "trash-guard" ? rewriting("Bash") : rewriting("^(Bash|Write)$"),
+    );
+    expect(overlaps).toHaveLength(1);
+    expect(overlaps[0].event).toBe("PreToolUse");
+    expect(overlaps[0].hooks).toEqual(["trash-guard", "other-guard"]);
+  });
+
+  test("a hook that only reads the input is not a conflict", () => {
+    expect(findRewriteOverlaps(["trash-guard", "pre-bash"], (name) => (name === "trash-guard" ? rewriting("Bash") : reading("Bash")))).toEqual([]);
+  });
+
+  test("one rewriting hook alone is not a conflict", () => {
+    expect(findRewriteOverlaps(["trash-guard"], () => rewriting("Bash"))).toEqual([]);
+  });
+
+  test("disjoint matchers on the same event are not a conflict", () => {
+    expect(
+      findRewriteOverlaps(["a", "b"], (name) => (name === "a" ? rewriting("Write") : rewriting("Read"))),
+    ).toEqual([]);
+  });
+
+  test("the same matcher on a different event is not a conflict", () => {
+    const meta = (name: string) => (name === "a" ? rewriting("Bash") : rewriting("Bash", "PostToolUse"));
+    expect(findRewriteOverlaps(["a", "b"], meta)).toEqual([]);
+  });
+
+  test("a hook that no longer resolves is skipped, not guessed at", () => {
+    expect(findRewriteOverlaps(["gone", "trash-guard"], (name) => (name === "trash-guard" ? rewriting("Bash") : undefined))).toEqual([]);
   });
 });

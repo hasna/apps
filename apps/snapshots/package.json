@@ -69,7 +69,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/snapshots.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/snapshots"
   },
   "engines": {
     "bun": ">=1.0.0"

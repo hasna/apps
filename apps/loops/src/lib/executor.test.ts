@@ -1765,6 +1765,13 @@ describe("executeLoop", () => {
       expect(script).toContain("command -v bash");
       expect(script).toContain("command -v 'sh'");
       expect(script).toContain("export PATH=");
+      // `bun add -g` links only the top-level package's bins into
+      // `$BUN_INSTALL/bin`; a CLI installed as a dependency (the `accounts`
+      // preflight below is the live case) is written to
+      // `$BUN_INSTALL/install/global/node_modules/.bin` and nowhere else. The
+      // bootstrap PATH must search it, or `command -v accounts` fails and the
+      // account preflight exits 127 on a machine where accounts is installed.
+      expect(script).toContain("${BUN_INSTALL:-$HOME/.bun}/install/global/node_modules/.bin");
       expect(readFileSync(envFile, "utf8")).not.toContain(secret);
     } finally {
       rmSync(root, { recursive: true, force: true });

@@ -2,13 +2,21 @@
 /**
  * Usage: files-serve [--port 19432]
  * Default port: 19432. Auto-finds next free port if taken.
+ *
+ * `--version` and `--help` are answered from argv alone and exit BEFORE any
+ * port is probed or bound: the published 0.4.0 bound 127.0.0.1:19432 on
+ * `files-serve --version` (hasna/apps#1720, station03 release verification).
  */
+import { createRequire } from "module";
 import { startServer } from "./serve.js";
 import { getCurrentMachine } from "../db/machines.js";
 import { listSources } from "../db/sources.js";
 import { indexLocalSource } from "../lib/indexer.js";
 import { getAutosyncPeers, markPeerSynced } from "../db/peers.js";
 import { syncWithPeer } from "../lib/sync.js";
+
+const require = createRequire(import.meta.url);
+const pkg = require("../../package.json") as { version: string };
 
 const DEFAULT_PORT = 19432;
 
@@ -19,7 +27,12 @@ Serve the open-files HTTP API.
 
 Options:
   --port <number>   Port to bind (default: ${DEFAULT_PORT})
+  -V, --version     Print the package version
   -h, --help        Show this help text`);
+}
+
+function shouldShowVersion(): boolean {
+  return process.argv.includes("-V") || process.argv.includes("--version");
 }
 
 function shouldShowHelp(): boolean {
@@ -47,6 +60,11 @@ async function findFreePort(start: number): Promise<number> {
     }
   }
   return start;
+}
+
+if (shouldShowVersion()) {
+  console.log(pkg.version);
+  process.exit(0);
 }
 
 if (shouldShowHelp()) {

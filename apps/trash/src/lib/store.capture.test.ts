@@ -9,7 +9,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, readFileSync, readdirSync, readlinkSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { createSandbox, createSandboxAt, readdirCount, spawnEnv, testEnv, type Sandbox } from "../testing/sandbox.js";
 import { CrashSentinel, crashingAt, makeTestStore } from "../testing/store.js";
 import { TrashStore } from "./store.js";
@@ -516,5 +517,215 @@ describe("put — concurrency", () => {
     expect(codes).toEqual([0, 0, 0, 0, 0, 0]);
     expect(store.list()).toHaveLength(6);
     expect(readdirSync(store.roots.files).filter((name) => !name.startsWith(".tmp-"))).toHaveLength(6);
+  });
+
+  test(
+    "parallel load on a COLD store: every process recovers while its siblings are mid-capture, and every put lands",
+    async () => {
+      // The reproduction of the CI flake (hasna/apps publish-guard, 2026-09-11):
+      // eight processes start on a spool that does not exist yet, so each one
+      // runs `init()` → `recover()` while the others are between their intent
+      // and their metadata publish. Before recovery was owner-scoped a sibling
+      // completed the owner's intent and the owner's own publish collided —
+      // `refused`, exit 2 — in 19 of 36 runs under 3x load. Three rounds, each
+      // on a fresh spool, so the cold-start window is hit every time.
+      const cli = new URL("../cli/index.ts", import.meta.url).pathname;
+      const env = spawnEnv(sandbox);
+      for (let round = 0; round < 3; round += 1) {
+        const spool = sandbox.path(`spool-load-${round}`);
+        const files = Array.from({ length: 8 }, (_, i) => sandbox.file(`load/r${round}/f${i}.txt`, `round ${round} file ${i}`));
+
+        const procs = files.map((file) =>
+          Bun.spawn({ cmd: ["bun", cli, "--spool", spool, "--json", "put", file], env, stdout: "pipe", stderr: "pipe" }),
+        );
+        const codes = await Promise.all(procs.map((proc) => proc.exited));
+        const outs = await Promise.all(procs.map((proc) => new Response(proc.stdout).text()));
+        const errs = await Promise.all(procs.map((proc) => new Response(proc.stderr).text()));
+
+        const failures = codes.map((code, i) => (code === 0 ? null : `proc ${i}: exit ${code}\n${outs[i]}\n${errs[i]}`)).filter(Boolean);
+        expect(failures).toEqual([]);
+        const statuses = outs.map((text) => (JSON.parse(text) as { status: string }[])[0]!.status);
+        expect(statuses).toEqual(Array.from({ length: 8 }, () => "captured"));
+
+        const store = makeTestStore(sandbox, { spool });
+        expect(store.list()).toHaveLength(8);
+        expect(readdirCount(store.roots.intents)).toBe(0);
+        expect(readdirSync(store.roots.info).filter((name) => name.startsWith(".tmp-"))).toEqual([]);
+        expect(files.every((file) => !existsSync(file))).toBe(true);
+      }
+    },
+    60_000,
+  );
+});
+
+describe("recovery is owner-scoped", () => {
+  const cli = new URL("../cli/index.ts", import.meta.url).pathname;
+
+  /**
+   * Stage a capture exactly as it looks between "payload linked" and
+   * "metadata published" — the window a concurrent recovery used to close on
+   * the owner's behalf — and attribute the intent to `owner`.
+   */
+  function stageMidCapture(store: TrashStore, label: string, owner: { pid: number; host: string } | null) {
+    const original = sandbox.file(`work/${label}.txt`, `mid-capture ${label}`);
+    const at = statSync(original);
+    const id = `33333333-3333-4333-8333-${label.padEnd(12, "0").slice(0, 12).replace(/[^0-9a-f]/g, "0")}`;
+    const entry = createEntry({
+      id,
+      originalPath: original,
+      givenPath: original,
+      capturedAt: new Date().toISOString(),
+      kind: "file",
+      sizeBytes: at.size,
+      sha256: "0".repeat(64),
+      device: at.dev,
+      inode: at.ino,
+      nlink: 1,
+      mode: at.mode,
+      retentionDays: 30,
+      expiresAt: null,
+    });
+    const payloadPath = store.payloadPath(id);
+    linkSync(original, payloadPath);
+    const intent = {
+      schema: "hasna.trash.capture-intent.v1",
+      entry,
+      payloadPath,
+      ...(owner ? { owner: { ...owner, startedAt: new Date().toISOString() } } : {}),
+    };
+    const intentPath = store.intentPath(id);
+    writeFileSync(intentPath, `${JSON.stringify(intent, null, 2)}\n`);
+    return { id, original, payloadPath, intentPath };
+  }
+
+  test("an intent owned by a LIVE sibling process is left alone; once that process is gone it is recovered", async () => {
+    const store = makeTestStore(sandbox);
+    store.init();
+    const sibling = Bun.spawn({ cmd: ["sleep", "60"], stdout: "ignore", stderr: "ignore" });
+    try {
+      const staged = stageMidCapture(store, "alive", { pid: sibling.pid, host: hostname() });
+
+      const during = store.recover();
+
+      expect(during.inFlight).toEqual([staged.id]);
+      expect(during.completedPublishes).toEqual([]);
+      expect(during.abortedIntents).toEqual([]);
+      expect(during.unresolvable).toEqual([]);
+      expect(store.info(staged.id)).toBeNull();
+      expect(existsSync(staged.intentPath)).toBe(true);
+      expect(existsSync(staged.original)).toBe(true);
+      expect(existsSync(staged.payloadPath)).toBe(true);
+
+      sibling.kill();
+      await sibling.exited;
+
+      const after = store.recover();
+
+      expect(after.inFlight).toEqual([]);
+      expect(after.completedPublishes).toEqual([staged.id]);
+      expect(store.info(staged.id)?.originalPath).toBe(staged.original);
+      expect(existsSync(staged.intentPath)).toBe(false);
+      expect(existsSync(staged.original)).toBe(false);
+      expect(readFileSync(staged.payloadPath, "utf8")).toBe("mid-capture alive");
+    } finally {
+      sibling.kill();
+    }
+  });
+
+  test("an intent owned by THIS pid is recovered: the capture path is synchronous, so it can only be an aborted one", () => {
+    const store = makeTestStore(sandbox);
+    store.init();
+    const staged = stageMidCapture(store, "selfpid", { pid: process.pid, host: hostname() });
+
+    const report = store.recover();
+
+    expect(report.inFlight).toEqual([]);
+    expect(report.completedPublishes).toEqual([staged.id]);
+    expect(store.info(staged.id)).not.toBeNull();
+  });
+
+  test("an intent without an owner, or from another host, cannot be checked and is recovered as before", async () => {
+    const store = makeTestStore(sandbox);
+    store.init();
+    const sibling = Bun.spawn({ cmd: ["sleep", "60"], stdout: "ignore", stderr: "ignore" });
+    try {
+      const legacy = stageMidCapture(store, "legacy", null);
+      const foreign = stageMidCapture(store, "foreign", { pid: sibling.pid, host: `${hostname()}-not-this-host` });
+
+      const report = store.recover();
+
+      expect(report.inFlight).toEqual([]);
+      expect(report.completedPublishes.sort()).toEqual([legacy.id, foreign.id].sort());
+    } finally {
+      sibling.kill();
+      await sibling.exited;
+    }
+  });
+
+  test("the owner tolerates a recoverer that completed its intent: the capture is reported captured, not refused", () => {
+    // A recoverer that cannot see the owner is alive (an older writer with no
+    // owner on the intent, or a sibling on another host) publishes the owner's
+    // metadata from the owner's payload. Simulated in-process: the sibling's
+    // `init()` runs at the after_payload seam, and the same-pid rule makes it
+    // treat the intent as aborted. The owner's publish then finds identical
+    // metadata already there — that is completion, not a collision.
+    const spool = sandbox.path("spool");
+    const file = sandbox.file("work/completed-by-sibling.txt", "finished by someone else");
+    const sibling: { report: ReturnType<TrashStore["init"]> | null } = { report: null };
+    const owner = makeTestStore(sandbox, {
+      spool,
+      crashAt: (point) => {
+        if (point === "after_payload") sibling.report = makeTestStore(sandbox, { spool }).init();
+      },
+    });
+
+    const [outcome] = owner.put(file);
+
+    expect(sibling.report?.completedPublishes).toHaveLength(1);
+    expect(outcome!.status).toBe("captured");
+    expect(outcome!.entryId).not.toBeNull();
+    expect(outcome!.refusals).toEqual([]);
+    expect(existsSync(file)).toBe(false);
+    const entries = owner.list();
+    expect(entries).toHaveLength(1);
+    expect(readFileSync(owner.payloadPath(entries[0]!.id), "utf8")).toBe("finished by someone else");
+    expect(readdirCount(owner.roots.intents)).toBe(0);
+    expect(readdirSync(owner.roots.info).filter((name) => name.startsWith(".tmp-"))).toEqual([]);
+  });
+
+  test("a genuine identity collision at the metadata path is still refused", () => {
+    // Different content at the metadata path is somebody else's entry: the
+    // tolerance above must never turn that into a false "captured".
+    const spool = sandbox.path("spool");
+    const file = sandbox.file("work/collide.txt", "mine");
+    const owner = makeTestStore(sandbox, {
+      spool,
+      crashAt: (point) => {
+        if (point !== "after_payload") return;
+        const intents = readdirSync(owner.roots.intents).filter((name) => name.endsWith(".json"));
+        const id = intents[0]!.replace(/\.json$/, "");
+        writeFileSync(owner.infoPath(id), `${JSON.stringify({ schema: "hasna.trash.entry.v1", id, forged: true }, null, 2)}\n`);
+      },
+    });
+
+    const [outcome] = owner.put(file);
+
+    expect(outcome!.status).toBe("refused");
+    expect(outcome!.detail).toContain("entry id collision");
+  });
+
+  test("the CLI records its pid and host on the intent it writes", () => {
+    const spool = sandbox.path("spool");
+    const file = sandbox.file("work/owned.txt", "owned");
+    const store = makeTestStore(sandbox, { spool, crashAt: crashingAt("after_intent") });
+
+    expect(() => store.put(file)).toThrow(CrashSentinel);
+
+    const [name] = readdirSync(store.roots.intents).filter((n) => n.endsWith(".json"));
+    const intent = JSON.parse(readFileSync(`${store.roots.intents}/${name}`, "utf8")) as { owner?: { pid: number; host: string; startedAt: string } };
+    expect(intent.owner?.pid).toBe(process.pid);
+    expect(intent.owner?.host).toBe(hostname());
+    expect(typeof intent.owner?.startedAt).toBe("string");
+    void cli;
   });
 });
