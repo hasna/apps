@@ -8,6 +8,9 @@ import { runMigrations } from "../db/schema.js";
 import type { Workspace, WorkspaceKind } from "../types/workspace.js";
 import { WORKSPACE_KINDS } from "../types/workspace.js";
 import {
+  assertProjectChannelIntegrationWritable,
+  assertProjectChannelWritable,
+  changedProjectChannel,
   conversationsChannelExistence,
   conversationsChannelListResult,
   conversationsChannelProbe,
@@ -17,6 +20,7 @@ import {
   notifyProjectAgentOnline,
   normalizeProjectChannelName,
   projectChannelSummary,
+  projectChannelWriteProbe,
   resolveProjectChannel,
   resolveProjectChannelClass,
   resolveProjectChannelClassDetailed,
@@ -803,5 +807,82 @@ describe("conversations channel existence probe", () => {
     expect(shouldProbeConversationsChannel({ HASNA_PROJECTS_CHANNEL_VERIFY: "1", NODE_ENV: "test" })).toBe(true);
     expect(shouldProbeConversationsChannel({ PROJECTS_CHANNEL_VERIFY: "true" })).toBe(true);
     expect(shouldProbeConversationsChannel({})).toBe(true);
+  });
+
+  // BUG-0063: integrations.conversations_channel could name something that is
+  // not a conversations channel — a renamed project kept its old name, which
+  // resolved only as an agent DM, so project posts missed the channel (or
+  // failed closed with HTTP 400). These cover the write-side guard.
+  describe("write-time conversations channel guard (BUG-0063)", () => {
+    const probeFor = (names: string[]) => conversationsChannelProbe(() => ({
+      ok: true,
+      stdout: JSON.stringify(names.map((name) => ({ name }))),
+      stderr: "",
+    }));
+
+    test("changedProjectChannel only reports a newly pinned or changed channel", () => {
+      expect(changedProjectChannel({ conversations_channel: "employee-contract-closing" }, {}))
+        .toBe("employee-contract-closing");
+      expect(changedProjectChannel({ conversations_channel: "employee-contracts" }, { conversations_channel: "employee-contract-closing" }))
+        .toBe("employee-contracts");
+      // Carrying the existing value forward is not a new claim.
+      expect(changedProjectChannel({ conversations_channel: "employee-contracts" }, { conversations_channel: "employee-contracts" }))
+        .toBeNull();
+      expect(changedProjectChannel({ todos_project_id: "x" }, {})).toBeNull();
+      expect(changedProjectChannel(undefined, { conversations_channel: "old" })).toBeNull();
+      expect(changedProjectChannel({ conversations_channel: "  " }, {})).toBeNull();
+    });
+
+    test("refuses to pin a name the conversations app has no channel for", () => {
+      const probe = probeFor(["employee-contracts", "package-arrivals"]);
+      expect(() => assertProjectChannelWritable("employee-contract-closing", { probe })).toThrow(
+        /Refusing to pin integrations\.conversations_channel "employee-contract-closing"/,
+      );
+      // The error names the observed failure modes so the operator can repair it.
+      expect(() => assertProjectChannelWritable("employee-contract-closing", { probe })).toThrow(/does not exist/);
+      expect(() => assertProjectChannelWritable("employee-contract-closing", { probe })).toThrow(/agent DM/);
+      expect(() => assertProjectChannelWritable("employee-contracts", { probe })).not.toThrow();
+    });
+
+    test("clearing or not touching the channel never trips the guard", () => {
+      const probe = probeFor(["employee-contracts"]);
+      expect(() => assertProjectChannelWritable(null, { probe })).not.toThrow();
+      expect(() => assertProjectChannelWritable(undefined, { probe })).not.toThrow();
+      expect(() => assertProjectChannelWritable("  ", { probe })).not.toThrow();
+      expect(() => assertProjectChannelIntegrationWritable(
+        { todos_project_id: "x" },
+        { conversations_channel: "employee-contract-closing" },
+        { probe },
+      )).not.toThrow();
+    });
+
+    test("an unavailable or unknown probe never fabricates a refusal", () => {
+      // No probe supplied (tests, or a box without the conversations CLI).
+      expect(() => assertProjectChannelWritable("employee-contract-closing", {})).not.toThrow();
+      // Probe present but the listing could not be read.
+      const unknown = conversationsChannelProbe(() => ({ ok: false, stdout: "", stderr: "conversations: command not found" }));
+      expect(() => assertProjectChannelWritable("employee-contract-closing", { probe: unknown })).not.toThrow();
+    });
+
+    test("the integration-level guard checks only a channel this write changes", () => {
+      const probe = probeFor(["employee-contracts"]);
+      expect(() => assertProjectChannelIntegrationWritable(
+        { conversations_channel: "employee-contract-closing" },
+        { conversations_channel: "employee-contracts" },
+        { probe },
+      )).toThrow(/Refusing to pin/);
+      // Unchanged value carried through a full-integrations write: allowed, so
+      // repairing a record stays a deliberate separate act.
+      expect(() => assertProjectChannelIntegrationWritable(
+        { conversations_channel: "employee-contract-closing" },
+        { conversations_channel: "employee-contract-closing" },
+        { probe },
+      )).not.toThrow();
+    });
+
+    test("projectChannelWriteProbe is off in tests", () => {
+      expect(projectChannelWriteProbe({ NODE_ENV: "test" })).toBeUndefined();
+      expect(typeof projectChannelWriteProbe({ HASNA_PROJECTS_CHANNEL_VERIFY: "1" })).toBe("function");
+    });
   });
 });

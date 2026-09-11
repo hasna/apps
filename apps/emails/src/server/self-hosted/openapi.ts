@@ -1545,10 +1545,33 @@ const mailboxFilterApplyPath = {
   post: {
     operationId: "applyMailboxFilter",
     summary: "Apply a saved mailbox filter",
+    description:
+      "List-only apply (read scope): no body, `{}`, or `{\"mutate\":false}` returns the matching mailbox page exactly as before. " +
+      "Mutate apply (write scope): `{\"mutate\":true}` transactionally applies the filter's actions (add_labels / archive / mark_read) " +
+      "to the COMPLETE matching set — `offset` must be 0, the filter must be `enabled:true`, and the response reports " +
+      "`matched`/`updated`/`unchanged` counts with an empty `items` list (`updated` counts messages that actually changed; " +
+      "already-satisfied actions are no-ops). Malformed JSON and non-boolean `mutate` values are refused (400 invalid_input).",
     parameters: [
       ...idParam,
       ...listParams,
     ],
+    requestBody: {
+      required: false,
+      content: {
+        "application/json": {
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              mutate: {
+                type: "boolean",
+                description: "true performs a transactional backfill applying the filter's actions; false (or absent) lists matching messages.",
+              },
+            },
+          },
+        },
+      },
+    },
     responses: {
       "200": {
         content: {
@@ -1561,12 +1584,22 @@ const mailboxFilterApplyPath = {
                 limit: { type: "integer" },
                 offset: { type: "integer" },
                 truncated: { type: "boolean" },
+                // Present only in mutate mode, where `items` is empty and the
+                // counts describe the backfilled matching set.
+                mutate: { type: "boolean", enum: [true] },
+                matched: { type: "integer", minimum: 0 },
+                updated: { type: "integer", minimum: 0 },
+                unchanged: { type: "integer", minimum: 0 },
               },
               required: ["filter", "items", "limit", "offset", "truncated"],
             },
           },
         },
       },
+      "400": errorResponse("Filter is disabled, offset must be 0, or the apply body is malformed"),
+      "401": errorResponse("Authentication required"),
+      "403": errorResponse("Mutate apply requires write scope"),
+      "404": errorResponse("Mailbox filter not found"),
     },
   },
 } as const;
@@ -3787,9 +3820,15 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                   track_clicks: {type:"boolean",description:"Observe unique message click requests using configured server tracking."},
                   tracking_url: {type:"string",format:"uri",description:"Exact tenant-approved HTTPS tracking base; requires a tracking switch."},
                   unsubscribe_url: { type: "string", format: "uri", description: "HTTP(S) unsubscribe URL emitted as List-Unsubscribe headers." },
+
                   headers: { type: "object", maxProperties: 20, additionalProperties: { type: "string", minLength: 1, maxLength: 900 }, description: "Nonreserved X-* extension headers only; printable ASCII values, no controls, authentication, transport, forwarding or tracking overrides. Total at most 8192 bytes." },
                   tags: { type: "object", maxProperties: 50, additionalProperties: { type: "string", minLength: 1, maxLength: 256, pattern: "^[A-Za-z0-9_-]+$" }, description: "Names and values contain 1–256 ASCII letters, digits, underscores or hyphens. Persisted and passed to the selected provider." },
-                  from: { type: "string" },
+
+                  from: {
+                    type: "string",
+                    description:
+                      "Sender mailbox. Either a bare address (`addr@example.com`) or the RFC 5322 display-name form (`\"Andrei Hasna\" <andrei@example.com>`). Authorization, the stored outbound record's from_addr, and idempotency all key on the bare addr-spec; the display name — unless overridden by the registered address record's display_name — is shown to recipients as the From sender.",
+                  },
                   to: { type: "array", items: { type: "string" } },
                   cc: { type: "array", items: { type: "string" } },
                   bcc: { type: "array", items: { type: "string" } },

@@ -1067,6 +1067,147 @@ describe("emails serve REST parity smoke", () => {
   });
 });
 
+describe("emails serve REST mailbox-filter mutation parity (FR-0001)", () => {
+  function seedUnread(subject: string, at: string): string {
+    const message = storeInboundEmail({
+      provider_id: null,
+      message_id: `<fr0001-${subject}-${at}@example.test>`,
+      from_address: "support@example.test",
+      to_addresses: ["ops@example.test"],
+      cc_addresses: [],
+      subject,
+      text_body: subject,
+      html_body: null,
+      attachments: [],
+      headers: {},
+      raw_size: subject.length,
+      received_at: at,
+    }, getDatabase());
+    return message.id;
+  }
+
+  async function createFilter(body: Record<string, unknown>): Promise<{ id: string; name: string }> {
+    return await json("/api/mailbox-filters", postJson("/api/mailbox-filters", body)) as { id: string; name: string };
+  }
+
+  function rowState(id: string): { is_read: number; is_archived: number } {
+    const row = getDatabase().query("SELECT is_read, is_archived FROM inbound_emails WHERE id = ?").get(id) as
+      | { is_read: number; is_archived: number }
+      | undefined;
+    if (!row) throw new Error(`no row for ${id}`);
+    return row;
+  }
+
+  it("keeps an empty-body apply as the list-only response", async () => {
+    const match = seedUnread("empty-body needle", "2026-01-02T00:00:00.000Z");
+    seedUnread("empty-body other", "2026-01-03T00:00:00.000Z");
+    const filter = await createFilter({ name: "Empty body", mailbox: "inbox", criteria: { subject: "needle" } });
+
+    const applied = await json<{ items: Array<{ id: string }>; mutate?: boolean; matched?: number }>(
+      `/api/mailbox-filters/${filter.id}/apply?limit=10`,
+      { method: "POST" },
+    );
+    expect(applied.items.map((item) => item.id)).toEqual([match]);
+    expect(applied).not.toHaveProperty("mutate");
+    expect(applied).not.toHaveProperty("matched");
+    expect(rowState(match)).toEqual({ is_read: 0, is_archived: 0 });
+  });
+
+  it("rejects a non-boolean mutate body with 400 invalid_input", async () => {
+    const filter = await createFilter({ name: "Strict body", mailbox: "inbox", criteria: { subject: "x" } });
+    for (const body of [{ mutate: "yes" }, "mutate", [true]]) {
+      const response = await call(`/api/mailbox-filters/${filter.id}/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ code: "invalid_input" });
+    }
+  });
+
+  it("backfills the whole matching set even when asked for a page smaller than it", async () => {
+    const ids = [
+      seedUnread("backfill one", "2026-01-01T00:00:00.000Z"),
+      seedUnread("backfill two", "2026-01-02T00:00:00.000Z"),
+      seedUnread("backfill three", "2026-01-03T00:00:00.000Z"),
+    ];
+    const filter = await createFilter({
+      name: "Backfill all",
+      mailbox: "inbox",
+      criteria: { from: "support@example.test", unread: true },
+      actions: { add_labels: ["triage"], mark_read: true },
+      enabled: true,
+    });
+
+    const applied = await json<{ matched: number; updated: number; unchanged: number; items: unknown[] }>(
+      `/api/mailbox-filters/${filter.id}/apply?limit=1`,
+      postJson(`/api/mailbox-filters/${filter.id}/apply?limit=1`, { mutate: true }),
+    );
+    expect(applied).toMatchObject({ matched: 3, updated: 3, unchanged: 0 });
+    expect(applied.items).toEqual([]);
+    for (const id of ids) expect(rowState(id).is_read).toBe(1);
+  });
+
+  it("rejects a nonzero offset in mutate mode", async () => {
+    const filter = await createFilter({
+      name: "No offset",
+      mailbox: "inbox",
+      criteria: { subject: "x" },
+      actions: { archive: true },
+      enabled: true,
+    });
+    const response = await call(`/api/mailbox-filters/${filter.id}/apply?offset=1`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mutate: true }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "invalid_input" });
+  });
+
+  it("archives and marks-read every matched unread row without skipping rows it evicts", async () => {
+    const ids = [
+      seedUnread("skip none one", "2026-01-01T00:00:00.000Z"),
+      seedUnread("skip none two", "2026-01-02T00:00:00.000Z"),
+    ];
+    const filter = await createFilter({
+      name: "Unread to archive",
+      mailbox: "inbox",
+      criteria: { from: "support@example.test", unread: true },
+      actions: { archive: true, mark_read: true },
+      enabled: true,
+    });
+
+    const applied = await json<{ matched: number; updated: number; unchanged: number }>(
+      `/api/mailbox-filters/${filter.id}/apply`,
+      postJson(`/api/mailbox-filters/${filter.id}/apply`, { mutate: true }),
+    );
+    // Acting on an unread row evicts it from the unread/inbox predicates, yet the
+    // snapshot semantics must apply to the whole matched set, not only the ones
+    // that still matched mid-loop.
+    expect(applied).toMatchObject({ matched: 2, updated: 2, unchanged: 0 });
+    for (const id of ids) expect(rowState(id)).toEqual({ is_read: 1, is_archived: 1 });
+  });
+
+  it("still accepts the pre-FR-0001 filter payload and applies it as a plain list", async () => {
+    const match = seedUnread("legacy payload", "2026-01-02T00:00:00.000Z");
+    const filter = await json<{ id: string; enabled: boolean; order: number; actions: { add_labels: string[]; archive: boolean; mark_read: boolean } }>(
+      "/api/mailbox-filters",
+      postJson("/api/mailbox-filters", { name: "Legacy", mailbox: "inbox", criteria: { subject: "legacy" } }),
+    );
+    expect(filter.enabled).toBe(false);
+    expect(filter.order).toBe(0);
+    expect(filter.actions).toEqual({ add_labels: [], archive: false, mark_read: false });
+
+    const applied = await json<{ items: Array<{ id: string }> }>(
+      `/api/mailbox-filters/${filter.id}/apply?limit=10`,
+      { method: "POST" },
+    );
+    expect(applied.items.map((item) => item.id)).toEqual([match]);
+  });
+});
+
 describe("dashboard API rate limiting", () => {
   it("throttles /api/domains/:id/verify on the socket peer, never the forgeable header", async () => {
     resetRateLimitWindows();

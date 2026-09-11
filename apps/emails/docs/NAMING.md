@@ -20,9 +20,12 @@ Stated as rules:
 1. The OSS email core is **Hasna Emails**. It is the repository
    `hasna/apps` (member `apps/emails`), the npm package `@hasna/emails`, and
    the `emails`, `emails-mcp`, and `emails-serve` bins.
-2. **`@hasna/mailery` is a legacy package name.** It is the abandoned 0.6.x
-   line (0.6.20-0.6.116, last published 2026-07-08). It is not this package
-   and must never be revived by publishing this tree under that name.
+2. **`@hasna/mailery` is not this package, and never may be.** It was the
+   abandoned 0.6.x line (0.6.20-0.6.116, last published 2026-07-08) when this
+   ruling was written; since 2026-09 it is the separate Mailery product's own
+   public CLI (see "Mailery is a different product"). Either way the rule is
+   the same and now has two reasons: this tree must never be published under
+   that name.
 3. **Mailery is reserved for a separate, unrelated future commercial product**
    and **must not be used to refer to the email product** — not in docs, not in
    code, not in commit messages, not in issue titles, not in conversation.
@@ -96,25 +99,71 @@ refused with a useful error.
 
 ## Mailery is a different product
 
-`hasnatools/platform-mailery` (private, `mailery.co`) and `hasnatools/mailery`
-(public, issues-only) belong to that separate product, and they keep the name.
-That separation is enforced from both sides: at `platform-mailery` GitHub main
-`7ff7ca4` its only `@hasna/*` dependencies are `@hasna/domains` and
-`@hasna/feedback`, `docs/COMMERCIAL_CONTRACT.md` names `@hasna/emails` a
-non-dependency, and `src/contracts/commercial-contract.test.ts` asserts it is
-absent; this repo in turn stays cloud-free with the `mailery*` bin names left
-free for that product's CLI.
+`hasna-products/mailery` (private control plane for `mailery.co`, npm
+`@hasna/mailery-server`) and its public client package `@hasna/mailery` belong
+to that separate product, and they keep the name. This repo in turn keeps the
+`mailery*` bin names free for that product's CLI.
 
-**Check that against GitHub, not a local checkout.** The on-disk clone at
-`~/workspace/hasnatools/platform/platform-mailery` is dozens of commits stale,
-predates the contract, and still carries `"@hasna/mailery": "0.6.93"`. An
-adversarial reviewer read it and concluded — wrongly — that the two products
-are coupled.
+### Amendment, 2026-09-09: Mailery consumes this library
 
-The practical consequence for this repo: **`@hasna/emails` has no hosted
-counterpart.** Its deployment modes are operator-owned. Do not describe
-`mailery.co` as the hosted version of this package, and do not add a client for
-it here.
+The original text of this section said the separation was enforced by Mailery
+NOT depending on `@hasna/emails` — that at `platform-mailery` GitHub main
+`7ff7ca4` its only `@hasna/*` dependencies were `@hasna/domains` and
+`@hasna/feedback`, that its `docs/COMMERCIAL_CONTRACT.md` named `@hasna/emails`
+a non-dependency, and that `src/contracts/commercial-contract.test.ts` asserted
+the dependency was absent.
+
+**The owner decided otherwise on 2026-08-29 and re-confirmed it on 2026-09-09.**
+Mailery now depends on `@hasna/emails`, exact-pinned, and consumes it as a
+library for internal primitives — the `@hasna/emails/inbound` subpath added in
+1.4.7 for exactly this purpose (inbound MIME normalization, AWS SNS signature
+verification and topic policy, SES/Resend webhook parsing, SES inbound setup,
+RFC 5322 threading headers) plus the SPF/DMARC record generators. Mailery's own
+contract test now asserts the dependency is PRESENT and exact-pinned, and that
+the public `@hasna/mailery` package never carries it.
+
+Duplicating this package's hostile-input primitives in a second product was the
+actual risk: two copies of a MIME normalizer and an SNS verifier drift, and the
+copy that drifts is the one nobody is looking at. One implementation, imported,
+is the safer arrangement.
+
+### What the amendment does NOT change
+
+Every product-separation rule in this file still holds. A library dependency is
+not a product relationship:
+
+1. Mailery keeps its own control plane, store, tenancy, RLS, billing, identity,
+   API and CLI. It imports primitives from this package and calls no store,
+   database, migration, provider-registry, CLI, MCP or server API of it.
+2. **`@hasna/emails` still has no hosted counterpart.** Its deployment modes
+   are operator-owned. Do not describe `mailery.co` as the hosted version of
+   this package, and do not add a client for it here.
+3. Mailery never presents itself as a hosted Hasna Emails, hosted
+   `@hasna/emails`, or any rebadging of this product — enforced on that side by
+   `web/src/lib/compare-accuracy.test.ts`, which fails if public copy so much as
+   names this package.
+4. This tree is never published as `@hasna/mailery` (rule 2), and this product
+   is never called Mailery (rule 3).
+5. The direction is one-way. This package takes no dependency on Mailery, gains
+   no awareness of it, and its behaviour never changes to suit it. A request to
+   add a Mailery-shaped feature here is refused on that ground; if Mailery needs
+   something, it is because the primitive is generally useful, and it lands as a
+   general primitive on a subpath that carries no store.
+6. The consumption is through `@hasna/emails/inbound` and nothing else. That is
+   enforced on Mailery's side by a contract test that scans its shipped source
+   and fails on a bare `@hasna/emails` import, so the storage-free boundary this
+   subpath was created for holds in practice and not just in intent. Where a
+   primitive Mailery wants is reachable only from the package root — today
+   `generateSpfRecord` and `generateDmarcRecord` — Mailery does without it and
+   keeps its own copy rather than pull this package's store, database and
+   provider layer into its server bundle. Publishing those two on a
+   storage-free subpath is the fix, and it is a request on this package, not an
+   argument for relaxing the rule.
+
+**Check any of this against GitHub, not a local checkout.** The stale on-disk
+clone that once carried `"@hasna/mailery": "0.6.93"` led an adversarial reviewer
+to conclude — wrongly — that the two products were coupled. They are coupled at
+exactly one point now, and it is a pinned library import.
 
 This supersedes, for this product only, the `mailery.co` example in the
 deployment doctrine (knowledge `k_mryqb555_2osk2w`), which cites it as the

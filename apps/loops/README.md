@@ -27,7 +27,7 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 
 Loops has no deployment modes. Storage is SQLite (the zero-configuration local
 file at the effective Loops data home — `~/.hasna/loops/loops.db` by default,
-resolved through `@hasna/paths` to the XDG data home once the store is migrated
+resolved by the in-package resolver to the XDG data home once the store is migrated
 there or `HASNA_DATA_HOME` is set, or `$LOOPS_DATA_DIR/loops.db` when the
 exact-app override is set) or PostgreSQL
 (explicitly configured on `loops-serve` via `HASNA_LOOPS_DATABASE_URL`).
@@ -171,17 +171,35 @@ bun run build
 bun link
 ```
 
-The CLI stores state in `~/.hasna/loops` by default (resolved through `@hasna/paths`; the XDG data home is adopted once the store is migrated there or `HASNA_DATA_HOME` is set). Set `LOOPS_DATA_DIR` to isolate state for tests or another profile.
+The CLI stores state in `~/.hasna/loops` by default (resolved by the in-package resolver; the XDG data home is adopted once the store is migrated there or `HASNA_DATA_HOME` is set). Set `LOOPS_DATA_DIR` to isolate state for tests or another profile.
 
 ## MCP Server
 
-Loops ships a stdio MCP server for safe loop and workflow inspection from
-MCP-capable agents:
+Loops ships an MCP server for safe loop and workflow inspection from
+MCP-capable agents — a shared Streamable HTTP transport by default
+(`http://127.0.0.1:8890/mcp`, `--port`/`MCP_HTTP_PORT`), or one stdio process
+per agent with `--stdio`/`MCP_STDIO=1`:
 
 ```bash
 loops-mcp list-tools
-loops-mcp
+loops-mcp            # Streamable HTTP on :8890
+loops-mcp --stdio    # stdio transport
 ```
+
+`loops-mcp` fails closed at startup, in every mode: it resolves the client
+connection once — through the same `@hasna/contracts` chain every tool uses
+per call (`HASNA_LOOPS_API_KEY`, the macOS Keychain item
+`hasna.credentials.loops.api-key`, `~/.hasna/loops/config/credentials`, or
+the explicit `HASNA_LOOPS_CONNECTION=file` opt-in) — BEFORE the stdio
+transport is connected or the HTTP port is bound. With no connection
+configured it exits non-zero with a one-line refusal naming where the
+credential should live, never answers `initialize`, and creates nothing under
+the app home. A deliberate tier that cannot be honoured (`HASNA_PROFILE`
+naming a missing profile, a `HASNA_LOOPS_API_KEY_REF` vault pointer this
+process cannot dereference, an unsafe credentials file) is refused the same
+way, never resolved around. `--help`, `--version` and `list-tools` answer
+ahead of the gate. The explicit local opt-in announces "local mode" once on
+stderr, and every tool still re-resolves the connection per call.
 
 The package also exports the server factory for embedded hosts:
 

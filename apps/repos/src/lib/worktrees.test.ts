@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { resolveTrustedAccountHome } from "./account-home.js";
 import { closeDb, getDb } from "../db/database.js";
 import {
   WorktreeError,
@@ -22,11 +23,13 @@ import {
   clonesRootDir,
   computeClonePath,
   computeWorktreePath,
+  legacyFlatWorktreePath,
   listWorktrees,
   releaseWorktree,
   removeWorktree,
   setClonesRootForTests,
   setWorktreeRootForTests,
+  worktreeOrgSegment,
   worktreeRootDir,
 } from "./worktrees.js";
 
@@ -83,7 +86,7 @@ function seed(opts: {
   indexedRemote?: string;
 } = {}) {
   const repoName = opts.repoName ?? "open-fixture";
-  tempDir = mkdtempSync(join(tmpdir(), "repos-worktree-"));
+  tempDir = realpathSync(mkdtempSync(join(tmpdir(), "repos-worktree-")));
   const root = join(tempDir, "worktrees");
   mkdirSync(root, { recursive: true });
   setWorktreeRootForTests(root);
@@ -161,12 +164,51 @@ describe("worktree name and path computation", () => {
     }
   });
 
-  test("the path is computed from the root, never supplied", () => {
+  test("the path is computed from the root, never supplied, and carries the org segment", () => {
     tempDir = mkdtempSync(join(tmpdir(), "repos-worktree-path-"));
     setWorktreeRootForTests(join(tempDir, "worktrees"));
-    expect(computeWorktreePath("repos", "a321ba13")).toBe(
-      join(tempDir, "worktrees", "repos", "a321ba13"),
+    // Owner ruling 2026-09-10: `<root>/<org>/<repo>/<worktree>`.
+    expect(computeWorktreePath("hasna", "repos", "a321ba13")).toBe(
+      join(tempDir, "worktrees", "hasna", "repos", "a321ba13"),
     );
+  });
+
+  test("the org segment keeps same-named repos of different orgs apart", () => {
+    tempDir = mkdtempSync(join(tmpdir(), "repos-worktree-path-"));
+    const root = join(tempDir, "worktrees");
+    setWorktreeRootForTests(root);
+    expect(computeWorktreePath("hasna", "apps", "wt")).toBe(join(root, "hasna", "apps", "wt"));
+    expect(computeWorktreePath("hasna-products", "apps", "wt")).toBe(join(root, "hasna-products", "apps", "wt"));
+    expect(computeWorktreePath("hasna", "apps", "wt")).not.toBe(computeWorktreePath("hasna-products", "apps", "wt"));
+    // The pre-ruling flat shape stays addressable for reconciliation and
+    // removal; it is never the canonical answer.
+    expect(legacyFlatWorktreePath("apps", "wt")).toBe(join(root, "apps", "wt"));
+  });
+
+  test("every segment is validated: an org or repo that is not a plain segment is refused", () => {
+    tempDir = mkdtempSync(join(tmpdir(), "repos-worktree-path-"));
+    setWorktreeRootForTests(join(tempDir, "worktrees"));
+    for (const bad of ["..", "", "a/b", "../escape", "-dash", "with space", "trailing."]) {
+      expect(codeOf(() => computeWorktreePath(bad, "repos", "wt"))).toBe("INVALID_REQUEST");
+      expect(codeOf(() => computeWorktreePath("hasna", bad, "wt"))).toBe("INVALID_REQUEST");
+      expect(codeOf(() => legacyFlatWorktreePath(bad, "wt"))).toBe("INVALID_REQUEST");
+    }
+  });
+
+  test("the org comes from the registry row: its org column, else the remote's owner, else a refusal", () => {
+    const base = { name: "fixture", org: null, remote_url: null };
+    expect(worktreeOrgSegment({ ...base, org: "hasna-products" })).toBe("hasna-products");
+    // The org column is the scanner's reading of the remote owner and wins
+    // over a re-derivation when both exist.
+    expect(worktreeOrgSegment({ ...base, org: "hasna-products", remote_url: "github.com/other/fixture" }))
+      .toBe("hasna-products");
+    expect(worktreeOrgSegment({ ...base, remote_url: "github.com/hasna/fixture" })).toBe("hasna");
+    expect(worktreeOrgSegment({ ...base, remote_url: "git@github.com:hasna-products/fixture.git" }))
+      .toBe("hasna-products");
+    expect(worktreeOrgSegment({ ...base, org: "   ", remote_url: "https://github.com/hasna/fixture.git" }))
+      .toBe("hasna");
+    expect(codeOf(() => worktreeOrgSegment(base))).toBe("REPO_ORG_UNRESOLVABLE");
+    expect(codeOf(() => worktreeOrgSegment({ ...base, org: "../etc" }))).toBe("INVALID_REQUEST");
   });
 
   test("the root is derived from the account database, not from $HOME", () => {
@@ -264,16 +306,23 @@ describe("the root follows the resolver data root (P5.1)", () => {
     runWithEnv({ HASNA_REPOS_HOME: exact }, () => {
       expect(worktreeRootDir()).toBe(join(exact, "worktrees"));
       expect(clonesRootDir()).toBe(join(exact, "clones"));
-      expect(computeWorktreePath("repos", "a321ba13")).toBe(join(exact, "worktrees", "repos", "a321ba13"));
+      expect(computeWorktreePath("hasna", "repos", "a321ba13")).toBe(join(exact, "worktrees", "hasna", "repos", "a321ba13"));
       expect(computeClonePath("hasna", "apps")).toBe(join(exact, "clones", "hasna", "apps"));
     });
   });
 
-  test("HASNA_DATA_HOME adopts the resolver (XDG) data root for the worktree root", () => {
-    const xdg = join(tmpdir(), "repos-xdg-data-home");
-    runWithEnv({ HASNA_DATA_HOME: xdg }, () => {
-      expect(worktreeRootDir()).toBe(join(xdg, "repos", "worktrees"));
-      expect(clonesRootDir()).toBe(join(xdg, "repos", "clones"));
+  test("HASNA_DATA_HOME respects an existing account store until it is physically migrated", () => {
+    tempDir = realpathSync(mkdtempSync(join(tmpdir(), "repos-worktree-xdg-")));
+    const xdg = join(tempDir, "data");
+    const accountHome = resolveTrustedAccountHome();
+    expect(accountHome).not.toBeNull();
+    const legacy = join(accountHome!, ".hasna", "repos");
+    // A real station can already have a store. The override must preserve it;
+    // on a fresh CI account the same override may adopt the new data root.
+    const expected = existsSync(join(legacy, "repos.db")) ? legacy : join(xdg, "repos");
+    runWithEnv({ HASNA_DATA_HOME: xdg, HASNA_REPOS_HOME: "" }, () => {
+      expect(worktreeRootDir()).toBe(join(expected, "worktrees"));
+      expect(clonesRootDir()).toBe(join(expected, "clones"));
     });
   });
 });
@@ -307,7 +356,10 @@ describe("addWorktree", () => {
     const { root, clonePath, repoName } = seed();
     const result = addWorktree({ repo: repoName, task: "a321ba13" });
 
-    expect(result.path).toBe(join(root, repoName, "a321ba13"));
+    // The registry row's org (`hasna` in the fixture) is the first segment.
+    expect(result.path).toBe(join(root, "hasna", repoName, "a321ba13"));
+    expect(existsSync(join(root, repoName))).toBe(false);
+    expect((JSON.parse(result.lease.owner_metadata) as { org?: string }).org).toBe("hasna");
     expect(existsSync(join(result.path, "README.md"))).toBe(true);
     expect(result.lease.status).toBe("claimed");
     expect(result.lease.task_id).toBe("a321ba13");
@@ -352,7 +404,7 @@ describe("addWorktree", () => {
 
     const result = addWorktree({ repo: repoName, task: "a321ba13" });
 
-    expect(result.path).toBe(join(root, repoName, "a321ba13"));
+    expect(result.path).toBe(join(root, "hasna", repoName, "a321ba13"));
     expect(result.lease.git_common_dir).toBe(realpathSync(originPath));
     expect(existsSync(join(result.path, "README.md"))).toBe(true);
   });
@@ -363,7 +415,7 @@ describe("addWorktree", () => {
     // then `rmSync(recursive, force)`. A destructive teardown is not a
     // precondition for a create, and this asserts the file survives.
     const { root, repoName } = seed();
-    const occupied = join(root, repoName, "a321ba13");
+    const occupied = join(root, "hasna", repoName, "a321ba13");
     mkdirSync(occupied, { recursive: true });
     writeFileSync(join(occupied, "PRECIOUS.txt"), "not yours to delete\n");
 
@@ -623,6 +675,65 @@ describe("addWorktree", () => {
     ).run(join(tempDir, "second-clone"), repoName, `github.com/hasna/${repoName}`, "2026-07-01 00:00:00");
     expect(codeOf(() => addWorktree({ repo: repoName, task: "a321ba13" }))).toBe("AMBIGUOUS_REPO");
   });
+
+  test("refuses a row with no org and no remote rather than inventing a segment, and writes nothing", () => {
+    const { root, db, clonePath, repoId } = seed({ withOrigin: false });
+    db.prepare("UPDATE repos SET org = NULL, remote_url = NULL WHERE id = ?").run(repoId);
+    expect(codeOf(() => addWorktree({ repo: clonePath, task: "no-org" }))).toBe("REPO_ORG_UNRESOLVABLE");
+    expect(readdirSync(root)).toEqual([]);
+    expect(git(clonePath, ["branch", "--list", "no-org"])).toBe("");
+  });
+
+  /**
+   * A second usable checkout of the same remote, registered under another
+   * name — the `platform-mailery` shape measured on 2026-09-10.
+   */
+  function olderCheckout(originPath: string, repoName: string, db: ReturnType<typeof getDb>, name = "platform-open-fixture") {
+    const older = join(tempDir, "workspace", name);
+    mkdirSync(dirname(older), { recursive: true });
+    git(tempDir, ["clone", originPath, older]);
+    db.prepare(
+      "INSERT INTO repos (path, name, org, remote_url, default_branch, updated_at) VALUES (?, ?, 'hasna', ?, 'main', ?)",
+    ).run(older, name, `github.com/hasna/${repoName}`, "2026-07-01 00:00:00");
+    return older;
+  }
+
+  test("an <org>/<repo> reference prefers the canonical clone when an older checkout shares the remote", () => {
+    // Measured 2026-09-10: `hasna-products/mailery` had two usable rows — the
+    // canonical clone under the clones root and an older `platform-mailery`
+    // checkout — and `add` refused the one unambiguous spelling as ambiguous.
+    const { root, db, originPath, repoName, clonePath } = seed({
+      cloneRelativePath: join("clones", "hasna", "open-fixture"),
+    });
+    setClonesRootForTests(join(tempDir, "clones"));
+    olderCheckout(originPath, repoName, db);
+    // The bare name still resolves the single row named that way, and the
+    // older checkout is reachable under its own name.
+    expect(codeOf(() => addWorktree({ repo: repoName, task: "bare" }))).toBe("NO_ERROR");
+
+    const result = addWorktree({ repo: `hasna/${repoName}`, task: "by-org-ref" });
+    expect(result.lease.repo_path).toBe(realpathSync(clonePath));
+    expect(result.path).toBe(join(root, "hasna", repoName, "by-org-ref"));
+    // The full remote spelling is the same reference.
+    const byRemote = addWorktree({ repo: `github.com/hasna/${repoName}`, task: "by-remote" });
+    expect(byRemote.lease.repo_path).toBe(realpathSync(clonePath));
+  });
+
+  test("an <org>/<repo> reference falls back to the single exact org/name row when no checkout is canonical", () => {
+    const { db, originPath, repoName, clonePath } = seed();
+    setClonesRootForTests(join(tempDir, "clones")); // nothing lives there
+    olderCheckout(originPath, repoName, db);
+    const result = addWorktree({ repo: `hasna/${repoName}`, task: "by-org-ref" });
+    expect(result.lease.repo_path).toBe(realpathSync(clonePath));
+  });
+
+  test("an <org>/<repo> reference stays AMBIGUOUS_REPO when two exact-name checkouts are usable and neither is canonical", () => {
+    const { db, originPath, repoName } = seed();
+    setClonesRootForTests(join(tempDir, "clones"));
+    olderCheckout(originPath, repoName, db, repoName);
+    expect(codeOf(() => addWorktree({ repo: `hasna/${repoName}`, task: "by-org-ref" }))).toBe("AMBIGUOUS_REPO");
+    expect(codeOf(() => addWorktree({ repo: repoName, task: "bare" }))).toBe("AMBIGUOUS_REPO");
+  });
 });
 
 describe("removeWorktree", () => {
@@ -636,8 +747,9 @@ describe("removeWorktree", () => {
       "/etc",
       "../../etc",
       "~/.hasna",
-      join(root, repoName, "a321ba13"),
-      "repo/name/extra",
+      join(root, "hasna", repoName, "a321ba13"),
+      "org/repo/name/extra",
+      "org//a321ba13",
       "./a321ba13",
     ]) {
       expect(codeOf(() => removeWorktree({ ref }))).toBe("INVALID_REQUEST");
@@ -654,6 +766,39 @@ describe("removeWorktree", () => {
     const byPair = addWorktree({ repo: repoName, task: "pair-ref" });
     expect(removeWorktree({ ref: `${repoName}/pair-ref` }).removed).toBe(true);
     expect(existsSync(byPair.path)).toBe(false);
+  });
+
+  test("removes by the fully qualified <org>/<repo>/<worktree> reference without a registry lookup", () => {
+    const { db, repoName } = seed();
+    const created = addWorktree({ repo: repoName, task: "qualified" });
+    // The registry row is gone: only the reference itself can name the path.
+    db.query("DELETE FROM repos").run();
+    const removed = removeWorktree({ ref: `hasna/${repoName}/qualified` });
+    expect(removed.removed).toBe(true);
+    expect(removed.lease_id).toBe(created.lease.lease_id);
+    expect(existsSync(created.path)).toBe(false);
+  });
+
+  test("a <repo>/<worktree> pair reaches a pre-ruling flat worktree when nothing sits at the canonical path", () => {
+    const { root, clonePath, repoName } = seed();
+    const legacy = join(root, repoName, "old-flat");
+    git(clonePath, ["worktree", "add", "-b", "old-flat", legacy]);
+    const dry = removeWorktree({ ref: `${repoName}/old-flat`, dryRun: true });
+    expect(dry.path).toBe(realpathSync(legacy));
+    const removed = removeWorktree({ ref: `${repoName}/old-flat` });
+    expect(removed.removed).toBe(true);
+    expect(existsSync(legacy)).toBe(false);
+  });
+
+  test("a <repo>/<worktree> pair prefers the canonical path over a same-named legacy directory", () => {
+    const { root, clonePath, repoName } = seed();
+    const canonical = addWorktree({ repo: repoName, task: "twin" });
+    const legacy = join(root, repoName, "twin");
+    git(clonePath, ["worktree", "add", "-b", "twin-legacy", legacy]);
+    const dry = removeWorktree({ ref: `${repoName}/twin`, dryRun: true });
+    expect(dry.path).toBe(realpathSync(canonical.path));
+    expect(dry.lease_id).toBe(canonical.lease.lease_id);
+    expect(existsSync(legacy)).toBe(true);
   });
 
   test("refuses a dirty worktree unless changes are explicitly discarded", () => {
@@ -922,12 +1067,12 @@ describe("listWorktrees", () => {
     // checkout moved or was deleted and took its `.git/worktrees/<name>`
     // metadata with it. git cannot open the worktree, and the reconciliation
     // surface has to be able to say so.
-    const dead = join(root, repoName, "dead-pointer");
+    const dead = join(root, "hasna", repoName, "dead-pointer");
     mkdirSync(dead, { recursive: true });
     writeFileSync(join(dead, ".git"), "gitdir: /nonexistent/checkout/.git/worktrees/dead-pointer\n");
 
     // A relative pointer resolves against the worktree directory, exactly as
-    // git resolves it.
+    // git resolves it — here on a worktree still at the legacy flat depth.
     const deadRelative = join(root, repoName, "dead-relative");
     mkdirSync(deadRelative, { recursive: true });
     writeFileSync(join(deadRelative, ".git"), "gitdir: ../../nonexistent/.git/worktrees/dead-relative\n");
@@ -937,13 +1082,15 @@ describe("listWorktrees", () => {
 
     expect(byPath.get(dead)?.is_worktree).toBe(true);
     expect(byPath.get(dead)?.issues).toContain("dead-gitdir");
+    expect(byPath.get(dead)?.issues).not.toContain("legacy-flat-layout");
     expect(byPath.get(deadRelative)?.issues).toContain("dead-gitdir");
+    expect(byPath.get(deadRelative)?.issues).toContain("legacy-flat-layout");
     expect(byPath.get(live.path)?.issues).not.toContain("dead-gitdir");
     expect(report.summary.issue_count).toBeGreaterThanOrEqual(2);
   });
 
   test("reconciles leases against disk and names the measured corruption classes", () => {
-    const { root, repoName } = seed();
+    const { root, clonePath, repoName } = seed();
     const live = addWorktree({ repo: repoName, task: "live-one" });
 
     // A flat task-named directory directly under the root — the largest class
@@ -952,10 +1099,20 @@ describe("listWorktrees", () => {
     mkdirSync(flat, { recursive: true });
     git(tempDir, ["init", "--initial-branch=main", flat]);
 
+    // A worktree at the pre-ruling `<root>/<repo>/<worktree>` — reported, not
+    // blocked, and carried with the path it would have today.
+    const legacy = join(root, repoName, "legacy-one");
+    git(clonePath, ["worktree", "add", "-b", "legacy-one", legacy]);
+
     // A machine-segment directory, explicitly forbidden by the convention.
-    const stationDir = join(root, "station01", "open-hooks", "wt_1");
-    mkdirSync(stationDir, { recursive: true });
-    git(tempDir, ["init", "--initial-branch=main", stationDir]);
+    // Three segments deep it is canonical BY SHAPE; only the registry can tell
+    // that `station01` is not this checkout's org.
+    const stationDir = join(root, "station01", repoName, "wt_1");
+    git(clonePath, ["worktree", "add", "-b", "wt_1", stationDir]);
+
+    // A worktree buried one level deeper than the canonical three segments.
+    const deep = join(root, "hasna", repoName, "station01", "deep-one");
+    git(clonePath, ["worktree", "add", "-b", "deep-one", deep]);
 
     // A lease whose directory is gone.
     const orphan = addWorktree({ repo: repoName, task: "orphan-lease" });
@@ -965,17 +1122,60 @@ describe("listWorktrees", () => {
     const byPath = new Map(report.entries.map((entry) => [entry.path, entry]));
 
     expect(byPath.get(live.path)?.issues).toEqual([]);
+    expect(byPath.get(live.path)?.org).toBe("hasna");
+    expect(byPath.get(live.path)?.repo_name).toBe(repoName);
+    expect(byPath.get(live.path)?.suggested_path).toBeNull();
     expect(byPath.get(flat)?.issues).toContain("flat-layout");
     expect(byPath.get(flat)?.issues).toContain("no-lease");
-    expect(byPath.get(stationDir)?.issues).toContain("nested-layout");
-    // The repo segment is carried down, or `worktree list <repo>` filters out a
+    expect(byPath.get(legacy)?.issues).toContain("legacy-flat-layout");
+    expect(byPath.get(legacy)?.issues).not.toContain("nested-layout");
+    expect(byPath.get(legacy)?.org).toBeNull();
+    expect(byPath.get(legacy)?.repo_name).toBe(repoName);
+    expect(byPath.get(legacy)?.suggested_path).toBe(join(root, "hasna", repoName, "legacy-one"));
+    expect(byPath.get(stationDir)?.issues).toContain("layout-mismatch");
+    expect(byPath.get(stationDir)?.suggested_path).toBe(join(root, "hasna", repoName, "wt_1"));
+    // The segments are carried down, or `worktree list <repo>` filters out a
     // violation sitting literally inside that repo's directory.
-    expect(byPath.get(stationDir)?.repo_name).toBe("station01");
+    expect(byPath.get(stationDir)?.org).toBe("station01");
+    expect(byPath.get(stationDir)?.repo_name).toBe(repoName);
+    expect(byPath.get(deep)?.issues).toContain("nested-layout");
+    expect(byPath.get(deep)?.org).toBe("hasna");
+    expect(byPath.get(deep)?.repo_name).toBe(repoName);
     expect(byPath.get(orphan.path)?.issues).toContain("missing-directory");
-    // A lease whose directory is gone still reports the repo segment it lived
+    // A lease whose directory is gone still reports the segments it lived
     // under, so `worktree list <repo>` can surface it.
+    expect(byPath.get(orphan.path)?.org).toBe("hasna");
     expect(byPath.get(orphan.path)?.repo_name).toBe(repoName);
-    expect(report.summary.issue_count).toBeGreaterThanOrEqual(3);
+    // A listing moves nothing.
+    expect(existsSync(legacy)).toBe(true);
+    expect(existsSync(stationDir)).toBe(true);
+    expect(report.summary.issue_count).toBeGreaterThanOrEqual(5);
+  });
+
+  test("a lease written under the pre-ruling flat layout is reported, not blocked, with its canonical path", () => {
+    const { root, db, clonePath, repoName, repoId } = seed();
+    const legacyPath = join(root, repoName, "old-lease");
+    const stamp = "2026-09-01T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO worktree_leases (
+         lease_id, repo_id, repo_path, repo_catalog_id, machine_id, worktree_path, branch,
+         base_ref, base_sha, task_id, run_id, mode, owner_metadata, cleanup_policy, status,
+         git_common_dir, created_at, updated_at, claimed_at, verified_at, released_at, last_error
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "wt_legacy", `github:hasna/${repoName}`, clonePath, repoId, "fixture-machine", legacyPath, "old-lease",
+      "main", "0000000000000000000000000000000000000000", "old-lease", "", "task", "{}", "delete-if-clean", "claimed",
+      null, stamp, stamp, stamp, stamp, null, null,
+    );
+
+    const report = listWorktrees({ machineId: "fixture-machine", now: new Date("2026-09-02T00:00:00Z") });
+    const entry = report.entries.find((row) => row.lease_id === "wt_legacy");
+    expect(entry?.issues).toContain("legacy-flat-layout");
+    expect(entry?.issues).toContain("missing-directory");
+    expect(entry?.issues).not.toContain("stale");
+    expect(entry?.org).toBeNull();
+    expect(entry?.repo_name).toBe(repoName);
+    expect(entry?.suggested_path).toBe(join(root, "hasna", repoName, "old-lease"));
   });
 
   test("flags leases claimed by another machine and leases past the staleness horizon", () => {
@@ -1019,19 +1219,28 @@ describe("adoptWorktrees", () => {
     expect(bulk.skipped[0]!.reason).toBe("dead-gitdir");
   });
 
-  test("backfills a lease for a stray worktree without touching it", () => {
+  test("backfills a lease for an org-nested stray worktree without touching it", () => {
     const { root, clonePath, repoName } = seed();
-    const stray = join(root, repoName, "hand-made");
+    // Made by hand at the canonical `<root>/<org>/<repo>/<worktree>` — the
+    // shape plain `git worktree add` produces once an agent follows the ruling.
+    const stray = join(root, "hasna", repoName, "hand-made");
     git(clonePath, ["worktree", "add", "-b", "hand-made", stray]);
     writeFileSync(join(stray, "STRAY.txt"), "pre-existing work\n");
 
     const result = adoptWorktrees({ path: stray, apply: true });
     expect(result.adopted).toHaveLength(1);
     expect(result.adopted[0]!.mode).toBe("adopted");
+    expect(result.adopted[0]!.org).toBe("hasna");
+    expect(result.adopted[0]!.layout).toBe("canonical");
+    expect(result.adopted[0]!.canonical_path).toBe(stray);
     expect(readFileSync(join(stray, "STRAY.txt"), "utf8")).toBe("pre-existing work\n");
+    // The lease is the one `list` reads as clean: no layout issue, no no-lease.
+    const listed = listWorktrees().entries.find((entry) => entry.path === stray);
+    expect(listed?.lease_id).toBe(result.adopted[0]!.lease_id);
+    expect(listed?.issues).toEqual([]);
   });
 
-  test("dry run is the default and writes no lease", () => {
+  test("dry run is the default and writes no lease, and a legacy flat stray is still adoptable", () => {
     const { root, clonePath, repoName } = seed();
     const stray = join(root, repoName, "hand-made");
     git(clonePath, ["worktree", "add", "-b", "hand-made", stray]);
@@ -1039,7 +1248,15 @@ describe("adoptWorktrees", () => {
     const result = adoptWorktrees({ path: stray });
     expect(result.applied).toBe(false);
     expect(result.adopted).toHaveLength(1);
+    expect(result.adopted[0]!.layout).toBe("legacy-flat");
+    expect(result.adopted[0]!.canonical_path).toBe(join(root, "hasna", repoName, "hand-made"));
     expect(getDb().query("SELECT count(*) AS n FROM worktree_leases").get()).toEqual({ n: 0 });
+
+    // Adoption leases it where it is; nothing is moved.
+    const applied = adoptWorktrees({ path: stray, apply: true });
+    expect(applied.adopted[0]!.lease_id).toBeTruthy();
+    expect(existsSync(stray)).toBe(true);
+    expect(existsSync(join(root, "hasna", repoName, "hand-made"))).toBe(false);
   });
 
   test("refuses a path outside the root and a path that is not a worktree", () => {
@@ -1051,13 +1268,18 @@ describe("adoptWorktrees", () => {
     expect(codeOf(() => adoptWorktrees({ path: notAWorktree, apply: true }))).toBe("NOT_A_WORKTREE");
   });
 
-  test("bulk mode reports every stray under the root", () => {
+  test("bulk mode reports every stray under the root, at the org-nested and the legacy flat depth", () => {
     const { root, clonePath, repoName } = seed();
-    for (const name of ["stray-a", "stray-b"]) {
-      git(clonePath, ["worktree", "add", "-b", name, join(root, repoName, name)]);
-    }
+    const canonical = join(root, "hasna", repoName, "stray-a");
+    const legacy = join(root, repoName, "stray-b");
+    git(clonePath, ["worktree", "add", "-b", "stray-a", canonical]);
+    git(clonePath, ["worktree", "add", "-b", "stray-b", legacy]);
     const result = adoptWorktrees({ all: true });
     expect(result.adopted.map((row) => row.worktree_name).sort()).toEqual(["stray-a", "stray-b"]);
+    expect(result.adopted.find((row) => row.path === canonical)?.layout).toBe("canonical");
+    expect(result.adopted.find((row) => row.path === legacy)?.layout).toBe("legacy-flat");
+    expect(result.adopted.find((row) => row.path === legacy)?.canonical_path)
+      .toBe(join(root, "hasna", repoName, "stray-b"));
     expect(result.applied).toBe(false);
   });
 

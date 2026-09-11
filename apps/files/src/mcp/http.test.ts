@@ -10,6 +10,7 @@ import {
   DEFAULT_MCP_HTTP_PORT,
   isHttpMode,
   resolveMcpHttpPort,
+  selectsMcpHttpTransport,
   startMcpHttpServer,
 } from "./http.ts";
 
@@ -28,6 +29,18 @@ describe("files MCP HTTP transport", () => {
     expect(isHttpMode(["node"], {})).toBe(false);
     expect(isHttpMode(["node", "--http"], {})).toBe(true);
     expect(isHttpMode(["node"], { MCP_HTTP: "1" })).toBe(true);
+  });
+
+  test("stdio is the default transport; HTTP needs an explicit --http or MCP_HTTP=1", () => {
+    expect(selectsMcpHttpTransport(["node"], {})).toBe(false);
+    expect(selectsMcpHttpTransport(["node", "--stdio"], {})).toBe(false);
+    expect(selectsMcpHttpTransport(["node", "--http"], {})).toBe(true);
+    expect(selectsMcpHttpTransport(["node"], { MCP_HTTP: "1" })).toBe(true);
+    // A flag beats the environment, and --stdio always wins.
+    expect(selectsMcpHttpTransport(["node", "--stdio"], { MCP_HTTP: "1" })).toBe(false);
+    expect(selectsMcpHttpTransport(["node", "--http"], { MCP_STDIO: "1" })).toBe(true);
+    expect(selectsMcpHttpTransport(["node", "--http", "--stdio"], {})).toBe(false);
+    expect(selectsMcpHttpTransport(["node"], { MCP_HTTP: "1", MCP_STDIO: "1" })).toBe(false);
   });
 });
 

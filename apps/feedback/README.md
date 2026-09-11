@@ -34,7 +34,7 @@ feedback serve --port 8787
 
 The HTTP API is a **local development server**. It serves the append-only JSONL
 store at the effective data dir (`~/.hasna/feedback` by default; the
-`@hasna/paths`-resolved XDG/macOS data home once adopted) and has no PostgreSQL
+in-package-resolved XDG/macOS data home once adopted) and has no PostgreSQL
 support. A
 PostgreSQL selection is rejected unless the host injects a `FeedbackStore`
 adapter. To run feedback as a real service, mount
@@ -280,7 +280,7 @@ Feedback submitted through the MCP server goes through the same store, so it cre
 ## Storage
 
 By default, Hasna Feedback stores feedback in a local **SQLite** database in the
-effective data dir. That dir resolves through the `@hasna/paths` resolver
+effective data dir. That dir resolves via the in-package resolver
 (XDG/macOS home layout): the legacy `~/.hasna/feedback` stays the effective root
 until the store has been migrated to the XDG data home
 (`~/.local/share/hasna/feedback` on Linux — `feedback.db` / `feedback.jsonl`

@@ -432,11 +432,11 @@ export function registerDnsCommands(
       }
     });
 
-  // ── pull: live provider → local DB ────────────────────────────────────
+  // ── pull: live provider → portfolio ───────────────────────────────────
 
   dnsCmd
     .command("pull <domain>")
-    .description("Pull live DNS records from provider into local DB")
+    .description("Pull live DNS records from provider into the portfolio")
     .option("--provider <name>", "DNS provider (route53, cloudflare) — defaults to config default-dns")
     .action(async (domain: string, opts: { provider?: string }) => {
       const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
@@ -445,7 +445,7 @@ export function registerDnsCommands(
         const records = await provider.getDnsRecords(domain);
         const dbDomain = await getDomainByName(domain);
         if (!dbDomain) {
-          printErrorLine(`Domain '${domain}' not found in local DB. Add it first: domains domain add --name ${domain}`);
+          printErrorLine(`Domain '${domain}' not found in the portfolio. Add it first: domains domain add --name ${domain}`);
           process.exit(1);
         }
         // Skip provider-managed types (SOA/CAA/…) the store cannot persist.
@@ -455,7 +455,7 @@ export function registerDnsCommands(
           await createDnsRecord({ domain_id: dbDomain.id, type: r.type as "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS" | "SRV", name: r.name, value: r.value, ttl: r.ttl, priority: r.priority });
           count++;
         }
-        printLine(`✓ Pulled ${count} record(s) from ${providerName} into local DB for ${domain}`);
+        printLine(`✓ Pulled ${count} record(s) from ${providerName} into the portfolio for ${domain}`);
         if (skipped.size > 0) {
           const summary = Array.from(skipped.entries()).map(([t, n]) => `${n} ${t}`).join(", ");
           printLine(`  Skipped ${summary} record(s) (unsupported/provider-managed type).`);
@@ -466,17 +466,17 @@ export function registerDnsCommands(
       }
     });
 
-  // ── push: local DB → live provider ────────────────────────────────────
+  // ── push: portfolio → live provider ───────────────────────────────────
 
   dnsCmd
     .command("push <domain-id>")
-    .description("Push local DB records to live DNS provider")
+    .description("Push portfolio DNS records to live DNS provider")
     .option("--provider <name>", "DNS provider — defaults to config default-dns")
     .action(async (domainId: string, opts: { provider?: string }) => {
       const providerName = opts.provider ?? loadConfig().default_dns ?? "route53";
       try {
         const records = await listDnsRecords(domainId);
-        if (records.length === 0) { printLine("No local DNS records to push."); return; }
+        if (records.length === 0) { printLine("No DNS records to push."); return; }
         const dbDomain = (await getDomain(domainId)) ?? (() => { throw new Error(`Domain '${domainId}' not found`); })();
         const provider = resolveDnsProvider(providerName);
         await provider.setDnsRecords(dbDomain.name, records.map((r) => ({

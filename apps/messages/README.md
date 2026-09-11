@@ -39,7 +39,7 @@ reads the other's store.
 The server storage backend is the only runtime switch, selected by
 configuration — never by a mode enum:
 
-- **SQLite** by default (zero-config, resolved through the `@hasna/paths`
+- **SQLite** by default (zero-config, resolved through the in-package resolver
   resolver — the XDG data home `~/.local/share/hasna/messages/messages.db`
   once adopted, otherwise the legacy `~/.hasna/messages/messages.db` — or
   `HASNA_MESSAGES_SQLITE_PATH`). The exact-app `HASNA_MESSAGES_HOME` override
@@ -57,7 +57,7 @@ The CLI, the MCP server and the `./sdk` client all call the **one**
 `@hasna/contracts` client resolver, per request, fresh (hasna/apps#1720) — the
 same chain every hosted Hasna app uses. There is no per-app credential chain
 any more: no `~/.hasna/fleet-env`, no `~/.hasna/cloud`, no `~/.config/hasna`,
-no `HASNA_MESSAGES_LOCAL_MODE_ENV` switch, no deprecation notice. The ladder:
+no legacy opt-in spelling, no deprecation notice. The ladder:
 
 | tier | source |
 |------|--------|

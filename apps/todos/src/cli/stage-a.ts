@@ -9,6 +9,7 @@ import {
   type TodosCliTransportResolution,
   type TodosRemoteCommandCapability,
 } from "./cloud-router.js";
+import { todosLocalModeNotice } from "../lib/local-opt-in.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -42,30 +43,10 @@ export type TodosCliCommandOwner = "diagnostic" | "remote-http" | "local-only";
  * "absent" everywhere, so a blank can never turn "no cloud client" into a hard
  * error.
  */
-/**
- * The one line a local run prints, and the reason it prints at all.
- *
- * An unhosted CLI that says nothing looks exactly like a hosted one whose store
- * happens to be empty — that is the false green the 2026-09-04 ruling
- * (hasna/apps#1720) closes, and it is why the notice is unconditional rather
- * than behind a verbosity flag. It goes to STDERR so `--json` output stays a
- * clean parseable document on stdout, and it names the credential the run did
- * NOT find, so the fix is in the message rather than in the docs.
- */
-export function todosLocalModeNotice(reason: "local-opt-in" | "local-only-command" = "local-opt-in"): string {
-  if (reason === "local-only-command") {
-    return (
-      "todos: LOCAL mode — this command only ever runs against the on-box SQLite store, so this run " +
-      "does not reach the hosted fleet even though a Todos authority is configured."
-    );
-  }
-  return (
-    "todos: LOCAL mode — using the on-box SQLite store, not the hosted fleet " +
-    "(HASNA_TODOS_LOCAL is set). Unset it, and provide a credential via the Keychain item " +
-    "hasna.credentials.todos.api-key, ~/.hasna/todos/config/credentials, or HASNA_TODOS_API_KEY, " +
-    "to work against https://api.hasna.com/todos."
-  );
-}
+// The notice text itself lives in the leaf module `lib/local-opt-in.ts` so the
+// MCP server prints the identical line without importing stage A (and, with
+// it, commander) into its bundle. Re-exported here for the existing callers.
+export { todosLocalModeNotice };
 
 /**
  * Print {@link todosLocalModeNotice} once for a run that resolved to the local

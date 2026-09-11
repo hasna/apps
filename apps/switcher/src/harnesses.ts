@@ -1,5 +1,6 @@
 import { proxyProviderStream } from "./provider-stream";
 import { createProviderRequest, type ProviderRequestTiming } from "./provider-request";
+import { codexReasoning, type ReasoningEffort } from "./reasoning";
 import { claudeContextEnvironment } from "./claude-context";
 import { compileOpenCodeModelPolicy, openCodeInvocationModel } from "./opencode-model-policy";
 import { prepareKilo, validateKiloConfiguration } from "./kilo";
@@ -267,12 +268,13 @@ async function preservedOpenCodePolicy(cwd:string):Promise<OpenCodePolicy> {
   if(result.tools) result.permission=mergePolicyValue(toolsPermission(result.tools,"OpenCode tools policy"),result.permission);
   return result;
 }
-export function codexModel(model: HarnessLaunchInput["models"][number], priority:number) {
-  // Conservative wire/tool choices; no invented reasoning levels or model-specific policies.
+export function codexModel(model: HarnessLaunchInput["models"][number], priority:number,baseUrl="https://provider.invalid",selectedReasoning?:ReasoningEffort) {
+  const reasoning=codexReasoning(model,baseUrl,selectedReasoning);
+  // Conservative wire/tool choices with explicit reasoning capabilities.
   return {
     slug:model.id,display_name:model.name,description:model.description??model.id,
     shell_type:"shell_command",visibility:"list",supported_in_api:true,priority,
-    supported_reasoning_levels:[],default_reasoning_level:null,
+    supported_reasoning_levels:reasoning.levels.map(effort=>({effort,description:effort==="none"?"Disable reasoning":`${effort} reasoning effort`})),default_reasoning_level:reasoning.defaultEffort,
     support_verbosity:false,supports_reasoning_summary_parameter:false,default_verbosity:null,
     supports_parallel_tool_calls:false,apply_patch_tool_type:null,
     truncation_policy:{mode:"tokens",limit:10000},experimental_supported_tools:[],
@@ -550,7 +552,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   }
   if(input.harness==="codex") {
     const rolePolicy=await prepareCodexModelPolicy({cwd:input.cwd,stateDir:input.stateDir,model:input.model,policy:input.modelPolicy?{version:1,...input.modelPolicy}:undefined,switcherProvider:"switcher",switcherBaseUrl:input.baseUrl});
-    const file=await jsonFile(input.stateDir,"codex-models.json",{models:input.models.map(codexModel)});
+    const file=await jsonFile(input.stateDir,"codex-models.json",{models:input.models.map((model,index)=>codexModel(model,index,providerBaseUrl,model.id===input.model?input.reasoning:undefined))});
     configPaths.push(file);
     configPaths.push(...Object.values(rolePolicy.agentConfigPaths));
     env[KEY]=input.credential??"switcher-local-no-auth";
@@ -566,7 +568,10 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
       overrides.push("-c",`agents.${name}.config_file=${quote(path)}`);
     }
     overrides.push("-c",`memories.extract_model=${quote(input.model)}`,"-c",`memories.consolidation_model=${quote(input.model)}`);
-    warnings.push("Codex catalog uses conservative generic tool metadata and a model-neutral coding prompt; provider-specific reasoning is not advertised.");
+    if(input.reasoning)overrides.push("-c",`model_reasoning_effort=${quote(input.reasoning)}`);
+    if(input.dangerouslyBypassApprovalsAndSandbox)overrides.push("-c",'approval_policy="never"',"-c",'sandbox_mode="danger-full-access"');
+    warnings.push("Codex catalog uses conservative generic tool metadata and a model-neutral coding prompt; reasoning controls come from declared capabilities, documented provider support or an explicit --reasoning selection.");
+    if(input.dangerouslyBypassApprovalsAndSandbox)warnings.push("Full access: approval prompts and command sandboxing are disabled for this launch.");
     return {executable,args:[...overrides,...args],env,configPaths,warnings};
   }
   if(input.harness==="grok") {

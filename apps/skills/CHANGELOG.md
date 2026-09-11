@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.10
+
+### Patch Changes
+
+- Preserve own JSON keys such as `__proto__` while canonicalizing skill manifests for content hashes. Changing those fields now changes the digest and invalidates an old declaration. Ordinary manifest hashes and the SHA-256 framing remain unchanged.
+
+## 0.5.9
+
+### Patch Changes
+
+- Reject negative, fractional, non-finite and unsafe monetary amounts before SDK admission, reservation or settlement writes. Limit each reservation and charge to 2147483647 cents across all stores, preventing PostgreSQL integer overflow after run creation; monthly totals and ceilings may still exceed this per-reservation limit. Capture validated estimates before asynchronous admission checks, and preserve zero amounts and first-reconciliation replay behavior.
+- Keep the interactive quit shortcut from intercepting q while typing a skill search. Search results can be selected and pinned normally; Escape still cancels and q still exits menu and completion screens.
+
+## 0.5.8
+
+### Patch Changes
+
+- 3751ba8: Accept boolean private execution capability reports while keeping publication and separately approved execution independent.
+
+  Widen publication recovery `executionEnabled` from literal false to `boolean | null`: existing recovery receipts report null because they do not contain a server capability observation. Align CLI/MCP output and guidance so publication is not confused with execution authorization.
+
+- 2e4ec23: Add a provider-neutral injected operation client with bounded immutable JSON, stable request identities, explicit status lookup, abort handling, and unknown-outcome errors without automatic retry. Credentials, authorization, IPC and provider execution remain the embedder's responsibility.
+
 ## 0.5.7
 
 ### Patch Changes

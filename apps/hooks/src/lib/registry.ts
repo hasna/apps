@@ -35,6 +35,20 @@ export interface HookMeta {
   events?: HookEvent[];
   matcher: string;
   tags: string[];
+  /**
+   * This hook rewrites the tool input (`hookSpecificOutput.updatedInput`).
+   * The agent harness keeps ONE rewrite per tool call — last writer wins — so
+   * two input-rewriting hooks on overlapping PreToolUse matchers silently
+   * disarm each other. Install refuses that pairing, and `hooks doctor`
+   * reports it.
+   */
+  rewritesInput?: boolean;
+  /**
+   * Timeout (seconds) written into the agent's settings entry for this hook.
+   * The harness default is 600s, and a TIMED-OUT HOOK DOES NOT BLOCK: a guard
+   * that needs a verdict on stdout must declare a timeout it can meet.
+   */
+  timeoutSeconds?: number;
 }
 
 export const CATEGORIES = [
@@ -103,6 +117,18 @@ export const HOOKS: HookMeta[] = [
     event: "PreToolUse",
     matcher: "^(Bash|Write|Edit|MultiEdit|NotebookEdit|apply_patch|ApplyPatch|functions\\.apply_patch)$",
     tags: ["workspace", "repos", "structure", "guard", "safety", "orgs", "multi-agent"],
+  },
+  {
+    name: "trash-guard",
+    displayName: "Trash Guard",
+    description: "Rewrites rm issued through Bash into `trash guard`, so the delete lands in a recoverable trash store; refuses the delete when there is nothing to redirect to (trash absent, a delete verb it cannot rewrite, or the protected class: /, ~, ~/.hasna, ~/.ssh, ~/.aws)",
+    version: "0.1.0",
+    category: "Git Safety",
+    event: "PreToolUse",
+    matcher: "Bash",
+    tags: ["rm", "delete", "trash", "recoverable", "guard", "safety", "bash"],
+    rewritesInput: true,
+    timeoutSeconds: 5,
   },
 
   // Code Quality

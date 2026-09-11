@@ -500,14 +500,11 @@ export class LocalStore implements TelephonyStore {
 }
 
 // ── ApiStore (the server's HTTP /v1 API) ─────────────────────────────────────
-
-/** Raised for a client op the cloud `/v1` API cannot serve. */
-export class CloudUnsupportedError extends Error {
-  constructor(op: string) {
-    super(`telephony: '${op}' is not available against the cloud API.`);
-    this.name = "CloudUnsupportedError";
-  }
-}
+//
+// Every TelephonyStore operation is served over the HTTP API transport —
+// nothing is "cloud unsupported": the server-side /v1 API implements the full
+// store contract (CRUD + provider passthroughs), so no op falls back to the
+// on-box store or raises a cloud-only refusal.
 
 export class ApiStore implements TelephonyStore {
   readonly transport = "cloud-http" as const;

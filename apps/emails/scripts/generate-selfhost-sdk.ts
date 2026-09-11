@@ -244,6 +244,22 @@ for (const operation of generated.operations) {
   );
 }
 
+// applyMailboxFilter's request body is OPTIONAL and additive. The base generator
+// emits it as `(id, body?, query?, init?)`; instead keep the long-standing
+// `(id, query?, init?)` calling convention and surface the body as a TRAILING
+// optional fourth argument, so existing list-only callers stay source-compatible
+// and mutate callers opt in with `{ mutate: true }`. The method's `this.request`
+// block already references `body`, so only the signature needs reordering.
+const applyMailboxFilterBodySignature =
+  /async applyMailboxFilter\(id: string, (body\?: \{[^\n]*\}), (query\?: \{[^\n]*\}), (init\?: RequestInit)\)/;
+if (!applyMailboxFilterBodySignature.test(secureClientCode)) {
+  throw new Error("generated SDK shape changed; applyMailboxFilter body signature was not found for reordering");
+}
+secureClientCode = secureClientCode.replace(
+  applyMailboxFilterBodySignature,
+  "async applyMailboxFilter(id: string, $2, $3, $1)",
+);
+
 secureClientCode = replaceRequired(
   secureClientCode,
   "  apiKey?: string;\n",
