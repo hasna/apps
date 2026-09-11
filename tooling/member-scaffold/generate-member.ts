@@ -28,6 +28,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertChangesetFrontmatter } from "./changeset.js";
 
 const NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SCAFFOLD_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -96,7 +97,9 @@ writeTree(target);
 // new package (version-without-changeset is a hard gate in test:versioning).
 const changesetDir = path.join(repoRoot, ".changeset");
 if (fs.existsSync(changesetDir)) {
-  const changeset = `"@hasna/${name}": minor
+  const changesetFile = `${name}-bootstrap.md`;
+  const changeset = `---
+"@hasna/${name}": minor
 ---
 
 Bootstrap @hasna/${name} as a new hasna/apps member (generated from tooling/member-scaffold):
@@ -105,7 +108,8 @@ Bootstrap @hasna/${name} as a new hasna/apps member (generated from tooling/memb
 - hasna.contract.json at contracts kit 0.11.1 (schema hasna.service_contract.v1).
 - tsconfig extending tsconfig.base.json; contract:check + verify gates wired.
 `;
-  fs.writeFileSync(path.join(changesetDir, `${name}-bootstrap.md`), changeset);
+  assertChangesetFrontmatter(changeset, changesetFile);
+  fs.writeFileSync(path.join(changesetDir, changesetFile), changeset);
 }
 
 console.log(`generated ${path.relative(repoRoot, target)}`);
