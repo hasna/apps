@@ -115,6 +115,23 @@ const scenarios: Record<string, () => Promise<void>> = {
     }
   },
 
+  // --- audit (MCP) ---
+  memory_audit_trail: async () => {
+    const { registerMemoryAuditTools } = await import("../../mcp/tools/memory-audit.js");
+    await callTool(registerMemoryAuditTools, "memory_audit_trail", { memory_id: "mem-1" });
+  },
+  memory_audit_export: async () => {
+    const { registerMemoryAuditTools } = await import("../../mcp/tools/memory-audit.js");
+    await callTool(registerMemoryAuditTools, "memory_audit_export", { operation: "update" });
+  },
+  "audit-stats": async () => {
+    const { getAuditStats } = await import("../audit.js");
+    const stats = getAuditStats();
+    if (stats.total_entries !== 3 || stats.by_operation["update"] !== 2) {
+      throw new Error(`audit stats did not come from the hosted route: ${JSON.stringify(stats)}`);
+    }
+  },
+
   // --- machines (MCP) ---
   register_machine: async () => {
     const { registerProjectTools } = await import("../../mcp/tools/project-tools.js");

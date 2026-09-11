@@ -54,6 +54,18 @@ const MACHINE = {
   last_seen_at: "2026-09-11T00:00:00.000Z",
 };
 
+const AUDIT_ENTRY = {
+  id: "audit-1",
+  memory_id: "mem-1",
+  memory_key: "audited-key",
+  operation: "update",
+  agent_id: "agent-1",
+  old_value_hash: null,
+  new_value_hash: null,
+  changes: "{}",
+  created_at: "2026-09-11T00:00:00.000Z",
+};
+
 const JOB = {
   id: "job-1",
   session_id: "session-1",
@@ -86,6 +98,15 @@ function respond(method: string, path: string): unknown {
   }
   if (method === "POST" && path === "/v1/profile/synthesize") {
     return { profile: "## Profile\nhosted-profile-body", memory_count: 7, from_cache: false };
+  }
+  if (method === "GET" && /^\/v1\/memories\/[^/]+\/audit-trail/.test(path)) {
+    return { entries: [AUDIT_ENTRY], count: 1 };
+  }
+  if (method === "GET" && path.startsWith("/v1/audit/export")) {
+    return { entries: [AUDIT_ENTRY], count: 1 };
+  }
+  if (method === "GET" && path.startsWith("/v1/audit/stats")) {
+    return { total_entries: 3, by_operation: { create: 1, update: 2 }, recent_24h: 3 };
   }
   if (method === "POST" && path === "/v1/machines") return MACHINE;
   if (method === "GET" && path.startsWith("/v1/machines/")) {

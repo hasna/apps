@@ -174,6 +174,21 @@ export interface Agent {
   last_seen_at: string | null;
 }
 
+/** One append-only entry in the immutable memory audit log. */
+export interface MementosAuditEntry {
+  id: string;
+  memory_id: string;
+  memory_key: string | null;
+  operation: "create" | "update" | "delete" | "archive" | "restore" | "read";
+  agent_id: string | null;
+  /** md5 of the value BEFORE the operation, or null when the backend cannot compute one. */
+  old_value_hash: string | null;
+  /** md5 of the value AFTER the operation, or null when the backend cannot compute one. */
+  new_value_hash: string | null;
+  changes: Record<string, unknown>;
+  created_at: string;
+}
+
 /** A registered machine in the shared machine registry. */
 export interface MementosMachine {
   id: string;
@@ -1450,6 +1465,30 @@ export class MementosClient {
 
   listAgentsByProject(projectId: string): Promise<{ agents: Agent[]; count: number }> {
     return this.get(`/api/agents`, { project_id: projectId });
+  }
+
+  // --------------------------------------------------------------------------
+  // Audit log (append-only; reads only)
+  // --------------------------------------------------------------------------
+
+  /** One memory's immutable history, newest first. */
+  getMemoryAuditTrail(memoryId: string, options: { limit?: number } = {}): Promise<{ entries: MementosAuditEntry[]; count: number }> {
+    return this.get(`/api/memories/${encodeURIComponent(memoryId)}/audit-trail`, { limit: options.limit });
+  }
+
+  /** The compliance export across memories. */
+  exportAuditLog(options: { since?: string; until?: string; operation?: string; agent_id?: string; limit?: number } = {}): Promise<{ entries: MementosAuditEntry[]; count: number }> {
+    return this.get("/api/audit/export", {
+      since: options.since,
+      until: options.until,
+      operation: options.operation,
+      agent_id: options.agent_id,
+      limit: options.limit,
+    });
+  }
+
+  getAuditStats(): Promise<{ total_entries: number; by_operation: Record<string, number>; recent_24h: number }> {
+    return this.get("/api/audit/stats");
   }
 
   // --------------------------------------------------------------------------
