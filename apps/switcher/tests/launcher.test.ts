@@ -287,7 +287,7 @@ const fixture=${JSON.stringify(executable)};
 const client={getProfile:async()=>({providerId:'fixture',harness:'prime-agent',model:'fixture-model'}),refreshModels:async()=>({}),launchPlan:async()=>({planToken:'${"a".repeat(64)}',profile:{harness:'prime-agent',model:'fixture-model'},provider:{baseUrl:'http://127.0.0.1:1/v1',protocol:'openai-chat',authStyle:'bearer'},catalog:{models:[{id:'fixture-model',name:'Fixture',supportedParameters:['tools'],inputModalities:['text'],outputModalities:['text']}],refreshedAt:new Date().toISOString(),source:'manual'},warnings:[]}),createRun:async()=>({id:'fixture',version:1}),finishRun:async()=>{}};
 try{const code=await launch(client,'fixture',{executable:fixture,cwd:${JSON.stringify(dir)},stateDir:${JSON.stringify(join(dir,"state"))},refresh:false});process.exitCode=code}catch(error){console.error(error);process.exitCode=error?.exitCode??1}
 `);
-  const child=spawn(process.execPath,[runner],{cwd:dir,env:{...process.env,TMPDIR:runtime,HASNA_SWITCHER_HOME:join(dir,"home"),SWITCHER_PROVIDER_FIXTURE:"fixture-key"},stdio:["ignore","pipe","pipe"]});
+  const child=spawn(process.execPath,[runner],{cwd:dir,env:{...process.env,TMPDIR:runtime,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"home"),SWITCHER_PROVIDER_FIXTURE:"fixture-key"},stdio:["ignore","pipe","pipe"]});
   let stderr="";child.stderr?.on("data",chunk=>{stderr+=chunk.toString()});
   try {
     const deadline=Date.now()+5000;while(Date.now()<deadline){try{await readFile(spawned);break}catch{await Bun.sleep(10)}}

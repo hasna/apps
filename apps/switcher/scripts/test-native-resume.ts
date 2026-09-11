@@ -21,7 +21,7 @@ const upstream=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(req){
  const events=[['message_start',{type:'message_start',message:{id:'msg_'+crypto.randomUUID(),type:'message',role:'assistant',model:body.model,content:[],stop_reason:null,stop_sequence:null,usage:{input_tokens:10,output_tokens:0}}}],['content_block_start',{type:'content_block_start',index:0,content_block:{type:'text',text:''}}],['content_block_delta',{type:'content_block_delta',index:0,delta:{type:'text_delta',text}}],['content_block_stop',{type:'content_block_stop',index:0}],['message_delta',{type:'message_delta',delta:{stop_reason:'end_turn',stop_sequence:null},usage:{output_tokens:5}}],['message_stop',{type:'message_stop'}]];
  return new Response(events.map(([event,data])=>`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join(''),{headers:{'content-type':'text/event-stream'}});
 }});
-const env:NodeJS.ProcessEnv={HOME:process.env.HOME,USER:process.env.USER,LOGNAME:process.env.LOGNAME,PATH:process.env.PATH,HASNA_SWITCHER_HOME:join(root,'switcher'),SWITCHER_PROVIDER_FIXTURE:'fixture-resume-key'};
+const env:NodeJS.ProcessEnv={HOME:process.env.HOME,USER:process.env.USER,LOGNAME:process.env.LOGNAME,PATH:process.env.PATH,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(root,'switcher'),SWITCHER_PROVIDER_FIXTURE:'fixture-resume-key'};
 env.GROK_HOME=join(root,'grok');
 for(const [name,dir] of [['XDG_DATA_HOME','data'],['XDG_CONFIG_HOME','config'],['XDG_STATE_HOME','state'],['XDG_CACHE_HOME','cache']]){env[name]=join(root,dir);await mkdir(env[name]!,{recursive:true,mode:0o700});}
 const results:any[]=[];
