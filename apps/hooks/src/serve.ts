@@ -17,6 +17,13 @@ import { resolveHooksServePublishKey } from "./lib/transport.js";
 import { secureEqual } from "./lib/secure-compare.js";
 import { openApiDocument } from "./openapi.js";
 import { SEMVER_PATTERN } from "./lib/semver.js";
+import {
+  HOOK_EVENT_STORE_UNCONFIGURED,
+  HookEventValidationError,
+  resolveHookEventStore,
+  type HookEventStore,
+} from "./server/event-store.js";
+import { boundedRowLimit, normalizeSince, type HookEventQuery } from "./lib/event-types.js";
 
 // Distinct from the MCP SSE default (39427) so `hooks serve` and
 // `hooks mcp --sse` can run on the same machine without colliding.
@@ -126,7 +133,126 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
   });
 }
 
-export function handleServeRequest(req: Request, apiKey: string | undefined): Promise<Response> {
+/**
+ * Server dependencies a caller may inject. `eventStore` exists so the route
+ * tests can drive the REAL handler against an in-memory store without a
+ * PostgreSQL instance; production passes nothing and the DSN decides.
+ */
+export interface ServeDeps {
+  eventStore?: HookEventStore | null;
+  /** Resolves the store when none was injected. Defaults to the DSN-backed one. */
+  resolveEventStore?: () => HookEventStore | null;
+}
+
+function eventStoreOf(deps: ServeDeps): HookEventStore | null {
+  if (deps.eventStore !== undefined) return deps.eventStore;
+  return (deps.resolveEventStore ?? resolveHookEventStore)();
+}
+
+function boolParam(params: URLSearchParams, name: string): boolean {
+  const value = params.get(name);
+  return value === "1" || value === "true";
+}
+
+function eventQueryFrom(params: URLSearchParams): HookEventQuery {
+  const limitRaw = params.get("limit");
+  const parsedLimit = limitRaw === null ? undefined : Number.parseInt(limitRaw, 10);
+  return {
+    hook: params.get("hook") ?? undefined,
+    session: params.get("session") ?? undefined,
+    since: normalizeSince(params.get("since")) ?? undefined,
+    search: params.get("q") ?? undefined,
+    errorsOnly: boolParam(params, "errors_only"),
+    limit: boundedRowLimit(Number.isFinite(parsedLimit as number) ? (parsedLimit as number) : undefined, 50),
+  };
+}
+
+/** Turn a store failure into an honest status: 400 for caller mistakes, 500 otherwise. */
+function storeFailure(error: unknown): Response {
+  if (error instanceof HookEventValidationError) return json({ error: error.message }, 400);
+  return json({ error: `event store failure: ${error instanceof Error ? error.message : String(error)}` }, 500);
+}
+
+async function handleEventRoutes(
+  req: Request,
+  url: URL,
+  store: HookEventStore,
+): Promise<Response> {
+  try {
+    if (url.pathname === "/api/v1/events" && req.method === "POST") {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ error: "invalid JSON body" }, 400);
+      }
+      const submitted = Array.isArray(body)
+        ? body
+        : body && typeof body === "object" && Array.isArray((body as { events?: unknown[] }).events)
+          ? (body as { events: unknown[] }).events
+          : [body];
+      if (submitted.length === 0) return json({ error: "no events submitted" }, 400);
+      if (submitted.length > 100) return json({ error: "at most 100 events per request" }, 400);
+      const written = await store.insertEvents(submitted as never[]);
+      return json({ events: written, count: written.length }, 201);
+    }
+
+    if (url.pathname === "/api/v1/events" && req.method === "GET") {
+      const events = await store.listEvents(eventQueryFrom(url.searchParams));
+      return json({ events, count: events.length });
+    }
+
+    if (url.pathname === "/api/v1/events" && req.method === "DELETE") {
+      const hook = url.searchParams.get("hook") ?? undefined;
+      const deleted = await store.deleteEvents({ hook });
+      return json({ deleted });
+    }
+
+    if (url.pathname === "/api/v1/events/summary" && req.method === "GET") {
+      const since = normalizeSince(url.searchParams.get("since"));
+      const rows = await store.summarize(since);
+      const events = rows.reduce((sum, row) => sum + row.total, 0);
+      const errors = rows.reduce((sum, row) => sum + row.errors, 0);
+      return json({
+        since,
+        hooks: rows.map((row) => ({
+          ...row,
+          error_rate: row.total > 0 ? `${((row.errors / row.total) * 100).toFixed(1)}%` : "0%",
+        })),
+        totals: { events, errors, hooks_active: rows.length },
+      });
+    }
+
+    if (url.pathname === "/api/v1/feedback" && req.method === "POST") {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ error: "invalid JSON body" }, 400);
+      }
+      const input = (body ?? {}) as { message?: unknown; email?: unknown; category?: unknown; version?: unknown };
+      if (typeof input.message !== "string" || input.message.trim() === "") {
+        return json({ error: "'message' is required and must be a non-empty string" }, 400);
+      }
+      const saved = await store.insertFeedback({
+        message: input.message,
+        email: typeof input.email === "string" ? input.email : null,
+        category: typeof input.category === "string" ? input.category : "general",
+        version: typeof input.version === "string" ? input.version : null,
+      });
+      return json({ ok: true, id: saved.id }, 201);
+    }
+  } catch (error) {
+    return storeFailure(error);
+  }
+  return json({ error: "Not Found" }, 404);
+}
+
+export function handleServeRequest(
+  req: Request,
+  apiKey: string | undefined,
+  deps: ServeDeps = {},
+): Promise<Response> {
   const url = new URL(req.url);
 
   if (url.pathname === "/health" && req.method === "GET") {
@@ -216,6 +342,23 @@ export function handleServeRequest(req: Request, apiKey: string | undefined): Pr
       },
       () => json({ error: "invalid JSON body" }, 400),
     );
+  }
+
+  // Hook events and feedback: the hosted home of what `hooks run`, the MCP
+  // run tools and the bundled observability hooks used to write into a local
+  // SQLite file, and what `hooks log` / `hooks_log_*` read back. Unlike the
+  // catalog, these are the caller's own data, so every method needs the key.
+  if (url.pathname === "/api/v1/events" || url.pathname === "/api/v1/events/summary" || url.pathname === "/api/v1/feedback") {
+    if (!authorized(req, apiKey)) {
+      return Promise.resolve(json({ error: "unauthorized: valid API key required for hook events" }, 401));
+    }
+    const store = eventStoreOf(deps);
+    if (!store) {
+      // Honest refusal. An empty list here would read as "you have no
+      // events" to a caller whose events simply live somewhere else.
+      return Promise.resolve(json({ error: HOOK_EVENT_STORE_UNCONFIGURED }, 503));
+    }
+    return handleEventRoutes(req, url, store);
   }
 
   return Promise.resolve(json({ error: "Not Found" }, 404));

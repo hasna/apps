@@ -25,12 +25,17 @@ beforeAll(() => {
   closeDb();
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;
   process.env.HASNA_HOOKS_DB_PATH = join(TEST_DIR, "hooks.db");
+  // Explicit local-mode opt-in (fleet fail-closed doctrine): hook events are
+  // hosted by default now, and this file asserts the ON-BOX store, so it
+  // declares the opt-in instead of relying on a silent local default.
+  process.env.HASNA_HOOKS_LOCAL = "1";
   process.env.HASNA_HOOKS_LOCK_PATH = join(TEST_DIR, "hooks.lock");
 });
 
 afterAll(() => {
   delete process.env.HASNA_HOOKS_DATA_DIR;
   delete process.env.HASNA_HOOKS_DB_PATH;
+  delete process.env.HASNA_HOOKS_LOCAL;
   delete process.env.HASNA_HOOKS_LOCK_PATH;
   closeDb();
   rmSync(TEST_DIR, { recursive: true, force: true });

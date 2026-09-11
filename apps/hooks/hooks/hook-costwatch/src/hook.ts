@@ -3,8 +3,10 @@
 /**
  * Claude Code Hook: costwatch
  *
- * Stop hook that estimates session token usage and persists cost data to
- * SQLite (~/.hooks/hooks.db) for cross-session history queries.
+ * Stop hook that estimates session token usage and records the cost as a
+ * hook event for cross-session history queries. The event goes to the
+ * registry (POST /api/v1/events); the on-box SQLite store is used only
+ * under the deliberate HOOKS_LOCAL=1 opt-in.
  *
  * Configuration:
  * - Environment variable: COST_WATCH_BUDGET (max $ per session, e.g. "5.00")
@@ -15,7 +17,7 @@
 
 import { readFileSync, existsSync, readdirSync, statSync } from "fs";
 import { join } from "path";
-import { writeHookEvent } from "../../../src/lib/db-writer";
+import { writeHookEventRouted } from "../../../src/lib/event-sink";
 
 interface HookInput {
   session_id: string;
@@ -99,7 +101,7 @@ function findSessionTranscript(cwd: string, sessionId: string): string | null {
   return null;
 }
 
-export function run(): void {
+export async function run(): Promise<void> {
   const input = readStdinJson();
 
   if (!input) {
@@ -136,7 +138,7 @@ export function run(): void {
       process.stderr.write(`[hook-costwatch] Check your actual usage at https://console.anthropic.com/\n`);
     }
 
-    writeHookEvent({
+    await writeHookEventRouted({
       session_id: input.session_id,
       hook_name: "costwatch",
       event_type: "Stop",
@@ -152,7 +154,7 @@ export function run(): void {
   } else {
     process.stderr.write(`[hook-costwatch] Could not estimate session cost (no transcript found).\n`);
 
-    writeHookEvent({
+    await writeHookEventRouted({
       session_id: input.session_id,
       hook_name: "costwatch",
       event_type: "Stop",
@@ -171,5 +173,5 @@ export function run(): void {
 }
 
 if (import.meta.main) {
-  run();
+  await run();
 }

@@ -639,7 +639,10 @@ describe("observability hooks write to SQLite", () => {
       stdin: new Response(JSON.stringify(input)),
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, HOOKS_DB_PATH: dbPath },
+      // Explicit local-mode opt-in (fleet fail-closed doctrine): these hooks
+      // post to the hosted /api/v1/events route by default now, and this
+      // block asserts the ON-BOX store, so it declares the opt-in.
+      env: { ...process.env, HOOKS_DB_PATH: dbPath, HOOKS_LOCAL: "1" },
     });
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),

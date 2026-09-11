@@ -63,8 +63,44 @@ import {
   storagePush,
   storageSync,
 } from "../storage.js";
+import { hasHooksEnvAuthorityIntent, isHooksLocalOptIn } from "../lib/local-opt-in.js";
+import {
+  boundedRowLimit,
+  buildEventFilter,
+  normalizeSince,
+  type HookEventQuery,
+} from "../lib/event-types.js";
 
 export const MCP_PORT = 39427;
+
+/**
+ * Hook events live on the registry (`/api/v1/events`). The on-box SQLite
+ * store answers ONLY under the deliberate local opt-in, the same decision
+ * every other hosted surface takes.
+ */
+function hookEventsAreLocal(env: Record<string, string | undefined> = process.env): boolean {
+  return !hasHooksEnvAuthorityIntent(env) && isHooksLocalOptIn(env);
+}
+
+/** Where the rows a log tool returned came from — part of every log response. */
+function hookEventSourceName(): "local-opt-in" | "hosted-registry" {
+  return hookEventsAreLocal() ? "local-opt-in" : "hosted-registry";
+}
+
+/** Read hook events from wherever this environment's transport says they live. */
+async function readHookEventRows(query: HookEventQuery): Promise<any[]> {
+  const limit = boundedRowLimit(query.limit, 50);
+  if (hookEventsAreLocal()) {
+    const { getDb } = await import("../db/index.js");
+    const db = getDb();
+    const { sql, params } = buildEventFilter(query);
+    return db
+      .query(`SELECT * FROM hook_events ${sql} ORDER BY timestamp DESC LIMIT ?`)
+      .all(...(params as any[]), limit) as any[];
+  }
+  const { listHookEvents } = await import("../lib/event-sink.js");
+  return (await listHookEvents({ ...query, limit })) as any[];
+}
 
 /**
  * Verified-bytes hook execution — the MCP run tools use the same trust path
@@ -105,10 +141,13 @@ async function runVerifiedHook(
   } catch (err) {
     // Record the timeout as an event row too.
     try {
-      const { recordHookRun, resolveEventType } = await import("../lib/db-writer.js");
+      // Hosted by default: the event goes to /api/v1/events, and only the
+      // deliberate HASNA_HOOKS_LOCAL opt-in routes it to the on-box store.
+      const { recordHookRunRouted } = await import("../lib/event-sink.js");
+      const { resolveEventType } = await import("../lib/event-types.js");
       let inputJson: Record<string, any> = {};
       try { inputJson = JSON.parse(stdin); } catch {}
-      recordHookRun({
+      await recordHookRunRouted({
         hookName: name,
         eventType: resolveEventType(inputJson.hook_event_name, resolved.events[0] ?? "PostToolUse"),
         version: resolved.version,
@@ -130,13 +169,14 @@ async function runVerifiedHook(
 
   const durationMs = Date.now() - started;
   try {
-    const { recordHookRun, resolveEventType } = await import("../lib/db-writer.js");
+    const { recordHookRunRouted } = await import("../lib/event-sink.js");
+    const { resolveEventType } = await import("../lib/event-types.js");
     let inputJson: Record<string, any> = {};
     try { inputJson = JSON.parse(stdin); } catch {}
     let outputJson: Record<string, any> = {};
     try { outputJson = JSON.parse(ran.stdout); } catch {}
     const blocked = outputJson.decision === "block" || outputJson.continue === false;
-    recordHookRun({
+    await recordHookRunRouted({
       hookName: name,
       eventType: resolveEventType(inputJson.hook_event_name, resolved.events[0] ?? "PostToolUse"),
       version: resolved.version,
@@ -942,31 +982,13 @@ export function createHooksServer(): McpServer {
       compact: z.boolean().default(true).describe("Return compact event summaries by default. Set false for full rows."),
     },
     async ({ hook_name, session_id, limit, since, compact }) => {
-      const { getDb } = await import("../db/index.js");
-      const db = getDb();
       const maxRows = boundedLimit(limit, compact ? 20 : 50, compact ? 100 : 500);
-
-      function parseDuration(s: string): string | null {
-        const m = s.match(/^(\d+)(s|m|h|d)$/);
-        if (!m) return null;
-        const n = parseInt(m[1]);
-        const ms = { s: 1000, m: 60000, h: 3600000, d: 86400000 }[m[2] as "s"|"m"|"h"|"d"]!;
-        return new Date(Date.now() - n * ms).toISOString();
-      }
-
-      let sql = "SELECT * FROM hook_events WHERE 1=1";
-      const params: (string | number)[] = [];
-
-      if (hook_name) { sql += " AND hook_name = ?"; params.push(hook_name); }
-      if (session_id) { sql += " AND session_id LIKE ?"; params.push(`${session_id}%`); }
-      if (since) {
-        const ts = since.match(/^\d{4}/) ? since : parseDuration(since);
-        if (ts) { sql += " AND timestamp >= ?"; params.push(ts); }
-      }
-      sql += " ORDER BY timestamp DESC LIMIT ?";
-      params.push(maxRows);
-
-      const rows = db.query(sql).all(...params) as any[];
+      const rows = await readHookEventRows({
+        hook: hook_name,
+        session: session_id,
+        since: normalizeSince(since) ?? undefined,
+        limit: maxRows,
+      });
       const projected = projectLogRows(rows);
       return {
         content: [{
@@ -975,6 +997,7 @@ export function createHooksServer(): McpServer {
             events: compact ? projected.map(compactEvent) : projected,
             count: projected.length,
             compact,
+            source: hookEventSourceName(),
             hint: compact ? "Use compact:false for full tool_input/output fields." : undefined,
           }),
         }],
@@ -990,10 +1013,8 @@ export function createHooksServer(): McpServer {
       compact: z.boolean().default(true).describe("Return compact event summaries by default. Set false for full rows."),
     },
     async ({ n, compact }) => {
-      const { getDb } = await import("../db/index.js");
-      const db = getDb();
       const maxRows = boundedLimit(n, 20, compact ? 100 : 500);
-      const rows = db.query("SELECT * FROM hook_events ORDER BY timestamp DESC LIMIT ?").all(maxRows) as any[];
+      const rows = await readHookEventRows({ limit: maxRows });
       const projected = projectLogRows(rows);
       return {
         content: [{
@@ -1002,6 +1023,7 @@ export function createHooksServer(): McpServer {
             events: compact ? projected.map(compactEvent) : projected,
             count: projected.length,
             compact,
+            source: hookEventSourceName(),
             hint: compact ? "Use compact:false for full tool_input/output fields." : undefined,
           }),
         }],
@@ -1018,22 +1040,11 @@ export function createHooksServer(): McpServer {
       compact: z.boolean().default(true).describe("Return compact event summaries by default. Set false for full rows."),
     },
     async ({ since, limit, compact }) => {
-      const { getDb } = await import("../db/index.js");
-      const db = getDb();
       const maxRows = boundedLimit(limit, compact ? 20 : 50, compact ? 100 : 500);
-
-      function parseDuration(s: string): string {
-        const m = s.match(/^(\d+)(s|m|h|d)$/);
-        if (!m) return s;
-        const n = parseInt(m[1]);
-        const ms = { s: 1000, m: 60000, h: 3600000, d: 86400000 }[m[2] as "s"|"m"|"h"|"d"]!;
-        return new Date(Date.now() - n * ms).toISOString();
-      }
-
-      const ts = since.match(/^\d{4}/) ? since : parseDuration(since);
-      const rows = db.query(
-        "SELECT * FROM hook_events WHERE error IS NOT NULL AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?"
-      ).all(ts, maxRows) as any[];
+      // An unparseable `since` keeps the documented 24h window rather than
+      // silently widening the query to all time.
+      const ts = normalizeSince(since) ?? normalizeSince("24h")!;
+      const rows = await readHookEventRows({ errorsOnly: true, since: ts, limit: maxRows });
       const projected = projectLogRows(rows);
       return {
         content: [{
@@ -1042,6 +1053,7 @@ export function createHooksServer(): McpServer {
             events: compact ? projected.map(compactEvent) : projected,
             count: projected.length,
             compact,
+            source: hookEventSourceName(),
             hint: compact ? "Use compact:false for full tool_input/output fields." : undefined,
           }),
         }],
@@ -1056,19 +1068,21 @@ export function createHooksServer(): McpServer {
       since: z.string().default("24h").describe("Duration string (e.g. '1h', '24h', '7d') or ISO timestamp"),
     },
     async ({ since }) => {
-      const { getDb } = await import("../db/index.js");
-      const db = getDb();
+      const ts = normalizeSince(since) ?? normalizeSince("24h")!;
 
-      function parseDuration(s: string): string {
-        const m = s.match(/^(\d+)(s|m|h|d)$/);
-        if (!m) return s;
-        const n = parseInt(m[1]);
-        const ms = { s: 1000, m: 60000, h: 3600000, d: 86400000 }[m[2] as "s"|"m"|"h"|"d"]!;
-        return new Date(Date.now() - n * ms).toISOString();
+      if (!hookEventsAreLocal()) {
+        const { hookEventSummary } = await import("../lib/event-sink.js");
+        const summary = await hookEventSummary(ts);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({ ...summary, since: summary.since ?? ts, source: hookEventSourceName() }),
+          }],
+        };
       }
 
-      const ts = since.match(/^\d{4}/) ? since : parseDuration(since);
-
+      const { getDb } = await import("../db/index.js");
+      const db = getDb();
       const totals = db.query(
         "SELECT hook_name, COUNT(*) as total, SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) as errors FROM hook_events WHERE timestamp >= ? GROUP BY hook_name ORDER BY total DESC"
       ).all(ts) as { hook_name: string; total: number; errors: number }[];
@@ -1090,6 +1104,7 @@ export function createHooksServer(): McpServer {
             since: ts,
             hooks: summary,
             totals: { events: grandTotal, errors: grandErrors, hooks_active: totals.length },
+            source: hookEventSourceName(),
           }),
         }],
       };
@@ -1134,6 +1149,21 @@ export function createHooksServer(): McpServer {
     },
     async (params) => {
       try {
+        if (!hookEventsAreLocal()) {
+          const { postFeedback } = await import("../lib/event-sink.js");
+          const saved = await postFeedback({
+            message: params.message,
+            email: params.email ?? null,
+            category: params.category ?? "general",
+            version: pkg.version,
+          });
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({ ok: true, id: saved.id, source: "hosted-registry", message: "Feedback sent. Thank you!" }),
+            }],
+          };
+        }
         const { getDb } = await import("../db/index.js");
         const db = getDb();
         db.run("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)", [

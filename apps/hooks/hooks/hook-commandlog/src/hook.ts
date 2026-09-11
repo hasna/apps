@@ -3,11 +3,13 @@
 /**
  * Claude Code Hook: commandlog
  *
- * PostToolUse hook that logs every Bash command to SQLite (~/.hooks/hooks.db).
+ * PostToolUse hook that records every Bash command as a hook event.
+ * The event goes to the registry (POST /api/v1/events); the on-box SQLite
+ * store is used only under the deliberate HOOKS_LOCAL=1 opt-in.
  */
 
 import { readFileSync } from "fs";
-import { writeHookEvent } from "../../../src/lib/db-writer";
+import { writeHookEventRouted } from "../../../src/lib/event-sink";
 
 interface HookInput {
   session_id: string;
@@ -34,7 +36,7 @@ function respond(output: HookOutput): void {
   console.log(JSON.stringify(output));
 }
 
-export function run(): void {
+export async function run(): Promise<void> {
   const input = readStdinJson();
 
   if (!input) {
@@ -51,7 +53,7 @@ export function run(): void {
   const command = (input.tool_input.command as string) || "(unknown command)";
   const exitCode = input.tool_input.exit_code;
 
-  writeHookEvent({
+  await writeHookEventRouted({
     session_id: input.session_id,
     hook_name: "commandlog",
     event_type: "PostToolUse",
@@ -65,5 +67,5 @@ export function run(): void {
 }
 
 if (import.meta.main) {
-  run();
+  await run();
 }
