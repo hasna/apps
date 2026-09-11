@@ -47,6 +47,79 @@ switcher --help
 switcher doctor
 ```
 
+## ChatGPT desktop with a provider
+
+From 0.1.9, use the installed macOS ChatGPT app with a selected provider and model:
+
+```sh
+switcher launch chatgpt --provider deepseek --model deepseek-flash
+switcher launch chatgpt --provider openrouter --model anthropic/claude-sonnet-4.6
+switcher launch chatgpt --provider my-provider --model my-model
+switcher launch chatgpt --provider deepseek --model deepseek-flash --dry-run
+switcher launch chatgpt --provider deepseek --model deepseek-flash --reasoning max \
+  --dangerously-bypass-approvals-and-sandbox
+```
+
+This runs **local Codex conversations inside the unified ChatGPT app** through
+Switcher's provider gateway. ChatGPT cloud Chat/Work, Preview Edit and other
+account-only features use their own service and are outside this routing path.
+The classic ChatGPT app (`com.openai.chat`) cannot use this launcher. The current
+unified ChatGPT app and its former Codex name (`com.openai.codex`) are supported;
+the bundled Codex runtime must meet the Codex CLI minimum above.
+
+Providers must support the Responses protocol and the selected model's tool
+calling. DeepSeek, OpenRouter, OpenAI and other Responses-compatible presets
+use the same provider/model catalog and credential bindings as terminal Codex.
+Use `switcher models PROVIDER` to find exact model IDs. Custom providers can be
+registered with `switcher providers add NAME --url URL --protocol openai-responses`.
+There is no automatic conversion from Chat Completions or Anthropic Messages.
+
+`--reasoning EFFORT` sets the initial effort (also supported for direct terminal
+Codex launches). DeepSeek's picker exposes none, low, high and max; its Responses
+API maps minimal to low and medium/xhigh to high. Other models can declare an
+exact `reasoningEfforts` array through `models add/update --file FILE`. An explicit
+effort also enables that choice for models whose catalog omits effort metadata;
+the provider must support it. The app can change effort per conversation, and
+routing events record the value actually sent upstream.
+
+`--dangerously-bypass-approvals-and-sandbox` explicitly selects full access:
+commands can edit files and use the network without approval prompts or a
+sandbox. Without that flag, desktop launches start with workspace-write and
+on-request approvals. These are startup defaults; the app's own permission
+controls and managed requirements still apply. Start a new conversation after
+changing launch defaults; existing conversations can retain their own settings.
+
+Switcher starts a separate app instance with persistent provider/model state
+under `~/.hasna/switcher/state/desktop/PROFILE`. Your regular ChatGPT app and its
+signed-in state are preserved. Each profile retains its own local conversations
+and preferences across launches; it does not copy the regular app's login or
+conversation history. A second launch of the same active profile is refused.
+Keep the launching terminal running until you quit that instance: Switcher owns
+its inference gateway and stops its own app process on interruption or timeout.
+
+Upstream API keys remain in the Switcher gateway. Only a temporary loopback
+credential reaches the child; its private auth file is removed after exit.
+Switcher refuses to overwrite authentication added manually to a provider
+profile. It does not modify or re-sign the installed app. Select a nonstandard
+installation with `--app-path /absolute/path/ChatGPT.app`; native CLI arguments,
+`--executable` and `--backend` are not accepted for desktop launches.
+
+`--dry-run` validates app detection and provider/model discovery without opening
+the app. The SDK offers local installation discovery through `detectChatGPTApp()`;
+provider/profile/catalog operations continue to use the existing HTTP API.
+
+The opt-in `test:native-chatgpt-runtime` script exercises the installed app's
+bundled runtime against a real provider using a fresh isolated profile. Set
+`SWITCHER_NATIVE_CHATGPT_PROVIDER` and `SWITCHER_NATIVE_CHATGPT_MODEL` to run it.
+It verifies selected-model configuration, a completed response and a successful
+gateway routing event. It is separate from visual desktop acceptance.
+
+References: [OpenAI custom provider configuration](https://learn.chatgpt.com/docs/config-file/config-advanced),
+[community desktop custom-model profiles](https://github.com/ademisler/codex-desktop-custom-models),
+[reported signed-in provider routing issue](https://github.com/openai/codex/issues/37245),
+and [Preview Edit routing limitation](https://github.com/openai/codex/issues/37315),
+and [DeepSeek thinking controls](https://api-docs.deepseek.com/guides/thinking_mode/).
+
 ## Direct launch
 
 The direct launch flow is available from 0.1.1. The additional OMP, DeepSeek Harness, Cline, Hermes, Prime Agent, legacy OpenCode, Kilo, Gemini CLI and Aider adapters are introduced in 0.1.2. Version 0.1.0 requires explicit API/provider/profile setup.

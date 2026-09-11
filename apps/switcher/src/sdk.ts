@@ -3,6 +3,8 @@ import { endpoint, modelSchema, parse } from "./domain";
 import { boundedJson } from "./http";
 import { createClientTransport, type CredentialChainOptions, type HasnaHttpTransport } from "@hasna/contracts/client";
 export { providerFromPreset } from "./presets";
+export { detectChatGPTApp } from "./desktop-apps";
+export type { ChatGPTInstallation } from "./desktop-apps";
 export type ProviderPreset = components["schemas"]["ProviderPreset"];
 export type ProviderInput = components["schemas"]["ProviderInput"];
 export type Provider = components["schemas"]["Provider"];
