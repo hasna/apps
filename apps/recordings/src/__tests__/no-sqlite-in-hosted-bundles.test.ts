@@ -39,6 +39,11 @@ async function bundle(
       entrypoints: [join(repoRoot, entry)],
       target: "bun",
       root: join(repoRoot, "src"),
+      // Bare specifiers stay external: the property under test is OUR module
+      // graph (does any relative import reach bun:sqlite?), and resolving
+      // workspace packages through apps/contracts/dist trips the in-process
+      // Bun.build API in CI ("Unexpected reading file: …/contracts/dist/…").
+      packages: "external",
       splitting: options.splitting,
       naming: { chunk: "chunks/[name]-[hash].[ext]" },
       external: [...SHARED_EXTERNALS, ...options.external],
