@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { ResolvedCredential } from "@hasna/contracts/client";
 import { Command } from "commander";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,7 +10,7 @@ import type { TenantAuthContext } from "../lib/auth/tenant-auth.js";
 import { BundleArtifactStorage, memoryObjectStore } from "../lib/bundle/artifact-storage.js";
 import { MODE_DATA, MODE_SCRIPT, validateBundleManifest } from "../lib/bundle/manifest.js";
 import { readBundleMarker } from "../lib/bundle/local.js";
-import { createBundleApiClient } from "./bundle-client.js";
+import { createBundleApiClient, EX_CONFIG } from "./bundle-client.js";
 import { registerBundleCommands } from "./bundle.js";
 
 const cleanups: Array<() => void> = [];
@@ -354,6 +355,103 @@ describe("credential and verb-collision handling", () => {
     } catch (error) {
       expect((error as { exitCode: number }).exitCode).toBe(78);
     }
+  });
+
+  test("a Secrets pointer completes per request and authority drift refuses before dispatch", async () => {
+    const env: NodeJS.ProcessEnv = {
+      HOME: tempDir("loops-bundle-pointer-home-"),
+      HASNA_LOOPS_API_URL: "https://loops.example.test",
+      HASNA_LOOPS_API_KEY_REF: "fleet/loops/live/api_key",
+    };
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+    const completePointer = async (_name: string, pointer: ResolvedCredential): Promise<ResolvedCredential> => ({
+      ...pointer,
+      apiKey: "completed-pointer-key",
+      tier: "pointer",
+      source: "HASNA_LOOPS_API_KEY_REF -> vault item fleet/loops/live/api_key",
+      deliberate: true,
+      diskCandidates: pointer.diskCandidates,
+      warning: null,
+    });
+    const client = createBundleApiClient(
+      env,
+      (async (input: string | URL | Request, init?: RequestInit) => {
+        const request = new Request(input, init);
+        requests.push({ url: request.url, authorization: request.headers.get("authorization") });
+        return new Response(JSON.stringify({ ok: true, bundles: [] }), { status: 200 });
+      }) as unknown as typeof fetch,
+      { completePointer },
+    );
+
+    await client.listBundles();
+    expect(requests).toEqual([{
+      url: "https://loops.example.test/v1/bundles",
+      authorization: "Bearer completed-pointer-key",
+    }]);
+
+    env.HASNA_LOOPS_API_URL = "https://other.example.test";
+    await expect(client.listBundles()).rejects.toMatchObject({ code: "AUTHORITY_CHANGED", exitCode: EX_CONFIG });
+    expect(requests).toHaveLength(1);
+
+    const racingEnv: NodeJS.ProcessEnv = {
+      HOME: tempDir("loops-bundle-pointer-race-home-"),
+      HASNA_LOOPS_API_URL: "https://loops.example.test",
+      HASNA_LOOPS_API_KEY_REF: "fleet/loops/live/api_key",
+    };
+    let dispatched = false;
+    const racingClient = createBundleApiClient(
+      racingEnv,
+      (async () => {
+        dispatched = true;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }) as unknown as typeof fetch,
+      {
+        completePointer: async (_name, pointer) => {
+          racingEnv.HASNA_LOOPS_API_URL = "https://other.example.test";
+          return {
+            ...pointer,
+            apiKey: "completed-racing-key",
+            tier: "pointer",
+            source: "HASNA_LOOPS_API_KEY_REF -> vault item fleet/loops/live/api_key",
+            deliberate: true,
+            diskCandidates: pointer.diskCandidates,
+            warning: null,
+          };
+        },
+      },
+    );
+    await expect(racingClient.listBundles()).rejects.toMatchObject({ code: "AUTHORITY_CHANGED", exitCode: EX_CONFIG });
+    expect(dispatched).toBe(false);
+
+    const pointerDriftEnv: NodeJS.ProcessEnv = {
+      HOME: tempDir("loops-bundle-pointer-identity-race-home-"),
+      HASNA_LOOPS_API_URL: "https://loops.example.test",
+      HASNA_LOOPS_API_KEY_REF: "fleet/loops/live/api_key",
+    };
+    let pointerDriftDispatched = false;
+    const pointerDriftClient = createBundleApiClient(
+      pointerDriftEnv,
+      (async () => {
+        pointerDriftDispatched = true;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }) as unknown as typeof fetch,
+      {
+        completePointer: async (_name, pointer) => {
+          pointerDriftEnv.HASNA_LOOPS_API_KEY_REF = "other/loops/live/api_key";
+          return {
+            ...pointer,
+            apiKey: "completed-pointer-drift-key",
+            tier: "pointer",
+            source: "HASNA_LOOPS_API_KEY_REF -> vault item fleet/loops/live/api_key",
+            deliberate: true,
+            diskCandidates: pointer.diskCandidates,
+            warning: null,
+          };
+        },
+      },
+    );
+    await expect(pointerDriftClient.listBundles()).rejects.toMatchObject({ code: "AUTHORITY_CHANGED", exitCode: EX_CONFIG });
+    expect(pointerDriftDispatched).toBe(false);
   });
 
   test("push refuses an argument that cannot be a bundle name, rather than treating it as a loop", async () => {

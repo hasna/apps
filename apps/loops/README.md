@@ -33,7 +33,7 @@ exact-app override is set) or PostgreSQL
 (explicitly configured on `loops-serve` via `HASNA_LOOPS_DATABASE_URL`).
 Clients connect either to the local file (`connection=file`) or to a
 control-plane HTTP API (`connection=api`). The hosted connection is selected
-by the SHARED credential resolver (`@hasna/contracts` 1.0.2): the macOS
+by the SHARED credential resolver (`@hasna/contracts` 1.1.0): the macOS
 Keychain items `hasna.credentials.loops.api-key` / `.api-url` (account
 `HASNA_STATION`, else the short hostname, else `USER`), the credential file
 `~/.hasna/loops/config/credentials` (0600; `HASNA_HOME` / `HASNA_CONFIG_HOME`
@@ -44,9 +44,8 @@ connection is a default: an invocation with no credential and no explicit
 selection FAILS CLOSED with a non-zero exit and an error naming what is
 missing — the client never silently serves the local SQLite file when no
 credential resolves. The file connection is an EXPLICIT opt-in only
-(`HASNA_LOOPS_CONNECTION=file`), and it announces itself on stderr; a
-configured environment outranks the opt-in. The retired `HASNA_LOOPS_CONNECTION=api`
-value and the former `HASNA_LOOPS_STORAGE_MODE` variable are not read at all.
+(`HASNA_LOOPS_LOCAL=1`, alias `LOOPS_LOCAL=1`), answered from the environment before any Keychain or disk read, and it announces itself once on stderr as "loops: LOCAL mode"; a
+configured environment outranks the opt-in. No connection-mode selector is read; the client chooses hosted authority through credentials or the explicit local boolean only.
 
 The public `@hasna/loops` package owns the local runtime, the Postgres storage
 adapter, the control-plane API contract, tenant authentication and
@@ -72,11 +71,20 @@ explicitly configured. Route admission remains bounded by `max_dispatch`,
 | --- | --- |
 | `HASNA_LOOPS_API_KEY` | Hosted credential tier (also stored in the macOS Keychain item `hasna.credentials.loops.api-key` or the file `~/.hasna/loops/config/credentials`, 0600; `HASNA_HOME` / `HASNA_CONFIG_HOME` relocate the file, XDG is never consulted) |
 | `HASNA_LOOPS_API_URL` | Optional explicit hosted authority (Keychain item `hasna.credentials.loops.api-url` / the credentials file override it in the same ladder); defaults to the fleet gateway `https://api.hasna.com/loops` once a credential resolves |
-| `HASNA_LOOPS_CONNECTION=file` | Explicit opt-in for the local SQLite file store (only accepted value; announces "local mode" on stderr) |
+| `HASNA_LOOPS_LOCAL=1` (alias `LOOPS_LOCAL=1`; the value must be exactly `1`) | Explicit opt-in for this machine's on-box SQLite store, honoured only when no Loops authority is configured (announces "loops: LOCAL mode" once on stderr) |
 | `HASNA_LOOPS_DATABASE_URL` | Server-side only (`loops-serve`): selects the PostgreSQL backend; never read by clients |
 
 The resolver is re-read per call by the CLI, the MCP server, the SDK and the
 runner, so a key rotation heals a long-lived process without a restart.
+
+Every on-box SQLite open reached through the `loops`, `loops-mcp` and `loops-daemon` bins passes
+one process-wide choke point: outside the explicit opt-in — a hosted credential or
+nothing configured — a local-only command
+(`export`, `import`, `tick`, `gc`, `daemon *`, `hygiene *`, …) refuses with
+`REMOTE_COMMAND_UNSUPPORTED` (or the fail-closed line naming the tiers) and
+creates nothing. `loops-daemon` is the on-box scheduler and starts only under
+`HASNA_LOOPS_LOCAL=1`; under a hosted credential it points at `loops-runner`.
+`loops daemon install --local` and `loops-daemon install --local` are explicit bootstrap commands: they open no store and write `HASNA_LOOPS_LOCAL=1` into the generated unit. Omitting `--local` refuses and writes nothing.
 
 Useful status and setup commands:
 
@@ -190,7 +198,7 @@ loops-mcp --stdio    # stdio transport
 connection once — through the same `@hasna/contracts` chain every tool uses
 per call (`HASNA_LOOPS_API_KEY`, the macOS Keychain item
 `hasna.credentials.loops.api-key`, `~/.hasna/loops/config/credentials`, or
-the explicit `HASNA_LOOPS_CONNECTION=file` opt-in) — BEFORE the stdio
+the explicit `HASNA_LOOPS_LOCAL=1` opt-in) — BEFORE the stdio
 transport is connected or the HTTP port is bound. With no connection
 configured it exits non-zero with a one-line refusal naming where the
 credential should live, never answers `initialize`, and creates nothing under
@@ -1331,11 +1339,11 @@ loops daemon run
 Install startup integration:
 
 ```bash
-loops daemon install
-loops daemon install --enable
+loops daemon install --local
+loops daemon install --local --enable
 ```
 
-On Linux this writes a user systemd service. On macOS it writes a LaunchAgent plist. The command prints the exact enable/load commands to run. `--enable` runs the user-service enable/start command when supported.
+On Linux this writes a user systemd service. On macOS it writes a LaunchAgent plist. The required `--local` confirmation writes the explicit local opt-in into the unit. The command prints the exact enable/load commands to run; `--enable` runs the user-service enable/start command when supported.
 
 ## Scheduling Contract
 

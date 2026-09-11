@@ -3,12 +3,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
+import { scrubLoopsClientEnv } from "../test-helpers.js";
 import type { Loop } from "../types.js";
 import { Store } from "../lib/store.js";
 import { sanitizeCliErrorContext } from "./safe-error-context.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
-const FLIP_MESSAGE = "not available while flipped to the hosted Loops API";
+const FLIP_MESSAGE = "REMOTE_COMMAND_UNSUPPORTED";
 
 interface CliResult {
   status: number;
@@ -22,18 +23,18 @@ async function runCli(
   env: Record<string, string> = {},
 ): Promise<CliResult> {
   const merged = {
-    ...process.env,
+    ...scrubLoopsClientEnv(),
     HOME: dataDir,
     HASNA_LOOPS_API_URL: "",
     HASNA_LOOPS_API_KEY: "",
-    HASNA_LOOPS_CONNECTION: "",
+    HASNA_LOOPS_LOCAL: "", LOOPS_LOCAL: "",
     LOOPS_DATA_DIR: dataDir,
     ...env,
   };
-  if (!merged.HASNA_LOOPS_CONNECTION?.trim() && !merged.HASNA_LOOPS_API_URL?.trim() && !merged.HASNA_LOOPS_API_KEY?.trim()) {
+  if (!merged.HASNA_LOOPS_LOCAL?.trim() && !merged.HASNA_LOOPS_API_URL?.trim() && !merged.HASNA_LOOPS_API_KEY?.trim()) {
     // No API env: this spawn runs against the local file store, which requires
     // the explicit opt-in (fail-closed policy).
-    merged.HASNA_LOOPS_CONNECTION = "file";
+    merged.HASNA_LOOPS_LOCAL = "1";
   }
   const child = Bun.spawn([process.execPath, cliPath, ...args], {
     env: merged,
@@ -151,7 +152,7 @@ describe("CLI P1 safety regressions", () => {
       // line itself is byte-identical to the JSON message.
       const err = result.stderr
         .split("\n")
-        .filter((line) => !line.includes("loops: local mode"))
+        .filter((line) => !line.includes("loops: LOCAL mode"))
         .join("\n");
       expect(err.trim()).toBe(`error: ${value.error.message}`);
       expect(result.stdout).not.toContain(syntheticSecret);
@@ -380,7 +381,7 @@ describe("CLI P1 safety regressions", () => {
     }
   });
 
-  test("hosted daemon stop, install, and logs fail before local side effects", async () => {
+  test("hosted daemon stop and logs fail before local side effects", async () => {
     const root = mkdtempSync(join(tmpdir(), "loops-cli-hosted-daemon-guard-"));
     const dataDir = join(root, "data");
     const home = join(root, "home");
@@ -411,10 +412,9 @@ describe("CLI P1 safety regressions", () => {
 
     try {
       const stop = await runCli(dataDir, ["daemon", "stop"], env);
-      const install = await runCli(dataDir, ["daemon", "install", "--enable"], env);
       const logs = await runCli(dataDir, ["daemon", "logs"], env);
 
-      for (const result of [stop, install, logs]) {
+      for (const result of [stop, logs]) {
         expect(result.status).toBe(1);
         expect(result.stderr).toContain(FLIP_MESSAGE);
         expect(result.stdout).not.toContain("test-hosted-key");

@@ -1,0 +1,12 @@
+---
+"@hasna/loops": minor
+---
+
+Fail-closed on-box store: `HASNA_LOOPS_LOCAL=1` is the only client opt-in for SQLite, and no managed client entrypoint opens the local store outside it (owner ruling 2026-09-07, hasna/apps#1720; supersedes #1905).
+
+- The on-box SQLite store is reachable ONLY through the exact boolean opt-in `HASNA_LOOPS_LOCAL=1` (alias `LOOPS_LOCAL=1`; the value must be exactly `1`), answered from the environment before any Keychain or disk read and honoured only when the environment configures no loops authority; a configured environment outranks the flag. Local mode prints one stderr line, `loops: LOCAL mode — …`, naming the credential tiers it did not find.
+- A process-wide choke point in the local `Store` constructor (`refuseLocalStore()`) is armed by the `loops` CLI, `loops-mcp` and `loops-daemon` whenever the process is not on the explicit local route. Every formerly ungated `new Store()` — `loops export`, `loops import`, `loops migrate|push|pull` (row backfill), the `loops-daemon` bin — and every guarded local-only command now fails closed: with nothing configured the resolver's own one-line refusal names `HASNA_LOOPS_API_KEY`, the Keychain item `hasna.credentials.loops.api-key`, `~/.hasna/loops/config/credentials` and the opt-in; under a hosted credential the refusal is `REMOTE_COMMAND_UNSUPPORTED` naming the opt-in. Nothing is created under the app home in either case.
+- `loops gc` checkpoints the WAL through the store (`Store.walCheckpoint()`); the CLI no longer imports `bun:sqlite` itself.
+- `loops-daemon` (the on-box scheduler) gains a startup gate: it starts only under `HASNA_LOOPS_LOCAL=1`; with a hosted credential resolvable it exits 1 with `REMOTE_COMMAND_UNSUPPORTED` pointing at `loops-runner`; with nothing configured it exits 1 with the fail-closed line. `--help`/`--version` answer ahead of the gate. On 0.7.0/0.8.0 every daemon subcommand opened (and created) `~/.hasna/loops/loops.db` with no credential check.
+- `loops daemon install --local` and `loops-daemon install --local` bootstrap without a pre-exported opt-in, open no store, and write `HASNA_LOOPS_LOCAL=1` into the generated unit. Omitting `--local` refuses and writes nothing.
+- The installed client now carries `@hasna/contracts` 1.1.0 and `@hasna/secrets` 0.4.2 so credential-file and vault references use the current fail-closed, fresh-resolution contract across data, MCP, bundle, and runner requests.

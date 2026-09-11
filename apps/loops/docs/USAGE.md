@@ -25,7 +25,7 @@ credential through the shared `@hasna/contracts` resolver (macOS Keychain
 `hasna.credentials.loops.api-key`, the file
 `~/.hasna/loops/config/credentials`, or `HASNA_LOOPS_API_KEY`), with the fleet
 gateway defaulting the authority; the local file connection is the explicit
-`HASNA_LOOPS_CONNECTION=file` opt-in only, and an unconfigured invocation
+`HASNA_LOOPS_LOCAL=1` opt-in only, and an unconfigured invocation
 fails closed with a non-zero exit.
 
 `loops status` reports the storage backend and the client connection
@@ -1253,11 +1253,11 @@ loops daemon run
 Install startup integration:
 
 ```bash
-loops daemon install
-loops daemon install --enable
+loops daemon install --local
+loops daemon install --local --enable
 ```
 
-On Linux this writes a user systemd service. On macOS it writes a LaunchAgent plist. The command prints the exact enable/load commands to run. `--enable` runs the user-service enable/start command when supported.
+On Linux this writes a user systemd service. On macOS it writes a LaunchAgent plist. The required `--local` confirmation writes `HASNA_LOOPS_LOCAL=1` into the generated unit. The command prints the exact enable/load commands to run; `--enable` runs the user-service enable/start command when supported.
 
 ## Scheduling Contract
 

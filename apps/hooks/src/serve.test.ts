@@ -138,11 +138,15 @@ describe("serve bind resolution (O15-00733)", () => {
     });
   });
 
-  test("startServeServer binds the PORT env port", () => {
-    withEnv("PORT", "48080", () => {
+  test("startServeServer binds through the PORT env without reserving a shared fixed test port", () => {
+    // PORT=0 delegates allocation to the kernel. A fixed port made unrelated
+    // affected shards fail whenever another process happened to own it.
+    withEnv("PORT", "0", () => {
+      expect(resolveServeOptions({}).port).toBe(0);
       const server = startServeServer({});
       try {
-        expect(server.port).toBe(48080);
+        expect(server.port).toBeGreaterThan(0);
+        expect(server.port).not.toBe(DEFAULT_SERVE_PORT);
       } finally {
         server.stop(true);
       }

@@ -8,7 +8,7 @@
  * transport in it would mean base64 in a JSON envelope - doubling the bytes on
  * the wire for the one payload with a hard 2 MiB cap.
  *
- * Credentials and the authority come from the shared `@hasna/contracts` 1.0.2
+ * Credentials and the authority come from the shared `@hasna/contracts` 1.1.0
  * resolver, exactly like every other loops surface: the macOS Keychain
  * (`hasna.credentials.loops.api-key` / `.api-url`), the credential file
  * `~/.hasna/loops/config/credentials`, `HASNA_LOOPS_API_KEY` /
@@ -16,8 +16,9 @@
  * `https://api.hasna.com/loops` once a credential has resolved. No app-owned
  * environment switch is introduced.
  */
-import { clientTransportEnvKeys, resolveClientTransport, resolveCredential } from "@hasna/contracts/client";
+import { completePointerCredential, clientTransportEnvKeys, resolveClientTransport, resolveCredential, type ResolvedCredential } from "@hasna/contracts/client";
 import type { OwnedBytes } from "../lib/bundle/pack.js";
+import { loopsResolverInputs } from "../lib/cloud/resolve.js";
 import { ownBytes } from "../lib/bundle/pack.js";
 
 /** Exit code for "credentials or configuration are missing" (EX_CONFIG). */
@@ -55,6 +56,26 @@ export function exitCodeForStatus(status: number, errorCode?: string): number {
   return 1;
 }
 
+
+export interface BundleApiClientOptions {
+  /** Test seam for a Secrets pointer; production uses Contracts' installed-SDK resolver. */
+  completePointer?: (name: string, pointer: ResolvedCredential, env: NodeJS.ProcessEnv) => Promise<ResolvedCredential>;
+}
+
+interface BundleBindingSnapshot {
+  baseUrl: string;
+  credential: ResolvedCredential;
+  env: NodeJS.ProcessEnv;
+}
+
+function sameBundleBinding(left: BundleBindingSnapshot, right: BundleBindingSnapshot): boolean {
+  return left.baseUrl === right.baseUrl &&
+    left.credential.apiKey === right.credential.apiKey &&
+    left.credential.pointerVaultKey === right.credential.pointerVaultKey &&
+    left.credential.source === right.credential.source &&
+    left.credential.tier === right.credential.tier;
+}
+
 export interface BundleApiClient {
   readonly baseUrl: string;
   listVersions(loopId: string, limit?: number): Promise<Record<string, unknown>>;
@@ -76,13 +97,22 @@ export interface BundleApiClient {
  * `pull`, `versions` or `pin`, so missing credentials are EX_CONFIG (78) rather
  * than a silent fall back to something that would appear to work.
  */
-export function createBundleApiClient(env: NodeJS.ProcessEnv = process.env, fetchImpl: typeof fetch = fetch): BundleApiClient {
-  let baseUrl: string;
+export function createBundleApiClient(
+  env: NodeJS.ProcessEnv = process.env,
+  fetchImpl: typeof fetch = fetch,
+  options: BundleApiClientOptions = {},
+): BundleApiClient {
+  const snapshotBinding = (): BundleBindingSnapshot => {
+    const inputs = loopsResolverInputs(env);
+    const baseUrl = resolveClientTransport("loops", inputs.env, { credentials: inputs.credentials }).baseUrl;
+    const credential = resolveCredential("loops", inputs.env, inputs.credentials);
+    if (!credential) throw new Error("no Loops credential resolved");
+    return { baseUrl, credential, env: inputs.env };
+  };
+
+  let initial: BundleBindingSnapshot;
   try {
-    // The shared resolver decides the authority: env, Keychain api-url item,
-    // credential file, then the fleet gateway. It throws when no credential
-    // resolves at all — the refusal below.
-    baseUrl = resolveClientTransport("loops", env).baseUrl;
+    initial = snapshotBinding();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new BundleCliError(
@@ -91,32 +121,54 @@ export function createBundleApiClient(env: NodeJS.ProcessEnv = process.env, fetc
       EX_CONFIG,
     );
   }
-  let apiKey: string | undefined;
-  try {
-    // The resolver returns null when no tier holds a credential; a throw means
-    // a tier held an unusable one. Both are the same refusal to the operator.
-    apiKey = resolveCredential("loops", env)?.apiKey;
-  } catch (error) {
-    throw new BundleCliError("CREDENTIALS_MISSING", error instanceof Error ? error.message : String(error), EX_CONFIG);
-  }
-  if (!apiKey) {
-    const keys = clientTransportEnvKeys("loops");
-    throw new BundleCliError(
-      "CREDENTIALS_MISSING",
-      `bundle commands require ${keys.apiKeyKeys[0]} (or the macOS Keychain item hasna.credentials.loops.api-key / ~/.hasna/loops/config/credentials)`,
-      EX_CONFIG,
-    );
-  }
-  const key = apiKey;
+  const baseUrl = initial.baseUrl;
 
-  const authorized = (extra: Record<string, string> = {}): Record<string, string> => ({
+  async function requestAuthorization(): Promise<{ baseUrl: string; key: string }> {
+    try {
+      const first = snapshotBinding();
+      const reviewed = snapshotBinding();
+      if (!sameBundleBinding(first, reviewed)) {
+        throw new BundleCliError("AUTHORITY_CHANGED", "the Loops authority or credential changed while preparing a bundle request", EX_CONFIG);
+      }
+      if (reviewed.baseUrl !== baseUrl) {
+        throw new BundleCliError(
+          "AUTHORITY_CHANGED",
+          "the resolved Loops authority changed after this bundle client was created; create a new client before dispatch",
+          EX_CONFIG,
+        );
+      }
+      const completed = reviewed.credential.tier === "pointer"
+        ? await (options.completePointer ?? completePointerCredential)("loops", reviewed.credential, reviewed.env)
+        : reviewed.credential;
+      if (!completed.apiKey) throw new Error("the selected Loops credential resolved empty");
+      const immediatelyBeforeDispatch = snapshotBinding();
+      if (!sameBundleBinding(reviewed, immediatelyBeforeDispatch) || immediatelyBeforeDispatch.baseUrl !== baseUrl) {
+        throw new BundleCliError(
+          "AUTHORITY_CHANGED",
+          "the Loops authority or credential changed during Secrets completion; no authenticated request was sent",
+          EX_CONFIG,
+        );
+      }
+      return { baseUrl: immediatelyBeforeDispatch.baseUrl, key: completed.apiKey };
+    } catch (error) {
+      if (error instanceof BundleCliError) throw error;
+      throw new BundleCliError(
+        "CREDENTIALS_MISSING",
+        error instanceof Error ? error.message : String(error),
+        EX_CONFIG,
+      );
+    }
+  }
+
+  const authorized = (key: string, extra: Record<string, string> = {}): Record<string, string> => ({
     authorization: `Bearer ${key}`,
     accept: "application/json",
     ...extra,
   });
 
   async function json(path: string, init: RequestInit = {}): Promise<Record<string, unknown>> {
-    const response = await fetchImpl(`${baseUrl}${path}`, { ...init, headers: { ...authorized(), ...(init.headers as Record<string, string> | undefined) } });
+    const auth = await requestAuthorization();
+    const response = await fetchImpl(`${auth.baseUrl}${path}`, { ...init, headers: { ...authorized(auth.key), ...(init.headers as Record<string, string> | undefined) } });
     const text = await response.text();
     let body: Record<string, unknown> = {};
     try {
@@ -142,9 +194,10 @@ export function createBundleApiClient(env: NodeJS.ProcessEnv = process.env, fetc
       return json(`/loops/${encodeURIComponent(loopId)}/versions/${encodeURIComponent(String(version))}`);
     },
     async download(loopId, version) {
+      const auth = await requestAuthorization();
       const response = await fetchImpl(
-        `${baseUrl}/loops/${encodeURIComponent(loopId)}/versions/${encodeURIComponent(String(version))}/bundle`,
-        { headers: authorized({ accept: "application/zstd" }) },
+        `${auth.baseUrl}/loops/${encodeURIComponent(loopId)}/versions/${encodeURIComponent(String(version))}/bundle`,
+        { headers: authorized(auth.key, { accept: "application/zstd" }) },
       );
       if (!response.ok) {
         let code = `http_${response.status}`;

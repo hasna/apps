@@ -65,3 +65,31 @@ export async function expectMarkerNeverWritten(gate: string, marker: string, set
     throw new Error(`expected killed child to never write marker, but ${marker} exists`);
   }
 }
+
+/**
+ * Copy an environment while removing every Loops client authority, credential,
+ * profile, pointer, and local-opt-in selector. Spawn tests add only the exact
+ * authority they intend to exercise, so a developer station cannot affect the
+ * result through inherited state.
+ */
+export function scrubLoopsClientEnv(
+  env: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  const copy: Record<string, string> = {};
+  const removed = new Set([
+    "HASNA_LOOPS_API_URL",
+    "LOOPS_API_URL",
+    "HASNA_LOOPS_API_KEY",
+    "LOOPS_API_KEY",
+    "HASNA_LOOPS_API_KEY_OVERRIDE",
+    "HASNA_LOOPS_API_KEY_REF",
+    "HASNA_PROFILE",
+    "HASNA_LOOPS_LOCAL",
+    "LOOPS_LOCAL",
+  ]);
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined || removed.has(key)) continue;
+    copy[key] = value;
+  }
+  return copy;
+}
