@@ -1,6 +1,25 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createTask } from "../../db/tasks.js";
+import {
+  getTodosCloudClient,
+  cloudCreateTemplate,
+  cloudDeleteTemplate,
+  cloudResolveProjectRef,
+} from "../../cli/cloud-router.js";
+import {
+  initializeSharedTemplates,
+  listSharedTemplates,
+  readSharedTemplateHistory,
+  updateSharedTemplate,
+} from "../../cli/template-api.js";
+import {
+  createRemoteTemplateTasks,
+  exportRemoteTemplate,
+  previewRemoteTemplate,
+  resolveRemoteTemplate,
+} from "../../cli/template-remote.js";
+import { listBuiltinTemplates, writeBuiltinTemplateFiles } from "../../lib/builtin-template-library.js";
 
 type Helpers = {
   shouldRegisterTool: (name: string) => boolean;
@@ -39,6 +58,16 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
       },
       async (params) => {
         try {
+          // http authority routing: POST /v1/templates. Without this arm the MCP
+          // door wrote templates into this machine's local sqlite island while
+          // the CLI `template` verbs were already remote-only (T1 §4 parity break).
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const created = await cloudCreateTemplate(cloud, params as never);
+            const remoteCount = created.tasks?.length ?? 0;
+            const remoteInfo = remoteCount > 0 ? ` | ${remoteCount} task(s)` : "";
+            return { content: [{ type: "text" as const, text: `Template created: ${created.id.slice(0, 8)} | ${created.name} | "${created.title_pattern}"${remoteInfo}` }] };
+          }
           const { createTemplate, getTemplateWithTasks } = await import("../../db/templates.js");
           const t = createTemplate(params);
           const withTasks = getTemplateWithTasks(t.id);
@@ -57,8 +86,10 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
       {},
       async () => {
         try {
-          const { listTemplates } = await import("../../db/templates.js");
-          const templates = listTemplates();
+          const cloud = getTodosCloudClient();
+          const templates = cloud
+            ? await listSharedTemplates(cloud)                       // GET /v1/templates
+            : (await import("../../db/templates.js")).listTemplates();
           if (templates.length === 0) return { content: [{ type: "text" as const, text: "No templates." }] };
           const text = templates.map(t => {
             const vars = t.variables.length > 0 ? ` | vars: ${t.variables.map(v => `${v.name}${v.required ? '*' : ''}${v.default ? `=${v.default}` : ''}`).join(', ')}` : "";
@@ -86,6 +117,26 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
       },
       async (params) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            // GET /v1/templates/:id then POST /v1/tasks (+ dependencies) through
+            // the SAME remote applier the CLI `template --use` verb runs, so the
+            // two doors cannot drift on variables, conditions or includes.
+            const template = await resolveRemoteTemplate(cloud, params.template_id);
+            if (!template) return { content: [{ type: "text" as const, text: `Template not found: ${params.template_id}` }], isError: true };
+            const projectRef = params.project_id ? await cloudResolveProjectRef(cloud, params.project_id) : undefined;
+            const effectiveProject = projectRef ?? template.project_id ?? undefined;
+            const { tasks } = await createRemoteTemplateTasks(
+              cloud,
+              template,
+              effectiveProject,
+              params.variables ?? {},
+              params.assigned_to,
+              { title: params.title, description: params.description, priority: params.priority as never },
+            );
+            const remoteText = tasks.map(t => `${t.id.slice(0, 8)} | ${t.priority} | ${t.title}`).join("\n");
+            return { content: [{ type: "text" as const, text: `${tasks.length} task(s) created from template:\n${remoteText}` }] };
+          }
           const { taskFromTemplate, getTemplateWithTasks, tasksFromTemplate } = await import("../../db/templates.js");
           const resolvedTemplateId = resolveId(params.template_id, "task_templates");
           const resolvedProjectId = params.project_id ? resolveId(params.project_id, "projects") : undefined;
@@ -116,6 +167,12 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
       { id: z.string() },
       async ({ id }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const template = await resolveRemoteTemplate(cloud, id);      // GET /v1/templates/:id
+            const removed = template ? await cloudDeleteTemplate(cloud, template.id) : false; // DELETE /v1/templates/:id
+            return { content: [{ type: "text" as const, text: removed ? "Template deleted." : "Template not found." }] };
+          }
           const { deleteTemplate } = await import("../../db/templates.js");
           const resolvedId = resolveId(id, "task_templates");
           const deleted = deleteTemplate(resolvedId);
@@ -141,6 +198,15 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
       },
       async ({ id, ...updates }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            // PATCH /v1/templates/:id, revision-checked against the row we just
+            // read so a concurrent edit is refused instead of silently clobbered.
+            const prior = await resolveRemoteTemplate(cloud, id);
+            if (!prior) return { content: [{ type: "text" as const, text: `Template not found: ${id}` }], isError: true };
+            const patched = await updateSharedTemplate(cloud, prior.id, { ...updates, expected_version: prior.version } as never);
+            return { content: [{ type: "text" as const, text: `Template updated: ${patched.id.slice(0, 8)} | ${patched.name} | "${patched.title_pattern}" | ${patched.priority}` }] };
+          }
           const { updateTemplate } = await import("../../db/templates.js");
           const resolvedId = resolveId(id, "task_templates");
           const t = updateTemplate(resolvedId, updates);
@@ -158,8 +224,10 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
       {},
       async () => {
         try {
-          const { initBuiltinTemplates } = await import("../../db/builtin-templates.js");
-          const result = initBuiltinTemplates();
+          const cloud = getTodosCloudClient();
+          const result = cloud
+            ? await initializeSharedTemplates(cloud)                  // POST /v1/templates/initialize
+            : (await import("../../db/builtin-templates.js")).initBuiltinTemplates();
           if (result.created === 0) return { content: [{ type: "text" as const, text: `All ${result.skipped} built-in template(s) already exist.` }] };
           return { content: [{ type: "text" as const, text: `Created ${result.created} template(s): ${result.names.join(", ")}. Skipped ${result.skipped} existing.` }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
@@ -174,7 +242,9 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
       {},
       async () => {
         try {
-          const { listBuiltinTemplates } = await import("../../db/builtin-templates.js");
+          // The bundled library is static data. It was reached through
+          // db/builtin-templates.js, whose module graph opens bun:sqlite; the
+          // data itself lives in lib/builtin-template-library.js.
           const templates = listBuiltinTemplates().map((template) => ({
             name: template.name,
             description: template.description,
@@ -196,7 +266,6 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
       { directory: z.string() },
       async ({ directory }) => {
         try {
-          const { writeBuiltinTemplateFiles } = await import("../../db/builtin-templates.js");
           return { content: [{ type: "text" as const, text: JSON.stringify(writeBuiltinTemplateFiles(directory), null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
@@ -213,9 +282,16 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
       },
       async (params) => {
         try {
-          const { previewTemplate } = await import("../../db/templates.js");
-          const resolvedId = resolveId(params.template_id, "task_templates");
-          const preview = previewTemplate(resolvedId, params.variables);
+          const cloud = getTodosCloudClient();
+          let preview;
+          if (cloud) {
+            const template = await resolveRemoteTemplate(cloud, params.template_id); // GET /v1/templates/:id
+            if (!template) return { content: [{ type: "text" as const, text: `Template not found: ${params.template_id}` }], isError: true };
+            preview = previewRemoteTemplate(template, params.variables);
+          } else {
+            const { previewTemplate } = await import("../../db/templates.js");
+            preview = previewTemplate(resolveId(params.template_id, "task_templates"), params.variables);
+          }
           const lines = preview.tasks.map(t => {
             const deps = t.depends_on_positions.length > 0 ? ` (after: ${t.depends_on_positions.join(", ")})` : "";
             return `  [${t.position}] ${t.priority} | ${t.title}${deps}`;
@@ -239,6 +315,12 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
       { template_id: z.string() },
       async ({ template_id }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const template = await resolveRemoteTemplate(cloud, template_id);   // GET /v1/templates/:id
+            if (!template) return { content: [{ type: "text" as const, text: `Template not found: ${template_id}` }], isError: true };
+            return { content: [{ type: "text" as const, text: JSON.stringify(exportRemoteTemplate(template), null, 2) }] };
+          }
           const { exportTemplate } = await import("../../db/templates.js");
           const resolvedId = resolveId(template_id, "task_templates");
           const json = exportTemplate(resolvedId);
@@ -255,8 +337,13 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
       { json: z.string().describe("JSON string of the template export") },
       async ({ json }) => {
         try {
-          const { importTemplate } = await import("../../db/templates.js");
           const parsed = JSON.parse(json);
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const imported = await cloudCreateTemplate(cloud, parsed);          // POST /v1/templates
+            return { content: [{ type: "text" as const, text: `Template imported: ${imported.id.slice(0, 8)} | ${imported.name} | "${imported.title_pattern}"` }] };
+          }
+          const { importTemplate } = await import("../../db/templates.js");
           const t = importTemplate(parsed);
           return { content: [{ type: "text" as const, text: `Template imported: ${t.id.slice(0, 8)} | ${t.name} | "${t.title_pattern}"` }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
@@ -271,6 +358,18 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
       { template_id: z.string() },
       async ({ template_id }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const template = await resolveRemoteTemplate(cloud, template_id);   // GET /v1/templates/:id
+            if (!template) return { content: [{ type: "text" as const, text: `Template not found: ${template_id}` }], isError: true };
+            const history = await readSharedTemplateHistory(cloud, template.id); // GET /v1/templates/:id/history
+            if (history.versions.length === 0) return { content: [{ type: "text" as const, text: `${template.name} v${template.version} — no previous versions.` }] };
+            const remoteLines = history.versions.map(v => {
+              const snap = typeof v.snapshot === "string" ? JSON.parse(v.snapshot) : v.snapshot;
+              return `v${v.version} | ${v.created_at} | ${snap.name} | "${snap.title_pattern}"`;
+            });
+            return { content: [{ type: "text" as const, text: `${template.name} — current: v${template.version}\n${remoteLines.join("\n")}` }] };
+          }
           const { listTemplateVersions, getTemplate } = await import("../../db/templates.js");
           const resolvedId = resolveId(template_id, "task_templates");
           const template = getTemplate(resolvedId);

@@ -8,7 +8,18 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
 import { compactJson, compactStatus, compactTask, truncateText } from "../token-utils.js";
-import { getTodosCloudClient, cloudGetStats, cloudGetTask, cloudCountTasks, cloudAddComment } from "../../cli/cloud-router.js";
+import {
+  getTodosCloudClient,
+  cloudGetStats,
+  cloudGetTask,
+  cloudCountTasks,
+  cloudAddComment,
+  cloudListComments,
+  cloudListTasks,
+  cloudRecap,
+  cloudTaskAction,
+  cloudUpdateTask,
+} from "../../cli/cloud-router.js";
 import { assignedToAliasSet, getDatabase } from "../../db/database.js";
 
 interface TaskAdvContext {
@@ -343,11 +354,37 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ agent_id, project_id }) => {
         try {
-          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const focus = ctx.getAgentFocus(agent_id || "");
           const effectiveAgentId = focus ? focus.agent_id : agent_id || "";
           const effectiveProjectId = focus?.project_id || project_id;
 
+          // http authority routing: the CLI `standup` verb is already
+          // remote-http; this door still read local sqlite, so the two surfaces
+          // reported different standups on the same station (T1 §4 parity
+          // break). `cloudRecap` is the same shared computation the CLI runs —
+          // GET /v1/tasks, /v1/dependencies and /v1/agents.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const recap = await cloudRecap(cloud, 24, effectiveProjectId);
+            const mine = (rows: Task[]) => effectiveAgentId
+              ? rows.filter((t) => (t.assigned_to ?? "").toLowerCase() === effectiveAgentId.toLowerCase())
+              : rows;
+            const remoteInProgress = mine(recap.in_progress);
+            const remoteCompleted = mine(recap.completed);
+            const remoteBlocked = mine(recap.blocked);
+            const remoteLines = [
+              `Standup for ${effectiveAgentId} (${effectiveProjectId ? `project: ${effectiveProjectId.slice(0, 8)}` : "all projects"})`,
+              remoteInProgress.length > 0 ? `\nIn Progress (${remoteInProgress.length}):` : "\nNo tasks in progress.",
+              ...remoteInProgress.map((t) => `  - ${t.title} (${t.id.slice(0, 8)})`),
+              remoteCompleted.length > 0 ? `\nCompleted in the last 24h (${remoteCompleted.length}):` : "\nNo tasks completed in the last 24h.",
+              ...remoteCompleted.map((t) => `  - ${t.title} (${t.id.slice(0, 8)})`),
+              remoteBlocked.length > 0 ? `\nBlocked (${remoteBlocked.length}):` : "\nNo blocked tasks.",
+              ...remoteBlocked.map((t) => `  - ${t.title} (${t.id.slice(0, 8)})`),
+            ].filter(Boolean);
+            return { content: [{ type: "text" as const, text: remoteLines.join("\n") }] };
+          }
+
+          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const inProgress = listTasks({
             assigned_to: effectiveAgentId,
             status: "in_progress",
@@ -403,10 +440,17 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ task_id, agent_id }) => {
         try {
-          const { startTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-          const resolvedId = resolveId(task_id);
           const focus = ctx.getAgentFocus(agent_id || "");
           const effectiveAgent = focus ? focus.agent_id : agent_id || "mcp";
+          // http authority routing: POST /v1/tasks/:id/start — the same route
+          // `start_task` (which this is documented as an alias of) already used.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const claimed = await cloudTaskAction(cloud, task_id, "start", { agent_id: effectiveAgent });
+            return { content: [{ type: "text" as const, text: formatTask(claimed) }] };
+          }
+          const { startTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          const resolvedId = resolveId(task_id);
           const task = startTask(resolvedId, effectiveAgent);
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
         } catch (e) {
@@ -425,6 +469,16 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ task_id }) => {
         try {
+          // http authority routing: GET then PATCH /v1/tasks/:id with the
+          // version we just read, so a concurrent edit is refused remotely
+          // exactly as the local optimistic lock refuses it.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const current = await cloudGetTask(cloud, task_id);
+            if (!current) throw new Error(`Task not found: ${task_id}`);
+            const released = await cloudUpdateTask(cloud, current.id, { status: "pending", assigned_to: null, version: current.version });
+            return { content: [{ type: "text" as const, text: formatTask(released) }] };
+          }
           const { getTask, updateTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedId = resolveId(task_id);
           const current = getTask(resolvedId);
@@ -552,6 +606,15 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ task_id, minutes }) => {
         try {
+          // http authority routing: GET then PATCH /v1/tasks/:id.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const current = await cloudGetTask(cloud, task_id);
+            if (!current) throw new Error(`Task not found: ${task_id}`);
+            const before = current.estimated_minutes || 0;
+            const after = await cloudUpdateTask(cloud, current.id, { estimated_minutes: before + minutes, version: current.version });
+            return { content: [{ type: "text" as const, text: `Estimate updated: ${before} → ${after.estimated_minutes} min (+${minutes})` }] };
+          }
           const { getTask, updateTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedId = resolveId(task_id);
           const task = getTask(resolvedId);
@@ -609,6 +672,17 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ task_id, detail, limit }) => {
         try {
+          // http authority routing: GET /v1/tasks/:id/comments — the write side
+          // (`add_comment`) already went to the shared store, so reading locally
+          // showed an empty thread for every comment this door had just written.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const page = await cloudListComments(cloud, task_id, { limit: detail === "full" ? 500 : (limit || 20) });
+            if (page.comments.length === 0) return { content: [{ type: "text" as const, text: "No comments." }] };
+            const remoteLines = page.comments.map((c) => `[${c.agent_id || "?"}] ${c.created_at?.slice(0, 16)}: ${detail === "full" ? c.content : truncateText(c.content, 180)}`);
+            if (page.has_more) remoteLines.unshift(`Showing ${page.comments.length} comment(s); older pages available.`);
+            return { content: [{ type: "text" as const, text: remoteLines.join("\n\n") }] };
+          }
           const { listComments } = require("../../db/comments.js") as typeof import("../../db/comments.js");
           const comments = listComments(resolveId(task_id));
           if (comments.length === 0) return { content: [{ type: "text" as const, text: "No comments." }] };
@@ -635,10 +709,24 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       },
       async ({ agent_id, status, project_id, limit }) => {
         try {
-          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const focus = ctx.getAgentFocus(agent_id || "");
           const effectiveAgentId = focus ? focus.agent_id : agent_id || "";
           const effectiveProjectId = focus?.project_id || project_id;
+          // http authority routing: GET /v1/tasks?assigned_to=… — the server
+          // resolves every alias form of assigned_to, so no client-side
+          // re-narrowing here.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const remote = await cloudListTasks(cloud, {
+              assigned_to: effectiveAgentId,
+              status,
+              project_id: effectiveProjectId,
+              limit: limit || 50,
+            } as never);
+            if (remote.length === 0) return { content: [{ type: "text" as const, text: "No tasks found." }] };
+            return { content: [{ type: "text" as const, text: remote.map(formatTask).join("\n") }] };
+          }
+          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const tasks = listTasks({
             assigned_to: effectiveAgentId,
             status,
