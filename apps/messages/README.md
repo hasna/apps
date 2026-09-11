@@ -39,7 +39,7 @@ reads the other's store.
 The server storage backend is the only runtime switch, selected by
 configuration — never by a mode enum:
 
-- **SQLite** by default (zero-config, resolved through the `@hasna/paths`
+- **SQLite** by default (zero-config, resolved through the in-package resolver
   resolver — the XDG data home `~/.local/share/hasna/messages/messages.db`
   once adopted, otherwise the legacy `~/.hasna/messages/messages.db` — or
   `HASNA_MESSAGES_SQLITE_PATH`). The exact-app `HASNA_MESSAGES_HOME` override

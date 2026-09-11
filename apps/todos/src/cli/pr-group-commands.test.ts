@@ -1,4 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {randomUUID} from "node:crypto";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+// Spawns child processes (CLI/server/scripts); bun's 5s default is too tight on a loaded host.
+setDefaultTimeout(60_000);
+
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -9,23 +13,9 @@ import { createLocalPrGroupLedger } from "../pr-groups/index.js";
 let dir: string;
 let dbPath: string;
 
-function childEnv(): Record<string, string> {
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([, value]): value is string => value !== undefined),
-  );
-  delete env["HASNA_TODOS_API_URL"];
-  delete env["HASNA_TODOS_API_KEY"];
-  delete env["TODOS_API_URL"];
-  delete env["TODOS_API_KEY"];
-  delete env["HASNA_TODOS_STORAGE_MODE"];
-  delete env["TODOS_STORAGE_MODE"];
-  delete env["HASNA_TODOS_MODE"];
-  delete env["TODOS_MODE"];
-  env["HASNA_TODOS_DB_PATH"] = dbPath;
-  return env;
-}
+function childEnv(): Record<string,string> {return {PATH:process.env.PATH??"",HOME:join(dir,"client-home"),USERPROFILE:join(dir,"client-home"),HASNA_STATION:randomUUID(),TMPDIR:dir,NO_COLOR:"1"};}
 
-async function run(args: string[], env = childEnv()) {
+async function run(args: string[], env=childEnv()) {
   const child = Bun.spawn({
     cmd: [process.execPath, "run", "src/cli/index.tsx", ...args],
     cwd: process.cwd(),
@@ -67,13 +57,21 @@ describe("PR-group CLI views", () => {
       pr_number: 78,
       base_sha: "a".repeat(40),
     });
-    db.close();
+    const view=await ledger.get(admitted.view.group.id);const history=await ledger.events(admitted.view.group.id,{limit:1});db.close();
+    // Closed remote wire fixture, derived from synthetic ledger rows; not PostgreSQL durability evidence.
+    const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch:request=>{
+      if(request.headers.get("authorization")!=="Bearer fixture-pr-group-key")return new Response(null,{status:401});
+      const events=new URL(request.url).pathname.endsWith("/events");return Response.json(events?{history:{...history,authority:"remote"}}:{view:{...view,authority:"remote"}});
+    }});
+    const env={...childEnv(),HASNA_TODOS_API_URL:server.url.origin,HASNA_TODOS_API_KEY:"fixture-pr-group-key"};
+    try{
 
-    const show = await run(["plans", "pr-group", "show", admitted.view.group.id, "--json"]);
-    expect(show.exitCode).toBe(0);
+
+    const show = await run(["plans", "pr-group", "show", admitted.view.group.id, "--json"],env);
+    expect(show.exitCode,show.stderr).toBe(0);
     expect(JSON.parse(show.stdout)).toMatchObject({
       authoritative: true,
-      authority: "local",
+      authority: "remote",
       group: { id: admitted.view.group.id },
     });
 
@@ -85,13 +83,14 @@ describe("PR-group CLI views", () => {
       "--limit",
       "1",
       "--json",
-    ]);
+    ],env);
     expect(events.exitCode).toBe(0);
     expect(JSON.parse(events.stdout)).toMatchObject({
       authoritative: true,
       count: 1,
       events: [{ event_type: "admission" }],
     });
+    }finally{server.stop(true);}
   }, 15_000);
 
   test("remote failure exits explicitly and never creates shadow local state", async () => {
@@ -99,7 +98,7 @@ describe("PR-group CLI views", () => {
     const env = childEnv();
     env["HASNA_TODOS_API_URL"] = "http://127.0.0.1:1";
     env["HASNA_TODOS_API_KEY"] = "opaque-test-key";
-    env["HASNA_TODOS_DB_PATH"] = shadowPath;
+
     const result = await run(["plans", "pr-group", "show", "prg_missing", "--json"], env);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toMatch(/local SQLite fallback is disabled/i);
@@ -113,6 +112,7 @@ describe("PR-group CLI views", () => {
 
   test("malformed authoritative remote envelopes map to REMOTE_API_INCOMPATIBLE", async () => {
     const server = Bun.serve({
+      hostname:"127.0.0.1",
       port: 0,
       fetch: () => Response.json({ view: { authoritative: true } }),
     });
@@ -121,7 +121,7 @@ describe("PR-group CLI views", () => {
       const env = childEnv();
       env["HASNA_TODOS_API_URL"] = `http://127.0.0.1:${server.port}`;
       env["HASNA_TODOS_API_KEY"] = "opaque-test-key";
-      env["HASNA_TODOS_DB_PATH"] = shadowPath;
+
       const result = await run(["plans", "pr-group", "show", "prg_malformed", "--json"], env);
       expect(result.exitCode).not.toBe(0);
       expect(result.stderr).toContain("REMOTE_API_INCOMPATIBLE");

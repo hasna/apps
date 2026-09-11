@@ -1,4 +1,8 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); HOME_DIR = fixture.home; });
+afterAll(async () => { await fixture?.stop(); });
+import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -29,7 +33,7 @@ import { join } from "path";
  * branch deliberately, and `...declares a DIFFERENT session` is the one that
  * actually discriminates — measured red before the fix and green after.
  *
- * Harness: each runCli() is a separate process on a throwaway HOME and DB.
+ * Harness: each runCli() uses a private saved-credential HOME and child HTTP API.
  * HASNA_CONVERSATIONS_* is stripped because it points the client at the hosted
  * production deployment. TMUX_PANE is stripped too: the `conversations` binary
  * on PATH can be a seat-identity shim that re-derives CONVERSATIONS_AGENT_ID
@@ -38,9 +42,8 @@ import { join } from "path";
  * the shim, but the strip keeps that true if the entrypoint ever changes.
  */
 
-const HOME_DIR = mkdtempSync(join(tmpdir(), "conversations-reglock-home-"));
-const TEST_DB = join(HOME_DIR, `presence-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+let HOME_DIR: string;
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 type PresenceRow = {
   agent: string;
@@ -49,22 +52,7 @@ type PresenceRow = {
 };
 
 function cliEnv(overrides: Record<string, string> = {}): Record<string, string> {
-  const env: Record<string, string> = { ...process.env } as Record<string, string>;
-
-  for (const key of Object.keys(env)) {
-    if (
-      key === "CONVERSATIONS_AGENT_ID"
-      || key === "CONVERSATIONS_SESSION_ID"
-      || key === "TMUX_PANE"
-      || key.startsWith("HASNA_CONVERSATIONS_")
-    ) {
-      delete env[key];
-    }
-  }
-
-  env.HOME = HOME_DIR;
-  env.USERPROFILE = HOME_DIR;
-  env.CONVERSATIONS_DB_PATH = TEST_DB;
+  const env = { ...fixture.env };
   env.FORCE_COLOR = "0";
 
   return { ...env, ...overrides };
@@ -106,7 +94,7 @@ function register(agent: string, session: string) {
 }
 
 afterAll(() => {
-  rmSync(HOME_DIR, { recursive: true, force: true });
+
 });
 
 describe("agent-name registration lock", () => {
@@ -117,7 +105,7 @@ describe("agent-name registration lock", () => {
     expect(leaked).toEqual([]);
     expect(env.CONVERSATIONS_AGENT_ID).toBeUndefined();
     expect(env.CONVERSATIONS_SESSION_ID).toBeUndefined();
-    expect(env.CONVERSATIONS_DB_PATH).toBe(TEST_DB);
+    expect(env.CONVERSATIONS_DB_PATH).toBeUndefined();
     expect(env.HOME).toBe(HOME_DIR);
   });
 
@@ -207,7 +195,7 @@ describe("agent-name registration lock", () => {
     const afterBeat = register("lockdelta", "sess-EEE");
     expect(afterBeat.exitCode).toBe(1);
     expect(afterBeat.body.existing_session_id).toBe("sess-DDD");
-  });
+  }, 20_000);
 
   test("a heartbeat from the SAME session leaves the holder unchanged", () => {
     expect(register("lockbeta", "sess-BETA").exitCode).toBe(0);

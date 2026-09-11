@@ -11,6 +11,7 @@ import { z } from "zod";
 import { resolveApiUrl } from "./api-url.js";
 import {
   normalizeSkillsApiOrigin,
+  skillsApiRequestUrl,
   resolveSkillsConnection,
   SkillsFleetCredentialError,
   SKILLS_API_KEY_ENV,
@@ -102,7 +103,14 @@ export function getConfiguredApiUrl(
  */
 export function buildSkillsApiUrl(apiUrl: string, endpoint = "/skills"): string {
   const url = new URL(apiUrl);
+  if (url.origin === "https://api.hasna.com" && /^\/skills\/(?:api\/)?v1\/skills\/?$/.test(url.pathname)) {
+    url.pathname = "/skills";
+    apiUrl = url.toString();
+  }
   const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+  if (normalizeSkillsApiOrigin(apiUrl) === "https://api.hasna.com/skills") {
+    return skillsApiRequestUrl(apiUrl, `/api/v1${cleanEndpoint}`);
+  }
   const pathname = url.pathname.replace(/\/+$/, "");
 
   const apiBase = /\/api(?:\/v1)?\/skills$/.test(pathname)

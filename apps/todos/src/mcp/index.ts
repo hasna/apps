@@ -18,7 +18,9 @@ import {
   AgentNotFoundError,
   CompletionGuardError,
   DispatchNotFoundError,
+  InputValidationError,
 } from "../types/index.js";
+import { EncryptedPayloadError, EncryptionKeyUnavailableError } from "../lib/local-encryption.js";
 import type { Task } from "../types/index.js";
 import { registerDispatchTools } from "./tools/dispatch.js";
 import { registerTaskCrudTools } from "./tools/task-crud.js";
@@ -37,6 +39,7 @@ import { registerEnvironmentSnapshotTools } from "./tools/environment-snapshots.
 import { registerWorkflowPrompts } from "./tools/workflow-prompts.js";
 import { getPackageVersion } from "../lib/package-version.js";
 import { installMcpTokenDiagnostics, shouldRegisterToolForProfile } from "./token-utils.js";
+import { RemoteApiConfigMissingError, suggestionForRemoteApiCode } from "./remote-authority.js";
 
 function getMcpVersion(): string {
   return getPackageVersion(import.meta.url);
@@ -121,7 +124,53 @@ export function applyFocus(params: Record<string, any>, agentId?: string): void 
   }
 }
 
-function formatError(error: unknown): string {
+/**
+ * Suggestions for the plain-`Error` guard refusals, keyed by the stable code
+ * each guard puts at the front of its message.
+ *
+ * `getDatabase()` refuses an implicit on-box open with
+ * `API_DATABASE_FALLBACK_FORBIDDEN: …`, and `getTodosCloudClient()` reports a
+ * resolution failure as `REMOTE_API_<REASON>: …`. Both are plain `Error`s, so
+ * the sanitizing tail of {@link formatError} turned them into
+ * `UNKNOWN_ERROR` — a configuration requirement reaching MCP clients as an
+ * opaque server fault, with the reason visible only on stderr. The ten
+ * plan/task-list tools were converted to a typed class in 0.16.0
+ * (`RemoteApiConfigMissingError`); this map extends the same shape to every
+ * other tool that hits either guard, without changing which tools reach the
+ * store or which route they take.
+ */
+const API_DATABASE_FALLBACK_FORBIDDEN_SUGGESTION =
+  "This tool reads the on-box SQLite store, which 0.16.0 no longer opens implicitly and which has no " +
+  "shared-API equivalent yet. Run the MCP server with HASNA_TODOS_LOCAL=1 (alias TODOS_LOCAL=1) and no " +
+  "HASNA_TODOS_API_URL / HASNA_TODOS_API_KEY configured to serve this tool from the on-box store.";
+
+/**
+ * Map a guard's stable code prefix to the typed, actionable payload.
+ *
+ * The code is the same one the CLI prints (`REMOTE_API_*` from the shared-API
+ * resolver, `API_DATABASE_FALLBACK_FORBIDDEN` from the storage guard), so a
+ * client sees one vocabulary across surfaces instead of `UNKNOWN_ERROR` on one
+ * and a named code on the other. The guard's own diagnostic is preserved as
+ * `message`: it names the tiers consulted and contains no credential value.
+ */
+function guardRefusalPayload(message: string): string | undefined {
+  const match = /^(REMOTE_API_[A-Z_]+|API_DATABASE_FALLBACK_FORBIDDEN):\s*([\s\S]*)$/.exec(message);
+  if (!match) return undefined;
+  const code = match[1]!;
+  const detail = match[2]!.trim();
+  return JSON.stringify({
+    code,
+    message: detail || message,
+    suggestion: code === "API_DATABASE_FALLBACK_FORBIDDEN"
+      ? API_DATABASE_FALLBACK_FORBIDDEN_SUGGESTION
+      : suggestionForRemoteApiCode(code),
+  });
+}
+
+export function formatError(error: unknown): string {
+  if (error instanceof RemoteApiConfigMissingError) {
+    return JSON.stringify({ code: error.code, message: error.message, suggestion: error.suggestion });
+  }
   if (error instanceof VersionConflictError) {
     return JSON.stringify({ code: VersionConflictError.code, message: error.message, suggestion: VersionConflictError.suggestion });
   }
@@ -162,8 +211,30 @@ function formatError(error: unknown): string {
   if (error instanceof DispatchNotFoundError) {
     return JSON.stringify({ code: DispatchNotFoundError.code, message: error.message, suggestion: DispatchNotFoundError.suggestion });
   }
+  // Caller-input / local-state refusals whose message is written for the caller.
+  // Without these the sanitizing tail turns "you did not pass a backup" into an
+  // opaque `UNKNOWN_ERROR`, which reads as a server bug (measured: the last five
+  // of the 89 opaque zero-argument tools on the 0.16.0 default posture).
+  if (error instanceof InputValidationError) {
+    return JSON.stringify({
+      code: InputValidationError.code,
+      message: error.message,
+      ...(error.suggestion ? { suggestion: error.suggestion } : {}),
+    });
+  }
+  if (error instanceof EncryptionKeyUnavailableError) {
+    return JSON.stringify({ code: EncryptionKeyUnavailableError.code, message: error.message, suggestion: error.suggestion });
+  }
+  if (error instanceof EncryptedPayloadError) {
+    return JSON.stringify({ code: EncryptedPayloadError.code, message: error.message, suggestion: EncryptedPayloadError.suggestion });
+  }
   if (error instanceof Error) {
     const msg = error.message;
+    // Storage/authority guard refusals carry the CLI's stable code as a message
+    // prefix. Map them BEFORE the sanitizing tail so a configuration
+    // requirement is a typed, actionable payload rather than UNKNOWN_ERROR.
+    const guardRefusal = guardRefusalPayload(msg);
+    if (guardRefusal) return guardRefusal;
     // Wrap SQLite constraint errors with agent-friendly messages
     if (msg.includes("UNIQUE constraint failed: projects.path") && !machineStartupCloudClient()) {
       const db = getDatabase();

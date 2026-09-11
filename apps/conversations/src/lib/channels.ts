@@ -1,5 +1,5 @@
 import { getDb } from "./db.js";
-import { normalizeChannelName, reservedHistoricalChannelMessage } from "./channel-names.js";
+import { normalizeChannelName, channelListingMatchSql, reservedHistoricalChannelMessage } from "./channel-names.js";
 import { newChannelId } from "./channel-id.js";
 import type { Channel, ChannelInfo, ChannelMember } from "../types.js";
 import { CHANNEL_LIST_ORDER, CHANNEL_MEMBER_ORDER, simpleOrderByClause } from "./list-order.js";
@@ -118,7 +118,7 @@ export function listChannels(options?: {
     SELECT
       c.*,
       (SELECT COUNT(*) FROM channel_members WHERE channel = c.name) AS member_count,
-      (SELECT COUNT(*) FROM messages WHERE channel = c.name) AS message_count
+      (SELECT COUNT(*) FROM messages WHERE ${channelListingMatchSql("channel", "c.name")}) AS message_count
     FROM channels c
     ${where}
     ${simpleOrderByClause(CHANNEL_LIST_ORDER, "c.")}
@@ -157,7 +157,7 @@ export function getChannel(name: string): ChannelInfo | null {
     SELECT
       c.*,
       (SELECT COUNT(*) FROM channel_members WHERE channel = c.name) AS member_count,
-      (SELECT COUNT(*) FROM messages WHERE channel = c.name) AS message_count
+      (SELECT COUNT(*) FROM messages WHERE ${channelListingMatchSql("channel", "c.name")}) AS message_count
     FROM channels c
     WHERE c.name = ?
   `).get(channelName) as Record<string, unknown> | null;

@@ -49,7 +49,7 @@ describe("MCP server-backed sync receipts", () => {
     expect(await stub.list("sync-requests")).toHaveLength(1);
   });
   it("selects the tenant provider by unique prefix and preserves incomplete observations", async () => {
-    await stub.seed({ providers: [{ id: "provider-one", name: "One", type: "resend", active: true }, { id: "provider-two", name: "Two", type: "ses", active: true }], "sync-results": [
+    await stub.seed({ providers: [{ id: "provider-one", name: "One", type: "resend", active: true, created_at: "2026-01-01T00:00:00.000Z" }, { id: "provider-two", name: "Two", type: "ses", active: true, created_at: "2026-01-02T00:00:00.000Z" }], "sync-results": [
       { operation: "provider-sync", provider_id: "provider-one", receipt: provider("provider-one", { complete: false, failures: [{ message_id: "m1", error: "Read failed" }] }) },
       { operation: "provider-sync", provider_id: "provider-two", receipt: provider("provider-two") },
     ] });
@@ -63,6 +63,9 @@ describe("MCP server-backed sync receipts", () => {
     expect(await stub.list("sync-requests")).toHaveLength(1);
     const all = await call("pull_events", {});
     expect(all.payload.providers).toHaveLength(2);
-    expect(all.payload.providers[1]).toMatchObject({ provider_id: "provider-two", complete: true, checked: 2 });
+    // Registry order is newest-first, independently of fixture insertion order.
+    expect(all.payload.providers.map((receipt: { provider_id: string }) => receipt.provider_id).sort()).toEqual(["provider-one", "provider-two"]);
+    expect(all.payload.providers.find((receipt: { provider_id: string }) => receipt.provider_id === "provider-one")).toEqual(provider("provider-one", { status: "partial", complete: false, failures: [{ message_id: "m1", error: "Read failed" }] }));
+    expect(all.payload.providers.find((receipt: { provider_id: string }) => receipt.provider_id === "provider-two")).toEqual(provider("provider-two"));
   });
 });

@@ -7,13 +7,32 @@ import {
   updateMailboxFilter,
 } from "../../db/mailbox-filters.local.js";
 import type { MailboxFilterInput } from "../../lib/mailbox-filters.js";
-import { MailboxFilterInputError } from "../../lib/mailbox-filters.js";
+import { MailboxFilterInputError, normalizeMailboxFilterApplyBody } from "../../lib/mailbox-filters.js";
 import { badRequest, internalError, json, parseBody, queryPage } from "./helpers.js";
 
 // A JSON primitive body must fail with 400 invalid_input, matching the
 // self-hosted server's readJsonBody object gate — `field in body` on a string
 // or number would otherwise TypeError into a 500 (PUT) or a silent no-op
 // (PATCH).
+/**
+ * Apply-body parser. Empty or whitespace-only bodies are `{}` (list-only
+ * apply); malformed nonempty JSON is refused instead of being silently read as
+ * `{}`. `normalizeMailboxFilterApplyBody` then rejects non-object bodies and
+ * non-boolean `mutate` values.
+ */
+async function parseApplyBody(req: Request): Promise<{ mutate: boolean }> {
+  const text = await req.text();
+  const trimmed = text.trim();
+  if (trimmed === "") return { mutate: false };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new MailboxFilterInputError("apply request body must be valid JSON");
+  }
+  return normalizeMailboxFilterApplyBody(parsed);
+}
+
 async function parseObjectBody(req: Request): Promise<Record<string, unknown>> {
   const body = await parseBody(req);
   if (body === null || typeof body !== "object" || Array.isArray(body)) {
@@ -46,7 +65,9 @@ export async function handle(req: Request, url: URL, path: string, method: strin
       if (method !== "POST") return json({ error: "method not allowed" }, 405);
       const filter = getMailboxFilter(decodeURIComponent(applyMatch[1]!));
       if (!filter) return json({ error: "mailbox filter not found", code: "not_found" }, 404);
-      return json(applyMailboxFilter(filter, queryPage(url, 100, 1000)));
+      const page = queryPage(url, 100, 1000);
+      const { mutate } = await parseApplyBody(req);
+      return json(applyMailboxFilter(filter, { ...page, mutate }));
     }
     const identifier = decodeURIComponent(suffix.slice(1));
     if (!identifier) return badRequest("filter id or name is required");

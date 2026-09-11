@@ -88,8 +88,8 @@ interface SafeOutcome {
 }
 
 function effectiveUid(): number {
-  if (process.platform !== "linux" || typeof process.geteuid !== "function") {
-    throw new ControlledSendPathError("controlled send files require Linux owner and no-follow checks");
+  if (!["linux", "darwin"].includes(process.platform) || typeof process.geteuid !== "function") {
+    throw new ControlledSendPathError("controlled send files require supported owner and no-follow checks");
   }
   const uid = process.geteuid();
   if (!Number.isSafeInteger(uid) || uid < 0) {
@@ -188,6 +188,10 @@ async function inspectPrivateDirectory(path: string, label: string, uid: number)
 async function readPrivateFile(pathValue: unknown, label: string, maxBytes: number): Promise<Buffer> {
   if (typeof pathValue !== "string" || !pathValue.trim()) {
     throw new ControlledDescriptorError(`${label} must be a private file path`);
+  }
+  if (process.platform === "darwin") {
+    try { return await (await import("./controlled-send-darwin.js")).readDarwinControlledFile(pathValue,maxBytes); }
+    catch { throw new ControlledDescriptorError(`${label} failed private owner, ACL, or no-follow validation`); }
   }
   const uid = effectiveUid();
   let path: string;
@@ -588,8 +592,15 @@ class ReceiptReservation {
   }
 }
 
-async function reserveReceipt(pathValue: string): Promise<ReceiptReservation> {
+async function reserveReceipt(pathValue: string): Promise<{path:string;finalize(receipt:ControlledSendReceipt):Promise<void>}> {
   if (!pathValue.trim()) throw new ControlledSendPathError("--receipt is required");
+  if (process.platform === "darwin") {
+    try {
+      const native=await (await import("./controlled-send-darwin.js")).reserveDarwinControlledReceipt(pathValue);
+      return {path:native.path,async finalize(receipt) {try {await native.finalize(receipt);} catch {throw new ControlledSendPathError("controlled receipt could not be finalized; read back the same request before any retry");}}};
+    } catch {throw new ControlledSendPathError("--receipt must be private and absent, without an unfinished reservation");}
+  }
+
   const uid = effectiveUid();
   let path: string;
   try {

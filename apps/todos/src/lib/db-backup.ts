@@ -2,7 +2,8 @@
  * Local SQLite backup, restore, integrity, compact, and migration dry-run.
  */
 
-import { existsSync, copyFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, openSync, closeSync, fsyncSync, chmodSync, rmdirSync, copyFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import { getDatabase, closeDatabase } from "../db/database.js";
@@ -15,7 +16,7 @@ export interface BackupResult {
   source_path: string;
   backup_path: string;
   bytes: number;
-  method: "sqlite_backup" | "file_copy";
+  method: "sqlite_backup" | "sqlite_vacuum" | "file_copy";
   created_at: string;
 }
 
@@ -47,26 +48,70 @@ function resolveDbPath(dbPath?: string): string {
   throw new Error("No database path — set TODOS_DB_PATH or pass --db");
 }
 
+function syncPath(path: string): void {
+  const fd = openSync(path, "r");
+  let syncFailed = false;
+  try { fsyncSync(fd); } catch (error) { syncFailed = true; throw error; }
+  finally {
+    try { closeSync(fd); } catch (error) { if (!syncFailed) throw error; }
+  }
+}
+
 export function backupDatabase(outputPath: string, sourcePath?: string): BackupResult {
   const source = resolveDbPath(sourcePath);
   if (!existsSync(source)) throw new Error(`Database not found: ${source}`);
 
-  mkdirSync(dirname(outputPath), { recursive: true });
-
-  closeDatabase();
-
-  const src = new Database(source);
-  try {
-    src.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  } catch {
-    /* best-effort checkpoint */
+  const sourceInfo = statSync(source);
+  if (resolve(outputPath) === resolve(source)) throw new Error("Backup output resolves to the same database as the source");
+  if (existsSync(outputPath)) {
+    const outputInfo = statSync(outputPath);
+    if (outputInfo.dev === sourceInfo.dev && outputInfo.ino === sourceInfo.ino) throw new Error("Backup output resolves to the same database as the source");
   }
-  const image = src.serialize();
-  src.close();
 
-  writeFileSync(outputPath, image);
+  mkdirSync(dirname(outputPath), { recursive: true, mode: 0o700 });
 
-  const method: BackupResult["method"] = "file_copy";
+  // serialize() preserves WAL header bytes, producing a standalone file that
+  // macOS SQLite cannot reopen read-only without sidecars. SQLite VACUUM INTO
+  // emits a complete rollback-journal image without modifying the source.
+  const stagingDir = join(dirname(outputPath), `.todos-backup-${randomUUID()}`);
+  const staging = join(stagingDir, "snapshot.db");
+  const src = new Database(source, { readonly: true });
+  let ownsStaging = false;
+  let renamed = false;
+  let primaryError: unknown;
+  try {
+    // macOS SQLite rejects even an existing empty VACUUM output. A private
+    // exclusively created directory protects the file throughout creation.
+    mkdirSync(stagingDir, { mode: 0o700 });
+    ownsStaging = true;
+    src.query("VACUUM INTO ?").run(staging);
+    chmodSync(staging, 0o600);
+    const integrity = checkDatabaseIntegrity(staging);
+    if (!integrity.ok) throw new Error(`Backup failed integrity check: ${integrity.errors.join("; ")}`);
+    syncPath(staging);
+    renameSync(staging, outputPath);
+    renamed = true;
+    rmdirSync(stagingDir);
+    ownsStaging = false;
+    syncPath(dirname(outputPath));
+  } catch (error) {
+    primaryError = renamed
+      ? new Error("Backup replacement may have completed but durability confirmation failed; inspect the target before retrying", { cause: error })
+      : error;
+    throw primaryError;
+  } finally {
+    let cleanupError: unknown;
+    try { src.close(); } catch (error) { cleanupError = error; }
+    if (ownsStaging) {
+      try { unlinkSync(staging); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") cleanupError ??= error; }
+      try { rmdirSync(stagingDir); } catch (error) { cleanupError ??= error; }
+    }
+    if (!primaryError && cleanupError) throw new Error(renamed
+      ? "Backup replacement completed but cleanup failed; inspect the target before retrying"
+      : "Backup staging cleanup failed", { cause: cleanupError });
+  }
+
+  const method: BackupResult["method"] = "sqlite_vacuum";
 
   const bytes = statSync(outputPath).size;
   return {

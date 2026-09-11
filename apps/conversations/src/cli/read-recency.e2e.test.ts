@@ -1,12 +1,13 @@
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { closeDb, getDb } from "../lib/db.js";
 import { DEFAULT_READ_LIMIT } from "../lib/message-window.js";
 import { SINCE_JSON_LIMIT } from "./compact.js";
 import { backfilledChannelIdForName } from "../lib/channel-id.js";
-import { isolatedStoreChildEnv, pinStoreToDb, restoreStoreEnv } from "../lib/store/isolated-test-env.js";
 
 // Regression for todos 2c25973b: every recency-shaped read returned the OLDEST
 // rows. A watcher built on any of them polled ancient history forever and
@@ -35,8 +36,7 @@ import { isolatedStoreChildEnv, pinStoreToDb, restoreStoreEnv } from "../lib/sto
 // known-newest message rather than a row count — a full-looking count with the
 // newest missing is exactly how this defect hid.
 
-const TEST_DB = join(tmpdir(), `556e6366-conversations-cli-recency-${Date.now()}-${process.pid}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 const CHANNEL = "recency-ch";
 // Above `conversations since --json`'s 200 default, which is the largest cap the
 // client applies; that also puts it well above the 20-row read default.
@@ -50,10 +50,10 @@ function runCli(args: string[], agent: string) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
-    env: isolatedStoreChildEnv(TEST_DB, {
+    env: { ...fixture.env,
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",
-    }),
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -91,29 +91,10 @@ function bodiesOf(stdout: string): string[] {
 }
 
 describe("CLI recency reads return the newest messages", () => {
-  beforeAll(() => {
-    pinStoreToDb(TEST_DB);
-    closeDb();
-    const db = getDb();
-    // The channel row is required: `channel read` refuses an unknown channel.
-    db.prepare(`INSERT INTO channels (id, name, created_by) VALUES (?, ?, ?)`).run(backfilledChannelIdForName(CHANNEL), CHANNEL, "alice");
-    const insert = db.prepare(
-      `INSERT INTO messages (session_id, from_agent, to_agent, channel, content, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-    );
-    db.exec("BEGIN");
-    for (let n = 1; n <= TOTAL; n++) insert.run("recency-session", "alice", CHANNEL, CHANNEL, body(n), stamp(n));
-    db.exec("COMMIT");
-    closeDb();
-  });
-
-  afterAll(() => {
-    closeDb();
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-    try { unlinkSync(`${TEST_DB}-shm`); } catch {}
-    // `beforeAll` pins process-wide and never restored it, so without this the
-    // suite's db path outlived the file and leaked into every later one.
-    restoreStoreEnv();
+  beforeAll(async () => {
+    await fixture.seed({ channel: { row: { id: backfilledChannelIdForName(CHANNEL), name: CHANNEL, created_by: "alice", created_at: stamp(1), metadata: null, archived_at: null }, members: ["alice", "bob"] }, messages: Array.from({length: TOTAL}, (_, index) => ({
+      session_id: "recency-session", from_agent: "alice", to_agent: CHANNEL, channel: CHANNEL, content: body(index+1), created_at: stamp(index+1),
+    })) });
   });
 
   // The seeded window must exceed every client-side cap, or the tests below sit

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/skills",
-  "version": "0.5.0",
+  "version": "0.5.10",
   "description": "Skills library for AI coding agents",
   "type": "module",
   "bin": {
@@ -40,7 +40,9 @@
     "docs/skill-standard.md",
     "schemas/",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "!dist/**/*test-utils.d.ts",
+    "!dist/**/*fixtures.d.ts"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

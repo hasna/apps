@@ -6,6 +6,7 @@ useDefaultTestTimeout();
 import { createSubmitRunService } from "../admission.js";
 import { createImageProfileRegistry } from "../image-profile.js";
 import { MemoryRunExecutionStore } from "../storage.js";
+import { createReceiptService } from "../receipts.js";
 import type { FrozenAdmission } from "../types.js";
 import { EcsDispatcher, clientTokenFor, startedByFor, type EcsRunTaskClient, type EcsRunTaskInput, type EcsTaskState } from "./ecs.js";
 
@@ -151,36 +152,6 @@ describe("ecs dispatcher", () => {
     expect((await store.listAttempts(runId)).length).toBe(1);
   });
 
-  test("lost response + reconciled ABSENT permits a new attempt with a new token", async () => {
-    const store = new MemoryRunExecutionStore();
-    const client = new MockEcsClient(async () => {
-      throw new Error("socket hang up");
-    });
-    const dispatcher = makeDispatcher(store, client);
-    const runId = await admittedRunId(store, "ecs-lost-absent");
-
-    const first = await dispatcher.launchAttempt(runId);
-    // The task never existed: reconcile proves absent.
-    expect(first.kind).toBe("launch-failed-absent");
-    if (first.kind !== "launch-failed-absent") return;
-
-    const attemptsAfterFirst = await store.listAttempts(runId);
-    expect(attemptsAfterFirst[0]!.launchState).toBe("absent");
-
-    // Previous launch proven absent → a new attempt is legal.
-    const second = await dispatcher.launchAttempt(runId);
-    expect(second.kind).toBe("launch-failed-absent");
-
-    const attempts = await store.listAttempts(runId);
-    expect(attempts).toHaveLength(2);
-    expect(attempts[0]!.attemptNumber).toBe(1);
-    expect(attempts[1]!.attemptNumber).toBe(2);
-    // The second attempt carries a DIFFERENT deterministic token.
-    expect(client.runTaskCalls[0]!.clientToken).toBe(clientTokenFor(runId, attempts[0]!.attemptId));
-    expect(client.runTaskCalls[1]!.clientToken).toBe(clientTokenFor(runId, attempts[1]!.attemptId));
-    expect(client.runTaskCalls[0]!.clientToken).not.toBe(client.runTaskCalls[1]!.clientToken);
-  });
-
   test("lost RunTask response + failing reconcile probe returns ambiguous and never mints a new attempt", async () => {
     const store = new MemoryRunExecutionStore();
     // The task DID launch server-side, but the RunTask response is lost AND
@@ -198,7 +169,7 @@ describe("ecs dispatcher", () => {
     const runId = await admittedRunId(store, "ecs-lost-ambiguous");
 
     // First call: response lost; the in-call reconcile probe also fails.
-    await dispatcher.launchAttempt(runId);
+    expect((await dispatcher.launchAttempt(runId)).kind).toBe("ambiguous");
     // Second call: the previous attempt is ambiguous; the probe fails again.
     // The ambiguous result must be returned as-is — no fall-through mint.
     const second = await dispatcher.launchAttempt(runId);
@@ -226,6 +197,7 @@ describe("ecs dispatcher", () => {
 
     const again = await dispatcher.launchAttempt(runId);
     expect(again.kind).toBe("previous-terminal");
+    expect((await dispatcher.launchAttempt(runId)).kind).toBe("previous-terminal");
     expect(client.runTaskCalls).toHaveLength(1);
     expect((await store.listAttempts(runId)).length).toBe(1);
   });
@@ -275,4 +247,189 @@ describe("ecs dispatcher", () => {
     const outcome = await dispatcher.launchAttempt("run_does_not_exist");
     expect(outcome.kind).toBe("no-admission");
   });
+});
+
+
+describe("ECS terminal authority", () => {
+  for (const probe of ["empty", "wrong-arn", "unknown", "mixed", "throws"] as const) {
+    test(`known task ${probe} description cannot prove terminal or permit another launch`, async () => {
+      const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), dispatcher = makeDispatcher(store, client);
+      const runId = await admittedRunId(store, `terminal-${probe}`);
+      const launched = await dispatcher.launchAttempt(runId); expect(launched.kind).toBe("launched");
+      if (launched.kind !== "launched") return;
+      client.describeTasks = async () => {
+        if (probe === "throws") throw Error("owned describe failure");
+        if (probe === "empty") return [];
+        if (probe === "wrong-arn") return [{ taskArn: "unrelated-task", lastStatus: "STOPPED" }];
+        if (probe === "mixed") return [{ taskArn: launched.taskId, lastStatus: "STOPPED" }, { taskArn: "unrelated-task", lastStatus: "STOPPED" }];
+        return [{ taskArn: launched.taskId, lastStatus: "UNKNOWN" }];
+      };
+      expect((await dispatcher.launchAttempt(runId)).kind).toBe("ambiguous");
+      expect((await dispatcher.launchAttempt(runId)).kind).toBe("ambiguous");
+      expect(client.runTaskCalls).toHaveLength(1); expect(await store.listAttempts(runId)).toHaveLength(1);
+      expect((await store.listAttempts(runId))[0]!.launchState).toBe("launched");
+    });
+  }
+  for (const stop of ["throws", "acknowledged-running", "missing-description"] as const) {
+    test(`cancel with ${stop} cannot finalize a receipt before STOPPED proof`, async () => {
+      const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), dispatcher = makeDispatcher(store, client);
+      const runId = await admittedRunId(store, `cancel-${stop}`); await dispatcher.launchAttempt(runId);
+      client.stopTask = async taskArn => { client.stopTaskCalls.push(taskArn); if (stop === "throws") throw Error("owned stop failure"); };
+      if (stop === "missing-description") client.describeTasks = async () => [];
+      expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+      expect((await store.getRun(runId))?.status).not.toBe("cancelled");
+      const attempt = (await store.listAttempts(runId))[0]!;
+      expect((await store.getReceipt(runId, attempt.attemptId))?.status).not.toBe("cancelled");
+      expect((await dispatcher.launchAttempt(runId)).kind).not.toBe("launched");
+      expect(client.runTaskCalls).toHaveLength(1);
+    });
+  }
+  test("lost launch plus empty listing remains ambiguous and cancellation cannot settle it", async () => {
+    const store = new MemoryRunExecutionStore();
+    const client = new MockEcsClient(async () => { throw Error("owned lost launch"); });
+    const dispatcher = makeDispatcher(store, client), runId = await admittedRunId(store, "lost-empty-unknown");
+    expect((await dispatcher.launchAttempt(runId)).kind).toBe("ambiguous");
+    expect((await dispatcher.launchAttempt(runId)).kind).toBe("ambiguous");
+    expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+    expect(client.runTaskCalls).toHaveLength(1); expect(await store.listAttempts(runId)).toHaveLength(1);
+  });
+});
+
+
+test("a lost stop response is accepted only when the exact task subsequently proves STOPPED", async () => {
+  const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), dispatcher = makeDispatcher(store, client);
+  const runId = await admittedRunId(store, "lost-stop-confirmed"); await dispatcher.launchAttempt(runId);
+  client.stopTask = async taskArn => {
+    client.stopTaskCalls.push(taskArn); client.launchedTasks.set(taskArn, { taskArn, lastStatus: "STOPPED" });
+    throw Error("owned lost stop response");
+  };
+  expect((await dispatcher.cancel(runId)).accepted).toBe(true);
+  expect((await store.getRun(runId))?.status).toBe("cancelled");
+  const attempt = (await store.listAttempts(runId))[0]!;
+  expect((await store.getReceipt(runId, attempt.attemptId))?.status).toBe("cancelled");
+});
+
+test("pending cancellation can be reconciled after the task later stops without launching again", async () => {
+  const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), dispatcher = makeDispatcher(store, client);
+  const runId = await admittedRunId(store, "stop-later"); const launched = await dispatcher.launchAttempt(runId);
+  if (launched.kind !== "launched") throw Error("expected owned launch");
+  client.stopTask = async taskArn => { client.stopTaskCalls.push(taskArn); };
+  expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+  client.launchedTasks.set(launched.taskId, { taskArn: launched.taskId, lastStatus: "STOPPED" });
+  expect((await dispatcher.cancel(runId)).accepted).toBe(true);
+  expect(client.runTaskCalls).toHaveLength(1); expect(client.stopTaskCalls).toHaveLength(1);
+});
+
+
+for (const matches of [["owned-task", "unexpected-task"], ["owned-task", "owned-task"]]) {
+  test("ambiguous task listings cannot select a convenient terminal match", async () => {
+    const store = new MemoryRunExecutionStore(), client = new MockEcsClient(async () => { throw Error("owned lost launch"); });
+    client.listTasksByStartedBy = async () => matches;
+    client.describeTasks = async arns => arns.map(taskArn => ({ taskArn, lastStatus: "STOPPED" }));
+    const dispatcher = makeDispatcher(store, client), runId = await admittedRunId(store, "multiple-list-" + matches.join("-"));
+    expect((await dispatcher.launchAttempt(runId)).kind).toBe("ambiguous");
+    expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+    expect((await dispatcher.launchAttempt(runId)).kind).toBe("ambiguous");
+    expect(client.runTaskCalls).toHaveLength(1);
+  });
+}
+
+test("eventually visible lost launch reconciles the original attempt without a replacement", async () => {
+  const store = new MemoryRunExecutionStore(), client = new MockEcsClient(async () => { throw Error("owned lost launch"); });
+  const dispatcher = makeDispatcher(store, client), runId = await admittedRunId(store, "eventual-visibility");
+  expect((await dispatcher.launchAttempt(runId)).kind).toBe("ambiguous");
+  const original = (await store.listAttempts(runId))[0]!;
+  const taskArn = `owned-task/${original.startedBy}`;
+  client.launchedTasks.set(taskArn, { taskArn, lastStatus: "RUNNING" });
+  expect(await dispatcher.launchAttempt(runId)).toMatchObject({ kind: "already-launched", attemptId: original.attemptId, taskId: taskArn });
+  expect(client.runTaskCalls).toHaveLength(1); expect(await store.listAttempts(runId)).toHaveLength(1);
+});
+
+
+test("a historical terminal marker cannot replace a missing physical task observation", async () => {
+  const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), dispatcher = makeDispatcher(store, client);
+  const runId = await admittedRunId(store, "historic-terminal"); await dispatcher.launchAttempt(runId);
+  const attempt = (await store.listAttempts(runId))[0]!;
+  await store.recordLaunchState({ runId, attemptId: attempt.attemptId, launchState: "terminal" });
+  client.describeTasks = async () => [];
+  expect((await dispatcher.launchAttempt(runId)).kind).toBe("ambiguous");
+  expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+  expect(client.runTaskCalls).toHaveLength(1);
+});
+
+test("historical cancelled state still requires physical stop proof before idempotent acceptance", async () => {
+  const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), dispatcher = makeDispatcher(store, client);
+  const runId = await admittedRunId(store, "historical-cancelled"); const launched = await dispatcher.launchAttempt(runId);
+  if (launched.kind !== "launched") throw Error("expected owned task");
+  await store.setRunStatus(runId, "cancelled");
+  client.stopTask = async () => { throw Error("owned stop failure"); };
+  const attempt = (await store.listAttempts(runId))[0]!, before = await store.getReceipt(runId, attempt.attemptId);
+  expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+  expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(before);
+  client.launchedTasks.set(launched.taskId, { taskArn: launched.taskId, lastStatus: "STOPPED" });
+  expect((await dispatcher.cancel(runId)).accepted).toBe(true);
+  const terminal = await store.getReceipt(runId, attempt.attemptId);
+  expect(terminal?.status).toBe("cancelled");
+  expect((await dispatcher.cancel(runId)).accepted).toBe(true);
+  expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(terminal);
+  expect(client.runTaskCalls).toHaveLength(1);
+});
+
+
+test("failed cancellation receipt persistence repairs on retry and preserves terminal fields thereafter", async () => {
+  const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), receipts = createReceiptService(store);
+  let failures = 1, finalizes = 0;
+  const dispatcher = new EcsDispatcher(CONFIG, client, { store, receipts: { ...receipts, async finalize(input) {
+    finalizes++; if (failures-- > 0) throw Error("owned receipt write failure"); return receipts.finalize(input);
+  } } });
+  const runId = await admittedRunId(store, "receipt-retry"); await dispatcher.launchAttempt(runId);
+  const attempt = (await store.listAttempts(runId))[0]!;
+  expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+  expect((await store.getRun(runId))?.status).toBe("cancelled");
+  expect((await store.getReceipt(runId, attempt.attemptId))?.status).toBe(null);
+  expect((await dispatcher.cancel(runId)).accepted).toBe(true);
+  const terminal = await store.getReceipt(runId, attempt.attemptId);
+  expect(terminal?.status).toBe("cancelled"); expect(terminal?.completedAt).toBeTruthy();
+  expect((await store.getRun(runId))?.terminalReceiptId).toBe(attempt.attemptId);
+  expect((await dispatcher.cancel(runId)).accepted).toBe(true);
+  expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(terminal); expect(finalizes).toBe(2);
+});
+
+for (const outcome of ["succeeded", "failed"] as const) {
+  test(`contradictory ${outcome} receipt is preserved and cancellation is refused`, async () => {
+    const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), dispatcher = makeDispatcher(store, client);
+    const runId = await admittedRunId(store, `contradictory-${outcome}`); await dispatcher.launchAttempt(runId);
+    const attempt = (await store.listAttempts(runId))[0]!, receipt = (await store.getReceipt(runId, attempt.attemptId))!;
+    const terminal = { ...receipt, status: outcome, completedAt: "2026-09-08T12:00:00.000Z", exitCode: 0 };
+    await store.writeReceipt(terminal);
+    expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+    expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(terminal);
+    expect(client.stopTaskCalls).toHaveLength(0);
+  });
+}
+
+
+test("a persisted cancellation receipt repairs its missing run pointer without changing completedAt", async () => {
+  const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), dispatcher = makeDispatcher(store, client);
+  const runId = await admittedRunId(store, "receipt-pointer-retry"); await dispatcher.launchAttempt(runId);
+  const attempt = (await store.listAttempts(runId))[0]!, finalizeRun = store.finalizeRun.bind(store);
+  let failures = 1;
+  store.finalizeRun = async (...args) => { if (failures-- > 0) throw Error("owned run pointer loss"); return finalizeRun(...args); };
+  expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+  const persisted = await store.getReceipt(runId, attempt.attemptId);
+  expect(persisted?.status).toBe("cancelled"); expect(persisted?.completedAt).toBeTruthy();
+  expect((await store.getRun(runId))?.terminalReceiptId).toBeNull();
+  expect((await dispatcher.cancel(runId)).accepted).toBe(true);
+  expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(persisted);
+  expect((await store.getRun(runId))?.terminalReceiptId).toBe(attempt.attemptId);
+});
+
+test("a missing launch receipt cannot be invented during cancellation", async () => {
+  const store = new MemoryRunExecutionStore(), client = new MockEcsClient(), receipts = createReceiptService(store);
+  const dispatcher = new EcsDispatcher(CONFIG, client, { store, receipts: { ...receipts, get: async () => null } });
+  const runId = await admittedRunId(store, "missing-launch-receipt"); await dispatcher.launchAttempt(runId);
+  const attempt = (await store.listAttempts(runId))[0]!, before = await store.getReceipt(runId, attempt.attemptId);
+  expect((await dispatcher.cancel(runId)).accepted).toBe(false);
+  expect(await store.getReceipt(runId, attempt.attemptId)).toEqual(before);
+  expect(client.stopTaskCalls).toHaveLength(0);
 });

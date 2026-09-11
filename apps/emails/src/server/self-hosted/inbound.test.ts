@@ -918,3 +918,47 @@ describe("tenant-bound send provider selection", () => {
     expect(sends).toBe(0);
   });
 });
+
+describe("mailbox-filter ingest hook wiring on message writes (FR-0001)", () => {
+  // Wiring coverage only: assert WHEN the automatic filter hook runs (every
+  // genuinely new insert), not whether any filter matches — matching is proven
+  // by the SQLite store tests and the disposable-Postgres integration cases.
+  function hookSpy(d: SelfHostedServiceDeps): string[] {
+    const hooked: string[] = [];
+    const store = d.store as unknown as {
+      applyEnabledMailboxFiltersToMessage: (client: unknown, messageId: string) => Promise<void>;
+    };
+    store.applyEnabledMailboxFiltersToMessage = async (_client, messageId) => {
+      hooked.push(messageId);
+    };
+    return hooked;
+  }
+
+  test("new inbound insert runs the hook; an existing-source upsert does not re-run it", async () => {
+    const d = deps();
+    const hooked = hookSpy(d);
+    const first = await handleSelfHostedRequest(d, post(INBOUND));
+    expect(first?.status).toBe(201);
+    const firstId = (await first!.json()).message.id;
+    expect(hooked).toEqual([firstId]);
+
+    // Same source_id replayed: existing row updated, filters must NOT re-run.
+    const second = await handleSelfHostedRequest(d, post({ ...INBOUND, is_read: true }));
+    expect(second?.status).toBe(200);
+    expect(hooked).toEqual([firstId]);
+
+    const fresh = await handleSelfHostedRequest(d, post({ ...INBOUND, source_id: "local-row-2", subject: "fresh import" }));
+    expect(fresh?.status).toBe(201);
+    const freshId = (await fresh!.json()).message.id;
+    expect(hooked).toEqual([firstId, freshId]);
+  });
+
+  test("create without a source_id also runs the hook on the new row", async () => {
+    const d = deps();
+    const hooked = hookSpy(d);
+    const { source_id: _omit, ...noSource } = INBOUND;
+    const res = await handleSelfHostedRequest(d, post(noSource));
+    expect(res?.status).toBe(201);
+    expect(hooked).toEqual([(await res!.json()).message.id]);
+  });
+});

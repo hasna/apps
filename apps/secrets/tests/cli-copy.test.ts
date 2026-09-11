@@ -1,6 +1,8 @@
+import { startLoopbackVault } from "./loopback-vault-fixture.mjs";
+let api: Awaited<ReturnType<typeof startLoopbackVault>>;
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,17 +23,7 @@ const FIXTURE_SHA256 = createHash("sha256").update(FIXTURE_VALUE).digest("hex");
 let vaultDir: string;
 
 function cliEnv(): Record<string, string | undefined> {
-  return {
-    ...process.env,
-    HASNA_SECRETS_DB_PATH: join(vaultDir, "vault.db"),
-    HASNA_SECRETS_KEY_DIR: join(vaultDir, "keys"),
-    // Local runs happen under the test preload's explicit HASNA_SECRETS_LOCAL_VAULT=1
-    // opt-in (owner ruling 2026-09-04: no env => fail closed, no fallback event).
-    // Retired storage-mode variables are a hard error, and there is no
-    // `secrets-local-fallback` event anymore — stderr must be clean. The
-    // corrupting-server test below routes with URL + key only.
-    NO_COLOR: "1",
-  };
+  return { ...api.env() };
 }
 
 async function runCli(args: string[], opts: { env?: Record<string, string | undefined> } = {}) {
@@ -60,6 +52,7 @@ function parseCheck(line: string): { length: number; hash: string } {
 
 beforeAll(async () => {
   vaultDir = mkdtempSync(join(tmpdir(), "secrets-cli-copy-"));
+  api = await startLoopbackVault(vaultDir);
   writeFileSync(join(vaultDir, "not-an-env"), "", { mode: 0o600 });
   const seeded = await runCli(["set", FIXTURE_KEY, FIXTURE_VALUE, "--type", "api_key", "--label", "Source label"]);
   if (seeded.exitCode !== 0) {
@@ -67,7 +60,8 @@ beforeAll(async () => {
   }
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await api?.stop();
   rmSync(vaultDir, { recursive: true, force: true });
 });
 
@@ -214,7 +208,10 @@ describe("CLI copy --verify against a corrupting server", () => {
   });
 
   it("non-zero exit, redacted message, and no value bytes on any surface", async () => {
+    const cloudHome = join(vaultDir, "corrupting-client-home");
+    mkdirSync(cloudHome, { recursive: true });
     const cloudEnv = {
+      HOME: cloudHome,
       HASNA_SECRETS_API_URL: `http://localhost:${server.port}` as const,
       HASNA_SECRETS_API_KEY: "test-api-key" as const,
     };

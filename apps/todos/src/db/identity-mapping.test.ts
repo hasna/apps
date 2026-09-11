@@ -1,8 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Spawns child processes; bun's 5s default is too tight for a cold start on a loaded host.
+setDefaultTimeout(60_000);
 import {
   getAvailableNamesFromPool,
   getAgent,

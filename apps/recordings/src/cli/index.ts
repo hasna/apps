@@ -98,6 +98,7 @@ import {
   prepareReleaseInstallInputs,
 } from "../lib/release-install-policy.js";
 import { exportDesktopSnapshot } from "./desktop-snapshot.js";
+import { buildHostedCommand, reportHostedCLIError } from "./hosted.js";
 
 const program = new Command();
 
@@ -113,6 +114,7 @@ program
   .option("--session <id>", "Session ID");
 
 registerEventsCommands(program, { source: "recordings" });
+program.addCommand(buildHostedCommand());
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_HUMAN_LIST_LIMIT = 50;
@@ -3077,6 +3079,10 @@ async function printJSON(value: unknown): Promise<void> {
 // ── Run ─────────────────────────────────────────────────────────────────────
 
 program.parseAsync().catch((error: unknown) => {
+  if (program.args[0] === "hosted") {
+    process.exitCode = reportHostedCLIError(error);
+    return;
+  }
   const msg = error instanceof Error ? error.message : String(error);
   console.error(`ERROR: ${msg}`);
   process.exit(1);

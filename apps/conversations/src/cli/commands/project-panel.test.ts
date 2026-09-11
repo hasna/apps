@@ -1,45 +1,29 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { createChannel } from "../../lib/channels.js";
-import { closeDb } from "../../lib/db.js";
-import { sendMessage } from "../../lib/messages.js";
-import { createProject } from "../../lib/projects.js";
-
-const TEST_DB = join(tmpdir(), `conversations-test-project-panel-cli-${Date.now()}.db`);
-
-function cleanupDb(): void {
-  closeDb();
-  try { unlinkSync(TEST_DB); } catch {}
-  try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-  try { unlinkSync(`${TEST_DB}-shm`); } catch {}
-}
-
+import { getStore } from "../../lib/store/index.js";
+import { startLoopbackApiFixture } from "../../lib/store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "../../lib/store/test-support/client-environment.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+let restoreClient: () => void;
 function runCli(args: string[]) {
   return Bun.spawnSync({
-    cmd: ["bun", "run", "src/cli/index.tsx", ...args],
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, CONVERSATIONS_DB_PATH: TEST_DB },
+    cmd: [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", ...args],
+    stdout: "pipe", stderr: "pipe", env: fixture.env,
   });
 }
-
-beforeEach(() => {
-  process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-  cleanupDb();
+beforeEach(async () => {
+  fixture = await startLoopbackApiFixture();
+  restoreClient = activateClientEnvironment(fixture.env);
 });
-
-afterEach(() => {
-  cleanupDb();
-  delete process.env.CONVERSATIONS_DB_PATH;
+afterEach(async () => {
+  restoreClient();
+  await fixture.stop();
 });
 
 describe("conversations project-panel CLI", () => {
-  test("prints contract JSON for a seeded project", () => {
-    const project = createProject({ name: "Swiss Bank Account", created_by: "alice" });
-    createChannel("iproj-swiss-bank-account", "alice", { project_id: project.id });
-    sendMessage({
+  test("prints contract JSON for a seeded project", async () => {
+    const project = await getStore().createProject({ name: "Swiss Bank Account", created_by: "alice" });
+    await getStore().createChannel("iproj-swiss-bank-account", "alice", { project_id: project.id });
+    await getStore().sendMessage({
       from: "alice",
       to: "iproj-swiss-bank-account",
       channel: "iproj-swiss-bank-account",
@@ -52,8 +36,7 @@ describe("conversations project-panel CLI", () => {
     const stderr = Buffer.from(result.stderr).toString("utf-8");
 
     expect(result.exitCode).toBe(0);
-    // Local mode announces itself once on stderr (hasna/apps#1720).
-    expect(stderr).toContain("LOCAL mode");
+    expect(stderr).not.toContain("local store");
     const panel = JSON.parse(stdout);
     expect(panel.schema).toBe("hasna.project_panel.v1");
     expect(panel.projectId).toBe("swiss-bank-account");

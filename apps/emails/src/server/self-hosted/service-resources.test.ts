@@ -24,7 +24,10 @@ function tableClient(): TypedQueryClient {
   };
   const insertCols = (sql: string): string[] => {
     const m = sql.match(/INSERT INTO [a-z_]+ \(([^)]+)\)/i);
-    return m ? m[1]!.split(",").map((c) => c.trim()) : [];
+    // Identifiers may be double-quoted (the store quotes every generic-resource
+    // column to keep the reserved word `order` valid on mailbox_filters); strip
+    // the surrounding quotes so rows carry the same keys Postgres would return.
+    return m ? m[1]!.split(",").map((c) => c.trim().replace(/^"|"$/g, "")) : [];
   };
   const client: TypedQueryClient = {
     async query(sql, params) {

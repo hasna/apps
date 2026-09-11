@@ -12,6 +12,7 @@
 // read, and — proven here with a loopback server — no request at all.
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { createSecretsClientFromEnv } from "../src/sdk.js";
+import { SecretsClient } from "../src/sdk.js";
 import type { KeychainCommandRunner } from "../src/store/client.js";
 
 const AMBIENT_KEY = "hasna_secrets_ambient_key_must_not_leak_0001";
@@ -115,5 +116,59 @@ describe("createSecretsClientFromEnv with an explicit baseUrl (#1794)", () => {
     expect(received).toHaveLength(1);
     expect(received[0]!.path).toBe("/v1/secrets");
     expect(received[0]!.apiKey).toBe(AMBIENT_KEY);
+  });
+});
+
+describe("SecretsClient direct construction (#1720 adversarial credential-seam audit)", () => {
+  it("an explicit baseUrl with NO apiKey REFUSES loudly — never an unauthenticated transport", () => {
+    // The direct client carries ONLY what the caller hands it; the ambient
+    // chain (Keychain, credentials file, HASNA_SECRETS_API_KEY) is a factory
+    // concern and is never consulted here. `apiKey: ""` must refuse exactly
+    // like an absent key — a blank key built the same unauthenticated
+    // transport before this fix (`options.apiKey ?? ""`).
+    process.env.HASNA_SECRETS_API_KEY = AMBIENT_KEY;
+    const message = /SECRETS_CLIENT_PIN_REQUIRED: a SecretsClient with an explicit baseUrl requires an explicit apiKey/;
+    expect(() => new SecretsClient({ baseUrl })).toThrow(message);
+    expect(() => new SecretsClient({ baseUrl, apiKey: "" })).toThrow(message);
+    // The refusal names the expected env sources and carries no key VALUE.
+    const text = (() => {
+      try {
+        new SecretsClient({ baseUrl });
+      } catch (error) {
+        return String((error as Error).message);
+      }
+      return "";
+    })();
+    expect(text).toContain("HASNA_SECRETS_API_URL");
+    expect(text).toContain("HASNA_SECRETS_API_KEY");
+    expect(text).not.toContain(AMBIENT_KEY);
+    // Nothing reached the authority — not a probe, not a request.
+    expect(received).toEqual([]);
+  });
+
+  it("a baseUrl WITH an apiKey still constructs and authenticates exactly that key", async () => {
+    const client = new SecretsClient({ baseUrl, apiKey: PINNED_KEY });
+    await client.listSecrets();
+    expect(received).toHaveLength(1);
+    expect(received[0]!.apiKey).toBe(PINNED_KEY);
+    expect(received[0]!.authorization).toBe(`Bearer ${PINNED_KEY}`);
+    expect(JSON.stringify(received)).not.toContain(AMBIENT_KEY);
+  });
+
+  it("a baseUrl with a CredentialProvider is a per-request credential, not a refusal", async () => {
+    const client = new SecretsClient({
+      baseUrl,
+      apiKey: () => ({
+        apiKey: PINNED_KEY,
+        tier: "argument" as const,
+        source: "test",
+        deliberate: true,
+        diskCandidates: [],
+        warning: null,
+      }),
+    });
+    await client.listSecrets();
+    expect(received).toHaveLength(1);
+    expect(received[0]!.apiKey).toBe(PINNED_KEY);
   });
 });

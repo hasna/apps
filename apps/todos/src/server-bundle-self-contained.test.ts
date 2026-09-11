@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import packageJson from "../package.json";
@@ -6,6 +6,10 @@ import {
   createBunPackageIsolatedTempDir,
   projectExternalBunDuplicatePackageWarning,
 } from "./test/bun-fixture-isolation.js";
+
+// Spawns the package build and a real node server boot; bun's 5s default is far
+// too tight for those on any host.
+setDefaultTimeout(60_000);
 
 const root = join(import.meta.dir, "..");
 

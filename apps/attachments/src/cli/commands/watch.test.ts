@@ -6,8 +6,11 @@ configureIntegrationFixture(() => {
   // Hermetic: the shared credential seam's disk tier anchors to this scratch
   // root, so a station's real ~/.hasna/attachments|todos|sessions/config/credentials
   // cannot leak into integration fixtures (or turn the fixture URL into an
-  // authority-conflict refusal).
+  // authority-conflict refusal). The Keychain account is pinned too (see
+  // task-journal.test.ts).
   process.env.HASNA_HOME = mkdtempSync(join(tmpdir(), "attachments-integration-"));
+  process.env.HASNA_CONFIG_HOME = process.env.HASNA_HOME;
+  process.env.HASNA_STATION = "attachments-hermetic-test";
   process.env.HASNA_TODOS_API_URL = "https://todos.example.test";
   process.env.TODOS_API_KEY = "remote-key";
   delete process.env.HASNA_TODOS_API_KEY;

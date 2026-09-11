@@ -6,16 +6,26 @@ import Testing
 private final class ProviderTestRecorder: PCMRecordingSource, @unchecked Sendable {
     private let lock = NSLock()
     private var callback: (@Sendable (Data) -> Void)?
+    private let stopPCM: Data
     private(set) var stopped = false
+    init(stopPCM: Data = Data()) { self.stopPCM = stopPCM }
     func attach(_ callback: @escaping @Sendable (Data) -> Void) { lock.withLock { self.callback = callback } }
     func emit(_ data: Data) { lock.withLock { callback }?(data) }
     func start() throws {}
-    func stop() { lock.withLock { stopped = true } }
+    func stop() {
+        let delivery = lock.withLock { () -> (@Sendable (Data) -> Void)? in
+            guard !stopped else { return nil }
+            stopped = true
+            return callback
+        }
+        if !stopPCM.isEmpty { delivery?(stopPCM) }
+    }
 }
 
 private final class ProviderTestSession: RecordingTranscriptionSession, @unchecked Sendable {
     private let lock = NSLock()
     private var audio = Data()
+    private var packets: [Data] = []
     private var request: RecordingTranscriptionRequest?
     private var partial: (@Sendable (String) -> Void)?
     private var cancelled = false
@@ -26,9 +36,12 @@ private final class ProviderTestSession: RecordingTranscriptionSession, @uncheck
     init(delayFinish: Bool = false) { self.delayFinish = delayFinish }
     var snapshot: (Data, RecordingTranscriptionRequest?, Bool) { lock.withLock { (audio, request, cancelled) } }
     var endedPCM: [Data] { lock.withLock { inputEndings } }
+    var receivedPackets: [Data] { lock.withLock { packets } }
     func configure(_ partial: @escaping @Sendable (String) -> Void) { lock.withLock { self.partial = partial } }
     func emitPartial(_ text: String) { lock.withLock { partial }?(text) }
-    func appendPCM(_ data: Data) { lock.withLock { if !cancelled { audio.append(data) } } }
+    func appendPCM(_ data: Data) {
+        lock.withLock { if !cancelled { audio.append(data); packets.append(data) } }
+    }
     func inputEnded() { lock.withLock { if !cancelled { inputEndings.append(audio) } } }
     func finish(_ request: RecordingTranscriptionRequest) async throws -> RecordingProviderResult {
         if delayFinish {
@@ -114,6 +127,74 @@ struct RecordingProviderTests {
         #expect(transcript.displayText == "Spoken words.")
         #expect(engine.flowPhase == .ready("Transcript ready — auto-paste is off"))
         #expect(engine.persistedRecordingRevision == 0, "An adapter result is not a persistence receipt")
+        #expect(recorder.stopped)
+    }
+
+    @Test("A paused provider receives the entire first packet without waiting for a network chunk or Stop",
+          arguments: [2, 1_600, 3_888, 4_800, 4_802])
+    func subChunkPCMReachesProviderBeforeStop(byteCount: Int) async throws {
+        let session = ProviderTestSession()
+        let recorder = ProviderTestRecorder()
+        let engine = try engine(session, recorder: recorder)
+        defer { engine.cancelRecording() }
+        let pcm = Data((0..<byteCount).map { UInt8(truncatingIfNeeded: $0 * 17) })
+        engine.startRecording()
+        recorder.emit(pcm)
+        #expect(await eventually { engine.isRecording })
+        engine.togglePause()
+        recorder.emit(Data(repeating: 9, count: 4_800))
+        #expect(await eventually { session.snapshot.0 == pcm }, "Pause must not withhold a partial network chunk")
+        #expect(session.receivedPackets == [pcm])
+        #expect(session.endedPCM.isEmpty)
+        #expect(session.snapshot.1 == nil)
+
+        engine.stopAndTranscribe()
+        #expect(await eventually { !engine.isTranscribing })
+        let request = try #require(session.snapshot.1)
+        #expect(session.receivedPackets == [pcm], "Stop must not repeat already delivered PCM")
+        #expect(session.endedPCM == [pcm])
+        #expect(Data(try Data(contentsOf: request.audioURL).dropFirst(44)) == pcm)
+        #expect(request.duration == Double(pcm.count) / 48_000)
+    }
+
+    @Test("Pause and resume preserve packet order; an admitted converter tail precedes inputEnded",
+          arguments: [false, true])
+    func orderedPauseResumeAndConverterTail(stopWhilePaused: Bool) async throws {
+        let session = ProviderTestSession()
+        let converterTail = Data([0x10, 0x20, 0x30, 0x40])
+        let recorder = ProviderTestRecorder(stopPCM: converterTail)
+        let engine = try engine(session, recorder: recorder)
+        defer { engine.cancelRecording() }
+        let first = Data(repeating: 1, count: 4_800)
+        let pauseTail = Data(repeating: 2, count: 3_888)
+        let resumed = [Data([3, 4]), Data(repeating: 5, count: 4_798), Data(repeating: 6, count: 9_602)]
+        engine.startRecording()
+        recorder.emit(first)
+        #expect(await eventually { engine.isRecording && session.snapshot.0 == first })
+        recorder.emit(pauseTail)
+        engine.togglePause()
+        recorder.emit(Data(repeating: 9, count: 5_000))
+        #expect(await eventually { session.snapshot.0 == first + pauseTail })
+        #expect(session.receivedPackets == [first, pauseTail])
+        engine.togglePause()
+        recorder.emit(Data())
+        for packet in resumed { recorder.emit(packet) }
+        let beforeStopPackets = [first, pauseTail] + resumed
+        let beforeStopPCM = beforeStopPackets.reduce(into: Data()) { $0.append($1) }
+        #expect(await eventually { session.snapshot.0 == beforeStopPCM })
+        #expect(session.receivedPackets == beforeStopPackets)
+        #expect(session.endedPCM.isEmpty)
+        if stopWhilePaused { engine.togglePause() }
+
+        engine.stopAndTranscribe()
+        #expect(await eventually { !engine.isTranscribing })
+        let request = try #require(session.snapshot.1)
+        let expectedPackets = beforeStopPackets + (stopWhilePaused ? [] : [converterTail])
+        let expectedPCM = expectedPackets.reduce(into: Data()) { $0.append($1) }
+        #expect(session.receivedPackets == expectedPackets)
+        #expect(session.endedPCM == [expectedPCM], "All admitted PCM must arrive exactly once before inputEnded")
+        #expect(Data(try Data(contentsOf: request.audioURL).dropFirst(44)) == expectedPCM)
+        #expect(request.duration == Double(expectedPCM.count) / 48_000)
         #expect(recorder.stopped)
     }
 

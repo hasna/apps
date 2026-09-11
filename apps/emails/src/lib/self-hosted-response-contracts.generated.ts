@@ -21197,6 +21197,13 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
                 "nullable": true
               },
               "criteria": {},
+              "actions": {},
+              "enabled": {
+                "type": "boolean"
+              },
+              "order": {
+                "type": "integer"
+              },
               "id": {
                 "type": "string"
               },
@@ -21220,6 +21227,9 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
               "normalized_name",
               "mailbox",
               "criteria",
+              "actions",
+              "enabled",
+              "order",
               "created_at",
               "updated_at"
             ],
@@ -21323,6 +21333,13 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
           "nullable": true
         },
         "criteria": {},
+        "actions": {},
+        "enabled": {
+          "type": "boolean"
+        },
+        "order": {
+          "type": "integer"
+        },
         "id": {
           "type": "string"
         },
@@ -21346,6 +21363,9 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
         "normalized_name",
         "mailbox",
         "criteria",
+        "actions",
+        "enabled",
+        "order",
         "created_at",
         "updated_at"
       ],
@@ -21597,6 +21617,13 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
           "nullable": true
         },
         "criteria": {},
+        "actions": {},
+        "enabled": {
+          "type": "boolean"
+        },
+        "order": {
+          "type": "integer"
+        },
         "id": {
           "type": "string"
         },
@@ -21620,6 +21647,9 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
         "normalized_name",
         "mailbox",
         "criteria",
+        "actions",
+        "enabled",
+        "order",
         "created_at",
         "updated_at"
       ],
@@ -21738,6 +21768,13 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
           "nullable": true
         },
         "criteria": {},
+        "actions": {},
+        "enabled": {
+          "type": "boolean"
+        },
+        "order": {
+          "type": "integer"
+        },
         "id": {
           "type": "string"
         },
@@ -21761,6 +21798,9 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
         "normalized_name",
         "mailbox",
         "criteria",
+        "actions",
+        "enabled",
+        "order",
         "created_at",
         "updated_at"
       ],
@@ -21919,6 +21959,13 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
           "nullable": true
         },
         "criteria": {},
+        "actions": {},
+        "enabled": {
+          "type": "boolean"
+        },
+        "order": {
+          "type": "integer"
+        },
         "id": {
           "type": "string"
         },
@@ -21942,6 +21989,9 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
         "normalized_name",
         "mailbox",
         "criteria",
+        "actions",
+        "enabled",
+        "order",
         "created_at",
         "updated_at"
       ],
@@ -22103,6 +22153,24 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
         },
         "truncated": {
           "type": "boolean"
+        },
+        "mutate": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        },
+        "matched": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unchanged": {
+          "type": "integer",
+          "minimum": 0
         }
       },
       "required": [
@@ -22111,6 +22179,32 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
         "limit",
         "offset",
         "truncated"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "applyMailboxFilter",
+    "path": "/v1/mailbox-filters/{id}/apply",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
       ]
     }
   },
@@ -22159,6 +22253,36 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
       "required": [
         "error",
         "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "applyMailboxFilter",
+    "path": "/v1/mailbox-filters/{id}/apply",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "applyMailboxFilter",
+    "path": "/v1/mailbox-filters/{id}/apply",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
       ]
     }
   },

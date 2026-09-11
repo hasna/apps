@@ -23,8 +23,8 @@
  * `https://api.hasna.com/conversations` — URLs never need configuring. A
  * credential that cannot be used, a declared-but-blank variable, an unreadable
  * credential file, an authority that is set but malformed — every one of those
- * THROWS. The SDK is hosted-only (the generated `/v1` client has no local
- * store), so a missing credential is a hard error, never a fallback.
+ * THROWS. The generated `/v1` client speaks HTTP; there is no local-store
+ * transport for it, so a missing credential is a hard error, never a fallback.
  *
  * THE LOCAL OPT-IN IS NOT THIS CLIENT'S TO SERVE. `HASNA_CONVERSATIONS_DB_PATH`
  * selects the on-box SQLite store for the CLI, the MCP server and `getStore()`.
@@ -66,7 +66,7 @@ type SdkEnv = Record<string, string | undefined>;
 
 /** The resolved SDK transport: authority, credential, and WHERE each came from. */
 export interface ConversationsSdkTransport {
-  /** The SDK is hosted-only: every resolved transport talks HTTP to the `/v1` API. */
+  /** Every resolved SDK transport talks HTTP to the `/v1` API (this client has no local-store transport). */
   mode: "http";
   /**
    * Origin (plus any gateway path prefix) WITHOUT the `/v1` suffix, so the
@@ -97,7 +97,7 @@ export interface ResolveConversationsSdkTransportOptions {
   headers?: Record<string, string>;
 }
 
-/** A resolution the hosted-only SDK cannot honour. The code names which rule refused. */
+/** A resolution the SDK's HTTP transport cannot honour. The code names which rule refused. */
 export class ConversationsSdkResolutionError extends Error {
   readonly code: "CONVERSATIONS_CREDENTIAL_MISSING" | "CONVERSATIONS_LOCAL_STORE_SELECTED";
   constructor(code: ConversationsSdkResolutionError["code"], message: string) {
@@ -139,8 +139,8 @@ function resolveSdkCredentialInputs(
   if (isConversationsLocalOptIn(rawEnv)) {
     throw new ConversationsSdkResolutionError(
       "CONVERSATIONS_LOCAL_STORE_SELECTED",
-      `${DB_PATH_KEYS[0]} / ${DB_PATH_KEYS[1]} selects the on-box SQLite store, which the hosted-only ` +
-        "./sdk client cannot talk to. Use getStore() from @hasna/conversations for the local store, or " +
+      `${DB_PATH_KEYS[0]} / ${DB_PATH_KEYS[1]} selects the on-box SQLite store, which the /v1 HTTP ` +
+        "./sdk client cannot talk to. Use getStore() from @hasna/conversations for the on-box store, or " +
         "unset the store path and provide a hosted credential. " + TIERS_CONSULTED,
     );
   }
@@ -176,7 +176,7 @@ function freshSdkCredential(options: ResolveConversationsSdkTransportOptions): s
  * @hasna/contracts client chain. An explicit `baseUrl` pins the credential
  * (tier 1 only — the ambient fleet key is never attached to a caller-chosen
  * authority, #1794); otherwise the chain decides, and a missing credential
- * throws — the SDK is hosted-only and never degrades.
+ * throws — the SDK never degrades into a store it cannot address.
  */
 export function resolveConversationsSdkTransport(
   options: ResolveConversationsSdkTransportOptions = {},
@@ -207,8 +207,8 @@ export function resolveConversationsSdkTransport(
   if (!credential) {
     throw new ConversationsSdkResolutionError(
       "CONVERSATIONS_CREDENTIAL_MISSING",
-      "the /v1 SDK client is hosted-only and no Hasna Conversations credential resolved. " + TIERS_CONSULTED +
-        ` (The on-box store is reachable only through getStore() with ${DB_PATH_KEYS[0]} set — local mode is opt-in, never a fallback.)`,
+      "the /v1 SDK client needs a hosted credential and none resolved. " + TIERS_CONSULTED +
+        ` (The on-box store is reachable only through getStore() with ${DB_PATH_KEYS[0]} set — the on-box store is used only when named, never by default.)`,
     );
   }
   const resolution: ClientTransportResolution = resolveClientTransport(APP, env, {
@@ -228,7 +228,7 @@ export function resolveConversationsSdkTransport(
 }
 
 /**
- * Build the hosted `/v1` client with the fleet resolver behind it.
+ * Build the `/v1` HTTP client with the fleet resolver behind it.
  *
  * The credential is refreshed PER REQUEST, not per client: the generated
  * client stores whatever key it is handed, so a client built once and held
@@ -238,9 +238,9 @@ export function resolveConversationsSdkTransport(
  * transient unreadable Keychain cannot turn a working client into a failing
  * one mid-flight.
  *
- * Throws when no credential resolves: this client speaks only to the hosted
- * authority, so there is no local mode to degrade to. An explicit `baseUrl`
- * without an `apiKey` builds an UNAUTHENTICATED client on purpose (#1794).
+ * Throws when no credential resolves: this client speaks HTTP to the `/v1`
+ * authority only — there is no other transport to degrade to. An explicit
+ * `baseUrl` without an `apiKey` builds an UNAUTHENTICATED client on purpose (#1794).
  */
 export function createConversationsClient(
   options: ResolveConversationsSdkTransportOptions = {},
