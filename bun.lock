@@ -645,7 +645,7 @@
     },
     "apps/mementos": {
       "name": "@hasna/mementos",
-      "version": "0.15.2",
+      "version": "0.15.3",
       "bin": {
         "mementos": "dist/cli/index.js",
         "mementos-mcp": "dist/mcp/index.js",
