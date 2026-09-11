@@ -36,6 +36,10 @@ try {
     devDependencies: {
       typescript: manifest.devDependencies.typescript,
       "@types/bun": manifest.devDependencies["@types/bun"],
+      // Mirror this package's own toolchain: with skipLibCheck=false a floating
+      // @types/node makes bun-types itself fail (measured: 26.x vs bun-types
+      // 1.3.14), which would hide whether OUR declarations are clean.
+      "@types/node": manifest.devDependencies["@types/node"],
     },
   }));
   run(["install", "--ignore-scripts"], consumer, "isolated archive install");
@@ -53,7 +57,18 @@ try {
 import { clientTransportEnvKeys, parseContract, SCHEMA_IDS, type ClientTransportEnvKeys, type ProjectPanel } from "@hasna/contracts";
 import type { ProjectPanel as SchemaPanel } from "@hasna/contracts/schemas";
 import type { ClientTransportEnvKeys as ClientKeys } from "@hasna/contracts/client";
+import { ClientResolutionError, resolveAppHome, selectsLocalStore, type AppHome } from "@hasna/contracts/client";
+import { localOptInEnvKey } from "@hasna/contracts/client/local-opt-in";
 const keys: ClientTransportEnvKeys = clientTransportEnvKeys("fixture");
+// 1.1.0 client surface must type-check from the installed archive too.
+const local: boolean = selectsLocalStore("fixture", {});
+const home: AppHome | null = resolveAppHome("fixture", { HOME: "/fixture-home" }, { scope: "internal" });
+const failure = new ClientResolutionError("CREDENTIAL_ABSENT", "fixture", "fixture message");
+const exitCode: number = failure.exitCode;
+const door: string = localOptInEnvKey("fixture");
+// @ts-expect-error Codes are a closed union.
+const badCode: typeof failure.code = "NOT_A_CODE";
+void local; void home; void exitCode; void door; void badCode;
 const sameKeys: ClientKeys = keys;
 const panel: ProjectPanel = parseContract(SCHEMA_IDS.projectPanel, {});
 const samePanel: SchemaPanel = panel;
