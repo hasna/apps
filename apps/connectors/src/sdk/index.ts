@@ -1,8 +1,15 @@
 /**
- * @hasna/connectors-sdk
+ * @hasna/connectors/sdk
  * Zero-dependency TypeScript SDK for the @hasna/connectors REST API.
  * Default server port: 9876 (matches connectors-serve default).
+ *
+ * Lives inside the one `@hasna/connectors` package as the `./sdk` export
+ * subpath (package-surfaces rule: never a separate `-sdk` package). Imports
+ * node builtins only, so the built `dist/sdk/index.js` is self-contained.
  */
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -214,6 +221,50 @@ export interface ConnectorsClientOptions {
   serverUrl?: string;
   /** Directory where connector binaries are installed. Default: .connectors */
   connectorsDir?: string;
+  /**
+   * Bearer token `connectors-serve` requires on every `/api/*` request.
+   * When omitted the client reads `HASNA_CONNECTORS_SERVE_TOKEN`, then the
+   * owner-only `<connectors home>/serve-token` file the server writes on first
+   * start — the same two sources the server enforces — so a same-user process
+   * needs no configuration. A client with no token gets a 401 from the server,
+   * never silent anonymous access.
+   */
+  token?: string;
+  /**
+   * Environment used to locate the token (`HASNA_CONNECTORS_SERVE_TOKEN`,
+   * `HASNA_CONNECTORS_DIR`, `HOME`). Defaults to `process.env`.
+   */
+  env?: Record<string, string | undefined>;
+}
+
+/** Environment variable that supplies the local serve token (mirrors the server). */
+export const LOCAL_SERVE_TOKEN_ENV = "HASNA_CONNECTORS_SERVE_TOKEN";
+
+/** Header the client sends alongside `Authorization: Bearer`. */
+export const LOCAL_SERVE_TOKEN_HEADER = "X-Connectors-Token";
+
+/**
+ * Locate the local serve token WITHOUT creating one: the environment first,
+ * then `<connectors home>/serve-token`, where the home is
+ * `HASNA_CONNECTORS_DIR` when set, otherwise `~/.hasna/connectors`.
+ *
+ * Reads only node builtins so the SDK bundle stays self-contained; returns
+ * `null` when nothing is configured (the server then answers 401).
+ */
+export function resolveLocalServeToken(
+  env: Record<string, string | undefined> = typeof process !== "undefined" ? (process.env as Record<string, string | undefined>) : {},
+): string | null {
+  const fromEnv = env[LOCAL_SERVE_TOKEN_ENV]?.trim();
+  if (fromEnv) return fromEnv;
+  const exact = env["HASNA_CONNECTORS_DIR"]?.trim();
+  const home = env["HOME"] || env["USERPROFILE"] || (typeof process !== "undefined" ? homedir() : "");
+  const connectorsHome = exact ? exact : join(home, ".hasna", "connectors");
+  try {
+    const value = readFileSync(join(connectorsHome, "serve-token"), "utf-8").trim();
+    return value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface ListOptions {
@@ -598,10 +649,17 @@ function normalizePolicyConnectorLists(input: HostedPolicy): HostedPolicy {
 export class LocalConnectorsClient {
   private readonly baseUrl: string;
   private readonly connectorsDir: string;
+  private readonly token: string | null;
 
   constructor(options: ConnectorsClientOptions = {}) {
     this.baseUrl = (options.serverUrl ?? "http://localhost:9876").replace(/\/$/, "");
     this.connectorsDir = options.connectorsDir ?? ".connectors";
+    this.token = options.token?.trim() || resolveLocalServeToken(options.env);
+  }
+
+  /** True when a serve token was supplied or located; false means the server will answer 401. */
+  get hasToken(): boolean {
+    return this.token !== null;
   }
 
   private async request<T>(
@@ -609,9 +667,17 @@ export class LocalConnectorsClient {
     options?: RequestInit
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
+    const headers = new Headers({ "Content-Type": "application/json" });
+    if (this.token) {
+      headers.set("Authorization", `Bearer ${this.token}`);
+      headers.set(LOCAL_SERVE_TOKEN_HEADER, this.token);
+    }
+    if (options?.headers) {
+      new Headers(options.headers).forEach((value, key) => headers.set(key, value));
+    }
     const res = await fetch(url, {
-      headers: { "Content-Type": "application/json" },
       ...options,
+      headers,
     });
 
     const data = await res.json() as T | ApiError;
