@@ -18,24 +18,28 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHooksServer } from "./server.js";
 import { closeDb } from "../db/index.js";
 import { setPinnedHook, sha256Of } from "../lib/store.js";
+import { pinLocalHookStoreEnv } from "../lib/local-store-test-env.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-mcp-runtools-"));
+
+let restoreLocalEnv: () => void = () => {};
 
 beforeAll(() => {
   closeDb();
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;
   process.env.HASNA_HOOKS_DB_PATH = join(TEST_DIR, "hooks.db");
-  // Explicit local-mode opt-in (fleet fail-closed doctrine): hook events are
-  // hosted by default now, and this file asserts the ON-BOX store, so it
-  // declares the opt-in instead of relying on a silent local default.
-  process.env.HASNA_HOOKS_LOCAL = "1";
+  // Hook events are hosted by default and the local opt-in is not a trump
+  // card: this suite asserts rows in the ON-BOX store, so it removes every
+  // authority variable as well (bun runs all files in one process and
+  // qa-regressions exports a live HASNA_HOOKS_API_KEY while it runs).
+  restoreLocalEnv = pinLocalHookStoreEnv();
   process.env.HASNA_HOOKS_LOCK_PATH = join(TEST_DIR, "hooks.lock");
 });
 
 afterAll(() => {
   delete process.env.HASNA_HOOKS_DATA_DIR;
   delete process.env.HASNA_HOOKS_DB_PATH;
-  delete process.env.HASNA_HOOKS_LOCAL;
+  restoreLocalEnv();
   delete process.env.HASNA_HOOKS_LOCK_PATH;
   closeDb();
   rmSync(TEST_DIR, { recursive: true, force: true });

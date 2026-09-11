@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { tmpdir } from "os";
+import { localHookStoreChildEnv } from "../lib/local-store-test-env.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOOKS_DIR = join(__dirname, "..", "..", "hooks");
@@ -639,10 +640,11 @@ describe("observability hooks write to SQLite", () => {
       stdin: new Response(JSON.stringify(input)),
       stdout: "pipe",
       stderr: "pipe",
-      // Explicit local-mode opt-in (fleet fail-closed doctrine): these hooks
-      // post to the hosted /api/v1/events route by default now, and this
-      // block asserts the ON-BOX store, so it declares the opt-in.
-      env: { ...process.env, HOOKS_DB_PATH: dbPath, HOOKS_LOCAL: "1" },
+      // These hooks post to the hosted /api/v1/events route by default now,
+      // and this block asserts the ON-BOX store: the child env carries the
+      // opt-in AND no authority variable (the opt-in alone loses to a
+      // configured registry, by design).
+      env: localHookStoreChildEnv({ HOOKS_DB_PATH: dbPath }),
     });
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),

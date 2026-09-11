@@ -155,7 +155,9 @@ describe("the sink posts to the hosted route", () => {
   test("the request carries the resolved key as x-api-key and never in the URL", async () => {
     const env = hostedEnv();
     const seen: Array<{ method: string; url: string; headers: Record<string, string>; body: unknown }> = [];
-    const fetchImpl: typeof fetch = async (input, init) => {
+    // Cast: a stub only needs to be callable like fetch; `typeof fetch`
+    // additionally demands Bun's `fetch.preconnect`.
+    const fetchImpl = (async (input: URL | RequestInfo, init?: RequestInit) => {
       const url = typeof input === "string" ? input : (input as Request).url;
       seen.push({
         method: init?.method ?? "GET",
@@ -167,7 +169,7 @@ describe("the sink posts to the hosted route", () => {
         status: 201,
         headers: { "content-type": "application/json" },
       });
-    };
+    }) as unknown as typeof fetch;
 
     await postHookEvents([{ session_id: "s", hook_name: "h", event_type: "Stop" }], { env, fetchImpl });
     expect(seen).toHaveLength(1);
@@ -183,12 +185,12 @@ describe("reads and deletes go through the route", () => {
   test("listHookEvents forwards every filter as a query parameter", async () => {
     const env = hostedEnv();
     let requested = "";
-    const fetchImpl: typeof fetch = async (input) => {
+    const fetchImpl = (async (input: URL | RequestInfo) => {
       requested = typeof input === "string" ? input : (input as Request).url;
       return new Response(JSON.stringify({ events: [], count: 0 }), {
         headers: { "content-type": "application/json" },
       });
-    };
+    }) as unknown as typeof fetch;
     await listHookEvents(
       { hook: "commandlog", session: "sess", since: "2026-09-11T00:00:00.000Z", search: "git", errorsOnly: true, limit: 7 },
       { env, fetchImpl },

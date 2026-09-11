@@ -11,22 +11,26 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { runHook } from "../index.js";
 import { getDb, closeDb } from "../db/index.js";
+import { localHookStoreChildEnv, pinLocalHookStoreEnv } from "./local-store-test-env.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-eventlog-test-"));
+
+let restoreLocalEnv: () => void = () => {};
 
 beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;
   process.env.HASNA_HOOKS_DB_PATH = ":memory:";
-  // Explicit local-mode opt-in (fleet fail-closed doctrine): hook events are
-  // hosted by default now, and this file asserts the ON-BOX store, so it
-  // declares the opt-in instead of relying on a silent local default.
-  process.env.HASNA_HOOKS_LOCAL = "1";
+  // Hook events are hosted by default and the local opt-in is not a trump
+  // card: this suite asserts rows in the ON-BOX store, so it removes every
+  // authority variable as well (bun runs all files in one process and
+  // qa-regressions exports a live HASNA_HOOKS_API_KEY while it runs).
+  restoreLocalEnv = pinLocalHookStoreEnv();
 });
 
 afterAll(() => {
   delete process.env.HASNA_HOOKS_DATA_DIR;
   delete process.env.HASNA_HOOKS_DB_PATH;
-  delete process.env.HASNA_HOOKS_LOCAL;
+  restoreLocalEnv();
   closeDb();
   rmSync(TEST_DIR, { recursive: true, force: true });
 });
@@ -167,7 +171,7 @@ describe("hook run event logging (bug ef58dcb7)", () => {
       stdin: new Response(JSON.stringify({ hook_event_name: "PreToolUse" })),
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, HASNA_HOOKS_DATA_DIR: TEST_DIR, HASNA_HOOKS_DB_PATH: cliDbPath, HASNA_HOOKS_LOCAL: "1" },
+      env: localHookStoreChildEnv({ HASNA_HOOKS_DATA_DIR: TEST_DIR, HASNA_HOOKS_DB_PATH: cliDbPath }),
     });
     const [cliOut, cliErr] = await Promise.all([
       new Response(proc.stdout as ReadableStream).text(),

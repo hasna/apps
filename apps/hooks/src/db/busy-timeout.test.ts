@@ -10,15 +10,23 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { closeDb, getDb, getDbPath } from "./index.js";
+import { localHookStoreChildEnv, pinLocalHookStoreEnv } from "../lib/local-store-test-env.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-busy-test-"));
 const DATA_DIR = join(TEST_DIR, "data");
 const DB_PATH = join(DATA_DIR, "hooks.db");
 const CLI = join(import.meta.dir, "..", "..", "src", "cli", "index.tsx");
 
+let restoreLocalEnv: () => void = () => {};
+
 beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = DATA_DIR;
   process.env.HASNA_HOOKS_DB_PATH = DB_PATH;
+  // Hook events are hosted by default and the local opt-in is not a trump
+  // card: this suite asserts rows in the ON-BOX store, so it removes every
+  // authority variable as well (bun runs all files in one process and
+  // qa-regressions exports a live HASNA_HOOKS_API_KEY while it runs).
+  restoreLocalEnv = pinLocalHookStoreEnv();
   mkdirSync(DATA_DIR, { recursive: true });
   const hookDir = join(DATA_DIR, "hooks", "busy-demo");
   mkdirSync(hookDir, { recursive: true });
@@ -38,6 +46,7 @@ beforeAll(() => {
 afterAll(() => {
   delete process.env.HASNA_HOOKS_DATA_DIR;
   delete process.env.HASNA_HOOKS_DB_PATH;
+  restoreLocalEnv();
   closeDb();
   rmSync(TEST_DIR, { recursive: true, force: true });
 });
@@ -59,12 +68,11 @@ describe("SQLITE_BUSY fix (QA-4 bug 09094299)", () => {
         stdin: new Response(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", command: "ls" })),
         stdout: "pipe",
         stderr: "pipe",
-        env: {
-          ...process.env,
+        env: localHookStoreChildEnv({
           HASNA_HOOKS_DATA_DIR: DATA_DIR,
           HASNA_HOOKS_DB_PATH: DB_PATH,
           NO_COLOR: "1",
-        },
+        }),
       }),
     );
     const results = await Promise.all(runs.map(async (p) => {
