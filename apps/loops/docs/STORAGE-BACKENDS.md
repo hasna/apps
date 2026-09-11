@@ -292,9 +292,11 @@ service is live by default.
 
 ## Contracts Note
 
-Until the in-flight `hasna/contracts` hotfix ships, the currently installed
-contracts schema still REQUIRES `serviceSurfaces[].deploymentModes` on service
-manifests, so a working `hasna.contract.json` must keep that field (dormant) or
-it fails validation. Treat it as transitional: do not hand-strip it from
-working manifests, and do not add mode vocabulary to new configuration. The
-field is removed once the hotfix schema lands.
+`serviceSurfaces[].deploymentModes` is gone from the service contract schema:
+the removal shipped in `@hasna/contracts`, which this package depends on at
+1.0.2, and no published version of the package carries the field any more.
+Surface objects are closed with `additionalProperties: false`, so a
+`hasna.contract.json` that still carries the field is now REJECTED rather than
+tolerated. Do not add mode vocabulary to new configuration, and drop the
+dormant field from a manifest when you next touch it. The contract kit's
+canonical source is `apps/contracts` in the `hasna/apps` monorepo.

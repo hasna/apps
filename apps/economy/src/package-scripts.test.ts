@@ -31,4 +31,16 @@ describe('published artifact gate', () => {
     const scan = packageJson().scripts?.['artifact-scan'] ?? ''
     expect(scan).toMatch(/artifact-scan\s+\S+/)
   })
+
+  test('build:server emits the pg-sync-worker sibling the Postgres serve requires at runtime', () => {
+    // The serve runs every Postgres query on a bundled worker thread
+    // (src/db/sync-pg.ts resolves `pg-sync-worker.<ext>` next to its own
+    // module). A `build:server` that emits only index.js leaves the runtime
+    // resolving the dev-source `.ts` path from dist/, where the worker cannot
+    // load and EVERY Postgres-backed query dies with "Worker has been
+    // terminated" (InvalidStateError). Regression: hasna/apps economy
+    // all-commands campaign.
+    const buildServer = packageJson().scripts?.['build:server'] ?? ''
+    expect(buildServer).toContain('bun build src/db/pg-sync-worker.ts --outdir dist/server')
+  })
 })

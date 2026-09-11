@@ -362,7 +362,7 @@ export function splitDomain(domain: string): { sld: string; tld: string } {
 }
 
 // ============================================================
-// Sync to Local DB
+// Sync to Portfolio (through the shared store facade)
 // ============================================================
 
 export async function syncToLocalDb(dbFunctions: {

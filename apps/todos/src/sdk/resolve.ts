@@ -27,15 +27,18 @@
  *
  * LOCAL MODE IS DELIBERATE, NEVER A FALLBACK FROM FAILURE. `TodosClient` speaks
  * the `/api/*` plane that `todos-serve` exposes on a workstation, so the
- * unhosted default — `http://localhost:19427`, no credential — is a real
- * product mode rather than a silent degradation. It is therefore reachable in
- * exactly two ways: the deliberate opt-in `HASNA_TODOS_LOCAL=1`, or an
- * environment where NOTHING resolves at all. A credential that resolves but
- * cannot be used, an unreadable credential file, an authority that is set but
- * malformed — every one of those THROWS. And when local mode is selected the
- * SDK says so, once per process, on stderr: a client silently talking to an
- * empty local store while the operator believes it is on the fleet is the
- * false-green this whole ruling exists to end.
+ * unhosted `http://localhost:19427` (no credential) is a real product mode —
+ * but it is reachable in exactly ONE way: the explicit opt-in
+ * `HASNA_TODOS_LOCAL=1` (alias `TODOS_LOCAL=1`), answered before the resolver
+ * runs. An environment where nothing resolves at all THROWS
+ * `TODOS_CREDENTIAL_MISSING`, the same as `createTodosV1Client`; it used to
+ * degrade to the local serve with only a stderr notice, which the 2026-09-04
+ * fail-closed ruling (owner ruling 2026-09-07, hasna/apps#1720 validation)
+ * forbids: "nothing configured" is exactly the state in which a client
+ * silently reading an empty local store looks healthy. A credential that
+ * resolves but cannot be used, an unreadable credential file, an authority that
+ * is set but malformed — every one of those throws too. And when local mode IS
+ * selected the SDK says so, once per process, on stderr.
  */
 import {
   ClientTransportConfigurationError,
@@ -51,10 +54,22 @@ import { selectsTodosLocalStore, todosResolverInputs } from "../lib/local-opt-in
 /** The unhosted `todos-serve` a workstation runs. Never a hosted authority. */
 export const TODOS_LOCAL_SERVE_URL = "http://localhost:19427";
 
+/**
+ * The refusal every hosted SDK entry point raises when the chain resolves no
+ * credential. It names every tier consulted and the one deliberate way to go
+ * local; it never carries a value.
+ */
+export const TODOS_CREDENTIAL_MISSING_MESSAGE =
+  "TODOS_CREDENTIAL_MISSING: no Hasna Todos credential resolved. Looked at " +
+  "HASNA_TODOS_API_KEY_OVERRIDE / HASNA_PROFILE / HASNA_TODOS_API_KEY_REF, the Keychain item " +
+  "hasna.credentials.todos.api-key, ~/.hasna/todos/config/credentials, then HASNA_TODOS_API_KEY. " +
+  "There is no local fallback: the on-box todos-serve is opt-in only (HASNA_TODOS_LOCAL=1, alias " +
+  "TODOS_LOCAL=1) and is disabled by default — failing closed.";
+
 type Env = Record<string, string | undefined>;
 
 export interface TodosSdkTransport {
-  /** `"http"` for a resolved hosted authority, `"local-serve"` for the unhosted default. */
+  /** `"http"` for a resolved hosted authority, `"local-serve"` under the explicit local opt-in. */
   mode: "http" | "local-serve";
   /**
    * Origin (plus any gateway path prefix) WITHOUT the `/v1` suffix, so a caller
@@ -93,21 +108,23 @@ function stripV1(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
 }
 
-function announceLocal(notice: ((line: string) => void) | undefined, reason: string): void {
+function announceLocal(notice: ((line: string) => void) | undefined): void {
   if (localNoticePrinted) return;
   localNoticePrinted = true;
   const line =
-    `todos: LOCAL mode — no Hasna credential resolved (${reason}); reading and writing the local ` +
-    `todos-serve at ${TODOS_LOCAL_SERVE_URL}, not the hosted fleet. Set HASNA_TODOS_API_KEY, add the ` +
-    `Keychain item hasna.credentials.todos.api-key, or write ~/.hasna/todos/config/credentials to go hosted.`;
+    `todos: LOCAL mode — HASNA_TODOS_LOCAL is set and nothing configures a Todos authority; reading and ` +
+    `writing the local todos-serve at ${TODOS_LOCAL_SERVE_URL}, not the hosted fleet. Unset it, and ` +
+    `provide a credential via the Keychain item hasna.credentials.todos.api-key, ` +
+    `~/.hasna/todos/config/credentials, or HASNA_TODOS_API_KEY, to work against https://api.hasna.com/todos.`;
   if (notice) notice(line);
   else if (typeof process !== "undefined") process.stderr.write(`${line}\n`);
 }
 
 /**
  * Resolve the SDK's authority and credential. Explicit arguments win; otherwise
- * the @hasna/contracts chain decides, and only a fully unconfigured environment
- * (or the deliberate opt-in) lands on the local serve.
+ * the @hasna/contracts chain decides, and ONLY the deliberate opt-in lands on
+ * the local serve — an environment that resolves nothing throws
+ * {@link TODOS_CREDENTIAL_MISSING_MESSAGE}.
  */
 export function resolveTodosSdkTransport(
   options: ResolveTodosSdkTransportOptions = {},
@@ -136,9 +153,10 @@ export function resolveTodosSdkTransport(
   }
 
   // The same preamble the CLI runs: a configured environment outranks the
-  // opt-in, so this arm is reached only when nothing at all is configured.
+  // opt-in, so this arm is reached only when nothing at all is configured AND
+  // the operator asked for the local serve. It is the ONLY way to get here.
   if (selectsTodosLocalStore(env)) {
-    announceLocal(options.notice, "HASNA_TODOS_LOCAL is set and nothing configures an authority");
+    announceLocal(options.notice);
     return {
       mode: "local-serve",
       baseUrl: TODOS_LOCAL_SERVE_URL,
@@ -168,25 +186,19 @@ export function resolveTodosSdkTransport(
   try {
     resolution = resolveClientTransport("todos", env, chainOptions);
   } catch (error) {
-    // ONLY "nothing is configured at all" degrades to the local serve. Every
-    // other refusal — a disagreeing pair, an unreadable credential file, a URL
-    // without a key — is a misconfiguration the operator has to see, and
-    // silently serving an empty local store instead is the false green this
-    // fails loudly to avoid. A declared-but-blank authority variable is not one
-    // of them: `todosResolverInputs` above removes it, so it resolves the next
-    // tier exactly as an unset variable would.
+    // "Nothing is configured at all" is a REFUSAL, not a route to the local
+    // serve: the arm that used to map this failure to `local-serve` with a
+    // stderr notice is gone (hasna/apps#1720 validation, owner ruling
+    // 2026-09-07). It is re-thrown under the stable TODOS_CREDENTIAL_MISSING
+    // code that `createTodosV1Client` already used, with the resolver's own
+    // message — which names every tier it consulted — kept as the cause. Every
+    // other refusal (a blank variable, a disagreeing pair, an unreadable
+    // credential file, a URL without a key) propagates untouched.
     if (
       error instanceof ClientTransportConfigurationError &&
       /is not set and no API key could be resolved/.test(error.message)
     ) {
-      announceLocal(options.notice, "nothing configured a Hasna Todos credential");
-      return {
-        mode: "local-serve",
-        baseUrl: TODOS_LOCAL_SERVE_URL,
-        apiKey: null,
-        apiKeySource: null,
-        apiUrlSource: "local-serve",
-      };
+      throw new Error(`${TODOS_CREDENTIAL_MISSING_MESSAGE} ${error.message}`, { cause: error });
     }
     throw error;
   }
@@ -215,7 +227,7 @@ export function resolveTodosSdkTransport(
  * copy of the chain.
  *
  * Throws when no credential resolves: this client speaks only to the hosted
- * authority, so there is no local mode to degrade to.
+ * authority, so even the explicit local opt-in is refused here.
  */
 export function createTodosV1Client(
   options: ResolveTodosSdkTransportOptions & Pick<TodosV1ClientOptions, "fetch" | "headers"> = {},
@@ -223,9 +235,7 @@ export function createTodosV1Client(
   const resolved = resolveTodosSdkTransport(options);
   if (resolved.mode !== "http" || !resolved.apiKey) {
     throw new Error(
-      "TODOS_CREDENTIAL_MISSING: the /v1 client is hosted-only and no Hasna Todos credential resolved. " +
-        "Looked at HASNA_TODOS_API_KEY_OVERRIDE / HASNA_PROFILE / HASNA_TODOS_API_KEY_REF, the Keychain item " +
-        "hasna.credentials.todos.api-key, ~/.hasna/todos/config/credentials, then HASNA_TODOS_API_KEY.",
+      `${TODOS_CREDENTIAL_MISSING_MESSAGE} The /v1 client is hosted-only: the local opt-in does not apply to it.`,
     );
   }
   // PER-CALL, NOT PER-CLIENT. `TodosV1Client` is generated from the OpenAPI
@@ -241,10 +251,10 @@ export function createTodosV1Client(
   const baseFetch = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
   // The per-request re-resolution must not TALK. It re-runs the same resolution
   // that already succeeded above against the same environment, so any notice it
-  // produces is about a state this client is not in: a mid-flight degradation
-  // prints the "LOCAL mode — ... not the hosted fleet" line while the client is
-  // still addressing its original hosted authority with its constructed key.
-  // The refreshed credential is used; the commentary is dropped.
+  // could produce (the opt-in line, if the operator flips HASNA_TODOS_LOCAL on
+  // mid-process) is about a state this client is not in: it is still addressing
+  // its original hosted authority with its constructed key. The refreshed
+  // credential is used; the commentary is dropped.
   const refreshOptions: ResolveTodosSdkTransportOptions = { ...options, notice: () => {} };
   const fetchWithFreshCredential = ((input: RequestInfo | URL, init?: RequestInit) => {
     // Normalise whatever shape the init carries. The generated client hands us

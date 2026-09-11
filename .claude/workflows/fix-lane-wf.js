@@ -74,7 +74,7 @@ const plan = await agent(
 Task title/summary: ${SUMMARY}
 
 IDEMPOTENCY CHECK FIRST — before any investigation work, verify ALL of:
-1. The row ${TASK_ID} is still pending and unowned (re-read it via the todos CLI; an exact-line short-id match in <scratch>/task-drain-seen.txt naming this lane counts as unowned). <scratch> is the absolute directory that ONE 'scratchpad path' call prints — make that call once, then write there with ordinary file I/O. Scratch NEVER goes in /tmp; if the scratchpad CLI is not installed on this station, STOP and report the missing CLI rather than substituting /tmp.
+1. The row ${TASK_ID} is still pending and unowned (re-read it via the todos CLI; an exact-line short-id match in <scratch>/task-drain-seen.txt naming this lane counts as unowned). <scratch> is $HOME/Workspace/scratch/fix-lane/ — mkdir -p it once, then write there with ordinary file I/O (scratch-layout ruling: NEVER /tmp, NEVER an app home such as ~/.hasna/<app> or ~/.hasna-internal/<app>, never the repo tree).
 2. NO live fixer: no in_progress row, no open PR, no branch, no workflow run already repairing this exact defect (search todos comments + open PRs on the owning repo; a comment naming a workstream or an open PR touching the same package = live).
 3. The defect still reproduces at CURRENT origin/main HEAD (pull the repo first; if the defect is already fixed at head, that is a legitimate stop).
 If ANY of 1-3 fails, STOP: do not write code, do not open a PR. Report which check failed and the evidence.

@@ -18,7 +18,7 @@
 // selector. Callers NEVER branch on mode themselves and NEVER touch sqlite or
 // fetch directly — that was the split-brain bug this module eliminates.
 //
-// `self_hosted` and `cloud` are the SAME client code (ApiStore); only the URL and
+// `hosted` and `cloud` are the SAME client code (ApiStore); only the URL and
 // key differ, and that distinction is server-side tenancy. `local` is
 // first-class and fully functional.
 //
@@ -813,8 +813,8 @@ export class ApiStore implements EconomyStore {
  * Resolve the active {@link EconomyStore} for the current environment. Returns an
  * {@link ApiStore} when the @hasna/contracts resolver produces an authenticated
  * cloud-http client, else a {@link LocalStore} when the explicit local opt-in
- * applies; a retired `HASNA_ECONOMY_STORAGE_MODE`-family variable is a hard
- * error, and NO credential + no opt-in FAILS CLOSED. Throws if the API is
+ * applies; stale `HASNA_ECONOMY_STORAGE_MODE`-family variables are ignored, and
+ * NO credential + no opt-in FAILS CLOSED. Throws if the API is
  * configured but misconfigured (so callers can never silently read the wrong
  * dataset).
  */

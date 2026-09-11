@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.1
+
+### Patch Changes
+
+- Wait briefly for the exact paste target to become active before preparing the clipboard. Use one cooperative activation request, preserve process and permission checks, and stop waiting after 1.5 seconds or recording cancellation.
+- af14ca1: Make the native recorder ready for the next recording immediately after paste delivery is confirmed, removing the extra 600 ms clipboard grace period on that path. Restore the previous clipboard only while the transaction still owns it, and retain the existing grace period when delivery cannot be confirmed.
+- Allow native callers to freeze the paste destination when recording stops, preserving exact process identity and discarding stale selection context when the destination changes.
+
+## 0.5.0
+
+### Minor Changes
+
+- Add an explicit hosted JSON client under `@hasna/recordings/hosted`, sharing
+  structural wire contracts while preserving the legacy SDK. Bound requests before
+  credential access, retain end-to-end cancellation and decoded response limits,
+  and expose safe status-aware errors without automatic retries.
+- Add transport-neutral hosted-v1 and stream-v1 contract exports with structural
+  parser interfaces, plain DTOs and fictional interoperability fixtures. Validate
+  hosted inputs, compatible wire metadata and bounded PCM/control events without
+  changing the existing SDK, CLI, MCP, server or native interfaces.
+
+### Patch Changes
+
+- Prevent concurrently launched command helpers from inheriting unrelated pipe descriptors while preserving their standard streams. Retain phase diagnostics for command rewrite deadline failures.
+- Count queue admission and command preparation against the existing native rewrite
+  deadline. Refuse exhausted work before command execution while preserving process
+  cleanup, capture-reader joins, and the interactive return reserve.
+
 ## 0.4.1
 
 ### Patch Changes

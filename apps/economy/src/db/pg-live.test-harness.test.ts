@@ -112,7 +112,7 @@ describe('live PostgreSQL gate (storage.pgTestGate)', () => {
         applicationName: 'economy-pg-gate',
       })
       try {
-        const rows = await pool.query('SELECT index FROM _pg_migrations ORDER BY index')
+        const rows = await pool.query('SELECT version FROM _pg_migrations ORDER BY version')
         expect(rows.rowCount).toBe(result.applied.length)
       } finally {
         await pool.end()

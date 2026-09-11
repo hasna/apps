@@ -29,6 +29,23 @@ export function resolveMcpHttpPort(
   return harnessResolveMcpHttpPort({ argv, env, default: DEFAULT_MCP_HTTP_PORT });
 }
 
+/**
+ * Which transport `files-mcp` serves. Stdio is the DEFAULT — the fleet
+ * convention, and what `--help` and the README document — and Streamable
+ * HTTP is the opt-in (`--http` or `MCP_HTTP=1`). A flag beats the
+ * environment, and `--stdio` always wins, so `MCP_HTTP=1 files-mcp --stdio`
+ * still serves stdio. (The published 0.4.0 had this inverted and bound
+ * 127.0.0.1 whenever `--stdio` was absent.)
+ */
+export function selectsMcpHttpTransport(
+  argv: readonly string[] = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (argv.includes("--stdio")) return false;
+  if (argv.includes("--http")) return true;
+  return isHttpMode(argv, env) && !isStdioMode(argv, env);
+}
+
 export async function startMcpHttpServer(
   buildServer: () => McpServer,
   options?: { port?: number; host?: string; serviceName?: string },

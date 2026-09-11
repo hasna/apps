@@ -303,7 +303,7 @@ ROLE: build verification (Opus). In the worktree ~/.hasna/repos/worktrees/apps/b
   // The real-user live verify is the exit gate: every command exercised live.
   phase('LocalVerify')
   local = await safeAgent(`${CONST}
-ROLE: local live verification (Opus) — YOU ARE THE REAL USER. In your scratch directory (ONE 'scratchpad path' call returns its absolute path; then ordinary file I/O there — NEVER /tmp, never the repo; if the scratchpad CLI is not installed on this station, STOP and report the missing CLI rather than substituting /tmp), exercise EVERY CLI command live as a user actually would: real operations against the real store, real effects, real outputs read and checked — never --help-only, never rc=0-only. For EACH command return {command, verdict: GO|NO_GO, evidence} where evidence is the actual output line(s) that prove the behavior.
+ROLE: local live verification (Opus) — YOU ARE THE REAL USER. In your scratch directory $HOME/Workspace/scratch/build-and-ship-workflows-app/ (mkdir -p it first; ordinary file I/O there — NEVER /tmp, NEVER an app home such as ~/.hasna/<app> or ~/.hasna-internal/<app>, never the repo tree), exercise EVERY CLI command live as a user actually would: real operations against the real store, real effects, real outputs read and checked — never --help-only, never rc=0-only. For EACH command return {command, verdict: GO|NO_GO, evidence} where evidence is the actual output line(s) that prove the behavior.
 
 THE FULL COMMAND SET (14 verbs — every one verified live):
 1. workflows init — creates ~/.hasna/workflows (workflows/ + sessions/ + workflows.db) in the scratch HOME; the store exists after.

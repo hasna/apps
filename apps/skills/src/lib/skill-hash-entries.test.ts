@@ -6,7 +6,8 @@ import { Hash, type BinaryLike, type Encoding } from "node:crypto";
 import { getEventListeners } from "node:events";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { collectSkillBundleEntries, inspectSkillBundle, packSkillBundle, type SkillBundleEntry } from "./skill-bundle.js";
-import { computeContentHash, computeContentHashFromEntries, verifyContentHashFromEntries, ContentHashInputError, CONTENT_HASH_LIMITS, type ContentHashInputErrorCode, type ContentHashOptions } from "./skill-hash.js";
+import { canonicalizeManifest, computeContentHash, computeContentHashFromEntries, verifyContentHashFromEntries, ContentHashInputError, CONTENT_HASH_LIMITS, type ContentHashInputErrorCode, type ContentHashOptions } from "./skill-hash.js";
+import { validatePortableManifestContract } from "./skill-contract.js";
 import { revisionIdOf, type RevisionContent } from "./revision.js";
 import { contentEntry, contentHashFixture } from "./skill-hash-entries.fixture.js";
 
@@ -71,6 +72,43 @@ test("excluded paths do not affect identity but covered regular build filenames 
   expect(await computeContentHashFromEntries(entries)).toBe(GOLDEN_HASH);
   entries.find(entry => entry.path === "scripts/build")!.bytes = new TextEncoder().encode("changed included regular file");
   expect(await computeContentHashFromEntries(entries)).not.toBe(GOLDEN_HASH);
+});
+
+test("canonical manifest sorting preserves own prototype-named JSON keys at every depth", () => {
+  const first = '{"nested":[{"b":2,"__proto__":{"owned":3},"a":1}],"constructor":{"prototype":{"owned":2}},"__proto__":{"owned":1},"provenance":{"content_hash":"self","__proto__":{"owned":4}},"content_hash":"self"}';
+  const reordered = '{"__proto__":{"owned":1},"content_hash":"other-self","constructor":{"prototype":{"owned":2}},"provenance":{"__proto__":{"owned":4},"content_hash":"other-self"},"nested":[{"a":1,"__proto__":{"owned":3},"b":2}]}';
+  const canonical = canonicalizeManifest(first), parsed = JSON.parse(canonical);
+  expect(canonicalizeManifest(reordered)).toBe(canonical);
+  expect(Object.keys(parsed)).toEqual(["__proto__", "constructor", "nested", "provenance"]);
+  expect(Object.hasOwn(parsed, "__proto__")).toBe(true);
+  expect(parsed.__proto__).toEqual({ owned: 1 });
+  expect(parsed.constructor).toEqual({ prototype: { owned: 2 } });
+  expect(Object.keys(parsed.nested[0])).toEqual(["__proto__", "a", "b"]);
+  expect(parsed.nested[0].__proto__).toEqual({ owned: 3 });
+  expect(Object.hasOwn(parsed.provenance, "__proto__")).toBe(true);
+  expect(parsed.provenance.__proto__).toEqual({ owned: 4 });
+  expect(parsed.provenance.content_hash).toBeUndefined();
+  expect(({} as Record<string, unknown>).owned).toBeUndefined();
+});
+
+test("own prototype-named manifest data cannot collide or change under a valid declaration", async () => {
+  const raw = '{"standard":"hasna.skill.v1","name":"owned-key","description":"Owned identity fixture","version":"1.0.0","inputs":[],"commands":[],"runtime":{"runtime":"bun","entrypoint":"src/index.ts","sandbox":"readonly-fs"},"provenance":{},"extensions":{"__proto__":{"owned":1},"constructor":{"prototype":{"owned":2}}}}';
+  const parsed = JSON.parse(raw), entries = [contentEntry("skill.json", raw)];
+  const originalHash = await computeContentHashFromEntries(entries);
+  const removed = JSON.parse(raw); delete removed.extensions.__proto__;
+  expect(await computeContentHashFromEntries([contentEntry("skill.json", JSON.stringify(removed))])).not.toBe(originalHash);
+  const changedConstructor = JSON.parse(raw); changedConstructor.extensions.constructor.prototype.owned = 3;
+  expect(await computeContentHashFromEntries([contentEntry("skill.json", JSON.stringify(changedConstructor))])).not.toBe(originalHash);
+  await directory(entries, async root => expect(computeContentHash(root)).toBe(originalHash));
+  parsed.provenance.content_hash = originalHash;
+  expect(validatePortableManifestContract(parsed, { strict: true })).toEqual([]);
+  expect(await verifyContentHashFromEntries([contentEntry("skill.json", JSON.stringify(parsed))]))
+    .toEqual({ declared: true, valid: true, declaredHash: originalHash, computedHash: originalHash });
+  parsed.extensions.__proto__.owned = 2;
+  const verification = await verifyContentHashFromEntries([contentEntry("skill.json", JSON.stringify(parsed))]);
+  expect(verification.declared).toBe(true); expect(verification.valid).toBe(false);
+  expect(verification.declaredHash).toBe(originalHash); expect(verification.computedHash).not.toBe(originalHash);
+  expect(new TextDecoder().decode(entries[0]!.bytes)).toBe(raw);
 });
 
 test("verification binds the same captured manifest and validates entries even without a usable declaration", async () => {

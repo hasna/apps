@@ -58,7 +58,8 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/orgs.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/orgs"
   },
   "homepage": "https://github.com/hasna/orgs",
   "bugs": {
