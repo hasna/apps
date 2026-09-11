@@ -26,6 +26,7 @@ import {
   workspaceRevision,
   workspaceSnapshot,
 } from "../lib/guarded-project-mutation.js";
+import { assertProjectChannelIntegrationWritable } from "../lib/project-channel-guard.js";
 import {
   assertProjectResourceLinkIntegrationMutation,
   assertProjectResourceLinkReadContractEquality,
@@ -1101,6 +1102,23 @@ export class ProjectsPgStore {
     // otherwise a duplicate request can point at the first project's path and
     // conversations channel. Explicit client values still win in the helper.
     const derived = deriveWorkspaceRegistryFields(input, { root, slug, id, kind });
+    // Create-time channel guard (BUG-0076 path (b), caller-supplied half): a
+    // caller-supplied `integrations.conversations_channel` is a NEW pin, the
+    // same claim the CLI (`workspaces create --integrations-json`) and the MCP
+    // create tool already refuse at their own call sites (BUG-0063). Guarding
+    // it at the store closes the direct `POST /v1/workspaces` door for callers
+    // that do not route through either.
+    //
+    // The DERIVED channel is deliberately NOT probed. It is not a caller claim,
+    // and a brand-new project's channel legitimately does not exist yet: local
+    // create makes it exist immediately after the write (`ensureProjectChannel`
+    // in the creation plan), so refusing here would break every hosted create
+    // instead of repairing anything. Closing that half means the hosted create
+    // must ensure the channel the way the local path does — an outbound
+    // conversations dependency for this process, which is a design decision and
+    // not a line of validation. The boundary is stated here and in the PR body
+    // rather than left implicit.
+    this.assertChannelIntegrationWritable(input.integrations, undefined);
 
     try {
       await this.db.execute(
@@ -1147,6 +1165,29 @@ export class ProjectsPgStore {
     return workspace;
   }
 
+  /**
+   * Refuse a hosted write that would pin `integrations.conversations_channel`
+   * at a name the conversations app has no channel for (BUG-0063 / BUG-0076).
+   *
+   * Applied at the stores' own write points — update, guarded patch and create
+   * — because a direct HTTP/SDK caller never passes a client-level guard. The
+   * rule itself is imported from the db-free `project-channel-guard` module:
+   * this store never touches `bun:sqlite`. Only a positive `missing` verdict
+   * refuses; an unavailable probe or an `unknown` verdict passes (`probe`
+   * undefined in tests and on any box without the conversations CLI), so this
+   * never invents a failure from an answer it could not obtain.
+   */
+  private assertChannelIntegrationWritable(
+    next: WorkspaceIntegrations | undefined,
+    previous: WorkspaceIntegrations | undefined,
+  ): void {
+    try {
+      assertProjectChannelIntegrationWritable(next, previous);
+    } catch (error) {
+      throw new ValidationError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async updateWorkspace(idOrSlug: string, input: UpdateWorkspaceInput): Promise<Workspace> {
     const before = await this.requireWorkspace(idOrSlug);
     if (input.integrations !== undefined) {
@@ -1155,6 +1196,17 @@ export class ProjectsPgStore {
         input.integrations,
         await this.listProjectResourceLinks(before.id, PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS),
       );
+      // A direct PATCH/PUT /v1/workspaces/{id} carrying `integrations` is the
+      // same claim the client surfaces refuse (assertProjectChannelIntegrationWritable:
+      // CLI create/update/link, MCP create/update/link, the prompt-agent tools,
+      // the prefix migration, and the resource-link projection below), so it is
+      // refused here too (BUG-0076 path (a)). The guard is the db-free
+      // project-channel-guard rule, applied to the value this write persists;
+      // it is NOT a caller-level check. It needs no conversations *client*:
+      // the probe is a bounded one-shot CLI call whose failure mode is
+      // `unknown`, which passes, so a box that cannot reach the conversations
+      // app never has a write refused on a probe it could not obtain.
+      this.assertChannelIntegrationWritable(input.integrations, before.integrations);
     }
     const root = input.root_id ? await this.getRoot(input.root_id) : null;
     if (input.root_id && !root) throw new ValidationError(`Root not found: ${input.root_id}`);
@@ -1381,6 +1433,13 @@ export class ProjectsPgStore {
     options: { preserveExactSlug?: boolean } = {},
   ): Promise<Workspace | null> {
     const before = await this.requireWorkspace(id);
+    // Channel guard on the value this UPDATE persists: the guarded-metadata
+    // route, the duplicate-quarantine accept and its rollback all write through
+    // here, and all three are reachable with a caller-supplied `integrations`
+    // patch (BUG-0076 path (a)). Guarded at the write, not at a call site.
+    if (patch.integrations !== undefined) {
+      this.assertChannelIntegrationWritable(patch.integrations, before.integrations);
+    }
     const root = patch.root_id ? await this.getRoot(patch.root_id) : null;
     if (patch.root_id && !root) throw new ValidationError(`Root not found: ${patch.root_id}`);
     const recipe = patch.recipe_id ? await this.getRecipe(patch.recipe_id) : null;
@@ -1631,6 +1690,12 @@ export class ProjectsPgStore {
     }
     const integrations = forcedIntegrations
       ?? projectResourceLinkIntegrationProjection(beforeProject.integrations, beforeLinks, desired);
+    // Server-side, on the value this write persists: the conversations channel
+    // link projection is authoritative for integrations.conversations_channel,
+    // so it must not pin a name the conversations app has no channel for — the
+    // same class the CLI/MCP/agent writers refuse (BUG-0063). Guarded before
+    // the dry-run preview so an unwritable plan is never reported as planned.
+    this.assertChannelIntegrationWritable(integrations, beforeProject.integrations);
     const preview = projectResourceLinkSnapshot({ ...beforeProject, integrations }, desired);
     if (input.dry_run) {
       return withResponseControl({
@@ -2926,6 +2991,13 @@ export class ProjectsPgStore {
         input.patch.integrations,
         await this.listProjectResourceLinks(input.project_id, PROJECT_RESOURCE_LINK_DEFAULT_MAX_ITEMS),
       );
+      // The same channel guard the direct update carries, applied here as well
+      // because this route reaches the row through its own patch path
+      // (BUG-0076 path (a), the second instance): POST
+      // /v1/workspaces/{id}/guarded-metadata with an `integrations` patch is a
+      // caller-supplied blob too. Checked before the dry-run preview below, so
+      // an unwritable plan is never reported as `planned`.
+      this.assertChannelIntegrationWritable(input.patch.integrations, before.integrations);
     }
     const currentRevision = workspaceRevision(before);
     const duplicate = await this.guardedAcceptedReceipt({ operation_id: input.operation_id, step_id: input.step_id, direction, idempotency_key: idempotencyKey, target_id: input.project_id });

@@ -38,7 +38,9 @@ import {
   matchRootForPath,
   migrateLegacyProjectsToWorkspaces,
   releaseWorkspaceLock,
+  readProjectResourceLinks,
   rollbackGuardedWorkspaceMutation,
+  mutateProjectResourceLinks,
   resolveTmuxProfile,
   renderTemplate,
   scoreRoots,
@@ -1736,4 +1738,198 @@ describe("registry fixture exclusion", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+/**
+ * The typed conversations channel link is authoritative for
+ * integrations.conversations_channel (projectResourceLinkIntegrationProjection),
+ * so it is a second way a project gets pinned at a channel name — the door
+ * BUG-0063's write guards originally missed. These tests drive the real store
+ * mutation with a stub conversations CLI (the env-driven probe the store uses)
+ * and assert the refusal lands before anything is persisted.
+ */
+describe("resource-link channel projection guard (BUG-0063)", () => {
+  const CHANNELS = ["guarded-projection", "product-mvp-launch"];
+  const SERVICE_INSTANCE = "https://conversations.example.test/v1";
+
+  /** A conversations stand-in whose `channel list -j` is the guarded set. */
+  function stubConversationsBin(root: string): string {
+    const bin = join(root, "conversations-projection-stub");
+    writeFileSync(
+      bin,
+      "#!/bin/sh\n"
+      + "if [ \"$1\" = \"channel\" ] && [ \"$2\" = \"list\" ]; then\n"
+      + `  printf '%s' '${JSON.stringify(CHANNELS.map((name) => ({ name })))}'\n`
+      + "  exit 0\n"
+      + "fi\n"
+      + "echo \"unexpected conversations invocation: $*\" >&2\n"
+      + "exit 1\n",
+    );
+    chmodSync(bin, 0o755);
+    return bin;
+  }
+
+  function channelLink(channelName: string) {
+    return {
+      authority: "conversations" as const,
+      service_instance: SERVICE_INSTANCE,
+      source_package: "@hasna/conversations" as const,
+      target_kind: "channel" as const,
+      locator: {
+        kind: "conversations_channel_id" as const,
+        value: "chn_0123456789abcdef0123456789abcdef",
+      },
+      scope: "resource" as const,
+      labels: { channel_name: channelName },
+    };
+  }
+
+  function mutation(projectId: string, revision: string, channelName: string, operationId: string) {
+    return {
+      project_id: projectId,
+      operation_id: operationId,
+      step_id: "add-channel-link",
+      mode: "add" as const,
+      expected_revision: revision,
+      links: [channelLink(channelName)],
+      max_items: 10,
+      response_byte_limit: 100_000,
+      time_budget_ms: 5_000,
+    };
+  }
+
+  test("refuses a channel link naming no channel, persisting neither the link nor the pin", () => {
+    const db = makeDb();
+    const root = tmpDir();
+    const bin = stubConversationsBin(root);
+    const previousVerify = process.env.HASNA_PROJECTS_CHANNEL_VERIFY;
+    const previousBin = process.env.HASNA_PROJECTS_CONVERSATIONS_BIN;
+    process.env.HASNA_PROJECTS_CHANNEL_VERIFY = "1";
+    process.env.HASNA_PROJECTS_CONVERSATIONS_BIN = bin;
+    try {
+      const projectPath = tmpDir();
+      const workspace = createWorkspace({
+        name: "Projection Guard",
+        slug: "projection-guard",
+        kind: "project",
+        primary_path: projectPath,
+      }, db);
+
+      // The bug's own value: a name that resolves as an agent DM, never as a channel.
+      expect(() => mutateProjectResourceLinks(
+        mutation(workspace.id, workspace.updated_at, "employee-contract-closing", "op-projection-refused"),
+        db,
+      )).toThrow(/Refusing to pin integrations\.conversations_channel/);
+
+      // Refused before any write: no link row, no pin, revision unmoved.
+      expect(readProjectResourceLinks({ project_id: workspace.id, max_items: 10, response_byte_limit: 100_000, time_budget_ms: 5_000 }, db).links).toHaveLength(0);
+      expect(getWorkspace(workspace.id, db)?.integrations.conversations_channel).toBeUndefined();
+      expect(getWorkspace(workspace.id, db)?.updated_at).toBe(workspace.updated_at);
+
+      // A dry run of the same write is refused too: an unwritable plan is not "planned".
+      expect(() => mutateProjectResourceLinks(
+        { ...mutation(workspace.id, workspace.updated_at, "employee-contract-closing", "op-projection-dry"), dry_run: true },
+        db,
+      )).toThrow(/Refusing to pin integrations\.conversations_channel/);
+
+      // The channel the listing actually has is accepted and projected.
+      const accepted = mutateProjectResourceLinks(
+        mutation(workspace.id, workspace.updated_at, "guarded-projection", "op-projection-accepted"),
+        db,
+      );
+      expect(accepted.outcome).toBe("accepted");
+      expect(getWorkspace(workspace.id, db)?.integrations.conversations_channel).toBe("guarded-projection");
+      expect(readProjectResourceLinks({ project_id: workspace.id, max_items: 10, response_byte_limit: 100_000, time_budget_ms: 5_000 }, db).links).toHaveLength(1);
+      rmSync(projectPath, { recursive: true, force: true });
+    } finally {
+      if (previousVerify === undefined) delete process.env.HASNA_PROJECTS_CHANNEL_VERIFY;
+      else process.env.HASNA_PROJECTS_CHANNEL_VERIFY = previousVerify;
+      if (previousBin === undefined) delete process.env.HASNA_PROJECTS_CONVERSATIONS_BIN;
+      else process.env.HASNA_PROJECTS_CONVERSATIONS_BIN = previousBin;
+      rmSync(root, { recursive: true, force: true });
+      db.close();
+    }
+  }, 30_000);
+
+  test("carries an already-broken pin forward instead of refusing an unrelated write", () => {
+    const db = makeDb();
+    const root = tmpDir();
+    const bin = stubConversationsBin(root);
+    const previousVerify = process.env.HASNA_PROJECTS_CHANNEL_VERIFY;
+    const previousBin = process.env.HASNA_PROJECTS_CONVERSATIONS_BIN;
+    const restoreEnv = () => {
+      if (previousVerify === undefined) delete process.env.HASNA_PROJECTS_CHANNEL_VERIFY;
+      else process.env.HASNA_PROJECTS_CHANNEL_VERIFY = previousVerify;
+      if (previousBin === undefined) delete process.env.HASNA_PROJECTS_CONVERSATIONS_BIN;
+      else process.env.HASNA_PROJECTS_CONVERSATIONS_BIN = previousBin;
+    };
+    try {
+      const projectPath = tmpDir();
+      const workspace = createWorkspace({
+        name: "Projection Carry",
+        slug: "projection-carry",
+        kind: "project",
+        primary_path: projectPath,
+      }, db);
+
+      // Seed the bad pin the way it exists in the fleet — through a write the
+      // guard cannot adjudicate (no reachable conversations app).
+      delete process.env.HASNA_PROJECTS_CHANNEL_VERIFY;
+      const seeded = mutateProjectResourceLinks(
+        mutation(workspace.id, workspace.updated_at, "legacy-not-a-channel", "op-projection-seed"),
+        db,
+      );
+      expect(seeded.outcome).toBe("accepted");
+      expect(getWorkspace(workspace.id, db)?.integrations.conversations_channel).toBe("legacy-not-a-channel");
+
+      // Now the probe CAN answer, and an unrelated write re-projects the same
+      // stored value: unchanged is not a new claim, so it is not refused.
+      process.env.HASNA_PROJECTS_CHANNEL_VERIFY = "1";
+      process.env.HASNA_PROJECTS_CONVERSATIONS_BIN = bin;
+      const revision = getWorkspace(workspace.id, db)!.updated_at;
+      const result = mutateProjectResourceLinks({
+        project_id: workspace.id,
+        operation_id: "op-projection-carry",
+        step_id: "add-todos-link",
+        mode: "add",
+        expected_revision: revision,
+        links: [{
+          authority: "todos" as const,
+          service_instance: "https://todos.example.test/v1",
+          source_package: "@hasna/todos" as const,
+          target_kind: "project" as const,
+          locator: { kind: "external_uuid" as const, value: "11111111-1111-4111-8111-111111111111" },
+          scope: "resource" as const,
+          labels: {},
+        }],
+        max_items: 10,
+        response_byte_limit: 100_000,
+        time_budget_ms: 5_000,
+      }, db);
+
+      expect(result.outcome).toBe("accepted");
+      expect(getWorkspace(workspace.id, db)?.integrations.conversations_channel).toBe("legacy-not-a-channel");
+
+      // ...but a link that RENAMES the label to another non-channel is a new
+      // claim, and must be refused: that is the bug's own rename trigger.
+      const renamed = getWorkspace(workspace.id, db)!.updated_at;
+      expect(() => mutateProjectResourceLinks({
+        project_id: workspace.id,
+        operation_id: "op-projection-rename",
+        step_id: "rename-channel-link",
+        mode: "reconcile",
+        expected_revision: renamed,
+        links: [channelLink("employee-contract-closing")],
+        max_items: 10,
+        response_byte_limit: 100_000,
+        time_budget_ms: 5_000,
+      }, db)).toThrow(/Refusing to pin integrations\.conversations_channel/);
+
+      rmSync(projectPath, { recursive: true, force: true });
+    } finally {
+      restoreEnv();
+      rmSync(root, { recursive: true, force: true });
+      db.close();
+    }
+  }, 30_000);
 });

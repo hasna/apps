@@ -1,5 +1,4 @@
 import { resolveStore } from "../../core/store";
-import { CONFIG_PATH } from "../../core/config";
 import { attachmentsClientEnvKeys, resolveAttachmentsTransport, type Env } from "../../core/client-config";
 import { ClientTransportConfigurationError, CredentialResolutionError } from "@hasna/contracts/client";
 
@@ -11,6 +10,15 @@ import { ClientTransportConfigurationError, CredentialResolutionError } from "@h
  * The report never reads a credential value and never reads the API env pair
  * past the shared seam — the resolver decides, and only its SOURCE names are
  * echoed.
+ *
+ * Stable transport contract (BUG-0048): the report states the transport and
+ * its mode on ONE line — `Transport: authenticated HTTPS (remote-only; no
+ * local fallback)`. That `remote-only` marker is the documented replacement
+ * for the pre-1.2.0 `Mode:` line, which was retired with the local
+ * SQLite/localhost:3459 fallback. The report must NOT advertise a local
+ * preferences/config path: the resolved config file is non-authoritative for
+ * transport (see docs/cli.md), so naming it here mis-triaged healthy
+ * remote-only CLIs as unconfigured.
  */
 const RESOLVER_ERROR_NAMES = new Set([
   "ClientTransportConfigurationError",
@@ -45,12 +53,11 @@ export async function serviceDiagnostic(
       return {
         ok: true,
         lines: [
-          "Transport: authenticated HTTPS",
+          "Transport: authenticated HTTPS (remote-only; no local fallback)",
           "API: " + resolved.url,
           "API key source: " + (resolved.apiKeySource ?? "unknown") + " (" + resolved.apiKeyTier + ")",
           "Health: authorized and reachable",
           "Sample records: " + rows.length,
-          "Preferences: " + CONFIG_PATH,
         ],
       };
     } finally {
