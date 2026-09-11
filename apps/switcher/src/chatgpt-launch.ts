@@ -1,12 +1,12 @@
-import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { readFile, writeFile, rm, lstat, rename, chmod } from "node:fs/promises";
+import { writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Fault } from "./domain";
 import { privateDirectory } from "./runtime";
 import { renderCodexAgentToml } from "./codex-model-policy";
 import type { PreparedLaunch } from "./harness-types";
 import type { ChatGPTInstallation } from "./desktop-apps";
+import { safeDesktopRead as safeRead,writeDesktopPrivate as writePrivate,desktopLease } from "./desktop-state";
 
 type Dict=Record<string,unknown>;
 const object=(value:unknown):value is Dict=>value!==null&&typeof value==="object"&&!Array.isArray(value);
@@ -14,19 +14,6 @@ function merge(base:Dict,overlay:Dict):Dict {
   const result={...base};
   for(const [key,value] of Object.entries(overlay)) result[key]=object(value)&&object(result[key])?merge(result[key] as Dict,value):value;
   return result;
-}
-async function safeRead(path:string):Promise<string|undefined> {
-  try {
-    const info=await lstat(path);
-    if(!info.isFile()||info.isSymbolicLink()||info.uid!==process.getuid?.())
-      throw new Fault(422,"desktop_state_permissions","Desktop profile settings must be regular files owned by this user.");
-    return await readFile(path,"utf8");
-  }catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return;throw error;}
-}
-async function writePrivate(path:string,text:string) {
-  const temporary=path+"."+crypto.randomUUID()+".tmp";
-  try {await writeFile(temporary,text,{mode:0o600,flag:"wx"});await rename(temporary,path);}
-  finally {await rm(temporary,{force:true});}
 }
 const digest=(value:string)=>createHash("sha256").update(value).digest("hex");
 const quote=(value:string)=>`'${value.replaceAll("'","'\"'\"'")}'`;
@@ -37,13 +24,7 @@ export async function prepareChatGPTLaunch(native:PreparedLaunch,app:ChatGPTInst
   await privateDirectory(sessionDir);
   const home=join(sessionDir,"codex"),userData=join(sessionDir,"electron");
   await privateDirectory(home);await privateDirectory(userData);
-  const lockPath=join(sessionDir,"launch.sqlite");
-  try {if((await lstat(lockPath)).isSymbolicLink())throw new Fault(500,"desktop_state_permissions","Desktop lease must be a real file.");}
-  catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
-  const lease=new Database(lockPath);
-  try {lease.exec("PRAGMA busy_timeout=0; CREATE TABLE IF NOT EXISTS lease (id INTEGER PRIMARY KEY); BEGIN EXCLUSIVE;");}
-  catch {lease.close();throw new Fault(409,"desktop_busy","This provider/model desktop profile is already running. Quit its ChatGPT instance before launching it again.");}
-  await chmod(lockPath,0o600);
+  const release=await desktopLease(join(sessionDir,"launch.sqlite"));
   let released=false,authText:string|undefined;
   const authPath=join(home,"auth.json"),receiptPath=join(home,".switcher-auth.sha256");
   const cleanup=async()=>{
@@ -52,7 +33,7 @@ export async function prepareChatGPTLaunch(native:PreparedLaunch,app:ChatGPTInst
       if(authText!==undefined&&await safeRead(authPath)===authText) {
         await rm(authPath,{force:true});await rm(receiptPath,{force:true});
       }
-    }finally{lease.close();}
+    }finally{release();}
   };
   try {
     const settings:string[]=[];

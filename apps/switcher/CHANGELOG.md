@@ -13,7 +13,7 @@ source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 
 ### Patch Changes
 
-- Add `switcher launch chatgpt --provider NAME --model MODEL` for local Codex conversations in the installed macOS ChatGPT app. Route supported Responses providers through the existing model-policy gateway, isolate persistent desktop profiles, preserve the regular app session, add reasoning effort and explicit full-access controls, and verify the installed runtime with an opt-in live provider check.
+- Add `launch chatgpt` and `launch claude-desktop` with `--provider NAME --model MODEL` for installed macOS apps. Route ChatGPT local Codex through Responses and Claude third-party mode through Messages, preserve normal app profiles, scope gateway credentials, and retain conversations. Add ChatGPT/Codex reasoning effort and explicit full-access controls, Claude configuration restoration and model-role aliases, and live DeepSeek acceptance in both apps.
 
 ## 0.1.8
 ### Patch Changes

@@ -13,13 +13,14 @@ import { runHarnessProcess } from "./harness-process";
 import { oriLaunchWarnings, assertOriLoginAllowed, inspectOri, prepareOriLaunch, requireOriHarness, validateOriLaunchRequest, type OriContract, type OriLaunchPlan } from "./ori-backend";
 
 import { prepareChatGPTLaunch } from "./chatgpt-launch";
-import type { ChatGPTInstallation } from "./desktop-apps";
+import { prepareClaudeDesktopLaunch } from "./claude-desktop-launch";
+import type { ChatGPTInstallation, ClaudeDesktopInstallation } from "./desktop-apps";
 import type { ReasoningEffort } from "./reasoning";
 import { childEnvironment } from "./harness-environment";
 import type { RoutingEvent } from "./inference-gateway";
 export { childEnvironment } from "./harness-environment";
 export type LaunchBackend = "direct" | "ori";
-export type LaunchOptions = {desktop?: ChatGPTInstallation; reasoning?:ReasoningEffort; dangerouslyBypassApprovalsAndSandbox?:boolean; backend?: LaunchBackend; oriExecutable?: string; cwd?: string; executable?: string; stateDir?: string; args?: string[]; timeoutMs?: number; refresh?: boolean; credentialEnv?: NodeJS.ProcessEnv; resolveCredential?: (provider: ProviderInput)=>Promise<string | undefined>};
+export type LaunchOptions = {desktop?: ChatGPTInstallation; claudeDesktop?:ClaudeDesktopInstallation; reasoning?:ReasoningEffort; dangerouslyBypassApprovalsAndSandbox?:boolean; backend?: LaunchBackend; oriExecutable?: string; cwd?: string; executable?: string; stateDir?: string; args?: string[]; timeoutMs?: number; refresh?: boolean; credentialEnv?: NodeJS.ProcessEnv; resolveCredential?: (provider: ProviderInput)=>Promise<string | undefined>};
 const LATE_RUN_FINALIZATION_TIMEOUT_MS = 5_000;
 
 async function writeOriCodexCatalog(stateDir: string, models: LaunchPlan["catalog"]["models"]): Promise<string> {
@@ -121,9 +122,10 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   if (backend === "ori" && options.executable) throw new Error("--executable is ambiguous with --backend ori; use --ori-executable PATH.");
   if (backend === "direct" && options.oriExecutable) throw new Error("--ori-executable requires --backend ori.");
   if (options.desktop && (plan.profile.harness !== "codex" || backend !== "direct")) throw new Error("ChatGPT requires the direct Codex provider adapter.");
+  if (options.claudeDesktop && (options.desktop || plan.profile.harness !== "claude" || backend !== "direct" || options.executable || options.args?.length)) throw new Error("Claude desktop requires its direct Messages gateway adapter without native CLI overrides.");
   const nativeExecutable = options.desktop?.codexExecutable ?? options.executable;
-  const detection = backend === "direct" ? await detectHarness(plan.profile.harness, nativeExecutable) : undefined;
-  if (backend === "direct" && !detection?.available) throw new Error(harnessInstallationMessage(plan.profile.harness, detection?.executable ?? plan.profile.harness, Boolean(options.executable)));
+  const detection = backend === "direct" && !options.claudeDesktop ? await detectHarness(plan.profile.harness, nativeExecutable) : undefined;
+  if (backend === "direct" && !options.claudeDesktop && !detection?.available) throw new Error(harnessInstallationMessage(plan.profile.harness, detection?.executable ?? plan.profile.harness, Boolean(options.executable)));
   if (backend === "direct" && plan.profile.harness === "gemini") validateHarnessVersion("gemini", detection?.version);
   if(backend==="direct"&&plan.profile.harness==="aider")validateHarnessVersion(plan.profile.harness,detection?.version);
   const root = resolve(options.stateDir ?? join(switcherHome(),"state"));
@@ -159,7 +161,10 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   // keep the cancellation promise handled in that synchronous path too.
   void preparationCancellation.catch(() => undefined);
   try {
-    let prepared = backend === "ori" ? (await prepareOriForPlan(plan,{...options,stateDir,onRoutingEvent})).prepared : await prepareHarnessLaunch({
+    const input = {
+      harness:plan.profile.harness,baseUrl:plan.provider.baseUrl,protocol:plan.provider.protocol,authStyle:plan.provider.authStyle,model:plan.profile.model,models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),modelPolicy:plan.profile.modelPolicy,providerId:plan.provider.id,onRoutingEvent,credential,stateDir,cwd:resolve(options.cwd??process.cwd()),
+    };
+    let prepared = options.claudeDesktop ? await prepareClaudeDesktopLaunch(input,options.claudeDesktop,join(root,"desktop-claude",profileId)) : backend === "ori" ? (await prepareOriForPlan(plan,{...options,stateDir,onRoutingEvent})).prepared : await prepareHarnessLaunch({
       harness:plan.profile.harness, baseUrl:plan.provider.baseUrl, protocol:plan.provider.protocol,
       model:plan.profile.model, models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),
       modelPolicy:plan.profile.modelPolicy,providerId:plan.provider.id,onRoutingEvent,
@@ -233,7 +238,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
       interruptPreparation(new CommandInterrupted(143, "Launch timed out before the native harness started."), false);
       throw preparationSignal;
     }
-    const {code,interrupted} = await runHarnessProcess({executable:prepared.executable,args:prepared.args,cwd:resolve(options.cwd ?? process.cwd()),env:{...childEnvironment(),...prepared.env},silent:Boolean(options.desktop),timeoutMs:remainingRuntime});
+    const {code,interrupted} = await runHarnessProcess({executable:prepared.executable,args:prepared.args,cwd:resolve(options.cwd ?? process.cwd()),env:{...childEnvironment(),...prepared.env},silent:Boolean(options.desktop||options.claudeDesktop),timeoutMs:remainingRuntime});
     // Close native background traffic before persisting the final routing log.
     await cleanup?.(); cleanup=undefined;
     await finishRunOnce(run,{status:interrupted?"interrupted":code===0?"exited":"failed",exitCode:code},`switcher: Harness exited ${code}; final metadata could not be saved for run ${run!.id}.`);

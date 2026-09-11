@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { Fault } from "./domain";
 
 export type ChatGPTInstallation = {path:string; executable:string; codexExecutable:string; bundleId:string; version:string};
+export type ClaudeDesktopInstallation = {path:string; executable:string; bundleId:string; version:string};
 export type DesktopHost = {
   platform:string; home:string;
   run(command:string,args:string[]):Promise<string>;
@@ -50,4 +51,27 @@ export async function detectChatGPTApp(appPath?:string, system:DesktopHost=host)
     }catch{/* Invalid/incomplete app bundles are never executed. */}
   }
   throw new Fault(404,"app_not_installed","Install the current ChatGPT/Codex macOS app or use --app-path with its absolute .app path. Legacy ChatGPT Classic cannot run custom Codex providers.");
+}
+
+/** Claude Desktop's supported third-party gateway mode uses its own Claude-3p
+ * data directory. Do not use restricted Electron development overrides. */
+export async function detectClaudeDesktopApp(appPath?:string,system:DesktopHost=host):Promise<ClaudeDesktopInstallation> {
+  if(system.platform!=="darwin")throw new Fault(422,"unsupported_platform","Claude desktop provider launches currently require macOS.");
+  const candidates=appPath===undefined?[join(system.home,"Applications/Claude.app"),"/Applications/Claude.app"]:[appPath];
+  if(appPath===undefined)try {
+    const found=await system.run("/usr/bin/osascript",["-l","JavaScript","-e",'ObjC.import("AppKit"); const url = $.NSWorkspace.sharedWorkspace.URLForApplicationWithBundleIdentifier("com.anthropic.claudefordesktop"); url.isNil() ? "" : ObjC.unwrap(url.path);']);
+    if(found)candidates.push(found);
+  }catch{/* Standard locations remain available. */}
+  for(const path of new Set(candidates)) {
+    if(!isAbsolute(path)||!path.endsWith(".app")||!await system.isDirectory(path))continue;
+    const field=(name:string)=>system.run("/usr/bin/plutil",["-extract",name,"raw","-o","-",join(path,"Contents/Info.plist")]);
+    try {
+      const bundleId=await field("CFBundleIdentifier");if(bundleId!=="com.anthropic.claudefordesktop")continue;
+      const name=await field("CFBundleExecutable"),version=await field("CFBundleShortVersionString");
+      if(!/^[A-Za-z0-9 _-]+$/.test(name))continue;
+      const executable=join(path,"Contents/MacOS",name);
+      if(await system.executable(executable))return{path,executable,bundleId,version};
+    }catch{/* Incomplete bundles are never launched. */}
+  }
+  throw new Fault(404,"app_not_installed","Install the current Claude macOS desktop app or supply its absolute .app path with --app-path.");
 }

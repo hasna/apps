@@ -120,6 +120,59 @@ References: [OpenAI custom provider configuration](https://learn.chatgpt.com/doc
 and [Preview Edit routing limitation](https://github.com/openai/codex/issues/37315),
 and [DeepSeek thinking controls](https://api-docs.deepseek.com/guides/thinking_mode/).
 
+## Claude desktop with a provider
+
+```sh
+switcher launch claude-desktop --provider deepseek --model deepseek-flash
+switcher launch claude-desktop --provider my-messages-provider --model vendor/model
+switcher launch claude-desktop --provider deepseek --model deepseek-flash --dry-run
+```
+
+Requires macOS and Claude desktop 1.52386.0 or newer. This uses the app's
+supported third-party gateway mode and its own downloaded Claude Code engine;
+a separately installed Claude Code CLI is not required. `launch claude` keeps
+launching the terminal CLI. `detectClaudeDesktopApp()` is available in the SDK.
+
+The provider must implement Anthropic Messages, including streaming and tool
+calling for the chosen model. DeepSeek and compatible gateway presets select
+the Messages endpoint automatically. Saved provider IDs retain their explicit
+protocol. Switcher does not convert Chat Completions or Responses into Messages.
+A configured provider works in both desktop apps when it offers both required
+APIs; a preset's existence is not proof that every model supports every feature.
+
+Claude uses its vendor-supported `~/Library/Application Support/Claude-3p`
+profile, separate from the regular signed-in Claude profile. Only one third-party
+instance can run at a time; quit it before switching providers. Switcher adds a
+temporary configuration-library entry, leases that profile, and restores the
+previous selection on exit. Its conversations remain in Claude-3p. Configuration
+changes made outside Switcher are preserved and reported for review. Managed
+Claude configurations are not overridden. No app patching, re-signing or
+restricted development flags are used.
+
+The selected model fills Claude's normal, planning and fast model slots using
+explicit gateway aliases. `--role-model planning=MODEL` and `--role-model
+fast=MODEL` can select different models from the same provider. The gateway
+records the actual upstream model. Display labels identify your provider model;
+the aliases do not change that model into an Anthropic model.
+
+Choose effort and permissions in Claude's own controls; the model must support
+what Claude sends. Switcher's `--reasoning` and
+`--dangerously-bypass-approvals-and-sandbox` flags currently apply to Codex and
+ChatGPT, and are rejected for Claude desktop. Cowork and account-dependent
+features retain their native requirements. Only a temporary scoped loopback
+credential is written to the private configuration file; the upstream provider
+key stays in Switcher. Keep Switcher running while using the launched instance.
+
+Live acceptance on macOS used DeepSeek `deepseek-flash`: ChatGPT local Codex
+returned the requested test marker with reasoning and Full access visible;
+Claude's third-party chat returned its requested marker, with successful gateway
+traces identifying `deepseek-flash`. Other compatible providers have adapter
+coverage, not a claim of live acceptance on every model.
+
+References: [Claude third-party gateway](https://claude.com/docs/third-party/claude-desktop/gateway),
+[configuration library and model tiers](https://claude.com/docs/third-party/claude-desktop/configuration),
+and [CC Switch's Claude desktop integration](https://github.com/Chenx-13/cc_switch/blob/main/docs/user-manual/en/2-providers/2.6-claude-desktop.md).
+
 ## Direct launch
 
 The direct launch flow is available from 0.1.1. The additional OMP, DeepSeek Harness, Cline, Hermes, Prime Agent, legacy OpenCode, Kilo, Gemini CLI and Aider adapters are introduced in 0.1.2. Version 0.1.0 requires explicit API/provider/profile setup.
