@@ -12,6 +12,10 @@
 import { existsSync, readFileSync, statSync } from "fs";
 import { basename } from "path";
 import { lookup as mimeLookup } from "mime-types";
+import type {
+  KnowledgeSourceManifest,
+  KnowledgeSourceManifestOptions,
+} from "../types/index.js";
 import type { FilesStorageClient } from "./client-types.js";
 import { HasnaHttpError } from "@hasna/contracts/client";
 import { sha256File } from "../lib/hasher.js";
@@ -108,6 +112,31 @@ type RankedFilePayload = FileWithTags & {
   search_document_kinds?: FileSearchDocumentKind[];
   search_document_count?: number;
 };
+
+/**
+ * The message a hosted failure should show a user.
+ *
+ * `HasnaHttpError`'s own message is transport-level ("... -> 400"), which hides
+ * the reason the service actually gave. When a route refuses deliberately — the
+ * manifest's `include_acl_summary`, for instance — that reason IS the answer,
+ * so it must reach the caller rather than being flattened into a status code.
+ * Falls back to the transport message when the body carries no `error`.
+ */
+export function hostedErrorMessage(error: unknown): string {
+  // Matched structurally, not with `instanceof`: `@hasna/contracts/client` can
+  // resolve to more than one module instance (workspace link vs installed
+  // copy), and a cross-instance `HasnaHttpError` fails `instanceof` even though
+  // its constructor name and shape are right. Measured here: an error whose
+  // constructor.name was "HasnaHttpError" and whose `body` held the service's
+  // JSON still answered `instanceof === false`.
+  if (error && typeof error === "object" && "body" in error && "status" in error) {
+    const body = (error as { body?: unknown }).body;
+    if (body && typeof body === "object" && typeof (body as { error?: unknown }).error === "string") {
+      return (body as { error: string }).error;
+    }
+  }
+  return error instanceof Error ? error.message : String(error);
+}
 
 export class ApiStore implements FilesStore {
   readonly transport = "api" as const;
@@ -338,6 +367,37 @@ export class ApiStore implements FilesStore {
   async signFileDownload(fileId: string, expiresIn = 3600): Promise<string> {
     const res = await this.http.post<{ url: string }>(`/files/${seg(fileId)}/sign-download`, { expires_in: expiresIn });
     return res.url;
+  }
+
+  /**
+   * The knowledge manifest, built by the service from its own store
+   * (`GET /v1/knowledge/manifest`).
+   *
+   * `include_acl_summary` and `include_evidence_assets` are refused by the
+   * service rather than answered with empty data — organization reviews are not
+   * modelled there, and evidence assets have their own route.
+   */
+  async exportKnowledgeManifest(opts: KnowledgeSourceManifestOptions = {}): Promise<KnowledgeSourceManifest> {
+    return this.http.get<KnowledgeSourceManifest>("/knowledge/manifest", {
+      query: {
+        source_id: opts.source_id,
+        collection_id: opts.collection_id,
+        project_id: opts.project_id,
+        tag: opts.tag,
+        status: opts.status,
+        include_deleted: opts.include_deleted,
+        delta: opts.delta,
+        since_cursor: opts.since_cursor,
+        since_sync_version: opts.since_sync_version,
+        after: opts.after,
+        before: opts.before,
+        cursor: opts.cursor,
+        limit: opts.limit,
+        format: opts.format,
+        include_acl_summary: opts.include_acl_summary,
+        include_evidence_assets: opts.include_evidence_assets,
+      },
+    });
   }
 
   // ── tags ─────────────────────────────────────────────────────────────────

@@ -14,7 +14,7 @@
  * must never open the local island.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -79,13 +79,55 @@ const HOSTED_EXTRACT = {
   },
 };
 
+const HOSTED_MANIFEST = {
+  manifest_id: "manifest_0123456789abcdef01234567",
+  generated_at: "2026-09-11T12:00:00.000Z",
+  format: "json",
+  filters: { source_id: undefined, status: "active", delta: false },
+  item_count: 1,
+  next_cursor: "eyJzeW5jX3ZlcnNpb24iOjcsImZpbGVfaWQiOiJmX2tub3cxIiwiaGlnaF93YXRlcm1hcmsiOjQyfQ",
+  delta: false,
+  high_watermark: 42,
+  delta_cursor: "eyJzeW5jX3ZlcnNpb24iOjQyLCJmaWxlX2lkIjoiIiwiaGlnaF93YXRlcm1hcmsiOjQyfQ",
+  tombstone_count: 0,
+  items: [{
+    kind: "file",
+    source_ref: "open-files://file/f_know1",
+    sync_version: 7,
+    source_revision_hash: `sha256:${"a".repeat(64)}`,
+    file_id: "f_know1",
+    source_id: "src_know",
+    path: "docs/notes.md",
+    name: "notes.md",
+    mime: "text/markdown",
+    size: 51,
+    status: "active",
+    updated_at: "2026-09-11T00:00:00.000Z",
+    deleted: false,
+    tags: ["handbook"],
+    open_files_root: {
+      open_files_root: "open-files://source/src_know",
+      source_id: "src_know",
+      source_type: "s3",
+      source_path: "docs/notes.md",
+      machine: { machine_id: "m_1" },
+      evidence_hash: `sha256:${"b".repeat(64)}`,
+    },
+    extraction: { text_available: true, status: "available", extracted_text_ref: "open-files://file/f_know1/text" },
+    permissions: { mode: "read_only", allowed_purposes: ["knowledge_index"] },
+    permission_labels: ["read_only"],
+  }],
+};
+
 let testDir: string;
 let server: ReturnType<typeof Bun.serve>;
 let hits: string[];
+let manifestQueries: URLSearchParams[];
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "files-knowledge-hosted-cli-"));
   hits = [];
+  manifestQueries = [];
   server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -98,6 +140,16 @@ beforeEach(() => {
       }
       if (req.method === "GET" && path === "/files") {
         return Response.json({ items: [HOSTED_FILE] });
+      }
+      if (req.method === "GET" && path === "/knowledge/manifest") {
+        if (url.searchParams.get("include_acl_summary") === "true") {
+          return Response.json({
+            error: "include_acl_summary is not available on the hosted transport: this service does not model file organization reviews.",
+            reason: "acl_summary_unavailable",
+          }, { status: 400 });
+        }
+        manifestQueries.push(url.searchParams);
+        return Response.json(HOSTED_MANIFEST);
       }
       if (req.method === "GET" && path === `/files/${HOSTED_FILE.id}`) {
         return Response.json(HOSTED_FILE);
@@ -243,6 +295,66 @@ describe("files knowledge doctor on the hosted transport", () => {
     expect(report.checks[0]?.issue_codes).toContain("not_found");
     expect(report.summary.not_found).toBe(1);
     expect(hits).toEqual(["GET /files/f_absent"]);
+    expect(databaseFilesUnder(testDir)).toEqual([]);
+  });
+});
+
+describe("files knowledge manifest on the hosted transport", () => {
+  test("reads GET /v1/knowledge/manifest and prints the service's manifest", async () => {
+    const result = await runCli(["knowledge", "manifest", "--json"]);
+
+    expect(result.exitCode).toBe(0);
+    const manifest = JSON.parse(result.stdout) as {
+      manifest_id: string; item_count: number; high_watermark: number;
+      items: Array<{ file_id: string; tags: string[] }>;
+    };
+    expect(manifest.manifest_id).toBe("manifest_0123456789abcdef01234567");
+    expect(manifest.item_count).toBe(1);
+    expect(manifest.high_watermark).toBe(42);
+    expect(manifest.items[0]?.file_id).toBe("f_know1");
+    expect(manifest.items[0]?.tags).toEqual(["handbook"]);
+    expect(hits).toEqual(["GET /knowledge/manifest"]);
+    expect(databaseFilesUnder(testDir)).toEqual([]);
+  });
+
+  test("filters and the delta cursor are forwarded to the service, not applied locally", async () => {
+    const result = await runCli([
+      "knowledge", "manifest", "--json",
+      "--source", "src_know", "--tag", "handbook", "--delta",
+      "--since-sync-version", "5", "--limit", "25", "--status", "all",
+    ]);
+
+    expect(result.exitCode).toBe(0);
+    const query = manifestQueries[0]!;
+    expect(query.get("source_id")).toBe("src_know");
+    expect(query.get("tag")).toBe("handbook");
+    expect(query.get("delta")).toBe("true");
+    expect(query.get("since_sync_version")).toBe("5");
+    expect(query.get("limit")).toBe("25");
+    expect(query.get("status")).toBe("all");
+    expect(databaseFilesUnder(testDir)).toEqual([]);
+  });
+
+  test("--out writes the artifact locally from the hosted manifest", async () => {
+    const out = join(testDir, "manifest.json");
+    const result = await runCli(["knowledge", "manifest", "--out", out, "--format", "jsonl"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(`manifest written: ${out}`);
+    // jsonl artifact: one line per item, no envelope
+    const written = readFileSync(out, "utf8").trim().split("\n");
+    expect(written).toHaveLength(1);
+    expect((JSON.parse(written[0]!) as { file_id: string }).file_id).toBe("f_know1");
+    expect(hits).toEqual(["GET /knowledge/manifest"]);
+    expect(databaseFilesUnder(testDir)).toEqual([]);
+  });
+
+  test("the service's acl_summary refusal surfaces as an error, never as an empty summary", async () => {
+    const result = await runCli(["knowledge", "manifest", "--include-acl-summary", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("does not model file organization reviews");
+    expect(result.stdout).not.toContain("acl_summary");
     expect(databaseFilesUnder(testDir)).toEqual([]);
   });
 });
