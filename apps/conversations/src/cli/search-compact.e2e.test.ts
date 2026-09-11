@@ -1,12 +1,14 @@
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { closeDb, getDb } from "../lib/db.js";
 import { backfilledChannelIdForName } from "../lib/channel-id.js";
 
-const TEST_DB = join(tmpdir(), `conversations-search-compact-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 const CHANNEL = "policy-search-compact";
 const CUTOFF = "2026-08-02T12:00:00.000Z";
 
@@ -15,8 +17,7 @@ function runCli(args: string[]) {
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
     env: {
-      ...process.env,
-      CONVERSATIONS_DB_PATH: TEST_DB,
+      ...fixture.env,
       CONVERSATIONS_AGENT_ID: "search-compact-test",
       FORCE_COLOR: "0",
     },
@@ -31,28 +32,11 @@ function runCli(args: string[]) {
 }
 
 describe("search --json compact policy-awareness envelope", () => {
-  beforeAll(() => {
-    process.env.CONVERSATIONS_DB_PATH = TEST_DB;
-    closeDb();
-    const db = getDb();
-    db.prepare(`INSERT INTO channels (id, name, created_by) VALUES (?, ?, ?)`).run(backfilledChannelIdForName(CHANNEL), CHANNEL, "alice");
-    const insert = db.prepare(
-      `INSERT INTO messages
-       (session_id, from_agent, to_agent, channel, content, metadata, attachments, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
+  beforeAll(async () => {
     const body = (label: string) => `[POLICY] ${label} ${"bounded-preview ".repeat(400)}`;
-    insert.run("policy-session", "alice", CHANNEL, CHANNEL, body("before"), '{"raw":"must-not-leak"}', '[{"name":"private.txt"}]', "2026-08-02T11:59:59.999Z");
-    insert.run("policy-session", "alice", CHANNEL, CHANNEL, body("at-cutoff"), '{"raw":"must-not-leak"}', '[{"name":"private.txt"}]', CUTOFF);
-    insert.run("policy-session", "alice", CHANNEL, CHANNEL, body("after"), '{"raw":"must-not-leak"}', '[{"name":"private.txt"}]', "2026-08-02T12:00:00.001Z");
-    closeDb();
-  });
-
-  afterAll(() => {
-    closeDb();
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try { unlinkSync(`${TEST_DB}${suffix}`); } catch {}
-    }
+    await fixture.seed({channel:{row:{id:backfilledChannelIdForName(CHANNEL),name:CHANNEL,created_by:"alice"},members:[]},messages:[
+      ["before","2026-08-02T11:59:59.999Z"],["at-cutoff",CUTOFF],["after","2026-08-02T12:00:00.001Z"],
+    ].map(([label,created_at])=>({session_id:"policy-session",from_agent:"alice",to_agent:CHANNEL,channel:CHANNEL,content:body(label),metadata:JSON.stringify({raw:"must-not-leak"}),attachments:JSON.stringify([{name:"private.txt"}]),created_at}))});
   });
 
   test("returns an inclusive, complete, preview-only page with in-band byte metadata", () => {

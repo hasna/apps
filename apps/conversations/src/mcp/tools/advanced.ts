@@ -655,8 +655,14 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     },
   }, async (params: Record<string, any>) => {
       try {
-        const { saveFeedback } = await import("../../lib/feedback.js");
-        saveFeedback(params.message, params.email || undefined);
+        const result = await getStore().saveFeedback({
+          message: params.message,
+          email: params.email || undefined,
+          category: params.category || undefined,
+        });
+        if (!result.sent && result.error) {
+          return { content: [{ type: "text" as const, text: result.error }], isError: true };
+        }
         return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: String(e) }], isError: true };

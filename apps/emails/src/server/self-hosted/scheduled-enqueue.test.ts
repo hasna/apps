@@ -55,7 +55,7 @@ function fixture() {
       keyStatus: async () => "active",
     }),
     sender,
-    resolveSender: () => sender,
+    resolveSender: async () => sender,
     migrations: [],
     version: "fixture",
     ...testAuthDeps(client, signingSecret),

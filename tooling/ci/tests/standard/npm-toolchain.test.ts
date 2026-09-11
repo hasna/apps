@@ -6,7 +6,8 @@ import { resolve } from "node:path";
 // independent CI job needs the same tested npm before builds, scans or tests.
 const root = resolve(import.meta.dir, "../../../..");
 const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
-const jobNames = ["gates", "test-suites", "build-test", "verify-generated", "publish-guard"];
+const jobNames = ["gates", "test-suites", "affected-plan", "affected-shard", "build-test", "verify-generated", "publish-guard"];
+const executionJobs = ["gates", "test-suites", "affected-plan", "affected-shard", "verify-generated", "publish-guard"];
 const provision = [
   'set -euo pipefail',
   'npm_prefix="$(mktemp -d "${RUNNER_TEMP}/npm-toolchain.XXXXXX")"',
@@ -20,7 +21,7 @@ type Workflow = { jobs: Record<string, { steps: Step[] }> };
 function violations(source: string): string[] {
   const workflow = Bun.YAML.parse(source) as Workflow;
   const problems: string[] = [];
-  for (const name of jobNames) {
+  for (const name of executionJobs) {
     const steps = workflow.jobs[name]?.steps ?? [];
     const npmIndex = steps.findIndex((step) => step.name === "Install npm for artifact gates");
     const installIndex = steps.findIndex((step) => step.name === "Install");
@@ -33,31 +34,36 @@ function violations(source: string): string[] {
 }
 
 describe("standard-adherence: npm artifact toolchain", () => {
-  test("all five independent CI jobs pin and verify npm before package work", () => {
+  test("all package execution jobs pin npm; planner and aggregator roles are explicit", () => {
     expect(Object.keys((Bun.YAML.parse(ci) as Workflow).jobs)).toEqual(jobNames);
     expect(violations(ci)).toEqual([]);
   });
 
   test("the toolchain gate detects missing, wrong, unverified, late, or bypassable installs", () => {
-    expect(violations(ci.replaceAll("Install npm for artifact gates", "Missing npm pin"))).toHaveLength(5);
-    expect(violations(ci.replaceAll("npm@11.19.0", "npm@10.9.8"))).toHaveLength(5);
-    expect(violations(ci.replaceAll('test "$("$npm_prefix/bin/npm" --version)" = "11.19.0"', "npm --version"))).toHaveLength(5);
-    expect(violations(ci.replaceAll("- name: Install npm for artifact gates", "- name: Install\n        run: bun install\n\n      - name: Install npm for artifact gates"))).toHaveLength(5);
-    expect(violations(ci.replaceAll("- name: Install npm for artifact gates", "- name: Install npm for artifact gates\n        if: false"))).toHaveLength(5);
-    expect(violations(ci.replaceAll("- name: Install npm for artifact gates", "- name: Install npm for artifact gates\n        continue-on-error: true"))).toHaveLength(5);
+    expect(violations(ci.replaceAll("Install npm for artifact gates", "Missing npm pin"))).toHaveLength(executionJobs.length);
+    expect(violations(ci.replaceAll("npm@11.19.0", "npm@10.9.8"))).toHaveLength(executionJobs.length);
+    expect(violations(ci.replaceAll('test "$("$npm_prefix/bin/npm" --version)" = "11.19.0"', "npm --version"))).toHaveLength(executionJobs.length);
+    expect(violations(ci.replaceAll("- name: Install npm for artifact gates", "- name: Install\n        run: bun install\n\n      - name: Install npm for artifact gates"))).toHaveLength(executionJobs.length);
+    expect(violations(ci.replaceAll("- name: Install npm for artifact gates", "- name: Install npm for artifact gates\n        if: false"))).toHaveLength(executionJobs.length);
+    expect(violations(ci.replaceAll("- name: Install npm for artifact gates", "- name: Install npm for artifact gates\n        continue-on-error: true"))).toHaveLength(executionJobs.length);
   });
 
   test("the toolchain gate requires a private runner prefix, explicit executable and later-step PATH", () => {
-    expect(violations(ci.replaceAll('--prefix "$npm_prefix" ', ""))).toHaveLength(5);
-    expect(violations(ci.replaceAll('${RUNNER_TEMP}/npm-toolchain.XXXXXX', '/usr/local/npm-toolchain.XXXXXX'))).toHaveLength(5);
-    expect(violations(ci.replaceAll('"$npm_prefix/bin/npm" --version', 'npm --version'))).toHaveLength(5);
-    expect(violations(ci.replaceAll('echo "$npm_prefix/bin" >> "$GITHUB_PATH"', 'echo "$npm_prefix/bin"'))).toHaveLength(5);
+    expect(violations(ci.replaceAll('--prefix "$npm_prefix" ', ""))).toHaveLength(executionJobs.length);
+    expect(violations(ci.replaceAll('${RUNNER_TEMP}/npm-toolchain.XXXXXX', '/usr/local/npm-toolchain.XXXXXX'))).toHaveLength(executionJobs.length);
+    expect(violations(ci.replaceAll('"$npm_prefix/bin/npm" --version', 'npm --version'))).toHaveLength(executionJobs.length);
+    expect(violations(ci.replaceAll('echo "$npm_prefix/bin" >> "$GITHUB_PATH"', 'echo "$npm_prefix/bin"'))).toHaveLength(executionJobs.length);
   });
 
-  test("Bun, frozen-lockfile and ordered prepare gates remain in every job", () => {
-    for (const { steps } of Object.values((Bun.YAML.parse(ci) as Workflow).jobs)) {
+  test("Bun remains pinned everywhere; every package execution job uses ordered scriptless installation", () => {
+    for (const [name, { steps }] of Object.entries((Bun.YAML.parse(ci) as Workflow).jobs)) {
       const bun = steps.find((step) => step.uses?.startsWith("oven-sh/setup-bun@"));
       expect(bun?.with?.["bun-version"]).toBe("1.3.14");
+      if (name === "build-test") {
+        expect(steps.some(step => step.name === "Install" || step.name === "Install npm for artifact gates")).toBe(false);
+        expect(steps.filter(step => step.run).map(step => step.run)).toEqual(['bun tooling/ci/run-affected-shards.ts aggregate "$RUNNER_TEMP/affected-plan/plan.json" "$AFFECTED_PLAN_SHA256" "$RUNNER_TEMP/affected-receipts" "$AFFECTED_MATRIX_RESULT" "$RUNNER_TEMP/affected-aggregate.json"']);
+        continue;
+      }
       const install = steps.find((step) => step.name === "Install");
       expect(install?.run).toContain("bun install --frozen-lockfile --ignore-scripts");
       expect(install?.run).toContain("bun run prepare:ordered");

@@ -140,10 +140,20 @@ describe("SnapshotStore capture lease", () => {
     const a = new SnapshotStore({ path });
     const b = new SnapshotStore({ path });
     try {
+      // Liveness leg: a live holder blocks a second acquirer. The TTL is long
+      // enough that no realistic runner load can expire it between the two
+      // acquires — asserting liveness against a 30 ms wall-clock TTL made this
+      // a race that flaked red on loaded CI runners (BUG-0046).
+      expect(a.acquireCaptureLease({ waitMs: 0, ttlMs: 60_000 })).toBe(true);
+      expect(b.acquireCaptureLease({ waitMs: 0, ttlMs: 60_000 })).toBe(false); // still live
+      a.releaseCaptureLease();
+
+      // Reclaim leg: a crashed holder never releases, so its short-TTL lease
+      // expires on its own and the next acquirer takes it over. Elapsed time
+      // only ever past the TTL here, so extra runner load cannot flip it.
       expect(a.acquireCaptureLease({ waitMs: 0, ttlMs: 30 })).toBe(true);
-      expect(b.acquireCaptureLease({ waitMs: 0, ttlMs: 30 })).toBe(false); // still live
-      Bun.sleepSync(60); // holder "dies" without releasing
-      expect(b.acquireCaptureLease({ waitMs: 0, ttlMs: 30 })).toBe(true); // expired row reclaimed
+      Bun.sleepSync(60); // holder "dies" without releasing; 2x TTL guarantees expiry
+      expect(b.acquireCaptureLease({ waitMs: 0, ttlMs: 60_000 })).toBe(true); // expired row reclaimed
       b.releaseCaptureLease();
     } finally {
       a.close();

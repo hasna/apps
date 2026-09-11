@@ -1,0 +1,23 @@
+{
+  // Compiles ONLY the contracts-conformance assertions in
+  // `src/contracts-types.test.ts`.
+  //
+  // WHY THIS FILE EXISTS. Those assertions are `AssertAssignable` type aliases:
+  // they are checked by the COMPILER and erased by every runtime. Nothing else
+  // in this package compiles them — `tsconfig.build.json` includes only the
+  // four published entry points (and excludes tests), and `bun test` strips
+  // types without typechecking. Without this config a drifted structural
+  // spelling in `src/contracts-types.ts` would ship and no gate would notice,
+  // which is exactly the guarantee the seam is supposed to buy.
+  //
+  // WIRED INTO THE BUILD. `package.json` "build" ends with
+  // `bun run typecheck:conformance`, and CI's `build-test` job runs
+  // `turbo run build --affected` — so this fails the same build step that
+  // emits the declarations. Do not drop it from the build script.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src/contracts-types.ts", "src/contracts-types.test.ts"],
+  "exclude": []
+}

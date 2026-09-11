@@ -111,6 +111,10 @@ function createStubClient(options: StubOptions = {}): TodosPostgresQueryClient &
         }
         return { rows: [] as T[] };
       }
+      // The shared project-reference fence verifies this fixture task owner.
+      if (sql.includes("FOR KEY SHARE") && sql.includes("object_type='projects'")) {
+        return { rows: values[1] === "proj-1" ? [{ object_id: "proj-1" }] as T[] : [] as T[] };
+      }
       // Single-record read (store.get / requireRecord).
       if (sql.includes("object_type = $2") && sql.includes("object_id = $3")) {
         return {

@@ -1,20 +1,27 @@
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import { tmpdir } from "os";
 import { join } from "path";
-import { existsSync, mkdirSync, readdirSync, rmSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from "fs";
 import { DEFAULT_CONFIG } from "../lib/config.js";
 import type { RecordingsConfig } from "../types/index.js";
 import { RecordingError } from "../types/index.js";
 import { EventEmitter } from "events";
 
 let tempDir: string;
+const defaultSpawn = Bun.spawn;
+const deniedSpawn = () => { throw new Error("recorder fixture requires an explicit simulated process"); };
 
 beforeEach(() => {
   tempDir = join(tmpdir(), `recordings-test-rec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  mkdirSync(tempDir, { recursive: true });
+  mkdirSync(tempDir, { recursive: true, mode: 0o700 });
+  tempDir = realpathSync(tempDir);
+  chmodSync(tempDir, 0o700);
+  // A missing mock must fail before a recording program could reach the microphone.
+  Bun.spawn = deniedSpawn as typeof Bun.spawn;
 });
 
 afterEach(() => {
+  Bun.spawn = defaultSpawn;
   if (existsSync(tempDir)) {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -32,9 +39,13 @@ describe("checkRecordingDeps", () => {
     expect(typeof result.message).toBe("string");
   });
 
-  test("detects at least one recording tool on this system or returns none", async () => {
+  test("reports a simulated available recording dependency", async () => {
+    const dependency = mock(() => ({ exited: Promise.resolve(0), exitCode: 0 }));
+    Bun.spawn = dependency as unknown as typeof Bun.spawn;
     const { checkRecordingDeps } = await import("../lib/recorder.js");
     const result = await checkRecordingDeps();
+    expect(dependency).toHaveBeenCalledWith(["which", "rec"], { stdout: "pipe", stderr: "pipe" });
+    expect(result.available).toBeTrue();
     if (result.available) {
       expect(result.tool).toBe("rec");
       expect(result.message).toContain("is available");
@@ -418,19 +429,11 @@ describe("recordDuration", () => {
 
   test("throws when rec is not available", async () => {
     const { recordDuration } = await import("../lib/recorder.js");
-
-    const config: RecordingsConfig = {
-      ...DEFAULT_CONFIG,
-      audio_dir: tempDir,
-    };
-
-    try {
-      await recordDuration(1, config);
-      // If rec is installed, this might succeed
-    } catch (err) {
-      // Expected to fail since rec isn't typically installed in CI
-      // Could be ENOENT from Bun.spawn or RecordingError
-      expect(err).toBeDefined();
-    }
+    const missing = Object.assign(new Error("fixture rec ENOENT"), { code: "ENOENT" });
+    const spawn = mock((_argv: string[], _options: unknown) => { throw missing; });
+    Bun.spawn = spawn as unknown as typeof Bun.spawn;
+    await expect(recordDuration(1, { ...DEFAULT_CONFIG, audio_dir: tempDir })).rejects.toBe(missing);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawn.mock.calls[0]?.[0]?.[0]).toBe("rec");
   });
 });

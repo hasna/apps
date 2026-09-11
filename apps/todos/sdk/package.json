@@ -19,13 +19,14 @@
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target bun && bun build src/schemas.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "bun run build"
   },
   "keywords": ["todos", "tasks", "ai", "agent", "sdk", "claude", "codex", "gemini", "mcp"],
   "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "https://github.com/hasna/todos.git", "directory": "sdk" },
-  "homepage": "https://github.com/hasna/todos",
-  "bugs": { "url": "https://github.com/hasna/todos/issues" },
+  "repository": { "type": "git", "url": "https://github.com/hasna/apps.git", "directory": "apps/todos/sdk" },
+  "homepage": "https://github.com/hasna/apps",
+  "bugs": { "url": "https://github.com/hasna/apps/issues" },
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "devDependencies": {

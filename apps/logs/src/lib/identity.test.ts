@@ -16,6 +16,7 @@ import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -122,7 +123,10 @@ describe("computeRuntimeIdentity", () => {
       execFileSync("git", ["-C", dir, "add", "file.txt"]);
       execFileSync("git", ["-C", dir, "commit", "-qm", "init"]);
       const identity = computeRuntimeIdentity(dir);
-      expect(identity.repo_id).toBe(`repo_${sha256(dir).slice(0, 16)}`);
+      // `git rev-parse --show-toplevel` answers with the RESOLVED path
+      // (macOS mktemp lives under /var -> /private/var), so the expectation
+      // hashes the resolved directory too.
+      expect(identity.repo_id).toBe(`repo_${sha256(realpathSync(dir)).slice(0, 16)}`);
       expect(identity.repo_id).toMatch(/^repo_[a-f0-9]{16}$/);
     } finally {
       rmSync(dir, { recursive: true, force: true });

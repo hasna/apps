@@ -1,3 +1,4 @@
+import { assertDomainsClientStorage } from "../lib/client-storage-policy.js";
 // Typed SDK for @hasna/domains — the hosted HTTP client surface.
 //
 // The client is GENERATED from the domains-serve OpenAPI document
@@ -47,8 +48,7 @@
 //
 // There is no local fallback here: an SDK client with no resolvable credential
 // THROWS, so a caller cannot read a local dataset while believing it is talking
-// to the fleet. Local mode is the CLI/store opt-in (`domains.db`), not an SDK
-// surface.
+// to the fleet. Legacy SQLite settings are rejected at the client boundary.
 
 export * from "./client.js";
 import {
@@ -90,6 +90,7 @@ export function createDomainsClientFromEnv(
   env: ClientEnv = process.env,
   overrides: CreateDomainsClientOptions = {},
 ): DomainsClient {
+  assertDomainsClientStorage(env);
   const { baseUrl: baseUrlOverride, apiKey: apiKeyOverride, profile, keychain, ...rest } = overrides;
 
   // Tier 1: an explicit authority is a deliberate selection, so it is never

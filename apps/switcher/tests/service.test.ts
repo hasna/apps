@@ -76,6 +76,18 @@ for (const engine of ["sqlite","postgresql"] as const) {
       expect(await client.createProvider(input,"stable-request-001")).toEqual(p);
       expect((await client.getRun(run.id)).exitCode).toBe(0);
     });
+    test("expired models remain listed but cannot form launch plans or policy roles",async()=>{
+      const provider=await client.createProvider({id:"expiry-provider",name:"Expiry provider",baseUrl:"https://example.com/v1",protocol:"anthropic-messages",manualModels:[{id:"live",name:"Live"},{id:"expired",name:"Expired",expiresOn:"2000-01-01"}]});
+      await client.refreshModels(provider.id);
+      expect((await client.listModels(provider.id)).data).toEqual([
+        expect.objectContaining({id:"live",expired:false,codingEligible:true}),
+        expect.objectContaining({id:"expired",expired:true,codingEligible:false}),
+      ]);
+      const expired=await client.createProfile({id:"expired-profile",name:"Expired",providerId:provider.id,harness:"claude",model:"expired"});
+      await expect(client.launchPlan(expired.id)).rejects.toMatchObject({code:"model_expired"});
+      const role=await client.createProfile({id:"expired-role-profile",name:"Expired role",providerId:provider.id,harness:"claude",model:"live",modelPolicy:{roles:{subagent:"expired"}}});
+      await expect(client.launchPlan(role.id)).rejects.toMatchObject({code:"model_expired"});
+    });
     test("transaction rolls back partial writes and concurrent idempotency is stable",async()=>{
       await expect(store.mutate("rollback-transaction","hash-1",async db=>{
         await store.put("providers",{id:"must-rollback"},undefined,db);throw new Error("injected failure");

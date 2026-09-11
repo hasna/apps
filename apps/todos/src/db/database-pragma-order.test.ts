@@ -18,11 +18,14 @@
  * holder to release and succeeds. There is no timing window in which correct code
  * fails, so this is not a load-sensitive test.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase, getDatabase, resetDatabase } from "./database.js";
+
+// Spawns a holder process; bun's 5s default is too tight for a cold start on a loaded host.
+setDefaultTimeout(60_000);
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 

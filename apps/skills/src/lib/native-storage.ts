@@ -815,19 +815,27 @@ function normalizeHeaders(headers: Record<string, string>): Record<string, strin
   return result;
 }
 
+function encodeAwsUriComponent(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+}
+
 function canonicalizeQuery(params: URLSearchParams): string {
+  // SigV4 sorts the encoded bytes, not decoded text or locale collation.
+  // Keep every pair: repeated keys and empty values are part of the signature.
+  const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
   return [...params.entries()]
-    .sort(([aKey, aValue], [bKey, bValue]) => aKey.localeCompare(bKey) || aValue.localeCompare(bValue))
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .map(([key, value]) => [encodeAwsUriComponent(key), encodeAwsUriComponent(value)] as const)
+    .sort(([aKey, aValue], [bKey, bValue]) => compare(aKey, bKey) || compare(aValue, bValue))
+    .map(([key, value]) => `${key}=${value}`)
     .join("&");
 }
 
 function encodeUriPath(pathname: string): string {
   return pathname
     .split("/")
-    .map((segment) => encodeURIComponent(decodeURIComponent(segment)).replace(/[!'()*]/g, (char) =>
-      `%${char.charCodeAt(0).toString(16).toUpperCase()}`
-    ))
+    .map((segment) => encodeAwsUriComponent(decodeURIComponent(segment)))
     .join("/");
 }
 

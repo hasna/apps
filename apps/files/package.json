@@ -1,6 +1,6 @@
 {
   "name": "@hasna/files",
-  "version": "0.3.18",
+  "version": "0.4.0",
   "description": "Agent-first file management \u2014 index local folders and S3 buckets, sync Google Drive, tag, search, and retrieve files via CLI + MCP",
   "type": "module",
   "main": "dist/index.js",
@@ -34,7 +34,12 @@
     "docs",
     "scripts",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "!dist/test/**",
+    "!scripts/**/*.test.ts",
+    "!dist/**/*fixtures.d.ts",
+    "!dist/**/*fixtures.d.ts.map",
+    "!dist/**/test-fixtures/**"
   ],
   "scripts": {
     "clean": "rm -rf dist",

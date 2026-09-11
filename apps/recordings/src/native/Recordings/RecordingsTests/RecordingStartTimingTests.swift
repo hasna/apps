@@ -61,9 +61,24 @@ private final class FakePCMRecorder: PCMRecordingSource, @unchecked Sendable {
 @MainActor
 private func makeStartableEngine(
     recorder: FakePCMRecorder,
+    intentDetectionEnabled: Bool = false,
     selectionCapture: @escaping @Sendable (pid_t) -> AccessibilitySelectionToken? = { _ in nil }
 ) -> RecordingEngine {
-    let engine = RecordingEngine(homePath: makeIsolatedTestHome("start-timing-tests"))
+    let engine = RecordingEngine(homePath: makeIsolatedTestHome("start-timing-tests"), installsGlobalHandlers: false)
+    // The legacy engine persists this setting. Keep the explicit mode on this instance,
+    // restoring the exact application-domain value before another MainActor test can run.
+    // This factory and the restoration are synchronous: there is no suspension in between.
+    let defaults = UserDefaults.standard
+    let domain = Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName
+    let priorIntent = defaults.persistentDomain(forName: domain)?["intentDetectionEnabled"]
+    defer {
+        if let priorIntent {
+            defaults.set(priorIntent, forKey: "intentDetectionEnabled")
+        } else {
+            defaults.removeObject(forKey: "intentDetectionEnabled")
+        }
+    }
+    engine.intentDetectionEnabled = intentDetectionEnabled
     engine.openAIAPIKeyProvider = { "" }
     engine.microphoneAuthorization = { .authorized }
     engine.accessibilityTrustCheck = { true }
@@ -80,6 +95,27 @@ private func makeStartableEngine(
     engine.pasteInterceptorForTesting = { _, _, _ in }
     engine.commandCLI = { _, _, _ in "ERROR: command CLI must not run in this test" }
     return engine
+}
+
+/// An entered callback is essential evidence: with intent detection disabled the engine
+/// correctly skips selection capture, so merely installing a blocked closure proves nothing.
+private final class BlockedSelectionCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private let gate = DispatchSemaphore(value: 0)
+    private var capturedPIDs: [pid_t] = []
+    private var returned = false
+
+    var pids: [pid_t] { lock.withLock { capturedPIDs } }
+    var isPending: Bool { lock.withLock { !capturedPIDs.isEmpty && !returned } }
+
+    func capture(_ pid: pid_t) -> AccessibilitySelectionToken? {
+        lock.withLock { capturedPIDs.append(pid) }
+        gate.wait()
+        lock.withLock { returned = true }
+        return AccessibilitySelectionToken.unsafeTestToken(selectedText: "frozen words")
+    }
+
+    func release() { gate.signal() }
 }
 
 @MainActor
@@ -138,14 +174,12 @@ private func expectEmptyAttemptDisclosed(
 @MainActor
 struct RecordingStartTimingTests {
     @Test("the recorder starts on keydown even while the AX selection capture is blocked")
-    func recorderStartDoesNotWaitOnSelectionCapture() async {
-        let captureGate = DispatchSemaphore(value: 0)
+    func recorderStartDoesNotWaitOnSelectionCapture() async throws {
+        let capture = BlockedSelectionCapture()
+        defer { capture.release() }
         let recorder = FakePCMRecorder()
-        let engine = makeStartableEngine(recorder: recorder) { _ in
-            // Simulates a beachballing target app: the capture IPC hangs far longer than
-            // any acceptable start budget.
-            captureGate.wait()
-            return nil
+        let engine = makeStartableEngine(recorder: recorder, intentDetectionEnabled: true) { pid in
+            capture.capture(pid)
         }
 
         // `startRecording` runs synchronously on the MainActor through recorder start.
@@ -157,25 +191,29 @@ struct RecordingStartTimingTests {
         #expect(engine.isWarmingUpCapture, "start() returning is warm-up, not captured audio")
         #expect(engine.captureIsActive)
         #expect(engine.flowPhase == .listening)
+        try #require(await waitUntil { capture.isPending })
+        #expect(capture.pids == [99_999])
 
         #expect(await confirmCapture(engine, recorder))
         #expect(!engine.isWarmingUpCapture)
 
-        captureGate.signal()
+        capture.release()
         engine.cancelRecording()
         #expect(engine.flowPhase == .idle)
     }
 
     @Test("stopping waits for the generation-bound start context instead of dropping the frozen target")
-    func stopAwaitsFrozenStartContext() async {
-        let captureGate = DispatchSemaphore(value: 0)
+    func stopAwaitsFrozenStartContext() async throws {
+        let capture = BlockedSelectionCapture()
+        defer { capture.release() }
         let recorder = FakePCMRecorder()
-        let engine = makeStartableEngine(recorder: recorder) { _ in
-            captureGate.wait()
-            return AccessibilitySelectionToken.unsafeTestToken(selectedText: "frozen words")
+        let engine = makeStartableEngine(recorder: recorder, intentDetectionEnabled: true) { pid in
+            capture.capture(pid)
         }
 
         engine.startRecording(trigger: .manual)
+        try #require(await waitUntil { capture.isPending })
+        #expect(capture.pids == [99_999])
         #expect(await confirmCapture(engine, recorder))
         engine.stopAndTranscribe()
         #expect(engine.isTranscribing)
@@ -183,9 +221,10 @@ struct RecordingStartTimingTests {
         // The pipeline must hold in finalizing while the frozen context is unresolved —
         // it may not deliver without the selection frozen at start.
         try? await Task.sleep(for: .milliseconds(150))
+        #expect(capture.isPending)
         #expect(engine.flowPhase == .finalizing)
 
-        captureGate.signal()
+        capture.release()
         // No audio was produced by the fake recorder, so the pipeline ends in the
         // fail-closed no-audio state — importantly, only after the context resolved.
         #expect(await waitUntil {
@@ -194,6 +233,37 @@ struct RecordingStartTimingTests {
         })
         #expect(engine.statusMessage == "No audio captured")
         #expect(engine.canStartRecording)
+    }
+
+    @Test("intent detection disabled skips selection capture and can finish the empty attempt")
+    func disabledIntentDoesNotWaitForSelection() async throws {
+        let capture = BlockedSelectionCapture()
+        defer { capture.release() }
+        let recorder = FakePCMRecorder()
+        let engine = makeStartableEngine(recorder: recorder, intentDetectionEnabled: false) { pid in
+            capture.capture(pid)
+        }
+        engine.startRecording(trigger: .manual)
+        try #require(await confirmCapture(engine, recorder))
+        engine.stopAndTranscribe()
+        try #require(await waitUntil { !engine.isTranscribing })
+        #expect(capture.pids.isEmpty)
+        #expect(engine.flowPhase == .failed("No audio captured"))
+        #expect(engine.canStartRecording)
+    }
+
+    @Test("fixture intent modes stay on their engine without changing the process preference")
+    func fixtureIntentModeIsInstanceScoped() {
+        let defaults = UserDefaults.standard
+        let domain = Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName
+        let before = defaults.persistentDomain(forName: domain)?["intentDetectionEnabled"] as? NSObject
+        let enabled = makeStartableEngine(recorder: FakePCMRecorder(), intentDetectionEnabled: true)
+        #expect(enabled.intentDetectionEnabled)
+        #expect((defaults.persistentDomain(forName: domain)?["intentDetectionEnabled"] as? NSObject) == before)
+        let disabled = makeStartableEngine(recorder: FakePCMRecorder())
+        #expect(!disabled.intentDetectionEnabled)
+        #expect(enabled.intentDetectionEnabled)
+        #expect((defaults.persistentDomain(forName: domain)?["intentDetectionEnabled"] as? NSObject) == before)
     }
 
     @Test("slow microphone shutdown keeps the UI responsive and finishes draining before transcription")
@@ -219,19 +289,21 @@ struct RecordingStartTimingTests {
     }
 
     @Test("a released key before the capture resolves still cancels cleanly")
-    func cancelDuringPendingCapture() async {
-        let captureGate = DispatchSemaphore(value: 0)
+    func cancelDuringPendingCapture() async throws {
+        let capture = BlockedSelectionCapture()
+        defer { capture.release() }
         let recorder = FakePCMRecorder()
-        let engine = makeStartableEngine(recorder: recorder) { _ in
-            captureGate.wait()
-            return nil
+        let engine = makeStartableEngine(recorder: recorder, intentDetectionEnabled: true) { pid in
+            capture.capture(pid)
         }
         engine.startRecording(trigger: .manual)
+        try #require(await waitUntil { capture.isPending })
+        #expect(capture.pids == [99_999])
         #expect(await confirmCapture(engine, recorder))
         engine.cancelRecording()
         #expect(!engine.isRecording)
         #expect(engine.flowPhase == .idle)
-        captureGate.signal()
+        capture.release()
         #expect(engine.canStartRecording)
     }
 }

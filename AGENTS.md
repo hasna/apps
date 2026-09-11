@@ -68,10 +68,10 @@ bun run check               # names + secrets + manifests + publish-guard + stan
 
 - `bun` workspaces (`apps/*`), `turbo` for build/test/lint (strict env lists),
   `changesets` with independent per-package versions and public access.
-- CI: five jobs in `ci.yml` — `gates` (secrets scan with self-test,
+- CI: four independent gates plus affected planning/shards/aggregation in `ci.yml` — `gates` (secrets scan with self-test,
   name-conformance gate, contract-manifest gate), `test-suites`
-  (versioning + standard-adherence, hard gate), `build-test` (`turbo --affected`
-  with `TURBO_SCM_BASE`), `verify-generated` (byte-reproducible bin/dist),
+  (versioning + standard-adherence, hard gate), `affected-plan` (one resolved base and immutable Turbo graph), `affected-shard`
+  (four isolated runners, serial tasks), `build-test` (required terminal receipt aggregate), `verify-generated` (byte-reproducible bin/dist),
   `publish-guard` (npm pack --dry-run per member) — alongside six other
   workflows: `release.yml`, `deploy-projects.yml`, `deploy-skills.yml`,
   `deploy-todos.yml`, `recordings-macos.yml`, `blacksmith-testbox.yml`.

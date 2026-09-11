@@ -11,6 +11,76 @@ Universal task management for AI coding agents - CLI + MCP server + interactive 
 bun install -g @hasna/todos
 ```
 
+## Upgrading From 0.15.52
+
+0.16.0 puts every surface on one credential resolver and moves three command
+families to the shared API. Upgrading from 0.15.52 needs no data migration, but
+four things change:
+
+- **Configure a credential.** The `./sdk` client no longer reads
+  `~/.todos/config.json`, and the unprefixed `TODOS_URL` / key spellings are
+  legacy. Put the key in the macOS Keychain, in
+  `~/.hasna/todos/config/credentials` (owner-only `0400`/`0600`), or in
+  `HASNA_TODOS_API_KEY`, then confirm with `todos storage status --json`. With no
+  credential the CLI exits non-zero (`REMOTE_API_CONFIG_MISSING`) instead of
+  quietly serving local rows, and MCP tool calls fail closed rather than falling
+  back to the on-box store (see the third bullet below). The
+  retired locations — `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`,
+  `$XDG_CONFIG_HOME` — are not read.
+- **`todos plans`, `todos task-lists` (`lists`, `tl`) and the template commands
+  are shared-API only.** They refuse `HASNA_TODOS_DB_PATH`, `TODOS_DB_PATH`,
+  `HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup — any one of them set is
+  enough to refuse the command, and the refusal names the ones that are set.
+  `todos template-library` is unchanged and still credential-free. The MCP plan
+  tools (`create_plan`, `list_plans`, `get_plan`, `update_plan`, `delete_plan`)
+  and task-list tools (`create_task_list`, `list_task_lists`, `get_task_list`,
+  `update_task_list`, `delete_task_list`) are shared-API only as well.
+- **Most MCP tools that read the on-box store need `HASNA_TODOS_LOCAL=1`, and
+  every refusal is typed.** The MCP server no longer opens the on-box SQLite
+  store implicitly, so tools that still read it directly — the template family,
+  tags and labels, stale/blocked work, `doctor`, run ledger,
+  handoffs, review queues, retrospectives, risks, knowledge records, backups,
+  calendar, boards, focus/time reports and dispatches — fail on the default
+  posture with the typed `{"code":"API_DATABASE_FALLBACK_FORBIDDEN"}` payload,
+  whose `suggestion` names the opt-in; the server also logs the same code.
+  Measured at 0.16.0 with `TODOS_PROFILE=full`, that is 68 of the 125
+  zero-required-argument tools. A further 18 return the typed
+  `REMOTE_API_CONFIG_MISSING` — the 16 shared-API tools that need a credential
+  (`list_tasks`, `list_projects`, `list_agents`, `get_next_task`, `get_status`,
+  `bootstrap`, `get_context`, `get_my_tasks`, `get_my_workload`, `get_health`,
+  `standup`, `list_my_tasks`, `machines_register`, `machines_list`,
+  `machines_heartbeat`, `machines_topology`) plus `list_plans` and
+  `list_task_lists`. Five more refuse caller input or local state with the typed
+  `INVALID_INPUT` / `ENCRYPTION_KEY_UNAVAILABLE` / `ENCRYPTED_PAYLOAD_INVALID`,
+  and five answer a readable text refusal ("Provide agent_id, id, or name.").
+  No zero-argument tool returns an opaque `UNKNOWN_ERROR` on either posture —
+  the default one measured above, or the `HASNA_TODOS_LOCAL=1` opt-in these
+  tools are served under. Run the server with
+  `HASNA_TODOS_LOCAL=1` to keep using the on-box tools; that opt-in is ignored
+  when `HASNA_TODOS_API_KEY` or `HASNA_TODOS_API_URL` is set, because a
+  configured environment outranks it.
+- **The advertised command list is route-dependent.** 0.15.52 listed all 166
+  commands to every caller because the local fallback was implicit. 0.16.0
+  lists only what the resolved route exposes: 76 root commands on the hosted
+  route once a credential resolves, 75 with none configured (the extra verb,
+  `stale-lock-handoff`, is advertised only when the shared-API authority is),
+  and the full 166 only with `HASNA_TODOS_LOCAL=1` set, because the on-box
+  families fail closed on the default posture. No command was removed —
+  `todos --help`, `todos manual` and
+  the generated completions all honour the same rule, and every verb still
+  resolves once its posture is configured. `todos storage status` also reports
+  credential-source disagreements as a `warnings` array (`--json`) and a yellow
+  stderr line (human mode); the entries name sources and env key names, never a
+  value.
+
+Everything else still runs offline with `HASNA_TODOS_LOCAL=1` (when the
+environment configures no authority or credential of its own). The per-surface
+detail lives under `apps/todos/docs/` (`PLAN_API.md`,
+`TASK_LIST_API.md`, `TEMPLATE_API.md`, `TASK_QUERY_API.md`,
+`native-storage.md`). The npm tarball ships this README, `CHANGELOG.md` and those
+five documents alongside `dist/`, so they are readable from an installed
+package; `docs/cli-help.md` is repo-only.
+
 ## Credentials and Service Authority
 
 The CLI, the MCP server and the `./sdk` client all resolve their credential
@@ -38,11 +108,18 @@ resolved its own hosted authority, which is where rotation matters.
 
 | # | Tier | Where |
 | --- | --- | --- |
-| 1 | explicit argument | `--api-key` / `--profile` (and `apiKey` on `new TodosClient({...})`) |
+| 1 | explicit argument | `apiKey` on `new TodosClient({...})` — the `todos` CLI exposes no hosted-credential flag of its own (`todos ai --profile` is a runtime profile, not a credential tier) |
 | 2 | deliberate env pointer | `HASNA_TODOS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_TODOS_API_KEY_REF` (a secrets-vault item key, never a value) |
 | 3 | macOS Keychain | generic password `hasna.credentials.todos.api-key`, account `HASNA_STATION` → `hostname -s` → `USER` |
 | 4 | disk | `~/.hasna/todos/config/credentials`, owner-only `0400`/`0600` |
 | 5 | environment | `HASNA_TODOS_API_KEY` |
+
+Tier 3 is account-scoped, not host-scoped: the item is looked up under the
+station name, so a key stored for one station is invisible on another. Set
+`HASNA_STATION` explicitly (a wrapper, a launchd plist, a CI job) when the
+account name is not the first of `hostname -s` / `USER`; with none of the three
+matching the item's account, the lookup misses and the run fails closed with
+`REMOTE_API_CONFIG_MISSING` rather than silently resolving something else.
 
 Tiers 1 and 2 are *deliberate*: if one is set and cannot be honoured, the run
 fails — it never quietly authenticates as a different principal. Tier 5 is a
@@ -71,10 +148,15 @@ printf 'HASNA_TODOS_API_KEY=%s\n' "$KEY" > ~/.hasna/todos/config/credentials
 chmod 600 ~/.hasna/todos/config/credentials
 ```
 
-**Hosted mode fails closed.** With no credential the CLI and the MCP server exit
-non-zero (`REMOTE_API_CONFIG_MISSING`) and say which tiers they consulted. They
-never fall back to the local SQLite store, because serving local rows while
-authentication is broken prints healthy output for a broken system.
+**Hosted mode fails closed.** With no credential the CLI exits non-zero
+(`REMOTE_API_CONFIG_MISSING`) and names the tiers it consulted. The MCP server
+stays up so a client can read the refusal, and each call fails instead of serving
+local rows — the credential-gated tools with the typed
+`REMOTE_API_CONFIG_MISSING` and the on-box tools with the typed
+`API_DATABASE_FALLBACK_FORBIDDEN`, both described under
+[Upgrading From 0.15.52](#upgrading-from-01552). Neither surface falls back to
+the local SQLite store, because serving local rows while authentication is broken
+prints healthy output for a broken system.
 
 The `./sdk` surface answers "nothing is configured" differently *on purpose*,
 and only for that one case: `new TodosClient()` targets the on-box
@@ -82,9 +164,19 @@ and only for that one case: `new TodosClient()` targets the on-box
 that client speaks the same `/api/*` plane a workstation serve exposes and local
 is a real mode for it. `createTodosV1Client()` is hosted-only and throws
 (`TODOS_CREDENTIAL_MISSING`). Every *other* refusal is a throw on all three
-surfaces — a blank variable, aliases that disagree, an unreadable credential
-file, a URL with no key — because those are misconfigurations, not an absence of
-configuration.
+surfaces — aliases that disagree, an unreadable credential file, a URL with no
+key — because those are misconfigurations, not an absence of configuration.
+
+A **declared-but-blank** authority variable is deliberately *not* one of those
+refusals. At the Todos seam a blank has always meant "unset" — helpers in the
+wild blank rather than delete — so every authority variable that is declared
+but empty is removed before the resolver runs. `HASNA_TODOS_API_KEY=` therefore
+resolves the machine's ambient Keychain item exactly as an unset variable does:
+it neither configures a credential nor withholds one. To force the on-box store
+from a wrapper, set `HASNA_TODOS_LOCAL=1` — a blank authority variable counts as
+absent for the opt-in too, so the opt-in is still honoured when
+`HASNA_TODOS_API_KEY` is present but empty — instead of blanking a credential
+variable.
 
 **Local mode is deliberate, and it says so.** `@hasna/todos` is usable entirely
 offline against an on-box SQLite store — set `HASNA_TODOS_LOCAL=1` (alias
@@ -92,6 +184,14 @@ offline against an on-box SQLite store — set `HASNA_TODOS_LOCAL=1` (alias
 authority and no credential, it is answered *before* the resolver runs (so no
 Keychain item and no credential file is read), and every local run prints one
 line on stderr saying it is local.
+
+Three command families are exempt from local mode and are shared-API only:
+`todos plans`, `todos task-lists` (aliases `lists`, `tl`) and the template
+commands (`templates`, `template-init`, `template-preview`, `template-export`,
+`template-import`, `template-history`). They refuse `HASNA_TODOS_DB_PATH`,
+`TODOS_DB_PATH`, `HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup and need a
+credential. `todos template-library` is the exception on the other side: it
+renders the library bundled in the package and stays credential-free.
 
 ```bash
 todos storage status --json    # which tier supplied the key, and which URL applied
@@ -110,6 +210,13 @@ todos completions bash > ~/.local/share/bash-completion/completions/todos
 todos completions zsh > ~/.zsh/completions/_todos
 todos completions fish > ~/.config/fish/completions/todos.fish
 ```
+
+`--help`, `manual` and the completions all derive from the same tree, and that
+tree is filtered by the resolved route: the default posture advertises the
+commands that can run against the hosted surface, and `HASNA_TODOS_LOCAL=1`
+advertises the full on-box set. See
+[Upgrading From 0.15.52](#upgrading-from-01552) and
+`apps/todos/docs/cli-help.md`.
 
 Print the local CLI manual when you need install/update commands, examples,
 JSON output contracts, error behavior, and the command catalog:
@@ -550,7 +657,7 @@ OpenLoops updates those pointers after admission or evaluator progress:
 todos task workflow-pointers <task-id> \
   --invocation <workflow-invocation-id> \
   --run <workflow-run-id> \
-  --manifest /home/hasna/.hasna/loops/runs/<project>/<subject>/<run>/manifest.json \
+  --manifest ~/.hasna/loops/runs/<project>/<subject>/<run>/manifest.json \
   --state working \
   --json
 ```
@@ -786,34 +893,60 @@ MCP clients get the same local coordination through `claim_next_task`,
 `claim_next_task` can opt into stale recovery with `steal_stale` and
 `stale_minutes`.
 
-## Local Plan Templates
+`get_stale_tasks` (and the other MCP tools that read the on-box store) require
+the deliberate local opt-in: start the MCP server with `HASNA_TODOS_LOCAL=1`, or
+the call fails on the default posture with the typed
+`API_DATABASE_FALLBACK_FORBIDDEN` refusal. See
+[Upgrading From 0.15.52](#upgrading-from-01552) for the affected families and
+the one case where the opt-in is ignored.
 
-Reusable plan templates live in the local SQLite database. The package also
-ships a marketplace-free local library for bug fixes, feature implementation,
-security review, releases, migrations, incidents, docs refreshes, QA, and open
-source package bootstraps. Templates can create one task or a full ordered plan
-with dependencies, variables, priorities, tags, and descriptions:
+## Plan Templates
 
-```bash
-todos template-library --json
-todos template-library --write .todos/templates
-todos template-init
-todos template-preview <template-id> --var name=api
-todos templates --use <template-id> --var name=api
-todos template-export <template-id> > plan-template.json
-todos template-import plan-template.json
-```
+The package ships a marketplace-free template library for bug fixes, feature
+implementation, security review, releases, migrations, incidents, docs
+refreshes, QA, and open source package bootstraps. Templates can create one
+task or a full ordered plan with dependencies, variables, priorities, tags, and
+descriptions.
+
+Two surfaces are involved, and they are not the same store:
+
+- `todos template-library` renders the library bundled in the package. It is
+  credential-free and never opens a database, so it works offline:
+
+  ```bash
+  todos template-library --json
+  todos template-library --write .todos/templates
+  ```
+
+- The remaining template commands are served by the authenticated shared API.
+  `todos template-init`, `todos template-preview`, `todos templates --use`,
+  `todos template-export`, `todos template-import` and `todos template-history`
+  require `HASNA_TODOS_API_URL` and `HASNA_TODOS_API_KEY` (or saved account
+  credentials) and refuse an on-box database selection before startup:
+
+  ```bash
+  todos template-init
+  todos template-preview <template-id> --var name=api
+  todos templates --use <template-id> --var name=api
+  todos template-export <template-id> > plan-template.json
+  todos template-import plan-template.json
+  ```
 
 `todos template-library --write` writes editable JSON files that use the same
 shape as `todos template-import`, so teams can fork a built-in workflow without
 contacting any hosted marketplace. `todos templates --use` creates every task in
-a multi-task template and wires its local dependency graph, so agents can
-immediately run `todos ready`, `todos blocked`, or
-`todos deps <task-id> --graph` against the generated plan. The same local-only
-workflow is available to MCP clients through `list_template_library`,
-`write_template_library`, `init_templates`, `create_template`, `list_templates`,
+a multi-task template and wires its dependency graph in the shared account, so
+agents can immediately run `todos ready`, `todos blocked`, or
+`todos deps <task-id> --graph` against the generated plan. MCP clients reach the
+bundled library through `list_template_library` and `write_template_library`,
+which are credential-free and open no store. The remaining MCP template tools —
+`init_templates`, `create_template`, `list_templates`,
 `create_task_from_template`, `preview_template`, `export_template`, and
-`import_template`.
+`import_template` — read the on-box SQLite store and are not served on the
+default posture: start the MCP server with `HASNA_TODOS_LOCAL=1` to use them.
+That opt-in is ignored when the environment sets `HASNA_TODOS_API_KEY` or
+`HASNA_TODOS_API_URL`, which leaves these tools unreachable (see
+[Upgrading From 0.15.52](#upgrading-from-01552)).
 
 ## Moving Tasks Between Plans
 
@@ -834,8 +967,21 @@ todos plans --show <plan-id>                  # verify the plan's task set
 
 Plan references accept a UUID, a plan slug, a plan name, or a unique id prefix.
 An unknown or ambiguous reference exits non-zero before any task is modified.
-All of these run against whichever store the CLI is configured for: the local
-SQLite file, or the shared dataset behind a hosted `/v1` authority.
+`todos add`, `todos update` and `todos bulk` follow whichever store the CLI is
+configured for — the local SQLite file, or the shared dataset behind a hosted
+`/v1` authority. `todos plans` does not: it is served by the authenticated
+shared API only and refuses `HASNA_TODOS_DB_PATH`, `TODOS_DB_PATH`,
+`HASNA_TODOS_LOCAL` and `TODOS_LOCAL` before startup.
+
+`todos plans --artifact <id-or-slug>` and `--write-artifacts` compare local
+Markdown against the shared plan record and therefore require an explicit
+`--artifact-root <directory>` — a trusted local project directory the caller
+chooses. Before 0.16.0 both options defaulted to the project path recorded in
+local SQLite, so the older form `todos plans --artifact <id-or-slug> --json`
+still appears in notes from that release; it now exits non-zero with
+`--artifact-root is required`. The files stay under
+`<artifact-root>/.hasna/todos/plans/<project-id>/`, and a path returned by the
+API is never used.
 
 ## Local Git Traceability
 
@@ -1625,6 +1771,38 @@ Always-on / hosted deployments should use the versioned `/v1` API, which
 authenticates independently against the cloud key store. `/health`, `/ready`,
 `/version` and `/openapi.json` are the only routes that are public by design.
 
+### Hosted `/v1` writes need a neutral `User-Agent`
+
+The hosted `/v1` plane is served through a Cloudflare-protected gateway that
+rejects automation-library default User-Agents. Python's `urllib` sends
+`Python-urllib/3.x` and `requests` sends `python-requests/x.y`; the gateway
+answers those with HTTP 403 (Cloudflare error 1010, browser-signature rule)
+even though the identical request from `curl` succeeds with the same headers
+and key. The origin is never reached, so no code change on the API server can
+help — the caller must present a non-python `User-Agent` on every request
+through the gateway:
+
+```python
+import json
+import urllib.request
+
+req = urllib.request.Request(
+    "https://api.hasna.com/todos/v1/tasks",
+    data=json.dumps({"title": "ship the parser"}).encode(),
+    method="POST",
+    headers={
+        "x-api-key": "<your-key>",          # or Authorization: Bearer <your-key>
+        "content-type": "application/json",
+        "user-agent": "hasna-todos/1.0",    # never the urllib default
+    },
+)
+urllib.request.urlopen(req)                  # 201, not 403 Cloudflare 1010
+```
+
+The `requests` equivalent sets the same `user-agent` header on the request or
+session; a fixed neutral product string works for both reads and writes. Do not
+rely on the library default User-Agent.
+
 Agent callers can trim REST responses with field selectors:
 
 ```bash
@@ -1639,9 +1817,11 @@ Data is stored in `~/.hasna/todos/`.
 
 ## Local-Only Security Boundary
 
-`@hasna/todos` is an open source, local-first package. The CLI, MCP server, and
-SDK read and write local state by default and do not require a
-hosted API, cloud account, billing provider, or remote model provider.
+`@hasna/todos` is an open source package with a local-first storage boundary.
+The CLI, MCP server, and SDK read and write on-box state under the explicit
+local opt-in (`HASNA_TODOS_LOCAL=1`) and otherwise talk only to the Todos `/v1`
+authority the operator configured. They never require a billing provider, a
+SaaS account, or a remote model provider.
 
 Release checks enforce that boundary before publishing:
 

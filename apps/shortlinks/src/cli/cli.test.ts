@@ -6,36 +6,84 @@ import { join } from "node:path";
 let tempHome = "";
 let dbPath = "";
 
+/**
+ * The CLI's environment: the real station env scrubbed of anything ambient
+ * that could select the hosted fleet (API URL + key, canonical and alias
+ * prefixes, and the deliberate-pointer/profile tiers, all declared-but-blank —
+ * "blank means unset" at the app seam), with the app home pinned to the
+ * per-test scratch dir. `extra` wins over the scrub so a hosted-mode test can
+ * author its own configuration.
+ */
+function cliEnv(extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    ...process.env,
+    SHORTLINKS_HOME: tempHome,
+    HASNA_SHORTLINKS_DATABASE_URL: "",
+    SHORTLINKS_DATABASE_URL: "",
+    // Force the on-box LocalStore by default: neutralize any ambient hosted-API
+    // client config — env (API_URL + API_KEY, canonical and alias prefixes) and
+    // the fleet app-config on disk (HOME pointed at the temp dir) — so tests
+    // never touch the real shortlinks API from a machine that has it
+    // configured.
+    HOME: tempHome,
+    HASNA_SHORTLINKS_API_URL: "",
+    HASNA_SHORTLINKS_API_KEY: "",
+    SHORTLINKS_API_URL: "",
+    SHORTLINKS_API_KEY: "",
+    // The contracts resolver's deliberate-pointer and profile tiers: nothing
+    // ambient may configure a hosted client behind the tests' backs.
+    HASNA_SHORTLINKS_API_KEY_OVERRIDE: "",
+    HASNA_SHORTLINKS_API_KEY_REF: "",
+    HASNA_PROFILE: "",
+    HASNA_EVENTS_HOME: join(tempHome, "events"),
+    ...extra,
+  };
+}
+
+/** Build the CLI argv for `runCli` / `runCliAsync`. */
+function cliArgs(args: string[], opts: { db?: boolean } = {}): string[] {
+  return [
+    process.execPath,
+    "src/cli/index.ts",
+    ...(opts.db === false ? [] : ["--db", dbPath]),
+    ...args,
+  ];
+}
+
 function runCli(args: string[], options: { env?: Record<string, string>; json?: boolean } = { json: true }) {
   return Bun.spawnSync({
-    cmd: [process.execPath, "src/cli/index.ts", "--db", dbPath, ...(options.json === false ? [] : ["--json"]), ...args],
+    cmd: cliArgs([...(options.json === false ? [] : ["--json"]), ...args]),
     cwd: process.cwd(),
-    env: {
-      ...process.env,
-      SHORTLINKS_HOME: tempHome,
-      HASNA_SHORTLINKS_DATABASE_URL: "",
-      SHORTLINKS_DATABASE_URL: "",
-      // Force the on-box LocalStore: neutralize any ambient hosted-API client
-      // config — env (API_URL + API_KEY, canonical and alias prefixes) and the
-      // fleet app-config on disk (HOME pointed at the temp dir) — so tests
-      // never touch the real shortlinks API from a machine that has it
-      // configured.
-      HOME: tempHome,
-      HASNA_SHORTLINKS_API_URL: "",
-      HASNA_SHORTLINKS_API_KEY: "",
-      SHORTLINKS_API_URL: "",
-      SHORTLINKS_API_KEY: "",
-      // The contracts resolver's deliberate-pointer and profile tiers: nothing
-      // ambient may configure a hosted client behind the tests' backs.
-      HASNA_SHORTLINKS_API_KEY_OVERRIDE: "",
-      HASNA_SHORTLINKS_API_KEY_REF: "",
-      HASNA_PROFILE: "",
-      HASNA_EVENTS_HOME: join(tempHome, "events"),
-      ...options.env,
-    },
+    env: cliEnv(options.env),
     stdout: "pipe",
     stderr: "pipe",
   });
+}
+
+/**
+ * Async CLI run for tests whose harness must keep processing events WHILE the
+ * CLI runs — e.g. a hosted-mode test with a local Bun.serve double: a
+ * synchronous spawn would block this process's event loop and the double could
+ * never answer the child's request.
+ */
+async function runCliAsync(args: string[], options: { env?: Record<string, string> } = {}): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  const child = Bun.spawn({
+    cmd: cliArgs(["--json", ...args]),
+    cwd: process.cwd(),
+    env: cliEnv(options.env),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  return { exitCode, stdout, stderr };
 }
 
 beforeEach(() => {
@@ -77,6 +125,53 @@ describe("CLI JSON workflow", () => {
     expect(payload.environment.api_url_present).toBe(false);
     expect(payload.environment.api_key_present).toBe(false);
     expect(JSON.stringify(payload)).not.toContain("DATABASE_URL");
+  });
+
+  test("doctor's hosted transport report sees the app-seam env, never raw process.env", async () => {
+    // Regression (hasna/apps#1720 release-quality): `doctor` used to hand
+    // @hasna/contracts the RAW process env for its transport report while every
+    // store-backed command hands over the app-seam inputs (declared-but-blank
+    // authority variables normalised away, client-resolver-inputs.ts). The
+    // resolver refuses a declared-but-blank variable LOUDLY, so a scrubbed
+    // environment — blank HASNA_SHORTLINKS_API_KEY_OVERRIDE / _REF alongside a
+    // valid key + URL — made `doctor` exit non-zero while the same environment
+    // worked for every store command. The report must resolve through the same
+    // seam the store was resolved with.
+    let statsHits = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/v1/stats") {
+          statsHits++;
+          return Response.json({ domains: 0, links: 0, clicks: 0 });
+        }
+        return Response.json({ error: "not found" }, { status: 404 });
+      },
+    });
+    try {
+      const doctor = await runCliAsync(["doctor"], {
+        env: {
+          HASNA_SHORTLINKS_API_URL: `http://127.0.0.1:${server.port}`,
+          HASNA_SHORTLINKS_API_KEY: "hsk_doctor_test_key",
+          HASNA_SHORTLINKS_API_KEY_OVERRIDE: "",
+          HASNA_SHORTLINKS_API_KEY_REF: "",
+        },
+      });
+      expect(doctor.exitCode).toBe(0);
+      const payload = JSON.parse(doctor.stdout);
+      expect(payload.store).toBe("http");
+      // The report names WHERE the authority and credential came from — never
+      // their values — and the store really talked to the local double.
+      expect(payload.environment.api_url_present).toBe(true);
+      expect(payload.environment.api_url_source).toBe("HASNA_SHORTLINKS_API_URL");
+      expect(payload.environment.api_key_present).toBe(true);
+      expect(payload.environment.api_key_source).toBe("HASNA_SHORTLINKS_API_KEY");
+      expect(statsHits).toBe(1);
+    } finally {
+      server.stop(true);
+    }
   });
 
   test("the removed postgres command group and --store flag are gone", () => {

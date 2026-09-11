@@ -160,7 +160,7 @@ See the [REST API reference](docs/rest-api.md) for routes and request shapes.
 
 The authoritative store is local SQLite. Data is stored in
 `~/.hasna/prompts/prompts.db` by default — the legacy data root. The store
-path resolves through the `@hasna/paths` resolver (XDG/macOS home layout):
+path resolves via the in-package resolver (XDG/macOS home layout):
 the resolver data home (`~/.local/share/hasna/prompts` on Linux,
 `~/Library/Application Support/Hasna/prompts` on macOS) is adopted when
 `HASNA_DATA_HOME` is set or the store has already been physically migrated

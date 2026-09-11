@@ -267,6 +267,8 @@ export interface ServerSkillVersion {
 }
 
 export interface PublishSkillInput {
+  /** Internal boot-seed precondition: never revive or replace non-bundled records. */
+  seedBundledOnly?: true;
   principal: ApiPrincipal;
   slug: string;
   displayName: string;

@@ -16,6 +16,7 @@ export type NativeMetadata = {
 export type NativeHandle = object;
 
 export type NativeFsGuard = {
+  duplicateDirectoryDescriptor(descriptor: number): NativeHandle;
   openTrustedHome(path: string, uid: number): NativeHandle;
   openDirAt(parent: NativeHandle, leaf: string): NativeHandle;
   openRegularAt(
@@ -122,6 +123,7 @@ export function nativeFsGuard(): NativeFsGuard {
   }
   const loaded = createRequire(import.meta.url)(path) as Partial<NativeFsGuard>;
   for (const name of [
+    "duplicateDirectoryDescriptor",
     "openTrustedHome",
     "openDirAt",
     "openRegularAt",

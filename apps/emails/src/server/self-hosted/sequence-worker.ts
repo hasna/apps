@@ -1,3 +1,4 @@
+import { WORKER_CLAIM_CTE, type WorkerFence } from "./worker-supervisor.js";
 import type { TypedQueryClient } from "../../storage-kit/index.js";
 import { renderTemplate } from "../../db/templates.js";
 import { runScheduledBatch } from "./scheduler.js";
@@ -7,20 +8,21 @@ export class SequenceWorkerStore {
   constructor(
     private readonly client: TypedQueryClient,
     private readonly tenantId: string,
+    private readonly workerFence?: WorkerFence,
   ) {}
 
   async claim(limit: number): Promise<Row[]> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
       throw new RangeError("Sequence limit must be 1–100");
     return this.client.many<Row>(
-      `WITH due AS (
+      `${this.workerFence ? WORKER_CLAIM_CTE : "WITH"} due AS (
       SELECT e.id FROM sequence_enrollments e JOIN sequences s ON s.id=e.sequence_id AND s.tenant_id=e.tenant_id
-      WHERE e.tenant_id=$1 AND e.status='active' AND s.status='active' AND e.next_send_at <= now()
+      WHERE e.tenant_id=$1 AND e.status='active' ${this.workerFence ? 'AND EXISTS(SELECT 1 FROM worker_guard)' : ''} AND s.status='active' AND e.next_send_at <= now()
         AND (e.execution_lease IS NULL OR e.execution_lease < now()-interval '5 minutes')
       ORDER BY e.next_send_at,e.id FOR UPDATE OF e SKIP LOCKED LIMIT $2
     ) UPDATE sequence_enrollments e SET execution_lease=date_trunc('milliseconds',clock_timestamp()), updated_at=now()
       FROM due WHERE e.id=due.id AND e.tenant_id=$1 RETURNING e.*`,
-      [this.tenantId, limit],
+      [this.tenantId, limit, ...(this.workerFence ? [this.workerFence.id,this.workerFence.generation,this.workerFence.ownerHash] : [])],
     );
   }
 

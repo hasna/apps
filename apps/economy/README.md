@@ -118,7 +118,7 @@ economy sync --hermes
 economy sync --loops
 ```
 
-`economy sync --loops` reads the OpenLoops store (`~/.hasna/loops/loops.db` by default, resolved through the `@hasna/paths` XDG data home once the loops store has migrated there) in read-only mode and imports OpenLoops orchestration/judge `goal_runs.tokens_used` into `loop:*` cost centers. It intentionally does not ingest dispatched coding-agent work from loops; heavy agent spend remains captured by the existing per-agent ingesters and can be analyzed alongside loop cost centers through account/profile attribution.
+`economy sync --loops` reads the OpenLoops store (`~/.hasna/loops/loops.db` by default, resolved by the in-package resolver to the XDG data home once the loops store has migrated there) in read-only mode and imports OpenLoops orchestration/judge `goal_runs.tokens_used` into `loop:*` cost centers. It intentionally does not ingest dispatched coding-agent work from loops; heavy agent spend remains captured by the existing per-agent ingesters and can be analyzed alongside loop cost centers through account/profile attribution.
 
 Useful repair options:
 
@@ -264,7 +264,7 @@ economy menubar uninstall
 
 ## Data Directory
 
-Data is stored under a single data root resolved through the `@hasna/paths` resolver (XDG/macOS home layout). The legacy `~/.hasna/economy/` stays the effective root until the store is actually migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME`; the exact-app overrides `HASNA_ECONOMY_HOME` / `ECONOMY_HOME` win unconditionally.
+Data is stored under a single data root resolved by the in-package resolver (XDG/macOS home layout). The legacy `~/.hasna/economy/` stays the effective root until the store is actually migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME`; the exact-app overrides `HASNA_ECONOMY_HOME` / `ECONOMY_HOME` win unconditionally.
 
 The main SQLite database lives at `<data-root>/economy.db` (`~/.hasna/economy/economy.db` by default). Older `~/.economy/` data is copied on first open when the new directory does not exist. Override the database path with `HASNA_ECONOMY_DB_PATH` or `ECONOMY_DB`.
 

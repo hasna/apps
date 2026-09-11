@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,38 @@ import { signBundleBytes } from "./skill-bundles.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
+
+// Ambient credential isolation. The pullSkills fail-closed case below drives
+// the shared resolver through the LIVE process.env, and the resolver's DISK
+// tier (~/.hasna/skills/config/credentials) outranks the env tier: on a
+// provisioned station the operator's REAL credential is refused against the
+// fixture authority ("The selected Skills API does not match this
+// credential's instance") instead of the no-credential behavior under test
+// (green on CI, red on the station). Anchoring every home-layout root at the
+// file's scratch dir — no credentials file can exist there — makes the disk
+// tier consult nothing, identically on both kinds of machine.
+const HOME_ROOT_KEYS = ["HOME", "HASNA_HOME", "HASNA_CONFIG_HOME"] as const;
+const scratchHome = mkdtempSync(join(tmpdir(), "skills-pull-home-"));
+// Saved once at load: this package's test script does not run --isolate, so
+// an anchored root not put back would redirect later files' disk-tier
+// resolutions (this file shares one process with the whole suite).
+const savedHomeRoots = new Map(HOME_ROOT_KEYS.map((name) => [name, process.env[name]]));
+
+beforeEach(() => {
+  for (const name of HOME_ROOT_KEYS) process.env[name] = scratchHome;
+});
+
+afterEach(() => {
+  for (const name of HOME_ROOT_KEYS) {
+    const value = savedHomeRoots.get(name);
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+});
+
+afterAll(() => {
+  rmSync(scratchHome, { recursive: true, force: true });
+});
 
 /**
  * A stand-in for RemoteSkillsClient that answers from an in-memory table, so the

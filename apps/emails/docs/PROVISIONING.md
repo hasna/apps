@@ -4,8 +4,11 @@
 > `emails address provision`, `emails provision address`, and MCP
 > `provision_address` use authenticated API jobs with durable receipts and retry.
 > See [Address provisioning](ADDRESS_PROVISIONING.md) for requirements and limits.
-> `provision status` reads the shared registry. Domain infrastructure setup,
-> `provision up`, daemon, domain-level retry, and roundtrip remain unimplemented.
+> `provision status` reads the shared registry. [Domain DNS publication](DOMAIN_DNS.md)
+> supports server-bound Cloudflare zones and SES sending setup. [Owned-domain setup](OWNED_DOMAIN_SETUP.md)
+> configures SES or an existing Resend identity. `provision roundtrip` runs an API-backed
+> delivery probe; see [Roundtrip checks](ROUNDTRIP.md). [Provision up and daemon](PROVISION_UP.md) compose those jobs for already-owned domains,
+> configured SES/S3 receivers, and optional delivery probes. Purchases remain outside Emails.
 
 ## Supported operator workflow
 
@@ -81,10 +84,9 @@ received or synced the source message. If Google Workspace, Microsoft 365, or
 another provider owns root MX and mail never enters Emails, configure forwarding
 at that provider.
 
-## Unimplemented target
+## Durable orchestration
 
-The intended domain infrastructure state machine, daemon, and round-trip
-acceptance runner remain design work. Their historical
-design is preserved in [PLAN-PROVISIONING.md](PLAN-PROVISIONING.md); it is not an
-operator runbook and its example future commands must not be used as current
-instructions.
+Use [Provision up](PROVISION_UP.md) for the supported API job workflow and
+[Roundtrip checks](ROUNDTRIP.md) for individual delivery probes. The historical
+[PLAN-PROVISIONING.md](PLAN-PROVISIONING.md) includes broader infrastructure and
+purchase ideas; it is not the current operator runbook.

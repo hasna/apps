@@ -25,18 +25,24 @@
  * release. The SDK's own `MEMENTOS_URL` / env-key reading is GONE, and an
  * explicit `baseUrl` with no `apiKey` never attaches the ambient fleet key
  * (hasna/apps#1794): the credential is pinned to the authority it resolved
- * with.
+ * with. The AUTHORITY is pinned for the life of the client too: the key is
+ * re-resolved per request, but a mid-process authority change (a re-pointed
+ * env var, a changed Keychain `api-url` item) refuses loudly with
+ * `MEMENTOS_AUTHORITY_CHANGED` instead of silently sending the client's data
+ * to a different server.
  *
- * LOCAL MODE IS DELIBERATE, NEVER A FALLBACK FROM FAILURE. The unhosted
- * default — `http://localhost:19428`, the on-box `mementos-serve` — is
- * reached in exactly two ways: the deliberate opt-in `HASNA_MEMENTOS_LOCAL=1`
- * (or an explicit `HASNA_MEMENTOS_DB_PATH`), or an environment where NOTHING
- * resolves at all. A credential that resolves but cannot be used, an
- * unreadable credential file, an authority that is set but malformed — every
- * one of those THROWS. And when local mode is selected the SDK says so, once
- * per process, on stderr: a client silently talking to an empty local store
- * while the operator believes it is on the fleet is the false-green this whole
- * ruling exists to end.
+ * LOCAL MODE IS DELIBERATE, NEVER A FALLBACK FROM FAILURE. The on-box
+ * `mementos-serve` at `http://localhost:19428` is reached in exactly ONE way:
+ * the deliberate opt-in `HASNA_MEMENTOS_LOCAL=1` (or an explicit
+ * `HASNA_MEMENTOS_DB_PATH`) with nothing else configured — and then the SDK
+ * says so, once per process, on stderr. An environment where NOTHING resolves
+ * — no argument, no env pointer, no Keychain item, no credentials file, no
+ * `HASNA_MEMENTOS_API_KEY` — THROWS {@link MementosConfigError} before any
+ * request is sent (hasna/apps#1720 acceptance (c)), exactly as the CLI and the
+ * MCP server refuse; so does a credential that resolves but cannot be used, an
+ * unreadable credential file, or an authority that is set but malformed. A
+ * client silently talking to an empty local store while the operator believes
+ * it is on the fleet is the false green this whole ruling exists to end.
  */
 
 // ============================================================================
@@ -590,6 +596,23 @@ export class MementosError extends Error {
   }
 }
 
+/**
+ * Thrown when the SDK is asked to reach the memory store and NOTHING resolves:
+ * no explicit argument, no env pointer, no Keychain item, no credentials file,
+ * no `HASNA_MEMENTOS_API_KEY` — and no deliberate local opt-in. Not a
+ * transport failure (those are {@link MementosError}): this is the fail-closed
+ * refusal of hasna/apps#1720, raised BEFORE any request is built, carrying the
+ * same `MEMENTOS_STORE_CONFIG` code and the same tier list as the CLI's store
+ * gate so every surface of the package refuses with one message.
+ */
+export class MementosConfigError extends Error {
+  readonly code = "MEMENTOS_STORE_CONFIG";
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "MementosConfigError";
+  }
+}
+
 // ============================================================================
 // Auto-memory & synthesis types
 // ============================================================================
@@ -755,6 +778,7 @@ export function resolveMementosApiBase(
 // ============================================================================
 
 import {
+  clientTransportEnvKeys,
   resolveClientTransport,
   resolveCredential,
   ClientTransportConfigurationError,
@@ -762,12 +786,17 @@ import {
   type CredentialChainOptions,
   type ResolvedCredential,
 } from "@hasna/contracts/client";
-import { mementosResolverInputs, selectsMementosLocalStore } from "../lib/local-opt-in.js";
+import {
+  MEMENTOS_DB_PATH_ENV_KEYS,
+  MEMENTOS_LOCAL_OPT_IN_ENV_KEYS,
+  mementosResolverInputs,
+  selectsMementosLocalStore,
+} from "../lib/local-opt-in.js";
 
 type Env = Record<string, string | undefined>;
 
 export interface MementosSdkTransport {
-  /** `"http"` for a resolved hosted authority, `"local-serve"` for the unhosted default. */
+  /** `"http"` for a resolved hosted authority, `"local-serve"` for the deliberate local opt-in. */
   mode: "http" | "local-serve";
   /**
    * Origin (plus any gateway path prefix) WITHOUT the `/v1` suffix, so a caller
@@ -823,17 +852,40 @@ function announceLocal(notice: ((line: string) => void) | undefined, reason: str
   if (localNoticePrinted) return;
   localNoticePrinted = true;
   const line =
-    `mementos: LOCAL mode — no Hasna credential resolved (${reason}); reading and writing the local ` +
-    `mementos-serve at ${MEMENTOS_DEFAULT_BASE_URL}, not the hosted fleet. Set HASNA_MEMENTOS_API_KEY, add the ` +
-    `Keychain item hasna.credentials.mementos.api-key, or write ~/.hasna/mementos/config/credentials to go hosted.`;
+    `mementos: LOCAL mode — reading and writing the on-box mementos-serve at ${MEMENTOS_DEFAULT_BASE_URL} ` +
+    `(${reason}), not the hosted fleet. Unset it and set HASNA_MEMENTOS_API_KEY, add the Keychain item ` +
+    `hasna.credentials.mementos.api-key, or write ~/.hasna/mementos/config/credentials to go hosted.`;
   if (notice) notice(line);
   else if (typeof process !== "undefined") process.stderr.write(`${line}\n`);
 }
 
 /**
+ * The one refusal every surface prints when NOTHING resolves — the same tier
+ * list and the same opt-ins the CLI's store gate names (src/db/api-mode.ts
+ * assertClientStoreConfigured), so an operator debugging the SDK and one
+ * debugging the CLI read one message. Names only; never a value.
+ */
+function unconfiguredSdkMessage(): string {
+  const keys = clientTransportEnvKeys("mementos");
+  const urlKey = keys.apiUrlKeys[0];
+  const keyKey = keys.apiKeyKeys[0];
+  return (
+    "mementos is not configured to reach any memory store, and will NOT fall back to the " +
+    `on-box mementos-serve (${MEMENTOS_DEFAULT_BASE_URL}). ` +
+    "No credential could be resolved from the Keychain item hasna.credentials.mementos.api-key " +
+    `(macOS only), ~/.hasna/mementos/config/credentials, or ${keyKey}; the authority would be the ` +
+    `fleet gateway https://api.hasna.com/mementos (or ${urlKey} if set). ` +
+    `Set ${keyKey} (the resolver also accepts the legacy ${keys.apiKeyKeys[1]} alias for one release), ` +
+    "add the Keychain item, or write the credentials file to use the fleet memory API, or opt into " +
+    `the on-box mementos-serve with ${MEMENTOS_LOCAL_OPT_IN_ENV_KEYS[0]}=1 (or an explicit ` +
+    `${MEMENTOS_DB_PATH_ENV_KEYS[0]}).`
+  );
+}
+
+/**
  * Resolve the SDK's authority and credential. Explicit arguments win; otherwise
- * the @hasna/contracts chain decides, and only a fully unconfigured environment
- * (or the deliberate opt-in) lands on the local serve.
+ * the @hasna/contracts chain decides. Only the deliberate opt-in lands on the
+ * local serve; a fully unconfigured environment THROWS {@link MementosConfigError}.
  */
 export function resolveMementosSdkTransport(
   options: ResolveMementosSdkTransportOptions = {},
@@ -893,24 +945,22 @@ export function resolveMementosSdkTransport(
   try {
     resolution = resolveClientTransport("mementos", env, chainOptions);
   } catch (error) {
-    // ONLY "nothing is configured at all" degrades to the local serve. Every
-    // other refusal — a blank variable, a disagreeing pair, an unreadable
-    // credential file, a URL without a key — is a misconfiguration the operator
-    // has to see, and silently serving an empty local store instead is the
-    // false green this fails loudly to avoid.
+    // NOTHING configured anywhere — no env pointer, no Keychain item, no
+    // credentials file, no HASNA_MEMENTOS_API_KEY — is a REFUSAL, never a
+    // local default (owner ruling 2026-09-04; hasna/apps#1720 acceptance (c)).
+    // This arm used to degrade to the on-box serve with only a stderr notice,
+    // which let an SDK caller read and write an empty local store while
+    // believing it was on the fleet — the false green the ruling ends. The
+    // on-box serve is reachable only through the deliberate opt-in above.
+    // Every other refusal — a blank variable, a disagreeing pair, an
+    // unreadable credential file, a URL without a key — is the resolver's own
+    // loud message and is rethrown as-is.
     if (
       error instanceof ClientTransportConfigurationError &&
       !credential &&
       /is not set and no API key could be resolved/.test(error.message)
     ) {
-      announceLocal(options.notice, "nothing configured a Hasna mementos credential");
-      return {
-        mode: "local-serve",
-        baseUrl: MEMENTOS_DEFAULT_BASE_URL,
-        apiKey: null,
-        apiKeySource: null,
-        apiUrlSource: "local-serve",
-      };
+      throw new MementosConfigError(unconfiguredSdkMessage(), { cause: error });
     }
     throw error;
   }
@@ -932,15 +982,21 @@ export function resolveMementosSdkTransport(
 }
 
 export class MementosClient {
-  private baseUrl: string;
   private _fetch: typeof globalThis.fetch;
   private apiKey?: string;
   private prefix: string;
   private readonly _resolveOptions: ResolveMementosSdkTransportOptions;
+  /**
+   * The authority this client was created for (hasna/apps#1794): the first
+   * request pins the resolved target, and every later request must hit the
+   * SAME authority or refuse loudly. The KEY rotates freely (re-resolved per
+   * request); the AUTHORITY does not — a credential is only ever sent to the
+   * authority it resolved with.
+   */
+  private _pinnedAuthority: string | null = null;
 
   constructor(config: MementosClientConfig = {}) {
     const resolved = resolveMementosApiBase(config.baseUrl, config.prefix);
-    this.baseUrl = resolved.baseUrl;
     this._fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
     this.apiKey = config.apiKey;
     this.prefix = resolved.prefix;
@@ -977,7 +1033,7 @@ export class MementosClient {
    */
   get apiUrl(): string {
     const transport = resolveMementosSdkTransport(this._resolveOptions);
-    const base = transport.mode === "http" ? transport.baseUrl : this.baseUrl;
+    const base = this.pinnedTarget(transport);
     return `${base}${this.prefix}`;
   }
 
@@ -995,6 +1051,33 @@ export class MementosClient {
     return resolveMementosSdkTransport(this._resolveOptions);
   }
 
+  /** The authority a resolved transport targets; the unhosted serve in local mode. */
+  private targetOf(transport: MementosSdkTransport): string {
+    return transport.mode === "http" ? transport.baseUrl : MEMENTOS_DEFAULT_BASE_URL;
+  }
+
+  /**
+   * Fail closed on authority drift (hasna/apps#1794): the first resolution
+   * pins the authority, and a later resolution that names ANOTHER authority —
+   * a re-pointed env var, a changed Keychain `api-url` item, a rewritten
+   * credentials file, an opt-in flip — refuses loudly instead of silently
+   * sending this client's data to a different server. The KEY may rotate; the
+   * AUTHORITY is pinned for the life of the client, exactly as the shared
+   * transport's binding provider refuses authority changes mid-request.
+   */
+  private pinnedTarget(transport: MementosSdkTransport): string {
+    const target = this.targetOf(transport);
+    if (this._pinnedAuthority !== null && target !== this._pinnedAuthority) {
+      throw new MementosConfigError(
+        `MEMENTOS_AUTHORITY_CHANGED: the configured service authority changed from ${this._pinnedAuthority} to ${target}. ` +
+          "A credential is only ever sent to the authority it resolved with — construct a new client " +
+          "before sending data (hasna/apps#1794).",
+      );
+    }
+    this._pinnedAuthority = target;
+    return target;
+  }
+
   private async request<T>(
     method: string,
     path: string,
@@ -1002,7 +1085,7 @@ export class MementosClient {
     query?: Record<string, string | number | boolean | undefined>
   ): Promise<T> {
     const transport = this.currentTransport();
-    const baseUrl = transport.mode === "http" ? transport.baseUrl : this.baseUrl;
+    const baseUrl = this.pinnedTarget(transport);
     const apiKey = transport.mode === "http" ? (transport.apiKey ?? this.apiKey) : this.apiKey;
     // Route legacy `/api/...` method paths through the configured version prefix.
     const routed = path.startsWith("/api/") ? `${this.prefix}${path.slice(4)}` : path;

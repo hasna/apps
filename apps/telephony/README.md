@@ -88,7 +88,15 @@ dispatch rows are written.
 The CLI, MCP and SDK surfaces resolve their credential and their service
 authority through the **one shared `@hasna/contracts` client resolver**, per
 call, fresh — a key rotation heals a long-lived shell, MCP server or agent
-without a restart:
+without a restart. The embeddable SDK is the `./sdk` export subpath (the root
+export stays for compatibility):
+
+```ts
+import { TelephonyClient } from "@hasna/telephony/sdk";
+const client = new TelephonyClient(); // resolves through the chain below, fails closed without a credential
+```
+
+The tiers, in order:
 
 | tier | credential | authority |
 |---|---|---|
@@ -131,7 +139,7 @@ gone: routing follows what resolves, not a mode word.
 
 In the explicit local mode (`HASNA_TELEPHONY_LOCAL=1`) telephony stores data in
 the effective telephony data home — the legacy `~/.hasna/telephony/` until the
-store is migrated to the `@hasna/paths`-resolved XDG data home
+store is migrated to the in-package-resolved XDG data home
 (`~/.local/share/hasna/telephony` on Linux, `~/Library/Application
 Support/Hasna/telephony` on macOS), which is adopted once
 `HASNA_DATA_HOME` is set or `telephony.db` exists there. Set

@@ -60,9 +60,11 @@ export function todosAuthorityEnvKeys(): string[] {
  *
  * A DECLARED-BUT-BLANK variable counts as absent HERE — a blank has always been
  * this package's spelling for "not configured", and helpers in the wild blank
- * rather than delete. It is NOT absent once we do go hosted: the resolver
- * refuses a blank loudly rather than falling through to another identity, which
- * is the behaviour that matters at that point.
+ * rather than delete. It is absent on the hosted path too: the blank is removed
+ * before the resolver runs (see {@link todosResolverEnv}), so it configures no
+ * credential and refuses nothing — the run resolves whatever the next tier
+ * holds, exactly as an unset variable would. That is the documented behaviour;
+ * a caller that wants to withhold hosted access sets the local opt-in instead.
  */
 export function hasTodosEnvAuthorityIntent(env: TodosLocalOptInEnv = process.env): boolean {
   return todosAuthorityEnvKeys().some((key) => (env[key] ?? "").trim() !== "");

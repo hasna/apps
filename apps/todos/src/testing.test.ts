@@ -69,21 +69,58 @@ describe("localTodosTestEnv", () => {
     // Local-intent defaults must not blind a fail-closed test: overrides are
     // applied last, so blanking the opt-in hands the resolver the real
     // "API env missing" shape and it must throw.
-    const env = localTodosTestEnv({
-      HASNA_TODOS_API_URL: "",
-      HASNA_TODOS_API_KEY: "",
-      HASNA_TODOS_LOCAL: "",
-      TODOS_LOCAL: "",
-    });
-    expect(() => resolveTodosCliTransport(env)).toThrow("REMOTE_API_CONFIG_MISSING");
+    //
+    // The env under test is a localTodosTestEnv() (a scrubbed copy of the
+    // live process.env), and the shared resolver's DISK tier outranks the env
+    // tier: on a provisioned station `~/.hasna/todos/config/credentials` is
+    // present, so a REAL credential would resolve and the fail-closed throw
+    // never happens (green on CI, red on the station). Anchoring HOME at a
+    // scratch dir — no credentials file can exist there — makes the disk tier
+    // consult nothing, identically on both kinds of machine.
+    const home = mkdtempSync(join(tmpdir(), "todos-failclosed-home-"));
+    try {
+      const env = localTodosTestEnv({
+        HASNA_TODOS_API_URL: "",
+        HASNA_TODOS_API_KEY: "",
+        HASNA_TODOS_LOCAL: "",
+        TODOS_LOCAL: "",
+        // Every home-layout root the resolver's disk tier honors: `$HOME` when
+        // HASNA_HOME is unset, HASNA_HOME itself (it replaces the ~/.hasna
+        // root), and HASNA_CONFIG_HOME (it replaces the config root) — an
+        // exported HASNA_HOME/HASNA_CONFIG_HOME would otherwise re-anchor the
+        // real file even with HOME scrubbed. The Keychain account is pinned by
+        // localTodosTestEnv itself (TODOS_TEST_KEYCHAIN_ACCOUNT).
+        HOME: home,
+        HASNA_HOME: home,
+        HASNA_CONFIG_HOME: home,
+      });
+      expect(() => resolveTodosCliTransport(env)).toThrow("REMOTE_API_CONFIG_MISSING");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("still resolves http when a test opts back in explicitly", () => {
-    const env = localTodosTestEnv({
-      HASNA_TODOS_API_URL: "http://127.0.0.1:3901",
-      HASNA_TODOS_API_KEY: "throwaway",
-    });
-    expect(resolveTodosCliTransport(env).transport).toBe("http");
+    // Same scratch-HOME anchoring as the fail-closed case above: the fixture
+    // loopback authority must be the only one the resolver sees, or a
+    // station's real credential file is refused as a different authority
+    // (REMOTE_API_URL_INVALID) instead of resolving http.
+    const home = mkdtempSync(join(tmpdir(), "todos-httpback-home-"));
+    try {
+      const env = localTodosTestEnv({
+        HASNA_TODOS_API_URL: "http://127.0.0.1:3901",
+        HASNA_TODOS_API_KEY: "throwaway",
+        // Same full-root anchoring as the fail-closed case: HASNA_HOME /
+        // HASNA_CONFIG_HOME are honored over $HOME by the resolver's disk
+        // tier, so an exported root would re-connect the station's real file.
+        HOME: home,
+        HASNA_HOME: home,
+        HASNA_CONFIG_HOME: home,
+      });
+      expect(resolveTodosCliTransport(env).transport).toBe("http");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("overrides are applied after the scrub, not before", () => {

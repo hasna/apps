@@ -1,15 +1,17 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
+import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-const TEST_DB = join(tmpdir(), `conversations-status-contract-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 function runStatus() {
   const env: Record<string, string> = {
-    ...process.env,
-    CONVERSATIONS_DB_PATH: TEST_DB,
+    ...fixture.env,
     CONVERSATIONS_AGENT_ID: "status-contract-tester",
     FORCE_COLOR: "0",
   };
@@ -41,12 +43,11 @@ function runStatus() {
 
 describe("status JSON contract", () => {
   afterAll(() => {
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-    try { unlinkSync(`${TEST_DB}-shm`); } catch {}
+
+
   });
 
-  test("reports the answering connection as exactly the two-backend location fields", () => {
+  test("reports the answering connection as the shared API authority without a database path", () => {
     const result = runStatus();
     expect(result.exitCode, result.stderr).toBe(0);
 
@@ -54,14 +55,14 @@ describe("status JSON contract", () => {
     // Exact key set: one connection-location field plus the five stats. No
     // other selector field may ride along in the payload.
     expect(Object.keys(payload).sort()).toEqual([
-      "db_path",
+      "api_url",
       "total_channels",
       "total_messages",
       "total_projects",
       "total_sessions",
       "unread_messages",
     ]);
-    expect(payload.db_path).toBe(TEST_DB);
-    expect(payload.api_url).toBeUndefined();
+    expect(payload.db_path).toBeUndefined();
+    expect(payload.api_url).toBe(fixture.url);
   });
 });

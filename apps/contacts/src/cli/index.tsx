@@ -45,6 +45,9 @@ program.parseAsync(process.argv).catch((err: unknown) => {
   // present it as a warning (expected), other errors as hard failures.
   const isApiUnavailable =
     err instanceof Error && err.name === "ApiUnavailableError";
-  console.error("\n" + (isApiUnavailable ? chalk.yellow(message) : chalk.red(message)) + "\n");
+  // The fail-closed message starts on the FIRST stderr line: the negative
+  // control (and users) read that line for what is missing and where the
+  // credential should live, and a leading blank line hid it (hasna/apps#1720).
+  console.error((isApiUnavailable ? chalk.yellow(message) : chalk.red(message)) + "\n");
   process.exit(1);
 });
