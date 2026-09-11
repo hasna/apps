@@ -112,7 +112,7 @@ The top-level SDK also exposes `knowledge.sync.status()`,
 The SDK uses the same canonical project workspace as the CLI:
 `~/.hasna/knowledge/projects/<key>` (project scope). By
 default it writes the SQLite catalog and generated artifacts under that path.
-The local store home resolves through the `@hasna/paths` resolver (XDG/macOS
+The local store home resolves via the in-package resolver (XDG/macOS
 home layout): the legacy `~/.hasna/knowledge` stays the effective home until the
 store is migrated to the XDG data home or `HASNA_DATA_HOME` is set, and
 `HASNA_KNOWLEDGE_HOME` is the exact-app override.
@@ -767,6 +767,30 @@ of the shared `@hasna/contracts` chain selects HTTP, against
 * **No resolvable credential → the CLI FAILS CLOSED** (non-zero, naming every
   place it looked). It never drops onto the on-box store: serving stale local
   rows at exit 0 while a credential is missing is the incident this closes.
+* **A dark source is machine-readable.** The fail-closed rejection exits **3**
+  (not the generic 1, and not the version-conflict 2), and `--json` carries the
+  answer a consuming run branches on rather than prose it has to scrape:
+
+  ```json
+  {
+    "ok": false,
+    "code": "source_unavailable",
+    "status": "unavailable",
+    "credential_source": "none",
+    "credential_file_candidates": ["/home/<user>/.hasna/knowledge/config/credentials"],
+    "credential_env_keys": ["HASNA_KNOWLEDGE_API_KEY", "KNOWLEDGE_API_KEY"],
+    "keychain_tier_enabled": false,
+    "local_opt_in_present": false,
+    "network_guard_active": false,
+    "reason": "…no API key could be resolved…"
+  }
+  ```
+
+  So a fleet run whose KNOWLEDGE source is dark on a host records
+  `status=unavailable` from the field, and can tell a dark source apart from a
+  command that failed for an unrelated reason. The payload is value-free — the
+  source names and paths it lists are exactly the ones a successful report
+  prints, and a resolution that refused an authority never echoes the URL back.
 * **The on-box store is opt-in only.** `HASNA_KNOWLEDGE_LOCAL=1` (or an
   explicit `--store <path>`) selects local mode, and local mode prints
   `local mode` once on stderr — it is never a silent default. An environment

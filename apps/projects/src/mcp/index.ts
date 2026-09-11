@@ -26,7 +26,7 @@ import {
   type ProjectBudgetStatus,
 } from "../lib/budget.js";
 import { filterProjectEvalArtifacts } from "../lib/project-eval-artifacts.js";
-import { projectChannelSummary, resolveProjectChannelForProject } from "../lib/project-channel.js";
+import { assertProjectChannelIntegrationWritable, projectChannelSummary, resolveProjectChannelForProject } from "../lib/project-channel.js";
 import { repairProjectPermissions } from "../lib/project-permissions.js";
 import { redactProjectValue } from "../lib/redaction.js";
 import {
@@ -1272,6 +1272,10 @@ server.tool(
         // (directory/git/tmux) does not apply to a hosted project row. Root/
         // recipe are shared registry resources: resolve slug->id through the
         // Store so intent is honored (not silently dropped) in the hosted backend.
+        // Same write-time channel guard as the CLI create (BUG-0063): a hosted
+        // row is not a reason to store a channel name nothing can post to.
+        const hostedIntegrations = input.integrations as WorkspaceIntegrations | undefined;
+        assertProjectChannelIntegrationWritable(hostedIntegrations, undefined);
         const project = await store.createProject({
           name: input.name,
           slug: input.slug,
@@ -1280,7 +1284,7 @@ server.tool(
           root_id: await rootId(store, input.root),
           recipe_id: await recipeId(store, input.recipe),
           tags: input.tags,
-          integrations: input.integrations as WorkspaceIntegrations | undefined,
+          integrations: hostedIntegrations,
           metadata: input.metadata as JsonObject | undefined,
         });
         return jsonText({ project });
@@ -1304,6 +1308,8 @@ server.tool(
         brief_id: input.brief_id,
         brief_path: input.brief_path,
       }) ?? integrationsBase;
+      // Same write-time channel guard as the CLI create (BUG-0063).
+      assertProjectChannelIntegrationWritable(integrations, undefined);
       return jsonProjectText(await executeWorkspaceCreation({
         name: input.name,
         slug: input.slug,
@@ -1725,6 +1731,8 @@ server.tool(
       const integrations = hasProjectIntegrationFields(integrationFields)
         ? mergeProjectIntegrationFields(integrationsBase, integrationFields)
         : input.integrations === undefined ? undefined : integrationsBase;
+      // Same write-time channel guard as the CLI update/link (BUG-0063).
+      assertProjectChannelIntegrationWritable(integrations, project.integrations);
       // Root/recipe are shared registry resources; resolve slug->id through the
       // Store in BOTH transports so root/recipe are never silently dropped on a
       // flipped machine.
@@ -1769,11 +1777,14 @@ server.tool(
     try {
       const store = resolveProjectStore();
       const project = await store.resolveTarget(input.project);
+      const linkedIntegrations = mergeProjectIntegrations(
+        project.integrations,
+        normalizeWorkspaceIntegrations(input.integrations as WorkspaceIntegrations),
+      );
+      // Same write-time channel guard as the CLI link (BUG-0063).
+      assertProjectChannelIntegrationWritable(linkedIntegrations, project.integrations);
       const updated = await store.updateProject(project.id, {
-        integrations: mergeProjectIntegrations(
-          project.integrations,
-          normalizeWorkspaceIntegrations(input.integrations as WorkspaceIntegrations),
-        ),
+        integrations: linkedIntegrations,
         agent_id: mcpMutationAgent(store, input.agent),
         source: "mcp",
         command: "projects_link",

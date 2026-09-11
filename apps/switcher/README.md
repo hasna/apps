@@ -47,6 +47,139 @@ switcher --help
 switcher doctor
 ```
 
+## ChatGPT desktop with a provider
+
+From 0.1.9, use the installed macOS ChatGPT app with a selected provider and model:
+
+```sh
+switcher launch chatgpt --provider deepseek --model deepseek-flash
+switcher launch chatgpt --provider openrouter --model anthropic/claude-sonnet-4.6
+switcher launch chatgpt --provider my-provider --model my-model
+switcher launch chatgpt --provider deepseek --model deepseek-flash --dry-run
+switcher launch chatgpt --provider deepseek --model deepseek-flash --reasoning max \
+  --dangerously-bypass-approvals-and-sandbox
+```
+
+This runs **local Codex conversations inside the unified ChatGPT app** through
+Switcher's provider gateway. ChatGPT cloud Chat/Work, Preview Edit and other
+account-only features use their own service and are outside this routing path.
+The classic ChatGPT app (`com.openai.chat`) cannot use this launcher. The current
+unified ChatGPT app and its former Codex name (`com.openai.codex`) are supported;
+the bundled Codex runtime must meet the Codex CLI minimum above.
+
+Providers must support the Responses protocol and the selected model's tool
+calling. DeepSeek, OpenRouter, OpenAI and other Responses-compatible presets
+use the same provider/model catalog and credential bindings as terminal Codex.
+Use `switcher models PROVIDER` to find exact model IDs. Custom providers can be
+registered with `switcher providers add NAME --url URL --protocol openai-responses`.
+There is no automatic conversion from Chat Completions or Anthropic Messages.
+
+For third-party Responses endpoints, Switcher converts the desktop's unpaired
+`codex_app` task-message outputs to ordinary user input, preserving their full
+text and images. This supports creating a task and sending follow-up messages
+without the missing-`call_id` errors from strict providers. Paired tool results
+keep their original format; OpenAI's own endpoint receives native messages.
+
+`--reasoning EFFORT` sets the initial effort (also supported for direct terminal
+Codex launches). DeepSeek's picker exposes none, low, high and max; its Responses
+API maps minimal to low and medium/xhigh to high. Other models can declare an
+exact `reasoningEfforts` array through `models add/update --file FILE`. An explicit
+effort also enables that choice for models whose catalog omits effort metadata;
+the provider must support it. The app can change effort per conversation, and
+routing events record the value actually sent upstream.
+
+`--dangerously-bypass-approvals-and-sandbox` explicitly selects full access:
+commands can edit files and use the network without approval prompts or a
+sandbox. Without that flag, desktop launches start with workspace-write and
+on-request approvals. These are startup defaults; the app's own permission
+controls and managed requirements still apply. Start a new conversation after
+changing launch defaults; existing conversations can retain their own settings.
+
+Switcher starts a separate app instance with persistent provider/model state
+under `~/.hasna/switcher/state/desktop/PROFILE`. Your regular ChatGPT app and its
+signed-in state are preserved. Each profile retains its own local conversations
+and preferences across launches; it does not copy the regular app's login or
+conversation history. A second launch of the same active profile is refused.
+Keep the launching terminal running until you quit that instance: Switcher owns
+its inference gateway and stops its own app process on interruption or timeout.
+
+Upstream API keys remain in the Switcher gateway. Only a temporary loopback
+credential reaches the child; its private auth file is removed after exit.
+Switcher refuses to overwrite authentication added manually to a provider
+profile. It does not modify or re-sign the installed app. Select a nonstandard
+installation with `--app-path /absolute/path/ChatGPT.app`; native CLI arguments,
+`--executable` and `--backend` are not accepted for desktop launches.
+
+`--dry-run` validates app detection and provider/model discovery without opening
+the app. The SDK offers local installation discovery through `detectChatGPTApp()`;
+provider/profile/catalog operations continue to use the existing HTTP API.
+
+The opt-in `test:native-chatgpt-runtime` script exercises the installed app's
+bundled runtime against a real provider using a fresh isolated profile. Set
+`SWITCHER_NATIVE_CHATGPT_PROVIDER` and `SWITCHER_NATIVE_CHATGPT_MODEL` to run it.
+It verifies selected-model configuration, direct responses, delegated task
+creation, follow-up delivery, and history replay against the real provider.
+It is separate from visual desktop acceptance.
+
+References: [OpenAI custom provider configuration](https://learn.chatgpt.com/docs/config-file/config-advanced),
+[community desktop custom-model profiles](https://github.com/ademisler/codex-desktop-custom-models),
+[reported signed-in provider routing issue](https://github.com/openai/codex/issues/37245),
+and [Preview Edit routing limitation](https://github.com/openai/codex/issues/37315),
+and [DeepSeek thinking controls](https://api-docs.deepseek.com/guides/thinking_mode/).
+
+## Claude desktop with a provider
+
+```sh
+switcher launch claude-desktop --provider deepseek --model deepseek-flash
+switcher launch claude-desktop --provider my-messages-provider --model vendor/model
+switcher launch claude-desktop --provider deepseek --model deepseek-flash --dry-run
+```
+
+Requires macOS and Claude desktop 1.52386.0 or newer. This uses the app's
+supported third-party gateway mode and its own downloaded Claude Code engine;
+a separately installed Claude Code CLI is not required. `launch claude` keeps
+launching the terminal CLI. `detectClaudeDesktopApp()` is available in the SDK.
+
+The provider must implement Anthropic Messages, including streaming and tool
+calling for the chosen model. DeepSeek and compatible gateway presets select
+the Messages endpoint automatically. Saved provider IDs retain their explicit
+protocol. Switcher does not convert Chat Completions or Responses into Messages.
+A configured provider works in both desktop apps when it offers both required
+APIs; a preset's existence is not proof that every model supports every feature.
+
+Claude uses its vendor-supported `~/Library/Application Support/Claude-3p`
+profile, separate from the regular signed-in Claude profile. Only one third-party
+instance can run at a time; quit it before switching providers. Switcher adds a
+temporary configuration-library entry, leases that profile, and restores the
+previous selection on exit. Its conversations remain in Claude-3p. Configuration
+changes made outside Switcher are preserved and reported for review. Managed
+Claude configurations are not overridden. No app patching, re-signing or
+restricted development flags are used.
+
+The selected model fills Claude's normal, planning and fast model slots using
+explicit gateway aliases. `--role-model planning=MODEL` and `--role-model
+fast=MODEL` can select different models from the same provider. The gateway
+records the actual upstream model. Display labels identify your provider model;
+the aliases do not change that model into an Anthropic model.
+
+Choose effort and permissions in Claude's own controls; the model must support
+what Claude sends. Switcher's `--reasoning` and
+`--dangerously-bypass-approvals-and-sandbox` flags currently apply to Codex and
+ChatGPT, and are rejected for Claude desktop. Cowork and account-dependent
+features retain their native requirements. Only a temporary scoped loopback
+credential is written to the private configuration file; the upstream provider
+key stays in Switcher. Keep Switcher running while using the launched instance.
+
+Live acceptance on macOS used DeepSeek `deepseek-flash`: ChatGPT local Codex
+returned the requested test marker with reasoning and Full access visible;
+Claude's third-party chat returned its requested marker, with successful gateway
+traces identifying `deepseek-flash`. Other compatible providers have adapter
+coverage, not a claim of live acceptance on every model.
+
+References: [Claude third-party gateway](https://claude.com/docs/third-party/claude-desktop/gateway),
+[configuration library and model tiers](https://claude.com/docs/third-party/claude-desktop/configuration),
+and [CC Switch's Claude desktop integration](https://github.com/Chenx-13/cc_switch/blob/main/docs/user-manual/en/2-providers/2.6-claude-desktop.md).
+
 ## Direct launch
 
 The direct launch flow is available from 0.1.1. The additional OMP, DeepSeek Harness, Cline, Hermes, Prime Agent, legacy OpenCode, Kilo, Gemini CLI and Aider adapters are introduced in 0.1.2. Version 0.1.0 requires explicit API/provider/profile setup.
@@ -95,6 +228,18 @@ switcher launch claude --provider deepseek --model deepseek-v4-pro
 ```
 
 `--vault-cli /absolute/path/to/secrets` selects a particular installation. Vault lookup uses `secrets exec` to inject the value into a short-lived receiver, which delivers it over an authenticated loopback connection. Values stay in process memory. The lookup has a 20-second deadline and owns a separate process group; it finishes before the native harness starts. Each lookup reads the vault again. Conflicting Secrets service URL configuration fails explicitly. Vault CLI bindings currently require POSIX; Windows callers can inject provider environment variables.
+
+If launch reports `vault_exec_permissions`, verify the installed Secrets package against its trusted release artifact before repairing it. Bun 1.3.14's [bin-link installer](https://github.com/oven-sh/bun/blob/bun-v1.3.14/src/install/bin.zig#L731-L735) can change an executable member from mode `0755` to `0777`, including with `--ignore-scripts`. Changing the shell umask does not correct that installer behavior.
+
+After validating the package archive against its registry integrity, compute the SHA256 of the executable member **inside that verified archive**. Use that expected digest to finalize the existing binding's installed executable:
+
+```sh
+switcher credentials repair-executable deepseek --sha256 EXPECTED_EXECUTABLE_SHA256
+```
+
+For a fresh installation whose unsafe executable prevents creating a binding, use `switcher credentials repair-executable --vault-cli /absolute/path/to/secrets --sha256 EXPECTED_EXECUTABLE_SHA256` first, then bind normally. Select either a binding reference or an explicit path.
+
+The digest is a release-artifact checksum, not a credential. Do not substitute the installed file's own hash: that would trust any altered bytes. Repair checks the exact bytes, file owner/type and every path ancestor, then creates an identical private copy and atomically replaces the writable executable with group/public write permission removed. Cache hardlinks and already-open writers retain the old inode and cannot change the repaired executable. It then runs the ordinary launch checks again. Safe files are unchanged; digest mismatches, unsafe ancestors and unowned files are refused. The command never starts Secrets, contacts the vault, changes bindings, or repairs permissions automatically during launch. Run this explicit step after each affected installation; a later Bun install can reset bin modes again. Reinstall a verified package if its bytes differ.
 
 For provider keys already stored in macOS Keychain, use `--keychain-service SERVICE --keychain-account ACCOUNT` instead of vault options. Bindings contain only references and authorized origins under `~/.hasna/switcher/config/credential-bindings`, in owner-only files. They remain local even when Switcher uses a remote API. A configured binding takes precedence over environment aliases; an unavailable binding never falls back to another account.
 
@@ -279,16 +424,45 @@ Claude Code with a non-Claude model is experimental and unsupported by Anthropic
 
 For Claude Code using the official DeepSeek Messages endpoint, Switcher defaults `CLAUDE_CODE_AUTO_COMPACT_WINDOW` to `786432`, following [DeepSeek's integration guidance](https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code/). An explicitly set environment value takes precedence. Recognized provider context-overflow errors become a sanitized `prompt is too long` error so the native client can compact or guide recovery; unrelated errors retain the sanitized upstream status. Existing launches must pick up the compaction setting or start a new launch to use this default.
 
-New DeepSeek presets include `deepseek-v4.1-flash-expires-on-0910` as an additional preview model with `expiresOn: "2026-09-10"`. The provider's normal model discovery stays active. To register an unlisted model on an existing provider:
+DeepSeek officially released V4.1 Flash on 2026-09-10. Its API model ID is `deepseek-flash`, as documented in the [official release notes](https://api-docs.deepseek.com/updates/) and [API quick start](https://api-docs.deepseek.com/). New DeepSeek presets include that model with text/image input and tool support, and support Chat Completions, Anthropic Messages, and Responses (for Codex). Saved providers and profiles keep their existing model selections. Configure an existing provider explicitly to adopt the new model:
 
 ```sh
-switcher models add my-provider vendor/preview --name "Preview" --expires-on 2026-09-10
+switcher models add deepseek-messages deepseek-flash --name "DeepSeek V4.1 Flash"
+switcher launch claude --provider deepseek-messages --model deepseek-flash
+# Or create the documented Responses preset and select the model directly:
+switcher launch codex --provider deepseek --model deepseek-flash
+```
+
+Configure a new model on any saved provider without editing the provider's JSON:
+
+```sh
+switcher models add my-provider vendor/new-model --name "New model"
+switcher models add my-provider vendor/detailed-model --file model.json
+switcher models config my-provider
+switcher models list my-provider --refresh
+switcher models update my-provider vendor/new-model --name "Preview" --expires-on 2027-01-01
+switcher models remove my-provider vendor/new-model
 switcher models my-provider --refresh
 ```
 
-`--expires-on` is optional and accepts a real `YYYY-MM-DD` date. Dates are inclusive in UTC: `2026-09-10` becomes expired at `2026-09-11T00:00:00Z`. This is operator metadata, not a guarantee of provider uptime. Expired models remain visible in `switcher models` with `expired: true` and `codingEligible: false`; new launches, policy roles, native picker catalogs and subsequent gateway requests reject them. Existing processes are not stopped. `models add` appends to the provider's optional `additionalModels` array; entries merge by model ID with discovered or manual models and override only supplied metadata. A duplicate additional entry is rejected; use a versioned `providers update --file` to edit it. Remote catalogs can also supply `expiresOn` or `expires_on`. `manualModels` continues to replace discovery when explicitly configured.
+A model JSON object needs `id` and `name`; it can also carry `contextWindow`, `maxOutputTokens`, `inputModalities`, `outputModalities`, `supportedParameters`, `supportedGenerationMethods`, `available`, `description`, and `expiresOn`. The file ID must match the command. Unknown fields, raw credential fields, invalid dates and blank/control-character model IDs are rejected. `models update` replaces that model's saved metadata: omit an optional field from the replacement to clear it. `models config` reads only saved settings and makes no provider request. SDK clients expose `addModel`, `updateModel`, and `removeModel`; MCP exposes `models_add`, `models_update`, and `models_remove` with the same behavior.
 
-For a provider without discovery, use `providers add ID --file provider.json` with `manualModels`. Each model needs `id` and `name`; optional fields are `contextWindow`, `maxOutputTokens`, `inputModalities`, `outputModalities`, `supportedParameters`, and `available`. Use `catalogBaseUrl` and `modelsPath` for a separate discovery root/path; CLI equivalents are `--catalog-url` and `--models-path`. Use `catalogFormat: "ollama"` for `/api/tags`. Mistral presets select a capability-aware parser, including archived status. Together presets select its native bare-array parser. Fireworks requires `--catalog-account-id ID` or an explicit catalog URL and retains count evidence across its paginated account catalog. DashScope requires an explicit region/workspace `--catalog-url` with `--catalog-format dashscope`. Z.AI currently requires an explicit catalog or manual models because its documented API has no model-list contract. MiniMax defaults to its `.cn` Open Platform endpoints; use an explicit authority and credential reference for another product or region. A different authenticated catalog origin requires an explicit `catalogCredentialEnv`; a public catalog can declare `catalogAuthStyle: "none"`. Standard credential aliases are resolved only for the matching built-in provider origin. The default parser follows Anthropic-style `has_more/last_id` pagination and otherwise expects an OpenAI-style `data` array. HTTP redirects are rejected.
+For providers using discovery, configured models live in `additionalModels`; discovery still runs and its errors still block launch. Additions merge by ID and override only supplied remote metadata. Removing an addition reveals any upstream entry with the same ID. For manual catalogs, model commands edit `manualModels`. Edits use the provider's current version and fail on concurrent changes rather than overwriting them. Existing profiles are not silently repointed when a model is removed or replaced.
+
+`--expires-on` is optional and accepts a real `YYYY-MM-DD` date, inclusive in UTC. Expired models remain visible with `expired: true` and `codingEligible: false`; new launches, policy roles, native picker catalogs and subsequent gateway requests reject them. Existing processes are not stopped. Expiry is operator metadata, not a guarantee of upstream availability.
+
+Create an arbitrary provider with a starter model or a JSON array of model objects:
+
+```sh
+switcher providers add deployment --url https://inference.example/v1 --protocol openai-responses \
+  --credential-env SWITCHER_PROVIDER_DEPLOYMENT --catalog-format none --model team/deployment
+switcher providers add catalog-provider --url https://inference.example/v1 --protocol openai-chat \
+  --credential-env SWITCHER_PROVIDER_CUSTOM --models-file models.json
+```
+
+`--catalog-format none` explicitly selects a manual catalog and avoids model discovery. Without it, starter models supplement discovery. Credential flags store reference names only; use the existing credential binding commands to configure their source.
+
+For advanced provider settings, use `providers add ID --file provider.json` with `manualModels` when discovery is unavailable. Each model needs `id` and `name`; optional fields are `contextWindow`, `maxOutputTokens`, `inputModalities`, `outputModalities`, `supportedParameters`, and `available`. Use `catalogBaseUrl` and `modelsPath` for a separate discovery root/path; CLI equivalents are `--catalog-url` and `--models-path`. Use `catalogFormat: "ollama"` for `/api/tags`. Mistral presets select a capability-aware parser, including archived status. Together presets select its native bare-array parser. Fireworks requires `--catalog-account-id ID` or an explicit catalog URL and retains count evidence across its paginated account catalog. DashScope requires an explicit region/workspace `--catalog-url` with `--catalog-format dashscope`. Z.AI currently requires an explicit catalog or manual models because its documented API has no model-list contract. MiniMax defaults to its `.cn` Open Platform endpoints; use an explicit authority and credential reference for another product or region. A different authenticated catalog origin requires an explicit `catalogCredentialEnv`; a public catalog can declare `catalogAuthStyle: "none"`. Standard credential aliases are resolved only for the matching built-in provider origin. The default parser follows Anthropic-style `has_more/last_id` pagination and otherwise expects an OpenAI-style `data` array. HTTP redirects are rejected.
 
 Grok uses a per-launch authenticated loopback bridge because its environment overlay cannot define providers. The bridge serves model metadata and forwards the selected protocol unchanged. It holds upstream credentials only in memory; Grok receives an ephemeral local token. The same bridge handles credentialless endpoints and OpenCode auth-header mismatches. Bridged requests are limited to 4 MiB and four minutes. Grok resumes retain the selected profile model. Use `-- --resume SESSION_ID -p PROMPT` for headless continuation, or omit the prompt and type after the interactive session loads. Interactive resume with an inline positional prompt is rejected because the native client can send it before applying the selected model. Grok 1.0.13 passed source and installed development CLI resume checks against a controlled Messages fixture and live DeepSeek Flash. OpenCode's provider identity stays stable across temporary bridge ports; `-- run --session SESSION_ID PROMPT` resumes with fresh launch settings. The installed beta-19157 passed two-process Messages resume checks against a controlled local upstream and live DeepSeek Flash, including a proof-file read and preserved history. Other provider/protocol and registry-release cells remain tracked separately in COMPATIBILITY.md.
 

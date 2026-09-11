@@ -1,3 +1,37 @@
+## 1.6.0
+
+First publication since 1.4.10. The 1.5.0 section below was cut (hasna/apps#1867) but never published — its independent release review returned NO_GO on the deliberate-tier defect fixed in this release — so everything listed under 1.5.0 ships here for the first time, together with the changes below.
+
+**Credential resolution as shipped.** The hosted client (`emails` CLI, `emails-mcp`, the `./storage` plan and the hosted HTTP store) resolves its API URL and key through the shared `@hasna/contracts` 1.0.2 resolver, fresh on every request (hasna/apps#1720):
+
+- Chain, first hit wins: the deliberate selections `HASNA_EMAILS_API_KEY_OVERRIDE`, `HASNA_PROFILE` and `HASNA_EMAILS_API_KEY_REF` — a blank override, a profile with no `credentials-<profile>` file, or a vault pointer (which this client cannot complete per request) REFUSES with a message naming the tier and never falls through — then the station macOS Keychain item for the Emails API key, then `~/.hasna/emails/config/credentials` (`HASNA_HOME` replaces `~/.hasna`), then `HASNA_EMAILS_API_KEY` (the legacy `EMAILS_SELF_HOSTED_API_KEY` spelling one rung below, accepted for one release). The URL comes from `HASNA_EMAILS_API_URL`, the Keychain `.api-url` item, the credentials file, else the built-in default API URL. A live `EMAILS_SESSION_TOKEN` / `EMAILS_IDP_TOKEN` still wins as the bearer credential.
+- No credential means no service: the CLI exits non-zero before any request and its first stderr line names the Keychain item, the credentials file and `HASNA_EMAILS_API_KEY`; `emails-mcp` prints that same line first and exits before answering `initialize`. No SQLite file is opened or created under the app home and there is no `local-fallback` event. Local SQLite exists only by explicit `HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` opt-in and is announced as `emails: local mode` on stderr.
+- Caller-supplied base URLs (`createHttpEmailStore`, `EmailsSelfHostClient`) require an explicit credential; the ambient station key is never attached to them.
+
+### Minor Changes
+
+- 606ed44: Execute forwarding on the authenticated Emails API with operator-gated rules, a tenant-isolated PostgreSQL delivery ledger, immutable retries, safe quoted copies and truthful sent/processing receipts. API clients no longer require a machine-local forwarding database.
+
+### Patch Changes
+
+- d34dc1e: Resolver validation fixes (hasna/apps#1720, release review of 1.5.0). The environment snapshot the hosted client hands to the `@hasna/contracts` resolver now carries the DELIBERATE tiers — `HASNA_EMAILS_API_KEY_OVERRIDE`, `HASNA_PROFILE` and `HASNA_EMAILS_API_KEY_REF` — so a blank override, a profile with no `credentials-<profile>` file, or a vault pointer REFUSES before any request (non-zero exit, nothing served) instead of silently resolving the station Keychain identity; a real override or profile credential resolves and is reported by name. A `HASNA_EMAILS_API_KEY_REF` pointer is refused with a message naming it: this client resolves its credential synchronously and cannot complete a vault pointer per request. The resolver's own credential refusals reach the CLI, the MCP server and the `./storage` plan as the same typed configuration error. `emails-mcp` prints the refusal message as its FIRST stderr line (never a source frame or stack) and exits before answering `initialize`. Docs and manifest corrected: no `--api-key` / `--profile` resolver flags exist on the `emails` CLI; the README self-hosted client paragraph names the canonical resolver settings; `hasna.contract.json` no longer describes a default local SQLite store. The hermetic test runner works on bash 3.2 (no `mapfile`).
+- 75c0f12: Show all registered addresses and domains by default in the CLI while preserving explicit pagination. Check the complete account registry for unverified addresses, address suggestions, and domain/address name or prefix lookups.
+- 334ca30: Provision addresses through authenticated API jobs on configured SES inbound domains, with read-only readiness plans, durable retries, tenant-scoped ownership, and atomic provisioning receipts.
+- d420873: Connect already-owned domains through authenticated API workflows, using server SES or Resend bindings, shared DNS task receipts, explicit pending verification, and retry-safe registration checks.
+- a1e2edd: Revalidate authenticated S3/watch tenant routing and source/provider lifecycle inside message and provenance transactions. Keep historical --force recovery scoped to the original source snapshot and leave raced queue deliveries unacknowledged.
+- a1776d4: Read provider credential status from the authenticated server API and remove local
+  SQLite keyring access from ordinary provider-secret commands.
+- 7997e0b: Configure and verify bound SES/SNS/SQS realtime notifications through the authenticated API, preserving existing policies and receipt actions and reporting partial cloud changes honestly.
+- 233838b: Support server-backed open and click tracking with opaque tenant-scoped links,
+  stable send retries, scheduled-send preservation, and idempotent engagement events.
+- 213f62f: Group sidebar email counts with commas and keep folder, category, and label counts visible in narrow terminals.
+- 915c3a0: Restore the foreground SMTP listener with authenticated API storage, tenant-bound envelope validation, MIME attachment preservation, and immutable transaction receipts before SMTP acceptance.
+- f48a53d: Keep unrecognized terminal key sequences from producing shortcut errors over the Emails UI while preserving focused text input and Escape navigation.
+- 3518fae: Restore the foreground webhook listener using authenticated API relay bindings, mandatory provider signatures, bounded full MIME retrieval and durable tenant/provider-scoped receipts.
+- 7bbb0fa: Load the complete API mailbox registry in the TUI, search all registered addresses, retain suspended mailboxes for browsing, and count domain addresses across all pages. Add saved attachment download or copy-link preferences and readable focused priority inputs in the light theme.
+- 01f843b: Support secure attachment downloads on macOS through the existing CLI and library writer. Downloads use private files, atomic publication without overwriting, and descriptor-based identity, content, directory, and ACL checks.
+- Also in this release, from the same API/TUI wave (hasna/apps#1883, no separate changeset): image previews inside the terminal reader on OpenTUI 0.5.10 (remote images load only on an explicit action; embedded images and image attachments use authenticated content access); scheduled sends and sequences executed through leased API jobs and the authenticated scheduler; test and batch sends, statistics, analytics and delivery/ingestion diagnostics read from the configured API store; provider health probed on the server; bound S3 imports and SQS queue watch run through the API; the inbox source registry persisted through the API; forwarded HTML content and attachments preserved; each mailbox shown once across provider registrations; domain lifecycle operations through tenant API bindings. The live API must be deployed with the new operational routes and bindings before the dependent commands succeed; the remaining operations are tracked in `docs/CLI-API-CLOSURE.md`.
+
 ## 1.5.0
 
 ### Minor Changes

@@ -119,17 +119,23 @@ commands.
 ## Worktree lifecycle
 
 The canonical root is `~/.hasna/repos/worktrees`, derived from the operating
-system account rather than caller-controlled `$HOME`.
+system account rather than caller-controlled `$HOME`. Worktrees are placed at
+`<root>/<org>/<repo>/<worktree>` (owner ruling 2026-09-10), where `<org>` is
+the registry row's GitHub org — the `org` column the scanner fills from the
+remote's owner, else the owner of the sanitized `remote_url`; a row with
+neither is `REPO_ORG_UNRESOLVABLE`. Worktrees still at the pre-ruling flat
+`<root>/<repo>/<worktree>` are reported as `legacy-flat-layout` with a
+`suggested_path` and are never moved automatically.
 
 | Command | Options and behavior |
 |---|---|
-| `repos worktree add <repo>` | Exactly one of `--task` or `--name`; optional `--base`, `--branch`, `--run-id`, `--cleanup-policy delete-if-clean\|keep`, `--json` |
-| `repos worktree list [repo]` | `--stale`, `--stale-days`, `--json` |
-| `repos worktree remove <ref>` | Reference is a lease ID or `<repo>/<worktree>`, never a path; `--discard-changes`, `--allow-unlanded`, `--allow-dead-gitdir` (archive the working tree and tear down a worktree whose gitdir pointer is dead), `--dry-run`, `--json` |
-| `repos worktree adopt [path]` | The only raw-path worktree verb; dry run by default; `--all`, `--apply`, `--json` |
+| `repos worktree add <repo>` | `<repo>` is a registry id, path, unique name or `<org>/<repo>` (when several usable checkouts share the remote, the row at the canonical clone path `<clones-root>/<org>/<repo>` wins, then the single exact `org`/`name` row, else `AMBIGUOUS_REPO`); exactly one of `--task` or `--name`; optional `--base`, `--branch`, `--run-id`, `--cleanup-policy delete-if-clean\|keep`, `--json` |
+| `repos worktree list [repo]` | `[repo]` filters by bare name or `<org>/<repo>`; entries carry `org`, `repo_name`, `worktree_name`, `issues` (`flat-layout`, `legacy-flat-layout`, `layout-mismatch`, `nested-layout`, `no-lease`, `missing-directory`, `machine-mismatch`, `stale`, `not-a-worktree`, `dead-gitdir`) and `suggested_path`; `--stale`, `--stale-days`, `--json` |
+| `repos worktree remove <ref>` | Reference is a lease ID, `<repo>/<worktree>` (canonical path first, then the legacy flat path) or `<org>/<repo>/<worktree>`, never a path; `--discard-changes`, `--allow-unlanded`, `--allow-dead-gitdir` (archive the working tree and tear down a worktree whose gitdir pointer is dead), `--dry-run`, `--json` |
+| `repos worktree adopt [path]` | The only raw-path worktree verb; dry run by default; `--all` sweeps both the org-nested and the legacy flat depth and reports each candidate's `layout` (`canonical`, `legacy-flat`, `other`) and `canonical_path`; `--apply`, `--json` |
 | `repos worktree release <lease-id>` | Apply the lease cleanup policy; `--keep`, `--json` |
-| `repos worktree push <ref>` | Publish the worktree's git-external state (uncommitted tracked changes, untracked files, stash list) plus its refs as one immutable, content-addressed version on the S3 artifact remote; reference is `<repo>/<worktree>`, never a path; requires `REPOS_S3_BUCKET`; `--json` |
-| `repos worktree pull <ref>` | Fetch a version from the artifact remote (default newest; `<repo>/<worktree>@<version>` pins one), verify the bundle sha256 against the manifest, and materialise the worktree in the canonical path; `--parent-checkout <path>` for a fresh station with no registry row; `--json` |
+| `repos worktree push <ref>` | Publish the worktree's git-external state (uncommitted tracked changes, untracked files, stash list) plus its refs as one immutable, content-addressed version on the S3 artifact remote; reference is `<repo>/<worktree>` or `<org>/<repo>/<worktree>`, never a path (the org otherwise comes from the registry row; a legacy flat worktree is found when nothing sits at the canonical path); requires `REPOS_S3_BUCKET`; `--json` |
+| `repos worktree pull <ref>` | Fetch a version from the artifact remote (default newest; `<repo>/<worktree>@<version>` pins one), verify the bundle sha256 against the manifest, and materialise the worktree in the canonical org-nested path (`<org>/<repo>/<worktree>` spells the org; otherwise the registry row, or the parent checkout's origin remote, supplies it); `--parent-checkout <path>` for a fresh station with no registry row; `--json` |
 | `repos worktree sync <ref>` | Push a new version, then re-read the remote and refuse (exit 1) if a newer version appeared after the push — never a silent overwrite; `--json` |
 | `repos worktree versions <ref>` | List published versions, newest first; `--json` |
 
@@ -258,3 +264,35 @@ Its default store is `~/.hasna/events`.
 It verifies the package digest before reading its embedded provenance, then
 binds the reviewed commit/tree and the exact packaged and selected executable
 bytes. Success prints a versioned JSON receipt; any mismatch exits non-zero.
+
+### Normalize a legacy worktree
+
+`repos worktree normalize <org>/<repo> --name <existing-name> --json` computes
+`worktrees/<repo>/<name>` → `worktrees/<org>/<repo>/<name>` from the registered
+primary checkout and returns a read-only plan. No destination argument exists.
+
+After reviewing the plan, repeat with `--apply --expected-plan-hash <hash>`.
+The command refuses changed contents/metadata, occupied destinations, wrong Git
+ownership, path aliases, Git locks, submodules and tracked relative symlinks
+that cross the worktree boundary. Coordinate active writers before applying.
+
+It checkpoints **all files, including ignored and untracked files**, plus the
+Git administrative directory, then uses Git's worktree move operation. Copies
+use copy-on-write where available and ordinary copies elsewhere; ensure enough
+space before applying. It verifies file hashes, index, HEAD, directory identity
+and the Git backlink, updates affected local registry and lease paths, and
+leaves an absolute compatibility symlink at the old path. Untracked relative
+symlinks crossing the worktree boundary are adjusted to retain their targets.
+Existing lease IDs and ownership fields remain unchanged; no ownership is
+invented for unleased worktrees. Use `adopt` separately after verifying ownership.
+
+The receipt and checkpoints stay under
+`worktrees/.evidence/normalize-<plan-hash>/`. A database error rolls the move
+back. Following an interruption, use
+`repos worktree normalize <org>/<repo> --name <name> --rollback <plan-hash>`.
+Rollback checks the receipt and refuses to overwrite work changed since the
+move. It restores paths and registry/lease rows, retaining the checkpoint.
+Retry after rollback with a new dry run; retained checkpoints are never silently
+overwritten. The command does not rewrite external session databases, runtime
+configuration, or old aliases elsewhere; compatibility links keep old paths
+reachable while those consumers are verified separately.
