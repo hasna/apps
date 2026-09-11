@@ -387,8 +387,15 @@ export function registerQueryCommands(program: Command) {
           .sort((a, b) => (rank[a.priority] ?? 4) - (rank[b.priority] ?? 4) || (a.updated_at ?? "").localeCompare(b.updated_at ?? ""));
         const target = candidates[0];
         if (target) {
-          await cloudUnlockTask(cloud, target.id, undefined, true);
-          const lock = await cloudLockTask(cloud, target.id, agent);
+          // Take the lock FIRST. Force-releasing the previous holder up front
+          // would leave the task unlocked and in_progress with no owner if the
+          // lock were then refused — worse than not stealing it at all. The
+          // forced release is the fallback for a lock that is still held.
+          let lock = await cloudLockTask(cloud, target.id, agent);
+          if (!lock.success) {
+            await cloudUnlockTask(cloud, target.id, undefined, true);
+            lock = await cloudLockTask(cloud, target.id, agent);
+          }
           if (!lock.success) { handleError(new Error(`Could not take the lock on ${target.id.slice(0, 8)}: ${lock.error ?? "refused"}`)); return; }
           task = await cloudTaskAction(cloud, target.id, "start", { agent_id: agent });
         }

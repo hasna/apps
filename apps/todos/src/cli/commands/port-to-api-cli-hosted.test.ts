@@ -62,13 +62,14 @@ test("steal takes the stale task on the shared store: unlock, lock, start", asyn
       const result = await ctx.run(["steal", "ada", "--stale-minutes", "30"]);
       expect(result.stderr).toBe("");
       expect(result.stdout).toContain("Stolen");
+      // The lock is attempted BEFORE any release, so an uncontended steal never
+      // force-unlocks anything.
       expect(ctx.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
         "GET /v1/tasks",
-        "POST /v1/tasks/steal-1/unlock",
         "POST /v1/tasks/steal-1/lock",
         "POST /v1/tasks/steal-1/start",
       ]);
-      expect((ctx.requests[2]!.body as { agent_id: string }).agent_id).toBe("ada");
+      expect((ctx.requests[1]!.body as { agent_id: string }).agent_id).toBe("ada");
     },
   );
 });
@@ -165,6 +166,37 @@ test("import <github-url> creates the task with POST /v1/tasks, not the local st
       const post = ctx.requests.find((r) => r.method === "POST" && r.path === "/v1/tasks");
       expect(post).toBeDefined();
       expect((post!.body as { title: string }).title).toBe("#42 fix the thing");
+    },
+  );
+});
+
+test("steal falls back to a forced release only when the lock is still held", async () => {
+  const held = task({ id: "steal-3", status: "in_progress", locked_by: "grace", assigned_to: "grace", updated_at: iso(-6 * 60 * 60 * 1000) });
+  let lockAttempts = 0;
+  await withHostedCommands(
+    registerQueryCommands,
+    {
+      "GET /v1/tasks": () => ({ tasks: [held], total: 1 }),
+      "POST /v1/tasks/:id/lock": () => {
+        lockAttempts += 1;
+        return lockAttempts === 1
+          ? { result: { success: false, error: "held by grace" } }
+          : { result: { success: true, locked_by: "ada", locked_at: iso(0) } };
+      },
+      "POST /v1/tasks/:id/unlock": () => ({ success: true }),
+      "POST /v1/tasks/:id/start": () => ({ task: { ...held, assigned_to: "ada", locked_by: "ada" } }),
+    },
+    async (ctx) => {
+      const result = await ctx.run(["steal", "ada"]);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("Stolen");
+      expect(ctx.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+        "GET /v1/tasks",
+        "POST /v1/tasks/steal-3/lock",
+        "POST /v1/tasks/steal-3/unlock",
+        "POST /v1/tasks/steal-3/lock",
+        "POST /v1/tasks/steal-3/start",
+      ]);
     },
   );
 });
