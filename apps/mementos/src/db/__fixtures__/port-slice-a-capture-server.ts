@@ -66,6 +66,32 @@ const AUDIT_ENTRY = {
   created_at: "2026-09-11T00:00:00.000Z",
 };
 
+const ACL = {
+  id: "acl-1",
+  agent_id: "agent-1",
+  key_pattern: "architecture-*",
+  permission: "read",
+  project_id: null,
+  created_at: "2026-09-11T00:00:00.000Z",
+};
+
+const RATING = {
+  id: "rating-1",
+  memory_id: "mem-1",
+  agent_id: "agent-1",
+  useful: true,
+  context: null,
+  created_at: "2026-09-11T00:00:00.000Z",
+};
+
+const RATINGS_SUMMARY = {
+  memory_id: "mem-1",
+  total: 4,
+  useful_count: 3,
+  not_useful_count: 1,
+  usefulness_ratio: 0.75,
+};
+
 const JOB = {
   id: "job-1",
   session_id: "session-1",
@@ -107,6 +133,16 @@ function respond(method: string, path: string): unknown {
   }
   if (method === "GET" && path.startsWith("/v1/audit/stats")) {
     return { total_entries: 3, by_operation: { create: 1, update: 2 }, recent_24h: 3 };
+  }
+  if (method === "POST" && path === "/v1/acl") return ACL;
+  if (method === "GET" && path.startsWith("/v1/acl/check")) return { allowed: true };
+  if (method === "GET" && path.startsWith("/v1/acl")) return { acls: [ACL], count: 1 };
+  if (method === "DELETE" && path.startsWith("/v1/acl/")) return { deleted: true };
+  if (method === "POST" && /^\/v1\/memories\/[^/]+\/ratings/.test(path)) {
+    return { rating: RATING, summary: RATINGS_SUMMARY };
+  }
+  if (method === "GET" && /^\/v1\/memories\/[^/]+\/ratings/.test(path)) {
+    return { ratings: [RATING], count: 1, summary: RATINGS_SUMMARY };
   }
   if (method === "POST" && path === "/v1/machines") return MACHINE;
   if (method === "GET" && path.startsWith("/v1/machines/")) {

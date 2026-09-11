@@ -52,6 +52,34 @@ async function callTool(
   }
 }
 
+/**
+ * The system-tools modules take a deps BAG, not a bare server. Build the real
+ * deps (getSystemToolDeps) around the capturing fake so the handler under test
+ * is byte-for-byte the shipped one.
+ */
+async function callSystemTool(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<void> {
+  const handlers = new Map<string, ToolHandler>();
+  const fake = {
+    tool(...toolArgs: unknown[]) {
+      handlers.set(toolArgs[0] as string, toolArgs[toolArgs.length - 1] as ToolHandler);
+    },
+  };
+  const { getSystemToolDeps } = await import("../../mcp/tools/system-tools-shared.js");
+  const { registerSystemMemoryAdminTools } = await import(
+    "../../mcp/tools/system-tools-memory-admin.js"
+  );
+  registerSystemMemoryAdminTools(getSystemToolDeps(fake as unknown as McpServer));
+  const handler = handlers.get(name);
+  if (!handler) throw new Error(`tool not registered: ${name}`);
+  const result = (await handler(args)) as { isError?: boolean; content?: { text?: string }[] };
+  if (result?.isError) {
+    throw new Error(`${name} returned isError: ${result.content?.[0]?.text ?? "(no text)"}`);
+  }
+}
+
 async function callCli(
   register: (program: Command) => void,
   argv: string[],
@@ -112,6 +140,27 @@ const scenarios: Record<string, () => Promise<void>> = {
     const result = await synthesizeProfile({ force_refresh: true });
     if (!result || !result.profile.includes("hosted-profile-body")) {
       throw new Error(`memory_profile did not return the hosted profile: ${JSON.stringify(result)}`);
+    }
+  },
+
+  // --- ACL + ratings (MCP, system-tools deps bag) ---
+  memory_acl_set: async () => {
+    await callSystemTool("memory_acl_set", {
+      agent_id: "agent-1",
+      key_pattern: "architecture-*",
+      permission: "read",
+    });
+  },
+  memory_acl_list: async () => {
+    await callSystemTool("memory_acl_list", { agent_id: "agent-1" });
+  },
+  memory_rate: async () => {
+    await callSystemTool("memory_rate", { memory_id: "mem-1", useful: true, agent_id: "agent-1" });
+  },
+  "acl-check": async () => {
+    const { checkPermission } = await import("../acl.js");
+    if (checkPermission("agent-1", "architecture-db", "read") !== true) {
+      throw new Error("checkPermission did not take the hosted decision");
     }
   },
 
