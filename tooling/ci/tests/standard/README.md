@@ -9,7 +9,7 @@ conform to the hasna/apps standards. Complements the repo's own gates
 
 | check | file | standard | severity |
 |---|---|---|---|
-| 1. contracts conformance | `contracts.test.ts` | `hasna.contract.json` exists and passes `contracts repo-conformance` at the member's effective kit version (pinned `@hasna/contracts` dep → manifest `kitVersion` → `latest`); `kitVersion` matches the pinned dep where present | HARD, recorded exceptions |
+| 1. contracts conformance | `contracts.test.ts` | `hasna.contract.json` exists and passes the IN-TREE `contracts repo-conformance` (`apps/contracts`, the kit this tree ships, run by `process.execPath` — since 2026-09-11 no per-member registry install of the member's own pin, see `census.ts#conformanceCommand`); `kitVersion` matches the pinned dep where present | HARD, recorded exceptions |
 | 2. publishConfig | `publish-config.test.ts` | `publishConfig.access === "public"`; nothing `private:true` | HARD, recorded exceptions |
 | 3. four surfaces | `surfaces.test.ts` | `<name>` CLI bin (HARD), `<name>-mcp`, `<name>-serve`, `./sdk` (WARN, P5-census exceptions) | HARD + WARN |
 | 4. license | `license.test.ts` | `license === "Apache-2.0"` | HARD, recorded exceptions |
@@ -21,7 +21,8 @@ conform to the hasna/apps standards. Complements the repo's own gates
 | 10. nested packages (one package per app) | `nested-packages.test.ts` + `tooling/ci/check-nested-packages.ts` | no `package.json` below a member root declares a publishable `@hasna/*` name; the connector and hook plugin catalogs are recorded families whose names must match their directory | REPORT (gate-mode; gate step runs `--report`) |
 | 11. registry hygiene | `registry-hygiene.test.ts` | every recorded exception in every census registry names a member that exists in `apps/` (deleted members cannot rot in the registries) | HARD |
 | 12. commit trailers (repo law 6) | `commit-trailers.test.ts` + `tooling/ci/check-commit-trailers.ts` | every non-merge commit in the PR/push carries `Agent: <registered-name>` and no `Co-Authored-By` line; the range check runs in the `gates` job (`--report` at landing), this test pins its self-test | REPORT (gate step) |
-| 13. member scaffold manifest | `member-scaffold.test.ts` | a generated member's `hasna.contract.json` is hosted-shaped (`class: service`, PostgreSQL-only storage, no `sqlitePath`, `api-key` surfaces) and passes the IN-TREE `contracts repo-conformance` | HARD |
+| 13. pinned toolchain | `toolchain-pin.test.ts` | the suite runs under the pinned bun (`TOOLCHAIN.bun`); every spawn uses `process.execPath`, so an unpinned runner is refused with the remedy | HARD |
+| 14. member scaffold manifest | `member-scaffold.test.ts` | a generated member's `hasna.contract.json` is hosted-shaped (`class: service`, PostgreSQL-only storage, no `sqlitePath`, `api-key` surfaces) and passes the IN-TREE `contracts repo-conformance` | HARD |
 
 ## Fleet-alignment gates land in REPORT mode (2026-09-11)
 

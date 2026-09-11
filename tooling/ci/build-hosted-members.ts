@@ -27,10 +27,10 @@ if (process.argv.includes("--list")) {
   console.log(members.join("\n"));
   process.exit(0);
 }
-const args = ["turbo", "run", "build", "--concurrency=1", "--continue", ...members.map((m) => `--filter=@hasna/${m}`)];
-console.log(`build-hosted-members: ${members.length} hosted members via bunx ${args.join(" ")}`);
+const args = ["x", "turbo", "run", "build", "--concurrency=1", "--continue", ...members.map((m) => `--filter=@hasna/${m}`)];
+console.log(`build-hosted-members: ${members.length} hosted members via ${process.execPath} ${args.join(" ")}`);
 const started = Date.now();
-const res = spawnSync("bunx", args, { cwd: REPO_ROOT, stdio: "inherit", env: { ...process.env, TURBO_TELEMETRY_DISABLED: "1", TURBO_NO_UPDATE_NOTIFIER: "1" } });
+const res = spawnSync(process.execPath, args, { cwd: REPO_ROOT, stdio: "inherit", env: { ...process.env, TURBO_TELEMETRY_DISABLED: "1", TURBO_NO_UPDATE_NOTIFIER: "1" } });
 const seconds = ((Date.now() - started) / 1000).toFixed(1);
 if (res.status !== 0) {
   console.error(`build-hosted-members: turbo exited ${res.status} after ${seconds}s — at least one hosted member (or a dependency it bundles) failed to build; see the task output above`);

@@ -89,7 +89,7 @@ export async function probe(memberDir: string, member: string, command: string[]
   const home = fs.mkdtempSync(path.join(os.tmpdir(), `client-fail-closed-${member}-`));
   fs.mkdirSync(path.join(home, "tmp"));
   try {
-    const proc = Bun.spawn(["bun", resolved.absolute, ...command], {
+    const proc = Bun.spawn([process.execPath, resolved.absolute, ...command], {
       cwd: home,
       env: scrubbedEnv(home, member),
       stdin: "ignore",

@@ -34,7 +34,7 @@ describe("standard-adherence: nested packages (one package per app)", () => {
   });
 
   test("self-test: the gate script's own two-sided self-test passes", () => {
-    const res = Bun.spawnSync(["bun", `${REPO_ROOT}/tooling/ci/check-nested-packages.ts`, "--self-test"], { stdout: "pipe", stderr: "pipe" });
+    const res = Bun.spawnSync([process.execPath, `${REPO_ROOT}/tooling/ci/check-nested-packages.ts`, "--self-test"], { stdout: "pipe", stderr: "pipe" });
     const out = `${res.stdout.toString()}\n${res.stderr.toString()}`;
     expect(res.exitCode, out).toBe(0);
     expect(out).toContain("self-test: PASS");
