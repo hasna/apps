@@ -13,7 +13,7 @@ import type {
   ExportMessagesOptions,
   MessageExportArtifact,
 } from "../types.js";
-import { getDataDir } from "./db.js";
+import { getConversationsHome } from "./home.js";
 import {
   resolveCollectionLimit,
   resolveCollectionMaxBytes,
@@ -123,7 +123,7 @@ export function serializeMessageExport(
 
 export function getMessageExportDir(): string {
   const configured = process.env.HASNA_CONVERSATIONS_EXPORT_DIR ?? process.env.CONVERSATIONS_EXPORT_DIR;
-  return resolve(configured?.trim() || join(getDataDir(), "exports"));
+  return resolve(configured?.trim() || join(getConversationsHome(), "exports"));
 }
 
 export function writeMessageExportArtifact(

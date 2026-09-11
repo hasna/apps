@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { acquireLock, bulkAcquireLock, tryBulkAcquireLock, releaseLock, checkLock, cleanExpiredLocks, listLocks, listLocksEnriched, releaseStaleAgentLocks } from "./locks";
 import { closeDb, getDb } from "./db";
-import { LocalStore } from "./store/index.js";
+import { LocalStore } from "./store/local-store.js";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";

@@ -58,7 +58,7 @@ afterAll(() => {
  * Hermetic env base: HOME + SHORTLINKS_HOME point at a scratch dir so the
  * @hasna/contracts resolver never sees a real fleet app-config / credential
  * file on disk from the machine running the tests. A no-op notice keeps the
- * local-mode stderr announcement out of the test log.
+ * local-backend stderr announcement out of the test log.
  */
 function env(home: string, extra: Record<string, string> = {}): Env {
   return { HOME: home, SHORTLINKS_HOME: home, ...extra };

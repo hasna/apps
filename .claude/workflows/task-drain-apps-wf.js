@@ -211,7 +211,7 @@ Execute ONE hasna/apps BUG row via the fix-lane discipline. Row: ${JSON.stringif
 
 CLAIM FIRST: comment the row now — \`todos comment <row.id> "${CLAIM_TAG} — executing <shortId> $(date -u +%Y-%m-%dT%H:%MZ)"\` (a concurrent task-drain instance's census excludes rows with a claim younger than 90 min; your claim prevents double-picking).
 
-WORKTREE (your own, via hasna/repos): create ~/.hasna/repos/worktrees/apps/<row.id> from origin/main with the repos CLI worktree verb (repos worktree add ... or git worktree add; run repos scan after). Branch named after the task. NEVER work in another agent's worktree and never in the shared checkout — each agent's worktree path is unique per row id, which is what makes concurrent execution safe.
+WORKTREE (your own, via hasna/repos): create ~/.hasna/repos/worktrees/apps/<row.id> from origin/main with the sanctioned verb (repos worktree add apps --name <row.id> --branch <branch> --base origin/main; run repos scan after; never git worktree add by hand). Branch named after the task. NEVER work in another agent's worktree and never in the shared checkout — each agent's worktree path is unique per row id, which is what makes concurrent execution safe.
 
 IDEMPOTENCY GATE — stop with outcome 'idempotency-stop' if any holds:
 (a) the defect no longer reproduces at origin/main head (git fetch + reproduce or code-read the exact failure);

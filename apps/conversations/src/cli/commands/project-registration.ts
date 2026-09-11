@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import type { Command } from "commander";
-import { closeDb } from "../../lib/db.js";
 import type {
   ProjectChannelCollectionItem,
   ProjectChannelCollectionPage,
@@ -12,7 +11,7 @@ import type {
 import {
   PROJECT_CHANNEL_COLLECTION_CHANGED,
   assertProjectChannelRegistrationOperationIntent,
-} from "../../lib/project-channel-registration.js";
+} from "../../lib/project-channel-registration-contract.js";
 import { getStore } from "../../lib/store/index.js";
 import { printJson } from "../../lib/stdout.js";
 import { emitCliError } from "../cli-error.js";
@@ -223,7 +222,6 @@ export function registerProjectRegistrationCommands(program: Command): void {
       try {
         printJson(await getStore().projectChannelRegistrationCapability());
       } finally {
-        closeDb();
       }
     });
 
@@ -238,7 +236,6 @@ export function registerProjectRegistrationCommands(program: Command): void {
           registrationRequest(opts.request, opts, "create"),
         ));
       } finally {
-        closeDb();
       }
     });
 
@@ -253,7 +250,6 @@ export function registerProjectRegistrationCommands(program: Command): void {
           registrationRequest(opts.request, opts, "bind_existing"),
         ));
       } finally {
-        closeDb();
       }
     });
 
@@ -268,7 +264,6 @@ export function registerProjectRegistrationCommands(program: Command): void {
           registrationRequest(opts.request, opts, "adopt_existing"),
         ));
       } finally {
-        closeDb();
       }
     });
 
@@ -283,7 +278,6 @@ export function registerProjectRegistrationCommands(program: Command): void {
           requestObject(opts.request, opts) as unknown as ProjectChannelRegistrationLookupRequest,
         ));
       } finally {
-        closeDb();
       }
     });
 
@@ -298,7 +292,6 @@ export function registerProjectRegistrationCommands(program: Command): void {
           registrationRequest(opts.request, opts),
         ));
       } finally {
-        closeDb();
       }
     });
 
@@ -313,7 +306,6 @@ export function registerProjectRegistrationCommands(program: Command): void {
           registrationRequest(opts.request, opts),
         ));
       } finally {
-        closeDb();
       }
     });
 
@@ -349,7 +341,6 @@ export function registerProjectRegistrationCommands(program: Command): void {
             ...bounds,
           }));
       } finally {
-        closeDb();
       }
     });
 
@@ -373,7 +364,6 @@ export function registerProjectRegistrationCommands(program: Command): void {
           ...collectionBounds(opts),
         }));
       } finally {
-        closeDb();
       }
     });
 
@@ -397,7 +387,6 @@ export function registerProjectRegistrationCommands(program: Command): void {
         };
         printJson(await getStore().readProjectChannelRegistrationExact(request));
       } finally {
-        closeDb();
       }
     });
 }

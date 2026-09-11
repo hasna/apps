@@ -2,7 +2,6 @@ import type { Command } from "commander";
 import { env } from "../../lib/env.js";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-import { closeDb } from "../../lib/db.js";
 import {
   resolveIdentity,
   readPersistedIdentity,
@@ -15,7 +14,7 @@ import {
   getDeclaredSessionId,
 } from "../../lib/identity.js";
 import { emitCliError } from "../cli-error.js";
-import { isAgentConflict, normalizeAgentName } from "../../lib/presence.js";
+import { isAgentConflict, normalizeAgentName } from "../../lib/agent-names.js";
 import { windowItems } from "../../lib/compact-output.js";
 import { getCliWindow, printCompactFooter, printJsonDisclosure, windowJsonList } from "../compact.js";
 import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
@@ -128,7 +127,6 @@ export function registerAgentCommands(program: Command): void {
           });
         }
       }
-      closeDb();
     });
 
   agents
@@ -155,7 +153,6 @@ export function registerAgentCommands(program: Command): void {
           process.exit(1);
         }
       }
-      closeDb();
     });
 
   agents
@@ -228,7 +225,6 @@ export function registerAgentCommands(program: Command): void {
         printErrorLine(chalk.red(e.message));
         process.exit(1);
       }
-      closeDb();
     });
 
   agents
@@ -332,7 +328,6 @@ export function registerAgentCommands(program: Command): void {
           printLine(chalk.yellow(`  warning    CONVERSATIONS_AGENT_ID="${envOverride}" has higher precedence; this environment still resolves as "${envOverride}"`));
         }
       }
-      closeDb();
     });
 
   agents
@@ -351,7 +346,6 @@ export function registerAgentCommands(program: Command): void {
       } else {
         printLine(`  ${chalk.green("♥")}  ${chalk.cyan(agent)}  ${chalk.dim(status)}`);
       }
-      closeDb();
     });
 
   agents
@@ -384,7 +378,6 @@ export function registerAgentCommands(program: Command): void {
           printLine(chalk.dim("  Report only — pass --apply to remove."));
         }
       }
-      closeDb();
     });
 
   // ---- focus ----
@@ -412,7 +405,6 @@ export function registerAgentCommands(program: Command): void {
       } else {
         printLine(`  ${chalk.green("focused")}  ${chalk.cyan(agent)}  →  ${chalk.bold(project.name)}  ${chalk.dim(`(${project.id})`)}`);
       }
-      closeDb();
     });
 
   focus
@@ -429,7 +421,6 @@ export function registerAgentCommands(program: Command): void {
       } else {
         printLine(`  ${chalk.yellow("unfocused")}  ${chalk.cyan(agent)}`);
       }
-      closeDb();
     });
 
   focus
@@ -453,7 +444,6 @@ export function registerAgentCommands(program: Command): void {
           printLine(`  ${chalk.cyan(agent)}  ${chalk.dim("no focus set")}`);
         }
       }
-      closeDb();
     });
 
   // ---- whoami ----
@@ -481,7 +471,6 @@ export function registerAgentCommands(program: Command): void {
       const payload = buildWhoamiPayload(agent, source, presence);
       if (opts.json) {
         printJson(payload);
-        closeDb();
         return;
       }
 
@@ -499,6 +488,5 @@ export function registerAgentCommands(program: Command): void {
       printLine(`  ${chalk.bold("Agent:")}  ${chalk.cyan(agent)}`);
       printLine(`  ${chalk.bold("Source:")} ${source}`);
       printLine(`  ${chalk.bold("Online:")} ${onlineStatus}`);
-      closeDb();
     });
 }
