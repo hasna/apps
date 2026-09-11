@@ -92,6 +92,31 @@ for (const backend of backends) {
       }
     });
 
+    test("reports written inside one millisecond still read back newest first", async () => {
+      // The regression this exists for: SQLite timestamps have millisecond
+      // resolution, so a tight burst ties on created_at and the ORDER BY's
+      // second key decides. With a random id that key was meaningless and the
+      // order inverted on a fast machine (CI) while holding on a slow one. Six
+      // sends with no await between the POST bodies land in the same
+      // millisecond on any current machine.
+      const ctx = await testServer(backend);
+      try {
+        const sent = ["a", "b", "c", "d", "e", "f"];
+        for (const message of sent) {
+          const response = await fetch(`${ctx.baseUrl}/api/v1/feedback`, authed("sk_test_org_a", { method: "POST", body: JSON.stringify({ message }) }));
+          expect(response.status).toBe(201);
+        }
+        const rows = await (await fetch(`${ctx.baseUrl}/api/v1/feedback?limit=10`, authed("sk_test_org_a"))).json();
+        expect(rows.map((row: { message: string }) => row.message)).toEqual([...sent].reverse());
+        // Ids are time-sortable, so the id order carries the same answer as the
+        // ordering above even when every created_at is identical.
+        const ids = rows.map((row: { id: string }) => row.id);
+        expect(ids).toEqual([...ids].sort().reverse());
+      } finally {
+        await ctx.stop();
+      }
+    });
+
     test("one org never reads another's feedback", async () => {
       const ctx = await testServer(backend);
       try {

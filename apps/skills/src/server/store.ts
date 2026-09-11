@@ -470,15 +470,14 @@ export class MemorySkillsStore implements SkillsProductStore {
   }
 
   async listFeedback(principal: ApiPrincipal, limit: number): Promise<ServerFeedback[]> {
-    // Newest first, and ties broken by insertion order reversed, because the
-    // SQL backends order by created_at DESC and two rows written inside the
-    // same millisecond must not reorder between backends (the parity suite
-    // writes several in a row).
+    // `created_at DESC, id DESC`, the SQL backends' exact ORDER BY rather than
+    // "reverse insertion order", so the three backends answer identically. The
+    // id is time-sortable (see feedbackId) and that is what decides rows
+    // written inside the same millisecond, on every backend.
     return this.feedback
       .filter((entry) => entry.orgId === principal.orgId)
       .slice()
-      .reverse()
-      .sort((a, b) => (a.createdAt === b.createdAt ? 0 : a.createdAt < b.createdAt ? 1 : -1))
+      .sort((a, b) => (a.createdAt === b.createdAt ? b.id.localeCompare(a.id) : (a.createdAt < b.createdAt ? 1 : -1)))
       .slice(0, normalizeLimit(limit));
   }
 
