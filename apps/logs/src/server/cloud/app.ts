@@ -245,7 +245,7 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
   });
 
   // Aggregates — feed the CLI/MCP data-plane (ApiStore) over /v1.
-  // Registered before "/logs/:id" so "count"/"summary" are not swallowed as ids.
+  // Registered before "/logs/:id" so "count"/"stats"/"summary" are not swallowed as ids.
   v1.get("/logs/count", requireScope("logs:read"), async (c) => {
     const q = c.req.query();
     const group_by = q.group_by === "service" ? "service" : undefined;
@@ -257,6 +257,17 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
         ...(q.since ? { since: q.since } : {}),
         ...(q.until ? { until: q.until } : {}),
         ...(group_by ? { group_by } : {}),
+      }),
+    );
+  });
+
+  v1.get("/logs/stats", requireScope("logs:read"), async (c) => {
+    const q = c.req.query();
+    const days = Number(q.days);
+    return c.json(
+      await store.statsSummary({
+        ...(q.project_id ? { project_id: q.project_id } : {}),
+        ...(Number.isFinite(days) && days > 0 ? { days } : {}),
       }),
     );
   });

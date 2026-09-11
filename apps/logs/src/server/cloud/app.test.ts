@@ -645,7 +645,7 @@ describe("cloud serve scan-run + maintenance surface (localonly-logs)", () => {
 });
 
 describe("openapi + sdk", () => {
-  test("document lists all 7 operations", () => {
+  test("document lists all 8 operations", () => {
     const doc = buildOpenApiDocument("1.0.0");
     const opIds: string[] = [];
     for (const item of Object.values(
@@ -665,6 +665,7 @@ describe("openapi + sdk", () => {
         "ingestLog",
         "listLogs",
         "listProjects",
+        "logStats",
       ].sort(),
     );
   });
