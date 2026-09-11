@@ -50,7 +50,7 @@ The diagnosis classifies the failure into one of these buckets:
 | `auth` | 401/403, auth profile switch, account limit, logged out, credential problem | repair the target agent account/profile state before retrying |
 | `machine` | SSH/Tailscale failure, host unreachable, machine not found, remote timeout | check `spark01`/`spark02`/`apple03`; reachability belongs to the fleet host setup (ssh config, DNS/MagicDNS) |
 | `stale_package` | unknown option/command, missing dist file, version mismatch, broken install | patch-publish `@hasna/dispatch`, update affected machines, then restart daemons |
-| `routing` | sessions-query/source mapping failure, no live sessions, route mismatch | fix route execution in `@hasna/dispatch`; source/config gaps belong in `@hasna/todos` or `@hasna/configs` |
+| `routing` | sessions-query/source mapping failure, no live sessions, route mismatch | fix route execution in `@hasna/dispatch`; source/config gaps belong in `@hasna/todos` or `@hasna/instructions` |
 | `dispatch_bug` | unhandled exception, stack trace, sqlite/internal invariant | fix `@hasna/dispatch` with a regression test before publish/update |
 
 `unknown` means the sample was too thin. Capture one more bounded redacted status
@@ -78,7 +78,8 @@ Use the diagnosis bucket to choose the owning package:
   reachability, and route resolution. `@hasna/machines` used to own this and was
   deleted from the registry (2026-09-03, issue #1603); dispatch resolves remote
   routes with plain SSH and accepts a custom `MachineCommandResolver`.
-- `@hasna/configs`: durable config/profile distribution gaps.
+- `@hasna/instructions` (formerly `@hasna/configs`): durable config/profile
+  distribution gaps.
 - `@hasna/todos`: task identity, task-triggered routing, dedupe, and lifecycle
   workflow gaps.
 

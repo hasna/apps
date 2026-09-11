@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { reasoningEffortSchema } from "./reasoning";
 
 /** Model references are opaque provider IDs, never prompts or credentials. */
 export const policyModelIdSchema = z.string().min(1).max(300).regex(/^[^\u0000-\u001f\u007f]+$/);
@@ -35,6 +36,7 @@ export const routingEventSchema = z.object({
   requestedModel: policyModelIdSchema,
   resolvedModel: policyModelIdSchema.optional(),
   reportedModel: policyModelIdSchema.optional(),
+  reasoningEffort: reasoningEffortSchema.optional(),
   decision: routingDecisionSchema,
   role: routingEventRoleSchema.optional(),
   reason: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/).optional(),

@@ -1,0 +1,162 @@
+name: Release todos to npm
+
+on:
+  push:
+    tags:
+      - "npm/todos/v*"
+  workflow_dispatch:
+
+concurrency:
+  group: hasna-todos-npm-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.repository == 'hasna/apps'
+    runs-on: ubuntu-latest
+    environment: npm-release
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NODE_OPTIONS: --max-old-space-size=14336
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require the exact release commit on protected main
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_TYPE" = tag
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag
+          test "$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install and verify the CI npm toolchain
+        run: |
+          set -euo pipefail
+          npm_prefix="$(mktemp -d "$RUNNER_TEMP/npm-toolchain.XXXXXX")"
+          npm install --global --prefix "$npm_prefix" npm@11.19.0
+          test "$("$npm_prefix/bin/npm" --version)" = 11.19.0
+          echo "$npm_prefix/bin" >> "$GITHUB_PATH"
+
+      - name: Bind the tag to the todos manifest
+        id: version
+        run: |
+          set -euo pipefail
+          bun apps/todos/scripts/resolve-npm-release-package.ts \
+            --release-commit "$GITHUB_SHA" \
+            --ref-type "$GITHUB_REF_TYPE" \
+            --ref-name "$GITHUB_REF_NAME" \
+            --output "$GITHUB_OUTPUT"
+          node -e '
+            const fs = require("node:fs");
+            const p = require("./apps/todos/package.json");
+            const out = fs.readFileSync(process.env.GITHUB_OUTPUT, "utf8");
+            if (!out.split("\n").includes("path=apps/todos") ||
+                p.name !== "@hasna/todos" ||
+                p.repository?.url !== "https://github.com/hasna/apps.git") {
+              throw new Error("This workflow only releases apps/todos from hasna/apps");
+            }
+          '
+
+      - name: Reject an existing version or an inconclusive registry lookup
+        if: github.event_name == 'push'
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node --input-type=module -e '
+            const version = process.env.RELEASE_VERSION;
+            const url = "https://registry.npmjs.org/@hasna%2Ftodos/" + encodeURIComponent(version);
+            const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
+            if (response.status === 404) {
+              console.log("@hasna/todos@" + version + " is not published");
+            } else if (response.ok) {
+              throw new Error("@hasna/todos@" + version + " is already published");
+            } else {
+              throw new Error("Registry lookup failed: HTTP " + response.status);
+            }
+          '
+
+      # Root lockfile; select this package and its current workspace dependencies.
+      # Lifecycle scripts remain enabled.
+      - name: Install locked release dependencies
+        run: |
+          bun install --frozen-lockfile \
+            --filter @hasna/todos \
+            --filter @hasna/contracts \
+            --filter @hasna/events
+
+      - name: Build workspace dependencies in order
+        run: |
+          set -euo pipefail
+          bun run --filter @hasna/contracts build
+          bun run --filter @hasna/events build
+
+      - name: Typecheck
+        working-directory: apps/todos
+        run: bun run typecheck
+
+      - name: Build
+        working-directory: apps/todos
+        run: bun run build
+
+      - name: Test
+        working-directory: apps/todos
+        run: bun test
+
+      - name: Exercise the public release checks without publishing
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: apps/todos
+        run: bun run verify:release
+
+      - name: Publish via OIDC and the package-owned prepublishOnly gate
+        if: github.event_name == 'push'
+        working-directory: apps/todos
+        env:
+          HASNA_TODOS_EXPECTED_COMMIT: ${{ github.sha }}
+          HASNA_TODOS_RELEASE_PACKAGE_PATH: apps/todos
+          RELEASE_REVIEWER_AGENT: ${{ vars.RELEASE_REVIEWER_AGENT }}
+          RELEASE_REVIEW_KEY_ID: ${{ vars.RELEASE_REVIEW_KEY_ID }}
+          RELEASE_REVIEW_PUBLIC_KEY: ${{ vars.RELEASE_REVIEW_PUBLIC_KEY }}
+          NPM_RELEASE_AGENT_REVIEW_RECEIPT: ${{ secrets.NPM_RELEASE_AGENT_REVIEW_RECEIPT }}
+        run: npm publish --provenance --access public
+
+      - name: Verify the published version
+        if: github.event_name == 'push'
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          spec="@hasna/todos@$RELEASE_VERSION"
+          for attempt in 1 2 3 4 5; do
+            if resolved="$(npm view "$spec" version 2>/dev/null)"; then
+              test "$resolved" = "$RELEASE_VERSION"
+              npm view "$spec" version dist.integrity dist.attestations --json
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$spec did not become visible after publish"
+          exit 1

@@ -63,3 +63,33 @@ export function formatSenderDisplayName(displayName: string, address: string): s
   const escaped = displayName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   return `"${escaped}" <${address}>`;
 }
+
+/**
+ * Return the RFC 5322 display-name phrase of a sender value, or null when the
+ * value carries none worth rendering.
+ *
+ * Mirrors `canonicalSender`'s single-addr-spec rules: only the
+ * `Display Name <addr>` angle-addr form has a display name, so a bare
+ * addr-spec, an empty phrase, or a value with more than one angle-addr yields
+ * null. A quoted phrase is returned UNQUOTED (with `\"` and `\\` escapes
+ * undone) so callers can re-render it with `formatSenderDisplayName`. Control
+ * characters and other unsafe bytes are deliberately NOT filtered here —
+ * exactly like the address-record `display_name` field, the caller applies its
+ * header-safety check before the phrase may reach a provider call.
+ */
+export function senderDisplayName(from: string): string | null {
+  if (typeof from !== "string") return null;
+  const value = from.trim();
+  if (!value) return null;
+  const lt = (value.match(/</g) ?? []).length;
+  const gt = (value.match(/>/g) ?? []).length;
+  if (lt !== 1 || gt !== 1) return null;
+  const m = value.match(/^([^<>]*?)<([^<>]+)>$/);
+  if (!m) return null;
+  let phrase = m[1]!.trim();
+  if (!phrase) return null;
+  if (phrase.length >= 2 && phrase.startsWith('"') && phrase.endsWith('"')) {
+    phrase = phrase.slice(1, -1).replace(/\\(.)/g, "$1").trim();
+  }
+  return phrase.length ? phrase : null;
+}

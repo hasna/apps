@@ -43,6 +43,8 @@ import {
 } from "./events-bridge.js";
 import {
   normalizeChannelName,
+  recipientChannelCandidate,
+  channelListingMatchSql,
   unknownChannelMessage,
   archivedChannelMessage,
   reservedHistoricalChannelMessage,
@@ -379,7 +381,24 @@ export function sendMessage(opts: SendMessageOptions): Message {
   if (opts.reply_to_uuid && !requestedReplyUuid) {
     throw new Error("reply_to_uuid must be a valid message UUID.");
   }
-  assertWorkStatusEnvelope(requestedChannel, requestedReplyUuid, opts.content);
+  // `to` NAMES A CHANNEL under the documented send contract — the one the
+  // generic workflow scripts and the fleet runbooks post, `{to: <channel>,
+  // content}`. It is a DM recipient only when no channel of that name exists.
+  // Binding it here keeps `channel` and `session_id = "channel:<name>"` in step
+  // with the hosted path (src/server/api.ts), which resolves the same value the
+  // same way; a decision present on only one backend is absent exactly where it
+  // matters. Without it the row was written channel-less under a session id no
+  // channel listing can reach, and the caller still got a 201 (BUG-0041).
+  // Precedence is unchanged: an explicit `channel` still wins, and a reply
+  // still derives its channel from its parent.
+  const recipientCandidate = !requestedReplyUuid && requestedChannel === null
+    ? recipientChannelCandidate(opts.to)
+    : null;
+  const recipientChannel = recipientCandidate === null
+    ? null
+    : (db.prepare("SELECT name FROM channels WHERE name = ?").get(recipientCandidate) as { name: string } | null)?.name ?? null;
+  const effectiveChannel = requestedChannel ?? recipientChannel;
+  assertWorkStatusEnvelope(effectiveChannel, requestedReplyUuid, opts.content);
   const normalizedPriority = (opts.priority === "low" || opts.priority === "normal" || opts.priority === "high" || opts.priority === "urgent")
     ? opts.priority
     : "normal";
@@ -397,7 +416,7 @@ export function sendMessage(opts: SendMessageOptions): Message {
   try {
     message = db.transaction(() => {
       let replyTo: number | null = null;
-      let channelName = requestedChannel;
+      let channelName = effectiveChannel;
       let sessionId: string;
       let threadId: number | null = null;
       let threadRootId: number | null = null;
@@ -684,8 +703,14 @@ export function readMessagePreviews(opts: ReadMessagePreviewsOptions = {}): Mess
     params.push(opts.to);
   }
   if (opts.channel) {
-    conditions.push("channel = ?");
-    params.push(normalizeChannelName(opts.channel));
+    // Channel membership is not the `channel` column alone. A send whose body
+    // names the channel only in `to` (`{to: <channel>, content}` — the
+    // documented contract) is bound to the channel on write, but a row stored
+    // BEFORE that binding carries `channel = NULL` with the name in `to_agent`,
+    // and `channel = ?` alone hides it from every channel read (BUG-0062).
+    const normalizedChannel = normalizeChannelName(opts.channel);
+    conditions.push(channelListingMatchSql("channel", "?"));
+    params.push(normalizedChannel, normalizedChannel);
   }
   if (opts.project_id) {
     conditions.push("project_id = ?");
@@ -811,8 +836,11 @@ export function countMessages(opts: CountMessagesOptions = {}): number {
     params.push(opts.to);
   }
   if (opts.channel) {
-    conditions.push("channel = ?");
-    params.push(normalizeChannelName(opts.channel));
+    // Same membership rule as readMessagePreviews — the count beside a channel
+    // listing must count what that listing shows (BUG-0062).
+    const normalizedChannel = normalizeChannelName(opts.channel);
+    conditions.push(channelListingMatchSql("channel", "?"));
+    params.push(normalizedChannel, normalizedChannel);
   }
   if (opts.project_id) {
     conditions.push("project_id = ?");

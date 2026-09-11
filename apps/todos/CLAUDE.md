@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Recommended Agent Workflow
 
-> Full cross-tool workflow template: `configs show agent-workflow-template` (requires @hasna/configs)
+> Full cross-tool workflow template: `configs show agent-workflow-template` (requires @hasna/instructions — the package that ships the `configs` bin)
 
 When starting a work session as an AI agent:
 

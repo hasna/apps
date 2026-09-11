@@ -84,7 +84,15 @@ describe("localTodosTestEnv", () => {
         HASNA_TODOS_API_KEY: "",
         HASNA_TODOS_LOCAL: "",
         TODOS_LOCAL: "",
+        // Every home-layout root the resolver's disk tier honors: `$HOME` when
+        // HASNA_HOME is unset, HASNA_HOME itself (it replaces the ~/.hasna
+        // root), and HASNA_CONFIG_HOME (it replaces the config root) — an
+        // exported HASNA_HOME/HASNA_CONFIG_HOME would otherwise re-anchor the
+        // real file even with HOME scrubbed. The Keychain account is pinned by
+        // localTodosTestEnv itself (TODOS_TEST_KEYCHAIN_ACCOUNT).
         HOME: home,
+        HASNA_HOME: home,
+        HASNA_CONFIG_HOME: home,
       });
       expect(() => resolveTodosCliTransport(env)).toThrow("REMOTE_API_CONFIG_MISSING");
     } finally {
@@ -102,7 +110,12 @@ describe("localTodosTestEnv", () => {
       const env = localTodosTestEnv({
         HASNA_TODOS_API_URL: "http://127.0.0.1:3901",
         HASNA_TODOS_API_KEY: "throwaway",
+        // Same full-root anchoring as the fail-closed case: HASNA_HOME /
+        // HASNA_CONFIG_HOME are honored over $HOME by the resolver's disk
+        // tier, so an exported root would re-connect the station's real file.
         HOME: home,
+        HASNA_HOME: home,
+        HASNA_CONFIG_HOME: home,
       });
       expect(resolveTodosCliTransport(env).transport).toBe("http");
     } finally {

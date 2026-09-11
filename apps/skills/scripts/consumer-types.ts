@@ -33,9 +33,35 @@ try {
   if (JSON.stringify(Object.keys(metadata.exports).sort()) !== JSON.stringify(checkedExports.sort())) {
     throw new Error("Update the installed consumer fixture to check every public package export.");
   }
+  // Deterministic type environment (BUG-0042). `@types/bun` depends on
+  // `bun-types`, and bun-types declares `"@types/node": "*"` — a floating range
+  // that a cold-cache install inside this throwaway workspace resolves to
+  // whatever @types/node the registry offers at that instant. Measured
+  // 2026-09-10: bun-types 1.3.14 fails with exactly the publish-guard error
+  // (`node_modules/bun-types/globals.d.ts(232,74) TS2694: Namespace
+  // '"node:util"' has no exported member 'TextEncoderEncodeIntoResult'`, plus
+  // the overrides.d.ts TS2552/TS2304 cluster) whenever @types/node resolves
+  // BELOW 25, and passes from 25 up — so a floating resolution turns a
+  // type-harness detail into a red publish guard on branches that touch nothing
+  // here. Pin every type package explicitly, in devDependencies (a direct
+  // install) AND in overrides (no nested `*` copy can shadow it), to the
+  // versions this monorepo already builds with (root `overrides`), falling back
+  // to the member's declared devDependencies.
+  const repoMetadata = JSON.parse(await readFile(join(root, "..", "..", "package.json"), "utf8"));
+  const typeOverrides: Record<string, string> = repoMetadata.overrides ?? {};
+  const pinnedType = (name: string) => typeOverrides[name] ?? metadata.devDependencies?.[name];
+  const typePins: Record<string, string> = {
+    "@types/bun": pinnedType("@types/bun"), "bun-types": pinnedType("bun-types"), "@types/node": pinnedType("@types/node"),
+  };
+  for (const [name, version] of Object.entries(typePins)) {
+    if (typeof version !== "string") {
+      throw new Error(`Cannot pin the consumer fixture's ${name}: neither the root overrides nor apps/skills devDependencies declare it.`);
+    }
+  }
   await writeFile(join(workspace, "package.json"), JSON.stringify({ private: true, type: "module",
     dependencies: { "@hasna/skills": `file:${join(workspace, filename)}` },
-    devDependencies: { typescript: "5.9.3", "@types/bun": metadata.devDependencies["@types/bun"], "@types/node": metadata.devDependencies["@types/node"] },
+    devDependencies: { typescript: "5.9.3", ...typePins },
+    overrides: typePins,
   }));
   await writeFile(join(workspace, "tsconfig.json"), JSON.stringify({ compilerOptions: {
     target: "ES2022", module: "ESNext", moduleResolution: "Bundler", strict: true,
@@ -502,6 +528,15 @@ assert.equal((await inspectSkillBundle(packed.bytes)).sha256, packed.sha256);
 console.log("Installed bundle SDK runtime: 17 assertions passed.");
 `);
   await run([process.execPath, "install", "--ignore-scripts", "--registry", "https://registry.npmjs.org"], workspace);
+  // Prove the pins held before tsc runs: a floating resolution must fail here
+  // with a resolution message, never as a TS2694 inside node_modules/bun-types
+  // that reads like a Skills distribution defect (BUG-0042).
+  for (const [name, expected] of Object.entries(typePins)) {
+    const installed = JSON.parse(await readFile(join(workspace, "node_modules", ...name.split("/"), "package.json"), "utf8")).version;
+    if (installed !== expected) {
+      throw new Error(`Consumer fixture resolved ${name}@${installed}, expected the pinned ${expected} — a floating dependency resolution (bun-types declares "@types/node": "*"), not a Skills distribution failure. Re-run the fixture; if it persists, update the pin.`);
+    }
+  }
   await run([process.execPath, "node_modules/typescript/bin/tsc", "-p", "tsconfig.json"], workspace);
   console.log((await run([process.execPath, "--no-env-file", "admin-list-runtime.ts"], workspace)).trim());
   console.log((await run([process.execPath, "--no-env-file", "bundle-runtime.ts"], workspace)).trim());
