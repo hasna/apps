@@ -53,10 +53,11 @@ import {
 } from "../lib/profiles.js";
 import { readCustomManifest } from "../lib/manifest.js";
 import { resolveHookMeta } from "../lib/resolve.js";
-import { hookRegisteredInSettings } from "../lib/registration.js";
+import { hookRegisteredInSettings, findRewriteOverlaps } from "../lib/registration.js";
 import { sha256Of, checkScriptHash } from "../lib/store.js";
 import { projectEventRowForRead } from "../lib/redact.js";
 import { secureEqual } from "../lib/secure-compare.js";
+import { decideHooksMcpAuthority } from "./authority.js";
 import {
   getStorageStatus,
   storagePull,
@@ -410,6 +411,16 @@ export function createHooksServer(): McpServer {
         }
 
         if (hookHealthy) healthy.push(name);
+      }
+
+      // Two input-rewriting PreToolUse hooks on overlapping matchers: only one
+      // rewrite wins per tool call, so the other guard is silently disarmed.
+      for (const overlap of findRewriteOverlaps(registered, (name) => getHook(name))) {
+        issues.push({
+          hook: overlap.hooks.join(" + "),
+          issue: `Both rewrite the tool input on overlapping ${overlap.event} matchers ('${overlap.matchers[0]}' / '${overlap.matchers[1]}'); only one rewrite is applied per tool call, so one of these guards is silently disarmed. Remove one, or narrow a matcher so they no longer overlap.`,
+          severity: "error",
+        });
       }
 
       return { content: [{ type: "text", text: JSON.stringify({ healthy: issues.length === 0, healthy_hooks: healthy, issues, registered, scope }) }] };
@@ -1251,6 +1262,11 @@ export async function startSSEServer(options: SSEServerOptions = {}): Promise<vo
     );
   }
 
+  // Authority FIRST, transport LAST (hasna/apps#1720): nothing configured
+  // throws here, before any socket is bound; the hosted route refuses the
+  // on-box store process-wide; the local opt-in has said so on stderr.
+  decideHooksMcpAuthority();
+
   const server = createHooksServer();
   const transports = new Map<string, SSEServerTransport>();
 
@@ -1306,6 +1322,19 @@ export async function startSSEServer(options: SSEServerOptions = {}): Promise<vo
  * Start the MCP server with stdio transport
  */
 export async function startStdioServer(): Promise<void> {
+  // Authority FIRST, transport LAST (hasna/apps#1720 fail-closed ruling):
+  // with nothing resolved the process exits 1 HERE, before the stdio
+  // transport exists, so `initialize` is never answered and no local file is
+  // created. The first stderr line is the REMOTE_API_* diagnostic naming the
+  // credential tiers and the local opt-in. On the hosted route the on-box
+  // store is refused for every tool; under the opt-in the seam has already
+  // printed "hooks: LOCAL mode — …" once.
+  try {
+    decideHooksMcpAuthority();
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  }
   try {
     const server = createHooksServer();
     const transport = new StdioServerTransport();

@@ -39,7 +39,7 @@ import {
   type Scope,
   type Target,
 } from "../lib/installer.js";
-import { hookRegisteredInSettings, countSettingsWiring } from "../lib/registration.js";
+import { hookRegisteredInSettings, countSettingsWiring, findRewriteOverlaps } from "../lib/registration.js";
 import { projectEventRowForRead } from "../lib/redact.js";
 import {
   createProfile,
@@ -56,8 +56,14 @@ import { getPinnedHook } from "../lib/store.js";
 import { SEMVER_PATTERN } from "../lib/semver.js";
 import { getReportedDbPath } from "../lib/app-home.js";
 import { getCustomHooksDir } from "../config.js";
-import { hasHooksEnvAuthorityIntent, isHooksLocalOptIn } from "../lib/local-opt-in.js";
+import {
+  hasHooksEnvAuthorityIntent,
+  hooksFailClosedLine,
+  hooksHostedRouteLocalStoreRefusal,
+  isHooksLocalOptIn,
+} from "../lib/local-opt-in.js";
 import { announceHooksLocalMode, resolveHooksTransport } from "../lib/transport.js";
+import { refuseLocalStore } from "../db/index.js";
 
 const program = new Command();
 
@@ -113,6 +119,25 @@ function truncateText(value: string | undefined, max = 96): string {
  */
 function projectLogRows(rows: any[]): any[] {
   return rows.map((row) => projectEventRowForRead({ ...row }));
+}
+
+/**
+ * Open the on-box store for a LOCAL-ONLY verb (`hooks log *`, `hooks storage
+ * *`), or exit 1 with the refusal. On the hosted route the CLI gate installed
+ * `refuseLocalStore()`, so `getDb()` throws REMOTE_COMMAND_UNSUPPORTED naming
+ * the opt-in; this turns that into one clean line (or a JSON error) instead
+ * of an unhandled rejection. Never a value, never a silent empty result.
+ */
+async function openLocalStoreOrExit(json: boolean) {
+  try {
+    const { getDb } = await import("../db/index.js");
+    return getDb();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (json) console.log(JSON.stringify({ error: message }));
+    else console.error(chalk.red(`✗ ${message}`));
+    process.exit(1);
+  }
 }
 
 function readToken(tokenFile: string | undefined): string | undefined {
@@ -211,6 +236,19 @@ program
   .alias("i")
   .description("Interactive hook browser")
   .action(() => {
+    // The Ink TUI needs a terminal (raw-mode input). Without one — an
+    // unknown token through a pipe, or a bare `hooks` in a script — refuse
+    // cleanly with the non-interactive alternatives instead of letting Ink
+    // fail on raw mode with a stack trace and a false-green exit (carried
+    // from hasna/apps#1888).
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.error(
+        chalk.red("The interactive hook browser requires a TTY terminal.") +
+          "\n" +
+          chalk.dim("Use `hooks search <query>`, `hooks list`, or `hooks categories` for non-interactive use."),
+      );
+      process.exit(1);
+    }
     render(<App />);
   });
 
@@ -511,6 +549,7 @@ program
     const { readCustomManifest, HOOK_NAME_RE } = await import("../lib/manifest.js");
     const { resolveHooksTransport } = await import("../lib/transport.js");
     const { sha256Of, pinInstalledHook } = await import("../lib/store.js");
+    const { installPinnedFromBundled, fetchPinnedHook } = await import("../lib/sync.js");
     const { readFileSync: readFileSyncFs } = await import("fs");
 
     // <name>@<version> pinned installs fetch the exact version from the
@@ -618,25 +657,26 @@ program
       }
     }
 
-    // Pinned registry installs: fetch the exact version, verify the sha
-    // against the remote lock, then register in settings. The registry
-    // authority and key resolve TOGETHER through the @hasna/contracts chain
-    // (strict pair, fresh per call) — a URL without a key is a refusal.
+    // Pinned installs: resolve the exact version and verify the sha against
+    // the ACTIVE registry — the remote registry when a hosted authority
+    // resolves (the authority and key resolve TOGETHER through the
+    // @hasna/contracts chain, strict pair, fresh per call), or the bundled
+    // registry under the explicit local opt-in (the only way the seam returns
+    // `mode: "local"`; with nothing configured the gate already failed closed).
     const installedPinned: string[] = [];
     for (const { arg, pinned } of pinnedRequests) {
       try {
         const transport = resolveHooksTransport();
-        if (transport.mode !== "remote" || !transport.authority) {
-          throw new Error(`Cannot install '${arg}': no remote registry configured (set HASNA_HOOKS_API_URL and HASNA_HOOKS_API_KEY, or opt into local mode with HASNA_HOOKS_LOCAL=1)`);
-        }
-        const { origin, apiKey } = transport.authority;
-        const { fetchPinnedHook } = await import("../lib/sync.js");
-        const pinnedInstall = await fetchPinnedHook(pinned.name, pinned.version, origin, apiKey);
+        const pinnedInstall =
+          transport.mode === "remote" && transport.authority
+            ? await fetchPinnedHook(pinned.name, pinned.version, transport.authority.origin, transport.authority.apiKey)
+            : await installPinnedFromBundled(pinned.name, pinned.version);
         installedPinned.push(pinnedInstall.name);
         if (options.json) {
           console.log(JSON.stringify({ pinned: { request: arg, name: pinnedInstall.name, version: pinnedInstall.version, sha256: pinnedInstall.sha256, source: pinnedInstall.source } }));
         } else {
-          console.log(chalk.green(`✓ Installed '${pinnedInstall.name}' v${pinnedInstall.version} from registry (sha256 ${pinnedInstall.sha256.slice(0, 12)}…)`));
+          const registryLabel = transport.mode === "remote" ? "registry" : "bundled registry";
+          console.log(chalk.green(`✓ Installed '${pinnedInstall.name}' v${pinnedInstall.version} from ${registryLabel} (sha256 ${pinnedInstall.sha256.slice(0, 12)}…)`));
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -1114,6 +1154,19 @@ program
       }
     }
 
+    // Two installed PreToolUse hooks that both rewrite the tool input cannot
+    // both win: the harness applies ONE rewrite per tool call, so the losing
+    // guard is silently disarmed (no error anywhere). Install refuses that
+    // pairing; this catches settings files written before the rule existed,
+    // or hand-edited ones.
+    for (const overlap of findRewriteOverlaps(registered, (name) => getHook(name))) {
+      issues.push({
+        hook: overlap.hooks.join(" + "),
+        issue: `Both rewrite the tool input on overlapping ${overlap.event} matchers ('${overlap.matchers[0]}' / '${overlap.matchers[1]}'); only one rewrite is applied per tool call, so one of these guards is silently disarmed. Remove one, or narrow a matcher so they no longer overlap.`,
+        severity: "error",
+      });
+    }
+
     if (options.json) {
       console.log(JSON.stringify({
         healthy: issues.length === 0,
@@ -1222,8 +1275,9 @@ program
 
     const { resolveHook } = await import("../lib/resolve.js");
     const { sha256File, setPinnedHook, upsertHookRecord } = await import("../lib/store.js");
-    const { getDb } = await import("../db/index.js");
+    const { getDb, isLocalStoreRefused } = await import("../db/index.js");
     const { resolveHooksTransport } = await import("../lib/transport.js");
+    const { installPinnedFromBundled, fetchPinnedHook } = await import("../lib/sync.js");
     const { isCustomSource } = await import("../lib/custom-install.js");
     const { HOOK_NAME_RE } = await import("../lib/manifest.js");
 
@@ -1251,12 +1305,10 @@ program
         // registry, verify sha, pin, then re-register in settings (QA-2).
         try {
           const transport = resolveHooksTransport();
-          if (transport.mode !== "remote" || !transport.authority) {
-            throw new Error(`Cannot update '${arg}': no remote registry configured (set HASNA_HOOKS_API_URL and HASNA_HOOKS_API_KEY, or opt into local mode with HASNA_HOOKS_LOCAL=1)`);
-          }
-          const { origin, apiKey } = transport.authority;
-          const { fetchPinnedHook } = await import("../lib/sync.js");
-          const pinnedInstall = await fetchPinnedHook(pinned.name, pinned.version, origin, apiKey);
+          const pinnedInstall =
+            transport.mode === "remote" && transport.authority
+              ? await fetchPinnedHook(pinned.name, pinned.version, transport.authority.origin, transport.authority.apiKey)
+              : await installPinnedFromBundled(pinned.name, pinned.version);
           const registered = installHook(pinnedInstall.name, { scope, overwrite: true });
           if (!registered.success) {
             results.push({ hook: arg, success: false, error: registered.error ?? "registration failed" });
@@ -1281,13 +1333,17 @@ program
       if (result.success && resolved) {
         const hash = await sha256File(resolved.scriptPath);
         setPinnedHook(resolved.name, { version: resolved.version, sha256: hash, source: resolved.source });
-        upsertHookRecord(getDb(), {
-          name: resolved.name,
-          version: resolved.version,
-          sha256: hash,
-          source_type: resolved.source,
-          last_verified_at: new Date().toISOString(),
-        });
+        // The hooks-table row mirrors the lock pin; on the hosted route the
+        // store is refused and the lock alone carries the pin (#1720).
+        if (!isLocalStoreRefused()) {
+          upsertHookRecord(getDb(), {
+            name: resolved.name,
+            version: resolved.version,
+            sha256: hash,
+            source_type: resolved.source,
+            last_verified_at: new Date().toISOString(),
+          });
+        }
         results.push({ ...result, pinned: { version: resolved.version, sha256: hash } });
         continue;
       }
@@ -1613,8 +1669,7 @@ logCmd
   .option("-n, --limit <n>", "Number of rows to show", "50")
   .option("-j, --json", "Output as JSON", false)
   .action(async (options: { hook?: string; session?: string; limit: string; json: boolean }) => {
-    const { getDb } = await import("../db/index.js");
-    const db = getDb();
+    const db = await openLocalStoreOrExit(options.json);
     const limit = parseInt(options.limit) || 50;
 
     let sql = "SELECT * FROM hook_events WHERE 1=1";
@@ -1647,8 +1702,7 @@ logCmd
   .option("-n, --limit <n>", "Number of rows to show", "50")
   .option("-j, --json", "Output as JSON", false)
   .action(async (text: string, options: { limit: string; json: boolean }) => {
-    const { getDb } = await import("../db/index.js");
-    const db = getDb();
+    const db = await openLocalStoreOrExit(options.json);
     const limit = parseInt(options.limit) || 50;
     const q = `%${text}%`;
     const rows = db.query(
@@ -1674,8 +1728,7 @@ logCmd
   .option("-n <n>", "Number of rows", "20")
   .option("-j, --json", "Output as JSON", false)
   .action(async (options: { n: string; json: boolean }) => {
-    const { getDb } = await import("../db/index.js");
-    const db = getDb();
+    const db = await openLocalStoreOrExit(options.json);
     const limit = parseInt(options.n) || 20;
     const rows = db.query(
       "SELECT * FROM hook_events ORDER BY timestamp DESC LIMIT ?"
@@ -1702,8 +1755,7 @@ logCmd
   .option("-n, --limit <n>", "Number of rows to show", "50")
   .option("-j, --json", "Output as JSON", false)
   .action(async (options: { since: string; limit: string; json: boolean }) => {
-    const { getDb } = await import("../db/index.js");
-    const db = getDb();
+    const db = await openLocalStoreOrExit(options.json);
     const limit = parseInt(options.limit) || 50;
 
     // Parse duration string to milliseconds
@@ -1743,8 +1795,7 @@ logCmd
   .option("--hook <name>", "Only delete events for this hook")
   .option("-y, --yes", "Skip confirmation prompt", false)
   .action(async (options: { hook?: string; yes: boolean }) => {
-    const { getDb } = await import("../db/index.js");
-    const db = getDb();
+    const db = await openLocalStoreOrExit(false);
 
     const countRow = options.hook
       ? db.query("SELECT COUNT(*) as n FROM hook_events WHERE hook_name = ?").get(options.hook) as any
@@ -1778,17 +1829,25 @@ storageCmd
   .description("Show storage sync status")
   .option("-j, --json", "Output as JSON", false)
   .action(async (options: { json: boolean }) => {
-    const { getStorageStatus } = await import("../storage.js");
-    const status = getStorageStatus();
-    if (options.json) {
-      console.log(JSON.stringify(status, null, 2));
-      return;
+    try {
+      const { getStorageStatus } = await import("../storage.js");
+      // Reads the local sync-meta table: refused on the hosted route (#1720).
+      const status = getStorageStatus();
+      if (options.json) {
+        console.log(JSON.stringify(status, null, 2));
+        return;
+      }
+      console.log(chalk.bold("\n  Storage Status\n"));
+      console.log(`  Configured: ${status.configured ? chalk.green(`yes (${status.activeEnv})`) : chalk.red("no")}`);
+      console.log(`  Backend:    ${status.backend}`);
+      console.log(`  Tables:     ${status.tables.join(", ")}`);
+      console.log(`  Sync rows:  ${status.sync.length}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (options.json) console.log(JSON.stringify({ error: message }));
+      else console.error(chalk.red(`✗ ${message}`));
+      process.exitCode = 1;
     }
-    console.log(chalk.bold("\n  Storage Status\n"));
-    console.log(`  Configured: ${status.configured ? chalk.green(`yes (${status.activeEnv})`) : chalk.red("no")}`);
-    console.log(`  Backend:    ${status.backend}`);
-    console.log(`  Tables:     ${status.tables.join(", ")}`);
-    console.log(`  Sync rows:  ${status.sync.length}`);
   });
 
 storageCmd
@@ -2050,6 +2109,15 @@ program
       await startSSEServer({ port: options.port ? parseInt(options.port) : 39427 });
     } else {
       // Default: shared Streamable HTTP server (one process per MCP, many agents).
+      // Authority FIRST (hasna/apps#1720): nothing configured exits 1 here,
+      // before a port is bound; the hosted route refuses the on-box store.
+      const { decideHooksMcpAuthority } = await import("../mcp/authority.js");
+      try {
+        decideHooksMcpAuthority();
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
       const { createHooksServer } = await import("../mcp/server.js");
       const { resolveMcpHttpPort, startMcpHttpServer } = await import("../mcp/http.js");
       const args = options.port ? ["--port", options.port] : [];
@@ -2068,21 +2136,31 @@ registerEventsCommands(program, { source: "hooks" });
 //
 // The registry authority and its credential resolve through the ONE
 // @hasna/contracts chain (hasna/apps#1720), as a STRICT pair: a URL without a
-// key is a refusal, not half-open progress. The gate below is deliberately
-// cheap for the run-hot surfaces — it answers the env dictionary and the
-// opt-in without touching the Keychain, so `hooks run` (which agents invoke on
-// every hook event), `hooks mcp` and `hooks serve` never pay a per-invocation
-// `security` spawn. Commands that resolve the registry themselves (sync,
-// pinned install/update) re-resolve the full chain per call.
+// key is a refusal, not half-open progress. The gate answers the env
+// dictionary and the opt-in first (no Keychain spawn when either decides);
+// only an env that configures nothing consults the machine's ambient tiers.
 //
-// Commands that are local/operator/runtime surfaces BY DESIGN never stand in
-// for the hosted API and may run without it:
-//   - run            execute a pinned local hook script (agents call this)
-//   - serve          serve the LOCAL registry over HTTP (self-hosted server)
-//   - mcp            local MCP server for agent integration
-//   - cf             provision a Cloudflare registry (operator tooling)
-//   - migrate        apply PostgreSQL migrations to the storage database
-//   - init           register a local agent profile / print registry config
+// ROUTE, NOT JUST ADMISSION (W6 2026-09-11). Once a run is HOSTED — env
+// intent, or a credential resolved from the Keychain / credentials file —
+// the gate installs `refuseLocalStore()` process-wide: every `getDb()` for
+// the rest of the process throws REMOTE_COMMAND_UNSUPPORTED naming the
+// opt-in, so `hooks log *`, `hooks storage *` and the hook-event writer can
+// never answer from (or create) ~/.hasna/hooks/hooks.db on the hosted route.
+// The install-state half (pins, trust) stays available through hooks.lock.
+//
+// `hooks run` is NOT exempt any more: it was the one ungated writer of the
+// local store (src/lib/db-writer.ts), so it decides its route like every
+// other client verb — LOCAL under the explicit opt-in (the child hook sees
+// HOOKS_LOCAL), HOSTED with the event write refused loudly (the registry has
+// no event route), and with nothing configured it fails closed with exit 1.
+//
+// Commands that never open the client store and are operator/server surfaces
+// BY DESIGN may run without a route decision:
+//   - serve          serve the LOCAL registry over HTTP (self-hosted server; hooks-serve)
+//   - mcp            decides its own authority before any transport connects (src/mcp/authority.ts)
+//   - cf             provision a Cloudflare registry (operator tooling; Cloudflare token only)
+//   - migrate        apply PostgreSQL migrations to the storage database (server-side DSN)
+//   - init           register a local agent profile (JSON file) / print registry config
 //   - profile-export/import   local agent-profile JSON files
 //   - channels, events        @hasna/events surfaces (own env contract)
 // Help/version output is informational and stays available.
@@ -2095,7 +2173,6 @@ registerEventsCommands(program, { source: "hooks" });
 // so it must fail closed like every other local-serving command.
 
 const API_INDEPENDENT_COMMANDS = new Set([
-  "run",
   "serve",
   "mcp",
   "cf",
@@ -2108,9 +2185,12 @@ const API_INDEPENDENT_COMMANDS = new Set([
 ]);
 
 function failClosedForMissingApiEnv(detail?: string): never {
+  // FIRST line: the one-line diagnostic (stable code, tiers consulted, the
+  // opt-in, the refusal) every fail-closed surface prints; the lines after it
+  // are the repair hints.
   console.error(
     chalk.red(
-      "hooks: no registry credential resolved and local mode is not explicitly enabled.\n"
+      hooksFailClosedLine() + "\n"
         + "The remote registry requires a STRICT pair — set HASNA_HOOKS_API_URL and HASNA_HOOKS_API_KEY, or the\n"
         + "Keychain items hasna.credentials.hooks.api-url / .api-key, or ~/.hasna/hooks/config/credentials.\n"
         + "config.json (api_url / api_key_ref) is RETIRED and no longer read. Or set\n"
@@ -2144,8 +2224,12 @@ function enforceTransportGate(): void {
 
   // A configured environment outranks the opt-in: hosted intent proceeds and
   // the command's own resolution enforces the strict pair (a half-configured
-  // URL-only run fails loudly at the command, not here).
-  if (hasHooksEnvAuthorityIntent(process.env)) return;
+  // URL-only run fails loudly at the command, not here). Hosted intent is a
+  // hosted ROUTE: the on-box store is refused for the whole process.
+  if (hasHooksEnvAuthorityIntent(process.env)) {
+    refuseLocalStore(hooksHostedRouteLocalStoreRefusal("configured by HASNA_HOOKS_API_URL / HASNA_HOOKS_API_KEY"));
+    return;
+  }
   // Local mode is the deliberate unhosted opt-in, answered WITHOUT the
   // resolver so no Keychain item and no credential file is read for it. The
   // run says so on stderr, once per process.
@@ -2159,15 +2243,18 @@ function enforceTransportGate(): void {
   // registry commands pay for this consultation. A fully unconfigured
   // environment resolves nothing and fails closed. Bare `hooks` (interactive)
   // and unknown tokens fall through to `failClosedForMissingApiEnv` too.
+  let transport: ReturnType<typeof resolveHooksTransport>;
   try {
-    const transport = resolveHooksTransport(process.env);
-    if (transport.mode !== "remote" || !transport.authority) {
-      failClosedForMissingApiEnv();
-    }
+    transport = resolveHooksTransport(process.env);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     failClosedForMissingApiEnv(message);
   }
+  if (transport.mode !== "remote" || !transport.authority) {
+    failClosedForMissingApiEnv();
+  }
+  // A credential resolved from the machine's ambient tiers: hosted route.
+  refuseLocalStore(hooksHostedRouteLocalStoreRefusal(transport.authority.v1BaseUrl));
 }
 
 enforceTransportGate();

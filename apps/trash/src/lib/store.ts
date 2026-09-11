@@ -37,6 +37,7 @@
  */
 
 import { closeSync, lstatSync, openSync, fsyncSync, readdirSync, readFileSync, renameSync, linkSync, unlinkSync } from "node:fs";
+import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
   loadTrashConfig,
@@ -187,12 +188,55 @@ export interface RecoveryReport {
   unresolvable: string[];
   restoredEntries: string[];
   pendingRestores: string[];
+  /** Intents whose owning capture is still running in a live sibling process — left alone. */
+  inFlight: string[];
+}
+
+/** Who is running the capture transaction an intent belongs to. */
+interface CaptureOwner {
+  pid: number;
+  host: string;
+  startedAt: string;
 }
 
 interface CaptureIntent {
   schema: "hasna.trash.capture-intent.v1";
   entry: TrashEntry;
   payloadPath: string;
+  /** Absent on intents written before recovery became owner-scoped: recovered as before. */
+  owner?: CaptureOwner;
+}
+
+/**
+ * Is the capture that wrote this intent still running?
+ *
+ * Only the owning process may finish its own transaction; recovery is for
+ * captures whose process is GONE. Every process used to run `recover()` in
+ * `init()` and complete whatever intent it found — so two `put`s starting
+ * together had the second one publish the first one's metadata from the
+ * first one's payload, and the first one's own publish then collided
+ * (`PublishCollisionError` → refused → exit 2). Measured at 19 refusals in 36
+ * runs under 3x parallel load, and it reddened unrelated CI runs through the
+ * publish guard's `npm pack` of this member.
+ *
+ * Liveness is `kill(pid, 0)` on the same host: ESRCH means dead; anything
+ * else, including EPERM (a live process we may not signal), means alive. The
+ * current pid is never "in flight": the capture path is synchronous, so an
+ * intent from this very pid that is still on disk when recovery runs can only
+ * be one an exception aborted (the crash tests exercise exactly that). An
+ * intent with no owner (an older writer) or from another host cannot be
+ * checked and is recovered as before — the owner side tolerates that (see
+ * `publishCapture`).
+ */
+function captureInFlight(owner: CaptureOwner | undefined): boolean {
+  if (!owner || !Number.isInteger(owner.pid) || owner.pid <= 0) return false;
+  if (owner.host !== hostname() || owner.pid === process.pid) return false;
+  try {
+    process.kill(owner.pid, 0);
+    return true;
+  } catch (error) {
+    return !isErrno(error, "ESRCH");
+  }
 }
 
 /** The source disappeared mid-capture — another process got there first. */
@@ -252,7 +296,11 @@ export class TrashStore {
     return join(this.roots.intents, `${assertSafeEntryId(id)}.json`);
   }
 
-  /** Create the store directories (0700) and complete any interrupted capture. */
+  /**
+   * Create the store directories (0700) and complete any interrupted capture
+   * whose process is gone (a capture still running in a live sibling is left
+   * to that sibling — see `captureInFlight`).
+   */
   init(): RecoveryReport {
     ensureDir(this.roots.state, 0o700);
     ensureDir(this.roots.files, 0o700);
@@ -509,7 +557,12 @@ export class TrashStore {
    */
   private publishCapture(entry: TrashEntry, sourcePath: string, kind: TrashEntryKind): void {
     const payloadPath = this.payloadPath(entry.id);
-    const intent: CaptureIntent = { schema: "hasna.trash.capture-intent.v1", entry, payloadPath };
+    const intent: CaptureIntent = {
+      schema: "hasna.trash.capture-intent.v1",
+      entry,
+      payloadPath,
+      owner: { pid: process.pid, host: hostname(), startedAt: new Date(this.clock()).toISOString() },
+    };
     const tmpIntent = writeTempSync(this.roots.intents, ".tmp-", `${JSON.stringify(intent, null, 2)}\n`);
     publishNoReplace(tmpIntent, this.intentPath(entry.id));
     this.crashAt?.("after_intent");
@@ -525,7 +578,15 @@ export class TrashStore {
         // identity collision rather than a clobber. For a symlink this links
         // the LINK, never its target.
         linkSync(sourcePath, payloadPath);
-        this.unlinkOriginalIfSameIdentity(sourcePath, entry);
+        if (!this.unlinkOriginalIfSameIdentity(sourcePath, entry) && lstatOrNull(sourcePath) === null) {
+          // link(2) is not exclusive the way rename(2) is: two captures of the
+          // same loose file both link the inode, and only one of them gets to
+          // unlink the name. The other one lost the race — its payload is a
+          // second name for an inode the winner now holds, so dropping it
+          // destroys nothing, and the outcome is "missing", not a duplicate.
+          removeFile(payloadPath);
+          throw new SourceVanishedError(sourcePath);
+        }
       } else {
         renameSync(sourcePath, payloadPath);
       }
@@ -542,12 +603,39 @@ export class TrashStore {
     this.syncPayload(payloadPath, kind);
     this.crashAt?.("after_payload");
 
-    const tmpMeta = writeTempSync(this.roots.info, ".tmp-", `${JSON.stringify(entry, null, 2)}\n`);
-    publishNoReplace(tmpMeta, this.infoPath(entry.id));
+    const metaBody = `${JSON.stringify(entry, null, 2)}\n`;
+    const tmpMeta = writeTempSync(this.roots.info, ".tmp-", metaBody);
+    try {
+      publishNoReplace(tmpMeta, this.infoPath(entry.id));
+    } catch (error) {
+      // A recoverer that could not see this capture was alive (an older writer
+      // that recorded no owner, or a sibling on another host) may have
+      // completed OUR intent from OUR payload. Then what sits at the metadata
+      // path is exactly what we were about to publish, and the capture is
+      // complete — not collided. Anything else there is a genuine identity
+      // collision and stays a refusal.
+      if (!(error instanceof PublishCollisionError) || !this.metadataEquals(entry.id, metaBody)) throw error;
+      removeFile(tmpMeta);
+    }
     this.crashAt?.("after_metadata");
 
     removeFile(this.intentPath(entry.id));
     fsyncDirectory(this.roots.intents);
+  }
+
+  /** Does the published metadata for `id` carry exactly this entry? */
+  private metadataEquals(id: string, expectedBody: string): boolean {
+    let published: string;
+    try {
+      published = readFileSync(this.infoPath(id), "utf8");
+    } catch {
+      return false;
+    }
+    try {
+      return JSON.stringify(JSON.parse(published)) === JSON.stringify(JSON.parse(expectedBody));
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -558,8 +646,9 @@ export class TrashStore {
     const info = lstatOrNull(path);
     if (!info) return false;
     if (info.dev !== entry.device || info.ino !== entry.inode) return false;
-    unlinkSync(path);
-    return true;
+    // A sibling may unlink the name between our lstat and our unlink; ENOENT
+    // then means "not by us", which is what `false` reports.
+    return removeFile(path);
   }
 
   /**
@@ -1028,6 +1117,7 @@ export class TrashStore {
       unresolvable: [],
       restoredEntries: [],
       pendingRestores: [],
+      inFlight: [],
     };
 
     let names: string[] = [];
@@ -1044,12 +1134,23 @@ export class TrashStore {
       try {
         intent = JSON.parse(readFileSync(path, "utf8")) as CaptureIntent;
         if (intent.schema !== "hasna.trash.capture-intent.v1" || !intent.entry) throw new Error("bad intent");
-      } catch {
+      } catch (error) {
+        // Listed, then gone before it was read: its owner finished the capture
+        // between our readdir and our read. Nothing to recover, nothing to report.
+        if (isErrno(error, "ENOENT")) continue;
         report.unresolvable.push(`${name} (unreadable intent — left in place, never deleted)`);
         continue;
       }
 
       const id = intent.entry.id;
+      if (captureInFlight(intent.owner)) {
+        // The owner is alive and mid-transaction. Completing (or abandoning) its
+        // intent from here is the race that made the owner's own metadata
+        // publish collide. Leave it; the owner finishes, or a later recovery
+        // finds the owner gone.
+        report.inFlight.push(id);
+        continue;
+      }
       const metaPath = this.infoPath(id);
       const payloadPath = this.payloadPath(id);
 

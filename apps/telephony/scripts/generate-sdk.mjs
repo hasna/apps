@@ -5,7 +5,7 @@
  * The OpenAPI spec is the single source of truth (also served at
  * GET /openapi.json). The generated client is a dependency-free fetch client
  * committed to src/generated/telephony-api-client.ts and re-exported from the
- * package root, so `@hasna/telephony` consumers get a typed self-hosted client.
+ * package root, so `@hasna/telephony` consumers get a typed API client.
  *
  *   bun scripts/generate-sdk.mjs
  */

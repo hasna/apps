@@ -203,7 +203,7 @@ function mapGoDaddyStatus(
 }
 
 // ============================================================
-// Sync to Local DB
+// Sync to Portfolio (through the shared store facade)
 // ============================================================
 
 export async function syncToLocalDb(dbFns: {

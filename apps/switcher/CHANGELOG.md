@@ -9,12 +9,46 @@ status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
+## 0.2.1
+
+### Patch Changes
+
+- Align the exact `@hasna/contracts` pin with the 1.0.2 optional secrets peer release.
+- Add OpenCode Zen and Go provider presets with their complete live model catalogs and Claude Messages translation to model-native Chat Completions, Responses, and Gemini endpoints. Preserve native tools, streaming, images, usage and scoped session headers. Retain OpenRouter reasoning choices and explicitly clear conflicting Claude authentication variables.
+
+## 0.2.0
+
+### Minor Changes
+
+- Fail closed on every client surface (owner ruling 2026-09-07, hasna/apps#1720).
+
+  - With no Switcher API credential resolvable, `switcher` and `switcher-mcp` exit non-zero with one `remote_api_config_missing` line that names the sources consulted (Keychain item `hasna.credentials.switcher.api-key`, `~/.hasna/switcher/config/credentials`, `HASNA_SWITCHER_API_KEY`) and the opt-in; nothing is opened or created under `~/.hasna/switcher`. The CLI used to start an owned local API over `~/.hasna/switcher/switcher.db` whenever nothing was configured, and `switcher-mcp` answered `initialize` before it knew whether it had an authority.
+  - The on-box store is reachable only through the deliberate `HASNA_SWITCHER_LOCAL=1` opt-in (alias `SWITCHER_LOCAL=1`), answered from the environment before any Keychain or disk read; it prints one `switcher: LOCAL mode` line on stderr per process. A configured API URL, key, override, pointer or profile outranks the flag. `HASNA_SWITCHER_DATABASE_URL` / `HASNA_SWITCHER_SQLITE_PATH` now only choose the owned service's storage under that opt-in.
+  - `switcher-mcp` serves the same runtime as the CLI (hosted, or local under the opt-in) and decides before the stdio transport connects; `--version` and `--help` still answer without any resolution.
+  - Provider Keychain bindings report `keychain_item_missing` (security exit 44) separately from a locked or unreadable item (`keychain_unavailable`) and an unusable value (`keychain_item_invalid`); all three stay terminal, never a fallback. `@hasna/contracts` 1.0.2 has no reader for user-named Keychain items, so this remains an owned `security` invocation.
+
+### Patch Changes
+
+- Preserve ChatGPT browser and computer tool sandbox commands instead of appending inference settings to the tool kernel. Keep native sandbox permissions intact and document extension and provider compatibility limits.
+- Replace the four-minute total provider-response deadline with a four-minute inactivity watchdog across all inference bridges (gateway, Grok, Hermes, Gemini). Keepalive bytes and streamed content allow long responses to finish, while idle headers or streams return a distinct sanitized `provider_idle_timeout` (HTTP 504). Preserve caller cancellation, terminal completion and downstream backpressure without replaying partial responses.
+
+  Prevent a provider that never acknowledges stream cancellation from blocking local error handling or bridge cleanup.
+
+## 0.1.9
+
+### Patch Changes
+
+- Add `launch chatgpt` and `launch claude-desktop` with `--provider NAME --model MODEL` for installed macOS apps. Route ChatGPT local Codex through Responses and Claude third-party mode through Messages, preserve normal app profiles, scope gateway credentials, and retain conversations. Add ChatGPT/Codex reasoning effort and explicit full-access controls, Claude configuration restoration and model-role aliases, and live DeepSeek acceptance in both apps.
+- Preserve ChatGPT inter-task messages on third-party Responses endpoints by converting unpaired desktop tool outputs to user input. Cover delegated task creation, follow-up delivery and history replay with the installed desktop runtime and a real provider.
+
 ## 0.1.8
+
 ### Patch Changes
 
 - Configure starter models while adding arbitrary providers, and add, replace, inspect or remove saved model metadata through the CLI, SDK and MCP without replacing provider settings. Preserve live discovery and optimistic concurrency. Update DeepSeek presets to the officially launched V4.1 Flash API ID `deepseek-flash` and support its Responses route.
 
 ## 0.1.7
+
 ### Patch Changes
 
 - Add an explicit artifact-digest-verified executable permission repair command for vault bindings installed with writable bin modes. Preserve launch-time executable ownership, ancestor and permission checks; no credentials are accessed by repair.
@@ -33,11 +67,13 @@ source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 - Finish completed provider SSE responses cleanly and distinguish native client cancellation from actual upstream stream failure.
 
 ## 0.1.4
+
 ### Patch Changes
 
 - Resolve API and vault operator credentials through the canonical Contracts chain; honor config/credentials, Keychain, URL defaults and rotation without manual process injection while retaining explicit account boundaries.
 
 ## 0.1.3
+
 ### Patch Changes
 
 - Inject model guidance automatically into managed inference requests, enforce profile model allowlists and explicit transient fallbacks, pin native child/utility model roles, and persist bounded routing evidence. Guard Ori's native launch paths and reject older launchers without model-policy support.

@@ -18,7 +18,7 @@ import {
   type UniversalEventType,
 } from "../lib/universal-ingest.ts";
 import {
-  assertHostedCredentialResolvable,
+  assertStoreConfigured,
   LocalStore,
   resolveStore,
 } from "../store/index.ts";
@@ -1560,11 +1560,18 @@ export function buildServer(): McpServer {
  * pointer — which `resolveStore` accepts on shape alone and the transport
  * completes per request — is completed ONCE so a pointer this process cannot
  * dereference exits now, not on the first tool call.
+ *
+ * The preflight itself is the store's `assertStoreConfigured` (round 3): the
+ * Streamable-HTTP listener factory (`./http.ts` `startMcpHttpServer`) runs the
+ * SAME preflight again right before the harness binds, so the bind can never
+ * precede the authority check whichever entry reaches it — this bin, an
+ * embedder, or a future CLI verb. 0.5.0 shipped an HTTP mode that bound
+ * first and refused per session (-32603); this ordering is pinned by the
+ * spawned `--http --port 0` tests in fail-closed.test.ts.
  */
 async function assertStoreConfiguredOrExit(): Promise<void> {
   try {
-    resolveStore();
-    await assertHostedCredentialResolvable();
+    await assertStoreConfigured();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

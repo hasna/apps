@@ -24,9 +24,8 @@ export function decayedStatus(storedStatus: string, ageMs: number): string {
   return storedStatus;
 }
 
-export function normalizeAgentName(name: string): string {
-  return name.trim().toLowerCase();
-}
+export { normalizeAgentName, isAgentConflict } from "./agent-names.js";
+import { normalizeAgentName } from "./agent-names.js";
 
 function toStoredProjectId(projectId?: string | null): string {
   const normalized = projectId?.trim() ?? "";
@@ -96,9 +95,6 @@ function isActiveSession(lastSeenAt: string): boolean {
   return (nowMs - lastSeenMs) < CONFLICT_THRESHOLD_SECONDS * 1000;
 }
 
-export function isAgentConflict(result: RegisterAgentResult | AgentConflictError): result is AgentConflictError {
-  return (result as AgentConflictError).conflict === true;
-}
 
 export function registerAgent(
   name: string,

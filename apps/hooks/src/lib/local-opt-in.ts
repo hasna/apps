@@ -79,6 +79,58 @@ export function selectsHooksLocalStore(env: HooksLocalOptInEnv = process.env): b
   return !hasHooksEnvAuthorityIntent(env) && isHooksLocalOptIn(env);
 }
 
+/** The credential tiers every fail-closed line names, in chain order. Never a value. */
+export const HOOKS_CREDENTIAL_TIERS =
+  "the Keychain item hasna.credentials.hooks.api-key, ~/.hasna/hooks/config/credentials, or HASNA_HOOKS_API_KEY";
+
+/** The opt-in every refusal names, canonical spelling first. */
+export const HOOKS_LOCAL_OPT_IN_HINT = "HASNA_HOOKS_LOCAL=1 (alias HOOKS_LOCAL=1)";
+
+/**
+ * The ONE line an unconfigured client surface prints before exiting non-zero
+ * (hasna/apps#1720 ruling, W6 target state): the stable code, the tiers
+ * consulted, the opt-in, and the refusal — no credential value, no local
+ * default. The CLI gate, the MCP server and the SDK all print this spelling.
+ */
+export function hooksFailClosedLine(detail?: string): string {
+  return (
+    `REMOTE_API_CONFIG_MISSING: hooks: no registry credential resolved from ${HOOKS_CREDENTIAL_TIERS} ` +
+    `(with HASNA_HOOKS_API_URL or the fleet gateway default), and local mode is not enabled ` +
+    `(${HOOKS_LOCAL_OPT_IN_HINT}) — refusing to silently fall back to local storage.` +
+    (detail ? ` ${detail}` : "")
+  );
+}
+
+/**
+ * The refusal every local-only verb / tool returns on the HOSTED route: the
+ * on-box SQLite store is a different dataset from the registry authority the
+ * run is routed to, so it is never opened — not even to answer an empty
+ * result. Installed process-wide through `refuseLocalStore()` in
+ * `src/db/index.ts`. Mirrors todos' `REMOTE_COMMAND_UNSUPPORTED`.
+ */
+export function hooksHostedRouteLocalStoreRefusal(authority: string): string {
+  return (
+    "REMOTE_COMMAND_UNSUPPORTED: this command is local-only — it reads the on-box SQLite store " +
+    `(hooks.db), which the hosted hooks registry authority (${authority}) does not serve; local SQLite ` +
+    `is opt-in only (${HOOKS_LOCAL_OPT_IN_HINT}) and is disabled by default — refusing to open a local ` +
+    "store on the hosted route."
+  );
+}
+
+/**
+ * The line the hook-event writer prints (once per process) when it has no
+ * sink: the hosted registry has no event route, so without the explicit
+ * local opt-in there is nowhere to record the event — and it is NOT written
+ * to a silently created hooks.db.
+ */
+export function hooksEventSinkRefusal(): string {
+  return (
+    "REMOTE_COMMAND_UNSUPPORTED: hook event not recorded — the hook event log is local-only (on-box " +
+    "SQLite hooks.db) and the hosted hooks registry has no event route; local SQLite is opt-in only " +
+    `(${HOOKS_LOCAL_OPT_IN_HINT}) and is disabled by default. Nothing was written.`
+  );
+}
+
 /**
  * The environment as the resolver should see it: every authority/credential
  * variable that is DECLARED BUT BLANK removed.

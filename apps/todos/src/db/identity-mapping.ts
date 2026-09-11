@@ -140,6 +140,45 @@ function ensureColumn(db: Database, table: string, column: string, type: string)
 }
 
 /**
+ * Guarded DDL for the append-only history triggers on
+ * `agent_identity_source_mappings`. Every statement is `CREATE TRIGGER IF NOT
+ * EXISTS`, so the block is intrinsically idempotent: executing it against a
+ * database that already carries the triggers is a no-op rather than
+ * "trigger ... already exists".
+ *
+ * This is defence in depth, not the removal of a reachable failure — stated
+ * plainly because the earlier framing claimed otherwise. The repair block runs
+ * inside `install.immediate()` (`BEGIN IMMEDIATE`), so its DROP and CREATE are
+ * atomic with respect to every other connection, and the DROP sits on the line
+ * directly above the CREATE: re-running the shipped initialiser against a
+ * database that already carries the trigger therefore succeeds on the pre-fix
+ * source too, and no end-to-end reproduction of "trigger ... already exists"
+ * exists from current `main`.
+ *
+ * What was actually wrong is the shape. Idempotency rested on statement
+ * adjacency — the CREATE was only safe because something above it dropped the
+ * trigger first — so any future caller that reached the CREATE without the
+ * DROP (another call site, a moved guard, a refactor) would reintroduce the
+ * error. `CREATE TRIGGER IF NOT EXISTS` makes each statement safe wherever it
+ * is reached from, including a caller that runs this exported constant on its
+ * own.
+ */
+export const AGENT_IDENTITY_HISTORY_TRIGGER_DDL = `
+  CREATE TRIGGER IF NOT EXISTS trg_agent_identity_mapping_history_immutable
+  BEFORE UPDATE OF local_agent_id, observed_label, evidence, mapping_basis, status, revision, created_at
+    ON agent_identity_source_mappings
+  BEGIN
+    SELECT RAISE(ABORT, 'IDENTITY_MAPPING_HISTORY_IMMUTABLE');
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_agent_identity_mapping_history_append_only
+  BEFORE DELETE ON agent_identity_source_mappings
+  BEGIN
+    SELECT RAISE(ABORT, 'IDENTITY_MAPPING_HISTORY_IMMUTABLE');
+  END;
+`;
+
+/**
  * Repairs partially-applied migration 65 without rewriting agent rows. The
  * transaction is bounded to local SQLite DDL and never touches task leases,
  * fences, heartbeats, or external Runtime Coordination state.
@@ -225,20 +264,17 @@ export function ensureAgentIdentitySchema(db: Database): void {
         SELECT RAISE(ABORT, 'IDENTITY_SOURCE_LINEAGE_IMMUTABLE');
       END;
 
+      -- Drop first so an older definition is replaced rather than silently
+      -- retained (the upgrade path). AGENT_IDENTITY_HISTORY_TRIGGER_DDL then
+      -- re-creates them with CREATE TRIGGER IF NOT EXISTS. The two statements
+      -- do different jobs and both are kept: the DROP is what refreshes a
+      -- stale definition, and the IF NOT EXISTS is what keeps the CREATE safe
+      -- on its own — so a caller that reaches it without a preceding DROP, in
+      -- its own connection or transaction, gets a no-op instead of
+      -- "trigger ... already exists".
       DROP TRIGGER IF EXISTS trg_agent_identity_mapping_history_immutable;
-      CREATE TRIGGER trg_agent_identity_mapping_history_immutable
-      BEFORE UPDATE OF local_agent_id, observed_label, evidence, mapping_basis, status, revision, created_at
-        ON agent_identity_source_mappings
-      BEGIN
-        SELECT RAISE(ABORT, 'IDENTITY_MAPPING_HISTORY_IMMUTABLE');
-      END;
-
       DROP TRIGGER IF EXISTS trg_agent_identity_mapping_history_append_only;
-      CREATE TRIGGER trg_agent_identity_mapping_history_append_only
-      BEFORE DELETE ON agent_identity_source_mappings
-      BEGIN
-        SELECT RAISE(ABORT, 'IDENTITY_MAPPING_HISTORY_IMMUTABLE');
-      END;
+      ${AGENT_IDENTITY_HISTORY_TRIGGER_DDL}
     `);
     db.run("INSERT OR IGNORE INTO _migrations (id) VALUES (?)", [IDENTITY_MIGRATION_ID]);
   });

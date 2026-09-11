@@ -737,7 +737,14 @@ function remoteBootstrapLines(
 ): string[] {
   const lines: string[] = [
     "set -e",
-    'export PATH="$HOME/.local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.npm-global/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}"',
+    // The Bun global *dependency* bin dir is on this list on purpose: `bun add
+    // -g <pkg>` links only the top-level package's bins into `$BUN_INSTALL/bin`,
+    // so anything installed as a dependency (the `accounts` CLI, for example)
+    // lands in `$BUN_INSTALL/install/global/node_modules/.bin` and is otherwise
+    // invisible — `command -v accounts` then fails and the preflight below
+    // exits 127 on a machine where accounts is installed and healthy. Keep this
+    // list in step with `commonExecutableDirs()` in ./env.ts.
+    'export PATH="$HOME/.local/bin:$HOME/.bun/bin:${BUN_INSTALL:-$HOME/.bun}/install/global/node_modules/.bin:$HOME/.cargo/bin:$HOME/.npm-global/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}"',
   ];
   // Worktree preparation must run before cd so a missing worktree fails
   // closed (mode=required) or falls back (mode=auto) with a clear message

@@ -11,6 +11,12 @@ const preset = (id: string, name: string, protocols: Route[], sources: string[],
 
 // These entries describe upstream contracts, not proof of successful live inference.
 export const providerPresets: readonly ProviderPreset[] = [
+  ...(["opencode", "opencode-go"] as const).map(id => preset(id, id === "opencode" ? "OpenCode Zen" : "OpenCode Go",
+    (["openai-chat", "openai-responses", "anthropic-messages"] as const).map(protocol => route(protocol,
+      id === "opencode" ? "https://opencode.ai/zen/v1" : "https://opencode.ai/zen/go/v1", {
+        authStyle: protocol === "anthropic-messages" ? "x-api-key" : "bearer", catalogAuthStyle: "none",
+        notes: ["Discovers the full live catalog. Claude requests are adapted to each model's documented native endpoint. Other harnesses require models compatible with their selected protocol. Go requires an active subscription and coding-agent session headers."],
+      })), ["https://opencode.ai/docs/zen/", "https://opencode.ai/docs/go/"], "OPENCODE_API_KEY")),
   preset("deepseek", "DeepSeek", [
     route("openai-chat", "https://api.deepseek.com", {catalogBaseUrl: "https://api.deepseek.com"}),
     route("openai-responses", "https://api.deepseek.com", {catalogBaseUrl: "https://api.deepseek.com"}),

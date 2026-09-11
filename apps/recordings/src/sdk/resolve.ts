@@ -26,17 +26,17 @@
  * `RECORDINGS_API_KEY` is this app's OpenAI transcription-key override, never
  * a Hasna credential.
  *
- * LOCAL MODE IS DELIBERATE, NEVER A FALLBACK FROM FAILURE. `RecordingsV1Client`
- * speaks the `/v1` plane that `recordings-serve` exposes, and the on-box
- * SQLite store is this package's first-class local dataset — so the unhosted
- * default (`http://localhost:8874`, no credential) is a real product mode
- * rather than a silent degradation. It is therefore reachable ONLY through the
- * explicit opt-in `HASNA_RECORDINGS_LOCAL=1`, and when local mode is selected
- * the SDK says so, once per process, on stderr: a client silently talking to a
- * local process while the operator believes it is on the fleet is the
- * false-green this whole ruling exists to end. EVERY other refusal — a blank
- * variable, an unreadable credential file, an authority that is set but
- * malformed — THROWS.
+ * THE LOCAL TRANSPORT IS DELIBERATE, NEVER A FALLBACK FROM FAILURE.
+ * `RecordingsV1Client` speaks the `/v1` plane that `recordings-serve` exposes,
+ * and the on-box SQLite store is this package's first-class local dataset — so
+ * the unhosted default (`http://localhost:8874`, no credential) is a real
+ * deployment rather than a silent degradation. It is therefore reachable ONLY
+ * through the explicit opt-in `HASNA_RECORDINGS_LOCAL=1`, and when the local
+ * transport is selected the SDK says so, once per process, on stderr: a client
+ * silently talking to a local process while the operator believes it is on the
+ * fleet is the false-green this whole ruling exists to end. EVERY other
+ * refusal — a blank variable, an unreadable credential file, an authority that
+ * is set but malformed — THROWS.
  */
 import {
   ClientTransportConfigurationError,
@@ -65,7 +65,7 @@ export interface RecordingsSdkTransport {
    * that composes `/v1/...` gets exactly one version segment.
    */
   baseUrl: string;
-  /** The credential, or null in local mode. */
+  /** The credential, or null when the local transport is selected. */
   apiKey: string | null;
   /** WHERE the credential came from — an env key NAME, a Keychain reference, a path. Never a value. */
   apiKeySource: string | null;
@@ -101,9 +101,9 @@ function announceLocal(notice: ((line: string) => void) | undefined, reason: str
   if (localNoticePrinted) return;
   localNoticePrinted = true;
   const line =
-    `recordings: LOCAL mode — ${reason}; reading and writing the local ` +
-    `recordings-serve at ${RECORDINGS_LOCAL_SERVE_URL}, not the hosted fleet. Set HASNA_RECORDINGS_API_KEY, add the ` +
-    `Keychain item hasna.credentials.recordings.api-key, or write ~/.hasna/recordings/config/credentials to go hosted.`;
+    `recordings: local transport — ${reason}; reading and writing the local ` +
+    `recordings-serve at ${RECORDINGS_LOCAL_SERVE_URL}. To use the hosted API, set HASNA_RECORDINGS_API_KEY, add the ` +
+    `Keychain item hasna.credentials.recordings.api-key, or write ~/.hasna/recordings/config/credentials.`;
   if (notice) notice(line);
   else if (typeof process !== "undefined") process.stderr.write(`${line}\n`);
 }
@@ -186,7 +186,7 @@ export function resolveRecordingsSdkTransport(
       // under the explicit opt-in. It is kept as a distinct refusal so the
       // error below reads correctly against every OTHER refusal.
       throw new Error(
-        "RECORDINGS_CREDENTIAL_MISSING: no Hasna Recordings credential resolved and local mode is opt-in only. " +
+        "RECORDINGS_CREDENTIAL_MISSING: no Hasna Recordings credential resolved and the local transport is opt-in only. " +
           "Looked at HASNA_RECORDINGS_API_KEY_OVERRIDE / HASNA_PROFILE / HASNA_RECORDINGS_API_KEY_REF, the Keychain item " +
           "hasna.credentials.recordings.api-key, ~/.hasna/recordings/config/credentials, then HASNA_RECORDINGS_API_KEY.",
         { cause: error },
@@ -219,8 +219,8 @@ export function resolveRecordingsSdkTransport(
  * copy of the chain.
  *
  * Throws when no credential resolves and takes the unhosted opt-in: this client
- * speaks only to the hosted authority, so there is no local mode to degrade
- * to.
+ * speaks the HTTP `/v1` plane with a resolved credential, so there is no
+ * sqlite or local-serve fallback to degrade to.
  */
 export function createRecordingsV1Client(
   options: ResolveRecordingsSdkTransportOptions & Pick<RecordingsV1ClientOptions, "fetch" | "headers"> = {},
@@ -228,7 +228,8 @@ export function createRecordingsV1Client(
   const resolved = resolveRecordingsSdkTransport(options);
   if (resolved.mode !== "http" || !resolved.apiKey) {
     throw new Error(
-      "RECORDINGS_CREDENTIAL_MISSING: the /v1 client is hosted-only and no Hasna Recordings credential resolved. " +
+      "RECORDINGS_CREDENTIAL_MISSING: the /v1 client requires a resolved Hasna Recordings credential; the local " +
+        "recordings-serve opt-in (HASNA_RECORDINGS_LOCAL=1) supplies no credential. " +
         "Looked at HASNA_RECORDINGS_API_KEY_OVERRIDE / HASNA_PROFILE / HASNA_RECORDINGS_API_KEY_REF, the Keychain item " +
         "hasna.credentials.recordings.api-key, ~/.hasna/recordings/config/credentials, then HASNA_RECORDINGS_API_KEY.",
     );

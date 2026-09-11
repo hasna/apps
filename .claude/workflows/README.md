@@ -86,6 +86,26 @@ them. The class is owned by the durable lane, not by the instance:
 A one-off that recurs a second time becomes a task for the owning lane, per
 the four-artefacts doctrine (rule + taxonomy + workflow + abstraction).
 
+## Scratch — `~/Workspace/scratch/<lane>/`, never `/tmp`, never an app home
+
+Lane agents write scratch under the station Workspace, one slug-named folder per
+lane or task (the scratch-layout ruling, owner decision 2026-09-04):
+
+```bash
+mkdir -p "$HOME/Workspace/scratch/<lane>"   # e.g. fix-lane, leak-scan, build-and-ship-workflows-app
+```
+
+Then do ordinary file I/O inside it; `logs/`, `tmp/` and `worktrees/`
+subfolders are allowed. `/tmp` is shared, world-readable and has no
+owner-approved lifetime. An app home (`~/.hasna/<app>`, `~/.hasna-internal/<app>`
+— including the scratchpad app's own home) is app data, not scratch. The repo
+tree and the home root are never scratch. A lane prompt that needs scratch
+names its directory (`<scratch>` = `$HOME/Workspace/scratch/<lane>/`).
+
+One deliberate exception: the credential-zero E2B box in
+`verify-apps-qa-wf.js` uses in-box `/tmp` for ephemeral run logs. That path is
+inside the box and dies with it — it is not station scratch, and it stays.
+
 ## Governance (axis 4, per the construction taxonomy)
 
 - Mandatory adversarial review; Fable reviewers; two-cycle remediation cap.

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,11 +12,11 @@ import { join } from "node:path";
  *     HASNA_SHORTLINKS_API_KEY) and creates no local database —
  *     ~/.hasna/shortlinks/shortlinks.db is never opened or created by default.
  *  2. A partially configured pair (URL without key, or key without URL) fails
- *     closed naming both members — never defaults to local mode.
+ *     closed naming both members — never degrades to the local store.
  *  3. `--json` mode reports the same refusal as a parseable JSON error with a
  *     non-zero exit (never a false-green exit 0 local-fallback event).
- *  4. Local mode works only under an EXPLICIT opt-in: SHORTLINKS_LOCAL=1 or
- *     the --db <path> flag.
+ *  4. The local backend works only under an EXPLICIT opt-in: SHORTLINKS_LOCAL=1
+ *     or the --db <path> flag.
  *
  * Unlike `cli.test.ts` these tests deliberately do NOT pass `--db` by default
  * and DO strip every fleet/local env key, so the process under test really has
@@ -126,9 +126,9 @@ describe("fail closed without the fleet API env", () => {
     expect(existsSync(join(tempHome, "shortlinks.db"))).toBe(false);
   });
 
-  test("a URL without a key fails closed naming both keys — never defaults to local mode", () => {
+  test("a URL without a key fails closed naming both keys — never degrades to the local store", () => {
     // URL without key: the hosted side declares intent, so the CLI must not
-    // open local mode or guess a credential. (The reverse — a key with no URL —
+    // open the local store or guess a credential. (The reverse — a key with no URL —
     // now resolves the fleet gateway by design, hasna/apps#1720; that case is
     // covered at the resolver level in client-store.test.ts.)
     const urlOnly = runCli(["init", "--domain", "has.na"], {
@@ -145,6 +145,33 @@ describe("fail closed without the fleet API env", () => {
   });
 });
 
+describe("the station credentials file selects the hosted store from a pristine env", () => {
+  test("~/.hasna/shortlinks/config/credentials is honored with no API env and no local opt-in", () => {
+    // The station credential lives ON DISK (fleet credential file, 0600):
+    // `env -i HOME=... <cli> <read-command>` must resolve the hosted store
+    // from `~/.hasna/shortlinks/config/credentials` — never fail closed and
+    // never silently open the local store. Point the file at an unreachable
+    // authority so the run fails ONLY on the network, proving the hosted
+    // transport was selected and attempted.
+    const dir = join(tempHome, ".hasna", "shortlinks", "config");
+    mkdirSync(dir, { recursive: true });
+    const credentials = join(dir, "credentials");
+    writeFileSync(credentials, "HASNA_SHORTLINKS_API_URL=http://127.0.0.1:1\nHASNA_SHORTLINKS_API_KEY=test-key\n");
+    chmodSync(credentials, 0o600);
+
+    const result = runCli(["link", "list"], { db: false });
+    const text = output(result);
+    // The credential file resolved, so neither refusal fired:
+    expect(text).not.toMatch(/No shortlinks data backend is configured/);
+    expect(text).not.toMatch(/local backend|local mode/);
+    // The process failed on the network, i.e. the hosted transport ran:
+    expect(result.exitCode).toBe(1);
+    expect(text).toMatch(/connect|refused|fetch|ECONN/i);
+    // No local database was opened or created.
+    expect(existsSync(join(tempHome, "shortlinks.db"))).toBe(false);
+  });
+});
+
 describe("explicit local opt-in still works", () => {
   test("SHORTLINKS_LOCAL=1 opts into the on-box SQLite store without --db", () => {
     const init = runCli(["init", "--domain", "has.na"], { db: false, local: true });
@@ -152,7 +179,7 @@ describe("explicit local opt-in still works", () => {
     const initJson = JSON.parse(init.stdout.toString()) as { store: string; config: { defaultDomain: string } };
     expect(initJson.store).toBe("local");
     expect(initJson.config.defaultDomain).toBe("has.na");
-    // Local mode is never silent: the opt-in says "local" on stderr.
+    // Local backend is never silent: the opt-in says "local" on stderr.
     expect(init.stderr.toString()).toMatch(/local/);
 
     const doctor = runCli(["doctor"], { db: false, local: true });
@@ -170,7 +197,7 @@ describe("explicit local opt-in still works", () => {
     expect(init.exitCode).toBe(0);
     const initJson = JSON.parse(init.stdout.toString()) as { store: string };
     expect(initJson.store).toBe("local");
-    // Local mode is never silent: --db says "local" on stderr too.
+    // Local backend is never silent: --db says "local" on stderr too.
     expect(init.stderr.toString()).toMatch(/local/);
     expect(existsSync(dbPath)).toBe(true);
   });

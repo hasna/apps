@@ -1,6 +1,6 @@
 // Cloud (PURE REMOTE, Amendment A1) storage path for economy-serve.
 //
-// The self-hosted service reads AND writes the shared RDS Postgres directly.
+// The serve process reads AND writes the shared RDS Postgres directly.
 // There is NO local SQLite, NO cache-as-mode, and NO sync engine in the serve
 // process. The core query layer in `database.ts` is dialect-agnostic (it only
 // uses the `DbAdapter` surface: prepare/all/get/run/exec/transaction), so the
@@ -16,25 +16,6 @@ import { PG_MIGRATIONS } from './pg-migrations.js'
 
 /** The environment shape the backend resolver reads. */
 type Env = Record<string, string | undefined>
-
-const RETIRED_BACKEND_KEYS = [
-  'HASNA_ECONOMY_STORAGE_MODE',
-  'HASNA_ECONOMY_MODE',
-  'ECONOMY_STORAGE_MODE',
-  'ECONOMY_MODE',
-] as const
-
-function assertNoRetiredBackendKey(env: Env): void {
-  const legacyKey = RETIRED_BACKEND_KEYS.find(
-    (key) => Object.hasOwn(env, key) && env[key] !== undefined,
-  )
-  if (!legacyKey) return
-  throw new Error(
-    `${legacyKey} was removed. Delete the retired variable; ` +
-      'set HASNA_ECONOMY_DATABASE_URL to select the postgresql server backend, ' +
-      'or leave it unset for sqlite.',
-  )
-}
 
 /** Resolve the Postgres DSN from the standard env aliases. */
 export function getCloudDatabaseUrl(env: Env = process.env): string | undefined {
@@ -59,19 +40,16 @@ export function getCloudDatabaseUrl(env: Env = process.env): string | undefined 
  *
  * The retired deployment-mode axis stays gone: the only switch is the server's
  * data backend, `sqlite | postgresql`, and a present database URL is what
- * selects `postgresql`. Retired `STORAGE_MODE` / `MODE` variables are rejected
- * with a migration hint rather than normalized or silently mapped, so a
- * half-migrated deployment fails loudly at startup instead of quietly serving
- * the wrong store.
- *
- * The rejection stays local because economy also honours the bare `DATABASE_URL`
- * alias, which the contract's own resolver does not read — deferring to it
- * wholesale would silently downgrade such a deployment to sqlite.
+ * selects `postgresql`. Stale `STORAGE_MODE` / `MODE` variables (still exported
+ * by some station wrappers) are ignored entirely — they never select a backend
+ * and never fail startup (owner directive 2026-08-15). The resolver stays local
+ * because economy also honours the bare `DATABASE_URL` alias, which the
+ * contract's own resolver does not read — deferring to it wholesale would
+ * silently downgrade such a deployment to sqlite.
  */
 export type EconomyServerBackend = 'sqlite' | 'postgresql'
 
 export function resolveEconomyServerBackend(env: Env = process.env): EconomyServerBackend {
-  assertNoRetiredBackendKey(env)
   return getCloudDatabaseUrl(env) ? 'postgresql' : 'sqlite'
 }
 

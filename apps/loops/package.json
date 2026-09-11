@@ -1,6 +1,6 @@
 {
   "name": "@hasna/loops",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Persistent local loop and workflow runner for deterministic commands and headless AI coding agents",
   "type": "module",
   "main": "dist/index.js",
@@ -110,7 +110,8 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/loops.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/loops"
   },
   "homepage": "https://github.com/hasna/loops#readme",
   "bugs": {
