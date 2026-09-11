@@ -118,6 +118,45 @@ const HOSTED_FILE = {
   tags: [],
 };
 
+const HOSTED_MANIFEST = {
+  manifest_id: "manifest_feedfacefeedfacefeedface",
+  generated_at: "2026-09-11T12:00:00.000Z",
+  format: "json",
+  filters: {},
+  item_count: 1,
+  delta: false,
+  high_watermark: 12,
+  delta_cursor: "eyJzeW5jX3ZlcnNpb24iOjEyLCJmaWxlX2lkIjoiIiwiaGlnaF93YXRlcm1hcmsiOjEyfQ",
+  tombstone_count: 0,
+  items: [{
+    kind: "file",
+    source_ref: "open-files://file/f_hosted1",
+    sync_version: 3,
+    source_revision_hash: `sha256:${"c".repeat(64)}`,
+    file_id: "f_hosted1",
+    source_id: "src_1",
+    path: "notes.md",
+    name: "notes.md",
+    mime: "text/markdown",
+    size: 34,
+    status: "active",
+    updated_at: "2026-08-18T00:00:00.000Z",
+    deleted: false,
+    tags: [],
+    open_files_root: {
+      open_files_root: "open-files://source/src_1",
+      source_id: "src_1",
+      source_type: "local",
+      source_path: "notes.md",
+      machine: { machine_id: "m_1" },
+      evidence_hash: `sha256:${"d".repeat(64)}`,
+    },
+    extraction: { text_available: true, status: "available" },
+    permissions: { mode: "read_only", allowed_purposes: ["knowledge_index"] },
+    permission_labels: ["read_only"],
+  }],
+};
+
 const HOSTED_CONTENT = "hello hosted files\nline two\nline three\n";
 
 const HOSTED_EXTRACT = {
@@ -187,6 +226,15 @@ async function startFakeServer(): Promise<FakeServer> {
       }
       if (method === "GET" && path === "/files") {
         return Response.json({ items: [HOSTED_FILE] });
+      }
+      if (method === "GET" && path === "/knowledge/manifest") {
+        if (url.searchParams.get("include_acl_summary") === "true") {
+          return Response.json({
+            error: "include_acl_summary is not available on the hosted transport: this service does not model file organization reviews.",
+            reason: "acl_summary_unavailable",
+          }, { status: 400 });
+        }
+        return Response.json(HOSTED_MANIFEST);
       }
       const f = path.match(/^\/files\/([^/]+)$/);
       if (method === "GET" && f) {
@@ -605,6 +653,53 @@ describe("ported read-side MCP tools on the hosted (api) transport", () => {
     }
   });
 
+  test("export_knowledge_manifest reads the hosted manifest route", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({ name: "export_knowledge_manifest", arguments: {} });
+      expect(result.isError).not.toBe(true);
+      const manifest = JSON.parse(callText(result));
+      expect(manifest.manifest_id).toBe("manifest_feedfacefeedfacefeedface");
+      expect(manifest.high_watermark).toBe(12);
+      expect(manifest.items[0].file_id).toBe("f_hosted1");
+      expect(fake.hits.map((h) => `${h.method} ${h.path}`)).toEqual(["GET /knowledge/manifest"]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("export_knowledge_manifest surfaces the service's acl_summary refusal verbatim", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "export_knowledge_manifest",
+        arguments: { include_acl_summary: true },
+      });
+      expect(result.isError).toBe(true);
+      // The reason the service gave, not a bare status code — and no
+      // fabricated acl_summary anywhere in the answer.
+      expect(callText(result)).toContain("does not model file organization reviews");
+      expect(callText(result)).not.toContain("\"acl_summary\"");
+    } finally {
+      await close();
+    }
+  });
+
+  test("export_knowledge_manifest refuses an S3 artifact on the hosted transport", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "export_knowledge_manifest",
+        arguments: { output_s3_source_id: "src_1", output_s3_key: "manifests/m.json" },
+      });
+      expect(result.isError).toBe(true);
+      expect(callText(result)).toContain("output_local_path");
+      expect(fake.hits).toHaveLength(0);
+    } finally {
+      await close();
+    }
+  });
+
   test("upload_file ingests a local document through the hosted transport as a tagged project resource", async () => {
     const fixture = join(testDir!, "partner-contract.pdf");
     writeFileSync(fixture, "contract bytes");
@@ -639,7 +734,6 @@ describe("write/ingest MCP tools keep the local-transport guard in api mode", ()
     { tool: "index_source", args: {} },
     { tool: "build_context_pack", args: {} },
     { tool: "search_context_pack", args: { query: "anything" } },
-    { tool: "export_knowledge_manifest", args: {} },
     { tool: "poll_knowledge_outbox", args: {} },
     { tool: "ack_knowledge_outbox", args: { consumer_id: "consumer-1", cursor: 1 } },
     { tool: "copy_file", args: { file_id: "f_hosted1", dest_source_id: "src_2" } },

@@ -22,6 +22,15 @@ import {
 import type { FileAssetStatus } from "../types/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import {
+  buildManifestCursor,
+  buildManifestEnvelope,
+  buildManifestFileItem,
+  normalizeManifestLimit,
+  parseManifestCursor,
+} from "../lib/knowledge-manifest-shared.js";
+import { isExtractableTextMime } from "../lib/knowledge-shared.js";
+import type { KnowledgeSourceManifestOptions } from "../types/index.js";
+import {
   extractRemoteFileText,
   normalizeContentReadLimit,
   readRemoteObject,
@@ -39,6 +48,13 @@ function asAssetStatus(value: string | null | undefined): FileAssetStatus | unde
 
 /** Upper bound for a single hosted document ingestion (2 GiB). */
 const MAX_INGEST_BYTES = 2 * 1024 * 1024 * 1024;
+
+/** A source type maps to exactly one storage provider; never guessed. */
+function manifestStorageProvider(sourceType: string): "local" | "s3" | "unknown" {
+  if (sourceType === "s3") return "s3";
+  if (sourceType === "local") return "local";
+  return "unknown";
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -606,6 +622,128 @@ export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
         }
 
         // ── /v1/stats ──────────────────────────────────────────────────
+        // ── /v1/knowledge/manifest ─────────────────────────────────────
+        // The same manifest the on-box exporter builds, served from Postgres.
+        // Every derived field comes from the shared pure module, so a cursor
+        // minted here is readable on-box and vice versa.
+        if (seg[0] === "knowledge" && seg[1] === "manifest" && seg.length === 2 && method === "GET") {
+          // Refused, not faked: organization reviews (the ACL summary source)
+          // are not modelled by this service, so there is no honest value to
+          // return. Answering with an empty/absent summary would read as
+          // "reviewed, nothing to report".
+          if (q("include_acl_summary") === "true" || q("include_acl_summary") === "1") {
+            return err(
+              "include_acl_summary is not available on the hosted transport: this service does not model file organization reviews.",
+              400,
+              { reason: "acl_summary_unavailable" },
+            );
+          }
+          if (q("include_evidence_assets") === "true" || q("include_evidence_assets") === "1") {
+            return err(
+              "include_evidence_assets is not available on /v1/knowledge/manifest; read /v1/evidence/assets directly.",
+              400,
+              { reason: "evidence_assets_unavailable" },
+            );
+          }
+
+          const intParam = (key: string): number | undefined => {
+            const raw = q(key);
+            if (raw === undefined) return undefined;
+            const value = Number(raw);
+            return Number.isInteger(value) ? value : undefined;
+          };
+          const boolParam = (key: string): boolean | undefined => {
+            const raw = q(key);
+            if (raw === undefined) return undefined;
+            return raw === "true" || raw === "1";
+          };
+
+          const format = q("format") === "jsonl" ? "jsonl" as const : "json" as const;
+          const opts = {
+            source_id: q("source_id"),
+            collection_id: q("collection_id"),
+            project_id: q("project_id"),
+            tag: q("tag"),
+            status: q("status") as KnowledgeSourceManifestOptions["status"],
+            include_deleted: boolParam("include_deleted"),
+            delta: boolParam("delta"),
+            since_cursor: q("since_cursor"),
+            since_sync_version: intParam("since_sync_version"),
+            after: q("after"),
+            before: q("before"),
+            cursor: q("cursor"),
+            limit: intParam("limit"),
+            format,
+          } satisfies KnowledgeSourceManifestOptions;
+
+          const cursor = parseManifestCursor(opts.cursor);
+          if (opts.cursor && !cursor) return err("cursor is not a valid manifest cursor", 400);
+          const sinceCursor = parseManifestCursor(opts.since_cursor);
+          if (opts.since_cursor && !sinceCursor) return err("since_cursor is not a valid manifest cursor", 400);
+
+          const highWatermark = cursor?.high_watermark ?? await store.knowledgeManifestHighWatermark(client);
+          const sinceSyncVersion = opts.since_sync_version ?? sinceCursor?.sync_version;
+          const pageAfter = cursor
+            ? { sync_version: cursor.sync_version, file_id: cursor.file_id }
+            : { sync_version: sinceSyncVersion ?? -1, file_id: "" };
+          const limit = normalizeManifestLimit(opts.limit);
+
+          // One extra row decides has-next without a second count query.
+          const rows = await store.listKnowledgeManifestRows(client, {
+            source_id: opts.source_id,
+            collection_id: opts.collection_id,
+            project_id: opts.project_id,
+            tag: opts.tag,
+            status: opts.status,
+            include_deleted: opts.include_deleted,
+            delta: opts.delta,
+            after: opts.after,
+            before: opts.before,
+            high_watermark: highWatermark,
+            page_after: pageAfter,
+            limit: limit + 1,
+          });
+          const hasNext = rows.length > limit;
+          const page = hasNext ? rows.slice(0, limit) : rows;
+          const ids = page.map((row) => row.id);
+          const [tagsByFile, versionsByFile] = await Promise.all([
+            store.knowledgeManifestTags(client, ids),
+            store.knowledgeManifestLatestVersions(client, ids),
+          ]);
+
+          const items = page.map((row) => {
+            const version = versionsByFile.get(row.id);
+            return buildManifestFileItem(row, {
+              revision_ref: version?.source_ref,
+              revision_id: version?.id,
+              s3_object_id: version?.s3_object_id,
+              content_hash_algorithm: version?.content_hash_algorithm,
+              content_hash: version?.content_hash,
+              tags: tagsByFile.get(row.id) ?? [],
+              // Pure mime/filename decision — the same answer the on-box
+              // resolver gives, with no object read.
+              text_available: isExtractableTextMime(row.mime, row.name),
+              // This service owns the object store and does not disclose the
+              // bucket or key; the provider comes from the source's own type.
+              storage: { provider: manifestStorageProvider(row.source_type), source_id: row.source_id },
+            });
+          });
+
+          const lastRow = page.at(-1);
+          const nextCursor = hasNext && lastRow
+            ? buildManifestCursor({ sync_version: lastRow.sync_version, file_id: lastRow.id, high_watermark: highWatermark })
+            : undefined;
+
+          return json(buildManifestEnvelope({
+            generated_at: new Date().toISOString(),
+            format,
+            opts,
+            items,
+            high_watermark: highWatermark,
+            next_cursor: nextCursor,
+          }));
+        }
+
         if (seg[0] === "stats" && seg.length === 1 && method === "GET") return json(await store.stats(client));
 
         // ── /v1/evidence (shared cross-app vault) ──────────────────────

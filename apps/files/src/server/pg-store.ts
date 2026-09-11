@@ -44,6 +44,7 @@ import type {
 import type { CreateUploadIntentInput, UpdateFileAssetStatusInput } from "../lib/evidence.js";
 import { FILES_API_MAX_PAGE_SIZE } from "../lib/api-pagination.js";
 import type { RemoteFileLocator } from "./file-content.js";
+import type { ManifestFileRow } from "../lib/knowledge-manifest-shared.js";
 
 const APP = "files";
 
@@ -1745,3 +1746,198 @@ export async function completeFileUpload(
   return getFile(client, fileId);
 }
 
+
+// ─── knowledge manifest ───────────────────────────────────────────────────────
+//
+// `GET /v1/knowledge/manifest` serves the same manifest the on-box exporter
+// builds, from Postgres. The row shape and every derived field come from
+// `src/lib/knowledge-manifest-shared.ts`, so the two transports cannot drift —
+// a cursor minted by one is readable by the other.
+
+export interface KnowledgeManifestQuery {
+  source_id?: string;
+  collection_id?: string;
+  project_id?: string;
+  tag?: string;
+  status?: string;
+  include_deleted?: boolean;
+  delta?: boolean;
+  after?: string;
+  before?: string;
+  high_watermark: number;
+  page_after: { sync_version: number; file_id: string };
+  limit: number;
+}
+
+/** The manifest's `high_watermark`: the newest `sync_version` in the store. */
+export async function knowledgeManifestHighWatermark(client: TypedQueryClient): Promise<number> {
+  const row = await client.get<Record<string, unknown>>(
+    "SELECT COALESCE(MAX(sync_version), 0)::int AS max_sync_version FROM files",
+  );
+  return Number(row?.max_sync_version ?? 0);
+}
+
+/**
+ * One page of manifest rows, ordered by the keyset the cursor encodes
+ * (`sync_version`, then `id`). Booleans are cast to int so the row matches the
+ * shared `ManifestFileRow` shape that SQLite also produces.
+ */
+export async function listKnowledgeManifestRows(
+  client: TypedQueryClient,
+  opts: KnowledgeManifestQuery,
+): Promise<ManifestFileRow[]> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  const joins: string[] = [
+    "JOIN sources s ON s.id = f.source_id",
+    "LEFT JOIN machines m ON m.id = f.machine_id",
+  ];
+
+  if (opts.status && opts.status !== "all") {
+    params.push(opts.status);
+    where.push(`f.status = $${params.length}`);
+  } else if (!opts.include_deleted && !opts.delta && opts.status !== "all") {
+    where.push("f.status = 'active'");
+  }
+
+  params.push(opts.high_watermark);
+  where.push(`f.sync_version <= $${params.length}`);
+  params.push(opts.page_after.sync_version);
+  const afterVersionRef = `$${params.length}`;
+  params.push(opts.page_after.file_id);
+  where.push(
+    `(f.sync_version > ${afterVersionRef} OR (f.sync_version = ${afterVersionRef} AND f.id > $${params.length}))`,
+  );
+
+  if (opts.source_id) {
+    params.push(opts.source_id);
+    where.push(`f.source_id = $${params.length}`);
+  }
+  if (opts.collection_id) {
+    params.push(opts.collection_id);
+    joins.push(`JOIN collection_files cf_filter ON cf_filter.file_id = f.id AND cf_filter.collection_id = $${params.length}`);
+  }
+  if (opts.project_id) {
+    params.push(opts.project_id);
+    joins.push(`JOIN project_files pf_filter ON pf_filter.file_id = f.id AND pf_filter.project_id = $${params.length}`);
+  }
+  if (opts.tag) {
+    // Tags are stored lowercase, as in listFiles.
+    params.push(opts.tag.toLowerCase());
+    joins.push(
+      `JOIN file_tags ft_filter ON ft_filter.file_id = f.id
+       JOIN tags t_filter ON t_filter.id = ft_filter.tag_id AND t_filter.name = $${params.length}`,
+    );
+  }
+  if (opts.after) {
+    params.push(opts.after);
+    where.push(`COALESCE(f.modified_at, f.indexed_at) >= $${params.length}`);
+  }
+  if (opts.before) {
+    params.push(opts.before);
+    where.push(`COALESCE(f.modified_at, f.indexed_at) <= $${params.length}`);
+  }
+
+  params.push(Math.max(1, Math.floor(opts.limit)));
+  const rows = await client.many<Record<string, unknown>>(
+    `SELECT DISTINCT
+       f.id, f.source_id, f.path, f.name, f.size, f.mime, f.hash, f.status,
+       f.indexed_at, f.modified_at, f.sync_version,
+       s.name AS source_name, s.type AS source_type,
+       s.machine_id AS source_machine_id, s.path AS source_root_path,
+       s.bucket AS source_bucket, s.prefix AS source_prefix, s.region AS source_region,
+       s.enabled::int AS source_enabled,
+       f.machine_id AS file_machine_id, m.name AS machine_name, m.hostname AS machine_hostname,
+       m.platform AS machine_platform, m.arch AS machine_arch, m.is_current::int AS machine_is_current
+     FROM files f
+     ${joins.join("\n     ")}
+     ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+     ORDER BY f.sync_version ASC, f.id ASC
+     LIMIT $${params.length}`,
+    params,
+  );
+  return rows.map(toManifestRow);
+}
+
+function toManifestRow(r: Record<string, unknown>): ManifestFileRow {
+  const str = (v: unknown) => (v === null || v === undefined ? null : String(v));
+  return {
+    id: String(r.id),
+    source_id: String(r.source_id),
+    path: String(r.path),
+    name: String(r.name),
+    size: Number(r.size ?? 0),
+    mime: String(r.mime ?? "application/octet-stream"),
+    hash: str(r.hash),
+    status: String(r.status),
+    indexed_at: String(r.indexed_at),
+    modified_at: r.modified_at == null ? null : String(r.modified_at),
+    sync_version: Number(r.sync_version ?? 0),
+    source_name: String(r.source_name ?? ""),
+    source_type: String(r.source_type ?? "local"),
+    source_machine_id: String(r.source_machine_id ?? ""),
+    source_root_path: str(r.source_root_path),
+    source_bucket: str(r.source_bucket),
+    source_prefix: str(r.source_prefix),
+    source_region: str(r.source_region),
+    source_enabled: Number(r.source_enabled ?? 0),
+    file_machine_id: String(r.file_machine_id ?? ""),
+    machine_name: str(r.machine_name),
+    machine_hostname: str(r.machine_hostname),
+    machine_platform: str(r.machine_platform),
+    machine_arch: str(r.machine_arch),
+    machine_is_current: r.machine_is_current === null || r.machine_is_current === undefined
+      ? null
+      : Number(r.machine_is_current),
+  };
+}
+
+/** Per-file tags for a page, batched — never one query per row. */
+export async function knowledgeManifestTags(
+  client: TypedQueryClient,
+  fileIds: string[],
+): Promise<Map<string, string[]>> {
+  const byFile = new Map<string, string[]>();
+  if (fileIds.length === 0) return byFile;
+  const rows = await client.many<Record<string, unknown>>(
+    `SELECT ft.file_id, t.name
+     FROM file_tags ft JOIN tags t ON t.id = ft.tag_id
+     WHERE ft.file_id = ANY($1)
+     ORDER BY ft.file_id, t.name`,
+    [fileIds],
+  );
+  for (const row of rows) {
+    const fileId = String(row.file_id);
+    const list = byFile.get(fileId) ?? [];
+    list.push(String(row.name));
+    byFile.set(fileId, list);
+  }
+  return byFile;
+}
+
+/** The latest revision per file for a page, batched. */
+export async function knowledgeManifestLatestVersions(
+  client: TypedQueryClient,
+  fileIds: string[],
+): Promise<Map<string, { id: string; source_ref: string; s3_object_id?: string; content_hash_algorithm?: string; content_hash?: string }>> {
+  const byFile = new Map<string, { id: string; source_ref: string; s3_object_id?: string; content_hash_algorithm?: string; content_hash?: string }>();
+  if (fileIds.length === 0) return byFile;
+  const rows = await client.many<Record<string, unknown>>(
+    `SELECT DISTINCT ON (file_id)
+       file_id, id, source_ref, s3_object_id, content_hash_algorithm, content_hash
+     FROM file_versions
+     WHERE file_id = ANY($1)
+     ORDER BY file_id, created_at DESC, id DESC`,
+    [fileIds],
+  );
+  for (const row of rows) {
+    byFile.set(String(row.file_id), {
+      id: String(row.id),
+      source_ref: String(row.source_ref),
+      s3_object_id: row.s3_object_id ? String(row.s3_object_id) : undefined,
+      content_hash_algorithm: row.content_hash_algorithm ? String(row.content_hash_algorithm) : undefined,
+      content_hash: row.content_hash ? String(row.content_hash) : undefined,
+    });
+  }
+  return byFile;
+}

@@ -574,6 +574,37 @@ export const openApiDocument = {
     "/projects/{id}/files": { post: { operationId: "addToProject", summary: "Add a file to a project", parameters: [idParam("id")], requestBody: { required: true, content: { "application/json": { schema: ref("FileIdBody") } } }, responses: { "200": ok(ref("Ok")) } } },
     "/projects/{id}/files/{fileId}": { delete: { operationId: "removeFromProject", summary: "Remove a file from a project", parameters: [idParam("id"), idParam("fileId")], responses: { "200": ok(ref("Ok")) } } },
     "/machines": { get: { operationId: "listMachines", summary: "List machines", responses: { "200": ok({ type: "array", items: ref("Machine") }) } } },
+    "/knowledge/manifest": {
+      get: {
+        operationId: "exportKnowledgeManifest",
+        summary: "Export the knowledge-source manifest",
+        description:
+          "The same manifest the on-box exporter builds, served from the service's own store. "
+          + "Cursors are interchangeable between the two transports. "
+          + "include_acl_summary and include_evidence_assets are refused with 400: this service does not "
+          + "model file organization reviews, and evidence assets are served by /evidence/assets.",
+        parameters: [
+          { name: "source_id", in: "query", schema: { type: "string" } },
+          { name: "collection_id", in: "query", schema: { type: "string" } },
+          { name: "project_id", in: "query", schema: { type: "string" } },
+          { name: "tag", in: "query", schema: { type: "string" } },
+          { name: "status", in: "query", schema: { type: "string", enum: ["active", "deleted", "moved", "all"] } },
+          { name: "include_deleted", in: "query", schema: { type: "boolean" } },
+          { name: "delta", in: "query", schema: { type: "boolean" } },
+          { name: "since_cursor", in: "query", schema: { type: "string" } },
+          { name: "since_sync_version", in: "query", schema: { type: "integer" } },
+          { name: "after", in: "query", schema: { type: "string" } },
+          { name: "before", in: "query", schema: { type: "string" } },
+          { name: "cursor", in: "query", schema: { type: "string" } },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 1000 } },
+          { name: "format", in: "query", schema: { type: "string", enum: ["json", "jsonl"] } },
+        ],
+        responses: {
+          "200": ok({ type: "object" }),
+          "400": ok({ type: "object" }),
+        },
+      },
+    },
     "/stats": { get: { operationId: "getStats", summary: "Aggregate file stats", responses: { "200": ok(ref("Stats")) } } },
   },
 } as const;

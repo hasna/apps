@@ -310,6 +310,15 @@ export class FilesClient {
       });
     }
 
+    /** Export the knowledge-source manifest */
+    async exportKnowledgeManifest(query?: { "source_id"?: string; "collection_id"?: string; "project_id"?: string; "tag"?: string; "status"?: "active" | "deleted" | "moved" | "all"; "include_deleted"?: boolean; "delta"?: boolean; "since_cursor"?: string; "since_sync_version"?: number; "after"?: string; "before"?: string; "cursor"?: string; "limit"?: number; "format"?: "json" | "jsonl" }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("GET", `/knowledge/manifest`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     /** List machines */
     async listMachines(init?: RequestInit): Promise<Array<Machine>> {
       return this.request("GET", `/machines`, {
