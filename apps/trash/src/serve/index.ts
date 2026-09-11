@@ -1,9 +1,10 @@
 /**
  * Serve entry — `<name>-serve` bin. Zero-dependency HTTP surface: health,
  * readiness, version and the OpenAPI document the contract references.
+ * Emitted to `dist/serve/index.js`.
  */
 const OPENAPI = JSON.stringify(
-  { openapi: "3.0.3", info: { title: "@hasna/__MEMBER__", version: "0.0.0" }, paths: { "/health": { get: { summary: "Health probe", responses: { "200": { description: "ok" } } } } } },
+  { openapi: "3.0.3", info: { title: "@hasna/trash", version: "0.0.0" }, paths: { "/health": { get: { summary: "Health probe", responses: { "200": { description: "ok" } } } } } },
   null,
   2,
 );
@@ -20,4 +21,4 @@ const server = Bun.serve({
   },
 });
 
-console.log(`@hasna/__MEMBER__-serve listening on ${server.url.href}`);
+console.log(`@hasna/trash-serve listening on ${server.url.href}`);

@@ -1,6 +1,7 @@
 /**
  * MCP entry — `<name>-mcp` bin. A minimal stdio JSON-RPC server so the
  * surface exists without a dependency: implement real tools here.
+ * Emitted to `dist/mcp/index.js`.
  */
 import { readFileSync } from "node:fs";
 
@@ -18,7 +19,7 @@ process.stdin.on("data", (chunk: Buffer) => {
     try {
       const req = JSON.parse(trimmed);
       if (req.method === "initialize") {
-        send({ jsonrpc: "2.0", id: req.id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "@hasna/__MEMBER__", version: "0.0.0" } } });
+        send({ jsonrpc: "2.0", id: req.id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "@hasna/trash", version: "0.0.0" } } });
       } else if (req.method === "tools/list") {
         send({ jsonrpc: "2.0", id: req.id, result: { tools: [{ name: "ping", description: "ping", inputSchema: { type: "object", properties: {} } }] } });
       } else if (req.method === "tools/call" && req.params?.name === "ping") {
