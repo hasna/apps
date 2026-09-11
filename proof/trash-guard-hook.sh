@@ -94,6 +94,18 @@ jrc=$?
 # Wave 1 is Bash-only (§11.9); every other tool is none of this hook's business.
 [ "$tool" = "Bash" ] || exit 0
 
+# A command we cannot READ is a payload we cannot verify. `.tool_input.command
+# // ""` collapses "cannot read" and "present but empty" into one value, and jq
+# succeeds on both -- so the `// ""` default alone would let an unreadable
+# payload fall through as "no delete verb", i.e. ALLOW. The harness falls back
+# to the ORIGINAL tool input whenever `updatedInput` is missing or empty, so
+# "cannot tell" must never resolve to "run it". Test readability with `jq -e`
+# BEFORE defaulting: a present-but-empty string still passes (it runs nothing,
+# and is correctly allowed), while a missing / null / non-string command is
+# refused.
+if ! printf '%s' "$payload" | jq -e '(.tool_input? | type) == "object" and (.tool_input.command? | type) == "string"' >/dev/null 2>&1; then
+  deny "the hook could not read a string tool_input.command from its input payload, so it cannot verify what would run — refusing rather than allowing an unverifiable call. Re-run the delete explicitly as \`rm -- <path>\`."
+fi
 cmd=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)
 jrc=$?
 [ "$jrc" -eq 0 ] || deny "the hook could not read tool_input.command from its input payload"
