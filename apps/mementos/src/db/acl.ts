@@ -62,26 +62,58 @@ export function removeAcl(id: string, db?: Database): boolean {
   return result.changes > 0;
 }
 
+export interface CheckPermissionOptions {
+  /**
+   * Answer `true` when the agent has NO rules at all, instead of denying.
+   *
+   * This used to be the silent default ("no ACLs = full access, backward
+   * compat"). A permissive default on an authorization primitive is only ever
+   * safe as a DELIBERATE choice at the call site, because the two states it
+   * conflates — "this agent is deliberately unrestricted" and "this agent's
+   * rules are missing/not yet written/not visible from here" — have opposite
+   * correct answers. Whoever wants the permissive reading now has to ask for
+   * it by name, in code review.
+   */
+  allowWhenUnconfigured?: boolean;
+}
+
 /**
  * Check if an agent has the required permission for a memory key.
- * Returns true if allowed (no ACLs = full access).
+ *
+ * DENY BY DEFAULT. `true` is returned only when a rule actually grants the
+ * access: an agent with no rules is denied unless the caller passes
+ * {@link CheckPermissionOptions.allowWhenUnconfigured}, and a rule set that
+ * cannot be read is denied outright — an unreadable ACL table must never read
+ * as a grant.
  */
 export function checkPermission(
   agentId: string,
   memoryKey: string,
   requiredPermission: "read" | "write",
-  db?: Database
+  db?: Database,
+  options: CheckPermissionOptions = {}
 ): boolean {
-  const d = db || getDatabase();
+  let acls: { permission: AclPermission }[];
+  let aclCount: number;
 
-  // If no ACLs exist for this agent, allow everything (backward compat)
-  const aclCount = (d.query("SELECT COUNT(*) as c FROM memory_acl WHERE agent_id = ?").get(agentId) as { c: number }).c;
-  if (aclCount === 0) return true;
+  try {
+    const d = db || getDatabase();
+    aclCount = (d.query("SELECT COUNT(*) as c FROM memory_acl WHERE agent_id = ?").get(agentId) as { c: number }).c;
 
-  // Find matching ACL rules (glob pattern match using LIKE)
-  const acls = d.query(
-    "SELECT permission FROM memory_acl WHERE agent_id = ? AND ? LIKE REPLACE(REPLACE(key_pattern, '*', '%'), '?', '_')"
-  ).all(agentId, memoryKey) as { permission: AclPermission }[];
+    // Find matching ACL rules (glob pattern match using LIKE)
+    acls = d.query(
+      "SELECT permission FROM memory_acl WHERE agent_id = ? AND ? LIKE REPLACE(REPLACE(key_pattern, '*', '%'), '?', '_')"
+    ).all(agentId, memoryKey) as { permission: AclPermission }[];
+  } catch {
+    // The rule set could not be read (no store configured, transport failure,
+    // a store error). We do not know what is permitted, so we permit nothing.
+    return false;
+  }
+
+  if (aclCount === 0) {
+    // No rules for this agent: unrestricted only if the caller said so.
+    return options.allowWhenUnconfigured === true;
+  }
 
   if (acls.length === 0) {
     // Agent has ACLs but none match this key — deny by default
