@@ -902,8 +902,8 @@ export class CloudConfigStore implements ConfigStore {
 
   async reset(): Promise<void> {
     throw new Error(
-      "`init --force` cannot wipe the shared cloud store from a client. " +
-        "Point this run at the local store (HASNA_INSTRUCTIONS_LOCAL=1 with no hosted credential) to reset it instead.",
+      "`init --force` cannot wipe the shared hosted store from a client. " +
+        "Force-wipe is available only against the on-box SQLite store (HASNA_INSTRUCTIONS_LOCAL=1 with no hosted credential).",
     );
   }
 }
