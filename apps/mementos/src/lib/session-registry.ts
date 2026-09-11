@@ -2,14 +2,37 @@
  * Session Registry — shared registry of active Claude Code sessions.
  * Designed to be reusable across the open-* ecosystem (mementos, todos, conversations).
  *
- * Uses a shared SQLite DB at ~/.open-sessions-registry.db.
  * Each MCP server registers on connect, heartbeats, and can query peers.
  * PID identifies the Claude Code process — all MCPs in same session share a PID.
+ *
+ * WHERE IT LIVES, AND WHEN (fleet fail-closed wave, 2026-09-11). Until this
+ * revision the registry was an ungated SQLite file at the HOME ROOT
+ * (`~/.open-sessions-registry.db`), created by the first `registerSession`
+ * call — i.e. by every `mementos-mcp` start, including a hosted one that had
+ * just refused to open the memory store (T1 §3.5 mementos). Two rules broke
+ * at once: "no local fleet SQLite on any station" and "an app's files live
+ * under ~/.hasna/<app>". Now:
+ *
+ *   - The registry is an on-box SQLite file ONLY when this process is allowed
+ *     to have an on-box store at all: the explicit local opt-in
+ *     (`HASNA_MEMENTOS_LOCAL=1` / `HASNA_MEMENTOS_DB_PATH`, see
+ *     `selectsMementosLocalStore`) or the server context (`mementos-serve`).
+ *     It then lives NEXT TO the memory store — `<dir of the store>/
+ *     sessions-registry.db` — never at the home root; a `:memory:` store gets
+ *     a `:memory:` registry.
+ *   - On the HOSTED route (a credential resolved, no opt-in) the registry is
+ *     PROCESS-LOCAL: the same API, backed by an in-process map, so the
+ *     auto-inject orchestrator and the channel pusher keep working for this
+ *     server's own session, and nothing is read from or written to disk.
+ *     Cross-process peer discovery is a local-store feature; it does not
+ *     exist on a hosted station and must not invent a file to fake it.
  */
 
-import { SqliteAdapter as Database } from "../storage.js";
+import { SqliteAdapter as Database, isServerContext } from "../storage.js";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { getDbPath } from "./config.js";
+import { selectsMementosLocalStore } from "./local-opt-in.js";
 
 // ============================================================================
 // Types
@@ -38,23 +61,54 @@ export interface SessionFilter {
 }
 
 // ============================================================================
-// Database
+// Placement
 // ============================================================================
 
-const DB_PATH = join(
-  process.env["HOME"] || process.env["USERPROFILE"] || "~",
-  ".open-sessions-registry.db"
-);
+/** File name of the registry, placed next to the memory store. */
+export const SESSION_REGISTRY_FILE = "sessions-registry.db";
+
+/**
+ * Is an on-box registry file permitted for this process? Only under the
+ * explicit local opt-in or in the server. Answered from the env dictionary
+ * (and the server flag) — no Keychain, no filesystem.
+ */
+export function sessionRegistryUsesLocalStore(env: Record<string, string | undefined> = process.env): boolean {
+  return isServerContext() || selectsMementosLocalStore(env);
+}
+
+/**
+ * Where the registry file lives when one is permitted: beside the memory
+ * store (`getDbPath()`), so a pinned scratch store gets a scratch registry
+ * and a `:memory:` store gets a `:memory:` registry. Never the home root.
+ */
+export function sessionRegistryPath(): string {
+  const store = getDbPath();
+  if (store === ":memory:") return ":memory:";
+  return join(dirname(store), SESSION_REGISTRY_FILE);
+}
+
+// ============================================================================
+// Database (local opt-in / server only)
+// ============================================================================
 
 let _db: Database | null = null;
+let _dbPath: string | null = null;
 
 function getDb(): Database {
-  if (_db) return _db;
+  const path = sessionRegistryPath();
+  if (_db && _dbPath === path) return _db;
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
 
-  const dir = dirname(DB_PATH);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  if (path !== ":memory:") {
+    const dir = dirname(path);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  }
 
-  _db = new Database(DB_PATH);
+  _db = new Database(path);
+  _dbPath = path;
   _db.run("PRAGMA journal_mode = WAL");
   _db.run("PRAGMA busy_timeout = 3000");
 
@@ -84,6 +138,13 @@ function getDb(): Database {
 
   return _db;
 }
+
+// ============================================================================
+// Process-local registry (hosted route)
+// ============================================================================
+
+/** The hosted-route registry: this process's own sessions, nothing on disk. */
+const _memory = new Map<string, SessionInfo>();
 
 function generateId(): string {
   return crypto.randomUUID().slice(0, 8);
@@ -119,6 +180,16 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+function matchesFilter(s: SessionInfo, filter?: SessionFilter): boolean {
+  if (!filter) return true;
+  if (filter.project_name && s.project_name !== filter.project_name) return false;
+  if (filter.git_root && s.git_root !== filter.git_root) return false;
+  if (filter.mcp_server && s.mcp_server !== filter.mcp_server) return false;
+  if (filter.agent_name && s.agent_name !== filter.agent_name) return false;
+  if (filter.exclude_pid && s.pid === filter.exclude_pid) return false;
+  return true;
+}
+
 // ============================================================================
 // Registry API
 // ============================================================================
@@ -132,11 +203,32 @@ export function registerSession(opts: {
   tty?: string;
   metadata?: Record<string, unknown>;
 }): SessionInfo {
-  const db = getDb();
   const pid = process.pid;
   const cwd = opts.cwd || process.cwd();
-  const id = generateId();
   const timestamp = now();
+
+  if (!sessionRegistryUsesLocalStore()) {
+    // Hosted route: process-local. Same PID + MCP server = same session.
+    const existing = [..._memory.values()].find((s) => s.pid === pid && s.mcp_server === opts.mcp_server);
+    const record: SessionInfo = {
+      id: existing?.id ?? generateId(),
+      pid,
+      cwd,
+      git_root: opts.git_root || null,
+      agent_name: opts.agent_name || null,
+      project_name: opts.project_name || null,
+      tty: opts.tty || null,
+      mcp_server: opts.mcp_server,
+      metadata: { ...(opts.metadata || {}) },
+      registered_at: existing?.registered_at ?? timestamp,
+      last_seen_at: timestamp,
+    };
+    _memory.set(record.id, record);
+    return { ...record, metadata: { ...record.metadata } };
+  }
+
+  const db = getDb();
+  const id = generateId();
 
   // Upsert — same PID + MCP server = same session
   const existing = db.query(
@@ -180,22 +272,47 @@ export function registerSession(opts: {
 }
 
 export function heartbeatSession(id: string): void {
+  if (!sessionRegistryUsesLocalStore()) {
+    const s = _memory.get(id);
+    if (s) s.last_seen_at = now();
+    return;
+  }
   const db = getDb();
   db.run("UPDATE sessions SET last_seen_at = ? WHERE id = ?", [now(), id]);
 }
 
 export function unregisterSession(id: string): void {
+  if (!sessionRegistryUsesLocalStore()) {
+    _memory.delete(id);
+    return;
+  }
   const db = getDb();
   db.run("DELETE FROM sessions WHERE id = ?", [id]);
 }
 
 export function getSession(id: string): SessionInfo | null {
+  if (!sessionRegistryUsesLocalStore()) {
+    const s = _memory.get(id);
+    return s ? { ...s, metadata: { ...s.metadata } } : null;
+  }
   const db = getDb();
   const row = db.query("SELECT * FROM sessions WHERE id = ?").get(id) as Record<string, unknown> | null;
   return row ? parseRow(row) : null;
 }
 
 export function listSessions(filter?: SessionFilter): SessionInfo[] {
+  if (!sessionRegistryUsesLocalStore()) {
+    return [..._memory.values()]
+      .filter((s) => matchesFilter(s, filter))
+      .filter((s) => {
+        if (isProcessAlive(s.pid)) return true;
+        _memory.delete(s.id);
+        return false;
+      })
+      .sort((a, b) => (a.last_seen_at < b.last_seen_at ? 1 : a.last_seen_at > b.last_seen_at ? -1 : 0))
+      .map((s) => ({ ...s, metadata: { ...s.metadata } }));
+  }
+
   const db = getDb();
   const conditions: string[] = [];
   const params: (string | number)[] = [];
@@ -245,6 +362,16 @@ export function getSessionsByProject(projectName: string): SessionInfo[] {
 }
 
 export function cleanStaleSessions(): number {
+  if (!sessionRegistryUsesLocalStore()) {
+    let cleaned = 0;
+    for (const s of [..._memory.values()]) {
+      if (!isProcessAlive(s.pid)) {
+        _memory.delete(s.id);
+        cleaned++;
+      }
+    }
+    return cleaned;
+  }
   const db = getDb();
   const rows = db.query("SELECT id, pid FROM sessions").all() as { id: string; pid: number }[];
   let cleaned = 0;
@@ -258,8 +385,17 @@ export function cleanStaleSessions(): number {
 }
 
 export function updateSessionAgent(mcpServer: string, agentName: string): void {
-  const db = getDb();
   const pid = process.pid;
+  if (!sessionRegistryUsesLocalStore()) {
+    for (const s of _memory.values()) {
+      if (s.pid === pid && s.mcp_server === mcpServer) {
+        s.agent_name = agentName;
+        s.last_seen_at = now();
+      }
+    }
+    return;
+  }
+  const db = getDb();
   db.run(
     "UPDATE sessions SET agent_name = ?, last_seen_at = ? WHERE pid = ? AND mcp_server = ?",
     [agentName, now(), pid, mcpServer]
@@ -274,5 +410,11 @@ export function closeRegistry(): void {
   if (_db) {
     _db.close();
     _db = null;
+    _dbPath = null;
   }
+}
+
+/** Drop the process-local registry. Test seam only. */
+export function __resetProcessLocalRegistry(): void {
+  _memory.clear();
 }
