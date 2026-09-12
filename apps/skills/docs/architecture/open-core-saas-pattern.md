@@ -31,9 +31,10 @@ Good OSS commands:
 
 - `auth login`, `auth signup`, `auth whoami` — the API-backed auth commands;
   they call the configured Skills API, print/open returned URLs, and store
-  scoped local credentials
-- `auth logout` — local credential removal (`src/cli/commands/auth.ts`,
-  `clearAuthConfig()`); no API call
+  nothing: this CLI writes no credential file (fail-closed re-cut,
+  hasna/apps#1720); the verbs name where a key belongs instead
+- `auth logout` — reports the credential source; this CLI stores and removes no credentials
+  (`src/cli/commands/auth.ts`, `credentialSource()`); no API call
 - `run`, `runs list`, `runs show`, `exports open` — local execution and local
   run records (`src/cli/commands/runtime.ts`); they require no API origin
 - `runs status`, `exports download` — the remote-client run subcommands; they

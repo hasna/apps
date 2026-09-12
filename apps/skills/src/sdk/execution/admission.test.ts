@@ -5,7 +5,8 @@ useDefaultTestTimeout();
 
 import { createSubmitRunService, digestInput, DEFAULT_RUN_LIMITS, DEFAULT_RUN_POLICY } from "./admission.js";
 import { ImageProfileResolutionError, createImageProfileRegistry, dependencyLayerRule } from "./image-profile.js";
-import { MemoryRunExecutionStore, SqliteRunExecutionStore } from "./storage.js";
+import { MemoryRunExecutionStore } from "./storage.js";
+import { SqliteRunExecutionStore } from "../../server/sqlite-run-execution-store.js";
 import type { RunExecutionStore } from "./storage.js";
 
 const TEST_IMAGE_PROFILES = createImageProfileRegistry({

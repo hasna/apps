@@ -6,7 +6,8 @@ useDefaultTestTimeout();
 import { createSubmitRunService } from "./admission.js";
 import { createImageProfileRegistry } from "./image-profile.js";
 import { createRunStateMachine } from "./state-machine.js";
-import { MemoryRunExecutionStore, SqliteRunExecutionStore } from "./storage.js";
+import { MemoryRunExecutionStore } from "./storage.js";
+import { SqliteRunExecutionStore } from "../../server/sqlite-run-execution-store.js";
 import type { RunExecutionStore } from "./storage.js";
 
 const PROFILES = createImageProfileRegistry({

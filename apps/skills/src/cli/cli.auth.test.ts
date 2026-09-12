@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { runCliInCwd } from "./cli.test-utils";
@@ -60,7 +60,7 @@ describe("CLI server auth", () => {
     }
   });
 
-  test("auth login --api-key verifies and stores a server key without echoing it", async () => {
+  test("auth login --api-key verifies a server key, stores nothing, and never echoes it", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-api-key-login-"));
     const seenAuthHeaders: Array<string | null> = [];
     const server = Bun.serve({
@@ -88,26 +88,28 @@ describe("CLI server auth", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        status: "authenticated",
-        authSource: "stored",
+      const payload = JSON.parse(result.stdout);
+      expect(payload).toMatchObject({
+        status: "verified",
+        stored: false,
+        code: "CREDENTIAL_STORE_UNMANAGED",
+        authSource: "--api-key",
         email: "key@example.com",
         organization: "key-org",
+      });
+      // Where the key belongs, by name — the Keychain item, the file, the variable.
+      expect(payload.placement).toMatchObject({
+        keychainItem: "hasna.credentials.skills.api-key",
+        credentialsFile: join(tmpDir, ".hasna", "skills", "config", "credentials"),
+        envKey: "HASNA_SKILLS_API_KEY",
       });
       expect(result.stdout).not.toContain(apiKey);
       expect(seenAuthHeaders).toEqual([`Bearer ${apiKey}`]);
 
-      // Stored in the shared credentials file the whole fleet reads, owner-only,
-      // with the display identity beside it rather than inside it.
-      const credentialsPath = join(tmpDir, ".hasna", "skills", "config", "credentials");
-      expect(readFileSync(credentialsPath, "utf8")).toContain(`HASNA_SKILLS_API_KEY=${apiKey}`);
-      expect(statSync(credentialsPath).mode & 0o077).toBe(0);
-      const identityPath = join(tmpDir, ".hasna", "skills", "config", "identity.json");
-      expect(JSON.parse(readFileSync(identityPath, "utf8"))).toMatchObject({
-        email: "key@example.com",
-        orgSlug: "key-org",
-      });
-      expect(readFileSync(identityPath, "utf8")).not.toContain(apiKey);
+      // Verified only: this CLI writes no credential file and no identity sidecar
+      // (fail-closed re-cut, hasna/apps#1720; provisioning is the operator's step).
+      expect(existsSync(join(tmpDir, ".hasna", "skills", "config", "credentials"))).toBe(false);
+      expect(existsSync(join(tmpDir, ".hasna", "skills", "config", "identity.json"))).toBe(false);
     } finally {
       server.stop(true);
       rmSync(tmpDir, { recursive: true, force: true });
@@ -223,14 +225,16 @@ describe("CLI server auth", () => {
     }
   });
 
-  test("device login stores credentials for the Skills API", async () => {
+  test("device login refuses before any request: this CLI stores no credentials", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-device-auth-"));
     const apiKey = crypto.randomUUID();
+    const requests: string[] = [];
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       fetch: async (req) => {
         const url = new URL(req.url);
+        requests.push(`${req.method} ${url.pathname}`);
         if (url.pathname === "/api/auth/device/start" && req.method === "POST") {
           return Response.json({
             deviceCode: "device_secret",
@@ -271,21 +275,18 @@ describe("CLI server auth", () => {
         "--no-open",
         "--json",
       ], tmpDir, env);
-      expect(login.exitCode).toBe(0);
-      expect(JSON.parse(login.stdout)).toMatchObject({
-        status: "authenticated",
-        email: "user@example.com",
-        organization: "user",
-      });
-
-      const credentialsPath = join(tmpDir, ".hasna", "skills", "config", "credentials");
-      expect(existsSync(credentialsPath)).toBe(true);
-      expect(statSync(credentialsPath).mode & 0o077).toBe(0);
-      expect(readFileSync(credentialsPath, "utf8")).toContain(`HASNA_SKILLS_API_KEY=${apiKey}`);
-      expect(JSON.parse(readFileSync(join(tmpDir, ".hasna", "skills", "config", "identity.json"), "utf8"))).toMatchObject({
-        email: "user@example.com",
-        orgSlug: "user",
-      });
+      // The verb ends in a key this CLI can neither store nor print, so it stops
+      // before the device flow starts: no request, no file, exit 1, the code and
+      // the placement (fail-closed re-cut, hasna/apps#1720).
+      expect(login.exitCode).toBe(1);
+      expect(login.stderr).toBe("");
+      const payload = JSON.parse(login.stdout);
+      expect(payload).toMatchObject({ status: "credential_store_unmanaged", code: "CREDENTIAL_STORE_UNMANAGED", apiUrl: `http://127.0.0.1:${server.port}` });
+      expect(payload.error).toContain("hasna.credentials.skills.api-key");
+      expect(requests).toEqual([]);
+      expect(login.stdout).not.toContain(apiKey);
+      expect(existsSync(join(tmpDir, ".hasna", "skills", "config", "credentials"))).toBe(false);
+      expect(existsSync(join(tmpDir, ".hasna", "skills", "config", "identity.json"))).toBe(false);
     } finally {
       server.stop(true);
       rmSync(tmpDir, { recursive: true, force: true });
@@ -464,7 +465,6 @@ describe("CLI server auth", () => {
       };
       for (const args of [
         ["auth", "whoami", "--json"],
-        ["auth", "login", "--device", "--json"],
       ]) {
         const result = await runCliInCwd(args, tmpDir, env);
         expect(result.exitCode, args.join(" ")).not.toBe(0);

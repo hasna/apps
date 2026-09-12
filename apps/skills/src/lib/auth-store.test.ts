@@ -1,42 +1,41 @@
 /**
- * Where the credential is written, and what reads it back.
+ * What reads the credential back — and the fact that nothing here writes one.
  *
- * The location changed with the fleet credential ladder (owner ruling
+ * The location is the fleet credential ladder's disk tier (owner ruling
  * 2026-09-04, hasna/apps#1720): `~/.hasna/skills/config/credentials`, mode 0600,
- * the shared @hasna/contracts disk tier — not `auth.json` in this app's data
- * directory. `$HASNA_SKILLS_DIR` therefore no longer moves it: that variable
- * relocates this app's DATA (corpus, database, config), and the fleet
- * credential is the machine's, shared with every other Hasna CLI. `HASNA_HOME`
- * is what relocates it, and these tests use a throwaway one throughout so the
- * developer's real credential is never read or written.
+ * relocated by `HASNA_HOME`, never by `$HASNA_SKILLS_DIR`. Since the fail-closed
+ * re-cut (owner ruling 2026-09-07) this package has no writer for that file:
+ * the provisioning step is the operator's, and the tests simulate it with the
+ * test-only fixture writer. Every case uses a throwaway root so the
+ * developer's real credential is never read.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
+import * as authStore from "./auth-store.js";
 import {
-  clearAuthConfig,
+  CREDENTIAL_STORE_UNMANAGED,
   credentialFileMode,
+  credentialPlacement,
+  credentialPlacementMessage,
   getApiKey,
   getAuthConfig,
   getAuthFilePath,
+  getAuthIdentity,
   getIdentityFilePath,
   readStoredApiUrl,
-  saveApiUrl,
-  saveAuthConfig,
-  type StoredAuthConfig,
 } from "./auth-store.js";
+import { writeSkillsCredentialFixture } from "./credential-fixture.test-utils.js";
 import { SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV } from "./fleet-credentials.js";
 
 useDefaultTestTimeout();
 
-const SAMPLE_CONFIG: StoredAuthConfig = {
+const SAMPLE = {
   apiKey: "sk_boundary_test_only",
-  email: "boundary@example.com",
-  orgId: "org_boundary",
-  orgSlug: "boundary-org",
+  identity: { email: "boundary@example.com", orgId: "org_boundary", orgSlug: "boundary-org" },
 };
 
 /** Run `fn` against a throwaway `~/.hasna` root, with no ambient credential. */
@@ -49,94 +48,72 @@ function withFleetHome<T>(fn: (env: Record<string, string | undefined>, root: st
   }
 }
 
-describe("the credential this CLI writes", () => {
-  test("saveAuthConfig writes the shared credentials file, owner-only", () => {
+describe("the credential this CLI reads", () => {
+  test("a provisioned credentials file resolves through the shared ladder", () => {
     withFleetHome((env, root) => {
-      const file = saveAuthConfig(SAMPLE_CONFIG, env);
-
+      const file = writeSkillsCredentialFixture(env, SAMPLE);
       expect(file).toBe(join(root, "skills", "config", "credentials"));
       expect(getAuthFilePath(env)).toBe(file);
-      expect(readFileSync(file, "utf-8")).toContain(`${SKILLS_API_KEY_ENV}=${SAMPLE_CONFIG.apiKey}`);
-      expect(statSync(file).mode & 0o777).toBe(0o600);
       expect(credentialFileMode(env)).toBe(0o600);
+      expect(getApiKey(env)).toBe(SAMPLE.apiKey);
+      expect(getAuthConfig(env)).toEqual({ apiKey: SAMPLE.apiKey, ...SAMPLE.identity });
     });
   });
 
-  test("the ladder reads back exactly what was written", () => {
+  test("identity beside the credential is display data: read only, never holding the key", () => {
     withFleetHome((env) => {
-      saveAuthConfig(SAMPLE_CONFIG, env);
-      expect(getApiKey(env)).toBe(SAMPLE_CONFIG.apiKey);
-      expect(getAuthConfig(env)).toEqual(SAMPLE_CONFIG);
-    });
-  });
-
-  test("identity is stored beside the credential, never inside it", () => {
-    withFleetHome((env) => {
-      const file = saveAuthConfig(SAMPLE_CONFIG, env);
+      const file = writeSkillsCredentialFixture(env, SAMPLE);
       const identityFile = getIdentityFilePath(env);
-
-      expect(existsSync(identityFile)).toBe(true);
-      const identity = JSON.parse(readFileSync(identityFile, "utf-8"));
-      expect(identity).toEqual({
-        apiUrl: "https://api.hasna.com/skills",
-        email: SAMPLE_CONFIG.email,
-        orgId: SAMPLE_CONFIG.orgId,
-        orgSlug: SAMPLE_CONFIG.orgSlug,
-      });
-      // The secret is in the credentials file and nowhere else.
-      expect(readFileSync(identityFile, "utf-8")).not.toContain(SAMPLE_CONFIG.apiKey);
-      expect(file).not.toBe(identityFile);
+      expect(identityFile).not.toBe(file);
+      expect(readFileSync(identityFile, "utf-8")).not.toContain(SAMPLE.apiKey);
+      expect(getAuthIdentity(env)).toEqual(SAMPLE.identity);
     });
   });
 
-  test("a stored API URL lives in the same file and is read back by the ladder", () => {
+  test("a stored API URL in the same file is read back; this package never writes one", () => {
     withFleetHome((env) => {
-      saveAuthConfig(SAMPLE_CONFIG, env);
-      saveApiUrl("https://skills.internal.example", env);
-
-      const contents = readFileSync(getAuthFilePath(env), "utf-8");
-      expect(contents).toContain(`${SKILLS_API_URL_ENV}=https://skills.internal.example`);
-      // Writing the URL must not disturb the key that is already there.
-      expect(contents).toContain(`${SKILLS_API_KEY_ENV}=${SAMPLE_CONFIG.apiKey}`);
+      writeSkillsCredentialFixture(env, { ...SAMPLE, apiUrl: "https://skills.internal.example/api/v1" });
       expect(readStoredApiUrl(env)).toBe("https://skills.internal.example");
-
-      expect(saveApiUrl(null, env)).toBe(getAuthFilePath(env));
-      expect(readStoredApiUrl(env)).toBeNull();
-      expect(getApiKey(env)).toBe(SAMPLE_CONFIG.apiKey);
+      expect(getApiKey(env)).toBe(SAMPLE.apiKey);
     });
   });
 
-  test("logout removes the credential this command owns and reports what is left", () => {
-    withFleetHome((env) => {
-      saveAuthConfig(SAMPLE_CONFIG, env);
-      expect(clearAuthConfig(env)).toEqual({ stillResolves: false });
-      expect(() => getApiKey(env)).toThrow("no API key resolved");
-      expect(existsSync(getIdentityFilePath(env))).toBe(false);
-
-      // A key injected by the environment belongs to the machine, not to this
-      // command: it is reported, never silently "signed out".
-      saveAuthConfig(SAMPLE_CONFIG, env);
-      const withEnvKey = { ...env, [SKILLS_API_KEY_ENV]: "sk_from_the_environment" };
-      expect(clearAuthConfig(withEnvKey)).toEqual({ stillResolves: true });
-      expect(getApiKey(withEnvKey)).toBe("sk_from_the_environment");
-    });
+  test("the module exports no credential writer and imports no filesystem writer", () => {
+    for (const name of ["saveAuthConfig", "saveApiUrl", "clearAuthConfig", "writeCredentialValues"]) {
+      expect((authStore as Record<string, unknown>)[name], name).toBeUndefined();
+    }
+    const source = readFileSync(new URL("./auth-store.ts", import.meta.url), "utf-8");
+    for (const writer of ["writeFileSync", "appendFileSync", "renameSync", "unlinkSync", "chmodSync", "mkdirSync"]) {
+      expect(source, writer).not.toContain(writer);
+    }
   });
 
-  test("a blank or non-ASCII key is refused rather than written", () => {
-    withFleetHome((env) => {
-      expect(() => saveAuthConfig({ apiKey: "   " }, env)).toThrow(/empty/);
-      expect(() => saveAuthConfig({ apiKey: "sk_with\na_newline" }, env)).toThrow(/control characters/);
-      expect(existsSync(getAuthFilePath(env))).toBe(false);
+  test("credential placement names the tiers and contains no value", () => {
+    withFleetHome((env, root) => {
+      const placement = credentialPlacement(env);
+      expect(placement.keychainItem).toBe("hasna.credentials.skills.api-key");
+      expect(placement.keychainUrlItem).toBe("hasna.credentials.skills.api-url");
+      expect(placement.credentialsFile).toBe(join(root, "skills", "config", "credentials"));
+      expect(placement.envKey).toBe(SKILLS_API_KEY_ENV);
+      expect(placement.envUrlKey).toBe(SKILLS_API_URL_ENV);
+
+      const message = credentialPlacementMessage(env);
+      expect(message.startsWith(`${CREDENTIAL_STORE_UNMANAGED}:`)).toBe(true);
+      for (const name of [placement.keychainItem, placement.credentialsFile!, placement.envKey, placement.envUrlKey]) {
+        expect(message).toContain(name);
+      }
+      expect(message).not.toMatch(/sk_[a-z0-9]/i);
     });
+    // With no HOME at all the message still names the tiers and invents no path.
+    expect(credentialPlacement({}).credentialsFile).toBeNull();
+    expect(credentialPlacementMessage({})).toContain("~/.hasna/skills/config/credentials");
   });
 
   test("the retired auth.json locations are not read", () => {
     withFleetHome((env, root) => {
-      // Both places a key used to live. Neither is a credential source now, and
-      // an operator holding one is told to sign in again rather than being
-      // silently authenticated from a file the shared ladder cannot see. The
-      // local opt-in keeps the unconfigured shape legal here (local mode),
-      // which is the point: the legacy files must still resolve NOTHING.
+      // Both places a key used to live. Neither is a credential source now. The
+      // local opt-in keeps the unconfigured shape legal here (local mode), which
+      // is the point: the legacy files must still resolve NOTHING.
       const appDir = join(root, "skills");
       mkdirSync(appDir, { recursive: true });
       writeFileSync(join(appDir, "auth.json"), JSON.stringify({ apiKey: "sk_legacy_app_dir" }), { mode: 0o600 });
@@ -154,6 +131,7 @@ describe("the credential this CLI writes", () => {
       writeFileSync(file, `${SKILLS_API_KEY_ENV}=sk_world_readable\n`);
       chmodSync(file, 0o644);
       expect(() => getApiKey(env)).toThrow();
+      expect(existsSync(file)).toBe(true);
     });
   });
 });

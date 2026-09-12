@@ -1,7 +1,8 @@
 import type { Command } from "commander";
-import { getApiUrl } from "../../lib/auth-store.js";
+import { getApiUrl, getAuthFilePath, CREDENTIAL_STORE_UNMANAGED } from "../../lib/auth-store.js";
+import { selectedSkillsProfile } from "../../lib/instance-credentials.js";
 import { RemoteSkillsAuthClient } from "../../lib/remote-auth.js";
-import { prepareWorkspaceEnrollment, WorkspaceProfileError } from "../../lib/workspace-profile.js";
+import { WorkspaceProfileError } from "../../lib/workspace-profile.js";
 import { NameInputError, promptCode, readCode } from "./customer-verification.js";
 
 type Options = { email?: string; codeStdin?: boolean; json?: boolean };
@@ -40,11 +41,22 @@ export function registerWorkspaceListCommand(workspace: Command) {
     });
 }
 export async function loginWorkspace(options: Options & { membershipId: string }) {
+  // Enrollment used to switch to the membership, mint a workspace key and WRITE
+  // it into the named profile's credentials file. This CLI writes no credential
+  // file (owner ruling 2026-09-07 / hasna/apps#1720; fleet credential rule
+  // 2026-09-09), so the verb stops BEFORE any request — no code is consumed and
+  // no key is minted — and names the profile file the key belongs in.
   try {
-    const enrollment = await prepareWorkspaceEnrollment(options.membershipId);
-    const code = await codeFor(new RemoteSkillsAuthClient(enrollment.origin), options); if (code === null) return;
-    const result = await enrollment.complete(options.email!, code);
-    if (options.json) console.log(JSON.stringify(result));
-    else console.log(`Signed in as ${result.email}\nProfile: ${result.profile}\nAPI: ${result.apiUrl}\nWorkspace: ${result.organization} (${result.organizationId})\nMembership: ${result.membershipId}\nRole: ${result.role}\nOne workspace key saved. Use HASNA_PROFILE=${result.profile} for subsequent commands.`);
+    const env = { ...process.env };
+    const origin = getApiUrl("Sign in to a workspace", env);
+    const profile = selectedSkillsProfile(env);
+    if (!profile) throw new WorkspaceProfileError("Workspace login requires an explicit HASNA_PROFILE name.");
+    const credentialsFile = getAuthFilePath(env);
+    const error = `${CREDENTIAL_STORE_UNMANAGED}: workspace enrollment no longer stores a key. Create one for membership ${options.membershipId} on ${origin} ` +
+      `(skills auth keys create <name> --email <you> --code <CODE>, shown once) and place it in profile '${profile}': ${credentialsFile} ` +
+      `(mode 0600, HASNA_SKILLS_API_KEY=<key> and HASNA_SKILLS_API_URL=${origin} lines).`;
+    if (options.json) console.log(JSON.stringify({ status: "credential_store_unmanaged", code: CREDENTIAL_STORE_UNMANAGED, error, profile, apiUrl: origin, membershipId: options.membershipId, credentialsFile }));
+    else console.error(error);
+    process.exitCode = 1;
   } catch (error) { errorResult(error, options.json); }
 }

@@ -3,7 +3,8 @@ import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js
 import { signBundleBytes } from "../lib/skill-bundles.js";
 import { createCancelService } from "../sdk/cancel.js";
 import { GOVERNANCE_ERROR_CODES, GovernanceError } from "../sdk/governance.js";
-import { createGovernanceStore, type GovernanceStore } from "../sdk/governance-store.js";
+import type { GovernanceStore } from "../sdk/governance-store.js";
+import { createGovernanceStore } from "./sqlite-governance-store.js";
 import { ArtifactStorage } from "./artifact-storage.js";
 import { seedBundledCorpus } from "./seed-bundled.js";
 import { authenticateRequest, publicPrincipal } from "./auth.js";

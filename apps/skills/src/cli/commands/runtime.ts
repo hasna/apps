@@ -15,7 +15,7 @@ import {
   validateBlogArticleRunOptions,
 } from "../../lib/blog-article.js";
 import { loadConfig } from "../../lib/config.js";
-import { saveApiUrl } from "../../lib/auth-store.js";
+import { credentialPlacement, CREDENTIAL_STORE_UNMANAGED } from "../../lib/auth-store.js";
 import { normalizeSkillsApiOrigin, resolveSkillsFleet, resolveSkillsApiOrigin, SkillsFleetCredentialError, SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../sdk/runs.js";
 import {
@@ -240,31 +240,25 @@ interface SetupCommandOptions {
 
 /**
  * Setup answers exactly one question: which Skills API server, if any, this CLI
- * should send remote work to.
+ * is pointed at — and, given `--api-url`, WHERE that address belongs.
  *
- * There is no mode to pick. Running skills on this machine is not a mode, it is
- * what happens when no credential resolves, so setup never has to be run to get
- * there and this command never writes a URL the operator did not supply.
+ * It writes nothing. Until 0.5.10 this command wrote `HASNA_SKILLS_API_URL`
+ * into `~/.hasna/skills/config/credentials`; that file is placed by the
+ * operator's provisioning step, not by this package (fail-closed ruling
+ * 2026-09-07, hasna/apps#1720; fleet credential rule 2026-09-09). A requested
+ * URL is validated and normalized, then the command names the Keychain item,
+ * the credentials-file line and the environment variable it can be configured
+ * in — and exits 1, because nothing was saved. `--global` is accepted and
+ * ignored, as before: the authority is per-user, never per-project.
  *
- * WHERE IT WRITES, and why that changed: `~/.hasna/skills/config/credentials`,
- * the shared fleet ladder's disk tier (owner ruling 2026-09-04, hasna/apps#1720)
- * — the same file `skills auth login` writes the key into, and the same file
- * every other Hasna CLI reads for its own app. It used to be this app's
- * `config.json`, project-scoped, which no other tool could see and which the
- * shared resolver does not read; `--global` is therefore accepted and ignored,
- * because a service address that differs per working directory is not a thing
- * the fleet ladder can express.
- *
- * Note the two separate facts in the output. `saved` is what this invocation
- * wrote, and only this invocation; `apiUrl` is the authority in effect
- * afterwards, which may come from the environment or the Keychain and outrank
- * what was just written. Reporting only the second would have this command claim
- * a write it never performed; reporting only the first would hide an override.
+ * Without `--api-url` the command reads the ladder back: `apiUrl` is the
+ * authority in effect and `source` names which rung answered (environment,
+ * Keychain item or credentials file).
  */
 async function handleSetup(options: SetupCommandOptions) {
-  // An absent flag means "tell me where I stand". A present but empty flag is
-  // an unset variable in a script (`--api-url "$SKILLS_URL"`), which must fail
-  // loudly rather than report success while pointing nowhere.
+  // A present but empty flag is an unset variable in a script
+  // (`--api-url "$SKILLS_URL"`), which must fail loudly rather than report
+  // success while pointing nowhere.
   if (options.apiUrl !== undefined && !options.apiUrl.trim()) {
     const error = "Invalid value '' for --api-url. Expected an http(s) URL";
     if (options.json) console.log(JSON.stringify({ saved: null, error }, null, 2));
@@ -273,20 +267,11 @@ async function handleSetup(options: SetupCommandOptions) {
     return;
   }
 
-  let requested = options.apiUrl?.trim();
-  if (!requested && !options.json && process.stdin.isTTY && process.stdout.isTTY) {
-    const answer = await promptLine("Skills API URL (blank to leave unchanged): ");
-    if (answer === null) { process.exitCode = 130; return; }
-    requested = answer.trim();
-  }
-
-  let saved: string | null = null;
-  let credentialsFile: string | null = null;
+  const requested = options.apiUrl?.trim();
   if (requested) {
+    let normalized: string;
     try {
-      const normalized = normalizeSkillsApiOrigin(requireHttpUrl(requested));
-      credentialsFile = saveApiUrl(normalized);
-      saved = normalized;
+      normalized = normalizeSkillsApiOrigin(requireHttpUrl(requested));
     } catch (err) {
       const error = (err as Error).message;
       if (options.json) console.log(JSON.stringify({ saved: null, requested, error }, null, 2));
@@ -294,11 +279,19 @@ async function handleSetup(options: SetupCommandOptions) {
       process.exitCode = 1;
       return;
     }
+    const placement = credentialPlacement();
+    const error =
+      `${CREDENTIAL_STORE_UNMANAGED}: this CLI does not write the Skills API address. Configure ${normalized} as the Keychain item ` +
+      `${placement.keychainUrlItem}, a ${placement.envUrlKey}=${normalized} line in ${placement.credentialsFile ?? "~/.hasna/skills/config/credentials"} ` +
+      `(mode 0600), or the ${placement.envUrlKey} environment variable. Nothing was saved.`;
+    if (options.json) console.log(JSON.stringify({ saved: null, requested: normalized, code: CREDENTIAL_STORE_UNMANAGED, error, placement }, null, 2));
+    else console.error(chalk.red(error));
+    process.exitCode = 1;
+    return;
   }
 
-  // Read the ladder back rather than echoing what was written: an env override
-  // or a Keychain item outranks the file, and an operator who cannot see that
-  // debugs the wrong thing.
+  // Read the ladder back: an env override or a Keychain item outranks the
+  // file, and an operator who cannot see that debugs the wrong thing.
   let configured: string | null = null;
   let source: string | null = null;
   let authenticated = false;
@@ -307,18 +300,17 @@ async function handleSetup(options: SetupCommandOptions) {
     const fleet = resolveSkillsFleet();
     if (fleet.mode === "hosted") authenticated = true;
   } catch (err) {
-    // Setup configures an instance before login. Missing authentication is
-    // expected here; malformed configuration and a mismatched saved key still fail.
+    // Setup describes an instance before there is a credential. Missing
+    // authentication is expected here; malformed configuration and a
+    // mismatched credential still fail.
     if (!(err instanceof SkillsFleetCredentialError && err.code === "MISSING_API_CREDENTIAL")) {
       error = (err as Error).message;
-      configured = saved;
     }
   }
   if (!error) {
     // The authority in effect, read back independently of the mode decision:
     // the local opt-in and a missing credential can both make the fleet
-    // resolution above refuse, while the address this command manages (env,
-    // Keychain, the file it just wrote) is still configured and must be shown.
+    // resolution above refuse while an address is still configured.
     const authority = resolveSkillsApiOrigin();
     configured = authority?.origin ?? null;
     source = authority?.source ?? null;
@@ -332,8 +324,7 @@ async function handleSetup(options: SetupCommandOptions) {
   const payload = {
     apiUrl: configured,
     source,
-    saved,
-    credentialsFile,
+    saved: null,
     authenticated,
     ...(error ? { error } : {}),
     config: loadConfig(),
@@ -347,29 +338,23 @@ async function handleSetup(options: SetupCommandOptions) {
   }
 
   if (error) {
-    if (saved) console.log(chalk.green(`Skills API set to ${saved}`));
     console.error(chalk.red(error));
     process.exitCode = 1;
     return;
   }
 
-  if (saved) {
-    console.log(chalk.green(`Skills API set to ${saved}`));
-    if (credentialsFile) console.log(chalk.dim(`  Saved in: ${credentialsFile}`));
-    console.log(chalk.dim("  Next: skills auth login"));
-  } else if (configured) {
-    console.log(chalk.green(`Skills API already configured: ${configured}`));
+  if (configured) {
+    console.log(chalk.green(`Skills API configured: ${configured}`));
     console.log(chalk.dim(`  Source: ${source}`));
-    console.log(chalk.dim("  Change it with: skills setup --api-url <url>"));
-    console.log(chalk.dim(`  Clear it with:  skills config unset apiUrl (or unset ${SKILLS_API_URL_ENV})`));
+    console.log(chalk.dim(`  Change or clear it at its source: unset ${SKILLS_API_URL_ENV}, the Keychain api-url item, or the credentials-file line`));
   } else {
     console.log(chalk.green("No Skills API configured; skills run on this machine."));
-    console.log(chalk.dim("  Point at a server with: skills setup --api-url <url>"));
+    console.log(chalk.dim("  Point at a server: skills setup --api-url <url> names where the address belongs"));
     console.log(chalk.dim("  Next: skills list"));
   }
 }
 
-/** Reject anything that is not an http(s) URL before it reaches the credentials file. */
+/** Reject anything that is not an http(s) URL before it is named as an authority. */
 function requireHttpUrl(value: string): string {
   let url: URL;
   try {

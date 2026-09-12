@@ -48,31 +48,34 @@ afterAll(() => rmSyncTop(FIXTURE_HOME, { recursive: true, force: true }));
 
 describe("CLI runtime and misc commands", () => {
   describe("setup", () => {
-    test("stores the API URL it was given in the shared credentials file", async () => {
-      // The service address moved out of this app's config (owner ruling
-      // 2026-09-04, hasna/apps#1720) and into `~/.hasna/skills/config/credentials`,
-      // the tier every Hasna CLI reads. An API base is normalized to the origin
-      // the client dials, so pasting the URL from an error message is safe.
-      const { mkdtempSync, rmSync, readFileSync, existsSync, statSync } = require("fs");
+    test("names where the API URL belongs and writes nothing", async () => {
+      // Until 0.5.10 this wrote `HASNA_SKILLS_API_URL` into
+      // `~/.hasna/skills/config/credentials`. That file is the operator's
+      // provisioning step, not this package's (fail-closed re-cut, hasna/apps#1720):
+      // the URL is validated and normalized, the command names the Keychain item,
+      // the file line and the variable, and exits 1 because nothing was saved.
+      const { mkdtempSync, rmSync, existsSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-api-url-"));
       try {
-        const { stdout, exitCode } = await runCliInCwd(
+        const { stdout, stderr, exitCode } = await runCliInCwd(
           ["setup", "--api-url", "https://skills.example.com/api/v1", "--json"],
           tmpDir,
           { HOME: tmpDir },
         );
-        expect(exitCode).toBe(0); // setup configures the instance before login
+        expect(exitCode).toBe(1);
+        expect(stderrWithoutLocalNotice(stderr)).toBe("");
         const data = JSON.parse(stdout);
-        expect(data).toMatchObject({ saved: "https://skills.example.com" });
-        expect(data.error).toBeUndefined();
-        expect(data.authenticated).toBe(false);
-        expect(data.next).toContain("skills auth login");
+        expect(data).toMatchObject({ saved: null, requested: "https://skills.example.com", code: "CREDENTIAL_STORE_UNMANAGED" });
+        expect(data.error).toContain("hasna.credentials.skills.api-url");
+        expect(data.error).toContain("HASNA_SKILLS_API_URL=https://skills.example.com");
+        expect(data.placement).toMatchObject({
+          envUrlKey: "HASNA_SKILLS_API_URL",
+          credentialsFile: join(tmpDir, ".hasna", "skills", "config", "credentials"),
+        });
 
-        const credentials = join(tmpDir, ".hasna", "skills", "config", "credentials");
-        expect(readFileSync(credentials, "utf8")).toContain("HASNA_SKILLS_API_URL=https://skills.example.com");
-        expect(statSync(credentials).mode & 0o077).toBe(0);
+        expect(existsSync(join(tmpDir, ".hasna", "skills", "config", "credentials"))).toBe(false);
         expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(false);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
@@ -108,16 +111,17 @@ describe("CLI runtime and misc commands", () => {
       const { join } = require("path");
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-global-"));
       try {
-        const { stdout } = await runCliInCwd(
+        const { stdout, exitCode } = await runCliInCwd(
           ["setup", "--api-url", "https://skills.example.com", "--global", "--json"],
           tmpDir,
           { HOME: tmpDir },
         );
-        expect(JSON.parse(stdout)).toMatchObject({ saved: "https://skills.example.com" });
+        expect(exitCode).toBe(1);
+        expect(JSON.parse(stdout)).toMatchObject({ saved: null, requested: "https://skills.example.com", code: "CREDENTIAL_STORE_UNMANAGED" });
         expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(false);
         expect(existsSync(join(tmpDir, ".hasna", "skills", "config.json"))).toBe(false);
-        expect(readFileSync(join(tmpDir, ".hasna", "skills", "config", "credentials"), "utf8"))
-          .toContain("HASNA_SKILLS_API_URL=https://skills.example.com");
+        expect(existsSync(join(tmpDir, ".hasna", "skills", "config", "credentials"))).toBe(false);
+        void readFileSync;
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -199,26 +203,34 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("config unset apiUrl returns a project to running on this machine", async () => {
-      // Under the old design there was a setup flag whose value was the word
-      // local. With that gone, local is the absence of an origin, so there has
-      // to be a supported way back to it.
-      const { mkdtempSync, rmSync } = require("fs");
+    test("config unset apiUrl removes the stale config key and never edits the credentials file", async () => {
+      // The retired config key is this command's to remove. A URL in the
+      // credentials file is not: that file is the operator's provisioning step
+      // (fail-closed re-cut, hasna/apps#1720), so the command reports it by path
+      // and exits 1 rather than claiming the project is back on this machine.
+      const { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-unset-"));
       try {
-        await runCliInCwd(["setup", "--api-url", "https://skills.example.com", "--json"], tmpDir, { HOME: tmpDir });
+        const nothing = await runCliInCwd(["config", "unset", "apiUrl", "--json"], tmpDir, { HOME: tmpDir });
+        expect(nothing.exitCode).toBe(0);
+        expect(JSON.parse(nothing.stdout)).toMatchObject({ key: "apiUrl", removed: false });
+
+        const credentials = join(tmpDir, ".hasna", "skills", "config", "credentials");
+        mkdirSync(join(tmpDir, ".hasna", "skills", "config"), { recursive: true, mode: 0o700 });
+        const body = "HASNA_SKILLS_API_URL=https://skills.example.com\n";
+        writeFileSync(credentials, body, { mode: 0o600 });
+
         const unset = await runCliInCwd(["config", "unset", "apiUrl", "--json"], tmpDir, { HOME: tmpDir });
-        expect(unset.exitCode).toBe(0);
-        expect(JSON.parse(unset.stdout)).toMatchObject({ key: "apiUrl", removed: true });
+        expect(unset.exitCode).toBe(1);
+        const payload = JSON.parse(unset.stdout);
+        expect(payload).toMatchObject({ key: "apiUrl", removed: false, credentialsFile: credentials });
+        expect(payload.note).toContain("HASNA_SKILLS_API_URL");
+        expect(readFileSync(credentials, "utf8")).toBe(body);
 
         const after = await runCliInCwd(["setup", "--json"], tmpDir, { HOME: tmpDir });
-        expect(JSON.parse(after.stdout)).toMatchObject({ apiUrl: null, saved: null });
-
-        const again = await runCliInCwd(["config", "unset", "apiUrl", "--json"], tmpDir, { HOME: tmpDir });
-        expect(again.exitCode).toBe(0);
-        expect(JSON.parse(again.stdout).removed).toBe(false);
+        expect(JSON.parse(after.stdout)).toMatchObject({ apiUrl: "https://skills.example.com", source: credentials, saved: null });
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }

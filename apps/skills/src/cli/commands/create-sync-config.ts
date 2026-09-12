@@ -7,7 +7,8 @@ import { existsSync } from "fs";
 import { join } from "path";
 import type { Command } from "commander";
 import { loadConfig, saveConfig, unsetConfig, getConfigPath } from "../../lib/config.js";
-import { readStoredApiUrl, saveApiUrl } from "../../lib/auth-store.js";
+import { getAuthFilePath, readStoredApiUrl } from "../../lib/auth-store.js";
+import { SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
 import { scaffoldPortableSkill } from "../../lib/portable-skills.js";
 import { clearRegistryCache } from "../../lib/registry.js";
 import {
@@ -74,18 +75,23 @@ export function registerCreateSync(parent: Command) {
     .action((key: string, options: { global: boolean; json: boolean }) => {
       const scope = options.global ? "global" : "project";
       try {
-        // `apiUrl` is retired as a config key but the service address it named
-        // still exists — in the credentials file the fleet ladder reads. The
-        // documented way to get back to running on this machine has to keep
-        // working, so this clears the real location as well as the stale key.
+        // `apiUrl` is retired as a config key. The service address it named lives
+        // in the credentials file the fleet ladder reads — a file this CLI no
+        // longer edits (fail-closed ruling 2026-09-07, hasna/apps#1720): the stale
+        // config key is removed here; a URL in the credentials file is reported by
+        // path and left for the operator's provisioning step, and the command
+        // exits 1 so a script cannot assume it is back to running on this machine.
         if (key === "apiUrl") {
-          const hadStored = Boolean(readStoredApiUrl());
-          if (hadStored) saveApiUrl(null);
-          const removedStaleKey = unsetConfig(key, scope);
-          const removed = hadStored || removedStaleKey;
-          if (options.json) console.log(JSON.stringify({ key, removed, scope, path: getConfigPath(scope) }));
+          const credentialsFile = readStoredApiUrl() ? getAuthFilePath() : null;
+          const removed = unsetConfig(key, scope);
+          const note = credentialsFile
+            ? `${SKILLS_API_URL_ENV} is still configured in ${credentialsFile}; this CLI does not edit that file — remove the line there (or the Keychain api-url item) to return to running on this machine.`
+            : null;
+          if (options.json) console.log(JSON.stringify({ key, removed, scope, path: getConfigPath(scope), ...(credentialsFile ? { credentialsFile, note } : {}) }));
+          else if (note) console.error(chalk.yellow(note));
           else if (removed) console.log(chalk.green(`Unset ${key}`));
           else console.log(chalk.dim(`${key} was not set`));
+          if (credentialsFile) process.exitCode = 1;
           return;
         }
         const removed = unsetConfig(key, scope);

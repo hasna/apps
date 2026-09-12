@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { clearAuthConfig, getAuthFilePath, getAuthIdentity, saveApiUrl, saveAuthConfig } from "./auth-store.js";
+import { getAuthFilePath, getAuthIdentity } from "./auth-store.js";
+import { writeSkillsCredentialFixture } from "./credential-fixture.test-utils.js";
 import { resolveSkillsFleet, resolveSkillsConnection } from "./fleet-credentials.js";
 import { readSkillsInstanceMetadata } from "./instance-credentials.js";
 import { createRemoteSkillsClient } from "./remote-client.js";
@@ -18,10 +19,8 @@ describe("Skills instance-bound profile credentials", () => {
     const base = env("profiles");
     const first = { ...base, HASNA_PROFILE: "internal" };
     const second = { ...base, HASNA_PROFILE: "commercial" };
-    saveApiUrl("http://127.0.0.1:4001/prefix/api/v1", first);
-    saveAuthConfig({ apiKey: "fixture-first", email: "first@example.test" }, first);
-    saveApiUrl("http://127.0.0.1:4002/api/v1", second);
-    saveAuthConfig({ apiKey: "fixture-second", email: "second@example.test" }, second);
+    writeSkillsCredentialFixture(first, { apiKey: "fixture-first", apiUrl: "http://127.0.0.1:4001/prefix/api/v1", identity: { email: "first@example.test" } });
+    writeSkillsCredentialFixture(second, { apiKey: "fixture-second", apiUrl: "http://127.0.0.1:4002/api/v1", identity: { email: "second@example.test" } });
     expect(getAuthFilePath(first)).not.toBe(getAuthFilePath(second));
     expect(resolveSkillsFleet(first)).toMatchObject({ apiOrigin: "http://127.0.0.1:4001/prefix", apiKey: "fixture-first" });
     expect(resolveSkillsFleet(second)).toMatchObject({ apiOrigin: "http://127.0.0.1:4002", apiKey: "fixture-second" });
@@ -71,66 +70,50 @@ describe("Skills instance-bound profile credentials", () => {
   });
   test("a completed connection keeps its original bound pair across later profile rotation", async () => {
     const base = { ...env("rotation"), HASNA_PROFILE: "customer" };
-    saveApiUrl("http://127.0.0.1:4001", base);
-    saveAuthConfig({ apiKey: "fixture-before" }, base);
+    writeSkillsCredentialFixture(base, { apiKey: "fixture-before", apiUrl: "http://127.0.0.1:4001" });
     const pending = resolveSkillsConnection(base);
-    saveApiUrl("http://127.0.0.1:4002", base);
-    saveAuthConfig({ apiKey: "fixture-after" }, base);
+    writeSkillsCredentialFixture(base, { apiKey: "fixture-after", apiUrl: "http://127.0.0.1:4002" });
     expect(await pending).toMatchObject({ apiOrigin: "http://127.0.0.1:4001", apiKey: "fixture-before" });
     expect(await resolveSkillsConnection(base)).toMatchObject({ apiOrigin: "http://127.0.0.1:4002", apiKey: "fixture-after" });
   });
   test("an established default instance does not override a selected profile", () => {
     const base = env("default-plus-profile");
-    saveApiUrl("http://127.0.0.1:4001", base);
-    saveAuthConfig({ apiKey: "fixture-default" }, base);
+    writeSkillsCredentialFixture(base, { apiKey: "fixture-default", apiUrl: "http://127.0.0.1:4001" });
     const profile = { ...base, HASNA_PROFILE: "customer" };
-    saveApiUrl("http://127.0.0.1:4002/prefix/api/v1", profile);
-    saveAuthConfig({ apiKey: "fixture-profile" }, profile);
+    writeSkillsCredentialFixture(profile, { apiKey: "fixture-profile", apiUrl: "http://127.0.0.1:4002/prefix/api/v1" });
     expect(resolveSkillsFleet(profile)).toMatchObject({ apiOrigin: "http://127.0.0.1:4002/prefix", apiKey: "fixture-profile" });
     expect(resolveSkillsFleet(base)).toMatchObject({ apiOrigin: "http://127.0.0.1:4001", apiKey: "fixture-default" });
   });
   test("equivalent normalized URL overrides work for default and named profiles", () => {
     for (const profile of [undefined, "customer"]) {
       const base = { ...env(`normalization-${profile ?? "default"}`), ...(profile ? { HASNA_PROFILE: profile } : {}) };
-      saveApiUrl("http://127.0.0.1:4001/prefix", base);
-      saveAuthConfig({ apiKey: "fixture-bound" }, base);
+      writeSkillsCredentialFixture(base, { apiKey: "fixture-bound", apiUrl: "http://127.0.0.1:4001/prefix" });
       expect(resolveSkillsFleet({ ...base, HASNA_SKILLS_API_URL: "http://127.0.0.1:4001/prefix/api/v1/" })).toMatchObject({ apiOrigin: "http://127.0.0.1:4001/prefix", apiKey: "fixture-bound" });
       expect(() => resolveSkillsFleet({ ...base, HASNA_SKILLS_API_URL: "http://127.0.0.1:4001", SKILLS_API_URL: "http://127.0.0.1:4002" })).toThrow();
     }
   });
-  test("logout removes selected-profile aliases without touching a different profile", () => {
-    const base = env("logout");
+  test("a selected profile whose file holds no key is refused and borrows nothing from another profile", () => {
+    // What `auth logout` used to leave behind (the URL lines with the key lines
+    // removed) is now simply a provisioning state the operator can be in; the
+    // resolver must still refuse it loudly rather than fall through.
+    const base = env("no-key-profile");
     const first = { ...base, HASNA_PROFILE: "first" };
     const second = { ...base, HASNA_PROFILE: "second" };
-    saveApiUrl("http://127.0.0.1:4001", first);
-    saveAuthConfig({ apiKey: "fixture-first" }, first);
-    saveApiUrl("http://127.0.0.1:4002", second);
-    saveAuthConfig({ apiKey: "fixture-second" }, second);
-    expect(clearAuthConfig(first)).toEqual({ stillResolves: false });
-    expect(clearAuthConfig(first)).toEqual({ stillResolves: false });
+    const firstFile = getAuthFilePath(first);
+    mkdirSync(dirname(firstFile), { recursive: true, mode: 0o700 });
+    writeFileSync(firstFile, "HASNA_SKILLS_API_URL=http://127.0.0.1:4001\n", { mode: 0o600 });
+    writeSkillsCredentialFixture(second, { apiKey: "fixture-second", apiUrl: "http://127.0.0.1:4002" });
     expect(resolveSkillsFleet(second)).toMatchObject({ apiKey: "fixture-second" });
     expect(() => resolveSkillsFleet(first)).toThrow("has no HASNA_SKILLS_API_KEY");
   });
   test("a URL override cannot redirect a saved credential or its identity", async () => {
     const base = env("override");
-    saveApiUrl("http://127.0.0.1:4001", base);
-    saveAuthConfig({ apiKey: "fixture-private", email: "private@example.test" }, base);
+    writeSkillsCredentialFixture(base, { apiKey: "fixture-private", apiUrl: "http://127.0.0.1:4001", identity: { email: "private@example.test" } });
     const changed = { ...base, HASNA_SKILLS_API_URL: "http://127.0.0.1:4002" };
     expect(() => resolveSkillsFleet(changed)).toThrow("does not match");
     await expect(createRemoteSkillsClient(changed)).rejects.toThrow("does not match");
     expect(getAuthIdentity(changed)).toEqual({});
     expect(() => resolveSkillsFleet({ ...base, HASNA_SKILLS_API_URL: "http://127.0.0.1:4001/other" })).toThrow("does not match");
-  });
-  test("editing an unbound legacy URL captures its OLD binding, never the replacement", () => {
-    const base = env("legacy");
-    const path = getAuthFilePath(base);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, "HASNA_SKILLS_API_KEY=fixture-legacy\nHASNA_SKILLS_API_URL=http://127.0.0.1:4001\n", { mode: 0o600 });
-    saveApiUrl("http://127.0.0.1:4002", base);
-    expect(readFileSync(path, "utf8")).toContain("HASNA_SKILLS_BOUND_API_URL=http://127.0.0.1:4001");
-    expect(() => resolveSkillsFleet(base)).toThrow("does not match");
-    saveAuthConfig({ apiKey: "fixture-new" }, base);
-    expect(resolveSkillsFleet(base)).toMatchObject({ apiOrigin: "http://127.0.0.1:4002", apiKey: "fixture-new" });
   });
   test("legacy internal defaults work, but a URL alone cannot send that key elsewhere", () => {
     const base = env("internal");

@@ -29,7 +29,8 @@ import { randomUUID } from "node:crypto";
 import { runMigrations } from "./migrate.js";
 import { MemorySkillsStore, PostgresSkillsStore } from "./store.js";
 import { SqliteSkillsStore } from "./sqlite-store.js";
-import { MemoryGovernanceStore, PostgresGovernanceStore, SqliteGovernanceStore, type GovernanceStore } from "../sdk/governance-store.js";
+import { MemoryGovernanceStore, PostgresGovernanceStore, type GovernanceStore } from "../sdk/governance-store.js";
+import { SqliteGovernanceStore } from "./sqlite-governance-store.js";
 import type { ApiPrincipal, SkillsProductStore } from "./types.js";
 
 export const TEST_DATABASE_URL_ENV = "HASNA_SKILLS_TEST_DATABASE_URL";

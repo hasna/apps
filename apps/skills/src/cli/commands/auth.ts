@@ -3,7 +3,7 @@ import { captureProfileWorkspace } from "../../lib/workspace-profile.js";
 import { Command } from "commander";
 import chalk from "chalk";
 import { createInterface } from "readline";
-import { getAuthConfig, getAuthIdentity, saveAuthConfig, clearAuthConfig, getApiUrl, getAuthFilePath } from "../../lib/auth-store.js";
+import { getAuthConfig, getAuthIdentity, getApiUrl, credentialPlacement, credentialPlacementMessage, CREDENTIAL_STORE_UNMANAGED } from "../../lib/auth-store.js";
 import { resolveSkillsFleet, resolveSkillsConnection, SkillsFleetCredentialError, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
 
 
@@ -146,72 +146,31 @@ function printWhoami(payload: Record<string, unknown>): void {
   if (payload.offline) console.log(chalk.dim("(offline — showing cached info)"));
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function browserCommand(url: string): string[] | null {
-  if (process.platform === "darwin") return ["open", url];
-  if (process.platform === "win32") return ["cmd", "/c", "start", "", url];
-  return ["xdg-open", url];
-}
-
-function openBrowser(url: string): void {
-  const command = browserCommand(url);
-  if (!command) return;
-  try {
-    Bun.spawn(command, { stdout: "ignore", stderr: "ignore" });
-  } catch {}
-}
-
-async function ensureApiKey(loginResult: any, origin: string): Promise<string | undefined> {
-  if (loginResult.apiKey) return loginResult.apiKey;
-  if (!loginResult.token) return undefined;
-  const keyRes = await apiRequest("/api/auth/keys", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${loginResult.token}` },
-    body: JSON.stringify({ name: "cli" }),
-  }, origin);
-  return keyRes.key;
-}
-
-async function persistLoginResult(loginResult: any, origin: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
-  const storedKey = await ensureApiKey(loginResult, origin);
-  if (!storedKey) return undefined;
-
-  saveAuthConfig({
-    apiKey: storedKey,
-    email: loginResult.user.email,
-    orgId: loginResult.organization.id,
-    orgSlug: loginResult.organization.slug,
-    userId: loginResult.user.id,
-  }, env, origin);
-
-  return storedKey;
-}
-
-function printLoginSuccess(loginResult: any, json: boolean) {
-  if (json || !isTTY) {
-    console.log(JSON.stringify({
-      status: "authenticated",
-      email: loginResult.user.email,
-      organization: loginResult.organization.slug,
-      firstLogin: loginResult.firstLogin,
-    }));
-    return;
+/**
+ * Where every verb that used to WRITE a credential now stops.
+ *
+ * `auth login` (email code, device code, `--api-key`), `auth signup` and
+ * workspace enrollment wrote `~/.hasna/skills/config/credentials` until 0.5.10.
+ * Credential provisioning is a separate, owner-authorised workflow (fleet
+ * credential rule 2026-09-09; fail-closed ruling 2026-09-07, hasna/apps#1720):
+ * this CLI names where the key belongs — Keychain item, credentials-file line,
+ * environment variable — and never writes or prints one. Exit 1, because
+ * nothing the verb's name promises has happened.
+ */
+function writeUnmanaged(json: boolean | undefined, extra: Record<string, unknown> = {}): void {
+  const error = credentialPlacementMessage();
+  if (json) {
+    console.log(JSON.stringify({ status: "credential_store_unmanaged", code: CREDENTIAL_STORE_UNMANAGED, error, placement: credentialPlacement(), ...extra }, null, 2));
+  } else {
+    console.error(chalk.red(error));
+    for (const [key, value] of Object.entries(extra)) {
+      if (typeof value === "string") console.error(chalk.dim(`  ${key}: ${value}`));
+    }
   }
-
-  console.log(chalk.green(`\n✓ Signed in as ${loginResult.user.email}`));
-  console.log(chalk.dim(`  Organization: ${loginResult.organization.name}`));
-  if (loginResult.firstLogin) {
-    // The real path, not an assumed one: HASNA_HOME / HASNA_CONFIG_HOME relocate
-    // the credentials file the shared ladder reads.
-    console.log(chalk.dim(`  API key saved to ${getAuthFilePath()}`));
-  }
+  process.exitCode = 1;
 }
 
 async function doLogin(email: string, code?: string, json?: boolean) {
-  const env = { ...process.env };
   let origin: string;
   try { origin = getApiUrl("Sign in"); }
   catch (error) { writeCommandError(error, "Configure a Skills API before signing in", json); return; }
@@ -241,49 +200,27 @@ async function doLogin(email: string, code?: string, json?: boolean) {
 
     if (!json) console.log(chalk.green("✓ Code sent to " + email));
 
+    // The code is for `auth keys create`, which mints a key and shows it once;
+    // this verb no longer verifies it, because verifying would mint a key this
+    // CLI can neither store nor print.
+    const next = `skills auth keys create <name> --email ${email} --code <CODE>`;
+    const message = `Check email for the 6-digit code, then mint a key with: ${next} (shown once) and place it where the shared ladder reads it. ${credentialPlacementMessage()}`;
     if (json || !isTTY) {
-      console.log(JSON.stringify({ status: "code_sent", email, message: "Check email for 6-digit code, then run: skills auth login --email " + email + " --code <CODE>" }));
+      console.log(JSON.stringify({ status: "code_sent", email, message, next }));
       return;
     }
-
-    const answer = await prompt(chalk.bold("Code: "));
-    if (answer === null) return;
-    code = answer;
-  }
-
-  let verifyRes: any;
-  try {
-    verifyRes = await apiRequest("/api/auth/verify", {
-      method: "POST",
-      body: JSON.stringify({ email, code }),
-    }, origin);
-  } catch (err) {
-    writeCommandError(err, "Failed to verify login code", json);
+    console.log(chalk.dim(`  Next: ${next}`));
+    console.log(chalk.dim(`  ${credentialPlacementMessage()}`));
     return;
   }
 
-  if (verifyRes.error) {
-    writeCommandError(new Error(verifyRes.error), "Failed to verify login code", json);
-    return;
-  }
-
-  let storedKey: string | undefined;
-  try {
-    storedKey = await persistLoginResult(verifyRes, origin, env);
-  } catch (err) {
-    writeCommandError(err, "Login succeeded but API key creation failed", json);
-    return;
-  }
-  if (!storedKey) {
-    writeCommandError(new Error("Login succeeded but API key creation failed"), "Login succeeded but API key creation failed", json);
-    return;
-  }
-
-  printLoginSuccess(verifyRes, Boolean(json));
+  // A code was supplied. Verifying it here would consume it to mint a key this
+  // CLI can neither store nor print; leave it for `auth keys create` and say
+  // where the key goes. No request is sent.
+  writeUnmanaged(json, { email, next: `skills auth keys create <name> --email ${email} --code <the code you received>` });
 }
 
 async function doApiKeyLogin(apiKey: string, json?: boolean) {
-  const env = { ...process.env };
   let origin: string;
   try { origin = getApiUrl("Verify API key"); }
   catch (error) { writeCommandError(error, "Configure a Skills API before signing in", json); return; }
@@ -303,30 +240,18 @@ async function doApiKeyLogin(apiKey: string, json?: boolean) {
     return;
   }
 
-  const identity = authIdentityPayload("stored", whoami);
-  const email = stringField(identity.email);
-  const orgId = stringField(identity.orgId);
-  const orgSlug = stringField(identity.organization);
-  const userId = stringField(identity.userId);
+  const identity = authIdentityPayload("--api-key", whoami);
 
-  // Only what `whoami` actually returned is stored. Filling a missing identity
-  // field with a placeholder both invents a fact about the user and, when the
-  // placeholder names a deployment variant, hands every later reader of
-  // `auth.json` a fingerprint of the instance the key belongs to.
-  saveAuthConfig({
-    apiKey: trimmed,
-    ...(email ? { email } : {}),
-    ...(orgId ? { orgId } : {}),
-    ...(orgSlug ? { orgSlug } : {}),
-    ...(userId ? { userId } : {}),
-  }, env, origin);
-
+  // Verified, NOT stored: this CLI writes no credential file. The identity the
+  // server returned is shown, and the placement names where the key belongs so
+  // the operator can finish provisioning. The key itself is never echoed.
+  const placement = credentialPlacement();
   if (json || !isTTY) {
-    console.log(JSON.stringify({ ...identity, status: "authenticated" }, null, 2));
+    console.log(JSON.stringify({ ...identity, status: "verified", stored: false, code: CREDENTIAL_STORE_UNMANAGED, placement }, null, 2));
     return;
   }
-
   printWhoami(identity);
+  console.log(chalk.dim(`  Verified only — nothing was stored. ${credentialPlacementMessage(process.env, "this key")}`));
 }
 
 interface DeviceLoginOptions {
@@ -342,105 +267,17 @@ async function doDeviceLogin(options: DeviceLoginOptions) {
     writeCommandError(new Error("Device polling timeout must be an integer from 1 to 600000 milliseconds"), "Invalid polling timeout", options.json);
     return;
   }
-  const env = { ...process.env };
   let origin: string;
   try { origin = getApiUrl("Device sign in"); }
   catch (error) { writeCommandError(error, "Configure a Skills API before signing in", options.json); return; }
-  let start: any;
-  try {
-    start = await apiRequest("/api/auth/device/start", {
-      method: "POST",
-      body: JSON.stringify({ client: "skills-cli" }),
-    }, origin);
-  } catch (err) {
-    writeCommandError(err, "Failed to start device login", options.json);
-    return;
-  }
-
-  if (start.error) {
-    writeCommandError(new Error(start.error), "Failed to start device login", options.json);
-    return;
-  }
-
-  const verificationUrl = start.verificationUriComplete || start.verificationUri;
-  const shouldPoll = Boolean(options.poll || (isTTY && !options.json));
-
-  if (options.open !== false && isTTY && verificationUrl) {
-    openBrowser(verificationUrl);
-  }
-
-  if (!shouldPoll) {
-    const payload = {
-      status: "pending",
-      userCode: start.userCode,
-      verificationUri: start.verificationUri,
-      verificationUriComplete: start.verificationUriComplete,
-      expiresIn: start.expiresIn,
-      interval: start.interval,
-      poll: "skills auth login --device --poll",
-    };
-    if (options.json || !isTTY) console.log(JSON.stringify(payload, null, 2));
-    else {
-      console.log(chalk.bold("\nSign in in your browser\n"));
-      console.log(`${chalk.dim("Code:")} ${start.userCode}`);
-      console.log(`${chalk.dim("URL:")}  ${verificationUrl}`);
-    }
-    return;
-  }
-
-  if (!options.json) {
-    console.log(chalk.bold("\nSign in in your browser\n"));
-    console.log(`${chalk.dim("Code:")} ${start.userCode}`);
-    console.log(`${chalk.dim("URL:")}  ${verificationUrl}`);
-    console.log(chalk.dim("\nWaiting for authentication..."));
-  }
-
-  const interval = Number(start.interval ?? 5);
-  const intervalMs = Number.isFinite(interval) ? Math.min(30_000, Math.max(1000, interval * 1000)) : 5000;
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    let tokenRes: any;
-    try {
-      tokenRes = await apiRequest("/api/auth/device/token", {
-        method: "POST",
-        body: JSON.stringify({ deviceCode: start.deviceCode }),
-      }, origin);
-    } catch (err) {
-      writeCommandError(err, "Failed to poll device login", options.json);
-      return;
-    }
-
-    if (tokenRes.error === "authorization_pending" || tokenRes.status === "pending") {
-      await sleep(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
-      continue;
-    }
-
-    if (tokenRes.error) {
-      writeCommandError(new Error(tokenRes.detail || tokenRes.error), "Failed to poll device login", options.json);
-      return;
-    }
-
-    let storedKey: string | undefined;
-    try {
-      storedKey = await persistLoginResult(tokenRes, origin, env);
-    } catch (err) {
-      writeCommandError(err, "Login succeeded but API key creation failed", options.json);
-      return;
-    }
-    if (!storedKey) {
-      writeCommandError(new Error("Login succeeded but API key creation failed"), "Login succeeded but API key creation failed", options.json);
-      return;
-    }
-
-    printLoginSuccess(tokenRes, Boolean(options.json));
-    return;
-  }
-
-  const error = "Device login timed out before browser authentication completed";
-  if (options.json || !isTTY) console.log(JSON.stringify({ status: "expired", error }));
-  else console.error(chalk.red(error));
-  process.exitCode = 1;
+  // Device login ends in a key this CLI can neither store nor print, so it is
+  // refused before any request is sent. The authority is still resolved first,
+  // so an unconfigured install gets the same MISSING_API_URL line as every
+  // other verb instead of a placement hint for a service it never named.
+  writeUnmanaged(options.json, {
+    apiUrl: origin,
+    next: "skills auth login --email <you>  (request a code), then: skills auth keys create <name> --email <you> --code <CODE>",
+  });
 }
 
 export function registerAuth(parent: Command) {
@@ -479,12 +316,12 @@ export function registerAuth(parent: Command) {
 
   auth
     .command("login")
-    .description("Sign in with browser/device code or email code")
+    .description("Request a sign-in code, or verify an API key; this CLI stores no credentials")
     .option("--email <email>", "Email address (non-interactive)")
     .option("--code <code>", "Verification code (non-interactive)")
     .option("--membership-id <id>", "Enroll an exact workspace membership into an explicit HASNA_PROFILE")
     .option("--code-stdin", "Read a fresh six-digit code for workspace enrollment from stdin")
-    .option("--api-key <key>", "Verify and store an API key")
+    .option("--api-key <key>", "Verify an API key and show where it belongs (nothing is stored)")
     .option("--device", "Use browser/device-code login", false)
     .option("--no-open", "Do not open a browser for device-code login")
     .option("--poll", "Poll until browser authentication completes in non-interactive mode", false)
@@ -562,14 +399,24 @@ export function registerAuth(parent: Command) {
 
   auth
     .command("logout")
-    .description("Remove this profile's stored credentials; injected keys remain configured")
+    .description("Report the credential in effect; this CLI stores and removes no credentials")
     .option("--json", "Output as JSON", false)
     .action((options: { json?: boolean }) => {
-      const { stillResolves } = clearAuthConfig();
-      if (options.json) console.log(JSON.stringify({ status: stillResolves ? "credential_still_configured" : "signed_out", stillResolves }));
-      else console.log(stillResolves
-        ? "Stored credential removed. A credential is still configured by the environment, profile selection, or Keychain; clear it there to finish signing out."
-        : "Signed out; this profile has no stored credential.");
+      // Nothing to clear: this CLI never wrote a credential (see writeUnmanaged).
+      // The truthful answer is WHICH rung of the ladder the credential in effect
+      // came from — a name, never a value — so the operator removes it there.
+      const source = credentialSource();
+      const stillResolves = source !== null;
+      const placement = credentialPlacement();
+      if (options.json) {
+        console.log(JSON.stringify({ status: stillResolves ? "credential_still_configured" : "signed_out", stillResolves, source, managed: false, placement }));
+        return;
+      }
+      console.log(stillResolves
+        ? `A Skills credential is configured at ${source}. This CLI does not manage credentials; remove it there ` +
+          `(the Keychain item ${placement.keychainItem}, the ${placement.envKey} line in ${placement.credentialsFile ?? "~/.hasna/skills/config/credentials"}, ` +
+          `or the ${placement.envKey} variable) to sign out.`
+        : "No Skills credential resolves on this machine; nothing to sign out of. This CLI stores no credentials.");
     });
 
   auth

@@ -13,9 +13,9 @@ useDefaultTestTimeout();
 // The same assertions can target a real, separately installed public package.
 // No production dependency or source file is substituted inside that package.
 const selected = process.env["SKILLS_RECONCILIATION_TEST_SDK"];
-const governanceUrl = selected ? pathToFileURL(resolve(selected)).href : new URL("./governance-store.ts", import.meta.url).href;
+const governanceUrl = selected ? pathToFileURL(resolve(selected)).href : new URL("../server/sqlite-governance-store.ts", import.meta.url).href;
 const productUrl = selected ? governanceUrl : new URL("../server/sqlite-store.ts", import.meta.url).href;
-const { SqliteGovernanceStore } = await import(governanceUrl) as typeof import("./governance-store.js");
+const { SqliteGovernanceStore } = await import(governanceUrl) as typeof import("../server/sqlite-governance-store.js");
 const { SqliteSkillsStore } = await import(productUrl) as typeof import("../server/sqlite-store.js");
 
 // Interpose only on the real database call immediately BEFORE its first
