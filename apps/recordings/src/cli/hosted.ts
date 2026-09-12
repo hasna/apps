@@ -12,7 +12,7 @@ export interface HostedCLIOptions {
 }
 export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
   const write = options.write ?? ((value: string) => { process.stdout.write(value); });
-  const program = new Command("hosted").description("Read hosted recordings, paste history and transcription providers; private text is omitted by default.")
+  const program = new Command("hosted").description("Manage hosted recordings and read paste history and providers; private text is omitted by default.")
     .requiredOption("--api-base <url>", "Complete hosted API base ending in /v1/")
     .requiredOption("--credential-env <name>", "Name of the environment variable containing this API's bearer session")
     .exitOverride().configureOutput({ writeOut: write, writeErr: () => {} });
@@ -35,6 +35,10 @@ export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
   program.command("get <id>").description("Read one hosted recording's metadata")
     .option("--include-text", "Include its private transcript", false)
     .action(async (id, values) => { write(JSON.stringify(await library().get(id, { includeText: values.includeText })) + "\n"); });
+  program.command("rename <id> <title>").description("Rename one hosted recording; returns metadata without transcript text")
+    .action(async (id, title) => { write(JSON.stringify(await library().rename(id, title)) + "\n"); });
+  program.command("delete <id>").description("Permanently delete one hosted recording; pending means audio cleanup is unfinished, with no automatic retry")
+    .action(async id => { write(JSON.stringify(await library().delete(id)) + "\n"); });
   program.command("paste-history").description("Read client-reported paste history; private text is omitted by default")
     .option("--limit <number>", "Page size, 1–100", "25")
     .option("--before <timestamp>", "UTC timestamp from the returned nextCursor")
