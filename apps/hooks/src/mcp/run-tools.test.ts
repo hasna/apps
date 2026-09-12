@@ -18,6 +18,9 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHooksServer } from "./server.js";
 import { closeDb } from "../db/index.js";
 import { setPinnedHook, sha256Of } from "../lib/store.js";
+import { enterLocalStoreRoute } from "../test/local-store-fixture.js";
+// Hermetic local route (see src/test/local-store-fixture.ts).
+let restoreRoute: () => void = () => {};
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-mcp-runtools-"));
 
@@ -26,12 +29,14 @@ beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;
   process.env.HASNA_HOOKS_DB_PATH = join(TEST_DIR, "hooks.db");
   process.env.HASNA_HOOKS_LOCK_PATH = join(TEST_DIR, "hooks.lock");
+  restoreRoute = enterLocalStoreRoute();
 });
 
 afterAll(() => {
   delete process.env.HASNA_HOOKS_DATA_DIR;
   delete process.env.HASNA_HOOKS_DB_PATH;
   delete process.env.HASNA_HOOKS_LOCK_PATH;
+  restoreRoute();
   closeDb();
   rmSync(TEST_DIR, { recursive: true, force: true });
 });

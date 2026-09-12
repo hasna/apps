@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.11
+
+### Patch Changes
+
+- Reject overlapping source and destination directories before portable skill import overwrites or copies files, including symlink aliases and destinations inside the source. Disjoint overwrites continue to replace only the selected skill.
+
 ## 0.5.10
 
 ### Patch Changes

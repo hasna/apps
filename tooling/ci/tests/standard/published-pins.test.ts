@@ -38,14 +38,15 @@
  * ordinary dependency bugs, not wave-tooling defects, and are out of scope.
  *
  * NETWORK: the check reads the public registry (npm view <dep> versions).
- * A network failure produces an explicit [SKIP published-pins] marker and
- * skips the hard assertion, mirroring the versioning suite's npm-parity
- * lane; CI has network, so the gate is live there.
+ * Unavailable registry evidence fails CI after bounded retries. Local offline
+ * runs retain an explicit [SKIP published-pins] marker; unsuccessful lookups
+ * never establish that a dependency is unpublished.
  */
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { APPS_DIR, REPO_ROOT, publishableMembers } from "./census";
+import { readPublishedVersions, requireRegistryEvidence } from "../../published-versions";
 
 export interface IntraWavePin {
   member: string;
@@ -62,7 +63,6 @@ export interface UnpublishedPin {
 
 const DEP_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const;
 const EXACT_PIN = /^\d+\.\d+\.\d+$/;
-const NETWORK_FAILURE = /EAI_AGAIN|ENETUNREACH|ECONNREFUSED|ETIMEDOUT|ERR_SOCKET_TIMEOUT|ENOTFOUND/i;
 
 /** Collect exact pins that members place on intra-wave deps (an @hasna/*
  * package that is itself a member of this tree). The wave tooling rewrites
@@ -114,30 +114,26 @@ export function findUnpublishedPins(
   return { violations, unverifiable };
 }
 
-/** Fetch the published versions of one package from the npm registry.
- * Returns null when the registry could not be read (network failure). */
+/** Read the canonical public registry with bounded npm processes and retries. */
 export async function fetchPublishedVersions(dep: string): Promise<string[] | null> {
-  const proc = Bun.spawn(["npm", "view", dep, "versions", "--json", "--fetch-timeout=5000", "--fetch-retries=0"], {
-    cwd: REPO_ROOT,
-    stdout: "pipe",
-    stderr: "pipe",
+  return readPublishedVersions(async () => {
+    const proc = Bun.spawn(["npm", "view", dep, "versions", "--json", "--fetch-timeout=5000", "--fetch-retries=0",
+      "--registry=https://registry.npmjs.org", "--@hasna:registry=https://registry.npmjs.org"], {
+      cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe",
+    });
+    let timedOut = false;
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      try { proc.kill("SIGKILL"); } catch { /* The owned process already exited. */ }
+    }, 7_000);
+    try {
+      const [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text(),
+      ]);
+      if (timedOut) throw new Error("Registry process deadline exceeded");
+      return { exitCode, stdout, stderr };
+    } finally { clearTimeout(deadline); }
   });
-  const [exitCode, stdout, stderr] = await Promise.all([
-    proc.exited,
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  if (exitCode !== 0) {
-    if (NETWORK_FAILURE.test(stderr)) return null;
-    return []; // non-network failure (e.g. E404): nothing verifiably published
-  }
-  try {
-    const parsed = JSON.parse(stdout.trim()) as unknown;
-    if (!Array.isArray(parsed)) return null;
-    return parsed.filter((v): v is string => typeof v === "string");
-  } catch {
-    return null;
-  }
 }
 
 const REAL_MEMBERS = publishableMembers();
@@ -245,7 +241,7 @@ describe("standard-adherence: intra-wave unpublished pins", () => {
     const deps = [...new Set(pins.map((p) => p.dependency))].sort();
     const publishedByDep = new Map<string, string[] | null>();
     for (const dep of deps) {
-      const published = await fetchPublishedVersions(dep);
+      const published = requireRegistryEvidence(dep, await fetchPublishedVersions(dep), Boolean(process.env.CI));
       if (published === null) {
         console.info(`[SKIP published-pins] registry unreachable for ${dep}; offline/network route`);
         return;

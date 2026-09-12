@@ -130,7 +130,32 @@ HOOKS_LOCAL=1 hooks list            # accepted alias
 
 Local mode is answered BEFORE the resolver runs (so an unhosted run touches neither the Keychain nor the credential file) and says so on stderr, once per process.
 
-Surfaces that are local, runtime, or operator-only by design never need either setting: `run`, `serve`, `mcp`, `cf`, `migrate`, `init`, `profile-export`/`profile-import`, `channels`, `events`, and `--help`/`--version`.
+**Hosted is a route, not just admission (owner ruling 2026-09-07).** Once a registry credential resolves — the env pair, the Keychain item, or the credentials file — the on-box SQLite store is refused for the whole process: `hooks log *`, `hooks storage *`, the MCP `hooks_log_*` / `storage_*` / `send_feedback` tools and the hook-event writer answer `REMOTE_COMMAND_UNSUPPORTED` (naming the opt-in) instead of reading or creating `~/.hasna/hooks/hooks.db`. Pins and trust keep working on the hosted route through `hooks.lock` alone; the SQLite `hooks` table is a local-mode mirror.
+
+**`hooks run` decides its route like every other client verb.** Under the explicit opt-in it executes the hook and records the event in the on-box store (the child hook sees `HOOKS_LOCAL`); on the hosted route it executes the hook but refuses the event write loudly (one stderr line — the hosted registry has no event route); with nothing configured it exits 1 with one line naming the credential tiers and the opt-in, and creates nothing. Agents that wire `hooks run <name>` into their settings on an unconfigured machine therefore need either a registry credential or `HASNA_HOOKS_LOCAL=1` in the hook's environment.
+
+Surfaces that never open the client store and are server/operator-only by design need neither setting: `serve` (`hooks-serve`), `cf`, `migrate`, `init`, `profile-export`/`profile-import`, `channels`, `events`, and `--help`/`--version`. `hooks mcp` and the `hooks-mcp` bin decide their authority themselves before any transport connects (below).
+
+**MCP server (`hooks-mcp`).** One package, four surfaces: the stdio MCP server is the `hooks-mcp` bin (34 tools).
+
+```bash
+bun install -g @hasna/hooks          # then "command": "hooks-mcp" in your agent's mcpServers
+bunx -p @hasna/hooks hooks-mcp       # no global install
+hooks mcp --stdio                    # same server through the CLI; --sse / --http for the shared transports
+```
+
+`hooks-mcp` fails closed at startup: with nothing configured it prints one `REMOTE_API_*` line naming the credential tiers and `HASNA_HOOKS_LOCAL=1`, exits 1 before answering `initialize`, and creates no file. Under a resolved credential it serves the catalog/install tools and the local-only tools refuse with `REMOTE_COMMAND_UNSUPPORTED`; under the opt-in it serves the on-box store and prints `hooks: LOCAL mode — …` on stderr once.
+
+**SDK (`@hasna/hooks/sdk`).** The importable surface is a hosted registry client that resolves its credential through the same chain and throws `REMOTE_API_*` when nothing resolves — it never returns a client bound to a local file, and it refuses `HASNA_HOOKS_LOCAL=1` by name (the on-box store is the CLI's). The bundle is self-contained: node builtins only, no `bun:sqlite`.
+
+```ts
+import { createHooksClient } from "@hasna/hooks/sdk";
+
+const registry = createHooksClient();          // throws REMOTE_API_CONFIG_MISSING with nothing configured
+const catalog = await registry.catalog();      // GET <origin>/api/v1/catalog
+const lock = await registry.lock();            // GET <origin>/api/v1/lock
+const artifact = await registry.artifact("gitguard", lock.hooks.gitguard.version);
+```
 
 ```bash
 hooks init --cloudflare --api-url https://registry.example.com --api-key <vault-key-name>
@@ -205,7 +230,7 @@ the data layer, so it is no longer expressed as one.
 | `HASNA_HOOKS_API_KEY_OVERRIDE` | Deliberate per-run key override (tier 1). |
 | `HASNA_HOOKS_API_KEY_REF` | Vault ITEM KEY name; resolved through `@hasna/secrets` at request time. Never a value. |
 | `HASNA_PROFILE` | Selects which identity profile the chain reads. |
-| `HASNA_HOOKS_LOCAL` / `HOOKS_LOCAL` | Explicit opt-in to local mode (bundled registry + local store); answered before the resolver runs and printed on stderr. |
+| `HASNA_HOOKS_LOCAL` / `HOOKS_LOCAL` | Explicit opt-in to local mode (bundled registry + on-box SQLite store); answered before the resolver runs and printed on stderr. The ONLY way any client surface (`hooks`, `hooks-mcp`, `hooks run`) opens `hooks.db`; a configured registry credential outranks it. |
 | `HASNA_STATION` | Keychain account when reading `hasna.credentials.hooks.*`. |
 | `HASNA_HOME` / `HASNA_CONFIG_HOME` | Move the disk credential root (`<…>/hooks/config/credentials`). `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna` and `$XDG_CONFIG_HOME` are never read. |
 | `HASNA_HOOKS_DATA_DIR` / `HOOKS_DATA_DIR`, `HASNA_HOOKS_HOME` / `HOOKS_HOME`, `HASNA_HOOKS_DB_PATH` / `HOOKS_DB_PATH`, `HASNA_HOOKS_LOCK_PATH` / `HOOKS_LOCK_PATH` | Local store locations (data root, DB, lock). |
@@ -213,9 +238,12 @@ the data layer, so it is no longer expressed as one.
 
 ## Runtime model
 
-This package is an npm CLI and MCP server. Installing
-and running hooks needs nothing deployed anywhere — the SQLite backend is the
-default and requires no server.
+This package is an npm CLI (`hooks`), a stdio MCP server (`hooks-mcp`), a local
+registry server (`hooks-serve`) and an importable hosted client (`@hasna/hooks/sdk`).
+Installing and running hooks needs nothing deployed anywhere, but the on-box SQLite
+store is never a silent default: every client surface either resolves a registry
+credential (hosted route — no local store is opened) or is told `HASNA_HOOKS_LOCAL=1`
+(local mode — announced on stderr); with neither it exits non-zero and creates nothing.
 
 ## Data Directory
 

@@ -21,6 +21,14 @@ Set `HASNA_INSTRUCTIONS_DB_PATH` to use another file or `:memory:`. The DB uses
 WAL mode and foreign keys. `instructions init --force` closes and removes the
 local DB plus WAL/SHM sidecars before rebuilding it.
 
+The local store is also physically absent from the shipped client bundles. Every
+`bun:sqlite` module hangs off `src/db/local.ts`, whose single importer is a
+dynamic `import()` inside `LocalConfigStore`, so the build emits it as a chunk
+(`dist/chunks/local-*.js`) and `dist/cli/index.js` and `dist/mcp/index.js`
+contain zero `bun:sqlite` references. A hosted run never loads that chunk;
+`getDatabase()` additionally refuses to open a file in a process whose
+environment configures a hosted authority.
+
 ## API transport
 
 Every client surface resolves its credential and authority through the ONE

@@ -11,7 +11,7 @@ import {
   getAgent,
   getAgentBySlug,
 } from "../db/workspaces.js";
-import { resolveProjectStore, type ProjectStore } from "../store/project-store.js";
+import { LocalOnlyOperationError, resolveProjectStore, type ProjectStore } from "../store/project-store.js";
 import { runWorkspaceAgentPrompt } from "../lib/workspace-agent.js";
 import { parseWorkspaceAgentEvalCaseIds, runWorkspaceAgentEval } from "../lib/workspace-agent-eval.js";
 import {
@@ -1044,6 +1044,7 @@ server.tool(
   },
   async (input) => {
     try {
+      const store = resolveProjectStore();
       const result = await startProject(input.target, {
         agentTool: input.agent_tool ? parseProjectStartAgent(input.agent_tool) : undefined,
         toolCommand: input.command,
@@ -1057,7 +1058,7 @@ server.tool(
         importMetadata: input.metadata as JsonObject | undefined,
         dryRun: true,
         attach: false,
-        agentId: await resolveToolAgentId(resolveProjectStore(), input.agent),
+        agentId: await resolveToolAgentId(store, input.agent),
         source: "mcp",
         auditCommand: "projects_render_start",
       });
@@ -1123,12 +1124,19 @@ server.tool(
     const store = resolveProjectStore();
     const project = await findProjectTarget(input.project, store);
     if (!project) return errorText(`Project not found: ${input.project}`);
+    // The per-project app store is on-box SQLite: read it only on the local
+    // transport. Under a hosted credential it is refused (no /v1 route, no
+    // SQLite under a hosted credential) and the refusal is reported as a field.
+    const appStore = store.transport === "local"
+      ? input.include_loops
+        ? await store.inspectAppStoreWithLoops(project, { includeRuns: input.include_runs })
+        : await store.inspectAppStore(project)
+      : null;
     return jsonText({
       project: projectWithManagement(project),
       store: inspectCanonicalProjectStore(project),
-      app_store: input.include_loops
-        ? await store.inspectAppStoreWithLoops(project, { includeRuns: input.include_runs })
-        : await store.inspectAppStore(project),
+      app_store: appStore,
+      ...(appStore === null ? { app_store_unavailable: new LocalOnlyOperationError("inspect the project app store").message } : {}),
     });
   },
 );
@@ -1604,6 +1612,7 @@ server.tool(
   },
   async (input) => {
     try {
+      const store = resolveProjectStore();
       return jsonText(await startProject(input.target, {
         agentTool: input.agent_tool ? parseProjectStartAgent(input.agent_tool) : undefined,
         toolCommand: input.command,
@@ -1617,7 +1626,7 @@ server.tool(
         importMetadata: input.metadata as JsonObject | undefined,
         dryRun: input.dry_run,
         attach: false,
-        agentId: await resolveToolAgentId(resolveProjectStore(), input.agent),
+        agentId: await resolveToolAgentId(store, input.agent),
         source: "mcp",
         auditCommand: "projects_start",
       }));

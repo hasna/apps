@@ -377,8 +377,13 @@ exits. See [MCP reference](mcp.md).
 - `init [--force]` syncs known configs, seeds managed reference configs,
   creates `my-setup`, and ensures platform profiles. `--force` wipes the local
   SQLite DB and is refused in API mode.
-- `status [--json]` reports the metadata-only status contract, including drift,
-  missing targets, unredacted findings, retired-agent rows, and counts.
+- `status [--json] [--deep]` reports the metadata-only status contract,
+  including drift, missing targets, unredacted findings, retired-agent rows,
+  and counts. `counts.profileLinks` and `counts.snapshots` need one API read
+  per profile and per config, so against a hosted store they are reported as
+  `null` unless `--deep` is passed; the on-box SQLite store always counts them
+  (measured 2026-09-11 on a 258-config hosted store: default 2.2 s, `--deep`
+  ~35 s, and the old always-deep behaviour took over two minutes).
 - `whoami` prints active storage and a compact category/profile summary.
 - `doctor` checks known paths, JSON syntax, and stored secret findings.
 - `report [--json] [--markdown]` prints an ecosystem summary. Both format flags
