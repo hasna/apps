@@ -36,12 +36,12 @@ describe("ingest SQS request contract and unknown visibility", () => {
   it("real SDK requests the supported visibility attribute and rejects old metric names", async () => {
     const { client, requests } = sqsFixture();
     try {
-      const attributes = await fetchIngestQueueAttributes(client, "https://sqs.us-east-1.amazonaws.com/000000000000/fixture");
+      const attributes = await fetchIngestQueueAttributes(client, "https://sqs.us-east-1.amazonaws.com/123456789012/fixture");
       expect(attributes).toEqual({ ApproximateNumberOfMessages: "17" });
       expect(requests).toEqual([["ApproximateNumberOfMessages"]]);
       for (const invalid of ["ApproximateAgeOfOldestMessage", "ApproximateNumberOfMessagesVisible"]) {
         await expect(client.send(new GetQueueAttributesCommand({
-          QueueUrl: "https://sqs.us-east-1.amazonaws.com/000000000000/fixture",
+          QueueUrl: "https://sqs.us-east-1.amazonaws.com/123456789012/fixture",
           AttributeNames: [invalid as QueueAttributeName], // Deliberately invalid control.
         }))).rejects.toMatchObject({ name: "InvalidAttributeName" });
       }
