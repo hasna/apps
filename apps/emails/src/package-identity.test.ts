@@ -8,6 +8,12 @@ import contract from "../hasna.contract.json" with { type: "json" };
 import { resolveClientModeSelection } from "./lib/mode.js";
 import { emailsSelfHostedOpenApi } from "./server/self-hosted/openapi.js";
 import { SELF_HOSTED_APP, SELF_HOSTED_APP_ALIASES } from "./server/self-hosted/env.js";
+import {
+  CANONICAL_BINS,
+  CANONICAL_PACKAGE,
+  CANONICAL_REPOSITORY,
+  packageIdentityFailures,
+} from "../scripts/package-identity-lib.mjs";
 
 const root = join(import.meta.dir, "..");
 
@@ -18,10 +24,26 @@ const root = join(import.meta.dir, "..");
 // line and must not be revived by publishing this tree under that name.
 //
 // These assertions pin the package identity independently of release-version
-// history or the separate cloud CLI.
-const CANONICAL_PACKAGE = "@hasna/emails";
-const CANONICAL_REPOSITORY = "git+https://github.com/hasna/apps.git";
-const CANONICAL_BINS = ["emails", "emails-mcp", "emails-serve"];
+// history or the separate cloud CLI. The predicate itself lives in
+// scripts/package-identity-lib.mjs and is the SAME code CI runs — the
+// negative arm below proves it refuses a foreign repository url, so the gate
+// is shown to fire rather than merely observed to stay green.
+const IDENTITY_REFUSAL = `repository provenance must be ${CANONICAL_REPOSITORY}`;
+
+function manifestWith(overrides: { url?: string | undefined; directory?: string | undefined }) {
+  const manifest = structuredClone(pkg) as typeof pkg & {
+    repository: { type: string; url?: string; directory?: string };
+  };
+  if ("url" in overrides) {
+    if (overrides.url === undefined) delete manifest.repository.url;
+    else manifest.repository.url = overrides.url;
+  }
+  if ("directory" in overrides) {
+    if (overrides.directory === undefined) delete manifest.repository.directory;
+    else manifest.repository.directory = overrides.directory;
+  }
+  return manifest;
+}
 
 describe("published package identity", () => {
   it("publishes as @hasna/emails from the apps/emails monorepo directory", () => {
@@ -61,11 +83,13 @@ describe("published package identity", () => {
     expect(emailsSelfHostedOpenApi.paths["/ready"]?.get?.security).toEqual([]);
   });
 
-  it("asserts the canonical identity in CI", () => {
+  it("asserts the canonical identity in CI through the one shared predicate", () => {
     const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
-    expect(ci).toContain(`pkg.name !== "${CANONICAL_PACKAGE}"`);
-    expect(ci).toContain(`pkg.repository?.url !== "${CANONICAL_REPOSITORY}"`);
-    expect(ci).toContain('pkg.repository?.directory !== "apps/emails"');
+    // CI must call the runner, not carry its own copy of the checks: an inline
+    // copy is a second code path that can drift from this test, and it cannot
+    // be exercised against a fixture.
+    expect(ci).toContain("bun run scripts/verify-package-identity.mjs");
+    expect(ci).not.toContain("pkg.repository?.url !== ");
     expect(ci).not.toContain("@hasna/mailery");
   });
 
@@ -90,6 +114,55 @@ describe("published package identity", () => {
       }
       expect({ entry, exists: existsSync(join(root, entry)) }).toEqual({ entry, exists: true });
     }
+  });
+});
+
+describe("repository provenance gate", () => {
+  // NEGATIVE ARM. A gate that has never been shown to fire is indistinguishable
+  // from no gate at all, so every foreign or dead repository shape below must be
+  // refused by the same predicate CI runs.
+  it("accepts the canonical identity in the live manifest", () => {
+    expect(packageIdentityFailures(pkg)).toEqual([]);
+  });
+
+  it("refuses a foreign repository url", () => {
+    const failures = packageIdentityFailures(manifestWith({ url: "https://github.com/hasna/emails.git" }));
+    expect(failures).toContain(`${IDENTITY_REFUSAL} (got https://github.com/hasna/emails.git)`);
+  });
+
+  it("refuses every dead repository shape, including the un-normalized git+ form", () => {
+    const dead: Array<string | undefined> = [
+      "https://github.com/hasna/emails.git", // pre-monorepo per-app repo
+      "git+https://github.com/hasna/emails.git", // ...in the npm git+ form
+      "https://github.com/hasnaxyz/emails.git", // deleted org
+      "https://github.com/hasna-products/emails.git", // dead name class
+      "git+https://github.com/hasna/apps.git", // right repo, not byte-exact
+      "https://github.com/hasna-internal/internal-apps.git", // the other home
+      undefined, // absent repository.url
+    ];
+    for (const url of dead) {
+      const failures = packageIdentityFailures(manifestWith({ url }));
+      expect({ url, refused: failures.some((failure) => failure.startsWith(IDENTITY_REFUSAL)) }).toEqual({
+        url,
+        refused: true,
+      });
+    }
+  });
+
+  it("refuses a foreign repository directory", () => {
+    for (const directory of ["apps/mailery", "sdk", undefined]) {
+      const failures = packageIdentityFailures(manifestWith({ directory }));
+      expect({
+        directory,
+        refused: failures.some((failure) => failure.startsWith("repository directory must be")),
+      }).toEqual({ directory, refused: true });
+    }
+  });
+
+  it("refuses the abandoned mailery package line", () => {
+    const revived = structuredClone(pkg) as typeof pkg & { name: string };
+    revived.name = "@hasna/mailery";
+    expect(packageIdentityFailures(revived)).toContain("unexpected package name: @hasna/mailery");
   });
 });
 

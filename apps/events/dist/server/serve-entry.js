@@ -1212,11 +1212,12 @@ var package_default = {
   },
   repository: {
     type: "git",
-    url: "git+https://github.com/hasna/events.git"
+    url: "https://github.com/hasna/apps.git",
+    directory: "apps/events"
   },
-  homepage: "https://github.com/hasna/events",
+  homepage: "https://github.com/hasna/apps",
   bugs: {
-    url: "https://github.com/hasna/events/issues"
+    url: "https://github.com/hasna/apps/issues"
   },
   engines: {
     bun: ">=1.0.0",

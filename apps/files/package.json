@@ -79,7 +79,12 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/files.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/files"
+  },
+  "homepage": "https://github.com/hasna/apps",
+  "bugs": {
+    "url": "https://github.com/hasna/apps/issues"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

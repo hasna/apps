@@ -4,12 +4,13 @@
   "description": "AI coding cost tracker \u2014 CLI + MCP server + REST API for Claude Code, Codex, OpenCode, Cursor, Pi, and Hermes, with legacy Gemini CLI session and Gemini API billing ingestion",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/economy.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/economy"
   },
   "bugs": {
-    "url": "https://github.com/hasna/economy/issues"
+    "url": "https://github.com/hasna/apps/issues"
   },
-  "homepage": "https://github.com/hasna/economy#readme",
+  "homepage": "https://github.com/hasna/apps",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

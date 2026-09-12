@@ -4,7 +4,8 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/dispatch.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/dispatch"
   },
   "main": "dist/index.js",
   "dependencies": {
@@ -39,7 +40,7 @@
     "dispatch-daemon": "dist/daemon/index.js"
   },
   "bugs": {
-    "url": "https://github.com/hasna/dispatch/issues"
+    "url": "https://github.com/hasna/apps/issues"
   },
   "description": "Dispatch prompts to coding agents in tmux windows \u2014 reliable auto-submit, long-prompt support, delivery confirmation, scheduled + cross-machine dispatch. CLI + MCP + SDK + daemon.",
   "engines": {
@@ -53,7 +54,7 @@
     "README.md",
     "postinstall.js"
   ],
-  "homepage": "https://github.com/hasna/dispatch",
+  "homepage": "https://github.com/hasna/apps",
   "keywords": [
     "tmux",
     "dispatch",

@@ -9,11 +9,12 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/guardrails.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/guardrails"
   },
-  "homepage": "https://github.com/hasna/guardrails#readme",
+  "homepage": "https://github.com/hasna/apps",
   "bugs": {
-    "url": "https://github.com/hasna/guardrails/issues"
+    "url": "https://github.com/hasna/apps/issues"
   },
   "publishConfig": {
     "access": "public"

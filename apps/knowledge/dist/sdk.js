@@ -19729,10 +19729,12 @@ var package_default = {
   },
   repository: {
     type: "git",
-    url: "git+https://github.com/hasna/knowledge.git"
+    url: "https://github.com/hasna/apps.git",
+    directory: "apps/knowledge"
   },
+  homepage: "https://github.com/hasna/apps",
   bugs: {
-    url: "https://github.com/hasna/knowledge/issues"
+    url: "https://github.com/hasna/apps/issues"
   },
   author: "Hasna Inc. <hasna@example.com>",
   engines: {

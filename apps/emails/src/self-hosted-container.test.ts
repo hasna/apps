@@ -302,7 +302,7 @@ describe("self-hosted container TLS contract", () => {
   test("locks runtime copy semantics and ownership", () => {
     expect(packageJson.repository).toEqual({
       type: "git",
-      url: "git+https://github.com/hasna/apps.git",
+      url: "https://github.com/hasna/apps.git",
       directory: "apps/emails",
     });
     expect(scratchStage).toContain("ARG VERSION=dev");
