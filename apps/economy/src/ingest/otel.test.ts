@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { getCostCenter, openDatabase } from '../db/database.js'
+import { getCostCenter, openDatabase } from '../db/sqlite-store.js'
 import { ingestOtelRows, parseOtlpMetrics, parseSimpleIngest } from './otel.js'
 
 describe('otel ingest', () => {

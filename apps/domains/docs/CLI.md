@@ -26,11 +26,15 @@ The authority follows the same ladder (`HASNA_DOMAINS_API_URL`, the Keychain
 selects a backend. A data command with no resolvable credential exits non-zero
 with the canonical env pair named; it never opens the default local database.
 
-Local SQLite is an explicit opt-in: set `HASNA_DOMAINS_DB_PATH` /
-`HASNA_DOMAINS_DIR` (or their legacy aliases) to name the database, with no
-authority or credential configured in the environment. Every local run prints
-one `LOCAL mode` line on stderr. `domains doctor` reports which store resolved,
-where the URL and key came from, and which tier supplied the key.
+There is **no local client mode** — not even an opt-in one. `domains` clients
+only ever talk to the shared account API. `HASNA_DOMAINS_DB_PATH`,
+`DOMAINS_DB_PATH`, `HASNA_DOMAINS_DIR` and `DOMAINS_DIR` are *refused*: setting
+one exits non-zero with `domains: <VAR> is no longer supported by clients`,
+whether or not a credential is configured, and no database is opened or
+created. `bun:sqlite` is not reachable from `dist/cli` or `dist/mcp` at all
+(ratchet: `src/db/no-sqlite-in-client-bundles.test.ts`). `domains doctor`
+reports which store resolved, where the URL and key came from, and which tier
+supplied the key.
 
 ## Command loading
 

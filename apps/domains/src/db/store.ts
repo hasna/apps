@@ -1,17 +1,16 @@
-// Domains clients always use the shared account API. LocalStore is retained
-// for explicit migration/SQLite unit fixtures; getStore never selects it.
+// Domains clients always use the shared account API. `getStore` only ever
+// returns ApiStore; there is no local client mode and the legacy local-path
+// variables are refused (lib/client-storage-policy.ts).
 // Credentials resolve fresh on every request through the shared resolver.
+//
+// This module must stay free of `bun:sqlite`: the sqlite-backed LocalStore now
+// lives in ./local-store.ts (fixtures only), because a dynamic
+// `import("./store.js")` materialises the whole namespace and would otherwise
+// drag db/database.ts — and with it `bun:sqlite` — into dist/cli and dist/mcp.
 
 import { resolveDomainsHttpClient, resolveDomainsTransport } from "../lib/domains-resolver.js";
 import type { CredentialChainOptions, CredentialTier, HasnaStorageClient } from "../lib/client-types.js";
 import { assertDomainsClientStorage } from "../lib/client-storage-policy.js";
-
-import * as records from "./domain-records.js";
-import * as dns from "./dns-records.js";
-import * as alertsDb from "./alerts.js";
-import * as owners from "./domain-owners.js";
-import * as history from "./domain-history.js";
-import * as reputation from "./domain-reputation.js";
 
 import type {
   CreateDomainInput,
@@ -158,79 +157,6 @@ const _transportUnionExactlyLocalOrHttp: "local" | "http" extends DomainsStore["
     ? true
     : never
   : never = true;
-
-// ── LocalStore ────────────────────────────────────────────────────────────────
-// Delegates to the sqlite-backed helper modules. Every method is async so the
-// interface is transport-agnostic; the sqlite calls themselves are synchronous.
-
-export class LocalStore implements DomainsStore {
-  readonly transport = "local" as const;
-
-  async createDomain(input: CreateDomainInput) { return records.createDomain(input); }
-  async getDomain(id: string) { return records.getDomain(id); }
-  async getDomainByName(name: string) { return records.getDomainByName(name); }
-  async getDomainByIdentifier(identifier: string) { return records.getDomainByIdentifier(identifier); }
-  async getDomainDetails(identifier: string) { return records.getDomainDetails(identifier); }
-  async listDomains(options: ListDomainsOptions = {}) { return records.listDomains(options); }
-  async updateDomain(id: string, input: UpdateDomainInput) { return records.updateDomain(id, input); }
-  async deleteDomain(id: string) { return records.deleteDomain(id); }
-  async countDomains() { return records.countDomains(); }
-  async searchDomains(query: string) { return records.searchDomains(query); }
-  async getByRegistrar(registrar: string) { return records.getByRegistrar(registrar); }
-  async listExpiring(days: number, options?: { includeLapsed?: boolean }) { return records.listExpiring(days, options); }
-  async listSslExpiring(days: number, options?: { includeLapsed?: boolean }) { return records.listSslExpiring(days, options); }
-  async listPastExpiry() { return records.listPastExpiry(); }
-  async listSslPastExpiry() { return records.listSslPastExpiry(); }
-  async getDomainStats() { return records.getDomainStats(); }
-  async markDomainPremium(identifier: string, premiumPrice: number, standardPrice?: number) { return records.markDomainPremium(identifier, premiumPrice, standardPrice); }
-  async updateDomainLifecycleStatus(identifier: string, status: DomainStatus, notes?: string) { return records.updateDomainLifecycleStatus(identifier, status, notes); }
-  async recordDomainPurchase(identifier: string, input: RecordDomainPurchaseInput) { return records.recordDomainPurchase(identifier, input); }
-
-  async createDomainOffer(input: CreateDomainOfferInput) { return records.createDomainOffer(input); }
-  async getDomainOffer(id: string) { return records.getDomainOffer(id); }
-  async listDomainOffers(domainId: string) { return records.listDomainOffers(domainId); }
-
-  async linkDomainEmail(input: CreateDomainEmailLinkInput) { return records.linkDomainEmail(input); }
-  async getDomainEmailLink(id: string) { return records.getDomainEmailLink(id); }
-  async listDomainEmailLinks(domainId: string) { return records.listDomainEmailLinks(domainId); }
-
-  async createDnsRecord(input: CreateDnsRecordInput) { return dns.createDnsRecord(input); }
-  async getDnsRecord(id: string) { return dns.getDnsRecord(id); }
-  async listDnsRecords(domainId: string, type?: DnsRecord["type"]) { return dns.listDnsRecords(domainId, type); }
-  async updateDnsRecord(id: string, input: UpdateDnsRecordInput) { return dns.updateDnsRecord(id, input); }
-  async deleteDnsRecord(id: string) { return dns.deleteDnsRecord(id); }
-
-  async createAlert(input: CreateAlertInput) { return alertsDb.createAlert(input); }
-  async getAlert(id: string) { return alertsDb.getAlert(id); }
-  async listAlerts(domainId: string) { return alertsDb.listAlerts(domainId); }
-  async deleteAlert(id: string) { return alertsDb.deleteAlert(id); }
-
-  async createDomainOwner(input: CreateDomainOwnerInput) { return owners.createDomainOwner(input); }
-  async getDomainOwner(id: string) { return owners.getDomainOwner(id); }
-  async getDomainOwnerByDomain(domainId: string) { return owners.getDomainOwnerByDomain(domainId); }
-  async getDomainOwnerByDomainName(domainName: string) { return owners.getDomainOwnerByDomainName(domainName); }
-  async listDomainOwners(options: { search?: string; source?: DomainOwnerSource; verified?: boolean } = {}) { return owners.listDomainOwners(options); }
-  async updateDomainOwner(id: string, input: Partial<CreateDomainOwnerInput>) { return owners.updateDomainOwner(id, input); }
-  async deleteDomainOwner(id: string) { return owners.deleteDomainOwner(id); }
-  async listDomainsWithOwners() { return owners.listDomainsWithOwners(); }
-
-  async createHistoryEntry(input: CreateHistoryEntryInput) { return history.createHistoryEntry(input); }
-  async getHistoryEntry(id: string) { return history.getHistoryEntry(id); }
-  async getHistoryByDomain(domainId: string, options?: { type?: DomainHistoryType; limit?: number }) { return history.getHistoryByDomain(domainId, options); }
-  async getLatestSnapshot(domainId: string, type: DomainHistoryType) { return history.getLatestSnapshot(domainId, type); }
-  async getHistoryByDateRange(startDate: string, endDate: string, domainId?: string) { return history.getHistoryByDateRange(startDate, endDate, domainId); }
-  async listDomainsWithHistoryChanges() { return history.listDomainsWithHistoryChanges(); }
-  async deleteHistoryEntry(id: string) { return history.deleteHistoryEntry(id); }
-  async deleteHistoryByDomain(domainId: string) { return history.deleteHistoryByDomain(domainId); }
-
-  async upsertDomainReputation(input: CreateReputationInput) { return reputation.upsertDomainReputation(input); }
-  async getDomainReputation(domainId: string) { return reputation.getDomainReputation(domainId); }
-  async getDomainReputationByName(domainName: string) { return reputation.getDomainReputationByName(domainName); }
-  async updateDomainReputation(id: string, input: Partial<CreateReputationInput>) { return reputation.updateDomainReputation(id, input); }
-  async listBlacklistedDomains() { return reputation.listBlacklistedDomains(); }
-  async listHighThreatDomains(threshold?: number) { return reputation.listHighThreatDomains(threshold); }
-  async deleteDomainReputation(id: string) { return reputation.deleteDomainReputation(id); }
-}
 
 // ── ApiStore ────────────────────────────────────────────────────────────────
 // Routes every operation to the cloud HTTP API. CRUD on top-level resources goes

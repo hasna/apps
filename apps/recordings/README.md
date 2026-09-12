@@ -51,7 +51,8 @@ normalized endpoint, and is separate from the OpenAI transcription key.
 
 An explicitly configured launch environment takes precedence over saved connection
 settings: `HASNA_RECORDINGS_API_URL` plus the existing Hasna credential chain, or
-`HASNA_RECORDINGS_CLIENT_STORE=sqlite` for an intentional local store. The native app
+`HASNA_RECORDINGS_LOCAL=1` (alias `RECORDINGS_LOCAL=1`) for an intentional local
+store — the retired `HASNA_RECORDINGS_CLIENT_STORE` switch selects nothing. The native app
 passes the connection to its embedded CLI, so recording persistence, history, and
 deletion use the same API client as the CLI and MCP. No local fallback is selected
 when an API connection is missing or fails.

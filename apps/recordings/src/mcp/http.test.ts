@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { existsSync, mkdirSync, rmSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { buildServer } from "./index.js";
@@ -11,6 +11,7 @@ import { createRecording } from "../db/recordings.js";
 import { registerAgent } from "../db/agents.js";
 import { registerProject } from "../db/projects.js";
 import { __resetStore } from "../store.js";
+import { loadConfig } from "../lib/config.js";
 
 describe("recordings MCP HTTP transport", () => {
   let httpServer: ReturnType<typeof Bun.serve>;
@@ -22,6 +23,9 @@ describe("recordings MCP HTTP transport", () => {
   const savedApiKeyRef = process.env.HASNA_RECORDINGS_API_KEY_REF;
   const savedProfile = process.env.HASNA_PROFILE;
   const savedLocal = process.env.HASNA_RECORDINGS_LOCAL;
+  const savedDbPath = process.env.HASNA_RECORDINGS_DB_PATH;
+  const savedAudioDir = process.env.RECORDINGS_AUDIO_DIR;
+  let suiteHome = "";
 
   beforeAll(() => {
     // The suite is hermetic by contract: a publisher's ambient hosted-store
@@ -37,6 +41,18 @@ describe("recordings MCP HTTP transport", () => {
     delete process.env.HASNA_RECORDINGS_API_KEY_REF;
     delete process.env.HASNA_PROFILE;
     process.env.HASNA_RECORDINGS_LOCAL = "1";
+    // …and the local store the tool calls below reach must be a THROWAWAY one.
+    // Declaring the opt-in without also pinning the path left `getDatabase()`
+    // with no argument, which resolves `loadConfig().db_path` — i.e.
+    // $HOME/.hasna/recordings/recordings.db, the operator's REAL store on a
+    // developer machine. The first `recording_stats` tool call below created
+    // that file (measured on station03, 2026-09-11); the sanctioned entry point
+    // `bun run test` hid it because release-suite-gate.ts gives each group an
+    // isolated HOME, so only a bare `bun test` showed the escape. Pin the path
+    // here so BOTH entry points are hermetic; restored in afterAll.
+    suiteHome = mkdtempSync(join(tmpdir(), "recordings-mcp-http-home-"));
+    process.env.HASNA_RECORDINGS_DB_PATH = join(suiteHome, "recordings.db");
+    process.env.RECORDINGS_AUDIO_DIR = join(suiteHome, "audio");
     httpServer = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -67,8 +83,25 @@ describe("recordings MCP HTTP transport", () => {
     else process.env.HASNA_PROFILE = savedProfile;
     if (savedLocal === undefined) delete process.env.HASNA_RECORDINGS_LOCAL;
     else process.env.HASNA_RECORDINGS_LOCAL = savedLocal;
+    if (savedDbPath === undefined) delete process.env.HASNA_RECORDINGS_DB_PATH;
+    else process.env.HASNA_RECORDINGS_DB_PATH = savedDbPath;
+    if (savedAudioDir === undefined) delete process.env.RECORDINGS_AUDIO_DIR;
+    else process.env.RECORDINGS_AUDIO_DIR = savedAudioDir;
+    closeDatabase();
+    resetDatabase();
+    if (suiteHome) rmSync(suiteHome, { recursive: true, force: true });
     __resetStore();
     httpServer.stop();
+  });
+
+  // The escape above is a property of the file, not of one test: any tool call
+  // made before a test pins its own database would take the default path again.
+  test("no tool call in this file can reach the operator's real store", () => {
+    const pinned = process.env.HASNA_RECORDINGS_DB_PATH;
+    expect(pinned).toBe(join(suiteHome, "recordings.db"));
+    // The default this replaces: loadConfig() resolves $HOME/.hasna/recordings.
+    expect(pinned?.includes(join(".hasna", "recordings"))).toBe(false);
+    expect(loadConfig().db_path).toBe(pinned);
   });
 
   test("default port is 8873", () => {

@@ -33,6 +33,25 @@ DEPRECATED notices.
   in `src/server/auth.ts`; `src/sdk/client-types.test.ts` proves the spellings
   are the same types as the contracts declarations.
 
+## Client bundles (binding)
+
+`bin/index.js` and `bin/mcp.js` must contain **zero** `bun:sqlite` references.
+The on-box store lives in `src/local-store.ts`, is emitted as its own
+`dist/local-store.js`, and is reachable only through `loadLocalMessagesService`
+(`src/local-store-loader.ts`) — which re-checks `selectsMessagesLocalStore()`
+and throws otherwise, so no hosted run can open SQLite. The specifier is
+computed at runtime (`src/runtime-module.ts`) because `bun build` INLINES a
+literal `await import("./x")` into the calling bundle; the same trick keeps the
+server out of the CLI (`messages serve` → `src/serve-loader.ts` → `bin/serve.js`).
+
+- Never import `../server/sqlite-store` (or `./server/store`) from
+  `src/cli/**`, `src/mcp/**` or `src/sdk/**`.
+- Never dispatch with `instanceof MessagesService` in a surface that can get
+  its service from the dynamic module — the class identity does not cross the
+  module boundary. Dispatch on the `transport` tag.
+- `src/local-store-loader.test.ts` is the ratchet: it bundles the real
+  entrypoints and fails if `bun:sqlite` reappears.
+
 ## Scope
 
 messages owns direct agent-to-agent DMs + DM-threads. conversations owns
@@ -47,7 +66,7 @@ bun install                 # pinned bun 1.3.14 (/home/hasna/bun-1.3.14/bin/bun)
 bun run test                # domain + CLI + HTTP surface tests (hermetic)
 bun run typecheck
 bun run contract-check      # manifest conformance via @hasna/contracts
-bun run build               # dist/ (sdk + index) and bin/ (CLI, MCP, serve)
+bun run build               # dist/ (sdk + index + local-store) and bin/ (CLI, MCP, serve)
 ```
 
 After `bun run build`, `grep -r "@hasna/contracts" dist --include="*.d.ts"` must

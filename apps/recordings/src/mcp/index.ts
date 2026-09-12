@@ -15,7 +15,7 @@ import { processText, needsEnhancement, resolveTranscriberModel } from "../lib/e
 import type { Recording, RecordingFilter } from "../types/index.js";
 import { VERSION } from "../version.js";
 import { currentMachineId } from "../lib/machine.js";
-import { selectsRecordingsLocalStore } from "../lib/local-opt-in.js";
+import { announceRecordingsLocalMode, selectsRecordingsLocalStore } from "../lib/local-opt-in.js";
 import { getRecordingsTransportStatus } from "../http/client.js";
 
 // ── Initialize ──────────────────────────────────────────────────────────────
@@ -941,12 +941,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   if (selectsRecordingsLocalStore(process.env)) {
-    console.error(
-      "recordings: LOCAL mode — HASNA_RECORDINGS_LOCAL is set and nothing configures an authority; " +
-        "reading and writing the on-box SQLite store, not the hosted fleet. " +
-        "Set HASNA_RECORDINGS_API_KEY, add the Keychain item hasna.credentials.recordings.api-key, " +
-        "or write ~/.hasna/recordings/config/credentials to go hosted."
-    );
+    // The shared once-per-process notice, so a local MCP server says it here
+    // at startup and `getStore()` does not repeat it on the first tool call.
+    announceRecordingsLocalMode();
     // A failed-closed hosted server must not create local store directories as
     // a startup side effect; only an opted-in local server may touch them.
     ensureDataDir(loadConfig());

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { mkdirSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { openDatabase } from '../db/database.js'
+import { openDatabase } from '../db/sqlite-store.js'
 import { syncOpenProjectsRegistry } from './open-projects.js'
 
 // The real-SDK integration below only runs when @hasna/projects resolves at

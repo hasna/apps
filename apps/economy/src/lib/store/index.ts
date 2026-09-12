@@ -26,9 +26,8 @@
 // or embedded in any value produced here. Only the HTTP transport ever holds it.
 
 import { randomUUID } from 'crypto'
-import { SqliteAdapter as Database } from '../../db/sqlite-adapter.js'
+import type { SqliteAdapter as Database } from '../../db/sqlite-adapter.js'
 import {
-  openDatabase,
   getMachineId,
   insertFeedback,
   querySummary,
@@ -295,8 +294,19 @@ export class LocalStore implements EconomyStore {
   readonly transport = 'local' as const
   private _db: Database | undefined
 
-  private db(): Database {
+  /**
+   * Open the on-box store — through ONE gated dynamic import.
+   *
+   * `getStore()` only ever hands back a LocalStore once the storage seam has
+   * resolved the explicit local opt-in, so by the time this runs the on-box
+   * lane is already the decided lane. Loading `db/sqlite-store.js` here (rather
+   * than importing it at the top of this module) is what keeps `bun:sqlite` out
+   * of `dist/cli` and `dist/mcp` entirely: with `--splitting` the SQLite code is
+   * emitted to `dist/chunks/` and a hosted run never loads it.
+   */
+  private async db(): Promise<Database> {
     if (!this._db) {
+      const { openDatabase } = await import('../../db/sqlite-store.js')
       this._db = openDatabase()
       ensurePricingSeeded(this._db)
     }
@@ -304,7 +314,7 @@ export class LocalStore implements EconomyStore {
   }
 
   async summary(period: Period, machine?: string): Promise<CostSummary> {
-    return querySummary(this.db(), period, machine)
+    return querySummary(await this.db(), period, machine)
   }
 
   async sessions(filter: {
@@ -316,41 +326,41 @@ export class LocalStore implements EconomyStore {
     since?: string
     search?: string
   }): Promise<EconomySession[]> {
-    return querySessions(this.db(), filter)
+    return querySessions(await this.db(), filter)
   }
 
   async topSessions(n: number, agent?: Agent, since?: string): Promise<EconomySession[]> {
-    return queryTopSessions(this.db(), n, agent, since)
+    return queryTopSessions(await this.db(), n, agent, since)
   }
 
   async sessionDetail(id: string): Promise<SessionDetail | null> {
-    return getSessionDetail(this.db(), id)
+    return getSessionDetail(await this.db(), id)
   }
 
   async modelBreakdown(query: BreakdownQuery = {}): Promise<ModelBreakdown[]> {
-    return query.since ? queryModelBreakdownSince(this.db(), query.since) : queryModelBreakdown(this.db())
+    return query.since ? queryModelBreakdownSince(await this.db(), query.since) : queryModelBreakdown(await this.db())
   }
 
   async agentBreakdown(query: BreakdownQuery = {}): Promise<AgentBreakdown[]> {
     return query.since
-      ? queryAgentBreakdownSince(this.db(), query.since)
-      : queryAgentBreakdown(this.db(), query.period ?? 'all', query.machine)
+      ? queryAgentBreakdownSince(await this.db(), query.since)
+      : queryAgentBreakdown(await this.db(), query.period ?? 'all', query.machine)
   }
 
   async projectBreakdown(query: BreakdownQuery = {}): Promise<ProjectBreakdown[]> {
     return query.since
-      ? queryProjectBreakdownSince(this.db(), query.since, query.machine)
-      : queryProjectBreakdown(this.db(), query.period ?? 'all', query.machine)
+      ? queryProjectBreakdownSince(await this.db(), query.since, query.machine)
+      : queryProjectBreakdown(await this.db(), query.period ?? 'all', query.machine)
   }
 
   async accountBreakdown(query: BreakdownQuery = {}): Promise<AccountBreakdown[]> {
     return query.since
-      ? queryAccountBreakdownSince(this.db(), query.since)
-      : queryAccountBreakdown(this.db(), query.period ?? 'all', query.machine)
+      ? queryAccountBreakdownSince(await this.db(), query.since)
+      : queryAccountBreakdown(await this.db(), query.period ?? 'all', query.machine)
   }
 
   async costCenterBreakdown(query: CostCenterQuery = {}): Promise<CostCenterBreakdown[]> {
-    return queryCostCenterBreakdown(this.db(), query.period ?? 'all', {
+    return queryCostCenterBreakdown(await this.db(), query.period ?? 'all', {
       kind: query.kind,
       machine: query.machine,
       since: query.since,
@@ -358,65 +368,65 @@ export class LocalStore implements EconomyStore {
   }
 
   async accounts(period: Period): Promise<AccountBreakdown[]> {
-    return queryAccountBreakdown(this.db(), period)
+    return queryAccountBreakdown(await this.db(), period)
   }
 
   async daily(days: number, machine?: string): Promise<Array<{ date: string; cost_usd: number; agent: string }>> {
-    return queryDailyBreakdown(this.db(), days, machine)
+    return queryDailyBreakdown(await this.db(), days, machine)
   }
 
   async machines(): Promise<MachineInfo[]> {
-    return listMachines(this.db())
+    return listMachines(await this.db())
   }
 
   async fleet(period: Period): Promise<FleetSummary> {
     return {
-      summary: querySummary(this.db(), period, undefined, true),
-      machines: listMachines(this.db(), period),
-      registry: listMachineRegistry(this.db()),
+      summary: querySummary(await this.db(), period, undefined, true),
+      machines: listMachines(await this.db(), period),
+      registry: listMachineRegistry(await this.db()),
     }
   }
 
   async billingSummary(period: Period): Promise<{ total_usd: number; by_provider: Record<string, number> }> {
-    return queryBillingSummary(this.db(), period)
+    return queryBillingSummary(await this.db(), period)
   }
 
   async billingDiff(period: Period): Promise<BillingDiffSummary> {
-    return queryBillingDiff(this.db(), period)
+    return queryBillingDiff(await this.db(), period)
   }
 
   async usage(period: Period, agent?: Agent): Promise<unknown> {
-    const snapshots = queryUsageSnapshots(this.db(), { agent, ...usageSnapshotFilterForPeriod(period) })
-    const summary = querySummary(this.db(), period, undefined, true, agent)
+    const snapshots = queryUsageSnapshots(await this.db(), { agent, ...usageSnapshotFilterForPeriod(period) })
+    const summary = querySummary(await this.db(), period, undefined, true, agent)
     return { snapshots, summary }
   }
 
   async savings(period: Period, agent?: Agent): Promise<unknown> {
-    return querySavingsSummary(this.db(), period, agent)
+    return querySavingsSummary(await this.db(), period, agent)
   }
 
   async listBudgets(): Promise<BudgetStatus[]> {
-    return getBudgetStatuses(this.db())
+    return getBudgetStatuses(await this.db())
   }
 
   async listGoals(): Promise<GoalStatus[]> {
-    return getGoalStatuses(this.db())
+    return getGoalStatuses(await this.db())
   }
 
   async listPricing(): Promise<DbModelPricing[]> {
-    return listModelPricing(this.db())
+    return listModelPricing(await this.db())
   }
 
   async listSubscriptions(): Promise<Subscription[]> {
-    return listSubscriptions(this.db())
+    return listSubscriptions(await this.db())
   }
 
   async listProjects(): Promise<ProjectBreakdown[]> {
-    return queryProjectBreakdown(this.db())
+    return queryProjectBreakdown(await this.db())
   }
 
   async brief(query: BriefQuery = {}): Promise<EconomyBrief> {
-    return buildBrief(this.db(), {
+    return buildBrief(await this.db(), {
       since: query.since,
       machine: query.machine,
       currentMachineId: query.currentMachineId,
@@ -425,32 +435,32 @@ export class LocalStore implements EconomyStore {
   }
 
   async projectDetail(nameOrPath: string): Promise<ProjectDetail | null> {
-    return queryProjectDetail(this.db(), nameOrPath)
+    return queryProjectDetail(await this.db(), nameOrPath)
   }
 
   async exportRows(type: ExportType, period: string): Promise<Array<Record<string, unknown>>> {
-    return queryExportRows(this.db(), type, period)
+    return queryExportRows(await this.db(), type, period)
   }
 
   async rangeStats(from: string, to: string): Promise<RangeStats> {
-    return queryRangeStats(this.db(), from, to)
+    return queryRangeStats(await this.db(), from, to)
   }
 
   async forecast(): Promise<ForecastData> {
-    return queryForecast(this.db())
+    return queryForecast(await this.db())
   }
 
   async efficiency(): Promise<ModelEfficiency[]> {
-    return queryModelEfficiency(this.db())
+    return queryModelEfficiency(await this.db())
   }
 
   async recentRequests(since: string): Promise<EconomyRequest[]> {
-    return queryRequestsSince(this.db(), since)
+    return queryRequestsSince(await this.db(), since)
   }
 
   async estimate(input: EstimateInput): Promise<number> {
     return estimateCostFromRows(
-      listModelPricing(this.db()),
+      listModelPricing(await this.db()),
       input.model,
       input.inputTokens,
       input.outputTokens,
@@ -464,29 +474,29 @@ export class LocalStore implements EconomyStore {
   async setBudget(input: BudgetInput): Promise<string> {
     const now = new Date().toISOString()
     const budget: Budget = { id: randomUUID(), ...input, created_at: now, updated_at: now }
-    upsertBudget(this.db(), budget)
+    upsertBudget(await this.db(), budget)
     return budget.id
   }
 
   async removeBudget(id: string): Promise<void> {
-    deleteBudget(this.db(), id)
+    deleteBudget(await this.db(), id)
   }
 
   async setGoal(input: GoalInput): Promise<void> {
     const now = new Date().toISOString()
-    upsertGoal(this.db(), { id: randomUUID(), ...input, created_at: now, updated_at: now })
+    upsertGoal(await this.db(), { id: randomUUID(), ...input, created_at: now, updated_at: now })
   }
 
   async removeGoal(id: string): Promise<void> {
-    deleteGoal(this.db(), id)
+    deleteGoal(await this.db(), id)
   }
 
   async setPricing(input: PricingInput): Promise<void> {
-    upsertModelPricing(this.db(), { ...input, updated_at: new Date().toISOString() })
+    upsertModelPricing(await this.db(), { ...input, updated_at: new Date().toISOString() })
   }
 
   async removePricing(model: string): Promise<void> {
-    deleteModelPricing(this.db(), model)
+    deleteModelPricing(await this.db(), model)
   }
 
   async setSubscription(input: SubscriptionInput): Promise<Subscription> {
@@ -504,16 +514,16 @@ export class LocalStore implements EconomyStore {
       created_at: now,
       updated_at: now,
     }
-    upsertSubscription(this.db(), row)
+    upsertSubscription(await this.db(), row)
     return row
   }
 
   async removeSubscription(id: string): Promise<void> {
-    deleteSubscription(this.db(), id)
+    deleteSubscription(await this.db(), id)
   }
 
   async addProject(path: string, name: string): Promise<void> {
-    upsertProject(this.db(), {
+    upsertProject(await this.db(), {
       id: randomUUID(),
       path,
       name,
@@ -524,17 +534,17 @@ export class LocalStore implements EconomyStore {
   }
 
   async renameProject(path: string, name: string): Promise<void> {
-    const existing = getProject(this.db(), path)
+    const existing = getProject(await this.db(), path)
     if (!existing) throw new Error('Project not found')
-    upsertProject(this.db(), { ...existing, name })
+    upsertProject(await this.db(), { ...existing, name })
   }
 
   async removeProject(path: string): Promise<void> {
-    deleteProject(this.db(), path)
+    deleteProject(await this.db(), path)
   }
 
   async sendFeedback(input: FeedbackInput): Promise<void> {
-    insertFeedback(this.db(), {
+    insertFeedback(await this.db(), {
       message: input.message,
       email: input.email ?? null,
       category: input.category ?? 'general',

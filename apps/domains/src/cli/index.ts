@@ -156,6 +156,9 @@ try {
   await program.parseAsync(process.argv);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
-  printErrorLine(message.startsWith("domains ") ? message : `domains: ${message}`);
+  // `domains ` catches "domains fails closed: …"; `domains:` catches the
+  // retired-local-path refusal from lib/client-storage-policy.ts, which
+  // already carries the prefix (it used to print "domains: domains: …").
+  printErrorLine(/^domains[: ]/.test(message) ? message : `domains: ${message}`);
   process.exit(1);
 }

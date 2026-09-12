@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { openDatabase, upsertRequest, upsertSession } from '../../db/database.js'
+import { openDatabase, upsertRequest, upsertSession } from '../../db/sqlite-store.js'
 import { buildBrief } from '../../lib/brief.js'
 import { renderBriefText } from './brief.js'
 import type { EconomyRequest, EconomySession } from '../../types/index.js'

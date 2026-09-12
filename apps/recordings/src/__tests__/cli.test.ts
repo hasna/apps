@@ -27,6 +27,7 @@ import {
 } from "../lib/release-install-policy.js";
 import { createHash } from "node:crypto";
 import { expectOrder, sliceBetween, sliceBetweenUnique } from "./helpers/source-assertions";
+import { RECORDINGS_LOCAL_MODE_NOTICE } from "../lib/local-opt-in.js";
 
 const tempDirs: string[] = [];
 const cliEntry = join(process.cwd(), "src", "cli", "index.ts");
@@ -59,6 +60,22 @@ function isolatedCliEnv(home: string, overrides: Record<string, string> = {}) {
     RECORDINGS_AUDIO_DIR: join(home, "audio"),
     ...overrides,
   };
+}
+
+/**
+ * Assert a spawn wrote nothing to stderr EXCEPT the local-mode notice.
+ *
+ * Every spawn that uses `isolatedCliEnv` declares the unhosted opt-in, and a
+ * process that lands on the on-box store says so once on stderr
+ * (`RECORDINGS_LOCAL_MODE_NOTICE`, src/lib/local-opt-in.ts) — selecting a
+ * different dataset is not allowed to be invisible. Commands that never
+ * resolve a Store (`--help`, argument validation) still print nothing at all,
+ * so both shapes are clean. Anything else — a warning, a stack trace, a second
+ * copy of the notice — still fails, which is what these assertions are for.
+ */
+function expectCleanStderr(stderr: string): void {
+  const notice = `${RECORDINGS_LOCAL_MODE_NOTICE}\n`;
+  expect(stderr.startsWith(notice) ? stderr.slice(notice.length) : stderr).toBe("");
 }
 
 afterEach(() => {
@@ -136,7 +153,7 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     expect(stdout).toContain("events");
     expect(stdout).toContain("agents");
     expect(stdout).toContain("feedback");
@@ -161,6 +178,30 @@ describe("recordings CLI", () => {
     expect(existsSync(join(home, ".hasna", "recordings", "recordings.db"))).toBe(false);
   });
 
+  // The other half of the announcement contract: a configured authority
+  // OUTRANKS the opt-in, so a run that has both must go hosted silently. If
+  // the notice ever escaped into a hosted run it would tell an operator their
+  // writes are on-box while they are going to the fleet — the exact inversion
+  // of the failure the notice exists to prevent.
+  test("a configured hosted authority never announces LOCAL mode, even with the opt-in set", async () => {
+    const home = appFixtureHome();
+    const { stderr, exitCode } = await runStartupFixture(home,
+      [process.execPath, join(import.meta.dir, "helpers/cli-app-fixture.ts"), "--json", "list", "--limit", "1"],
+      startupFixtureEnv(home, {
+        HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
+        // A dead port: this must fail as a TRANSPORT error, never by falling
+        // back to the on-box store.
+        HASNA_RECORDINGS_API_URL: "http://127.0.0.1:9/recordings",
+        HASNA_RECORDINGS_API_KEY: "fixture-not-a-real-key",
+        HASNA_RECORDINGS_LOCAL: "1",
+      }));
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).not.toContain("LOCAL mode");
+    expect(existsSync(join(home, ".hasna", "recordings", "recordings.db"))).toBe(false);
+    expect(existsSync(join(home, "recordings.db"))).toBe(false);
+  });
+
   test("agents lists via the local store (no DSN) as JSON", async () => {
     const home = join(tmpdir(), `open-recordings-cli-agents-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     tempDirs.push(home);
@@ -183,7 +224,7 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     // Fresh local store => empty agent list, proving local routing works with no API env.
     expect(JSON.parse(stdout)).toEqual([]);
   });
@@ -218,7 +259,7 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     const project = JSON.parse(stdout) as { id: string; name: string; path: string };
     expect(project.id).toHaveLength(36);
     expect(project).toMatchObject({ name: "Desktop App", path: "recordings-app://projects/desktop" });
@@ -243,7 +284,7 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode, stderr).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
 
     const status = JSON.parse(stdout) as {
       package_root: string;
@@ -294,7 +335,7 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     expect(stdout).toContain("--artifact");
     expect(stdout).toContain("--manifest");
     expect(stdout).toContain("--envelope");
@@ -779,7 +820,7 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode, stderr).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     const status = JSON.parse(stdout) as {
       installed_app_path: string;
       installed: boolean;
@@ -828,7 +869,7 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode, stderr).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     const status = JSON.parse(stdout) as {
       installed_app_path: string;
       installed: boolean;
@@ -856,7 +897,7 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode, stderr).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     const permissions = JSON.parse(stdout) as {
       installed: boolean;
       microphone: string;
@@ -962,7 +1003,7 @@ describe("recordings CLI", () => {
       compactProc.exited,
     ]);
     expect(compactExit, compactStderr).toBe(0);
-    expect(compactStderr).toBe("");
+    expectCleanStderr(compactStderr);
     expect(compactStdout).toContain("Recordings.app");
     expect(compactStdout).toContain("Use --verbose");
     expect(compactStdout).not.toContain(`Package: ${process.cwd()}`);
@@ -977,7 +1018,7 @@ describe("recordings CLI", () => {
       verboseProc.exited,
     ]);
     expect(verboseExit, verboseStderr).toBe(0);
-    expect(verboseStderr).toBe("");
+    expectCleanStderr(verboseStderr);
     expect(verboseStdout).toContain(`Package: ${process.cwd()}`);
     expect(verboseStdout).toContain("Executable path:");
   });
@@ -1001,7 +1042,7 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode, stderr).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
 
     const permissions = JSON.parse(stdout) as {
       bundle_id: string;
@@ -1038,7 +1079,7 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode, stderr).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     expect(stdout).toContain("request-permissions");
   });
 
@@ -1061,7 +1102,7 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode, stderr).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     expect(stdout).toContain("snapshot [options] [output]");
     expect(stdout).toContain("current main desktop");
   });
@@ -1080,7 +1121,7 @@ describe("recordings CLI", () => {
       }));
 
     expect(exitCode, stderr).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
 
     const report = JSON.parse(stdout) as {
       recording: { available: boolean; tool: string | null; message: string };
@@ -1116,7 +1157,7 @@ describe("recordings CLI", () => {
       [process.execPath, join(import.meta.dir, "helpers/cli-app-fixture.ts"), "check"],
       startupFixtureEnv(home, { HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
         RECORDINGS_AUDIO_DIR: join(home, "audio"), OPENAI_API_KEY: "test-openai-key" }));
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     expect(exitCode).toBe(1);
     // The fail-closed line must read as a FAIL, never a green sqlite store.
     expect(stdout).toContain("✗ Active store: none — fail-closed");
@@ -1132,7 +1173,7 @@ describe("recordings CLI", () => {
       [process.execPath, join(import.meta.dir, "helpers/cli-app-fixture.ts"), "--json", "check"],
       startupFixtureEnv(home, { HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
         RECORDINGS_AUDIO_DIR: join(home, "audio"), OPENAI_API_KEY: "test-openai-key" }));
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     expect(exitCode).toBe(1);
     const report = JSON.parse(stdout) as {
       active_store: {
@@ -1162,7 +1203,7 @@ describe("recordings CLI", () => {
         OPENAI_API_KEY: "test-openai-key", HASNA_RECORDINGS_API_KEY: "fixture-check-env-key",
         RECORDINGS_TEST_KEYCHAIN_MODE: "locked" }));
     expect(exitCode).toBe(1);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     const report = JSON.parse(stdout);
     expect(report.active_store.transport).toBe("none");
     expect(stdout).toContain("never resolved around");
@@ -1211,7 +1252,7 @@ describe("recordings CLI", () => {
       ]);
 
       expect(exitCode).toBe(0);
-      expect(stderr).toBe("");
+      expectCleanStderr(stderr);
       expect(stdout).not.toContain("Transcribing");
       expect(stdout).not.toContain("Transcription:");
       expect(stdout.trim().startsWith("{")).toBe(true);
@@ -1287,7 +1328,7 @@ describe("recordings CLI", () => {
       ]);
 
       expect(exitCode).toBe(0);
-      expect(stderr).toBe("");
+      expectCleanStderr(stderr);
       const recording = JSON.parse(stdout) as {
         raw_text: string;
         processed_text: string;
@@ -1366,7 +1407,7 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     const recording = JSON.parse(stdout) as {
       audio_path: string;
       raw_text: string;
@@ -1495,7 +1536,7 @@ describe("recordings CLI", () => {
       saveProc.exited,
     ]);
     expect(saveExit).toBe(0);
-    expect(saveStderr).toBe("");
+    expectCleanStderr(saveStderr);
     const saved = JSON.parse(saveStdout) as { id: string; raw_text: string };
     expect(saved.raw_text).toBe(longText);
 
@@ -1509,7 +1550,7 @@ describe("recordings CLI", () => {
       listProc.exited,
     ]);
     expect(listExit).toBe(0);
-    expect(listStderr).toBe("");
+    expectCleanStderr(listStderr);
     expect(listStdout).toContain("recordings: showing 1 of 1");
     expect(listStdout).toContain(saved.id.slice(0, 8));
     expect(listStdout).toContain("Details: recordings show <id> or inspect <id>");
@@ -1529,7 +1570,7 @@ describe("recordings CLI", () => {
       verboseProc.exited,
     ]);
     expect(verboseExit).toBe(0);
-    expect(verboseStderr).toBe("");
+    expectCleanStderr(verboseStderr);
     expect(verboseStdout).toContain("model: model Injectedredgreen");
     expect(verboseStdout).not.toContain("\u001b");
     expect(verboseStdout).not.toContain("\u009b");
@@ -1550,7 +1591,7 @@ describe("recordings CLI", () => {
       statsProc.exited,
     ]);
     expect(statsExit).toBe(0);
-    expect(statsStderr).toBe("");
+    expectCleanStderr(statsStderr);
     expect(statsStdout).toContain("model Injectedredgreen");
     expect(statsStdout).not.toContain("\u001b");
     expect(statsStdout).not.toContain("\u009b");
@@ -1569,7 +1610,7 @@ describe("recordings CLI", () => {
       jsonProc.exited,
     ]);
     expect(jsonExit).toBe(0);
-    expect(jsonStderr).toBe("");
+    expectCleanStderr(jsonStderr);
     const listed = JSON.parse(jsonStdout) as Array<{ raw_text: string }>;
     expect(listed[0]!.raw_text).toBe(longText);
 
@@ -1583,7 +1624,7 @@ describe("recordings CLI", () => {
       inspectProc.exited,
     ]);
     expect(inspectExit).toBe(0);
-    expect(inspectStderr).toBe("");
+    expectCleanStderr(inspectStderr);
     expect(inspectStdout).toContain("hidden-tail-token");
   });
 
@@ -1614,7 +1655,7 @@ describe("recordings CLI", () => {
       proc.exited,
     ]);
     expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     expect(stdout).toContain("recordings: showing 2 of 2");
     expect(stdout).toContain("limit 50");
     expect(stdout).toContain("Limit capped at 50");
@@ -1652,7 +1693,7 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
+    expectCleanStderr(stderr);
     expect(stdout).toContain("Codex");
     expect(stdout).toContain("Gemini");
     expect(readFileSync(codexConfig, "utf-8")).toContain('args = ["--stdio"]');

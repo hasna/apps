@@ -1,7 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { registerAgentTools } from './agent-registry.js'
 import { z } from 'zod'
-import { openDatabase, getMachineId } from '../db/database.js'
+import { getMachineId } from '../db/database.js'
+import type { SqliteAdapter } from '../db/sqlite-adapter.js'
 import { syncAll } from '../lib/sync-all.js'
 import { syncAllToCloud } from '../lib/cloud-ingest.js'
 import { economyCloudStorage } from '../lib/cloud-storage.js'
@@ -22,9 +23,13 @@ export function buildServer(): any {
 // lazily and only after `sync` has already confirmed local mode via isCloudStore,
 // so hosted mode never touches (or creates) a local SQLite file — in
 // cloud mode the client reads/writes the shared API only.
-let _db: ReturnType<typeof openDatabase> | undefined
-const localDb = (): ReturnType<typeof openDatabase> => {
+// The import is DYNAMIC and taken inside the local branch of `sync`, so
+// `bun:sqlite` is emitted to dist/chunks and never appears in dist/mcp: a
+// hosted MCP session cannot load the on-box SQLite lane at all.
+let _db: SqliteAdapter | undefined
+const localDb = async (): Promise<SqliteAdapter> => {
   if (!_db) {
+    const { openDatabase } = await import('../db/sqlite-store.js')
     _db = openDatabase()
     ensurePricingSeeded(_db)
   }
@@ -569,7 +574,7 @@ server.tool(
 
 server.tool(
   'sync',
-  `Ingest new cost data. sources: ${SYNC_SOURCES.join('|')}. Set json=true for the full result object.`,
+  `Ingest new cost data. sources: ${SYNC_SOURCES.join('|')} ('loops' reads another app's on-box store and is refused for a hosted client). Set json=true for the full result object.`,
   { sources: z.enum([...SYNC_SOURCES] as [string, ...string[]]).optional(), json: z.boolean().optional() },
   async ({ sources, json }: { sources?: typeof SYNC_SOURCES[number]; json?: boolean }) => {
     const selected = sources ?? 'all'
@@ -602,7 +607,7 @@ server.tool(
       lines.push('Use json=true for the full sync result.')
       return text(lines.join('\n'))
     }
-    const result = await syncAll(localDb(), opts)
+    const result = await syncAll(await localDb(), opts)
     if (json) return text(JSON.stringify(result, null, 2))
     const lines = [
       `sync: ${selected}`,

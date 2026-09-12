@@ -362,27 +362,34 @@ SDK throws — it never degrades to an anonymous client or to local data.
 | `BRANDSIGHT_DEMO_STUBS`, `BRANDSIGHT_ALLOW_STUBS` | Set either to `1` to allow demo stub responses when the Brandsight API is unreachable |
 | `SEDO_PARTNER_ID`, `SEDO_API_KEY`, `SEDO_USERNAME`, `SEDO_PASSWORD` | Sedo marketplace API credentials |
 
-### Picking a store: a local path and a configured credential are mutually exclusive
+### There is one store: the shared account API
 
-`HASNA_DOMAINS_DB_PATH`, `DOMAINS_DB_PATH`, `HASNA_DOMAINS_DIR`, `DOMAINS_DIR` and
-`HASNA_DOMAINS_HOME` all name a **local sqlite file or directory**. Only the local store
-has one. So setting any of them while the environment also configures a hosted
-authority or credential (`HASNA_DOMAINS_API_URL`, `HASNA_DOMAINS_API_KEY`, the
-deliberate pointers, `HASNA_PROFILE`, or a Keychain / credential-file entry)
-asks for two different stores at once, and **`getStore()` refuses to start**
-rather than pick one for you. Local mode applies only when the environment
-configures nothing at all.
+`domains` clients have **no local mode**, opt-in or otherwise.
+`HASNA_DOMAINS_DB_PATH`, `DOMAINS_DB_PATH`, `HASNA_DOMAINS_DIR` and
+`DOMAINS_DIR` are refused outright by `getStore()` — with or without a
+credential configured — and nothing is opened or created:
+
+```text
+$ HASNA_DOMAINS_DB_PATH=/tmp/x.db domains domain list
+domains: HASNA_DOMAINS_DB_PATH is no longer supported by clients. …
+$ echo $?
+1
+```
 
 This is deliberate. Before it, the combination silently resolved to the cloud
 store: a script that set `DOMAINS_DB_PATH` created no sqlite file, wrote to the
 remote portfolio, and printed success. Nothing on any surface said which store
 it had used.
 
-To resolve it, say which you meant:
+The CLI, MCP and SDK bundles cannot open SQLite even by accident: `bun:sqlite`
+is unreachable from `src/cli/index.ts`, `src/mcp/index.ts` and
+`src/sdk/index.ts`, and `src/db/no-sqlite-in-client-bundles.test.ts` fails the
+build if that ever changes. The sqlite modules (`db/database.ts`,
+`db/local-store.ts`) remain only as explicit migration/unit fixtures. To use
+the hosted store, unset the retired variables:
 
 ```sh
-unset HASNA_DOMAINS_DB_PATH DOMAINS_DB_PATH HASNA_DOMAINS_DIR DOMAINS_DIR HASNA_DOMAINS_HOME   # use the hosted store
-unset HASNA_DOMAINS_API_URL HASNA_DOMAINS_API_KEY HASNA_DOMAINS_API_KEY_OVERRIDE HASNA_DOMAINS_API_KEY_REF HASNA_PROFILE   # use the sqlite file the path variable names
+unset HASNA_DOMAINS_DB_PATH DOMAINS_DB_PATH HASNA_DOMAINS_DIR DOMAINS_DIR
 ```
 
 `domains doctor` names the store it resolved, in its `Store` section — including

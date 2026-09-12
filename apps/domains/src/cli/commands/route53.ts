@@ -433,7 +433,7 @@ export function registerRoute53Commands(program: Command): void {
 
   r53
     .command("sync")
-    .description("Sync Route 53 registered domains to local database")
+    .description("Sync Route 53 registered domains into the shared domains portfolio")
     .action(async () => {
       try {
         const provider = createRoute53Provider();

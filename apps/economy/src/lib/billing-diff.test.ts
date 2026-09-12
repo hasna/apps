@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { openDatabase, upsertRequest, upsertSession, upsertBillingDaily } from '../db/database.js'
+import { openDatabase, upsertRequest, upsertSession, upsertBillingDaily } from '../db/sqlite-store.js'
 import { queryBillingDiff, billingDriftCheck, billingDeltaPct } from './billing-diff.js'
 import type { SqliteAdapter } from '../db/sqlite-adapter.js'
 

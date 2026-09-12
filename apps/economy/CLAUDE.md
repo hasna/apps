@@ -28,7 +28,13 @@ AI coding cost tracker — `@hasna/economy`
 - `economy-mcp` — start MCP stdio server
 
 ## Key Files
-- `src/db/database.ts` — SQLite layer
+- `src/db/database.ts` — the SQL query layer (pure functions over a handle; NO `bun:sqlite` import)
+- `src/db/sqlite-store.ts` — `openDatabase()` + the query-layer re-export: the ONE module that opens economy's own SQLite.
+  Clients reach it through a gated dynamic import inside the local lane, so `dist/cli`, `dist/mcp` and `dist/index.js`
+  carry no `bun:sqlite` (the code lands in `dist/chunks/`). `economy-serve` / `economy-otel` import it statically.
+- `src/db/third-party-sqlite.ts` — the only other `bun:sqlite` importer: read-only handles on OTHER tools' stores
+  (Codex, Codewith, Hermes, OpenLoops); loaded dynamically by the collectors. The OpenLoops read is refused for a
+  hosted client (cross-app on-box read).
 - `src/lib/pricing.ts` — model pricing table
 - `src/ingest/claude.ts` — Claude Code telemetry ingest
 - `src/ingest/codex.ts` — Codex SQLite ingest
@@ -36,7 +42,7 @@ AI coding cost tracker — `@hasna/economy`
 - `src/cli/index.ts` — CLI entry
 - `src/mcp/index.ts` — MCP server
 - `src/server/index.ts` — REST API
-- `src/lib/cloud-storage.ts` — the ONE client storage seam: `@hasna/contracts` 1.0.2 resolver (Keychain item `hasna.credentials.economy.api-key`, `~/.hasna/economy/config/credentials`, `HASNA_ECONOMY_API_KEY`, default gateway `https://api.hasna.com/economy`), fail-closed on no credential, local store only via `HASNA_ECONOMY_LOCAL=1` (prints `local` on stderr)
+- `src/lib/cloud-storage.ts` — the ONE client storage seam: `@hasna/contracts` 1.0.2 resolver (Keychain item `hasna.credentials.economy.api-key`, `~/.hasna/economy/config/credentials`, `HASNA_ECONOMY_API_KEY`, default gateway `https://api.hasna.com/economy`), fail-closed on no credential, local store only via `HASNA_ECONOMY_LOCAL=1` (prints one `economy: LOCAL mode …` line on stderr)
 - `menubar/Sources/EconomyBar` — native SwiftUI menu bar app
 
 ## Testing
