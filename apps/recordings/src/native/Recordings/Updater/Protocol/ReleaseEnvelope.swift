@@ -71,6 +71,7 @@ public struct ReleaseEnvelopePayload: Codable, Equatable, Sendable {
     }
 
     public func validate(now: Date = Date(), brokerVersion: String = RecordingsUpdateConstants.brokerVersion) throws {
+        try RecordingsUpdateConstants.productPolicy.requireRuntimeSupport()
         guard schemaVersion == RecordingsUpdateConstants.protocolVersion else {
             throw ReleaseEnvelopeValidationError.unsupportedSchema
         }
@@ -112,7 +113,7 @@ public struct ReleaseEnvelopePayload: Codable, Equatable, Sendable {
         else {
             throw ReleaseEnvelopeValidationError.invalidField("release_input_size")
         }
-        guard architectures == ["arm64", "x86_64"] else {
+        guard architectures == RecordingsUpdateConstants.productPolicy.architectures else {
             throw ReleaseEnvelopeValidationError.invalidField("architectures")
         }
         guard HostOSVersionPolicy.isValidNumericVersion(minimumOSVersion) else {

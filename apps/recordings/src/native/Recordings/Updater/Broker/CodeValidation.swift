@@ -26,6 +26,7 @@ enum CanonicalReleaseOrder {
 
 enum ReleaseCodeValidator {
     static func validateProtectedComponents(payload: ReleaseEnvelopePayload) throws {
+        try RecordingsUpdateConstants.productPolicy.requireRuntimeSupport()
         try validateRegularDigest(
             path: RecordingsUpdateConstants.brokerExecutablePath,
             expected: payload.updateBrokerSHA256
@@ -51,6 +52,8 @@ enum ReleaseCodeValidator {
         payload: ReleaseEnvelopePayload,
         policy: BrokerPolicy
     ) throws -> CandidateValidationResult {
+        let productPolicy = RecordingsUpdateConstants.productPolicy
+        try productPolicy.requireRuntimeSupport()
         let treeDigest = try CanonicalTree.digest(at: applicationPath)
         guard treeDigest == payload.candidateTreeSHA256 else {
             throw CodeValidationError.treeDigestMismatch
@@ -86,7 +89,7 @@ enum ReleaseCodeValidator {
         }
 
         let provenancePath =
-            applicationPath + "/Contents/Resources/recordings-build-provenance.json"
+            applicationPath + "/" + productPolicy.provenanceRelativePath
         let provenanceData = try readBoundedRegularFile(
             path: provenancePath,
             maximumBytes: 64 * 1024
@@ -103,27 +106,17 @@ enum ReleaseCodeValidator {
         } catch {
             throw CodeValidationError.invalidBuildProvenance
         }
-        let expectedProvenanceFields: Set<String> = [
-            "schema_version",
-            "bundle_id",
-            "bundle_version",
-            "bundle_build_version",
-            "git_sha",
-            "architectures",
-            "team_id",
-            "minimum_macos",
-            "companion",
-        ]
-        let expectedCompanionFields: Set<String> = ["version", "sha256", "architectures"]
+        let expectedProvenanceFields = productPolicy.provenanceFields
+        let expectedCompanionFields = productPolicy.companionProvenanceFields
         guard Set(provenanceObject.keys) == expectedProvenanceFields,
               let companionObject = provenanceObject["companion"] as? [String: Any],
               Set(companionObject.keys) == expectedCompanionFields
         else {
             throw CodeValidationError.invalidBuildProvenance
         }
-        let executablePath = applicationPath + "/Contents/MacOS/Recordings"
+        let executablePath = applicationPath + "/" + productPolicy.executableRelativePath
         let actualArchitectures = try readArchitectures(executablePath)
-        let companionPath = applicationPath + "/Contents/Helpers/recordings"
+        let companionPath = applicationPath + "/" + productPolicy.companionRelativePath
         let actualCompanionSHA256 = try sha256RegularFile(path: companionPath)
         let actualCompanionArchitectures = try readArchitectures(companionPath)
         let localOnlyFieldNames: Set<String> = [
@@ -167,14 +160,15 @@ enum ReleaseCodeValidator {
                 ),
                 expected: CandidateReleaseMetadataExpectation(
                     applicationIdentifier: policy.applicationIdentifier,
-                    applicationExecutable: "Recordings",
+                    applicationExecutable: productPolicy.applicationExecutable,
                     version: payload.version,
                     build: payload.build,
                     sourceCommit: payload.sourceCommit,
                     signingTeamIdentifier: payload.signingTeamIdentifier,
                     minimumOSVersion: payload.minimumOSVersion,
                     architectures: payload.architectures
-                )
+                ),
+                productPolicy: productPolicy
             )
         } catch let error as CandidateMetadataPolicyError {
             throw mapMetadataPolicyError(error)
@@ -350,7 +344,8 @@ enum ReleaseCodeValidator {
              .updateClientArchitectureMismatch,
              .companionArchitectureMismatch:
             return .invalidApplicationMetadata
-        case .provenanceSchemaMismatch,
+        case .productPolicyMismatch,
+             .provenanceSchemaMismatch,
              .localOnlyProvenanceRejected,
              .provenanceIdentifierMismatch,
              .provenanceVersionMismatch,

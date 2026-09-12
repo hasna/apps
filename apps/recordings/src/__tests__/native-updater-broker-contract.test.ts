@@ -46,6 +46,20 @@ describe("native privileged updater broker contract", () => {
     expect(readme).toContain("does not authorize an update or bypass");
   });
 
+  test("keeps runtime product selection legacy-only before privileged startup", () => {
+    const protocol = withoutAnyComments(source("src/native/Recordings/Updater/Protocol/UpdateProtocol.swift"));
+    const product = withoutAnyComments(source("src/native/Recordings/Updater/Protocol/UpdateProductPolicy.swift"));
+    const broker = withoutAnyComments(source("src/native/Recordings/Updater/Broker/BrokerMain.swift"));
+    const envelope = withoutAnyComments(source("src/native/Recordings/Updater/Protocol/ReleaseEnvelope.swift"));
+    expect(protocol).toContain("public static let productPolicy = UpdateProductPolicy.legacy");
+    expect(product).toContain("guard self == Self.legacy else");
+    expect(product).toContain("throw UpdateProductPolicyError.runtimeUnsupported");
+    expectOrder(broker, "productPolicy.requireRuntimeSupport()", "RootTrustStore.readPolicy()");
+    expectOrder(broker, "productPolicy.requireRuntimeSupport()", "BrokerStartupRecovery.recoverInterruptedTransactions()");
+    expect(envelope).toContain("try RecordingsUpdateConstants.productPolicy.requireRuntimeSupport()");
+    expect(envelope).toContain("architectures == RecordingsUpdateConstants.productPolicy.architectures");
+  });
+
   test("admits only audit-token-authenticated signed XPC peers and no path options", () => {
     // Comment-stripped: every assertion below is about code. PeerIdentity.swift now carries a
     // long note naming these same symbols, and prose must not be able to satisfy a contract.
@@ -111,7 +125,8 @@ describe("native privileged updater broker contract", () => {
       'application.buildVersion == expected.build',
       'application.minimumOSVersion == expected.minimumOSVersion',
       'application.executable == expected.applicationExecutable',
-      'provenance.schemaVersion == 4',
+      'provenance.schemaVersion == productPolicy.provenanceSchemaVersion',
+      'productPolicy.admits(expected)',
       '!provenance.containsLocalOnlyFields',
       'provenance.bundleIdentifier == expected.applicationIdentifier',
       'provenance.bundleVersion == expected.version',
@@ -129,11 +144,11 @@ describe("native privileged updater broker contract", () => {
       expect(policy).toContain(binding);
     }
     expect(validation).toContain(
-      'applicationPath + "/Contents/Resources/recordings-build-provenance.json"',
+      'applicationPath + "/" + productPolicy.provenanceRelativePath',
     );
     expect(validation).toContain("JSONDecoder().decode(ReleaseBuildProvenance.self");
     expect(validation).toContain("throw CodeValidationError.invalidBuildProvenance");
-    expect(validation).toContain('applicationPath + "/Contents/Helpers/recordings"');
+    expect(validation).toContain('applicationPath + "/" + productPolicy.companionRelativePath');
     expect(validation).toContain("let actualCompanionSHA256 = try sha256RegularFile(path: companionPath)");
     expect(validation).toContain("let actualCompanionArchitectures = try readArchitectures(companionPath)");
     expect(validation).toContain("let actualUpdateClientArchitectures = try readArchitectures(clientPath)");
@@ -340,7 +355,7 @@ describe("native privileged updater broker contract", () => {
     expect(validator).toContain("metadata.st_gid == 80");
     expect(validator).toContain("permissions == 0o775");
     expect(updateProtocol).toContain(
-      'monotonicStateDirectory = "/private/var/db/com.hasna.recordings.updater"',
+      'monotonicStateDirectory = productPolicy.monotonicStateDirectory',
     );
     expect(validator).toContain("if (permissions & 0o022) == 0 { return true }");
     expect(validator).toContain(
