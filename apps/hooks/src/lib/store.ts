@@ -10,7 +10,7 @@ import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "fs";
 import { readFile } from "fs/promises";
 import type { Database } from "bun:sqlite";
-import { getDb } from "../db/index.js";
+import { getDb, isLocalStoreRefused } from "../db/index.js";
 import { getLockPath } from "../config.js";
 import { randomBytes } from "crypto";
 
@@ -50,6 +50,17 @@ export function sha256Of(input: Buffer | string): string {
 export async function sha256File(path: string): Promise<string> {
   const buf = await readFile(path);
   return sha256Of(buf);
+}
+
+/**
+ * The hooks-table handle for a store write, or null when the on-box store is
+ * refused for this process (hosted route, hasna/apps#1720). The lock file is
+ * then the ONLY pin store: the DB row is a mirror of the lock pin, never the
+ * other way round, so a hosted run pins, trusts and removes through
+ * hooks.lock alone and never opens hooks.db.
+ */
+function storeDb(): Database | null {
+  return isLocalStoreRefused() ? null : getDb();
 }
 
 export function getHookRecord(db: Database, name: string): HookRecord | null {
@@ -217,15 +228,17 @@ export function pinInstalledHook(
   sourceRef?: string | null,
 ): void {
   const now = new Date().toISOString();
-  const db = getDb();
-  upsertHookRecord(db, {
-    name,
-    version,
-    sha256,
-    source_type: source,
-    source_ref: sourceRef ?? null,
-    last_verified_at: now,
-  });
+  const db = storeDb();
+  if (db) {
+    upsertHookRecord(db, {
+      name,
+      version,
+      sha256,
+      source_type: source,
+      source_ref: sourceRef ?? null,
+      last_verified_at: now,
+    });
+  }
   setPinnedHook(name, { version, sha256, source });
 }
 
@@ -236,8 +249,8 @@ export function pinInstalledHook(
  */
 export function removeHookFromStore(name: string): { removedPin: boolean; removedRecord: boolean } {
   const removedPin = removePinnedHook(name);
-  const db = getDb();
-  const removedRecord = removeHookRecord(db, name);
+  const db = storeDb();
+  const removedRecord = db ? removeHookRecord(db, name) : false;
   return { removedPin, removedRecord };
 }
 
@@ -258,8 +271,8 @@ export interface TrustCheck {
  * about to execute (content-based verification), instead of re-reading a path.
  */
 export function checkScriptHash(name: string, actual: string): TrustCheck {
-  const db = getDb();
-  const record = getHookRecord(db, name);
+  const db = storeDb();
+  const record = db ? getHookRecord(db, name) : null;
   const pin = getPinnedHook(name);
   const expected = record?.sha256 ?? pin?.sha256 ?? null;
   if (expected !== null && expected !== actual) {
@@ -269,24 +282,28 @@ export function checkScriptHash(name: string, actual: string): TrustCheck {
     const now = new Date().toISOString();
     const version = pin?.version ?? record?.version ?? "0.0.0";
     const source = pin?.source ?? record?.source_type ?? "local";
-    upsertHookRecord(db, {
-      name,
-      version,
-      sha256: actual,
-      source_type: source,
-      last_verified_at: now,
-    });
+    if (db) {
+      upsertHookRecord(db, {
+        name,
+        version,
+        sha256: actual,
+        source_type: source,
+        last_verified_at: now,
+      });
+    }
     setPinnedHook(name, { version, sha256: actual, source });
     return { ok: true, pinned: false, expected: null, actual, name };
   }
   const now = new Date().toISOString();
-  upsertHookRecord(db, {
-    name,
-    version: record?.version ?? pin?.version ?? "0.0.0",
-    sha256: expected,
-    source_type: record?.source_type ?? pin?.source ?? "local",
-    last_verified_at: now,
-  });
+  if (db) {
+    upsertHookRecord(db, {
+      name,
+      version: record?.version ?? pin?.version ?? "0.0.0",
+      sha256: expected,
+      source_type: record?.source_type ?? pin?.source ?? "local",
+      last_verified_at: now,
+    });
+  }
   return { ok: true, pinned: true, expected, actual, name };
 }
 
@@ -301,14 +318,16 @@ export async function verifyScriptHash(name: string, scriptPath: string): Promis
 
 export function retrustHook(name: string, scriptPath: string, version: string, source: string): TrustCheck {
   const actual = sha256Of(readFileSync(scriptPath));
-  const db = getDb();
-  upsertHookRecord(db, {
-    name,
-    version,
-    sha256: actual,
-    source_type: source,
-    last_verified_at: new Date().toISOString(),
-  });
+  const db = storeDb();
+  if (db) {
+    upsertHookRecord(db, {
+      name,
+      version,
+      sha256: actual,
+      source_type: source,
+      last_verified_at: new Date().toISOString(),
+    });
+  }
   setPinnedHook(name, { version, sha256: actual, source });
   return { ok: true, pinned: true, expected: actual, actual, name };
 }

@@ -1201,6 +1201,276 @@
       "name": "missing ready status refused",
       "valid": false,
       "value": {}
+    },
+    {
+      "parser": "providersResponseParser",
+      "name": "legacy provider catalog",
+      "valid": true,
+      "value": {
+        "providers": [
+          {
+            "id": "fictional",
+            "models": [
+              "fictional-model"
+            ],
+            "formats": [
+              {
+                "encoding": "pcm_s16le",
+                "sampleRateHz": 24000,
+                "channels": 1
+              }
+            ],
+            "execution": "hosted",
+            "interim": true,
+            "cancellation": true,
+            "languageSelection": true,
+            "requiresAccount": true,
+            "ready": true
+          }
+        ]
+      }
+    },
+    {
+      "parser": "providersResponseParser",
+      "name": "provider catalog with explicit defaults",
+      "valid": true,
+      "value": {
+        "defaultProvider": "fictional",
+        "providers": [
+          {
+            "id": "fictional",
+            "models": [
+              "fictional-model"
+            ],
+            "formats": [
+              {
+                "encoding": "pcm_s16le",
+                "sampleRateHz": 24000,
+                "channels": 1
+              }
+            ],
+            "execution": "hosted",
+            "interim": true,
+            "cancellation": true,
+            "languageSelection": true,
+            "requiresAccount": true,
+            "ready": true,
+            "name": "Fictional provider",
+            "defaultModel": "fictional-model",
+            "modelDetails": [
+              {
+                "id": "fictional-model",
+                "name": "Fictional model",
+                "task": "transcription"
+              }
+            ],
+            "transcriptionMode": "realtime"
+          }
+        ]
+      }
+    },
+    {
+      "parser": "providersResponseParser",
+      "name": "segmented provider catalog",
+      "valid": true,
+      "value": {
+        "providers": [
+          {
+            "id": "fictional",
+            "models": [
+              "fictional-model"
+            ],
+            "formats": [
+              {
+                "encoding": "pcm_s16le",
+                "sampleRateHz": 24000,
+                "channels": 1
+              }
+            ],
+            "execution": "hosted",
+            "interim": false,
+            "cancellation": true,
+            "languageSelection": true,
+            "requiresAccount": true,
+            "ready": false,
+            "name": "Fictional provider",
+            "defaultModel": "fictional-model",
+            "modelDetails": [
+              {
+                "id": "fictional-model",
+                "name": "Fictional model",
+                "task": "transcription"
+              }
+            ],
+            "transcriptionMode": "segmented"
+          }
+        ]
+      }
+    },
+    {
+      "parser": "providersResponseParser",
+      "name": "provider catalog invalid transcription mode",
+      "valid": false,
+      "value": {
+        "providers": [
+          {
+            "id": "fictional",
+            "models": [
+              "fictional-model"
+            ],
+            "formats": [
+              {
+                "encoding": "pcm_s16le",
+                "sampleRateHz": 24000,
+                "channels": 1
+              }
+            ],
+            "execution": "hosted",
+            "interim": true,
+            "cancellation": true,
+            "languageSelection": true,
+            "requiresAccount": true,
+            "ready": true,
+            "name": "Fictional provider",
+            "defaultModel": "fictional-model",
+            "modelDetails": [
+              {
+                "id": "fictional-model",
+                "name": "Fictional model",
+                "task": "transcription"
+              }
+            ],
+            "transcriptionMode": "chat"
+          }
+        ]
+      }
+    },
+    {
+      "parser": "providersResponseParser",
+      "name": "provider catalog invalid model task",
+      "valid": false,
+      "value": {
+        "providers": [
+          {
+            "id": "fictional",
+            "models": [
+              "fictional-model"
+            ],
+            "formats": [
+              {
+                "encoding": "pcm_s16le",
+                "sampleRateHz": 24000,
+                "channels": 1
+              }
+            ],
+            "execution": "hosted",
+            "interim": true,
+            "cancellation": true,
+            "languageSelection": true,
+            "requiresAccount": true,
+            "ready": true,
+            "name": "Fictional provider",
+            "defaultModel": "fictional-model",
+            "modelDetails": [
+              {
+                "id": "fictional-model",
+                "name": "Fictional",
+                "task": "chat"
+              }
+            ],
+            "transcriptionMode": "realtime"
+          }
+        ]
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "explicit provider and qualified model",
+      "valid": true,
+      "value": {
+        "type": "session.start",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "provider": "fictional-provider",
+        "model": "fictional/audio-model"
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "provider only preserves server model default",
+      "valid": true,
+      "value": {
+        "type": "session.start",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "provider": "fictional-provider"
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "provider selection empty",
+      "valid": false,
+      "value": {
+        "type": "session.start",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "provider": ""
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "provider selection URL",
+      "valid": false,
+      "value": {
+        "type": "session.start",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "provider": "https://fictional.example.test"
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "provider selection uppercase",
+      "valid": false,
+      "value": {
+        "type": "session.start",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "provider": "Fictional"
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "provider selection overlong",
+      "valid": false,
+      "value": {
+        "type": "session.start",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "provider": "ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      }
+    },
+    {
+      "parser": "streamControlParser",
+      "name": "provider selection trailing newline",
+      "valid": false,
+      "value": {
+        "type": "session.start",
+        "sessionId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "provider": "fictional\n"
+      }
+    },
+    {
+      "parser": "versionResponseParser",
+      "name": "optional provider selection capability",
+      "valid": true,
+      "value": {
+        "name": "recordings",
+        "version": "fictional",
+        "apiVersion": "v1",
+        "wireVersion": "1.0",
+        "capabilities": [
+          "version-negotiation",
+          "pcm-s16le-24000-mono",
+          "audio-ack",
+          "session-authorize",
+          "provider-selection"
+        ]
+      }
     }
   ]
 }

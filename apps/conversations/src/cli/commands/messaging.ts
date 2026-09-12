@@ -5,10 +5,9 @@ import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { normalizeExactIsoTimestamp, normalizeSince } from "../../lib/since.js";
 // Reads/writes route through getStore(): ApiStore (HTTP API) or LocalStore.
-import { closeDb } from "../../lib/db.js";
 import { resolveIdentities, resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
-import { buildMessagePreview } from "../../lib/channel-notifications.js";
+import { buildMessagePreview } from "../../lib/message-preview-text.js";
 import { resolveSelfSenderId } from "../../lib/sender-identity.js";
 import { buildCompactSearchEnvelope, parseNonNegativeInteger, previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, warnIfPageFull, SINCE_JSON_LIMIT } from "../compact.js";
@@ -78,7 +77,6 @@ export function sendDesktopNotification(
 
 function failCommand(error: unknown, fallback: string): never {
   printErrorLine(chalk.red(error instanceof Error ? error.message : fallback));
-  closeDb();
   process.exit(1);
 }
 
@@ -269,7 +267,6 @@ export function registerMessagingCommands(program: Command): void {
       } else {
         printLine(chalk.green(`Message sent`) + chalk.dim(` (uuid: ${msg.uuid}, id: ${msg.id}, session: ${msg.session_id})`));
       }
-      closeDb();
     });
 
   // ---- read ----
@@ -356,7 +353,6 @@ export function registerMessagingCommands(program: Command): void {
           });
         }
       }
-      closeDb();
     });
 
   // ---- show ----
@@ -392,7 +388,6 @@ export function registerMessagingCommands(program: Command): void {
         printLine(renderContent(msg.content));
         printReactionRow(msg.reactions);
       }
-      closeDb();
     });
 
   // ---- digest ----
@@ -461,7 +456,6 @@ export function registerMessagingCommands(program: Command): void {
           printLine(chalk.dim("Use conversations show <id> for one full message."));
         }
       }
-      closeDb();
     });
 
   // ---- search ----
@@ -578,7 +572,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           });
         }
       }
-      closeDb();
     });
 
   // ---- since ----
@@ -637,7 +630,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           });
         }
       }
-      closeDb();
     });
 
   // ---- reply ----
@@ -741,7 +733,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
       } else {
         printLine(chalk.green(`Reply sent`) + chalk.dim(` (uuid: ${msg.uuid}, id: ${msg.id}, session: ${msg.session_id})`));
       }
-      closeDb();
     });
 
   // ---- mark-read ----
@@ -775,7 +766,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
       } else {
         printLine(chalk.green(`Marked ${count} message(s) as read.`));
       }
-      closeDb();
     });
 
   // ---- export ----
@@ -812,7 +802,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
       }
 
       printJson(result);
-      closeDb();
     });
 
   // ---- edit ----
@@ -854,7 +843,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           process.exit(1);
         }
       }
-      closeDb();
     });
 
   // ---- delete ----
@@ -882,7 +870,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           process.exit(1);
         }
       }
-      closeDb();
     });
 
   // ---- pin ----
@@ -904,7 +891,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           process.exit(1);
         }
       }
-      closeDb();
     });
 
   // ---- unpin ----
@@ -926,7 +912,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           process.exit(1);
         }
       }
-      closeDb();
     });
 
   // ---- pinned ----
@@ -972,7 +957,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           });
         }
       }
-      closeDb();
     });
 
   // ---- blockers ----
@@ -1016,7 +1000,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           });
         }
       }
-      closeDb();
     });
 
   // ---- watch ----
@@ -1042,7 +1025,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
         } else {
           printLine(chalk.green(`Cleared ${cleared} notification(s).`));
         }
-        closeDb();
         return;
       }
 
@@ -1069,7 +1051,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
         }
         printLine(chalk.dim("\nInspect the full message later with: conversations show <message-id>"));
       }
-      closeDb();
     });
 
   program
@@ -1280,7 +1261,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
       process.on("SIGINT", () => {
         for (const stop of stops) void stop.stop();
         printLine(chalk.dim("\n  Stopped watching."));
-        closeDb();
         process.exit(0);
       });
     });

@@ -2,7 +2,6 @@ import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { createConversationsProjectPanel } from "../../lib/project-panel.js";
-import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { previewText } from "../../lib/compact-output.js";
 import { getCliWindow, getJsonWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor } from "../compact.js";
@@ -73,7 +72,6 @@ export function registerProjectCommands(program: Command): void {
         }
         process.exit(1);
       } finally {
-        closeDb();
       }
     });
 
@@ -130,7 +128,6 @@ export function registerProjectCommands(program: Command): void {
         }
         emitCliError(e.message, opts);
       }
-      closeDb();
     });
 
   project
@@ -208,7 +205,6 @@ export function registerProjectCommands(program: Command): void {
           });
         }
       }
-      closeDb();
     });
 
   project
@@ -236,7 +232,6 @@ export function registerProjectCommands(program: Command): void {
         if (p.tags.length > 0) printLine(`  Tags: ${p.tags.join(", ")}`);
         printLine(`  Created by: ${p.created_by} on ${p.created_at.slice(0, 10)}`);
       }
-      closeDb();
     });
 
   project
@@ -278,7 +273,6 @@ export function registerProjectCommands(program: Command): void {
       } catch (e: any) {
         emitCliError(e.message, opts);
       }
-      closeDb();
     });
 
   project
@@ -309,6 +303,5 @@ export function registerProjectCommands(program: Command): void {
         }
         process.exit(1);
       }
-      closeDb();
     });
 }

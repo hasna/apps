@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb } from "./db.js";
 import { saveFeedbackLocal } from "./feedback.js";
-import { ConversationsStoreConfigError, getStore, LocalStore } from "./store/index.js";
+import { ConversationsStoreConfigError, getStore } from "./store/index.js";
+import { LocalStore } from "./store/local-store.js";
 import { enterHermeticTestEnv } from "../test/hermetic.js";
 
 const HOME_KEYS = ["HOME", "HASNA_HOME", "HASNA_CONVERSATIONS_HOME", "CONVERSATIONS_HOME"] as const;

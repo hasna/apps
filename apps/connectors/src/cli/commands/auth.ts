@@ -270,7 +270,7 @@ export function registerCommands(program: Command): void {
 
             // Verify the server is up
             try {
-              await fetch(`http://localhost:${port}/api/connectors`);
+              await fetch(`http://localhost:${port}/health`);
             } catch {
               console.log(chalk.red(`OAuth server failed to start on port ${port}. Is the port already in use?`));
               console.log(chalk.dim("Free the port and try again, or use 'connectors serve' for the OAuth flow."));

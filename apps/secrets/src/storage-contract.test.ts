@@ -78,7 +78,7 @@ describe("secrets storage surface contract", () => {
   });
 
   it("ApiStore.listSecrets skips a secret the server cannot return instead of aborting", async () => {
-    // Regression for `export-env` (cloud): one server-side-undecryptable secret
+    // Regression for the cloud bulk read: one server-side-undecryptable secret
     // used to reject the whole Promise.all and 500 the entire command.
     const transport = {
       baseUrl: "https://secrets.hasna.xyz/v1",

@@ -55,10 +55,30 @@ export interface SynthesisResult {
 // ============================================================================
 
 export async function runSynthesis(options: SynthesisOptions = {}): Promise<SynthesisResult> {
-  const d = options.db || getDatabase();
   const projectId = options.projectId ?? null;
   const agentId = options.agentId ?? null;
   const dryRun = options.dryRun ?? false;
+
+  // API mode: synthesis creates a run record, builds the corpus, fires an LLM
+  // call, and persists proposals — every step must land in the shared cloud
+  // store, not a local SQLite island. Route to the server (POST
+  // /synthesis/run, mapped from the client's /v1 authority), which runs this
+  // exact function server-side (with the server's own provider configuration)
+  // against cloud Postgres. Without this the op hits the getDatabase()
+  // split-brain guard. The server passes an explicit `db`, so it never
+  // recurses here.
+  if (!options.db && isApiMode()) {
+    const { data } = apiJson<SynthesisResult>("POST", "/synthesis/run", {
+      project_id: projectId,
+      agent_id: agentId,
+      dry_run: dryRun,
+      max_proposals: options.maxProposals,
+      provider: options.provider,
+    });
+    return data;
+  }
+
+  const d = options.db || getDatabase();
 
   // 1. Create the synthesis run record
   const run = createSynthesisRun(
@@ -216,6 +236,16 @@ export async function rollbackSynthesis(
   runId: string,
   db?: Database
 ): Promise<{ rolled_back: number; errors: string[] }> {
+  // API mode: rollback restores memories and rewrites run records in the
+  // shared cloud store — route to the server exactly like runSynthesis does.
+  if (!db && isApiMode()) {
+    const { data } = apiJson<{ rolled_back: number; errors: string[] }>(
+      "POST",
+      `/synthesis/rollback/${encodeURIComponent(runId)}`,
+    );
+    return data;
+  }
+
   const d = db || getDatabase();
 
   const result = await _rollbackRun(runId, d);

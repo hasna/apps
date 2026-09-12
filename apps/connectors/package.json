@@ -30,19 +30,23 @@
     "./social": {
       "import": "./dist/social/index.js",
       "types": "./dist/.types/src/social/index.d.ts"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js",
+      "default": "./dist/sdk/index.js"
     }
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external conf --external @hasna/events && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/index.ts --outfile ./bin/serve.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/social/index.ts --outfile ./dist/social/index.js --target bun && tsc --emitDeclarationOnly --outDir ./dist && tsc -p tsconfig.social.json",
+    "build": "bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external conf --external @hasna/events && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/index.ts --outfile ./bin/serve.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/social/index.ts --outfile ./dist/social/index.js --target bun && bun build ./src/sdk/index.ts --outfile ./dist/sdk/index.js --target bun && tsc --emitDeclarationOnly --outDir ./dist && tsc -p tsconfig.social.json",
     "postinstall": "mkdir -p $HOME/.hasna/connectors 2>/dev/null || true",
     "dev": "bun run ./src/cli/index.tsx",
     "check:package-secrets": "bun run scripts/check-package-secrets.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.social.json --noEmit",
     "test": "bun run build && bun test",
     "secrets:scan:npmrc": "bun run scripts/scan-npmrc-auth.mjs",
-    "sdk:build": "cd sdk && bun run build",
     "prepublishOnly": "bun run secrets:scan:npmrc && bun run build && bun run check:package-secrets && bun test",
     "prepack": "bun run build && bun run check:package-secrets"
   },
