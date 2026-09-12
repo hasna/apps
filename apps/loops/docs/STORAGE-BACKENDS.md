@@ -183,6 +183,17 @@ refuses to write a no-loss bundle unless the operator explicitly uses
 requires `--apply`; existing rows with the same id are updated only with
 `--replace`. The CLI creates a local SQLite backup before a safe apply.
 
+On a hosted connection `loops import` targets the control plane instead of the
+local file: the preview is computed from `/v1` reads with the same plan builder
+(so a bundle is classified identically on both transports) and `--apply` sends
+one `POST /v1/import`. Only the rows the plan marks `insert` or `update` are
+sent. Two differences are printed rather than assumed: there is no local backup
+to take, and the route's backfill safety applies — imported workflow definitions
+land archived and imported loops land paused with `nextRunAt`/`retryScheduledFor`
+cleared, so resume them explicitly. The checks a hosted plan cannot run (the
+sqlite destination table census, and the bounded run-slot / active-workflow
+lookup windows) are listed under `not checked`.
+
 `loops push` applies an additional safety rule. Imported
 workflow definitions are archived, and imported loops are paused with
 `nextRunAt`/`retryScheduledFor` cleared. That safety normalization can re-archive

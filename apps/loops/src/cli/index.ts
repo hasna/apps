@@ -62,8 +62,10 @@ import {
   exportLoopsMigrationBundle,
   publicMigrationBundle,
   validateLoopsMigrationBundle,
+  type LoopsMigrationBundle,
   type LoopsMigrationPlan,
 } from "../lib/migration.js";
+import { applyHostedImport, buildHostedImportPlan } from "../lib/hosted-migration.js";
 import { buildStorageConnectionReport, resolvedClientRuntimeConfig, storageConnectionReportLine, type StorageConnectionReport } from "../lib/runtime-status.js";
 import {
   buildDuplicateOverlapReport,
@@ -983,15 +985,80 @@ program
     }
   }));
 
+/**
+ * `loops import` against the hosted control plane.
+ *
+ * The preview runs the SAME plan builder as the local path (fed from `/v1`
+ * reads), so a bundle is classified identically on both transports; the apply
+ * is one `POST /v1/import`. Both print what the hosted plan could not check,
+ * and the apply prints the route's backfill safety effect rather than letting
+ * an operator assume imported loops are live.
+ */
+async function hostedImport(
+  bundle: LoopsMigrationBundle,
+  opts: { apply?: boolean; replace?: boolean; runs?: boolean; json?: boolean },
+): Promise<void> {
+  const store = getStore();
+  try {
+    if (!opts.apply) {
+      const preview = await buildHostedImportPlan(store, bundle, {
+        includeRuns: opts.runs,
+        replace: opts.replace,
+        dryRun: true,
+      });
+      if (isJson() || opts.json) {
+        console.log(JSON.stringify({ ...preview.plan, backend: preview.backend, unchecked: preview.unchecked }, null, 2));
+      } else {
+        console.log(`backend  hosted control plane ${preview.backend.apiUrl ?? "(url unavailable)"} (transport=${preview.backend.transport})`);
+        printMigrationPlan(preview.plan, opts);
+        printUnchecked(preview.unchecked);
+      }
+      return;
+    }
+    const result = await applyHostedImport(store, bundle, {
+      includeRuns: opts.runs,
+      replace: opts.replace,
+      dryRun: false,
+    });
+    const output = {
+      ok: true,
+      backend: result.backend,
+      imported: result.imported,
+      skippedRunning: result.skippedRunning,
+      backfillSafety: result.backfillSafety,
+      plan: result.plan,
+      unchecked: result.unchecked,
+    };
+    if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
+    else {
+      console.log(`backend  hosted control plane ${result.backend.apiUrl ?? "(url unavailable)"} (transport=${result.backend.transport})`);
+      console.log(
+        `imported workflows=${result.imported.workflows} loops=${result.imported.loops} runs=${result.imported.runs}` +
+          `${result.skippedRunning > 0 ? ` skipped_running=${result.skippedRunning}` : ""}`,
+      );
+      console.log("note  /v1/import backfill safety: imported workflows land archived and imported loops land paused with scheduling cleared; resume them explicitly");
+      printUnchecked(result.unchecked);
+    }
+  } finally {
+    await store.close();
+  }
+}
+
 program
   .command("import <file>")
-  .description("preview or apply a local Loops migration bundle")
+  .description("preview or apply a Loops migration bundle against the current connection (hosted /v1 or the local file store)")
   .option("--apply", "apply the import; default is a dry-run preview")
   .option("--replace", "update existing rows whose ids match but hashes differ")
   .option("--no-runs", "ignore loop run history in the bundle")
   .option("--json", "print JSON")
-  .action(runAction((file, opts) => {
+  .action(runAction(async (file, opts) => {
     const bundle = validateLoopsMigrationBundle(parseJsonFile(file));
+    // Hosted connection: plan and apply against the control plane through
+    // `POST /v1/import` (the id-preserving bulk route), never the on-box file.
+    if (isCloudStore()) {
+      await hostedImport(bundle, opts);
+      return;
+    }
     const store = new Store();
     try {
       if (!opts.apply) {

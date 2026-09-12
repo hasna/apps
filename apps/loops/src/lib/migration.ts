@@ -326,8 +326,28 @@ function remoteRepresentationRow(
   };
 }
 
+/**
+ * The destination reads an import plan needs, named as a contract instead of a
+ * concrete sqlite {@link Store}.
+ *
+ * The local {@link Store} satisfies it structurally, so every existing caller is
+ * unchanged; a hosted destination (see `hosted-migration.ts`) implements it over
+ * prefetched `/v1` reads. `exportMigrationRows` is OPTIONAL because the
+ * destination integrity sweep it performs is a sqlite table census: a hosted
+ * destination must say it did not run that sweep rather than return an empty
+ * check set that reads as "destination is clean".
+ */
+export interface MigrationDestination {
+  exportMigrationRows?(opts: { includeRuns?: boolean }): { checks: StoreMigrationChecks };
+  listWorkflows(opts: { status?: WorkflowSpec["status"] }): WorkflowSpec[];
+  getWorkflow(id: string): WorkflowSpec | undefined;
+  getLoop(id: string): Loop | undefined;
+  getRun(id: string): LoopRun | undefined;
+  getRunBySlot(loopId: string, scheduledFor: string): LoopRun | undefined;
+}
+
 export function buildImportMigrationPlan(
-  store: Store,
+  store: MigrationDestination,
   bundle: LoopsMigrationBundle,
   opts: ImportLoopsMigrationOptions = {},
 ): LoopsMigrationPlan {
@@ -337,7 +357,9 @@ export function buildImportMigrationPlan(
   const replace = opts.replace ?? false;
   const rows: LoopsMigrationPlanRow[] = [];
   const warnings = [...(bundle.warnings ?? [])];
-  rows.push(...checksToBlockers(store.exportMigrationRows({ includeRuns: false }).checks, "destination", warnings));
+  if (store.exportMigrationRows) {
+    rows.push(...checksToBlockers(store.exportMigrationRows({ includeRuns: false }).checks, "destination", warnings));
+  }
   if (!bundle.importable || bundle.blockers.length > 0) {
     rows.push(...bundle.blockers.map((row) => ({ ...row, action: "blocked" as const })));
   }

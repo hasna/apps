@@ -78,6 +78,12 @@ loops import ./loops-export.json --apply
 creates a SQLite backup first. Existing ids are not overwritten unless
 `--replace` is used and the dry-run has no conflicts or blockers.
 
+On a hosted connection the same command targets the control plane: the preview
+reads `/v1` and `--apply` sends one `POST /v1/import`. There is no local backup
+to take, and the route's backfill safety applies (imported workflows land
+archived, imported loops land paused with scheduling cleared). See
+`docs/STORAGE-BACKENDS.md`.
+
 No-loss export/import currently preserves workflow specs, loop definitions, and
 terminal loop run history. It intentionally blocks when unsupported durable
 tables contain rows (workflow invocations/work items, workflow run/step/event

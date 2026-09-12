@@ -18,6 +18,12 @@ import {
 } from "../lib/format.js";
 import { publicCommandDescriptor } from "../lib/command-target.js";
 import { buildHealthReport, buildHealthScan, classifyRunFailure, expectationForLoop } from "../lib/health.js";
+import {
+  buildHostedDoctorReport,
+  buildHostedHealthReport,
+  buildHostedHealthScan,
+  buildHostedLoopDiagnosis,
+} from "../lib/hosted-diagnostics.js";
 import { nowIso } from "../lib/ids.js";
 import { LOOP_LABEL_MAX_COUNT, mergeLoopLabels, normalizeLoopLabels, removeLoopLabels } from "../lib/labels.js";
 import { resolveLoopMachine } from "../lib/machines.js";
@@ -592,7 +598,13 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     readOnly: true,
     annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {},
-    handler: () => withLocalStore("loops_doctor", (store) => runDoctor(store)),
+    handler: () =>
+      isCloudStore()
+        ? withStore(async (store) => {
+            const hosted = await buildHostedDoctorReport(store);
+            return { ...hosted.report, backend: hosted.backend, unchecked: hosted.unchecked };
+          })
+        : withLocalStore("loops_doctor", (store) => runDoctor(store)),
   },
   {
     name: "loops_health",
@@ -605,7 +617,17 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       limit: limitSchema,
     },
     handler: ({ includeArchived, includeInactive, limit }) =>
-      withLocalStore("loops_health", (store) => buildHealthReport(store, { includeArchived, includeInactive, limit })),
+      isCloudStore()
+        ? withStore(async (store) => {
+            const hosted = await buildHostedHealthReport(store, { includeArchived, includeInactive, limit });
+            return {
+              ...hosted.report,
+              backend: hosted.backend,
+              executionTruth: hosted.executionTruth,
+              unchecked: hosted.unchecked,
+            };
+          })
+        : withLocalStore("loops_health", (store) => buildHealthReport(store, { includeArchived, includeInactive, limit })),
   },
   {
     name: "loops_health_scan",
@@ -623,16 +645,36 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       limit: limitSchema,
     },
     handler: ({ includeStatuses, includeArchived, latestRun, doctor, daemon, staleRunningMs, maxFindings, limit }) =>
-      withLocalStore("loops_health_scan", (store) => buildHealthScan(store, {
-        includeStatuses: includeStatuses as LoopStatus[] | undefined,
-        includeArchived,
-        latestRun,
-        doctor: doctor ? runDoctor(store) : undefined,
-        daemon: daemon ? daemonStatus(store) : undefined,
-        staleRunningMs,
-        maxFindings,
-        limit,
-      })),
+      isCloudStore()
+        ? withStore(async (store) => {
+            // doctor/daemon findings describe THIS machine's runtime, not the
+            // control plane. Refuse them on a hosted connection instead of
+            // returning a machine report labelled as the fleet's.
+            if (doctor || daemon) {
+              throw new Error(
+                "hosted loops_health_scan supports read-only hosted checks; the doctor and daemon findings remain machine-local",
+              );
+            }
+            const hosted = await buildHostedHealthScan(store, {
+              includeStatuses: includeStatuses as LoopStatus[] | undefined,
+              includeArchived,
+              latestRun,
+              staleRunningMs,
+              maxFindings,
+              limit,
+            });
+            return { ...hosted.scan, backend: hosted.backend, unchecked: hosted.unchecked };
+          })
+        : withLocalStore("loops_health_scan", (store) => buildHealthScan(store, {
+            includeStatuses: includeStatuses as LoopStatus[] | undefined,
+            includeArchived,
+            latestRun,
+            doctor: doctor ? runDoctor(store) : undefined,
+            daemon: daemon ? daemonStatus(store) : undefined,
+            staleRunningMs,
+            maxFindings,
+            limit,
+          })),
   },
   {
     name: "loops_diagnose",
@@ -646,18 +688,32 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       showOutput: showOutputSchema,
     },
     handler: ({ idOrName, runLimit, showOutput }) =>
-      withLocalStore("loops_diagnose", (store) => {
-        const loop = store.requireLoop(idOrName);
-        const runs = store.listRuns({ loopId: loop.id, limit: runLimit ?? 5 });
-        return {
-          loop: publicLoop(loop),
-          expectation: expectationForLoop(store, loop),
-          recentRuns: runs.map((run) => ({
-            run: publicRun(run, showOutput ?? false),
-            failure: classifyRunFailure(run),
-          })),
-        };
-      }),
+      isCloudStore()
+        ? withStore(async (store) => {
+            const hosted = await buildHostedLoopDiagnosis(store, idOrName, { runLimit: runLimit ?? 5 });
+            return {
+              backend: hosted.backend,
+              loop: publicLoop(hosted.loop),
+              expectation: hosted.expectation,
+              recentRuns: hosted.recentRuns.map((entry) => ({
+                run: publicRun(entry.run, showOutput ?? false),
+                failure: entry.failure,
+              })),
+              unchecked: hosted.unchecked,
+            };
+          })
+        : withLocalStore("loops_diagnose", (store) => {
+            const loop = store.requireLoop(idOrName);
+            const runs = store.listRuns({ loopId: loop.id, limit: runLimit ?? 5 });
+            return {
+              loop: publicLoop(loop),
+              expectation: expectationForLoop(store, loop),
+              recentRuns: runs.map((run) => ({
+                run: publicRun(run, showOutput ?? false),
+                failure: classifyRunFailure(run),
+              })),
+            };
+          }),
   },
   {
     name: "loops_daemon_status",
