@@ -220,6 +220,28 @@ export async function assertHostedCredentialResolvable(
   }
 }
 
+/**
+ * The ONE authority preflight every serving surface runs before it opens a
+ * transport or binds a socket (owner ruling 2026-09-04, hasna/apps#1720
+ * acceptance (c)): select the store — fail closed with the remedy when no
+ * tier produced a credential and local was not opted into, refuse a deliberate
+ * tier that cannot be honoured — and prove once that a vault pointer can be
+ * completed. Returns the selected store so a caller need not resolve twice.
+ * Local mode announces itself here, once per process, on stderr.
+ *
+ * Rejects with the resolver's own error; it never exits — the caller decides
+ * whether that is a `process.exit(1)` (the `logs-mcp` startup gate) or a
+ * rejected promise (the Streamable-HTTP listener factory, whose caller may be
+ * an embedder rather than the bin).
+ */
+export async function assertStoreConfigured(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<Store> {
+  const store = resolveStore(env);
+  await assertHostedCredentialResolvable(env);
+  return store;
+}
+
 /** The transport decision this process resolves to, in diagnostics shape. */
 export interface LogsTransportReport {
   transport: "http" | "local";

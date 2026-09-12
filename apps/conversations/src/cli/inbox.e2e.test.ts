@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { hermeticHomeEnv } from "../test/hermetic.js";
 
 const PACKAGE_INBOX = join(import.meta.dir, "..", "inbox", "inbox");
 const PACKAGE_JSON = join(import.meta.dir, "..", "..", "package.json");
@@ -196,6 +197,7 @@ function runInbox(
     cmd: [PACKAGE_INBOX, ...args],
     cwd: join(import.meta.dir, "..", ".."),
     env: {
+      ...hermeticHomeEnv(),
       ...process.env,
       INBOX_STATE_DIR: harness.stateRoot,
       PATH: `${harness.binDir}:${process.env.PATH ?? ""}`,
@@ -1034,6 +1036,7 @@ exec "$INBOX_REAL_BUN" "$@"
   async function publish(body: string, from: string, to: string) {
     const child = Bun.spawn(["bash", "-c", `${body}\ninstall_state_directory "$1" "$2"`, "inbox-test", from, to], {
       env: { ...process.env, PATH: `${process.execPath.slice(0, process.execPath.lastIndexOf("/"))}:${process.env.PATH}` },
+        ...hermeticHomeEnv(),
       stdout: "pipe", stderr: "pipe",
     });
     const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);

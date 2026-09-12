@@ -1,7 +1,6 @@
 import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-import { closeDb } from "../../lib/db.js";
 import { normalizeChannelName } from "../../lib/channel-names.js";
 import { emitCliError } from "../cli-error.js";
 import { printJson, printLine } from "../../lib/stdout.js";
@@ -62,6 +61,5 @@ export function registerReceiptCommands(program: Command): void {
           }
         }
       }
-      closeDb();
     });
 }

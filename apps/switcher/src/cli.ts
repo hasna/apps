@@ -57,11 +57,14 @@ Keep Switcher running while using the app; quit that app instance to end the lau
 --reasoning: none, minimal, low, medium, high, xhigh, max, ultra (provider support required).
 --dangerously-bypass-approvals-and-sandbox: full access without prompts or command sandboxing.
 PROTOCOL: anthropic-messages, openai-responses, openai-chat, gemini-generate-content
-Without remote API configuration, the CLI owns a local authenticated API and
-stores data in ~/.hasna/switcher (override HASNA_SWITCHER_HOME).
-Remote API URL/key resolve through @hasna/contracts: overrides, Keychain,
-~/.hasna/switcher/config/credentials, then environment. A key alone uses the gateway.
-A configured remote API never falls back to local data.
+Data access is HTTP against the configured Switcher API. Its URL/key resolve
+through @hasna/contracts: overrides, Keychain (hasna.credentials.switcher.api-key),
+~/.hasna/switcher/config/credentials, then environment (HASNA_SWITCHER_API_KEY).
+A key alone uses the gateway. With nothing configured the command exits 1 and
+names those sources; it never falls back to local data.
+HASNA_SWITCHER_LOCAL=1 (alias SWITCHER_LOCAL=1) deliberately selects the on-box
+store in ~/.hasna/switcher (override HASNA_SWITCHER_HOME) behind an owned
+per-command loopback API; a configured remote API outranks the flag.
 Provider credential references must start SWITCHER_PROVIDER_.
 --models-file accepts a JSON array of model metadata; --model adds one starter.
 Use --catalog-format none for a manual catalog; otherwise discovery stays active.

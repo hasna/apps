@@ -26,8 +26,9 @@
 // Shared domain types (type-only; no runtime surface).
 export * from "./types.js";
 
-// The Store abstraction: getStore(), ConversationsStore, LocalStore, the
-// transport resolvers (isCloudStore/cloudApiUrl/…) and normalizeChannelName.
+// The Store abstraction: getStore(), ConversationsStore, the transport
+// resolvers (isCloudStore/cloudApiUrl/…) and normalizeChannelName. There is
+// no local store export: clients are API-only.
 export * from "./lib/store/index.js";
 
 // Contract-valid project dashboard panel, aggregated through the active Store.
@@ -42,8 +43,8 @@ export {
 export {
   PROJECT_CHANNEL_REGISTRATION_ROUTE,
   createProjectChannelRegistrationAuthority,
-  projectChannelRegistrationDigest,
-} from "./lib/project-channel-registration.js";
+} from "./lib/project-channel-registration-authority.js";
+export { projectChannelRegistrationDigest } from "./lib/project-channel-registration-contract.js";
 export type {
   ProjectChannelCollectionItem,
   ProjectChannelCollectionPage,

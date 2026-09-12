@@ -23,7 +23,10 @@ breaking adoption.
 ## 1. Product stories
 
 Every Hasna OSS product has exactly **two** customer-facing stories, declared
-in the manifest's `hosting` array. There is no third.
+in the manifest's `hosting` array. There is no third. Where a product is
+*served* is not a story and is deliberately not expressed here; a repo that
+answers on the shared gateway declares that in the optional `serving` block
+(§9.2).
 
 | Story | Meaning |
 | --- | --- |
@@ -445,6 +448,9 @@ backend, storage capabilities, and product surfaces are separate axes:
 - `kitVersion` — the `@hasna/contracts` version the repo tracks.
 - `hosting` — product stories: `user-hosted` and, only when available,
   `hasna-saas`.
+- `serving` — optional. Where the product is reachable from a client: the
+  gateway route slug, its credential gate, and the client base URL. See
+  section 9.2.
 - `storage.backend` — active data backend (`sqlite | postgresql`), the server's
   internal storage.
 - `storage.engines` — supported persistence engines.
@@ -551,6 +557,44 @@ non-Node profile cannot use waivers to bypass required supported surfaces.
 Storage capabilities use the same waiver pattern in
 `metadata.conformance.waivedStorageEngines`; see §6 for the eligibility,
 expiry, and `pgTestGate` rules.
+
+### 9.2 `serving` — the route
+
+`hosting` says who a story is for; `serving` says where the product is
+reachable. A repo that answers on the shared gateway declares it here. The
+block is optional and additive — omitting it asserts nothing about routing —
+so every manifest that predates it keeps validating.
+
+```json
+{
+  "serving": {
+    "routeSlug": "notes",
+    "access": "api-key",
+    "targetClientBase": "https://api.hasna.com/notes"
+  }
+}
+```
+
+- `routeSlug` — the gateway path segment: the route is reachable at
+  `https://api.hasna.com/<routeSlug>`. Lowercase dashed slug.
+- `access` — the credential gate, named explicitly and never defaulted, because
+  a route's gate is a security fact: `public` (no gate), `api-key` (a fleet
+  client key at `hasna/oss/<routeSlug>/api-key`), or `signature` (a
+  request-signature check, as hooks uses instead of a presented key).
+- `targetClientBase` — the client base URL: absolute `https`, no credentials,
+  query, fragment, or trailing slash, and never ending in `/v1` — clients
+  append the version segment themselves. A base on `api.hasna.com` must be
+  path-prefixed with its own `routeSlug`, because the gateway strips that
+  prefix and a different segment would route to another app's surface. An app
+  still pinned to its origin hostname names that host instead.
+
+These three are exactly what the fleet registry
+(`tooling/fleet/hosted-apps.json`) already records per hosted app — the `app`
+slug, the derived `baseUrl`, and the `keyCheck` gate — so the contract and the
+registry describe one route the same way. `clientKeySecretRefFor(routeSlug)`
+and `gatewayClientBaseFor(routeSlug)` export the derived key ref and default
+base. A `library` repo ships no serve surface, so it must not declare
+`serving`.
 
 ---
 

@@ -210,12 +210,20 @@ export function bindingTarget(selector: string, override?: string, allowedOrigin
 
 async function readKeychain(source: z.infer<typeof keychain>): Promise<string> {
   if (process.platform !== "darwin") throw new Fault(422,"keychain_unavailable","This binding requires macOS Keychain. Use a supported vault binding or runtime environment on this station.");
-  try {
-    const {stdout} = await execute("/usr/bin/security",["find-generic-password","-a",source.account,"-s",source.service,"-w"],{encoding:"utf8",timeout:10_000,maxBuffer:65536});
-    const value = stdout.replace(/\r?\n$/,"");
-    if (!value || /[\x00-\x1f\x7f]/.test(value)) throw new Error("Invalid credential");
-    return value;
-  } catch { throw new Fault(422,"keychain_unavailable","The configured Keychain item is missing, locked, or inaccessible; no alternate credential was selected."); }
+  // A binding names a user-chosen service/account, which @hasna/contracts'
+  // Keychain tier (hasna.credentials.<app>.*) cannot address, so the exact
+  // `security` status is classified here the same way the shared tier does:
+  // absent (44) and unreadable (locked, denied) are both terminal, never a fallback.
+  let stdout: string;
+  try { ({stdout} = await execute("/usr/bin/security",["find-generic-password","-a",source.account,"-s",source.service,"-w"],{encoding:"utf8",timeout:10_000,maxBuffer:65536})); }
+  catch (error) {
+    const status = (error as {code?: unknown}).code;
+    if (status === 44) throw new Fault(422,"keychain_item_missing","The configured Keychain item does not exist for that service and account; no alternate credential was selected.");
+    throw new Fault(422,"keychain_unavailable",`The configured Keychain item could not be read (security exited ${typeof status === "number" ? status : "without a status"}); it is locked or inaccessible. No alternate credential was selected.`);
+  }
+  const value = stdout.replace(/\r?\n$/,"");
+  if (!value || /[\x00-\x1f\x7f]/.test(value)) throw new Fault(422,"keychain_item_invalid","The configured Keychain item holds an unusable value; no alternate credential was selected.");
+  return value;
 }
 
 export class CredentialResolver {

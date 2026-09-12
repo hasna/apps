@@ -8,7 +8,7 @@ import { server, disposeServer } from "./index.js";
 import { setSessionAgent } from "./channel.js";
 import { resetStoreForTests } from "../lib/store/index.js";
 import { join } from "path";
-import { createDisposableStore, hermeticSpawnEnv } from "../test/hermetic.js";
+import { createDisposableStore, hermeticSpawnEnv, hermeticHomeEnv } from "../test/hermetic.js";
 
 let client: Client;
 let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
@@ -121,6 +121,7 @@ describe("MCP module lifecycle", () => {
     await expectIndexImportTerminates({
       marker: "MCP_INDEX_IMPORTED_WITH_TELEGRAM",
       env: { TELEGRAM_BOT_TOKEN: "not-a-real-test-token" },
+        ...hermeticHomeEnv(),
       script: `
         globalThis.fetch = async () => Response.json({ ok: true, result: { username: "testbot" } });
         await import("./src/mcp/index.ts");

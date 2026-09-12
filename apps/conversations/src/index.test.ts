@@ -9,7 +9,7 @@ import * as index from "./index";
 describe("public API exports", () => {
   test("exports the Store resolver and implementations", () => {
     expect(typeof index.getStore).toBe("function");
-    expect(typeof index.LocalStore).toBe("function");
+    expect((index as Record<string, unknown>).LocalStore).toBeUndefined(); // API-only: the SQLite store is not a public export
   });
 
   test("exports the transport resolvers", () => {

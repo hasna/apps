@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getDatabase, resetDatabase } from "../db/database.js";
+import { getRawStoreRoot } from "../lib/raw-store-root.js";
 import {
   CloudConfigStore,
   LocalConfigStore,
@@ -264,6 +266,58 @@ describe("retired storage-mode variables are GONE (no mode switches exist)", () 
         [API_KEY_ENV]: "k",
       }),
     ).toBeInstanceOf(CloudConfigStore);
+  });
+});
+
+describe("the on-box SQLite store is never opened under a hosted authority (hasna/apps#1886 review, P1)", () => {
+  // The regression this covers: `LocalConfigStore` is a PUBLIC export of
+  // `@hasna/instructions` (src/index.ts, the package's `.` entry point), so a
+  // consumer reaches the raw SQLite store WITHOUT passing through
+  // resolveConfigStore() and its routing. With the drift guard removed, a
+  // process configured for the hosted API silently opened
+  // `<store root>/instructions.db` and read/wrote it — the loud failure the
+  // guard exists to produce became a silent read against the wrong dataset.
+  const HOSTED_URL = "http://127.0.0.1:18877/instructions";
+
+  /** Run `body` with a hosted authority in the PROCESS env, restoring it after. */
+  async function withHostedEnv(home: string, body: () => Promise<void>): Promise<void> {
+    const saved = new Map(
+      [API_URL_ENV, API_KEY_ENV, "HASNA_INSTRUCTIONS_DB_PATH", "HOME"].map((key) => [key, process.env[key]]),
+    );
+    resetDatabase();
+    delete process.env["HASNA_INSTRUCTIONS_DB_PATH"];
+    process.env["HOME"] = home;
+    process.env[API_URL_ENV] = HOSTED_URL;
+    process.env[API_KEY_ENV] = "fake-key";
+    try {
+      await body();
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key!];
+        else process.env[key!] = value;
+      }
+      resetDatabase();
+    }
+  }
+
+  test("LocalConfigStore throws instead of opening local SQLite, and creates no store", async () => {
+    const home = tempHome("hosted-sdk-drift");
+    await withHostedEnv(home, async () => {
+      expect(process.env["HOME"]).toBe(home);
+      await expect(new LocalConfigStore().listConfigs()).rejects.toThrow(/silently drift/);
+      // Fail-loud must mean fail-before-side-effect: the guard runs before the
+      // path is resolved, so no store file (and no store directory) appears.
+      expect(existsSync(join(getRawStoreRoot(), "instructions.db"))).toBe(false);
+    });
+  });
+
+  test("an explicit database handle is the deliberate opt-out", async () => {
+    await withHostedEnv(tempHome("hosted-explicit-db"), async () => {
+      const db = getDatabase(":memory:");
+      expect(db).toBeTruthy();
+      const rows = await new LocalConfigStore(db).listConfigs();
+      expect(rows).toEqual([]);
+    });
   });
 });
 
