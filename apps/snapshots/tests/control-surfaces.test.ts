@@ -188,10 +188,14 @@ describe("concurrent CLI captures (station04 P1 2026-08-24)", () => {
       exitCode: await proc.exited,
     })));
 
-    for (const result of results) {
-      expect(result.exitCode).toBe(0);
-      expect(result.stderr).not.toContain("UNIQUE constraint");
-      expect(result.stdout).toContain('"snapshot"');
+    for (const [index, result] of results.entries()) {
+      // On failure, carry the process's own output into the assertion message:
+      // CI run 34626252771 (2026-09-11) reported only "Expected: 0, Received: 1"
+      // for one of the three captures and left nothing to diagnose.
+      const detail = `capture ${index} exit=${result.exitCode}\nstderr: ${result.stderr.trim()}\nstdout: ${result.stdout.trim().slice(0, 400)}`;
+      expect(result.exitCode, detail).toBe(0);
+      expect(result.stderr, detail).not.toContain("UNIQUE constraint");
+      expect(result.stdout, detail).toContain('"snapshot"');
     }
     const store = new SnapshotStore({ path: dbPath });
     try {
