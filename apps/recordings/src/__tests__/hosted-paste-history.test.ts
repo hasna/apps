@@ -87,7 +87,7 @@ test("actual MCP discovery is inert and paste-history dispatch retains client-re
   await server.connect(serverTransport); await client.connect(clientTransport);
   try {
     const { tools } = await client.listTools();
-    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"]);
+    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_delete", "recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers", "recordings_hosted_rename"]);
     const tool = tools.find(tool => tool.name === "recordings_hosted_paste_history")!;
     expect(tool.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false, idempotentHint: true });
     expect(f.credentials()).toBe(0); expect(f.requests).toHaveLength(0);

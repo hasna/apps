@@ -94,7 +94,7 @@ test("real MCP stdio entry discovers without requests then serves paste history 
     await client.connect(transport, { timeout: 3000 });
     transport.stderr?.on("data", chunk => { stderr += String(chunk); if (stderr.length > 65536) void transport.close(); });
     const { tools } = await client.listTools({}, { timeout: 3000 });
-    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"]);
+    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_delete", "recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers", "recordings_hosted_rename"]);
     expect(counts()).toEqual({ denied: 0, requests: 0 });
     const result = await client.callTool({ name: "recordings_hosted_paste_history", arguments: { limit: 1 } }, undefined, { timeout: 3000 });
     expect(result.isError).not.toBe(true);
@@ -106,5 +106,30 @@ test("real MCP stdio entry discovers without requests then serves paste history 
     expect(catalog.structuredContent).toMatchObject({ defaultProvider: "fictional", providers: [{ name: "Fictional provider" }] });
     expect(JSON.stringify(catalog)).not.toContain("Hidden fictional provider configuration");
     expect(counts()).toEqual({ denied: 0, requests: 2 }); expect(stderr).toBe("");
+    const renamed = await client.callTool({ name: "recordings_hosted_rename", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", title: " Renamed " } }, undefined, { timeout: 3000 });
+    expect(renamed.isError).not.toBe(true); expect(renamed.structuredContent).toMatchObject({ recording: { title: "Renamed" } });
+    expect(JSON.stringify(renamed)).not.toContain("Hidden fictional transcript");
+    const deleted = await client.callTool({ name: "recordings_hosted_delete", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } }, undefined, { timeout: 3000 });
+    expect(deleted.isError).not.toBe(true); expect(deleted.structuredContent).toEqual({ state: "pending" });
+    expect(counts()).toEqual({ denied: 0, requests: 4 }); expect(stderr).toBe("");
   } finally { await client.close(); await transport.close(); rmSync(home, { recursive: true, force: true }); }
 }, 15000);
+
+test("real hosted CLI rename and delete make one request each without local fallback", async () => {
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const connection = ["hosted", "--api-base", "https://fictional.example.test/api/v1/", "--credential-env", "SELECTED_SESSION"];
+  for (const args of [["rename", id, " Renamed "], ["delete", id]]) {
+    const result = await entry("cli", [...connection, ...args], true);
+    expect(result.exitCode).toBe(0); expect(result.requests).toBe(1); expect(result.stderr).toBe("");
+    const body = JSON.parse(result.stdout);
+    if (args[0] === "rename") expect(body.recording.title).toBe("Renamed");
+    else expect(body).toEqual({ state: "pending" });
+    expect(result.stdout).not.toContain("Hidden fictional transcript");
+    const missing = await entry("cli", [...connection, ...args]);
+    expect(missing.exitCode).toBe(1); expect(missing.requests).toBe(0);
+  }
+  for (const args of [["rename", id, " "], ["delete", "../account"]]) {
+    const invalid = await entry("cli", [...connection, ...args], true);
+    expect(invalid.exitCode).toBe(1); expect(invalid.requests).toBe(0);
+  }
+});

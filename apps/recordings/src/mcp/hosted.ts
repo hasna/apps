@@ -32,6 +32,16 @@ export function buildHostedServer(client: HostedRecordingsClient): McpServer {
     description: "Read one hosted recording. Private transcript text is omitted unless includeText is true.",
     inputSchema: { id: z.string(), includeText: z.boolean().optional() }, annotations,
   }, ({ id, includeText }) => execute(() => library.get(id, { includeText })));
+  server.registerTool("recordings_hosted_rename", {
+    description: "Rename one hosted recording. Returns metadata without private transcript text. The title is trimmed and must contain 1–200 characters.",
+    inputSchema: z.object({ id: z.string(), title: z.string() }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  }, ({ id, title }, extra) => execute(() => library.rename(id, title, { signal: extra.signal })));
+  server.registerTool("recordings_hosted_delete", {
+    description: "Permanently delete one hosted recording. A pending result means durable deletion was accepted but audio cleanup is unfinished. Makes one request without automatic retry.",
+    inputSchema: z.object({ id: z.string() }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  }, ({ id }, extra) => execute(() => library.delete(id, { signal: extra.signal })));
   const history = new HostedPasteHistory(client);
   server.registerTool("recordings_hosted_paste_history", {
     description: "Read one hosted paste-history page with destination and client-reported delivery evidence. Private pasted text requires includeText. A confirmed report does not mean the server observed delivery.",

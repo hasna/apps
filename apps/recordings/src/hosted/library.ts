@@ -27,7 +27,7 @@ function project(row: HostedRecording, includeText: boolean): HostedLibraryRecor
     ...(includeText ? { transcript: row.transcript } : {}) };
 }
 
-/** Read-only projections over the existing hosted transport; never reads a native/local store. */
+/** Library operations over the existing hosted transport; never reads a native/local store. */
 export class HostedLibrary {
   constructor(private readonly client: HostedRecordingsClient) {}
   async list(options: HostedLibraryOptions = {}, request?: RequestOptions): Promise<HostedLibraryPage> {
@@ -45,5 +45,14 @@ export class HostedLibrary {
     const includeText = textOption(options, ["includeText"]);
     const { recording } = await this.client.getRecording(id, request);
     return { recording: project(recording, includeText) };
+  }
+  /** Renaming never opts the caller into reading the recording's private transcript. */
+  async rename(id: string, title: string, request?: RequestOptions): Promise<{ recording: HostedLibraryRecording }> {
+    const { recording } = await this.client.renameRecording(id, title, request);
+    return { recording: project(recording, false) };
+  }
+  /** One explicit deletion request. Pending audio cleanup is not completed removal. */
+  async delete(id: string, request?: RequestOptions) {
+    return this.client.deleteRecording(id, request);
   }
 }

@@ -27,10 +27,14 @@ const row = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", title: "Fictional", tr
   durationMs: 1000, createdAt: "2026-01-01T12:00:00Z", updatedAt: "2026-01-01T12:00:00Z" };
 globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input);
-  if (!["https://fictional.example.test/api/v1/recordings?limit=1", "https://fictional.example.test/api/v1/paste-history?limit=1", "https://fictional.example.test/api/v1/providers"].includes(url) ||
-      init?.method !== "GET" || new Headers(init.headers).get("authorization") !== "Bearer fictional-entry-session" ||
+  const read = init?.method === "GET" && ["https://fictional.example.test/api/v1/recordings?limit=1", "https://fictional.example.test/api/v1/paste-history?limit=1", "https://fictional.example.test/api/v1/providers"].includes(url);
+  const mutation = url === "https://fictional.example.test/api/v1/recordings/" + row.id &&
+    ((init?.method === "PATCH" && init.body === JSON.stringify({ title: "Renamed" })) || (init?.method === "DELETE" && init.body === undefined));
+  if ((!read && !mutation) || !init || new Headers(init.headers).get("authorization") !== "Bearer fictional-entry-session" ||
       init.redirect !== "manual" || init.credentials !== "omit") return refuse();
   counts.requests++; writeBoundary();
+  if (mutation) return init.method === "DELETE" ? Response.json({ audioCleanup: { state: "pending" } }, { status: 202 })
+    : Response.json({ recording: { ...row, title: "Renamed" } });
   if (url.endsWith("/providers")) {
     const catalog = vectors.cases.find(value => value.name === "provider catalog with explicit defaults")!.value;
     if (!catalog || typeof catalog !== "object" || Array.isArray(catalog)) return refuse();

@@ -42,7 +42,7 @@ Start the @hasna/recordings HTTP API server.
 Options:
   --port <port>   HTTP port to bind. Defaults to ${DEFAULT_PORT} (or $PORT)
   --host <host>   Hostname to bind. Defaults to 127.0.0.1 (or $HOST)
-  --hosted       Read-only SaaS Library proxy, bound only to an explicit loopback IP
+  --hosted       SaaS Library proxy with explicit rename/delete, bound only to a loopback IP
   --api-base <url> Complete upstream /v1/ base, required for --hosted.
                   Hosted requests supply their own Bearer session; no process credential.
   -V, --version   output the version number
@@ -82,7 +82,7 @@ async function main() {
       const options = parseHostedProcessOptions(process.argv.slice(2), "serve");
       const { buildHostedFetch } = await import("./hosted.js");
       Bun.serve({ hostname: options.host, port: options.port, fetch: buildHostedFetch(options) });
-      console.error("recordings-serve: read-only hosted Library mode");
+      console.error("recordings-serve: hosted Library mode with explicit rename/delete");
     } catch (error) { console.error(JSON.stringify(hostedFailure(error))); process.exitCode = 1; }
     return;
   }
