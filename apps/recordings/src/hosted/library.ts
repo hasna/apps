@@ -1,6 +1,7 @@
 import type { HostedRecordingsClient, Cursor } from "./index.js";
 import type { HostedRecording } from "../contracts/hosted-v1.js";
-import { RecordingsSDKError, type RequestOptions } from "./transport.js";
+import type { RequestOptions } from "./transport.js";
+import { textOption } from "./read-options.js";
 
 export interface HostedLibraryOptions {
   limit?: number;
@@ -21,13 +22,6 @@ export interface HostedLibraryPage {
   nextCursor: Cursor | null;
 }
 
-function textOption(options: object, allowed: readonly string[]): boolean {
-  if (!options || typeof options !== "object" || Array.isArray(options) ||
-      Object.keys(options).some(key => !allowed.includes(key))) throw new RecordingsSDKError("invalid_input");
-  const value = (options as { includeText?: unknown }).includeText;
-  if (value !== undefined && typeof value !== "boolean") throw new RecordingsSDKError("invalid_input");
-  return value === true;
-}
 function project(row: HostedRecording, includeText: boolean): HostedLibraryRecording {
   return { id: row.id, title: row.title, createdAt: row.createdAt, durationMs: row.durationMs,
     ...(includeText ? { transcript: row.transcript } : {}) };

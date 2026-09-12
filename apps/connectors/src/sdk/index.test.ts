@@ -88,10 +88,10 @@ describe("ConnectorsClient", () => {
 
     it("strips trailing slash from serverUrl", async () => {
       const fetchMock = mockFetch(200, []);
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const c = new ConnectorsClient({ serverUrl: "http://localhost:9876/" });
       await c.list();
-      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/connectors");
     });
   });
@@ -99,9 +99,9 @@ describe("ConnectorsClient", () => {
   describe("list()", () => {
     it("calls GET /api/connectors", async () => {
       const fetchMock = mockFetch(200, [{ name: "github", category: "dev", installed: true }]);
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.list();
-      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/connectors");
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe("github");
@@ -109,17 +109,17 @@ describe("ConnectorsClient", () => {
 
     it("adds compact=true query param when compact option is set", async () => {
       const fetchMock = mockFetch(200, [{ name: "github", category: "dev", installed: true }]);
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       await client.list({ compact: true });
-      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toContain("compact=true");
     });
 
     it("adds fields query param when fields option is set", async () => {
       const fetchMock = mockFetch(200, [{ name: "github" }]);
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       await client.list({ fields: "name,category" });
-      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toContain("fields=name%2Ccategory");
     });
   });
@@ -128,16 +128,16 @@ describe("ConnectorsClient", () => {
     it("calls GET /api/connectors/:name", async () => {
       const connector = { name: "github", displayName: "GitHub", description: "...", category: "dev", installed: true, auth: null };
       const fetchMock = mockFetch(200, connector);
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.get("github");
-      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/connectors/github");
       expect(result.name).toBe("github");
     });
 
     it("throws when connector not found (404)", async () => {
       const fetchMock = mockFetch(404, { error: "Connector 'unknown' not found" });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       await expect(client.get("unknown")).rejects.toThrow("Connector 'unknown' not found");
     });
   });
@@ -167,9 +167,9 @@ describe("ConnectorsClient", () => {
         ],
         helpText: "Usage: connect-github ...",
       });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.listOperations("github");
-      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/connectors/github/operations");
       expect(result.commands).toContain("repo");
       expect(result.auth?.type).toBe("bearer");
@@ -188,9 +188,9 @@ describe("ConnectorsClient", () => {
         command: "user",
         help: "Usage: connect-github user [options] [command]",
       });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.getOperationHelp("github", "user");
-      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe(
         "http://localhost:9876/api/connectors/github/operations/user"
       );
@@ -209,9 +209,9 @@ describe("ConnectorsClient", () => {
         connectorCount: 1,
         connectors: [{ id: "github", name: "github", aliases: ["github", "connect-github"] }],
       });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.getManifest();
-      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/connectors/manifest");
       expect(result.connectors[0].id).toBe("github");
     });
@@ -226,9 +226,9 @@ describe("ConnectorsClient", () => {
         connectorCount: 1,
         connectors: [],
       });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       await client.getManifest({ includeOperations: true, connectorNames: ["github", "stripe"] });
-      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toContain("includeOperations=true");
       expect(url).toContain("connectors=github%2Cstripe");
     });
@@ -242,12 +242,12 @@ describe("ConnectorsClient", () => {
         success: true,
         output: "{\"profile\":\"default\"}",
       });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.runOperation("github", ["config", "show"], {
         format: "json",
         timeout: 5000,
       });
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe(
         "http://localhost:9876/api/connectors/github/operations/run"
       );
@@ -273,14 +273,14 @@ describe("ConnectorsClient", () => {
         success: true,
         data: { login: "octocat" },
       });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.runStructuredOperation<{ login: string }>("github", {
         operation: "user.info",
         input: { username: "octocat" },
         profile: "work",
         timeout: 5000,
       });
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe(
         "http://localhost:9876/api/connectors/github/operations/run"
       );
@@ -298,9 +298,9 @@ describe("ConnectorsClient", () => {
   describe("install()", () => {
     it("calls POST /api/connectors/:name/install", async () => {
       const fetchMock = mockFetch(200, { success: true, name: "github" });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.install("github");
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/connectors/github/install");
       expect(init.method).toBe("POST");
       expect(result.success).toBe(true);
@@ -310,9 +310,9 @@ describe("ConnectorsClient", () => {
   describe("uninstall()", () => {
     it("calls POST /api/connectors/:name/uninstall", async () => {
       const fetchMock = mockFetch(200, { success: true, name: "github" });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.uninstall("github");
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/connectors/github/uninstall");
       expect(init.method).toBe("POST");
       expect(result.success).toBe(true);
@@ -322,9 +322,9 @@ describe("ConnectorsClient", () => {
   describe("setKey()", () => {
     it("calls POST /api/connectors/:name/key with key in body", async () => {
       const fetchMock = mockFetch(200, { success: true });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.setKey("github", ("ghp" + "_secret"));
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/connectors/github/key");
       expect(init.method).toBe("POST");
       expect(JSON.parse(init.body as string)).toEqual({ key: ("ghp" + "_secret") });
@@ -333,9 +333,9 @@ describe("ConnectorsClient", () => {
 
     it("includes field in body when provided", async () => {
       const fetchMock = mockFetch(200, { success: true });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       await client.setKey("stripe", "sk_test_xxx", "secret_key");
-      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(JSON.parse(init.body as string)).toEqual({ key: "sk_test_xxx", field: "secret_key" });
     });
   });
@@ -343,9 +343,9 @@ describe("ConnectorsClient", () => {
   describe("refresh()", () => {
     it("calls POST /api/connectors/:name/refresh", async () => {
       const fetchMock = mockFetch(200, { success: true, expiresAt: 1700000000000 });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.refresh("google");
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/connectors/google/refresh");
       expect(init.method).toBe("POST");
       expect(result.success).toBe(true);
@@ -357,9 +357,9 @@ describe("ConnectorsClient", () => {
     it("calls GET /api/connectors/:name/profiles", async () => {
       const profilesResp = { current: "default", profiles: [{ id: "default" }, { id: "work" }] };
       const fetchMock = mockFetch(200, profilesResp);
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.getProfiles("github");
-      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/connectors/github/profiles");
       expect(result.current).toBe("default");
       expect(result.profiles).toHaveLength(2);
@@ -369,9 +369,9 @@ describe("ConnectorsClient", () => {
   describe("switchProfile()", () => {
     it("calls POST /api/connectors/:name/profiles/switch", async () => {
       const fetchMock = mockFetch(200, { success: true, profile: "work" });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.switchProfile("github", "work");
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/connectors/github/profiles/switch");
       expect(init.method).toBe("POST");
       expect(JSON.parse(init.body as string)).toEqual({ profile: "work" });
@@ -386,9 +386,9 @@ describe("ConnectorsClient", () => {
         { action: "key_saved", connector: "stripe", timestamp: 1700000001000 },
       ];
       const fetchMock = mockFetch(200, entries);
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.getActivity();
-      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/activity");
       expect(result).toHaveLength(2);
     });
@@ -400,7 +400,7 @@ describe("ConnectorsClient", () => {
         timestamp: Date.now(),
       }));
       const fetchMock = mockFetch(200, entries);
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.getActivity(3);
       expect(result).toHaveLength(3);
     });
@@ -409,9 +409,9 @@ describe("ConnectorsClient", () => {
   describe("update()", () => {
     it("calls POST /api/update", async () => {
       const fetchMock = mockFetch(200, { results: [], count: 0, total: 0 });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       const result = await client.update();
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
       expect(url).toBe("http://localhost:9876/api/update");
       expect(init.method).toBe("POST");
       expect(result.count).toBe(0);
@@ -421,13 +421,13 @@ describe("ConnectorsClient", () => {
   describe("error handling", () => {
     it("throws error with message from API error response", async () => {
       const fetchMock = mockFetch(500, { error: "Internal server error" });
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       await expect(client.install("github")).rejects.toThrow("Internal server error");
     });
 
     it("throws generic error when no error message in response", async () => {
       const fetchMock = mockFetch(500, {});
-      global.fetch = fetchMock;
+      global.fetch = fetchMock as unknown as typeof fetch;
       await expect(client.install("github")).rejects.toThrow("Request failed with status 500");
     });
   });
@@ -634,7 +634,7 @@ describe("ConnectorsClient", () => {
 describe("SDK client split", () => {
   it("keeps ConnectorsClient as the local connectors-serve client", async () => {
     const fetchMock = mockFetch(200, []);
-    global.fetch = fetchMock;
+    global.fetch = fetchMock as unknown as typeof fetch;
     const client = new ConnectorsClient({ serverUrl: "http://localhost:9876" });
     const local = new LocalConnectorsClient({ serverUrl: "http://localhost:9876" });
 
@@ -642,7 +642,7 @@ describe("SDK client split", () => {
     await local.list();
 
     expect(client).toBeInstanceOf(LocalConnectorsClient);
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+    expect((fetchMock.mock.calls as unknown as [string, RequestInit][]).map(([url]) => url)).toEqual([
       "http://localhost:9876/api/connectors",
       "http://localhost:9876/api/connectors",
     ]);
@@ -671,7 +671,7 @@ describe("HostedConnectorsClient", () => {
 
     await hosted.listConnectors();
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://connectors.example/api/v1/connectors");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer pcs_key_test");
   });

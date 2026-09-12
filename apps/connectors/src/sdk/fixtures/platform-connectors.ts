@@ -1,4 +1,37 @@
-export const platformConnectorsFixtures = {
+import type {
+  HostedApiContract,
+  HostedApiErrorPayload,
+  HostedApprovalRequiredRun,
+  HostedBillingStatus,
+  HostedConnectAccountResponse,
+  HostedConnectorSummary,
+  HostedConnectorsClient,
+  HostedRun,
+  HostedRunArtifact,
+  HostedRunLog,
+  HostedRunPollingStatus,
+} from "../index";
+
+/**
+ * Hosted platform-connectors contract fixtures, typed against the SDK's own
+ * response types so a drift between the two is a compile error here, not a
+ * runtime surprise in a consumer.
+ */
+export interface PlatformConnectorsFixtures {
+  contract: HostedApiContract;
+  connectors: HostedConnectorSummary[];
+  connectorDetail: Awaited<ReturnType<HostedConnectorsClient["getConnector"]>>;
+  accountCreated: HostedConnectAccountResponse;
+  runQueued: HostedRun;
+  runStatus: HostedRunPollingStatus;
+  approvalRequiredRun: HostedApprovalRequiredRun;
+  logs: HostedRunLog[];
+  artifacts: HostedRunArtifact[];
+  billingStatus: HostedBillingStatus;
+  error: HostedApiErrorPayload;
+}
+
+export const platformConnectorsFixtures: PlatformConnectorsFixtures = {
   contract: {
     service: "platform-connectors",
     version: "2026-05-27",
@@ -145,4 +178,4 @@ export const platformConnectorsFixtures = {
     error: "operation denied by policy",
     code: "OPERATION_DENIED",
   },
-} as const;
+};

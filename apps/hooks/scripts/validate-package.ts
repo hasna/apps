@@ -173,15 +173,27 @@ async function validateExtractedSmoke(pkg: PackageJson): Promise<void> {
     const dataDir = join(workspace, "data");
     const binIndex = join(packageDir, "bin", "index.js");
     const binServe = join(packageDir, "bin", "serve.js");
+    const binMcp = join(packageDir, "bin", "hooks-mcp.js");
+    const sdkBundle = join(packageDir, "dist", "sdk", "index.js");
     if (!existsSync(binIndex)) throw new Error(`packed tarball is missing bin/index.js (CLI bin)`);
     if (!existsSync(binServe)) throw new Error(`packed tarball is missing bin/serve.js (serve bin)`);
+    if (!existsSync(binMcp)) throw new Error(`packed tarball is missing bin/hooks-mcp.js (MCP bin)`);
+    if (!existsSync(sdkBundle)) throw new Error(`packed tarball is missing dist/sdk/index.js (./sdk export)`);
 
+    // Hermetic route: the smoke lanes below exercise the on-box store on
+    // purpose, so they opt in explicitly (hasna/apps#1720 — without the
+    // opt-in `hooks run` and `hooks-mcp` fail closed, which the fail-closed
+    // lane checks separately) and keep the station's Keychain out of it.
     const env = {
       ...process.env,
+      HASNA_STATION: "no-such-station",
+      HASNA_HOOKS_LOCAL: "1",
       HASNA_HOOKS_DATA_DIR: dataDir,
       HASNA_HOOKS_DB_PATH: join(dataDir, "hooks.db"),
       NO_COLOR: "1",
     };
+    const failClosedEnv = { ...env };
+    delete (failClosedEnv as Record<string, string | undefined>).HASNA_HOOKS_LOCAL;
 
     // 1. CLI help.
     const help = spawnSync("bun", ["run", binIndex, "--help"], { cwd: smokeDir, env, encoding: "utf8" });
@@ -210,8 +222,22 @@ async function validateExtractedSmoke(pkg: PackageJson): Promise<void> {
       await new Promise((r) => setTimeout(r, 100));
     }
 
-    // 3. MCP stdio startup: an initialize handshake must get a response.
-    const mcpProc = spawn("bun", ["run", binIndex, "mcp", "--stdio"], {
+    // 2b. Fail-closed lane (hasna/apps#1720): with nothing configured the
+    // packed CLI and the packed hooks-mcp bin exit non-zero, name the
+    // credential tiers + the opt-in on stderr, and create no local store.
+    const failClosedHome = join(workspace, "failclosed-home");
+    const fcEnv = { ...failClosedEnv, HOME: failClosedHome, HASNA_HOOKS_DATA_DIR: join(failClosedHome, "data"), HASNA_HOOKS_DB_PATH: join(failClosedHome, "data", "hooks.db") };
+    for (const [label, argv] of [["packed CLI `hooks categories`", [binIndex, "categories"]], ["packed hooks-mcp", [binMcp]]] as Array<[string, string[]]>) {
+      const fc = spawnSync("bun", ["run", ...argv], { cwd: smokeDir, env: fcEnv, encoding: "utf8", input: "", timeout: 20000 });
+      if (fc.status === 0) throw new Error(`${label} exited 0 with nothing configured (must fail closed)`);
+      if (!/HASNA_HOOKS_LOCAL=1/.test(fc.stderr) || !/hasna\.credentials\.hooks\.api-key/.test(fc.stderr)) {
+        throw new Error(`${label} refusal did not name the tiers + opt-in: ${fc.stderr.slice(0, 300)}`);
+      }
+      if (existsSync(join(failClosedHome, "data", "hooks.db"))) throw new Error(`${label} created hooks.db while failing closed`);
+    }
+
+    // 3. MCP stdio startup (explicit local opt-in): an initialize handshake must get a response.
+    const mcpProc = spawn("bun", ["run", binMcp], {
       cwd: smokeDir,
       env,
       stdio: ["pipe", "pipe", "pipe"],
@@ -252,11 +278,12 @@ async function validateExtractedSmoke(pkg: PackageJson): Promise<void> {
       // pg link is best-effort; the import below will fail loudly if needed.
     }
     const sdkSmoke = join(smokeDir, "sdk-smoke.ts");
-    await writeFile(sdkSmoke, `import { HOOKS, getStorageStatus } from "@hasna/hooks";\nimport { getStorageStatus as ss } from "@hasna/hooks/storage";\nconsole.log(JSON.stringify({ count: HOOKS.length, backend: getStorageStatus().backend, ss: ss().backend }));\n`);
+    await writeFile(sdkSmoke, `import { HOOKS, getStorageStatus } from "@hasna/hooks";\nimport { getStorageStatus as ss } from "@hasna/hooks/storage";\nimport { HooksClient, createHooksClient } from "@hasna/hooks/sdk";\nlet sdk = "threw";\ntry { createHooksClient({ env: { HASNA_STATION: "no-such-station" }, credentials: { keychain: { enabled: false } } }); sdk = "returned"; } catch (e) { sdk = /REMOTE_API_/.test(String(e)) ? "fail-closed" : "threw"; }\nconsole.log(JSON.stringify({ count: HOOKS.length, backend: getStorageStatus().backend, ss: ss().backend, sdk, hasClient: typeof HooksClient === "function" }));\n`);
     const sdk = spawnSync("bun", ["run", sdkSmoke], { cwd: smokeDir, env, encoding: "utf8", timeout: 20000 });
     if (sdk.status !== 0) throw new Error(`packed SDK import failed: ${sdk.stderr}`);
-    const sdkOut = JSON.parse(sdk.stdout.trim()) as { count: number; backend: string };
+    const sdkOut = JSON.parse(sdk.stdout.trim()) as { count: number; backend: string; sdk: string; hasClient: boolean };
     if (typeof sdkOut.count !== "number" || sdkOut.count <= 0) throw new Error(`packed SDK import returned count ${sdkOut.count}`);
+    if (sdkOut.sdk !== "fail-closed" || !sdkOut.hasClient) throw new Error(`packed ./sdk export did not fail closed with nothing configured: ${JSON.stringify(sdkOut)}`);
 
     // 5. One bundled-hook run from the packed artifact (isolated data dir;
     // first run self-trusts, then executes).
