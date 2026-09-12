@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -16,6 +17,9 @@ import { dirname, join } from "node:path";
 import { resolveTrustedAccountHome } from "./account-home.js";
 import { closeDb, getDb } from "../db/database.js";
 import {
+  DEFAULT_GIT_TIMEOUT_MS,
+  GIT_TIMEOUT_ENV,
+  GIT_TIMEOUT_LEGACY_ENV,
   WorktreeError,
   addWorktree,
   adoptWorktrees,
@@ -24,6 +28,7 @@ import {
   computeClonePath,
   computeWorktreePath,
   legacyFlatWorktreePath,
+  gitTimeoutMs,
   listWorktrees,
   releaseWorktree,
   removeWorktree,
@@ -1541,5 +1546,128 @@ describe("releaseWorktree", () => {
     // deleting unknown content, and reports that it was not removed.
     expect(result.removed).toBe(false);
     expect(existsSync(created.path)).toBe(true);
+  });
+});
+
+/**
+ * A `git` that is genuinely slow, without a PATH shim.
+ *
+ * The first attempt at this used a `git` script on `PATH` that slept before
+ * delegating to the real binary. MEASURED, and the reason this file does not
+ * do that: under Bun 1.3.14 `execFileSync` does NOT resolve the executable
+ * against a `process.env.PATH` mutated after startup — the shim ran zero
+ * times and the "slow git" test would have passed for the wrong reason. A
+ * `post-checkout` hook is run by git itself, inside the git process `runGit`
+ * is timing, so the delay lands inside the measured interval and cannot be
+ * routed around by the runtime's own exec resolution.
+ */
+function installSlowCheckout(clonePath: string, seconds: number): void {
+  const hooksDir = join(clonePath, ".git", "hooks");
+  mkdirSync(hooksDir, { recursive: true });
+  const hook = join(hooksDir, "post-checkout");
+  // `exec` + redirection matter: the sleeper must not hold git's stdout pipe
+  // open after git itself is killed, or the read side of the pipe stays open
+  // for the whole sleep and the "the ceiling returned early" assertion below
+  // measures the orphan instead of the ceiling.
+  writeFileSync(hook, `#!/bin/sh\nexec sleep ${seconds} >/dev/null 2>&1\n`);
+  chmodSync(hook, 0o755);
+}
+
+/** Set `HASNA_REPOS_GIT_TIMEOUT_MS` for the duration of `run`, then restore. */
+function withGitTimeoutEnv(value: string, run: () => void): void {
+  const previous = process.env[GIT_TIMEOUT_ENV];
+  process.env[GIT_TIMEOUT_ENV] = value;
+  try {
+    run();
+  } finally {
+    if (previous === undefined) delete process.env[GIT_TIMEOUT_ENV];
+    else process.env[GIT_TIMEOUT_ENV] = previous;
+  }
+}
+
+describe("the git ceiling", () => {
+  /**
+   * Measured on this station, 2026-09-10, against a synthetic repository with
+   * 95,000 tracked files: a single `git worktree add` took 32.1s, 37s and
+   * 68.8s across three runs. Under the old hard-coded 30_000 every one of
+   * those was killed mid-checkout and `add` reported
+   * `GIT_FAILED: git worktree failed: spawnSync git ETIMEDOUT` on a
+   * repository whose only defect was its size.
+   */
+  const MEASURED_95K_CHECKOUT_MS = 68_800;
+
+  test("the default clears the measured 95k-file checkout and is still a bound", () => {
+    // `gitTimeoutMs({})` is the same call `runGit` makes with no override, so
+    // this is the value actually in force — not a decoration.
+    expect(gitTimeoutMs({})).toBe(DEFAULT_GIT_TIMEOUT_MS);
+    expect(DEFAULT_GIT_TIMEOUT_MS).toBeGreaterThan(MEASURED_95K_CHECKOUT_MS);
+    // "Raised" must not have become "removed": a wedged git still has to be
+    // killed, so the ceiling stays finite and stays on the order of minutes.
+    expect(Number.isFinite(DEFAULT_GIT_TIMEOUT_MS)).toBe(true);
+    expect(DEFAULT_GIT_TIMEOUT_MS).toBeLessThanOrEqual(30 * 60_000);
+  });
+
+  test("the override is read, canonical name first, legacy name as an alias", () => {
+    expect(gitTimeoutMs({ [GIT_TIMEOUT_ENV]: "1500" })).toBe(1500);
+    expect(gitTimeoutMs({ [GIT_TIMEOUT_LEGACY_ENV]: "2000" })).toBe(2000);
+    // Canonical wins when both are set — never a silent disagreement.
+    expect(gitTimeoutMs({ [GIT_TIMEOUT_ENV]: "1500", [GIT_TIMEOUT_LEGACY_ENV]: "2000" })).toBe(1500);
+    expect(gitTimeoutMs({ [GIT_TIMEOUT_ENV]: "1500.7" })).toBe(1500);
+    expect(gitTimeoutMs({ [GIT_TIMEOUT_ENV]: " 2500 " })).toBe(2500);
+  });
+
+  test("an unusable value falls back to the default rather than removing the bound", () => {
+    // The guard that matters: `execFileSync({ timeout: 0 })` means NO timeout,
+    // so a typo in a config value must not be able to delete the ceiling and
+    // leave an unbounded git process behind.
+    for (const bad of ["", "   ", "abc", "0", "-1", "NaN", "Infinity", "1e999", "10s"]) {
+      expect(gitTimeoutMs({ [GIT_TIMEOUT_ENV]: bad }), `value '${bad}'`).toBe(DEFAULT_GIT_TIMEOUT_MS);
+    }
+  });
+
+  test("a git process longer than the ceiling is killed and reported as GIT_FAILED", () => {
+    const { repoName, clonePath } = seed();
+    // The hook sleeps 3s inside `git worktree add`, so the git process is
+    // unambiguously longer than the 250ms ceiling being imposed.
+    installSlowCheckout(clonePath, 3);
+    const started = Date.now();
+    withGitTimeoutEnv("250", () => {
+      expect(codeOf(() => addWorktree({ repo: repoName, task: "slow-git" }))).toBe("GIT_FAILED");
+    });
+    // Two things at once. The ceiling decided when the call returned, not git
+    // (3s) — and the ceiling in force was the OVERRIDE: had the env var been
+    // ignored, the default would have let a 3s git through and this call
+    // would have SUCCEEDED. So this failure is reachable only if the
+    // configured value is the one actually applied.
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  test("the same slow git succeeds once the ceiling is raised above its duration", () => {
+    const { repoName, clonePath } = seed();
+    installSlowCheckout(clonePath, 0.5);
+    const started = Date.now();
+    let created = "";
+    withGitTimeoutEnv("30000", () => {
+      created = addWorktree({ repo: repoName, task: "slow-git-ok" }).path;
+    });
+    // The delay really happened (the hook is not being skipped) and the call
+    // still completed: a ceiling above the git duration is honoured as an
+    // allowance, not applied as a fixed kill point.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(500);
+    expect(existsSync(join(created, "README.md"))).toBe(true);
+    // Worktrees are org-segmented on main (`<root>/<org>/<repo>/<name>`); the
+    // fixture's indexed remote resolves to the `hasna` org.
+    expect(created).toBe(join(worktreeRootDir(), "hasna", repoName, "slow-git-ok"));
+  });
+
+  test("the ceiling is read at call time, not frozen at import", () => {
+    // A module-level `const` read once would make `repos` unconfigurable for
+    // any caller that sets the variable after its own startup.
+    const { repoName, clonePath } = seed();
+    installSlowCheckout(clonePath, 1);
+    expect(codeOf(() => addWorktree({ repo: repoName, task: "late-lower" }))).toBe("NO_ERROR");
+    withGitTimeoutEnv("200", () => {
+      expect(codeOf(() => addWorktree({ repo: repoName, task: "late-higher" }))).toBe("GIT_FAILED");
+    });
   });
 });

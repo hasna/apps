@@ -98,9 +98,63 @@ export const WORKTREE_LEASE_SCHEMA = "repos.worktree-lease.v1" as const;
 export const WORKTREE_LIST_SCHEMA = "repos.worktree-list.v1" as const;
 export const WORKTREE_ADOPT_SCHEMA = "repos.worktree-adopt.v1" as const;
 
-const GIT_TIMEOUT_MS = 30_000;
+/**
+ * The ceiling on a single `git` process, and the environment names that
+ * override it.
+ *
+ * ## Why 30s was wrong, and 10 minutes is not a free upgrade
+ *
+ * 30s is not a slow-git detector, it is a file-count detector: `add` spends
+ * almost all of its time inside one `git worktree add`, which materialises
+ * every tracked file of the base commit. Measured on this station
+ * (2026-09-10) against a synthetic repository with 95,000 tracked files, that
+ * single checkout took 32.1s, 37s and 68.8s across three runs, and under the
+ * 30s ceiling `add` failed with
+ * `GIT_FAILED: git worktree failed: spawnSync git ETIMEDOUT` — on a
+ * repository where nothing was wrong except its size. The ceiling was the
+ * defect, not the checkout.
+ *
+ * 600_000 clears the slowest measurement (68.8s) by nearly nine times, and
+ * sits at the same order as the clone ceiling in `repo-lifecycle`
+ * (GH_CLONE_TIMEOUT_MS, 5 min) — a clone and a worktree checkout are the same
+ * filesystem work. It is still a bound: a wedged git is killed and reported
+ * rather than hanging the caller forever.
+ *
+ * `GIT_FETCH_TIMEOUT_MS` is deliberately NOT raised here. A fetch moves
+ * objects over the network with no working-tree fanout, so file count is not
+ * its cost, and its 120s ceiling is unchanged.
+ */
+export const DEFAULT_GIT_TIMEOUT_MS = 600_000;
+
+/** Canonical override, per the repo env standard (HASNA_<APP>_ prefix). */
+export const GIT_TIMEOUT_ENV = "HASNA_REPOS_GIT_TIMEOUT_MS";
+
+/** Legacy alias, accepted for one deprecation window. Canonical wins. */
+export const GIT_TIMEOUT_LEGACY_ENV = "REPOS_GIT_TIMEOUT_MS";
+
 const GIT_FETCH_TIMEOUT_MS = 120_000;
 const DEFAULT_STALE_DAYS = 7;
+
+/**
+ * The `git` timeout in force for the current call, in milliseconds.
+ *
+ * Read lazily at every call site, so a caller (or a test, or a wrapper script)
+ * that sets the variable observes the value it set rather than the value that
+ * happened to be present when this module was first imported.
+ *
+ * An unusable value — blank, non-numeric, zero, negative, `Infinity` — falls
+ * back to the default instead of widening or removing the bound. This is the
+ * whole point of the guard: `execFileSync({ timeout: 0 })` means NO timeout,
+ * so a config typo would otherwise silently convert the ceiling into an
+ * unbounded git process. A ceiling that a typo can delete is not a ceiling.
+ */
+export function gitTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[GIT_TIMEOUT_ENV] ?? env[GIT_TIMEOUT_LEGACY_ENV];
+  if (raw === undefined || raw.trim() === "") return DEFAULT_GIT_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_GIT_TIMEOUT_MS;
+  return Math.floor(parsed);
+}
 
 /**
  * A worktree name is one path segment of a conservative slug alphabet.
@@ -240,7 +294,7 @@ function runGit(cwd: string, args: string[], options: GitOptions = {}): GitResul
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: options.timeout ?? GIT_TIMEOUT_MS,
+      timeout: options.timeout ?? gitTimeoutMs(),
       maxBuffer: 32 * 1024 * 1024,
     });
     return { ok: true, stdout: stdout.trim(), stderr: "" };
