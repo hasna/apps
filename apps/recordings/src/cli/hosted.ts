@@ -2,24 +2,63 @@ import { Command, CommanderError } from "commander";
 import { HostedLibrary } from "../hosted/library.js";
 import { HostedPasteHistory } from "../hosted/paste-history.js";
 import { hostedFailure, hostedProcessClient } from "../hosted/process-options.js";
-import type { HostedRecordingsClient } from "../hosted/index.js";
+import { HostedRecordingsClient, RecordingsSDKError } from "../hosted/index.js";
+import { resolveRecordingsSdkTransport } from "../sdk/resolve.js";
 
 export interface HostedCLIOptions {
   write?: (value: string) => void;
   env?: Record<string, string | undefined>;
   /** Test/custom-runtime injection retains the same shared operation and parser. */
   client?: HostedRecordingsClient;
+  /** Trusted injection for tests; forwarded to the hosted transport. */
+  fetch?: typeof globalThis.fetch;
 }
+
+export interface HostedCommandAuthority { apiBase?: string; credentialEnv?: string }
+
+/**
+ * The hosted Library client for one invocation of `recordings hosted`.
+ *
+ * `--api-base` + `--credential-env` stay an explicit, named selection and are
+ * still the only way to reach an arbitrary authority. With NEITHER flag the
+ * command now resolves through the ONE fleet chain
+ * (`resolveRecordingsSdkTransport` → `@hasna/contracts/client`), so a station
+ * that already holds a recordings credential reads the hosted `/v1` Library
+ * without hand-building an authority or exporting a bearer value.
+ *
+ * The unhosted local serve is never a hosted Library: when the chain selects
+ * it — or resolves no credential — this fails closed rather than reading a
+ * local process and calling it "hosted".
+ */
+export function hostedCommandClient(
+  authority: HostedCommandAuthority,
+  env: Record<string, string | undefined> = process.env,
+  fetchImpl?: typeof globalThis.fetch,
+): HostedRecordingsClient {
+  if (authority.apiBase !== undefined || authority.credentialEnv !== undefined) {
+    if (!authority.apiBase) throw new RecordingsSDKError("invalid_configuration");
+    return hostedProcessClient({ apiBase: authority.apiBase, credentialEnv: authority.credentialEnv }, env, fetchImpl);
+  }
+  const transport = resolveRecordingsSdkTransport({ env });
+  if (transport.mode !== "http" || !transport.apiKey) throw new RecordingsSDKError("credential_unavailable");
+  const credential = transport.apiKey;
+  return new HostedRecordingsClient({
+    apiBase: `${transport.baseUrl}/v1`,
+    fetch: fetchImpl,
+    credentialProvider: () => credential,
+  });
+}
+
 export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
   const write = options.write ?? ((value: string) => { process.stdout.write(value); });
   const program = new Command("hosted").description("Read hosted recordings, paste history and transcription providers; private text is omitted by default.")
-    .requiredOption("--api-base <url>", "Complete hosted API base ending in /v1/")
-    .requiredOption("--credential-env <name>", "Name of the environment variable containing this API's bearer session")
+    .option("--api-base <url>", "Complete hosted API base ending in /v1/ (default: the resolved recordings authority)")
+    .option("--credential-env <name>", "Name of the environment variable containing this API's bearer session (default: the resolved recordings credential)")
     .exitOverride().configureOutput({ writeOut: write, writeErr: () => {} });
-  const library = () => new HostedLibrary(options.client ?? hostedProcessClient(program.opts(), options.env));
+  const library = () => new HostedLibrary(options.client ?? hostedCommandClient(program.opts(), options.env, options.fetch));
   program.command("providers").description("Read the server's transcription providers, models and defaults")
     .action(async () => {
-      const client = options.client ?? hostedProcessClient(program.opts(), options.env);
+      const client = options.client ?? hostedCommandClient(program.opts(), options.env, options.fetch);
       write(JSON.stringify(await client.providers()) + "\n");
     });
   const list = program.command("list").description("Read one page of hosted recording metadata")
@@ -41,7 +80,7 @@ export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
     .option("--before-id <id>", "Receipt ID from the same nextCursor")
     .option("--include-text", "Include private pasted text", false)
     .action(async values => {
-      const history = new HostedPasteHistory(options.client ?? hostedProcessClient(program.opts(), options.env));
+      const history = new HostedPasteHistory(options.client ?? hostedCommandClient(program.opts(), options.env, options.fetch));
       write(JSON.stringify(await history.list({ limit: Number(values.limit), before: values.before,
         beforeId: values.beforeId, includeText: values.includeText })) + "\n");
     });
