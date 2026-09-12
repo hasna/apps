@@ -9,6 +9,7 @@ enum RecordingsUpdateBrokerMain {
     static func main() {
         guard geteuid() == 0 else { Darwin.exit(78) }
         do {
+            try RecordingsUpdateConstants.productPolicy.requireRuntimeSupport()
             let policy = try RootTrustStore.readPolicy()
             // Recovery runs to a terminal exact-digest state before the Mach service
             // accepts any peer. Ambiguous journals keep launchd fail-closed.

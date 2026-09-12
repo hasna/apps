@@ -110,6 +110,7 @@ public struct CandidateBuildProvenanceMetadata: Equatable, Sendable {
 }
 
 public enum CandidateMetadataPolicyError: Error, Equatable, Sendable {
+    case productPolicyMismatch
     case applicationIdentifierMismatch
     case applicationVersionMismatch
     case applicationBuildMismatch
@@ -142,8 +143,12 @@ public enum CandidateMetadataPolicy {
         updateClientArchitectures: [String],
         companion: CandidateCompanionMetadata,
         provenance: CandidateBuildProvenanceMetadata,
-        expected: CandidateReleaseMetadataExpectation
+        expected: CandidateReleaseMetadataExpectation,
+        productPolicy: UpdateProductPolicy = .legacy
     ) throws {
+        guard productPolicy.admits(expected) else {
+            throw CandidateMetadataPolicyError.productPolicyMismatch
+        }
         guard application.bundleIdentifier == expected.applicationIdentifier else {
             throw CandidateMetadataPolicyError.applicationIdentifierMismatch
         }
@@ -172,7 +177,7 @@ public enum CandidateMetadataPolicy {
             throw CandidateMetadataPolicyError.companionDigestMismatch
         }
 
-        guard provenance.schemaVersion == 4 else {
+        guard provenance.schemaVersion == productPolicy.provenanceSchemaVersion else {
             throw CandidateMetadataPolicyError.provenanceSchemaMismatch
         }
         guard !provenance.containsLocalOnlyFields else {
