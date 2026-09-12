@@ -553,6 +553,19 @@ describe("checkApp drives the probe two-sidedly", () => {
 });
 
 describe("minting from the deploy lane", () => {
+  test("explicit mint scopes are validated and passed only to the declared container", async () => {
+    const manifest = { cluster: "fleet", mint_key_task_family: "mint-skills", subnets: ["subnet-a"], security_groups: ["sg-a"], assign_public_ip: "DISABLED", mint_key_container_name: "mint", mint_key_scopes: ["skills:read", "stations:write"] };
+    const target = mintTargetFrom(manifest)!;
+    const calls: string[][] = [];
+    await runMintTask(target, { readSecret: async () => null, probe: async () => null, aws: async (args) => { calls.push(args); return args[1] === "run-task" ? "task-fixture" : args[1] === "describe-tasks" ? "0" : ""; } }, "us-east-1", "skills-mint-fixture");
+    const launch = calls[0]!;
+    const index = launch.indexOf("--overrides");
+    expect(index).toBeGreaterThan(-1);
+    expect(JSON.parse(launch[index + 1]!)).toEqual({ containerOverrides: [{ name: "mint", environment: [{ name: "MINT_SCOPES", value: "skills:read,stations:write" }] }] });
+    expect(() => mintTargetFrom({ ...manifest, mint_key_container_name: undefined })).toThrow();
+    expect(() => mintTargetFrom({ ...manifest, mint_key_scopes: ["skills:read,admin:write"] })).toThrow();
+  });
+
   test("a manifest without every mint input yields no target, and a complete one does", () => {
     const complete = {
       cluster: "oss-fleet-prod",

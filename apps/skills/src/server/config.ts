@@ -18,6 +18,8 @@ export interface SkillsServerConfig {
   seedBundledCorpus: boolean;
   artifactBucket?: string;
   artifactPrefix: string;
+  /** Optional expiring run-output namespace; immutable bundles retain artifactPrefix. */
+  runArtifactPrefix?: string;
   inlineWorker: boolean;
   /**
    * HMAC key for signing served skill bundles. When set, the bundle endpoint adds
@@ -85,6 +87,7 @@ export function resolveServerConfig(env: Record<string, string | undefined> = pr
     seedBundledCorpus: (env.HASNA_SKILLS_SEED_BUNDLED_CORPUS ?? "1") !== "0",
     artifactBucket: env.HASNA_SKILLS_S3_BUCKET || env.SKILLS_S3_BUCKET || undefined,
     artifactPrefix: normalizePrefix(env.HASNA_SKILLS_S3_PREFIX || env.SKILLS_S3_PREFIX || "skills/artifacts"),
+    runArtifactPrefix: env.HASNA_SKILLS_S3_RUN_PREFIX ? normalizePrefix(env.HASNA_SKILLS_S3_RUN_PREFIX) : undefined,
     inlineWorker: env.HASNA_SKILLS_INLINE_WORKER === "1",
     // HASNA_SKILLS_API_SIGNING_KEY is canonical: it is the name the production deploy
     // mounts (see the doc comment on bundleSigningKey). The legacy name is read only

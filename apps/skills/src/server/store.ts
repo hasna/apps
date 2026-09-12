@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { MemorySkillSelectionStore, PostgresSkillSelectionStore } from "./selection-store.js";
 import type {
   ApiPrincipal,
   ClaimRunInput,
@@ -120,6 +121,7 @@ function instantiateStore(target: DatabaseTarget, sqliteOptions?: SqliteStoreOpt
 }
 
 export class MemorySkillsStore implements SkillsProductStore {
+  readonly selectionStore = new MemorySkillSelectionStore();
   readonly backend: StoreBackendInfo = { kind: "memory", durable: false, label: "memory (non-durable)" };
   private apiKeys = new Map<string, ApiPrincipal>();
   private runs = new Map<string, ServerRunRecord>();
@@ -543,6 +545,7 @@ function versionKey(orgId: string, slug: string, version: string): string {
 }
 
 export class PostgresSkillsStore implements SkillsProductStore {
+  get selectionStore() { return new PostgresSkillSelectionStore(this.sql); }
   readonly backend: StoreBackendInfo = { kind: "postgres", durable: true, label: "postgres" };
   private sql: SqlTag;
 

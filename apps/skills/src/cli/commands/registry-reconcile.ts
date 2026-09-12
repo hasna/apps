@@ -11,6 +11,10 @@
  */
 import chalk from "chalk";
 import type { Command } from "commander";
+import { requiresCliSkillLoading } from "../../lib/managed-policy.js";
+import { syncSelectionProfile } from "../../lib/selection-resolver.js";
+import { selectedProfileId } from "./context.js";
+import { SkillSelectionError } from "../../lib/selection-cache.js";
 
 import {
   reconcileRegistry,
@@ -33,14 +37,24 @@ export function registerRegistryReconcile(parent: Command) {
     .option("--all", "Both directions (the default when neither --push nor --pull is given)", false)
     .option("--dry-run", "Plan and report without writing anything", false)
     .option("--json", "Output the full result as JSON", false)
+    .option("--selection-profile <id>", "Selection profile for stations using the Skills CLI cache")
     .option(
       "--conflict <policy>",
       `Conflict policy: ${CONFLICT_POLICIES.join(" | ")}. Default: ${DEFAULT_CONFLICT_POLICY}.`,
       "skip",
     )
     .description("Two-way reconcile between the local corpus and the hosted registry")
-    .action(async (options: { push: boolean; pull: boolean; all: boolean; dryRun: boolean; json: boolean; conflict: ReconcileConflictPolicy }) => {
+    .action(async (options: { push: boolean; pull: boolean; all: boolean; dryRun: boolean; json: boolean; conflict: ReconcileConflictPolicy; selectionProfile?: string }) => {
       try {
+        if (requiresCliSkillLoading()) {
+          if (options.push || options.all || options.conflict === "local") {
+            throw new SkillSelectionError("AUTHORING_COMMAND_REQUIRED", "Managed station sync only consumes published selections. Publish a reviewed authoring draft explicitly with skills push.");
+          }
+          const result = await syncSelectionProfile(selectedProfileId(options.selectionProfile), { check: options.dryRun });
+          if (options.json) console.log(JSON.stringify({ ...result, direction: "pull", dryRun: options.dryRun }));
+          else console.log(options.dryRun ? `Selection sync ${result.changed ? "has changes" : "is current"}.` : `Synchronized selection profile ${result.profile.profileId}; no publication was performed.`);
+          return;
+        }
         const result = await reconcileRegistry({
           push: options.push,
           pull: options.pull,

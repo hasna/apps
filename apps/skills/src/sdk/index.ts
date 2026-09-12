@@ -15,6 +15,8 @@
  * — the shared @hasna/contracts ladder — instead of reading an environment
  * variable of its own. See lib/fleet-credentials.ts.
  */
+export { HttpProfileClient, createProfileClient, type ProfileClient } from "../lib/profile-client.js";
+export type { SkillSelection, SkillProfile, ResolvedSkillSelection, ResolvedSkillProfile, StationSkillStateInput, StationSkillState } from "../types/skill-selection.js";
 export {
   MissingSkillsFleetError,
   SkillsFleetCredentialError,

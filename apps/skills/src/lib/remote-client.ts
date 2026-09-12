@@ -150,6 +150,7 @@ export class RemoteSkillsClient {
       credentials: "omit", // Explicit bearer transport never borrows browser cookie authority.
       signal: options?.signal ?? AbortSignal.timeout(15_000),
       headers: {
+        "User-Agent": "hasna-skills",
         Authorization: `Bearer ${this.apiKey}`,
         "Content-Type": "application/json",
         ...options?.headers,

@@ -36,7 +36,13 @@ on:
     workflows: [ci]
     types: [completed]
     branches: [main]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      publish_runtime_image:
+        description: "Publish the runtime image; disable only when activating an already reviewed immutable image"
+        type: boolean
+        required: false
+        default: true
 
 concurrency:
   group: deploy-skills-production
@@ -174,6 +180,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     environment: production
     timeout-minutes: 45
+    outputs:
+      runtime_ecr_url: ${{ steps.m.outputs.runtime_ecr_url }}
 
     defaults:
       run:
@@ -276,6 +284,7 @@ jobs:
           VAR_MIG_FAMILY: ${{ vars.MIGRATION_TASK_FAMILY }}
           VAR_MIG_CONTAINER: ${{ vars.MIGRATION_CONTAINER }}
           VAR_ECR_URL: ${{ vars.ECR_REPOSITORY_URL }}
+          VAR_RUNTIME_ECR_URL: ${{ vars.RUNTIME_ECR_REPOSITORY_URL }}
           VAR_ASSIGN_PUBLIC_IP: ${{ vars.ASSIGN_PUBLIC_IP }}
           VAR_SUBNETS: ${{ vars.SUBNETS }}
           VAR_SGS: ${{ vars.SECURITY_GROUPS }}
@@ -322,6 +331,27 @@ jobs:
           resolve worker_family    '.worker_task_family'            WORKER_TASK_FAMILY     "${VAR_WORKER_TASK_FAMILY:-}"
           resolve worker_container '.worker_container'              WORKER_CONTAINER       "${VAR_WORKER_CONTAINER:-}"
           resolve health_url       '.health_url'                    HEALTH_URL             "${VAR_HEALTH_URL:-}"
+
+          # Optional until the dedicated repository has been provisioned. The
+          # runtime image job never reuses the API repository by default.
+          runtime_ecr_url="$(jq -r '.runtime_ecr_repository_url // empty' <<<"$M")"
+          runtime_ecr_url="${runtime_ecr_url:-${VAR_RUNTIME_ECR_URL:-}}"
+          printf 'runtime_ecr_url=%s\n' "$runtime_ecr_url" >> "$GITHUB_OUTPUT"
+
+          # Only these non-secret runtime settings may replace existing task
+          # environment. Unknown keys or non-string values fail before mutation.
+          for target in web worker; do
+            environment="$(jq -ce --arg target "$target" '
+              .[$target + "_environment"] // {} |
+              if type != "object" then error("invalid task environment map") else . end |
+              if all(to_entries[];
+                (.key == "HASNA_SKILLS_S3_RUN_PREFIX" or
+                 ($target == "web" and .key == "HASNA_SKILLS_RUNTIME_CONFIG")) and
+                (.value | type == "string" and length > 0 and length <= 64000))
+              then . else error("unsupported task environment override") end
+            ' <<<"$M")"
+            printf '%s_environment=%s\n' "$target" "$environment" >> "$GITHUB_OUTPUT"
+          done
 
           if [ -n "$missing" ]; then
             echo "::error::deploy manifest '$DEPLOY_MANIFEST' is missing required values and no repository-variable fallback is set:"
@@ -388,11 +418,18 @@ jobs:
           SERVICE: ${{ steps.m.outputs.service }}
           WEB_FAMILY: ${{ steps.m.outputs.web_family }}
           WEB_CONTAINER: ${{ steps.m.outputs.web_container }}
+          ENVIRONMENT_OVERRIDES: ${{ steps.m.outputs.web_environment }}
         run: |
           set -euo pipefail
           NEW_TD="$(aws ecs describe-task-definition --task-definition "$WEB_FAMILY" \
-            --query taskDefinition | jq --arg img "$IMAGE" --arg c "$WEB_CONTAINER" '
-              .containerDefinitions |= map(if .name==$c then .image=$img else . end)
+            --query taskDefinition | jq --arg img "$IMAGE" --arg c "$WEB_CONTAINER" --argjson overrides "$ENVIRONMENT_OVERRIDES" '
+              .containerDefinitions |= map(if .name==$c then
+                if any(.secrets[]?; .name as $name | $overrides | has($name))
+                then error("task environment override collides with a secret reference") else . end |
+                .image=$img |
+                .environment = ([.environment[]? | select(.name as $name | $overrides | has($name) | not)] +
+                  ($overrides | to_entries | map({name:.key,value:.value})))
+              else . end)
               | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)')"
           WEB_ARN="$(aws ecs register-task-definition --cli-input-json "$NEW_TD" \
             --query taskDefinition.taskDefinitionArn --output text)"
@@ -419,11 +456,18 @@ jobs:
           WORKER_SERVICE: ${{ steps.m.outputs.worker_service }}
           WORKER_FAMILY: ${{ steps.m.outputs.worker_family }}
           WORKER_CONTAINER: ${{ steps.m.outputs.worker_container }}
+          ENVIRONMENT_OVERRIDES: ${{ steps.m.outputs.worker_environment }}
         run: |
           set -euo pipefail
           NEW_TD="$(aws ecs describe-task-definition --task-definition "$WORKER_FAMILY" \
-            --query taskDefinition | jq --arg img "$IMAGE" --arg c "$WORKER_CONTAINER" '
-              .containerDefinitions |= map(if .name==$c then .image=$img else . end)
+            --query taskDefinition | jq --arg img "$IMAGE" --arg c "$WORKER_CONTAINER" --argjson overrides "$ENVIRONMENT_OVERRIDES" '
+              .containerDefinitions |= map(if .name==$c then
+                if any(.secrets[]?; .name as $name | $overrides | has($name))
+                then error("task environment override collides with a secret reference") else . end |
+                .image=$img |
+                .environment = ([.environment[]? | select(.name as $name | $overrides | has($name) | not)] +
+                  ($overrides | to_entries | map({name:.key,value:.value})))
+              else . end)
               | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)')"
           WORKER_ARN="$(aws ecs register-task-definition --cli-input-json "$NEW_TD" \
             --query taskDefinition.taskDefinitionArn --output text)"
@@ -453,6 +497,111 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsS "$HEALTH_URL" | jq -e '.ok == true'
+
+  runtime_image:
+    name: build + scan + publish isolated runtime image
+    needs: [gate, deploy]
+    if: ${{ needs.gate.outputs.proceed == 'true' && needs.deploy.outputs.runtime_ecr_url != '' && (github.event_name != 'workflow_dispatch' || inputs.publish_runtime_image) }}
+    runs-on: ubuntu-24.04-arm
+    environment: production
+    timeout-minutes: 30
+    outputs:
+      image_digest: ${{ steps.publish.outputs.image_digest }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/skills
+    env:
+      RUNTIME_LOCAL_IMAGE: skills-runtime-candidate
+      SOURCE_SHA: ${{ needs.gate.outputs.source_sha }}
+
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.gate.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Verify runtime source matches successful deployment
+        run: |
+          set -Eeuo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build native ARM64 runtime with guard self-test
+        run: |
+          set -Eeuo pipefail
+          docker buildx build \
+            --platform linux/arm64 \
+            --provenance=false \
+            --file Dockerfile.runtime \
+            --cache-from "type=gha,scope=skills-runtime" \
+            --cache-to "type=gha,scope=skills-runtime,mode=max" \
+            --tag "${RUNTIME_LOCAL_IMAGE}:${SOURCE_SHA}" \
+            --load .
+
+      - name: Generate runtime vulnerability report before credentials
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.RUNTIME_LOCAL_IMAGE }}:${{ needs.gate.outputs.source_sha }}
+          format: json
+          output: ${{ github.workspace }}/apps/skills/trivy-runtime.json
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "0"
+
+      - name: Enforce runtime vulnerability gate
+        run: |
+          set -Eeuo pipefail
+          critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-runtime.json)"
+          high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-runtime.json)"
+          [[ "$critical" =~ ^[0-9]+$ && "$high" =~ ^[0-9]+$ ]]
+          if (( critical > 0 || high > 0 )); then
+            echo "runtime image scan rejected the candidate: critical=${critical}, high=${high}" >&2
+            exit 1
+          fi
+
+      - name: Configure AWS credentials after runtime scan
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ env.APP }}-prod-gha-deploy
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-runtime-${{ env.APP }}-${{ github.run_id }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
+        with:
+          mask-password: true
+
+      - name: Publish scanned runtime and record immutable digest
+        id: publish
+        env:
+          RUNTIME_ECR_URL: ${{ needs.deploy.outputs.runtime_ecr_url }}
+        run: |
+          set -Eeuo pipefail
+          image="${RUNTIME_ECR_URL}:${SOURCE_SHA}"
+          docker tag "${RUNTIME_LOCAL_IMAGE}:${SOURCE_SHA}" "$image"
+          docker push "$image"
+          digest="$(docker image inspect "$image" --format '{{json .RepoDigests}}' | jq -er 'map(split("@")[1]) | unique | select(length == 1) | .[0]')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'image_digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          jq -n --arg sourceSha "$SOURCE_SHA" --arg imageDigest "$digest" \
+            '{sourceSha:$sourceSha,imageDigest:$imageDigest,architecture:"ARM64",critical:0,high:0}' \
+            > runtime-image-receipt.json
+          printf 'Runtime image `%s` from `%s` passed the vulnerability gate.\n' "$digest" "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload runtime image publication receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: skills-runtime-image-${{ needs.gate.outputs.source_sha }}
+          path: apps/skills/runtime-image-receipt.json
+          if-no-files-found: error
+          retention-days: 30
 
   # Provision-or-verify the CLIENT API key for this app (hasna/apps#1595).
   #

@@ -734,6 +734,9 @@ export interface MintTarget {
   subnets: string[];
   securityGroups: string[];
   assignPublicIp: string;
+  /** Scopes for a newly minted key only; existing valid keys are never widened. */
+  scopes?: string[];
+  containerName?: string;
 }
 
 /** Read the mint target out of a deploy manifest document. Null when unset. */
@@ -745,7 +748,15 @@ export function mintTargetFrom(manifest: Record<string, unknown>): MintTarget | 
   const assignPublicIp =
     typeof manifest.assign_public_ip === "string" ? manifest.assign_public_ip : String(manifest.assign_public_ip ?? "");
   if (!family || !cluster || subnets.length === 0 || securityGroups.length === 0 || !assignPublicIp) return null;
-  return { cluster, taskFamily: family, subnets, securityGroups, assignPublicIp };
+  let scopes: string[] | undefined;
+  let containerName: string | undefined;
+  if (manifest.mint_key_scopes !== undefined) {
+    if (!Array.isArray(manifest.mint_key_scopes) || manifest.mint_key_scopes.length < 1 || manifest.mint_key_scopes.length > 32 || manifest.mint_key_scopes.some((scope) => typeof scope !== "string" || !/^(?:\*|[a-z][a-z0-9_-]*:(?:\*|[a-z][a-z0-9_-]*))$/.test(scope))) throw new Error("Invalid mint_key_scopes in deploy manifest");
+    if (typeof manifest.mint_key_container_name !== "string" || !/^[A-Za-z0-9_-]{1,255}$/.test(manifest.mint_key_container_name)) throw new Error("Explicit mint_key_scopes require mint_key_container_name");
+    scopes = [...new Set(manifest.mint_key_scopes as string[])];
+    containerName = manifest.mint_key_container_name;
+  }
+  return { cluster, taskFamily: family, subnets, securityGroups, assignPublicIp, ...(scopes ? { scopes, containerName } : {}) };
 }
 
 /** The message shown when an app needs a key and no mint route is configured. */
@@ -795,6 +806,7 @@ export async function runMintTask(target: MintTarget, io: Io, region: string, st
           startedBy,
           "--network-configuration",
           network,
+          ...(target.scopes ? ["--overrides", JSON.stringify({ containerOverrides: [{ name: target.containerName, environment: [{ name: "MINT_SCOPES", value: target.scopes.join(",") }] }] })] : []),
           "--query",
           "tasks[0].taskArn",
           "--output",

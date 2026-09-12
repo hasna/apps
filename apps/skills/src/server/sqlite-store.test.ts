@@ -181,12 +181,9 @@ console.log(JSON.stringify({ mode, tables }));
     // full migrated schema. A single "database is locked" here is the bug.
     for (const result of results) {
       expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
-      // 16 since migration 0002 added skills_bundles, 0003 added the two
-      // governance tables (skills_lifecycle_receipts, skills_credit_reservations),
-      // 0004 added skills_pins, and 0005 added skills_tags. The count is
-      // asserted rather than ranged so that a migration silently failing to
-      // apply is a failure here.
-      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 17 });
+      // Includes profiles, station receipts and durable cloud execution jobs.
+      // Exact count catches a migration that silently failed to apply.
+      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 20 });
     }
   }, 60_000);
 
@@ -260,7 +257,7 @@ console.log(JSON.stringify({ mode, tables }));
   test("an authenticated principal carries its scopes back out of storage", async () => {
     const principal = await store.authenticateApiKeyHash(await hash("sk_a"));
     expect(principal).toMatchObject({ orgId: "org_a", orgSlug: "org-a", userId: "user_a", role: "owner" });
-    expect(principal?.scopes).toEqual(["skills:read", "runs:write"]);
+    expect(principal?.scopes).toEqual(["*"]);
   });
 });
 

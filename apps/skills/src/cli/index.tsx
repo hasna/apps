@@ -106,6 +106,13 @@ registerCompletion(program);
 const { registerCreateSync } = await import("./commands/create-sync-config.js");
 registerCreateSync(program);
 
+const { registerContextCommands } = await import("./commands/context.js");
+registerContextCommands(program);
+const { registerAgentIntegration } = await import("./commands/agent-integration.js");
+registerAgentIntegration(program);
+const { registerProfiles } = await import("./commands/profiles.js");
+registerProfiles(program);
+
 const { registerHydrate } = await import("./commands/hydrate.js");
 registerHydrate(program);
 

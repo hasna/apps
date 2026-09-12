@@ -8,6 +8,10 @@ import {
 import type { SkillRegistryProfile } from "../../lib/registry.js";
 import { pullSkills, PullSkillError, type PulledSkillResult } from "../../lib/pull.js";
 import { createRemoteSkillsClient } from "../../lib/remote-client.js";
+import { requiresCliSkillLoading } from "../../lib/managed-policy.js";
+import { loadSelectedSkill, syncSelectionProfile } from "../../lib/selection-resolver.js";
+import { selectedProfileId } from "./context.js";
+import { SkillSelectionError } from "../../lib/selection-cache.js";
 
 export function registerRegistry(parent: Command) {
   const registry = parent
@@ -89,9 +93,28 @@ export function registerPull(parent: Command) {
     .option("--all", "Pull every skill the instance serves", false)
     .option("--for-machine", "Prepare this machine with the instance's full catalog (implies --all)", false)
     .option("--json", "Output results as JSON", false)
+    .option("--selection-profile <id>", "Selection profile for stations using the Skills CLI cache")
     .description("Fetch skills from the configured Skills instance into this machine's corpus")
-    .action(async (names: string[], options: { all: boolean; forMachine: boolean; json: boolean }) => {
+    .action(async (names: string[], options: { all: boolean; forMachine: boolean; json: boolean; selectionProfile?: string }) => {
       try {
+        if (requiresCliSkillLoading()) {
+          const profileId = selectedProfileId(options.selectionProfile);
+          if (options.all || options.forMachine) {
+            const result = await syncSelectionProfile(profileId);
+            if (options.json) console.log(JSON.stringify(result));
+            else console.log(`Pulled verified selection profile ${result.profile.profileId} at ${result.profile.profileRevision}.`);
+          } else {
+            if (!names.length) throw new SkillSelectionError("SKILL_SELECTION_REQUIRED", "Name a selected skill, or use --all to synchronize the selected profile.");
+            const results = [];
+            for (const spec of names) {
+              const loaded = await loadSelectedSkill(spec, profileId, { projectDir: process.cwd() });
+              results.push({ name: loaded.selection.slug, version: loaded.selection.version, success: true, selection: loaded.selection });
+            }
+            if (options.json) console.log(JSON.stringify({ results }));
+            else for (const result of results) console.log(`Pulled ${result.name}@${result.version} into the verified Skills cache.`);
+          }
+          return;
+        }
         const { results } = await pullSkills({ names, all: options.all || options.forMachine });
         if (options.json) {
           console.log(JSON.stringify({ results }, null, 2));

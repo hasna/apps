@@ -15,6 +15,7 @@ import { fileURLToPath } from "url";
 import { adaptSkillMdForAgent, hasSkillsOwnershipMarker, writeManagedSkillDir } from "./agent-sync.js";
 import { normalizeSkillName } from "./utils.js";
 import { getDataDir } from "./config.js";
+import { assertNativeExportAllowed } from "./agent-integration.js";
 import { findPortableSkill } from "./portable-skills.js";
 import { findExtensionSkillPath, getSkill, type SkillMeta } from "./registry.js";
 import { normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
@@ -369,6 +370,7 @@ export function installSkillForAgent(
   options: AgentInstallOptions & { overwrite?: boolean; dryRun?: boolean },
   generateSkillMd?: (name: string) => string | null,
 ): InstallResult {
+  assertNativeExportAllowed();
   const canonicalName = getCanonicalSkillName(name);
   if (!existsSync(getSkillPath(name))) {
     return { skill: canonicalName, success: false, error: `Skill '${name}' not found` };

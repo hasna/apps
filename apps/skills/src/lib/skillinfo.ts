@@ -91,8 +91,15 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
     const content = readIfExists(join(skillPath, file));
     if (content) texts.push(content);
   }
-  const allText = texts.join("\n");
   const meta = getSkill(name);
+  let dependencies: Record<string, string> = {};
+  try { dependencies = JSON.parse(readFileSync(join(skillPath, "package.json"), "utf8")).dependencies || {}; } catch {}
+  return getSkillRequirementsFromContent(name, texts, dependencies, meta);
+}
+
+/** Shared parser for verified bundle content and explicit local authoring files. */
+export function getSkillRequirementsFromContent(name: string, texts: string[], dependencies: Record<string, string> = {}, meta?: SkillMeta): SkillRequirements {
+  const allText = texts.join("\n");
   const canonicalName = meta?.name ?? normalizeSkillName(name);
 
   // Extract env vars
@@ -135,15 +142,6 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
   // are implementation details for runSkill() resolution.
   const skillName = normalizeSkillName(name);
   let cliCommand: string | null = `skills run ${skillName}`;
-  let dependencies: Record<string, string> = {};
-  const pkgPath = join(skillPath, "package.json");
-  if (existsSync(pkgPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-      dependencies = pkg.dependencies || {};
-    } catch {}
-  }
-
   return {
     envVars: Array.from(envVars).sort(),
     systemDeps: Array.from(systemDeps).sort(),

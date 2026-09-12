@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.12
+
+### Patch Changes
+
+- Unify versioned skill selections through the Skills API, with compare-and-swap profiles, verified immutable station caches, project/session locks, CLI context hooks, recoverable native-skill migration, and scoped station receipts. Bind managed CLI and MCP reads and execution to selected bundles. Add a reviewed isolated cloud execution lane with durable admission, digest-bound artifacts and deployment readiness reporting.
+
 ## 0.5.11
 
 ### Patch Changes

@@ -19,6 +19,8 @@ export interface S3ClientLike {
 export interface ArtifactStorageOptions {
   bucket?: string;
   prefix?: string;
+  /** Separate expiring run outputs from durable bundle/version objects. Defaults to prefix for compatibility. */
+  runPrefix?: string;
   region?: string;
   /** Overrides the real S3 client (tests). Ignored when no bucket is configured. */
   client?: S3ClientLike;
@@ -27,11 +29,13 @@ export interface ArtifactStorageOptions {
 export class ArtifactStorage {
   private bucket?: string;
   private prefix: string;
+  private runPrefix: string;
   private s3?: S3ClientLike;
 
   constructor(options: ArtifactStorageOptions = {}) {
     this.bucket = options.bucket;
     this.prefix = (options.prefix || "skills/artifacts").replace(/^\/+|\/+$/g, "");
+    this.runPrefix = (options.runPrefix || this.prefix).replace(/^\/+|\/+$/g, "");
     this.s3 = this.bucket ? options.client ?? new AwsS3Client({ region: options.region || process.env.AWS_REGION || "us-east-1" }) : undefined;
   }
 
@@ -49,7 +53,7 @@ export class ArtifactStorage {
    */
   objectKeyFor(tenantId: string, runId: string, relativePath: string): string {
     const safeRelativePath = relativePath.replace(/^\/+/, "").replace(/\.\.(?:\/|$)/g, "");
-    return `${this.prefix}/${tenantId}/${runId}/${safeRelativePath}`;
+    return `${this.runPrefix}/${tenantId}/${runId}/${safeRelativePath}`;
   }
 
   /**
@@ -60,7 +64,7 @@ export class ArtifactStorage {
    * that the artifact's original location no longer resolves.
    */
   quarantineKeyFor(tenantId: string, runId: string, artifactId: string): string {
-    return `${this.prefix}/quarantine/${tenantId}/${runId}/${artifactId}`;
+    return `${this.runPrefix}/quarantine/${tenantId}/${runId}/${artifactId}`;
   }
 
   async materialize(
@@ -219,16 +223,10 @@ export class ArtifactStorage {
    * The content-addressed object under bundles/ stays the read path (dedupe); these keys
    * are the durable, browsable history and are never deleted by orphan collection.
    *
-   * RETENTION (hasna/apps#1671): these objects accumulate without bound by design — every
-   * version keeps a full copy — so the bucket lifecycle is the retention story, not the
-   * store. The intended rule (operated in the bucket's lifecycle config, outside this
-   * repository): expire `<prefix>/skills/` objects older than N days per the slot policy,
-   * while `<prefix>/bundles/` (content-addressed, deduped across versions and slugs) is
-   * NEVER expired by lifecycle — only the reference-guarded delete path removes those,
-   * because one object can serve many versions. A busy org that pushes thousands of
-   * versions should pair the lifecycle rule with a documented cap on retained versions
-   * per slug (e.g. the newest K, pruned by a maintenance job that deletes the version row
-   * and its two objects together); row deletion alone would strand the objects.
+   * RETENTION: neither version history nor content-addressed bundles may share an
+   * expiring lifecycle prefix with run outputs. Configure runPrefix separately for
+   * ephemeral artifacts; retain this prefix until reference-aware maintenance removes
+   * the version rows and objects together. Existing persisted storage keys remain valid.
    * Returns the placement recorded on the version row; in db mode nothing is written.
    */
   async putVersionObjects(
@@ -262,8 +260,7 @@ export class ArtifactStorage {
   }
 
   private bundleKeyFor(orgId: string, sha256: string): string {
-    // Under the same configured prefix as run artifacts, in a sibling namespace, so one
-    // bucket policy and one lifecycle rule cover both.
+    // Immutable bundle storage keeps its original prefix independently of expiring runs.
     return `${this.prefix}/bundles/${encodeURIComponent(orgId)}/${sha256}.tar.gz`;
   }
 }

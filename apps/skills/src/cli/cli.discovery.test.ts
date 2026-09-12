@@ -208,13 +208,9 @@ describe("CLI discovery", () => {
           SKILLS_API_KEY: "fixture-remote-read",
         });
         expect(exitCode).toBe(0);
-        // Merged: the instance's categories appear ALONGSIDE the bundled ones rather than
-        // replacing them. Asserting the exact list would just re-encode the whole bundled
-        // taxonomy into this test, so it asserts the property that changed.
+        // The authenticated API owns discovery; local categories cannot shadow it.
         const data = JSON.parse(stdout);
-        expect(data).toContainEqual({ name: "Remote Tools", count: 2 });
-        expect(data.map((entry: any) => entry.name)).toContain("Development Tools");
-        expect(data.length).toBeGreaterThan(1);
+        expect(data).toEqual([{ name: "Remote Tools", count: 2 }]);
       } finally {
         server.stop(true);
       }
@@ -337,15 +333,12 @@ describe("CLI discovery", () => {
         });
         const data = JSON.parse(stdout);
         expect(exitCode).toBe(0);
-        // MERGED, not replaced. `--remote` used to return exactly what the instance
-        // served, so pointing the CLI at your own server made the bundled corpus and
-        // every locally written skill vanish from the listing. Both halves are present
-        // now, resolved by the precedence rule in src/lib/registry-merge.ts.
+        // Remote discovery is authoritative even where local names collide.
         const names = data.map((skill: any) => skill.name);
         expect(names).toContain("market-research-report");
         expect(names).toContain("logo-design");
-        expect(names).toContain("blog-article");
-        expect(data.length).toBeGreaterThan(2);
+        expect(names).not.toContain("blog-article");
+        expect(data.length).toBe(2);
         const image = data.find((skill: any) => skill.name === "market-research-report");
         const logo = data.find((skill: any) => skill.name === "logo-design");
         expect(image).toMatchObject({
@@ -403,7 +396,7 @@ describe("CLI discovery", () => {
         expect(exitCode).toBe(0);
         const names = data.map((skill: any) => skill.name);
         expect(names).toContain("remote-only-skill");
-        expect(names).toContain("blog-article");
+        expect(names).not.toContain("blog-article");
         const remote = data.find((skill: any) => skill.name === "remote-only-skill");
         expect(remote).toMatchObject({
           source: "remote",
