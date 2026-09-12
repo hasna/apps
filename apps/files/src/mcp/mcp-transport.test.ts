@@ -185,8 +185,12 @@ async function startFakeServer(): Promise<FakeServer> {
       if (method === "POST" && sd) {
         return Response.json({ url: "https://s3.example.test/presigned-f_hosted1" });
       }
+      if (method === "GET" && path === "/files") {
+        return Response.json({ items: [HOSTED_FILE] });
+      }
       const f = path.match(/^\/files\/([^/]+)$/);
       if (method === "GET" && f) {
+        if (f[1] !== HOSTED_FILE.id) return new Response(JSON.stringify({ error: "File not found" }), { status: 404 });
         return Response.json(HOSTED_FILE);
       }
       // Cloud ingestion (bug de9aeeed): fake hosted /v1 accepts upload intents,
@@ -441,6 +445,166 @@ describe("ported read-side MCP tools on the hosted (api) transport", () => {
     }
   });
 
+  // ── knowledge-source resolution, ported to /v1 (W13 PORT-TO-API slice A) ──
+
+  test("resolve_knowledge_source metadata mode reads the hosted file route", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "resolve_knowledge_source",
+        arguments: { source_ref: "open-files://file/f_hosted1", mode: "metadata" },
+      });
+      expect(result.isError).not.toBe(true);
+      const payload = JSON.parse(callText(result));
+      expect(payload.status).toBe("ready");
+      expect(payload.file_id).toBe("f_hosted1");
+      expect(payload.content.mime).toBe("text/markdown");
+      expect(fake.hits).toEqual([{ method: "GET", path: "/files/f_hosted1", search: expect.anything(), body: undefined }]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("resolve_knowledge_source content mode streams the hosted content route", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "resolve_knowledge_source",
+        arguments: { source_ref: "open-files://file/f_hosted1", mode: "content" },
+      });
+      expect(result.isError).not.toBe(true);
+      const payload = JSON.parse(callText(result));
+      expect(payload.content.text).toBe(HOSTED_CONTENT);
+      expect(payload.content.text_available).toBe(true);
+      expect(fake.hits.map((h) => `${h.method} ${h.path}`)).toEqual([
+        "GET /files/f_hosted1",
+        "GET /files/f_hosted1/content",
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("resolve_knowledge_source snapshot mode posts to the hosted extract-text route", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "resolve_knowledge_source",
+        arguments: { source_ref: "open-files://file/f_hosted1", mode: "snapshot" },
+      });
+      expect(result.isError).not.toBe(true);
+      const payload = JSON.parse(callText(result));
+      expect(payload.snapshot.snapshot_id).toMatch(/^snap_/);
+      expect(payload.content.extraction.snapshot_id).toBe(payload.snapshot.snapshot_id);
+      expect(fake.hits.map((h) => `${h.method} ${h.path}`)).toEqual([
+        "GET /files/f_hosted1",
+        "POST /files/f_hosted1/extract-text",
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("resolve_knowledge_source signed_url mode posts to the hosted sign-download route", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "resolve_knowledge_source",
+        arguments: { source_ref: "open-files://file/f_hosted1", mode: "signed_url" },
+      });
+      expect(result.isError).not.toBe(true);
+      const payload = JSON.parse(callText(result));
+      expect(payload.access.url).toBe("https://s3.example.test/presigned-f_hosted1");
+      expect(fake.hits.map((h) => `${h.method} ${h.path}`)).toEqual([
+        "GET /files/f_hosted1",
+        "POST /files/f_hosted1/sign-download",
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("resolve_knowledge_source reports not_found from the hosted route, never the local island", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "resolve_knowledge_source",
+        arguments: { source_ref: "open-files://file/f_missing" },
+      });
+      const payload = JSON.parse(callText(result));
+      expect(payload.status).toBe("not_found");
+      expect(fake.hits.map((h) => `${h.method} ${h.path}`)).toEqual(["GET /files/f_missing"]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("resolve_extracted_text posts to the hosted extract-text route", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "resolve_extracted_text",
+        arguments: { source_ref: "open-files://file/f_hosted1", segment_chars: 4000 },
+      });
+      expect(result.isError).not.toBe(true);
+      const payload = JSON.parse(callText(result));
+      expect(payload.extracted_text.segments[0].text).toBe("hello hosted files");
+      expect(payload.content.extraction.extractor).toBe("hosted-extractor");
+      expect(fake.hits.map((h) => `${h.method} ${h.path}`)).toEqual([
+        "GET /files/f_hosted1",
+        "POST /files/f_hosted1/extract-text",
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("doctor_knowledge_sources collects refs from the hosted list route and checks each one", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "doctor_knowledge_sources",
+        arguments: { require_extracted_text: false },
+      });
+      expect(result.isError).not.toBe(true);
+      const report = JSON.parse(callText(result));
+      expect(report.checked_count).toBe(1);
+      expect(report.checks[0].source_ref).toBe("open-files://file/f_hosted1");
+      expect(report.checks[0].status).toBe("ready");
+      expect(report.summary.ready).toBe(1);
+      expect(fake.hits.map((h) => `${h.method} ${h.path}`)).toEqual([
+        "GET /files",
+        "GET /files/f_hosted1",
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("doctor_knowledge_sources checks extracted text over the hosted extract-text route", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "doctor_knowledge_sources",
+        arguments: {
+          source_refs: ["open-files://file/f_hosted1"],
+          require_extracted_text: true,
+          check_extracted_text: true,
+        },
+      });
+      expect(result.isError).not.toBe(true);
+      const report = JSON.parse(callText(result));
+      expect(report.checks[0].content.extraction_status).toBe("ready");
+      expect(report.checks[0].issue_codes).toEqual([]);
+      expect(fake.hits.map((h) => `${h.method} ${h.path}`)).toEqual([
+        "GET /files/f_hosted1",
+        "POST /files/f_hosted1/extract-text",
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
   test("upload_file ingests a local document through the hosted transport as a tagged project resource", async () => {
     const fixture = join(testDir!, "partner-contract.pdf");
     writeFileSync(fixture, "contract bytes");
@@ -476,9 +640,6 @@ describe("write/ingest MCP tools keep the local-transport guard in api mode", ()
     { tool: "build_context_pack", args: {} },
     { tool: "search_context_pack", args: { query: "anything" } },
     { tool: "export_knowledge_manifest", args: {} },
-    { tool: "resolve_knowledge_source", args: { source_ref: "open-files://file/f_hosted1" } },
-    { tool: "doctor_knowledge_sources", args: {} },
-    { tool: "resolve_extracted_text", args: { source_ref: "open-files://file/f_hosted1" } },
     { tool: "poll_knowledge_outbox", args: {} },
     { tool: "ack_knowledge_outbox", args: { consumer_id: "consumer-1", cursor: 1 } },
     { tool: "copy_file", args: { file_id: "f_hosted1", dest_source_id: "src_2" } },

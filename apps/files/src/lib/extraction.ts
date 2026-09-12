@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getLatestFileVersion } from "../db/file-versions.js";
 import { buildOpenFilesFileRef, buildOpenFilesFileRevisionRef } from "./source-ref.js";
+import { isExtractableTextMime } from "./knowledge-shared.js";
 import { resolveFileObject } from "./file-object.js";
 import { createS3ClientConfig } from "./s3.js";
 import type { ExtractedTextResult, ExtractedTextSegment, FileWithTags } from "../types/index.js";
@@ -162,26 +163,6 @@ export function extractTextFromBuffer(input: ExtractTextFromBufferInput): Extrac
       supported_mime: true,
     },
   };
-}
-
-export function isExtractableTextMime(mime: string, filename = ""): boolean {
-  const normalized = mime.split(";")[0]!.toLowerCase();
-  if (normalized.startsWith("text/")) return true;
-  if ([
-    "application/json",
-    "application/ld+json",
-    "application/xml",
-    "application/xhtml+xml",
-    "application/yaml",
-    "application/x-yaml",
-    "application/toml",
-    "application/javascript",
-    "application/typescript",
-    "application/sql",
-    "image/svg+xml",
-  ].includes(normalized)) return true;
-
-  return /\.(md|markdown|mdx|txt|csv|tsv|json|jsonl|yaml|yml|toml|xml|html|htm|css|js|jsx|ts|tsx|sql|svg)$/i.test(filename);
 }
 
 async function readResolvedBytes(
@@ -370,3 +351,7 @@ function isTruncated(bytesRead: number, totalSize: number | undefined, maxBytes:
 function hasUtf16Bom(bytes: Buffer): boolean {
   return bytes[0] === 0xff && bytes[1] === 0xfe;
 }
+
+// Re-exported for the many call sites that already import it from here; the
+// implementation lives in the pure module so the hosted path can use it too.
+export { isExtractableTextMime };
