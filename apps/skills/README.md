@@ -47,6 +47,11 @@ exports are refused while this policy is active. Archives preserve full skill
 directories; `--include-unmanaged` explicitly includes user-authored copies.
 Archive receipts and configuration backups live under the Skills data directory.
 
+If your home `.claude` or `.codex` directory intentionally links to another
+directory within your home, add `--allow-root-aliases` to hook installation and
+native migration. The plan records and rechecks the exact link and target;
+links inside skill contents or configuration files remain refused.
+
 At session start, the hook authenticates and refreshes the profile. Prompt hooks
 select complete skill instructions from that verified cache using explicit
 `$skill` references, profile keywords, paths and always-required selections.
