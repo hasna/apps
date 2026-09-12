@@ -27,6 +27,12 @@ test("desktop profiles pin the runtime/provider, isolate state, protect credenti
     expect(output.args.indexOf('model="wrong"')).toBeLessThan(output.args.indexOf('model="provider/model"'));
     expect(output.home).toBe(join(session,"codex"));
     expect(output.ambientKey).toBeUndefined();
+    const sandboxArgs=["sandbox","-c",'default_permissions="node_repl"',"-c",'permissions.node_repl={filesystem={":root"="read"},network={enabled=false}}',"--","/path with spaces/node","--experimental-vm-modules","/path with spaces/kernel.js","--session-id","fixture-session"];
+    const helper=Bun.spawn([prepared.env.CODEX_CLI_PATH,...sandboxArgs],{env:{PATH:process.env.PATH,OPENAI_API_KEY:"unrelated-fixture-key",...prepared.env},stdout:"pipe",stderr:"pipe"});
+    const helperOutput=JSON.parse(await new Response(helper.stdout).text());expect(await helper.exited).toBe(0);
+    expect(helperOutput.args).toEqual(sandboxArgs);
+    expect(helperOutput.home).toBe(join(session,"codex"));
+    expect(helperOutput.ambientKey).toBeUndefined();
     await expect(prepareChatGPTLaunch(native,app,state,session)).rejects.toMatchObject({code:"desktop_busy"});
     const saved=join(session,"codex/saved-conversation");await writeFile(saved,"keep");
     expect((await stat(join(session,"codex/auth.json"))).mode&0o777).toBe(0o600);
@@ -55,7 +61,7 @@ test.skipIf(process.platform!=="darwin")("exact desktop CLI selects an arbitrary
   await writeFile(join(contents,"Resources/codex"),"#!/bin/sh\necho 'codex-cli 0.153.4'\n",{mode:0o700});
   await writeFile(join(contents,"MacOS/ChatGPT"),`#!${process.execPath}\nconst config=Bun.TOML.parse(await Bun.file(process.env.CODEX_HOME+"/config.toml").text());await Bun.write(${JSON.stringify(join(root,"receipt.json"))},JSON.stringify({model:config.model,provider:config.model_provider,home:process.env.CODEX_HOME,reasoning:config.model_reasoning_effort,approval:config.approval_policy,sandbox:config.sandbox_mode}));console.log("private-gui-output");process.exit(7);\n`,{mode:0o700});
   const run=async(args:string[])=>{
-    const child=Bun.spawn([process.execPath,join(import.meta.dir,"../src/cli.ts"),...args],{cwd:root,env:{PATH:process.env.PATH,HOME:root,HASNA_STATION:"desktop-cli-fixture",HASNA_SWITCHER_HOME:join(root,"data")},stdin:"ignore",stdout:"pipe",stderr:"pipe"});
+    const child=Bun.spawn([process.execPath,join(import.meta.dir,"../src/cli.ts"),...args],{cwd:root,env:{PATH:process.env.PATH,HOME:root,HASNA_STATION:"desktop-cli-fixture",HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(root,"data")},stdin:"ignore",stdout:"pipe",stderr:"pipe"});
     const timer=setTimeout(()=>child.kill("SIGKILL"),15000);
     try{const [code,stdout,stderr]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);return {code,stdout,stderr};}finally{clearTimeout(timer);}
   };

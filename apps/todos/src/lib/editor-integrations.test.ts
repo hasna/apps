@@ -60,8 +60,6 @@ describe("local editor integrations", () => {
       "list_tasks",
       "get_next_task",
       "build_agent_context_pack",
-      "extract_todos",
-      "watch_source_todos",
     ]));
   });
 

@@ -82,14 +82,14 @@ test("real CLI parser uses shared list/get, help and fixed failures", async () =
   expect(f.calls).toHaveLength(2);
 });
 
-test("actual MCP discovery and dispatch expose only the two read-only hosted operations", async () => {
+test("actual MCP discovery and dispatch expose the read-only hosted operations", async () => {
   const f = fixture(), server = buildHostedServer(f.client);
   const client = new Client({ name: "fictional-library-test", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);
   try {
     const { tools } = await client.listTools();
-    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_get", "recordings_hosted_list"]);
+    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"]);
     expect(tools.every(tool => tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false)).toBe(true);
     const result = await client.callTool({ name: "recordings_hosted_list", arguments: { limit: 1 } });
     expect(result.structuredContent).toEqual({ recordings: [expected], nextCursor: { before: at, beforeId: id } });

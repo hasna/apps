@@ -1,3 +1,4 @@
+import { enterLocalStoreRoute } from "../test/local-store-fixture.js";
 /**
  * Regression tests for P1-3 event-log redaction.
  *
@@ -14,8 +15,9 @@ import { tmpdir } from "os";
 import { runHook } from "../index.js";
 import { getDb, closeDb } from "../db/index.js";
 import { recordHookRun } from "./db-writer.js";
+// Hermetic local route (see src/test/local-store-fixture.ts).
+let restoreRoute: () => void = () => {};
 import { redactEventPayload, projectEventRowForRead, redactText, redactValue } from "./redact.js";
-import { pinLocalHookStoreEnv } from "./local-store-test-env.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-redact-test-"));
 
@@ -34,22 +36,17 @@ const sentinel = {
   aws: (body: string) => `AKIA${body}`,
 };
 
-let restoreLocalEnv: () => void = () => {};
 
 beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;
   process.env.HASNA_HOOKS_DB_PATH = ":memory:";
-  // Hook events are hosted by default and the local opt-in is not a trump
-  // card: this suite asserts rows in the ON-BOX store, so it removes every
-  // authority variable as well (bun runs all files in one process and
-  // qa-regressions exports a live HASNA_HOOKS_API_KEY while it runs).
-  restoreLocalEnv = pinLocalHookStoreEnv();
+  restoreRoute = enterLocalStoreRoute();
 });
 
 afterAll(() => {
   delete process.env.HASNA_HOOKS_DATA_DIR;
   delete process.env.HASNA_HOOKS_DB_PATH;
-  restoreLocalEnv();
+  restoreRoute();
   closeDb();
   rmSync(TEST_DIR, { recursive: true, force: true });
 });

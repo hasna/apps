@@ -5,12 +5,16 @@ import { join } from "path";
 
 const SERVER_ENTRY = join(import.meta.dir, "..", "..", "bin", "serve.js");
 
+// connectors-serve gates /api/* behind a bearer token; the spawned server is
+// pinned to this one through its environment and the probe presents it.
+const TEST_TOKEN = `connectors-entry-test-token-${process.pid}`;
+
 async function waitForConnectors(port: number): Promise<Response> {
   let lastError: unknown;
 
   for (let attempt = 0; attempt < 50; attempt++) {
     try {
-      const res = await fetch(`http://localhost:${port}/api/connectors`);
+      const res = await fetch(`http://localhost:${port}/api/connectors`, { headers: { Authorization: `Bearer ${TEST_TOKEN}` } });
       if (res.status === 200) {
         return res;
       }
@@ -62,7 +66,7 @@ describe("server entry (connectors-serve)", () => {
     const home = mkdtempSync(join(tmpdir(), "connectors-serve-home-"));
 
     const proc = Bun.spawn(["bun", SERVER_ENTRY, "--port", String(port), "--no-open"], {
-      env: { ...process.env, HOME: home },
+      env: { ...process.env, HOME: home, HASNA_CONNECTORS_SERVE_TOKEN: TEST_TOKEN },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -85,7 +89,7 @@ describe("server entry (connectors-serve)", () => {
     const home = mkdtempSync(join(tmpdir(), "connectors-serve-home-"));
 
     const proc = Bun.spawn(["bun", SERVER_ENTRY, `--port=${port}`, "--no-open"], {
-      env: { ...process.env, HOME: home },
+      env: { ...process.env, HOME: home, HASNA_CONNECTORS_SERVE_TOKEN: TEST_TOKEN },
       stdout: "pipe",
       stderr: "pipe",
     });

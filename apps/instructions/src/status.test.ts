@@ -170,3 +170,81 @@ describe("getConfigsStatus", () => {
     expect(JSON.stringify(status)).not.toContain(skillDir);
   });
 });
+
+/**
+ * The hosted N+1 that made `instructions status` look hung on station03
+ * (fleet probe 2026-09-11: killed at 40 s, exit 142). `counts.profileLinks`
+ * and `counts.snapshots` cost ONE HTTP round trip per profile and per config;
+ * with 258 configs that was 120 s of serial reads — and ~35 s even with the
+ * reads bounded-concurrent, because the ceiling is the service's throughput,
+ * not the client's request pattern. So a default hosted status must not issue
+ * them at all, and must say `null` rather than invent a number.
+ */
+describe("getConfigsStatus per-row counts follow the transport", () => {
+  function countingStore(mode: "api" | "local") {
+    const calls = { listSnapshots: 0, getProfileConfigs: 0 };
+    const config = {
+      id: "cfg-1",
+      slug: "cfg-1",
+      name: "cfg 1",
+      kind: "reference" as const,
+      category: "rules",
+      agent: "global",
+      target_path: null,
+      format: "markdown",
+      content: "body",
+      description: null,
+      tags: [],
+      is_template: false,
+      version: 1,
+      outputs: [],
+      created_at: "2026-09-11T00:00:00.000Z",
+      updated_at: "2026-09-11T00:00:00.000Z",
+      synced_at: null,
+    };
+    const store = {
+      mode,
+      v1BaseUrl: mode === "api" ? "https://api.hasna.com/instructions/v1" : null,
+      listConfigs: async () => [config],
+      getConfigStats: async () => ({ total: 1, rules: 1 }),
+      listProfiles: async () => [{ id: "prof-1", slug: "p", name: "p" }],
+      listMachines: async () => [],
+      getProfileConfigs: async () => {
+        calls.getProfileConfigs += 1;
+        return [config];
+      },
+      listSnapshots: async () => {
+        calls.listSnapshots += 1;
+        return [{ id: "snap-1" }];
+      },
+    };
+    return { store: store as unknown as Parameters<typeof getConfigsStatus>[0], calls };
+  }
+
+  test("a hosted store reports them as null and makes no per-row request", async () => {
+    const { store, calls } = countingStore("api");
+    const status = await getConfigsStatus(store, { homeDir: tempDir });
+    expect(status.counts.snapshots).toBeNull();
+    expect(status.counts.profileLinks).toBeNull();
+    expect(calls).toEqual({ listSnapshots: 0, getProfileConfigs: 0 });
+    // The cheap aggregate counts are still real.
+    expect(status.counts.profiles).toBe(1);
+    expect(status.counts.configs.total).toBe(1);
+  });
+
+  test("--deep counts them against a hosted store", async () => {
+    const { store, calls } = countingStore("api");
+    const status = await getConfigsStatus(store, { homeDir: tempDir, deep: true });
+    expect(status.counts.snapshots).toBe(1);
+    expect(status.counts.profileLinks).toBe(1);
+    expect(calls).toEqual({ listSnapshots: 1, getProfileConfigs: 1 });
+  });
+
+  test("the on-box store counts them by default — they are free there", async () => {
+    const { store, calls } = countingStore("local");
+    const status = await getConfigsStatus(store, { homeDir: tempDir });
+    expect(status.counts.snapshots).toBe(1);
+    expect(status.counts.profileLinks).toBe(1);
+    expect(calls).toEqual({ listSnapshots: 1, getProfileConfigs: 1 });
+  });
+});

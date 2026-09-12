@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 const cli=new URL("../src/cli.ts",import.meta.url).pathname;
 async function run(home:string,args:string[]){
-  const p=Bun.spawn([process.execPath,cli,...args],{cwd:home,env:{PATH:process.env.PATH,HOME:home,HASNA_SWITCHER_HOME:join(home,"data"),HASNA_STATION:"model-config-fixture"},stdout:"pipe",stderr:"pipe",stdin:"ignore"});
+  const p=Bun.spawn([process.execPath,cli,...args],{cwd:home,env:{PATH:process.env.PATH,HOME:home,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(home,"data"),HASNA_STATION:"model-config-fixture"},stdout:"pipe",stderr:"pipe",stdin:"ignore"});
   const timer=setTimeout(()=>p.kill("SIGKILL"),15000);
   try{const [code,stdout,stderr]=await Promise.all([p.exited,new Response(p.stdout).text(),new Response(p.stderr).text()]);return {code,stdout,stderr};}finally{clearTimeout(timer);}
 }

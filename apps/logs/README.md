@@ -39,7 +39,8 @@ exits non-zero with one actionable line — no SQLite fallback, no local-fallbac
 event. A deliberate tier that cannot be honoured (`HASNA_PROFILE` naming a
 profile with no key, or a `HASNA_LOGS_API_KEY_REF` vault pointer this process
 cannot complete) is refused the same way, never resolved around — and
-`logs-mcp` refuses it at startup, before `initialize` is answered. The on-box
+`logs-mcp` refuses it at startup: before `initialize` is answered on stdio, and
+before the Streamable-HTTP listener (`--http`) binds its port. The on-box
 SQLite store (`~/.hasna/logs/logs.db`) is reachable only through the explicit
 opt-in:
 

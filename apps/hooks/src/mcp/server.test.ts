@@ -1,3 +1,4 @@
+import { enterLocalStoreRoute } from "../test/local-store-fixture.js";
 import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -7,7 +8,6 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHooksServer, MCP_PORT } from "./server.js";
 import { closeDb, getDb } from "../db/index.js";
 import { getHook } from "../lib/registry.js";
-import { pinLocalHookStoreEnv } from "../lib/local-store-test-env.js";
 
 const TEST_HOME = join(process.cwd(), ".tmp-mcp-home");
 const SETTINGS_PATH = join(TEST_HOME, ".claude", "settings.json");
@@ -24,8 +24,9 @@ const TEST_DATA_DIR = join(tmpdir(), `hooks-mcp-data-${Date.now()}-${Math.random
 const originalDataDir = process.env.HASNA_HOOKS_DATA_DIR;
 const originalDbPath = process.env.HASNA_HOOKS_DB_PATH;
 const originalLockPath = process.env.HASNA_HOOKS_LOCK_PATH;
+// Hermetic local route (see src/test/local-store-fixture.ts).
+let restoreRoute: () => void = () => {};
 
-let restoreLocalEnv: () => void = () => {};
 
 beforeAll(() => {
   closeDb();
@@ -35,8 +36,8 @@ beforeAll(() => {
   // card: this suite asserts rows in the ON-BOX store, so it removes every
   // authority variable as well (bun runs all files in one process and
   // qa-regressions exports a live HASNA_HOOKS_API_KEY while it runs).
-  restoreLocalEnv = pinLocalHookStoreEnv();
   process.env.HASNA_HOOKS_LOCK_PATH = join(TEST_DATA_DIR, "hooks.lock");
+  restoreRoute = enterLocalStoreRoute();
 });
 
 function backupSettings(): void {
@@ -59,7 +60,7 @@ function restoreSettings(): void {
 
 afterAll(() => {
   closeDb();
-  restoreLocalEnv();
+  restoreRoute();
   if (originalDataDir === undefined) delete process.env.HASNA_HOOKS_DATA_DIR;
   else process.env.HASNA_HOOKS_DATA_DIR = originalDataDir;
   if (originalDbPath === undefined) delete process.env.HASNA_HOOKS_DB_PATH;
@@ -1018,9 +1019,21 @@ describe("MCP server", () => {
     let serverProcess: any;
 
     beforeAll(async () => {
+      // Hermetic route for the child (hasna/apps#1720): bun test files share
+      // one process.env and the env-isolation suites seed authority-shaped
+      // variables into it mid-run; a stray HASNA_HOOKS_API_URL would make the
+      // SSE server resolve a hosted route (and refuse the strict pair) instead
+      // of the local opt-in this suite relies on.
+      const sseEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
+      for (const key of [
+        "HASNA_HOOKS_API_URL", "HOOKS_API_URL", "HASNA_HOOKS_API_KEY", "HOOKS_API_KEY",
+        "HASNA_HOOKS_API_KEY_OVERRIDE", "HASNA_HOOKS_API_KEY_REF", "HASNA_PROFILE",
+      ]) delete sseEnv[key];
+      sseEnv.HASNA_HOOKS_LOCAL = "1";
+      sseEnv.HASNA_STATION = "no-such-station";
       serverProcess = Bun.spawn(
         ["bun", "run", join(import.meta.dir, "..", "cli", "index.tsx"), "mcp", "--sse", "--port", String(TEST_PORT)],
-        { stdout: "pipe", stderr: "pipe" }
+        { stdout: "pipe", stderr: "pipe", env: sseEnv }
       );
       for (let i = 0; i < 50; i++) {
         try {

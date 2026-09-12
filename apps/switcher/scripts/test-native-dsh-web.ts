@@ -11,7 +11,7 @@ const root=await mkdtemp(join(base,"dsh-web-"));const home=join(root,"home");awa
 let inferenceCalls=0;
 const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){if(new URL(request.url).pathname==="/v1/models")return Response.json({data:[{id:"fixture/selected"},{id:"fixture/other"}]});inferenceCalls++;return new Response(null,{status:500});}});
 const cli=fileURLToPath(new URL("../src/cli.ts",import.meta.url));
-const child=Bun.spawn([process.execPath,cli,"launch","dsh","--provider","generic-openai-chat","--url",upstream.url.origin+"/v1","--model","fixture/selected","--executable",executable,"--timeout","35","--","--no-open"],{cwd:root,env:{HOME:home,PATH:process.env.PATH,HASNA_SWITCHER_HOME:join(root,"switcher")},stdin:"ignore",stdout:"pipe",stderr:"pipe",detached:true});
+const child=Bun.spawn([process.execPath,cli,"launch","dsh","--provider","generic-openai-chat","--url",upstream.url.origin+"/v1","--model","fixture/selected","--executable",executable,"--timeout","35","--","--no-open"],{cwd:root,env:{HOME:home,PATH:process.env.PATH,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(root,"switcher")},stdin:"ignore",stdout:"pipe",stderr:"pipe",detached:true});
 let output="";let browserUrl:string|undefined;let outputReady!:()=>void;const ready=new Promise<void>(resolve=>{outputReady=resolve;});
 const stdout=(async()=>{const decoder=new TextDecoder();for await(const chunk of child.stdout){output+=decoder.decode(chunk,{stream:true});const match=output.match(/dsh web: (http:\/\/127\.0\.0\.1:\d+[^\s]*)/);if(match){browserUrl=match[1];outputReady();}}})();
 const stderr=new Response(child.stderr).text();
@@ -39,7 +39,7 @@ try {
   process.kill(child.pid,"SIGTERM");assert.equal(await child.exited,0);await stdout;
   await assert.rejects(fetch(api,{...request,signal:AbortSignal.timeout(1000)}));
   assert(!(await readdir(join(root,"switcher","state"))).some(name=>name.startsWith("launch-")));
-  const metadata=Bun.spawn([process.execPath,cli,"runs","list"],{cwd:root,env:{HOME:home,PATH:process.env.PATH,HASNA_SWITCHER_HOME:join(root,"switcher")},stdout:"pipe",stderr:"pipe",stdin:"ignore"});
+  const metadata=Bun.spawn([process.execPath,cli,"runs","list"],{cwd:root,env:{HOME:home,PATH:process.env.PATH,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(root,"switcher")},stdout:"pipe",stderr:"pipe",stdin:"ignore"});
   const metadataDeadline=setTimeout(()=>metadata.kill("SIGKILL"),10000);
   let runs:any;
   try{const [code,out,err]=await Promise.all([metadata.exited,new Response(metadata.stdout).text(),new Response(metadata.stderr).text()]);assert.equal(code,0,err);runs=JSON.parse(out);assert.equal(runs.data.length,1);assert.equal(runs.data[0].status,"interrupted");assert.equal(runs.data[0].exitCode,0);}finally{clearTimeout(metadataDeadline);}

@@ -1,3 +1,4 @@
+import { localStoreChildEnv } from "../test/local-store-fixture.js";
 /**
  * Unit tests for individual hook logic.
  *
@@ -10,7 +11,6 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { tmpdir } from "os";
-import { localHookStoreChildEnv } from "../lib/local-store-test-env.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOOKS_DIR = join(__dirname, "..", "..", "hooks");
@@ -644,7 +644,7 @@ describe("observability hooks write to SQLite", () => {
       // and this block asserts the ON-BOX store: the child env carries the
       // opt-in AND no authority variable (the opt-in alone loses to a
       // configured registry, by design).
-      env: localHookStoreChildEnv({ HOOKS_DB_PATH: dbPath, HOME: tmpDir, HASNA_STATION: "no-such-station" }),
+      env: localStoreChildEnv({ HOOKS_DB_PATH: dbPath, HOME: tmpDir, HASNA_STATION: "no-such-station" }),
     });
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),

@@ -13,6 +13,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { unavailableEventServer } from "../test/unavailable-event-server.js";
 
 const CLI = join(import.meta.dir, "index.tsx");
 
@@ -59,8 +60,10 @@ function cleanEnv(sb: Sandbox): Record<string, string> {
 }
 
 const sandboxes: Sandbox[] = [];
+const eventServers: ReturnType<typeof unavailableEventServer>[] = [];
 
 afterEach(() => {
+  for (const endpoint of eventServers.splice(0)) endpoint.server.stop(true);
   const sb = sandboxes.pop();
   if (sb) rmSync(sb.root, { recursive: true, force: true });
 });
@@ -217,6 +220,115 @@ describe("hooks transport gate (fleet fail-closed)", () => {
     expect(result.stderr).toContain(REFUSING);
     // No local SQLite store was opened.
     expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
+  });
+
+  // ── W6 2026-09-11: `hooks run` and the local-only verbs decide their ROUTE ──
+
+  test("`hooks run` with nothing configured fails closed: exit 1, first stderr line names the tiers + opt-in, no hooks.db", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    env.HASNA_STATION = "no-such-station";
+    const result = await runCli(["run", "gitguard"], env);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(1);
+    const firstLine = result.stderr.split("\n").find((line) => line.trim() !== "") ?? "";
+    expect(firstLine).toContain("REMOTE_API_CONFIG_MISSING");
+    expect(firstLine).toContain("hasna.credentials.hooks.api-key");
+    expect(firstLine).toContain("~/.hasna/hooks/config/credentials");
+    expect(firstLine).toContain("HASNA_HOOKS_API_KEY");
+    expect(firstLine).toContain("HASNA_HOOKS_LOCAL=1");
+    expect(existsSync(sb.dataDir)).toBe(false);
+    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
+  });
+
+  test("`hooks run` under the explicit opt-in executes and records the event in the on-box store", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    env.HASNA_HOOKS_LOCAL = "1";
+    const proc = Bun.spawn(["bun", "run", CLI, "run", "gitguard"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: new Response(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "echo ok" } })),
+      env,
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout as ReadableStream).text(),
+      new Response(proc.stderr as ReadableStream).text(),
+    ]);
+    const exitCode = await proc.exited;
+    expect(exitCode, stderr).toBe(0);
+    expect(stdout).toContain("decision");
+    expect(stderr).toMatch(/LOCAL mode/);
+    expect(stderr).not.toContain("REMOTE_COMMAND_UNSUPPORTED");
+    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(true);
+    const db = new (require("bun:sqlite").Database)(join(sb.dataDir, "hooks.db"), { readonly: true });
+    const row = db.query("SELECT COUNT(*) AS n FROM hook_events WHERE hook_name = 'gitguard'").get() as { n: number };
+    db.close();
+    expect(row.n).toBe(1);
+  });
+
+  test("`hooks run` reports unavailable hosted event storage without falling back to hooks.db", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    const endpoint = unavailableEventServer("gate-test-key");
+    eventServers.push(endpoint);
+    env.HASNA_HOOKS_API_URL = endpoint.url;
+    env.HASNA_HOOKS_API_KEY = "gate-test-key";
+    const proc = Bun.spawn(["bun", "run", CLI, "run", "gitguard"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: new Response(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "echo ok" } })),
+      env,
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout as ReadableStream).text(),
+      new Response(proc.stderr as ReadableStream).text(),
+    ]);
+    const exitCode = await proc.exited;
+    expect(exitCode, stderr).toBe(0);
+    expect(stdout).toContain("decision");
+    expect(stderr).toContain("fixture event store unavailable");
+    expect(endpoint.requests).toEqual(["POST /api/v1/events"]);
+    // The trust pin went to hooks.lock only; the SQLite store was never opened.
+    expect(existsSync(join(sb.dataDir, "hooks.lock"))).toBe(true);
+    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
+  });
+
+  test("hosted log reads report unavailable storage in text and JSON without opening hooks.db", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    const endpoint = unavailableEventServer("gate-test-key");
+    eventServers.push(endpoint);
+    env.HASNA_HOOKS_API_URL = endpoint.url;
+    env.HASNA_HOOKS_API_KEY = "gate-test-key";
+    const tail = await runCli(["log", "tail"], env);
+    expect(tail.timedOut).toBe(false);
+    expect(tail.exitCode).toBe(1);
+    expect(tail.stderr).toContain("fixture event store unavailable");
+    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
+    // JSON callers get the same refusal as a JSON error, exit 1.
+    const json = await runCli(["log", "list", "--json"], env);
+    expect(json.exitCode).toBe(1);
+    expect(JSON.parse(json.stdout.trim()).error).toContain("fixture event store unavailable");
+    const status = await runCli(["storage", "status"], env);
+    expect(status.exitCode).toBe(1);
+    expect(status.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
+    expect(endpoint.requests).toEqual(["GET /api/v1/events", "GET /api/v1/events"]);
+  }, 20_000);
+
+  test("a bare `hooks` with no TTY refuses cleanly under the opt-in instead of an Ink raw-mode crash", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    env.HASNA_HOOKS_LOCAL = "1";
+    const result = await runCli([], env);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("requires a TTY terminal");
   });
 
   test("a config.json without api_url does not open the gate", async () => {

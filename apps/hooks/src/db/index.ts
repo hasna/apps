@@ -17,6 +17,38 @@ import { runRetention } from "./retention";
 
 let instance: Database | null = null;
 
+/**
+ * Process-wide refusal of the on-box store (hasna/apps#1720 fail-closed
+ * ruling, todos #1942 pattern). A hosted surface — the CLI gate once a
+ * registry credential resolved, the MCP server before its transport connects
+ * — installs it at startup, and from then on EVERY getDb() call throws the
+ * installed message instead of opening ~/.hasna/hooks/hooks.db. It is the one
+ * choke point every local-only verb, tool and writer funnels through, so the
+ * hosted route physically cannot answer from (or create) a local SQLite file.
+ * The message names only sources and the opt-in, never a credential value.
+ */
+let localStoreRefusal: string | null = null;
+
+/** Refuse every local-store open for the rest of this process. */
+export function refuseLocalStore(message: string): void {
+  localStoreRefusal = message;
+}
+
+/** Lift a refusal installed by {@link refuseLocalStore}. Test seam. */
+export function allowLocalStore(): void {
+  localStoreRefusal = null;
+}
+
+/** True while {@link refuseLocalStore} is in force for this process. */
+export function isLocalStoreRefused(): boolean {
+  return localStoreRefusal !== null;
+}
+
+/** The installed refusal text, or null when the store is not refused. */
+export function localStoreRefusalMessage(): string | null {
+  return localStoreRefusal;
+}
+
 function resolveDataDir(): string {
   const effective = getEffectiveDataRoot();
   const oldDir = join(getHomeDir(), ".hooks");
@@ -46,6 +78,9 @@ function ensureDir(dbPath: string): void {
 }
 
 export function getDb(): Database {
+  // A refusal installed by a hosted surface outranks everything else,
+  // including an instance opened earlier in the process.
+  if (localStoreRefusal !== null) throw new Error(localStoreRefusal);
   if (instance) return instance;
 
   const dbPath = getDbPath();

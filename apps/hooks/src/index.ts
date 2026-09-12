@@ -315,6 +315,17 @@ export {
   type HooksTransportResolution,
 } from "./lib/transport.js";
 export type { HooksLocalOptInEnv } from "./lib/resolver-types.js";
+export {
+  HOOKS_LOCAL_OPT_IN_ENV_KEYS,
+  isHooksLocalOptIn,
+  hasHooksEnvAuthorityIntent,
+  selectsHooksLocalStore,
+  hooksFailClosedLine,
+  hooksHostedRouteLocalStoreRefusal,
+  hooksEventSinkRefusal,
+} from "./lib/local-opt-in.js";
+export { refuseLocalStore, allowLocalStore, isLocalStoreRefused } from "./db/index.js";
+export { resolveHookEventSink, type HookEventSink } from "./lib/db-writer.js";
 
 export {
   getHookRecord,
@@ -363,6 +374,7 @@ export {
   planSync,
   syncHooks,
   fetchPinnedHook,
+  installPinnedFromBundled,
 } from "./lib/sync.js";
 export type { SyncDiff, SyncPlan, ArtifactResponse, PinnedHookInstall } from "./lib/sync.js";
 

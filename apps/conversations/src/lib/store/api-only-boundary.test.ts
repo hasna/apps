@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { getStore, resolveConversationsCloud, conversationsCloudEnv, assertUnambiguousStoreEnv } from "./index.js";
@@ -76,7 +76,10 @@ test("public root convenience functions never open a local database", async () =
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
-test("identity lookup preserves legacy identity but never imports database files", async () => {
+test("identity lookup ignores the retired ~/.conversations home: no identity import, no database import", async () => {
+  // The station app home is ~/.hasna/conversations only (home-layout ruling); the
+  // pre-2026 ~/.conversations root is neither read nor copied, and nothing is
+  // created under the app home by a read-only command.
   const home = mkdtempSync(join(tmpdir(), "conversations-legacy-client-"));
   const legacy = join(home, ".conversations");
   mkdirSync(legacy);
@@ -88,7 +91,8 @@ test("identity lookup preserves legacy identity but never imports database files
       env: { HOME: home, PATH: process.env.PATH!, HASNA_STATION: randomUUID() }, stdout: "pipe", stderr: "pipe" });
     const [, , code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect([0,1]).toContain(code);
-    expect(readFileSync(join(home, ".hasna/conversations/agent-id"), "utf8")).toBe("legacy-fixture-agent\n");
+    expect(existsSync(join(home, ".hasna/conversations/agent-id"))).toBe(false);
+    expect(existsSync(join(home, ".hasna/conversations"))).toBe(false);
     const files = readdirSync(home, { recursive: true }).map(String).filter(path => /\.(db|sqlite|sqlite3)(-wal|-shm)?$/.test(path)).sort();
     expect(files).toEqual([".conversations/messages.db", ".conversations/messages.db-shm", ".conversations/messages.db-wal"]);
     for (const suffix of ["", "-wal", "-shm"]) expect(readFileSync(join(legacy, `messages.db${suffix}`)).equals(sentinel)).toBe(true);

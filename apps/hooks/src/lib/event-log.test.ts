@@ -1,3 +1,4 @@
+import { enterLocalStoreRoute, localStoreChildEnv } from "../test/local-store-fixture.js";
 /**
  * Regression: every hook execution lands in hook_events so `hooks log` shows
  * rows after a real fire (QA-5/QA-2, bug ef58dcb7: 0 rows after real fires).
@@ -11,26 +12,23 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { runHook } from "../index.js";
 import { getDb, closeDb } from "../db/index.js";
-import { localHookStoreChildEnv, pinLocalHookStoreEnv } from "./local-store-test-env.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-eventlog-test-"));
+// Hermetic local route (see src/test/local-store-fixture.ts): scrubs stray
+// authority variables other suites seed into the shared process.env.
+let restoreRoute: () => void = () => {};
 
-let restoreLocalEnv: () => void = () => {};
 
 beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;
   process.env.HASNA_HOOKS_DB_PATH = ":memory:";
-  // Hook events are hosted by default and the local opt-in is not a trump
-  // card: this suite asserts rows in the ON-BOX store, so it removes every
-  // authority variable as well (bun runs all files in one process and
-  // qa-regressions exports a live HASNA_HOOKS_API_KEY while it runs).
-  restoreLocalEnv = pinLocalHookStoreEnv();
+  restoreRoute = enterLocalStoreRoute();
 });
 
 afterAll(() => {
   delete process.env.HASNA_HOOKS_DATA_DIR;
   delete process.env.HASNA_HOOKS_DB_PATH;
-  restoreLocalEnv();
+  restoreRoute();
   closeDb();
   rmSync(TEST_DIR, { recursive: true, force: true });
 });
@@ -171,7 +169,7 @@ describe("hook run event logging (bug ef58dcb7)", () => {
       stdin: new Response(JSON.stringify({ hook_event_name: "PreToolUse" })),
       stdout: "pipe",
       stderr: "pipe",
-      env: localHookStoreChildEnv({ HASNA_HOOKS_DATA_DIR: TEST_DIR, HASNA_HOOKS_DB_PATH: cliDbPath }),
+      env: localStoreChildEnv({ HASNA_HOOKS_DATA_DIR: TEST_DIR, HASNA_HOOKS_DB_PATH: cliDbPath }),
     });
     const [cliOut, cliErr] = await Promise.all([
       new Response(proc.stdout as ReadableStream).text(),

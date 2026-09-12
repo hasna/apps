@@ -18,6 +18,18 @@ import {
 import { join } from "path";
 import { tmpdir } from "os";
 import { startServer } from "./serve.js";
+
+// Every /api/* route requires the serve bearer token (serve-auth.ts). The
+// tests pin it through the environment BEFORE the server starts and send it
+// on every request; the anonymous path is covered by server-auth-gate.test.ts.
+const TEST_TOKEN = `connectors-test-token-${process.pid}`;
+const ORIGINAL_SERVE_TOKEN = process.env.HASNA_CONNECTORS_SERVE_TOKEN;
+
+function authedFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${TEST_TOKEN}`);
+  return fetch(input, { ...init, headers });
+}
 import { connectorsHome } from "../lib/paths.js";
 
 const TEST_ID = `zzztest${process.pid}m`;
@@ -53,12 +65,15 @@ describe("server management routes", () => {
 
   beforeAll(async () => {
     process.env.HOME = TEST_HOME;
+    process.env.HASNA_CONNECTORS_SERVE_TOKEN = TEST_TOKEN;
     serverPort = 50000 + Math.floor(Math.random() * 10000);
     serverPort = await startServer(serverPort);
     baseUrl = `http://localhost:${serverPort}`;
   });
 
   afterAll(() => {
+    if (ORIGINAL_SERVE_TOKEN === undefined) delete process.env.HASNA_CONNECTORS_SERVE_TOKEN;
+    else process.env.HASNA_CONNECTORS_SERVE_TOKEN = ORIGINAL_SERVE_TOKEN;
     if (ORIGINAL_HOME) {
       process.env.HOME = ORIGINAL_HOME;
     } else {
@@ -73,7 +88,7 @@ describe("server management routes", () => {
     });
 
     test("returns 400 for invalid connector name", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/INVALID/install`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors/INVALID/install`, {
         method: "POST",
       });
       expect(res.status).toBe(400);
@@ -82,7 +97,7 @@ describe("server management routes", () => {
     });
 
     test("returns 404 for non-existent connector", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/nonexistent-xyz-abc/install`,
         { method: "POST" }
       );
@@ -92,7 +107,7 @@ describe("server management routes", () => {
     });
 
     test("installs a valid connector and returns success", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/anthropic/install`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors/anthropic/install`, {
         method: "POST",
       });
       expect(res.status).toBe(200);
@@ -103,14 +118,14 @@ describe("server management routes", () => {
 
     test("after install, GET /api/connectors shows installed=true", async () => {
       // Install first
-      const installRes = await fetch(
+      const installRes = await authedFetch(
         `${baseUrl}/api/connectors/anthropic/install`,
         { method: "POST" }
       );
       expect(installRes.status).toBe(200);
 
       // Verify installed=true in the list
-      const listRes = await fetch(`${baseUrl}/api/connectors`);
+      const listRes = await authedFetch(`${baseUrl}/api/connectors`);
       const data = (await listRes.json()) as Array<{
         name: string;
         installed: boolean;
@@ -129,7 +144,7 @@ describe("server management routes", () => {
     });
 
     test("returns 400 for invalid connector name", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/INVALID/uninstall`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors/INVALID/uninstall`, {
         method: "POST",
       });
       expect(res.status).toBe(400);
@@ -138,7 +153,7 @@ describe("server management routes", () => {
     });
 
     test("returns 404 when connector is not installed", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/anthropic/uninstall`,
         { method: "POST" }
       );
@@ -149,14 +164,14 @@ describe("server management routes", () => {
 
     test("uninstalls a previously installed connector", async () => {
       // Install first
-      const installRes = await fetch(
+      const installRes = await authedFetch(
         `${baseUrl}/api/connectors/anthropic/install`,
         { method: "POST" }
       );
       expect(installRes.status).toBe(200);
 
       // Uninstall
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/anthropic/uninstall`,
         { method: "POST" }
       );
@@ -175,7 +190,7 @@ describe("server management routes", () => {
     });
 
     test("returns successfully with count field", async () => {
-      const res = await fetch(`${baseUrl}/api/update`, { method: "POST" });
+      const res = await authedFetch(`${baseUrl}/api/update`, { method: "POST" });
       expect(res.status).toBe(200);
       const data = (await res.json()) as { count: number };
       expect(typeof data.count).toBe("number");
@@ -184,14 +199,14 @@ describe("server management routes", () => {
 
     test("after installing a connector, update returns results", async () => {
       // Install first
-      const installRes = await fetch(
+      const installRes = await authedFetch(
         `${baseUrl}/api/connectors/anthropic/install`,
         { method: "POST" }
       );
       expect(installRes.status).toBe(200);
 
       // Update
-      const res = await fetch(`${baseUrl}/api/update`, { method: "POST" });
+      const res = await authedFetch(`${baseUrl}/api/update`, { method: "POST" });
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
         results: Array<{ success: boolean }>;
@@ -206,7 +221,7 @@ describe("server management routes", () => {
 
   describe("GET /api/connectors/:name/operations", () => {
     test("returns internal command surface for github", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/github/operations`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/github/operations`);
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
         connector: string;
@@ -228,7 +243,7 @@ describe("server management routes", () => {
     });
 
     test("returns internal command surface for stripe", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/stripe/operations`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/stripe/operations`);
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
         connector: string;
@@ -250,7 +265,7 @@ describe("server management routes", () => {
     });
 
     test("returns clean typed command descriptors for skill connectors", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/googlegemini/operations`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/googlegemini/operations`);
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
         connector: string;
@@ -283,7 +298,7 @@ describe("server management routes", () => {
 
   describe("GET /api/connectors/:name/operations/:command", () => {
     test("returns help text for github user command", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/github/operations/user`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/github/operations/user`);
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
         connector: string;
@@ -296,7 +311,7 @@ describe("server management routes", () => {
     });
 
     test("returns help text for stripe products command", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/stripe/operations/products`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/stripe/operations/products`);
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
         connector: string;
@@ -311,7 +326,7 @@ describe("server management routes", () => {
 
   describe("GET /api/connectors/manifest", () => {
     test("returns scoped capability manifest", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/manifest?connectors=github&includeOperations=true`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/manifest?connectors=github&includeOperations=true`);
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
         packageName: string;
@@ -328,7 +343,7 @@ describe("server management routes", () => {
 
   describe("POST /api/connectors/:name/operations/run", () => {
     test("runs an internal github command", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/github/operations/run`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors/github/operations/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ args: ["config", "show"], format: "json" }),
@@ -345,7 +360,7 @@ describe("server management routes", () => {
     });
 
     test("runs an internal stripe command", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/stripe/operations/run`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors/stripe/operations/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ args: ["config", "show"], format: "json" }),
@@ -362,7 +377,7 @@ describe("server management routes", () => {
     });
 
     test("runs a legacy CLI-backed connector command", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/anthropic/operations/run`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors/anthropic/operations/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ args: ["models"], format: "json" }),
@@ -379,7 +394,7 @@ describe("server management routes", () => {
     });
 
     test("runs a structured connector operation", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/github/operations/run`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors/github/operations/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -411,7 +426,7 @@ describe("server management routes", () => {
     });
 
     test("returns an array", async () => {
-      const res = await fetch(`${baseUrl}/api/activity`);
+      const res = await authedFetch(`${baseUrl}/api/activity`);
       expect(res.status).toBe(200);
       const data = (await res.json()) as unknown[];
       expect(Array.isArray(data)).toBe(true);
@@ -419,13 +434,13 @@ describe("server management routes", () => {
 
     test("after saving a key, activity log contains the entry", async () => {
       // Save a key to trigger an activity log entry
-      await fetch(`${baseUrl}/api/connectors/${testName}/key`, {
+      await authedFetch(`${baseUrl}/api/connectors/${testName}/key`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: "activity-test-key" }),
       });
 
-      const res = await fetch(`${baseUrl}/api/activity`);
+      const res = await authedFetch(`${baseUrl}/api/activity`);
       expect(res.status).toBe(200);
       const data = (await res.json()) as Array<{
         action: string;
@@ -444,7 +459,7 @@ describe("server management routes", () => {
 
   describe("GET /api/connectors/:name/profiles", () => {
     test("returns default profile for unconfigured connector", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/anthropic/profiles`
       );
       expect(res.status).toBe(200);
@@ -458,7 +473,7 @@ describe("server management routes", () => {
     });
 
     test("returns 400 for invalid name", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/INVALID/profiles`
       );
       expect(res.status).toBe(400);
@@ -477,7 +492,7 @@ describe("server management routes", () => {
     });
 
     test("switches profile and returns success", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/${testName}/profiles/switch`,
         {
           method: "POST",
@@ -503,7 +518,7 @@ describe("server management routes", () => {
     });
 
     test("returns 400 for missing profile in body", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/${testName}/profiles/switch`,
         {
           method: "POST",
@@ -517,7 +532,7 @@ describe("server management routes", () => {
     });
 
     test("returns 400 for invalid name", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/INVALID/profiles/switch`,
         {
           method: "POST",
@@ -541,7 +556,7 @@ describe("server management routes", () => {
     });
 
     test("returns 400 for default profile", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/${testName}/profiles/default`,
         { method: "DELETE" }
       );
@@ -551,7 +566,7 @@ describe("server management routes", () => {
     });
 
     test("returns 400 for invalid connector name", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/INVALID/profiles/staging`,
         { method: "DELETE" }
       );
@@ -561,7 +576,7 @@ describe("server management routes", () => {
     });
 
     test("returns 404 for non-existent profile", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/${testName}/profiles/nonexistent`,
         { method: "DELETE" }
       );
@@ -575,7 +590,7 @@ describe("server management routes", () => {
 
   describe("GET /api/export", () => {
     test("returns JSON with connectors and exportedAt fields", async () => {
-      const res = await fetch(`${baseUrl}/api/export`);
+      const res = await authedFetch(`${baseUrl}/api/export`);
       expect(res.status).toBe(200);
       const data = (await res.json()) as {
         connectors: Record<string, unknown>;
@@ -588,7 +603,7 @@ describe("server management routes", () => {
     });
 
     test("has Content-Disposition header", async () => {
-      const res = await fetch(`${baseUrl}/api/export`);
+      const res = await authedFetch(`${baseUrl}/api/export`);
       expect(res.status).toBe(200);
       const disposition = res.headers.get("Content-Disposition");
       expect(disposition).toBeDefined();
@@ -607,7 +622,7 @@ describe("server management routes", () => {
     });
 
     test("returns 400 for invalid format (missing connectors)", async () => {
-      const res = await fetch(`${baseUrl}/api/import`, {
+      const res = await authedFetch(`${baseUrl}/api/import`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ data: "invalid" }),
@@ -628,7 +643,7 @@ describe("server management routes", () => {
         },
       };
 
-      const res = await fetch(`${baseUrl}/api/import`, {
+      const res = await authedFetch(`${baseUrl}/api/import`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(importData),
