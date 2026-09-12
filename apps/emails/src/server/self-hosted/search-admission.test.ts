@@ -12,7 +12,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function fixture() {
+function fixture(cancelSearch = false) {
   const gate = deferred<never[]>();
   const started = deferred<void>();
   let searchCalls = 0;
@@ -21,11 +21,12 @@ function fixture() {
     async many<T>(sql: string): Promise<T[]> {
       if (sql.includes("lower(concat_ws(")) {
         searchCalls++;
+        if (cancelSearch) throw { code: "57014" };
         if (searchCalls === 1) { started.resolve(); return gate.promise; }
       }
       return [];
     },
-    async get<T>(sql: string): Promise<T | null> { return sql.includes("SELECT 1") ? { ok: 1 } as T : null; },
+    async get<T>(sql: string): Promise<T | null> { return sql.includes("FROM mailbox_filters") ? { id: "filter-fixture", name: "fixture", normalized_name: "fixture", mailbox: "inbox", criteria: { search: "beta" } } as T : sql.includes("SELECT 1") ? { ok: 1 } as T : null; },
     async one<T>(): Promise<T> { return {} as T; },
     async execute() {},
   };
@@ -39,6 +40,7 @@ function fixture() {
   };
   const token = mintApiKey({ app: "emails", scopes: ["emails:read"], signingSecret: SIGNING_SECRET }).token;
   const request = (path: string, authenticated = true) => handleSelfHostedRequest(deps, new Request(`http://test${path}`, {
+    method: path.includes("/apply") ? "POST" : "GET",
     headers: authenticated ? { "x-api-key": token } : {},
   }));
   return { store, gate, started, request, calls: () => searchCalls };
@@ -75,8 +77,26 @@ describe("message search admission through real store and handler", () => {
         }
         expect((await f.request(`${path}?q=beta`, false))!.status).toBe(401);
       }
+      for (const prefix of ["/v1", "/api/v1"]) {
+        const response = (await f.request(`${prefix}/mailbox-filters/fixture/apply`))!;
+        expect(response.status).toBe(429);
+        expect(await response.json()).toEqual({ error: "Message search is busy; retry later.", code: "search_busy", retry_after: 5 });
+      }
       expect((await f.request("/health", false))!.status).toBe(200);
       expect(f.calls()).toBe(1);
     } finally { f.gate.resolve([]); expect((await first)!.status).toBe(200); }
   });
+});
+
+test("database search cancellation reaches both HTTP operations and aliases as an explicit 504", async () => {
+  const f = fixture(true);
+  for (const prefix of ["/v1", "/api/v1"]) {
+    for (const suffix of ["/messages?search=alpha", "/mailbox-filters/fixture/apply"]) {
+      const response = (await f.request(prefix + suffix))!;
+      expect(response.status).toBe(504);
+      expect(response.headers.get("Retry-After")).toBe("5");
+      expect(await response.json()).toEqual({ error: "Message search exceeded its time limit.", code: "search_timeout", retry_after: 5 });
+    }
+  }
+  expect((await f.request("/v1/messages?limit=1"))!.status).toBe(200);
 });

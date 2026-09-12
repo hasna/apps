@@ -50,6 +50,7 @@ export function messageSearchErrorResponse(error: unknown): Response | null {
   return new Response(JSON.stringify({
     error: error.message,
     code: busy ? "search_busy" : "search_timeout",
+    retry_after: 5,
   }), {
     status: busy ? 429 : 504,
     headers: { "Content-Type": "application/json", "Retry-After": "5", "Cache-Control": "no-store" },
