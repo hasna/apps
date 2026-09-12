@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.12
+
+### Patch Changes
+
+- Declare HTTP 400 for invalid identifier inputs in administrative organization, user, entitlement, run, billing and audit operation contracts.
+- Reject malformed, nonpositive and overflowing remote run polling values before quoting or creating a run, instead of silently truncating them or using defaults. Bound polling milliseconds to 2147483647 so native timers cannot overflow into rapid requests.
+
 ## 0.5.11
 
 ### Patch Changes
