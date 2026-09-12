@@ -16,7 +16,15 @@
 
 import { SqliteAdapter as Database } from "../storage.js";
 import { acquireLock, releaseLock, checkLock, type ResourceLock } from "../db/locks.js";
-import { getDatabase } from "../db/database.js";
+
+// NOTE (hosted transport): nothing here resolves a store of its own. Every
+// function forwards its optional `db` UNCHANGED to src/db/locks.ts, whose
+// acquireLock / releaseLock / checkLock already branch on `!db && isApiMode()`
+// and call POST /v1/locks, DELETE /v1/locks/:id and GET /v1/locks. The previous
+// `const d = db || getDatabase()` defeated that branch: it materialised a local
+// SQLite handle before locks.ts could choose the hosted arm, so memory_lock /
+// memory_unlock / memory_check_lock were SQLite-only even under a hosted
+// credential. Passing `db` through is the whole fix.
 
 const MEMORY_WRITE_TTL = 30; // 30 seconds — short TTL for write locks
 
@@ -44,8 +52,7 @@ export function acquireMemoryWriteLock(
   ttlSeconds = MEMORY_WRITE_TTL,
   db?: Database
 ): ResourceLock | null {
-  const d = db || getDatabase();
-  return acquireLock(agentId, "memory", memoryLockId(key, scope, projectId), "exclusive", ttlSeconds, d);
+  return acquireLock(agentId, "memory", memoryLockId(key, scope, projectId), "exclusive", ttlSeconds, db);
 }
 
 /**
@@ -56,8 +63,7 @@ export function releaseMemoryWriteLock(
   agentId: string,
   db?: Database
 ): boolean {
-  const d = db || getDatabase();
-  return releaseLock(lockId, agentId, d);
+  return releaseLock(lockId, agentId, db);
 }
 
 /**
@@ -70,8 +76,7 @@ export function checkMemoryWriteLock(
   projectId?: string | null,
   db?: Database
 ): ResourceLock | null {
-  const d = db || getDatabase();
-  const locks = checkLock("memory", memoryLockId(key, scope, projectId), "exclusive", d);
+  const locks = checkLock("memory", memoryLockId(key, scope, projectId), "exclusive", db);
   return locks[0] ?? null;
 }
 
@@ -94,18 +99,17 @@ export function withMemoryLock<T>(
   ttlSeconds = MEMORY_WRITE_TTL,
   db?: Database
 ): T {
-  const d = db || getDatabase();
-  const lock = acquireMemoryWriteLock(agentId, key, scope, projectId, ttlSeconds, d);
+  const lock = acquireMemoryWriteLock(agentId, key, scope, projectId, ttlSeconds, db);
 
   if (!lock) {
-    const existing = checkMemoryWriteLock(key, scope, projectId, d);
+    const existing = checkMemoryWriteLock(key, scope, projectId, db);
     throw new MemoryLockConflictError(key, scope, existing?.agent_id ?? "unknown");
   }
 
   try {
     return fn();
   } finally {
-    releaseLock(lock.id, agentId, d);
+    releaseLock(lock.id, agentId, db);
   }
 }
 

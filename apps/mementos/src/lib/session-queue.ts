@@ -7,6 +7,8 @@
 import { getDatabase } from "../db/database.js";
 import { getNextPendingJob, recoverStaleProcessingJobs } from "../db/session-jobs.js";
 import { processSessionJob } from "./session-processor.js";
+import { isApiMode, apiJson } from "../db/api-mode.js";
+import { isServerContext } from "../storage.js";
 
 // ============================================================================
 // Types
@@ -37,6 +39,11 @@ let _workerStarted = false;
  * The background worker will pick it up within the next polling interval.
  */
 export function enqueueSessionJob(jobId: string): void {
+  // Hosted transport: the queue lives on the server. POST /v1/sessions/ingest
+  // already enqueued this job there, and a client has no store to poll — the
+  // in-process worker below would only try to open local SQLite. Do nothing
+  // rather than start a doomed local drain.
+  if (!isServerContext() && isApiMode()) return;
   _pendingQueue.add(jobId);
   // If worker is not running, kick off immediate processing
   if (!_isProcessing) {
@@ -50,6 +57,15 @@ export function enqueueSessionJob(jobId: string): void {
  * this returns a lightweight in-memory snapshot.
  */
 export function getSessionQueueStats(): SessionQueueStats {
+  if (!isServerContext() && isApiMode()) {
+    const { data } = apiJson<SessionQueueStats>("GET", "/sessions/queue/stats");
+    return {
+      pending: data?.pending ?? 0,
+      processing: data?.processing ?? 0,
+      completed: data?.completed ?? 0,
+      failed: data?.failed ?? 0,
+    };
+  }
   try {
     const db = getDatabase();
     const rows = db
@@ -86,6 +102,10 @@ export function getSessionQueueStats(): SessionQueueStats {
  */
 export function startSessionQueueWorker(): void {
   if (_workerStarted) return;
+  // The worker drains jobs straight out of the store; only the server process
+  // holds one. A client under a hosted credential must never start it (the
+  // poll would hit the fail-closed getDatabase() guard every 5 seconds).
+  if (!isServerContext() && isApiMode()) return;
   _workerStarted = true;
 
   // Poll for pending jobs every 5 seconds

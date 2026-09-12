@@ -81,6 +81,33 @@ export function createSessionJob(
   input: CreateSessionJobInput,
   db?: Database
 ): SessionMemoryJob {
+  if (!db && isApiMode()) {
+    // POST /v1/sessions/ingest is the hosted create: it writes the job AND
+    // enqueues it on the server-side worker (the only place the extraction
+    // pipeline can run against the cloud store). It answers with the job id,
+    // so read the row back to keep this function's SessionMemoryJob contract.
+    const { data } = apiJson<{ job_id: string }>("POST", "/sessions/ingest", {
+      session_id: input.session_id,
+      transcript: input.transcript,
+      source: input.source ?? "manual",
+      agent_id: input.agent_id,
+      project_id: input.project_id,
+      metadata: input.metadata ?? {},
+    });
+    const jobId = data?.job_id;
+    if (!jobId) {
+      throw new Error(
+        "mementos cloud POST /sessions/ingest returned no job_id — the session was not queued",
+      );
+    }
+    const job = getSessionJob(jobId);
+    if (!job) {
+      throw new Error(
+        `mementos cloud accepted session job ${jobId} but GET /sessions/jobs/${jobId} did not return it`,
+      );
+    }
+    return job;
+  }
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
