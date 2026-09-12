@@ -6,6 +6,7 @@ import {
   resolveVisibleMachineId,
   visibleToMachineFilter,
   isMemoryVisibleToMachine,
+  MachineIdentityUnresolvedError,
 } from "./machine-visibility.js";
 
 function freshDb(): Database {
@@ -59,10 +60,39 @@ describe("resolveVisibleMachineId", () => {
     db.close();
   });
 
-  it("handles db failure gracefully", () => {
-    // Without machines table, getCurrentMachineId will throw
+  // FAIL CLOSED (P0, 2026-09-11). This test previously asserted
+  // `resolveVisibleMachineId(undefined, brokenDb) === null`, i.e. the failure
+  // was swallowed into a value indistinguishable from an explicit null — and
+  // the two transports read that null in OPPOSITE ways (local: machine_id IS
+  // NULL, hiding everything scoped; hosted: the param is dropped, so no filter
+  // is applied and other machines' memories come back). Refusing is the only
+  // answer that is safe on both.
+  it("REFUSES when this machine's identity cannot be resolved", () => {
+    // Without the machines table, getCurrentMachineId throws.
     const db = new Database(":memory:", { create: true });
-    expect(resolveVisibleMachineId(undefined, db)).toBe(null);
+    expect(() => resolveVisibleMachineId(undefined, db)).toThrow(MachineIdentityUnresolvedError);
+    expect(() => resolveVisibleMachineId(undefined, db)).toThrow(/could not resolve this machine's identity/);
+    db.close();
+  });
+
+  it("an EXPLICIT null is still honoured — the deliberate unscoped view keeps working", () => {
+    const db = new Database(":memory:", { create: true });
+    // Same broken store: the explicit argument never consults the machine table.
+    expect(resolveVisibleMachineId(null, db)).toBe(null);
+    expect(resolveVisibleMachineId("explicit-id", db)).toBe("explicit-id");
+    db.close();
+  });
+
+  it("the refusal carries the cause so an operator can see WHY", () => {
+    const db = new Database(":memory:", { create: true });
+    try {
+      resolveVisibleMachineId(undefined, db);
+      throw new Error("expected a refusal");
+    } catch (e) {
+      expect(e).toBeInstanceOf(MachineIdentityUnresolvedError);
+      expect((e as MachineIdentityUnresolvedError).code).toBe("MEMENTOS_MACHINE_IDENTITY_UNRESOLVED");
+      expect((e as MachineIdentityUnresolvedError).cause).toBeDefined();
+    }
     db.close();
   });
 });
@@ -90,6 +120,14 @@ describe("visibleToMachineFilter", () => {
     const db = freshDb();
     const filter = visibleToMachineFilter(undefined, db);
     expect(typeof filter.visible_to_machine_id).toBe("string");
+    db.close();
+  });
+
+  it("REFUSES rather than emitting a filter it cannot justify", () => {
+    // The filter is where the damage happened: a null here silently becomes
+    // "no machine filter" on the hosted transport.
+    const db = new Database(":memory:", { create: true });
+    expect(() => visibleToMachineFilter(undefined, db)).toThrow(MachineIdentityUnresolvedError);
     db.close();
   });
 });
@@ -121,6 +159,8 @@ describe("isMemoryVisibleToMachine", () => {
     db.close();
   });
 
+  // The predicate stays TOTAL: for a machine-scoped memory, "not visible" is
+  // already the closed answer, so it absorbs the refusal rather than throwing.
   it("returns false when db can't resolve machineId", () => {
     const db = new Database(":memory:", { create: true });
     const memory = { machine_id: "some-machine" } as { machine_id: string | null };
