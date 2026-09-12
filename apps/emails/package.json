@@ -1,6 +1,6 @@
 {
   "name": "@hasna/emails",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "Email management through a shared API: CLI, terminal UI, MCP server, and library",
   "keywords": [
     "email",
@@ -73,7 +73,7 @@
     "secrets:staged": "node scripts/scan-staged-secrets.mjs",
     "pack:identity": "bun test src/self-hosted-container.test.ts --test-name-pattern \"packed manifest identities\"",
     "prepack": "bun run build && bun run no-cloud:source && bun run no-cloud:pack && bun run pack:identity",
-    "prepublishOnly": "bun scripts/prepublish-local-test.mjs && bun run build && bun run no-cloud:pack && bun run pack:identity && bun run contracts:conformance && contracts no-cloud-scan .",
+    "prepublishOnly": "bun run build && bun scripts/prepublish-local-test.mjs && bun run no-cloud:pack && bun run pack:identity && bun run contracts:conformance && contracts no-cloud-scan .",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts"
