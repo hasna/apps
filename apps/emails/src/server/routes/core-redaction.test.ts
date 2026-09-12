@@ -94,5 +94,7 @@ describe("core REST redaction", () => {
     expect(providers).toHaveLength(50);
     expect(providers.every((provider) => !("access_key" in provider) && !("secret_key" in provider))).toBe(true);
     expect(JSON.stringify(providers)).not.toContain("REST_DEFAULT_SECRET");
-  });
+    // Creating 51 real provider fixtures can exceed Bun's default five-second
+    // test budget on a busy release host; keep every pagination/redaction check.
+  }, 15_000);
 });
