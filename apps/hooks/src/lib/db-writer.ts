@@ -1,11 +1,49 @@
 /**
  * Shared hook DB writer — single write path for all observability hooks.
  * Never throws: errors are written to stderr only.
+ *
+ * GATED (hasna/apps#1720 fail-closed ruling, W6 2026-09-11). This used to be
+ * the one ungated path to ~/.hasna/hooks/hooks.db: every `hooks run`, every
+ * MCP run tool and four bundled hook runtimes called it, and it created the
+ * store on first write with no credential decision at all — a silent local
+ * default. It now writes ONLY when the environment selects the on-box store
+ * through the explicit opt-in (HASNA_HOOKS_LOCAL=1 / HOOKS_LOCAL=1, answered
+ * from the env dictionary alone — no Keychain or disk read on the per-event
+ * hot path). On the hosted route (a process-wide refusal installed by the CLI
+ * gate / MCP startup, or any authority variable set in the env) and in an
+ * unconfigured environment it prints ONE stderr line naming the opt-in and
+ * writes nothing: the hosted registry has no event route to port to.
  */
 
-import { getDb } from "../db";
+import { getDb, isLocalStoreRefused, localStoreRefusalMessage } from "../db/index.js";
 import type { HookEventRow } from "../db/schema";
+import { hooksEventSinkRefusal, selectsHooksLocalStore } from "./local-opt-in.js";
+import type { HooksLocalOptInEnv } from "./resolver-types.js";
 import { redactEventPayload } from "./redact.js";
+
+/** Where a hook event may land: the on-box store, or nowhere (with the reason). */
+export type HookEventSink = { kind: "local" } | { kind: "refused"; reason: string };
+
+/**
+ * Decide the event sink from the env dictionary and the process-wide store
+ * refusal ONLY — never the resolver, so agents' per-event `hooks run` and the
+ * bundled hook children never pay a `security` spawn here (the CLI gate
+ * already decided the route for the parent process).
+ */
+export function resolveHookEventSink(env: HooksLocalOptInEnv = process.env): HookEventSink {
+  if (isLocalStoreRefused()) return { kind: "refused", reason: localStoreRefusalMessage() ?? hooksEventSinkRefusal() };
+  if (selectsHooksLocalStore(env)) return { kind: "local" };
+  // Hosted intent in the env, or nothing configured at all: either way there
+  // is no local store to write and no hosted route to write to.
+  return { kind: "refused", reason: hooksEventSinkRefusal() };
+}
+
+let sinkRefusalPrinted = false;
+
+/** Reset the once-per-process sink refusal notice. Test seam only. */
+export function __resetHookEventSinkNotice(): void {
+  sinkRefusalPrinted = false;
+}
 
 export type HookEventInput = Omit<HookEventRow, "id" | "timestamp"> & {
   timestamp?: string;
@@ -16,6 +54,16 @@ function nanoid(): string {
 }
 
 export function writeHookEvent(event: HookEventInput): void {
+  const sink = resolveHookEventSink();
+  if (sink.kind !== "local") {
+    // Loud, once, and NOTHING opened: a refused write must never create
+    // hooks.db as a side effect of being refused.
+    if (!sinkRefusalPrinted) {
+      sinkRefusalPrinted = true;
+      process.stderr.write(`[hooks db-writer] ${sink.reason}\n`);
+    }
+    return;
+  }
   try {
     const db = getDb();
     const id = nanoid();

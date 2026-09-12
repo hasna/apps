@@ -60,7 +60,10 @@ export async function prepareChatGPTLaunch(native:PreparedLaunch,app:ChatGPTInst
     await writePrivate(authPath,authText);
     const wrapper=join(stateDir,"chatgpt-codex");
     const overrides=settings.flatMap(setting=>["-c",setting]);
-    await writeFile(wrapper,`#!/bin/sh\nset -eu\nunset OPENAI_API_KEY CODEX_API_KEY CODEX_ACCESS_TOKEN OPENAI_BASE_URL OPENAI_ORG_ID OPENAI_ORGANIZATION OPENAI_PROJECT_ID\nexport CODEX_HOME=${quote(home)}\nexec ${quote(app.codexExecutable)} "$@" ${overrides.map(quote).join(" ")}\n`,{mode:0o700,flag:"wx"});
+    // The app also uses CODEX_CLI_PATH for `sandbox ... -- node kernel.js`.
+    // Appending model options there passes them to the kernel, not Codex, and
+    // breaks browser/computer tools. Preserve the helper's own sandbox policy.
+    await writeFile(wrapper,`#!/bin/sh\nset -eu\nunset OPENAI_API_KEY CODEX_API_KEY CODEX_ACCESS_TOKEN OPENAI_BASE_URL OPENAI_ORG_ID OPENAI_ORGANIZATION OPENAI_PROJECT_ID\nexport CODEX_HOME=${quote(home)}\nif [ "\${1-}" = sandbox ]; then\n  exec ${quote(app.codexExecutable)} "$@"\nfi\nexec ${quote(app.codexExecutable)} "$@" ${overrides.map(quote).join(" ")}\n`,{mode:0o700,flag:"wx"});
     return {...native,executable:app.executable,args:[`--user-data-dir=${userData}`],
       env:{...native.env,CODEX_HOME:home,CODEX_ELECTRON_USER_DATA_PATH:userData,CODEX_CLI_PATH:wrapper,CODEX_APP_SERVER_FORCE_CLI:"1",CODEX_APP_SERVER_USE_LOCAL_DAEMON:"0"},
       configPaths:[...native.configPaths,configPath,wrapper],

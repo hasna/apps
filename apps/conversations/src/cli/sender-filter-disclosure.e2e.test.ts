@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { hermeticHomeEnv } from "../test/hermetic.js";
 
 /**
  * End-to-end cover for todos 807d355d (`search`) and e60b8820 (`read`) — the
@@ -48,6 +49,7 @@ function runCli(args: string[], agent: string) {
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
     env: {
+      ...hermeticHomeEnv(),
       ...fixture.env,
       CONVERSATIONS_AGENT_ID: agent,
       FORCE_COLOR: "0",

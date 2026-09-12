@@ -2,9 +2,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { clientFromEnv } from "./sdk";
-import { VERSION, providerInputSchema, profileInputSchema, modelSchema } from "./domain";
+import type { SwitcherClient } from "./sdk";
+import { openCliRuntime } from "./runtime";
+import { Fault, VERSION, providerInputSchema, profileInputSchema, modelSchema } from "./domain";
 const server = new McpServer({name:"switcher",version:VERSION});
+let runtime: Awaited<ReturnType<typeof openCliRuntime>> | undefined;
+/** The authority is decided once, before the stdio transport exists; the client rereads its credential per request. */
+const clientFromEnv = (): SwitcherClient => { if (!runtime) throw new Fault(503,"unavailable","Switcher API runtime is not open."); return runtime.client; };
 const page = {limit:z.number().int().min(1).max(1000).optional(),offset:z.number().int().nonnegative().optional(),search:z.string().optional()};
 function tool(name:string,description:string,schema:z.ZodRawShape,run:(input:any)=>Promise<unknown>) {
   server.tool(name,description,schema,async input=>{
@@ -31,5 +35,15 @@ tool("launch_plan","Validate a local launch plan; does not execute a remote proc
 tool("runs_list","List launch metadata.",page,p=>clientFromEnv().listRuns(p));
 tool("runs_get","Get launch metadata.",{id:z.string()},p=>clientFromEnv().getRun(p.id));
 if(process.argv.includes("--version")) console.log(VERSION);
-else if(process.argv.includes("--help")) console.log("switcher-mcp: authenticated Switcher API tools over MCP stdio. Resolves API URL/key through @hasna/contracts (Keychain, canonical config/credentials, or environment).");
-else await server.connect(new StdioServerTransport());
+else if(process.argv.includes("--help")) console.log("switcher-mcp: authenticated Switcher API tools over MCP stdio. Resolves API URL/key through @hasna/contracts (Keychain, canonical config/credentials, or environment). With nothing configured it exits 1 before answering initialize and names those sources; HASNA_SWITCHER_LOCAL=1 deliberately serves the on-box store instead.");
+else {
+  // Fail closed BEFORE the stdio transport exists: with no credential and no
+  // opt-in this exits 1 without answering `initialize` and creates no store.
+  try { runtime = await openCliRuntime(process.env); }
+  catch (error) {
+    const code = error instanceof Fault ? error.code : "remote_api_config_error";
+    console.error(`${code.toUpperCase()}: ${error instanceof Error ? error.message : "Switcher API configuration could not be resolved."}`);
+    process.exit(1);
+  }
+  await server.connect(new StdioServerTransport());
+}

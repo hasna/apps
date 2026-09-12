@@ -1,4 +1,5 @@
 import type { HarnessLaunchInput } from "./harness-types";
+import type { ProviderRequest } from "./provider-request";
 
 /** Recognize whole SSE terminal events, never marker text inside a delta. */
 export function terminalEventObserver(protocol: HarnessLaunchInput["protocol"], contentType: string | null) {
@@ -41,8 +42,9 @@ export function proxyProviderStream(input: {
   abort: AbortController;
   closing: () => boolean;
   release: () => void;
+  activity?: ProviderRequest;
   inspect?: (chunk: Uint8Array, done?: boolean) => void;
-  interrupted?: () => void;
+  interrupted?: (reason: "stream_interrupted" | "provider_idle_timeout") => void;
 }) {
   const reader = input.response.body!.getReader();
   const terminal = terminalEventObserver(input.protocol, input.response.headers.get("content-type"));
@@ -50,18 +52,20 @@ export function proxyProviderStream(input: {
   const end = (error?: Error) => {
     if (ended) return;
     ended = true;
+    input.activity?.finish();
     try { if (error) output.error(error); else output.close(); } catch { /* The client may have already cancelled. */ }
     input.release();
   };
   const cancelReader = async () => {
     input.abort.abort();
-    try { await reader.cancel(); } catch { /* Already closed or aborted. */ }
+    // A stalled provider cancellation must not hold local timeout/cleanup open.
+    void reader.cancel().catch(() => undefined);
   };
   const stream = new ReadableStream<Uint8Array>({
     start(controller) { output = controller; },
     async pull(controller) {
       try {
-        const chunk = await reader.read();
+        const chunk = await (input.activity ? input.activity.run(() => reader.read()) : reader.read());
         if (ended) return;
         if (chunk.done) { input.inspect?.(new Uint8Array(), true); end(); return; }
         input.inspect?.(chunk.value);
@@ -75,12 +79,16 @@ export function proxyProviderStream(input: {
         }
       } catch {
         if (ended) return;
-        if (input.requestSignal.aborted || input.abort.signal.aborted || input.closing()) end();
-        else { input.interrupted?.(); end(new Error("Provider stream ended unexpectedly")); }
+        if (input.activity?.timedOut()) {
+          input.interrupted?.("provider_idle_timeout");
+          end(new Error("Provider stream timed out waiting for activity"));
+        } else if (input.requestSignal.aborted || input.abort.signal.aborted || input.closing()) end();
+        else { input.interrupted?.("stream_interrupted"); end(new Error("Provider stream ended unexpectedly")); }
+        await cancelReader();
       }
     },
     async cancel() {
-      if (!ended) { ended = true; input.release(); }
+      if (!ended) { ended = true; input.activity?.finish(); input.release(); }
       await cancelReader();
     },
   });

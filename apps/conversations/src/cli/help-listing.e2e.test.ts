@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { hermeticHomeEnv } from "../test/hermetic.js";
 
 // Regression for todos afda2dcf: the top-level `conversations --help`
 // command listing derives each subcommand row's argument list from the
@@ -22,6 +23,7 @@ function runCli(args: string[]) {
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
     env: {
+      ...hermeticHomeEnv(),
       ...process.env,
       CONVERSATIONS_AGENT_ID: "alice",
       FORCE_COLOR: "0",

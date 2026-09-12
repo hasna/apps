@@ -1,7 +1,6 @@
 import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
-import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { windowItems } from "../../lib/compact-output.js";
 import { getCliWindow, printCompactFooter } from "../compact.js";
@@ -83,7 +82,6 @@ export function registerLockCommands(program: Command): void {
         printLine(chalk.yellow(`Lock held by ${result.held_by}: ${resourceType}/${resourceId}`));
       }
 
-      closeDb();
       if (!result.acquired) process.exit(2);
     });
 
@@ -112,7 +110,6 @@ export function registerLockCommands(program: Command): void {
       } else {
         printLine(chalk.dim(`No lock on ${resourceType}/${resourceId} was held by ${agent}.`));
       }
-      closeDb();
     });
 
   locks
@@ -135,7 +132,6 @@ export function registerLockCommands(program: Command): void {
         printLine(chalk.green(`Not locked: ${resourceType}/${resourceId}`));
       }
 
-      closeDb();
       if (lock) process.exit(2);
     });
 
@@ -182,7 +178,6 @@ export function registerLockCommands(program: Command): void {
           sort: LOCKS_LIST_ORDER,
         });
       }
-      closeDb();
     });
 
   locks
@@ -199,6 +194,5 @@ export function registerLockCommands(program: Command): void {
       } else {
         printLine(chalk.green(`Cleaned ${total} lock(s)`) + chalk.dim(` (${released_expired} expired, ${released_stale_agent} stale-agent)`));
       }
-      closeDb();
     });
 }

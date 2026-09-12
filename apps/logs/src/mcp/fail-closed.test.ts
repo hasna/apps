@@ -17,8 +17,9 @@
  *       opened lazily on the first agent tool call, under `$HASNA_HOME/logs`
  *       when HASNA_HOME replaces `~/.hasna`.
  */
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { connect as tcpConnect, createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -179,6 +180,211 @@ describe("logs-mcp fails closed without a fleet credential", () => {
     expect(result.stderr.split("\n")[0] ?? "").toMatch(/hasna\.credentials\.logs\.api-key/);
     expect(result.stderr).not.toMatch(/listening|http:\/\/127\.0\.0\.1/i);
     expect(allDbFiles(r)).toEqual([]);
+  });
+});
+
+// ── Streamable HTTP never binds ungated (hasna/apps#1720 validation, round 3) ──
+//
+// 0.5.0 shipped an HTTP mode that BOUND 127.0.0.1:<port> with no credential
+// ("[logs-mcp] Streamable HTTP listening"), stayed alive, and refused every
+// session per request (-32603). Acceptance (c) is "non-zero exit BEFORE
+// binding in every mode", so these tests look at the socket, not at stderr
+// text: a port the test reserved is probed continuously while the child runs
+// and must be refused on every probe; an `initialize` POST must never get an
+// HTTP answer of any kind.
+
+/** Bind an ephemeral port on loopback, release it, return its number. */
+function reservePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createTcpServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+/** One TCP connect attempt: "open" when something accepted, "refused" otherwise. */
+function probePort(port: number): Promise<"open" | "refused"> {
+  return new Promise((resolve) => {
+    const socket = tcpConnect({ host: "127.0.0.1", port });
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve("open");
+    });
+    socket.once("error", () => resolve("refused"));
+  });
+}
+
+interface SpawnedMcp {
+  exited: Promise<number | null>;
+  stdout: () => string;
+  stderr: () => string;
+  kill: (signal: NodeJS.Signals) => void;
+}
+
+/** Spawn logs-mcp detached from the test's stdin and collect its streams. */
+function spawnMcpAsync(args: string[], env: Record<string, string>): SpawnedMcp {
+  const child = spawn("bun", [entry, ...args], {
+    cwd: repoRoot,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk: Buffer | string) => {
+    stdout += String(chunk);
+  });
+  child.stderr.on("data", (chunk: Buffer | string) => {
+    stderr += String(chunk);
+  });
+  const exited = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
+  return {
+    exited,
+    stdout: () => stdout,
+    stderr: () => stderr,
+    kill: (signal) => child.kill(signal),
+  };
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe("logs-mcp over Streamable HTTP never binds without a fleet credential", () => {
+  test("--http --port 0: exits non-zero before binding, remedy first, no listener line, creates nothing", () => {
+    const r = tempRoots("neg-http-port0");
+    const result = spawnMcp(["--http", "--port", "0"], hermeticEnv(r));
+
+    // A real exit, not the spawn timeout reaping a process that sat listening.
+    expect(result.status).not.toBeNull();
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
+    const firstLine = result.stderr.split("\n")[0] ?? "";
+    expect(firstLine).toMatch(/hasna\.credentials\.logs\.api-key/);
+    expect(firstLine).toMatch(/config\/credentials/);
+    expect(firstLine).toMatch(/HASNA_LOGS_API_KEY/);
+    expect(firstLine).toMatch(/HASNA_LOGS_LOCAL/);
+    expect(result.stderr).not.toMatch(/listening|http:\/\/127\.0\.0\.1/i);
+    expect(result.stderr).not.toMatch(/\n\s+at /);
+    expect(allDbFiles(r)).toEqual([]);
+    expect(existsSync(r.dataDir)).toBe(false);
+    expect(existsSync(join(r.hasnaHome, "logs"))).toBe(false);
+    expect(existsSync(join(r.home, ".hasna"))).toBe(false);
+  });
+
+  test("a reserved port is refused on every probe until exit; an initialize POST never gets an HTTP answer", async () => {
+    const r = tempRoots("neg-http-socket");
+    const port = await reservePort();
+    const child = spawnMcpAsync(["--http", "--port", String(port)], hermeticEnv(r));
+    let done = false;
+    void child.exited.then(() => {
+      done = true;
+    });
+
+    const probes: Array<"open" | "refused"> = [];
+    let httpAnswered = false;
+    const deadline = Date.now() + 20_000;
+    while (!done && Date.now() < deadline) {
+      probes.push(await probePort(port));
+      try {
+        // Any HTTP response at all — 200, 406, 500 — means a listener served us.
+        const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+          },
+          body: INITIALIZE_REQUEST,
+        });
+        httpAnswered = true;
+        await res.text();
+      } catch {
+        // Connection refused: nothing is listening.
+      }
+      await sleep(25);
+    }
+    if (!done) child.kill("SIGKILL");
+    const code = await child.exited;
+
+    expect(done).toBe(true);
+    expect(code).not.toBeNull();
+    expect(code).not.toBe(0);
+    expect(probes.length).toBeGreaterThan(0);
+    expect(probes.every((outcome) => outcome === "refused")).toBe(true);
+    expect(httpAnswered).toBe(false);
+    expect(await probePort(port)).toBe("refused");
+    expect(child.stdout()).toBe("");
+    expect(child.stderr().split("\n")[0] ?? "").toMatch(/hasna\.credentials\.logs\.api-key/);
+    expect(child.stderr()).not.toMatch(/listening|http:\/\/127\.0\.0\.1/i);
+    expect(allDbFiles(r)).toEqual([]);
+  });
+
+  test("a deliberate tier that cannot be honoured refuses before the HTTP bind too", () => {
+    const r = tempRoots("neg-http-profile");
+    const result = spawnMcp(
+      ["--http", "--port", "0"],
+      hermeticEnv(r, { HASNA_PROFILE: "no-such-profile" }),
+    );
+
+    expect(result.status).not.toBeNull();
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.split("\n")[0] ?? "").toMatch(/Profile 'no-such-profile'/);
+    expect(result.stderr).not.toMatch(/listening|http:\/\/127\.0\.0\.1/i);
+    expect(allDbFiles(r)).toEqual([]);
+  });
+
+  test("--version answers before any bind and before any credential tier is consulted", () => {
+    const r = tempRoots("http-version");
+    const expected = (JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { version: string })
+      .version;
+    // The profile sentinel would refuse at the gate; metadata must come first.
+    const result = spawnMcp(
+      ["--http", "--port", "0", "--version"],
+      hermeticEnv(r, { HASNA_PROFILE: "no-such-profile" }),
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(expected);
+    expect(result.stderr).not.toMatch(/listening|http:\/\/127\.0\.0\.1/i);
+    expect(result.stderr).not.toMatch(/hasna\.credentials\.logs\.api-key|no-such-profile/);
+    expect(allDbFiles(r)).toEqual([]);
+  });
+
+  test("explicit HASNA_LOGS_LOCAL=1 still serves over HTTP: one local-mode notice, then the listener, no db before a tool call", async () => {
+    const r = tempRoots("local-http");
+    const child = spawnMcpAsync(["--http", "--port", "0"], hermeticEnv(r, { HASNA_LOGS_LOCAL: "1" }));
+    let done = false;
+    void child.exited.then(() => {
+      done = true;
+    });
+
+    const deadline = Date.now() + 20_000;
+    let listening: RegExpMatchArray | null = null;
+    while (!done && !listening && Date.now() < deadline) {
+      listening = child.stderr().match(/Streamable HTTP listening on http:\/\/127\.0\.0\.1:(\d+)\/mcp/);
+      if (!listening) await sleep(25);
+    }
+    try {
+      expect(done).toBe(false);
+      expect(listening).not.toBeNull();
+      const port = Number(listening?.[1]);
+      const stderr = child.stderr();
+      // The notice is printed once, by the preflight, before the bind.
+      const notices = stderr.match(/^logs: local mode — /gm) ?? [];
+      expect(notices).toHaveLength(1);
+      expect(stderr.indexOf("logs: local mode — ")).toBeLessThan(stderr.indexOf("Streamable HTTP listening"));
+      const res = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ status: "ok", name: "logs" });
+      // Lazy: serving opened nothing on disk.
+      expect(allDbFiles(r)).toEqual([]);
+    } finally {
+      child.kill("SIGTERM");
+      await child.exited;
+    }
+    expect(existsSync(join(r.home, ".hasna"))).toBe(false);
   });
 });
 
