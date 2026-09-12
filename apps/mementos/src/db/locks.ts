@@ -212,6 +212,14 @@ export function agentHoldsLock(
   lockType?: LockType,
   db?: Database
 ): ResourceLock | null {
+  if (!db && isApiMode()) {
+    // GET /v1/locks returns every ACTIVE lock on the resource (the server
+    // applies the same expiry predicate as the SQL below), so selecting this
+    // agent's row from that list is exactly the local answer — no extra route
+    // and no invented data.
+    const locks = checkLock(resourceType, resourceId, lockType, db);
+    return locks.find((l) => l.agent_id === agentId) ?? null;
+  }
   const d = db || getDatabase();
 
   const query = lockType
