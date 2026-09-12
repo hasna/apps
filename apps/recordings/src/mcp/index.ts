@@ -896,6 +896,7 @@ Options:
   --stdio        Serve MCP over stdio (Codex/Claude agent form)
   --hosted       Read-only SaaS Library mode; requires --stdio, --api-base <complete-v1-url>
                  and --credential-env <environment-variable-name>
+  --allow-writes Enable hosted rename/delete tools; requires --hosted
   --http         Serve MCP over the shared Streamable HTTP endpoint
   --port <port>  HTTP port to bind. Defaults to ${DEFAULT_MCP_HTTP_PORT} (or $MCP_HTTP_PORT)
   -V, --version  output the version number
@@ -909,6 +910,10 @@ Environment:
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args.some(arg => arg === "--allow-writes" || arg.startsWith("--allow-writes=")) && !args.includes("--hosted")) {
+    console.error(JSON.stringify({ error: { code: "invalid_configuration", message: "--allow-writes requires --hosted." } }));
+    process.exitCode = 1; return;
+  }
   if (args.includes("--version") || args.includes("-V")) {
     console.log(VERSION);
     return;
@@ -922,7 +927,7 @@ async function main(): Promise<void> {
     try {
       const options = parseHostedProcessOptions(args, "mcp");
       const { buildHostedServer } = await import("./hosted.js");
-      await buildHostedServer(hostedProcessClient(options)).connect(new StdioServerTransport());
+      await buildHostedServer(hostedProcessClient(options), options).connect(new StdioServerTransport());
     } catch (error) { console.error(JSON.stringify(hostedFailure(error))); process.exitCode = 1; }
     return;
   }

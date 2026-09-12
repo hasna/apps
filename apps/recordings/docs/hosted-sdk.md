@@ -73,7 +73,7 @@ tenant storage, usage admission or provider execution.
 
 ## Hosted Library across interfaces
 
-The additive `HostedLibrary` adapter provides read-only `list` and `get`
+The additive `HostedLibrary` adapter provides `list`, `get`, `rename` and `delete`
 operations through CLI, MCP, serve and SDK. `HostedPasteHistory` provides a
 read-only receipt page across the same interfaces. Library output includes only `id`, `title`,
 `createdAt` and `durationMs`; `transcript` requires an explicit option. Unknown
@@ -87,12 +87,22 @@ environment variable containing that API's existing bearer session:
 ```sh
 recordings --json hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION list --limit 25
 recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION get <recording-id> --include-text
+recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION rename <recording-id> "New title"
+recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION delete <recording-id>
 ```
 
 The named variable is read fresh per request. No token argument, implicit API
 base, local-store fallback, provider-key lookup, Keychain lookup or credential
 persistence is added. The caller supplies the existing session. Legacy commands
 and their transport configuration are unchanged.
+
+Rename trims the title and requires 1–200 characters. Its response contains
+recording metadata without transcript text. Delete is an explicit permanent
+mutation, following the existing CLI's direct `delete <id>` convention.
+It returns `{state: "pending"}` when durable deletion was accepted but audio
+cleanup is unfinished, or `{state: "removed"}` when cleanup completed.
+Neither state triggers another request. A pending result is not proof of a
+completed audio purge; the caller may explicitly repeat the deletion later.
 
 A full page returns `nextCursor: {before, beforeId}`; supply both with `--before`
 and `--before-id`. A cursor permits another request without promising another
@@ -101,26 +111,44 @@ pagination. Limits are 1–100, default 25.
 
 ```sh
 recordings-mcp --hosted --stdio --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION
+# Explicit startup opt-in for rename/delete:
+recordings-mcp --hosted --allow-writes --stdio --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION
 ```
 
 This explicit mode exposes `recordings_hosted_list`, `recordings_hosted_get` and
 `recordings_hosted_paste_history` for these reads; each accepts `includeText: true`.
 The read-only `recordings_hosted_providers` tool accepts no arguments.
+Without `--allow-writes`, the MCP server registers only those four read tools.
+When started with `--allow-writes`, `recordings_hosted_rename` accepts `{id, title}` and
+`recordings_hosted_delete` accepts `{id}`. Both are marked as destructive mutations
+because rename replaces metadata and delete removes data. Rename is not marked
+idempotent because the service can update its modification timestamp on each
+request. Delete is resumable and marked idempotent. Their results match the CLI and SDK.
 Stdio is required so the selected session cannot be shared through the legacy
 MCP HTTP listener. Legacy MCP mode is unchanged.
 
 ```sh
 recordings-serve --hosted --api-base "$MY_RECORDINGS_API_BASE" --port 8874
+# Explicit startup opt-in for recording mutations:
+recordings-serve --hosted --allow-writes --api-base "$MY_RECORDINGS_API_BASE" --port 8874
 ```
 
-The read-only proxy binds to `127.0.0.1` by default; only `127.0.0.1` and `::1`
+The proxy remains read-only by default and binds to `127.0.0.1`; only `127.0.0.1` and `::1`
 are accepted. It supports `GET /v1/recordings`, `GET /v1/recordings/<id>` and
 `GET /v1/paste-history` and `GET /v1/providers`.
 Both list routes accept `limit`, `before`, `beforeId` and `includeText=true|false`; get
-accepts only `includeText`. The providers route accepts no query parameters. Every request supplies its own
+accepts only `includeText`. The providers route accepts no query parameters.
+With `--allow-writes`, `PATCH /v1/recordings/<id>` accepts only a JSON `{title}` body and returns
+metadata. The body has an 8 KiB limit and a five-second read deadline.
+`DELETE /v1/recordings/<id>` accepts no body. It preserves the hosted service's
+`202 {audioCleanup: {state: "pending"}}` or empty `204` response. Both mutation
+routes reject query parameters and remain refused with 405 when the startup
+flag is absent. `--allow-writes` is valid only with `--hosted`; it never changes
+legacy MCP or serve mode. This startup option adds no confirmation prompt and
+does not change direct CLI or SDK mutations. Every request supplies its own
 `Authorization: Bearer <session>` header. Process credentials are never used,
 and a request cannot choose the upstream authority. Cookies, browser Origin
-headers, mutation methods and unknown query fields are refused. Responses are
+headers, other mutation routes and unknown query fields are refused. Responses are
 not cached. `/health` describes the proxy process only. Legacy serve mode and
 its database/auth configuration are unchanged.
 
@@ -135,13 +163,15 @@ const library = new HostedLibrary(new HostedRecordingsClient({
 }));
 const page = await library.list({ limit: 25 });
 const detail = await library.get(recordingId, { includeText: true });
+const renamed = await library.rename(recordingId, "New title");
+const deletion = await library.delete(recordingId); // pending or removed, never retried automatically
 ```
 
 The existing hosted transport supplies validation, prefix preservation,
 credential/origin isolation, redirect refusal, cancellation, deadlines and
 response-size bounds. SDK callers can configure those bounds. Wrapper failures
 expose fixed codes/messages without response bodies, credentials or arbitrary
-causes. This addition does not implement sign-in, refresh, writes, microphone
+causes. This addition does not implement sign-in, refresh, recording uploads, microphone
 control, audio transfer or transcription; those hosted parity gates remain
 separate.
 

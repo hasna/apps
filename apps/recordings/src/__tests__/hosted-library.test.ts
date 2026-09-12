@@ -90,7 +90,8 @@ test("actual MCP discovery and dispatch expose the read-only hosted operations",
   try {
     const { tools } = await client.listTools();
     expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"]);
-    expect(tools.every(tool => tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false)).toBe(true);
+    const reads = tools.filter(tool => !["recordings_hosted_rename", "recordings_hosted_delete"].includes(tool.name));
+    expect(reads.every(tool => tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false)).toBe(true);
     const result = await client.callTool({ name: "recordings_hosted_list", arguments: { limit: 1 } });
     expect(result.structuredContent).toEqual({ recordings: [expected], nextCursor: { before: at, beforeId: id } });
     expect(JSON.stringify(result)).not.toContain(row.transcript);
@@ -157,3 +158,264 @@ test("process configuration requires explicit authority and keeps hosted MCP std
     expect(() => parseHostedProcessOptions(args, "serve")).toThrow();
   }
 });
+
+function mutationFixture(status = 200) {
+  const calls: Array<{ url: string; method?: string; body?: BodyInit | null }> = [];
+  let credentials = 0;
+  const client = new HostedRecordingsClient({ apiBase, credentialProvider: () => { credentials++; return "fictional-session"; },
+    fetch: fakeFetch((url, init) => {
+      calls.push({ url, method: init.method, body: init.body });
+      expect(init.redirect).toBe("manual"); expect(init.credentials).toBe("omit");
+      if (status === 401) return Response.json({ privateDetail: row.transcript }, { status });
+      if (init.method === "DELETE") return status === 204 ? new Response(null, { status })
+        : Response.json({ audioCleanup: { state: "pending" } }, { status: 202 });
+      return Response.json({ recording: { ...row, title: "Renamed" } });
+    }) });
+  return { client, calls, credentialCount: () => credentials };
+}
+
+test("hosted Library mutations reuse validated SDK calls and omit transcript text", async () => {
+  const f = mutationFixture(), library = new HostedLibrary(f.client);
+  expect(await library.rename(id, " Renamed ")).toEqual({ recording: { ...expected, title: "Renamed" } });
+  expect(await library.delete(id)).toEqual({ state: "pending" });
+  expect(f.calls).toEqual([
+    { url: apiBase.slice(0, -1) + "/recordings/" + id, method: "PATCH", body: JSON.stringify({ title: "Renamed" }) },
+    { url: apiBase.slice(0, -1) + "/recordings/" + id, method: "DELETE", body: undefined },
+  ]);
+  for (const bad of ["", " ", "x".repeat(201)]) await expect(library.rename(id, bad)).rejects.toMatchObject({ code: "invalid_input" });
+  await expect(library.rename("../account", "Renamed")).rejects.toMatchObject({ code: "invalid_input" });
+  await expect(library.delete("../account")).rejects.toMatchObject({ code: "invalid_input" });
+  expect(f.calls).toHaveLength(2); expect(f.credentialCount()).toBe(2);
+  expect(await new HostedLibrary(mutationFixture(204).client).delete(id)).toEqual({ state: "removed" });
+});
+
+test("hosted CLI exposes rename and delete without implicit retries or private output", async () => {
+  const f = mutationFixture(), written: string[] = [];
+  const connection = ["--api-base", apiBase, "--credential-env", "SELECTED_SESSION"];
+  const options = { client: f.client, write: (value: string) => { written.push(value); } };
+  expect(await runHostedCLI([...connection, "rename", id, " Renamed "], options)).toBe(0);
+  expect(JSON.parse(written.pop()!)).toEqual({ recording: { ...expected, title: "Renamed" } });
+  expect(await runHostedCLI([...connection, "delete", id], options)).toBe(0);
+  expect(JSON.parse(written.pop()!)).toEqual({ state: "pending" });
+  for (const args of [["rename", id, " "], ["rename", "../account", "Renamed"], ["delete", "../account"]]) {
+    expect(await runHostedCLI([...connection, ...args], options)).toBe(1);
+    expect(JSON.parse(written.pop()!).error.code).toBe("invalid_input");
+  }
+  expect(f.calls).toHaveLength(2);
+  const denied = mutationFixture(401);
+  expect(await runHostedCLI([...connection, "delete", id], { ...options, client: denied.client })).toBe(1);
+  expect(JSON.parse(written.pop()!).error.code).toBe("unauthorized");
+  expect(denied.calls).toHaveLength(1); expect(written.join("")).not.toContain(row.transcript);
+});
+
+test("hosted MCP mutations have truthful annotations and preserve pending deletion", async () => {
+  const f = mutationFixture(), server = buildHostedServer(f.client, { allowWrites: true });
+  const client = new Client({ name: "fictional-mutation-test", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
+  try {
+    const { tools } = await client.listTools();
+    expect(tools.find(tool => tool.name === "recordings_hosted_rename")?.annotations)
+      .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false });
+    expect(tools.find(tool => tool.name === "recordings_hosted_delete")?.annotations)
+      .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+    const renamed = await client.callTool({ name: "recordings_hosted_rename", arguments: { id, title: " Renamed " } });
+    expect(renamed.structuredContent).toEqual({ recording: { ...expected, title: "Renamed" } });
+    const deleted = await client.callTool({ name: "recordings_hosted_delete", arguments: { id } });
+    expect(deleted.structuredContent).toEqual({ state: "pending" });
+    for (const [name, args] of [["recordings_hosted_rename", { id, title: " " }], ["recordings_hosted_delete", { id: "../account" }]] as const) {
+      const invalid = await client.callTool({ name, arguments: args });
+      expect(invalid.isError).toBe(true);
+    }
+    expect(f.calls).toHaveLength(2);
+  } finally { await client.close(); await server.close(); }
+});
+
+test("hosted HTTP mutations project rename metadata and preserve 202 versus 204", async () => {
+  const calls: string[] = [];
+  const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch((url, init) => {
+    calls.push(url); expect(new Headers(init.headers).get("authorization")).toBe("Bearer fictional-A");
+    expect(init.redirect).toBe("manual"); expect(init.credentials).toBe("omit");
+    if (init.method === "PATCH") {
+      expect(JSON.parse(String(init.body))).toEqual({ title: "Renamed" });
+      return Response.json({ recording: { ...row, title: "Renamed" } });
+    }
+    expect(init.method).toBe("DELETE");
+    return calls.length === 2 ? Response.json({ audioCleanup: { state: "pending" } }, { status: 202 }) : new Response(null, { status: 204 });
+  }) });
+  const request = (method: string, body?: string) => new Request("http://127.0.0.1/v1/recordings/" + id,
+    { method, headers: { authorization: "Bearer fictional-A", "content-type": "application/json" }, body });
+  const renamed = await handle(request("PATCH", JSON.stringify({ title: " Renamed " })));
+  expect(renamed.status).toBe(200); expect(await renamed.json()).toEqual({ recording: { ...expected, title: "Renamed" } });
+  const pending = await handle(request("DELETE"));
+  expect(pending.status).toBe(202); expect(await pending.json()).toEqual({ audioCleanup: { state: "pending" } });
+  const removed = await handle(request("DELETE"));
+  expect(removed.status).toBe(204); expect(await removed.text()).toBe("");
+  expect(calls).toEqual(Array(3).fill(apiBase.slice(0, -1) + "/recordings/" + id));
+});
+
+test("hosted HTTP rejects invalid mutations and never retries authorization failures", async () => {
+  let calls = 0;
+  const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch(() => { calls++; return Response.json({ privateDetail: row.transcript }, { status: 401 }); }) });
+  const base = "http://127.0.0.1/v1/recordings/" + id;
+  const headers = { authorization: "Bearer fictional-A", "content-type": "application/json" };
+  for (const [url, init] of [
+    [base, { method: "PATCH", body: JSON.stringify({ title: " " }) }],
+    [base, { method: "PATCH", body: JSON.stringify({ title: "Renamed", apiBase }) }],
+    [base, { method: "PATCH", body: "{" }],
+    [base, { method: "PATCH", body: JSON.stringify({ title: "x".repeat(9000) }) }],
+    [base + "?includeText=true", { method: "PATCH", body: JSON.stringify({ title: "Renamed" }) }],
+    [base + "?apiBase=https://foreign.example.test/v1", { method: "DELETE" }],
+    ["http://127.0.0.1/v1/recordings/not-a-uuid", { method: "DELETE" }],
+  ] as const) expect((await handle(new Request(url, { headers, ...init }))).status).toBe(400);
+  expect((await handle(new Request(base, { method: "DELETE" }))).status).toBe(401);
+  expect((await handle(new Request(base, { method: "DELETE", headers: { ...headers, origin: "https://foreign.example.test" } }))).status).toBe(403);
+  expect((await handle(new Request(base, { method: "DELETE", headers: { ...headers, cookie: "fictional=1" } }))).status).toBe(403);
+  expect((await handle(new Request(base, { method: "DELETE", headers, body: "{}" }))).status).toBe(400);
+  expect(calls).toBe(0);
+  const denied = await handle(new Request(base, { method: "DELETE", headers }));
+  expect(denied.status).toBe(401); expect(calls).toBe(1); expect(await denied.text()).not.toContain(row.transcript);
+});
+
+test("hosted HTTP bounds streamed rename bodies and cancels a stalled upload before upstream", async () => {
+  let calls = 0, cancelled = 0;
+  const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch(() => { calls++; throw Error("unexpected upstream"); }) });
+  const url = "http://127.0.0.1/v1/recordings/" + id;
+  const headers = { authorization: "Bearer fictional-A", "content-type": "application/json" };
+  const oversized = new ReadableStream<Uint8Array>({ pull(controller) { controller.enqueue(new Uint8Array(4096)); }, cancel() { cancelled++; } });
+  expect((await handle(new Request(url, { method: "PATCH", headers, body: oversized }))).status).toBe(400);
+  const controller = new AbortController();
+  const pending = handle(new Request(url, { method: "PATCH", headers, signal: controller.signal,
+    body: new ReadableStream<Uint8Array>({ cancel() { cancelled++; } }) }));
+  controller.abort();
+  const result = await pending;
+  expect((await result.json()).error.code).toBe("aborted");
+  expect(cancelled).toBe(2); expect(calls).toBe(0);
+});
+
+test("hosted mutation transport failures neither retry nor fall back to another surface", async () => {
+  let calls = 0;
+  const client = new HostedRecordingsClient({ apiBase, credentialProvider: () => "fictional-session",
+    fetch: fakeFetch(() => { calls++; throw Error("private transport diagnostic"); }) });
+  const library = new HostedLibrary(client);
+  await expect(library.rename(id, "Renamed")).rejects.toMatchObject({ code: "network_error" });
+  expect(calls).toBe(1);
+  await expect(library.delete(id)).rejects.toMatchObject({ code: "network_error" });
+  expect(calls).toBe(2);
+  const redirected = new HostedRecordingsClient({ apiBase, credentialProvider: () => "fictional-session",
+    fetch: fakeFetch(() => { calls++; return new Response(null, { status: 307, headers: { location: "https://foreign.example.test/v1" } }); }) });
+  await expect(new HostedLibrary(redirected).delete(id)).rejects.toMatchObject({ code: "redirect_refused" });
+  expect(calls).toBe(3);
+});
+
+test("hosted MCP unauthorized mutation returns one fixed failure without a retry", async () => {
+  const f = mutationFixture(401), server = buildHostedServer(f.client, { allowWrites: true });
+  const client = new Client({ name: "fictional-denied-mutation", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
+  try {
+    const result = await client.callTool({ name: "recordings_hosted_delete", arguments: { id } });
+    expect(result.isError).toBe(true); expect(result.structuredContent).toMatchObject({ error: { code: "unauthorized" } });
+    expect(JSON.stringify(result)).not.toContain(row.transcript); expect(f.calls).toHaveLength(1);
+  } finally { await client.close(); await server.close(); }
+});
+
+test("hosted HTTP simultaneous mutations use only each caller's bearer", async () => {
+  const seen: string[] = [];
+  const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch(async (url, init) => {
+    const bearer = new Headers(init.headers).get("authorization")!; seen.push(bearer);
+    expect(url).toBe(apiBase.slice(0, -1) + "/recordings/" + id); expect(init.method).toBe("DELETE");
+    await Promise.resolve();
+    return bearer === "Bearer fictional-A" ? new Response(null, { status: 204 })
+      : Response.json({ audioCleanup: { state: "pending" } }, { status: 202 });
+  }) });
+  const replies = await Promise.all(["A", "B"].map(name => handle(new Request("http://127.0.0.1/v1/recordings/" + id,
+    { method: "DELETE", headers: { authorization: "Bearer fictional-" + name } }))));
+  expect(replies.map(reply => reply.status)).toEqual([204, 202]);
+  expect(seen).toEqual(["Bearer fictional-A", "Bearer fictional-B"]);
+});
+
+test("cancelling a real MCP mutation before credentials resolve prevents upstream dispatch", async () => {
+  for (const name of ["recordings_hosted_rename", "recordings_hosted_delete"]) {
+    let entered!: () => void, release!: () => void, completed!: () => void, cancellationSeen!: () => void;
+    const credentialEntered = new Promise<void>(resolve => { entered = resolve; });
+    const credentialHeld = new Promise<void>(resolve => { release = resolve; });
+    const operationCompleted = new Promise<void>(resolve => { completed = resolve; });
+    const cancellationHandled = new Promise<void>(resolve => { cancellationSeen = resolve; });
+    let calls = 0, credentialSignal: AbortSignal | undefined;
+    const hosted = new HostedRecordingsClient({ apiBase,
+      credentialProvider: async ({ signal }) => { credentialSignal = signal; entered(); await credentialHeld; return "fictional-session"; },
+      fetch: fakeFetch((_url, init) => { calls++; return init.method === "DELETE" ? new Response(null, { status: 204 }) : Response.json({ recording: row }); }) });
+    const rename = hosted.renameRecording.bind(hosted), remove = hosted.deleteRecording.bind(hosted);
+    hosted.renameRecording = (...args) => rename(...args).finally(completed);
+    hosted.deleteRecording = (...args) => remove(...args).finally(completed);
+    const server = buildHostedServer(hosted, { allowWrites: true }), client = new Client({ name: "fictional-cancelled-mutation", version: "1" });
+    const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
+    const onMessage = b.onmessage!;
+    b.onmessage = (message, extra) => {
+      onMessage(message, extra);
+      // The SDK queues its cancellation handler first; release credentials only afterward.
+      if ("method" in message && message.method === "notifications/cancelled") queueMicrotask(cancellationSeen);
+    };
+    const controller = new AbortController();
+    try {
+      const result = client.callTool({ name, arguments: name.endsWith("rename") ? { id, title: "Renamed" } : { id } },
+        undefined, { signal: controller.signal }).then(() => "completed", () => "cancelled");
+      await credentialEntered; controller.abort(); await cancellationHandled;
+      const credentialCancelled = credentialSignal?.aborted;
+      release(); await operationCompleted;
+      expect(await result).toBe("cancelled");
+      expect({ credentialCancelled, calls }).toEqual({ credentialCancelled: true, calls: 0 });
+    } finally { release(); await client.close(); await server.close(); }
+  }
+});
+
+test("hosted MCP remains read-only unless startup explicitly allows writes", async () => {
+  for (const options of [{}, { allowWrites: false }]) {
+    const f = mutationFixture(), server = buildHostedServer(f.client, options);
+    const client = new Client({ name: "fictional-read-only-mcp", version: "1" });
+    const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
+    try {
+      const { tools } = await client.listTools();
+      expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"]);
+      expect(tools.every(tool => tool.annotations?.readOnlyHint === true)).toBe(true);
+      const refused = await client.callTool({ name: "recordings_hosted_delete", arguments: { id } });
+      expect(refused.isError).toBe(true); expect(f.calls).toHaveLength(0); expect(f.credentialCount()).toBe(0);
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
+test("hosted HTTP remains read-only unless startup explicitly allows writes", async () => {
+  let calls = 0;
+  for (const options of [{}, { allowWrites: false }]) {
+    const handle = buildHostedFetch({ apiBase, ...options, fetch: fakeFetch(() => { calls++; return new Response(null, { status: 204 }); }) });
+    for (const method of ["PATCH", "DELETE"]) {
+      const response = await handle(new Request("http://127.0.0.1/v1/recordings/" + id, { method,
+        headers: { authorization: "Bearer fictional-A", "content-type": "application/json" },
+        ...(method === "PATCH" ? { body: JSON.stringify({ title: "Renamed" }) } : {}) }));
+      expect(response.status).toBe(405); expect((await response.json()).error.code).toBe("read_only");
+    }
+  }
+  expect(calls).toBe(0);
+});
+
+test("write startup option is explicit, unique and only valid in hosted mode", () => {
+  const common = ["--hosted", "--api-base", apiBase, "--allow-writes"];
+  expect(parseHostedProcessOptions(common, "serve").allowWrites).toBe(true);
+  expect(parseHostedProcessOptions([...common, "--stdio", "--credential-env", "SELECTED_SESSION"], "mcp").allowWrites).toBe(true);
+  for (const surface of ["serve", "mcp"] as const) {
+    expect(() => parseHostedProcessOptions(["--allow-writes"], surface)).toThrow();
+    expect(() => parseHostedProcessOptions([...common, "--allow-writes"], surface)).toThrow();
+    expect(() => parseHostedProcessOptions([...common, "false"], surface)).toThrow();
+  }
+});
+
+test("hosted HTTP stalled rename body reaches its deadline without dispatching a write", async () => {
+  let calls = 0, cancelled = 0;
+  const handle = buildHostedFetch({ apiBase, allowWrites: true,
+    fetch: fakeFetch(() => { calls++; throw Error("unexpected upstream"); }) });
+  const request = new Request("http://127.0.0.1/v1/recordings/" + id, { method: "PATCH",
+    headers: { authorization: "Bearer fictional-A", "content-type": "application/json" },
+    body: new ReadableStream<Uint8Array>({ cancel() { cancelled++; } }) });
+  const response = await handle(request);
+  expect(response.status).toBe(504); expect((await response.json()).error.code).toBe("timeout");
+  expect(request.signal.aborted).toBe(false); expect(cancelled).toBe(1); expect(calls).toBe(0);
+}, 8000);

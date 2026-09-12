@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3
+
+### Patch Changes
+
+- Add hosted recording rename and delete to the CLI, MCP and HTTP proxy through the existing SDK. MCP and HTTP startup stays read-only unless `--allow-writes` is supplied. Preserve pending deletion responses, cancellation before mutation dispatch, strict inputs and bounded HTTP body reads without automatic retries.
+
 ## 0.5.2
 
 ### Patch Changes
