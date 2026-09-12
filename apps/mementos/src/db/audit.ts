@@ -5,6 +5,7 @@
 
 import { SqliteAdapter as Database } from "../storage.js";
 import { getDatabase } from "./database.js";
+import { isApiMode, apiJson, toQuery } from "./api-mode.js";
 
 export interface AuditEntry {
   id: string;
@@ -54,6 +55,13 @@ export function getMemoryAuditTrail(
   limit: number = 50,
   db?: Database
 ): AuditEntry[] {
+  if (!db && isApiMode()) {
+    const { data } = apiJson<{ entries: AuditEntry[] }>(
+      "GET",
+      `/memories/${encodeURIComponent(memoryId)}/audit-trail${toQuery({ limit })}`,
+    );
+    return data?.entries ?? [];
+  }
   const d = db || getDatabase();
   const rows = d
     .query("SELECT * FROM memory_audit_log WHERE memory_id = ? ORDER BY created_at DESC LIMIT ?")
@@ -74,6 +82,19 @@ export function exportAuditLog(
   } = {},
   db?: Database
 ): AuditEntry[] {
+  if (!db && isApiMode()) {
+    const { data } = apiJson<{ entries: AuditEntry[] }>(
+      "GET",
+      `/audit/export${toQuery({
+        since: options.since,
+        until: options.until,
+        operation: options.operation,
+        agent_id: options.agent_id,
+        limit: options.limit,
+      })}`,
+    );
+    return data?.entries ?? [];
+  }
   const d = db || getDatabase();
   const conditions: string[] = [];
   const params: (string | number)[] = [];
@@ -112,6 +133,18 @@ export function getAuditStats(db?: Database): {
   by_operation: Record<string, number>;
   recent_24h: number;
 } {
+  if (!db && isApiMode()) {
+    const { data } = apiJson<{
+      total_entries?: number;
+      by_operation?: Record<string, number>;
+      recent_24h?: number;
+    }>("GET", "/audit/stats");
+    return {
+      total_entries: data?.total_entries ?? 0,
+      by_operation: data?.by_operation ?? {},
+      recent_24h: data?.recent_24h ?? 0,
+    };
+  }
   const d = db || getDatabase();
 
   const total = (d.query("SELECT COUNT(*) as c FROM memory_audit_log").get() as { c: number }).c;

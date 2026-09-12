@@ -3,7 +3,9 @@
  * Cached as a special pinned memory, auto-refreshed when preferences change.
  */
 
-import { createMemory, listMemories, getMemoryByKey } from "../db/memories.js";
+import { createMemory, listMemories, getMemoryByKey, updateMemory } from "../db/memories.js";
+import { isApiMode, apiJson } from "../db/api-mode.js";
+import { isServerContext } from "../storage.js";
 
 const PROFILE_PROMPT = `You synthesize a coherent agent/project profile from individual preference and fact memories.
 
@@ -27,6 +29,29 @@ export async function synthesizeProfile(options: {
   scope?: "agent" | "project" | "global";
   force_refresh?: boolean;
 }): Promise<{ profile: string; memory_count: number; from_cache: boolean } | null> {
+  // Hosted transport: the server owns the corpus AND the LLM spend. A client
+  // must not gather the corpus itself (it would need the whole memory set) nor
+  // hold an ANTHROPIC_API_KEY to produce a profile — it asks
+  // POST /v1/profile/synthesize and returns what the server produced.
+  if (!isServerContext() && isApiMode()) {
+    const { data } = apiJson<{
+      profile?: string | null;
+      memory_count?: number;
+      from_cache?: boolean;
+    }>("POST", "/profile/synthesize", {
+      project_id: options.project_id,
+      agent_id: options.agent_id,
+      force_refresh: options.force_refresh === true,
+    });
+    // The route answers {profile: null, message} when there is nothing to
+    // synthesize — the same "no profile" outcome as the local arm's null.
+    if (!data || data.profile === null || data.profile === undefined) return null;
+    return {
+      profile: data.profile,
+      memory_count: data.memory_count ?? 0,
+      from_cache: data.from_cache ?? false,
+    };
+  }
   const scope = options.scope || (options.project_id ? "project" : options.agent_id ? "agent" : "global");
   const id = options.project_id || options.agent_id || "global";
   const profileKey = getProfileKey(scope, id);
@@ -133,7 +158,34 @@ function saveProfile(
 /**
  * Mark profile as stale. Called from PostMemorySave hook when a preference/fact is saved.
  */
-export function markProfileStale(projectId?: string, _agentId?: string): void {
+export function markProfileStale(projectId?: string, agentId?: string): void {
+  // Hosted transport: there is no bulk-metadata route, and there must not be a
+  // silent no-op either — the cached profile would stay fresh-looking forever.
+  // The cache keys are deterministic (getProfileKey), so mark exactly the ones
+  // this hook can name, through the hosted read/update routes.
+  if (!isServerContext() && isApiMode()) {
+    try {
+      const keys = [
+        projectId ? getProfileKey("project", projectId) : undefined,
+        agentId ? getProfileKey("agent", agentId) : undefined,
+        getProfileKey("global", "global"),
+      ].filter((k): k is string => !!k);
+      for (const key of keys) {
+        const cached = getMemoryByKey(key, "shared", undefined, projectId);
+        if (!cached) continue;
+        updateMemory(cached.id, {
+          metadata: { ...(cached.metadata ?? {}), stale: true },
+          // Optimistic locking: the version we just read. A concurrent writer
+          // wins and this best-effort mark is skipped (caught below), exactly
+          // like the local arm's swallowed failure.
+          version: cached.version,
+        });
+      }
+    } catch {
+      // Non-critical (same contract as the local arm).
+    }
+    return;
+  }
   try {
     const { getDatabase } = require("../db/database.js");
     const db = getDatabase();

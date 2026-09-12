@@ -7,6 +7,7 @@
 
 import { SqliteAdapter as Database } from "../storage.js";
 import { getDatabase, uuid } from "./database.js";
+import { isApiMode, apiJson, toQuery } from "./api-mode.js";
 
 export type AclPermission = "read" | "readwrite" | "admin";
 
@@ -29,6 +30,15 @@ export function setAcl(
   projectId?: string,
   db?: Database
 ): MemoryAcl {
+  if (!db && isApiMode()) {
+    const { data } = apiJson<MemoryAcl>("POST", "/acl", {
+      agent_id: agentId,
+      key_pattern: keyPattern,
+      permission,
+      project_id: projectId,
+    });
+    return data;
+  }
   const d = db || getDatabase();
   // Need unique index for upsert — create before INSERT
   try {
@@ -49,6 +59,10 @@ export function setAcl(
  * List ACLs for an agent.
  */
 export function listAcls(agentId: string, db?: Database): MemoryAcl[] {
+  if (!db && isApiMode()) {
+    const { data } = apiJson<{ acls: MemoryAcl[] }>("GET", `/acl${toQuery({ agent_id: agentId })}`);
+    return data?.acls ?? [];
+  }
   const d = db || getDatabase();
   return d.query("SELECT * FROM memory_acl WHERE agent_id = ? ORDER BY key_pattern").all(agentId) as MemoryAcl[];
 }
@@ -57,6 +71,15 @@ export function listAcls(agentId: string, db?: Database): MemoryAcl[] {
  * Remove an ACL rule.
  */
 export function removeAcl(id: string, db?: Database): boolean {
+  if (!db && isApiMode()) {
+    const { status } = apiJson<{ deleted: boolean }>(
+      "DELETE",
+      `/acl/${encodeURIComponent(id)}`,
+      undefined,
+      { allow404: true },
+    );
+    return status !== 404;
+  }
   const d = db || getDatabase();
   const result = d.run("DELETE FROM memory_acl WHERE id = ?", [id]);
   return result.changes > 0;
@@ -72,6 +95,16 @@ export function checkPermission(
   requiredPermission: "read" | "write",
   db?: Database
 ): boolean {
+  if (!db && isApiMode()) {
+    // The DECISION is taken server-side. A client must not re-derive it from a
+    // rule list it may only partly hold: the "no ACLs = full access" default
+    // would turn an unreadable rule set into a grant.
+    const { data } = apiJson<{ allowed: boolean }>(
+      "GET",
+      `/acl/check${toQuery({ agent_id: agentId, key: memoryKey, permission: requiredPermission })}`,
+    );
+    return data?.allowed === true;
+  }
   const d = db || getDatabase();
 
   // If no ACLs exist for this agent, allow everything (backward compat)
