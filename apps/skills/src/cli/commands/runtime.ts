@@ -863,14 +863,18 @@ interface PollRemoteRunResult {
 
 function parsePollingOptions(options: RunCommandOptions): PollingOptions {
   return {
-    intervalMs: parsePositiveInt(options.pollIntervalMs, 1000),
-    timeoutMs: parsePositiveInt(options.pollTimeoutMs, 300_000),
+    intervalMs: parsePollingMilliseconds(options.pollIntervalMs, 1000, "--poll-interval-ms"),
+    timeoutMs: parsePollingMilliseconds(options.pollTimeoutMs, 300_000, "--poll-timeout-ms"),
   };
 }
 
-function parsePositiveInt(value: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+function parsePollingMilliseconds(value: string | undefined, fallback: number, flag: string): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(parsed) || parsed <= 0 || parsed > 2_147_483_647) {
+    throw new Error(`${flag} must be an integer from 1 to 2147483647 milliseconds`);
+  }
+  return parsed;
 }
 
 async function pollRemoteRun(

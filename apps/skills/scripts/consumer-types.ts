@@ -12,8 +12,8 @@ const env = { PATH: `${dirname(process.execPath)}:${process.env.PATH ?? "/usr/bi
   HOME: workspace, TMPDIR: workspace, NO_COLOR: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
   NPM_CONFIG_USERCONFIG: join(workspace, "user.npmrc"), NPM_CONFIG_GLOBALCONFIG: join(workspace, "global.npmrc") };
 
-async function run(command: string[], cwd: string) {
-  const child = Bun.spawn(command, { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+async function run(command: string[], cwd: string, extraEnv: Record<string, string> = {}) {
+  const child = Bun.spawn(command, { cwd, env: { ...env, ...extraEnv }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const timeout = setTimeout(() => child.kill("SIGKILL"), 120_000);
   try {
     const [stdout, stderr, status] = await Promise.all([
@@ -591,5 +591,12 @@ try {
 console.log("Installed quote error root/SDK runtime: 14 assertions passed.");
 `);
   console.log((await run([process.execPath, "--no-env-file", "quote-error-runtime.ts"], workspace)).trim());
+  // Exercise the installed CLI archive too: malformed polling values must not
+  // cross the quote/credit boundary; the maximum accepted delay must not overflow
+  // into rapid status requests after an owned loopback run is submitted.
+  await run([process.execPath, "--no-env-file", "test", resolve(root, "src/cli/cli.run-polling.test.ts")], workspace, {
+    SKILLS_RUN_POLLING_TEST_PACKAGE: join(workspace, "node_modules/@hasna/skills"),
+  });
+  console.log("Installed CLI polling: invalid inputs refused before HTTP or local run writes; valid quote and maximum-delay wait controls passed.");
   console.log(`Consumer types: @hasna/skills@${metadata.version} passed strict installed-package checking for all four exports (skipLibCheck=false).`);
 } finally { await rm(workspace, { recursive: true, force: true }); }
