@@ -463,6 +463,73 @@ export class CloudLogStore {
     }));
   }
 
+  /**
+   * Volume overview for `/v1/logs/stats`: three real aggregates instead of the
+   * 100k-row download the CLI and the MCP tool used to fold client-side.
+   */
+  async statsSummary(
+    filters: { project_id?: string; days?: number } = {},
+  ): Promise<CloudLogStats> {
+    const days =
+      Number.isFinite(filters.days) && (filters.days as number) > 0
+        ? Math.min(Math.floor(filters.days as number), 366)
+        : 7;
+    const scoped = Boolean(filters.project_id);
+    const where = scoped ? "WHERE project_id = $1" : "";
+    const params: unknown[] = scoped ? [filters.project_id] : [];
+    const since = new Date(Date.now() - days * 86_400_000).toISOString();
+
+    const [levelRows, serviceRows, bounds, dayRows] = await Promise.all([
+      this.client.many<{ level: string; c: string }>(
+        `SELECT level, COUNT(*)::text AS c FROM logs ${where} GROUP BY level`,
+        params,
+      ),
+      this.client.many<{ service: string | null; c: string }>(
+        `SELECT service, COUNT(*)::text AS c FROM logs ${where} GROUP BY service ORDER BY COUNT(*) DESC`,
+        params,
+      ),
+      this.client.get<{
+        oldest: string | Date | null;
+        newest: string | Date | null;
+      }>(
+        `SELECT MIN(timestamp) AS oldest, MAX(timestamp) AS newest FROM logs ${where}`,
+        params,
+      ),
+      this.client.many<{ day: string | Date; c: string }>(
+        `SELECT to_char(timestamp::date, 'YYYY-MM-DD') AS day, COUNT(*)::text AS c
+           FROM logs
+          WHERE ${scoped ? "project_id = $1 AND " : ""}timestamp >= $${scoped ? 2 : 1}
+          GROUP BY day ORDER BY day`,
+        [...params, since],
+      ),
+    ]);
+
+    const by_level: Record<string, number> = {};
+    let total = 0;
+    for (const r of levelRows) {
+      const n = Number(r.c);
+      by_level[r.level] = n;
+      total += n;
+    }
+    return {
+      total,
+      errors: by_level.error ?? 0,
+      warns: by_level.warn ?? 0,
+      fatals: by_level.fatal ?? 0,
+      by_level,
+      // `-` for a missing service keeps the rendered output identical to what
+      // the client-side fold produced (`r.service ?? "-"`).
+      by_service: Object.fromEntries(
+        serviceRows.map((r) => [r.service ?? "-", Number(r.c)]),
+      ),
+      by_day: Object.fromEntries(
+        dayRows.map((r) => [String(r.day).slice(0, 10), Number(r.c)]),
+      ),
+      oldest: bounds?.oldest ? toIso(bounds.oldest) : null,
+      newest: bounds?.newest ? toIso(bounds.newest) : null,
+    };
+  }
+
   /** A HealthResult-shaped summary for the cloud tier (logs + projects only). */
   async healthSummary(uptimeSeconds: number): Promise<CloudHealth> {
     const [projects, byLevel, bounds] = await Promise.all([
@@ -1634,6 +1701,21 @@ export interface CloudLogCount {
   fatals: number;
   by_level: Record<string, number>;
   by_service?: Record<string, number>;
+}
+
+/** `/v1/logs/stats` — the volume overview `logs stats` and `log_stats` read. */
+export interface CloudLogStats {
+  total: number;
+  errors: number;
+  warns: number;
+  fatals: number;
+  by_level: Record<string, number>;
+  /** Counts per service. Logs with no service are keyed `-`, as the CLI renders them. */
+  by_service: Record<string, number>;
+  /** Counts per UTC day (`YYYY-MM-DD`) over the trailing window. */
+  by_day: Record<string, number>;
+  oldest: string | null;
+  newest: string | null;
 }
 
 export interface CloudLogSummary {

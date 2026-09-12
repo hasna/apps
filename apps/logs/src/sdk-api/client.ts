@@ -2,7 +2,9 @@
 // DO NOT EDIT. Regenerate: bun scripts/generate-sdk-api.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Logs 0.4.8
+// Source: Logs 0.5.1
+
+export interface LogStats { "total": number; "errors": number; "warns": number; "fatals": number; "by_level": Record<string, number>; "by_service": Record<string, number>; "by_day": Record<string, number>; "oldest"?: string | null; "newest"?: string | null }
 
 export interface Project { "id": string; "name": string; "github_repo"?: string | null; "base_url"?: string | null; "description"?: string | null; "created_at": string }
 
@@ -96,6 +98,15 @@ export class LogsClient {
       return this.request("POST", `/v1/logs`, {
         body,
         query: undefined,
+        init,
+      });
+    }
+
+    /** Volume overview aggregated server-side */
+    async logStats(query?: { "project_id"?: string; "days"?: number }, init?: RequestInit): Promise<LogStats> {
+      return this.request("GET", `/v1/logs/stats`, {
+        body: undefined,
+        query,
         init,
       });
     }

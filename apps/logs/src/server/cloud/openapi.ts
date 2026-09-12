@@ -43,6 +43,43 @@ export function buildOpenApiDocument(version: string): OpenApiDoc {
         apiKey: { type: "apiKey", in: "header", name: "x-api-key" },
       },
       schemas: {
+        LogStats: {
+          type: "object",
+          description:
+            "Volume overview: totals, level/service/day breakdowns and " +
+            "timestamp bounds, aggregated server-side.",
+          properties: {
+            total: { type: "integer" },
+            errors: { type: "integer" },
+            warns: { type: "integer" },
+            fatals: { type: "integer" },
+            by_level: {
+              type: "object",
+              additionalProperties: { type: "integer" },
+            },
+            by_service: {
+              type: "object",
+              description: "Counts per service; logs with no service key as `-`.",
+              additionalProperties: { type: "integer" },
+            },
+            by_day: {
+              type: "object",
+              description: "Counts per UTC day (YYYY-MM-DD) over the trailing window.",
+              additionalProperties: { type: "integer" },
+            },
+            oldest: { type: "string", nullable: true },
+            newest: { type: "string", nullable: true },
+          },
+          required: [
+            "total",
+            "errors",
+            "warns",
+            "fatals",
+            "by_level",
+            "by_service",
+            "by_day",
+          ],
+        },
         Project: {
           type: "object",
           properties: {
@@ -235,6 +272,40 @@ export function buildOpenApiDocument(version: string): OpenApiDoc {
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/ErrorResponse" },
+                },
+              },
+            },
+          },
+        },
+      },
+      "/v1/logs/stats": {
+        get: {
+          operationId: "logStats",
+          summary: "Volume overview aggregated server-side",
+          description:
+            "Totals, level/service/day breakdowns and timestamp bounds. " +
+            "Replaces downloading the corpus to count it in the client.",
+          parameters: [
+            {
+              name: "project_id",
+              in: "query",
+              required: false,
+              schema: { type: "string" },
+            },
+            {
+              name: "days",
+              in: "query",
+              required: false,
+              description: "Trailing window for by_day, in days. Defaults to 7.",
+              schema: { type: "integer", minimum: 1, maximum: 366 },
+            },
+          ],
+          responses: {
+            "200": {
+              description: "Log statistics",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/LogStats" },
                 },
               },
             },

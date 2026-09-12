@@ -30,7 +30,7 @@ import {
   runCapturedCommand,
 } from "../lib/command-runner.ts";
 import type { CompareResult } from "../lib/compare.ts";
-import type { LogCount } from "../lib/count.ts";
+import type { LogCount, LogStats, StatsLogsInput } from "../lib/count.ts";
 import type { DiagnoseInclude, DiagnosisResult } from "../lib/diagnose.ts";
 import type { EventCatalogEntry, EventCatalogQuery } from "../lib/events.ts";
 import {
@@ -317,6 +317,23 @@ export class ApiStore implements Store {
       {
         query,
       },
+    );
+  }
+
+  /**
+   * The hosted aggregate. `logs stats` and the `log_stats` MCP tool used to ask
+   * for `listLogs({ limit: 100000 })` and fold the rows in the client; the
+   * numbers are now computed by the tier that holds the data.
+   */
+  async stats(input: StatsLogsInput): Promise<LogStats> {
+    const query: Record<string, string | undefined> = {};
+    if (input.project_id) query.project_id = input.project_id;
+    if (input.days !== undefined) query.days = String(input.days);
+    return this.client.transport.request<LogStats>(
+      "GET",
+      `/${LOGS}/stats`,
+      undefined,
+      { query },
     );
   }
 

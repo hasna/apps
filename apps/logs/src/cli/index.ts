@@ -1376,32 +1376,23 @@ program
     "Volume overview: count, DB size, timeline, top services, error rate",
   )
   .option("--project <name|id>", "Scope to a project")
+  .option("--days <n>", "Trailing window for the daily histogram", "7")
   .action(async (opts) => {
-    const projectId = await getStore().resolveProjectId(opts.project);
-    const rows = await getStore().listLogs({ project_id: projectId, limit: 100000 });
-    const total = rows.length;
-    const byLevel: Record<string, number> = {};
-    const byService: Record<string, number> = {};
-    const byDay: Record<string, number> = {};
-    const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
-    let oldest: string | null = null;
-    let newest: string | null = null;
-    for (const r of rows) {
-      byLevel[r.level] = (byLevel[r.level] ?? 0) + 1;
-      const svc = r.service ?? "-";
-      byService[svc] = (byService[svc] ?? 0) + 1;
-      if (r.timestamp) {
-        if (oldest === null || r.timestamp < oldest) oldest = r.timestamp;
-        if (newest === null || r.timestamp > newest) newest = r.timestamp;
-        const t = new Date(r.timestamp).getTime();
-        if (Number.isFinite(t) && t >= weekAgo) {
-          const day = r.timestamp.slice(0, 10);
-          byDay[day] = (byDay[day] ?? 0) + 1;
-        }
-      }
-    }
-    const errors = byLevel.error ?? 0;
-    const fatals = byLevel.fatal ?? 0;
+    const store = getStore();
+    const projectId = await store.resolveProjectId(opts.project);
+    // Aggregated by the tier that owns the data. This used to be
+    // `listLogs({ limit: 100000 })` folded in the client, which dragged the
+    // whole corpus over the wire to print a few dozen numbers.
+    const windowDays = Number(opts.days);
+    const stats = await store.stats({
+      ...(projectId ? { project_id: projectId } : {}),
+      ...(Number.isFinite(windowDays) && windowDays > 0
+        ? { days: windowDays }
+        : {}),
+    });
+    const { total, by_level: byLevel, by_service: byService, by_day: byDay } =
+      stats;
+    const { oldest, newest, errors, fatals } = stats;
     const errorRate =
       total > 0 ? (((errors + fatals) / total) * 100).toFixed(2) : "0.00";
 
@@ -1436,7 +1427,9 @@ program
     const days = Object.entries(byDay).sort((a, b) => a[0].localeCompare(b[0]));
     if (days.length) {
       const maxC = Math.max(...days.map(([, c]) => c));
-      console.log(`\n${C.bold}Last 7 Days:${C.reset}`);
+      const shown =
+        Number.isFinite(windowDays) && windowDays > 0 ? windowDays : 7;
+      console.log(`\n${C.bold}Last ${shown} Days:${C.reset}`);
       for (const [day, c] of days) {
         const bar = "█".repeat(Math.max(1, Math.round((c / maxC) * 20)));
         console.log(
