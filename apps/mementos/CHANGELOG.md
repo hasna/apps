@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.15.3
+
+### Patch Changes
+
+- e8c2bfd: Fix every command to work in ANY transport (hosted API via the credentials
+  file, or local SQLite) — the storage-mode axis is retired (owner directive
+  2026-08-15). Transport-gated breakage removed:
+
+  - `synthesis run` / `synthesis rollback` crashed in hosted mode with the
+    split-brain guard; they now route to the server (`POST /synthesis/run`,
+    `POST /synthesis/rollback/:run_id`).
+  - `session ingest` crashed in hosted mode; the transcript now ships to the
+    server-side queue (`POST /sessions/ingest`).
+  - `backup` in hosted mode snapshot a stale local island or failed with
+    "Database not found"; it now captures the cloud population through the API
+    into the same portable format `restore` reads, so backup → restore
+    round-trips in both transports (and overwriting an existing destination path
+    behaves like the local arm instead of failing on a UNIQUE conflict).
+  - `mementos-serve` no longer consults the client resolver: `isApiMode()` is
+    false in the server process, so a serve spawned from a shell exporting
+    `HASNA_MEMENTOS_API_URL`/`HASNA_MEMENTOS_API_KEY` keeps serving its own
+    backend instead of crashing or routing writes at the shared cloud.
+  - Credential-hermeticity suites now pin a fixture home/config-home, so they
+    never resolve the operator's real `~/.hasna/mementos/config/credentials`.
+
+- e0746f4: Fail-closed: close the two on-box store bypasses that survived the 0.15 gate
+  (fleet alignment 2026-09-11, T1 §3.5 mementos).
+
+  - `storage push|pull|sync|status` (CLI) and the `storage_*` MCP tools built
+    `new SqliteAdapter(getDbPath())` directly, bypassing `getDatabase()`'s
+    fail-closed gate: on a hosted station they created and read
+    `~/.hasna/mementos/mementos.db`. They now refuse with
+    `REMOTE_COMMAND_UNSUPPORTED` naming the opt-in (`HASNA_MEMENTOS_LOCAL=1` or an
+    explicit `HASNA_MEMENTOS_DB_PATH`) unless the process is the server or the
+    local opt-in is in force. Nothing is created on the hosted route.
+  - The MCP session registry lived at the HOME ROOT (`~/.open-sessions-registry.db`)
+    and was created ungated by every `mementos-mcp` start, hosted or not. It now
+    exists as a file only under the local opt-in / server context, beside the
+    memory store (`<store dir>/sessions-registry.db`, `:memory:` for a `:memory:`
+    store), and is process-local (in-memory, same API) on the hosted route — the
+    auto-inject orchestrator and channel pusher keep working; no file is written.
+  - Tests pin a scratch store + the local opt-in before importing the registry, so
+    the suite never touches a real machine's files; a new hosted-route test proves
+    no `*.db*` appears under HOME for either module.
+
 ## 0.15.2
 
 ### Patch Changes
