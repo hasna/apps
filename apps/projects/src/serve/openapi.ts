@@ -1202,6 +1202,20 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
           properties: { recipes: { type: "array", items: ref("Recipe") }, count: { type: "integer" } },
           required: ["recipes", "count"],
         },
+        Machine: {
+          type: "object",
+          properties: {
+            slug: { type: "string" },
+            status: { type: "string" },
+            role: { type: "string", enum: ["mirror-hub", "assignable", "avoid"] },
+          },
+          required: ["slug", "status", "role"],
+        },
+        MachineList: {
+          type: "object",
+          properties: { machines: { type: "array", items: ref("Machine") }, count: { type: "integer" } },
+          required: ["machines", "count"],
+        },
         EventList: {
           type: "object",
           properties: { events: { type: "array", items: ref("WorkspaceEvent") }, count: { type: "integer" } },
@@ -1823,6 +1837,18 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
           summary: "Get a recipe by id or slug",
           parameters: [ID_PARAM],
           responses: { "200": jsonResp("Recipe"), "404": jsonResp("Error", "Not found") },
+        },
+      },
+      // `/v1/machines` has been dispatched by route() since the machine
+      // registry landed but was never documented here, so every generated
+      // client and every reader of the spec believed the canonical-machine
+      // registry was local-only. It is read-only (the registry is seeded by
+      // migrations, not by the API).
+      "/v1/machines": {
+        get: {
+          operationId: "listMachines",
+          summary: "List canonical machines in the registry",
+          responses: { "200": jsonResp("MachineList") },
         },
       },
     },

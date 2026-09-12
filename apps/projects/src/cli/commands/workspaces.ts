@@ -695,6 +695,25 @@ function mutationAgentId(store: ProjectStore, optAgent?: string): string | undef
 }
 
 /**
+ * Same contract as {@link mutationAgentId}, for the commands that accept an
+ * explicitly named attributing agent (`start --actor`, cleanup `--agent`).
+ *
+ * `resolveAgentId()` reads the on-box sqlite agent table, so calling it on a
+ * hosted station opens ~/.hasna/projects/projects.db for nothing but a name
+ * lookup. Here the hosted transport resolves the named agent through the
+ * shared `/v1/agents` registry instead (GET /v1/agents/{idOrSlug}); an unnamed
+ * agent stays `undefined` so the server derives attribution from the bearer
+ * key, exactly as every other hosted mutation already does.
+ */
+async function resolveMutationAgentId(store: ProjectStore, optAgent?: string): Promise<string | undefined> {
+  if (store.transport === "local") return optAgent ? resolveAgentId(optAgent) : ensureCliAgent().id;
+  if (!optAgent) return undefined;
+  const agent = await store.getAgent(optAgent);
+  if (!agent) throw new Error(`Agent not found: ${optAgent}`);
+  return agent.id;
+}
+
+/**
  * `--canonical-machine` must name a registered machine slug. The server
  * rejects an unknown slug with HTTP 400 ("Machine not found: <slug>") — the
  * live `update --canonical-machine station03` report — so resolve it against
@@ -1804,10 +1823,7 @@ function registerProjectStartCommand(program: Command): void {
           throw new Error("--session/--name is only supported for a single project start");
         }
 
-        // Local resolves/creates the on-box CLI agent row; the hosted backend
-        // attributes the start to the bearer key server-side and must never
-        // open projects.db to mint a local agent (hasna/apps#1720).
-        const agentId = mutationAgentId(store, opts.actor);
+        const agentId = await resolveMutationAgentId(store, opts.actor);
         const requestedWindows = parseTmuxWindowsJson(opts.windowsJson, "--windows-json");
         const commonOptions = {
           agentTool: opts.agent ? parseProjectStartAgent(opts.agent) : undefined,

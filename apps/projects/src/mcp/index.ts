@@ -317,6 +317,25 @@ function agentId(idOrSlug: string | undefined): string {
 }
 
 /**
+ * Transport-aware version of {@link agentId} for the start tools.
+ *
+ * `agentId()`/`ensureCliAgent()` read (and create in) the on-box sqlite agent
+ * table. Calling them unconditionally meant a hosted MCP session opened
+ * ~/.hasna/projects/projects.db purely to name the actor of a start event. The
+ * hosted transport now resolves a named agent through the shared `/v1/agents`
+ * registry (GET /v1/agents/{idOrSlug}) and leaves an unnamed one to the server,
+ * which derives attribution from the bearer key — the same rule
+ * projects_agents_assign and projects_locations_add already follow.
+ */
+async function resolveToolAgentId(store: ProjectStore, idOrSlug: string | undefined): Promise<string | undefined> {
+  if (store.transport === "local") return idOrSlug ? agentId(idOrSlug) : ensureCliAgent().id;
+  if (!idOrSlug) return undefined;
+  const agent = await store.getAgent(idOrSlug);
+  if (!agent) throw new Error(`Agent not found: ${idOrSlug}`);
+  return agent.id;
+}
+
+/**
  * Resolve a caller-supplied target to a single project through the active
  * Store. In the hosted backend this resolves the project server-side (so hosted-only
  * projects resolve correctly and stale on-box rows are never used); on the local
@@ -1039,9 +1058,7 @@ server.tool(
         importMetadata: input.metadata as JsonObject | undefined,
         dryRun: true,
         attach: false,
-        // Local mints/resolves the on-box CLI agent; hosted attribution is
-        // server-side and must never open projects.db (hasna/apps#1720).
-        agentId: store.transport === "local" ? (input.agent ? agentId(input.agent) : ensureCliAgent().id) : undefined,
+        agentId: await resolveToolAgentId(store, input.agent),
         source: "mcp",
         auditCommand: "projects_render_start",
       });
@@ -1609,9 +1626,7 @@ server.tool(
         importMetadata: input.metadata as JsonObject | undefined,
         dryRun: input.dry_run,
         attach: false,
-        // Local mints/resolves the on-box CLI agent; hosted attribution is
-        // server-side and must never open projects.db (hasna/apps#1720).
-        agentId: store.transport === "local" ? (input.agent ? agentId(input.agent) : ensureCliAgent().id) : undefined,
+        agentId: await resolveToolAgentId(store, input.agent),
         source: "mcp",
         auditCommand: "projects_start",
       }));
