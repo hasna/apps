@@ -91,7 +91,7 @@ const results: Array<{ label: string; code: number; stdout: string; stderr: stri
 const invoke = async (args: string[], label: string) => {
   const child = Bun.spawn([process.execPath, sourceCli, ...args], {
     cwd: project,
-    env: { PATH: process.env.PATH ?? "/Users/hasna/.bun/bin:/usr/bin:/bin", HOME: home, USER: process.env.USER ?? "fixture-user", HASNA_SWITCHER_HOME: switcherHome, SWITCHER_PROVIDER_FIXTURE: credential },
+    env: { PATH: process.env.PATH ?? "/Users/hasna/.bun/bin:/usr/bin:/bin", HOME: home, USER: process.env.USER ?? "fixture-user", HASNA_SWITCHER_LOCAL: "1", HASNA_SWITCHER_HOME: switcherHome, SWITCHER_PROVIDER_FIXTURE: credential },
     stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: true,
   });
   children.push(child);

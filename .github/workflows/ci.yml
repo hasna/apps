@@ -573,3 +573,11 @@ jobs:
             fi
             bun tooling/ci/check-publish-guard.ts --changed-since "$BASE"
           fi
+      # The scoped guard can skip Emails. Prepare its artifacts explicitly so
+      # the remaining prepublishOnly checks run against the current source.
+      - name: Emails release contract gates
+        working-directory: apps/emails
+        run: |
+          bun run prepack
+          bun run contracts:conformance
+          bun run contracts no-cloud-scan .

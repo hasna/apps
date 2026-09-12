@@ -681,30 +681,6 @@ import { scanWorkspaceExposures } from "@hasna/secrets/scanner";
 const result = scanWorkspaceExposures({ root: process.cwd(), limit: 50 });
 ```
 
-## Env-File Bridge
-
-The vault can import from and export to the conventional machine-local
-`~/.secrets` tree:
-
-```text
-~/.secrets/{division}/{service}/live.env
-~/.secrets/{division}/{business}/{service}/live.env
-```
-
-Import `.env` files into the vault:
-
-```bash
-secrets import-env --dir ~/.secrets --dry-run
-secrets import-env --dir ~/.secrets --overwrite
-```
-
-Export vault entries back to `.env` files:
-
-```bash
-secrets export-env --dir ~/.secrets --dry-run
-secrets export-env --dir ~/.secrets --force
-```
-
 ## Shared storage and migration
 
 Ordinary CLI, MCP, and default library access use the authenticated API. Clients
@@ -734,7 +710,6 @@ SQLite. The migration reader opens an existing file read-only without schema
 upgrades or implicit key creation.
 
 ```bash
-secrets path
 secrets key
 ```
 

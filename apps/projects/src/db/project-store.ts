@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { customAlphabet } from "nanoid";
+import { assertLocalStoreAllowed } from "./database.js";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -602,6 +603,7 @@ function bindProjectStoreOwner(db: Database, projectId: string): void {
 export function inspectProjectStoreOwner(project: string | Pick<Workspace, "id">): string | null {
   const paths = getProjectStorePaths(project);
   if (!existsSync(paths.db_path)) return null;
+  assertLocalStoreAllowed();
   const db = new Database(paths.db_path, { readonly: true });
   try {
     return projectStoreOwner(db);
@@ -611,6 +613,9 @@ export function inspectProjectStoreOwner(project: string | Pick<Workspace, "id">
 }
 
 export function getProjectDatabase(project: string | Pick<Workspace, "id">): Database {
+  // Refuse BEFORE creating the data directories: a hosted run must leave no
+  // trace of an app store it may not open.
+  assertLocalStoreAllowed();
   const projectId = projectIdOf(project);
   const paths = ensureProjectStoreDirs(projectId);
   const db = new Database(paths.db_path);
@@ -1112,6 +1117,7 @@ export function inspectProjectStoreReadOnly(project: string | Pick<Workspace, "i
       legacy_canvas_storage: inspectLegacyProjectCanvasStorage(project),
     };
   }
+  assertLocalStoreAllowed();
   const db = new Database(paths.db_path, { readonly: true });
   try {
     const schemaVersion = hasTable(db, "project_meta")
@@ -1184,6 +1190,7 @@ export function readLegacyProjectCanvasMigrationSource(
       canvases: [],
     };
   }
+  assertLocalStoreAllowed();
   const db = new Database(source.db_path, { readonly: true });
   try {
     const rows = db
@@ -1231,6 +1238,7 @@ function hasTable(db: Database, table: string): boolean {
 
 function legacyCanvasTableExists(dbPath: string): boolean {
   if (!existsSync(dbPath)) return false;
+  assertLocalStoreAllowed();
   const db = new Database(dbPath, { readonly: true });
   try {
     return hasTable(db, LEGACY_PROJECT_CANVAS_TABLE);
@@ -1240,6 +1248,7 @@ function legacyCanvasTableExists(dbPath: string): boolean {
 }
 
 function legacyCanvasRecordCount(dbPath: string): number {
+  assertLocalStoreAllowed();
   const db = new Database(dbPath, { readonly: true });
   try {
     return tableCount(db, LEGACY_PROJECT_CANVAS_TABLE);

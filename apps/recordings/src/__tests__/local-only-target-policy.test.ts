@@ -414,12 +414,13 @@ describe("local-only approved target policy", () => {
     // and src/native/Recordings/build.sh is `#!/bin/bash` and exports no
     // locale of its own — so on the Mac that actually builds artifacts, the reader's
     // function-local pin is the only thing between the caller's LANG and the allowlist.
-    // `shopt -u globasciiranges` reproduces those pre-4.3 semantics on the bash we have.
+    // Disable the option when enabled. An absent option on macOS Bash 3.2 or an
+    // already-disabled option needs no change; neither may abort the fixture.
     //
     // Without this preamble the test passes with the pin deleted, which is exactly how an
     // earlier revision of this branch talked itself into calling the pin unguarded.
     const hostile = {
-      preamble: "shopt -u globasciiranges",
+      preamble: "if shopt -p globasciiranges >/dev/null 2>&1; then shopt -u globasciiranges; fi",
       env: { LC_ALL: "en_US.UTF-8", LANG: "en_US.UTF-8" },
     };
     // One input is not the hole; the hole is a CLASS. A change that special-cased uppercase

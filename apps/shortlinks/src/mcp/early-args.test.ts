@@ -18,7 +18,7 @@ import { assertMcpBackend, mcpUsage } from "./startup.js";
  *    first stderr line, print nothing on stdout, and create no *.db.
  *  - Positive probes: a hosted credential starts the stdio server and creates
  *    nothing under the app home; the explicit local opt-in starts it too,
- *    announces local mode, and opens the database in the caller's home.
+ *    announces the local backend, and opens the database in the caller's home.
  *
  * Hermetic against the station: the child gets an absent Keychain account
  * (HASNA_STATION), an empty HASNA_HOME, and no ambient fleet variables.
@@ -168,9 +168,9 @@ describe("shortlinks-mcp fails closed at startup", () => {
     expect(existsSync(join(result.home, "hasna", "shortlinks"))).toBe(false);
   });
 
-  test("the explicit local opt-in starts the server, announces local mode, and opens the database in the caller's home", async () => {
+  test("the explicit local opt-in starts the server, announces the local backend, and opens the database in the caller's home", async () => {
     const result = await runMcp([], { HASNA_SHORTLINKS_LOCAL: "1" }, 10_000);
-    expect(result.stderr).toContain("local mode");
+    expect(result.stderr).toContain("local backend");
     expect(result.stderr).toContain(STDIO_MARKER);
     // The app home follows HASNA_HOME: $HASNA_HOME/shortlinks/shortlinks.db.
     expect(existsSync(join(result.home, "hasna", "shortlinks", "shortlinks.db"))).toBe(true);

@@ -3,9 +3,10 @@ import { recordingIDParser } from "../contracts/stream-v1.js";
 import { input, output, Transport, type ClientOptions, type RequestOptions } from "./transport.js";
 export { RecordingsSDKError, type SDKErrorCode, type CredentialProvider, type ClientOptions, type RequestOptions } from "./transport.js";
 export { HostedLibrary, type HostedLibraryOptions, type HostedLibraryRecording, type HostedLibraryPage } from "./library.js";
+export { HostedPasteHistory, type HostedPasteHistoryOptions, type HostedPasteHistoryReceipt, type HostedPasteHistoryPage } from "./paste-history.js";
 export type { HostedRecordingInput as RecordingInput, HostedRecording as Recording, HostedPasteInput as PasteInput,
   HostedPasteReceipt as PasteReceipt, HostedAccount as Account, HostedAccountResponse as AccountResponse,
-  HostedPageOptions as PageOptions } from "../contracts/hosted-v1.js";
+  HostedPageOptions as PageOptions, HostedProvidersResponse, HostedTranscriptionProvider, HostedTranscriptionModel } from "../contracts/hosted-v1.js";
 export interface Cursor { before: string; beforeId: string }
 export type DeletionResult = { state: "removed" } | { state: "pending" };
 /** Explicit cursor for the last received row. No extra request or inferred total. */
@@ -19,6 +20,8 @@ export class HostedRecordingsClient {
   get apiBase(): string { return this.#transport.base; }
   async health(options?: RequestOptions) { return output(contract.healthResponseParser, (await this.#transport.request("GET", "/health", false, [200], undefined, options)).data); }
   async version(options?: RequestOptions) { return output(contract.versionResponseParser, (await this.#transport.request("GET", "/version", false, [200], undefined, options)).data); }
+  /** Read server-configured transcription choices. No provider calls or inferred defaults. */
+  async providers(options?: RequestOptions) { return output(contract.providersResponseParser, (await this.#transport.request("GET", "/providers", true, [200], undefined, options)).data); }
   async ready(options?: RequestOptions) { return output(contract.readyResponseParser, (await this.#transport.request("GET", "/ready", true, [200], undefined, options)).data); }
   async account(options?: RequestOptions) { return output(contract.accountResponseParser, (await this.#transport.request("GET", "/account", true, [200], undefined, options)).data); }
   /** Caller owns broker OAuth/PKCE. Profile authority comes from the opaque bearer session. */

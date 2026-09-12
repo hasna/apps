@@ -19,9 +19,9 @@ import { loggableUrl } from "../loggable-url.js";
 import { AGENT_LIST_ORDER, CHANNEL_LIST_ORDER, SEARCH_RECENT_ORDER, describeMessageOrder } from "../list-order.js";
 import { normalizeExactIsoTimestamp, normalizeSince } from "../since.js";
 import { resolveReadLimit, resolveReadWindow } from "../message-window.js";
-import { parseProject } from "../projects.js";
+import { parseProject } from "../project-parse.js";
 import { assertNoSensitiveContent, attachSendRedaction } from "../content-safety.js";
-import { normalizeEmoji } from "../reactions.js";
+import { normalizeEmoji } from "../emoji.js";
 import { normalizeMessageUuid } from "../message-reference.js";
 import { encodeAttachmentUploads, prepareAttachmentSources } from "../attachments.js";
 import {

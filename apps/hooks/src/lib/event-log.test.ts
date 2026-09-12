@@ -11,17 +11,23 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { runHook } from "../index.js";
 import { getDb, closeDb } from "../db/index.js";
+import { enterLocalStoreRoute } from "../test/local-store-fixture.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-eventlog-test-"));
+// Hermetic local route (see src/test/local-store-fixture.ts): scrubs stray
+// authority variables other suites seed into the shared process.env.
+let restoreRoute: () => void = () => {};
 
 beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;
   process.env.HASNA_HOOKS_DB_PATH = ":memory:";
+  restoreRoute = enterLocalStoreRoute();
 });
 
 afterAll(() => {
   delete process.env.HASNA_HOOKS_DATA_DIR;
   delete process.env.HASNA_HOOKS_DB_PATH;
+  restoreRoute();
   closeDb();
   rmSync(TEST_DIR, { recursive: true, force: true });
 });

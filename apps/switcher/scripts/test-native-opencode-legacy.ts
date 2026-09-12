@@ -138,7 +138,7 @@ async function runCase(caseProtocol: Protocol) {
     PATH: process.env.PATH ?? "/Users/hasna/.bun/bin:/usr/bin:/bin",
     HOME: home,
     USER: process.env.USER ?? "fixture-user",
-    HASNA_SWITCHER_HOME: switcherHome,
+    HASNA_SWITCHER_LOCAL: "1", HASNA_SWITCHER_HOME: switcherHome,
     SWITCHER_PROVIDER_FIXTURE: syntheticCredential,
   };
   const children: ReturnType<typeof Bun.spawn>[] = [];

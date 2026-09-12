@@ -1,9 +1,13 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 import { hasInstructionsEnvAuthorityIntent } from "../lib/local-opt-in.js";
 import { getRawStoreRoot } from "../lib/raw-store-root.js";
+
+// Pure helpers, re-exported so every existing importer keeps working. They now
+// live in ../lib/ids.ts because importing them from HERE pulled bun:sqlite into
+// the CLI and MCP bundles (W12 fail-closed residue, 2026-09-11).
+export { now, slugify, uuid } from "../lib/ids.js";
 
 function getDbPath(): string {
   if (process.env["HASNA_INSTRUCTIONS_DB_PATH"]) {
@@ -12,21 +16,6 @@ function getDbPath(): string {
   const dir = getRawStoreRoot();
   mkdirSync(dir, { recursive: true });
   return join(dir, "instructions.db");
-}
-
-export function uuid(): string {
-  return randomUUID();
-}
-
-export function now(): string {
-  return new Date().toISOString();
-}
-
-export function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
 }
 
 const MIGRATIONS = [

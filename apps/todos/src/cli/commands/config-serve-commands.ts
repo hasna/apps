@@ -1293,9 +1293,11 @@ export function registerConfigServeCommands(program: Command) {
     .description("Subscribe to real-time task events via SSE (requires todos serve)")
     .option("--agent <id>", "Filter to events for a specific agent")
     .option("--events <list>", "Comma-separated event types (default: all)", "task.created,task.started,task.completed,task.failed,task.assigned,task.status_changed")
-    .option("--port <n>", "Server port", "3000")
+    .option("--port <n>", "Port of the local `todos serve` to subscribe to", String(DEFAULT_SERVER_PORT))
     .option("--json", "Output raw JSON events")
     .action(async (opts) => {
+      // Same default as `todos serve` / `todos-serve` (DEFAULT_PORT); this used to
+      // default to 3000, a port nothing in this package ever listens on.
       const baseUrl = `http://localhost:${opts.port}`;
       const params = new URLSearchParams();
       if (opts.agent) params.set("agent_id", opts.agent);
