@@ -1,3 +1,4 @@
+import { runMessageListQuery } from "./search-admission.js";
 import { WorkerSupervisorStore, WORKER_CLAIM_CTE, type WorkerFence } from "./worker-supervisor.js";
 import type { RuntimeLogEntry, RuntimeComponent } from "./runtime-log.js";
 import { ProvisionUpJobs } from "./provision-up-store.js";
@@ -3255,7 +3256,12 @@ export class TenantScopedStore {
     const offsetIndex = params.length;
     // Inner query pages ids in index order; the outer select projects (snippet
     // regex, attachment count) only the surviving rows.
-    const rows = await this.client.many<Record<string, unknown>>(
+    const rows = await runMessageListQuery({
+      search: opts.search,
+      tenantId: this.tenantId,
+      scopedClient: this.client,
+      atomicClient: this.atomicClient,
+      query: (client) => client.many<Record<string, unknown>>(
       `SELECT ${MESSAGE_LIST_COLUMNS}
        FROM (
          SELECT id FROM messages ${whereSql}
@@ -3264,7 +3270,8 @@ export class TenantScopedStore {
        JOIN messages m ON m.tenant_id = $1 AND m.id = page.id
        ORDER BY m.sort_ts DESC, m.id DESC`,
       params,
-    );
+      ),
+    });
     const last = rows.length === limit ? rows[rows.length - 1] : undefined;
     const nextCursor =
       last && typeof last["cursor_ts"] === "string" && typeof last["id"] === "string"

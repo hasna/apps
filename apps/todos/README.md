@@ -485,8 +485,10 @@ todos extract-watch . --dry-run --max-runs 1 --json
 ```
 
 Created tasks are tagged with `extracted` and linked back to the source file.
-MCP clients can call `extract_todos` and `watch_source_todos` for the same
-offline workflow; no hosted code search, hosted sync, or telemetry is used.
+The source index is CLI-only: the former `extract_todos` / `watch_source_todos`
+MCP tools were removed (a filesystem watcher is not an MCP tool call, and the
+scan runs against the local checkout, not the hosted fleet). No hosted code
+search, hosted sync, or telemetry is used.
 
 ## Local Editor Integrations
 
@@ -1713,14 +1715,17 @@ todos-mcp
 
 ## HTTP mode
 
-Shared Streamable HTTP transport for long-lived local MCP (stdio remains the default). MCP is mounted on the existing `todos-serve` HTTP server — no second server:
+The Streamable HTTP transport is served by `todos-serve`, never by `todos-mcp`
+(stdio only). `todos-mcp --http`, `todos-mcp --port <n>` and `MCP_HTTP=1` are
+refused with exit code 2 — the listener and its auth posture are server-only
+code and do not ship in a client binary that MCP clients spawn without a
+credential. Start the server instead:
 
 ```bash
-todos-mcp --http              # starts todos-serve with MCP mounted; or MCP_HTTP=1
-todos-mcp --port 8881         # explicit HTTP port (default MCP HTTP port is 8881)
+todos-serve                   # mounts POST /mcp next to /api/*; see "REST API" for the auth gate
 ```
 
-- Bind: `127.0.0.1` only
+- Bind: `127.0.0.1` by default
 - Health: `GET /health` → `{"status":"ok","name":"todos"}`
 - MCP: `POST /mcp` on the same server as the REST API (Streamable HTTP, stateless)
 
@@ -1759,9 +1764,10 @@ todos serve --allow-anonymous           # local dev only; refused for a non-loop
 `--allow-anonymous` (or `TODOS_ALLOW_ANONYMOUS=1`) is refused for any non-loopback
 bind host, and even when enabled it only serves requests whose transport peer is
 itself loopback — so it can never publish an anonymous task read/write plane
-off-box. `todos-mcp --http` sets it implicitly because that transport is pinned to
-`127.0.0.1`; set `HASNA_TODOS_SERVER_API_KEY` (and send it from your MCP client)
-to require a credential there too.
+off-box. (`todos-mcp --http` used to set it implicitly; that path is gone — the MCP
+bin is stdio-only and `todos-serve` is the only process that serves `/mcp`.) Set
+`HASNA_TODOS_SERVER_API_KEY` (and send it from your MCP client) to require a
+credential there too.
 
 Pass the generated key from your app as `x-api-key` or `Authorization: Bearer`.
 

@@ -125,6 +125,8 @@ export async function startSelfHostedServer(
   const server = Bun.serve({
     port,
     hostname,
+    // Let the proxy close idle backend connections first (ALB default: 60s).
+    idleTimeout: 75,
     fetch: async (req, bunServer) => {
       // The socket peer address is the only client identity a request cannot
       // forge; the auth rate limits are anchored on it (see auth/client-ip.ts).

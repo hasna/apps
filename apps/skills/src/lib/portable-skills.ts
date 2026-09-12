@@ -4,17 +4,19 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "fs";
-import { basename, dirname, isAbsolute, join, normalize } from "path";
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "path";
 
 import {
   INSTALLED_SKILLS_DIRNAME,
   SKILLS_CACHE_DIRNAME,
   getDataDir,
+  getDataDirReadOnly,
   isOwnerLayoutMigrated,
 } from "./config.js";
 import { SKILLS } from "./registry-data/index.js";
@@ -109,15 +111,20 @@ const LEGACY_CUSTOM_DIRNAME = "custom";
  * and one rule for which source wins.
  */
 export function getPortableSkillsRoot(options: PortableSkillOptions = {}): string {
+  return resolvePortableSkillsRoot(options, true);
+}
+
+function resolvePortableSkillsRoot(options: PortableSkillOptions, migrate: boolean): string {
   // rootDir names the corpus directly - it is not an app folder and gets no
   // `installed` suffix. Callers that hand over a directory of skill folders mean
   // exactly that directory.
   if (options.rootDir) return options.rootDir;
-  const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills") : getDataDir();
+  const appDir = options.homeDir ? join(options.homeDir, ".hasna", "skills")
+    : migrate ? getDataDir() : getDataDirReadOnly();
   const cache = join(appDir, SKILLS_CACHE_DIRNAME);
   if (isOwnerLayoutMigrated(appDir) && safeIsDirectory(cache)) return cache;
   const installed = join(appDir, INSTALLED_SKILLS_DIRNAME);
-  migrateLegacySkillLayout(appDir, installed);
+  if (migrate) migrateLegacySkillLayout(appDir, installed);
   return installed;
 }
 
@@ -362,6 +369,30 @@ function isSkillCandidate(dir: string): boolean {
     || existsSync(join(dir, "package.json"));
 }
 
+// Resolve an absent destination through its nearest existing ancestor without
+// creating it. This also detects aliases through symlinked parent directories.
+function physicalImportPath(path: string): string {
+  let ancestor = resolve(path);
+  const suffix: string[] = [];
+  while (!existsSync(ancestor)) {
+    suffix.unshift(basename(ancestor));
+    ancestor = dirname(ancestor);
+  }
+  return join(realpathSync(ancestor), ...suffix);
+}
+
+function assertDisjointImportPaths(source: string, destination: string): void {
+  const sourcePath = realpathSync(source);
+  const destinationPath = physicalImportPath(destination);
+  const contains = (parent: string, child: string): boolean => {
+    const path = relative(parent, child);
+    return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
+  };
+  if (contains(sourcePath, destinationPath) || contains(destinationPath, sourcePath)) {
+    throw new Error("Source and destination skill directories must not overlap");
+  }
+}
+
 export function portPortableSkill(sourcePath: string, options: PortPortableSkillOptions = {}): PortableSkillWriteResult {
   const absoluteSource = normalize(sourcePath);
   if (!existsSync(absoluteSource) || !statSync(absoluteSource).isDirectory()) {
@@ -386,8 +417,12 @@ export function portPortableSkill(sourcePath: string, options: PortPortableSkill
     );
   }
 
+  // Reject before corpus resolution can copy legacy skills or create app data.
+  assertDisjointImportPaths(absoluteSource, join(resolvePortableSkillsRoot(options, false), skillName));
   const root = getPortableSkillsRoot(options);
   const destination = join(root, skillName);
+  // Migration may have materialized a previously absent path or alias.
+  assertDisjointImportPaths(absoluteSource, destination);
   if (existsSync(destination)) {
     if (!options.overwrite) throw new Error(`Skill '${skillName}' already exists at ${destination}`);
     rmSync(destination, { recursive: true, force: true });

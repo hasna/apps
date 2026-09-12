@@ -1,9 +1,9 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from "fs";
 import { createHash, randomUUID } from "crypto";
 import { join, dirname } from "path";
-import { getDataDir } from "./db.js";
+import { getConversationsHome } from "./home.js";
 import { IdentityError } from "./identity-error.js";
-import { normalizeAgentName } from "./presence.js";
+import { normalizeAgentName } from "./agent-names.js";
 import { env } from "./env.js";
 
 /**
@@ -15,7 +15,7 @@ import { env } from "./env.js";
  * the developer's REAL identity file).
  */
 function agentIdFile(): string {
-  return join(getDataDir(), "agent-id");
+  return join(getConversationsHome(), "agent-id");
 }
 
 /** Return the stable session id declared by the caller, if it has one. */
@@ -33,7 +33,7 @@ export function getDeclaredSessionId(): string | null {
  */
 function sessionIdentityFile(sessionId: string): string {
   const key = createHash("sha256").update(sessionId).digest("hex");
-  return join(getDataDir(), "session-identities", `${key}.json`);
+  return join(getConversationsHome(), "session-identities", `${key}.json`);
 }
 
 type SessionIdentityRecord = {

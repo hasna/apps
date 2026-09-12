@@ -18,8 +18,9 @@
 // the app's own chain, deleted by the 2026-09-04 adoption, hasna/apps#1720).
 // There is NO DSN / Postgres / local SQLite here — the raw RDS is never touched
 // from a client. A missing credential leaves `fromEnv` returning null and the
-// caller (resolveStore in ./client-store.ts) FAILS CLOSED unless local mode was
-// explicitly opted into — unset env is never an implicit local store. A
+// caller (resolveStore in ./client-store.ts) FAILS CLOSED unless the local
+// backend was explicitly opted into — unset env is never an implicit local
+// store. A
 // MISCONFIGURED hosted side (a URL with no key, a declared-but-blank variable,
 // disagreeing authorities, an unreadable credential file) always throws: it is
 // never resolved around and never degrades to local.
@@ -101,8 +102,8 @@ export class CloudShortlinksStore implements Store {
    * default, so a credential alone is enough — URLs never need configuring.
    *
    * `null` means NO credential resolved anywhere — the caller must then fail
-   * closed unless local mode was explicitly opted into (never a silent switch
-   * to the on-box store). Anything else — a URL without a credential, a
+   * closed unless the local backend was explicitly opted into (never a silent
+   * switch to the on-box store). Anything else — a URL without a credential, a
    * declared-but-blank variable, disagreeing authorities, an unreadable
    * credential file — THROWS: a partially configured hosted client must fail
    * loudly, never silently drift to the local dataset.
@@ -251,7 +252,8 @@ export class CloudShortlinksStore implements Store {
 
   async recordClick(_link: Link, _input: ClickInput = {}): Promise<Click> {
     throw new Error(
-      "recordClick is not supported over the cloud API; clicks are recorded by the redirect server.",
+      "Clicks are recorded by the redirect service that serves each short URL; the /v1 API has no " +
+        "client click-record endpoint, so this store records no clicks of its own.",
     );
   }
 

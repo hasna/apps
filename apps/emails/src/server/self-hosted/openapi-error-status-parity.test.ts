@@ -87,7 +87,8 @@ const SERVICE_STATUS_MATRIX: ReadonlyArray<readonly [string, string, readonly nu
   ["/v1/addresses/{id}", "patch", [200, 400, 401, 403, 404, 413, 500]],
   ["/v1/addresses/{id}", "put", [200, 400, 401, 403, 404, 413, 500]],
   ["/v1/addresses/{id}", "delete", [200, 401, 403, 404, 500]],
-  ["/v1/messages", "get", [200, 400, 401, 403, 500]],
+  ["/v1/messages", "get", [200, 400, 401, 403, 429, 500, 504]],
+  ["/v1/mailbox-filters/{id}/apply", "post", [200, 400, 401, 403, 404, 413, 429, 500, 504]],
   ["/v1/messages", "post", [200, 201, 400, 401, 403, 409, 413, 500]],
   // The record route carries NO 409: it accepts either direction, so the outbound
   // rejection that /v1/messages answers with has nothing to fire on here. That absence

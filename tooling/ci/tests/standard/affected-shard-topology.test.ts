@@ -8,7 +8,7 @@ function problems(source: Workflow, executable: string): string[] {
   const out: string[] = [], jobs = source.jobs, planner = jobs["affected-plan"], shard = jobs["affected-shard"], aggregate = jobs["build-test"];
   const require = (ok: unknown, label: string) => { if (!ok) out.push(label); };
   require(JSON.stringify(source.permissions) === JSON.stringify({ contents: "read" }), "read-only workflow");
-  require(JSON.stringify(Object.keys(jobs)) === JSON.stringify(["gates", "test-suites", "affected-plan", "affected-shard", "build-test", "verify-generated", "publish-guard"]), "explicit complete job topology");
+  require(JSON.stringify(Object.keys(jobs)) === JSON.stringify(["gates", "test-suites", "affected-plan", "affected-shard", "build-test", "client-gates", "verify-generated", "publish-guard"]), "explicit complete job topology");
   for (const [name, job] of Object.entries(jobs)) {
     require(job.permissions === undefined && job["continue-on-error"] === undefined, `${name}: no permission or failure override`);
   }

@@ -203,7 +203,9 @@ The two transports behind `ConfigStore`:
 - **local** — on-box SQLite (`LocalConfigStore`), **opt-in only**:
   `HASNA_INSTRUCTIONS_LOCAL=1`, honoured only when the environment configures
   no authority and no credential. Every local run says `local mode` once on
-  stderr.
+  stderr. The SQLite half is loaded through a single dynamic import and is
+  bundled as a separate chunk, so `dist/cli/index.js` and `dist/mcp/index.js`
+  ship with zero `bun:sqlite` references and a hosted run never loads it.
 
 Retired locations (`~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`,
 `$XDG_CONFIG_HOME`, a `~/.instructions/config.json` key store) are inputs

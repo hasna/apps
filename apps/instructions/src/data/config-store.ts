@@ -37,45 +37,7 @@
 // says "local" on stderr.
 import { randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
-import {
-  createConfig as dbCreateConfig,
-  deleteConfig as dbDeleteConfig,
-  getConfig as dbGetConfig,
-  getConfigById as dbGetConfigById,
-  getConfigStats as dbGetConfigStats,
-  listConfigs as dbListConfigs,
-  updateConfig as dbUpdateConfig,
-} from "../db/configs.js";
-import {
-  addConfigToProfile as dbAddConfigToProfile,
-  createProfile as dbCreateProfile,
-  deleteProfile as dbDeleteProfile,
-  getProfile as dbGetProfile,
-  getProfileConfigsPage as dbGetProfileConfigsPage,
-  getProfileConfigBindings as dbGetProfileConfigBindings,
-  listProfilesPage as dbListProfilesPage,
-  removeConfigFromProfile as dbRemoveConfigFromProfile,
-  resolveProfileForMachineRead as dbResolveProfileForMachineRead,
-  setProfileConfigBinding as dbSetProfileConfigBinding,
-  updateProfile as dbUpdateProfile,
-  addAssetToProfile as dbAddAssetToProfile,
-  getProfileAssetBindings as dbGetProfileAssetBindings,
-  removeAssetFromProfile as dbRemoveAssetFromProfile,
-  setProfileAssetBinding as dbSetProfileAssetBinding,
-} from "../db/profiles.js";
-import {
-  createSnapshot as dbCreateSnapshot,
-  getSnapshot as dbGetSnapshot,
-  getSnapshotByVersion as dbGetSnapshotByVersion,
-  listSnapshots as dbListSnapshots,
-  pruneSnapshots as dbPruneSnapshots,
-} from "../db/snapshots.js";
-import {
-  listMachines as dbListMachines,
-  registerMachine as dbRegisterMachine,
-  updateMachineApplied as dbUpdateMachineApplied,
-} from "../db/machines.js";
-import { insertFeedback as dbInsertFeedback, resetLocalDatabase as dbResetLocalDatabase, type FeedbackInput } from "../db/database.js";
+import type { FeedbackInput } from "../db/database.js";
 import { ConfigNotFoundError, ProfileNotFoundError } from "../types/index.js";
 import type {
   Config,
@@ -299,6 +261,26 @@ export interface ConfigStore {
 }
 
 /**
+ * The ONE seam that loads the on-box SQLite store, and it is a DYNAMIC import.
+ *
+ * `../db/local.js` is the only module in this package that reaches `bun:sqlite`
+ * from the client graph, and nothing imports it statically. That is what keeps
+ * `dist/cli/index.js` and `dist/mcp/index.js` free of the local store: the
+ * bundler emits it as a separate chunk (`dist/chunks/*`) that a hosted run
+ * never loads. Routing is decided before any of this, in
+ * {@link resolveConfigStore} — the opt-in `HASNA_INSTRUCTIONS_LOCAL=1`,
+ * answered from the env dictionary alone — and `getDatabase()` still refuses
+ * to open a file in a process configured for a hosted authority.
+ *
+ * The promise is memoised so a local-mode session pays the import once.
+ */
+let localStoreModulePromise: Promise<typeof import("../db/local.js")> | null = null;
+function localStoreModule(): Promise<typeof import("../db/local.js")> {
+  if (!localStoreModulePromise) localStoreModulePromise = import("../db/local.js");
+  return localStoreModulePromise;
+}
+
+/**
  * Local SQLite-backed store (wraps the synchronous db layer). Accepts an
  * explicit `Database` handle for isolated use (tests); otherwise uses the
  * process-wide singleton via the db layer's default.
@@ -310,41 +292,41 @@ export class LocalConfigStore implements ConfigStore {
 
   // Configs
   async listConfigs(filter?: ConfigFilter): Promise<Config[]> {
-    return dbListConfigs(filter, this.db);
+    return (await localStoreModule()).listConfigs(filter, this.db);
   }
   async getConfig(idOrSlug: string): Promise<Config> {
-    return dbGetConfig(idOrSlug, this.db);
+    return (await localStoreModule()).getConfig(idOrSlug, this.db);
   }
   async getConfigById(id: string): Promise<Config> {
-    return dbGetConfigById(id, this.db);
+    return (await localStoreModule()).getConfigById(id, this.db);
   }
   async createConfig(input: CreateConfigInput): Promise<Config> {
-    return dbCreateConfig(input, this.db);
+    return (await localStoreModule()).createConfig(input, this.db);
   }
   async updateConfig(idOrSlug: string, input: UpdateConfigInput): Promise<Config> {
-    return dbUpdateConfig(idOrSlug, input, this.db);
+    return (await localStoreModule()).updateConfig(idOrSlug, input, this.db);
   }
   async deleteConfig(idOrSlug: string): Promise<void> {
-    dbDeleteConfig(idOrSlug, this.db);
+    (await localStoreModule()).deleteConfig(idOrSlug, this.db);
   }
   async getConfigStats(): Promise<Record<string, number>> {
-    return dbGetConfigStats(this.db);
+    return (await localStoreModule()).getConfigStats(this.db);
   }
   // Snapshots
   async listSnapshots(configId: string): Promise<ConfigSnapshot[]> {
-    return dbListSnapshots(configId, this.db);
+    return (await localStoreModule()).listSnapshots(configId, this.db);
   }
   async getSnapshot(id: string): Promise<ConfigSnapshot | null> {
-    return dbGetSnapshot(id, this.db);
+    return (await localStoreModule()).getSnapshot(id, this.db);
   }
   async getSnapshotByVersion(configId: string, version: number): Promise<ConfigSnapshot | null> {
-    return dbGetSnapshotByVersion(configId, version, this.db);
+    return (await localStoreModule()).getSnapshotByVersion(configId, version, this.db);
   }
   async createSnapshot(configId: string, content: string, version: number): Promise<ConfigSnapshot> {
-    return dbCreateSnapshot(configId, content, version, this.db);
+    return (await localStoreModule()).createSnapshot(configId, content, version, this.db);
   }
   async pruneSnapshots(configId: string, keep = 10): Promise<number> {
-    return dbPruneSnapshots(configId, keep, this.db);
+    return (await localStoreModule()).pruneSnapshots(configId, keep, this.db);
   }
   // Profiles
   async listProfiles(): Promise<Profile[]> {
@@ -358,10 +340,10 @@ export class LocalConfigStore implements ConfigStore {
     }
   }
   async listProfilesPage(options: BoundedReadOptions = {}): Promise<BoundedReadPage<Profile>> {
-    return dbListProfilesPage(options, this.db);
+    return (await localStoreModule()).listProfilesPage(options, this.db);
   }
   async getProfile(idOrSlug: string): Promise<Profile> {
-    return dbGetProfile(idOrSlug, this.db);
+    return (await localStoreModule()).getProfile(idOrSlug, this.db);
   }
   async getProfileConfigs(idOrSlug: string): Promise<Config[]> {
     const configs: Config[] = [];
@@ -374,40 +356,40 @@ export class LocalConfigStore implements ConfigStore {
     }
   }
   async getProfileConfigsPage(idOrSlug: string, options: BoundedReadOptions = {}): Promise<BoundedReadPage<Config>> {
-    return dbGetProfileConfigsPage(idOrSlug, options, this.db);
+    return (await localStoreModule()).getProfileConfigsPage(idOrSlug, options, this.db);
   }
   async getProfileConfigBindings(idOrSlug: string): Promise<ProfileConfigBinding[]> {
-    return dbGetProfileConfigBindings(idOrSlug, this.db);
+    return (await localStoreModule()).getProfileConfigBindings(idOrSlug, this.db);
   }
   async createProfile(input: CreateProfileInput): Promise<Profile> {
-    return dbCreateProfile(input, this.db);
+    return (await localStoreModule()).createProfile(input, this.db);
   }
   async updateProfile(idOrSlug: string, input: UpdateProfileInput): Promise<Profile> {
-    return dbUpdateProfile(idOrSlug, input, this.db);
+    return (await localStoreModule()).updateProfile(idOrSlug, input, this.db);
   }
   async deleteProfile(idOrSlug: string): Promise<void> {
-    dbDeleteProfile(idOrSlug, this.db);
+    (await localStoreModule()).deleteProfile(idOrSlug, this.db);
   }
   async addConfigToProfile(profileIdOrSlug: string, configId: string): Promise<void> {
-    dbAddConfigToProfile(profileIdOrSlug, configId, this.db);
+    (await localStoreModule()).addConfigToProfile(profileIdOrSlug, configId, this.db);
   }
   async setProfileConfigBinding(profileIdOrSlug: string, configId: string, binding: ProfileConfigBindingSpec): Promise<ProfileConfigBinding> {
-    return dbSetProfileConfigBinding(profileIdOrSlug, configId, binding, this.db);
+    return (await localStoreModule()).setProfileConfigBinding(profileIdOrSlug, configId, binding, this.db);
   }
   async removeConfigFromProfile(profileIdOrSlug: string, configId: string): Promise<void> {
-    dbRemoveConfigFromProfile(profileIdOrSlug, configId, this.db);
+    (await localStoreModule()).removeConfigFromProfile(profileIdOrSlug, configId, this.db);
   }
   async getProfileAssetBindings(profileIdOrSlug: string): Promise<ProfileAssetBinding[]> {
-    return dbGetProfileAssetBindings(profileIdOrSlug, this.db);
+    return (await localStoreModule()).getProfileAssetBindings(profileIdOrSlug, this.db);
   }
   async addAssetToProfile(profileIdOrSlug: string, sourceConfigId: string, binding: ProfileAssetBindingSpec): Promise<ProfileAssetBinding> {
-    return dbAddAssetToProfile(profileIdOrSlug, sourceConfigId, binding, this.db);
+    return (await localStoreModule()).addAssetToProfile(profileIdOrSlug, sourceConfigId, binding, this.db);
   }
   async setProfileAssetBinding(profileIdOrSlug: string, assetKey: string, binding: ProfileAssetBindingSpec): Promise<ProfileAssetBinding> {
-    return dbSetProfileAssetBinding(profileIdOrSlug, assetKey, binding, this.db);
+    return (await localStoreModule()).setProfileAssetBinding(profileIdOrSlug, assetKey, binding, this.db);
   }
   async removeAssetFromProfile(profileIdOrSlug: string, assetKey: string): Promise<void> {
-    dbRemoveAssetFromProfile(profileIdOrSlug, assetKey, this.db);
+    (await localStoreModule()).removeAssetFromProfile(profileIdOrSlug, assetKey, this.db);
   }
   async resolveProfileForMachine(machine?: MachineContext): Promise<Profile | null> {
     return (await this.resolveProfileForMachineRead(machine)).profile;
@@ -417,24 +399,24 @@ export class LocalConfigStore implements ConfigStore {
     options: BoundedReadOptions = {},
   ): Promise<ProfileResolutionRead> {
     return machine
-      ? dbResolveProfileForMachineRead(machine, options, this.db)
-      : dbResolveProfileForMachineRead(undefined, options, this.db);
+      ? (await localStoreModule()).resolveProfileForMachineRead(machine, options, this.db)
+      : (await localStoreModule()).resolveProfileForMachineRead(undefined, options, this.db);
   }
   // Machines
   async registerMachine(hostname?: string, os?: string, arch?: string): Promise<Machine> {
-    return dbRegisterMachine(hostname, os, arch, this.db);
+    return (await localStoreModule()).registerMachine(hostname, os, arch, this.db);
   }
   async updateMachineApplied(hostname?: string): Promise<void> {
-    dbUpdateMachineApplied(hostname, this.db);
+    (await localStoreModule()).updateMachineApplied(hostname, this.db);
   }
   async listMachines(): Promise<Machine[]> {
-    return dbListMachines(this.db);
+    return (await localStoreModule()).listMachines(this.db);
   }
   async sendFeedback(input: FeedbackInput): Promise<void> {
-    dbInsertFeedback(input, this.db);
+    (await localStoreModule()).insertFeedback(input, this.db);
   }
   async reset(): Promise<void> {
-    dbResetLocalDatabase();
+    (await localStoreModule()).resetLocalDatabase();
   }
 }
 
@@ -902,8 +884,8 @@ export class CloudConfigStore implements ConfigStore {
 
   async reset(): Promise<void> {
     throw new Error(
-      "`init --force` cannot wipe the shared cloud store from a client. " +
-        "Point this run at the local store (HASNA_INSTRUCTIONS_LOCAL=1 with no hosted credential) to reset it instead.",
+      "`init --force` cannot wipe the shared hosted store from a client. " +
+        "Force-wipe is available only against the on-box SQLite store (HASNA_INSTRUCTIONS_LOCAL=1 with no hosted credential).",
     );
   }
 }

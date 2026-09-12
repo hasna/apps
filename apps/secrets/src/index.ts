@@ -54,8 +54,6 @@ Commands:
   items delete <id>           delete a structured vault item
   items add-login --title <title> --url <url> --username <user> --password <pass>
   items add-address --title <title> [--name <name>] [--line1 <line>] [--city <city>]
-  import-env                 import ~/.secrets/ .env files into vault [--dir <path>] [--push] [--dry-run] [--overwrite]
-  export-env                 export vault secrets to ~/.secrets/ .env files [--dir <path>] [--force] [--dry-run]
   list [namespace] [--json]
   search <query> [--json]
   export [--show|--plaintext] [--pretty]  export redacted compact JSON by default
@@ -70,7 +68,6 @@ Commands:
   status                      show metadata-only secret reference health
   gc                          prune expired secrets
   audit [key] [--json]        show audit log
-  path                        show vault db path
   events                      emit, list, and replay Hasna events
   webhooks                    manage Hasna event webhook subscriptions
 
@@ -211,15 +208,6 @@ Structured vault items
     secrets items search github
     secrets items get <id>        # redacted
     secrets items get <id> --show # decrypted payload
-
-Env-file bridge
-  Import ~/.secrets .env files into the vault:
-    secrets import-env --dir ~/.secrets --dry-run
-    secrets import-env --dir ~/.secrets --overwrite
-
-  Export vault entries back to ~/.secrets .env files:
-    secrets export-env --dir ~/.secrets --dry-run
-    secrets export-env --dir ~/.secrets --force
 
 AWS Secrets Manager sync
   Preview metadata-only actions with profile/default-chain credentials:
@@ -497,7 +485,7 @@ async function writeStdout(text: string): Promise<void> {
 
 /**
  * Drain any `console.log` bytes still buffered in Bun's stdout writer before
- * the top-level script ends. `get --show` values, export-env messages and the
+ * the top-level script ends. `get --show` values, `export` output and the
  * plain loop prints all write through `process.stdout`, whose JS-side buffer
  * is dropped on early exit for piped output (see `writeStdout`). Runs only
  * for non-TTY stdout (pipes): TTY writes flush line-synchronously.
@@ -877,7 +865,7 @@ switch (command) {
       // (handled as "Not found" below) but RETHROWS every other failure — e.g. a
       // server-side decrypt 500. Catch it here so the CLI prints a clean one-line
       // error and exits non-zero, instead of leaking a raw HasnaHttpError stack
-      // trace + internal frames (matches the export-env "Skipped unreadable" path).
+      // trace + internal frames (matches the bulk-read "skipped unreadable" path).
       // The message is value-free (method/path/status only); never log the value.
       console.error(`Unable to read secret "${key}": ${e?.message ?? String(e)}`);
       process.exit(1);
@@ -1325,11 +1313,6 @@ switch (command) {
     break;
   }
 
-  case "path": {
-    console.log(store().describe().location);
-    break;
-  }
-
   case "users": {
     // Flags (e.g. --type) are already extracted by the top-level parseArgs into
     // `flags`; the subcommand args are the remaining positionals. Re-parsing
@@ -1634,56 +1617,13 @@ switch (command) {
     break;
   }
 
-  case "import-env": {
-    const { importEnv } = await import("./env.js");
-    try {
-      const result = await importEnv({
-        dir: flags.dir,
-        push: "push" in flags,
-        dryRun: "dry-run" in flags,
-        overwrite: "overwrite" in flags,
-      });
-      if ("dry-run" in flags) {
-        console.log(`\n[dry-run] Would import ${result.imported} secret(s) from ${result.files} file(s)`);
-      } else {
-        console.log(`✓ Imported ${result.imported} secret(s) from ${result.files} file(s)`);
-        if (result.skipped > 0) console.log(`  Skipped ${result.skipped} already-existing key(s) (use --overwrite to replace)`);
-      }
-    } catch (e: any) {
-      console.error(`Import failed: ${e.message}`);
-      process.exit(1);
-    }
-    break;
-  }
-
-  case "export-env": {
-    const { exportEnv } = await import("./env.js");
-    try {
-      const result = await exportEnv({
-        dir: flags.dir,
-        force: "force" in flags,
-        dryRun: "dry-run" in flags,
-      });
-      if ("dry-run" in flags) {
-        console.log(`\n[dry-run] Would export ${result.exported} secret(s) to ${result.files} file(s)`);
-      } else {
-        console.log(`✓ Exported ${result.exported} secret(s) to ${result.files} file(s)`);
-        if (result.skippedFiles > 0) console.log(`  Skipped ${result.skippedFiles} existing file(s) (use --force to overwrite)`);
-      }
-    } catch (e: any) {
-      console.error(`Export failed: ${e.message}`);
-      process.exit(1);
-    }
-    break;
-  }
-
   case "encrypt-vault": {
     try {
-      const active = store();
-      const { migrated, alreadyEncrypted } = await active.encryptVault();
-      console.log(active.mode === "api"
-        ? `✓ Encrypted ${migrated} payload(s). ${alreadyEncrypted} already encrypted and verified.`
-        : `✓ Encrypted ${migrated} secret(s). ${alreadyEncrypted} already encrypted.`);
+      // One path only: the service verifies and repairs its own payload tables
+      // through POST /v1/encryption/repair. There is no second, locally worded
+      // outcome to branch on.
+      const { migrated, alreadyEncrypted } = await store().encryptVault();
+      console.log(`✓ Encrypted ${migrated} payload(s). ${alreadyEncrypted} already encrypted and verified.`);
     } catch (e: any) {
       console.error(e.message);
       process.exit(1);

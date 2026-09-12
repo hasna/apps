@@ -16,7 +16,11 @@ import {
   SERVICE_SURFACE_KINDS,
   STORAGE_ENGINES,
   WAIVABLE_STORAGE_ENGINES,
-  HOSTING_MODES
+  HOSTING_MODES,
+  SERVING_ACCESS_MODES,
+  FLEET_GATEWAY_HOST,
+  clientKeySecretRefFor,
+  gatewayClientBaseFor
 } from "../src";
 
 const repoRoot = join(import.meta.dir, "..");
@@ -818,6 +822,173 @@ describe("service contract manifest validation", () => {
   });
 });
 
+describe("serving contract (gateway route declaration)", () => {
+  // A served app: ships a <-serve> bin, routes through the shared gateway.
+  const baseService = {
+    schema: SCHEMA_IDS.serviceContract,
+    name: "notes",
+    class: "service",
+    contractVersion: SERVICE_CONTRACT_VERSION,
+    kitVersion: "1.0.2",
+    bins: ["notes", "notes-mcp", "notes-serve"],
+    storage: {
+      backend: "postgresql",
+      engines: ["postgresql"],
+      envPrefix: "HASNA_NOTES_",
+      pgTestGate: { envVar: "NOTES_TEST_DATABASE_URL", command: "bun run test:pg" }
+    },
+    serviceSurfaces: [
+      {
+        name: "notes-serve",
+        kind: "api",
+        status: "supported",
+        bin: "notes-serve",
+        authMode: "api-key",
+        health: { method: "GET", path: "/health" },
+        readiness: { method: "GET", path: "/ready" },
+        version: { method: "GET", path: "/version" }
+      }
+    ]
+  } as const;
+
+  const baseServing = {
+    routeSlug: "notes",
+    access: "api-key",
+    targetClientBase: gatewayClientBaseFor("notes")
+  } as const;
+
+  test("the fixture is a valid service manifest before serving is added", () => {
+    expect(validateServiceContractManifest(baseService).success).toBe(true);
+  });
+
+  test("the hosting enum is unchanged, so route placement is not a product story", () => {
+    // The decision on record: a route is expressed by `serving`, never by a new
+    // `hosting` value. `hosting` still rejects anything outside its two stories.
+    expect(HOSTING_MODES).toEqual(["user-hosted", "hasna-saas"]);
+    expect(SERVING_ACCESS_MODES).toEqual(["public", "api-key", "signature"]);
+    expect(validateServiceContractManifest({ ...baseService, hosting: ["gateway"] }).success).toBe(false);
+    expect(validateServiceContractManifest({ ...baseService, hosting: ["user-hosted", "hasna-saas"] }).success).toBe(true);
+  });
+
+  test("the old shape (no serving key) still validates and asserts no route", () => {
+    const parsed = ServiceContractManifestSchema.parse(baseService);
+    expect(parsed.serving).toBeUndefined();
+  });
+
+  test("the new shape (serving key) validates and round-trips", () => {
+    const result = validateServiceContractManifest({ ...baseService, serving: baseServing });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.serving).toEqual(baseServing);
+    }
+  });
+
+  test("a non-gateway client base is accepted (a pinned-origin override)", () => {
+    const result = validateServiceContractManifest({
+      ...baseService,
+      serving: { ...baseServing, targetClientBase: "https://notes.example.com" }
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test("the secret ref and default base mirror the fleet registry", () => {
+    expect(FLEET_GATEWAY_HOST).toBe("api.hasna.com");
+    expect(clientKeySecretRefFor("notes")).toBe("hasna/oss/notes/api-key");
+    expect(gatewayClientBaseFor("notes")).toBe("https://api.hasna.com/notes");
+  });
+
+  test("rejects a base ending in /v1, a trailing slash, credentials, query, or plain http", () => {
+    for (const targetClientBase of [
+      "https://api.hasna.com/notes/v1",
+      // Non-gateway hosts are exempt from the routeSlug-prefix rule, so this
+      // one isolates the /v1 rule as load-bearing on its own.
+      "https://notes.example.com/v1",
+      "https://api.hasna.com/notes/",
+      "https://user:pass@api.hasna.com/notes",
+      "https://api.hasna.com/notes?x=1",
+      "https://api.hasna.com/notes#frag",
+      "http://api.hasna.com/notes"
+    ]) {
+      expect(
+        validateServiceContractManifest({ ...baseService, serving: { ...baseServing, targetClientBase } }).success,
+        `${targetClientBase} must be rejected`
+      ).toBe(false);
+    }
+  });
+
+  test("rejects a gateway base whose path segment is not the routeSlug", () => {
+    const result = validateServiceContractManifest({
+      ...baseService,
+      serving: { ...baseServing, targetClientBase: "https://api.hasna.com/messages" }
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue) => issue.path.join("."))).toContain("serving.targetClientBase");
+    }
+  });
+
+  test("rejects a routeSlug that is not a lowercase dashed slug", () => {
+    for (const routeSlug of ["Notes", "notes/v1", "-notes", "notes_api"]) {
+      const result = validateServiceContractManifest({
+        ...baseService,
+        serving: { ...baseServing, routeSlug, targetClientBase: "https://notes.example.com" }
+      });
+      expect(result.success, `${routeSlug} must be rejected`).toBe(false);
+    }
+  });
+
+  test("rejects an unknown access mode and an unknown key inside serving (strict block)", () => {
+    expect(
+      validateServiceContractManifest({ ...baseService, serving: { ...baseServing, access: "oauth" } }).success
+    ).toBe(false);
+    const withExtra = validateServiceContractManifest({
+      ...baseService,
+      serving: { ...baseServing, notes: "unknown" }
+    });
+    expect(withExtra.success).toBe(false);
+    if (!withExtra.success) {
+      expect(withExtra.error.issues.some((issue) => issue.code === "unrecognized_keys")).toBe(true);
+    }
+  });
+
+  test("rejects a serving block missing a required field", () => {
+    const { access: _access, ...withoutAccess } = baseServing;
+    expect(
+      validateServiceContractManifest({ ...baseService, serving: withoutAccess }).success
+    ).toBe(false);
+    const { targetClientBase: _base, ...withoutBase } = baseServing;
+    expect(
+      validateServiceContractManifest({ ...baseService, serving: withoutBase }).success
+    ).toBe(false);
+  });
+
+  test("rejects serving on a library repo, which ships no serve surface", () => {
+    const library = {
+      schema: SCHEMA_IDS.serviceContract,
+      name: "contracts",
+      class: "library",
+      contractVersion: SERVICE_CONTRACT_VERSION,
+      kitVersion: "1.0.2",
+      bins: ["contracts"]
+    } as const;
+    expect(validateServiceContractManifest(library).success).toBe(true);
+    const result = validateServiceContractManifest({
+      ...library,
+      serving: { routeSlug: "contracts", access: "api-key", targetClientBase: gatewayClientBaseFor("contracts") }
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue) => issue.path.join("."))).toContain("serving");
+    }
+  });
+
+  test("an unknown top-level key is still rejected — serving did not relax strictness", () => {
+    expect(
+      validateServiceContractManifest({ ...baseService, unrouted: true }).success
+    ).toBe(false);
+  });
+});
+
 describe("service contract JSON schema and repo manifest", () => {
   test("shipped JSON schema file matches the exported constant", () => {
     const shipped = JSON.parse(readFileSync(join(repoRoot, "src", "hasna.contract.schema.json"), "utf8"));
@@ -843,5 +1014,17 @@ describe("service contract JSON schema and repo manifest", () => {
       expect(loaded.manifest.serviceSurfaces.map((surface) => surface.kind)).toEqual(["sdk", "cli"]);
       expect(loaded.manifest.metadata?.conformance?.waivedSurfaces.map((waiver) => waiver.kind)).toEqual(["api", "mcp"]);
     }
+  });
+
+  test("the shipped JSON Schema carries a closed serving object and an unchanged hosting enum", () => {
+    const shipped = JSON.parse(readFileSync(join(repoRoot, "src", "hasna.contract.schema.json"), "utf8")) as any;
+    const serving = shipped.properties?.serving;
+    expect(serving, "serving is declared").toBeDefined();
+    expect(serving.additionalProperties, "serving is closed").toBe(false);
+    expect(serving.required).toEqual(["routeSlug", "access", "targetClientBase"]);
+    expect(serving.properties.routeSlug.pattern).toBe("^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$");
+    expect(serving.properties.access.enum).toEqual(["public", "api-key", "signature"]);
+    // The route schema is additive: the product-story enum is untouched.
+    expect(shipped.properties.hosting.items.enum).toEqual(["user-hosted", "hasna-saas"]);
   });
 });
