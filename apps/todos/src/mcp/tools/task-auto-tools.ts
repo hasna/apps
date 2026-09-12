@@ -60,7 +60,11 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
               status: "completed",
               include_archived: false,
               ...(project_id ? { project_id } : {}),
-            } as never)).filter((t) => (t.completed_at ?? t.updated_at ?? "") < cutoff);
+            // Parity with the local archiveTasks predicate, which is
+            // `updated_at < cutoff` (src/db/task-relations.ts:164-168), not
+            // completed_at: a different clock here would archive a different
+            // set through the two doors.
+            } as never)).filter((t) => (t.updated_at ?? "") < cutoff);
             let archived = 0;
             for (const t of candidates) {
               await cloudUpdateTask(cloud, t.id, { archived_at: stampedAt, version: t.version });

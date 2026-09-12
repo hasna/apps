@@ -123,8 +123,10 @@ test("agents: suggest_agent_name reads the shared roster, not this machine's", a
 });
 
 test("task-auto: archive_completed, unarchive_task, get_archived_tasks and rebalance_workload run on /v1", async () => {
-  const old = task({ id: "arch-1", status: "completed", completed_at: iso(-30 * 24 * 60 * 60 * 1000) });
-  const fresh = task({ id: "arch-2", status: "completed", completed_at: iso(-60 * 60 * 1000) });
+  // archive_completed selects on updated_at, matching the local archiveTasks
+  // predicate (src/db/task-relations.ts:164-168) — not completed_at.
+  const old = task({ id: "arch-1", status: "completed", completed_at: iso(-30 * 24 * 60 * 60 * 1000), updated_at: iso(-30 * 24 * 60 * 60 * 1000) });
+  const fresh = task({ id: "arch-2", status: "completed", completed_at: iso(-60 * 60 * 1000), updated_at: iso(-60 * 60 * 1000) });
   const archived = task({ id: "arch-3", short_id: "ARCH-3", status: "completed", archived_at: iso(-3600_000) });
   const patched: Array<{ id: string; body: Record<string, unknown> }> = [];
   await withHostedTools(
