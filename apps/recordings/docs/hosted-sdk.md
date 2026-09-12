@@ -111,12 +111,15 @@ pagination. Limits are 1–100, default 25.
 
 ```sh
 recordings-mcp --hosted --stdio --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION
+# Explicit startup opt-in for rename/delete:
+recordings-mcp --hosted --allow-writes --stdio --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION
 ```
 
 This explicit mode exposes `recordings_hosted_list`, `recordings_hosted_get` and
 `recordings_hosted_paste_history` for these reads; each accepts `includeText: true`.
 The read-only `recordings_hosted_providers` tool accepts no arguments.
-`recordings_hosted_rename` accepts `{id, title}` and
+Without `--allow-writes`, the MCP server registers only those four read tools.
+When started with `--allow-writes`, `recordings_hosted_rename` accepts `{id, title}` and
 `recordings_hosted_delete` accepts `{id}`. Both are marked as destructive mutations
 because rename replaces metadata and delete removes data. Rename is not marked
 idempotent because the service can update its modification timestamp on each
@@ -126,18 +129,23 @@ MCP HTTP listener. Legacy MCP mode is unchanged.
 
 ```sh
 recordings-serve --hosted --api-base "$MY_RECORDINGS_API_BASE" --port 8874
+# Explicit startup opt-in for recording mutations:
+recordings-serve --hosted --allow-writes --api-base "$MY_RECORDINGS_API_BASE" --port 8874
 ```
 
-The proxy binds to `127.0.0.1` by default; only `127.0.0.1` and `::1`
+The proxy remains read-only by default and binds to `127.0.0.1`; only `127.0.0.1` and `::1`
 are accepted. It supports `GET /v1/recordings`, `GET /v1/recordings/<id>` and
 `GET /v1/paste-history` and `GET /v1/providers`.
 Both list routes accept `limit`, `before`, `beforeId` and `includeText=true|false`; get
 accepts only `includeText`. The providers route accepts no query parameters.
-`PATCH /v1/recordings/<id>` accepts only a JSON `{title}` body and returns
+With `--allow-writes`, `PATCH /v1/recordings/<id>` accepts only a JSON `{title}` body and returns
 metadata. The body has an 8 KiB limit and a five-second read deadline.
 `DELETE /v1/recordings/<id>` accepts no body. It preserves the hosted service's
 `202 {audioCleanup: {state: "pending"}}` or empty `204` response. Both mutation
-routes reject query parameters. Every request supplies its own
+routes reject query parameters and remain refused with 405 when the startup
+flag is absent. `--allow-writes` is valid only with `--hosted`; it never changes
+legacy MCP or serve mode. This startup option adds no confirmation prompt and
+does not change direct CLI or SDK mutations. Every request supplies its own
 `Authorization: Bearer <session>` header. Process credentials are never used,
 and a request cannot choose the upstream authority. Cookies, browser Origin
 headers, other mutation routes and unknown query fields are refused. Responses are

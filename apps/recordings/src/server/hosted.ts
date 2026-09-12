@@ -50,7 +50,7 @@ async function renameTitle(request: Request): Promise<string> {
   }
 }
 /** Explicit proxy mode: the caller's bearer is the sole credential; the upstream cannot be selected by a request. */
-export function buildHostedFetch(options: { apiBase: string; fetch?: typeof globalThis.fetch }) {
+export function buildHostedFetch(options: { apiBase: string; fetch?: typeof globalThis.fetch; allowWrites?: boolean }) {
   const apiBase = new HostedRecordingsClient({ apiBase: options.apiBase }).apiBase;
   return async (request: Request): Promise<Response> => {
     try {
@@ -62,7 +62,8 @@ export function buildHostedFetch(options: { apiBase: string; fetch?: typeof glob
       const isProviders = url.pathname === "/v1/providers";
       if (!match && !isPasteHistory && !isProviders) return json({ error: { code: "not_found", message: "This hosted Library route does not exist." } }, 404);
       const mutation = Boolean(match?.[1]) && ["PATCH", "DELETE"].includes(request.method);
-      if (request.method !== "GET" && !mutation) return json({ error: { code: "read_only", message: "This hosted Library route does not support the requested method." } }, 405);
+      if (request.method !== "GET" && (!mutation || options.allowWrites !== true)) return json({ error: { code: "read_only",
+        message: options.allowWrites === true ? "This hosted Library route does not support the requested method." : "Hosted Library mode supports GET only." } }, 405);
       if ((isProviders || mutation) && url.searchParams.size) throw new RecordingsSDKError("invalid_input");
       if (request.method === "DELETE" && request.body !== null) throw new RecordingsSDKError("invalid_input");
       const page = isProviders || mutation ? {} : readOptions(url, isPasteHistory || match?.[1] === undefined);

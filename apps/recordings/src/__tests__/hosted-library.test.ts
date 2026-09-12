@@ -89,7 +89,7 @@ test("actual MCP discovery and dispatch expose the read-only hosted operations",
   await server.connect(serverTransport); await client.connect(clientTransport);
   try {
     const { tools } = await client.listTools();
-    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_delete", "recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers", "recordings_hosted_rename"]);
+    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"]);
     const reads = tools.filter(tool => !["recordings_hosted_rename", "recordings_hosted_delete"].includes(tool.name));
     expect(reads.every(tool => tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false)).toBe(true);
     const result = await client.callTool({ name: "recordings_hosted_list", arguments: { limit: 1 } });
@@ -209,7 +209,7 @@ test("hosted CLI exposes rename and delete without implicit retries or private o
 });
 
 test("hosted MCP mutations have truthful annotations and preserve pending deletion", async () => {
-  const f = mutationFixture(), server = buildHostedServer(f.client);
+  const f = mutationFixture(), server = buildHostedServer(f.client, { allowWrites: true });
   const client = new Client({ name: "fictional-mutation-test", version: "1" });
   const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
   try {
@@ -232,7 +232,7 @@ test("hosted MCP mutations have truthful annotations and preserve pending deleti
 
 test("hosted HTTP mutations project rename metadata and preserve 202 versus 204", async () => {
   const calls: string[] = [];
-  const handle = buildHostedFetch({ apiBase, fetch: fakeFetch((url, init) => {
+  const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch((url, init) => {
     calls.push(url); expect(new Headers(init.headers).get("authorization")).toBe("Bearer fictional-A");
     expect(init.redirect).toBe("manual"); expect(init.credentials).toBe("omit");
     if (init.method === "PATCH") {
@@ -255,7 +255,7 @@ test("hosted HTTP mutations project rename metadata and preserve 202 versus 204"
 
 test("hosted HTTP rejects invalid mutations and never retries authorization failures", async () => {
   let calls = 0;
-  const handle = buildHostedFetch({ apiBase, fetch: fakeFetch(() => { calls++; return Response.json({ privateDetail: row.transcript }, { status: 401 }); }) });
+  const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch(() => { calls++; return Response.json({ privateDetail: row.transcript }, { status: 401 }); }) });
   const base = "http://127.0.0.1/v1/recordings/" + id;
   const headers = { authorization: "Bearer fictional-A", "content-type": "application/json" };
   for (const [url, init] of [
@@ -278,7 +278,7 @@ test("hosted HTTP rejects invalid mutations and never retries authorization fail
 
 test("hosted HTTP bounds streamed rename bodies and cancels a stalled upload before upstream", async () => {
   let calls = 0, cancelled = 0;
-  const handle = buildHostedFetch({ apiBase, fetch: fakeFetch(() => { calls++; throw Error("unexpected upstream"); }) });
+  const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch(() => { calls++; throw Error("unexpected upstream"); }) });
   const url = "http://127.0.0.1/v1/recordings/" + id;
   const headers = { authorization: "Bearer fictional-A", "content-type": "application/json" };
   const oversized = new ReadableStream<Uint8Array>({ pull(controller) { controller.enqueue(new Uint8Array(4096)); }, cancel() { cancelled++; } });
@@ -308,7 +308,7 @@ test("hosted mutation transport failures neither retry nor fall back to another 
 });
 
 test("hosted MCP unauthorized mutation returns one fixed failure without a retry", async () => {
-  const f = mutationFixture(401), server = buildHostedServer(f.client);
+  const f = mutationFixture(401), server = buildHostedServer(f.client, { allowWrites: true });
   const client = new Client({ name: "fictional-denied-mutation", version: "1" });
   const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
   try {
@@ -320,7 +320,7 @@ test("hosted MCP unauthorized mutation returns one fixed failure without a retry
 
 test("hosted HTTP simultaneous mutations use only each caller's bearer", async () => {
   const seen: string[] = [];
-  const handle = buildHostedFetch({ apiBase, fetch: fakeFetch(async (url, init) => {
+  const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch(async (url, init) => {
     const bearer = new Headers(init.headers).get("authorization")!; seen.push(bearer);
     expect(url).toBe(apiBase.slice(0, -1) + "/recordings/" + id); expect(init.method).toBe("DELETE");
     await Promise.resolve();
@@ -347,7 +347,7 @@ test("cancelling a real MCP mutation before credentials resolve prevents upstrea
     const rename = hosted.renameRecording.bind(hosted), remove = hosted.deleteRecording.bind(hosted);
     hosted.renameRecording = (...args) => rename(...args).finally(completed);
     hosted.deleteRecording = (...args) => remove(...args).finally(completed);
-    const server = buildHostedServer(hosted), client = new Client({ name: "fictional-cancelled-mutation", version: "1" });
+    const server = buildHostedServer(hosted, { allowWrites: true }), client = new Client({ name: "fictional-cancelled-mutation", version: "1" });
     const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
     const onMessage = b.onmessage!;
     b.onmessage = (message, extra) => {
@@ -367,3 +367,55 @@ test("cancelling a real MCP mutation before credentials resolve prevents upstrea
     } finally { release(); await client.close(); await server.close(); }
   }
 });
+
+test("hosted MCP remains read-only unless startup explicitly allows writes", async () => {
+  for (const options of [{}, { allowWrites: false }]) {
+    const f = mutationFixture(), server = buildHostedServer(f.client, options);
+    const client = new Client({ name: "fictional-read-only-mcp", version: "1" });
+    const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
+    try {
+      const { tools } = await client.listTools();
+      expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"]);
+      expect(tools.every(tool => tool.annotations?.readOnlyHint === true)).toBe(true);
+      const refused = await client.callTool({ name: "recordings_hosted_delete", arguments: { id } });
+      expect(refused.isError).toBe(true); expect(f.calls).toHaveLength(0); expect(f.credentialCount()).toBe(0);
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
+test("hosted HTTP remains read-only unless startup explicitly allows writes", async () => {
+  let calls = 0;
+  for (const options of [{}, { allowWrites: false }]) {
+    const handle = buildHostedFetch({ apiBase, ...options, fetch: fakeFetch(() => { calls++; return new Response(null, { status: 204 }); }) });
+    for (const method of ["PATCH", "DELETE"]) {
+      const response = await handle(new Request("http://127.0.0.1/v1/recordings/" + id, { method,
+        headers: { authorization: "Bearer fictional-A", "content-type": "application/json" },
+        ...(method === "PATCH" ? { body: JSON.stringify({ title: "Renamed" }) } : {}) }));
+      expect(response.status).toBe(405); expect((await response.json()).error.code).toBe("read_only");
+    }
+  }
+  expect(calls).toBe(0);
+});
+
+test("write startup option is explicit, unique and only valid in hosted mode", () => {
+  const common = ["--hosted", "--api-base", apiBase, "--allow-writes"];
+  expect(parseHostedProcessOptions(common, "serve").allowWrites).toBe(true);
+  expect(parseHostedProcessOptions([...common, "--stdio", "--credential-env", "SELECTED_SESSION"], "mcp").allowWrites).toBe(true);
+  for (const surface of ["serve", "mcp"] as const) {
+    expect(() => parseHostedProcessOptions(["--allow-writes"], surface)).toThrow();
+    expect(() => parseHostedProcessOptions([...common, "--allow-writes"], surface)).toThrow();
+    expect(() => parseHostedProcessOptions([...common, "false"], surface)).toThrow();
+  }
+});
+
+test("hosted HTTP stalled rename body reaches its deadline without dispatching a write", async () => {
+  let calls = 0, cancelled = 0;
+  const handle = buildHostedFetch({ apiBase, allowWrites: true,
+    fetch: fakeFetch(() => { calls++; throw Error("unexpected upstream"); }) });
+  const request = new Request("http://127.0.0.1/v1/recordings/" + id, { method: "PATCH",
+    headers: { authorization: "Bearer fictional-A", "content-type": "application/json" },
+    body: new ReadableStream<Uint8Array>({ cancel() { cancelled++; } }) });
+  const response = await handle(request);
+  expect(response.status).toBe(504); expect((await response.json()).error.code).toBe("timeout");
+  expect(request.signal.aborted).toBe(false); expect(cancelled).toBe(1); expect(calls).toBe(0);
+}, 8000);
