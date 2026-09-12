@@ -1,10 +1,19 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { SqliteAdapter as Database } from "../storage.js";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+// Pin a scratch store + the local opt-in BEFORE the module is imported: the
+// registry file lives next to the memory store and exists only under the opt-in.
+const SCRATCH_HOME = mkdtempSync(join(tmpdir(), "mementos-session-registry-extra-"));
+process.env["HASNA_MEMENTOS_LOCAL"] = "1";
+process.env["HASNA_MEMENTOS_DB_PATH"] = join(SCRATCH_HOME, "mementos.db");
+for (const key of ["HASNA_MEMENTOS_API_URL", "HASNA_MEMENTOS_API_KEY", "MEMENTOS_API_URL", "MEMENTOS_API_KEY"]) delete process.env[key];
+import { SqliteAdapter as Database } from "../storage.js";
 import {
   listSessions,
   cleanStaleSessions,
   closeRegistry,
+  sessionRegistryPath,
 } from "./session-registry.js";
 
 // ============================================================================
@@ -13,11 +22,8 @@ import {
 // 253-254 (cleanStaleSessions deletes dead sessions)
 // ============================================================================
 
-// The registry DB path (mirrors what session-registry.ts uses internally)
-const DB_PATH = join(
-  process.env["HOME"] || process.env["USERPROFILE"] || "~",
-  ".open-sessions-registry.db"
-);
+// The registry DB path, from the owning module (next to the pinned scratch store).
+const DB_PATH = sessionRegistryPath();
 
 // A PID that doesn't exist — signal 0 will throw ESRCH → isProcessAlive returns false
 // Use a very high value unlikely to be a real process

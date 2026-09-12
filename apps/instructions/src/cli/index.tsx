@@ -2525,8 +2525,15 @@ program
   .command("status")
   .description("Health check: total configs, drift from disk, unredacted secrets")
   .option("--json", "output metadata-only JSON")
-  .action(async (opts: { json?: boolean }) => {
-    const status = await getConfigsStatus(resolveConfigStore());
+  .option(
+    "--deep",
+    "also count profile links and snapshots (one API round trip per profile and per config: ~35s against a 258-config hosted store, free locally)",
+  )
+  .action(async (opts: { json?: boolean; deep?: boolean }) => {
+    // Against the hosted API the per-row counts are reported as null unless
+    // --deep is passed: they cost one request per config, which is what made
+    // this command look hung on a station (see STATUS_FANOUT_CONCURRENCY).
+    const status = await getConfigsStatus(resolveConfigStore(), { deep: opts.deep });
 
     if (opts.json) {
       printJson(status);

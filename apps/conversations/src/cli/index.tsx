@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { registerEventsCommands } from "@hasna/events/commander";
 import { Command, Help } from "commander";
 import chalk from "chalk";
 import { render } from "ink";
@@ -119,7 +118,6 @@ program
     const agent = resolveIdentity();
     render(React.createElement(App, { agent }));
   });
-registerEventsCommands(program, { source: "conversations" });
 
 // ---- top-level error handling ----
 // Commander actions are async; `program.parse()` returns before they settle, so a

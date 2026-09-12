@@ -39,7 +39,7 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: deploy-production
+  group: deploy-skills-production
   cancel-in-progress: false
 
 permissions:
