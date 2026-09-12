@@ -53,6 +53,8 @@ import "./routes/projects.js";
 import "./routes/project-registration.js";
 import "./routes/entities.js";
 import "./routes/tasks.js";
+import "./routes/machines.js";
+import "./routes/audit.js";
 import "./routes/system.js";
 
 // ============================================================================
