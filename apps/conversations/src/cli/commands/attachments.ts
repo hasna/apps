@@ -2,7 +2,6 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { writeFileSync } from "node:fs";
 import { getStore } from "../../lib/store/index.js";
-import { closeDb } from "../../lib/db.js";
 import {
   AttachmentRetrievalError,
   type RetrievedAttachment,
@@ -19,7 +18,6 @@ function errorCode(error: unknown): string | null {
 
 function failMessage(message: string): never {
   printErrorLine(chalk.red(message));
-  closeDb();
   process.exit(1);
 }
 
@@ -82,7 +80,6 @@ export function registerAttachmentCommands(program: Command): void {
         if (attachment.size === 0) {
           printErrorLine(chalk.dim(`Attachment "${attachment.name}" is empty; 0 bytes written to stdout.`));
         }
-        closeDb();
         return;
       }
 
@@ -99,6 +96,5 @@ export function registerAttachmentCommands(program: Command): void {
         failMessage("Could not write the output file. Choose a valid writable --output path.");
       }
       printLine(chalk.green(`Saved attachment "${attachment.name}" (${attachment.size} bytes).`));
-      closeDb();
     });
 }

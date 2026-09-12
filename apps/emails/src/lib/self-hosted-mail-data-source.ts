@@ -1,3 +1,4 @@
+import { searchAdmissionError } from "./search-admission-error.js";
 import { normalizeSendMetadata } from "./send-metadata.js";
 // SelfHostedMailDataSource maps the operator-configured Emails service onto the
 // common mailbox interface. The service speaks a versioned resource API — the
@@ -1247,7 +1248,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     if (opts.archived === true) params.set("archived", "true");
     const { status, json } = await this.request("GET", `/messages?${params.toString()}`);
     if (status < 200 || status >= 300) {
-      throw new Error(`self-hosted emails: GET /messages failed (HTTP ${status})`);
+      throw searchAdmissionError(status, json) ?? new Error(`self-hosted emails: GET /messages failed (HTTP ${status})`);
     }
     const body = json as { messages?: unknown; next_cursor?: unknown } | null;
     const messages = Array.isArray(body?.messages) ? (body.messages as V1Message[]) : [];
@@ -1736,7 +1737,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     if (options.offset !== undefined) params.set("offset", String(options.offset));
     const { status, json } = await this.request("POST", `/mailbox-filters/${encodeURIComponent(identifier)}/apply?${params.toString()}`);
     if (status === 404) throw new Error(`mailbox filter not found: ${identifier}`);
-    if (status < 200 || status >= 300) throw new Error(`self-hosted emails: POST /mailbox-filters/<id>/apply failed (HTTP ${status})`);
+    if (status < 200 || status >= 300) throw searchAdmissionError(status, json) ?? new Error(`self-hosted emails: POST /mailbox-filters/<id>/apply failed (HTTP ${status})`);
     const body = json as { filter: Pick<MailboxFilter, "name" | "criteria">; items?: unknown[]; limit: number; offset: number; truncated: boolean };
     return { ...body, items: (body.items ?? []).map((item) => v1ToTuiMessage(item as V1Message)) };
   }

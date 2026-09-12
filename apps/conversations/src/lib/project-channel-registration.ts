@@ -8,8 +8,21 @@ import {
   projectMessageLinkageHashes,
   type ProjectMessageLinkageRow,
 } from "./project-message-linkage.js";
+export {
+  PROJECT_CHANNEL_COLLECTION_CHANGED,
+  ProjectChannelCollectionChangedError,
+  assertProjectChannelRegistrationOperationIntent,
+  projectChannelRegistrationDigest,
+} from "./project-channel-registration-contract.js";
+import {
+  PROJECT_CHANNEL_COLLECTION_CHANGED,
+  ProjectChannelCollectionChangedError,
+  assertProjectChannelRegistrationOperationIntent,
+  projectChannelRegistrationDigest,
+} from "./project-channel-registration-contract.js";
+export { PROJECT_CHANNEL_REGISTRATION_ROUTE, createProjectChannelRegistrationAuthority } from "./project-channel-registration-authority.js";
+import { PROJECT_CHANNEL_REGISTRATION_ROUTE } from "./project-channel-registration-authority.js";
 
-export const PROJECT_CHANNEL_REGISTRATION_ROUTE = "/v1/project-registration/channels";
 export const PROJECT_CHANNEL_REGISTRATION_CREATOR = "project-registration";
 
 export type ProjectChannelRegistrationDirection = "forward" | "inverse";
@@ -352,21 +365,6 @@ export interface ProjectChannelRegistrationFaultOptions {
   ) => void;
 }
 
-export const PROJECT_CHANNEL_COLLECTION_CHANGED =
-  "CONVERSATIONS_PROJECT_CHANNEL_COLLECTION_CHANGED" as const;
-
-export class ProjectChannelCollectionChangedError extends Error {
-  readonly code = PROJECT_CHANNEL_COLLECTION_CHANGED;
-
-  constructor(
-    message: string,
-    readonly details: Record<string, unknown> = {},
-  ) {
-    super(message);
-    this.name = "ProjectChannelCollectionChangedError";
-  }
-}
-
 export function isProjectChannelCollectionChangedError(
   error: unknown,
 ): error is ProjectChannelCollectionChangedError {
@@ -409,25 +407,6 @@ export type ProjectChannelMessageCollectionRow = Record<string, unknown> & {
   priority: string;
   created_at: string;
 };
-
-function canonicalize(value: unknown): unknown {
-  if (value instanceof Date) return value.toISOString();
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === "object") {
-    const input = value as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.keys(input).sort().map((key) => [key, canonicalize(input[key])]),
-    );
-  }
-  if (typeof value === "bigint") return value.toString();
-  return value ?? null;
-}
-
-export function projectChannelRegistrationDigest(value: unknown): string {
-  return createHash("sha256")
-    .update(JSON.stringify(canonicalize(value)))
-    .digest("hex");
-}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -949,55 +928,6 @@ function assertRequiredText(name: string, value: unknown): asserts value is stri
 
 function retiredPrefix(slug: string): boolean {
   return slug.startsWith("iproj-") || slug.startsWith("internal-iproj-");
-}
-
-export function assertProjectChannelRegistrationOperationIntent(
-  request: Pick<
-    ProjectChannelRegistrationRequest,
-    | "operation_intent"
-    | "bind_existing"
-    | "adopt_existing"
-    | "desired"
-    | "precondition_digest"
-    | "target_selector"
-  >,
-  expected: ProjectChannelRegistrationOperationIntent,
-): void {
-  const desiredBind = request.desired.registration_mode === "bind_existing";
-  const desiredAdopt = request.desired.registration_mode === "adopt_existing";
-  const bindShape = request.bind_existing !== undefined || desiredBind;
-  const adoptShape = request.adopt_existing !== undefined || desiredAdopt;
-  if (expected === "create" && request.operation_intent === undefined && bindShape) {
-    throw new Error("project channel registration create surface rejects bind-existing intent.");
-  }
-  if (expected === "create" && request.operation_intent === undefined && adoptShape) {
-    throw new Error("project channel registration create surface rejects adopt-existing intent.");
-  }
-  const legacyExpectedAbsentCreate = expected === "create"
-    && request.operation_intent === undefined
-    && !bindShape
-    && !adoptShape
-    && request.precondition_digest === projectChannelRegistrationDigest({
-      target_selector: request.target_selector,
-      expected: "absent",
-    });
-  if (request.operation_intent !== expected && !legacyExpectedAbsentCreate) {
-    throw new Error(
-      `project channel registration ${expected} surface requires operation_intent=${expected}.`,
-    );
-  }
-  if (expected === "create" && bindShape) {
-    throw new Error("project channel registration create surface rejects bind-existing intent.");
-  }
-  if (expected === "create" && adoptShape) {
-    throw new Error("project channel registration create surface rejects adopt-existing intent.");
-  }
-  if (expected === "bind_existing" && (!request.bind_existing || !desiredBind)) {
-    throw new Error("project channel registration bind-existing surface requires bind-existing intent.");
-  }
-  if (expected === "adopt_existing" && (!request.adopt_existing || !desiredAdopt)) {
-    throw new Error("project channel registration adopt-existing surface requires adopt-existing intent.");
-  }
 }
 
 export function validateProjectChannelRegistrationForward(
@@ -2498,36 +2428,4 @@ export function verifyProjectChannelRegistrationInverse(
   return verification;
 }
 
-async function activeAuthorityStore(
-  explicit?: ProjectChannelRegistrationAuthorityStore,
-): Promise<ProjectChannelRegistrationAuthorityStore> {
-  if (explicit) return explicit;
-  const { getStore } = await import("./store/index.js");
-  return getStore();
-}
 
-export function createProjectChannelRegistrationAuthority(
-  store?: ProjectChannelRegistrationAuthorityStore,
-): ProjectChannelRegistrationAuthority {
-  return {
-    authority: "conversations",
-    async capability() {
-      return (await activeAuthorityStore(store)).projectChannelRegistrationCapability();
-    },
-    async create(request) {
-      return (await activeAuthorityStore(store)).registerProjectChannel(request);
-    },
-    async readExact(request) {
-      return (await activeAuthorityStore(store)).readProjectChannelRegistrationExact(request);
-    },
-    async lookupReceipt(request) {
-      return (await activeAuthorityStore(store)).lookupProjectChannelRegistrationReceipt(request);
-    },
-    async compensate(request) {
-      return (await activeAuthorityStore(store)).compensateProjectChannelRegistration(request);
-    },
-    async verifyInverse(request) {
-      return (await activeAuthorityStore(store)).verifyProjectChannelRegistrationInverse(request);
-    },
-  };
-}

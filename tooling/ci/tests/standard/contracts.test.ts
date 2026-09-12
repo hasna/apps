@@ -2,17 +2,15 @@
  * Contracts conformance — standard-adherence suite, check 1.
  *
  * For every publishable member that carries a hasna.contract.json, run the
- * canonical manifest validator (`contracts repo-conformance` from
- * @hasna/contracts) at the member's effective kit version and assert the
- * manifest passes. The validator is the same one the member pins: a
- * manifest claims a kit (kitVersion) and must validate against a kit that
- * understands its shape. Effective version resolution (measured
- * 2026-08-14):
- *
- *   1. the member's pinned @hasna/contracts dependency when >= 0.4.1
- *      (0.2.2 and 0.1.0 do not expose `repo-conformance`);
- *   2. else the manifest's kitVersion when that version exists on npm;
- *   3. else `latest`.
+ * canonical manifest validator — the IN-TREE `contracts repo-conformance`
+ * (apps/contracts, the kit this producer repository ships), executed by the
+ * bun that runs the suite — and assert the manifest passes. Since 2026-09-11
+ * the member's own pinned kit version is NOT used to select a validator: the
+ * per-member `bunx @hasna/contracts@<pin>` path installed from the registry
+ * per member per run through whatever bun was on PATH (see
+ * census.ts#conformanceCommand). A manifest is validated against what the
+ * tree ships; when the in-tree kit changes verdicts, the exception registry
+ * below moves with it in the same PR.
  *
  * Recorded exceptions (CONTRACTS_EXCEPTIONS) are the measured failures as
  * of 2026-08-14, each with a filed remediation task. Two-sided contract of
@@ -33,6 +31,7 @@ import {
   versionAtLeast,
   resolveValidatorVersion,
   runConformance,
+  inTreeKitVersion,
   CONTRACTS_EXCEPTIONS,
   CONTRACTS_EXCEPTION_MEMBERS,
   MANIFEST_MISSING_EXCEPTIONS,
@@ -55,7 +54,7 @@ export interface ConformanceEntry {
  * the gate validate at the same effective version with the same invocation. */
 
 function buildReport(): { entries: ConformanceEntry[]; known: Set<string>; kitByMember: Map<string, string>; pinnedByMember: Map<string, string | undefined> } {
-  const known = new Set(["0.4.1", "0.4.2", "0.5.2", "0.8.1", "0.8.2", "0.8.4", "0.8.5", "0.9.0", "0.10.6", "0.13.1"]);
+  const known = new Set<string>([inTreeKitVersion()]);
   const entries: ConformanceEntry[] = [];
   const kitByMember = new Map<string, string>();
   const pinnedByMember = new Map<string, string | undefined>();
@@ -67,7 +66,7 @@ function buildReport(): { entries: ConformanceEntry[]; known: Set<string>; kitBy
     const kitVersion = manifest.kitVersion;
     kitByMember.set(m.name, kitVersion ?? "");
     pinnedByMember.set(m.name, m.contractsDep);
-    const version = resolveValidatorVersion(m.contractsDep, kitVersion, known);
+    const version = inTreeKitVersion();
     const { verdict, fails } = runConformance(`apps/${m.name}`, version);
     entries.push({ member: m.name, version, verdict, fails });
   }
@@ -224,7 +223,7 @@ describe("standard-adherence: contracts conformance", () => {
     const pass = report.entries.filter((e) => e.verdict === "ok");
     const fail = report.entries.filter((e) => e.verdict === "fail");
     console.log(
-      `\n[standard] contracts conformance: ${pass.length}/${report.entries.length} pass, ${fail.length} fail (validator: pinned dep -> kitVersion -> latest)\n` +
+      `\n[standard] contracts conformance: ${pass.length}/${report.entries.length} pass, ${fail.length} fail (validator: in-tree @hasna/contracts ${inTreeKitVersion()})\n` +
         fail
           .map((e) => `  FAIL ${e.member} @${e.version}: ${e.fails.slice(0, 2).join(" | ")}`)
           .sort()

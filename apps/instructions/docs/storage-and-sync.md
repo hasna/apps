@@ -6,7 +6,12 @@ feedback; filesystem apply/sync operations still run on the client machine.
 
 ## Local SQLite
 
-With no client API variables set, the store is SQLite:
+The on-box SQLite store is an explicit opt-in: `HASNA_INSTRUCTIONS_LOCAL=1`
+with no authority or credential configured anywhere. With no client API
+variables set and no opt-in, the CLI fails LOUD — non-zero exit naming the
+credential tiers consulted — and never opens the local store.
+
+With the opt-in (`HASNA_INSTRUCTIONS_LOCAL=1`), the store is SQLite:
 
 ```text
 ~/.hasna/instructions/instructions.db
@@ -15,6 +20,14 @@ With no client API variables set, the store is SQLite:
 Set `HASNA_INSTRUCTIONS_DB_PATH` to use another file or `:memory:`. The DB uses
 WAL mode and foreign keys. `instructions init --force` closes and removes the
 local DB plus WAL/SHM sidecars before rebuilding it.
+
+The local store is also physically absent from the shipped client bundles. Every
+`bun:sqlite` module hangs off `src/db/local.ts`, whose single importer is a
+dynamic `import()` inside `LocalConfigStore`, so the build emits it as a chunk
+(`dist/chunks/local-*.js`) and `dist/cli/index.js` and `dist/mcp/index.js`
+contain zero `bun:sqlite` references. A hosted run never loads that chunk;
+`getDatabase()` additionally refuses to open a file in a process whose
+environment configures a hosted authority.
 
 ## API transport
 
@@ -54,7 +67,7 @@ API](http-api.md). A client never needs a database DSN.
 | Variable | Effect |
 | --- | --- |
 | `CONFIGS_HOME` | Home used to expand `~/` config targets and detect machine paths. Falls back to `HOME`. |
-| `HASNA_CONFIGS_HOME` | Raw session-render root. Defaults to `~/.hasna/configs`. |
+| `HASNA_CONFIGS_HOME` | Raw session-render root. Defaults to `~/.hasna/instructions`. |
 | `HASNA_INSTRUCTIONS_DB_PATH` | Local SQLite path only. |
 
 `CONFIGS_HOME` and `HASNA_CONFIGS_HOME` are intentionally separate and neither

@@ -40,9 +40,18 @@ export interface ConfigsStatusContract {
     byAgent: Record<string, number>;
     byFormat: Record<string, number>;
     profiles: number;
-    profileLinks: number;
+    /**
+     * Profile -> config links, and snapshots across every config.
+     *
+     * `null` means "not counted in this run", which is the DEFAULT against a
+     * hosted store: both numbers cost one HTTP round trip per row, and a
+     * summary command must not pay 258 of them (see STATUS_FANOUT_CONCURRENCY).
+     * `instructions status --deep` counts them anyway; the on-box SQLite store
+     * always does, because there they are free.
+     */
+    profileLinks: number | null;
     machines: number;
-    snapshots: number;
+    snapshots: number | null;
     knownTargets: number;
     managedSkillRuntimes: {
       skillsPresent: number;
@@ -83,6 +92,50 @@ function configuredDatabaseKind(): DatabaseKind {
   return value === ":memory:" || value.startsWith("file::memory:") ? "memory" : "file";
 }
 
+/**
+ * How many per-row reads a DEEP status keeps in flight against a hosted store.
+ *
+ * `counts.profileLinks` and `counts.snapshots` need one read per profile and
+ * one per config. Against the on-box SQLite store those are synchronous and
+ * free; against the `/v1` API each one is a separate HTTP round trip, and the
+ * serial `for` loop that used to run them is why `instructions status` looked
+ * hung on a real station. Measured on station03 against api.hasna.com,
+ * 2026-09-11, with 258 configs and 8 profiles:
+ *
+ *   serial (the old code)            120.3 s for the snapshot loop alone
+ *   8 / 16 / 32 / 64 concurrent      37.5 s / 34.2 s / 36.4 s / 37.1 s
+ *
+ * So the wall time is the SERVICE's throughput (~7 reads/s), not the client's
+ * request pattern: concurrency takes 120 s down to ~35 s and then stops
+ * helping. A 40 s fleet probe still kills it, which is why the fan-out is no
+ * longer part of a default hosted status at all — the counts it feeds are
+ * reported as `null` unless the caller asks for them (`status --deep`). The
+ * bound stays for that deep path, because a few hundred simultaneous sockets
+ * against the gateway is a self-inflicted rate-limit and buys nothing here.
+ */
+const STATUS_FANOUT_CONCURRENCY = 16;
+
+/**
+ * Map `fn` over `items` with at most `limit` promises in flight, preserving
+ * order. Workers pull from a shared cursor, so one slow row cannot idle the
+ * rest (a chunked `Promise.all` would wait for the slowest row of each batch).
+ */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (let index = next++; index < items.length; index = next++) {
+      results[index] = await fn(items[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 function countBy<T>(items: T[], getValue: (item: T) => string | null | undefined): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const item of items) {
@@ -95,8 +148,11 @@ function countBy<T>(items: T[], getValue: (item: T) => string | null | undefined
 
 export async function getConfigsStatus(
   store: ConfigStore = resolveConfigStore(),
-  options: { homeDir?: string; conversationsCommand?: string } = {},
+  options: { homeDir?: string; conversationsCommand?: string; deep?: boolean } = {},
 ): Promise<ConfigsStatusContract> {
+  // Per-row counts are free against SQLite and expensive against the API, so
+  // they follow the transport unless the caller says otherwise.
+  const deepCounts = options.deep ?? store.mode === "local";
   let databaseReachable = true;
   let configs: Config[] = [];
   let categoryStats: Record<string, number> = { total: 0 };
@@ -143,18 +199,26 @@ export async function getConfigsStatus(
 
   let profiles = 0;
   let machines = 0;
-  let profileLinks = 0;
-  let snapshots = 0;
+  let profileLinks: number | null = deepCounts ? 0 : null;
+  let snapshots: number | null = deepCounts ? 0 : null;
   if (databaseReachable) {
     try {
       const profileList = await store.listProfiles();
       profiles = profileList.length;
       machines = (await store.listMachines()).length;
-      for (const profile of profileList) {
-        profileLinks += (await store.getProfileConfigs(profile.id)).length;
-      }
-      for (const config of configs) {
-        snapshots += (await store.listSnapshots(config.id)).length;
+      if (deepCounts) {
+        const linkCounts = await mapWithConcurrency(
+          profileList,
+          STATUS_FANOUT_CONCURRENCY,
+          async (profile) => (await store.getProfileConfigs(profile.id)).length,
+        );
+        profileLinks = linkCounts.reduce((total, count) => total + count, 0);
+        const snapshotCounts = await mapWithConcurrency(
+          configs,
+          STATUS_FANOUT_CONCURRENCY,
+          async (config) => (await store.listSnapshots(config.id)).length,
+        );
+        snapshots = snapshotCounts.reduce((total, count) => total + count, 0);
       }
     } catch {
       databaseReachable = false;

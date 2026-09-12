@@ -1,7 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { getStore } from "../../lib/store/index.js";
-import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { emitCliError } from "../cli-error.js";
 import { printJson, printJsonLine, printLine } from "../../lib/stdout.js";
@@ -64,7 +63,6 @@ export function registerThreadCommands(program: Command): void {
           }
         }
       }
-      closeDb();
     });
 
   threads
@@ -90,7 +88,6 @@ export function registerThreadCommands(program: Command): void {
       } else {
         renderThreadExpand(expanded);
       }
-      closeDb();
     });
 
   const registerStatusVerb = (name: "close" | "reopen", status: "closed" | "open"): void => {
@@ -128,7 +125,6 @@ export function registerThreadCommands(program: Command): void {
         } else {
           printLine(chalk.green(`Thread #${updated.id} ${name === "close" ? "closed" : "reopened"}.`));
         }
-        closeDb();
       });
   };
   registerStatusVerb("close", "closed");

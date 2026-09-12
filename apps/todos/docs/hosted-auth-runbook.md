@@ -1,7 +1,8 @@
 # Hosted auth runbook — `/api/*` and `/mcp` fail closed
 
 Applies from `@hasna/todos` **0.13.0**. Read this before redeploying a hosted
-deployment or upgrading a machine that runs `todos serve` / `todos-mcp --http`.
+deployment or upgrading a machine that runs `todos serve` / `todos-serve`
+(`todos-mcp --http` no longer exists — the MCP bin is stdio-only and refuses `--http`, exit 2).
 
 > **Server credential naming (2026-09-05).** The env var that configures this
 > static credential is `HASNA_TODOS_SERVER_API_KEY` — the server's own
@@ -87,7 +88,7 @@ Related hardening worth applying in the same revision (pre-existing, not fixed h
 | --- | --- | --- |
 | CLI / SDK against `/v1` with an API key | `/v1` with a key | unchanged — `/v1` was never affected |
 | `todos-mcp` (stdio, the default for MCP clients) | local SQLite, no HTTP | unchanged |
-| `todos-mcp --http` (loopback `127.0.0.1`) | anonymous | unchanged — the transport is loopback-pinned and opts in implicitly; set `HASNA_TODOS_SERVER_API_KEY` and send it from the client to enforce auth |
+| `todos-mcp --http` | anonymous `todos-serve` started from the MCP bin | **refused (exit 2)** — the MCP bin is stdio-only; run `todos-serve` for `/mcp` and apply the rows below |
 | `todos serve` / `todos-serve`, no key, loopback | anonymous | **breaking** — add `--allow-anonymous` (or `TODOS_ALLOW_ANONYMOUS=1`), or mint a key with `todos api-keys create "<name>"` |
 | `todos serve --host 0.0.0.0`, no key | anonymous, off-box | **refuses to start** — set `HASNA_TODOS_SERVER_API_KEY` |
 | Load-balancer / container health checks (`/ready`) | public | unchanged (pre-auth) |
