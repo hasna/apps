@@ -58,7 +58,7 @@ describe("message search isolation", () => {
   test("busy and timeout responses are explicit with retry advice; unrelated errors retain old handler", async () => {
     for(const [error,status,code] of [[new MessageSearchBusyError(),429,"search_busy"],[new MessageSearchTimeoutError(),504,"search_timeout"]] as const) {
       const response=messageSearchErrorResponse(error)!;expect(response.status).toBe(status);expect(response.headers.get("Retry-After")).toBe("5");expect(response.headers.get("Cache-Control")).toBe("no-store");
-      expect(await response.json()).toEqual({error:error.message,code});
+      expect(await response.json()).toEqual({error:error.message,code,retry_after:5});
     }
     expect(messageSearchErrorResponse(new Error("other"))).toBeNull();
   });
