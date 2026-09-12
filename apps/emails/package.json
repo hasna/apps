@@ -1,6 +1,6 @@
 {
   "name": "@hasna/emails",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Email management through a shared API: CLI, terminal UI, MCP server, and library",
   "keywords": [
     "email",
@@ -108,7 +108,7 @@
     "@opentui/core": "0.5.10",
     "chalk": "^5.4.1",
     "commander": "^15.0.0",
-    "mailparser": "3.9.16",
+    "mailparser": "3.9.20",
     "marked": "18.0.5",
     "pdf-lib": "^1.17.1",
     "pg": "^8.22.0",

@@ -74,12 +74,20 @@ survey-only run results are the lane's recorded state. They are not BUG rows
 and not anomalies — the lane records them in its own result and the health
 cron reports them as state.
 
-## 9. Mementos cloud 403 on station01 — fall back locally, dedupe first
+## 9. Mementos cloud 403 on station01 — fail closed, file the defect, never write locally
 
-The mementos cloud API returns 403 Host-not-allowed on station01 (defect
-O15-04621, fix tracked in its own task). When it fires: save to the local
-store as the fallback and **dedupe against existing local rows** (the deploy
-lane found its own row at version 4 instead of re-filing). Never file a
+The mementos cloud API returned 403 Host-not-allowed on station01 (defect
+O15-04621, fix tracked in its own task). A 403 from `api.hasna.com/mementos`
+is a credential/allowlist defect, not a signal to change stores. When it
+fires: stop the write, record the failure (status, host, key id — never a key
+value) in the lane result and on the tracking task, and re-run the write after
+the fix lands. **Never save to a local mementos store as a fallback and never
+dedupe against local rows** — the fleet local-storage doctrine
+(`docs/fleet-local-storage.md`, 2026-09-04) removes the local tier in api mode,
+and the fleet credential rule forbids opting into local mode to make a fleet
+command succeed. The dedupe lesson stands, on the HOSTED store: before filing
+a defect row, search the hosted store for an existing row and update it (the
+deploy lane found its own row at version 4 instead of re-filing). Never file a
 duplicate row for an already-tracked defect; file-and-delete is waste.
 
 ## 10. Health-pass filing shape

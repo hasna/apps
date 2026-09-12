@@ -5892,3 +5892,28 @@ emailsSelfHostedOpenApi.paths!["/v1/inbox/setup-ses-inbound"] = { post: {
   requestBody: { required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,required:["domain","bucket"],properties:{domain:{type:"string"},bucket:{type:"string"},region:{type:"string"},prefix:{type:"string"},catch_all:{type:"boolean"}}}}}},
   responses: { "200":{description:"Completed setup attempt with explicit verified or partial result",content:{"application/json":{schema:sesInboundSetupReceipt}}}, ...Object.fromEntries(["400","401","403","404","405","409","422","429","500","502","503"].map(code=>[code,errorResponse("SES inbound setup failed")])) }
 } };
+
+// Both operations enter the shared search permit through listMessages.
+for (const [path, method] of [
+  ["/v1/messages", "get"],
+  ["/v1/mailbox-filters/{id}/apply", "post"],
+] as const) {
+  for (const [status, code, message] of [
+    [429, "search_busy", "Message search is busy; retry later."],
+    [504, "search_timeout", "Message search exceeded its time limit."],
+  ] as const) {
+    addRoutineError(emailsSelfHostedOpenApi, path, method, status, message, {
+      type: "object", additionalProperties: false, required: ["error", "code"],
+      properties: {
+        error: { type: "string", enum: [message] },
+        code: { type: "string", enum: [code] },
+        // Optional for services deployed before the JSON retry hint was added.
+        retry_after: { type: "integer", enum: [5] },
+      },
+    }, "replace");
+    const operation = emailsSelfHostedOpenApi.paths![path]![method]! as { responses: Record<string, { headers?: unknown }> };
+    operation.responses![String(status)]!.headers = {
+      "Retry-After": { description: "Seconds before retrying the search", schema: { type: "string", enum: ["5"] } },
+    };
+  }
+}

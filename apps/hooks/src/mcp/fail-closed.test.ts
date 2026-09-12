@@ -10,7 +10,7 @@ import { tmpdir } from "os";
 import { Client } from "@modelcontextprotocol/sdk/client";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHooksServer, startSSEServer } from "./server.js";
-import { closeDb, getDb } from "../db/index.js";
+import { allowLocalStore, closeDb, getDb } from "../db/index.js";
 import { getSettingsPath } from "../lib/installer.js";
 
 const TEST_DATA_DIR = mkdtempSync(join(tmpdir(), "hooks-mcp-failclosed-"));
@@ -32,9 +32,25 @@ const originalLockPath = process.env.HASNA_HOOKS_LOCK_PATH;
 const originalClaudeSettings = process.env.HASNA_HOOKS_CLAUDE_SETTINGS_PATH;
 const originalGeminiSettings = process.env.HASNA_HOOKS_GEMINI_SETTINGS_PATH;
 const originalCodewithConfig = process.env.HASNA_HOOKS_CODEWITH_CONFIG_PATH;
+// startSSEServer decides its authority in-process from process.env: a stray
+// authority variable seeded by another suite would turn that into a HOSTED
+// decision and install a process-wide store refusal that outlives this file.
+const AUTHORITY_ENV_KEYS = [
+  "HASNA_HOOKS_API_URL", "HOOKS_API_URL", "HASNA_HOOKS_API_KEY", "HOOKS_API_KEY",
+  "HASNA_HOOKS_API_KEY_OVERRIDE", "HASNA_HOOKS_API_KEY_REF", "HASNA_PROFILE",
+];
+const originalAuthorityEnv: Record<string, string | undefined> = {};
 
 beforeAll(() => {
   closeDb();
+  // Explicit local opt-in (hasna/apps#1720): the hook-event writer and
+  // startSSEServer's authority decision fail closed without it; this file exercises the
+  // on-box store on purpose.
+  for (const key of AUTHORITY_ENV_KEYS) {
+    originalAuthorityEnv[key] = process.env[key];
+    delete process.env[key];
+  }
+  process.env.HASNA_HOOKS_LOCAL = "1";
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DATA_DIR;
   process.env.HASNA_HOOKS_DB_PATH = join(TEST_DATA_DIR, "hooks.db");
   process.env.HASNA_HOOKS_LOCK_PATH = join(TEST_DATA_DIR, "hooks.lock");
@@ -49,6 +65,9 @@ afterAll(() => {
     if (original === undefined) delete process.env[name];
     else process.env[name] = original;
   };
+  delete process.env.HASNA_HOOKS_LOCAL;
+  for (const key of AUTHORITY_ENV_KEYS) restore(key, originalAuthorityEnv[key]);
+  allowLocalStore();
   restore("HASNA_HOOKS_DATA_DIR", originalDataDir);
   restore("HASNA_HOOKS_DB_PATH", originalDbPath);
   restore("HASNA_HOOKS_LOCK_PATH", originalLockPath);

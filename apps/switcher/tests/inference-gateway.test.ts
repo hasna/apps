@@ -15,6 +15,15 @@ const input = (protocol: any, baseUrl: string, events: any[]) => {
 };
 const auth = (protocol: string, token: string) => protocol === "gemini-generate-content" ? { "x-goog-api-key": token } : { authorization: `Bearer ${token}` };
 
+test("provider throttling keeps Retry-After without exposing its response body",async()=>{
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(){return Response.json({error:"private provider detail"},{status:429,headers:{"retry-after":"120"}});}});
+  const gateway=createInferenceGateway(input("anthropic-messages",upstream.url.origin+"/v1",[]) as any);
+  try{
+    const response=await fetch(gateway.baseUrl+"/messages",{method:"POST",headers:{...auth("anthropic-messages",gateway.token),"content-type":"application/json"},body:JSON.stringify({model:"main",messages:[]})});
+    expect(response.status).toBe(429);expect(response.headers.get("retry-after")).toBe("120");expect(await response.text()).not.toContain("private provider detail");
+  }finally{await gateway.cleanup();await upstream.stop(true);}
+});
+
 for (const [protocol, path, terminal] of [
   ["anthropic-messages", "/messages", 'event: message_stop\ndata: {"type":"message_stop"}\n\n'],
   ["openai-chat", "/chat/completions", "data: [DONE]\n\n"],

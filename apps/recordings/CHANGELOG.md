@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.2
+
+### Patch Changes
+
+- Add explicit hosted Library list/get support across CLI, stdio MCP, the loopback serve proxy, and SDK exports. The shared adapter uses the existing hosted client, typed cursors and metadata-only output by default. API authority and credential references are explicit; HTTP callers supply their own bearer session. Legacy modes remain available. This does not add hosted sign-in, writes, microphone control or transcription.
+- Add read-only hosted paste history to CLI, MCP, serve and SDK. Preserve destination and client-reported delivery evidence, omit private text by default, and reuse bounded authenticated transport and keyset pagination.
+- Expose server-configured transcription provider catalogs through the hosted SDK, CLI, MCP and HTTP reads. Add optional provider selection to the shared session contract while preserving legacy defaults and capability negotiation.
+
 ## 0.5.1
 
 ### Patch Changes

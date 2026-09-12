@@ -20,25 +20,28 @@ async function runReplyCommand(args: string[]) {
     data = d;
     out.push(String(formatted ?? ""));
   });
-  await program.parseAsync(["node", "emails", ...args]);
-  return { data, out: out.join("\n") };
+  const originalExit = process.exit;
+  // Command failures must fail this test and run fixture cleanup, rather than
+  // terminating the shared test runner with the stub process still alive.
+  process.exit = ((code?: number) => { throw new Error(`process.exit:${code ?? 0}`); }) as never;
+  try {
+    await program.parseAsync(["node", "emails", ...args]);
+    return { data, out: out.join("\n") };
+  } finally {
+    process.exit = originalExit;
+  }
 }
 
 async function runReplyCommandExpectingExit(args: string[]): Promise<string> {
   const errors: string[] = [];
   const originalError = console.error;
-  const originalExit = process.exit;
   (console as unknown as { error: (...v: unknown[]) => void }).error = (...values: unknown[]) => {
     errors.push(values.map(String).join(" "));
   };
-  (process as unknown as { exit: (code?: number) => never }).exit = ((code?: number) => {
-    throw new Error(`process.exit:${code ?? 0}`);
-  }) as never;
   try {
     await expect(runReplyCommand(args)).rejects.toThrow(/process\.exit/);
   } finally {
     (console as unknown as { error: typeof originalError }).error = originalError;
-    (process as unknown as { exit: typeof originalExit }).exit = originalExit;
   }
   return errors.join("\n");
 }
@@ -67,7 +70,8 @@ function outboundRows() {
 }
 
 beforeAll(async () => {
-  stub = await startV1Stub();
+  // Replies verify the published parent_message_id capability before sending.
+  stub = await startV1Stub({ openapi: true });
 });
 afterAll(() => stub.stop());
 beforeEach(async () => {
@@ -96,6 +100,7 @@ describe("forward command", () => {
     // Prepended note + quoted original both carried in the re-sent body.
     expect(String(sent[0]!["body_text"])).toContain("FYI");
     expect(String(sent[0]!["body_text"])).toContain("Here are the numbers.");
+    expect((await stub.sendRequests())[0]).not.toHaveProperty("parent_message_id");
   });
 
   it("keeps an existing Fwd: prefix instead of doubling it", async () => {
@@ -142,6 +147,7 @@ describe("reply command", () => {
     expect(sent[0]).toMatchObject({ from_addr: "me@acme.com", subject: "Re: Question" });
     expect(sent[0]!["to_addrs"]).toEqual(["ext@ext.com"]);
     expect(String(sent[0]!["body_text"])).toContain("Yes, shipping today.");
+    expect((await stub.sendRequests())[0]).toMatchObject({ parent_message_id: inbound.id });
   });
 
   it("reply-all folds in the other recipients, excluding the sender and de-duping", async () => {

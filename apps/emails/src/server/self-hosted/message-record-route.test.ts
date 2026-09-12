@@ -55,7 +55,8 @@ function messageRow(params: readonly unknown[]): Record<string, unknown> {
     send_started_at: params[22] ?? null,
     provider_id: params[23] ?? null,
     tags: params[24] ?? null,
-    tenant_id: String(params[25] ?? ""),
+    thread_id: params[25] ?? null,
+    tenant_id: String(params[26] ?? ""),
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     inserted: true,
@@ -159,11 +160,12 @@ describe("POST /v1/messages/record", () => {
     expect(insert, "no message insert was emitted").toBeDefined();
     expect(insert).not.toContain("ON CONFLICT");
     const bound = recorder.params[recorder.statements.indexOf(insert as string)] as unknown[];
-    expect(bound.length).toBe(26);
-    expect(bound[25]).toBe("00000000-0000-0000-0000-000000000001");
+    expect(bound.length).toBe(27);
+    expect(bound[26]).toBe("00000000-0000-0000-0000-000000000001");
     expect(bound[23], "unknown provider provenance").toBeNull();
     expect(bound[24], "unrecorded tags").toBeNull();
-    expect(answer.body["message"]).toMatchObject({ tenant_id: bound[25], provider_id: null, tags: null });
+    expect(bound[25], "unrecorded thread identity").toBeNull();
+    expect(answer.body["message"]).toMatchObject({ tenant_id: bound[26], provider_id: null, tags: null, thread_id: null });
     // The ledger columns are recorded as ABSENT, not as invented values.
     expect(bound[19], "idempotency_key").toBeNull();
     expect(bound[20], "send_payload_hash").toBeNull();

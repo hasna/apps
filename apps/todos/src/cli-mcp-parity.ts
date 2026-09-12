@@ -925,17 +925,23 @@ export const TODOS_CLI_MCP_PARITY: TodosCliMcpParityEntry[] = [
       "todos extract",
       "todos extract-watch",
     ],
-    mcpTools: [
-      "extract_todos",
-      "watch_source_todos",
-    ],
+    mcpTools: [],
     jsonContracts: ["source_code_index", "source_todo_comment", "task", "structured_error", "api_error"],
     errorContracts: ["structured_error", "api_error"],
-    status: "matched",
-    intentionalGaps: [],
+    status: "intentional-gap",
+    intentionalGaps: [
+      {
+        cliCommand: "todos extract",
+        reason: "The source TODO index scans the local checkout the CLI runs in; the former extract_todos MCP tool read the agent host's filesystem behind a task-store tool surface and had no hosted arm, so it was removed (fleet alignment 2026-09-11).",
+      },
+      {
+        cliCommand: "todos extract-watch",
+        reason: "A polling filesystem watcher is a long-running local process, not an MCP tool call; the former watch_source_todos tool was removed with extract_todos — run `todos extract-watch` from the checkout instead.",
+      },
+    ],
+    gapReason: "Source scanning and watching are local-filesystem CLI operations; no MCP tool mapping.",
     example: {
       cli: "todos extract . --dry-run --index --json",
-      mcpTool: "extract_todos",
     },
   },
   {

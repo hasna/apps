@@ -22290,6 +22290,40 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "method": "POST",
     "operationId": "applyMailboxFilter",
     "path": "/v1/mailbox-filters/{id}/apply",
+    "status": 429,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error",
+        "code"
+      ],
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "Message search is busy; retry later."
+          ]
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "search_busy"
+          ]
+        },
+        "retry_after": {
+          "type": "integer",
+          "enum": [
+            5
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "applyMailboxFilter",
+    "path": "/v1/mailbox-filters/{id}/apply",
     "status": 500,
     "schema": {
       "type": "object",
@@ -22305,6 +22339,40 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
       "required": [
         "error"
       ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "applyMailboxFilter",
+    "path": "/v1/mailbox-filters/{id}/apply",
+    "status": 504,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error",
+        "code"
+      ],
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "Message search exceeded its time limit."
+          ]
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "search_timeout"
+          ]
+        },
+        "retry_after": {
+          "type": "integer",
+          "enum": [
+            5
+          ]
+        }
+      }
     }
   },
   {
@@ -23904,6 +23972,40 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "method": "GET",
     "operationId": "listMessages",
     "path": "/v1/messages",
+    "status": 429,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error",
+        "code"
+      ],
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "Message search is busy; retry later."
+          ]
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "search_busy"
+          ]
+        },
+        "retry_after": {
+          "type": "integer",
+          "enum": [
+            5
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listMessages",
+    "path": "/v1/messages",
     "status": 500,
     "schema": {
       "type": "object",
@@ -23919,6 +24021,40 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
       "required": [
         "error"
       ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listMessages",
+    "path": "/v1/messages",
+    "status": 504,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error",
+        "code"
+      ],
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "Message search exceeded its time limit."
+          ]
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "search_timeout"
+          ]
+        },
+        "retry_after": {
+          "type": "integer",
+          "enum": [
+            5
+          ]
+        }
+      }
     }
   },
   {

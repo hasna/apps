@@ -1,3 +1,4 @@
+import { messageSearchErrorResponse } from "./search-admission.js";
 import { setupBoundSesInbound, type SesInboundSetupCloudFactory, type SesInboundSetupInput } from "./ses-inbound-setup.js";
 import { readDomainDnsRecords, DomainDnsReadError } from "./domain-dns-read.js";
 import { normalizeSendMetadata } from "../../lib/send-metadata.js";
@@ -3270,6 +3271,8 @@ export async function handleSelfHostedRequest(
 
     return json(404, { error: "not found" });
   } catch (err) {
+    const searchFailure = messageSearchErrorResponse(err);
+    if (searchFailure) return searchFailure;
     if (err instanceof ManagedSenderUnavailableError) return json(503, { error: err.message, reason: "provider_credentials_unavailable" });
     if (err instanceof RequestBodyTooLargeError) {
       return json(413, { error: "request body too large" });

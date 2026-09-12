@@ -11,14 +11,15 @@ import { SwitcherClient } from "../src/sdk";
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const scratch = process.env.SWITCHER_TEST_ROOT ?? join(homedir(), "Workspace/scratch/switcher-tests");
 async function directory() { await mkdir(scratch, {recursive:true}); return mkdtemp(join(scratch, "cli-runtime-")); }
+const withoutLocalNotice = (stderr: string) => stderr.replace(/^switcher: LOCAL mode [^\n]*\n/, ""); // The opt-in notice is asserted in fail-closed.test.ts; here it would only mask the command's own diagnostics.
 async function command(home: string, args: string[], extra: NodeJS.ProcessEnv = {}) {
   const child = Bun.spawn([process.execPath, cli, ...args], {cwd: home, env: {
-    PATH: process.env.PATH, HOME: home, USER: "fixture", HASNA_STATION: "switcher-runtime-fixture", HASNA_SWITCHER_HOME: join(home, "data"), ...extra,
+    PATH: process.env.PATH, HOME: home, USER: "fixture", HASNA_STATION: "switcher-runtime-fixture", HASNA_SWITCHER_LOCAL: "1", HASNA_SWITCHER_HOME: join(home, "data"), ...extra,
   }, stdout: "pipe", stderr: "pipe", stdin: "ignore"});
   const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
   try {
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    return {code, stdout, stderr};
+    return {code, stdout, stderr: withoutLocalNotice(stderr)};
   } finally { clearTimeout(timer); }
 }
 
@@ -87,7 +88,7 @@ test("interactive model selection cancels on Ctrl-C, Ctrl-D and SIGTERM without 
       const dir = await directory();
       let output = "", cancelled = false, timedOut = false;
       const child = Bun.spawn([process.execPath,cli,"launch","claude","--provider","generic-anthropic-messages","--url",upstream.url.origin], {
-        cwd:dir, env:{PATH:process.env.PATH,HOME:process.env.HOME,USER:process.env.USER,HASNA_SWITCHER_HOME:join(dir,"data")},
+        cwd:dir, env:{PATH:process.env.PATH,HOME:process.env.HOME,USER:process.env.USER,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"data")},
         terminal:{cols:120,rows:40,data(terminal,data) {
           output += new TextDecoder().decode(data);
           if (!cancelled && output.includes("Ctrl-C cancels): ")) {
@@ -118,7 +119,7 @@ test.skipIf(process.platform === "win32")("owned native process group retains te
   await writeFile(executable,`#!${process.execPath}\nif(process.argv.includes('--version')){console.log('codex-cli 0.153.4');process.exit(0);}\nconst {openSync,closeSync,writeSync}=await import('node:fs');closeSync(openSync('/dev/tty','r'));console.log('CONTROLLING_TTY');const {spawnSync}=await import('node:child_process');spawnSync('/bin/stty',['-opost'],{stdio:['inherit','ignore','ignore']});writeSync(1,'RAW_BEGIN:A\\nB:RAW_END\\n');spawnSync('/bin/stty',['opost'],{stdio:['inherit','ignore','ignore']});process.on('SIGINT',()=>{console.log('NATIVE_INT');process.exit(130);});process.on('SIGWINCH',()=>console.log('RESIZED:'+spawnSync('/bin/stty',['size'],{stdio:['inherit','pipe','ignore'],encoding:'utf8'}).stdout.trim()));process.stdin.setEncoding('utf8');process.stdin.on('data',value=>console.log('READ:'+value.trim()));console.log('NATIVE_READY:'+process.pid+':'+process.stdin.isTTY+':'+process.stdout.isTTY);\n`,{mode:0o700});
   let output="",sent=false,interrupted=false,timedOut=false;
   const child=Bun.spawn([process.execPath,cli,"launch","codex","--provider","generic-openai-responses","--url",upstream.url.origin,"--model","fixture-model","--executable",executable],{
-    cwd:dir,env:{PATH:process.env.PATH,HOME:process.env.HOME,USER:process.env.USER,HASNA_SWITCHER_HOME:join(dir,"data")},
+    cwd:dir,env:{PATH:process.env.PATH,HOME:process.env.HOME,USER:process.env.USER,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"data")},
     terminal:{cols:80,rows:24,data(terminal,data){
       output+=new TextDecoder().decode(data);
       if(!sent&&/NATIVE_READY:\d+:true:true/.test(output)){sent=true;terminal.write("terminal-proof\n");terminal.resize(101,37);}
@@ -181,7 +182,7 @@ test.skipIf(process.platform === "win32")("native controlling terminal coexists 
       const script=redirected.map(fd=>`exec ${fd}${fd===0?"<input":fd===1?">stdout":">stderr"};`).join(" ")+' exec "$@"';
       let output="",timedOut=false,keyboardSent=false;
       const child=Bun.spawn(["/bin/sh","-c",script,"fixture",process.execPath,cli,"launch","codex","--provider","generic-openai-responses","--url",upstream.url.origin,"--model","fixture-model","--executable",executable,"--","--fixture-argument",literal],{
-        cwd:project,env:{PATH:process.env.PATH,HOME:process.env.HOME,HASNA_SWITCHER_HOME:join(project,"data")},terminal:{data(terminal,data){output+=new TextDecoder().decode(data);if(!keyboardSent&&output.includes("TTY_READ_READY")){keyboardSent=true;terminal.write("keyboard-proof\n");}}},
+        cwd:project,env:{PATH:process.env.PATH,HOME:process.env.HOME,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(project,"data")},terminal:{data(terminal,data){output+=new TextDecoder().decode(data);if(!keyboardSent&&output.includes("TTY_READ_READY")){keyboardSent=true;terminal.write("keyboard-proof\n");}}},
       });
       const timer=setTimeout(()=>{timedOut=true;child.kill("SIGKILL");},10_000);
       try {
@@ -203,7 +204,7 @@ test("owned API is authenticated, persists data on reopen and closes its listene
   const dir = await directory();
   let runtime: Awaited<ReturnType<typeof openCliRuntime>> | undefined;
   try {
-    runtime = await openCliRuntime({HASNA_SWITCHER_HOME: join(dir, "data")});
+    runtime = await openCliRuntime({HASNA_SWITCHER_LOCAL: "1", HASNA_SWITCHER_HOME: join(dir, "data")});
     expect(runtime.mode).toBe("local");
     expect((await runtime.client.health()).backend).toBe("sqlite");
     expect((await runtime.client.ready()).ready).toBe(true);
@@ -213,7 +214,7 @@ test("owned API is authenticated, persists data on reopen and closes its listene
     const address = runtime.client.baseUrl;
     await runtime.close(); await runtime.close();
     await expect(fetch(address + "/health")).rejects.toThrow();
-    runtime = await openCliRuntime({HASNA_SWITCHER_HOME: join(dir, "data")});
+    runtime = await openCliRuntime({HASNA_SWITCHER_LOCAL: "1", HASNA_SWITCHER_HOME: join(dir, "data")});
     expect((await runtime.client.listProviders()).total).toBe(1);
     expect((await stat(join(dir, "data"))).mode & 0o777).toBe(0o700);
     expect((await stat(join(dir, "data/switcher.db"))).mode & 0o777).toBe(0o600);
@@ -273,7 +274,7 @@ test("concurrent first-run CLI processes share SQLite without startup-lock failu
     expect(results.map(r=>({code:r.code,stderr:r.stderr}))).toEqual(results.map(()=>({code:0,stderr:""})));
     const list = await command(dir,["providers","list"]);
     expect(list.code, list.stderr).toBe(0); expect(JSON.parse(list.stdout).total).toBe(12);
-    const [a,b] = await Promise.all([openCliRuntime({HASNA_SWITCHER_HOME:join(dir,"data")}),openCliRuntime({HASNA_SWITCHER_HOME:join(dir,"data")})]);
+    const [a,b] = await Promise.all([openCliRuntime({HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"data")}),openCliRuntime({HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"data")})]);
     try {
       const input=providerFromPreset("deepseek");
       const [first,second] = await Promise.all([a.client.createProvider(input,"cross-process-idempotent"),b.client.createProvider(input,"cross-process-idempotent")]);
@@ -304,7 +305,7 @@ test.skipIf(!process.env.SWITCHER_TEST_DATABASE_URL)("CLI-owned PostgreSQL API p
   try {
     await admin.unsafe(`CREATE SCHEMA ${schema}`);
     const url = new URL(process.env.SWITCHER_TEST_DATABASE_URL!); url.searchParams.set("options", `-c search_path=${schema}`);
-    const env = {HASNA_SWITCHER_DATABASE_URL:url.href};
+    const env = {HASNA_SWITCHER_DATABASE_URL:url.href,HASNA_SWITCHER_LOCAL:"1"};
     const add = await command(dir,["providers","add","pg-deepseek","--preset","deepseek","--protocol","anthropic-messages"],env);
     expect(add.code,add.stderr).toBe(0);
     const read = await command(dir,["providers","get","pg-deepseek"],env);
