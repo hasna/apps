@@ -548,6 +548,16 @@ deployment IAM role; Resend uses `RESEND_API_KEY`. See
 [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) for signup, sessions,
 tenant-scoped keys, and optional IdP verification.
 
+The ingest worker's `/ready` probe checks receive-cycle progress and independently
+samples SQS `ApproximateNumberOfMessages`. A stalled loop stays ready only when a
+fresh, valid sample proves no visible work; missing or malformed visibility fails
+closed. `/health` reports `oldest_age_seconds: null`: oldest-message age is a
+CloudWatch metric, not a `GetQueueAttributes` field. Operators must configure and
+verify a separate `AWS/SQS` `ApproximateAgeOfOldestMessage` alarm; the worker does
+not provision or evaluate that alarm. `EMAILS_INGEST_QUEUE_AGE_POLL_SECONDS` keeps
+its legacy name but controls visibility sampling. The legacy
+`EMAILS_INGEST_QUEUE_AGE_ALARM_SECONDS` value is diagnostic only.
+
 Self-hosted client commands fail closed when the URL or credential is missing
 or invalid — a configured authority with no credential refuses rather than
 falling back to local data. With `--json`, the CLI emits one structured error object on
