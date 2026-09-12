@@ -376,17 +376,27 @@ public-safe descriptor.
 
 ## Data Directory
 
-Local data resolves via the in-package resolver (XDG/macOS home
-layout, XDG home-migration plan `0f49f56a`): `~/.local/share/hasna/files/`
-on Linux, `~/Library/Application Support/Hasna/files` on macOS. The legacy
-`~/.hasna/files/` stays the effective data root until the store has been
-migrated to the XDG data home or the operator sets the data-kind override
-`HASNA_DATA_HOME` — an existing local store never becomes invisible on
-upgrade.
+Local data resolves to `~/.hasna/files/` on every platform — the one canonical
+per-app home (home-layout ruling, 2026-09-04).
 
-Override the data root with `HASNA_FILES_DATA_DIR`, `FILES_DATA_DIR`,
-`HASNA_FILES_HOME`, or `FILES_HOME` (first-nonblank wins, in that order); or
-only the SQLite path with `HASNA_FILES_DB_PATH`.
+Overrides, in precedence order:
+
+1. `HASNA_FILES_DATA_DIR`, `FILES_DATA_DIR`, `HASNA_FILES_HOME`, `FILES_HOME` —
+   name the data root directly (first non-blank wins, in that order).
+2. `HASNA_DATA_HOME` — relocates the data root to `<HASNA_DATA_HOME>/files`.
+3. `HASNA_HOME` — relocates the `~/.hasna` root, so the data root becomes
+   `<HASNA_HOME>/files`.
+
+`HASNA_CONFIG_HOME`, `HASNA_STATE_HOME` and `HASNA_CACHE_HOME` never move the
+data root. Override only the SQLite path with `HASNA_FILES_DB_PATH`.
+
+Earlier versions resolved an XDG / macOS layout here
+(`~/.local/share/hasna/files`, `~/Library/Application Support/Hasna/files`) and
+would silently adopt it whenever a `files.db` already existed there. That is
+removed: the home no longer depends on the presence of a local store. If a
+station previously ran with `HASNA_DATA_HOME` unset but had data at one of
+those paths, it is no longer read — move it to `~/.hasna/files/` (or point
+`HASNA_DATA_HOME` at its parent) before upgrading.
 
 ## License
 
