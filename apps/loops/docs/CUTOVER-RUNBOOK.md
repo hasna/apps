@@ -208,4 +208,4 @@ credential (unset `HASNA_LOOPS_API_KEY`, delete the Keychain item
 `hasna.credentials.loops.api-key` / the credential file
 `~/.hasna/loops/config/credentials`) returns the standalone CLI/daemon to
 fail-closed mode; the local file connection is the explicit
-`HASNA_LOOPS_CONNECTION=file` opt-in.
+`HASNA_LOOPS_LOCAL=1` opt-in (the retired `HASNA_LOOPS_CONNECTION=file` is refused; regenerate daemon units with `loops daemon install --local`).

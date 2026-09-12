@@ -178,7 +178,7 @@ describe("resolved transport report (shared resolver is the authority)", () => {
       mkdirSync(join(root, ".hasna", "loops", "config"), { recursive: true });
       writeFileSync(file, "HASNA_LOOPS_API_KEY=fixture-disk-key\n", { mode: 0o600 });
 
-      const config = resolvedClientRuntimeConfig({ HOME: root, HASNA_LOOPS_CONNECTION: "file" });
+      const config = resolvedClientRuntimeConfig({ HOME: root, HASNA_LOOPS_LOCAL: "1" });
       expect(config.connection).toBe("file");
       expect(config.apiKeyPresent).toBe(false);
       expect(config.apiUrlPresent).toBe(false);

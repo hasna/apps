@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Database } from "bun:sqlite";
 import { Command } from "commander";
 import type {
   AccountRef,
@@ -20,7 +19,7 @@ import type {
   WorkflowSpec,
   WriteRunReceiptInput,
 } from "../types.js";
-import { dataDir, daemonLogPath, dbPath } from "../lib/paths.js";
+import { dataDir, daemonLogPath } from "../lib/paths.js";
 import {
   publicLoop,
   publicExecutorResult,
@@ -40,8 +39,15 @@ import {
 import { classifyLoopExecutionStaleness } from "../lib/execution-staleness.js";
 import { publicCommandDescriptor } from "../lib/command-target.js";
 import { initialNextRun, parseDuration } from "../lib/recurrence.js";
-import { Store } from "../lib/store.js";
+import { Store, refuseLocalStore } from "../lib/store.js";
 import { CloudUnsupportedError, getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
+import { resolveCloudStorage } from "../lib/cloud/resolve.js";
+import {
+  REMOTE_COMMAND_UNSUPPORTED,
+  hasRetiredLoopsConnectionSwitch,
+  loopsHostedLocalStoreRefusal,
+  selectsLoopsLocalStore,
+} from "../lib/local-opt-in.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
 import { runLoopNow, tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
@@ -308,11 +314,25 @@ async function listAllLoops(
  */
 function assertLocalOnlyCommand(command: string): void {
   if (isCloudStore()) {
-    throw new ValidationError(
-      `'loops ${command}' operates on this machine's local runtime and is not available while flipped to the hosted Loops API. ` +
-        `Set HASNA_LOOPS_CONNECTION=file to explicitly use the local file store and run it here.`,
-    );
+    throw new CodedError(REMOTE_COMMAND_UNSUPPORTED, loopsHostedLocalStoreRefusal(`loops ${command}`));
   }
+}
+
+/**
+ * The lazy refusal the process-wide local-store choke point throws when a
+ * command reaches `new Store()` outside the explicit local opt-in: with
+ * nothing configured, the resolver's own fail-closed line (tiers + opt-in);
+ * on the hosted route, `REMOTE_COMMAND_UNSUPPORTED` naming the opt-in. Decided
+ * at the moment of the attempted open, so `--help` and the hosted data
+ * commands never pay for a Keychain read they do not need.
+ */
+function localStoreRefusalForThisProcess(): Error {
+  try {
+    resolveCloudStorage("loops");
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+  return new CodedError(REMOTE_COMMAND_UNSUPPORTED, loopsHostedLocalStoreRefusal("this local-only loops command"));
 }
 
 /** `123456` -> `2m3s`, so an operator reads an unclaimed slot without doing arithmetic. */
@@ -404,8 +424,8 @@ function printStorageConnectionReport(report: StorageConnectionReport, opts: { j
 function statusCommand() {
   return (opts: { json?: boolean } = {}) => {
     // The shared credential resolver decides the connection (env, Keychain,
-    // credential file, or the explicit HASNA_LOOPS_CONNECTION=file opt-in),
-    // so an unconfigured invocation exits non-zero with guidance instead of
+    // credential file, or the explicit HASNA_LOOPS_LOCAL=1 opt-in), so an
+    // unconfigured invocation exits non-zero with guidance instead of
     // reporting a file connection that no data command would use.
     printStorageConnectionReport(buildStorageConnectionReport(resolvedClientRuntimeConfig()), opts);
   };
@@ -3128,8 +3148,19 @@ program
 
     const store = new Store();
     let history;
+    let walCheckpoint: Record<string, unknown> = { ran: false };
     try {
       history = store.pruneHistory({ maxAgeDays, keepPerLoop, dryRun });
+      // Checkpoint on the store's own connection (right after the deletes, so
+      // the WAL actually shrinks) instead of a second raw `bun:sqlite` open:
+      // the CLI bundle owns no SQLite import and this open is the gated one.
+      if (!dryRun) {
+        try {
+          walCheckpoint = { ran: true, ...(store.walCheckpoint() ?? {}) };
+        } catch (error) {
+          walCheckpoint = { ran: false, error: redact(error instanceof Error ? error.message : String(error), 240) };
+        }
+      }
     } finally {
       store.close();
     }
@@ -3151,19 +3182,6 @@ program
     const strayFiles = listStrayTempFiles([dataDir(), backupsDir]);
     if (!dryRun) {
       for (const path of [...prunedBackups, ...strayFiles]) rmSync(path, { force: true });
-    }
-
-    let walCheckpoint: Record<string, unknown> = { ran: false };
-    if (!dryRun && existsSync(dbPath())) {
-      const db = new Database(dbPath());
-      try {
-        const result = db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as Record<string, unknown> | null;
-        walCheckpoint = { ran: true, ...(result ?? {}) };
-      } catch (error) {
-        walCheckpoint = { ran: false, error: redact(error instanceof Error ? error.message : String(error), 240) };
-      } finally {
-        db.close();
-      }
     }
 
     const value = {
@@ -3254,5 +3272,16 @@ daemon
   }));
 
 const { push: bundlePush, pull: bundlePull } = registerBundleCommands(program, { json: isJson });
+
+// FAIL-CLOSED CHOKE POINT (owner ruling 2026-09-07, hasna/apps#1720): the
+// on-box SQLite store is reachable ONLY through the explicit HASNA_LOOPS_LOCAL=1
+// opt-in, answered from the environment before any Keychain or disk read. On
+// every other route — a hosted credential, nothing configured, or the retired
+// HASNA_LOOPS_CONNECTION switch still exported — every `new Store()` in this
+// process refuses instead of opening (and creating) ~/.hasna/loops/loops.db.
+// Data commands are unaffected: they resolve the hosted `/v1` store per call.
+if (!selectsLoopsLocalStore(process.env) || hasRetiredLoopsConnectionSwitch(process.env)) {
+  refuseLocalStore(localStoreRefusalForThisProcess);
+}
 
 await program.parseAsync(process.argv);

@@ -18,7 +18,7 @@ function runCli(dataDir: string, args: string[]) {
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_API_KEY: "",
       // Local file store requires the explicit opt-in (fail-closed policy).
-      HASNA_LOOPS_CONNECTION: "file",
+      HASNA_LOOPS_LOCAL: "1",
     },
     encoding: "utf8",
   });

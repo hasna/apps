@@ -56,8 +56,35 @@ describe("installStartup", () => {
       expect(service).toContain("WantedBy=default.target");
       expect(service).toContain(`WorkingDirectory=${env.dataDir}`);
       expect(service).toContain(`Environment="LOOPS_DATA_DIR=${env.dataDir}"`);
-      expect(service).toContain(`Environment="HASNA_LOOPS_CONNECTION=file"`);
       expect(service).toContain('Environment="PATH=');
+    } finally {
+      env.restore();
+    }
+  });
+
+  test("FAILING INPUT (0.7.0 baked the retired switch): without --local the unit carries NO store selection and says so", () => {
+    const env = withInstallEnv();
+    try {
+      const result = installStartup("loops-daemon", "/usr/bin/bun", ["run"], "linux");
+      const service = readFileSync(result.path, "utf8");
+      expect(service).not.toContain("HASNA_LOOPS_CONNECTION");
+      expect(service).not.toContain("HASNA_LOOPS_LOCAL");
+      expect(result.local).toBe(false);
+      expect(result.instructions.some((line) => line.includes("--local") && line.includes("HASNA_LOOPS_LOCAL=1"))).toBe(true);
+    } finally {
+      env.restore();
+    }
+  });
+
+  test("--local writes the standard boolean opt-in HASNA_LOOPS_LOCAL=1 (never the retired HASNA_LOOPS_CONNECTION)", () => {
+    const env = withInstallEnv();
+    try {
+      const result = installStartup("loops-daemon", "/usr/bin/bun", ["run"], "linux", { local: true });
+      const service = readFileSync(result.path, "utf8");
+      expect(service).toContain('Environment="HASNA_LOOPS_LOCAL=1"');
+      expect(service).not.toContain("HASNA_LOOPS_CONNECTION");
+      expect(result.local).toBe(true);
+      expect(result.instructions.some((line) => line.startsWith("note:"))).toBe(false);
     } finally {
       env.restore();
     }
@@ -82,11 +109,25 @@ describe("installStartup", () => {
       expect(plist).toContain("<string>/opt/a&amp;b/&lt;cli&gt;.js</string>");
       expect(plist).not.toContain("<string>/opt/a&b/<cli>.js</string>");
       expect(plist).toContain(`<key>LOOPS_DATA_DIR</key><string>${env.dataDir}</string>`);
-      expect(plist).toContain("<key>HASNA_LOOPS_CONNECTION</key><string>file</string>");
+      expect(plist).not.toContain("HASNA_LOOPS_CONNECTION");
+      expect(plist).not.toContain("HASNA_LOOPS_LOCAL");
       expect(plist).toContain(`<key>WorkingDirectory</key><string>${env.dataDir}</string>`);
       expect(result.instructions.some((line) => line.includes("launchctl bootstrap gui/$(id -u)"))).toBe(true);
       expect(result.instructions.some((line) => line.includes("launchctl bootout gui/$(id -u)"))).toBe(true);
       expect(result.instructions.some((line) => line.includes("load -w"))).toBe(false);
+    } finally {
+      env.restore();
+    }
+  });
+
+  test("--local on darwin writes HASNA_LOOPS_LOCAL=1 into the plist environment", () => {
+    const env = withInstallEnv();
+    try {
+      const result = installStartup("loops-daemon", "/usr/bin/bun", ["run"], "darwin", { local: true });
+      const plist = readFileSync(result.path, "utf8");
+      expect(plist).toContain("<key>HASNA_LOOPS_LOCAL</key><string>1</string>");
+      expect(plist).not.toContain("HASNA_LOOPS_CONNECTION");
+      expect(result.local).toBe(true);
     } finally {
       env.restore();
     }

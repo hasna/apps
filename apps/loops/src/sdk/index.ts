@@ -62,7 +62,7 @@ export interface LoopsClientOptions {
    * it. When omitted, the data store is resolved from the connection env via
    * {@link getStore} — the hosted `/v1` API when HASNA_LOOPS_API_URL and
    * HASNA_LOOPS_API_KEY are set, or the local sqlite store when
-   * HASNA_LOOPS_CONNECTION=file is set explicitly. With neither, construction
+   * HASNA_LOOPS_LOCAL=1 is set explicitly. With neither, construction
    * fails closed (no silent local fallback). Every data method routes through
    * the one Store abstraction.
    */

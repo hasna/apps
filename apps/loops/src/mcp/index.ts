@@ -24,8 +24,9 @@ import { resolveLoopMachine } from "../lib/machines.js";
 import { dataDir } from "../lib/paths.js";
 import { initialNextRun } from "../lib/recurrence.js";
 import { runLoopNow } from "../lib/scheduler.js";
-import { Store } from "../lib/store.js";
+import { Store, refuseLocalStore } from "../lib/store.js";
 import { LocalStore, getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
+import { loopsHostedLocalStoreRefusal } from "../lib/local-opt-in.js";
 import { packageVersion } from "../lib/version.js";
 import { preflightWorkflow } from "../lib/workflow-runner.js";
 import { workflowBodyFromJson } from "../lib/workflow-spec.js";
@@ -278,10 +279,7 @@ async function withStore<T>(fn: (store: LoopStore) => T | Promise<T>): Promise<T
  */
 async function withLocalStore<T>(operation: string, fn: (store: Store) => T | Promise<T>): Promise<T> {
   if (isCloudStore()) {
-    throw new Error(
-      `'${operation}' inspects this machine's local Loops runtime and is not available while flipped to the hosted Loops API. ` +
-        `Set HASNA_LOOPS_CONNECTION=file to explicitly select the local file store and run it here.`,
-    );
+    throw new Error(loopsHostedLocalStoreRefusal(operation));
   }
   const store = new Store();
   try {
@@ -1116,8 +1114,9 @@ MCP server for @hasna/loops (Streamable HTTP by default; --stdio to select stdio
 Requires a configured loops connection before it serves, in every mode:
 HASNA_LOOPS_API_KEY (or the macOS Keychain item hasna.credentials.loops.api-key,
 or ~/.hasna/loops/config/credentials), or the explicit local opt-in
-HASNA_LOOPS_CONNECTION=file. Without one it exits non-zero before binding or
-answering initialize.
+HASNA_LOOPS_LOCAL=1 (alias LOOPS_LOCAL=1). Without one it exits non-zero before
+binding or answering initialize. The retired HASNA_LOOPS_CONNECTION switch is
+refused.
 
 Options:
   -V, --version  output the version number
@@ -1136,14 +1135,21 @@ Options:
   // STARTUP GATE (owner ruling 2026-09-07, hasna/apps#1720 acceptance (c)):
   // resolve the client connection ONCE, through the same chain every tool
   // uses per call, BEFORE any transport exists. With no credential resolvable
-  // and no explicit HASNA_LOOPS_CONNECTION=file opt-in the process exits
-  // non-zero naming where the credential should live — before `initialize`
-  // can be answered on stdio and before the Streamable HTTP port is bound.
-  // Nothing is created. See ./startup-gate.ts.
+  // and no explicit HASNA_LOOPS_LOCAL=1 opt-in the process exits non-zero
+  // naming where the credential should live — before `initialize` can be
+  // answered on stdio and before the Streamable HTTP port is bound. Nothing
+  // is created. See ./startup-gate.ts.
   const gate = await resolveLoopsMcpStartupGate();
   if (!gate.ok) {
     console.error(gate.message);
     process.exit(1);
+  }
+  if (gate.transport === "api") {
+    // The authority is hosted for the life of this process: no tool, no
+    // helper, no diagnostic may open the on-box store — the process-wide
+    // choke point in `Store` refuses every attempt with the code and the
+    // opt-in, instead of answering from a different dataset.
+    refuseLocalStore(loopsHostedLocalStoreRefusal("this loops-mcp tool"));
   }
 
   // Explicit stdio opt-out (--stdio / MCP_STDIO=1) keeps the legacy

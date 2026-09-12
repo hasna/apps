@@ -70,7 +70,7 @@ describe("loops-mcp startup gate refuses with no connection configured", () => {
     expect(line).toContain("HASNA_LOOPS_API_KEY");
     expect(line).toContain(KEYCHAIN_ITEM);
     expect(line).toContain(join(home, "loops", "config", "credentials"));
-    expect(line).toContain("HASNA_LOOPS_CONNECTION=file");
+    expect(line).toContain("HASNA_LOOPS_LOCAL=1");
     // The chain actually ran down to the Keychain tier, under the sentinel
     // station account: the gate is the real resolver, not a shortcut.
     expect(keychain.calls.length).toBeGreaterThan(0);
@@ -236,11 +236,11 @@ describe("loops-mcp startup gate passes a configured connection", () => {
     expect(readdirSync(dir)).toEqual(["credentials"]);
   });
 
-  test("the explicit HASNA_LOOPS_CONNECTION=file opt-in selects the local store without consulting the Keychain or creating it", async () => {
+  test("the explicit HASNA_LOOPS_LOCAL=1 opt-in selects the local store without consulting the Keychain or creating it", async () => {
     const home = tempHome("file");
     const keychain = fakeKeychain({});
 
-    const gate = await resolveLoopsMcpStartupGate(gateEnv(home, { HASNA_LOOPS_CONNECTION: "file" }), keychain.credentials);
+    const gate = await resolveLoopsMcpStartupGate(gateEnv(home, { HASNA_LOOPS_LOCAL: "1" }), keychain.credentials);
 
     expect(gate).toEqual({ ok: true, transport: "file", apiKeySource: null });
     expect(keychain.calls).toEqual([]);

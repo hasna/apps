@@ -1,11 +1,11 @@
 import { completePointerCredential, resolveCredential, type ResolvedCredential } from "@hasna/contracts/client";
 import {
-  LOOPS_CONNECTION_ENV_KEY,
   loopsResolverInputs,
   resolveCloudStorage,
   type Env,
   type LoopsCredentialChainOptions,
 } from "../lib/cloud/resolve.js";
+import { LOOPS_LOCAL_OPT_IN_HINT } from "../lib/local-opt-in.js";
 
 /**
  * The fail-closed startup gate for `loops-mcp` (owner ruling 2026-09-07,
@@ -27,17 +27,17 @@ import {
  * The gate is ONE pass down the same chain every tool resolves through per
  * call (`resolveCloudStorage`, i.e. `getStore()`): the live process
  * environment keeps its ambient Keychain and disk tiers, a caller-built env
- * is the hermetic seam, and the explicit `HASNA_LOOPS_CONNECTION=file` opt-in
- * still selects the on-box store (announcing "local mode" once on stderr from
- * the resolver). A DELIBERATE tier that cannot produce a key is a refusal,
- * never resolved around: `HASNA_PROFILE` naming a missing profile file, an
- * unsafe credentials file, a Keychain item that exists but cannot be read,
- * the retired `HASNA_LOOPS_CONNECTION=api` selector, and the secrets-vault
- * pointer `HASNA_LOOPS_API_KEY_REF`. The chain validates only the pointer's
- * SHAPE, so the gate dereferences it once through the vault exactly as the
- * transport does at request time; a pointer that cannot be completed (SDK
- * absent, vault unconfigured or unreachable, item missing or empty) refuses
- * the start instead of answering `initialize`.
+ * is the hermetic seam, and the explicit `HASNA_LOOPS_LOCAL=1` opt-in still
+ * selects the on-box store (announcing "LOCAL mode" once on stderr from the
+ * resolver). A DELIBERATE tier that cannot produce a key is a refusal, never
+ * resolved around: `HASNA_PROFILE` naming a missing profile file, an unsafe
+ * credentials file, a Keychain item that exists but cannot be read, the
+ * retired `HASNA_LOOPS_CONNECTION` selector (any value), and the
+ * secrets-vault pointer `HASNA_LOOPS_API_KEY_REF`. The chain validates only
+ * the pointer's SHAPE, so the gate dereferences it once through the vault
+ * exactly as the transport does at request time; a pointer that cannot be
+ * completed (SDK absent, vault unconfigured or unreachable, item missing or
+ * empty) refuses the start instead of answering `initialize`.
  *
  * Nothing here opens, reads or creates a local store, and the message names
  * WHERE the credential should live (an env key NAME, the Keychain item, the
@@ -57,7 +57,7 @@ export interface LoopsMcpStartupGateOptions {
 const APP = "loops";
 export const LOOPS_MCP_REFUSAL_PREFIX = "loops-mcp: refusing to start —";
 const LOOPS_MCP_REFUSAL_HINT =
-  `The MCP server never serves tools without a loops credential or the explicit ${LOOPS_CONNECTION_ENV_KEY}=file opt-in, ` +
+  `The MCP server never serves tools without a loops credential or the explicit ${LOOPS_LOCAL_OPT_IN_HINT} opt-in, ` +
   "and never reads or creates a local store on its own; configure the connection and restart loops-mcp.";
 
 export async function resolveLoopsMcpStartupGate(
