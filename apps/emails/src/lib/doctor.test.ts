@@ -59,8 +59,10 @@ function restoreInheritedProcessEnv(): void {
 const CONTROLLED_ENV = [
   "HASNA_EMAILS_DB_PATH",
   "EMAILS_DB_PATH",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_LOCAL",
+  "EMAILS_LOCAL",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_CLIENT_ENV_SECRET",
   "EMAILS_SESSION_TOKEN",
   "AWS_ACCESS_KEY_ID",
@@ -83,6 +85,7 @@ beforeEach(() => {
   process.env["HOME"] = tempHome;
   for (const key of CONTROLLED_ENV) delete process.env[key];
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   db = getDatabase();
 });
@@ -549,8 +552,9 @@ describe("runDiagnostics and the storage configuration", () => {
     // A doctor is the tool an operator runs BECAUSE the configuration is broken, so the
     // resolver's boot error has to become part of the report rather than replace it.
     process.env["EMAILS_DB_PATH"] = join(tempHome, "emails.db");
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://mail.example.test";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
+    process.env["HASNA_EMAILS_API_URL"] = "https://mail.example.test";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-key";
 
     const checks = await runDiagnostics();
     const store = named(checks, "Store");
@@ -558,7 +562,7 @@ describe("runDiagnostics and the storage configuration", () => {
     expect(store.status).toBe("fail");
     expect(store.message).toContain("no way to tell which one you meant");
     expect(store.message).toContain("EMAILS_DB_PATH");
-    expect(store.message).toContain("EMAILS_SELF_HOSTED_URL");
+    expect(store.message).toContain("HASNA_EMAILS_API_URL");
 
     // And every subject the store would have answered says so, rather than vanishing from
     // the report or reporting a zero.
@@ -594,6 +598,7 @@ describe("runDiagnostics and the storage configuration", () => {
     // passes with the production change reverted, which is no test at all.
     const store = realStore();
     delete process.env["EMAILS_DB_PATH"];
+    delete process.env["HASNA_EMAILS_LOCAL"];
     resetDatabase();
 
     await runDiagnostics({ _store: store });
@@ -845,8 +850,9 @@ describe("formatDiagnostics", () => {
 describe("provisioning credentials on an API-backed installation", () => {
   function configureApiStorage(): void {
     delete process.env["EMAILS_DB_PATH"];
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://mail.example.test";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+    delete process.env["HASNA_EMAILS_LOCAL"];
+    process.env["HASNA_EMAILS_API_URL"] = "https://mail.example.test";
+    process.env["HASNA_EMAILS_API_KEY"] = "test-key";
   }
 
   it("reports absent local cloudflare/resend credentials as unknown, never fail", async () => {

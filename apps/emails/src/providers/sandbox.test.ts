@@ -30,6 +30,7 @@ import {
   API_CREDENTIAL_SETTINGS,
   API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
 } from "../store-resolution.js";
 
 const PROVIDER_ID = "sandbox-provider-1";
@@ -60,8 +61,9 @@ function openDatabase(): void {
   for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
     delete process.env[setting];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+  for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
   process.env[DATABASE_PATH_SETTINGS[1]] = ":memory:";
+  process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
   resetDatabase();
   db = getDatabase();
   // `sandbox_emails.provider_id` is a real foreign key into `providers`.
@@ -71,7 +73,7 @@ function openDatabase(): void {
 /** Hand the environment over to a `/v1` service backed by `store`. */
 function pointTheEnvironmentAt(store: EmailStore): V1StoreApi {
   const service = startV1StoreApi({ store });
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+  for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
   process.env[API_BASE_URL_SETTING] = service.baseUrl;
   process.env[API_CREDENTIAL_SETTINGS[2] as string] = service.apiKey;
   return service;

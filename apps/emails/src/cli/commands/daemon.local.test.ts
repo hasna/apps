@@ -33,12 +33,14 @@ async function runDaemonCommand(args: string[]) {
 beforeEach(() => {
   captureInheritedProcessEnv();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
 });
 
 afterEach(() => {
   closeDatabase();
   delete process.env["EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_LOCAL"];
   restoreInheritedProcessEnv();
 });
 

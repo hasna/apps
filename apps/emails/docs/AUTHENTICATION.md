@@ -9,8 +9,8 @@ not use these accounts.
 A self-hosted client resolves the service URL and a bearer credential through
 the shared credential resolver (hasna/apps#1720). The canonical env names are
 `HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`; the legacy
-`EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` spellings remain
-accepted as aliases for one release. The resolver also consults the macOS
+`EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` spellings are retired
+(1.6.1) and refused by name if still exported. The resolver also consults the macOS
 Keychain items for this app (`api-url` / `api-key`) and the
 `~/.hasna/emails/config/credentials` file, and defaults the URL to the shared
 gateway once a credential resolves:
@@ -18,9 +18,8 @@ gateway once a credential resolves:
 ```bash
 export HASNA_EMAILS_API_URL="https://emails.example.com"
 export HASNA_EMAILS_API_KEY="..."                # operator or tenant API key
-# …or, for one more release, the legacy spellings:
-# export EMAILS_SELF_HOSTED_URL="https://emails.example.com"
-# export EMAILS_SELF_HOSTED_API_KEY="..."
+# The retired EMAILS_SELF_HOSTED_URL / EMAILS_SELF_HOSTED_API_KEY spellings are
+# refused: unset them and use the canonical names above.
 ```
 
 The URL is what selects the hosted client store; there is no separate

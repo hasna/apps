@@ -33,14 +33,16 @@ import { emptyMailboxCounts, type MailboxSourceSummary } from "./mail-types.js";
 const HOME_ENV = "HOME";
 const MODE_ENV = ["EMAILS", "MODE"].join("_");
 const DB_PATH_ENV = ["EMAILS", "DB_PATH"].join("_");
-const API_URL_ENV = "EMAILS_SELF_HOSTED_URL";
-const API_KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
+const API_URL_ENV = "HASNA_EMAILS_API_URL";
+const API_KEY_ENV = "HASNA_EMAILS_API_KEY";
 const TOUCHED_ENV = [
   HOME_ENV,
   MODE_ENV,
   `HASNA_${MODE_ENV}`,
   DB_PATH_ENV,
   `HASNA_${DB_PATH_ENV}`,
+  "HASNA_EMAILS_LOCAL",
+  "EMAILS_LOCAL",
   API_URL_ENV,
   API_KEY_ENV,
   "EMAILS_CLIENT_ENV_SECRET",
@@ -61,6 +63,7 @@ beforeEach(() => {
   // The deployment-mode variable is retired (hasna/apps#1566): the database path
   // alone routes the local arm.
   process.env[DB_PATH_ENV] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
 });
 
@@ -392,6 +395,7 @@ describe("status facts are measured on the store, or refused", () => {
     // settings.
     scratch = mkdtempSync(join(tmpdir(), "emails-status-facts-"));
     process.env[DB_PATH_ENV] = join(scratch, "emails.db");
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     process.env[API_URL_ENV] = "http://127.0.0.1:9";
     process.env[API_KEY_ENV] = "test-key";
 
@@ -422,6 +426,7 @@ describe("status facts are measured on the store, or refused", () => {
     scratch = mkdtempSync(join(tmpdir(), "emails-status-facts-"));
     const file = join(scratch, "emails.db");
     process.env[DB_PATH_ENV] = file;
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     resetDatabase();
 
     const bundle = await facts();

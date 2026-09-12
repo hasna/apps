@@ -53,8 +53,10 @@ const ISOLATED_ENV_KEYS = [
   `HASNA_${MODE_ENV_KEY}`,
   DB_PATH_ENV_KEY,
   `HASNA_${DB_PATH_ENV_KEY}`,
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_LOCAL",
+  "EMAILS_LOCAL",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_CLIENT_ENV_SECRET",
   "EMAILS_SESSION_TOKEN",
   "EMAILS_IDP_TOKEN",
@@ -71,6 +73,7 @@ beforeEach(() => {
   // database path selects the local database — the deployment word is removed
   // and never set (a carried-forward value is refused by the retired guard).
   process.env[DB_PATH_ENV_KEY] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
 });
 

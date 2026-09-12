@@ -124,7 +124,7 @@ describe("server startup contract", () => {
   for (const command of ["ingest-worker", "ingest-s3-backfill"] as const) {
     it(`${command} reaches operator validation without a client URL or API/session key`, () => {
       const env = { ...process.env };
-      for (const key of ["EMAILS_SELF_HOSTED_URL", "EMAILS_SELF_HOSTED_API_KEY", "EMAILS_SESSION_TOKEN"]) {
+      for (const key of ["HASNA_EMAILS_API_URL", "HASNA_EMAILS_API_KEY", "EMAILS_SESSION_TOKEN"]) {
         delete env[key];
       }
       // THE RETIRED DEPLOYMENT SETTINGS GO TOO, and not as tidiness. The hermetic harness
@@ -151,8 +151,8 @@ describe("server startup contract", () => {
       const combined = new TextDecoder().decode(result.stdout) + new TextDecoder().decode(result.stderr);
       expect(result.exitCode).not.toBe(0);
       expect(combined).toContain("EMAILS_INGEST_S3_BUCKET");
-      expect(combined).not.toContain("EMAILS_SELF_HOSTED_URL");
-      expect(combined).not.toContain("EMAILS_SELF_HOSTED_API_KEY");
+      expect(combined).not.toContain("HASNA_EMAILS_API_URL");
+      expect(combined).not.toContain("HASNA_EMAILS_API_KEY");
     });
   }
 
@@ -173,6 +173,7 @@ describe("server startup contract", () => {
         PATH: process.env["PATH"] ?? "",
         HOME: home,
         EMAILS_DB_PATH: ":memory:",
+        HASNA_EMAILS_LOCAL: "1",
         HOST: "invalid-host.invalid",
         PORT: "0",
         AWS_EC2_METADATA_DISABLED: "true",

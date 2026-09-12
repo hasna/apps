@@ -30,15 +30,23 @@ import {
   API_BASE_URL_SETTING,
   API_CREDENTIAL_SETTINGS,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
   StoreConfigurationError,
   createConfiguredEmailStore,
   planEmailStore,
 } from "./store-resolution.js";
-import { EMAILS_SELF_HOSTED_API_KEY_ENV } from "./lib/emails-credentials.js";
+import { EMAILS_API_KEY_ENV, RETIRED_EMAILS_CLIENT_ENV_KEYS, emailsKeychainItem } from "./lib/emails-credentials.js";
 
 /** An environment with nothing this resolver reads, so a quadrant is exactly stated. */
 function bare(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   return { ...overrides };
+}
+
+/** The canonical opt-in, the ONLY thing that selects the local store (1.6.1). */
+const LOCAL = LOCAL_OPT_IN_SETTINGS[0];
+/** A bare environment that has deliberately opted into the local store. */
+function local(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
+  return bare({ [LOCAL]: "1", ...overrides });
 }
 
 const A_URL = "https://mail.example.test";
@@ -61,14 +69,74 @@ describe("configured store resolution — the quadrants and the boot-error rows"
     // the credential routes, in the shared resolver's vocabulary)...
     expect(error.message).toContain(API_BASE_URL_SETTING);
     expect(error.message).toContain("HASNA_EMAILS_API_KEY");
-    expect(error.message).toContain(EMAILS_SELF_HOSTED_API_KEY_ENV);
-    // ...without recommending a SQLite setting that ordinary clients reject.
+    expect(error.message).toContain(EMAILS_API_KEY_ENV);
+    // ...names the tiers consulted and the ONE opt-in, and never a retired alias or a
+    // SQLite path setting that ordinary clients reject.
+    expect(error.message).toContain(emailsKeychainItem("api-key"));
+    expect(error.message).toContain("~/.hasna/emails/config/credentials");
+    expect(error.message).toContain(`${LOCAL}=1`);
     for (const setting of DATABASE_PATH_SETTINGS) expect(error.message).not.toContain(setting);
-    // The machine-readable half carries the hosted-env and local keys at fault — never
-    // a value, because a value in this row can be a credential.
+    for (const [retired] of RETIRED_EMAILS_CLIENT_ENV_KEYS) expect(error.message).not.toContain(retired);
+    // The machine-readable half carries the hosted-env keys and the opt-in keys at
+    // fault — never a value, because a value in this row can be a credential.
     expect([...error.settings].sort()).toEqual(
-      [API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS, ...DATABASE_PATH_SETTINGS].sort(),
+      [API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS, ...LOCAL_OPT_IN_SETTINGS].sort(),
     );
+  });
+
+  it("REFUSES a database path on its own — a path never selects the local store (the 1.6.1 door)", () => {
+    for (const setting of DATABASE_PATH_SETTINGS) {
+      let thrown: unknown;
+      try {
+        planEmailStore(bare({ [setting]: "/tmp/alone.db" }));
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(StoreConfigurationError);
+      const error = thrown as StoreConfigurationError;
+      // Names the path key, the opt-in and the hosted alternative; quotes no path.
+      expect(error.message).toContain(setting);
+      expect(error.message).toContain(`${LOCAL}=1`);
+      expect(error.message).toContain(`${LOCAL_OPT_IN_SETTINGS[1]}=1`);
+      expect(error.message).not.toContain("/tmp/alone.db");
+      expect([...error.settings].sort()).toEqual([setting, ...LOCAL_OPT_IN_SETTINGS].sort());
+    }
+  });
+
+  it("selects the local store on the opt-in alone, at the documented default file", () => {
+    for (const flag of LOCAL_OPT_IN_SETTINGS) {
+      const plan = planEmailStore(bare({ [flag]: "1" }));
+      expect(plan.store).toBe("sqlite");
+      if (plan.store !== "sqlite") return;
+      expect(plan.databasePath, "no path configured → the database layer's default file").toBeNull();
+      expect(plan.setting).toBe(flag);
+    }
+    // A blank flag is not an opt-in.
+    expect(() => planEmailStore(bare({ [LOCAL]: "   " }))).toThrow(StoreConfigurationError);
+  });
+
+  it("a configured environment OUTRANKS the opt-in", () => {
+    // A stale flag beside a configured API is a hosted run, never a local one.
+    const plan = planEmailStore(local({ [API_BASE_URL_SETTING]: A_URL, [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE }));
+    expect(plan.store).toBe("api");
+    // ...and beside a HALF-configured API it fails closed rather than falling back to local.
+    expect(() => planEmailStore(local({ [API_BASE_URL_SETTING]: A_URL }))).toThrow(StoreConfigurationError);
+    expect(() => planEmailStore(local({ [API_CREDENTIAL_SETTINGS[1]]: "emid_only" }))).toThrow(StoreConfigurationError);
+  });
+
+  it("REFUSES the retired EMAILS_SELF_HOSTED_* aliases by name before deciding anything", () => {
+    for (const [retired, canonical] of RETIRED_EMAILS_CLIENT_ENV_KEYS) {
+      let thrown: unknown;
+      try {
+        planEmailStore(local({ [retired]: "alias-fixture" }));
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as Error).name).toBe("ClientTransportConfigurationError");
+      expect((thrown as Error).message).toContain(retired);
+      expect((thrown as Error).message).toContain(canonical);
+      expect((thrown as Error).message).not.toContain("alias-fixture");
+    }
   });
 
   it("uses the configured database path, and the documented setting wins", () => {
@@ -79,7 +147,7 @@ describe("configured store resolution — the quadrants and the boot-error rows"
     expect(first).toBe("HASNA_EMAILS_DB_PATH");
     expect(second).toBe("EMAILS_DB_PATH");
 
-    const lower = planEmailStore(bare({ [second]: "/tmp/lower.db" }));
+    const lower = planEmailStore(local({ [second]: "/tmp/lower.db" }));
     expect(lower.store).toBe("sqlite");
     if (lower.store !== "sqlite") return;
     expect(lower.databasePath).toBe("/tmp/lower.db");
@@ -87,7 +155,7 @@ describe("configured store resolution — the quadrants and the boot-error rows"
 
     // Both database settings naming the SAME file is not a contradiction, and the
     // documented precedence names the higher-priority key.
-    const same = planEmailStore(bare({ [first]: "/tmp/same.db", [second]: "/tmp/same.db" }));
+    const same = planEmailStore(local({ [first]: "/tmp/same.db", [second]: "/tmp/same.db" }));
     expect(same.store).toBe("sqlite");
     if (same.store !== "sqlite") return;
     expect(same.databasePath).toBe("/tmp/same.db");
@@ -103,7 +171,7 @@ describe("configured store resolution — the quadrants and the boot-error rows"
     const [first, second] = DATABASE_PATH_SETTINGS;
     let thrown: unknown;
     try {
-      planEmailStore(bare({ [first]: "/tmp/higher.db", [second]: "/tmp/lower.db" }));
+      planEmailStore(local({ [first]: "/tmp/higher.db", [second]: "/tmp/lower.db" }));
     } catch (error) {
       thrown = error;
     }
@@ -220,7 +288,7 @@ describe("configured store resolution — the quadrants and the boot-error rows"
     expect([...API_CREDENTIAL_SETTINGS]).toEqual([
       "EMAILS_SESSION_TOKEN",
       "EMAILS_IDP_TOKEN",
-      "EMAILS_SELF_HOSTED_API_KEY",
+      "HASNA_EMAILS_API_KEY",
     ]);
     const keyOnly = planEmailStore(bare({ [API_BASE_URL_SETTING]: A_URL, [API_CREDENTIAL_SETTINGS[2]]: "hasna_k" }));
     expect(keyOnly.store === "api" && keyOnly.credentialSetting).toBe("HASNA_EMAILS_API_KEY");
@@ -354,8 +422,10 @@ describe("configured store resolution — configurations it will not guess at", 
     // canonical URL beside a database path would be a boot error for a
     // configuration that names exactly one store.
     for (const blank of ["", "   ", "\t\n"]) {
-      const plan = planEmailStore(bare({ [DATABASE_PATH_SETTINGS[1]]: "/tmp/x.db", [API_BASE_URL_SETTING]: blank }));
+      const plan = planEmailStore(local({ [DATABASE_PATH_SETTINGS[1]]: "/tmp/x.db", [API_BASE_URL_SETTING]: blank }));
       expect(plan.store, `${JSON.stringify(blank)} must not configure an API`).toBe("sqlite");
+      // A blank opt-in is not an opt-in: the same path alone is the refused row.
+      expect(() => planEmailStore(bare({ [DATABASE_PATH_SETTINGS[1]]: "/tmp/x.db", [LOCAL]: blank }))).toThrow(StoreConfigurationError);
       // A blank database path names no local store at all — and with the API also
       // unset that is the ALL-UNSET row, which fails closed rather than serving the
       // documented default.
@@ -379,18 +449,27 @@ describe("configured store resolution — configurations it will not guess at", 
       // row now fails closed rather than reporting the documented default, so the two
       // layers still agree — neither would open a file a blank value pointed at.
       for (const value of ["", "   ", "\t\n"]) {
-        for (const key of DATABASE_PATH_SETTINGS) delete process.env[key];
+        for (const key of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[key];
         process.env[DATABASE_PATH_SETTINGS[1]] = value;
         expect(() => planEmailStore(process.env), `${JSON.stringify(value)} must be the all-unset boot row`).toThrow(
           StoreConfigurationError,
         );
+        // With the opt-in, a blank path is "no path": the default file, and the
+        // database layer agrees (it falls through to its documented default too).
+        process.env[LOCAL] = "1";
+        const plan = planEmailStore(process.env);
+        expect(plan.store).toBe("sqlite");
+        if (plan.store !== "sqlite") return;
+        expect(plan.databasePath, `${JSON.stringify(value)} is no path`).toBeNull();
+        expect(plan.setting).toBe(LOCAL);
       }
       // The padded case uses `:memory:` deliberately: a real path goes through
       // `canonicalizeDatabasePath`, which resolves symlinked ancestors, so comparing raw
       // strings would fail on a platform where the temp root is a symlink and would be
       // testing realpath rather than the trimming rule.
       for (const value of ["  :memory:  ", ":memory:"]) {
-        for (const key of DATABASE_PATH_SETTINGS) delete process.env[key];
+        for (const key of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[key];
+        process.env[LOCAL] = "1";
         process.env[DATABASE_PATH_SETTINGS[1]] = value;
         const plan = planEmailStore(process.env);
         expect(plan.store).toBe("sqlite");
@@ -418,7 +497,7 @@ describe("the store the resolution actually hands back", () => {
   let inherited: NodeJS.ProcessEnv;
 
   const only = (settings: Record<string, string>): void => {
-    for (const key of [...DATABASE_PATH_SETTINGS, API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS]) {
+    for (const key of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS, API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS]) {
       delete process.env[key];
     }
     Object.assign(process.env, settings);
@@ -437,7 +516,7 @@ describe("the store the resolution actually hands back", () => {
   });
 
   it("builds the SQLite store, reporting the OPEN CONNECTION's own file", () => {
-    only({ [DATABASE_PATH_SETTINGS[1]]: ":memory:" });
+    only({ [LOCAL]: "1", [DATABASE_PATH_SETTINGS[1]]: ":memory:" });
     resetDatabase();
     const store = createConfiguredEmailStore();
     // Identified by the capability set it DECLARES, not by a label a caller branches
@@ -454,7 +533,7 @@ describe("the store the resolution actually hands back", () => {
     // can name a file the store is not bound to. Adversarial review reproduced exactly
     // that: open A, point the environment at B, and the store reported B while writing to
     // A. The detail now comes from the connection itself, so this cannot drift.
-    only({ [DATABASE_PATH_SETTINGS[1]]: ":memory:" });
+    only({ [LOCAL]: "1", [DATABASE_PATH_SETTINGS[1]]: ":memory:" });
     resetDatabase();
     const bound = createConfiguredEmailStore();
     expect(bound.descriptor.detail).toBe("SQLite at :memory:");
@@ -548,7 +627,7 @@ describe("what the resolver is not allowed to read", () => {
 });
 
 describe("fail-closed resolution (incident 715712 → the fail-closed ruling)", () => {
-  // Regression: a harness session-env re-provision dropped EMAILS_SELF_HOSTED_URL
+  // Regression: a harness session-env re-provision dropped HASNA_EMAILS_API_URL
   // (+ the pointer) and the CLI silently served the local SQLite store at rc=0 —
   // the mailbox appeared empty. The first fix made that fallback announce itself
   // on stderr; the fail-closed ruling (2026-09-04) removed the fallback entirely.
@@ -576,12 +655,14 @@ describe("fail-closed resolution (incident 715712 → the fail-closed ruling)", 
     }
   });
 
-  it("an explicitly configured database path stays silent (chosen local store, not a fallback)", () => {
+  it("the opt-in plus an explicit database path plans silently (chosen local store, not a fallback)", () => {
     const errSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
-      const plan = planEmailStore(bare({ [DATABASE_PATH_SETTINGS[0]]: "/tmp/explicit.db" }));
+      const plan = planEmailStore(local({ [DATABASE_PATH_SETTINGS[0]]: "/tmp/explicit.db" }));
       expect(plan.store).toBe("sqlite");
       expect(plan.setting).toBe(DATABASE_PATH_SETTINGS[0]);
+      // Planning is silent; the one "emails: LOCAL mode" stderr line belongs to
+      // construction (createConfiguredEmailStore), once per process.
       expect(errSpy).not.toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();
@@ -616,7 +697,7 @@ describe("fail-closed resolution (incident 715712 → the fail-closed ruling)", 
     const home = mkdtempSync(join(tmpdir(), "emails-store-resolution-failclosed-"));
     try {
       process.env["HOME"] = home;
-      for (const key of [...DATABASE_PATH_SETTINGS, API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS]) {
+      for (const key of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS, API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS]) {
         delete process.env[key];
       }
       resetDatabase();

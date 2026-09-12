@@ -32,8 +32,8 @@ function cliEnv(): NodeJS.ProcessEnv {
   for (const key of LEGACY_ENV_KEYS) delete base[key];
   return {
     ...base,
-    EMAILS_SELF_HOSTED_URL: stub.baseUrl,
-    EMAILS_SELF_HOSTED_API_KEY: stub.apiKey,
+    HASNA_EMAILS_API_URL: stub.baseUrl,
+    HASNA_EMAILS_API_KEY: stub.apiKey,
     HOME: homePath,
     NO_COLOR: "1",
   };
@@ -105,7 +105,7 @@ describe("CLI JSON contracts (self-hosted /v1)", () => {
   it("requires an API upgrade before submitting credentials to an older service", async () => {
     const legacy = await startV1Stub();
     try {
-      const env = { ...cliEnv(), EMAILS_SELF_HOSTED_URL: legacy.baseUrl, EMAILS_SELF_HOSTED_API_KEY: legacy.apiKey };
+      const env = { ...cliEnv(), HASNA_EMAILS_API_URL: legacy.baseUrl, HASNA_EMAILS_API_KEY: legacy.apiKey };
       const secret = "synthetic-secret-" + crypto.randomUUID();
       const result = runCli(["provider", "add", "--name", "legacy-ses", "--type", "ses", "--region", "us-east-1",
         "--access-key", "synthetic-access", "--secret-key", secret, "--skip-validation"], env);
@@ -264,10 +264,10 @@ describe("fail-closed without API configuration (fail-closed ruling, 2026-09-04)
     for (const key of [
       ...LEGACY_ENV_KEYS,
       modeWord,
-      "EMAILS_SELF_HOSTED_URL",
+      "HASNA_EMAILS_API_URL",
       "EMAILS_SESSION_TOKEN",
       "EMAILS_IDP_TOKEN",
-      "EMAILS_SELF_HOSTED_API_KEY",
+      "HASNA_EMAILS_API_KEY",
     ]) delete env[key];
     env["HOME"] = homePath;
     env["NO_COLOR"] = "1";

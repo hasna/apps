@@ -219,7 +219,7 @@ describe("deployment gate runtime environments", () => {
       expect(success.exitCode).toBe(0);
       expect(JSON.parse(success.stdout.toString())).toEqual([]);
       expect((await stub.listQueries("messages")).length).toBeGreaterThan(0);
-      for (const setting of ["HASNA_EMAILS_DB_PATH", "EMAILS_DB_PATH"]) {
+      for (const setting of ["HASNA_EMAILS_DB_PATH", "EMAILS_DB_PATH", "HASNA_EMAILS_LOCAL", "EMAILS_LOCAL"]) {
         const result = run({ ...env, [setting]: trap });
         expect(result.exitCode).not.toBe(0);
         expect(result.stderr.toString()).toContain(setting);

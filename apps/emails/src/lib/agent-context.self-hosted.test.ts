@@ -442,7 +442,7 @@ describe("honest-unavailable contract (G3)", () => {
   it("reports null (never 0) and a source_unreachable reason when the API cannot be read", async () => {
     // Point the client at a port nothing listens on: the reads MUST fail loudly
     // in the payload rather than degrade to zeros.
-    process.env["EMAILS_SELF_HOSTED_URL"] = "http://127.0.0.1:1";
+    process.env["HASNA_EMAILS_API_URL"] = "http://127.0.0.1:1";
     const { resetSelfHostedConfigCache } = await import("../db/self-hosted-store.js");
     const { resetMailDataSource } = await import("./mail-data-source.js");
     resetSelfHostedConfigCache();

@@ -120,7 +120,7 @@ describe("enumerateSelfHostedRows", () => {
 
   it("throws instead of returning an empty page set when the endpoint is unreachable", async () => {
     // Fail LOUD: the caller must report `source_unreachable`, never count 0 rows.
-    process.env["EMAILS_SELF_HOSTED_URL"] = "http://127.0.0.1:1";
+    process.env["HASNA_EMAILS_API_URL"] = "http://127.0.0.1:1";
     const { resetSelfHostedConfigCache } = await import("./self-hosted-store.js");
     resetSelfHostedConfigCache();
 

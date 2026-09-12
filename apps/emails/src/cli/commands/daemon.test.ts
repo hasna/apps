@@ -9,7 +9,7 @@ const worker = { id: "00000000-0000-4000-8000-000000000038", component: "schedul
 const managed = (key: string) => key === "HOME" || key.startsWith("EMAILS_") || key.startsWith("HASNA_EMAILS_");
 beforeAll(() => { server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request => { const url = new URL(request.url); if (mode === "legacy") return Response.json({ error: "not found" }, { status: 404 }); if (url.pathname === "/v1/workers") return Response.json({ items: mode === "empty" ? [] : [worker], complete: true }); const body = await request.json() as { action: string; request_id: string }; return Response.json({ restart: { id: body.request_id, worker_id: worker.id, status: mode === "pending" ? "draining" : "complete", old_generation: 1, new_generation: mode === "pending" ? null : 2 } }, { status: mode === "pending" ? 202 : 200 }); } }); });
 afterAll(() => server.stop(true));
-beforeEach(() => { prior = Object.fromEntries(Object.entries(process.env).filter(([key]) => managed(key))); for (const key of Object.keys(process.env)) if (managed(key)) delete process.env[key]; home = mkdtempSync(join(tmpdir(), "emails-daemon-unit-")); Object.assign(process.env, { HOME: home, EMAILS_HOME: home, HASNA_EMAILS_HOME: home, EMAILS_SELF_HOSTED_URL: server.url.origin, EMAILS_SELF_HOSTED_API_KEY: crypto.randomUUID(), EMAILS_CLIENT_ENV_LOADED: "1" }); mode = "complete"; });
+beforeEach(() => { prior = Object.fromEntries(Object.entries(process.env).filter(([key]) => managed(key))); for (const key of Object.keys(process.env)) if (managed(key)) delete process.env[key]; home = mkdtempSync(join(tmpdir(), "emails-daemon-unit-")); Object.assign(process.env, { HOME: home, EMAILS_HOME: home, HASNA_EMAILS_HOME: home, HASNA_EMAILS_API_URL: server.url.origin, HASNA_EMAILS_API_KEY: crypto.randomUUID(), EMAILS_CLIENT_ENV_LOADED: "1" }); mode = "complete"; });
 afterEach(() => {
   // Restore each inherited value; remove only keys absent before this test.
   for (const key of new Set([...Object.keys(process.env).filter(managed), ...Object.keys(prior)])) {
@@ -35,8 +35,8 @@ describe("logs tail reads tenant API lifecycle events", () => {
         return Response.json({ scope: "tenant_api_operations", component: url.searchParams.get("component"), items, container_stdout: false, worker_liveness: "not_measured" });
       }
     });
-    const previous = process.env.EMAILS_SELF_HOSTED_URL; process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${server.port}`;
-    try { await run(); } finally { server.stop(true); if (previous === undefined) delete process.env.EMAILS_SELF_HOSTED_URL; else process.env.EMAILS_SELF_HOSTED_URL = previous; }
+    const previous = process.env.HASNA_EMAILS_API_URL; process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${server.port}`;
+    try { await run(); } finally { server.stop(true); if (previous === undefined) delete process.env.HASNA_EMAILS_API_URL; else process.env.HASNA_EMAILS_API_URL = previous; }
   }
   it("renders API events with original component and line options", async () => {
     await api([{ id: crypto.randomUUID(), request_id: crypto.randomUUID(), component: "scheduler", operation: "scheduled_run", event: "returned", http_status: 200, created_at: "2026-09-07T00:00:00.000Z" }], async () => {

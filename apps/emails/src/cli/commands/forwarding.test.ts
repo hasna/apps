@@ -26,6 +26,7 @@ import {
   API_CREDENTIAL_SETTINGS,
   API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
 } from "../../store-resolution.js";
 import { startV1StoreApi, type V1StoreApi } from "../../test-support/v1-store-api.js";
 import { registerForwardingCommands } from "./forwarding.js";
@@ -38,13 +39,14 @@ function clearStoreSettings(): void {
   for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
     delete process.env[setting];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+  for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
 }
 
 /** Local SQLite, which is also what `resolveId` reads. */
 function configureLocalStore(): void {
   clearStoreSettings();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
 }
 
 /**
@@ -54,7 +56,7 @@ function configureLocalStore(): void {
 function configureApiStore(): void {
   clearStoreSettings();
   process.env[API_BASE_URL_SETTING] = api.baseUrl;
-  process.env["EMAILS_SELF_HOSTED_API_KEY"] = api.apiKey;
+  process.env["HASNA_EMAILS_API_KEY"] = api.apiKey;
 }
 
 beforeEach(() => {

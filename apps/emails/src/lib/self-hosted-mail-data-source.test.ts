@@ -6,7 +6,8 @@ import {
   resolveSelfHostedMailDataSource,
 } from "./self-hosted-mail-data-source.js";
 import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
-import { EMAILS_SELF_HOSTED_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./client-env.js";
+import { EMAILS_SESSION_TOKEN_ENV } from "./client-env.js";
+import { EMAILS_API_KEY_ENV } from "./emails-credentials.js";
 import { resetMailDataSource, resolveMailDataSource } from "./mail-data-source.js";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -43,8 +44,8 @@ const LEGACY_ENV_KEYS = [
 function clearModeEnv(): void {
   delete process.env["EMAILS_MODE"];
   delete process.env["HASNA_EMAILS_MODE"];
-  delete process.env["EMAILS_SELF_HOSTED_URL"];
-  delete process.env["EMAILS_SELF_HOSTED_API_KEY"];
+  delete process.env["HASNA_EMAILS_API_URL"];
+  delete process.env["HASNA_EMAILS_API_KEY"];
   for (const key of LEGACY_ENV_KEYS) delete process.env[key];
 }
 
@@ -2411,7 +2412,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
       apiKey: "k",
       credentials: [
         { setting: EMAILS_SESSION_TOKEN_ENV, value: "session-token-placeholder" },
-        { setting: EMAILS_SELF_HOSTED_API_KEY_ENV, value: "api-key-placeholder" },
+        { setting: EMAILS_API_KEY_ENV, value: "api-key-placeholder" },
       ],
       fetchImpl,
     });
@@ -2440,7 +2441,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
       apiKey: "k",
       credentials: [
         { setting: EMAILS_SESSION_TOKEN_ENV, value: "session-token-placeholder" },
-        { setting: EMAILS_SELF_HOSTED_API_KEY_ENV, value: "api-key-placeholder" },
+        { setting: EMAILS_API_KEY_ENV, value: "api-key-placeholder" },
       ],
       fetchImpl,
     });
@@ -2456,8 +2457,8 @@ describe("resolveMailDataSource — self-hosted seam selection", () => {
     // Storage configuration alone routes this arm (hasna/apps#1566): the API
     // origin and credential select the self-hosted source — the deployment word
     // is removed and never set.
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "k";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "k";
     resetSelfHostedConfigCache();
     resetMailDataSource();
     const ds = resolveMailDataSource();
@@ -2468,6 +2469,7 @@ describe("resolveMailDataSource — self-hosted seam selection", () => {
 
   it("does not construct a self-hosted client while a database path selects local storage", () => {
     process.env["EMAILS_DB_PATH"] = ":memory:";
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     resetSelfHostedConfigCache();
     resetMailDataSource();
     expect(resolveSelfHostedMailDataSource()).toBeNull();

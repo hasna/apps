@@ -37,6 +37,7 @@ beforeEach(() => {
   tmpHome = mkdtempSync(join(tmpdir(), "emails-s3-source-"));
   process.env["HOME"] = tmpHome;
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   db = getDatabase();
 });
@@ -230,6 +231,7 @@ describe("adopting the old raw_s3_url dedup key as the seam fence", () => {
     const dbFile = join(tmpHome, "wired.sqlite");
     closeDatabase();
     process.env["EMAILS_DB_PATH"] = dbFile;
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     resetDatabase();
     db = getDatabase();
     db.run(

@@ -64,6 +64,7 @@ let api: V1StoreApi;
 beforeEach(() => {
   captureInheritedProcessEnv();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   db = getDatabase();
   // The `/v1` service the HTTP store talks to. Every row it serves comes out of this

@@ -54,6 +54,7 @@ import {
   API_CREDENTIAL_SETTINGS,
   API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
   StoreConfigurationError,
   createConfiguredEmailStore,
   planEmailStore,
@@ -203,9 +204,12 @@ describe("the ambient test environment configures exactly one store", () => {
     }
     expect(thrown).toBeInstanceOf(StoreConfigurationError);
     expect((thrown as StoreConfigurationError).message).toContain(API_BASE_URL_SETTING);
-    // The refusal is not a dead end: the same neutral environment plus an explicit
-    // database path is a local store, which is the harness's own fixture shape.
-    const explicit = { ...process.env, [HIGHER_PRECEDENCE_SETTING]: HIGHER_PRECEDENCE_VALUE };
+    // The refusal is not a dead end: the same neutral environment plus the standard
+    // opt-in and an explicit database path is a local store, which is the harness's
+    // own fixture shape. The path ALONE is refused (1.6.1): only the flag selects.
+    expect(() => planEmailStore({ ...process.env, [HIGHER_PRECEDENCE_SETTING]: HIGHER_PRECEDENCE_VALUE }))
+      .toThrow(StoreConfigurationError);
+    const explicit = { ...process.env, [LOCAL_OPT_IN_SETTINGS[0]]: "1", [HIGHER_PRECEDENCE_SETTING]: HIGHER_PRECEDENCE_VALUE };
     const plan = planEmailStore(explicit);
     expect(plan.store).toBe("sqlite");
     if (plan.store !== "sqlite") return;
@@ -272,6 +276,7 @@ describe("a consumer calling createConfiguredEmailStore() under a self-hosted te
   it("removes both database-path settings, not only the lower-precedence one", () => {
     // A fix that unset `EMAILS_DB_PATH` and left `HASNA_EMAILS_DB_PATH` set would leave
     // the HIGHER-precedence setting configured and the boot error exactly where it was.
+    process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
     process.env[HIGHER_PRECEDENCE_SETTING] = HIGHER_PRECEDENCE_VALUE;
     expect(planEmailStore(process.env).store).toBe("sqlite");
 
@@ -288,6 +293,9 @@ describe("a consumer calling createConfiguredEmailStore() under a self-hosted te
 
 describe("the local-store configuration comes back exactly as it was", () => {
   it("restores every managed setting to its prior value", () => {
+    // The standard opt-in stays set throughout: a configured API outranks it while the
+    // stub is applied, and it lets the restored path plan the local store afterwards.
+    process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
     process.env[HIGHER_PRECEDENCE_SETTING] = HIGHER_PRECEDENCE_VALUE;
     const before = comparableEnv();
 

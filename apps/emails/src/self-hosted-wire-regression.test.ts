@@ -612,8 +612,8 @@ function applySelfHostedEnv(): void {
   // Storage configuration alone routes this arm (hasna/apps#1566): the loopback
   // origin and key select the self-hosted store — the deployment word is removed
   // and never set (a carried-forward value is refused by the retired guard).
-  process.env["EMAILS_SELF_HOSTED_URL"] = baseUrl;
-  process.env["EMAILS_SELF_HOSTED_API_KEY"] = "loopback-test-key";
+  process.env["HASNA_EMAILS_API_URL"] = baseUrl;
+  process.env["HASNA_EMAILS_API_KEY"] = "loopback-test-key";
   resetSelfHostedConfigCache();
   resetMailDataSource();
 }
@@ -627,8 +627,8 @@ function applySelfHostedEnv(): void {
 const MODE_ENV_KEY = ["EMAILS", "MODE"].join("_");
 const SELF_HOSTED_ENV_KEYS = [
   MODE_ENV_KEY,
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_SELF_HOSTED_HTTP_MAX_RESPONSE_BYTES",
 ] as const;
 
@@ -776,7 +776,7 @@ describe("shared-process environment hygiene", () => {
     // Prove the guard rejects both accidental inheritance and a forced store.
     const leaks = unsanitizedRuntimeEnvKeys(active, (input) => ({ ...input }));
     expect(leaks).toContain("EMAILS_SELF_HOSTED_HTTP_TIMEOUT");
-    expect(leaks).toContain("EMAILS_SELF_HOSTED_API_KEY");
+    expect(leaks).toContain("HASNA_EMAILS_API_KEY");
     expect(unsanitizedRuntimeEnvKeys(["EMAILS_DB_PATH"], (input, home) => ({
       ...buildPrepublishTestEnv(input, home), EMAILS_DB_PATH: ":memory:",
     }))).toEqual(["EMAILS_DB_PATH"]);

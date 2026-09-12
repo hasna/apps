@@ -27,11 +27,11 @@ function clearMailModeEnv(): void {
     "MAILERY_MODE",
     "HASNA_EMAILS_MODE",
     "HASNA_MAILERY_MODE",
-    "EMAILS_SELF_HOSTED_URL",
+    "HASNA_EMAILS_API_URL",
     "MAILERY_SELF_HOSTED_URL",
     "HASNA_EMAILS_SELF_HOSTED_URL",
     "HASNA_MAILERY_SELF_HOSTED_URL",
-    "EMAILS_SELF_HOSTED_API_KEY",
+    "HASNA_EMAILS_API_KEY",
     "MAILERY_SELF_HOSTED_API_KEY",
     "HASNA_EMAILS_SELF_HOSTED_API_KEY",
     "HASNA_MAILERY_SELF_HOSTED_API_KEY",
@@ -53,6 +53,7 @@ beforeEach(() => {
   // database path selects the local database — the deployment word is removed
   // and never set (a carried-forward value is refused by the retired guard).
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   resetMailDataSource();
 });
@@ -63,6 +64,7 @@ afterEach(() => {
   resetMailDataSource();
   clearMailModeEnv();
   delete process.env["EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_LOCAL"];
   for (const dir of attachmentDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   restoreInheritedProcessEnv();
 });

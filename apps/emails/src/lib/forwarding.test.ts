@@ -11,6 +11,7 @@ import {
   API_CREDENTIAL_SETTINGS,
   API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
 } from "../store-resolution.js";
 import { processForwardingRules, type ForwardingRunOptions } from "./forwarding.js";
 import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
@@ -32,13 +33,14 @@ function clearStoreSettings(): void {
   for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
     delete process.env[setting];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+  for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
 }
 
 /** Storage configured as a local in-memory database, which is what the pipeline needs. */
 function configureLocalStore(): void {
   clearStoreSettings();
   process.env[DATABASE_PATH_SETTINGS[1]] = ":memory:";
+  process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
 }
 
 /** Storage configured as an Emails API, and NO database path. */
@@ -182,6 +184,7 @@ describe("processForwardingRules storage gate", () => {
     process.env[API_BASE_URL_SETTING] = "https://mail.example.test";
     process.env[API_CREDENTIAL_SETTINGS[0]] = "not-a-real-credential";
     process.env[DATABASE_PATH_SETTINGS[1]] = ":memory:";
+    process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
 
     await expect(processForwardingRules()).rejects.toThrow(/did not resolve to one store/);
     // The refusal carries the resolver's own settings list, so the operator learns WHICH
@@ -209,7 +212,8 @@ describe("processForwardingRules storage gate", () => {
     // The refusal names the API setting to provide and the explicit opt-ins that do select
     // local storage, so an operator can act on it.
     await expect(processForwardingRules()).rejects.toThrow(new RegExp(API_BASE_URL_SETTING));
-    await expect(processForwardingRules()).rejects.toThrow(new RegExp(DATABASE_PATH_SETTINGS[1]));
+    // The all-unset row names the ONE way to a local store — the opt-in — never a path.
+    await expect(processForwardingRules()).rejects.toThrow(new RegExp(LOCAL_OPT_IN_SETTINGS[0]));
     // The refusal never opened any database: no data root exists in this HOME.
     expect(existsSync(join(home, ".hasna"))).toBe(false);
   });
@@ -228,6 +232,7 @@ describe("processForwardingRules storage gate", () => {
     closeDatabase();
     clearStoreSettings();
     process.env[DATABASE_PATH_SETTINGS[1]] = join(home, "forwarding.db");
+    process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
     await expect(processForwardingRules()).resolves.toEqual({
       attempted: 0, sent: 0, failed: 0, skipped: 0, items: [],
     });
@@ -306,6 +311,7 @@ describe("processForwardingRules pipeline", () => {
     const file = join(home, "threaded.db");
     clearStoreSettings();
     process.env[DATABASE_PATH_SETTINGS[1]] = file;
+    process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
     resetDatabase();
     // The fixtures below seed through the module-level handle, so it has to be the one bound to
     // this file rather than the in-memory one `beforeEach` opened.

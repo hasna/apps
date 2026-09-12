@@ -23,6 +23,7 @@ import {
   API_BASE_URL_SETTING,
   API_CREDENTIAL_SETTINGS,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
 } from "../../store-resolution.js";
 import { registerEmailLogCommands } from "./email-log.local.test-support.js";
 
@@ -37,8 +38,9 @@ function pinLocalStore(): void {
   delete process.env[EMAILS_CLIENT_ENV_SECRET_ENV];
   delete process.env[API_BASE_URL_SETTING];
   for (const key of API_CREDENTIAL_SETTINGS) delete process.env[key];
-  for (const key of DATABASE_PATH_SETTINGS) delete process.env[key];
+  for (const key of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[key];
   process.env.EMAILS_DB_PATH = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
 }
 
 let originalEnv: NodeJS.ProcessEnv;

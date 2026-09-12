@@ -106,6 +106,7 @@ export {
   API_BASE_URL_SETTING,
   API_CREDENTIAL_SETTINGS,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
   StoreConfigurationError,
   createConfiguredEmailStore,
   planEmailStore,

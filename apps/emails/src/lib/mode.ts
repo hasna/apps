@@ -3,10 +3,11 @@
 // The store seam (src/store-resolution.ts) decides which store this process reads
 // and writes: the HTTP API client when the shared @hasna/contracts resolver
 // (src/lib/emails-credentials.ts) produces a hosted authority plus a credential, and
-// the local SQLite database only when a database path is configured explicitly
-// (HASNA_EMAILS_DB_PATH / EMAILS_DB_PATH). Every other row — both configured, an
-// authority without a credential, or nothing at all — is a boot error in the
-// seam's own words (`StoreConfigurationError`, fail-closed ruling 2026-09-04).
+// the local SQLite database only behind the explicit opt-in HASNA_EMAILS_LOCAL=1
+// (src/lib/local-opt-in.ts; a database path alone selects nothing). Every other
+// row — both configured, an authority without a credential, a path without the
+// opt-in, or nothing at all — is a boot error in the seam's own words
+// (`StoreConfigurationError`, fail-closed ruling 2026-09-04).
 // This module maps that plan onto the two-arm "client mode" value the repository
 // families that are NOT yet collapsed onto the store seam still route on:
 // `local` for the SQLite plan, `self_hosted` for the API plan.

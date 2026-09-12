@@ -20,6 +20,7 @@ import {
   API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
   StoreConfigurationError,
+  LOCAL_OPT_IN_SETTINGS,
 } from "../store-resolution.js";
 import { readStorageWiring, storeErrorMessage } from "./storage-wiring.js";
 
@@ -30,8 +31,11 @@ function clearStoreSettings(env: NodeJS.ProcessEnv): void {
   for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
     delete env[setting];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete env[setting];
+  for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete env[setting];
 }
+
+/** The standard local opt-in: the ONLY thing that lets a database path plan the local store (1.6.1). */
+const LOCAL = LOCAL_OPT_IN_SETTINGS[0];
 
 beforeEach(() => {
   INHERITED_PROCESS_ENV = { ...process.env };
@@ -66,7 +70,7 @@ function configure(settings: Record<string, string>): NodeJS.ProcessEnv {
 describe("readStorageWiring", () => {
   it("reports an on-disk database as a FILE, with the path the rows are actually in", () => {
     const file = join(home, "mail.db");
-    expect(readStorageWiring(configure({ [DATABASE_PATH_SETTINGS[1]]: file }))).toEqual({
+    expect(readStorageWiring(configure({ [LOCAL]: "1", [DATABASE_PATH_SETTINGS[1]]: file }))).toEqual({
       kind: "database_file",
       path: file,
     });
@@ -76,7 +80,7 @@ describe("readStorageWiring", () => {
     // The distinction the forwarding pipeline does not care about and the status payload does:
     // "in memory" and "at this path" are different answers, and collapsing them makes a status
     // report claim a data directory that does not exist.
-    expect(readStorageWiring(configure({ [DATABASE_PATH_SETTINGS[1]]: ":memory:" }))).toEqual({
+    expect(readStorageWiring(configure({ [LOCAL]: "1", [DATABASE_PATH_SETTINGS[1]]: ":memory:" }))).toEqual({
       kind: "database_in_memory",
     });
   });
@@ -135,7 +139,8 @@ describe("readStorageWiring", () => {
     // DEFAULT and the directory itself is refused. `getDatabasePath()` rejects a symlinked data
     // directory, and a caller that treated this as a `database_file` would go on to open it.
     symlinkSync(tmpdir(), join(home, ".hasna"));
-    const wiring = readStorageWiring(configure({}));
+    // Opted in, no path: the default data root under HOME is what gets refused.
+    const wiring = readStorageWiring(configure({ [LOCAL]: "1" }));
     expect(wiring.kind).toBe("unresolved");
     expect(wiring.kind === "unresolved" && wiring.message.length > 0).toBe(true);
   });
@@ -154,7 +159,7 @@ describe("readStorageWiring", () => {
     //
     // Asserted so that closing the gap is a deliberate, visible change rather than a silent one.
     clearStoreSettings(process.env);
-    const detached = readStorageWiring({ [DATABASE_PATH_SETTINGS[1]]: join(home, "named-in-the-argument.db") });
+    const detached = readStorageWiring({ [LOCAL]: "1", [DATABASE_PATH_SETTINGS[1]]: join(home, "named-in-the-argument.db") });
     expect(detached.kind).toBe("database_file");
     expect(
       detached.kind === "database_file" && detached.path.endsWith("named-in-the-argument.db"),

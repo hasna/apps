@@ -54,6 +54,7 @@ let db: Database;
 beforeEach(() => {
   captureInheritedProcessEnv();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   db = getDatabase();
 });

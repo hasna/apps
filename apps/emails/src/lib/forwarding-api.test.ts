@@ -37,6 +37,7 @@ test("an API client runs forwarding on its authenticated service without a local
   });
   delete process.env.EMAILS_DB_PATH;
   delete process.env.HASNA_EMAILS_DB_PATH;
+  delete process.env["HASNA_EMAILS_LOCAL"];
   process.env.HASNA_EMAILS_API_URL = server.url.origin;
   process.env.EMAILS_SESSION_TOKEN = credential;
   resetSelfHostedConfigCache();
