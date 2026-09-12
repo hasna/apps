@@ -185,10 +185,13 @@ export function registerResourceMetaTools(server: McpServer): void {
     { message: z.string(), email: z.string().optional(), category: z.enum(["bug", "feature", "general"]).optional() },
     async (params: { message: string; email?: string; category?: FeedbackCategory }) => {
       try {
-        const result = saveFeedback({ ...params, version: pkg.version });
+        // Hosted send (POST /api/v1/feedback). saveFeedback() only writes this
+        // machine under the explicit local opt-in; every other refusal throws
+        // and is reported as an error, not as a local "saved".
+        const result = await saveFeedback({ ...params, version: pkg.version });
         return mcpJson(result);
       } catch (e) {
-        return mcpError("FEEDBACK_SAVE_FAILED", String(e));
+        return mcpError("FEEDBACK_SEND_FAILED", e instanceof Error ? e.message : String(e));
       }
     }
   );

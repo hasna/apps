@@ -57,6 +57,7 @@ const EXPECTED_TABLES = [
   "skills_audit_events",
   "skills_bundles",
   "skills_credit_reservations",
+  "skills_feedback",
   "skills_lifecycle_receipts",
   "skills_pins",
   "skills_registry",

@@ -17,6 +17,8 @@ import type {
   BlobStorageKind,
   ServerSkillVersion,
   ServerArtifact,
+  ServerFeedback,
+  ServerFeedbackCategory,
   ServerPin,
   ServerRunLog,
   ServerRunRecord,
@@ -49,6 +51,37 @@ export function runId(): string {
 
 export function artifactId(): string {
   return `art_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
+}
+
+/**
+ * Monotonic per-process counter behind {@link feedbackId}.
+ *
+ * Feedback is an append-only feed read newest-first, and the read orders by
+ * `created_at DESC, id DESC`. A purely random id makes that second key
+ * meaningless: SQLite timestamps have millisecond resolution, so two reports
+ * sent in the same millisecond tie on `created_at` and the tiebreak decided
+ * their order at random - "newest first" held on a slow machine and inverted
+ * on a fast one. The id therefore carries the clock, then this counter.
+ */
+let feedbackSequence = 0;
+
+/**
+ * A time-sortable feedback id: `fbk_` + the millisecond clock + a monotonic
+ * per-process counter + random entropy.
+ *
+ * Lexicographic order on this id equals write order for one writer, including
+ * inside a single millisecond, which is what makes `ORDER BY created_at DESC,
+ * id DESC` deterministic. Two REPLICAS writing in the same millisecond still
+ * tie arbitrarily - each has its own counter - and that is the one case where
+ * either order is a correct answer to "which of these two arrived first".
+ */
+export function feedbackId(): string {
+  // Base36 of the epoch in ms is 8 characters until 2059 and 9 after it; pad so
+  // the field width cannot change under the caller's feet and reorder the set.
+  const stamp = Date.now().toString(36).padStart(9, "0");
+  feedbackSequence = (feedbackSequence + 1) % 36 ** 5;
+  const sequence = feedbackSequence.toString(36).padStart(5, "0");
+  return `fbk_${stamp}${sequence}${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 }
 
 export function rowToRun(row: Record<string, unknown>): ServerRunRecord {
@@ -138,6 +171,21 @@ export function rowToPin(row: Record<string, unknown>): ServerPin {
     slug: String(row.slug),
     pinnedAt: dateString(row.pinned_at),
     metadata: parseJsonObject(row.metadata_json),
+  };
+}
+
+export function rowToFeedback(row: Record<string, unknown>): ServerFeedback {
+  return {
+    id: String(row.id),
+    orgId: String(row.org_id),
+    userId: String(row.user_id),
+    principal: String(row.principal),
+    message: String(row.message),
+    category: String(row.category) as ServerFeedbackCategory,
+    ...(row.email ? { email: String(row.email) } : {}),
+    ...(row.agent ? { agent: String(row.agent) } : {}),
+    ...(row.version ? { version: String(row.version) } : {}),
+    createdAt: dateString(row.created_at),
   };
 }
 

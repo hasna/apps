@@ -19,15 +19,17 @@ import { dirname, join } from "node:path";
 import { hashApiKey, publicPrincipal } from "./auth.js";
 import { SQLITE_MEMORY_PATH } from "./database-url.js";
 import { resolveMigrationsDir } from "./migrations-dir.js";
-import { nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToPin, rowToRun, rowToSkill, rowToSkillBundle,
+import { feedbackId, nowIso, normalizeLimit, rowToArtifact, rowToFeedback, rowToLog, rowToPin, rowToRun, rowToSkill, rowToSkillBundle,
   rowToSkillVersion, runId } from "./rows.js";
 import type {
   ApiPrincipal,
   ClaimRunInput,
+  CreateFeedbackInput,
   CreateRunInput,
   PublishSkillInput,
   RunTransitionPatch,
   ServerArtifact,
+  ServerFeedback,
   ServerPin,
   ServerRunLog,
   ServerRunRecord,
@@ -849,6 +851,41 @@ export class SqliteSkillsStore implements SkillsProductStore {
       "SELECT * FROM skills_pins WHERE org_id = ? AND principal = ? ORDER BY slug ASC",
       [principal.orgId, principal.apiKeyId],
     ).map(rowToPin);
+  }
+
+  /*
+   * Feedback. Mirrors the Postgres twin statement for statement: a minted id,
+   * an append-only insert, and an org-scoped read ordered newest first. The
+   * secondary `id DESC` in the ORDER BY is not decoration - SQLite's
+   * millisecond timestamps tie for rows written in the same millisecond, and
+   * without it the two backends could page them differently.
+   */
+  async createFeedback(input: CreateFeedbackInput): Promise<ServerFeedback> {
+    const row = this.get(
+      `INSERT INTO skills_feedback (id, org_id, user_id, principal, message, category, email, agent, version, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       RETURNING *`,
+      [
+        feedbackId(),
+        input.principal.orgId,
+        input.principal.userId,
+        input.principal.apiKeyId,
+        input.message,
+        input.category ?? "general",
+        input.email ?? null,
+        input.agent ?? null,
+        input.version ?? null,
+        nowIso(),
+      ],
+    );
+    return rowToFeedback(row!);
+  }
+
+  async listFeedback(principal: ApiPrincipal, limit: number): Promise<ServerFeedback[]> {
+    return this.all(
+      "SELECT * FROM skills_feedback WHERE org_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+      [principal.orgId, normalizeLimit(limit)],
+    ).map(rowToFeedback);
   }
 
   async listTags(principal: ApiPrincipal): Promise<string[]> {

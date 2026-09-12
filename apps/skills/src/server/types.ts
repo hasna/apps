@@ -236,6 +236,45 @@ export interface ServerPin {
   metadata: Record<string, unknown>;
 }
 
+/** The three categories `skills feedback --category` and the MCP tool accept. */
+export const SERVER_FEEDBACK_CATEGORIES = ["bug", "feature", "general"] as const;
+
+export type ServerFeedbackCategory = (typeof SERVER_FEEDBACK_CATEGORIES)[number];
+
+/**
+ * One piece of feedback the instance received.
+ *
+ * The hosted twin of what `skills feedback` used to write to the machine it ran
+ * on (a SQLite insert in local mode, a `feedback.jsonl` append on a keyed
+ * station). Append-only: the same message sent twice is two rows, because two
+ * sends are two events. `principal` is the api_keys.id that sent it, exactly as
+ * on ServerPin, so a read can be narrowed to one key while the org still sees
+ * everything it submitted.
+ */
+export interface ServerFeedback {
+  id: string;
+  orgId: string;
+  userId: string;
+  principal: string;
+  message: string;
+  category: ServerFeedbackCategory;
+  email?: string;
+  agent?: string;
+  version?: string;
+  createdAt: string;
+}
+
+export interface CreateFeedbackInput {
+  principal: ApiPrincipal;
+  message: string;
+  category?: ServerFeedbackCategory;
+  email?: string;
+  /** Agent name the sender identified itself with; free text, never a credential. */
+  agent?: string;
+  /** Client package version, so a report can be tied to the build that made it. */
+  version?: string;
+}
+
 export interface ServerSkillBundle {
   orgId: string;
   sha256: string;
@@ -450,6 +489,20 @@ export interface SkillsProductStore {
   /** False when this principal has no pin by that slug. */
   unpinSkill(principal: ApiPrincipal, slug: string): Promise<boolean>;
   listPins(principal: ApiPrincipal): Promise<ServerPin[]>;
+
+  /*
+   * Feedback.
+   *
+   * Required rather than optional, for the reason pinSkill is: a store that
+   * silently could not persist feedback would answer POST /api/v1/feedback with
+   * a 2xx and drop the message, which is the exact failure the local
+   * `feedback.jsonl` already was - a client that believed the instance had the
+   * report while nobody who could act on it would ever see it. Reads are
+   * org-scoped like every other read here.
+   */
+  createFeedback(input: CreateFeedbackInput): Promise<ServerFeedback>;
+  /** The org's feedback, newest first, bounded by `limit`. */
+  listFeedback(principal: ApiPrincipal, limit: number): Promise<ServerFeedback[]>;
 
   /*
    * Tag surface (T7).

@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import type {
   ApiPrincipal,
   ClaimRunInput,
+  CreateFeedbackInput,
   CreateRunInput,
   PublishSkillInput,
   RunTransitionPatch,
   ServerArtifact,
+  ServerFeedback,
   ServerPin,
   ServerRunLog,
   ServerRunRecord,
@@ -19,7 +21,7 @@ import type {
 import { SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError } from "./types.js";
 import { hashApiKey, publicPrincipal } from "./auth.js";
 import { resolveDatabaseTarget, type DatabaseTarget } from "./database-url.js";
-import { artifactId, nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToPin, rowToRun, rowToSkill, rowToSkillBundle, rowToSkillVersion, parseJsonArray, runId } from "./rows.js";
+import { artifactId, feedbackId, nowIso, normalizeLimit, rowToArtifact, rowToFeedback, rowToLog, rowToPin, rowToRun, rowToSkill, rowToSkillBundle, rowToSkillVersion, parseJsonArray, runId } from "./rows.js";
 import { revisionIdOfRecord, type RevisionContent } from "../lib/revision.js";
 import { SqliteSkillsStore, type SqliteStoreOptions } from "./sqlite-store.js";
 
@@ -130,6 +132,9 @@ export class MemorySkillsStore implements SkillsProductStore {
   private bundles = new Map<string, ServerSkillBundle>();
   private versions = new Map<string, ServerSkillVersion>();
   private pins = new Map<string, ServerPin>();
+  // An array, not a Map: feedback is an append-only event stream with no
+  // natural key to upsert on - the same message twice is two reports.
+  private feedback: ServerFeedback[] = [];
 
   constructor(apiKeys: Array<{ token: string; principal?: Partial<ApiPrincipal> }> = []) {
     for (const key of apiKeys) this.addApiKey(key.token, key.principal);
@@ -445,6 +450,35 @@ export class MemorySkillsStore implements SkillsProductStore {
     return Array.from(this.pins.values())
       .filter((pin) => pin.orgId === principal.orgId && pin.principal === principal.apiKeyId)
       .sort((a, b) => a.slug.localeCompare(b.slug));
+  }
+
+  async createFeedback(input: CreateFeedbackInput): Promise<ServerFeedback> {
+    const record: ServerFeedback = {
+      id: feedbackId(),
+      orgId: input.principal.orgId,
+      userId: input.principal.userId,
+      principal: input.principal.apiKeyId,
+      message: input.message,
+      category: input.category ?? "general",
+      ...(input.email ? { email: input.email } : {}),
+      ...(input.agent ? { agent: input.agent } : {}),
+      ...(input.version ? { version: input.version } : {}),
+      createdAt: nowIso(),
+    };
+    this.feedback.push(record);
+    return record;
+  }
+
+  async listFeedback(principal: ApiPrincipal, limit: number): Promise<ServerFeedback[]> {
+    // `created_at DESC, id DESC`, the SQL backends' exact ORDER BY rather than
+    // "reverse insertion order", so the three backends answer identically. The
+    // id is time-sortable (see feedbackId) and that is what decides rows
+    // written inside the same millisecond, on every backend.
+    return this.feedback
+      .filter((entry) => entry.orgId === principal.orgId)
+      .slice()
+      .sort((a, b) => (a.createdAt === b.createdAt ? b.id.localeCompare(a.id) : (a.createdAt < b.createdAt ? 1 : -1)))
+      .slice(0, normalizeLimit(limit));
   }
 
   async listTags(principal: ApiPrincipal): Promise<string[]> {
@@ -1211,6 +1245,32 @@ export class PostgresSkillsStore implements SkillsProductStore {
       SELECT * FROM skills_pins WHERE org_id = ${principal.orgId} AND principal = ${principal.apiKeyId} ORDER BY slug ASC
     `;
     return rows.map(rowToPin);
+  }
+
+  /*
+   * Feedback. Append-only, org-scoped on read; the id is minted client-side
+   * (feedbackId()) like run ids are, so the row carries the same shape on both
+   * backends and no sequence is needed.
+   */
+  async createFeedback(input: CreateFeedbackInput): Promise<ServerFeedback> {
+    const rows = await this.sql`
+      INSERT INTO skills_feedback (id, org_id, user_id, principal, message, category, email, agent, version, created_at)
+      VALUES (
+        ${feedbackId()}, ${input.principal.orgId}, ${input.principal.userId}, ${input.principal.apiKeyId},
+        ${input.message}, ${input.category ?? "general"}, ${input.email ?? null}, ${input.agent ?? null},
+        ${input.version ?? null}, now()
+      )
+      RETURNING *
+    `;
+    return rowToFeedback(rows[0]!);
+  }
+
+  async listFeedback(principal: ApiPrincipal, limit: number): Promise<ServerFeedback[]> {
+    const rows = await this.sql`
+      SELECT * FROM skills_feedback WHERE org_id = ${principal.orgId}
+      ORDER BY created_at DESC, id DESC LIMIT ${normalizeLimit(limit)}
+    `;
+    return rows.map(rowToFeedback);
   }
 
   async listTags(principal: ApiPrincipal): Promise<string[]> {

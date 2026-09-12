@@ -844,10 +844,10 @@ const toolContracts: McpToolContract[] = [
   {
     name: "send_feedback",
     title: "Send Feedback",
-    description: "Store local feedback for this service.",
+    description: "Send feedback about this service to the configured Skills instance.",
     params: ["message", "email?", "category?"],
     category: "feedback",
-    sideEffects: "filesystem",
+    sideEffects: "local-process-or-remote-run",
     stable: true,
     inputSchema: objectSchema({
       message: stringSchema("Feedback message."),
