@@ -1,4 +1,8 @@
-import { ShortlinksStore } from "./store.js";
+// `./store.js` (and with it `bun:sqlite`) is loaded through a dynamic import
+// only when a caller asks this handler to open the on-box database itself
+// (`options.dbPath` / no `options.store`). The CLI always hands over the store
+// resolved by ./client-store.ts, so importing this module from `shortlinks`
+// must not drag the sqlite engine into `dist/cli`.
 import type { ClickInput, Link } from "./types.js";
 import {
   normalizeIpLiteral,
@@ -87,10 +91,19 @@ function logRecordClickError(link: Link): void {
 }
 
 export function createShortlinksHandler(options: ShortlinksHandlerOptions = {}): (request: Request) => Response | Promise<Response> {
-  const store = options.store || new ShortlinksStore(options.dbPath);
   const redirectStatus = options.redirectStatus || 302;
+  // The on-box store, opened lazily and once, only when the caller did not
+  // hand one over. The dynamic import keeps `bun:sqlite` out of every bundle
+  // that merely imports this handler (the CLI passes the resolved Store).
+  let ownStore: Promise<ShortlinksRuntimeStore> | null = null;
+  const getStore = (): ShortlinksRuntimeStore | Promise<ShortlinksRuntimeStore> => {
+    if (options.store) return options.store;
+    ownStore ??= import("./store.js").then((m) => new m.ShortlinksStore(options.dbPath));
+    return ownStore;
+  };
 
   return async (request: Request): Promise<Response> => {
+    const store = await getStore();
     const url = new URL(request.url);
     if (url.pathname === "/healthz") {
       return json({ ok: true, service: "shortlinks", stats: await store.totalStats() });

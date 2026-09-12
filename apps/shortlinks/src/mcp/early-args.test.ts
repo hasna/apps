@@ -133,16 +133,20 @@ describe("shortlinks-mcp early arguments", () => {
 });
 
 describe("shortlinks-mcp fails closed at startup", () => {
-  test("assertMcpBackend throws the chain-naming message and opens nothing without a credential", () => {
+  test("assertMcpBackend rejects with the chain-naming message and opens nothing without a credential", async () => {
     const home = mkdtempSync(join(tmpdir(), "shortlinks-mcp-gate-"));
     tempHomes.push(home);
+    // The gate is async since the local store moved behind a gated dynamic
+    // import; it still decides authority BEFORE any transport is connected.
     const error = () => assertMcpBackend({ HOME: home, SHORTLINKS_HOME: home });
-    expect(error).toThrow(/hasna\.credentials\.shortlinks\.api-key/);
-    expect(error).toThrow(/HASNA_SHORTLINKS_API_KEY/);
-    expect(error).toThrow(/never falls back to local storage/);
+    await expect(error()).rejects.toThrow(/hasna\.credentials\.shortlinks\.api-key/);
+    await expect(error()).rejects.toThrow(/HASNA_SHORTLINKS_API_KEY/);
+    await expect(error()).rejects.toThrow(/never falls back to local storage/);
     expect(readdirSync(home)).toEqual([]);
     // A hosted credential passes the gate and still touches nothing on disk.
-    expect(() => assertMcpBackend({ HOME: home, SHORTLINKS_HOME: home, HASNA_SHORTLINKS_API_KEY: "test-key" })).not.toThrow();
+    await expect(
+      assertMcpBackend({ HOME: home, SHORTLINKS_HOME: home, HASNA_SHORTLINKS_API_KEY: "test-key" }),
+    ).resolves.toBeUndefined();
     expect(readdirSync(home)).toEqual([]);
   });
 
@@ -170,7 +174,7 @@ describe("shortlinks-mcp fails closed at startup", () => {
 
   test("the explicit local opt-in starts the server, announces the local backend, and opens the database in the caller's home", async () => {
     const result = await runMcp([], { HASNA_SHORTLINKS_LOCAL: "1" }, 10_000);
-    expect(result.stderr).toContain("local backend");
+    expect(result.stderr).toContain("LOCAL mode");
     expect(result.stderr).toContain(STDIO_MARKER);
     // The app home follows HASNA_HOME: $HASNA_HOME/shortlinks/shortlinks.db.
     expect(existsSync(join(result.home, "hasna", "shortlinks", "shortlinks.db"))).toBe(true);

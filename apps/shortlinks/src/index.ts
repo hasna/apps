@@ -1,6 +1,10 @@
 export { ShortlinksDatabase, SQLITE_MIGRATIONS, makeId, now } from "./database.js";
 export { ShortlinksStore } from "./store.js";
-export { LocalStore, ApiStore, resolveStore, withStore } from "./client-store.js";
+export { ApiStore, resolveStore, withStore, isLocalOptIn, missingBackendMessage } from "./client-store.js";
+// The on-box SQLite store. The CLI/MCP graphs reach it ONLY through the gated
+// dynamic import in ./client-store.ts; this library entry (`dist/index.js`) is
+// allowed to bind it statically — it is not a fail-closed client surface.
+export { LocalStore } from "./local-store.js";
 export { CloudShortlinksStore } from "./cloud-store.js";
 export type { Store, ListLinksOptions, TotalStats } from "./store-interface.js";
 export { PgShortlinksStore, createKitPgAdapter } from "./pg-store.js";
