@@ -213,6 +213,18 @@ export interface MessageRecord {
   provider_message_id: string | null;
   message_id: string | null;
   in_reply_to: string | null;
+  /**
+   * Conversation identity (RFC 5322). The root message's Message-ID for a
+   * thread this service started, or the inherited value for a reply. OPTIONAL
+   * on the wire: a server older than FR-0002 does not send it, and a NULL value
+   * means "unknown / fall back to the subject rollup", never "no thread".
+   */
+  thread_id?: string | null;
+  /**
+   * The RFC 5322 References chain (oldest→newest Message-IDs), derived from
+   * `headers.References`. OPTIONAL for the same reason as `thread_id`.
+   */
+  references?: string[];
   received_at: string | null;
   is_read: boolean;
   is_starred: boolean;
@@ -248,6 +260,8 @@ export interface MessageListRecord {
   provider_message_id: string | null;
   message_id: string | null;
   in_reply_to: string | null;
+  /** Conversation identity (see MessageRecord.thread_id); never carries the chain. */
+  thread_id?: string | null;
   received_at: string | null;
   is_read: boolean;
   is_starred: boolean;
@@ -286,6 +300,8 @@ export interface MessageInput {
   direction?: string;
   message_id?: string | null;
   in_reply_to?: string | null;
+  /** Conversation identity; persisted verbatim, inherited from the parent on a reply. */
+  thread_id?: string | null;
   received_at?: string | null;
   is_read?: boolean;
   is_starred?: boolean;

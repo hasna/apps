@@ -8,9 +8,11 @@
  * shared mail DTOs + pure helpers live in ../../lib/mail-types.js and are
  * re-exported here for back-compat with existing importers.
  *
- * The `/v1` message model has NO thread_id column (threads are server-derived by
- * normalized subject) and no provider/source dimension on a message, so
- * conversation grouping is by subject and source scoping is limited to
+ * The `/v1` message model carries a conversation identity as `thread_id`
+ * (FR-0002), with the server's normalized-subject key as the fallback for rows
+ * that predate it — conversation grouping uses that same
+ * `thread_id ?? subject-key` rule. There is no provider/source dimension on a
+ * message, so source scoping is limited to
  * address/domain. Availability failures retain the TUI's safe empty-state
  * fallback, while malformed successful server responses remain explicit
  * contract failures and are never presented as an empty mailbox.

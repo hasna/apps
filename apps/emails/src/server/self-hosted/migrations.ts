@@ -3274,6 +3274,34 @@ const INBOUND_MESSAGE_IDENTITY_COLUMN = defineMigration(
   `,
 );
 
+/**
+ * Outbound reply threading (FR-0002).
+ *
+ * The unified `messages` ledger carried only the `message_id` / `in_reply_to`
+ * scalars: a send could not record WHICH conversation it belongs to, so every
+ * reply the API produced went out as a NEW top-level message that merely
+ * repeated the subject, and `/v1/messages/threads` had to guess a conversation
+ * from a Re:-stripped subject key. `thread_id` is that missing conversation
+ * identity — the root message's RFC Message-ID for a thread this service
+ * started, or the inherited value for a reply — so a conversation can be
+ * enumerated exactly instead of approximated.
+ *
+ * The In-Reply-To / References headers themselves are persisted in the existing
+ * `headers` jsonb (they ARE mail headers, and 0002 already widened that
+ * column), which keeps this migration strictly additive: one nullable column
+ * and a partial index. Existing rows read `thread_id = NULL` and fall back to
+ * the subject rollup.
+ */
+const MESSAGE_THREADING = defineMigration(
+  "0044_message_threading",
+  `
+  ALTER TABLE messages ADD COLUMN IF NOT EXISTS thread_id TEXT;
+  CREATE INDEX IF NOT EXISTS messages_thread_id_idx
+    ON messages (tenant_id, thread_id)
+    WHERE thread_id IS NOT NULL;
+  `,
+);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3325,5 +3353,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     MAILBOX_FILTER_ACTIONS,
     INBOUND_MESSAGE_IDENTITY_INDEX,
     INBOUND_MESSAGE_IDENTITY_COLUMN,
+    MESSAGE_THREADING,
   ];
 }

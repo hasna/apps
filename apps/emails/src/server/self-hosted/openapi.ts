@@ -690,8 +690,22 @@ const messageSchema = {
     provider_id: { type: "string", nullable: true, description: "Recorded provider identifier; null when historical provenance is unknown." },
     tags: { type: "object", nullable: true, additionalProperties: { type: "string" }, description: "Persisted outbound tags; null when not recorded." },
     provider_message_id: { type: "string", nullable: true },
-    message_id: { type: "string", nullable: true, description: "RFC 5322 Message-ID" },
-    in_reply_to: { type: "string", nullable: true },
+    message_id: { type: "string", nullable: true, description: "RFC 5322 Message-ID. Every outbound send mints one — deterministic in the idempotency key, so an idempotent retry rebuilds the same headers and the same payload hash; inbound mail carries the sender's." },
+    in_reply_to: { type: "string", nullable: true, description: "RFC 5322 In-Reply-To: the Message-ID of the message this one answers, or null when this message starts a conversation." },
+    thread_id: {
+      type: "string",
+      nullable: true,
+      description:
+        "Conversation identity: the root message's RFC 5322 Message-ID for a thread this service started, or the inherited value for a reply. "
+        + "Enumerate a conversation with GET /v1/messages/threads, which groups by this id when present. "
+        + "OPTIONAL, like policy_denial: a client that required it would refuse every response from a server older than this field. "
+        + "NULL means 'unknown for this row' (it predates threading, or arrived without a resolvable References chain), NOT 'not part of a thread'.",
+    },
+    references: {
+      type: "array",
+      items: { type: "string" },
+      description: "RFC 5322 References chain (oldest→newest Message-IDs), derived from headers.References. OPTIONAL for the same reason as thread_id.",
+    },
     received_at: { type: "string", format: "date-time", nullable: true, description: "Original receipt time (inbound)" },
     is_read: { type: "boolean" },
     is_starred: { type: "boolean" },
@@ -880,6 +894,7 @@ const messageListItemSchema = {
     provider_message_id: { type: "string", nullable: true },
     message_id: { type: "string", nullable: true, description: "RFC 5322 Message-ID" },
     in_reply_to: { type: "string", nullable: true },
+    thread_id: { type: "string", nullable: true, description: "Conversation identity (root Message-ID or inherited value); see the Message schema. OPTIONAL." },
     received_at: { type: "string", format: "date-time", nullable: true, description: "Original receipt time (inbound)" },
     is_read: { type: "boolean" },
     is_starred: { type: "boolean" },
@@ -3863,6 +3878,19 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                     description: "Explicit per-send override of the tenant suppression ledger for the recipients of this one message. Honored only for principals with tenant-wide send authority (API keys, owner/admin sessions, IdP principals with emails:write) — the same set that can unsuppress a contact. A sender-scoped send key requesting it is refused with 403 suppression_override_forbidden. Without this flag the server refuses a suppressed recipient with 409 recipient_suppressed, unconditionally.",
                   },
                   idempotency_key: { type: "string", maxLength: 200 },
+                  parent_message_id: {
+                    type: "string",
+                    description: "Hosted id of the message this send answers. The server derives In-Reply-To/References from the parent (its Message-ID plus its own References chain) and makes the reply inherit the parent's conversation, so a caller never has to build threading headers. A parent that is not in this tenant is refused with 404 parent_message_not_found and nothing is sent. Optional: without it (and without in_reply_to/references) the send starts a new conversation, carrying its own Message-ID as the thread id.",
+                  },
+                  in_reply_to: {
+                    type: "string",
+                    description: "RFC 5322 Message-ID of the parent, when the caller holds the Message-ID rather than the hosted id. Resolved against the tenant's ledger; also refused with 404 when unknown. Mutually usable with parent_message_id (parent_message_id wins).",
+                  },
+                  references: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Extra RFC 5322 Message-IDs to carry in the References chain (ancestors the parent's own chain omits). Merged after the parent's references, deduplicated, with the parent's Message-ID last per RFC 5322 §3.6.4.",
+                  },
                 },
                 required: ["from", "to", "subject", "idempotency_key"],
               },

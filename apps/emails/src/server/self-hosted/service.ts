@@ -2,6 +2,7 @@ import { messageSearchErrorResponse } from "./search-admission.js";
 import { setupBoundSesInbound, type SesInboundSetupCloudFactory, type SesInboundSetupInput } from "./ses-inbound-setup.js";
 import { readDomainDnsRecords, DomainDnsReadError } from "./domain-dns-read.js";
 import { normalizeSendMetadata } from "../../lib/send-metadata.js";
+import { deriveReplyThreading, generateMessageId } from "../../lib/threading.js";
 import { normalizeFeedback } from "./feedback.js";
 import { WorkerError, workerFence, workerId } from "./worker-supervisor.js";
 import { runtimeLogQuery, withRuntimeLog } from "./runtime-log.js";
@@ -347,6 +348,27 @@ function publicMessageListItem(record: MessageRecord | MessageListRecord): Messa
 
 function sendPayloadHash(value: Record<string, unknown>): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+/**
+ * The local part of the RFC 5322 Message-ID an outbound send mints.
+ *
+ * DERIVED FROM THE IDEMPOTENCY KEY, never random (FR-0002). A retry with the
+ * same key must reproduce the same Message-ID: the threading headers are part
+ * of the hashed payload, so a random one would make an idempotent replay hash
+ * differently and be refused as an idempotency-key conflict — turning the
+ * feature into a reason retries fail. Hashed (not used verbatim) because a key
+ * may contain characters that are not valid in a Message-ID local part and may
+ * be up to 200 characters long.
+ */
+function sendMessageIdLocalPart(idempotencyKey: string): string {
+  return createHash("sha256").update(idempotencyKey, "utf8").digest("hex").slice(0, 32);
+}
+
+/** The domain of a canonical bare address, for minting a Message-ID. Empty when unusable. */
+function addressDomain(address: string): string {
+  const at = address.lastIndexOf("@");
+  return at > 0 ? address.slice(at + 1).trim().toLowerCase() : "";
 }
 
 function decodeStrictBase64(value: string): Buffer {
@@ -1574,7 +1596,7 @@ export async function handleSelfHostedRequest(
       let metadata: ReturnType<typeof normalizeSendMetadata>;
       try { metadata = normalizeSendMetadata(body.headers, body.tags); }
       catch (error) { return json(400, { error: error instanceof Error ? error.message : "Invalid send metadata", reason: "invalid_send_metadata" }); }
-      const sendHeaders = metadata.headers || trustedSendHeaders ? { ...metadata.headers, ...trustedSendHeaders } : undefined;
+      let sendHeaders = metadata.headers || trustedSendHeaders ? { ...metadata.headers, ...trustedSendHeaders } : undefined;
       let scheduledAt: string | undefined;
       if (enqueue) {
         try {
@@ -1611,6 +1633,74 @@ export async function handleSelfHostedRequest(
       const parsedIdempotencyKey = parseIdempotencyKey(body.idempotency_key);
       if (!parsedIdempotencyKey.ok) return json(400, { error: parsedIdempotencyKey.error });
       const idempotencyKey = parsedIdempotencyKey.value;
+
+      // ---- RFC 5322 threading (FR-0002) ----------------------------------
+      // Every message this route sends now carries a Message-ID. RFC 5322
+      // §3.6.1 asks for one on every message, and without it a conversation
+      // that STARTS here has no identity for its replies to inherit — a reply
+      // to it would have to name the parent by hosted row id, which is not a
+      // Message-ID, and the two would land in different threads. The local part
+      // is derived from the idempotency key (`sendMessageIdLocalPart`) rather
+      // than random, so an idempotent replay rebuilds the same threading
+      // headers, the same payload hash, and is recognised as a replay instead
+      // of being refused as an idempotency-key conflict.
+      //
+      // A caller names the parent either by hosted message id
+      // (`parent_message_id`) or by RFC Message-ID (`in_reply_to`), and may add
+      // ancestor Message-IDs directly (`references`). All three are optional: a
+      // send that names no parent is simply the root of its own thread.
+      if (body.parent_message_id !== undefined && typeof body.parent_message_id !== "string") {
+        return json(400, { error: "parent_message_id must be a string", reason: "invalid_parent_message_id" });
+      }
+      if (body.in_reply_to !== undefined && typeof body.in_reply_to !== "string") {
+        return json(400, { error: "in_reply_to must be a string", reason: "invalid_in_reply_to" });
+      }
+      if (body.references !== undefined
+        && (!Array.isArray(body.references) || body.references.some((value) => typeof value !== "string"))) {
+        return json(400, { error: "references must be an array of Message-ID strings", reason: "invalid_references" });
+      }
+      const parentReference = String(body.parent_message_id ?? "").trim() || String(body.in_reply_to ?? "").trim();
+      const extraReferences = asStringArray(body.references).map((value) => value.trim()).filter(Boolean);
+      let parent: MessageRecord | null = null;
+      if (parentReference) {
+        // A hosted row id (what `parent_message_id` means) resolves directly; an
+        // RFC Message-ID (what `in_reply_to` usually carries) is looked up in the
+        // tenant's own ledger. A parent that cannot be found is refused rather
+        // than silently sending an unthreaded message that CLAIMS to be a reply.
+        parent = await auth.store.getMessage(parentReference);
+        if (!parent) parent = await auth.store.findMessageByRfcMessageId(parentReference);
+        if (!parent) {
+          return json(404, {
+            error: "the parent message was not found in this tenant; nothing was sent",
+            reason: "parent_message_not_found",
+            retry_safe: false,
+          });
+        }
+      }
+      // An In-Reply-To must be an RFC Message-ID, never a hosted row id. A
+      // parent that predates threading carries no Message-ID, and emitting its
+      // uuid there would forge a header no mail client can match. So the
+      // caller's reference is only usable when it is a real Message-ID.
+      const parentMessageId = parent?.message_id?.trim()
+        || (parentReference.includes("@") ? parentReference : "");
+      const threading = deriveReplyThreading({
+        ownMessageId: generateMessageId(addressDomain(from), sendMessageIdLocalPart(idempotencyKey)),
+        parentMessageId,
+        parentReferences: parent?.references ?? [],
+        extraReferences,
+      });
+      // The conversation this message belongs to. A reply inherits its parent's
+      // thread; a message that starts one IS the thread, and its own Message-ID
+      // is the id every later reply inherits. A parent with no Message-ID at all
+      // anchors the thread on its hosted id, so the reply still groups with it.
+      const threadId = parent
+        ? (parent.thread_id?.trim() || threading.in_reply_to || parent.id)
+        : threading.headers["Message-ID"] || null;
+      // Message-ID / In-Reply-To / References are mail-transport headers, not
+      // caller extension headers, so they are merged server-side (the same
+      // channel `trustedSendHeaders` uses) and override any caller value.
+      sendHeaders = { ...sendHeaders, ...threading.headers };
+
       const rawAttachments = asArray(body.attachments) ?? [];
       if (rawAttachments.length > SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxFiles) {
         return json(400, { error: `at most ${SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxFiles} inline attachments are allowed` });
@@ -1704,6 +1794,11 @@ export async function handleSelfHostedRequest(
           ...(tracking ?? {}),
           from: rawFrom, to, cc, bcc, reply_to: payload.reply_to, subject,
           text: payload.text, html: payload.html, attachments,
+          // The scheduled run re-posts this payload to /v1/messages/send, so the
+          // threading inputs travel with it and the Message-ID is re-derived
+          // deterministically from the same idempotency key at send time.
+          ...(parent ? { parent_message_id: parent.id } : {}),
+          ...(extraReferences.length ? { references: extraReferences } : {}),
           ...(requestedProviderId ? { provider_id: providerId } : {}),
           ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
           ...metadata,
@@ -1755,6 +1850,11 @@ export async function handleSelfHostedRequest(
           subject,
           body_text: payload.text,
           body_html: payload.html,
+          // Persist the threading the send was authorized to carry, so the row
+          // reads back as the reply it is (FR-0002) instead of a bare new message.
+          message_id: threading.headers["Message-ID"] ?? null,
+          in_reply_to: threading.in_reply_to,
+          thread_id: threadId,
           headers: sendHeaders,
           tags: metadata.tags,
           attachments: attachments.map(({ filename, content_type, content }) => ({
