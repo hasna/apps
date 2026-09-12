@@ -11,8 +11,26 @@
  * layout and username — into the open.
  *
  * Usage:
- *   bun tooling/ci/check-publish-guard.ts [--root <dir>]
+ *   bun tooling/ci/check-publish-guard.ts [--root <dir>]                     # every member (local default)
+ *   bun tooling/ci/check-publish-guard.ts --changed-since <base> [--root]    # CI: members whose tarball can differ from <base>
  *   bun tooling/ci/check-publish-guard.ts --self-test
+ *
+ * SCOPING (2026-09-11). `npm pack --dry-run` runs each member's `prepack`, and
+ * most prepacks run the member's full verify (typecheck + tests + build). So
+ * one member's pack-time flake reddens this REQUIRED check for every other
+ * package in the commit — measured on the release commit fb59fb6a, which went
+ * red for four unrelated packages because of the @hasna/trash concurrency
+ * test. A member's tarball is a function of its own directory, the in-tree
+ * members it bundles, and the shared inputs (root package.json, bun.lock,
+ * turbo.json, tsconfig.base.json, tooling/, ci.yml). `--changed-since <base>`
+ * therefore packs exactly the members whose `apps/<m>/**` changed in
+ * `<base>...HEAD` plus every in-tree member that depends on one of them
+ * (transitively), and falls back to EVERY member when a shared input changed
+ * (bun.lock counts only when its third-party `packages` section differs — a
+ * release commit's workspace-version regeneration is member-scoped) or when
+ * <base> cannot be resolved (conservative: never a vacuous pass). A
+ * PR that changes no member and no shared input packs nothing and says so.
+ * Without the flag the guard scans every member, as before.
  *
  * Why the pack output is parsed the way it is (measured 2026-08-13):
  *
@@ -175,6 +193,160 @@ function memberPackages(root: string): string[] {
     .sort()
     .filter((name) => fs.existsSync(path.join(apps, name, "package.json")))
     .map((name) => path.join(apps, name));
+}
+
+/** Root-level inputs that can change ANY member's tarball. A change here scans every member. */
+export const SHARED_TARBALL_INPUTS: RegExp[] = [
+  /^package\.json$/,
+  /^turbo\.json$/,
+  /^tsconfig\.base\.json$/,
+  /^\.npmrc$/,
+  /^tooling\//,
+  /^\.github\/workflows\/ci\.yml$/,
+];
+
+/**
+ * bun.lock is handled separately: a release commit regenerates it, but only
+ * its `workspaces` section (the in-tree members' own versions and dependency
+ * specs) — those members are in the changed set already. Only the `packages`
+ * section (third-party resolutions) can change what a member BUNDLES, so only
+ * a diff there widens the scan to every member. The section is compared as
+ * text from its top-level key to the end of file (bun writes top-level keys in
+ * a fixed order: lockfileVersion, workspaces, packages); an unreadable side
+ * counts as changed (conservative).
+ */
+export function packagesSectionChanged(lockBase: string | null, lockHead: string | null): boolean {
+  if (lockBase === null || lockHead === null) return true;
+  const section = (text: string) => {
+    const i = text.indexOf('\n  "packages": {');
+    return i < 0 ? text : text.slice(i);
+  };
+  return section(lockBase) !== section(lockHead);
+}
+
+export interface Selection {
+  /** Member directories (absolute) to pack and scan. */
+  members: string[];
+  scope: "all" | "changed" | "none";
+  reason: string;
+  /** Member directories skipped as unchanged (for the report). */
+  skipped: string[];
+}
+
+function gitLines(root: string, args: string[]): string[] | null {
+  try {
+    const out = execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return out.split("\n").map((l) => l.trim()).filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+/** `apps/<m>/...` -> `<m>` (a nested workspace like apps/notes/server belongs to `notes`). */
+export function memberOfPath(relative: string): string | null {
+  const m = /^apps\/([^/]+)\//.exec(relative);
+  return m ? m[1] : null;
+}
+
+/** In-tree dependency edges: member -> members that DEPEND on it (they bundle its dist). */
+export function inTreeDependents(root: string, memberDirs: string[]): Map<string, Set<string>> {
+  const nameToMember = new Map<string, string>();
+  const deps = new Map<string, Set<string>>();
+  for (const dir of memberDirs) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+      if (typeof pkg.name === "string") nameToMember.set(pkg.name, path.basename(dir));
+    } catch {
+      /* unreadable manifest: no edges */
+    }
+  }
+  for (const dir of memberDirs) {
+    let pkg: any;
+    try {
+      pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
+    } catch {
+      continue;
+    }
+    const member = path.basename(dir);
+    for (const section of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+      for (const depName of Object.keys(pkg[section] ?? {})) {
+        const target = nameToMember.get(depName);
+        if (!target || target === member) continue;
+        if (!deps.has(target)) deps.set(target, new Set());
+        deps.get(target)!.add(member);
+      }
+    }
+  }
+  return deps;
+}
+
+/**
+ * Decide which members `--changed-since <base>` packs. Conservative in every
+ * ambiguous direction: an unresolvable base, a changed shared input, or a git
+ * failure all select EVERY member. Only a diff that touches nothing a tarball
+ * is built from selects none.
+ */
+export function selectMembers(root: string, base: string | null): Selection {
+  const all = memberPackages(root);
+  if (base === null) return { members: all, scope: "all", reason: "no --changed-since base: every member", skipped: [] };
+  const resolved = gitLines(root, ["rev-parse", "--verify", "--quiet", `${base}^{commit}`]);
+  if (!resolved || resolved.length === 0) {
+    return { members: all, scope: "all", reason: `base ${base} cannot be resolved: scanning every member (conservative)`, skipped: [] };
+  }
+  const changed = gitLines(root, ["diff", "--name-only", `${base}...HEAD`]);
+  if (changed === null) return { members: all, scope: "all", reason: `git diff ${base}...HEAD failed: scanning every member (conservative)`, skipped: [] };
+  const shared = changed.filter((f) => SHARED_TARBALL_INPUTS.some((re) => re.test(f)));
+  let lockNote = "";
+  if (changed.includes("bun.lock")) {
+    // Raw text on both sides: the section key is matched with its indentation.
+    let baseLock: string | null;
+    try {
+      baseLock = execFileSync("git", ["show", `${base}:bun.lock`], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+    } catch {
+      baseLock = null;
+    }
+    let headLock: string | null;
+    try {
+      headLock = fs.readFileSync(path.join(root, "bun.lock"), "utf8");
+    } catch {
+      headLock = null;
+    }
+    if (packagesSectionChanged(baseLock, headLock)) {
+      shared.push("bun.lock (packages section changed)");
+    } else {
+      lockNote = "; bun.lock changed in its workspaces section only (member-scoped)";
+    }
+  }
+  if (shared.length > 0) {
+    return { members: all, scope: "all", reason: `shared tarball input(s) changed vs ${base}: ${shared.slice(0, 5).join(", ")}${shared.length > 5 ? ", …" : ""}`, skipped: [] };
+  }
+  const changedMembers = new Set<string>();
+  for (const f of changed) {
+    const m = memberOfPath(f);
+    if (m) changedMembers.add(m);
+  }
+  const dependents = inTreeDependents(root, all);
+  const queue = [...changedMembers];
+  while (queue.length > 0) {
+    const m = queue.pop()!;
+    for (const d of dependents.get(m) ?? []) {
+      if (!changedMembers.has(d)) {
+        changedMembers.add(d);
+        queue.push(d);
+      }
+    }
+  }
+  const members = all.filter((dir) => changedMembers.has(path.basename(dir)));
+  const skipped = all.filter((dir) => !changedMembers.has(path.basename(dir)));
+  if (members.length === 0) {
+    return { members, scope: "none", reason: `no member directory and no shared tarball input changed vs ${base} (${changed.length} file(s) changed)${lockNote}`, skipped };
+  }
+  return {
+    members,
+    scope: "changed",
+    reason: `${members.length} member(s) changed vs ${base} (incl. in-tree dependents), ${skipped.length} unchanged skipped${lockNote}`,
+    skipped,
+  };
 }
 
 function scanNames(names: string[]): Array<{ name: string; pattern: string }> {
@@ -423,8 +595,16 @@ function missingDeclaredBins(pkgDir: string, names: string[]): string[] {
     .filter((p) => p.length > 0 && !names.includes(p));
 }
 
-function run(root: string, exceptions: typeof CONTENT_EXCEPTIONS = CONTENT_EXCEPTIONS): number {
-  const pkgs = memberPackages(root);
+function run(root: string, exceptions: typeof CONTENT_EXCEPTIONS = CONTENT_EXCEPTIONS, selection?: Selection): number {
+  const pkgs = selection ? selection.members : memberPackages(root);
+  if (selection) {
+    console.log(`publish guard: scope=${selection.scope} — ${selection.reason}`);
+    if (selection.skipped.length > 0) console.log(`publish guard: skipped as unchanged: ${selection.skipped.map((d) => path.basename(d)).join(", ")}`);
+    if (selection.scope === "none") {
+      console.log("publish guard: no tarball can differ from the base — nothing to pack (scoped run)");
+      return 0;
+    }
+  }
   if (pkgs.length === 0) {
     console.log("publish guard: 0 member packages — nothing to scan");
     return 0;
@@ -980,10 +1160,99 @@ function selfTest(): number {
   return 0;
 }
 
-const args = process.argv.slice(2);
-if (args.includes("--self-test")) {
-  process.exit(selfTest());
+/**
+ * Two-sided self-test of the `--changed-since` selection over a real git
+ * fixture: a changed member selects itself and its in-tree dependents; an
+ * unchanged member is skipped; a shared-input change selects every member; a
+ * diff touching nothing tarball-relevant selects none; an unresolvable base
+ * selects every member (conservative).
+ */
+function selectionSelfTest(): number {
+  let failed = false;
+  const check = (name: string, ok: boolean) => {
+    console.log(`  ${ok ? "PASS" : "FAIL"} — ${name}`);
+    if (!ok) failed = true;
+  };
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "publish-guard-selection-"));
+  try {
+    const env = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
+    const g = (...a: string[]) => execFileSync("git", a, { cwd: tmp, encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] }).trim();
+    fs.writeFileSync(path.join(tmp, "package.json"), JSON.stringify({ name: "@hasna/apps", private: true, workspaces: ["apps/*"] }, null, 2));
+    fixturePackage(path.join(tmp, "apps"), "a", ["x.txt"], false);
+    fixturePackage(path.join(tmp, "apps"), "b", ["x.txt"], false, undefined, { fields: { dependencies: { "@hasna/self-test-a": "workspace:*" } } });
+    fixturePackage(path.join(tmp, "apps"), "c", ["x.txt"], false);
+    fs.writeFileSync(path.join(tmp, "README.md"), "root readme\n");
+    g("init", "-q", "-b", "main");
+    g("add", "-A");
+    g("commit", "-q", "-m", "base\n\nAgent: fixture");
+    const base = g("rev-parse", "HEAD");
+    const names = (sel: Selection) => sel.members.map((d) => path.basename(d)).sort().join(",");
+
+    fs.writeFileSync(path.join(tmp, "apps", "a", "data", "x.txt"), "changed\n");
+    g("commit", "-qam", "change a\n\nAgent: fixture");
+    const s1 = selectMembers(tmp, base);
+    check("a changed -> a and its dependent b selected, c skipped", s1.scope === "changed" && names(s1) === "a,b" && s1.skipped.map((d) => path.basename(d)).join(",") === "c");
+
+    fs.writeFileSync(path.join(tmp, "README.md"), "root readme changed\n");
+    g("commit", "-qam", "readme only\n\nAgent: fixture");
+    const s2 = selectMembers(tmp, g("rev-parse", "HEAD~1"));
+    check("a diff touching nothing tarball-relevant selects none (scope none)", s2.scope === "none" && s2.members.length === 0);
+
+    fs.writeFileSync(path.join(tmp, "package.json"), JSON.stringify({ name: "@hasna/apps", private: true, workspaces: ["apps/*"], x: 1 }, null, 2));
+    g("commit", "-qam", "root package.json\n\nAgent: fixture");
+    const s3 = selectMembers(tmp, g("rev-parse", "HEAD~1"));
+    check("a shared tarball input (root package.json) selects every member", s3.scope === "all" && names(s3) === "a,b,c");
+
+    const s4 = selectMembers(tmp, "no-such-ref");
+    check("an unresolvable base selects every member (conservative, never vacuous)", s4.scope === "all" && names(s4) === "a,b,c" && /cannot be resolved/.test(s4.reason));
+
+    const s5 = selectMembers(tmp, null);
+    check("no base selects every member (local default)", s5.scope === "all" && names(s5) === "a,b,c");
+
+    // bun.lock: a workspaces-only regeneration (release commit) stays
+    // member-scoped; a packages-section change widens to every member.
+    const lock = (wsVersion: string, pkgHash: string) =>
+      `{\n  "lockfileVersion": 1,\n  "workspaces": {\n    "apps/a": { "name": "@hasna/self-test-a", "version": "${wsVersion}" },\n  },\n  "packages": {\n    "zod": ["zod@3.25.76", "", {}, "${pkgHash}"],\n  },\n}\n`;
+    fs.writeFileSync(path.join(tmp, "bun.lock"), lock("0.0.1", "sha512-A"));
+    g("add", "bun.lock");
+    g("commit", "-qm", "lock base\n\nAgent: fixture");
+    fs.writeFileSync(path.join(tmp, "bun.lock"), lock("0.0.2", "sha512-A"));
+    fs.writeFileSync(path.join(tmp, "apps", "a", "data", "x.txt"), "release\n");
+    g("commit", "-qam", "release a\n\nAgent: fixture");
+    const s6 = selectMembers(tmp, g("rev-parse", "HEAD~1"));
+    check("bun.lock workspaces-only regeneration stays member-scoped (a + dependent b, c skipped)", s6.scope === "changed" && names(s6) === "a,b" && /workspaces section only/.test(s6.reason));
+    fs.writeFileSync(path.join(tmp, "bun.lock"), lock("0.0.2", "sha512-B"));
+    g("commit", "-qam", "dep bump\n\nAgent: fixture");
+    const s7 = selectMembers(tmp, g("rev-parse", "HEAD~1"));
+    check("bun.lock packages-section change widens to every member", s7.scope === "all" && names(s7) === "a,b,c" && /packages section changed/.test(s7.reason));
+    check("packagesSectionChanged treats an unreadable side as changed (conservative)", packagesSectionChanged(null, "x") && packagesSectionChanged("x", null));
+
+    // run() with a scope-none selection exits 0 and says so, without packing.
+    const none = capture(() => run(tmp, [], s2));
+    check("run() on a scope-none selection packs nothing and exits 0 with the reason printed", none.rc === 0 && none.lines.join("\n").includes("nothing to pack"));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  if (failed) {
+    console.error("selection self-test FAILED — the scoping cannot be trusted");
+    return 1;
+  }
+  console.log("selection self-test: PASS (selects changed + dependents, skips unchanged, widens to all on shared inputs / unresolvable base)");
+  return 0;
 }
-const rootIdx = args.indexOf("--root");
-const root = rootIdx >= 0 ? args[rootIdx + 1] : process.cwd();
-process.exit(run(root));
+
+if (import.meta.main) {
+  const args = process.argv.slice(2);
+  if (args.includes("--self-test")) {
+    process.exit(selfTest() || selectionSelfTest());
+  }
+  const rootIdx = args.indexOf("--root");
+  const root = rootIdx >= 0 ? args[rootIdx + 1]! : process.cwd();
+  const sinceIdx = args.indexOf("--changed-since");
+  const base = sinceIdx >= 0 ? (args[sinceIdx + 1] ?? null) : null;
+  if (sinceIdx >= 0 && !base) {
+    console.error("usage: --changed-since <base-ref>");
+    process.exit(2);
+  }
+  process.exit(run(root, CONTENT_EXCEPTIONS, base === null ? undefined : selectMembers(root, base)));
+}
