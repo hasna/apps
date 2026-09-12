@@ -39,6 +39,7 @@ import {
   cloudResolveProjectRef,
   cloudResolveTaskListRef,
   cloudResolveTaskRef, cloudLockTask, cloudUnlockTask, cloudAddDependency, cloudRemoveDependency,
+  cloudCreateTask, cloudDeleteTask, cloudListComments, cloudRecentActivity,
 } from "../../cli/cloud-router.js";
 import { requireTodosCloudClient } from "../remote-authority.js";
 import { cloudTaskLockStatus, cloudPrioritizeTask, cloudTaskGraph } from "../task-coordination-api.js";
@@ -1360,6 +1361,14 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, deadline, version }) => {
         try {
+          // http authority routing: PATCH /v1/tasks/:id. Every neighbouring
+          // lifecycle tool (start/complete/prioritize/move) already routed here;
+          // the deadline write was the one that still landed in local sqlite.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const rescheduled = await cloudUpdateTask(cloud, task_id, version !== undefined ? { due_at: deadline, version } : { due_at: deadline });
+            return { content: [{ type: "text" as const, text: formatTask(rescheduled) }] };
+          }
           const resolvedId = resolveId(task_id);
           const task = updateWithOptionalVersion(resolvedId, { due_at: deadline }, version);
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
@@ -1492,6 +1501,22 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_ids, status, priority, assigned_to }) => {
         try {
+          // http authority routing: one PATCH /v1/tasks/:id per id, reporting
+          // the true updated/failed split instead of a local-store count.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const patch: Record<string, unknown> = {};
+            if (status !== undefined) patch.status = status;
+            if (priority !== undefined) patch.priority = priority;
+            if (assigned_to !== undefined) patch.assigned_to = assigned_to;
+            let updated = 0;
+            const failed: string[] = [];
+            for (const id of task_ids) {
+              try { await cloudUpdateTask(cloud, id, patch); updated++; }
+              catch { failed.push(id); }
+            }
+            return { content: [{ type: "text" as const, text: `${updated} task(s) updated, ${failed.length} failed.${failed.length ? ` Failed: ${failed.map((f) => f.slice(0, 8)).join(", ")}` : ""}` }] };
+          }
           const { bulkUpdateTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolved = task_ids.map(resolveId);
           let resolvedAssignee: string | null | undefined = assigned_to;
@@ -1526,6 +1551,26 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ tasks }) => {
         try {
+          // http authority routing: POST /v1/tasks per row, then
+          // POST /v1/tasks/:id/dependencies for the declared edges. Dependencies
+          // are wired after the whole batch so an id can reference a sibling.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const createdRemote: { id: string; depends_on: string[] }[] = [];
+            for (const t of tasks) {
+              const { depends_on, estimate, project_id, task_list_id, ...rest } = t as Record<string, unknown> & { depends_on?: string[]; estimate?: number };
+              const input: Record<string, unknown> = { ...rest };
+              if (estimate !== undefined) input.estimated_minutes = estimate;
+              if (project_id) input.project_id = await cloudResolveProjectRef(cloud, project_id as string);
+              if (task_list_id) input.task_list_id = await cloudResolveTaskListRef(cloud, task_list_id as string);
+              const row = await cloudCreateTask(cloud, input);
+              createdRemote.push({ id: row.id, depends_on: depends_on ?? [] });
+            }
+            for (const row of createdRemote) {
+              for (const dep of row.depends_on) await cloudAddDependency(cloud, row.id, dep);
+            }
+            return { content: [{ type: "text" as const, text: `${createdRemote.length} task(s) created.` }] };
+          }
           const { bulkCreateTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolved = tasks.map(t => {
             const r: Record<string, unknown> = { ...t };
@@ -1554,6 +1599,19 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_ids, force }) => {
         try {
+          // http authority routing: DELETE /v1/tasks/:id per id. The server owns
+          // the child check, so a skipped row is reported from its answer rather
+          // than from a local subtask scan.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            let deleted = 0;
+            const skipped: string[] = [];
+            for (const id of task_ids) {
+              try { if (await cloudDeleteTask(cloud, id)) deleted++; else skipped.push(id); }
+              catch { skipped.push(id); }
+            }
+            return { content: [{ type: "text" as const, text: `${deleted} task(s) deleted, ${skipped.length} skipped.${skipped.length ? ` Skipped: ${skipped.map((s2) => s2.slice(0, 8)).join(", ")}` : ""}` }] };
+          }
           const { bulkDeleteTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolved = task_ids.map(resolveId);
           const result = bulkDeleteTasks(resolved, force);
@@ -2803,6 +2861,17 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id }) => {
         try {
+          // http authority routing: GET /v1/tasks/:id/comments. `create_comment`
+          // already wrote to the shared store, so this read showed an empty
+          // thread for every comment the same server had just accepted.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const page = await cloudListComments(cloud, task_id, { limit: 100 });
+            if (page.comments.length === 0) return { content: [{ type: "text" as const, text: "No comments." }] };
+            const remoteLines = page.comments.map((c) => `[${c.agent_id || "unknown"}] ${c.created_at?.slice(0, 16)}:\n  ${c.content}`);
+            if (page.has_more) remoteLines.push(`(older comments available; showing the ${page.comments.length} most recent)`);
+            return { content: [{ type: "text" as const, text: remoteLines.join("\n\n") }] };
+          }
           const resolvedId = resolveId(task_id);
           const comments = listComments(resolvedId);
           if (comments.length === 0) return { content: [{ type: "text" as const, text: "No comments." }] };
@@ -2835,6 +2904,28 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           if (input.entity_type === "project" && entityId) entityId = resolveId(entityId, "projects");
           if (input.entity_type === "plan" && entityId) entityId = resolveId(entityId, "plans");
           if (input.entity_type === "run" && entityId) entityId = resolveTaskRunId(entityId);
+          // http authority routing: GET /v1/activity is the shared task-history
+          // feed. It does NOT carry run evidence (no /v1/task-runs route yet),
+          // so the hosted answer says so explicitly rather than presenting a
+          // silently narrower timeline as the whole story.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const limit = input.limit ?? 50;
+            const offset = input.offset ?? 0;
+            let entries = await cloudRecentActivity(cloud, Math.min(10000, limit + offset));
+            if (input.entity_type === "task" && entityId) entries = entries.filter((e) => e.task_id === entityId);
+            if (input.since) entries = entries.filter((e) => (e.created_at ?? "") >= input.since!);
+            if (input.until) entries = entries.filter((e) => (e.created_at ?? "") <= input.until!);
+            if (input.order === "asc") entries = [...entries].reverse();
+            return { content: [{ type: "text" as const, text: JSON.stringify({
+              source: "cloud",
+              scope: { entity_type: input.entity_type ?? "all", entity_id: entityId ?? null },
+              entries: entries.slice(offset, offset + limit),
+              count: Math.max(0, Math.min(limit, entries.length - offset)),
+              omitted_sources: ["run_evidence"],
+              omitted_reason: "the hosted authority exposes task history at /v1/activity; run evidence has no /v1 route yet",
+            }, null, 2) }] };
+          }
           const timeline = getLocalActivityTimeline({
             entity_type: input.entity_type,
             entity_id: entityId,
@@ -3120,6 +3211,20 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ query, project_id, status, limit }) => {
         try {
+          // http authority routing: GET /v1/tasks?q=… — the server runs the
+          // search over the shared dataset instead of this machine's rows.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const remote = await cloudListTasks(cloud, {
+              query,
+              ...(project_id ? { project_id } : {}),
+              ...(status ? { status } : {}),
+              limit: limit || 20,
+            } as never);
+            if (remote.length === 0) return { content: [{ type: "text" as const, text: `No results for: ${query}` }] };
+            const remoteLines = remote.map((t) => `${(t.short_id || t.id.slice(0, 8))} [${t.status}] ${t.title}`);
+            return { content: [{ type: "text" as const, text: `${remote.length} result(s) for "${query}":\n${remoteLines.join("\n")}` }] };
+          }
           const { searchTasks } = require("../../lib/search.js") as typeof import("../../lib/search.js");
           const resolved: Record<string, unknown> = { query, limit };
           if (project_id) resolved.project_id = resolveId(project_id, "projects");
