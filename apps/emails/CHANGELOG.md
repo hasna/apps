@@ -1,3 +1,10 @@
+## 1.6.2
+
+### Patch Changes
+
+- Request the supported SQS visibility attribute and fail readiness when a stalled ingest worker has unknown queue state. Keep oldest-message age unknown without a real CloudWatch measurement; deployment alarms must monitor queue age separately.
+- Build the package before prepublish tests inspect generated distribution paths, so the release check also works from a fresh checkout.
+
 ## 1.6.1
 
 ### Patch Changes
