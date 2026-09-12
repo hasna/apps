@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from "bun:test";
 import { enterLocalStoreRoute } from "../test/local-store-fixture.js";
+import { describe, test, expect, beforeEach, afterEach, beforeAll, afterAll } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -27,10 +27,15 @@ const originalLockPath = process.env.HASNA_HOOKS_LOCK_PATH;
 // Hermetic local route (see src/test/local-store-fixture.ts).
 let restoreRoute: () => void = () => {};
 
+
 beforeAll(() => {
   closeDb();
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DATA_DIR;
   process.env.HASNA_HOOKS_DB_PATH = join(TEST_DATA_DIR, "hooks.db");
+  // Hook events are hosted by default and the local opt-in is not a trump
+  // card: this suite asserts rows in the ON-BOX store, so it removes every
+  // authority variable as well (bun runs all files in one process and
+  // qa-regressions exports a live HASNA_HOOKS_API_KEY while it runs).
   process.env.HASNA_HOOKS_LOCK_PATH = join(TEST_DATA_DIR, "hooks.lock");
   restoreRoute = enterLocalStoreRoute();
 });

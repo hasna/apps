@@ -1,3 +1,4 @@
+import { localStoreChildEnv } from "../test/local-store-fixture.js";
 /**
  * Unit tests for individual hook logic.
  *
@@ -6,7 +7,6 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { localStoreChildEnv } from "../test/local-store-fixture.js";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -640,9 +640,11 @@ describe("observability hooks write to SQLite", () => {
       stdin: new Response(JSON.stringify(input)),
       stdout: "pipe",
       stderr: "pipe",
-      // Explicit local route (hasna/apps#1720): the hook-event writer inside
-      // the bundled hook refuses (and opens nothing) without the opt-in.
-      env: localStoreChildEnv({ HOOKS_DB_PATH: dbPath }),
+      // These hooks post to the hosted /api/v1/events route by default now,
+      // and this block asserts the ON-BOX store: the child env carries the
+      // opt-in AND no authority variable (the opt-in alone loses to a
+      // configured registry, by design).
+      env: localStoreChildEnv({ HOOKS_DB_PATH: dbPath, HOME: tmpDir, HASNA_STATION: "no-such-station" }),
     });
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),

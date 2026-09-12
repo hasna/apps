@@ -1,3 +1,4 @@
+import { enterLocalStoreRoute, localStoreChildEnv } from "../test/local-store-fixture.js";
 /**
  * Regression: every hook execution lands in hook_events so `hooks log` shows
  * rows after a real fire (QA-5/QA-2, bug ef58dcb7: 0 rows after real fires).
@@ -11,12 +12,12 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { runHook } from "../index.js";
 import { getDb, closeDb } from "../db/index.js";
-import { enterLocalStoreRoute } from "../test/local-store-fixture.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-eventlog-test-"));
 // Hermetic local route (see src/test/local-store-fixture.ts): scrubs stray
 // authority variables other suites seed into the shared process.env.
 let restoreRoute: () => void = () => {};
+
 
 beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;
@@ -168,7 +169,7 @@ describe("hook run event logging (bug ef58dcb7)", () => {
       stdin: new Response(JSON.stringify({ hook_event_name: "PreToolUse" })),
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, HASNA_HOOKS_DATA_DIR: TEST_DIR, HASNA_HOOKS_DB_PATH: cliDbPath },
+      env: localStoreChildEnv({ HASNA_HOOKS_DATA_DIR: TEST_DIR, HASNA_HOOKS_DB_PATH: cliDbPath }),
     });
     const [cliOut, cliErr] = await Promise.all([
       new Response(proc.stdout as ReadableStream).text(),

@@ -183,12 +183,15 @@ The worker (`src/cf/worker.ts`) implements the same API routes against D1 + R2, 
 
 ## Storage
 
-Hooks stores data locally by default in `~/.hasna/hooks/` and uses SQLite
-directly for hook event history. The package owns its database schema and
+Hook events (the rows `hooks log` shows) live on the registry: every run path
+POSTs them to `/api/v1/events` and every read comes back from there, so the
+history follows you between machines. The on-box SQLite store at
+`~/.hasna/hooks/` answers only under the deliberate `HASNA_HOOKS_LOCAL=1`
+(alias `HOOKS_LOCAL=1`) opt-in. The package owns its database schema and
 migrations; it does not depend on the deprecated shared runtime or its CLI.
-The repo includes its own PostgreSQL migration definitions for the optional
-`hooks storage push|pull|sync` commands. Use the `hooks log` commands to inspect
-local hook event data.
+The repo includes its own PostgreSQL migration definitions, used both by the
+server's event store and by the optional `hooks storage push|pull|sync`
+commands.
 
 ```bash
 hooks storage status --json

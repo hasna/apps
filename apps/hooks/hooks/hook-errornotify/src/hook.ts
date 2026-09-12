@@ -3,13 +3,15 @@
 /**
  * Claude Code Hook: errornotify
  *
- * PostToolUse hook that detects tool failures and logs errors to SQLite (~/.hooks/hooks.db).
+ * PostToolUse hook that detects tool failures and records them as hook
+ * events on the registry (POST /api/v1/events); the on-box SQLite store is
+ * used only under the deliberate HOOKS_LOCAL=1 opt-in.
  * Also writes warnings to stderr for immediate terminal visibility.
  * Never blocks — always outputs { continue: true }.
  */
 
 import { readFileSync } from "fs";
-import { writeHookEvent } from "../../../src/lib/db-writer";
+import { writeHookEventRouted } from "../../../src/lib/event-sink";
 
 interface HookInput {
   session_id: string;
@@ -116,7 +118,7 @@ function respond(): void {
   console.log(JSON.stringify(output));
 }
 
-export function run(): void {
+export async function run(): Promise<void> {
   const input = readStdinJson();
 
   if (!input) {
@@ -133,7 +135,7 @@ export function run(): void {
     process.stderr.write(`[hook-errornotify] FAILURE in ${toolContext}\n`);
     process.stderr.write(`[hook-errornotify] ${message}\n`);
 
-    writeHookEvent({
+    await writeHookEventRouted({
       session_id: input.session_id,
       hook_name: "errornotify",
       event_type: "PostToolUse",
@@ -148,5 +150,5 @@ export function run(): void {
 }
 
 if (import.meta.main) {
-  run();
+  await run();
 }

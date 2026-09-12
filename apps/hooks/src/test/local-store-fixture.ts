@@ -17,17 +17,10 @@
  * decision may have installed, so `getDb()` is reachable again.
  */
 import { allowLocalStore } from "../db/index.js";
+import { hooksAuthorityEnvKeys } from "../lib/local-opt-in.js";
 
 /** Every env name that configures a hooks authority/credential (the resolver's own set). */
-export const HOOKS_AUTHORITY_ENV_KEYS = [
-  "HASNA_HOOKS_API_URL",
-  "HOOKS_API_URL",
-  "HASNA_HOOKS_API_KEY",
-  "HOOKS_API_KEY",
-  "HASNA_HOOKS_API_KEY_OVERRIDE",
-  "HASNA_HOOKS_API_KEY_REF",
-  "HASNA_PROFILE",
-] as const;
+export const HOOKS_AUTHORITY_ENV_KEYS = hooksAuthorityEnvKeys();
 
 /**
  * Scrub authority variables, set the opt-in and keep the station's Keychain

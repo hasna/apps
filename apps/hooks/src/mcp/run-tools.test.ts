@@ -1,3 +1,4 @@
+import { enterLocalStoreRoute } from "../test/local-store-fixture.js";
 /**
  * Regression: MCP run tools (QA-4 bug 4d4c8f0b).
  *
@@ -18,16 +19,20 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createHooksServer } from "./server.js";
 import { closeDb } from "../db/index.js";
 import { setPinnedHook, sha256Of } from "../lib/store.js";
-import { enterLocalStoreRoute } from "../test/local-store-fixture.js";
 // Hermetic local route (see src/test/local-store-fixture.ts).
 let restoreRoute: () => void = () => {};
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-mcp-runtools-"));
 
+
 beforeAll(() => {
   closeDb();
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;
   process.env.HASNA_HOOKS_DB_PATH = join(TEST_DIR, "hooks.db");
+  // Hook events are hosted by default and the local opt-in is not a trump
+  // card: this suite asserts rows in the ON-BOX store, so it removes every
+  // authority variable as well (bun runs all files in one process and
+  // qa-regressions exports a live HASNA_HOOKS_API_KEY while it runs).
   process.env.HASNA_HOOKS_LOCK_PATH = join(TEST_DIR, "hooks.lock");
   restoreRoute = enterLocalStoreRoute();
 });

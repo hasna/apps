@@ -1,3 +1,4 @@
+import { enterLocalStoreRoute } from "../test/local-store-fixture.js";
 /**
  * Regression tests for P1-3 event-log redaction.
  *
@@ -14,7 +15,6 @@ import { tmpdir } from "os";
 import { runHook } from "../index.js";
 import { getDb, closeDb } from "../db/index.js";
 import { recordHookRun } from "./db-writer.js";
-import { enterLocalStoreRoute } from "../test/local-store-fixture.js";
 // Hermetic local route (see src/test/local-store-fixture.ts).
 let restoreRoute: () => void = () => {};
 import { redactEventPayload, projectEventRowForRead, redactText, redactValue } from "./redact.js";
@@ -35,6 +35,7 @@ const sentinel = {
   gho: (body: string) => `gh${"o_"}${body}`,
   aws: (body: string) => `AKIA${body}`,
 };
+
 
 beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;

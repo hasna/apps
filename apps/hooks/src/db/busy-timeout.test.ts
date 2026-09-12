@@ -1,3 +1,4 @@
+import { enterLocalStoreRoute, localStoreChildEnv } from "../test/local-store-fixture.js";
 /**
  * Regression: SQLITE_BUSY under concurrent hook runs (QA-4 bug 09094299:
  * 6/10 parallel runs failed at the default 0ms busy timeout). getDb must open
@@ -6,7 +7,6 @@
  */
 
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { enterLocalStoreRoute } from "../test/local-store-fixture.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -18,6 +18,7 @@ const DB_PATH = join(DATA_DIR, "hooks.db");
 const CLI = join(import.meta.dir, "..", "..", "src", "cli", "index.tsx");
 // Hermetic local route (see src/test/local-store-fixture.ts).
 let restoreRoute: () => void = () => {};
+
 
 beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = DATA_DIR;
@@ -64,12 +65,11 @@ describe("SQLITE_BUSY fix (QA-4 bug 09094299)", () => {
         stdin: new Response(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", command: "ls" })),
         stdout: "pipe",
         stderr: "pipe",
-        env: {
-          ...process.env,
+        env: localStoreChildEnv({
           HASNA_HOOKS_DATA_DIR: DATA_DIR,
           HASNA_HOOKS_DB_PATH: DB_PATH,
           NO_COLOR: "1",
-        },
+        }),
       }),
     );
     const results = await Promise.all(runs.map(async (p) => {

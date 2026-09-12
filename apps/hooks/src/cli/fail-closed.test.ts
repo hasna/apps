@@ -13,6 +13,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { unavailableEventServer } from "../test/unavailable-event-server.js";
 
 const CLI = join(import.meta.dir, "index.tsx");
 
@@ -59,8 +60,10 @@ function cleanEnv(sb: Sandbox): Record<string, string> {
 }
 
 const sandboxes: Sandbox[] = [];
+const eventServers: ReturnType<typeof unavailableEventServer>[] = [];
 
 afterEach(() => {
+  for (const endpoint of eventServers.splice(0)) endpoint.server.stop(true);
   const sb = sandboxes.pop();
   if (sb) rmSync(sb.root, { recursive: true, force: true });
 });
@@ -266,11 +269,13 @@ describe("hooks transport gate (fleet fail-closed)", () => {
     expect(row.n).toBe(1);
   });
 
-  test("`hooks run` on the hosted route executes the hook but REFUSES the local event write — no hooks.db", async () => {
+  test("`hooks run` reports unavailable hosted event storage without falling back to hooks.db", async () => {
     const sb = makeSandbox();
     sandboxes.push(sb);
     const env = cleanEnv(sb);
-    env.HASNA_HOOKS_API_URL = "https://api.hasna.com/hooks";
+    const endpoint = unavailableEventServer("gate-test-key");
+    eventServers.push(endpoint);
+    env.HASNA_HOOKS_API_URL = endpoint.url;
     env.HASNA_HOOKS_API_KEY = "gate-test-key";
     const proc = Bun.spawn(["bun", "run", CLI, "run", "gitguard"], {
       stdout: "pipe",
@@ -285,35 +290,36 @@ describe("hooks transport gate (fleet fail-closed)", () => {
     const exitCode = await proc.exited;
     expect(exitCode, stderr).toBe(0);
     expect(stdout).toContain("decision");
-    // Loud, once: the event log is local-only and the registry has no event route.
-    expect(stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
-    expect(stderr).toContain("HASNA_HOOKS_LOCAL=1");
+    expect(stderr).toContain("fixture event store unavailable");
+    expect(endpoint.requests).toEqual(["POST /api/v1/events"]);
     // The trust pin went to hooks.lock only; the SQLite store was never opened.
     expect(existsSync(join(sb.dataDir, "hooks.lock"))).toBe(true);
     expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
   });
 
-  test("`hooks log tail` on the hosted route refuses (REMOTE_COMMAND_UNSUPPORTED) instead of answering from an empty hooks.db", async () => {
+  test("hosted log reads report unavailable storage in text and JSON without opening hooks.db", async () => {
     const sb = makeSandbox();
     sandboxes.push(sb);
     const env = cleanEnv(sb);
-    env.HASNA_HOOKS_API_URL = "https://api.hasna.com/hooks";
+    const endpoint = unavailableEventServer("gate-test-key");
+    eventServers.push(endpoint);
+    env.HASNA_HOOKS_API_URL = endpoint.url;
     env.HASNA_HOOKS_API_KEY = "gate-test-key";
     const tail = await runCli(["log", "tail"], env);
     expect(tail.timedOut).toBe(false);
     expect(tail.exitCode).toBe(1);
-    expect(tail.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
-    expect(tail.stderr).toContain("HASNA_HOOKS_LOCAL=1");
+    expect(tail.stderr).toContain("fixture event store unavailable");
     expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
     // JSON callers get the same refusal as a JSON error, exit 1.
     const json = await runCli(["log", "list", "--json"], env);
     expect(json.exitCode).toBe(1);
-    expect(JSON.parse(json.stdout.trim()).error).toContain("REMOTE_COMMAND_UNSUPPORTED");
+    expect(JSON.parse(json.stdout.trim()).error).toContain("fixture event store unavailable");
     const status = await runCli(["storage", "status"], env);
     expect(status.exitCode).toBe(1);
     expect(status.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
     expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
-  });
+    expect(endpoint.requests).toEqual(["GET /api/v1/events", "GET /api/v1/events"]);
+  }, 20_000);
 
   test("a bare `hooks` with no TTY refuses cleanly under the opt-in instead of an Ink raw-mode crash", async () => {
     const sb = makeSandbox();

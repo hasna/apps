@@ -63,6 +63,7 @@ import {
   isHooksLocalOptIn,
 } from "../lib/local-opt-in.js";
 import { announceHooksLocalMode, resolveHooksTransport } from "../lib/transport.js";
+import { boundedRowLimit, buildEventFilter, normalizeSince, type HookEventQuery } from "../lib/event-types.js";
 import { refuseLocalStore } from "../db/index.js";
 
 const program = new Command();
@@ -122,8 +123,46 @@ function projectLogRows(rows: any[]): any[] {
 }
 
 /**
- * Open the on-box store for a LOCAL-ONLY verb (`hooks log *`, `hooks storage
- * *`), or exit 1 with the refusal. On the hosted route the CLI gate installed
+ * Hook events live on the registry (`/api/v1/events`). The on-box SQLite
+ * store answers ONLY under the deliberate local opt-in — the same decision
+ * every other hosted surface in this CLI takes.
+ */
+function hookEventsAreLocal(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !hasHooksEnvAuthorityIntent(env) && isHooksLocalOptIn(env);
+}
+
+/** Read hook events from wherever this environment's transport says they live. */
+async function readHookEventRows(query: HookEventQuery, json: boolean): Promise<any[]> {
+  try {
+    const limit = boundedRowLimit(query.limit, 50);
+    if (hookEventsAreLocal()) {
+      const { getDb } = await import("../db/index.js");
+      const db = getDb();
+      const { sql, params } = buildEventFilter(query);
+      return db
+        .query(`SELECT * FROM hook_events ${sql} ORDER BY timestamp DESC LIMIT ?`)
+        .all(...(params as any[]), limit) as any[];
+    }
+    const { listHookEvents } = await import("../lib/event-sink.js");
+    return (await listHookEvents({ ...query, limit })) as any[];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (json) console.log(JSON.stringify({ error: message }));
+    else console.error(chalk.red(`✗ ${message}`));
+    process.exit(1);
+  }
+}
+
+/** Where the rows shown by `hooks log` came from — printed so a reader is never guessing. */
+function hookEventSourceNote(): string {
+  return hookEventsAreLocal()
+    ? `local store (${getReportedDbPath()}) — HASNA_HOOKS_LOCAL is set`
+    : "the hosted registry (/api/v1/events)";
+}
+
+/**
+ * Open the on-box store for a LOCAL-ONLY verb (`hooks storage *`), or exit 1
+ * with the refusal. On the hosted route the CLI gate installed
  * `refuseLocalStore()`, so `getDb()` throws REMOTE_COMMAND_UNSUPPORTED naming
  * the opt-in; this turns that into one clean line (or a JSON error) instead
  * of an unhandled rejection. Never a value, never a silent empty result.
@@ -356,7 +395,10 @@ program
   .action(async (hook: string, options: { profile?: string }) => {
     const { resolveHook, resolveScriptPath } = await import("../lib/resolve.js");
     const { sha256Of, checkScriptHash } = await import("../lib/store.js");
-    const { recordHookRun, resolveEventType } = await import("../lib/db-writer.js");
+    // Hook events go to the registry (/api/v1/events); the on-box store is
+    // reachable only through the deliberate HASNA_HOOKS_LOCAL opt-in.
+    const { recordHookRunRouted } = await import("../lib/event-sink.js");
+    const { resolveEventType } = await import("../lib/event-types.js");
     const resolved = resolveHook(hook);
     if (!resolved) {
       console.error(JSON.stringify({ error: `Hook '${hook}' not found` }));
@@ -435,10 +477,9 @@ program
         // The timeout is itself an execution attempt — record it so the
         // audit trail is never empty (general reviewer P1-3).
         try {
-          const { recordHookRun, resolveEventType } = await import("../lib/db-writer.js");
           let inputJson: Record<string, any> = {};
           try { inputJson = JSON.parse(stdin); } catch {}
-          recordHookRun({
+          await recordHookRunRouted({
             hookName: hook,
             eventType: resolveEventType(inputJson.hook_event_name, resolved.events[0] ?? "PostToolUse"),
             version: resolved.version,
@@ -468,7 +509,7 @@ program
     let outputJson: Record<string, any> = {};
     try { outputJson = JSON.parse(stdout); } catch {}
     const blocked = outputJson.decision === "block" || outputJson.continue === false;
-    recordHookRun({
+    await recordHookRunRouted({
       hookName: hook,
       eventType: resolveEventType(inputJson.hook_event_name, resolved.events[0] ?? "PostToolUse"),
       version: resolved.version,
@@ -1656,10 +1697,10 @@ program
     }
   });
 
-// Log command group — query hook events from SQLite
+// Log command group — hook events, read from the hosted registry
 const logCmd = program
   .command("log")
-  .description(`Query hook event logs from SQLite (${getReportedDbPath()})`);
+  .description("Query hook event logs from the registry (/api/v1/events; the local store only under HASNA_HOOKS_LOCAL=1)");
 
 logCmd
   .command("list")
@@ -1669,18 +1710,8 @@ logCmd
   .option("-n, --limit <n>", "Number of rows to show", "50")
   .option("-j, --json", "Output as JSON", false)
   .action(async (options: { hook?: string; session?: string; limit: string; json: boolean }) => {
-    const db = await openLocalStoreOrExit(options.json);
     const limit = parseInt(options.limit) || 50;
-
-    let sql = "SELECT * FROM hook_events WHERE 1=1";
-    const params: string[] = [];
-
-    if (options.hook) { sql += " AND hook_name = ?"; params.push(options.hook); }
-    if (options.session) { sql += " AND session_id LIKE ?"; params.push(`${options.session}%`); }
-    sql += " ORDER BY timestamp DESC LIMIT ?";
-    params.push(String(limit));
-
-    const rows = db.query(sql).all(...params) as any[];
+    const rows = await readHookEventRows({ hook: options.hook, session: options.session, limit }, options.json);
     const projected = projectLogRows(rows);
 
     if (options.json) { console.log(JSON.stringify(projected, null, 2)); return; }
@@ -1693,7 +1724,7 @@ logCmd
       const tool = row.tool_name ? chalk.dim(` [${row.tool_name}]`) : "";
       console.log(`  ${chalk.dim(ts)}  ${chalk.cyan(row.hook_name.padEnd(14))}${tool}${err}`);
     }
-    console.log(chalk.dim("\n  Compact rows shown. Use --json for full event records or --limit <n> to change row count."));
+    console.log(chalk.dim(`\n  Compact rows from ${hookEventSourceNote()}. Use --json for full event records or --limit <n> to change row count.`));
   });
 
 logCmd
@@ -1702,12 +1733,8 @@ logCmd
   .option("-n, --limit <n>", "Number of rows to show", "50")
   .option("-j, --json", "Output as JSON", false)
   .action(async (text: string, options: { limit: string; json: boolean }) => {
-    const db = await openLocalStoreOrExit(options.json);
     const limit = parseInt(options.limit) || 50;
-    const q = `%${text}%`;
-    const rows = db.query(
-      "SELECT * FROM hook_events WHERE tool_input LIKE ? OR error LIKE ? ORDER BY timestamp DESC LIMIT ?"
-    ).all(q, q, limit) as any[];
+    const rows = await readHookEventRows({ search: text, limit }, options.json);
     const projected = projectLogRows(rows);
 
     if (options.json) { console.log(JSON.stringify(projected, null, 2)); return; }
@@ -1719,7 +1746,7 @@ logCmd
       const snippet = truncateText(row.tool_input || row.error || "", 80);
       console.log(`  ${chalk.dim(ts)}  ${chalk.cyan(row.hook_name.padEnd(14))}  ${chalk.dim(snippet)}`);
     }
-    console.log(chalk.dim("\n  Compact rows shown. Use --json for full event records or --limit <n> to change row count."));
+    console.log(chalk.dim(`\n  Compact rows from ${hookEventSourceNote()}. Use --json for full event records or --limit <n> to change row count.`));
   });
 
 logCmd
@@ -1728,11 +1755,8 @@ logCmd
   .option("-n <n>", "Number of rows", "20")
   .option("-j, --json", "Output as JSON", false)
   .action(async (options: { n: string; json: boolean }) => {
-    const db = await openLocalStoreOrExit(options.json);
     const limit = parseInt(options.n) || 20;
-    const rows = db.query(
-      "SELECT * FROM hook_events ORDER BY timestamp DESC LIMIT ?"
-    ).all(limit) as any[];
+    const rows = await readHookEventRows({ limit }, options.json);
     const projected = projectLogRows(rows);
 
     if (options.json) { console.log(JSON.stringify(projected, null, 2)); return; }
@@ -1745,7 +1769,7 @@ logCmd
       const tool = row.tool_name ? chalk.dim(` [${row.tool_name}]`) : "";
       console.log(`  ${chalk.dim(ts)}  ${chalk.cyan(row.hook_name.padEnd(14))}${tool}${err}`);
     }
-    console.log(chalk.dim("\n  Compact rows shown. Use --json for full event records or -n <n> to change row count."));
+    console.log(chalk.dim(`\n  Compact rows from ${hookEventSourceNote()}. Use --json for full event records or -n <n> to change row count.`));
   });
 
 logCmd
@@ -1755,27 +1779,11 @@ logCmd
   .option("-n, --limit <n>", "Number of rows to show", "50")
   .option("-j, --json", "Output as JSON", false)
   .action(async (options: { since: string; limit: string; json: boolean }) => {
-    const db = await openLocalStoreOrExit(options.json);
     const limit = parseInt(options.limit) || 50;
-
-    // Parse duration string to milliseconds
-    function parseDuration(s: string): number {
-      const m = s.match(/^(\d+)(s|m|h|d)$/);
-      if (!m) return 24 * 60 * 60 * 1000;
-      const n = parseInt(m[1]);
-      switch (m[2]) {
-        case "s": return n * 1000;
-        case "m": return n * 60 * 1000;
-        case "h": return n * 60 * 60 * 1000;
-        case "d": return n * 24 * 60 * 60 * 1000;
-        default: return 24 * 60 * 60 * 1000;
-      }
-    }
-
-    const since = new Date(Date.now() - parseDuration(options.since)).toISOString();
-    const rows = db.query(
-      "SELECT * FROM hook_events WHERE error IS NOT NULL AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?"
-    ).all(since, limit) as any[];
+    // An unparseable --since keeps the documented 24h default rather than
+    // silently widening the window to all time.
+    const since = normalizeSince(options.since) ?? normalizeSince("24h")!;
+    const rows = await readHookEventRows({ errorsOnly: true, since, limit }, options.json);
     const projected = projectLogRows(rows);
 
     if (options.json) { console.log(JSON.stringify(projected, null, 2)); return; }
@@ -1786,7 +1794,7 @@ logCmd
       const ts = row.timestamp.slice(0, 19).replace("T", " ");
       console.log(`  ${chalk.dim(ts)}  ${chalk.cyan(row.hook_name.padEnd(14))}  ${chalk.red(truncateText(row.error, 100))}`);
     }
-    console.log(chalk.dim("\n  Compact rows shown. Use --json for full event records or --limit <n> to change row count."));
+    console.log(chalk.dim(`\n  Compact rows from ${hookEventSourceNote()}. Use --json for full event records or --limit <n> to change row count.`));
   });
 
 logCmd
@@ -1795,29 +1803,47 @@ logCmd
   .option("--hook <name>", "Only delete events for this hook")
   .option("-y, --yes", "Skip confirmation prompt", false)
   .action(async (options: { hook?: string; yes: boolean }) => {
-    const db = await openLocalStoreOrExit(false);
+    const local = hookEventsAreLocal();
 
-    const countRow = options.hook
-      ? db.query("SELECT COUNT(*) as n FROM hook_events WHERE hook_name = ?").get(options.hook) as any
-      : db.query("SELECT COUNT(*) as n FROM hook_events").get() as any;
-    const count = countRow?.n ?? 0;
+    // The confirmation prompt must say how many rows are about to go, so the
+    // count comes from the same store the delete will hit.
+    let count: number;
+    if (local) {
+      const { getDb } = await import("../db/index.js");
+      const db = getDb();
+      const countRow = options.hook
+        ? (db.query("SELECT COUNT(*) as n FROM hook_events WHERE hook_name = ?").get(options.hook) as any)
+        : (db.query("SELECT COUNT(*) as n FROM hook_events").get() as any);
+      count = countRow?.n ?? 0;
+    } else {
+      const { hookEventSummary } = await import("../lib/event-sink.js");
+      const summary = await hookEventSummary(null);
+      count = options.hook
+        ? (summary.hooks.find((row) => row.hook_name === options.hook)?.total ?? 0)
+        : summary.totals.events;
+    }
 
     if (count === 0) { console.log(chalk.dim("Nothing to clear.")); return; }
 
     if (!options.yes) {
       const scope = options.hook ? `hook "${options.hook}"` : "all hooks";
-      console.log(chalk.yellow(`About to delete ${count} event(s) for ${scope}.`));
+      console.log(chalk.yellow(`About to delete ${count} event(s) for ${scope} from ${hookEventSourceNote()}.`));
       console.log(chalk.dim("Re-run with --yes to confirm."));
       return;
     }
 
-    if (options.hook) {
-      db.run("DELETE FROM hook_events WHERE hook_name = ?", [options.hook]);
+    let deleted = count;
+    if (local) {
+      const { getDb } = await import("../db/index.js");
+      const db = getDb();
+      if (options.hook) db.run("DELETE FROM hook_events WHERE hook_name = ?", [options.hook]);
+      else db.run("DELETE FROM hook_events");
     } else {
-      db.run("DELETE FROM hook_events");
+      const { deleteHookEvents } = await import("../lib/event-sink.js");
+      deleted = await deleteHookEvents({ hook: options.hook });
     }
 
-    console.log(chalk.green(`✓ Cleared ${count} event(s).`));
+    console.log(chalk.green(`✓ Cleared ${deleted} event(s).`));
   });
 
 const storageCmd = program

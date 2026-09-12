@@ -18,6 +18,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { Client } from "@modelcontextprotocol/sdk/client";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { unavailableEventServer } from "../test/unavailable-event-server.js";
 
 const BIN = join(import.meta.dir, "hooks-mcp.ts");
 
@@ -34,7 +35,9 @@ const TRANSPORT_ENV_KEYS = [
 ];
 
 const roots: string[] = [];
+const eventServers: ReturnType<typeof unavailableEventServer>[] = [];
 afterEach(() => {
+  for (const endpoint of eventServers.splice(0)) endpoint.server.stop(true);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -103,16 +106,18 @@ describe("hooks-mcp decides authority before the transport connects", () => {
     expect(session.stderr()).toContain("hooks: LOCAL mode");
   }, 30_000);
 
-  test("hosted route (strict env pair): serves, but local-only tools refuse and hooks.db is never created", async () => {
+  test("hosted route: unavailable event reads and local-only tools refuse without creating hooks.db", async () => {
     const { env, dataDir } = sandboxEnv();
-    env.HASNA_HOOKS_API_URL = "https://api.hasna.com/hooks";
+    const endpoint = unavailableEventServer("mcp-authority-test-placeholder-key");
+    eventServers.push(endpoint);
+    env.HASNA_HOOKS_API_URL = endpoint.url;
     env.HASNA_HOOKS_API_KEY = "mcp-authority-test-placeholder-key";
     const session = await connect(env);
     try {
       const tail: any = await session.client.callTool({ name: "hooks_log_tail", arguments: { n: 5 } });
       expect(tail.isError).toBe(true);
-      expect(tail.content[0].text).toContain("REMOTE_COMMAND_UNSUPPORTED");
-      expect(tail.content[0].text).toContain("HASNA_HOOKS_LOCAL=1");
+      expect(tail.content[0].text).toContain("fixture event store unavailable");
+      expect(endpoint.requests).toEqual(["GET /api/v1/events"]);
       const status: any = await session.client.callTool({ name: "storage_status", arguments: {} });
       expect(status.isError).toBe(true);
       expect(status.content[0].text).toContain("REMOTE_COMMAND_UNSUPPORTED");

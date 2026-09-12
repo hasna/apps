@@ -194,8 +194,11 @@ export async function runHook(name: string, input: HookInput, options: RunHookOp
   } catch (err) {
     if (err instanceof HookTimeoutError) {
       try {
-        const { recordHookRun, resolveEventType } = await import("./lib/db-writer.js");
-        recordHookRun({
+        // Hosted by default: the event goes to /api/v1/events, and only the
+        // deliberate HASNA_HOOKS_LOCAL opt-in routes it to the on-box store.
+        const { recordHookRunRouted } = await import("./lib/event-sink.js");
+        const { resolveEventType } = await import("./lib/event-types.js");
+        await recordHookRunRouted({
           hookName: name,
           eventType: resolveEventType(input.hook_event_name, custom?.manifest.events[0] ?? "PostToolUse"),
           version: custom?.manifest.version,
@@ -218,13 +221,14 @@ export async function runHook(name: string, input: HookInput, options: RunHookOp
   const durationMs = Date.now() - started;
 
   // Every SDK run lands in hook_events so `hooks log` is never empty after a
-  // real fire (bug ef58dcb7).
+  // real fire (bug ef58dcb7) — on the registry, not in a local file.
   try {
-    const { recordHookRun, resolveEventType } = await import("./lib/db-writer.js");
+    const { recordHookRunRouted } = await import("./lib/event-sink.js");
+    const { resolveEventType } = await import("./lib/event-types.js");
     let outputJson: HookOutput = {};
     try { outputJson = JSON.parse(stdoutText); } catch {}
     const blocked = outputJson.decision === "block" || outputJson.continue === false;
-    recordHookRun({
+    await recordHookRunRouted({
       hookName: name,
       eventType: resolveEventType(input.hook_event_name, custom?.manifest.events[0] ?? "PostToolUse"),
       version: custom?.manifest.version,
@@ -379,7 +383,41 @@ export {
   startServeServer,
   DEFAULT_SERVE_PORT,
 } from "./serve.js";
-export type { CatalogEntry, ArtifactPayload } from "./serve.js";
+export type { CatalogEntry, ArtifactPayload, ServeDeps } from "./serve.js";
+
+// ── Hook events (the hosted /api/v1/events family) ───────────────────────────
+
+export {
+  deleteHookEvents,
+  eventsUrl,
+  hookEventSummary,
+  listHookEvents,
+  postFeedback,
+  postHookEvents,
+  projectEventForTransport,
+  recordHookRunRouted,
+  usesLocalHookStore,
+  writeHookEventRouted,
+  type EventClientOptions,
+} from "./lib/event-sink.js";
+export {
+  boundedRowLimit,
+  buildEventFilter,
+  HOOK_EVENT_TYPES,
+  MAX_EVENT_ROWS,
+  normalizeEventType,
+  normalizeSince,
+  resolveEventType,
+} from "./lib/event-types.js";
+export type {
+  FeedbackInput,
+  HookEventInput,
+  HookEventQuery,
+  HookEventRecord,
+  HookEventSummary,
+  HookEventSummaryRow,
+  HookEventType,
+} from "./lib/event-types.js";
 
 export {
   provisionCloudflareResources,
