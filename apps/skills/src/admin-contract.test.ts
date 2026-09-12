@@ -36,6 +36,11 @@ describe("skills admin API contract", () => {
       expect(operation.path).toStartWith("/api/v1/");
       expect(operation.successStatuses.length).toBeGreaterThan(0);
       expect(operation.errorStatuses).toContain(401);
+      // Identifier inputs can fail validation before resource lookup.
+      const takesIdentifier = operation.path.includes(":id") ||
+        operation.querySchema.safeParse({ organizationId: "00000000-0000-4000-8000-000000000001" }).success;
+      if (takesIdentifier) expect(operation.errorStatuses).toContain(400);
+      if (operation.path.includes(":id")) expect(operation.errorStatuses).toContain(404);
       expect(operation.additiveResponseFields).toBe(SKILLS_ADMIN_ADDITIVE_RESPONSE_FIELDS);
     }
   });
