@@ -14,8 +14,99 @@ var __export = (target, all) => {
     });
 };
 
-// src/client/transport.ts
-import { isIP } from "net";
+// src/client/errors.ts
+var CLIENT_RESOLUTION_CODES = [
+  "CREDENTIAL_ABSENT",
+  "CREDENTIAL_UNREADABLE",
+  "CREDENTIAL_REJECTED",
+  "AUTHORITY_MISSING",
+  "AUTHORITY_INVALID",
+  "AUTHORITY_CONFLICT",
+  "LOCAL_OPT_IN_CONFLICT",
+  "TRANSPORT_UNAVAILABLE",
+  "NOT_AVAILABLE_HOSTED"
+];
+var CLIENT_RESOLUTION_EXIT_CODES = Object.freeze({
+  CREDENTIAL_ABSENT: 2,
+  CREDENTIAL_UNREADABLE: 3,
+  CREDENTIAL_REJECTED: 4,
+  AUTHORITY_MISSING: 5,
+  AUTHORITY_INVALID: 5,
+  AUTHORITY_CONFLICT: 5,
+  LOCAL_OPT_IN_CONFLICT: 6,
+  TRANSPORT_UNAVAILABLE: 7,
+  NOT_AVAILABLE_HOSTED: 8
+});
+var CLIENT_RESOLUTION_CODE_DESCRIPTIONS = Object.freeze({
+  CREDENTIAL_ABSENT: "no credential in the Keychain, the credentials file, or the environment, and the local opt-in is off",
+  CREDENTIAL_UNREADABLE: "a credential source exists but cannot be read or holds an unusable value",
+  CREDENTIAL_REJECTED: "the authority rejected the presented credential (401/403)",
+  AUTHORITY_MISSING: "no service authority is configured and the fleet gateway default cannot be composed",
+  AUTHORITY_INVALID: "a declared service authority is not a usable HTTPS URL",
+  AUTHORITY_CONFLICT: "configured service authorities disagree or changed during a request",
+  LOCAL_OPT_IN_CONFLICT: "the local opt-in and hosted client configuration were both declared",
+  TRANSPORT_UNAVAILABLE: "the service authority could not be reached",
+  NOT_AVAILABLE_HOSTED: "the command is server-only and has no hosted client path"
+});
+function isClientResolutionCode(value) {
+  return typeof value === "string" && CLIENT_RESOLUTION_CODES.includes(value);
+}
+function exitCodeForClientResolutionCode(code) {
+  return CLIENT_RESOLUTION_EXIT_CODES[code];
+}
+
+class ClientResolutionError extends Error {
+  code;
+  exitCode;
+  app;
+  sources;
+  remedy;
+  constructor(code, app, message, options = {}) {
+    super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
+    if (!isClientResolutionCode(code)) {
+      throw new TypeError(`Unknown client resolution code: ${String(code)}`);
+    }
+    this.name = "ClientResolutionError";
+    this.code = code;
+    this.exitCode = CLIENT_RESOLUTION_EXIT_CODES[code];
+    this.app = app;
+    this.sources = Object.freeze([...options.sources ?? []]);
+    this.remedy = options.remedy ?? null;
+  }
+  toJSON() {
+    return {
+      name: this.name,
+      code: this.code,
+      exitCode: this.exitCode,
+      app: this.app,
+      message: this.message,
+      sources: [...this.sources],
+      remedy: this.remedy
+    };
+  }
+}
+function isClientResolutionError(value) {
+  return value instanceof ClientResolutionError;
+}
+function clientResolutionCodeOf(error) {
+  if (!error || typeof error !== "object")
+    return null;
+  const code = error.code;
+  return isClientResolutionCode(code) ? code : null;
+}
+function clientResolutionExitCode(error, fallback = 1) {
+  const code = clientResolutionCodeOf(error);
+  return code ? CLIENT_RESOLUTION_EXIT_CODES[code] : fallback;
+}
+function formatClientResolutionFailure(error, options = {}) {
+  const app = options.app ?? error.app ?? "client";
+  if (options.json) {
+    return JSON.stringify({ ...error.toJSON(), app });
+  }
+  const oneLine = (text) => text.replace(/\s*\n\s*/g, " ").trim();
+  const remedy = error.remedy ? ` ${oneLine(error.remedy)}` : "";
+  return `${app}: ${error.code}: ${oneLine(error.message)}${remedy}`;
+}
 
 // src/env-token.ts
 function envToken(name) {
@@ -38,83 +129,250 @@ function credentialPointerEnvKey(name) {
   return `HASNA_${envToken(name)}_API_KEY_REF`;
 }
 
+// src/client/local-opt-in.ts
+function localOptInEnvKey(name) {
+  return `HASNA_${envToken(name)}_LOCAL`;
+}
+function localOptInAliasEnvKey(name) {
+  return `${envToken(name)}_LOCAL`;
+}
+var LOCAL_OPT_IN_TRUE_VALUES = ["1", "true", "yes"];
+var LOCAL_OPT_IN_FALSE_VALUES = ["", "0", "false", "no"];
+function hostedClientEnvKeys(name) {
+  const keys = clientTransportEnvKeys(name);
+  return [
+    ...keys.apiUrlKeys,
+    ...keys.apiKeyKeys,
+    credentialOverrideEnvKey(name),
+    credentialPointerEnvKey(name),
+    CREDENTIAL_PROFILE_ENV_KEY
+  ];
+}
+function ownStringValue(env, key) {
+  if (!Object.prototype.hasOwnProperty.call(env, key))
+    return;
+  const descriptor = Object.getOwnPropertyDescriptor(env, key);
+  if (!descriptor || !("value" in descriptor))
+    return;
+  const value = descriptor.value;
+  return typeof value === "string" ? value : undefined;
+}
+function flagState(raw) {
+  if (raw === undefined)
+    return "unset";
+  const normalized = raw.trim().toLowerCase();
+  if (LOCAL_OPT_IN_TRUE_VALUES.includes(normalized))
+    return "on";
+  if (LOCAL_OPT_IN_FALSE_VALUES.includes(normalized))
+    return "off";
+  return "unrecognized";
+}
+function describeLocalOptIn(name, env = process.env) {
+  const envKey = localOptInEnvKey(name);
+  const aliasKey = localOptInAliasEnvKey(name);
+  const canonical = flagState(ownStringValue(env, envKey));
+  const alias = flagState(ownStringValue(env, aliasKey));
+  const recognized = canonical !== "unrecognized" && alias !== "unrecognized";
+  let on = false;
+  let source = null;
+  const conflicts = [];
+  if (canonical === "on") {
+    on = true;
+    source = envKey;
+    if (alias === "off")
+      conflicts.push(aliasKey);
+  } else if (canonical === "off") {
+    if (alias === "on")
+      conflicts.push(aliasKey);
+  } else if (alias === "on") {
+    on = true;
+    source = aliasKey;
+  }
+  if (on) {
+    for (const key of hostedClientEnvKeys(name)) {
+      if (ownStringValue(env, key) !== undefined)
+        conflicts.push(key);
+    }
+  }
+  const state = conflicts.length > 0 ? "conflict" : on ? "on" : "off";
+  return { state, envKey, source, conflicts, recognized };
+}
+function selectsLocalStore(name, env = process.env) {
+  const described = describeLocalOptIn(name, env);
+  if (described.state === "conflict") {
+    throw new ClientResolutionError("LOCAL_OPT_IN_CONFLICT", name, `${described.source ?? described.envKey} selects the on-box store for '${name}', but ${described.conflicts.join(", ")} ` + `${described.conflicts.length === 1 ? "is" : "are"} also declared; a process runs against exactly one store.`, {
+      sources: [described.source ?? described.envKey, ...described.conflicts],
+      remedy: `Unset ${described.envKey} to use the hosted service, or unset the hosted keys to use the on-box store.`
+    });
+  }
+  return described.state === "on";
+}
+function localStoreNotice(name, storePath) {
+  return `local mode (${localOptInEnvKey(name)}=1): on-box store ${storePath}; hosted data is NOT visible`;
+}
+
+// src/client/app-home.ts
+import { isAbsolute, join } from "path";
+var APP_HOME_SCOPES = ["public", "internal"];
+var HASNA_HOME_ENV_KEY = "HASNA_HOME";
+var HASNA_CONFIG_HOME_ENV_KEY = "HASNA_CONFIG_HOME";
+var HASNA_DATA_HOME_ENV_KEY = "HASNA_DATA_HOME";
+var HASNA_STATE_HOME_ENV_KEY = "HASNA_STATE_HOME";
+var HASNA_CACHE_HOME_ENV_KEY = "HASNA_CACHE_HOME";
+var APP_HOME_ENV_KEYS = [
+  HASNA_HOME_ENV_KEY,
+  HASNA_CONFIG_HOME_ENV_KEY,
+  HASNA_DATA_HOME_ENV_KEY,
+  HASNA_STATE_HOME_ENV_KEY,
+  HASNA_CACHE_HOME_ENV_KEY
+];
+var PUBLIC_HOME_DIR_NAME = ".hasna";
+var INTERNAL_SCOPE_SUFFIX = "internal";
+var INTERNAL_HOME_DIR_NAME = [PUBLIC_HOME_DIR_NAME, INTERNAL_SCOPE_SUFFIX].join("-");
+var INTERNAL_PACKAGE_SCOPE_PREFIX = ["@hasna", `${INTERNAL_SCOPE_SUFFIX}/`].join("-");
+var APP_CONFIG_SUBDIR = "config";
+var APP_STATE_SUBDIR = "state";
+var APP_CACHE_SUBDIR = "cache";
+var APP_CREDENTIALS_FILE = "credentials";
+var APP_HOME_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+function appScopeForPackageName(packageName) {
+  if (packageName.startsWith("@hasna/"))
+    return "public";
+  if (packageName.startsWith(INTERNAL_PACKAGE_SCOPE_PREFIX))
+    return "internal";
+  return null;
+}
+function scopeHomeDirName(scope) {
+  return scope === "internal" ? INTERNAL_HOME_DIR_NAME : PUBLIC_HOME_DIR_NAME;
+}
+
+class AppHomeUnresolvableError extends Error {
+  appName;
+  constructor(appName, message) {
+    super(message);
+    this.name = "AppHomeUnresolvableError";
+    this.appName = appName;
+  }
+}
+function absoluteOverride(env, key) {
+  const value = env[key]?.trim();
+  return value && isAbsolute(value) ? value : null;
+}
+function homeDir(env) {
+  const home = env.HOME?.trim();
+  return home ? home : null;
+}
+function resolveAppHome(name, env = process.env, options = {}) {
+  if (!APP_HOME_SLUG_PATTERN.test(name)) {
+    throw new AppHomeUnresolvableError(name, `App name '${name}' is not a safe path segment; use a lowercase dashed slug.`);
+  }
+  const scope = options.scope ?? "public";
+  const rootOverride = absoluteOverride(env, HASNA_HOME_ENV_KEY);
+  const home = homeDir(env);
+  const root = rootOverride ?? (home ? join(home, scopeHomeDirName(scope)) : null);
+  if (!root)
+    return null;
+  const appHome = join(root, name);
+  const layer = (key, fallback) => {
+    const override = absoluteOverride(env, key);
+    return override ? { path: join(override, name), source: key } : { path: fallback, source: "home" };
+  };
+  const config = layer(HASNA_CONFIG_HOME_ENV_KEY, join(appHome, APP_CONFIG_SUBDIR));
+  const data = layer(HASNA_DATA_HOME_ENV_KEY, appHome);
+  const state = layer(HASNA_STATE_HOME_ENV_KEY, join(appHome, APP_STATE_SUBDIR));
+  const cache = layer(HASNA_CACHE_HOME_ENV_KEY, join(appHome, APP_CACHE_SUBDIR));
+  return Object.freeze({
+    name,
+    scope,
+    root,
+    home: appHome,
+    config: config.path,
+    credentials: join(config.path, APP_CREDENTIALS_FILE),
+    data: data.path,
+    state: state.path,
+    cache: cache.path,
+    localDb: join(data.path, `${name}.db`),
+    sources: Object.freeze({
+      root: rootOverride ? HASNA_HOME_ENV_KEY : "HOME",
+      config: config.source,
+      data: data.source,
+      state: state.source,
+      cache: cache.source
+    })
+  });
+}
+function appPaths(name, env = process.env, options = {}) {
+  const resolved = resolveAppHome(name, env, options);
+  if (!resolved) {
+    throw new AppHomeUnresolvableError(name, `No HOME or ${HASNA_HOME_ENV_KEY} in this environment, so no home can be resolved for '${name}'.`);
+  }
+  return resolved;
+}
+
+// src/client/transport.ts
+import { isIP } from "net";
+
 // src/client/credentials.ts
 import { spawnSync } from "child_process";
 import { closeSync, fstatSync, openSync, readFileSync } from "fs";
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "constants";
 import { createRequire } from "module";
 import { hostname as osHostname } from "os";
-import { isAbsolute, join } from "path";
-class CredentialResolutionError extends Error {
+import { join as join2 } from "path";
+class CredentialResolutionError extends ClientResolutionError {
   appName;
   attempted;
-  constructor(appName, message, attempted) {
-    super(message);
+  constructor(appName, message, attempted, code = "CREDENTIAL_UNREADABLE", remedy = null) {
+    super(code, appName, message, { sources: attempted, remedy });
     this.name = "CredentialResolutionError";
     this.appName = appName;
     this.attempted = attempted;
   }
 }
 
-class CredentialFileUnsafeError extends Error {
+class CredentialFileUnsafeError extends ClientResolutionError {
   path;
   constructor(path, reason) {
-    super(`Refusing unsafe credential/config file ${path}: ${reason}.`);
+    super("CREDENTIAL_UNREADABLE", null, `Refusing unsafe credential/config file ${path}: ${reason}.`, {
+      sources: [path],
+      remedy: "Make the file a regular, current-user-owned file with mode 0600 (or 0400), or delete it."
+    });
     this.name = "CredentialFileUnsafeError";
     this.path = path;
   }
 }
-var HASNA_HOME_ENV_KEY = "HASNA_HOME";
-var HASNA_CONFIG_HOME_ENV_KEY = "HASNA_CONFIG_HOME";
 var KEYCHAIN_STATION_ENV_KEY = "HASNA_STATION";
-var HASNA_HOME_DIR = ".hasna";
-var CONFIG_SUBDIR = "config";
 var CREDENTIALS_FILE = "credentials";
 var KEYCHAIN_SECURITY_BIN = "/usr/bin/security";
 var KEYCHAIN_SERVICE_PREFIX = "hasna.credentials";
 var KEYCHAIN_ITEM_NOT_FOUND_STATUS = 44;
+function keychainCredentialServiceName(name) {
+  return `${KEYCHAIN_SERVICE_PREFIX}.${name}.api-key`;
+}
 var KEYCHAIN_SPAWN_TIMEOUT_MS = 1e4;
 var MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
-var SAFE_APP_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+var SAFE_APP_SLUG = APP_HOME_SLUG_PATTERN;
 var SAFE_PROFILE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 var ILLEGAL_IN_HEADER_VALUE = /[^\t\x20-\x7e]/;
 var VAULT_POINTER_SHAPE = /^[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-_.]*){2,}$/;
-function homeDir(env) {
-  const home = env.HOME?.trim();
-  return home ? home : null;
+function appConfigDir(name, env, scope) {
+  const home = resolveAppHome(name, env, { scope });
+  return home ? home.config : null;
 }
-function absoluteOverride(env, key) {
-  const value = env[key]?.trim();
-  return value && isAbsolute(value) ? value : null;
-}
-function hasnaHomeDir(env) {
-  const override = absoluteOverride(env, HASNA_HOME_ENV_KEY);
-  if (override)
-    return override;
-  const home = homeDir(env);
-  return home ? join(home, HASNA_HOME_DIR) : null;
-}
-function appConfigDir(name, env) {
-  const configRoot = absoluteOverride(env, HASNA_CONFIG_HOME_ENV_KEY);
-  if (configRoot)
-    return join(configRoot, name);
-  const root = hasnaHomeDir(env);
-  return root ? join(root, name, CONFIG_SUBDIR) : null;
-}
-function credentialDiskSourceList(name, env, profile = null) {
+function credentialDiskSourceList(name, env, profile = null, scope = "public") {
   if (!SAFE_APP_SLUG.test(name))
     return [];
-  const directory = appConfigDir(name, env);
+  const directory = appConfigDir(name, env, scope);
   if (!directory)
     return [];
   const file = profile ? `${CREDENTIALS_FILE}-${profile}` : CREDENTIALS_FILE;
-  return [{ path: join(directory, file), tier: "disk" }];
+  return [{ path: join2(directory, file), tier: "disk" }];
 }
-function credentialDiskSources(name, env) {
-  return credentialDiskSourceList(name, env, null).map((s) => s.path);
+function credentialDiskSources(name, env, scope = "public") {
+  return credentialDiskSourceList(name, env, null, scope).map((s) => s.path);
 }
-function profileDiskSources(name, env, profile) {
-  return credentialDiskSourceList(name, env, profile).map((s) => s.path);
+function profileDiskSources(name, env, profile, scope) {
+  return credentialDiskSourceList(name, env, profile, scope).map((s) => s.path);
 }
 function parseEnvFile(text) {
   const values = new Map;
@@ -210,11 +468,11 @@ function readCredentialFile(path, apiKeyKeys) {
   return values[0] ?? null;
 }
 var CREDENTIAL_SHAPED_KEY = /(?:^|_)(?:API_KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)(?:_|$)/;
-function appConfigDiskValue(name, env, keys) {
+function appConfigDiskValue(name, env, keys, scope = "public") {
   const wanted = keys.filter((key) => !CREDENTIAL_SHAPED_KEY.test(key));
   if (wanted.length === 0)
     return null;
-  for (const path of credentialDiskSources(name, env)) {
+  for (const path of credentialDiskSources(name, env, scope)) {
     const parsed = readAppConfigFile(path);
     if (!parsed)
       continue;
@@ -409,9 +667,14 @@ function snapshotClientEnvironment(name, env) {
     credentialOverrideEnvKey(name),
     credentialPointerEnvKey(name),
     CREDENTIAL_PROFILE_ENV_KEY,
+    localOptInEnvKey(name),
+    localOptInAliasEnvKey(name),
     "HOME",
     HASNA_HOME_ENV_KEY,
     HASNA_CONFIG_HOME_ENV_KEY,
+    HASNA_DATA_HOME_ENV_KEY,
+    HASNA_STATE_HOME_ENV_KEY,
+    HASNA_CACHE_HOME_ENV_KEY,
     KEYCHAIN_STATION_ENV_KEY,
     "USER"
   ]) {
@@ -439,7 +702,8 @@ function snapshotClientEnvironment(name, env) {
 function resolveCredential(name, env, options = {}) {
   env = snapshotClientEnvironment(name, env);
   const { apiKeyKeys } = clientTransportEnvKeys(name);
-  const diskPaths = credentialDiskSources(name, env);
+  const scope = options.scope ?? "public";
+  const diskPaths = credentialDiskSources(name, env, scope);
   if (options.apiKey !== undefined) {
     const explicitKey = options.apiKey.trim();
     if (!explicitKey) {
@@ -505,7 +769,7 @@ function resolveCredential(name, env, options = {}) {
     if (!SAFE_PROFILE.test(profile)) {
       throw new CredentialResolutionError(name, `Profile name from ${profileSource} is not usable in a path. ` + `Use letters, digits, dot, dash, or underscore.`, [profileSource]);
     }
-    const paths = profileDiskSources(name, env, profile);
+    const paths = profileDiskSources(name, env, profile, scope);
     for (const path of paths) {
       const value = readCredentialFile(path, apiKeyKeys);
       if (value) {
@@ -544,7 +808,7 @@ function resolveCredential(name, env, options = {}) {
       warning
     });
   }
-  const diskSourceList = credentialDiskSourceList(name, env, null);
+  const diskSourceList = credentialDiskSourceList(name, env, null, scope);
   const diskHits = diskSourceList.map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys) })).filter((hit) => hit.value !== null);
   if (diskHits.length > 0) {
     const winner = diskHits[0];
@@ -801,18 +1065,24 @@ function toV1BaseUrl(apiUrl) {
 }
 var CLIENT_TRANSPORTS = ["http"];
 
-class ClientTransportConfigurationError extends Error {
+class ClientTransportConfigurationError extends ClientResolutionError {
   appName;
-  sources;
-  constructor(appName, message, sources = []) {
-    super(message);
+  constructor(appName, message, sources = [], code = "AUTHORITY_INVALID", remedy = null) {
+    super(code, appName, message, { sources, remedy });
     this.name = "ClientTransportConfigurationError";
     this.appName = appName;
-    this.sources = Object.freeze([...sources]);
   }
 }
-function resolveClientTransportSnapshot(name, env = process.env, options = {}) {
-  env = snapshotClientEnvironment(name, env);
+function assertHostedClientAllowed(name, env) {
+  if (selectsLocalStore(name, env)) {
+    const key = localOptInEnvKey(name);
+    throw new ClientResolutionError("LOCAL_OPT_IN_CONFLICT", name, `${key} selects the on-box store for '${name}', but a hosted client was requested; a process runs against exactly one store.`, {
+      sources: [key],
+      remedy: `Decide the store with selectsLocalStore('${name}', env) before building a hosted client, or unset ${key}.`
+    });
+  }
+}
+function resolveConfiguredAuthority(name, env, options) {
   const keys = clientTransportEnvKeys(name);
   const definedUrlEntries = keys.apiUrlKeys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, raw: String(env[key]) }));
   const blankUrl = definedUrlEntries.find((entry) => entry.raw.trim().length === 0);
@@ -825,11 +1095,11 @@ function resolveClientTransportSnapshot(name, env = process.env, options = {}) {
   }
   const usableUrlEntries = definedUrlEntries.map((entry) => ({ key: entry.key, value: entry.raw.trim() }));
   if (usableUrlEntries.length > 1 && new Set(usableUrlEntries.map((entry) => entry.value)).size > 1) {
-    throw new ClientTransportConfigurationError(name, `${usableUrlEntries.map((entry) => entry.key).join(" and ")} disagree; client authority aliases must be identical or only one may be set.`, usableUrlEntries.map((entry) => entry.key));
+    throw new ClientTransportConfigurationError(name, `${usableUrlEntries.map((entry) => entry.key).join(" and ")} disagree; client authority aliases must be identical or only one may be set.`, usableUrlEntries.map((entry) => entry.key), "AUTHORITY_CONFLICT");
   }
   const envUrlHit = usableUrlEntries[0] ?? null;
   const keychainUrlHit = keychainConfigValue(name, env, options.credentials?.keychain);
-  const diskConfigUrlHit = appConfigDiskValue(name, env, keys.apiUrlKeys);
+  const diskConfigUrlHit = appConfigDiskValue(name, env, keys.apiUrlKeys, options.credentials?.scope);
   if (diskConfigUrlHit?.unusable) {
     throw new ClientTransportConfigurationError(name, `${diskConfigUrlHit.key} in ${diskConfigUrlHit.path} is declared but blank or malformed; public clients require a valid HTTPS service authority.`, [diskConfigUrlHit.path]);
   }
@@ -841,46 +1111,63 @@ function resolveClientTransportSnapshot(name, env = process.env, options = {}) {
   const configuredUrl = urlCandidates[0] ?? null;
   const divergentUrls = urlCandidates.filter((candidate) => candidate.value !== configuredUrl?.value);
   if (configuredUrl && divergentUrls.length > 0) {
-    throw new ClientTransportConfigurationError(name, `${configuredUrl.key} and ${divergentUrls.map((candidate) => candidate.key).join(" and ")} select different service authorities; refusing to send a credential written for one authority to the other.`, urlCandidates.map((candidate) => candidate.key));
+    throw new ClientTransportConfigurationError(name, `${configuredUrl.key} and ${divergentUrls.map((candidate) => candidate.key).join(" and ")} select different service authorities; refusing to send a credential written for one authority to the other.`, urlCandidates.map((candidate) => candidate.key), "AUTHORITY_CONFLICT");
   }
   const warnings = [];
   if (configuredUrl && !envUrlHit) {
     warnings.push(`No ${keys.apiUrlKeys[0]} in the environment; the server URL in ${configuredUrl.key} was used, so this client connects to the server. ` + `Keep that entry aligned with the intended service authority.`);
   }
-  const credential = resolveCredential(name, env, options.credentials);
-  if (!credential) {
-    const diskHint = credentialDiskSourcesForMessage(name, env);
-    const lead = configuredUrl ? `${configuredUrl.key} selects the HTTP server for '${name}', but no API key could be resolved` : `${keys.apiUrlKeys[0]} is not set and no API key could be resolved for '${name}'; a credential is required before the default fleet gateway authority applies`;
-    warnings.push(`${lead}; refusing to create an unauthenticated client \u2014 public clients never fall back to SQLite or another local store. ` + `Looked in the Keychain (macOS only), then for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`);
-    throw new ClientTransportConfigurationError(name, warnings.join(" "), [configuredUrl?.key ?? keys.apiUrlKeys[0]]);
-  }
-  if (credential.warning)
-    warnings.push(credential.warning);
-  let urlHit;
-  if (configuredUrl) {
-    urlHit = configuredUrl;
-  } else {
-    try {
-      urlHit = { key: DEFAULT_AUTHORITY_SOURCE, value: defaultFleetGatewayBaseUrl(name) };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new ClientTransportConfigurationError(name, `No ${keys.apiUrlKeys[0]} is configured and the default fleet gateway authority cannot be composed for '${name}': ${message}`, [keys.apiUrlKeys[0]]);
-    }
-  }
-  const apiUrlSource = urlHit.key;
-  let baseUrl;
+  return { configured: configuredUrl, warnings };
+}
+function credentialAbsentError(name, env, options, configuredUrl, warnings) {
+  const keys = clientTransportEnvKeys(name);
+  const scope = options.credentials?.scope;
+  const diskPaths = credentialDiskSources(name, env, scope);
+  const diskHint = credentialDiskSourcesForMessage(name, env, scope);
+  const lead = configuredUrl ? `${configuredUrl.key} selects the HTTP server for '${name}', but no API key could be resolved` : `${keys.apiUrlKeys[0]} is not set and no API key could be resolved for '${name}'; a credential is required before the default fleet gateway authority applies`;
+  const absent = `${lead}; refusing to create an unauthenticated client \u2014 public clients never fall back to SQLite or another local store. ` + `Looked in the Keychain (macOS only), then for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`;
+  const keychainItem = `keychain:${keychainCredentialServiceName(name)}`;
+  const remedy = `Store the key in the Keychain item ${keychainCredentialServiceName(name)} for this station, or write ` + `${keys.apiKeyKeys[0]} into ${diskPaths[0] ?? "the app credentials file"} (mode 0600). ` + `To use the on-box store deliberately, set ${localOptInEnvKey(name)}=1 instead.`;
+  return new ClientTransportConfigurationError(name, [...warnings, absent].join(" "), [configuredUrl?.key ?? keys.apiUrlKeys[0], keychainItem, ...diskPaths, keys.apiKeyKeys[0]], "CREDENTIAL_ABSENT", remedy);
+}
+function composeAuthority(name, configured) {
+  if (configured)
+    return configured;
+  const keys = clientTransportEnvKeys(name);
   try {
-    baseUrl = toV1BaseUrl(urlHit.value);
+    return { key: DEFAULT_AUTHORITY_SOURCE, value: defaultFleetGatewayBaseUrl(name) };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new ClientTransportConfigurationError(name, `Invalid API URL from ${apiUrlSource}: ${message}`, [apiUrlSource]);
+    throw new ClientTransportConfigurationError(name, `No ${keys.apiUrlKeys[0]} is configured and the default fleet gateway authority cannot be composed for '${name}': ${message}`, [keys.apiUrlKeys[0]], "AUTHORITY_MISSING");
   }
+}
+function canonicalBaseUrl(name, urlHit) {
+  try {
+    return toV1BaseUrl(urlHit.value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new ClientTransportConfigurationError(name, `Invalid API URL from ${urlHit.key}: ${message}`, [urlHit.key]);
+  }
+}
+function resolveClientTransportSnapshot(name, env = process.env, options = {}) {
+  env = snapshotClientEnvironment(name, env);
+  assertHostedClientAllowed(name, env);
+  const ladder = resolveConfiguredAuthority(name, env, options);
+  const configuredUrl = ladder.configured;
+  const warnings = [...ladder.warnings];
+  const credential = resolveCredential(name, env, options.credentials);
+  if (!credential)
+    throw credentialAbsentError(name, env, options, configuredUrl, warnings);
+  if (credential.warning)
+    warnings.push(credential.warning);
+  const urlHit = composeAuthority(name, configuredUrl);
+  const baseUrl = canonicalBaseUrl(name, urlHit);
   return {
     resolution: {
       transport: "http",
       transportSource: urlHit.key,
       baseUrl,
-      apiUrlSource,
+      apiUrlSource: urlHit.key,
       apiKeyPresent: true,
       apiKeySource: credential.source,
       apiKeyTier: credential.tier,
@@ -890,11 +1177,102 @@ function resolveClientTransportSnapshot(name, env = process.env, options = {}) {
     credential
   };
 }
+function asClientResolutionError(error, name) {
+  if (error instanceof ClientResolutionError)
+    return error;
+  const message = error instanceof Error ? error.message : String(error);
+  return new ClientResolutionError("CREDENTIAL_UNREADABLE", name, message, { cause: error });
+}
+function describeClientTransport(name, env = process.env, options = {}) {
+  const errors2 = [];
+  let snapshot;
+  try {
+    snapshot = snapshotClientEnvironment(name, env);
+  } catch (error) {
+    errors2.push(asClientResolutionError(error, name));
+    return {
+      app: name,
+      credential: "unreadable",
+      credentialTier: null,
+      credentialSource: null,
+      authority: null,
+      authoritySource: null,
+      localOptIn: "off",
+      localOptInSource: null,
+      errors: errors2
+    };
+  }
+  const local = describeLocalOptIn(name, snapshot);
+  if (local.state !== "off") {
+    if (local.state === "conflict") {
+      try {
+        selectsLocalStore(name, snapshot);
+      } catch (error) {
+        errors2.push(asClientResolutionError(error, name));
+      }
+    }
+    return {
+      app: name,
+      credential: "not-consulted",
+      credentialTier: null,
+      credentialSource: null,
+      authority: null,
+      authoritySource: null,
+      localOptIn: local.state,
+      localOptInSource: local.source,
+      errors: errors2
+    };
+  }
+  let ladder = null;
+  try {
+    ladder = resolveConfiguredAuthority(name, snapshot, options);
+  } catch (error) {
+    errors2.push(asClientResolutionError(error, name));
+  }
+  let credential = "absent";
+  let credentialTier = null;
+  let credentialSource = null;
+  try {
+    const resolved = resolveCredential(name, snapshot, options.credentials);
+    if (resolved) {
+      credential = "present";
+      credentialTier = resolved.tier;
+      credentialSource = resolved.source;
+    } else {
+      errors2.push(credentialAbsentError(name, snapshot, options, ladder?.configured ?? null, ladder?.warnings ?? []));
+    }
+  } catch (error) {
+    credential = "unreadable";
+    errors2.push(asClientResolutionError(error, name));
+  }
+  let authority = null;
+  let authoritySource = null;
+  if (ladder) {
+    try {
+      const urlHit = composeAuthority(name, ladder.configured);
+      authority = canonicalBaseUrl(name, urlHit);
+      authoritySource = urlHit.key;
+    } catch (error) {
+      errors2.push(asClientResolutionError(error, name));
+    }
+  }
+  return {
+    app: name,
+    credential,
+    credentialTier,
+    credentialSource,
+    authority,
+    authoritySource,
+    localOptIn: "off",
+    localOptInSource: null,
+    errors: errors2
+  };
+}
 function resolveClientTransport(name, env = process.env, options = {}) {
   return resolveClientTransportSnapshot(name, env, options).resolution;
 }
-function credentialDiskSourcesForMessage(name, env) {
-  const paths = credentialDiskSources(name, env);
+function credentialDiskSourcesForMessage(name, env, scope) {
+  const paths = credentialDiskSources(name, env, scope);
   return paths.length > 0 ? paths.join(" or ") : "<no HOME or HASNA_HOME set in this environment, so no credential file was consulted>";
 }
 
@@ -919,6 +1297,17 @@ class HasnaHttpError extends Error {
     });
     this.credentialSource = credential?.source ?? null;
     this.credentialTier = credential?.tier ?? null;
+  }
+  get code() {
+    if (this.status === 401 || this.status === 403)
+      return "CREDENTIAL_REJECTED";
+    if (DEFAULT_RETRY_STATUSES.includes(this.status))
+      return "TRANSPORT_UNAVAILABLE";
+    return null;
+  }
+  get exitCode() {
+    const code = this.code;
+    return code ? CLIENT_RESOLUTION_EXIT_CODES[code] : null;
   }
 }
 function currentCredential(name, apiKey) {
@@ -995,6 +1384,57 @@ function createHasnaHttpTransportInternal(options, requestBindingProvider) {
   const timeoutMs = options.timeoutMs ?? 30000;
   const sleep = options.sleepImpl ?? defaultSleep;
   const defaultRetry = options.retry;
+  async function fetchRaw(input, init) {
+    let request2;
+    try {
+      request2 = new Request(input, init);
+    } catch {
+      throw new ClientTransportConfigurationError(options.name, "The request URL, method, headers or body are invalid.");
+    }
+    const target = new URL(request2.url);
+    const application = new URL(base);
+    const rootPath = application.pathname.replace(/\/v1$/, "").replace(/\/$/, "");
+    if (target.origin !== application.origin || target.username || target.password || target.hash || target.pathname !== rootPath && !target.pathname.startsWith(`${rootPath}/`) || /%(?:2f|5c|25)/i.test(target.pathname)) {
+      throw new ClientTransportConfigurationError(options.name, "The request URL is outside the bound application path.");
+    }
+    const headers = new Headers(options.headers);
+    request2.headers.forEach((value, key) => headers.set(key, value));
+    assertNoAuthorityOverrideHeaders(Object.fromEntries(headers), "request");
+    if (headers.has("x-api-key") || headers.has("authorization")) {
+      throw new ClientTransportConfigurationError(options.name, "Authenticated request headers must not override the bound credential.");
+    }
+    request2.signal.throwIfAborted();
+    const binding = requestBindingProvider ? await requestBindingProvider() : { baseUrl: base, credential: await resolveRequestCredential(options.name, options.apiKey) };
+    if (binding.baseUrl !== base) {
+      throw new ClientTransportConfigurationError(options.name, "The configured service authority changed; rebuild the client before sending credentials.", [], "AUTHORITY_CONFLICT");
+    }
+    headers.set("x-api-key", binding.credential.apiKey);
+    headers.set("Authorization", `Bearer ${binding.credential.apiKey}`);
+    const timeout = new AbortController;
+    const signal = AbortSignal.any([request2.signal, timeout.signal]);
+    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    const fetchOptions = {
+      method: request2.method,
+      headers: Object.fromEntries(headers),
+      body: request2.body,
+      signal,
+      redirect: "manual",
+      cache: request2.cache,
+      credentials: request2.credentials,
+      integrity: request2.integrity,
+      keepalive: request2.keepalive,
+      mode: request2.mode,
+      referrer: request2.referrer,
+      referrerPolicy: request2.referrerPolicy,
+      ...request2.body ? { duplex: "half" } : {}
+    };
+    try {
+      signal.throwIfAborted();
+      return await fetchImpl(target.href, fetchOptions);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   function resolveRetry(callRetry) {
     const chosen = callRetry !== undefined ? callRetry : defaultRetry;
     if (chosen === false)
@@ -1121,6 +1561,7 @@ function createHasnaHttpTransportInternal(options, requestBindingProvider) {
   }
   return {
     baseUrl: base,
+    fetch: fetchRaw,
     request,
     get: (path, opts) => request("GET", path, undefined, opts),
     post: (path, body, opts) => request("POST", path, body, opts),
@@ -1137,21 +1578,21 @@ function createClientTransport(name, env = process.env, overrides) {
   const snapshotOptions = { ...credentialOptions ? { credentials: credentialOptions } : {} };
   const resolution = resolveClientTransportSnapshot(name, env, snapshotOptions).resolution;
   const sameBinding = (left, right) => left.resolution.baseUrl === right.resolution.baseUrl && left.credential.apiKey === right.credential.apiKey && left.credential.pointerVaultKey === right.credential.pointerVaultKey && left.credential.source === right.credential.source && left.credential.tier === right.credential.tier;
-  const unstableConfiguration = () => new ClientTransportConfigurationError(name, "The configured service authority or credential changed while a request was being prepared; no authenticated request was sent.");
+  const unstableConfiguration = () => new ClientTransportConfigurationError(name, "The configured service authority or credential changed while a request was being prepared; no authenticated request was sent.", [], "AUTHORITY_CONFLICT");
   const requestBindingProvider = async () => {
     const first = resolveClientTransportSnapshot(name, env, snapshotOptions);
     const reviewed = resolveClientTransportSnapshot(name, env, snapshotOptions);
     if (!sameBinding(first, reviewed))
       throw unstableConfiguration();
     if (reviewed.resolution.baseUrl !== resolution.baseUrl) {
-      throw new ClientTransportConfigurationError(name, "The configured service authority changed; rebuild the client before sending credentials.");
+      throw new ClientTransportConfigurationError(name, "The configured service authority changed; rebuild the client before sending credentials.", [], "AUTHORITY_CONFLICT");
     }
     const credential = await resolveRequestCredential(name, () => reviewed.credential, env);
     const immediatelyBeforeDispatch = resolveClientTransportSnapshot(name, env, snapshotOptions);
     if (!sameBinding(reviewed, immediatelyBeforeDispatch))
       throw unstableConfiguration();
     if (immediatelyBeforeDispatch.resolution.baseUrl !== resolution.baseUrl) {
-      throw new ClientTransportConfigurationError(name, "The configured service authority changed; rebuild the client before sending credentials.");
+      throw new ClientTransportConfigurationError(name, "The configured service authority changed; rebuild the client before sending credentials.", [], "AUTHORITY_CONFLICT");
     }
     return { baseUrl: immediatelyBeforeDispatch.resolution.baseUrl, credential };
   };
@@ -1174,11 +1615,25 @@ function createClientTransport(name, env = process.env, overrides) {
 }
 export {
   toV1BaseUrl,
+  selectsLocalStore,
+  scopeHomeDirName,
   resolveCredential,
   resolveClientTransport,
+  resolveAppHome,
+  localStoreNotice,
+  localOptInEnvKey,
+  localOptInAliasEnvKey,
+  keychainCredentialServiceName,
   keychainConfigValue,
+  isClientResolutionError,
+  isClientResolutionCode,
+  hostedClientEnvKeys,
+  formatClientResolutionFailure,
   fleetApiDomain,
   explicitCredential,
+  exitCodeForClientResolutionCode,
+  describeLocalOptIn,
+  describeClientTransport,
   defaultFleetGatewayBaseUrl,
   defaultCloudBaseUrl,
   credentialPointerEnvKey,
@@ -1189,16 +1644,42 @@ export {
   createClientTransport,
   completePointerCredential,
   clientTransportEnvKeys,
+  clientResolutionExitCode,
+  clientResolutionCodeOf,
   appendQuery,
+  appScopeForPackageName,
+  appPaths,
   appConfigDiskValue,
+  PUBLIC_HOME_DIR_NAME,
+  LOCAL_OPT_IN_TRUE_VALUES,
+  LOCAL_OPT_IN_FALSE_VALUES,
   KEYCHAIN_STATION_ENV_KEY,
+  INTERNAL_SCOPE_SUFFIX,
+  INTERNAL_PACKAGE_SCOPE_PREFIX,
+  INTERNAL_HOME_DIR_NAME,
   HasnaHttpError,
+  HASNA_STATE_HOME_ENV_KEY,
   HASNA_HOME_ENV_KEY,
+  HASNA_DATA_HOME_ENV_KEY,
   HASNA_CONFIG_HOME_ENV_KEY,
+  HASNA_CACHE_HOME_ENV_KEY,
   DEFAULT_FLEET_GATEWAY_ORIGIN,
   DEFAULT_AUTHORITY_SOURCE,
   CredentialResolutionError,
+  CredentialFileUnsafeError,
   ClientTransportConfigurationError,
+  ClientResolutionError,
   CREDENTIAL_PROFILE_ENV_KEY,
-  CLIENT_TRANSPORTS
+  CLIENT_TRANSPORTS,
+  CLIENT_RESOLUTION_EXIT_CODES,
+  CLIENT_RESOLUTION_CODE_DESCRIPTIONS,
+  CLIENT_RESOLUTION_CODES,
+  AppHomeUnresolvableError,
+  APP_STATE_SUBDIR,
+  APP_HOME_SLUG_PATTERN,
+  APP_HOME_SCOPES,
+  APP_HOME_ENV_KEYS,
+  APP_CREDENTIALS_FILE,
+  APP_CONFIG_SUBDIR,
+  APP_CACHE_SUBDIR
 };

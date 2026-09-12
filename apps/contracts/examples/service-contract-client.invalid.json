@@ -1,0 +1,16 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "kit",
+  "class": "library",
+  "contractVersion": "v1",
+  "kitVersion": "1.1.0",
+  "description": "Invalid: a library ships no client, and the door key does not match the app name.",
+  "bins": ["kit"],
+  "hosting": ["user-hosted"],
+  "client": {
+    "transport": "hosted",
+    "credentialChain": "contracts",
+    "localOptIn": "HASNA_OTHER_LOCAL",
+    "localStoreModule": "src/db/database.ts"
+  }
+}

@@ -17,7 +17,7 @@ var __export = (target, all) => {
 // src/todos/common.ts
 import { createHash } from "crypto";
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/core.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/core.js
 var NEVER = Object.freeze({
   status: "aborted"
 });
@@ -77,7 +77,7 @@ function config(newConfig) {
     Object.assign(globalConfig, newConfig);
   return globalConfig;
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/util.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/util.js
 var exports_util = {};
 __export(exports_util, {
   unwrapMessage: () => unwrapMessage,
@@ -591,7 +591,7 @@ class Class {
   constructor(..._args) {}
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/errors.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/errors.js
 var initializer = (inst, def) => {
   inst.name = "$ZodError";
   Object.defineProperty(inst, "_zod", {
@@ -665,7 +665,7 @@ function formatError(error, _mapper) {
   return fieldErrors;
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/parse.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/parse.js
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
   const ctx = _ctx ? Object.assign(_ctx, { async: false }) : { async: false };
   const result = schema._zod.run({ value, issues: [] }, ctx);
@@ -714,7 +714,7 @@ var _safeParseAsync = (_Err) => async (schema, value, _ctx) => {
   } : { success: true, data: result.value };
 };
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync($ZodRealError);
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/regexes.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/regexes.js
 var cuid = /^[cC][^\s-]{8,}$/;
 var cuid2 = /^[0-9a-z]+$/;
 var ulid = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/;
@@ -772,7 +772,7 @@ var _null = /null/i;
 var lowercase = /^[^A-Z]*$/;
 var uppercase = /^[^a-z]*$/;
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/checks.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
   var _a;
   inst._zod ?? (inst._zod = {});
@@ -1156,7 +1156,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/doc.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/doc.js
 class Doc {
   constructor(args = []) {
     this.content = [];
@@ -1194,14 +1194,14 @@ class Doc {
   }
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/versions.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 0,
   patch: 0
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/schemas.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
   var _a;
   inst ?? (inst = {});
@@ -2275,7 +2275,7 @@ function handleRefineResult(result, payload, input, inst) {
     payload.issues.push(issue(_iss));
   }
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/locales/en.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/locales/en.js
 var parsedType = (data) => {
   const t = typeof data;
   switch (t) {
@@ -2392,7 +2392,7 @@ function en_default() {
     localeError: error()
   };
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/registries.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/registries.js
 var $output = Symbol("ZodOutput");
 var $input = Symbol("ZodInput");
 
@@ -2442,7 +2442,7 @@ function registry() {
   return new $ZodRegistry;
 }
 var globalRegistry = /* @__PURE__ */ registry();
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/api.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/api.js
 function _string(Class2, params) {
   return new Class2({
     type: "string",
@@ -2866,7 +2866,7 @@ function _refine(Class2, fn, _params) {
   });
   return schema;
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/iso.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/iso.js
 var exports_iso = {};
 __export(exports_iso, {
   time: () => time2,
@@ -2907,7 +2907,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/errors.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/errors.js
 var initializer2 = (inst, issues) => {
   $ZodError.init(inst, issues);
   inst.name = "ZodError";
@@ -2936,13 +2936,13 @@ var ZodRealError = $constructor("ZodError", initializer2, {
   Parent: Error
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/parse.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/parse.js
 var parse2 = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError);
 var safeParseAsync2 = /* @__PURE__ */ _safeParseAsync(ZodRealError);
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/schemas.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/schemas.js
 var ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
   $ZodType.init(inst, def);
   inst.def = def;
@@ -3504,7 +3504,7 @@ function superRefine(fn) {
   });
   return ch;
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/external.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/external.js
 config(en_default());
 
 // src/todos/common.ts
@@ -3576,7 +3576,7 @@ function sha256TodosText(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/external.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/external.js
 var exports_external = {};
 __export(exports_external, {
   void: () => voidType,
@@ -3688,7 +3688,7 @@ __export(exports_external, {
   BRAND: () => BRAND
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/util.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/util.js
 var util;
 (function(util2) {
   util2.assertEqual = (_) => {};
@@ -3819,7 +3819,7 @@ var getParsedType2 = (data) => {
   }
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/ZodError.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/ZodError.js
 var ZodIssueCode = util.arrayToEnum([
   "invalid_type",
   "invalid_literal",
@@ -3938,7 +3938,7 @@ ZodError2.create = (issues) => {
   return error2;
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/locales/en.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/locales/en.js
 var errorMap = (issue2, _ctx) => {
   let message;
   switch (issue2.code) {
@@ -4041,7 +4041,7 @@ var errorMap = (issue2, _ctx) => {
 };
 var en_default2 = errorMap;
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/errors.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/errors.js
 var overrideErrorMap = en_default2;
 function setErrorMap(map) {
   overrideErrorMap = map;
@@ -4049,7 +4049,7 @@ function setErrorMap(map) {
 function getErrorMap() {
   return overrideErrorMap;
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
   const { data, path, errorMaps, issueData } = params;
   const fullPath = [...path, ...issueData.path || []];
@@ -4155,14 +4155,14 @@ var isAborted = (x) => x.status === "aborted";
 var isDirty = (x) => x.status === "dirty";
 var isValid = (x) => x.status === "valid";
 var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/errorUtil.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
 (function(errorUtil2) {
   errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
   errorUtil2.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil || (errorUtil = {}));
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/types.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/types.js
 class ParseInputLazyPath {
   constructor(parent, value, path, key) {
     this._cachedPath = [];
@@ -7867,7 +7867,7 @@ function createDeploymentSchemas(primitives) {
     evidenceRefs: exports_external.array(primitives.evidencePointer).min(1)
   }).strict().superRefine((value, ctx) => {
     validateDeploymentRecord(value, ctx);
-    uniqueBy(value.processes, (process) => process.id, ctx, ["processes"], "Process ids");
+    uniqueBy(value.processes, (process2) => process2.id, ctx, ["processes"], "Process ids");
     uniqueBy(value.serviceRequirements, (requirement) => requirement.id, ctx, ["serviceRequirements"], "Service requirement ids");
     uniqueBy(value.configurationRequirements, (requirement) => requirement.name, ctx, ["configurationRequirements"], "Configuration requirement names");
   });
@@ -8808,6 +8808,203 @@ function validateDeploymentContractSet(schemas3, input) {
   };
 }
 
+// src/client/errors.ts
+var CLIENT_RESOLUTION_CODES = [
+  "CREDENTIAL_ABSENT",
+  "CREDENTIAL_UNREADABLE",
+  "CREDENTIAL_REJECTED",
+  "AUTHORITY_MISSING",
+  "AUTHORITY_INVALID",
+  "AUTHORITY_CONFLICT",
+  "LOCAL_OPT_IN_CONFLICT",
+  "TRANSPORT_UNAVAILABLE",
+  "NOT_AVAILABLE_HOSTED"
+];
+var CLIENT_RESOLUTION_EXIT_CODES = Object.freeze({
+  CREDENTIAL_ABSENT: 2,
+  CREDENTIAL_UNREADABLE: 3,
+  CREDENTIAL_REJECTED: 4,
+  AUTHORITY_MISSING: 5,
+  AUTHORITY_INVALID: 5,
+  AUTHORITY_CONFLICT: 5,
+  LOCAL_OPT_IN_CONFLICT: 6,
+  TRANSPORT_UNAVAILABLE: 7,
+  NOT_AVAILABLE_HOSTED: 8
+});
+var CLIENT_RESOLUTION_CODE_DESCRIPTIONS = Object.freeze({
+  CREDENTIAL_ABSENT: "no credential in the Keychain, the credentials file, or the environment, and the local opt-in is off",
+  CREDENTIAL_UNREADABLE: "a credential source exists but cannot be read or holds an unusable value",
+  CREDENTIAL_REJECTED: "the authority rejected the presented credential (401/403)",
+  AUTHORITY_MISSING: "no service authority is configured and the fleet gateway default cannot be composed",
+  AUTHORITY_INVALID: "a declared service authority is not a usable HTTPS URL",
+  AUTHORITY_CONFLICT: "configured service authorities disagree or changed during a request",
+  LOCAL_OPT_IN_CONFLICT: "the local opt-in and hosted client configuration were both declared",
+  TRANSPORT_UNAVAILABLE: "the service authority could not be reached",
+  NOT_AVAILABLE_HOSTED: "the command is server-only and has no hosted client path"
+});
+function isClientResolutionCode(value) {
+  return typeof value === "string" && CLIENT_RESOLUTION_CODES.includes(value);
+}
+function exitCodeForClientResolutionCode(code) {
+  return CLIENT_RESOLUTION_EXIT_CODES[code];
+}
+
+class ClientResolutionError extends Error {
+  code;
+  exitCode;
+  app;
+  sources;
+  remedy;
+  constructor(code, app, message, options = {}) {
+    super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
+    if (!isClientResolutionCode(code)) {
+      throw new TypeError(`Unknown client resolution code: ${String(code)}`);
+    }
+    this.name = "ClientResolutionError";
+    this.code = code;
+    this.exitCode = CLIENT_RESOLUTION_EXIT_CODES[code];
+    this.app = app;
+    this.sources = Object.freeze([...options.sources ?? []]);
+    this.remedy = options.remedy ?? null;
+  }
+  toJSON() {
+    return {
+      name: this.name,
+      code: this.code,
+      exitCode: this.exitCode,
+      app: this.app,
+      message: this.message,
+      sources: [...this.sources],
+      remedy: this.remedy
+    };
+  }
+}
+function isClientResolutionError(value) {
+  return value instanceof ClientResolutionError;
+}
+function clientResolutionCodeOf(error2) {
+  if (!error2 || typeof error2 !== "object")
+    return null;
+  const code = error2.code;
+  return isClientResolutionCode(code) ? code : null;
+}
+function clientResolutionExitCode(error2, fallback = 1) {
+  const code = clientResolutionCodeOf(error2);
+  return code ? CLIENT_RESOLUTION_EXIT_CODES[code] : fallback;
+}
+function formatClientResolutionFailure(error2, options = {}) {
+  const app = options.app ?? error2.app ?? "client";
+  if (options.json) {
+    return JSON.stringify({ ...error2.toJSON(), app });
+  }
+  const oneLine = (text) => text.replace(/\s*\n\s*/g, " ").trim();
+  const remedy = error2.remedy ? ` ${oneLine(error2.remedy)}` : "";
+  return `${app}: ${error2.code}: ${oneLine(error2.message)}${remedy}`;
+}
+
+// src/env-token.ts
+function envToken(name) {
+  return name.toUpperCase().replace(/-/g, "_");
+}
+
+// src/client/env-keys.ts
+function clientTransportEnvKeys(name) {
+  const envSegment = envToken(name);
+  return {
+    apiUrlKeys: [`HASNA_${envSegment}_API_URL`, `${envSegment}_API_URL`],
+    apiKeyKeys: [`HASNA_${envSegment}_API_KEY`, `${envSegment}_API_KEY`]
+  };
+}
+function credentialOverrideEnvKey(name) {
+  return `HASNA_${envToken(name)}_API_KEY_OVERRIDE`;
+}
+var CREDENTIAL_PROFILE_ENV_KEY = "HASNA_PROFILE";
+function credentialPointerEnvKey(name) {
+  return `HASNA_${envToken(name)}_API_KEY_REF`;
+}
+
+// src/client/local-opt-in.ts
+function localOptInEnvKey(name) {
+  return `HASNA_${envToken(name)}_LOCAL`;
+}
+function localOptInAliasEnvKey(name) {
+  return `${envToken(name)}_LOCAL`;
+}
+var LOCAL_OPT_IN_TRUE_VALUES = ["1", "true", "yes"];
+var LOCAL_OPT_IN_FALSE_VALUES = ["", "0", "false", "no"];
+function hostedClientEnvKeys(name) {
+  const keys = clientTransportEnvKeys(name);
+  return [
+    ...keys.apiUrlKeys,
+    ...keys.apiKeyKeys,
+    credentialOverrideEnvKey(name),
+    credentialPointerEnvKey(name),
+    CREDENTIAL_PROFILE_ENV_KEY
+  ];
+}
+function ownStringValue(env, key) {
+  if (!Object.prototype.hasOwnProperty.call(env, key))
+    return;
+  const descriptor = Object.getOwnPropertyDescriptor(env, key);
+  if (!descriptor || !("value" in descriptor))
+    return;
+  const value = descriptor.value;
+  return typeof value === "string" ? value : undefined;
+}
+function flagState(raw) {
+  if (raw === undefined)
+    return "unset";
+  const normalized = raw.trim().toLowerCase();
+  if (LOCAL_OPT_IN_TRUE_VALUES.includes(normalized))
+    return "on";
+  if (LOCAL_OPT_IN_FALSE_VALUES.includes(normalized))
+    return "off";
+  return "unrecognized";
+}
+function describeLocalOptIn(name, env = process.env) {
+  const envKey = localOptInEnvKey(name);
+  const aliasKey = localOptInAliasEnvKey(name);
+  const canonical = flagState(ownStringValue(env, envKey));
+  const alias = flagState(ownStringValue(env, aliasKey));
+  const recognized = canonical !== "unrecognized" && alias !== "unrecognized";
+  let on = false;
+  let source = null;
+  const conflicts = [];
+  if (canonical === "on") {
+    on = true;
+    source = envKey;
+    if (alias === "off")
+      conflicts.push(aliasKey);
+  } else if (canonical === "off") {
+    if (alias === "on")
+      conflicts.push(aliasKey);
+  } else if (alias === "on") {
+    on = true;
+    source = aliasKey;
+  }
+  if (on) {
+    for (const key of hostedClientEnvKeys(name)) {
+      if (ownStringValue(env, key) !== undefined)
+        conflicts.push(key);
+    }
+  }
+  const state = conflicts.length > 0 ? "conflict" : on ? "on" : "off";
+  return { state, envKey, source, conflicts, recognized };
+}
+function selectsLocalStore(name, env = process.env) {
+  const described = describeLocalOptIn(name, env);
+  if (described.state === "conflict") {
+    throw new ClientResolutionError("LOCAL_OPT_IN_CONFLICT", name, `${described.source ?? described.envKey} selects the on-box store for '${name}', but ${described.conflicts.join(", ")} ` + `${described.conflicts.length === 1 ? "is" : "are"} also declared; a process runs against exactly one store.`, {
+      sources: [described.source ?? described.envKey, ...described.conflicts],
+      remedy: `Unset ${described.envKey} to use the hosted service, or unset the hosted keys to use the on-box store.`
+    });
+  }
+  return described.state === "on";
+}
+function localStoreNotice(name, storePath) {
+  return `local mode (${localOptInEnvKey(name)}=1): on-box store ${storePath}; hosted data is NOT visible`;
+}
+
 // src/schemas.ts
 import { createHash as createHash2 } from "crypto";
 
@@ -9171,7 +9368,8 @@ function createDeploymentEnvelopeSchema(primitives) {
 
 // src/schemas.ts
 var CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-var CONTRACTS_PACKAGE_VERSION = "1.0.2";
+var CONTRACTS_PACKAGE_VERSION = "1.1.0";
+var FLEET_MIN_KIT_VERSION = "1.1.0";
 var SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
   resourceRef: "hasna.resource_ref.v1",
@@ -13215,6 +13413,51 @@ var SERVICE_SURFACE_KINDS = ["api", "sdk", "mcp", "cli"];
 var ServiceSurfaceKindSchema = exports_external.enum(SERVICE_SURFACE_KINDS);
 var ServiceSurfaceStatusSchema = exports_external.enum(["supported", "deferred", "unsupported"]);
 var ServiceAuthModeSchema = exports_external.enum(["none", "local-only", "api-key", "session", "service-token", "custom"]);
+var APP_SCOPES = ["public", "internal"];
+var AppScopeSchema = exports_external.enum(APP_SCOPES);
+var DATA_ACCESS_MODES = ["hosted", "server-only", "local-opt-in"];
+var DataAccessSchema = exports_external.enum(DATA_ACCESS_MODES);
+var SurfaceCommandSchema = exports_external.object({
+  name: exports_external.string().trim().min(1),
+  dataAccess: DataAccessSchema
+}).strict();
+var CLIENT_CONTRACT_TRANSPORTS = ["hosted"];
+var ClientContractTransportSchema = exports_external.enum(CLIENT_CONTRACT_TRANSPORTS);
+var CLIENT_CREDENTIAL_CHAINS = ["contracts"];
+var ClientCredentialChainSchema = exports_external.enum(CLIENT_CREDENTIAL_CHAINS);
+var CLIENT_AUTHORITY_PATTERN = /^https:\/\/[^\s/@?#]+(?:\/[^\s/?#]+)*$/;
+var LOCAL_OPT_IN_KEY_PATTERN = /^HASNA_[A-Z][A-Z0-9_]*_LOCAL$/;
+var RELATIVE_SOURCE_PATH_PATTERN = /^(?!\/)(?!\.\.)[A-Za-z0-9_./-]+\.[cm]?[jt]sx?$/;
+var ClientContractSchema = exports_external.object({
+  transport: ClientContractTransportSchema,
+  authority: exports_external.string().regex(CLIENT_AUTHORITY_PATTERN, "client.authority must be an absolute https URL with no credentials, query, fragment, or trailing slash").optional(),
+  credentialChain: ClientCredentialChainSchema,
+  localOptIn: exports_external.string().regex(LOCAL_OPT_IN_KEY_PATTERN, "client.localOptIn must be HASNA_<NAME>_LOCAL").nullable().optional(),
+  localStoreModule: exports_external.string().regex(RELATIVE_SOURCE_PATH_PATTERN, "client.localStoreModule must be a repo-relative source path such as src/db/database.ts").nullable().optional(),
+  readProbe: exports_external.array(exports_external.string().min(1)).min(1).optional()
+}).strict().superRefine((value, ctx) => {
+  if (value.authority?.endsWith("/v1")) {
+    ctx.addIssue({
+      code: exports_external.ZodIssueCode.custom,
+      message: "client.authority must not end in /v1; the client appends the version segment itself",
+      path: ["authority"]
+    });
+  }
+  if (value.localOptIn && !value.localStoreModule) {
+    ctx.addIssue({
+      code: exports_external.ZodIssueCode.custom,
+      message: "client.localOptIn names a door, so client.localStoreModule must name the one module that opens the on-box store",
+      path: ["localStoreModule"]
+    });
+  }
+  if (value.localStoreModule && !value.localOptIn) {
+    ctx.addIssue({
+      code: exports_external.ZodIssueCode.custom,
+      message: "client.localStoreModule names an on-box store, so client.localOptIn must name its door",
+      path: ["localOptIn"]
+    });
+  }
+});
 var ServiceEndpointSchema = exports_external.object({
   method: exports_external.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
   path: exports_external.string().regex(/^\/[A-Za-z0-9_./:*-]*$/, "Endpoint paths must be absolute HTTP paths"),
@@ -13254,8 +13497,19 @@ var ServiceSurfaceSchema = exports_external.object({
   generatedFrom: exports_external.string().regex(/^\/[A-Za-z0-9_./:-]*$/, "SDK generatedFrom must reference an absolute OpenAPI path").optional(),
   clientClassName: exports_external.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/).optional(),
   deferReason: exports_external.string().min(1).optional(),
-  readinessGates: exports_external.array(DeploymentReadinessGateSchema).default([])
+  readinessGates: exports_external.array(DeploymentReadinessGateSchema).default([]),
+  dataAccess: DataAccessSchema.optional(),
+  commands: exports_external.array(SurfaceCommandSchema).optional()
 }).strict().superRefine((value, ctx) => {
+  if (value.commands) {
+    const seen = new Set;
+    for (const [index, command] of value.commands.entries()) {
+      if (seen.has(command.name)) {
+        ctx.addIssue({ code: exports_external.ZodIssueCode.custom, message: `Duplicate command declaration "${command.name}"`, path: ["commands", index, "name"] });
+      }
+      seen.add(command.name);
+    }
+  }
   if (value.status === "supported") {
     if (!value.kind || value.kind === "api") {
       if (!value.bin) {
@@ -13668,6 +13922,8 @@ var ServiceContractManifestSchema = exports_external.object({
   serving: ServingContractSchema.optional(),
   serviceSurfaces: exports_external.array(ServiceSurfaceSchema).default([]),
   publishing: PublishingContractSchema.optional(),
+  scope: AppScopeSchema.optional(),
+  client: ClientContractSchema.nullable().optional(),
   metadata: ServiceContractMetadataSchema.optional()
 }).strict().superRefine((value, ctx) => {
   if (new Set(value.hosting).size !== value.hosting.length) {
@@ -13818,6 +14074,40 @@ var ServiceContractManifestSchema = exports_external.object({
         code: exports_external.ZodIssueCode.custom,
         message: `Service surface MCP bin "${surface.mcpBin}" must be declared in bins`,
         path: ["serviceSurfaces", index, "mcpBin"]
+      });
+    }
+  }
+  if (value.client) {
+    const expectedOptIn = localOptInEnvKey(value.name);
+    if (value.client.localOptIn && value.client.localOptIn !== expectedOptIn) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: `client.localOptIn must be ${expectedOptIn}`,
+        path: ["client", "localOptIn"]
+      });
+    }
+    if (value.class === "library") {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "library repos ship no client; declare client: null or omit it",
+        path: ["client"]
+      });
+    }
+  }
+  for (const [index, surface] of value.serviceSurfaces.entries()) {
+    const accesses = [surface.dataAccess, ...(surface.commands ?? []).map((command) => command.dataAccess)];
+    if (accesses.includes("local-opt-in") && !value.client?.localOptIn) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "a local-opt-in surface or command requires client.localOptIn to name the door",
+        path: ["serviceSurfaces", index, "dataAccess"]
+      });
+    }
+    if (value.client === null && accesses.includes("hosted")) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "client is null (local-by-design), so no surface or command can declare hosted data access; omit dataAccess or declare server-only",
+        path: ["serviceSurfaces", index, "dataAccess"]
       });
     }
   }
@@ -14211,6 +14501,7 @@ export {
   TASK_TO_PR_V1_ADAPTER_EXTENSION_SCHEMA_PREFIX,
   TASK_TO_PR_ROLE_AUTHORITIES,
   SurfaceConformanceWaiverSchema,
+  SurfaceCommandSchema,
   StorageEngineWaiverSchema,
   StorageEngineSchema,
   StorageContractSchema,
@@ -14341,6 +14632,7 @@ export {
   GithubUrlSchema,
   GitShaSchema,
   FORBIDDEN_SHARED_CLOUD_RUNTIMES,
+  FLEET_MIN_KIT_VERSION,
   FLEET_GATEWAY_HOST,
   EvidenceRefSchema,
   EvidencePointerSchema,
@@ -14367,6 +14659,8 @@ export {
   DeploymentActionSchema,
   DecisionStatusSchema,
   DecisionEnvelopeSchema,
+  DataAccessSchema,
+  DATA_ACCESS_MODES,
   CredentialRequirementSchema,
   CostEstimateSchema,
   ContractStatusSchema,
@@ -14385,12 +14679,17 @@ export {
   CommsChannelNoiseSchema,
   CommsChannelMetadataSchema,
   CommsChannelClassSchema,
+  ClientCredentialChainSchema,
+  ClientContractTransportSchema,
+  ClientContractSchema,
   CapabilityCardSchema,
   CONTRACTS_PACKAGE_VERSION,
   CONTRACTS_PACKAGE_NAME,
   COMMS_SEVERITY_TAG_INFO,
   COMMS_SEVERITY_TAGS,
   COMMS_EVENT_TYPES,
+  CLIENT_CREDENTIAL_CHAINS,
+  CLIENT_CONTRACT_TRANSPORTS,
   BuildArtifactSchema,
   BuildArtifactRefSchema,
   AudienceSchema,
@@ -14402,6 +14701,7 @@ export {
   ArtifactAttestationSchema,
   ArtifactAttestationRefSchema,
   AppSurfacesSchema,
+  AppScopeSchema,
   AppSchema,
   AppNameSchema,
   AppMcpSurfaceSchema,
@@ -14420,5 +14720,6 @@ export {
   ActorPointerSchema,
   ActorKindSchema,
   ASSET_INVENTORY_KINDS,
+  APP_SCOPES,
   ALLOWED_BIN_SUFFIXES
 };

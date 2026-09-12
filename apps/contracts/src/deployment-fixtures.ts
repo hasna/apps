@@ -26,7 +26,7 @@ import {
   type ProductProjection,
   type ProviderReceipt,
   type VerifiedSourceCandidate,
-} from "./schemas";
+} from "./schemas.js";
 import {
   DEPLOYMENT_SCHEMA_IDS,
   computeEnvironmentBindingEtag,
@@ -35,7 +35,7 @@ import {
   withDeploymentRecordDigest,
   type DeploymentContractSet,
   type DeploymentSchemaId,
-} from "./deployment";
+} from "./deployment.js";
 
 const CREATED_AT = "2026-08-09T09:00:00.000Z";
 const UPDATED_AT = "2026-08-09T09:05:00.000Z";

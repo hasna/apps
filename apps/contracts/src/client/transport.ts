@@ -27,7 +27,10 @@ import {
 // The credential chain is part of this module's public surface: callers wire
 // `--api-key` / `--profile` through it, and consumers migrating off a direct
 // `process.env` read need its types.
-import { appConfigDiskValue, credentialDiskSources, keychainConfigValue } from "./credentials.js";
+import { appConfigDiskValue, credentialDiskSources, keychainConfigValue, keychainCredentialServiceName } from "./credentials.js";
+import { CLIENT_RESOLUTION_EXIT_CODES, ClientResolutionError, type ClientResolutionCode } from "./errors.js";
+import { describeLocalOptIn, localOptInEnvKey, selectsLocalStore, type LocalOptInState } from "./local-opt-in.js";
+import type { AppHomeScope } from "./app-home.js";
 
 export {
   appConfigDiskValue,
@@ -35,13 +38,19 @@ export {
   credentialDiskSourceList,
   credentialDiskSources,
   CredentialResolutionError,
+  CredentialFileUnsafeError,
   explicitCredential,
   HASNA_CONFIG_HOME_ENV_KEY,
   HASNA_HOME_ENV_KEY,
   KEYCHAIN_STATION_ENV_KEY,
   keychainConfigValue,
+  keychainCredentialServiceName,
   resolveCredential,
 } from "./credentials.js";
+// 1.1.0: the error taxonomy, the one local opt-in door, and the one home resolver.
+export * from "./errors.js";
+export * from "./local-opt-in.js";
+export * from "./app-home.js";
 export type {
   AppConfigDiskHit,
   CredentialChainOptions,
@@ -349,16 +358,27 @@ export function toV1BaseUrl(apiUrl: string): string {
 export const CLIENT_TRANSPORTS = ["http"] as const;
 export type ClientTransportKind = (typeof CLIENT_TRANSPORTS)[number];
 
-/** A client authority or credential declaration cannot be used safely. */
-export class ClientTransportConfigurationError extends Error {
+/**
+ * A client authority or credential declaration cannot be used safely.
+ *
+ * Carries a discriminated `code` (default `AUTHORITY_INVALID`); the no-credential
+ * case is `CREDENTIAL_ABSENT`, disagreeing authorities are `AUTHORITY_CONFLICT`,
+ * and an uncomposable default is `AUTHORITY_MISSING`. Messages are byte-stable
+ * with 1.0.x.
+ */
+export class ClientTransportConfigurationError extends ClientResolutionError {
   readonly appName: string;
-  readonly sources: readonly string[];
 
-  constructor(appName: string, message: string, sources: readonly string[] = []) {
-    super(message);
+  constructor(
+    appName: string,
+    message: string,
+    sources: readonly string[] = [],
+    code: ClientResolutionCode = "AUTHORITY_INVALID",
+    remedy: string | null = null,
+  ) {
+    super(code, appName, message, { sources, remedy });
     this.name = "ClientTransportConfigurationError";
     this.appName = appName;
-    this.sources = Object.freeze([...sources]);
   }
 }
 
@@ -410,19 +430,44 @@ interface ResolvedClientTransportSnapshot {
   credential: ResolvedCredential;
 }
 
+/** A configured authority: the SOURCE that decided it (an env key NAME, a Keychain item reference, or a file PATH) and its value. */
+interface ConfiguredAuthority {
+  key: string;
+  value: string;
+}
+
+interface ConfiguredAuthorityLadder {
+  /** The winning configured authority, or null when nothing configured one (the fleet gateway default applies). */
+  configured: ConfiguredAuthority | null;
+  warnings: string[];
+}
+
 /**
- * Resolve the sole authenticated service transport. The authority is read from
- * the environment, then the Keychain `api-url` item, then the credentials
- * file, and defaults to the fleet gateway once a credential has resolved.
- * Missing, blank, conflicting, or invalid declarations throw. Credentials are
- * resolved at call time.
+ * The ONE local door is answered first, from the env alone — no Keychain, no
+ * disk. A process that selected the on-box store never resolves a hosted
+ * credential it will not use, and never builds a hosted client by accident.
  */
-function resolveClientTransportSnapshot(
-  name: string,
-  env: Env = process.env,
-  options: ResolveClientTransportOptions = {},
-): ResolvedClientTransportSnapshot {
-  env = snapshotClientEnvironment(name, env);
+function assertHostedClientAllowed(name: string, env: Env): void {
+  if (selectsLocalStore(name, env)) {
+    const key = localOptInEnvKey(name);
+    throw new ClientResolutionError(
+      "LOCAL_OPT_IN_CONFLICT",
+      name,
+      `${key} selects the on-box store for '${name}', but a hosted client was requested; a process runs against exactly one store.`,
+      {
+        sources: [key],
+        remedy: `Decide the store with selectsLocalStore('${name}', env) before building a hosted client, or unset ${key}.`,
+      },
+    );
+  }
+}
+
+/**
+ * The authority ladder: the environment, then the Keychain `api-url` item,
+ * then the credentials file. Every configured value must agree. Throws
+ * `AUTHORITY_INVALID` or `AUTHORITY_CONFLICT`; never touches a credential.
+ */
+function resolveConfiguredAuthority(name: string, env: Env, options: ResolveClientTransportOptions): ConfiguredAuthorityLadder {
   const keys = clientTransportEnvKeys(name);
   const definedUrlEntries = keys.apiUrlKeys
     .filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined)
@@ -445,11 +490,12 @@ function resolveClientTransportSnapshot(
       name,
       `${usableUrlEntries.map((entry) => entry.key).join(" and ")} disagree; client authority aliases must be identical or only one may be set.`,
       usableUrlEntries.map((entry) => entry.key),
+      "AUTHORITY_CONFLICT",
     );
   }
   const envUrlHit = usableUrlEntries[0] ?? null;
   const keychainUrlHit = keychainConfigValue(name, env, options.credentials?.keychain);
-  const diskConfigUrlHit = appConfigDiskValue(name, env, keys.apiUrlKeys);
+  const diskConfigUrlHit = appConfigDiskValue(name, env, keys.apiUrlKeys, options.credentials?.scope);
   if (diskConfigUrlHit?.unusable) {
     throw new ClientTransportConfigurationError(
       name,
@@ -463,7 +509,7 @@ function resolveClientTransportSnapshot(
   // reports its tier this way, so an operator reads both the same way. All of
   // them must agree: a credential written for one authority is never sent to
   // another.
-  const urlCandidates = [
+  const urlCandidates: ConfiguredAuthority[] = [
     ...(envUrlHit ? [envUrlHit] : []),
     ...(keychainUrlHit ? [{ key: keychainUrlHit.source, value: keychainUrlHit.value }] : []),
     ...(diskConfigUrlHit ? [{ key: diskConfigUrlHit.path, value: diskConfigUrlHit.value.trim() }] : []),
@@ -475,6 +521,7 @@ function resolveClientTransportSnapshot(
       name,
       `${configuredUrl.key} and ${divergentUrls.map((candidate) => candidate.key).join(" and ")} select different service authorities; refusing to send a credential written for one authority to the other.`,
       urlCandidates.map((candidate) => candidate.key),
+      "AUTHORITY_CONFLICT",
     );
   }
   const warnings: string[] = [];
@@ -487,61 +534,102 @@ function resolveClientTransportSnapshot(
         `Keep that entry aligned with the intended service authority.`,
     );
   }
+  return { configured: configuredUrl, warnings };
+}
 
-  // Resolve the credential at call time. A deliberate tier that cannot be
-  // honoured still throws rather than authenticating as a different principal.
-  const credential: ResolvedCredential | null = resolveCredential(name, env, options.credentials);
+/** The `CREDENTIAL_ABSENT` (exit 2) failure: every tier was genuinely absent. Message byte-stable with 1.0.x. */
+function credentialAbsentError(
+  name: string,
+  env: Env,
+  options: ResolveClientTransportOptions,
+  configuredUrl: ConfiguredAuthority | null,
+  warnings: readonly string[],
+): ClientTransportConfigurationError {
+  const keys = clientTransportEnvKeys(name);
+  const scope = options.credentials?.scope;
+  const diskPaths = credentialDiskSources(name, env, scope);
+  const diskHint = credentialDiskSourcesForMessage(name, env, scope);
+  const lead = configuredUrl
+    ? `${configuredUrl.key} selects the HTTP server for '${name}', but no API key could be resolved`
+    : `${keys.apiUrlKeys[0]} is not set and no API key could be resolved for '${name}'; a credential is required before the default fleet gateway authority applies`;
+  const absent =
+    `${lead}; refusing to create an unauthenticated client — public clients never fall back to SQLite or another local store. ` +
+    `Looked in the Keychain (macOS only), then for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`;
+  const keychainItem = `keychain:${keychainCredentialServiceName(name)}`;
+  const remedy =
+    `Store the key in the Keychain item ${keychainCredentialServiceName(name)} for this station, or write ` +
+    `${keys.apiKeyKeys[0]} into ${diskPaths[0] ?? "the app credentials file"} (mode 0600). ` +
+    `To use the on-box store deliberately, set ${localOptInEnvKey(name)}=1 instead.`;
+  return new ClientTransportConfigurationError(
+    name,
+    [...warnings, absent].join(" "),
+    [configuredUrl?.key ?? keys.apiUrlKeys[0]!, keychainItem, ...diskPaths, keys.apiKeyKeys[0]!],
+    "CREDENTIAL_ABSENT",
+    remedy,
+  );
+}
 
-  if (!credential) {
-    const diskHint = credentialDiskSourcesForMessage(name, env);
-    const lead = configuredUrl
-      ? `${configuredUrl.key} selects the HTTP server for '${name}', but no API key could be resolved`
-      : `${keys.apiUrlKeys[0]} is not set and no API key could be resolved for '${name}'; a credential is required before the default fleet gateway authority applies`;
-    warnings.push(
-      `${lead}; refusing to create an unauthenticated client — public clients never fall back to SQLite or another local store. ` +
-        `Looked in the Keychain (macOS only), then for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`,
-    );
-    throw new ClientTransportConfigurationError(name, warnings.join(" "), [configuredUrl?.key ?? keys.apiUrlKeys[0]!]);
-  }
-  if (credential.warning) warnings.push(credential.warning);
-
-  // With a credential in hand and nothing configuring the authority, the fleet
-  // gateway IS the authority: URLs never need configuring.
-  let urlHit: { key: string; value: string };
-  if (configuredUrl) {
-    urlHit = configuredUrl;
-  } else {
-    try {
-      urlHit = { key: DEFAULT_AUTHORITY_SOURCE, value: defaultFleetGatewayBaseUrl(name) };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new ClientTransportConfigurationError(
-        name,
-        `No ${keys.apiUrlKeys[0]} is configured and the default fleet gateway authority cannot be composed for '${name}': ${message}`,
-        [keys.apiUrlKeys[0]!],
-      );
-    }
-  }
-
-  const apiUrlSource = urlHit.key;
-  let baseUrl: string;
+/** With a credential in hand and nothing configuring the authority, the fleet gateway IS the authority. */
+function composeAuthority(name: string, configured: ConfiguredAuthority | null): ConfiguredAuthority {
+  if (configured) return configured;
+  const keys = clientTransportEnvKeys(name);
   try {
-    baseUrl = toV1BaseUrl(urlHit.value);
+    return { key: DEFAULT_AUTHORITY_SOURCE, value: defaultFleetGatewayBaseUrl(name) };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new ClientTransportConfigurationError(
       name,
-      `Invalid API URL from ${apiUrlSource}: ${message}`,
-      [apiUrlSource],
+      `No ${keys.apiUrlKeys[0]} is configured and the default fleet gateway authority cannot be composed for '${name}': ${message}`,
+      [keys.apiUrlKeys[0]!],
+      "AUTHORITY_MISSING",
     );
   }
+}
+
+/** `<origin>/v1` for a configured or default authority; `AUTHORITY_INVALID` when it cannot be normalised. */
+function canonicalBaseUrl(name: string, urlHit: ConfiguredAuthority): string {
+  try {
+    return toV1BaseUrl(urlHit.value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new ClientTransportConfigurationError(name, `Invalid API URL from ${urlHit.key}: ${message}`, [urlHit.key]);
+  }
+}
+
+/**
+ * Resolve the sole authenticated service transport. The local opt-in is
+ * answered first from the env alone; then the authority is read from the
+ * environment, then the Keychain `api-url` item, then the credentials file,
+ * and defaults to the fleet gateway once a credential has resolved. Missing,
+ * blank, conflicting, or invalid declarations throw. Credentials are resolved
+ * at call time.
+ */
+function resolveClientTransportSnapshot(
+  name: string,
+  env: Env = process.env,
+  options: ResolveClientTransportOptions = {},
+): ResolvedClientTransportSnapshot {
+  env = snapshotClientEnvironment(name, env);
+  assertHostedClientAllowed(name, env);
+  const ladder = resolveConfiguredAuthority(name, env, options);
+  const configuredUrl = ladder.configured;
+  const warnings = [...ladder.warnings];
+
+  // Resolve the credential at call time. A deliberate tier that cannot be
+  // honoured still throws rather than authenticating as a different principal.
+  const credential: ResolvedCredential | null = resolveCredential(name, env, options.credentials);
+  if (!credential) throw credentialAbsentError(name, env, options, configuredUrl, warnings);
+  if (credential.warning) warnings.push(credential.warning);
+
+  const urlHit = composeAuthority(name, configuredUrl);
+  const baseUrl = canonicalBaseUrl(name, urlHit);
 
   return {
     resolution: {
       transport: "http",
       transportSource: urlHit.key,
       baseUrl,
-      apiUrlSource,
+      apiUrlSource: urlHit.key,
       apiKeyPresent: true,
       apiKeySource: credential.source,
       apiKeyTier: credential.tier,
@@ -549,6 +637,138 @@ function resolveClientTransportSnapshot(
       warning: warnings.length > 0 ? warnings.join(" ") : null,
     },
     credential,
+  };
+}
+
+/** Where the credential stands, as `status` / `doctor` report it. Never a value. */
+export type ClientCredentialState = "present" | "absent" | "unreadable" | "not-consulted";
+
+/** The non-throwing picture of a client's transport, for `status` / `doctor` verbs. */
+export interface ClientTransportDescription {
+  app: string;
+  /** `not-consulted` when the local opt-in is on: the chain is never run under it. */
+  credential: ClientCredentialState;
+  credentialTier: CredentialTier | null;
+  /** An env key NAME, a Keychain item reference, or an absolute file PATH. Never a value. */
+  credentialSource: string | null;
+  /** The `<origin>/v1` base the client would use, when it could be determined. */
+  authority: string | null;
+  /** An env key NAME, a Keychain item reference, a file PATH, or `"default"`. */
+  authoritySource: string | null;
+  localOptIn: LocalOptInState;
+  /** Which key turned the opt-in on, or null. */
+  localOptInSource: string | null;
+  /** Every failure encountered, each with its `code`; empty when a client could be built. */
+  errors: ClientResolutionError[];
+}
+
+function asClientResolutionError(error: unknown, name: string): ClientResolutionError {
+  if (error instanceof ClientResolutionError) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  return new ClientResolutionError("CREDENTIAL_UNREADABLE", name, message, { cause: error });
+}
+
+/**
+ * Describe the client's transport WITHOUT throwing and WITHOUT opening any
+ * store — the one call a `status` or `doctor` verb makes. The local opt-in is
+ * answered first; when it is on, the credential chain is not consulted at
+ * all. Otherwise the authority ladder and the credential chain each run and
+ * report independently, so an unreadable Keychain and an invalid URL both
+ * appear. Exit 0 with this report is the correct outcome for a diagnostic
+ * verb even when the credential is unreadable; no value ever appears in it.
+ */
+export function describeClientTransport(
+  name: string,
+  env: Env = process.env,
+  options: ResolveClientTransportOptions = {},
+): ClientTransportDescription {
+  const errors: ClientResolutionError[] = [];
+  let snapshot: Env;
+  try {
+    snapshot = snapshotClientEnvironment(name, env);
+  } catch (error) {
+    errors.push(asClientResolutionError(error, name));
+    return {
+      app: name,
+      credential: "unreadable",
+      credentialTier: null,
+      credentialSource: null,
+      authority: null,
+      authoritySource: null,
+      localOptIn: "off",
+      localOptInSource: null,
+      errors,
+    };
+  }
+
+  const local = describeLocalOptIn(name, snapshot);
+  if (local.state !== "off") {
+    if (local.state === "conflict") {
+      try {
+        selectsLocalStore(name, snapshot);
+      } catch (error) {
+        errors.push(asClientResolutionError(error, name));
+      }
+    }
+    return {
+      app: name,
+      credential: "not-consulted",
+      credentialTier: null,
+      credentialSource: null,
+      authority: null,
+      authoritySource: null,
+      localOptIn: local.state,
+      localOptInSource: local.source,
+      errors,
+    };
+  }
+
+  let ladder: ConfiguredAuthorityLadder | null = null;
+  try {
+    ladder = resolveConfiguredAuthority(name, snapshot, options);
+  } catch (error) {
+    errors.push(asClientResolutionError(error, name));
+  }
+
+  let credential: ClientCredentialState = "absent";
+  let credentialTier: CredentialTier | null = null;
+  let credentialSource: string | null = null;
+  try {
+    const resolved = resolveCredential(name, snapshot, options.credentials);
+    if (resolved) {
+      credential = "present";
+      credentialTier = resolved.tier;
+      credentialSource = resolved.source;
+    } else {
+      errors.push(credentialAbsentError(name, snapshot, options, ladder?.configured ?? null, ladder?.warnings ?? []));
+    }
+  } catch (error) {
+    credential = "unreadable";
+    errors.push(asClientResolutionError(error, name));
+  }
+
+  let authority: string | null = null;
+  let authoritySource: string | null = null;
+  if (ladder) {
+    try {
+      const urlHit = composeAuthority(name, ladder.configured);
+      authority = canonicalBaseUrl(name, urlHit);
+      authoritySource = urlHit.key;
+    } catch (error) {
+      errors.push(asClientResolutionError(error, name));
+    }
+  }
+
+  return {
+    app: name,
+    credential,
+    credentialTier,
+    credentialSource,
+    authority,
+    authoritySource,
+    localOptIn: "off",
+    localOptInSource: null,
+    errors,
   };
 }
 
@@ -565,8 +785,8 @@ export function resolveClientTransport(
 }
 
 /** Render the disk candidates for a diagnostic, without touching their contents. */
-function credentialDiskSourcesForMessage(name: string, env: Env): string {
-  const paths = credentialDiskSources(name, env);
+function credentialDiskSourcesForMessage(name: string, env: Env, scope?: AppHomeScope): string {
+  const paths = credentialDiskSources(name, env, scope);
   return paths.length > 0
     ? paths.join(" or ")
     : "<no HOME or HASNA_HOME set in this environment, so no credential file was consulted>";
@@ -605,6 +825,23 @@ export class HasnaHttpError extends Error {
     });
     this.credentialSource = credential?.source ?? null;
     this.credentialTier = credential?.tier ?? null;
+  }
+
+  /**
+   * The resolution code this response maps to: `CREDENTIAL_REJECTED` for 401
+   * and 403, `TRANSPORT_UNAVAILABLE` for a retryable status, null otherwise
+   * (an ordinary HTTP failure is not a resolution failure).
+   */
+  get code(): ClientResolutionCode | null {
+    if (this.status === 401 || this.status === 403) return "CREDENTIAL_REJECTED";
+    if ((DEFAULT_RETRY_STATUSES as readonly number[]).includes(this.status)) return "TRANSPORT_UNAVAILABLE";
+    return null;
+  }
+
+  /** The exit code for {@link code}, or null when the status carries no resolution code. */
+  get exitCode(): number | null {
+    const code = this.code;
+    return code ? CLIENT_RESOLUTION_EXIT_CODES[code] : null;
   }
 }
 
@@ -803,6 +1040,14 @@ export interface HasnaHttpTransportOptions {
 
 export interface HasnaHttpTransport {
   readonly baseUrl: string;
+  /**
+   * Fetch an absolute URL inside the configured application root (the canonical
+   * baseUrl without its terminal /v1) with the bound credential attached.
+   * Returns the original unread Response, including error/redirect responses,
+   * for CSV, downloads and event streams. No retries or response parsing occur;
+   * authentication and manual redirect handling cannot be overridden by init.
+   */
+  fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>;
   request<T = unknown>(method: string, path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T>;
   get<T = unknown>(path: string, opts?: HasnaRequestOptions): Promise<T>;
   post<T = unknown>(path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T>;
@@ -854,6 +1099,79 @@ function createHasnaHttpTransportInternal(
   const timeoutMs = options.timeoutMs ?? 30_000;
   const sleep = options.sleepImpl ?? defaultSleep;
   const defaultRetry = options.retry;
+
+  async function fetchRaw(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+    let request: Request;
+    try {
+      request = new Request(input, init);
+    } catch {
+      // Native Request errors can include the supplied URL or header value.
+      throw new ClientTransportConfigurationError(options.name, "The request URL, method, headers or body are invalid.");
+    }
+    const target = new URL(request.url);
+    const application = new URL(base);
+    const rootPath = application.pathname.replace(/\/v1$/, "").replace(/\/$/, "");
+    // URL parses dot segments before this comparison. Also reject encoded path
+    // separators and nested escapes: a gateway must not decode a path that we
+    // approved into a different application's route.
+    if (
+      target.origin !== application.origin || target.username || target.password || target.hash ||
+      (target.pathname !== rootPath && !target.pathname.startsWith(`${rootPath}/`)) ||
+      /%(?:2f|5c|25)/i.test(target.pathname)
+    ) {
+      throw new ClientTransportConfigurationError(options.name, "The request URL is outside the bound application path.");
+    }
+    const headers = new Headers(options.headers);
+    request.headers.forEach((value, key) => headers.set(key, value));
+    assertNoAuthorityOverrideHeaders(Object.fromEntries(headers), "request");
+    if (headers.has("x-api-key") || headers.has("authorization")) {
+      throw new ClientTransportConfigurationError(options.name, "Authenticated request headers must not override the bound credential.");
+    }
+    request.signal.throwIfAborted();
+    const binding = requestBindingProvider
+      ? await requestBindingProvider()
+      : { baseUrl: base, credential: await resolveRequestCredential(options.name, options.apiKey) };
+    // The dynamic provider checks this itself; keep the raw path invariant
+    // explicit for both static and dynamically bound transports.
+    if (binding.baseUrl !== base) {
+      throw new ClientTransportConfigurationError(
+        options.name,
+        "The configured service authority changed; rebuild the client before sending credentials.",
+        [],
+        "AUTHORITY_CONFLICT",
+      );
+    }
+    headers.set("x-api-key", binding.credential.apiKey);
+    headers.set("Authorization", `Bearer ${binding.credential.apiKey}`);
+    const timeout = new AbortController();
+    const signal = AbortSignal.any([request.signal, timeout.signal]);
+    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    // Use the Request's normalized body and headers together. This retains its
+    // multipart boundary and preserves streams instead of serializing JSON.
+    const fetchOptions: RequestInit & { duplex?: "half" } = {
+      method: request.method,
+      headers: Object.fromEntries(headers),
+      body: request.body,
+      signal,
+      redirect: "manual",
+      cache: request.cache,
+      credentials: request.credentials,
+      integrity: request.integrity,
+      keepalive: request.keepalive,
+      mode: request.mode,
+      referrer: request.referrer,
+      referrerPolicy: request.referrerPolicy,
+      ...(request.body ? { duplex: "half" as const } : {}),
+    };
+    try {
+      signal.throwIfAborted();
+      return await fetchImpl(target.href, fetchOptions);
+    } finally {
+      // The header deadline ends here; the caller still owns cancellation of
+      // an unread or streaming response through its original signal.
+      clearTimeout(timer);
+    }
+  }
 
   function resolveRetry(callRetry: HasnaRequestOptions["retry"]): Required<HasnaRetryOptions> | null {
     const chosen = callRetry !== undefined ? callRetry : defaultRetry;
@@ -1017,6 +1335,7 @@ function createHasnaHttpTransportInternal(
 
   return {
     baseUrl: base,
+    fetch: fetchRaw,
     request,
     get: (path, opts) => request("GET", path, undefined, opts),
     post: (path, body, opts) => request("POST", path, body, opts),
@@ -1065,6 +1384,8 @@ export function createClientTransport(
     new ClientTransportConfigurationError(
       name,
       "The configured service authority or credential changed while a request was being prepared; no authenticated request was sent.",
+      [],
+      "AUTHORITY_CONFLICT",
     );
 
   const requestBindingProvider: AuthenticatedRequestBindingProvider = async () => {
@@ -1079,6 +1400,8 @@ export function createClientTransport(
       throw new ClientTransportConfigurationError(
         name,
         "The configured service authority changed; rebuild the client before sending credentials.",
+        [],
+        "AUTHORITY_CONFLICT",
       );
     }
 
@@ -1089,6 +1412,8 @@ export function createClientTransport(
       throw new ClientTransportConfigurationError(
         name,
         "The configured service authority changed; rebuild the client before sending credentials.",
+        [],
+        "AUTHORITY_CONFLICT",
       );
     }
     return { baseUrl: immediatelyBeforeDispatch.resolution.baseUrl, credential };

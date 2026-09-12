@@ -47,7 +47,7 @@ var __export = (target, all) => {
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __require = import.meta.require;
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/commander@13.1.0/node_modules/commander/lib/error.js
+// ../../node_modules/.bun/commander@13.1.0/node_modules/commander/lib/error.js
 var require_error = __commonJS((exports) => {
   class CommanderError extends Error {
     constructor(exitCode, code, message) {
@@ -71,7 +71,7 @@ var require_error = __commonJS((exports) => {
   exports.InvalidArgumentError = InvalidArgumentError;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/commander@13.1.0/node_modules/commander/lib/argument.js
+// ../../node_modules/.bun/commander@13.1.0/node_modules/commander/lib/argument.js
 var require_argument = __commonJS((exports) => {
   var { InvalidArgumentError } = require_error();
 
@@ -150,7 +150,7 @@ var require_argument = __commonJS((exports) => {
   exports.humanReadableArgName = humanReadableArgName;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/commander@13.1.0/node_modules/commander/lib/help.js
+// ../../node_modules/.bun/commander@13.1.0/node_modules/commander/lib/help.js
 var require_help = __commonJS((exports) => {
   var { humanReadableArgName } = require_argument();
 
@@ -500,7 +500,7 @@ ${itemIndentStr}`);
   exports.stripColor = stripColor;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/commander@13.1.0/node_modules/commander/lib/option.js
+// ../../node_modules/.bun/commander@13.1.0/node_modules/commander/lib/option.js
 var require_option = __commonJS((exports) => {
   var { InvalidArgumentError } = require_error();
 
@@ -678,7 +678,7 @@ var require_option = __commonJS((exports) => {
   exports.DualOptions = DualOptions;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/commander@13.1.0/node_modules/commander/lib/suggestSimilar.js
+// ../../node_modules/.bun/commander@13.1.0/node_modules/commander/lib/suggestSimilar.js
 var require_suggestSimilar = __commonJS((exports) => {
   var maxDistance = 3;
   function editDistance(a, b) {
@@ -751,7 +751,7 @@ var require_suggestSimilar = __commonJS((exports) => {
   exports.suggestSimilar = suggestSimilar;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/commander@13.1.0/node_modules/commander/lib/command.js
+// ../../node_modules/.bun/commander@13.1.0/node_modules/commander/lib/command.js
 var require_command = __commonJS((exports) => {
   var EventEmitter = __require("events").EventEmitter;
   var childProcess = __require("child_process");
@@ -2061,7 +2061,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
   exports.useColor = useColor;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/commander@13.1.0/node_modules/commander/index.js
+// ../../node_modules/.bun/commander@13.1.0/node_modules/commander/index.js
 var require_commander = __commonJS((exports) => {
   var { Argument } = require_argument();
   var { Command } = require_command();
@@ -2081,7 +2081,7 @@ var require_commander = __commonJS((exports) => {
   exports.InvalidOptionArgumentError = InvalidArgumentError;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/postgres-array@2.0.0/node_modules/postgres-array/index.js
+// ../../node_modules/.bun/postgres-array@2.0.0/node_modules/postgres-array/index.js
 var require_postgres_array = __commonJS((exports) => {
   exports.parse = function(source, transform2) {
     return new ArrayParser(source, transform2).parse();
@@ -2177,7 +2177,7 @@ var require_postgres_array = __commonJS((exports) => {
   }
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-types@2.2.0/node_modules/pg-types/lib/arrayParser.js
+// ../../node_modules/.bun/pg-types@2.2.0/node_modules/pg-types/lib/arrayParser.js
 var require_arrayParser = __commonJS((exports, module) => {
   var array2 = require_postgres_array();
   module.exports = {
@@ -2191,7 +2191,7 @@ var require_arrayParser = __commonJS((exports, module) => {
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/postgres-date@1.0.7/node_modules/postgres-date/index.js
+// ../../node_modules/.bun/postgres-date@1.0.7/node_modules/postgres-date/index.js
 var require_postgres_date = __commonJS((exports, module) => {
   var DATE_TIME = /(\d{1,})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(\.\d{1,})?.*?( BC)?$/;
   var DATE = /^(\d{1,})-(\d{2})-(\d{2})( BC)?$/;
@@ -2276,7 +2276,7 @@ var require_postgres_date = __commonJS((exports, module) => {
   }
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/xtend@4.0.2/node_modules/xtend/mutable.js
+// ../../node_modules/.bun/xtend@4.0.2/node_modules/xtend/mutable.js
 var require_mutable = __commonJS((exports, module) => {
   module.exports = extend2;
   var hasOwnProperty = Object.prototype.hasOwnProperty;
@@ -2293,7 +2293,7 @@ var require_mutable = __commonJS((exports, module) => {
   }
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/postgres-interval@1.2.0/node_modules/postgres-interval/index.js
+// ../../node_modules/.bun/postgres-interval@1.2.0/node_modules/postgres-interval/index.js
 var require_postgres_interval = __commonJS((exports, module) => {
   var extend2 = require_mutable();
   module.exports = PostgresInterval;
@@ -2385,7 +2385,7 @@ var require_postgres_interval = __commonJS((exports, module) => {
   }
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/postgres-bytea@1.0.1/node_modules/postgres-bytea/index.js
+// ../../node_modules/.bun/postgres-bytea@1.0.1/node_modules/postgres-bytea/index.js
 var require_postgres_bytea = __commonJS((exports, module) => {
   var bufferFrom = Buffer.from || Buffer;
   module.exports = function parseBytea(input) {
@@ -2418,7 +2418,7 @@ var require_postgres_bytea = __commonJS((exports, module) => {
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-types@2.2.0/node_modules/pg-types/lib/textParsers.js
+// ../../node_modules/.bun/pg-types@2.2.0/node_modules/pg-types/lib/textParsers.js
 var require_textParsers = __commonJS((exports, module) => {
   var array2 = require_postgres_array();
   var arrayParser = require_arrayParser();
@@ -2621,7 +2621,7 @@ var require_textParsers = __commonJS((exports, module) => {
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-int8@1.0.1/node_modules/pg-int8/index.js
+// ../../node_modules/.bun/pg-int8@1.0.1/node_modules/pg-int8/index.js
 var require_pg_int8 = __commonJS((exports, module) => {
   var BASE = 1e6;
   function readInt8(buffer) {
@@ -2698,7 +2698,7 @@ var require_pg_int8 = __commonJS((exports, module) => {
   module.exports = readInt8;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-types@2.2.0/node_modules/pg-types/lib/binaryParsers.js
+// ../../node_modules/.bun/pg-types@2.2.0/node_modules/pg-types/lib/binaryParsers.js
 var require_binaryParsers = __commonJS((exports, module) => {
   var parseInt64 = require_pg_int8();
   var parseBits = function(data, bits, offset, invert, callback) {
@@ -2897,7 +2897,7 @@ var require_binaryParsers = __commonJS((exports, module) => {
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-types@2.2.0/node_modules/pg-types/lib/builtins.js
+// ../../node_modules/.bun/pg-types@2.2.0/node_modules/pg-types/lib/builtins.js
 var require_builtins = __commonJS((exports, module) => {
   module.exports = {
     BOOL: 16,
@@ -2963,7 +2963,7 @@ var require_builtins = __commonJS((exports, module) => {
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-types@2.2.0/node_modules/pg-types/index.js
+// ../../node_modules/.bun/pg-types@2.2.0/node_modules/pg-types/index.js
 var require_pg_types = __commonJS((exports) => {
   var textParsers = require_textParsers();
   var binaryParsers = require_binaryParsers();
@@ -3002,7 +3002,7 @@ var require_pg_types = __commonJS((exports) => {
   });
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/defaults.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/defaults.js
 var require_defaults = __commonJS((exports, module) => {
   var user;
   try {
@@ -3043,7 +3043,7 @@ var require_defaults = __commonJS((exports, module) => {
   });
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/utils.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/utils.js
 var require_utils = __commonJS((exports, module) => {
   var defaults = require_defaults();
   var { isDate } = __require("util/types");
@@ -3192,7 +3192,7 @@ var require_utils = __commonJS((exports, module) => {
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/crypto/utils.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/crypto/utils.js
 var require_utils2 = __commonJS((exports, module) => {
   var nodeCrypto = __require("crypto");
   module.exports = {
@@ -3241,7 +3241,7 @@ var require_utils2 = __commonJS((exports, module) => {
   }
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/crypto/cert-signatures.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/crypto/cert-signatures.js
 var require_cert_signatures = __commonJS((exports, module) => {
   function x509Error(msg, cert) {
     return new Error("SASL channel binding: " + msg + " when parsing public certificate " + cert.toString("base64"));
@@ -3353,7 +3353,7 @@ var require_cert_signatures = __commonJS((exports, module) => {
   module.exports = { signatureAlgorithmHashFromCertificate };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/crypto/sasl.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/crypto/sasl.js
 var require_sasl = __commonJS((exports, module) => {
   var crypto = require_utils2();
   var { signatureAlgorithmHashFromCertificate } = require_cert_signatures();
@@ -3533,7 +3533,7 @@ var require_sasl = __commonJS((exports, module) => {
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/type-overrides.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/type-overrides.js
 var require_type_overrides = __commonJS((exports, module) => {
   var types2 = require_pg_types();
   function TypeOverrides(userTypes) {
@@ -3565,7 +3565,7 @@ var require_type_overrides = __commonJS((exports, module) => {
   module.exports = TypeOverrides;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-connection-string@2.14.0/node_modules/pg-connection-string/index.js
+// ../../node_modules/.bun/pg-connection-string@2.14.0/node_modules/pg-connection-string/index.js
 var require_pg_connection_string = __commonJS((exports, module) => {
   function parse4(str, options = {}) {
     if (str.charAt(0) === "/") {
@@ -3746,7 +3746,7 @@ See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode de
   parse4.parseIntoClientConfig = parseIntoClientConfig;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/connection-parameters.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/connection-parameters.js
 var require_connection_parameters = __commonJS((exports, module) => {
   var dns = __require("dns");
   var defaults = require_defaults();
@@ -3893,7 +3893,7 @@ var require_connection_parameters = __commonJS((exports, module) => {
   module.exports = ConnectionParameters;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/result.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/result.js
 var require_result = __commonJS((exports, module) => {
   var types2 = require_pg_types();
   var matchRegexp = /^([A-Za-z]+)(?: (\d+))?(?: (\d+))?/;
@@ -3981,7 +3981,7 @@ var require_result = __commonJS((exports, module) => {
   module.exports = Result;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/query.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/query.js
 var require_query = __commonJS((exports, module) => {
   var { EventEmitter } = __require("events");
   var Result = require_result();
@@ -4172,7 +4172,7 @@ var require_query = __commonJS((exports, module) => {
   module.exports = Query;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/messages.js
+// ../../node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/messages.js
 var require_messages = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.NoticeMessage = exports.DataRowMessage = exports.CommandCompleteMessage = exports.ReadyForQueryMessage = exports.NotificationResponseMessage = exports.BackendKeyDataMessage = exports.AuthenticationMD5Password = exports.ParameterStatusMessage = exports.ParameterDescriptionMessage = exports.RowDescriptionMessage = exports.Field = exports.CopyResponse = exports.CopyDataMessage = exports.DatabaseError = exports.copyDone = exports.emptyQuery = exports.replicationStart = exports.portalSuspended = exports.noData = exports.closeComplete = exports.bindComplete = exports.parseComplete = undefined;
@@ -4348,7 +4348,7 @@ var require_messages = __commonJS((exports) => {
   exports.NoticeMessage = NoticeMessage;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/buffer-writer.js
+// ../../node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/buffer-writer.js
 var require_buffer_writer = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.Writer = undefined;
@@ -4444,7 +4444,7 @@ var require_buffer_writer = __commonJS((exports) => {
   exports.Writer = Writer;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/serializer.js
+// ../../node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/serializer.js
 var require_serializer = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.serialize = undefined;
@@ -4612,7 +4612,7 @@ var require_serializer = __commonJS((exports) => {
   exports.serialize = serialize;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/buffer-reader.js
+// ../../node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/buffer-reader.js
 var require_buffer_reader = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.BufferReader = undefined;
@@ -4668,7 +4668,7 @@ var require_buffer_reader = __commonJS((exports) => {
   exports.BufferReader = BufferReader;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/parser.js
+// ../../node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/parser.js
 var require_parser = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.Parser = undefined;
@@ -4973,7 +4973,7 @@ var require_parser = __commonJS((exports) => {
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/index.js
+// ../../node_modules/.bun/pg-protocol@1.16.0/node_modules/pg-protocol/dist/index.js
 var require_dist = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.DatabaseError = exports.serialize = undefined;
@@ -4990,17 +4990,17 @@ var require_dist = __commonJS((exports) => {
   function parse4(stream, callback) {
     const parser = new parser_1.Parser;
     stream.on("data", (buffer) => parser.parse(buffer, callback));
-    return new Promise((resolve4) => stream.on("end", () => resolve4()));
+    return new Promise((resolve6) => stream.on("end", () => resolve6()));
   }
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-cloudflare@1.4.0/node_modules/pg-cloudflare/dist/empty.js
+// ../../node_modules/.bun/pg-cloudflare@1.4.0/node_modules/pg-cloudflare/dist/empty.js
 var require_empty = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.default = {};
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/stream.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/stream.js
 var require_stream = __commonJS((exports, module) => {
   var { getStream, getSecureStream } = getStreamFuncs();
   module.exports = {
@@ -5055,7 +5055,7 @@ var require_stream = __commonJS((exports, module) => {
   }
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/connection.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/connection.js
 var require_connection = __commonJS((exports, module) => {
   var EventEmitter = __require("events").EventEmitter;
   var { parse: parse4, serialize } = require_dist();
@@ -5248,7 +5248,7 @@ var require_connection = __commonJS((exports, module) => {
   module.exports = Connection;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/split2@4.2.0/node_modules/split2/index.js
+// ../../node_modules/.bun/split2@4.2.0/node_modules/split2/index.js
 var require_split2 = __commonJS((exports, module) => {
   var { Transform } = __require("stream");
   var { StringDecoder } = __require("string_decoder");
@@ -5347,7 +5347,7 @@ var require_split2 = __commonJS((exports, module) => {
   module.exports = split;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pgpass@1.0.5/node_modules/pgpass/lib/helper.js
+// ../../node_modules/.bun/pgpass@1.0.5/node_modules/pgpass/lib/helper.js
 var require_helper = __commonJS((exports, module) => {
   var path = __require("path");
   var Stream = __require("stream").Stream;
@@ -5511,7 +5511,7 @@ var require_helper = __commonJS((exports, module) => {
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pgpass@1.0.5/node_modules/pgpass/lib/index.js
+// ../../node_modules/.bun/pgpass@1.0.5/node_modules/pgpass/lib/index.js
 var require_lib = __commonJS((exports, module) => {
   var path = __require("path");
   var fs = __require("fs");
@@ -5529,7 +5529,7 @@ var require_lib = __commonJS((exports, module) => {
   module.exports.warnTo = helper.warnTo;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/client.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/client.js
 var require_client = __commonJS((exports, module) => {
   var EventEmitter = __require("events").EventEmitter;
   var utils = require_utils();
@@ -5703,12 +5703,12 @@ var require_client = __commonJS((exports, module) => {
         this._connect(callback);
         return;
       }
-      return new this._Promise((resolve4, reject) => {
+      return new this._Promise((resolve6, reject) => {
         this._connect((error2) => {
           if (error2) {
             reject(error2);
           } else {
-            resolve4(this);
+            resolve6(this);
           }
         });
       });
@@ -6071,8 +6071,8 @@ var require_client = __commonJS((exports, module) => {
       } else {
         query = new Query(config2, values, callback);
         if (!query.callback) {
-          result = new this._Promise((resolve4, reject) => {
-            query.callback = (err, res) => err ? reject(err) : resolve4(res);
+          result = new this._Promise((resolve6, reject) => {
+            query.callback = (err, res) => err ? reject(err) : resolve6(res);
           }).catch((err) => {
             Error.captureStackTrace(err);
             throw err;
@@ -6161,8 +6161,8 @@ var require_client = __commonJS((exports, module) => {
       if (cb) {
         this.connection.once("end", cb);
       } else {
-        return new this._Promise((resolve4) => {
-          this.connection.once("end", resolve4);
+        return new this._Promise((resolve6) => {
+          this.connection.once("end", resolve6);
         });
       }
     }
@@ -6175,7 +6175,7 @@ var require_client = __commonJS((exports, module) => {
   module.exports = Client;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg-pool@3.14.0+00a0136bc273dfed/node_modules/pg-pool/index.js
+// ../../node_modules/.bun/pg-pool@3.14.0+00a0136bc273dfed/node_modules/pg-pool/index.js
 var require_pg_pool = __commonJS((exports, module) => {
   var EventEmitter = __require("events").EventEmitter;
   var NOOP = function() {};
@@ -6209,8 +6209,8 @@ var require_pg_pool = __commonJS((exports, module) => {
     const cb = function(err, client) {
       err ? rej(err) : res(client);
     };
-    const result = new Promise2(function(resolve4, reject) {
-      res = resolve4;
+    const result = new Promise2(function(resolve6, reject) {
+      res = resolve6;
       rej = reject;
     }).catch((err) => {
       Error.captureStackTrace(err);
@@ -6271,7 +6271,7 @@ var require_pg_pool = __commonJS((exports, module) => {
       if (typeof Promise2.try === "function") {
         return Promise2.try(f);
       }
-      return new Promise2((resolve4) => resolve4(f()));
+      return new Promise2((resolve6) => resolve6(f()));
     }
     _isFull() {
       return this._clients.length >= this.options.max;
@@ -6587,7 +6587,7 @@ var require_pg_pool = __commonJS((exports, module) => {
   module.exports = Pool;
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/native/query.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/native/query.js
 var require_query2 = __commonJS((exports, module) => {
   var EventEmitter = __require("events").EventEmitter;
   var util3 = __require("util");
@@ -6647,8 +6647,8 @@ var require_query2 = __commonJS((exports, module) => {
   NativeQuery.prototype._getPromise = function() {
     if (this._promise)
       return this._promise;
-    this._promise = new Promise(function(resolve4, reject) {
-      this._once("end", resolve4);
+    this._promise = new Promise(function(resolve6, reject) {
+      this._once("end", resolve6);
       this._once("error", reject);
     }.bind(this));
     return this._promise;
@@ -6723,7 +6723,7 @@ var require_query2 = __commonJS((exports, module) => {
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/native/client.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/native/client.js
 var require_client2 = __commonJS((exports, module) => {
   var nodeUtils = __require("util");
   var Native;
@@ -6824,12 +6824,12 @@ var require_client2 = __commonJS((exports, module) => {
       this._connect(callback);
       return;
     }
-    return new this._Promise((resolve4, reject) => {
+    return new this._Promise((resolve6, reject) => {
       this._connect((error2) => {
         if (error2) {
           reject(error2);
         } else {
-          resolve4(this);
+          resolve6(this);
         }
       });
     });
@@ -6853,8 +6853,8 @@ var require_client2 = __commonJS((exports, module) => {
       query = new NativeQuery(config2, values, callback);
       if (!query.callback) {
         let resolveOut, rejectOut;
-        result = new this._Promise((resolve4, reject) => {
-          resolveOut = resolve4;
+        result = new this._Promise((resolve6, reject) => {
+          resolveOut = resolve6;
           rejectOut = reject;
         }).catch((err) => {
           Error.captureStackTrace(err);
@@ -6914,8 +6914,8 @@ var require_client2 = __commonJS((exports, module) => {
     }
     let result;
     if (!cb) {
-      result = new this._Promise(function(resolve4, reject) {
-        cb = (err) => err ? reject(err) : resolve4();
+      result = new this._Promise(function(resolve6, reject) {
+        cb = (err) => err ? reject(err) : resolve6();
       });
     }
     const doEnd = function() {
@@ -7049,7 +7049,7 @@ var require_client2 = __commonJS((exports, module) => {
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/index.js
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/lib/index.js
 var require_lib2 = __commonJS((exports, module) => {
   var Client = require_client();
   var defaults = require_defaults();
@@ -7111,7 +7111,7 @@ var require_lib2 = __commonJS((exports, module) => {
   });
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/esm/index.mjs
+// ../../node_modules/.bun/pg@8.23.0+00a0136bc273dfed/node_modules/pg/esm/index.mjs
 var exports_esm = {};
 __export(exports_esm, {
   types: () => types2,
@@ -7145,10 +7145,10 @@ var init_esm = __esm(() => {
 });
 
 // src/cli/index.ts
-import { existsSync as existsSync5, readdirSync as readdirSync5, readFileSync as readFileSync9, statSync as statSync5 } from "fs";
-import { join as join9 } from "path";
+import { existsSync as existsSync7, readdirSync as readdirSync7, readFileSync as readFileSync11, statSync as statSync7 } from "fs";
+import { join as join11 } from "path";
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/commander@13.1.0/node_modules/commander/esm.mjs
+// ../../node_modules/.bun/commander@13.1.0/node_modules/commander/esm.mjs
 var import__ = __toESM(require_commander(), 1);
 var {
   program,
@@ -7170,7 +7170,7 @@ import { createHash as createHash2 } from "crypto";
 // src/todos/common.ts
 import { createHash } from "crypto";
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/core.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/core.js
 var NEVER = Object.freeze({
   status: "aborted"
 });
@@ -7230,7 +7230,7 @@ function config(newConfig) {
     Object.assign(globalConfig, newConfig);
   return globalConfig;
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/util.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/util.js
 var exports_util = {};
 __export(exports_util, {
   unwrapMessage: () => unwrapMessage,
@@ -7744,7 +7744,7 @@ class Class {
   constructor(..._args) {}
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/errors.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/errors.js
 var initializer = (inst, def) => {
   inst.name = "$ZodError";
   Object.defineProperty(inst, "_zod", {
@@ -7818,7 +7818,7 @@ function formatError(error, _mapper) {
   return fieldErrors;
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/parse.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/parse.js
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
   const ctx = _ctx ? Object.assign(_ctx, { async: false }) : { async: false };
   const result = schema._zod.run({ value, issues: [] }, ctx);
@@ -7867,7 +7867,7 @@ var _safeParseAsync = (_Err) => async (schema, value, _ctx) => {
   } : { success: true, data: result.value };
 };
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync($ZodRealError);
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/regexes.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/regexes.js
 var cuid = /^[cC][^\s-]{8,}$/;
 var cuid2 = /^[0-9a-z]+$/;
 var ulid = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/;
@@ -7925,7 +7925,7 @@ var _null = /null/i;
 var lowercase = /^[^A-Z]*$/;
 var uppercase = /^[^a-z]*$/;
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/checks.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
   var _a;
   inst._zod ?? (inst._zod = {});
@@ -8309,7 +8309,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/doc.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/doc.js
 class Doc {
   constructor(args = []) {
     this.content = [];
@@ -8347,14 +8347,14 @@ class Doc {
   }
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/versions.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 0,
   patch: 0
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/schemas.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
   var _a;
   inst ?? (inst = {});
@@ -9428,7 +9428,7 @@ function handleRefineResult(result, payload, input, inst) {
     payload.issues.push(issue(_iss));
   }
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/locales/en.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/locales/en.js
 var parsedType = (data) => {
   const t = typeof data;
   switch (t) {
@@ -9545,7 +9545,7 @@ function en_default() {
     localeError: error()
   };
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/registries.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/registries.js
 var $output = Symbol("ZodOutput");
 var $input = Symbol("ZodInput");
 
@@ -9595,7 +9595,7 @@ function registry() {
   return new $ZodRegistry;
 }
 var globalRegistry = /* @__PURE__ */ registry();
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/api.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/api.js
 function _string(Class2, params) {
   return new Class2({
     type: "string",
@@ -10019,7 +10019,7 @@ function _refine(Class2, fn, _params) {
   });
   return schema;
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/iso.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/iso.js
 var exports_iso = {};
 __export(exports_iso, {
   time: () => time2,
@@ -10060,7 +10060,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/errors.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/errors.js
 var initializer2 = (inst, issues) => {
   $ZodError.init(inst, issues);
   inst.name = "ZodError";
@@ -10089,13 +10089,13 @@ var ZodRealError = $constructor("ZodError", initializer2, {
   Parent: Error
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/parse.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/parse.js
 var parse2 = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError);
 var safeParseAsync2 = /* @__PURE__ */ _safeParseAsync(ZodRealError);
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/schemas.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/schemas.js
 var ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
   $ZodType.init(inst, def);
   inst.def = def;
@@ -10657,7 +10657,7 @@ function superRefine(fn) {
   });
   return ch;
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/external.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/external.js
 config(en_default());
 
 // src/todos/common.ts
@@ -10729,7 +10729,7 @@ function sha256TodosText(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/external.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/external.js
 var exports_external = {};
 __export(exports_external, {
   void: () => voidType,
@@ -10841,7 +10841,7 @@ __export(exports_external, {
   BRAND: () => BRAND
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/util.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/util.js
 var util;
 (function(util2) {
   util2.assertEqual = (_) => {};
@@ -10972,7 +10972,7 @@ var getParsedType2 = (data) => {
   }
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/ZodError.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/ZodError.js
 var ZodIssueCode = util.arrayToEnum([
   "invalid_type",
   "invalid_literal",
@@ -11091,7 +11091,7 @@ ZodError2.create = (issues) => {
   return error2;
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/locales/en.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/locales/en.js
 var errorMap = (issue2, _ctx) => {
   let message;
   switch (issue2.code) {
@@ -11194,7 +11194,7 @@ var errorMap = (issue2, _ctx) => {
 };
 var en_default2 = errorMap;
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/errors.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/errors.js
 var overrideErrorMap = en_default2;
 function setErrorMap(map) {
   overrideErrorMap = map;
@@ -11202,7 +11202,7 @@ function setErrorMap(map) {
 function getErrorMap() {
   return overrideErrorMap;
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
   const { data, path, errorMaps, issueData } = params;
   const fullPath = [...path, ...issueData.path || []];
@@ -11308,14 +11308,14 @@ var isAborted = (x) => x.status === "aborted";
 var isDirty = (x) => x.status === "dirty";
 var isValid = (x) => x.status === "valid";
 var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/errorUtil.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
 (function(errorUtil2) {
   errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
   errorUtil2.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil || (errorUtil = {}));
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/types.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/types.js
 class ParseInputLazyPath {
   constructor(parent, value, path, key) {
     this._cachedPath = [];
@@ -16014,8 +16014,52 @@ function createDeploymentEnvelopeSchema(primitives) {
   };
 }
 
+// src/env-token.ts
+function envToken(name) {
+  return name.toUpperCase().replace(/-/g, "_");
+}
+
+// src/client/env-keys.ts
+function clientTransportEnvKeys(name) {
+  const envSegment = envToken(name);
+  return {
+    apiUrlKeys: [`HASNA_${envSegment}_API_URL`, `${envSegment}_API_URL`],
+    apiKeyKeys: [`HASNA_${envSegment}_API_KEY`, `${envSegment}_API_KEY`]
+  };
+}
+
+// src/client/errors.ts
+var CLIENT_RESOLUTION_EXIT_CODES = Object.freeze({
+  CREDENTIAL_ABSENT: 2,
+  CREDENTIAL_UNREADABLE: 3,
+  CREDENTIAL_REJECTED: 4,
+  AUTHORITY_MISSING: 5,
+  AUTHORITY_INVALID: 5,
+  AUTHORITY_CONFLICT: 5,
+  LOCAL_OPT_IN_CONFLICT: 6,
+  TRANSPORT_UNAVAILABLE: 7,
+  NOT_AVAILABLE_HOSTED: 8
+});
+var CLIENT_RESOLUTION_CODE_DESCRIPTIONS = Object.freeze({
+  CREDENTIAL_ABSENT: "no credential in the Keychain, the credentials file, or the environment, and the local opt-in is off",
+  CREDENTIAL_UNREADABLE: "a credential source exists but cannot be read or holds an unusable value",
+  CREDENTIAL_REJECTED: "the authority rejected the presented credential (401/403)",
+  AUTHORITY_MISSING: "no service authority is configured and the fleet gateway default cannot be composed",
+  AUTHORITY_INVALID: "a declared service authority is not a usable HTTPS URL",
+  AUTHORITY_CONFLICT: "configured service authorities disagree or changed during a request",
+  LOCAL_OPT_IN_CONFLICT: "the local opt-in and hosted client configuration were both declared",
+  TRANSPORT_UNAVAILABLE: "the service authority could not be reached",
+  NOT_AVAILABLE_HOSTED: "the command is server-only and has no hosted client path"
+});
+
+// src/client/local-opt-in.ts
+function localOptInEnvKey(name) {
+  return `HASNA_${envToken(name)}_LOCAL`;
+}
+
 // src/schemas.ts
-var CONTRACTS_PACKAGE_VERSION = "1.0.2";
+var CONTRACTS_PACKAGE_VERSION = "1.1.0";
+var FLEET_MIN_KIT_VERSION = "1.1.0";
 var SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
   resourceRef: "hasna.resource_ref.v1",
@@ -19662,6 +19706,51 @@ var SERVICE_SURFACE_KINDS = ["api", "sdk", "mcp", "cli"];
 var ServiceSurfaceKindSchema = exports_external.enum(SERVICE_SURFACE_KINDS);
 var ServiceSurfaceStatusSchema = exports_external.enum(["supported", "deferred", "unsupported"]);
 var ServiceAuthModeSchema = exports_external.enum(["none", "local-only", "api-key", "session", "service-token", "custom"]);
+var APP_SCOPES = ["public", "internal"];
+var AppScopeSchema = exports_external.enum(APP_SCOPES);
+var DATA_ACCESS_MODES = ["hosted", "server-only", "local-opt-in"];
+var DataAccessSchema = exports_external.enum(DATA_ACCESS_MODES);
+var SurfaceCommandSchema = exports_external.object({
+  name: exports_external.string().trim().min(1),
+  dataAccess: DataAccessSchema
+}).strict();
+var CLIENT_CONTRACT_TRANSPORTS = ["hosted"];
+var ClientContractTransportSchema = exports_external.enum(CLIENT_CONTRACT_TRANSPORTS);
+var CLIENT_CREDENTIAL_CHAINS = ["contracts"];
+var ClientCredentialChainSchema = exports_external.enum(CLIENT_CREDENTIAL_CHAINS);
+var CLIENT_AUTHORITY_PATTERN = /^https:\/\/[^\s/@?#]+(?:\/[^\s/?#]+)*$/;
+var LOCAL_OPT_IN_KEY_PATTERN = /^HASNA_[A-Z][A-Z0-9_]*_LOCAL$/;
+var RELATIVE_SOURCE_PATH_PATTERN = /^(?!\/)(?!\.\.)[A-Za-z0-9_./-]+\.[cm]?[jt]sx?$/;
+var ClientContractSchema = exports_external.object({
+  transport: ClientContractTransportSchema,
+  authority: exports_external.string().regex(CLIENT_AUTHORITY_PATTERN, "client.authority must be an absolute https URL with no credentials, query, fragment, or trailing slash").optional(),
+  credentialChain: ClientCredentialChainSchema,
+  localOptIn: exports_external.string().regex(LOCAL_OPT_IN_KEY_PATTERN, "client.localOptIn must be HASNA_<NAME>_LOCAL").nullable().optional(),
+  localStoreModule: exports_external.string().regex(RELATIVE_SOURCE_PATH_PATTERN, "client.localStoreModule must be a repo-relative source path such as src/db/database.ts").nullable().optional(),
+  readProbe: exports_external.array(exports_external.string().min(1)).min(1).optional()
+}).strict().superRefine((value, ctx) => {
+  if (value.authority?.endsWith("/v1")) {
+    ctx.addIssue({
+      code: exports_external.ZodIssueCode.custom,
+      message: "client.authority must not end in /v1; the client appends the version segment itself",
+      path: ["authority"]
+    });
+  }
+  if (value.localOptIn && !value.localStoreModule) {
+    ctx.addIssue({
+      code: exports_external.ZodIssueCode.custom,
+      message: "client.localOptIn names a door, so client.localStoreModule must name the one module that opens the on-box store",
+      path: ["localStoreModule"]
+    });
+  }
+  if (value.localStoreModule && !value.localOptIn) {
+    ctx.addIssue({
+      code: exports_external.ZodIssueCode.custom,
+      message: "client.localStoreModule names an on-box store, so client.localOptIn must name its door",
+      path: ["localOptIn"]
+    });
+  }
+});
 var ServiceEndpointSchema = exports_external.object({
   method: exports_external.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
   path: exports_external.string().regex(/^\/[A-Za-z0-9_./:*-]*$/, "Endpoint paths must be absolute HTTP paths"),
@@ -19701,8 +19790,19 @@ var ServiceSurfaceSchema = exports_external.object({
   generatedFrom: exports_external.string().regex(/^\/[A-Za-z0-9_./:-]*$/, "SDK generatedFrom must reference an absolute OpenAPI path").optional(),
   clientClassName: exports_external.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/).optional(),
   deferReason: exports_external.string().min(1).optional(),
-  readinessGates: exports_external.array(DeploymentReadinessGateSchema).default([])
+  readinessGates: exports_external.array(DeploymentReadinessGateSchema).default([]),
+  dataAccess: DataAccessSchema.optional(),
+  commands: exports_external.array(SurfaceCommandSchema).optional()
 }).strict().superRefine((value, ctx) => {
+  if (value.commands) {
+    const seen = new Set;
+    for (const [index, command] of value.commands.entries()) {
+      if (seen.has(command.name)) {
+        ctx.addIssue({ code: exports_external.ZodIssueCode.custom, message: `Duplicate command declaration "${command.name}"`, path: ["commands", index, "name"] });
+      }
+      seen.add(command.name);
+    }
+  }
   if (value.status === "supported") {
     if (!value.kind || value.kind === "api") {
       if (!value.bin) {
@@ -20108,6 +20208,8 @@ var ServiceContractManifestSchema = exports_external.object({
   serving: ServingContractSchema.optional(),
   serviceSurfaces: exports_external.array(ServiceSurfaceSchema).default([]),
   publishing: PublishingContractSchema.optional(),
+  scope: AppScopeSchema.optional(),
+  client: ClientContractSchema.nullable().optional(),
   metadata: ServiceContractMetadataSchema.optional()
 }).strict().superRefine((value, ctx) => {
   if (new Set(value.hosting).size !== value.hosting.length) {
@@ -20258,6 +20360,40 @@ var ServiceContractManifestSchema = exports_external.object({
         code: exports_external.ZodIssueCode.custom,
         message: `Service surface MCP bin "${surface.mcpBin}" must be declared in bins`,
         path: ["serviceSurfaces", index, "mcpBin"]
+      });
+    }
+  }
+  if (value.client) {
+    const expectedOptIn = localOptInEnvKey(value.name);
+    if (value.client.localOptIn && value.client.localOptIn !== expectedOptIn) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: `client.localOptIn must be ${expectedOptIn}`,
+        path: ["client", "localOptIn"]
+      });
+    }
+    if (value.class === "library") {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "library repos ship no client; declare client: null or omit it",
+        path: ["client"]
+      });
+    }
+  }
+  for (const [index, surface] of value.serviceSurfaces.entries()) {
+    const accesses = [surface.dataAccess, ...(surface.commands ?? []).map((command) => command.dataAccess)];
+    if (accesses.includes("local-opt-in") && !value.client?.localOptIn) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "a local-opt-in surface or command requires client.localOptIn to name the door",
+        path: ["serviceSurfaces", index, "dataAccess"]
+      });
+    }
+    if (value.client === null && accesses.includes("hosted")) {
+      ctx.addIssue({
+        code: exports_external.ZodIssueCode.custom,
+        message: "client is null (local-by-design), so no surface or command can declare hosted data access; omit dataAccess or declare server-only",
+        path: ["serviceSurfaces", index, "dataAccess"]
       });
     }
   }
@@ -22030,17 +22166,12 @@ function scanNoCloudTarget(target, options = {}) {
 }
 
 // src/conformance.ts
-import { existsSync as existsSync2, readFileSync as readFileSync4, statSync as statSync3 } from "fs";
-import { join as join5, relative as relative3 } from "path";
+import { existsSync as existsSync4, readFileSync as readFileSync6, statSync as statSync5 } from "fs";
+import { join as join7, relative as relative5 } from "path";
 
 // src/service-contract.ts
 import { readFileSync as readFileSync2 } from "fs";
 import { join as join3 } from "path";
-
-// src/env-token.ts
-function envToken(name) {
-  return name.toUpperCase().replace(/-/g, "_");
-}
 
 // src/server-backend.ts
 function serverDataBackendEnvKeys(name) {
@@ -22254,6 +22385,23 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
             pattern: "^[A-Za-z_$][A-Za-z0-9_$]*$"
           },
           deferReason: { type: "string", minLength: 1 },
+          dataAccess: {
+            enum: ["hosted", "server-only", "local-opt-in"],
+            description: "How the surface reaches data: hosted (the authenticated /v1 client only), server-only (never reachable from a CLI or MCP bin), or local-opt-in (the on-box store behind HASNA_<NAME>_LOCAL=1 only). Absent asserts nothing."
+          },
+          commands: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["name", "dataAccess"],
+              properties: {
+                name: { type: "string", minLength: 1 },
+                dataAccess: { enum: ["hosted", "server-only", "local-opt-in"] }
+              }
+            },
+            description: "Per-command data access where it differs from the surface default, e.g. a `db migrate` command that is server-only."
+          },
           readinessGates: {
             type: "array",
             items: {
@@ -22452,6 +22600,46 @@ var SERVICE_CONTRACT_JSON_SCHEMA = {
         }
       },
       description: "How the repo's artifacts reach consumers. Optional and additive; absence asserts nothing."
+    },
+    scope: {
+      enum: ["public", "internal"],
+      description: "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*); internal is the same root with the -internal suffix, for internal-scope packages. Absent means public."
+    },
+    client: {
+      oneOf: [
+        { type: "null" },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["transport", "credentialChain"],
+          properties: {
+            transport: { const: "hosted" },
+            authority: {
+              type: "string",
+              pattern: "^https://[^\\s/@?#]+(?:/[^\\s/?#]+)*$",
+              description: "Absolute https client base with no credentials, query, fragment, or trailing slash, never ending in /v1. Defaults to https://api.hasna.com/<name>."
+            },
+            credentialChain: { const: "contracts" },
+            localOptIn: {
+              type: ["string", "null"],
+              pattern: "^HASNA_[A-Z][A-Z0-9_]*_LOCAL$",
+              description: "HASNA_<NAME>_LOCAL, the one door to an on-box store; null when the app has none."
+            },
+            localStoreModule: {
+              type: ["string", "null"],
+              minLength: 1,
+              description: "Repo-relative source path of the one module allowed to open the on-box store, e.g. src/db/database.ts."
+            },
+            readProbe: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string", minLength: 1 },
+              description: 'The read command the black-box fail-closed check runs, e.g. ["list", "--limit", "1"].'
+            }
+          }
+        }
+      ],
+      description: "The hosted client contract: CLI and MCP bins reach data only through the shared authenticated client. null states explicitly that the repo ships no client. Omit to assert nothing."
     },
     metadata: {
       type: "object",
@@ -22720,17 +22908,6 @@ function mintApiKey(options) {
 // src/credential-seam.ts
 import { readFileSync as readFileSync3, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
 import { join as join4, relative as relative2 } from "path";
-
-// src/client/env-keys.ts
-function clientTransportEnvKeys(name) {
-  const envSegment = envToken(name);
-  return {
-    apiUrlKeys: [`HASNA_${envSegment}_API_URL`, `${envSegment}_API_URL`],
-    apiKeyKeys: [`HASNA_${envSegment}_API_KEY`, `${envSegment}_API_KEY`]
-  };
-}
-
-// src/credential-seam.ts
 var SKIP_DIRS2 = new Set([
   ".git",
   "node_modules",
@@ -22971,6 +23148,592 @@ function firstReadOnLine(masked, candidates) {
   return null;
 }
 
+// src/conformance-client.ts
+import { existsSync as existsSync3, readFileSync as readFileSync5, readdirSync as readdirSync4 } from "fs";
+import { spawnSync } from "child_process";
+import { mkdtempSync as mkdtempSync2, rmSync as rmSync2 } from "fs";
+import { tmpdir as tmpdir2 } from "os";
+import { join as join6, relative as relative4, resolve as resolve4 } from "path";
+
+// src/client/app-home.ts
+var PUBLIC_HOME_DIR_NAME = ".hasna";
+var INTERNAL_SCOPE_SUFFIX = "internal";
+var INTERNAL_HOME_DIR_NAME = [PUBLIC_HOME_DIR_NAME, INTERNAL_SCOPE_SUFFIX].join("-");
+var INTERNAL_PACKAGE_SCOPE_PREFIX = ["@hasna", `${INTERNAL_SCOPE_SUFFIX}/`].join("-");
+function scopeHomeDirName(scope) {
+  return scope === "internal" ? INTERNAL_HOME_DIR_NAME : PUBLIC_HOME_DIR_NAME;
+}
+
+// src/conformance-import-graph.ts
+import { existsSync as existsSync2, readFileSync as readFileSync4, readdirSync as readdirSync3, statSync as statSync3 } from "fs";
+import { basename as basename2, dirname, join as join5, relative as relative3, resolve as resolve3 } from "path";
+var SQLITE_MODULE_SPECIFIERS = Object.freeze([
+  ["bun", "sqlite"].join(":"),
+  ["better", "sqlite3"].join("-"),
+  ["node", "sqlite"].join(":"),
+  "sqlite3",
+  "sqlite",
+  ["@libsql", "client"].join("/"),
+  "libsql"
+]);
+var SQLITE_SPECIFIER_SET = new Set(SQLITE_MODULE_SPECIFIERS);
+var NEW_DATABASE = new RegExp(`\\bnew\\s+${["Data", "base"].join("")}\\s*\\(`);
+var NEW_DATABASE_EVIDENCE = ["new ", "Data", "base("].join("");
+var SOURCE_FILE = /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/;
+var TEST_FILE2 = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
+var DECLARATION_FILE = /\.d\.[cm]?ts$/;
+var MAX_FILE_BYTES2 = 2000000;
+var IMPORT_GRAPH_SKIP_DIRS = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "build",
+  "out",
+  "coverage",
+  ".next",
+  ".turbo",
+  ".cache",
+  "tests",
+  "test",
+  "__tests__"
+]);
+var IMPORT_SPECIFIER = /(?:import|export)\s+(?:[^'";]*?\s+from\s+)?["']([^"']+)["']|\brequire\(\s*["']([^"']+)["']\s*\)|\bimport\(\s*["']([^"']+)["']\s*\)/g;
+function maskSourceComments(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, " ")).replace(/(^|[^:"'`\\])\/\/[^\n]*/g, (match, lead) => lead + " ".repeat(match.length - lead.length));
+}
+function resolveRelativeImport(fromFile, specifier) {
+  if (!specifier.startsWith("."))
+    return null;
+  const base = resolve3(dirname(fromFile), specifier);
+  const candidates = [
+    base,
+    base.replace(/\.js$/, ".ts"),
+    base.replace(/\.js$/, ".tsx"),
+    base.replace(/\.mjs$/, ".mts"),
+    base.replace(/\.cjs$/, ".cts"),
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.js`,
+    `${base}.mts`,
+    `${base}.mjs`,
+    join5(base, "index.ts"),
+    join5(base, "index.tsx"),
+    join5(base, "index.js"),
+    join5(base, "index.mjs")
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (existsSync2(candidate) && statSync3(candidate).isFile())
+        return candidate;
+    } catch {}
+  }
+  return null;
+}
+function walkSourceFiles(dir, out) {
+  let entries;
+  try {
+    entries = readdirSync3(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const full = join5(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (!IMPORT_GRAPH_SKIP_DIRS.has(entry.name))
+        walkSourceFiles(full, out);
+      continue;
+    }
+    if (!entry.isFile())
+      continue;
+    if (!SOURCE_FILE.test(entry.name) || TEST_FILE2.test(entry.name) || DECLARATION_FILE.test(entry.name))
+      continue;
+    try {
+      if (statSync3(full).size > MAX_FILE_BYTES2)
+        continue;
+    } catch {
+      continue;
+    }
+    out.push(full);
+  }
+}
+function analyzeSourceFile(path) {
+  let text;
+  try {
+    text = readFileSync4(path, "utf8");
+  } catch {
+    return null;
+  }
+  const masked = maskSourceComments(text);
+  const imports = [];
+  const externalImports = [];
+  let sqliteEvidence = null;
+  for (const match of masked.matchAll(IMPORT_SPECIFIER)) {
+    const specifier = match[1] ?? match[2] ?? match[3];
+    if (!specifier)
+      continue;
+    if (specifier.startsWith(".")) {
+      const resolved = resolveRelativeImport(path, specifier);
+      if (resolved && !imports.includes(resolved))
+        imports.push(resolved);
+    } else {
+      if (!externalImports.includes(specifier))
+        externalImports.push(specifier);
+      if (SQLITE_SPECIFIER_SET.has(specifier) && !sqliteEvidence)
+        sqliteEvidence = specifier;
+    }
+  }
+  if (!sqliteEvidence && NEW_DATABASE.test(masked))
+    sqliteEvidence = NEW_DATABASE_EVIDENCE;
+  return { path, imports, externalImports, sqlite: sqliteEvidence !== null, sqliteEvidence };
+}
+function buildImportGraph(repoRoot) {
+  const root = resolve3(repoRoot);
+  const files = [];
+  const sourceRoot = join5(root, "src");
+  if (existsSync2(sourceRoot))
+    walkSourceFiles(sourceRoot, files);
+  else
+    walkSourceFiles(root, files);
+  const binRoot = join5(root, "bin");
+  if (existsSync2(binRoot))
+    walkSourceFiles(binRoot, files);
+  const infos = new Map;
+  for (const file of files) {
+    const info = analyzeSourceFile(file);
+    if (info)
+      infos.set(file, info);
+  }
+  return { root, files: infos };
+}
+function resolveBinEntry(repoRoot, binTarget) {
+  const root = resolve3(repoRoot);
+  const direct = resolve3(root, binTarget);
+  const guesses = [];
+  const asSource = (path) => path.replace(/\/dist\//, "/src/").replace(/\.[cm]?js$/, ".ts");
+  guesses.push(asSource(direct), asSource(direct).replace(/\.ts$/, "/index.ts"));
+  if (existsSync2(direct) && statSync3(direct).isFile()) {
+    try {
+      const shim = maskSourceComments(readFileSync4(direct, "utf8"));
+      const match = /(?:from|import\(|require\()\s*["']([^"']+)["']/.exec(shim);
+      if (match?.[1]?.startsWith(".")) {
+        const resolved = resolveRelativeImport(direct, match[1]);
+        if (resolved)
+          guesses.unshift(resolved);
+        const shimTarget = asSource(resolve3(dirname(direct), match[1]));
+        guesses.push(shimTarget, shimTarget.replace(/\.ts$/, "/index.ts"));
+      }
+    } catch {}
+    if (SOURCE_FILE.test(direct) && !direct.includes("/dist/"))
+      guesses.push(direct);
+  }
+  const stem = basename2(binTarget).replace(/\.[cm]?js$/, "");
+  guesses.push(join5(root, "src", `${stem}.ts`), join5(root, "src", stem, "index.ts"), join5(root, "src", "cli", `${stem}.ts`));
+  if (/mcp/.test(stem))
+    guesses.push(join5(root, "src", "mcp", "index.ts"), join5(root, "src", "mcp.ts"));
+  if (/serve|server/.test(stem))
+    guesses.push(join5(root, "src", "server", "index.ts"), join5(root, "src", "server.ts"));
+  if (/^(?:index|cli)$/.test(stem) || stem === basename2(root)) {
+    guesses.push(join5(root, "src", "cli", "index.ts"), join5(root, "src", "cli.ts"), join5(root, "src", "index.ts"));
+  }
+  for (const guess of guesses) {
+    try {
+      if (existsSync2(guess) && statSync3(guess).isFile())
+        return guess;
+    } catch {}
+  }
+  return null;
+}
+function reachableFrom(graph, entry) {
+  const seen = new Set;
+  const queue = [resolve3(entry)];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (seen.has(current))
+      continue;
+    seen.add(current);
+    const info = graph.files.get(current) ?? analyzeSourceFile(current);
+    if (!info)
+      continue;
+    for (const next of info.imports)
+      if (!seen.has(next))
+        queue.push(next);
+  }
+  return seen;
+}
+function importPath(graph, from, to) {
+  const start = resolve3(from);
+  const goal = resolve3(to);
+  const previous = new Map([[start, null]]);
+  const queue = [start];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === goal) {
+      const chain = [];
+      for (let node = current;node; node = previous.get(node) ?? null)
+        chain.unshift(node);
+      return chain;
+    }
+    const info = graph.files.get(current) ?? analyzeSourceFile(current);
+    if (!info)
+      continue;
+    for (const next of info.imports) {
+      if (!previous.has(next)) {
+        previous.set(next, current);
+        queue.push(next);
+      }
+    }
+  }
+  return null;
+}
+function sqliteReachability(graph, entry) {
+  const reachable = reachableFrom(graph, entry);
+  const modules = [...reachable].filter((path) => (graph.files.get(path) ?? analyzeSourceFile(path))?.sqlite).sort();
+  const chains = {};
+  for (const module of modules) {
+    const chain = importPath(graph, entry, module) ?? [module];
+    chains[relative3(graph.root, module)] = chain.map((step) => relative3(graph.root, step));
+  }
+  return { modules, chains };
+}
+function importsLocalOptInGate(path) {
+  let text;
+  try {
+    text = maskSourceComments(readFileSync4(path, "utf8"));
+  } catch {
+    return false;
+  }
+  const gate = /import\s*(?:type\s+)?\{[^}]*\bselectsLocalStore\b[^}]*\}\s*from\s*["']@hasna\/contracts(?:\/client(?:\/local-opt-in)?)?(?:\.js)?["']/;
+  return gate.test(text);
+}
+
+// src/conformance-client.ts
+var MAX_FINDINGS_IN_DETAIL = 8;
+function verdict(id, findings, passDetail, strict) {
+  if (findings.length === 0)
+    return { id, status: "pass", detail: passDetail };
+  const status = strict ? "fail" : "report";
+  const shown = findings.slice(0, MAX_FINDINGS_IN_DETAIL);
+  const more = findings.length > shown.length ? `; +${findings.length - shown.length} more` : "";
+  return { id, status, detail: `${shown.join("; ")}${more}` };
+}
+function readPackage(repoRoot) {
+  const path = join6(repoRoot, "package.json");
+  if (!existsSync3(path))
+    return { present: false, name: null, bins: {}, kitPin: null };
+  try {
+    const pkg = JSON.parse(readFileSync5(path, "utf8"));
+    const name = typeof pkg.name === "string" ? pkg.name : null;
+    const bins = {};
+    if (typeof pkg.bin === "string" && name)
+      bins[name.replace(/^@[^/]+\//, "")] = pkg.bin;
+    else if (pkg.bin && typeof pkg.bin === "object") {
+      for (const [bin, target] of Object.entries(pkg.bin))
+        if (typeof target === "string")
+          bins[bin] = target;
+    }
+    const pin = [pkg.dependencies, pkg.devDependencies, pkg.optionalDependencies].map((section) => section?.["@hasna/contracts"]).find((value) => typeof value === "string");
+    return { present: true, name, bins, kitPin: pin ?? null };
+  } catch {
+    return { present: true, name: null, bins: {}, kitPin: null };
+  }
+}
+function localByDesign(manifest) {
+  return manifest.client === null;
+}
+function clientBins(manifest) {
+  const bins = [];
+  for (const surface of manifest.serviceSurfaces) {
+    if (surface.status !== "supported")
+      continue;
+    if (surface.kind === "cli" && surface.bin)
+      bins.push({ surface: surface.name, kind: "cli", bin: surface.bin, dataAccess: surface.dataAccess });
+    if (surface.kind === "mcp" && surface.mcpBin)
+      bins.push({ surface: surface.name, kind: "mcp", bin: surface.mcpBin, dataAccess: surface.dataAccess });
+  }
+  if (bins.length === 0) {
+    if (manifest.bins.includes(manifest.name))
+      bins.push({ surface: manifest.name, kind: "cli", bin: manifest.name, dataAccess: undefined });
+    if (manifest.bins.includes(`${manifest.name}-mcp`))
+      bins.push({ surface: `${manifest.name}-mcp`, kind: "mcp", bin: `${manifest.name}-mcp`, dataAccess: undefined });
+  }
+  return bins;
+}
+function clientTransportDeclaredCheck(manifest, options = {}) {
+  const id = "client_transport_declared";
+  const bins = clientBins(manifest);
+  if (bins.length === 0)
+    return { id, status: "skip", detail: "no CLI or MCP surface declared" };
+  if (!manifest.storage)
+    return { id, status: "skip", detail: "no storage declared; nothing to reach" };
+  if (localByDesign(manifest))
+    return { id, status: "pass", detail: "local-by-design: client is null" };
+  const findings = [];
+  if (!manifest.client) {
+    findings.push(`hasna.contract.json declares ${bins.map((bin) => bin.bin).join(", ")} with storage but no client; declare client.transport: hosted (credentialChain: contracts), or client: null for a local-by-design tool`);
+  } else {
+    for (const bin of bins) {
+      if (bin.dataAccess === undefined)
+        findings.push(`surface ${bin.surface} (${bin.bin}) declares no dataAccess; declare hosted, server-only or local-opt-in`);
+    }
+    if (!manifest.client.readProbe)
+      findings.push("client.readProbe is not declared, so the black-box fail-closed check cannot run");
+  }
+  return verdict(id, findings, `client.transport hosted via the contracts credential chain for ${bins.map((bin) => bin.bin).join(", ")}`, options.strict ?? false);
+}
+function clientSqliteIsolationCheck(repoRoot, manifest, options = {}, graph = buildImportGraph(repoRoot)) {
+  const id = "client_sqlite_isolation";
+  const bins = clientBins(manifest).filter((bin) => bin.dataAccess !== "server-only");
+  if (bins.length === 0)
+    return { id, status: "skip", detail: "no CLI or MCP surface declared" };
+  if (localByDesign(manifest))
+    return { id, status: "skip", detail: "local-by-design: client is null" };
+  const pkg = readPackage(repoRoot);
+  if (!pkg.present)
+    return { id, status: "skip", detail: "no package.json found" };
+  const allowedModule = manifest.client?.localStoreModule ? resolve4(repoRoot, manifest.client.localStoreModule) : null;
+  const findings = [];
+  let reachableSqlite = 0;
+  for (const bin of bins) {
+    const target = pkg.bins[bin.bin];
+    if (!target) {
+      findings.push(`bin ${bin.bin} is declared in hasna.contract.json but not in package.json bin`);
+      continue;
+    }
+    const entry = resolveBinEntry(repoRoot, target);
+    if (!entry) {
+      findings.push(`bin ${bin.bin} (${target}) has no resolvable source entry; the import graph cannot be checked`);
+      continue;
+    }
+    const reach = sqliteReachability(graph, entry);
+    for (const module of reach.modules) {
+      const rel = relative4(repoRoot, module);
+      const chain = reach.chains[rel]?.join(" -> ") ?? rel;
+      if (allowedModule && module === allowedModule) {
+        reachableSqlite += 1;
+        if (!importsLocalOptInGate(module)) {
+          findings.push(`${bin.bin}: client.localStoreModule ${rel} opens a store without importing selectsLocalStore from @hasna/contracts/client`);
+        }
+        continue;
+      }
+      findings.push(`${bin.bin} (${bin.kind}) reaches a SQLite module outside client.localStoreModule: ${chain}`);
+    }
+  }
+  const pass = reachableSqlite > 0 ? `only client.localStoreModule opens a store from ${bins.map((bin) => bin.bin).join(", ")}, behind selectsLocalStore` : `no SQLite module is reachable from ${bins.map((bin) => bin.bin).join(", ")}`;
+  return verdict(id, findings, pass, options.strict ?? false);
+}
+var STORE_ARTIFACT = /\.(?:db|db-wal|db-shm|db-journal|sqlite|sqlite3|json)$/i;
+function filesUnder(root) {
+  const out = [];
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = readdirSync4(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join6(dir, entry.name);
+      if (entry.isDirectory())
+        walk(full);
+      else
+        out.push(full);
+    }
+  };
+  walk(root);
+  return out;
+}
+var defaultBlackboxRunner = (timeoutMs) => (argv, env, cwd) => {
+  const result = spawnSync(argv[0], argv.slice(1), { cwd, env, encoding: "utf8", timeout: timeoutMs, stdio: ["ignore", "pipe", "pipe"] });
+  return { status: result.status, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
+};
+function clientFailClosedBlackboxCheck(repoRoot, manifest, options = {}) {
+  const id = "client_fail_closed_blackbox";
+  if (options.blackbox === false)
+    return { id, status: "skip", detail: "disabled by caller" };
+  if (localByDesign(manifest))
+    return { id, status: "skip", detail: "local-by-design: client is null" };
+  const probe = manifest.client?.readProbe;
+  if (!manifest.client || !probe)
+    return { id, status: "skip", detail: "client.readProbe is not declared" };
+  const pkg = readPackage(repoRoot);
+  const target = pkg.bins[manifest.name];
+  if (!target)
+    return { id, status: "skip", detail: `package.json declares no "${manifest.name}" bin` };
+  const binPath = resolve4(repoRoot, target);
+  const strict = options.strict ?? false;
+  if (!existsSync3(binPath)) {
+    return verdict(id, [`built bin ${relative4(repoRoot, binPath)} is missing; build before running the probe`], "", strict);
+  }
+  const timeoutMs = options.blackboxTimeoutMs ?? 60000;
+  const run = options.blackboxRunner ?? defaultBlackboxRunner(timeoutMs);
+  const optIn = manifest.client.localOptIn ?? null;
+  const scopeDir = scopeHomeDirName(manifest.scope ?? "public");
+  const findings = [];
+  const probeOnce = (label, extra) => {
+    const home = mkdtempSync2(join6(tmpdir2(), "contracts-blackbox-"));
+    try {
+      const env = {
+        HOME: home,
+        HASNA_STATION: "no-such-station",
+        USER: "nobody",
+        PATH: process.env.PATH ?? "",
+        ...extra
+      };
+      const result = run([process.execPath, binPath, ...probe], env, repoRoot);
+      const created = filesUnder(home).filter((file) => STORE_ARTIFACT.test(file));
+      return { label, result, created: created.map((file) => relative4(home, file)), home };
+    } finally {
+      rmSync2(home, { recursive: true, force: true });
+    }
+  };
+  const absent = probeOnce("no credential", {});
+  if (absent.result.status !== 2)
+    findings.push(`${absent.label}: exit ${absent.result.status ?? "signal"}, expected 2`);
+  if (!absent.result.stderr.includes("CREDENTIAL_ABSENT"))
+    findings.push(`${absent.label}: stderr does not name CREDENTIAL_ABSENT`);
+  if (absent.created.length > 0)
+    findings.push(`${absent.label}: created ${absent.created.length} store/JSON file(s) under an empty HOME (${absent.created.slice(0, 3).join(", ")})`);
+  if (optIn) {
+    const local = probeOnce(`${optIn}=1`, { [optIn]: "1" });
+    const expectedStore = join6(scopeDir, manifest.name, `${manifest.name}.db`);
+    if (local.result.status !== 0)
+      findings.push(`${local.label}: exit ${local.result.status ?? "signal"}, expected 0`);
+    const stray = local.created.filter((file) => !file.startsWith(join6(scopeDir, manifest.name) + "/"));
+    if (stray.length > 0)
+      findings.push(`${local.label}: wrote outside ${scopeDir}/${manifest.name}/ (${stray.slice(0, 3).join(", ")})`);
+    if (!local.created.includes(expectedStore))
+      findings.push(`${local.label}: no store at ${expectedStore}`);
+    const apiKey = clientTransportEnvKeys(manifest.name).apiKeyKeys[0];
+    const conflict = probeOnce(`${optIn}=1 with ${apiKey}`, { [optIn]: "1", [apiKey]: "not-a-real-key" });
+    if (conflict.result.status !== 6)
+      findings.push(`${conflict.label}: exit ${conflict.result.status ?? "signal"}, expected 6`);
+    if (!conflict.result.stderr.includes("LOCAL_OPT_IN_CONFLICT"))
+      findings.push(`${conflict.label}: stderr does not name LOCAL_OPT_IN_CONFLICT`);
+  }
+  return verdict(id, findings, `${manifest.name} ${probe.join(" ")} exits 2 CREDENTIAL_ABSENT with no store created${optIn ? `; ${optIn}=1 keeps the store at ${scopeDir}/${manifest.name}/ and conflicts exit 6` : ""}`, strict);
+}
+function lit(...parts) {
+  return parts.join("");
+}
+function esc2(text) {
+  return text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+}
+function noModeVocabularyPatterns() {
+  const selfHosting = ["self", "hosted"];
+  return [
+    { label: "mode env var (*_MODE read)", pattern: new RegExp(`(?:process\\.env|\\benv)\\s*(?:\\.|\\[\\s*["'\`])[A-Z][A-Z0-9_]*_MODE\\b`) },
+    { label: "storage-mode env var", pattern: new RegExp(`_${lit("STORAGE", "_MODE")}\\b`) },
+    { label: "data-backend env var", pattern: new RegExp(`_${lit("DATA", "_BACKEND")}\\b`) },
+    { label: "deployment selector env var", pattern: new RegExp(`\\b[A-Z][A-Z0-9_]*_${lit("DEPLOY", "MENT")}\\s*=`) },
+    { label: "self-hosting word (underscore)", pattern: new RegExp(selfHosting.join("_"), "i") },
+    { label: "self-hosting word (dash)", pattern: new RegExp(selfHosting.join("-"), "i") },
+    { label: "mixed-mode word", pattern: new RegExp(`\\b${lit("hyb", "rid")}(?:\\b|_)`, "i") },
+    { label: "retired env-file credential tier", pattern: new RegExp(lit("fleet", "[-.]", "env"), "i") },
+    { label: "retired cloud runtime config dir", pattern: new RegExp(esc2(lit(".hasna", "/", "cloud"))), outsideContracts: true },
+    { label: "retired cloud runtime config env", pattern: new RegExp(lit("HASNA_", "CLOUD")), outsideContracts: true },
+    { label: "XDG base directory variable", pattern: new RegExp(`\\b${lit("XDG_")}(?:CONFIG|DATA|STATE|CACHE)_HOME\\b`) },
+    { label: "macOS library support root", pattern: new RegExp(lit("Application", " ", "Support")) },
+    { label: "retired paths package", pattern: new RegExp(esc2(lit("@hasna", "/paths")) + "|" + esc2(lit("@hasna-", "internal", "/paths"))) },
+    { label: "second local door (*_DB_PATH read)", pattern: new RegExp(`(?:process\\.env|\\benv)\\s*(?:\\.|\\[\\s*["'\`])[A-Z][A-Z0-9_]*_DB_PATH\\b`) },
+    { label: "own Keychain read outside the seam", pattern: new RegExp(lit("find-generic", "-password")), outsideContracts: true },
+    { label: "own credentials-file read outside the seam", pattern: new RegExp(esc2(lit("config", "/credentials"))), outsideContracts: true }
+  ];
+}
+function isContractsKit(repoRoot, manifest) {
+  return manifest.name === "contracts" && readPackage(repoRoot).name === "@hasna/contracts";
+}
+function scanSources(repoRoot, graph, patterns, skipOutsideContracts) {
+  const findings = [];
+  const active = patterns.filter((pattern) => !(pattern.outsideContracts && skipOutsideContracts));
+  for (const file of [...graph.files.keys()].sort()) {
+    let text;
+    try {
+      text = maskSourceComments(readFileSync5(file, "utf8"));
+    } catch {
+      continue;
+    }
+    const lines = text.split(`
+`);
+    for (const { label, pattern } of active) {
+      const index = lines.findIndex((line) => pattern.test(line));
+      if (index === -1)
+        continue;
+      const count = lines.filter((line) => pattern.test(line)).length;
+      findings.push(`${relative4(repoRoot, file)}:${index + 1} ${label}${count > 1 ? ` (x${count})` : ""}`);
+    }
+  }
+  return findings;
+}
+function noModeVocabularyCheck(repoRoot, manifest, options = {}, graph = buildImportGraph(repoRoot)) {
+  const id = "no_mode_vocabulary";
+  if (graph.files.size === 0)
+    return { id, status: "skip", detail: "no source files found" };
+  const findings = scanSources(repoRoot, graph, noModeVocabularyPatterns(), isContractsKit(repoRoot, manifest));
+  return verdict(id, findings, `${graph.files.size} source files carry no retired mode vocabulary or second local door`, options.strict ?? false);
+}
+function noLegacyHostnamePatterns() {
+  const originApex = ["hasna", "xyz"].join("\\.");
+  const internalApex = ["hasna", "internal"].join("\\.");
+  const loopbackHost = `(?:${lit("local", "host")}|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\])`;
+  return [
+    { label: "per-app origin hostname (legacy apex)", pattern: new RegExp(`[a-z0-9-]+\\.${originApex}\\b`, "i") },
+    { label: "internal apex hostname", pattern: new RegExp(`[a-z0-9-]+\\.${internalApex}\\b`, "i") },
+    { label: "loopback default endpoint", pattern: new RegExp(`https?:\\/\\/${loopbackHost}(?::\\d+)?`, "i") }
+  ];
+}
+function noLegacyHostnamesCheck(repoRoot, manifest, options = {}, graph = buildImportGraph(repoRoot)) {
+  const id = "no_legacy_hostnames";
+  if (graph.files.size === 0)
+    return { id, status: "skip", detail: "no source files found" };
+  const findings = scanSources(repoRoot, graph, noLegacyHostnamePatterns(), isContractsKit(repoRoot, manifest));
+  return verdict(id, findings, `${graph.files.size} source files name no legacy origin, internal apex, or loopback default`, options.strict ?? false);
+}
+var EXACT_SEMVER = /^\d+\.\d+\.\d+$/;
+function versionAtLeast(version2, floor) {
+  const a = version2.split(".").map(Number);
+  const b = floor.split(".").map(Number);
+  for (let index = 0;index < 3; index += 1) {
+    const left = a[index] ?? 0;
+    const right = b[index] ?? 0;
+    if (left !== right)
+      return left > right;
+  }
+  return true;
+}
+function kitVersionPinnedCheck(repoRoot, manifest, options = {}) {
+  const id = "kit_version_pinned";
+  if (isContractsKit(repoRoot, manifest))
+    return { id, status: "skip", detail: "the kit itself; its version is its kitVersion" };
+  const pkg = readPackage(repoRoot);
+  if (!pkg.present)
+    return { id, status: "skip", detail: "no package.json found" };
+  const findings = [];
+  if (!pkg.kitPin) {
+    findings.push("package.json declares no @hasna/contracts dependency; pin the exact kit version");
+  } else if (!EXACT_SEMVER.test(pkg.kitPin)) {
+    findings.push(`@hasna/contracts is pinned as a range (${pkg.kitPin}); pin the exact version`);
+  } else if (pkg.kitPin !== manifest.kitVersion) {
+    findings.push(`kitVersion ${manifest.kitVersion} differs from the @hasna/contracts pin ${pkg.kitPin}`);
+  }
+  if (EXACT_SEMVER.test(manifest.kitVersion) && !versionAtLeast(manifest.kitVersion, FLEET_MIN_KIT_VERSION)) {
+    findings.push(`kitVersion ${manifest.kitVersion} is below the fleet floor ${FLEET_MIN_KIT_VERSION}`);
+  } else if (!EXACT_SEMVER.test(manifest.kitVersion)) {
+    findings.push(`kitVersion ${manifest.kitVersion} is not an exact version`);
+  }
+  return verdict(id, findings, `kitVersion ${manifest.kitVersion} equals the exact pin and meets the fleet floor ${FLEET_MIN_KIT_VERSION}`, options.strict ?? false);
+}
+function clientContractChecks(repoRoot, manifest, options = {}) {
+  const graph = buildImportGraph(repoRoot);
+  return [
+    clientTransportDeclaredCheck(manifest, options),
+    clientSqliteIsolationCheck(repoRoot, manifest, options, graph),
+    clientFailClosedBlackboxCheck(repoRoot, manifest, options),
+    noModeVocabularyCheck(repoRoot, manifest, options, graph),
+    noLegacyHostnamesCheck(repoRoot, manifest, options, graph),
+    kitVersionPinnedCheck(repoRoot, manifest, options)
+  ];
+}
+
 // src/conformance.ts
 function collectExportTargets(value) {
   if (typeof value === "string")
@@ -22995,7 +23758,7 @@ function packageExportTargets(value) {
 }
 function isFile(path) {
   try {
-    return statSync3(path).isFile();
+    return statSync5(path).isFile();
   } catch {
     return false;
   }
@@ -23016,19 +23779,19 @@ function sourceCandidatesForExportTarget(target) {
 function exportTargetExists(repoRoot, target) {
   if (!target.startsWith("./"))
     return false;
-  const resolved = join5(repoRoot, target);
-  if (relative3(repoRoot, resolved).startsWith(".."))
+  const resolved = join7(repoRoot, target);
+  if (relative5(repoRoot, resolved).startsWith(".."))
     return false;
   if (isFile(resolved))
     return true;
-  return sourceCandidatesForExportTarget(target).some((candidate) => isFile(join5(repoRoot, candidate)));
+  return sourceCandidatesForExportTarget(target).some((candidate) => isFile(join7(repoRoot, candidate)));
 }
 function packageJsonInfo(repoRoot) {
-  const path = join5(repoRoot, "package.json");
-  if (!existsSync2(path))
+  const path = join7(repoRoot, "package.json");
+  if (!existsSync4(path))
     return { present: false, bins: [], exportSubpaths: [], exportTargets: {} };
   try {
-    const pkg = JSON.parse(readFileSync4(path, "utf8"));
+    const pkg = JSON.parse(readFileSync6(path, "utf8"));
     const defaultBinName = typeof pkg.name === "string" && pkg.name.length > 0 ? pkg.name.replace(/^@[^/]+\//, "") : "<default>";
     const bins = typeof pkg.bin === "string" ? [defaultBinName] : pkg.bin && typeof pkg.bin === "object" ? Object.keys(pkg.bin) : [];
     const exportTargets = packageExportTargets(pkg.exports);
@@ -23268,13 +24031,13 @@ function unpinnedPackageRunnerInvocations(body) {
   return unpinned;
 }
 function publishedArtifactGateCheck(repoRoot, manifest) {
-  const packagePath = join5(repoRoot, "package.json");
-  if (!existsSync2(packagePath)) {
+  const packagePath = join7(repoRoot, "package.json");
+  if (!existsSync4(packagePath)) {
     return { id: "published_artifact_gate", status: "skip", detail: "no package.json found" };
   }
   let pkg;
   try {
-    pkg = JSON.parse(readFileSync4(packagePath, "utf8"));
+    pkg = JSON.parse(readFileSync6(packagePath, "utf8"));
   } catch {
     return { id: "published_artifact_gate", status: "fail", detail: "package.json is not valid JSON" };
   }
@@ -23466,7 +24229,7 @@ function runRepoConformance(repoRoot, options = {}) {
     detail: requiresGeneratedServiceSdk ? apiTopologyFailures.length === 0 ? "supported API declares GET /health, GET /ready, and GET /version" : apiTopologyFailures.join("; ") : `${manifest.class} repo has no required service API topology`
   });
   if (requiresGeneratedServiceSdk) {
-    const presentArtifacts = SELF_HOST_ARTIFACTS.filter((artifact) => isFile(join5(repoRoot, artifact)));
+    const presentArtifacts = SELF_HOST_ARTIFACTS.filter((artifact) => isFile(join7(repoRoot, artifact)));
     checks3.push({
       id: "self_host_artifact",
       status: presentArtifacts.length > 0 ? "pass" : "fail",
@@ -23613,6 +24376,11 @@ function runRepoConformance(repoRoot, options = {}) {
       checks3.push({ id: "no_cloud_guard", status: "fail", detail: `no-cloud scan error: ${message}` });
     }
   }
+  checks3.push(...clientContractChecks(repoRoot, manifest, {
+    ...options.strict !== undefined ? { strict: options.strict } : {},
+    ...options.blackbox !== undefined ? { blackbox: options.blackbox } : {},
+    ...options.blackboxRunner ? { blackboxRunner: options.blackboxRunner } : {}
+  }));
   const ok = checks3.every((check2) => check2.status !== "fail");
   return { ok, repoRoot, name: manifest.name, class: manifest.class, checks: checks3 };
 }
@@ -23884,8 +24652,8 @@ function secureLocalStorePolicy(stores) {
 
 // src/kit/generate.ts
 import { createHash as createHash4 } from "crypto";
-import { existsSync as existsSync3, mkdirSync, readdirSync as readdirSync3, readFileSync as readFileSync5, unlinkSync, writeFileSync } from "fs";
-import { dirname, join as join6, resolve as resolve3 } from "path";
+import { existsSync as existsSync5, mkdirSync, readdirSync as readdirSync5, readFileSync as readFileSync7, unlinkSync, writeFileSync } from "fs";
+import { dirname as dirname2, join as join8, resolve as resolve5 } from "path";
 import { fileURLToPath } from "url";
 var KIT_TEMPLATE_FILES = [
   "own.ts",
@@ -23927,11 +24695,11 @@ function kitMatchesDeclaredDependency(kitVersion, declared) {
   return kit.minor === dep.minor;
 }
 function readDeclaredKitDependency(targetRepo) {
-  const pkgPath = join6(resolve3(targetRepo), "package.json");
-  if (!existsSync3(pkgPath))
+  const pkgPath = join8(resolve5(targetRepo), "package.json");
+  if (!existsSync5(pkgPath))
     return null;
   try {
-    const pkg = JSON.parse(readFileSync5(pkgPath, "utf8"));
+    const pkg = JSON.parse(readFileSync7(pkgPath, "utf8"));
     for (const section of ["dependencies", "devDependencies", "peerDependencies"]) {
       const declared = pkg[section]?.[KIT_DEPENDENCY_NAME];
       if (typeof declared === "string" && declared.length > 0)
@@ -23941,20 +24709,20 @@ function readDeclaredKitDependency(targetRepo) {
   return null;
 }
 function moduleDir() {
-  return dirname(fileURLToPath(import.meta.url));
+  return dirname2(fileURLToPath(import.meta.url));
 }
 function findPackageRoot(start = moduleDir()) {
   let dir = start;
   for (let i = 0;i < 8; i++) {
-    const pkgPath = join6(dir, "package.json");
-    if (existsSync3(pkgPath)) {
+    const pkgPath = join8(dir, "package.json");
+    if (existsSync5(pkgPath)) {
       try {
-        const pkg = JSON.parse(readFileSync5(pkgPath, "utf8"));
+        const pkg = JSON.parse(readFileSync7(pkgPath, "utf8"));
         if (pkg.name === "@hasna/contracts")
           return dir;
       } catch {}
     }
-    const parent = dirname(dir);
+    const parent = dirname2(dir);
     if (parent === dir)
       break;
     dir = parent;
@@ -23963,17 +24731,17 @@ function findPackageRoot(start = moduleDir()) {
 }
 function resolveTemplatesDir() {
   const candidates = [
-    join6(moduleDir(), "templates"),
-    join6(findPackageRoot(), "src", "kit", "templates")
+    join8(moduleDir(), "templates"),
+    join8(findPackageRoot(), "src", "kit", "templates")
   ];
   for (const candidate of candidates) {
-    if (existsSync3(join6(candidate, "index.ts")))
+    if (existsSync5(join8(candidate, "index.ts")))
       return candidate;
   }
   throw new Error(`Kit templates not found. Looked in: ${candidates.join(", ")}`);
 }
 function getKitVersion() {
-  const pkg = JSON.parse(readFileSync5(join6(findPackageRoot(), "package.json"), "utf8"));
+  const pkg = JSON.parse(readFileSync7(join8(findPackageRoot(), "package.json"), "utf8"));
   if (!pkg.version)
     throw new Error("@hasna/contracts package.json has no version.");
   return pkg.version;
@@ -23989,7 +24757,7 @@ function tsHeader(version2) {
 `);
 }
 function renderKitFile(file, version2, templatesDir = resolveTemplatesDir()) {
-  const raw = readFileSync5(join6(templatesDir, file), "utf8");
+  const raw = readFileSync7(join8(templatesDir, file), "utf8");
   const withVersion = raw.split(KIT_VERSION_PLACEHOLDER).join(version2);
   if (file.endsWith(".ts"))
     return tsHeader(version2) + withVersion;
@@ -24018,12 +24786,12 @@ function renderKit(version2 = getKitVersion()) {
 function generateKit(options) {
   const version2 = options.version ?? getKitVersion();
   const rendered = renderKit(version2);
-  const targetDir = join6(resolve3(options.targetRepo), KIT_TARGET_SUBDIR);
+  const targetDir = join8(resolve5(options.targetRepo), KIT_TARGET_SUBDIR);
   mkdirSync(targetDir, { recursive: true });
   const removed = [];
   for (const file of RETIRED_KIT_FILES) {
-    const path = join6(targetDir, file);
-    if (!existsSync3(path))
+    const path = join8(targetDir, file);
+    if (!existsSync5(path))
       continue;
     unlinkSync(path);
     removed.push(file);
@@ -24033,23 +24801,23 @@ function generateKit(options) {
     const content = rendered.files[file];
     if (content === undefined)
       continue;
-    writeFileSync(join6(targetDir, file), content, "utf8");
+    writeFileSync(join8(targetDir, file), content, "utf8");
     written.push(file);
   }
-  writeFileSync(join6(targetDir, KIT_MANIFEST_FILE), JSON.stringify(rendered.manifest, null, 2) + `
+  writeFileSync(join8(targetDir, KIT_MANIFEST_FILE), JSON.stringify(rendered.manifest, null, 2) + `
 `, "utf8");
   written.push(KIT_MANIFEST_FILE);
   let contractUpdated = false;
   if (options.writeContract !== false) {
-    contractUpdated = writeKitVersionToContract(resolve3(options.targetRepo), version2);
+    contractUpdated = writeKitVersionToContract(resolve5(options.targetRepo), version2);
   }
   return { version: version2, targetDir, written, removed, contractUpdated };
 }
 function writeKitVersionToContract(targetRepo, version2) {
-  const contractPath = join6(targetRepo, "hasna.contract.json");
-  if (!existsSync3(contractPath))
+  const contractPath = join8(targetRepo, "hasna.contract.json");
+  if (!existsSync5(contractPath))
     return false;
-  const contract = JSON.parse(readFileSync5(contractPath, "utf8"));
+  const contract = JSON.parse(readFileSync7(contractPath, "utf8"));
   if (contract.kitVersion === version2)
     return false;
   contract.kitVersion = version2;
@@ -24060,32 +24828,32 @@ function writeKitVersionToContract(targetRepo, version2) {
 function checkKit(options) {
   const version2 = options.version ?? getKitVersion();
   const rendered = renderKit(version2);
-  const targetDir = join6(resolve3(options.targetRepo), KIT_TARGET_SUBDIR);
+  const targetDir = join8(resolve5(options.targetRepo), KIT_TARGET_SUBDIR);
   const files = [];
   for (const file of KIT_TEMPLATE_FILES) {
-    const path = join6(targetDir, file);
-    if (!existsSync3(path)) {
+    const path = join8(targetDir, file);
+    if (!existsSync5(path)) {
       files.push({ file, status: "missing" });
       continue;
     }
-    const actual = sha256(readFileSync5(path, "utf8"));
+    const actual = sha256(readFileSync7(path, "utf8"));
     const expected = rendered.manifest.files[file];
     files.push({ file, status: actual === expected ? "ok" : "modified" });
   }
   const expectedNames = new Set([...KIT_TEMPLATE_FILES, KIT_MANIFEST_FILE]);
   const extras = [];
-  if (existsSync3(targetDir)) {
-    for (const entry of readdirSync3(targetDir)) {
+  if (existsSync5(targetDir)) {
+    for (const entry of readdirSync5(targetDir)) {
       if (!expectedNames.has(entry))
         extras.push(entry);
     }
   }
   let staleVersion = null;
   let manifestKitVersion = null;
-  const manifestPath = join6(targetDir, KIT_MANIFEST_FILE);
-  if (existsSync3(manifestPath)) {
+  const manifestPath = join8(targetDir, KIT_MANIFEST_FILE);
+  if (existsSync5(manifestPath)) {
     try {
-      const manifest = JSON.parse(readFileSync5(manifestPath, "utf8"));
+      const manifest = JSON.parse(readFileSync7(manifestPath, "utf8"));
       manifestKitVersion = manifest.kitVersion;
       if (manifest.kitVersion !== version2)
         staleVersion = manifest.kitVersion;
@@ -25020,8 +25788,8 @@ async function runIssueKey(options, deps) {
 
 // src/artifact-scan.ts
 import { createHash as createHash5, randomBytes as randomBytes2 } from "crypto";
-import { existsSync as existsSync4, readFileSync as readFileSync6, readdirSync as readdirSync4, rmSync as rmSync2, statSync as statSync4 } from "fs";
-import { basename as basename2, join as join7, relative as relative4 } from "path";
+import { existsSync as existsSync6, readFileSync as readFileSync8, readdirSync as readdirSync6, rmSync as rmSync3, statSync as statSync6 } from "fs";
+import { basename as basename3, join as join9, relative as relative6 } from "path";
 
 // src/tlds.ts
 var IANA_TLDS = [
@@ -26905,8 +27673,8 @@ function readError(error2) {
 }
 function* readDirectoryMembers(root, maxMemberBytes, dir = root) {
   const skipDirs = new Set([".git", "node_modules"]);
-  for (const entry of readdirSync4(dir, { withFileTypes: true })) {
-    const full = join7(dir, entry.name);
+  for (const entry of readdirSync6(dir, { withFileTypes: true })) {
+    const full = join9(dir, entry.name);
     if (entry.isDirectory()) {
       if (!skipDirs.has(entry.name))
         yield* readDirectoryMembers(root, maxMemberBytes, full);
@@ -26914,14 +27682,14 @@ function* readDirectoryMembers(root, maxMemberBytes, dir = root) {
     }
     if (!entry.isFile())
       continue;
-    const path = relative4(root, full).replaceAll("\\", "/");
-    const size = statSync4(full).size;
+    const path = relative6(root, full).replaceAll("\\", "/");
+    const size = statSync6(full).size;
     if (size > maxMemberBytes) {
       yield { path, reason: `${size} bytes exceeds the ${maxMemberBytes}-byte scan ceiling` };
       continue;
     }
     try {
-      yield { path, bytes: readFileSync6(full) };
+      yield { path, bytes: readFileSync8(full) };
     } catch (error2) {
       yield { path, reason: readError(error2) };
     }
@@ -26932,18 +27700,18 @@ function* readArchiveMembers(target, maxMemberBytes) {
   try {
     extracted = extractArchive(target);
   } catch (error2) {
-    yield { path: basename2(target), reason: `archive could not be extracted: ${readError(error2)}` };
+    yield { path: basename3(target), reason: `archive could not be extracted: ${readError(error2)}` };
     return;
   }
   try {
-    const root = existsSync4(join7(extracted, "package")) ? join7(extracted, "package") : extracted;
+    const root = existsSync6(join9(extracted, "package")) ? join9(extracted, "package") : extracted;
     yield* readDirectoryMembers(root, maxMemberBytes);
   } finally {
-    rmSync2(extracted, { recursive: true, force: true });
+    rmSync3(extracted, { recursive: true, force: true });
   }
 }
 function scanPublishedArtifact(target, options = {}) {
-  const stat = statSync4(target);
+  const stat = statSync6(target);
   const scanMode = stat.isDirectory() ? "source_tree" : isPackedArtifactPath(target) ? "packed_artifact" : "packed_artifact";
   if (!stat.isDirectory() && !isPackedArtifactPath(target)) {
     throw new Error("Artifact scan target must be a directory, .tgz, or .tar.gz file.");
@@ -27017,7 +27785,7 @@ function scanPublishedArtifact(target, options = {}) {
     (waived.has(kind) ? waivedFindings : findings).push(finding);
   }
   if (scanned === 0) {
-    throw new Error(`Artifact scan read zero members from ${basename2(target)} (${seen} seen, ${excludedByCaller} excluded). Refusing to report a clean verdict on nothing.`);
+    throw new Error(`Artifact scan read zero members from ${basename3(target)} (${seen} seen, ${excludedByCaller} excluded). Refusing to report a clean verdict on nothing.`);
   }
   return {
     ok: findings.length === 0 && unreadable.length === 0,
@@ -27033,7 +27801,7 @@ function scanPublishedArtifact(target, options = {}) {
 }
 function formatArtifactScanReport(report) {
   const lines = [
-    `${report.ok ? "pass" : "FAIL"} artifact-scan ${basename2(report.target)} (${report.scanMode}, ${report.membersScanned} members scanned, ${report.membersSkipped} excluded, ${report.unreadable.length} unreadable)`
+    `${report.ok ? "pass" : "FAIL"} artifact-scan ${basename3(report.target)} (${report.scanMode}, ${report.membersScanned} members scanned, ${report.membersSkipped} excluded, ${report.unreadable.length} unreadable)`
   ];
   for (const finding of report.findings) {
     lines.push(`  FAIL ${finding.path}: ${finding.count} distinct ${finding.kind} entries (threshold ${finding.threshold}) e.g. ${finding.sample.join(", ")}`);
@@ -27067,11 +27835,11 @@ function readDeclaredWaiver(value) {
   return { kind, reason, reviewedBy, expiresAt };
 }
 function resolveAssetInventoryWaivers(manifestPath, now = new Date) {
-  if (!existsSync4(manifestPath))
+  if (!existsSync6(manifestPath))
     return { kinds: [], notes: [] };
   let manifest;
   try {
-    manifest = JSON.parse(readFileSync6(manifestPath, "utf8"));
+    manifest = JSON.parse(readFileSync8(manifestPath, "utf8"));
   } catch (error2) {
     throw new Error(`Could not read asset-inventory waivers from ${manifestPath}: ${readError(error2)}`);
   }
@@ -27102,10 +27870,10 @@ function resolveAssetInventoryWaivers(manifestPath, now = new Date) {
 }
 
 // src/safe-read-exec.ts
-import { spawnSync } from "child_process";
-import { closeSync, mkdtempSync as mkdtempSync2, openSync, readFileSync as readFileSync7, rmSync as rmSync3 } from "fs";
-import { tmpdir as tmpdir2 } from "os";
-import { join as join8 } from "path";
+import { spawnSync as spawnSync2 } from "child_process";
+import { closeSync, mkdtempSync as mkdtempSync3, openSync, readFileSync as readFileSync9, rmSync as rmSync4 } from "fs";
+import { tmpdir as tmpdir3 } from "os";
+import { join as join10 } from "path";
 
 // src/safe-read.ts
 var ROWS_KEY_CANDIDATES = [
@@ -27343,15 +28111,15 @@ function runCaptured(argv) {
   const [bin, ...args] = argv;
   if (!bin)
     throw new Error("empty argv");
-  const dir = mkdtempSync2(join8(tmpdir2(), "hasna-safe-read-"));
-  const outPath = join8(dir, "stdout.bin");
-  const errPath = join8(dir, "stderr.bin");
+  const dir = mkdtempSync3(join10(tmpdir3(), "hasna-safe-read-"));
+  const outPath = join10(dir, "stdout.bin");
+  const errPath = join10(dir, "stderr.bin");
   let outFd;
   let errFd;
   try {
     outFd = openSync(outPath, "w");
     errFd = openSync(errPath, "w");
-    const proc = spawnSync(bin, args, { shell: false, stdio: ["ignore", outFd, errFd] });
+    const proc = spawnSync2(bin, args, { shell: false, stdio: ["ignore", outFd, errFd] });
     closeSync(outFd);
     outFd = undefined;
     closeSync(errFd);
@@ -27361,8 +28129,8 @@ function runCaptured(argv) {
       return { stdout: "", stderr: `spawn failed: ${err.message}`, code: 252 };
     }
     return {
-      stdout: readFileSync7(outPath, "utf8"),
-      stderr: readFileSync7(errPath, "utf8"),
+      stdout: readFileSync9(outPath, "utf8"),
+      stderr: readFileSync9(errPath, "utf8"),
       code: proc.status ?? 253
     };
   } finally {
@@ -27370,7 +28138,7 @@ function runCaptured(argv) {
       closeSync(outFd);
     if (errFd !== undefined)
       closeSync(errFd);
-    rmSync3(dir, { recursive: true, force: true });
+    rmSync4(dir, { recursive: true, force: true });
   }
 }
 function withFlag(argv, flag, value) {
@@ -27423,18 +28191,18 @@ function safeReadInner(request) {
   if (argv.join(" ") !== request.argv.join(" "))
     evidence.push(`ran: ${argv.join(" ")}`);
   let captured = run(argv);
-  let verdict = classifyRead(captured, {
+  let verdict2 = classifyRead(captured, {
     rowsKey: request.rowsKey,
     totalKey: request.totalKey,
     allowEmpty: request.allowEmpty,
     limit: request.limit
   });
-  evidence.push(...verdict.evidence);
+  evidence.push(...verdict2.evidence);
   let pages = 1;
-  if (!verdict.ok && verdict.code === "unfollowed_cursor" && request.cursorFlag) {
+  if (!verdict2.ok && verdict2.code === "unfollowed_cursor" && request.cursorFlag) {
     const accumulated = [];
-    let cursor = verdict.nextCursor;
-    let declaredTotal = verdict.declaredTotal;
+    let cursor = verdict2.nextCursor;
+    let declaredTotal = verdict2.declaredTotal;
     let declaredTotalShape;
     if (!isUsableCursor(cursor)) {
       return fail("unfollowed_cursor", "the surface indicates another page but supplied no usable cursor; refusing rather than treating the first page as exhausted", evidence, pages);
@@ -27446,39 +28214,39 @@ function safeReadInner(request) {
       const paged = withFlag(argv, request.cursorFlag, cursor);
       captured = run(paged);
       pages += 1;
-      verdict = classifyRead(captured, {
+      verdict2 = classifyRead(captured, {
         rowsKey: request.rowsKey,
         totalKey: request.totalKey,
         allowEmpty: true,
         limit: request.limit
       });
-      if (verdict.declaredTotal !== undefined) {
+      if (verdict2.declaredTotal !== undefined) {
         if (declaredTotal === undefined) {
-          return fail("declared_total_mismatch", `paging introduced a declared total of ${verdict.declaredTotal} after page 1; ` + `its population-relative semantics cannot be established from the later page alone`, evidence, pages);
+          return fail("declared_total_mismatch", `paging introduced a declared total of ${verdict2.declaredTotal} after page 1; ` + `its population-relative semantics cannot be established from the later page alone`, evidence, pages);
         }
-        const samePopulation = verdict.declaredTotal === declaredTotal;
-        const remainingPopulation = accumulated.length + verdict.declaredTotal === declaredTotal;
+        const samePopulation = verdict2.declaredTotal === declaredTotal;
+        const remainingPopulation = accumulated.length + verdict2.declaredTotal === declaredTotal;
         if (!samePopulation && !remainingPopulation) {
-          return fail("declared_total_mismatch", `paging changed its declared total from ${declaredTotal} to ${verdict.declaredTotal} ` + `after ${accumulated.length} accumulated row(s); it matches neither a stable population total ` + `nor a cursor-relative remaining total`, evidence, pages);
+          return fail("declared_total_mismatch", `paging changed its declared total from ${declaredTotal} to ${verdict2.declaredTotal} ` + `after ${accumulated.length} accumulated row(s); it matches neither a stable population total ` + `nor a cursor-relative remaining total`, evidence, pages);
         }
         const observedShape = samePopulation ? "population" : "remaining";
         if (declaredTotalShape !== undefined && declaredTotalShape !== observedShape) {
           return fail("declared_total_mismatch", `paging changed declared-total semantics from ${declaredTotalShape} to ${observedShape}`, evidence, pages);
         }
         declaredTotalShape = observedShape;
-        evidence.push(`page ${pages} declared total ${verdict.declaredTotal} as a ${observedShape} count ` + `after ${accumulated.length} accumulated row(s)`);
+        evidence.push(`page ${pages} declared total ${verdict2.declaredTotal} as a ${observedShape} count ` + `after ${accumulated.length} accumulated row(s)`);
       }
       const located = locateRows(safeParse3(captured.stdout), request.rowsKey);
       if (located.ok)
         accumulated.push(...located.rows);
-      if (verdict.ok || verdict.code === "declared_total_mismatch" && (verdict.hasMore === false || verdict.nextCursor === null)) {
+      if (verdict2.ok || verdict2.code === "declared_total_mismatch" && (verdict2.hasMore === false || verdict2.nextCursor === null)) {
         cursor = null;
         break;
       }
-      if (verdict.code !== "unfollowed_cursor") {
-        return fail(verdict.code, `paging stopped at page ${pages}: ${verdict.reason}`, evidence, pages);
+      if (verdict2.code !== "unfollowed_cursor") {
+        return fail(verdict2.code, `paging stopped at page ${pages}: ${verdict2.reason}`, evidence, pages);
       }
-      cursor = verdict.nextCursor;
+      cursor = verdict2.nextCursor;
       if (!isUsableCursor(cursor)) {
         return fail("unfollowed_cursor", `paging stopped at page ${pages}: the surface indicates another page but supplied no usable cursor`, evidence, pages);
       }
@@ -27504,12 +28272,12 @@ function safeReadInner(request) {
       evidence
     };
   }
-  if (verdict.ok) {
-    return { ok: true, reason: verdict.reason, proofs: verdict.proofs, rows: verdict.rows, rowCount: verdict.rowCount, pages, scope: "default", evidence };
+  if (verdict2.ok) {
+    return { ok: true, reason: verdict2.reason, proofs: verdict2.proofs, rows: verdict2.rows, rowCount: verdict2.rowCount, pages, scope: "default", evidence };
   }
   const recoverable = ["completeness_unproven", "page_cap_reached", "declared_total_mismatch", "stderr_truncation_notice"];
-  if (!recoverable.includes(verdict.code)) {
-    return fail(verdict.code, verdict.reason, evidence, pages);
+  if (!recoverable.includes(verdict2.code)) {
+    return fail(verdict2.code, verdict2.reason, evidence, pages);
   }
   if (request.siblingArgv?.length && request.siblingPath) {
     const sib = run(request.siblingArgv);
@@ -27520,27 +28288,27 @@ function safeReadInner(request) {
       if (aggregate === undefined) {
         evidence.push(`sibling path '${request.siblingPath}' absent or non-numeric; falling through`);
       } else {
-        evidence.push(`sibling ${request.siblingPath}=${aggregate} vs rows=${verdict.rowCount}`);
-        if (aggregate === verdict.rowCount) {
+        evidence.push(`sibling ${request.siblingPath}=${aggregate} vs rows=${verdict2.rowCount}`);
+        if (aggregate === verdict2.rowCount) {
           const rows = locateRows(safeParse3(captured.stdout), request.rowsKey);
           return {
             ok: true,
             reason: `read proven complete by sibling_aggregate_agrees (${request.siblingPath}=${aggregate})`,
             proofs: ["sibling_aggregate_agrees"],
             rows: rows.ok ? rows.rows : [],
-            rowCount: verdict.rowCount,
+            rowCount: verdict2.rowCount,
             pages,
             scope: "default",
             evidence
           };
         }
-        return fail("declared_total_mismatch", `sibling aggregate ${request.siblingPath}=${aggregate} disagrees with ${verdict.rowCount} row(s) read`, evidence, pages);
+        return fail("declared_total_mismatch", `sibling aggregate ${request.siblingPath}=${aggregate} disagrees with ${verdict2.rowCount} row(s) read`, evidence, pages);
       }
     }
   }
   if (request.limitFlag !== undefined || request.limit !== undefined) {
     const flag = request.limitFlag ?? "--limit";
-    const base = request.limit ?? verdict.rowCount;
+    const base = request.limit ?? verdict2.rowCount;
     const wider = request.widenTo ?? Math.max(base * 4, base + 1);
     const widened = run(withFlag(request.argv, flag, wider));
     pages += 1;
@@ -27555,7 +28323,7 @@ function safeReadInner(request) {
     });
     const wideRows = locateRows(safeParse3(widened.stdout), request.rowsKey);
     const wideCount = wideRows.ok ? wideRows.rows.length : -1;
-    evidence.push(`widened ${flag} ${base} -> ${wider}: ${verdict.rowCount} -> ${wideCount} row(s)`);
+    evidence.push(`widened ${flag} ${base} -> ${wider}: ${verdict2.rowCount} -> ${wideCount} row(s)`);
     evidence.push(...wideVerdict.evidence.map((line) => `widened: ${line}`));
     if (wideVerdict.ok) {
       return { ok: true, reason: `widened read proven complete by ${wideVerdict.proofs.join(" + ")}`, proofs: wideVerdict.proofs, rows: wideVerdict.rows, rowCount: wideVerdict.rowCount, pages, scope: "default", evidence };
@@ -27572,8 +28340,8 @@ function safeReadInner(request) {
       if (clamp === undefined && SUSPICIOUS_COUNTS.has(wideCount)) {
         return fail("hidden_clamp_suspected", `widening to ${wider} returned exactly ${wideCount} row(s) \u2014 a round number, and this surface is not in the ` + `clamp census, so a silent server cap cannot be ruled out. Widening cannot tell a population of ${wideCount} ` + `from a hidden cap at ${wideCount}. Supply --known-clamp once you have established the real cap, or prove ` + `completeness with a cursor or a sibling aggregate.`, evidence, pages);
       }
-      if (wideCount > verdict.rowCount) {
-        evidence.push(`population grew between reads (${verdict.rowCount} -> ${wideCount}); returning the wider read`);
+      if (wideCount > verdict2.rowCount) {
+        evidence.push(`population grew between reads (${verdict2.rowCount} -> ${wideCount}); returning the wider read`);
       }
       if (clampNote)
         evidence.push(`clamp census: ${clampNote.key} cap=${clampNote.cap} grade=${clampNote.grade}`);
@@ -27598,13 +28366,13 @@ function safeReadInner(request) {
       reason: "completeness ASSUMED by the caller, not proven",
       proofs: ["assumed_complete"],
       rows: rows.ok ? rows.rows : [],
-      rowCount: verdict.rowCount,
+      rowCount: verdict2.rowCount,
       pages,
       scope: "default",
       evidence
     };
   }
-  return fail(verdict.code, verdict.reason, evidence, pages);
+  return fail(verdict2.code, verdict2.reason, evidence, pages);
 }
 function probePredicate(request, run, evidence) {
   const count = (argv) => {
@@ -27706,7 +28474,7 @@ function runSafeReadCli(argv, options, io = {
 }
 
 // src/cli/verify-write.ts
-import { readFileSync as readFileSync8 } from "fs";
+import { readFileSync as readFileSync10 } from "fs";
 
 // src/verify-write.ts
 import { createHash as createHash6 } from "crypto";
@@ -27832,7 +28600,7 @@ function runVerifyWriteCli(targetId, argv, options, io = defaultIo, run = runCap
   }
   let authored;
   try {
-    authored = readFileSync8(options.authored);
+    authored = readFileSync10(options.authored);
   } catch {
     return writeResult(refusal("authored_read_failed", "authored payload could not be read; stored body NOT rendered"), Boolean(options.json), io);
   }
@@ -27947,19 +28715,19 @@ function runCheckSigningSecret(options, deps = {}) {
 
 // src/cli/index.ts
 function collectJsonFiles(root) {
-  const stat = statSync5(root);
+  const stat = statSync7(root);
   if (stat.isFile()) {
     return root.endsWith(".json") ? [root] : [];
   }
   const files = [];
-  for (const entry of readdirSync5(root).sort()) {
-    files.push(...collectJsonFiles(join9(root, entry)));
+  for (const entry of readdirSync7(root).sort()) {
+    files.push(...collectJsonFiles(join11(root, entry)));
   }
   return files;
 }
 function readJsonFile(file) {
   try {
-    return { ok: true, value: JSON.parse(readFileSync9(file, "utf8")) };
+    return { ok: true, value: JSON.parse(readFileSync11(file, "utf8")) };
   } catch (error2) {
     const message = error2 instanceof Error ? error2.message : String(error2);
     return { ok: false, error: message };
@@ -28004,7 +28772,7 @@ function preflightJsonUsageErrors(argv) {
     validate: new Set(["--json", "-j", "--schema"]),
     conformance: new Set(["--json", "-j"]),
     "no-cloud-scan": new Set(["--json", "-j", "--manifest"]),
-    "repo-conformance": new Set(["--json", "-j"]),
+    "repo-conformance": new Set(["--json", "-j", "--strict"]),
     "vendor-kit": new Set(["--json", "-j", "--check", "--kit-version", "--no-contract"]),
     "artifact-scan": new Set([
       "--json",
@@ -28236,10 +29004,10 @@ function createContractsProgram() {
       printSecureLocalStoreText(policy);
     }
   });
-  program2.command("repo-conformance").description("Check a repo against the Hasna Service Contract v1 using its hasna.contract.json").argument("[path]", "Repo root path", ".").option("-j, --json", "Output JSON report").action((target, options) => {
+  program2.command("repo-conformance").description("Check a repo against the Hasna Service Contract v1 using its hasna.contract.json").argument("[path]", "Repo root path", ".").option("-j, --json", "Output JSON report").option("--strict", "Promote the report-mode client-contract checks to failures (the 1.2.0 default)").action((target, options) => {
     let report;
     try {
-      report = runRepoConformance(target);
+      report = runRepoConformance(target, options.strict ? { strict: true } : {});
     } catch (error2) {
       const message = error2 instanceof Error ? error2.message : String(error2);
       reportCliError(options, `Repo conformance failed for ${target}: ${message}`, { path: target, code: "repo_conformance_error" });
@@ -28290,8 +29058,8 @@ function createContractsProgram() {
       });
       return;
     }
-    const manifestPath = manifestSupplied ? String(options.manifest) : join9(process.cwd(), "hasna.contract.json");
-    if (manifestSupplied && !existsSync5(manifestPath)) {
+    const manifestPath = manifestSupplied ? String(options.manifest) : join11(process.cwd(), "hasna.contract.json");
+    if (manifestSupplied && !existsSync7(manifestPath)) {
       reportCliError(options, `Could not read or parse ${manifestPath}: no such file`, {
         file: manifestPath,
         code: "manifest_read_or_parse_error"

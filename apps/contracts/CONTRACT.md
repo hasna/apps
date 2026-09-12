@@ -182,6 +182,78 @@ Rules:
 
 ---
 
+### 3b. Fail closed, one local door, one home (contracts 1.1.0)
+
+A client either talks to the hosted `/v1` authority with a credential the chain
+in §3a resolved, or — deliberately — opens its on-box store. There is nothing
+in between: a missing, rejected or unreadable credential never selects a local
+store, and a local store is never selected by a missing credential.
+
+**The one local door is `HASNA_<NAME>_LOCAL=1`** (`1|true|yes`; the unprefixed
+`<NAME>_LOCAL` alias is accepted in 1.1.x only). `selectsLocalStore(name, env)`
+answers it from the process environment ALONE, before any Keychain or disk
+read, so a scrubbed test environment can never reach the shared store. If the
+flag is on while `HASNA_<NAME>_API_URL`, `_API_KEY`, `_API_KEY_OVERRIDE`,
+`_API_KEY_REF`, their unprefixed aliases or `HASNA_PROFILE` are also declared,
+it throws `LOCAL_OPT_IN_CONFLICT`; a hosted client requested under the flag is
+refused the same way. `--store <path>`, `--db <path>`, `HASNA_<NAME>_DB_PATH`
+and every `*_MODE` word are not doors; an argv `--local` may exist only as
+sugar that sets the same signal in-process. When the store is selected the app
+prints exactly one stderr line, `localStoreNotice(name, path)` — never a JSON
+event on stdout. The store lives at `appPaths(name, env, { scope }).localDb`
+(`~/.hasna/<name>/<name>.db`) and nowhere else.
+
+**Every failure carries one code and one exit code.** `ClientResolutionError`
+(`@hasna/contracts/client`) is the base of `CredentialResolutionError`,
+`CredentialFileUnsafeError` and `ClientTransportConfigurationError`, whose
+messages are byte-stable with 1.0.x; `HasnaHttpError` exposes the same `code`
+for 401/403 and retryable statuses. `toJSON()` emits `code`, `exitCode`, `app`,
+`message`, `sources` (env key NAMES, file PATHS, Keychain item REFERENCES) and
+`remedy` — never a value.
+
+| code | when | exit |
+| --- | --- | --- |
+| `CREDENTIAL_ABSENT` | every tier is genuinely absent and the local door is closed | 2 |
+| `CREDENTIAL_UNREADABLE` | a tier EXISTS but cannot be read or is unusable: `security` status outside {0, 44}, an empty item, an unsafe file, a declared-but-blank variable, an unresolvable vault pointer | 3 |
+| `CREDENTIAL_REJECTED` | the authority answered 401 or 403; never retried, body discarded | 4 |
+| `AUTHORITY_MISSING` | nothing configured an authority and the fleet gateway default cannot be composed | 5 |
+| `AUTHORITY_INVALID` | a declared authority is blank, carries control characters, is plain http off loopback, or has a query, fragment or userinfo | 5 |
+| `AUTHORITY_CONFLICT` | configured authorities disagree, or the authority changed between snapshot and dispatch | 5 |
+| `LOCAL_OPT_IN_CONFLICT` | the local door is open while hosted client configuration is also declared, or a hosted client was requested under it | 6 |
+| `TRANSPORT_UNAVAILABLE` | the authority could not be reached after retries | 7 |
+| `NOT_AVAILABLE_HOSTED` | a server-only command was invoked through the hosted client | 8 |
+
+An adopter's CLI top-level handler prints one line to stderr —
+`formatClientResolutionFailure(error)` renders `<app>: <CODE>: <message>
+<remedy>` (with `--json`, the `toJSON()` envelope, still on stderr) — and exits
+with `clientResolutionExitCode(error)`.
+
+**`status` and `doctor` use `describeClientTransport(name, env)`.** It never
+throws and never opens a store: it answers the local door first (the credential
+is then `not-consulted`), otherwise runs the authority ladder and the credential
+chain independently and returns `{ credential: present | absent | unreadable,
+credentialTier, credentialSource, authority, authoritySource, localOptIn: off |
+on | conflict, errors }`. A diagnostic verb exits 0 with this report even when
+the credential is unreadable.
+
+**One home resolver.** `resolveAppHome(name, env, { scope })` (null when
+neither `HOME` nor `HASNA_HOME` anchors a root) and `appPaths(...)` (throws
+instead) return the app home for its scope — `public` (`@hasna/*`) is
+`~/.hasna/<name>`, `internal` (internal-scope packages) is the same root
+with the `-internal` suffix — with the layers `config/` (the credentials file),
+`state/`, `cache/`, data at the home root and `localDb` at
+`<data>/<name>.db`. The overrides are exactly `HASNA_HOME` (replaces the scope
+root) and `HASNA_CONFIG_HOME`, `HASNA_DATA_HOME`, `HASNA_STATE_HOME`,
+`HASNA_CACHE_HOME` (each replaces one layer's root, giving `<override>/<name>`);
+absolute and non-blank only. No XDG variable and no macOS library folder is
+ever consulted. The credential chain's disk tier reads
+`resolveAppHome(...).credentials` for the `scope` passed in
+`credentials.scope` (default `public`), so an internal app's credentials file
+is `<internal root>/<name>/config/credentials`; Keychain item names are the
+same for both scopes.
+
+---
+
 ## 4. Health endpoints (services)
 
 Any repo that ships a `<name>-serve` bin **MUST** expose:
@@ -462,6 +534,22 @@ backend, storage capabilities, and product surfaces are separate axes:
   the API's `openApiPath` via `generatedFrom`.
 - `publishing` — optional. How the repo's artifacts reach consumers. See
   section 9.1.
+- `scope` — optional (1.1.0). `public` (`~/.hasna/<name>`, the default) or
+  `internal` (the same root with the `-internal` suffix); the home root the app owns, derived
+  from its package scope.
+- `client` — optional (1.1.0). The hosted client contract: `transport:
+  "hosted"`, `credentialChain: "contracts"`, an optional `authority` (absolute
+  https, never ending in `/v1`; defaults to the fleet gateway), `localOptIn`
+  (exactly `HASNA_<NAME>_LOCAL`, or null), `localStoreModule` (the ONE
+  repo-relative module allowed to open the on-box store; required with
+  `localOptIn`) and `readProbe` (the argv the black-box check runs). `client:
+  null` states explicitly that the repo ships no client. Under `client: null` the repo is local-by-design: its store is simply the
+  storage, so it omits `dataAccess` or declares `server-only`; `hosted` and
+  `local-opt-in` are rejected. A `library` never declares a client object.
+- `serviceSurfaces[].dataAccess` — optional (1.1.0). `hosted`, `server-only`
+  or `local-opt-in` for the whole surface; `serviceSurfaces[].commands[]`
+  overrides it per command (`{ "name": "db migrate", "dataAccess":
+  "server-only" }`). `local-opt-in` anywhere requires `client.localOptIn`.
 
 ### 9.1 `publishing` — the release path
 
@@ -616,8 +704,14 @@ if (!report.ok) throw new Error(JSON.stringify(report.checks, null, 2));
 ```
 
 `runRepoConformance` accepts `env`, `healthSample`, `skipNoCloudScan`,
-`manifestTier`, and `now` (the clock used for time-boxed checks such as storage
-waiver expiry; defaults to the current time).
+`manifestTier`, `now` (the clock used for time-boxed checks such as storage
+waiver expiry; defaults to the current time), and — for checks 16-21 —
+`strict` (promote `report` to `fail`; the CLI flag is `--strict`), `blackbox`
+and `blackboxRunner`.
+
+A check reports one of `pass`, `fail`, `skip` or, since 1.1.0, `report`: the
+check found violations that are not yet enforced for this repo. `report` never
+turns `ok` false; `strict` turns it into `fail`, which is the 1.2.0 default.
 
 Checks:
 
@@ -717,6 +811,33 @@ Checks:
    would silence the gate while recording nothing a reviewer can weigh. Every
    accepted waiver is echoed into the report, so it stays a thing a human
    reads.
+
+16. `client_transport_declared` (1.1.0, report) — a repo with a CLI or MCP
+   surface and a store declares `client.transport: hosted` with a `dataAccess`
+   per surface and a `readProbe`, or declares itself local-by-design
+   (`client: null`).
+17. `client_sqlite_isolation` (1.1.0, report) — no CLI or MCP bin reaches a
+   module that opens a SQLite store through its relative-import graph, except
+   the one `client.localStoreModule`, which must import `selectsLocalStore`
+   from `@hasna/contracts/client`. Static and heuristic; paired with 18.
+18. `client_fail_closed_blackbox` (1.1.0, report) — runs the BUILT `<name>` bin
+   with `client.readProbe` under an empty `HOME`, `HASNA_STATION=no-such-station`,
+   `USER=nobody` and no `HASNA_*`: exit 2 naming `CREDENTIAL_ABSENT`, no store
+   or JSON file created. With `client.localOptIn` set: `HASNA_<NAME>_LOCAL=1`
+   exits 0 with the store at `<scope root>/<name>/<name>.db`, and the flag plus
+   `HASNA_<NAME>_API_KEY` exits 6 naming `LOCAL_OPT_IN_CONFLICT`. Skipped when
+   no `readProbe` is declared; a missing built bin is a finding.
+19. `no_mode_vocabulary` (1.1.0, report) — shipped source (comments masked,
+   tests excluded) carries none of the retired mode words, selector variables,
+   retired credential tiers, XDG or macOS library roots, retired paths
+   packages, or second local doors (`*_DB_PATH` reads). Own Keychain and
+   credentials-file reads are findings outside the kit itself.
+20. `no_legacy_hostnames` (1.1.0, report) — shipped source names no per-app
+   origin hostname, internal apex, or loopback default endpoint. Findings name
+   the file, line and pattern label, never the hostname.
+21. `kit_version_pinned` (1.1.0, report) — `kitVersion` equals the exact
+   `@hasna/contracts` dependency pin (no range) and is at least
+   `FLEET_MIN_KIT_VERSION`.
 
 The kit is dev-dependency friendly: `@hasna/contracts` can be a `devDependency`
 and the checks run under `bun test` with no runtime footprint in the app.

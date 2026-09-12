@@ -1,6 +1,11 @@
 import { type Env } from "../env-token.js";
 import { type CredentialChainOptions, type CredentialTier, type ResolvedCredential } from "./credentials.js";
-export { appConfigDiskValue, completePointerCredential, credentialDiskSourceList, credentialDiskSources, CredentialResolutionError, explicitCredential, HASNA_CONFIG_HOME_ENV_KEY, HASNA_HOME_ENV_KEY, KEYCHAIN_STATION_ENV_KEY, keychainConfigValue, resolveCredential, } from "./credentials.js";
+import { ClientResolutionError, type ClientResolutionCode } from "./errors.js";
+import { type LocalOptInState } from "./local-opt-in.js";
+export { appConfigDiskValue, completePointerCredential, credentialDiskSourceList, credentialDiskSources, CredentialResolutionError, CredentialFileUnsafeError, explicitCredential, HASNA_CONFIG_HOME_ENV_KEY, HASNA_HOME_ENV_KEY, KEYCHAIN_STATION_ENV_KEY, keychainConfigValue, keychainCredentialServiceName, resolveCredential, } from "./credentials.js";
+export * from "./errors.js";
+export * from "./local-opt-in.js";
+export * from "./app-home.js";
 export type { AppConfigDiskHit, CredentialChainOptions, CredentialTier, DiskCredentialSource, KeychainCommandResult, KeychainCommandRunner, KeychainItemHit, KeychainTierOptions, ResolvedCredential, } from "./credentials.js";
 export { clientTransportEnvKeys, credentialOverrideEnvKey, credentialPointerEnvKey, CREDENTIAL_PROFILE_ENV_KEY, } from "./env-keys.js";
 export type { ClientTransportEnvKeys } from "./env-keys.js";
@@ -44,11 +49,17 @@ export declare function defaultCloudBaseUrl(name: string, env?: Env): string;
 export declare function toV1BaseUrl(apiUrl: string): string;
 export declare const CLIENT_TRANSPORTS: readonly ["http"];
 export type ClientTransportKind = (typeof CLIENT_TRANSPORTS)[number];
-/** A client authority or credential declaration cannot be used safely. */
-export declare class ClientTransportConfigurationError extends Error {
+/**
+ * A client authority or credential declaration cannot be used safely.
+ *
+ * Carries a discriminated `code` (default `AUTHORITY_INVALID`); the no-credential
+ * case is `CREDENTIAL_ABSENT`, disagreeing authorities are `AUTHORITY_CONFLICT`,
+ * and an uncomposable default is `AUTHORITY_MISSING`. Messages are byte-stable
+ * with 1.0.x.
+ */
+export declare class ClientTransportConfigurationError extends ClientResolutionError {
     readonly appName: string;
-    readonly sources: readonly string[];
-    constructor(appName: string, message: string, sources?: readonly string[]);
+    constructor(appName: string, message: string, sources?: readonly string[], code?: ClientResolutionCode, remedy?: string | null);
 }
 export interface ClientTransportResolution {
     /** Where the client should read/write from. */
@@ -91,6 +102,36 @@ export interface ResolveClientTransportOptions {
     /** Tier-1 credential inputs (`--api-key` / `--profile`) and Keychain-tier controls. */
     credentials?: CredentialChainOptions;
 }
+/** Where the credential stands, as `status` / `doctor` report it. Never a value. */
+export type ClientCredentialState = "present" | "absent" | "unreadable" | "not-consulted";
+/** The non-throwing picture of a client's transport, for `status` / `doctor` verbs. */
+export interface ClientTransportDescription {
+    app: string;
+    /** `not-consulted` when the local opt-in is on: the chain is never run under it. */
+    credential: ClientCredentialState;
+    credentialTier: CredentialTier | null;
+    /** An env key NAME, a Keychain item reference, or an absolute file PATH. Never a value. */
+    credentialSource: string | null;
+    /** The `<origin>/v1` base the client would use, when it could be determined. */
+    authority: string | null;
+    /** An env key NAME, a Keychain item reference, a file PATH, or `"default"`. */
+    authoritySource: string | null;
+    localOptIn: LocalOptInState;
+    /** Which key turned the opt-in on, or null. */
+    localOptInSource: string | null;
+    /** Every failure encountered, each with its `code`; empty when a client could be built. */
+    errors: ClientResolutionError[];
+}
+/**
+ * Describe the client's transport WITHOUT throwing and WITHOUT opening any
+ * store — the one call a `status` or `doctor` verb makes. The local opt-in is
+ * answered first; when it is on, the credential chain is not consulted at
+ * all. Otherwise the authority ladder and the credential chain each run and
+ * report independently, so an unreadable Keychain and an invalid URL both
+ * appear. Exit 0 with this report is the correct outcome for a diagnostic
+ * verb even when the credential is unreadable; no value ever appears in it.
+ */
+export declare function describeClientTransport(name: string, env?: Env, options?: ResolveClientTransportOptions): ClientTransportDescription;
 /**
  * Resolve the sole authenticated service transport without exposing its
  * credential value. Invalid or incomplete configuration throws.
@@ -111,6 +152,14 @@ export declare class HasnaHttpError extends Error {
         tier: CredentialTier;
         guidance: string;
     } | null);
+    /**
+     * The resolution code this response maps to: `CREDENTIAL_REJECTED` for 401
+     * and 403, `TRANSPORT_UNAVAILABLE` for a retryable status, null otherwise
+     * (an ordinary HTTP failure is not a resolution failure).
+     */
+    get code(): ClientResolutionCode | null;
+    /** The exit code for {@link code}, or null when the status carries no resolution code. */
+    get exitCode(): number | null;
 }
 /**
  * A credential resolved fresh for one request.
@@ -180,6 +229,14 @@ export interface HasnaHttpTransportOptions {
 }
 export interface HasnaHttpTransport {
     readonly baseUrl: string;
+    /**
+     * Fetch an absolute URL inside the configured application root (the canonical
+     * baseUrl without its terminal /v1) with the bound credential attached.
+     * Returns the original unread Response, including error/redirect responses,
+     * for CSV, downloads and event streams. No retries or response parsing occur;
+     * authentication and manual redirect handling cannot be overridden by init.
+     */
+    fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>;
     request<T = unknown>(method: string, path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T>;
     get<T = unknown>(path: string, opts?: HasnaRequestOptions): Promise<T>;
     post<T = unknown>(path: string, body?: unknown, opts?: HasnaRequestOptions): Promise<T>;

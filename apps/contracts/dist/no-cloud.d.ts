@@ -1,4 +1,4 @@
-import { type NoCloudEvidencePack } from "./schemas";
+import { type NoCloudEvidencePack } from "./schemas.js";
 export interface NoCloudScanOptions {
     id?: string;
     now?: string;

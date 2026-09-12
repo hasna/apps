@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import { ContractSchemaRegistry, type ContractBySchemaId, type KnownSchemaId } from "./schemas";
+import { ContractSchemaRegistry, type ContractBySchemaId, type KnownSchemaId } from "./schemas.js";
 export type EmbeddedContractValidationResult = {
     success: true;
     schemaId: KnownSchemaId;

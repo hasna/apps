@@ -72,7 +72,7 @@ import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { createRequire } from "node:module";
 import { hostname as osHostname } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import type { Env } from "../env-token.js";
 import {
   CREDENTIAL_PROFILE_ENV_KEY,
@@ -80,6 +80,18 @@ import {
   credentialOverrideEnvKey,
   credentialPointerEnvKey,
 } from "./env-keys.js";
+import { ClientResolutionError, type ClientResolutionCode } from "./errors.js";
+import {
+  APP_HOME_SLUG_PATTERN,
+  HASNA_CACHE_HOME_ENV_KEY,
+  HASNA_CONFIG_HOME_ENV_KEY,
+  HASNA_DATA_HOME_ENV_KEY,
+  HASNA_HOME_ENV_KEY,
+  HASNA_STATE_HOME_ENV_KEY,
+  resolveAppHome,
+  type AppHomeScope,
+} from "./app-home.js";
+import { localOptInAliasEnvKey, localOptInEnvKey } from "./local-opt-in.js";
 
 /** Which link of the chain supplied the credential. */
 export type CredentialTier =
@@ -174,6 +186,13 @@ export interface CredentialChainOptions {
   profile?: string;
   /** Tier 3: Keychain controls — a fake `security` runner in tests, an opt-out on CI. */
   keychain?: KeychainTierOptions;
+  /**
+   * Tier 4: which home root the credentials file lives under — `~/.hasna/<app>`
+   * (`"public"`, the default) or the same root with the `-internal` suffix (`"internal"`).
+   * Internal apps pass the `scope` their `hasna.contract.json` declares. The
+   * Keychain item names are the same for both scopes.
+   */
+  scope?: AppHomeScope;
 }
 
 /**
@@ -185,11 +204,22 @@ export interface CredentialChainOptions {
  * a different principal than the operator asked for. A corrupt credential file
  * throws for the same reason.
  */
-export class CredentialResolutionError extends Error {
+export class CredentialResolutionError extends ClientResolutionError {
   readonly appName: string;
   readonly attempted: readonly string[];
-  constructor(appName: string, message: string, attempted: readonly string[]) {
-    super(message);
+  /**
+   * Every failure this class reports is a tier that EXISTS but cannot be
+   * honoured, so the code defaults to `CREDENTIAL_UNREADABLE` (exit 3). The
+   * message is byte-stable with 1.0.x; the code and exit code are additive.
+   */
+  constructor(
+    appName: string,
+    message: string,
+    attempted: readonly string[],
+    code: ClientResolutionCode = "CREDENTIAL_UNREADABLE",
+    remedy: string | null = null,
+  ) {
+    super(code, appName, message, { sources: attempted, remedy });
     this.name = "CredentialResolutionError";
     this.appName = appName;
     this.attempted = attempted;
@@ -197,11 +227,14 @@ export class CredentialResolutionError extends Error {
 }
 
 /** An existing credential/config file is unsafe and is never treated as absent. */
-export class CredentialFileUnsafeError extends Error {
+export class CredentialFileUnsafeError extends ClientResolutionError {
   readonly path: string;
 
   constructor(path: string, reason: string) {
-    super(`Refusing unsafe credential/config file ${path}: ${reason}.`);
+    super("CREDENTIAL_UNREADABLE", null, `Refusing unsafe credential/config file ${path}: ${reason}.`, {
+      sources: [path],
+      remedy: "Make the file a regular, current-user-owned file with mode 0600 (or 0400), or delete it.",
+    });
     this.name = "CredentialFileUnsafeError";
     this.path = path;
   }
@@ -213,17 +246,21 @@ export class CredentialFileUnsafeError extends Error {
 // The overrides follow XDG semantics — absolute only, blank is unset — but
 // XDG's own variables are not read: `HASNA_HOME` replaces the root and
 // `HASNA_CONFIG_HOME` replaces the config root for every app at once.
-export const HASNA_HOME_ENV_KEY = "HASNA_HOME";
-export const HASNA_CONFIG_HOME_ENV_KEY = "HASNA_CONFIG_HOME";
+// The keys themselves live in `app-home.ts`, the one home resolver; they are
+// re-exported here so 1.0.x import sites keep working.
+export { HASNA_HOME_ENV_KEY, HASNA_CONFIG_HOME_ENV_KEY };
 /** The Keychain account; absent, the short hostname is used, then `USER`. */
 export const KEYCHAIN_STATION_ENV_KEY = "HASNA_STATION";
-const HASNA_HOME_DIR = ".hasna";
-const CONFIG_SUBDIR = "config";
 const CREDENTIALS_FILE = "credentials";
 const KEYCHAIN_SECURITY_BIN = "/usr/bin/security";
 const KEYCHAIN_SERVICE_PREFIX = "hasna.credentials";
 /** `errSecItemNotFound`: `security find-generic-password` exits 44 when no item matches. */
 const KEYCHAIN_ITEM_NOT_FOUND_STATUS = 44;
+
+/** The Keychain service name of an app's credential item: `hasna.credentials.<app>.api-key`. A name, never a value. */
+export function keychainCredentialServiceName(name: string): string {
+  return `${KEYCHAIN_SERVICE_PREFIX}.${name}.api-key`;
+}
 const KEYCHAIN_SPAWN_TIMEOUT_MS = 10_000;
 
 /**
@@ -241,7 +278,7 @@ const MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
  * throwing, so the transport's own `validateAppSlug` keeps producing the
  * canonical error for a bad slug.
  */
-const SAFE_APP_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const SAFE_APP_SLUG = APP_HOME_SLUG_PATTERN;
 /** A profile name that is safe to put in a filesystem path. */
 const SAFE_PROFILE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 
@@ -281,34 +318,16 @@ const VAULT_POINTER_SHAPE = /^[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-_.]*){2,}$/
  * that take the `process.env` default get the real HOME, the real disk, and
  * the real Keychain.
  */
-function homeDir(env: Env): string | null {
-  const home = env.HOME?.trim();
-  return home ? home : null;
-}
-
-/** An XDG-style override: an absolute, non-blank value; anything else is unset. */
-function absoluteOverride(env: Env, key: string): string | null {
-  const value = env[key]?.trim();
-  return value && isAbsolute(value) ? value : null;
-}
-
-/** The `~/.hasna` root: `HASNA_HOME`, else `$HOME/.hasna`; null with neither. */
-function hasnaHomeDir(env: Env): string | null {
-  const override = absoluteOverride(env, HASNA_HOME_ENV_KEY);
-  if (override) return override;
-  const home = homeDir(env);
-  return home ? join(home, HASNA_HOME_DIR) : null;
-}
-
 /**
  * The app's config directory: `<HASNA_CONFIG_HOME>/<app>` when the config root
- * is overridden, else `<hasna home>/<app>/config`.
+ * is overridden, else `<home root>/<app>/config` where the home root is
+ * `~/.hasna` (public) or the same root with the `-internal` suffix (internal), or `HASNA_HOME`.
+ * Delegates to the ONE home resolver in `app-home.ts`; null when neither HOME
+ * nor HASNA_HOME anchors a root. Callers validate the slug first.
  */
-function appConfigDir(name: string, env: Env): string | null {
-  const configRoot = absoluteOverride(env, HASNA_CONFIG_HOME_ENV_KEY);
-  if (configRoot) return join(configRoot, name);
-  const root = hasnaHomeDir(env);
-  return root ? join(root, name, CONFIG_SUBDIR) : null;
+function appConfigDir(name: string, env: Env, scope: AppHomeScope): string | null {
+  const home = resolveAppHome(name, env, { scope });
+  return home ? home.config : null;
 }
 
 /** One on-disk credential source: its absolute path and its tier. */
@@ -329,13 +348,14 @@ export function credentialDiskSourceList(
   name: string,
   env: Env,
   profile: string | null = null,
+  scope: AppHomeScope = "public",
 ): DiskCredentialSource[] {
   // A name that is not a safe slug never reaches the filesystem. Without this,
   // `resolveCredential("../../elsewhere", env)` composes a path outside the
   // credential directory, and the transport's slug check runs too late to stop
   // the read.
   if (!SAFE_APP_SLUG.test(name)) return [];
-  const directory = appConfigDir(name, env);
+  const directory = appConfigDir(name, env, scope);
   if (!directory) return [];
   const file = profile ? `${CREDENTIALS_FILE}-${profile}` : CREDENTIALS_FILE;
   return [{ path: join(directory, file), tier: "disk" }];
@@ -347,12 +367,12 @@ export function credentialDiskSourceList(
  * Exactly one disk layer exists. Exported so callers and error messages can
  * name the exact path consulted.
  */
-export function credentialDiskSources(name: string, env: Env): string[] {
-  return credentialDiskSourceList(name, env, null).map((s) => s.path);
+export function credentialDiskSources(name: string, env: Env, scope: AppHomeScope = "public"): string[] {
+  return credentialDiskSourceList(name, env, null, scope).map((s) => s.path);
 }
 
-function profileDiskSources(name: string, env: Env, profile: string | null): string[] {
-  return credentialDiskSourceList(name, env, profile).map((s) => s.path);
+function profileDiskSources(name: string, env: Env, profile: string | null, scope: AppHomeScope): string[] {
+  return credentialDiskSourceList(name, env, profile, scope).map((s) => s.path);
 }
 
 /**
@@ -547,10 +567,11 @@ export function appConfigDiskValue(
   name: string,
   env: Env,
   keys: readonly string[],
+  scope: AppHomeScope = "public",
 ): AppConfigDiskHit | null {
   const wanted = keys.filter((key) => !CREDENTIAL_SHAPED_KEY.test(key));
   if (wanted.length === 0) return null;
-  for (const path of credentialDiskSources(name, env)) {
+  for (const path of credentialDiskSources(name, env, scope)) {
     const parsed = readAppConfigFile(path);
     if (!parsed) continue;
     if (wanted.some((key) => parsed.unusable.has(key))) {
@@ -911,9 +932,14 @@ export function snapshotClientEnvironment(name: string, env: Env): Env {
     credentialOverrideEnvKey(name),
     credentialPointerEnvKey(name),
     CREDENTIAL_PROFILE_ENV_KEY,
+    localOptInEnvKey(name),
+    localOptInAliasEnvKey(name),
     "HOME",
     HASNA_HOME_ENV_KEY,
     HASNA_CONFIG_HOME_ENV_KEY,
+    HASNA_DATA_HOME_ENV_KEY,
+    HASNA_STATE_HOME_ENV_KEY,
+    HASNA_CACHE_HOME_ENV_KEY,
     KEYCHAIN_STATION_ENV_KEY,
     "USER",
   ]) {
@@ -954,7 +980,8 @@ export function resolveCredential(
 ): ResolvedCredential | null {
   env = snapshotClientEnvironment(name, env);
   const { apiKeyKeys } = clientTransportEnvKeys(name);
-  const diskPaths = credentialDiskSources(name, env);
+  const scope: AppHomeScope = options.scope ?? "public";
+  const diskPaths = credentialDiskSources(name, env, scope);
 
   // ---- Tier 1: an explicit argument. -------------------------------------
   if (options.apiKey !== undefined) {
@@ -1067,7 +1094,7 @@ export function resolveCredential(
         [profileSource],
       );
     }
-    const paths = profileDiskSources(name, env, profile);
+    const paths = profileDiskSources(name, env, profile, scope);
     for (const path of paths) {
       const value = readCredentialFile(path, apiKeyKeys);
       if (value) {
@@ -1150,7 +1177,7 @@ export function resolveCredential(
   //
   // The sole automatic disk source is the owner-only credentials file in the
   // app's config directory.
-  const diskSourceList = credentialDiskSourceList(name, env, null);
+  const diskSourceList = credentialDiskSourceList(name, env, null, scope);
   const diskHits = diskSourceList
     .map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys) }))
     .filter((hit): hit is { src: DiskCredentialSource; value: string } => hit.value !== null);

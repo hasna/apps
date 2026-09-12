@@ -1,6 +1,6 @@
 {
   "name": "@hasna/contracts",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Shared schemas and validators for Hasna open-source agent infrastructure contracts.",
   "type": "module",
   "license": "Apache-2.0",
@@ -91,6 +91,18 @@
       "types": "./dist/client/storage.d.ts",
       "import": "./dist/client/storage.js"
     },
+    "./client/errors": {
+      "types": "./dist/client/errors.d.ts",
+      "import": "./dist/client/errors.js"
+    },
+    "./client/local-opt-in": {
+      "types": "./dist/client/local-opt-in.d.ts",
+      "import": "./dist/client/local-opt-in.js"
+    },
+    "./client/app-home": {
+      "types": "./dist/client/app-home.d.ts",
+      "import": "./dist/client/app-home.js"
+    },
     "./todos": {
       "types": "./dist/todos/index.d.ts",
       "import": "./dist/todos/index.js"
@@ -118,14 +130,15 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "bun run deployment:check && bun run todos:check && rm -rf dist && bun build src/index.ts src/schemas.ts src/validators.ts src/safe-read.ts src/safe-read-exec.ts src/deployment.ts src/deployment/index.ts src/deployment-artifacts.ts src/no-cloud.ts src/server-backend.ts src/service-contract.ts src/secure-local-store.ts src/conformance.ts src/artifact-scan.ts src/kit/generate.ts src/auth/index.ts src/sdk/generate.ts src/client/transport.ts src/client/storage.ts --root src --outdir dist --target bun && bun build src/todos/index.ts --root src --outdir dist --target bun --packages external && bun build src/cli/index.ts --outdir dist/cli --target bun && cp src/cli/contracts-cli.ts dist/cli/contracts-cli.js && cp src/hasna.contract.schema.json dist/hasna.contract.schema.json && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "bun run deployment:check && bun run todos:check && rm -rf dist && bun build src/index.ts src/schemas.ts src/validators.ts src/safe-read.ts src/safe-read-exec.ts src/deployment.ts src/deployment/index.ts src/deployment-artifacts.ts src/no-cloud.ts src/server-backend.ts src/service-contract.ts src/secure-local-store.ts src/conformance.ts src/artifact-scan.ts src/kit/generate.ts src/auth/index.ts src/sdk/generate.ts src/client/transport.ts src/client/storage.ts src/client/errors.ts src/client/local-opt-in.ts src/client/app-home.ts src/conformance-import-graph.ts --root src --outdir dist --target bun && bun build src/todos/index.ts --root src --outdir dist --target bun --packages external && bun build src/cli/index.ts --outdir dist/cli --target bun && cp src/cli/contracts-cli.ts dist/cli/contracts-cli.js && cp src/hasna.contract.schema.json dist/hasna.contract.schema.json && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test --timeout 120000",
     "lint": "tsc --noEmit",
     "conformance": "bun run src/cli/index.ts conformance examples",
-    "verify:release": "bun run todos:hygiene && bun run typecheck && bun run test && bun run conformance && rm -rf dist && bun run build && bun run src/cli/index.ts repo-conformance . && bun run smoke:dist && bun run smoke:todos-pack && bun run pack:check && bun run scan:artifact",
+    "verify:release": "bun run todos:hygiene && bun run typecheck && bun run test && bun run conformance && rm -rf dist && bun run build && bun run src/cli/index.ts repo-conformance . && bun run smoke:dist && bun run smoke:todos-pack && bun run smoke:root-types-pack && bun run pack:check && bun run scan:artifact",
     "smoke:dist": "bun scripts/smoke-dist.ts",
     "smoke:todos-pack": "bun scripts/smoke-todos-pack.ts",
+    "smoke:root-types-pack": "bun scripts/smoke-root-types-pack.ts",
     "smoke:optional-peer": "bun scripts/smoke-optional-peer.ts",
     "pack:check": "bun pm pack --dry-run --ignore-scripts",
     "todos:generate": "bun scripts/generate-todos-contract.ts",
@@ -137,7 +150,7 @@
     "prepack": "bun run verify:release",
     "prepublishOnly": "bun run verify:release",
     "scan:artifact": "bun scripts/scan-artifact.ts",
-    "build:js": "bun run deployment:check && bun run todos:check && rm -rf dist && bun build src/index.ts src/schemas.ts src/validators.ts src/safe-read.ts src/safe-read-exec.ts src/deployment.ts src/deployment/index.ts src/deployment-artifacts.ts src/no-cloud.ts src/server-backend.ts src/service-contract.ts src/secure-local-store.ts src/conformance.ts src/artifact-scan.ts src/kit/generate.ts src/auth/index.ts src/sdk/generate.ts src/client/transport.ts src/client/storage.ts --root src --outdir dist --target bun && bun build src/todos/index.ts --root src --outdir dist --target bun --packages external && bun build src/cli/index.ts --outdir dist/cli --target bun && cp src/cli/contracts-cli.ts dist/cli/contracts-cli.js && cp src/hasna.contract.schema.json dist/hasna.contract.schema.json"
+    "build:js": "bun run deployment:check && bun run todos:check && rm -rf dist && bun build src/index.ts src/schemas.ts src/validators.ts src/safe-read.ts src/safe-read-exec.ts src/deployment.ts src/deployment/index.ts src/deployment-artifacts.ts src/no-cloud.ts src/server-backend.ts src/service-contract.ts src/secure-local-store.ts src/conformance.ts src/artifact-scan.ts src/kit/generate.ts src/auth/index.ts src/sdk/generate.ts src/client/transport.ts src/client/storage.ts src/client/errors.ts src/client/local-opt-in.ts src/client/app-home.ts src/conformance-import-graph.ts --root src --outdir dist --target bun && bun build src/todos/index.ts --root src --outdir dist --target bun --packages external && bun build src/cli/index.ts --outdir dist/cli --target bun && cp src/cli/contracts-cli.ts dist/cli/contracts-cli.js && cp src/hasna.contract.schema.json dist/hasna.contract.schema.json"
   },
   "keywords": [
     "contracts",

@@ -146,6 +146,7 @@ function throwingTransport(error: unknown): HasnaHttpTransport {
   };
   return {
     baseUrl: "https://x/v1",
+    fetch: throwIt,
     request: throwIt,
     get: throwIt,
     post: throwIt,

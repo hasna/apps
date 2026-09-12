@@ -1,6 +1,6 @@
 import type { z } from "zod";
-import { type ServiceContractManifest } from "./schemas";
-import { type ServerDataBackendEnvKeys } from "./server-backend";
+import { type ServiceContractManifest } from "./schemas.js";
+import { type ServerDataBackendEnvKeys } from "./server-backend.js";
 export declare const SERVICE_CONTRACT_MANIFEST_FILENAME = "hasna.contract.json";
 /**
  * Draft-07 JSON Schema for `hasna.contract.json`. This is the source of truth
@@ -239,6 +239,28 @@ export declare const SERVICE_CONTRACT_JSON_SCHEMA: {
                     readonly deferReason: {
                         readonly type: "string";
                         readonly minLength: 1;
+                    };
+                    readonly dataAccess: {
+                        readonly enum: readonly ["hosted", "server-only", "local-opt-in"];
+                        readonly description: "How the surface reaches data: hosted (the authenticated /v1 client only), server-only (never reachable from a CLI or MCP bin), or local-opt-in (the on-box store behind HASNA_<NAME>_LOCAL=1 only). Absent asserts nothing.";
+                    };
+                    readonly commands: {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "object";
+                            readonly additionalProperties: false;
+                            readonly required: readonly ["name", "dataAccess"];
+                            readonly properties: {
+                                readonly name: {
+                                    readonly type: "string";
+                                    readonly minLength: 1;
+                                };
+                                readonly dataAccess: {
+                                    readonly enum: readonly ["hosted", "server-only", "local-opt-in"];
+                                };
+                            };
+                        };
+                        readonly description: "Per-command data access where it differs from the surface default, e.g. a `db migrate` command that is server-only.";
                     };
                     readonly readinessGates: {
                         readonly type: "array";
@@ -491,6 +513,52 @@ export declare const SERVICE_CONTRACT_JSON_SCHEMA: {
                 };
             };
             readonly description: "How the repo's artifacts reach consumers. Optional and additive; absence asserts nothing.";
+        };
+        readonly scope: {
+            readonly enum: readonly ["public", "internal"];
+            readonly description: "Which home root the app owns: public is ~/.hasna/<name> (@hasna/*); internal is the same root with the -internal suffix, for internal-scope packages. Absent means public.";
+        };
+        readonly client: {
+            readonly oneOf: readonly [{
+                readonly type: "null";
+            }, {
+                readonly type: "object";
+                readonly additionalProperties: false;
+                readonly required: readonly ["transport", "credentialChain"];
+                readonly properties: {
+                    readonly transport: {
+                        readonly const: "hosted";
+                    };
+                    readonly authority: {
+                        readonly type: "string";
+                        readonly pattern: "^https://[^\\s/@?#]+(?:/[^\\s/?#]+)*$";
+                        readonly description: "Absolute https client base with no credentials, query, fragment, or trailing slash, never ending in /v1. Defaults to https://api.hasna.com/<name>.";
+                    };
+                    readonly credentialChain: {
+                        readonly const: "contracts";
+                    };
+                    readonly localOptIn: {
+                        readonly type: readonly ["string", "null"];
+                        readonly pattern: "^HASNA_[A-Z][A-Z0-9_]*_LOCAL$";
+                        readonly description: "HASNA_<NAME>_LOCAL, the one door to an on-box store; null when the app has none.";
+                    };
+                    readonly localStoreModule: {
+                        readonly type: readonly ["string", "null"];
+                        readonly minLength: 1;
+                        readonly description: "Repo-relative source path of the one module allowed to open the on-box store, e.g. src/db/database.ts.";
+                    };
+                    readonly readProbe: {
+                        readonly type: "array";
+                        readonly minItems: 1;
+                        readonly items: {
+                            readonly type: "string";
+                            readonly minLength: 1;
+                        };
+                        readonly description: "The read command the black-box fail-closed check runs, e.g. [\"list\", \"--limit\", \"1\"].";
+                    };
+                };
+            }];
+            readonly description: "The hosted client contract: CLI and MCP bins reach data only through the shared authenticated client. null states explicitly that the repo ships no client. Omit to assert nothing.";
         };
         readonly metadata: {
             readonly type: "object";
