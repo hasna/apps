@@ -544,6 +544,8 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     // Keep it and unassigned subagents on the selected provider model.
     env.ANTHROPIC_DEFAULT_MODEL=input.model;
     env.CLAUDE_CODE_SUBAGENT_MODEL=input.compiledPolicy?.roles.subagent??input.model;
+    env.ANTHROPIC_API_KEY="";
+    env.ANTHROPIC_AUTH_TOKEN="";
     env[input.authStyle==="x-api-key"?"ANTHROPIC_API_KEY":"ANTHROPIC_AUTH_TOKEN"]=input.credential??"switcher-local-no-auth";
     const file=await jsonFile(input.stateDir,"claude-settings.json",{modelPicker:{replaceBuiltInOptions:true,options:input.models.map(m=>({model:m.id,label:m.name,description:m.description?.slice(0,300)}))}});
     configPaths.push(file);

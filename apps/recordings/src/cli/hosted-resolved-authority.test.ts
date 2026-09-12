@@ -20,6 +20,12 @@ const row = {
   durationMs: 1250, createdAt: at, updatedAt: at,
 };
 const projected = { id, title: row.title, durationMs: row.durationMs, createdAt: at };
+const providers = { providers: [{
+  id: "fictional", models: ["fictional-model"],
+  formats: [{ encoding: "pcm_s16le", sampleRateHz: 24_000, channels: 1 }],
+  execution: "fixture", interim: false, cancellation: true,
+  languageSelection: false, requiresAccount: true, ready: true,
+}] };
 
 const requests: Array<{ method: string; path: string; authorized: boolean }> = [];
 const server = Bun.serve({
@@ -32,6 +38,8 @@ const server = Bun.serve({
     if (!authorized) return Response.json({ error: "unauthorized" }, { status: 401 });
     if (url.pathname === "/v1/recordings") return Response.json({ recordings: [row] });
     if (url.pathname === `/v1/recordings/${id}`) return Response.json({ recording: row });
+    if (url.pathname === "/v1/providers") return Response.json(providers);
+    if (url.pathname === "/v1/paste-history") return Response.json({ receipts: [] });
     return Response.json({ error: "not_found" }, { status: 404 });
   },
 });
@@ -95,4 +103,24 @@ test("an explicit --api-base still requires its named credential variable", asyn
   });
   expect(status).toBe(1);
   expect(JSON.parse(written.join("")).error.code).toBe("invalid_configuration");
+});
+
+test.each(["providers", "paste-history"])("hosted %s uses the resolved authority without explicit flags", async command => {
+  const home = scrubbedHome();
+  const before = requests.length;
+  const written: string[] = [];
+  const status = await runHostedCLI([command], {
+    env: {
+      HOME: home,
+      HASNA_STATION: "no-such-station",
+      HASNA_RECORDINGS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_RECORDINGS_API_KEY: credential,
+    },
+    write: value => { written.push(value); },
+  });
+  expect(status).toBe(0);
+  expect(JSON.parse(written.join(""))).toEqual(command === "providers"
+    ? providers : { receipts: [], nextCursor: null });
+  expect(requests.slice(before)).toEqual([{ method: "GET", path: `/v1/${command}`, authorized: true }]);
+  expect(dbFiles(home)).toEqual([]);
 });

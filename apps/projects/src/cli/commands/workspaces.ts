@@ -39,7 +39,8 @@ import {
 } from "../../lib/project-registration.js";
 import { productionProjectRegistrationAuthorities } from "../../lib/production-project-registration-authorities.js";
 import { doctorWorkspaceWithStore } from "../../lib/workspace-doctor.js";
-import { resolveProjectStore, type ProjectStore } from "../../store/project-store.js";
+import { LocalOnlyOperationError, resolveProjectStore, type ProjectStore } from "../../store/project-store.js";
+import { getDatabase } from "../../db/database.js";
 
 // Drop keys whose value is `undefined` so a hosted PATCH only carries fields the
 // caller actually set (an explicit `null` still clears the field server-side).
@@ -691,6 +692,21 @@ function resolveAgentId(idOrSlug: string | undefined): string {
 function mutationAgentId(store: ProjectStore, optAgent?: string): string | undefined {
   if (store.transport !== "local") return undefined;
   return optAgent ? resolveAgentId(optAgent) : ensureCliAgent().id;
+}
+
+/**
+ * `--canonical-machine` must name a registered machine slug. The server
+ * rejects an unknown slug with HTTP 400 ("Machine not found: <slug>") — the
+ * live `update --canonical-machine station03` report — so resolve it against
+ * the machines registry first (both transports) and name the registered slugs.
+ */
+async function assertKnownMachine(store: ProjectStore, slug: string): Promise<void> {
+  const known = (await store.listMachines()).map((machine) => machine.slug);
+  if (known.includes(slug)) return;
+  throw new Error(
+    `Unknown machine: ${slug} — canonical_machine must be a registered machine slug` +
+    (known.length ? ` (registered: ${known.join(", ")})` : " (the machines registry is empty)") + ".",
+  );
 }
 
 function printRows(rows: Array<Record<string, unknown>>, columns: string[]): void {
@@ -1769,12 +1785,13 @@ function registerProjectStartCommand(program: Command): void {
     .option("-j, --json", "Output JSON")
     .action(async (targets, opts) => {
       try {
+        const store = resolveProjectStore();
         const labelFilters = splitLabelFilters(opts.label, opts.labels);
         const startTargets = await (async () => {
           const explicitTargets = collectStartTargets(targets, opts.bulkFile);
           const hasExplicitTargets = (targets?.length ?? 0) > 0 || Boolean(opts.bulkFile);
           if (hasExplicitTargets || labelFilters.length === 0) return explicitTargets;
-          return (await resolveProjectStore().listProjects({ status: "active", tags: labelFilters, limit: parseHumanLimit(undefined, MAX_HUMAN_LIMIT) })).map((project) => project.slug);
+          return (await store.listProjects({ status: "active", tags: labelFilters, limit: parseHumanLimit(undefined, MAX_HUMAN_LIMIT) })).map((project) => project.slug);
         })();
         if (startTargets.length === 0 && labelFilters.length > 0) {
           throw new Error(`No active projects matched label filter: ${labelFilters.join(", ")}`);
@@ -1787,7 +1804,10 @@ function registerProjectStartCommand(program: Command): void {
           throw new Error("--session/--name is only supported for a single project start");
         }
 
-        const agentId = opts.actor ? resolveAgentId(opts.actor) : ensureCliAgent().id;
+        // Local resolves/creates the on-box CLI agent row; the hosted backend
+        // attributes the start to the bearer key server-side and must never
+        // open projects.db to mint a local agent (hasna/apps#1720).
+        const agentId = mutationAgentId(store, opts.actor);
         const requestedWindows = parseTmuxWindowsJson(opts.windowsJson, "--windows-json");
         const commonOptions = {
           agentTool: opts.agent ? parseProjectStartAgent(opts.agent) : undefined,
@@ -2175,7 +2195,15 @@ function registerProjectCommands(program: Command): void {
           if (project.primary_path) console.log(`  ${chalk.dim("path:")} ${project.primary_path}`);
           return;
         }
-        const agentId = resolveAgentId(opts.agent);
+        // Reached for a local create, or for a hosted --dry-run (the hosted
+        // create returned above). A hosted dry-run previews against an
+        // in-memory scratch registry — nothing on disk, nothing served — never
+        // the on-box projects.db, which a hosted credential refuses to open
+        // (hasna/apps#1720); attribution stays server-side. Local uses the real
+        // registry and the on-box CLI agent as before.
+        const hostedPreview = store.transport === "http";
+        const planDb = hostedPreview ? getDatabase(":memory:") : undefined;
+        const agentId = hostedPreview ? undefined : resolveAgentId(opts.agent);
         const result = await executeWorkspaceCreation({
           name: opts.name,
           slug: opts.slug,
@@ -2196,7 +2224,7 @@ function registerProjectCommands(program: Command): void {
           writeMarker: opts.marker,
           tmux: opts.tmuxSession || tmuxWindows ? { session: opts.tmuxSession, windows: tmuxWindows } : undefined,
           tmux_profile: opts.tmuxProfile,
-        }, { dryRun: opts.dryRun, runtimeDryRun: opts.dryRunRuntime, createProject: (input) => store.createProject(input) });
+        }, { dryRun: opts.dryRun, runtimeDryRun: opts.dryRunRuntime, db: planDb, createProject: (input) => store.createProject(input) });
         if (wantsJson(opts)) { printObject(projectPayload(result), opts); return; }
         if (result.dry_run) {
           console.log(chalk.dim(`[dry-run] Project plan: ${result.plan.workspace.slug}`));
@@ -2293,7 +2321,7 @@ function registerProjectCommands(program: Command): void {
             })();
         const result = cleanupWorkspaceCreationTarget(target, {
           dryRun: opts.dryRun,
-          agentId: opts.agent ? resolveAgentId(opts.agent) : ensureCliAgent().id,
+          agentId: mutationAgentId(store, opts.agent),
           source: "cli",
           command: process.argv.join(" "),
         });
@@ -2450,6 +2478,10 @@ function registerProjectCommands(program: Command): void {
     .option("-j, --json", "Output JSON")
     .action(async (opts) => {
       try {
+        // The eval harness writes tmux profiles and agent rows on-box: resolve
+        // the store first so a hosted credential refuses instead of opening
+        // projects.db, and nothing configured fails closed.
+        resolveProjectStore();
         const maxSteps = Number.parseInt(opts.maxSteps, 10);
         if (!Number.isInteger(maxSteps) || maxSteps <= 0) throw new Error("--max-steps must be a positive integer");
         const result = await runWorkspaceAgentEval({
@@ -2490,9 +2522,14 @@ function registerProjectCommands(program: Command): void {
     .option("-j, --json", "Output JSON")
     .action((opts) => {
       try {
+        // The eval-artifact ledger is on-box only. Resolve the store first so
+        // routing is decided the same way as every other command: nothing
+        // configured fails closed, a hosted credential refuses the local open,
+        // and only the explicit local opt-in reaches the registry.
+        const store = resolveProjectStore();
         const result = cleanupProjectEvalArtifacts({
           dryRun: !opts.apply,
-          agentId: opts.agent ? resolveAgentId(opts.agent) : ensureCliAgent().id,
+          agentId: mutationAgentId(store, opts.agent),
           source: "cli",
           command: process.argv.join(" "),
         });
@@ -2914,6 +2951,7 @@ function registerProjectCommands(program: Command): void {
           root_id: opts.clearRoot ? null : await resolveRootId(store, opts.root),
           recipe_id: opts.clearRecipe ? null : await resolveRecipeId(store, opts.recipe),
         };
+        if (opts.canonicalMachine !== undefined) await assertKnownMachine(store, opts.canonicalMachine);
         const updated = await store.updateProject(project.id, {
           name: opts.name,
           slug: opts.slug,
@@ -4064,18 +4102,34 @@ function registerStoreCommand(program: Command): void {
         const store = resolveProjectStore();
         const project = await store.resolveTarget(projectIdOrSlug);
         const inspection = inspectCanonicalProjectStore(project);
-        const appStore = opts.includeLoops
-          ? await store.inspectAppStoreWithLoops(project, { includeRuns: opts.includeRuns })
-          : await store.inspectAppStore(project);
-        if (wantsJson(opts)) { printObject({ ...inspection, app_store: appStore }, opts); return; }
+        // The per-project app store is on-box SQLite: read it only on the local
+        // transport. Under a hosted credential it is refused (no /v1 route, no
+        // SQLite under a hosted credential) and the refusal is reported as a
+        // field so the filesystem inspection still answers.
+        const appStore = store.transport === "local"
+          ? opts.includeLoops
+            ? await store.inspectAppStoreWithLoops(project, { includeRuns: opts.includeRuns })
+            : await store.inspectAppStore(project)
+          : null;
+        const appStoreUnavailable = appStore === null
+          ? new LocalOnlyOperationError("inspect the project app store").message
+          : undefined;
+        if (wantsJson(opts)) {
+          printObject({ ...inspection, app_store: appStore, ...(appStoreUnavailable ? { app_store_unavailable: appStoreUnavailable } : {}) }, opts);
+          return;
+        }
         console.log(`${chalk.bold(project.slug)} store`);
         console.log(`  ${chalk.dim("home:")} ${inspection.paths.home}`);
         console.log(`  ${chalk.dim("workspace:")} ${inspection.paths.workspace_path}${inspection.exists.workspace ? "" : " (missing)"}`);
         console.log(`  ${chalk.dim("data:")} ${inspection.paths.data_path}${inspection.exists.data ? "" : " (missing)"}`);
         console.log(`  ${chalk.dim("primary:")} ${inspection.primary_path ?? "none"}${inspection.primary_is_canonical ? " (canonical)" : ""}`);
-        console.log(`  ${chalk.dim("app db:")} ${appStore.paths.db_path}`);
-        console.log(`  ${chalk.dim("legacy canvases:")} ${appStore.legacy_canvas_storage.record_count} (read-only migration source)`);
-        console.log(`  ${chalk.dim("app loop links:")} ${appStore.counts.loop_links}`);
+        if (appStore) {
+          console.log(`  ${chalk.dim("app db:")} ${appStore.paths.db_path}`);
+          console.log(`  ${chalk.dim("legacy canvases:")} ${appStore.legacy_canvas_storage.record_count} (read-only migration source)`);
+          console.log(`  ${chalk.dim("app loop links:")} ${appStore.counts.loop_links}`);
+        } else {
+          console.log(`  ${chalk.yellow("app store:")} not read — ${appStoreUnavailable}`);
+        }
         if (inspection.migration_recommended) console.log(chalk.yellow("  migration recommended: primary path is not the canonical store path"));
       } catch (err) {
         console.error(chalk.red(err instanceof Error ? err.message : String(err)));
@@ -4830,24 +4884,30 @@ function registerTmuxProfilesCommand(program: Command): void {
     .option("--verbose", "Show description and window count")
     .option("-j, --json", "Output JSON")
     .action(async (opts) => {
-      const store = resolveProjectStore();
-      const profiles = await store.listTmuxProfiles();
-      if (wantsJson(opts)) { printObject(profiles, opts); return; }
-      const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
-      const visible = profiles.slice(0, limit);
-      const windowCounts = opts.verbose
-        ? new Map(await Promise.all(visible.map(async (profile) => [profile.id, (await store.listTmuxProfileWindows(profile.id)).length] as const)))
-        : new Map<string, number>();
-      printRows(visible.map((profile) => ({
-        slug: profile.slug,
-        session: compactText(profile.session_template, 80),
-        attach: profile.attach ? "yes" : "no",
-        ...(opts.verbose ? {
-          windows: windowCounts.get(profile.id) ?? 0,
-          description: compactText(profile.description, 80),
-        } : {}),
-      })), opts.verbose ? ["slug", "session", "attach", "windows", "description"] : ["slug", "session", "attach"]);
-      printDiscoveryHint(`Showing ${visible.length} of ${profiles.length} tmux profile(s). Use --limit <n>, --verbose, --json, or 'projects tmux-profiles show <slug>' for details.`);
+      try {
+        const store = resolveProjectStore();
+        const profiles = await store.listTmuxProfiles();
+        if (wantsJson(opts)) { printObject(profiles, opts); return; }
+        const limit = parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
+        const visible = profiles.slice(0, limit);
+        const windowCounts = opts.verbose
+          ? new Map(await Promise.all(visible.map(async (profile) => [profile.id, (await store.listTmuxProfileWindows(profile.id)).length] as const)))
+          : new Map<string, number>();
+        printRows(visible.map((profile) => ({
+          slug: profile.slug,
+          session: compactText(profile.session_template, 80),
+          attach: profile.attach ? "yes" : "no",
+          ...(opts.verbose ? {
+            windows: windowCounts.get(profile.id) ?? 0,
+            description: compactText(profile.description, 80),
+          } : {}),
+        })), opts.verbose ? ["slug", "session", "attach", "windows", "description"] : ["slug", "session", "attach"]);
+        printDiscoveryHint(`Showing ${visible.length} of ${profiles.length} tmux profile(s). Use --limit <n>, --verbose, --json, or 'projects tmux-profiles show <slug>' for details.`);
+      } catch (err) {
+        // One clean line (the hosted REMOTE_COMMAND_UNSUPPORTED refusal included), never a raw stack.
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
     });
 
   cmd

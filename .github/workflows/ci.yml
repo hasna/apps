@@ -554,3 +554,11 @@ jobs:
 
       - name: Publish-guard (npm pack --dry-run + block internal-infra strings)
         run: bun tooling/ci/check-publish-guard.ts
+
+      # Publish-guard runs Emails prepack (build, artifact scan and packed identity).
+      # These remaining prepublishOnly checks must also pass before release.
+      - name: Emails release contract gates
+        working-directory: apps/emails
+        run: |
+          bun run contracts:conformance
+          bun run contracts no-cloud-scan .

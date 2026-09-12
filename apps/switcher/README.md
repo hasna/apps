@@ -95,6 +95,20 @@ on-request approvals. These are startup defaults; the app's own permission
 controls and managed requirements still apply. Start a new conversation after
 changing launch defaults; existing conversations can retain their own settings.
 
+Browser and Computer Use are local app tools, separate from the inference
+provider. Switcher preserves the app's sandbox-helper arguments so
+the installed tool runtime can start. Enable the app's browser/computer plugins
+and the browser extension in the desired profile; website permissions, macOS
+Accessibility/Screen Recording permissions, workspace policy and model
+eligibility still apply. Full access does not override those controls.
+
+Models need function calling; screenshot workflows also need image input.
+DeepSeek's Responses API supports both for `deepseek-flash`, but ignores OpenAI's
+built-in `computer_use` tool. The desktop's local MCP tools are a separate path.
+Successful inference does not establish browser or computer compatibility for
+every provider. See the [browser extension guide](https://learn.chatgpt.com/docs/chrome-extension)
+and [DeepSeek compatibility details](https://api-docs.deepseek.com/guides/responses_api/).
+
 Switcher starts a separate app instance with persistent provider/model state
 under `~/.hasna/switcher/state/desktop/PROFILE`. Your regular ChatGPT app and its
 signed-in state are preserved. Each profile retains its own local conversations
@@ -121,6 +135,11 @@ It verifies selected-model configuration, direct responses, delegated task
 creation, follow-up delivery, and history replay against the real provider.
 It is separate from visual desktop acceptance.
 
+`test:native-chatgpt-tools` checks the installed browser/computer tool kernel
+through the generated launcher without provider calls or UI actions. Set
+`SWITCHER_TEST_CUA_CONFIG` to the installed unified-computer-use plugin's
+`.mcp.json`; the check uses disposable state and leaves that configuration intact.
+
 References: [OpenAI custom provider configuration](https://learn.chatgpt.com/docs/config-file/config-advanced),
 [community desktop custom-model profiles](https://github.com/ademisler/codex-desktop-custom-models),
 [reported signed-in provider routing issue](https://github.com/openai/codex/issues/37245),
@@ -128,6 +147,12 @@ and [Preview Edit routing limitation](https://github.com/openai/codex/issues/373
 and [DeepSeek thinking controls](https://api-docs.deepseek.com/guides/thinking_mode/).
 
 ## Claude desktop with a provider
+
+Claude Code's official Chrome integration requires direct Anthropic sign-in;
+API-key and third-party-provider sessions cannot use it. Routing Claude desktop
+inference through Switcher does not remove that restriction. A separately
+configured, provider-compatible browser MCP server is another integration path.
+See [Anthropic's Chrome prerequisites](https://code.claude.com/docs/en/chrome#prerequisites).
 
 ```sh
 switcher launch claude-desktop --provider deepseek --model deepseek-flash
@@ -143,7 +168,8 @@ launching the terminal CLI. `detectClaudeDesktopApp()` is available in the SDK.
 The provider must implement Anthropic Messages, including streaming and tool
 calling for the chosen model. DeepSeek and compatible gateway presets select
 the Messages endpoint automatically. Saved provider IDs retain their explicit
-protocol. Switcher does not convert Chat Completions or Responses into Messages.
+protocol. OpenCode Zen and Go additionally use the Claude translation adapter
+described below for models served on another native wire.
 A configured provider works in both desktop apps when it offers both required
 APIs; a preset's existence is not proof that every model supports every feature.
 
@@ -204,7 +230,60 @@ With no Switcher API credential configured, the CLI and `switcher-mcp` exit non-
 
 Remote API configuration is resolved through Contracts, including canonical credential stores and the default gateway URL. Invalid, unavailable or unauthorized remote services fail without opening local SQLite.
 
-The registry contains DeepSeek, OpenRouter, Anthropic, OpenAI, xAI, Ollama, LM Studio, Groq, Cerebras, Mistral, Together AI, Fireworks, Moonshot/Kimi, DashScope, Z.AI, MiniMax, SiliconFlow, and generic protocol entries. `switcher providers presets ID` exposes documented routes, aliases and limitations; this is not a claim that every combination has passed live tests. Remaining adapters and acceptance gates are tracked in [TODOS.md](TODOS.md).
+The registry contains DeepSeek, OpenCode Zen, OpenCode Go, OpenRouter, Anthropic, OpenAI, xAI, Ollama, LM Studio, Groq, Cerebras, Mistral, Together AI, Fireworks, Moonshot/Kimi, DashScope, Z.AI, MiniMax, SiliconFlow, and generic protocol entries. `switcher providers presets ID` exposes documented routes, aliases and limitations; this is not a claim that every combination has passed live tests. Remaining adapters and acceptance gates are tracked in [TODOS.md](TODOS.md).
+
+### OpenCode and OpenRouter providers
+
+From 0.2.1, `opencode` selects OpenCode Zen and `opencode-go` selects its Go
+subscription. Both discover their complete live `/models` catalogs. Supply
+`OPENCODE_API_KEY` through environment injection or bind each preset to your
+existing vault/keychain reference. Go requires an active Go subscription.
+`SWITCHER_PROVIDER_OPENCODE` and `SWITCHER_PROVIDER_OPENCODE_GO` can bind
+different accounts explicitly. OpenRouter uses `OPENROUTER_API_KEY` or its
+`SWITCHER_PROVIDER_OPENROUTER` binding.
+
+```sh
+switcher models opencode --limit 1000
+switcher models opencode-go --limit 1000
+switcher models openrouter --limit 1000
+switcher launch claude --provider opencode --model big-pickle
+switcher launch claude --provider opencode-go --model kimi-k3
+switcher launch claude --provider openrouter --model deepseek/deepseek-v4-flash
+```
+
+Use the exact API model ID from the catalog. OpenCode IDs are unprefixed;
+OpenRouter IDs include their provider prefix. `--limit` controls the displayed
+page, and `--offset` accesses subsequent pages. The stored catalog includes all
+pages and modalities; coding selections exclude models explicitly lacking text
+output or tools. OpenRouter's declared reasoning efforts are retained.
+
+Claude Code and `claude-desktop` speak Messages to Switcher. For OpenCode,
+Switcher forwards Claude/Qwen Messages requests natively, uses Messages for
+Go's MiniMax models, and translates the other documented model families to
+Chat Completions, Responses, or Gemini generateContent. Translation preserves
+streaming text, tool arguments/results, images, reasoning text, and token usage.
+It keeps Gemini tool signatures within the current launch. Restarting a launch
+does not restore that transient signature cache, so start a fresh conversation
+for Gemini tool workflows. Token counting on translated routes and provider
+server tools are rejected explicitly; model capabilities and entitlements still
+apply. Other harnesses use the preset's selected native protocol and require a
+model compatible with it. OpenRouter provides its own Messages translation.
+
+OpenCode inference receives Switcher's own user agent and a stable conversation
+identifier. Native session headers are preserved from an explicit allowlist;
+Claude's session metadata is used when available, with a per-launch fallback.
+Credential and session handling is scoped to the exact OpenCode service URLs.
+
+`bun run test:native-claude-providers` uses installed Claude Code with controlled
+upstream fixtures and verifies actual file reads through Chat Completions,
+Responses, Gemini, Go Messages, and OpenRouter Messages. This is separate from
+paid-provider acceptance. Development live checks discovered all three catalogs
+and received answers from OpenCode's free Chat endpoint; the saved paid keys
+were rejected and the free endpoint subsequently rate-limited native testing.
+
+Sources: [OpenCode Zen](https://opencode.ai/docs/zen/),
+[OpenCode Go](https://opencode.ai/docs/go/), and
+[OpenRouter Claude Code integration](https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration).
 
 ## Canonical API configuration
 

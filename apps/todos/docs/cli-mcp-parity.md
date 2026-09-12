@@ -449,12 +449,9 @@ todos extract . --dry-run --index --exclude fixtures/** --json
 todos extract-watch . --dry-run --max-runs 1 --json
 ```
 
-Matching MCP tools:
-
-```json
-{ "tool": "extract_todos", "arguments": { "path": ".", "dry_run": true, "include_index": true, "exclude": ["fixtures/**"] } }
-{ "tool": "watch_source_todos", "arguments": { "path": ".", "dry_run": true, "max_runs": 1 } }
-```
+Intentional gap: the source index is CLI-only. The former `extract_todos` and
+`watch_source_todos` MCP tools were removed — the scan reads the local checkout
+and the watcher is a long-running local process, neither an MCP tool call.
 
 CLI workflow prompt render:
 

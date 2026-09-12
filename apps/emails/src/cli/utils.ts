@@ -1,3 +1,4 @@
+import { searchAdmissionFailure } from "../lib/search-admission-error.js";
 import chalk from "../lib/chalk-lite.js";
 import { SCHEDULED_STATUSES, type ScheduledStatus } from "../db/scheduled.js";
 import { writeSync } from "node:fs";
@@ -234,6 +235,7 @@ function fixCommands(message: string): string[] {
 
 export function handleError(e: unknown): never {
   const message = e instanceof Error ? e.message : String(e);
+  const searchFailure = searchAdmissionFailure(e);
   if (jsonOutput) {
     structuredJsonEmitted = true;
     try {
@@ -241,8 +243,9 @@ export function handleError(e: unknown): never {
         error: {
           message,
           code: errorCode(message),
-          fix_commands: fixCommands(message),
+          fix_commands: searchFailure ? [] : fixCommands(message),
           retryable: false,
+          ...searchFailure,
         },
       });
     } catch {

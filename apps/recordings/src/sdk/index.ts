@@ -18,9 +18,11 @@
  * so on stderr.
  */
 // Additive SaaS interface; the generated legacy client below retains its contract.
-export { HostedRecordingsClient, HostedLibrary, recordingCursor, pasteCursor, RecordingsSDKError } from "../hosted/index.js";
+export { HostedRecordingsClient, HostedLibrary, HostedPasteHistory, recordingCursor, pasteCursor, RecordingsSDKError } from "../hosted/index.js";
 export type { ClientOptions as HostedClientOptions, CredentialProvider as HostedCredentialProvider,
-  HostedLibraryOptions, HostedLibraryRecording, HostedLibraryPage, Cursor as HostedCursor } from "../hosted/index.js";
+  HostedLibraryOptions, HostedLibraryRecording, HostedLibraryPage,
+  HostedPasteHistoryOptions, HostedPasteHistoryReceipt, HostedPasteHistoryPage, Cursor as HostedCursor,
+  HostedProvidersResponse, HostedTranscriptionProvider, HostedTranscriptionModel } from "../hosted/index.js";
 
 export {
   createRecordingsV1Client,
