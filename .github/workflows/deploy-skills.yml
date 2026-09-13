@@ -43,6 +43,23 @@ on:
         type: boolean
         required: false
         default: true
+      reload_runtime_config:
+        description: "Reload the runtime manifest using a verified prior API image; no image rebuild or push"
+        type: boolean
+        required: false
+        default: false
+      reload_from_run_id:
+        description: "Successful automatic deployment that scanned and published both release images"
+        type: string
+        required: false
+      reload_source_sha:
+        description: "Exact release source of the prior automatic deployment"
+        type: string
+        required: false
+      reload_api_image_digest:
+        description: "Exact API digest recorded by that deployment's successful Docker push"
+        type: string
+        required: false
 
 concurrency:
   group: deploy-skills-production
@@ -92,6 +109,10 @@ jobs:
     outputs:
       proceed: ${{ steps.resolve.outputs.proceed }}
       source_sha: ${{ steps.resolve.outputs.source_sha }}
+      reload_runtime_config: ${{ steps.reload.outputs.reload_runtime_config }}
+      release_source_sha: ${{ steps.reload.outputs.release_source_sha }}
+      api_image_digest: ${{ steps.reload.outputs.api_image_digest }}
+      runtime_image_digest: ${{ steps.reload.outputs.runtime_image_digest }}
     steps:
       - name: Checkout main history
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -175,6 +196,27 @@ jobs:
             printf 'proceed=%s\n' "${proceed}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Verify prior publication for configuration reload
+        id: reload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROLLER_SOURCE_SHA: ${{ steps.resolve.outputs.source_sha }}
+          RELOAD_RUNTIME_CONFIG: ${{ inputs.reload_runtime_config }}
+          RELOAD_FROM_RUN_ID: ${{ inputs.reload_from_run_id }}
+          RELOAD_SOURCE_SHA: ${{ inputs.reload_source_sha }}
+          RELOAD_API_IMAGE_DIGEST: ${{ inputs.reload_api_image_digest }}
+          PUBLISH_RUNTIME_IMAGE: ${{ inputs.publish_runtime_image }}
+        run: python3 -I -B tooling/ci/skills-runtime-config-reload.py gate
+
+      - name: Record configuration reload provenance
+        if: ${{ steps.reload.outputs.reload_runtime_config == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: skills-runtime-config-reload-${{ github.run_id }}
+          path: ${{ runner.temp }}/skills-runtime-config-reload-provenance.json
+          if-no-files-found: error
+          retention-days: 30
+
   deploy:
     name: build + scan + migrate + deploy
     needs: gate
@@ -217,9 +259,11 @@ jobs:
           printf 'SOURCE_SHA=%s\n' "${GATED_SHA}" >> "${GITHUB_ENV}"
 
       - name: Set up Docker Buildx
+        if: ${{ needs.gate.outputs.reload_runtime_config != 'true' }}
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build native ARM64 image locally
+        if: ${{ needs.gate.outputs.reload_runtime_config != 'true' }}
         run: |
           set -Eeuo pipefail
           docker buildx build \
@@ -237,6 +281,7 @@ jobs:
       # lane; the action is pinned to its full commit (a tag is mutable, and
       # this action runs before the deploy job holds any production credential).
       - name: Generate local vulnerability report
+        if: ${{ needs.gate.outputs.reload_runtime_config != 'true' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.LOCAL_IMAGE }}:${{ needs.gate.outputs.source_sha }}
@@ -249,6 +294,7 @@ jobs:
           exit-code: "0"
 
       - name: Enforce local vulnerability gate
+        if: ${{ needs.gate.outputs.reload_runtime_config != 'true' }}
         id: local-scan
         run: |
           set -Eeuo pipefail
@@ -366,11 +412,13 @@ jobs:
           fi
 
       - name: Login to Amazon ECR
+        if: ${{ needs.gate.outputs.reload_runtime_config != 'true' }}
         uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
         with:
           mask-password: true
 
       - name: Push scanned image
+        if: ${{ needs.gate.outputs.reload_runtime_config != 'true' }}
         id: build
         env:
           ECR_URL: ${{ steps.m.outputs.ecr_url }}
@@ -381,7 +429,23 @@ jobs:
           docker push "${IMAGE}"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
+      # Reloads reuse the exact previously scanned/pushed digest. The gate has
+      # already checked the successful automatic release and unchanged build
+      # inputs before this job receives AWS credentials. ECR's returned manifest
+      # must match that Docker push digest; a source tag alone is insufficient.
+      - name: Verify published API digest and activation manifest
+        id: reuse
+        if: ${{ needs.gate.outputs.reload_runtime_config == 'true' }}
+        env:
+          ECR_URL: ${{ steps.m.outputs.ecr_url }}
+          RELOAD_SOURCE_SHA: ${{ needs.gate.outputs.release_source_sha }}
+          RELOAD_API_IMAGE_DIGEST: ${{ needs.gate.outputs.api_image_digest }}
+          RELOAD_RUNTIME_IMAGE_DIGEST: ${{ needs.gate.outputs.runtime_image_digest }}
+          ENVIRONMENT_OVERRIDES: ${{ steps.m.outputs.web_environment }}
+        run: python3 -I -B ../../tooling/ci/skills-runtime-config-reload.py image
+
       - name: Run database migration
+        if: ${{ needs.gate.outputs.reload_runtime_config != 'true' }}
         env:
           IMAGE: ${{ steps.build.outputs.image }}
           CLUSTER: ${{ steps.m.outputs.cluster }}
@@ -418,7 +482,7 @@ jobs:
       - name: Deploy API service
         id: deploy_api
         env:
-          IMAGE: ${{ steps.build.outputs.image }}
+          IMAGE: ${{ steps.reuse.outputs.image || steps.build.outputs.image }}
           CLUSTER: ${{ steps.m.outputs.cluster }}
           SERVICE: ${{ steps.m.outputs.service }}
           WEB_FAMILY: ${{ steps.m.outputs.web_family }}
@@ -456,7 +520,7 @@ jobs:
 
       - name: Deploy worker service
         env:
-          IMAGE: ${{ steps.build.outputs.image }}
+          IMAGE: ${{ steps.reuse.outputs.image || steps.build.outputs.image }}
           CLUSTER: ${{ steps.m.outputs.cluster }}
           WORKER_SERVICE: ${{ steps.m.outputs.worker_service }}
           WORKER_FAMILY: ${{ steps.m.outputs.worker_family }}
