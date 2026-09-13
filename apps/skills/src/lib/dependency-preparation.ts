@@ -1,5 +1,6 @@
 import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmdirSync, unlinkSync, ftruncateSync, writeSync } from "node:fs";
 import { join } from "node:path";
+import { capturePreparationProcess } from "./preparation-process";
 
 export const DEPENDENCY_PREPARATION_MARKER = ".skills-dependency-preparation";
 const RECOVERY = "Skill dependency preparation is incomplete. Confirm no installer is running, successfully run bun install --no-save in the skill directory, then remove only .skills-dependency-preparation. See docs/skill-standard.md#recovering-interrupted-dependency-preparation.";
@@ -69,6 +70,7 @@ export async function prepareSkillDependencies(
     return { exitCode, error };
   };
   let proc;
+  let ownedProcess;
   try {
     proc = Bun.spawn(["bun", "install", "--no-save"], {
       cwd: skillPath,
@@ -78,6 +80,7 @@ export async function prepareSkillDependencies(
       stdout: "pipe",
       stderr: "pipe",
     });
+    ownedProcess = capturePreparationProcess(proc);
   } catch {
     return fail("Could not start skill dependency preparation");
   }
@@ -88,25 +91,16 @@ export async function prepareSkillDependencies(
   const drains = readers.map(async (reader) => {
     while (!(await reader.read()).done) { /* discard each bounded chunk */ }
   });
-  const kill = () => {
-    try {
-      if (process.platform !== "win32") process.kill(-proc.pid, "SIGKILL");
-      else proc.kill("SIGKILL");
-    } catch { try { proc.kill("SIGKILL"); } catch { /* already exited */ } }
-  };
+  const kill = () => ownedProcess.kill();
   const failAfterCleanup = async (errorMessage: string, exitCode = 1): Promise<PreparationFailure> => {
     kill();
     try { await proc.exited; }
     catch { preparation.abandon(); return { exitCode, error: RECOVERY }; }
-    if (process.platform !== "win32") {
-      for (let attempt = 0; attempt < 20; attempt++) {
-        try { process.kill(-proc.pid, 0); }
-        catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ESRCH") return fail(errorMessage, exitCode);
-          break;
-        }
-        await Bun.sleep(25);
-      }
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const stopped = ownedProcess.groupExited();
+      if (stopped === true) return fail(errorMessage, exitCode);
+      if (stopped === undefined) break;
+      await Bun.sleep(25);
     }
     // Unknown group cleanup remains pending, never accepted as retryable.
     preparation.abandon();
