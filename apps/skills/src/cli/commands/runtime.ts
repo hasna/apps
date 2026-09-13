@@ -458,7 +458,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   // Commander preserves arguments after <skill>. Reserve run-control options
   // for selected executions, and keep legacy skill arguments unchanged.
   const targetIndex = args.indexOf("--target");
-  if (managed || options.target || targetIndex >= 0) {
+  if ((managed && !options.remote) || options.target || targetIndex >= 0) {
     options = { ...options }; args = [...args];
     for (const [flag, key] of [["--target", "target"], ["--input", "input"], ["--skill-version", "skillVersion"], ["--selection-profile", "selectionProfile"], ["--session", "session"], ["--idempotency-key", "idempotencyKey"], ["--poll-timeout-ms", "pollTimeoutMs"], ["--poll-interval-ms", "pollIntervalMs"]] as const) {
       const at = args.indexOf(flag);
@@ -474,12 +474,13 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       const at = args.indexOf(flag); if (at >= 0) { options[key] = true; args.splice(at, 1); }
     }
   }
-  if (managed && options.remote) {
-    if (options.target === "local") { console.error("Conflicting local and remote execution targets"); process.exitCode = 1; return; }
-    options = { ...options, target: "cloud", remote: false };
+  // Explicit hosted execution uses the configured server catalog and quote,
+  // independently of the station's selected-bundle loading policy.
+  if (options.remote && options.target) {
+    console.error("Conflicting --remote and --target execution modes"); process.exitCode = 1; return;
   }
   if (options.target && !["local", "cloud"].includes(options.target)) { console.error("Execution target must be local or cloud"); process.exitCode = 1; return; }
-  if (options.target === "cloud" || managed) {
+  if (options.target === "cloud" || (managed && !options.remote)) {
     try {
       let input: unknown = {};
       if (options.input !== undefined) { try { input = JSON.parse(options.input); } catch { throw new Error("Run --input must be valid JSON"); } }

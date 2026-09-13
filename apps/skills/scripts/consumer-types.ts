@@ -598,5 +598,9 @@ console.log("Installed quote error root/SDK runtime: 14 assertions passed.");
     SKILLS_RUN_POLLING_TEST_PACKAGE: join(workspace, "node_modules/@hasna/skills"),
   });
   console.log("Installed CLI polling: invalid inputs refused before HTTP or local run writes; valid quote and maximum-delay wait controls passed.");
+  await run([process.execPath, "--no-env-file", "test", resolve(root, "src/cli/cli.remote-routing.test.ts")], workspace, {
+    SKILLS_REMOTE_ROUTING_TEST_PACKAGE: join(workspace, "node_modules/@hasna/skills"),
+  });
+  console.log("Installed CLI routing: explicit remote approval, isolated profiles, target conflicts and managed defaults passed.");
   console.log(`Consumer types: @hasna/skills@${metadata.version} passed strict installed-package checking for all four exports (skipLibCheck=false).`);
 } finally { await rm(workspace, { recursive: true, force: true }); }
