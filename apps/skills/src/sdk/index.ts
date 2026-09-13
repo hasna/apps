@@ -45,6 +45,7 @@ export {
 export * from "./server.js";
 export * from "./registry.js";
 export * from "./runs.js";
+export * from "./recurring-consent.js";
 export * from "./dispatcher.js";
 export * from "./executor.js";
 export * from "./storage.js";
