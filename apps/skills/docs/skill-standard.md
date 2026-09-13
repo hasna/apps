@@ -425,3 +425,5 @@ An interrupted, active, malformed, or symlinked marker refuses execution. To rec
 
 Do not remove an incomplete marker merely to bypass preparation. If the directory
 is read-only, prepare it through its owner before running it.
+
+The root `.skills-dependency-preparation` directory is local runtime state. Bundles, portable copies, and authoring snapshots exclude it; a nested directory with that name remains authored content. Moving an existing local corpus preserves its dependency tree and preparation state together.

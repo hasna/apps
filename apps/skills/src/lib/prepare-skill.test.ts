@@ -98,6 +98,32 @@ describe("prepare local skill drafts", () => {
     expect(validatePortableSkillDirectory("prepare-example", path).valid).toBe(true);
   }));
 
+  test.each(["failed", "pending"])("author preparation ignores unreadable local %s state and retains nested same-name source", status => fixture((root, path) => {
+    const marker = ".skills-dependency-preparation";
+    const stateFile = join(path, marker, "state.json");
+    mkdirSync(join(path, marker));
+    const state = JSON.stringify({ version: 1, status });
+    writeFileSync(stateFile, state);
+    if (status === "pending") mkdirSync(join(path, marker, "active"));
+    const nestedEntry = `src/${marker}/index.ts`;
+    mkdirSync(join(path, "src", marker));
+    writeFileSync(join(path, nestedEntry), "console.log('authored nested entry');\n");
+    editManifest(path, manifest => {
+      manifest.commands[0].entry = nestedEntry;
+      manifest.runtime.entrypoint = nestedEntry;
+    });
+    // Local runtime state is not authoring input and need not be readable. The
+    // nested directory is real source: candidate entrypoint validation needs it.
+    chmodSync(stateFile, 0);
+    try {
+      expect(prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" }).written).toBe(true);
+      expect(validatePortableSkillDirectory("prepare-example", path).valid).toBe(true);
+      expect(readFileSync(join(path, nestedEntry), "utf8")).toBe("console.log('authored nested entry');\n");
+    } finally { chmodSync(stateFile, 0o600); }
+    expect(readFileSync(stateFile, "utf8")).toBe(state);
+    expect(existsSync(join(path, marker, "active"))).toBe(status === "pending");
+  }));
+
   test("legacy kind-less helper scripts require explicit author intent", () => fixture((root, path) => {
     const before = editManifest(path, manifest => { delete manifest.kind; });
     expect(() => prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" })).toThrow("no explicit kind");
