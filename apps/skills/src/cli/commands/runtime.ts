@@ -1,3 +1,4 @@
+import { writeCliOutput } from "../output.js";
 /**
  * run / mcp / self-update — runtime commands
  */
@@ -77,7 +78,7 @@ export function registerRuntime(parent: Command) {
       .action(async (id: string) => {
         try { const client = await CloudExecutionClient.configured();
           const value = operation === "show" ? await client.get(id) : await client[operation](id);
-          console.log(JSON.stringify(value, null, 2));
+          await writeCliOutput(JSON.stringify(value, null, 2));
         } catch (error) { console.error(JSON.stringify({ error: (error as Error).message })); process.exitCode = 1; }
       });
   }
@@ -496,8 +497,8 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         if (!selected) throw new Error("A selected skill is required for managed execution");
         if (options.file?.length) throw new Error("Selected local execution accepts arguments and structured --input only");
         const result = await executeSelectedLocal(selected, { args, input, cwd: process.cwd() });
-        if (options.json) console.log(JSON.stringify(result, null, 2));
-        else { process.stdout.write(result.stdout); process.stderr.write(result.stderr); console.error(JSON.stringify({ selection: result.selection, target: result.target, exitCode: result.exitCode, runDirectory: result.runDirectory })); }
+        if (options.json) await writeCliOutput(JSON.stringify(result, null, 2));
+        else { await writeCliOutput(result.stdout, false); process.stderr.write(result.stderr); console.error(JSON.stringify({ selection: result.selection, target: result.target, exitCode: result.exitCode, runDirectory: result.runDirectory })); }
         process.exitCode = result.exitCode;
         return;
       }
@@ -510,7 +511,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       // Print the durable identifier before waiting so a timeout can be recovered.
       if (options.wait) console.error(JSON.stringify({ executionId: admitted.id, status: admitted.status }));
       const result = options.wait ? await client.wait(admitted.id, { timeoutMs, intervalMs }) : admitted;
-      console.log(JSON.stringify(result, null, 2));
+      await writeCliOutput(JSON.stringify(result, null, 2));
       if (["failed", "cancelled"].includes(result.status)) process.exitCode = 1;
     } catch (error) { console.log(JSON.stringify({ error: (error as Error).message, exitCode: 1 })); process.exitCode = 1; }
     return;
@@ -689,7 +690,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   });
   if (options.json) console.log(JSON.stringify({ skill: skill.name, args, ...result, run: completed }, null, 2));
   else {
-    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stdout) await writeCliOutput(result.stdout, false);
     if (result.stderr) process.stderr.write(result.stderr);
     if (result.error) console.error(result.error);
     console.log(chalk.dim(`Run metadata: ${completed.paths.runDir}/run.json`));

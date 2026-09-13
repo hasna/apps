@@ -1,3 +1,4 @@
+import { writeCliOutput } from "../output.js";
 import type { Command } from "commander";
 import { readSync } from "node:fs";
 import { configuredSkillsApiUrl, normalizeSkillsApiOrigin, skillsApiRequestUrl } from "../../lib/fleet-credentials.js";
@@ -30,7 +31,7 @@ export function registerContextCommands(parent: Command): void {
         const result = await loadSelectedSkill(skill, selectedProfileId(options.selectionProfile), {
           ...contextResolverOptions(options), projectDir: process.cwd(), sessionId: options.session, file: options.file,
         });
-        console.log(options.json ? JSON.stringify(result) : result.content);
+        await writeCliOutput(options.json ? JSON.stringify(result) : result.content);
       } catch (error) { reportContextError(error, options.json); }
     });
   parent.command("context [prompt]")
@@ -53,7 +54,7 @@ export function registerContextCommands(parent: Command): void {
         const result = await buildSkillContext(input, {
           ...contextResolverOptions(options), maxChars: Number(options.maxChars), maxSkills: Number(options.maxSkills),
         });
-        console.log(options.json ? JSON.stringify(result) : result.context);
+        await writeCliOutput(options.json ? JSON.stringify(result) : result.context);
       } catch (error) { reportContextError(error, options.json); }
     });
 }

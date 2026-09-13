@@ -1,3 +1,4 @@
+import { writeCliOutput } from "../output.js";
 import type { Command } from "commander";
 import { readFileSync } from "node:fs";
 import { selectedProfileId } from "./context.js";
@@ -20,14 +21,14 @@ export function registerAgentIntegration(parent: Command): void {
     .option("--apply", "Apply the plan, preserving prior configuration in private backups", false)
     .option("--json", "Output a receipt as JSON", false)
     .description("Plan or install prompt hooks and disable native skill invocation")
-    .action((options) => {
+    .action(async (options) => {
       try {
         const plan = planAgentIntegration({ agents: agents(options.agent), command: options.command, profileId: options.selectionProfile, includeVendor: options.includeVendor, allowRootAliases: options.allowRootAliases });
         const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
         // Configuration contents can include credentials. Only paths/counts leave this command.
         const receipt = { applied: options.apply, planned: plan.changes.map(change => change.path), ...result, rootAliases: plan.rootAliases ?? [], nativeSkills: plan.nativeSkills.map(entry => ({ agent: entry.agent, path: entry.path, managed: entry.managed, vendor: entry.vendor })) };
-        if (options.json) console.log(JSON.stringify(receipt));
-        else console.log(`${options.apply ? "Configured" : "Planned"} ${plan.changes.length} agent configuration change(s).${options.apply ? " Restart the agent and trust the installed hook configuration." : " Use --apply to install."}`);
+        if (options.json) await writeCliOutput(JSON.stringify(receipt));
+        else await writeCliOutput(`${options.apply ? "Configured" : "Planned"} ${plan.changes.length} agent configuration change(s).${options.apply ? " Restart the agent and trust the installed hook configuration." : " Use --apply to install."}`);
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
     });
 
@@ -64,13 +65,13 @@ export function registerAgentIntegration(parent: Command): void {
           if (status !== 0) throw new Error("Skills context could not be resolved");
           const result = JSON.parse(stdout);
           if (typeof result.context !== "string") throw new Error("Invalid Skills context response");
-          console.log(JSON.stringify(hookContextOutput(event, result)));
+          await writeCliOutput(JSON.stringify(hookContextOutput(event, result)));
         } finally { clearTimeout(timer); }
       } catch {
         const reason = "Skills context is unavailable. Run skills sync --selection-profile <id> and skills context --stdin --json to diagnose the selected profile.";
-        if (event === "UserPromptSubmit") console.log(JSON.stringify({ decision: "block", reason }));
-        else if (event === "SessionStart") console.log(JSON.stringify({ continue: false, stopReason: reason, systemMessage: reason }));
-        else console.log(JSON.stringify({ systemMessage: reason, hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: "Required Skills context was unavailable. Report this to the parent before performing task actions." } }));
+        if (event === "UserPromptSubmit") await writeCliOutput(JSON.stringify({ decision: "block", reason }));
+        else if (event === "SessionStart") await writeCliOutput(JSON.stringify({ continue: false, stopReason: reason, systemMessage: reason }));
+        else await writeCliOutput(JSON.stringify({ systemMessage: reason, hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: "Required Skills context was unavailable. Report this to the parent before performing task actions." } }));
       }
     });
 
@@ -82,12 +83,12 @@ export function registerAgentIntegration(parent: Command): void {
     .option("--apply", "Move selected skills to private archives outside agent discovery roots", false)
     .option("--json", "Output inventory and archive receipt as JSON", false)
     .description("Inventory native skill copies; preserve complete directories before retiring them")
-    .action((options) => {
+    .action(async (options) => {
       try {
         const inventory = inventoryNativeSkills(undefined, { projectDir: options.project, allowRootAliases: options.allowRootAliases });
         const result = options.apply ? archiveNativeSkills(inventory, { includeUnmanaged: options.includeUnmanaged, allowRootAliases: options.allowRootAliases }) : { entries: [] };
-        if (options.json) console.log(JSON.stringify({ applied: options.apply, inventory, ...result }));
-        else console.log(`${inventory.length} native skill(s) found; ${result.entries.length} archived with recovery receipts.${options.apply ? "" : " Use --apply to archive managed copies."}`);
+        if (options.json) await writeCliOutput(JSON.stringify({ applied: options.apply, inventory, ...result }));
+        else await writeCliOutput(`${inventory.length} native skill(s) found; ${result.entries.length} archived with recovery receipts.${options.apply ? "" : " Use --apply to archive managed copies."}`);
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
     });
 }
