@@ -126,7 +126,16 @@ sync mode and cannot be mixed with profile sync.
 
 Selection documents contain a `selections` array. Each entry has `slug`,
 `version`, `bundleDigest` (`sha256:` followed by 64 lowercase hex characters),
-and optional `triggers` containing `keywords`, `paths`, or `always`. Profile
+and optional `triggers` containing `keywords`, `paths`, or `always`. An optional
+`aliases` array gives a selection up to 32 reviewed kebab-case alternate names.
+Aliases cannot duplicate another alias or any canonical name in the profile.
+They resolve directly to that selection's exact version and digest in `load`,
+managed `run`/`pull`, and explicit prompt references such as `$old-name`.
+Receipts and bundle requests retain the canonical name. Aliases are scoped to
+the authority, workspace and profile revision; project/session locks preserve
+their pinned aliases. They do not create global registry entries or native
+redirect skills. Saving aliases requires an API advertising `selectionAliases`.
+Profile
 writes use compare-and-swap revisions. Station receipts belong to the workspace,
 user and stable station ID, so rotating a key does not create a new station.
 Consumers need `skills:read` and `stations:write`; profile publishers need

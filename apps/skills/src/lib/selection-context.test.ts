@@ -89,6 +89,44 @@ describe("immutable selected Skills cache", () => {
 });
 
 describe("selected prompt context", () => {
+  test("reviewed aliases load one canonical bundle and retain exact project pins", async () => {
+    const f = fixture(); const cacheDir = directory(), projectDir = directory();
+    const snapshot = profile([{ ...f.selection, aliases: ["legacy-review"] }]);
+    const client = clientFor(f, snapshot);
+    const requested: string[] = [];
+    client.getBundle = async (slug, version) => { requested.push(`${slug}@${version}`); return f.response(); };
+    await syncSelectionProfile("engineering", { client, cacheDir, projectDir });
+    const loaded = await loadSelectedSkill("legacy-review@1.0.0", "engineering", { client, cacheDir, projectDir });
+    expect(loaded.content).toBe(f.markdown);
+    expect(requested.every(spec => spec === "review-code@1.0.0")).toBe(true);
+    const context = await buildSkillContext({ prompt: "$legacy-review@1.0.0 and $review-code", profileId: "engineering", cwd: projectDir }, { client, cacheDir });
+    expect(context.selections).toHaveLength(1);
+    expect(context.selections[0]).toMatchObject({ slug: "review-code", version: "1.0.0", bundleDigest: f.selection.bundleDigest, reason: "explicit" });
+    await expect(loadSelectedSkill("legacy-review@2.0.0", "engineering", { client, cacheDir, projectDir })).rejects.toMatchObject({ code: "SKILL_NOT_SELECTED" });
+    client.resolveProfile = async () => profile([{ ...f.selection, aliases: ["different-alias"] }], "revision-two");
+    expect((await loadSelectedSkill("legacy-review", "engineering", { client, cacheDir, projectDir })).content).toBe(f.markdown);
+    await expect(loadSelectedSkill("different-alias", "engineering", { client, cacheDir, projectDir })).rejects.toMatchObject({ code: "SKILL_NOT_SELECTED" });
+    client.resolveProfile = async () => { throw new Error("authentication failed"); };
+    await expect(loadSelectedSkill("legacy-review", "engineering", { client, cacheDir, projectDir })).rejects.toThrow("authentication failed");
+  });
+  test("ambiguous or malformed aliases fail before fetching or activating bundles", async () => {
+    const f = fixture(); const cacheDir = directory(); let fetches = 0;
+    const second = { ...f.selection, slug: "other-review" };
+    for (const selections of [
+      [{ ...f.selection, aliases: ["review-code"] }],
+      [{ ...f.selection, aliases: ["legacy-review", "legacy-review"] }],
+      [{ ...f.selection, aliases: ["../outside"] }],
+      [{ ...f.selection, aliases: ["legacy-review"] }, { ...second, aliases: ["legacy-review"] }],
+      [{ ...f.selection, aliases: ["other-review"] }, second],
+      [{ ...f.selection, aliases: ["other-review"] }, { ...second, aliases: ["review-code"] }],
+    ]) {
+      const client = clientFor(f, profile(selections));
+      client.getBundle = async () => { fetches++; return f.response(); };
+      await expect(syncSelectionProfile("engineering", { client, cacheDir })).rejects.toMatchObject({ code: "INVALID_SELECTION_ALIASES" });
+    }
+    expect(fetches).toBe(0);
+    expect(readSelectionProfile("engineering", { cacheDir })).toBeNull();
+  });
   test("deterministic prompt/path rules, no unrelated content, and complete-body budgets", async () => {
     const f = fixture(); const cacheDir = directory();
     const snapshot = profile([{ ...f.selection, triggers: { keywords: ["audit"], paths: ["**/src/*.ts"] } }]);

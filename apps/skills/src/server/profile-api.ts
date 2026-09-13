@@ -13,6 +13,7 @@ import type { ApiPrincipal, SkillsProductStore } from "./types.js";
 import type { SkillsServerConfig } from "./config.js";
 import { SkillRequestError, assertPublishableSlug } from "./skills-api.js";
 import { permitsSkillsRoute } from "./auth.js";
+import { selectionAliasError } from "../lib/selection-aliases.js";
 
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
@@ -29,7 +30,7 @@ function selected(value: unknown): SkillSelection[] {
   if (!Array.isArray(value) || value.length > 256)
     invalid("selections must be an array with at most 256 entries");
   const seen = new Set<string>();
-  return value
+  const selections = value
     .map((item) => {
       if (
         !object(item) ||
@@ -80,10 +81,14 @@ function selected(value: unknown): SkillSelection[] {
         slug: item.slug,
         version: item.version as string,
         bundleDigest: item.bundleDigest,
+        ...(item.aliases !== undefined ? { aliases: item.aliases as string[] } : {}),
         ...(triggers ? { triggers } : {}),
       };
     })
     .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  const aliasError = selectionAliasError(selections);
+  if (aliasError) invalid(aliasError);
+  return selections;
 }
 async function validatePublished(
   store: SkillsProductStore,
@@ -193,6 +198,7 @@ export async function handleProfileApi(
           : []),
       ],
       profileResolution: Boolean(store.selectionStore),
+      selectionAliases: Boolean(store.selectionStore),
       immutableVersions: true,
       stationState: Boolean(store.selectionStore),
       incrementalSync: false,
