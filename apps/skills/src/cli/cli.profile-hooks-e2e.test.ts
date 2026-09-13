@@ -154,7 +154,7 @@ test("built CLI performs profile CAS/rollback, two-station sync, pinned hook res
     const rollback = await f.a.ok(["profiles", "set", "engineering", "--file", saved, "--if-match", updated.revision, "--json"]); expect(rollback.revision).not.toBe(updated.revision); expect(rollback.selections).toEqual(created.selections);
     await f.b.ok(["sync", "--json"]); expect((await f.b.ok(["load", "review-code@1.0.0", "--json"])).content).toBe(v1.skillMd);
     expect(f.requests.some(path => path.startsWith("PUT /api/v1/profiles/"))).toBe(true); expect(f.requests.some(path => path.startsWith("PUT /api/v1/stations/"))).toBe(true);
-    expect(existsSync(join(f.a.home, ".claude", "skills"))).toBe(false); expect(existsSync(join(f.b.home, ".codex", "skills"))).toBe(false);
+    expect(readdirSync(join(f.a.home, ".claude", "skills"))).toEqual(["skills-cli"]); expect(readdirSync(join(f.b.home, ".codex", "skills"))).toEqual(["skills-cli"]);
   } finally { await f.close(); }
 });
 
@@ -172,6 +172,60 @@ test("built CLI refuses revoked HTTP access without silent cache fallback and bl
   } finally { await f.close(); }
 });
 
+test("native payload project roots are guarded even when the host launches hooks from its home", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install(); await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]); await f.a.ok(["sync", "--json"]);
+    for (const [agent, event, root] of [["claude", "UserPromptSubmit", ".claude"], ["gemini", "BeforeAgent", ".gemini"], ["cursor", "beforeSubmitPrompt", ".cursor"]]) {
+      const native = join(f.a.project, root!, "skills", "unexpected", "SKILL.md");
+      put(native, "Unexpected project instructions\n");
+      const requestsBefore = f.requests.length;
+      const response = await f.a.ok(["hook", "user-prompt", "--agent", agent!, "--event", event!], { cwd: f.a.home, stdin: { hook_event_name: event, prompt: "review", ...(agent === "cursor" ? { workspace_roots: [f.a.project], conversation_id: "cursor-test" } : { cwd: f.a.project, session_id: "test" }) } });
+      expect(JSON.stringify(response)).toContain("NATIVE_SKILL_DRIFT");
+      expect(f.requests).toHaveLength(requestsBefore);
+      if (agent === "cursor") expect(response.continue).toBe(false);
+      else expect(response.decision).toBe(agent === "gemini" ? "deny" : "block");
+      rmSync(join(native, ".."), { recursive: true });
+    }
+  } finally { await f.close(); }
+});
+
+test("managed prompt hook refuses new native copies and missing or modified bridges before loading cached context", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    await f.a.ok(["sync", "--json"]);
+    const bridge = join(f.a.home, ".claude", "skills", "skills-cli", "SKILL.md"), original = readFileSync(bridge, "utf8");
+    const unexpected = join(f.a.home, ".claude", "skills", "unexpected", "SKILL.md");
+    put(unexpected, "Unexpected native instructions must not be accepted.\n");
+    const refused = await f.a.hook("claude", "UserPromptSubmit", { prompt: "review this patch" });
+    expect(refused.decision).toBe("block"); expect(refused.reason).toContain("native");
+    expect(JSON.stringify(refused)).not.toContain("Published 1.0.0");
+    rmSync(dirname(unexpected), { recursive: true });
+    writeFileSync(bridge, `${original}\nUnexpected bridge edit.\n`);
+    expect((await f.a.hook("claude", "UserPromptSubmit", { prompt: "review again" })).decision).toBe("block");
+    rmSync(bridge);
+    expect((await f.a.hook("claude", "UserPromptSubmit", { prompt: "review again" })).decision).toBe("block");
+    put(bridge, original);
+    const loaded = await f.a.hook("claude", "UserPromptSubmit", { prompt: "review the repaired setup" });
+    expect(loaded.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+  } finally { await f.close(); }
+});
+
+test("native Skill invocation admits only the verified bridge and never dispatches a payload skill", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    const before = [...f.requests];
+    const denied = await f.a.hook("claude", "PreToolUse", { tool_name: "Skill", tool_input: { skill: "other-skill" } });
+    expect(denied.hookSpecificOutput.permissionDecision).toBe("deny");
+    const allowed = await f.a.hook("claude", "PreToolUse", { tool_name: "Skill", tool_input: { skill: "skills-cli" } });
+    expect(allowed.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect(f.requests).toEqual(before);
+  } finally { await f.close(); }
+});
+
 test("built hook installation preserves config and migration preserves unique edited skills and vendor separation", async () => {
   const f = await fixture();
   try {
@@ -184,7 +238,7 @@ test("built hook installation preserves config and migration preserves unique ed
     const plan = await f.a.ok(["hook", "install", "--selection-profile", "engineering", "--command", executable, "--json"]); expect(plan.applied).toBe(false); expect(readFileSync(settings, "utf8")).toBe(original);
     const installed = await f.a.install(); expect(installed.backups.some((path: string) => readFileSync(path, "utf8") === original)).toBe(true);
     const configured = json(settings); expect(configured.model).toBe("preserved-model"); expect(configured.permissions.allow).toEqual(["Bash(git status)"]); expect(configured.permissions.deny).toEqual(["Read(.env)", "Skill"]); expect(configured.hooks.Stop[0].hooks[0].command).toBe("existing-stop-command");
-    const codexConfig = Bun.TOML.parse(readFileSync(codex, "utf8")) as any; expect(codexConfig.model).toBe("preserved-codex-model"); expect(codexConfig.mcp_servers.existing.command).toBe("preserved-mcp"); expect(codexConfig.skills.config).toEqual([{ path: join(unique, "SKILL.md"), enabled: false }]);
+    const codexConfig = Bun.TOML.parse(readFileSync(codex, "utf8")) as any; expect(codexConfig.model).toBe("preserved-codex-model"); expect(codexConfig.mcp_servers.existing.command).toBe("preserved-mcp"); expect(codexConfig.skills.config).toEqual([{ path: join(vendor, "SKILL.md"), enabled: false }, { path: join(unique, "SKILL.md"), enabled: false }]);
     expect((await f.a.install()).changed).toEqual([]);
     const archived = await f.a.ok(["migrate", "native", "--apply", "--json"]); expect(archived.entries).toHaveLength(1); expect(readFileSync(join(archived.entries[0].archive, "SKILL.md"), "utf8")).toBe("Managed copy with a unique edit."); expect(readFileSync(join(archived.entries[0].archive, "references", "asset.txt"), "utf8")).toBe("Unique managed asset."); expect(existsSync(managed)).toBe(false); expect(existsSync(unique)).toBe(true); expect(existsSync(vendor)).toBe(true);
     const authored = await f.a.ok(["migrate", "native", "--include-unmanaged", "--apply", "--json"]); expect(authored.entries).toHaveLength(1); expect(readFileSync(join(authored.entries[0].archive, "SKILL.md"), "utf8")).toBe("Unmanaged authoring draft."); expect(existsSync(vendor)).toBe(true);
@@ -213,24 +267,38 @@ test.skipIf(!nativeCodex)("installed Codex delivers the managed UserPromptSubmit
     } });
     const codexHome = join(f.a.home, ".codex"), localProvider = `http://127.0.0.1:${modelServer.port}/v1`;
     put(join(codexHome, "config.toml"), `model = "fixture-model"\nmodel_provider = "fixture"\n[model_providers.fixture]\nname = "Local fixture"\nbase_url = ${JSON.stringify(localProvider)}\nwire_api = "responses"\nrequires_openai_auth = false\nrequest_max_retries = 0\nstream_max_retries = 0\n`);
+    // A new Codex home materializes its packaged .system skills on first startup.
+    // The first managed hook must refuse those unbound instructions before the model call.
+    const initialize = Bun.spawn([nativeCodex!, "exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-hook-trust", "--sandbox", "read-only", "review this fixture; respond without tools"], { cwd: f.a.project, env: { ...f.a.env, CODEX_HOME: codexHome }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const initializeTimer = setTimeout(() => initialize.kill("SIGKILL"), 15000);
+    try { await Promise.all([new Response(initialize.stdout).text(), new Response(initialize.stderr).text(), initialize.exited]); } finally { clearTimeout(initializeTimer); }
+    expect(requests).toHaveLength(0);
+    expect(existsSync(join(codexHome, "skills", ".system"))).toBe(true);
+    await f.a.install();
     const child = Bun.spawn([nativeCodex!, "exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-hook-trust", "--sandbox", "read-only", "review this fixture; respond without tools"], { cwd: f.a.project, env: { ...f.a.env, CODEX_HOME: codexHome }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const timer = setTimeout(() => child.kill("SIGKILL"), 15_000);
     try {
       const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       expect({ code, stdout: stdout.slice(-2000), stderr: stderr.slice(-2000) }).toMatchObject({ code: 0 });
-      expect(requests.length).toBeGreaterThan(0);
+      expect({ requests: requests.length, stdout: stdout.slice(-4000), stderr: stderr.slice(-2000) }).toMatchObject({ requests: expect.any(Number) });
+      if (!requests.length) throw new Error(`Native Codex made no model request: ${stdout.slice(-4000)} ${stderr.slice(-2000)}`);
+      expect(requests).toHaveLength(1);
       expect(requests.some(body => body.includes("Published 1.0.0 review instructions."))).toBe(true);
+      expect(requests[0]).toContain("skills-cli");
+      expect(requests[0]).not.toContain("skill-creator");
+      expect(requests[0]).not.toContain("skill-installer");
       expect(f.requests.some(path => path === "PUT /api/v1/stations/station-a/state")).toBe(true);
     } finally { clearTimeout(timer); }
   } finally { modelServer?.stop(true); await f.close(); }
 });
 
 const nativeClaude = process.env.HASNA_SKILLS_NATIVE_CLAUDE_BIN;
-test.skipIf(!nativeClaude)("installed Claude delivers selected context and omits the denied native Skill tool", async () => {
+test.skipIf(!nativeClaude)("installed Claude delivers selected context and advertises the owned native Skills bridge", async () => {
   const f = await fixture(); let modelServer: ReturnType<typeof Bun.serve> | undefined;
   try {
     put(join(f.a.home, ".claude", "skills", "native-sentinel", "SKILL.md"), "---\nname: native-sentinel\ndescription: Review fixture using native instructions\n---\nNative sentinel instructions must not be loaded.\n");
     await f.a.install(); await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    await f.a.ok(["migrate", "native", "--include-unmanaged", "--include-vendor", "--apply", "--json"]); await f.a.install();
     const requests: any[] = [];
     modelServer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
       const route = new URL(request.url).pathname;
@@ -256,7 +324,8 @@ test.skipIf(!nativeClaude)("installed Claude delivers selected context and omits
       expect({ code, stdout: stdout.slice(-2000), stderr: stderr.slice(-2000) }).toMatchObject({ code: 0 });
       expect(requests.length).toBeGreaterThan(0);
       expect(requests.some(body => JSON.stringify(body).includes("Published 1.0.0 review instructions."))).toBe(true);
-      expect(requests.every(body => !body.tools?.some((tool: any) => tool.name === "Skill"))).toBe(true);
+      expect(requests.some(body => body.tools?.some((tool: any) => tool.name === "Skill"))).toBe(true);
+      expect(requests.some(body => JSON.stringify(body).includes("skills-cli"))).toBe(true);
       expect(requests.every(body => !JSON.stringify(body).includes("Native sentinel instructions must not be loaded."))).toBe(true);
       expect(f.requests.some(route => route === "PUT /api/v1/stations/station-a/state")).toBe(true);
     } finally { clearTimeout(timer); }

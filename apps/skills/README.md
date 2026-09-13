@@ -45,13 +45,14 @@ skills install pdf-generate@0.5.2 --selection-profile default --json
 skills load pdf-generate@0.5.2 --selection-profile default
 skills context 'Use $pdf-generate to create a PDF' --selection-profile default --json
 
-# Preview agent configuration, then install hooks with recoverable backups.
+# Preview retirement, then archive ordinary copies and vendor discovery files.
+skills migrate native --include-unmanaged --include-vendor --json
+skills migrate native --include-unmanaged --include-vendor --apply --json
+
+# Preview the available adapters, then install one bridge plus hooks per agent.
+skills hook agents --json
 skills hook install --agent all --selection-profile default --json
 skills hook install --agent all --selection-profile default --apply --json
-
-# Inventory native copies, then archive managed copies outside agent discovery.
-skills migrate native --json
-skills migrate native --apply --json
 ```
 
 Restart the agent after applying the hooks. In Codex, review and grant normal
@@ -60,17 +61,47 @@ request a selected skill in a prompt, for example `Use $pdf-generate to create
 a PDF`. The hooks supply instructions; executing the skill remains a separate
 explicit action.
 
-Hook installation enables CLI loading on the station, denies Claude's native
-Skill tool, and disables discovered Codex native skills. It preserves unrelated
-hooks and configuration. Add `--include-vendor` to `skills hook install` to
-include Codex system and cached plugin skills in the disable plan; vendor files
-remain intact. This covers the paths discovered when the plan was made. Project-local skills and
-newly installed plugins require another discovery audit. A third-party plugin
-can also inject instructions through its own hooks or startup behavior; review
-and disable that plugin separately when it conflicts with CLI-only loading. Native
-exports are refused while this policy is active. Archives preserve full skill
-directories; `--include-unmanaged` explicitly includes user-authored copies.
-Archive receipts and configuration backups live under the Skills data directory.
+Each supported agent gets one small `skills-cli` native skill containing CLI
+instructions, without a copied catalogue. Claude's native Skill tool admits
+that bridge after other copies are retired. Prompt guards verify the owned
+bridge bytes, required native configuration, and discovered home/project skill
+paths before loading context. A missing or changed bridge, newly discovered
+copy, stale plugin registration, or incomplete scan refuses the prompt and
+reports repair guidance. These are checks on configured native discovery, not
+an operating-system restriction on arbitrary file reads.
+
+Hook installation preserves unrelated configuration, hooks, and plugin assets.
+It disables discovered Codex native skills; exact system-skill trees can remain
+only with their hash-bound disabled paths; migration preserves these package files. A client that restores or changes
+packaged skills requires a fresh inventory and disable plan. Native exports are
+refused while managed CLI loading is active. Migration preserves ordinary skill
+directories in private archives; `--include-unmanaged` includes user-authored
+copies, and `--include-vendor` retires vendor `SKILL.md` discovery files while
+preserving shared scripts and assets. Archive receipts and configuration backups
+live under the Skills data directory.
+
+`skills hook agents --json` reports the supported adapters and coverage limits.
+Claude and Codex have lifecycle context hooks; Gemini uses `BeforeAgent`, and
+OpenCode uses its awaited message plugin. Cursor receives selected context at
+session start and gates later prompt submission; its prompt hook does not
+inject context on the supported installed path. Other inventoried clients do
+not automatically gain a working prompt adapter.
+
+Known local plugin registrations are resolved automatically. Plugins with
+instruction-injecting hooks, unresolved runtime registrations, unsupported
+legacy command formats, and higher-precedence project discovery settings need
+separate review; a cache-only scan does not establish complete coverage. The
+advanced `--discovery-inputs <file>` option on hook installation and migration
+accepts reviewed active roots and full source-file SHA-256 witnesses. Its
+version-1 document has an `agents` array; each entry names `agent`, absolute
+`roots`, `sources` (`path` and `sha256`, or `null` for an absent file), and
+`pluginHooks: "reviewed-no-skill-injection"`. Include the agent configuration
+and every input establishing the active roots and plugin-hook behavior. A
+changed witness requires a new review. This option does not add support for an
+unknown native file format or make unreviewed plugin behavior safe. Managed
+system configuration, process-specific overrides, and alternate agent home
+directories are outside automatic coverage and require their own integration
+review before declaring a station migrated.
 
 If your home `.claude` or `.codex` directory intentionally links to another
 directory within your home, add `--allow-root-aliases` to hook installation and
@@ -298,8 +329,9 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills install [name@version] --selection-profile <id>` | | Cache selected immutable bundles; without names, sync the profile |
 | `skills load <name> --selection-profile <id>` | | Load complete instructions from the verified selection |
 | `skills context <prompt> --selection-profile <id>` | | Resolve instructions matching the prompt and profile triggers |
-| `skills hook install --agent all --selection-profile <id>` | | Plan Claude/Codex integration; `--apply` installs it, then restart and trust the hooks |
-| `skills migrate native` | | Inventory native copies; `--apply` archives managed non-vendor copies |
+| `skills hook install --agent all --selection-profile <id>` | | Plan one CLI bridge plus supported native hooks; `--apply` installs it, then restart and trust the hooks |
+| `skills hook agents --json` | | Report maintained adapters and explicit coverage limits |
+| `skills migrate native` | | Inventory native copies; `--apply` archives managed copies, with explicit `--include-unmanaged` and `--include-vendor` retirement options |
 | `skills pull --all --selection-profile <id>` | | With CLI loading active, refresh the selected profile into the verified cache |
 | `skills sync --selection-profile <id> [--check] [--station <id>]` | | Sync or check the selected profile/cache; optionally record station state |
 | `skills station-state <id>` | | Read a station's sync receipt in the authenticated workspace |

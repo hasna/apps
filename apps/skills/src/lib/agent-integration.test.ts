@@ -25,14 +25,14 @@ test("hook install plans without writes, preserves unrelated hooks and is idempo
   const applied = applyAgentIntegration(plan);
   const config = JSON.parse(readFileSync(path, "utf8"));
   expect(config.hooks.Stop[0].hooks[0].command).toBe("existing-stop");
-  expect(config.permissions.allow).toEqual(["Bash(git status)"]);
-  expect(config.permissions.deny).toEqual(["Read(.env)", "Skill"]);
+  expect(config.permissions.allow).toEqual(["Bash(git status)", "Skill(skills-cli)"]);
+  expect(config.permissions.deny).toEqual(["Read(.env)"]);
   expect(config.hooks.UserPromptSubmit[0].hooks[0].command).toContain("hook user-prompt --agent claude");
   expect(applied.backups.length).toBe(1);
   expect(readFileSync(applied.backups[0]!, "utf8")).toBe(before);
   const again = planAgentIntegration({ ...f, agents: ["claude", "codex"], command: "/opt/bin/skills" });
   expect(again.changes).toHaveLength(0);
-  expect(existsSync(join(f.home, ".claude", "skills"))).toBe(false);
+  expect(inventoryNativeSkills(f.home).filter(entry => entry.agent === "claude")).toMatchObject([{ bridge: true }]);
 });
 
 test("an intervening edit refuses the entire plan before writing any config", () => {

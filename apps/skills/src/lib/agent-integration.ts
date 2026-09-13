@@ -1,22 +1,27 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, writeFileSync, unlinkSync, chmodSync } from "node:fs";
+import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, writeFileSync, unlinkSync, chmodSync } from "node:fs";
 import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { homedir } from "node:os";
-import { getDataDir } from "./config.js";
+import { getDataDir, getDataDirReadOnly } from "./config.js";
+import { requiresCliSkillLoading } from "./managed-policy.js";
+import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
+import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, type AgentDiscoveryBinding, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
+import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 
-export type IntegrationAgent = "claude" | "codex";
+export type { IntegrationAgent } from "./agent-adapters.js";
 export type ContextHookEvent = "UserPromptSubmit" | "SessionStart" | "SubagentStart";
 export interface AgentRootAlias { agent: IntegrationAgent; home: string; alias: string; target: string; link: string; aliasIdentity: string; targetIdentity: string }
-export interface NativeSkillEntry { agent: string; path: string; hash: string; managed: boolean; vendor: boolean; rootAlias?: AgentRootAlias }
+export interface NativeSkillEntry { agent: string; path: string; hash: string; managed: boolean; vendor: boolean; system?: boolean; bridge?: boolean; bridgeHome?: string; rootAlias?: AgentRootAlias }
 export interface AgentConfigChange { path: string; before: string | null; after: string }
-export interface AgentIntegrationPlan { dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; rootAliases?: AgentRootAlias[] }
+export interface AgentIntegrationPlan { dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; rootAliases?: AgentRootAlias[] }
 
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const HOOK_EVENTS: readonly ContextHookEvent[] = ["UserPromptSubmit", "SessionStart", "SubagentStart"];
 const ROOTS = [
   ["claude", ".claude/skills"], ["codex", ".codex/skills"], ["codex", ".agents/skills"],
   ["gemini", ".gemini/skills"],
-  ["codewith", ".codewith/skills"], ["opencode", ".config/opencode/skills"], ["cursor", ".cursor/skills"],
+  ["codewith", ".codewith/skills"], ["opencode", ".config/opencode/skills"], ["opencode", ".opencode/skills"], ["cursor", ".cursor/skills"],
+  ["hermes", ".hermes/skills"], ["windsurf", ".windsurf/skills"], ["pi", ".pi/agent/skills"], ["amp", ".amp/skills"], ["cline", ".cline/skills"], ["roo", ".roo/skills"], ["copilot", ".github/skills"],
 ] as const;
 
 function assertSafePath(path: string): void {
@@ -80,10 +85,13 @@ function treeHash(root: string): string {
   assertSafePath(root); visit(root); return hash.digest("hex");
 }
 
-export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; projectDir?: string; allowRootAliases?: boolean } = {}): NativeSkillEntry[] {
+export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; projectDir?: string; projectDirs?: string[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean } = {}): NativeSkillEntry[] {
   const aliases = rootAliases(home, options.allowRootAliases);
   const roots: Array<readonly [string, string]> = ROOTS.map(([agent, path]) => [agent, canonicalAgentPath(join(home, path), aliases)]);
-  if (options.projectDir) for (const [agent, path] of ROOTS) roots.push([agent, join(resolve(options.projectDir), path)]);
+  const bridgePaths = Object.values(AGENT_ADAPTERS).map(adapter => canonicalAgentPath(join(home, adapter.root, CLI_BRIDGE_NAME), aliases));
+  for (const project of new Set([...(options.projectDirs ?? []), ...(options.projectDir ? [options.projectDir] : [])].map(path => resolve(path)))) {
+    for (const [agent, path] of ROOTS) roots.push([agent, canonicalAgentPath(join(project, path), aliases)]);
+  }
   const entries: NativeSkillEntry[] = [], seen = new Set<string>();
   type Scan = { complete: boolean; hasSkills: boolean; entries: number };
   const cacheScans = new Map<string, Scan>(), maxAliasProofEntries = 10000;
@@ -106,8 +114,9 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
       let managed = false;
       const marker = join(path, ".hasna-skills.json");
       if (existsSync(marker)) { try { managed = JSON.parse(readFileSync(marker, "utf8")).managedBy === "@hasna/skills"; } catch { /* Unrecognized markers grant no ownership. */ } }
+      const bridge = !vendor && isOwnedCliBridge(path, bridgePaths);
       const rootAlias = aliases.find(item => path === item.target || path.startsWith(item.target + sep));
-      entries.push({ agent, path, hash: treeHash(path), managed, vendor, ...(rootAlias ? { rootAlias } : {}) }); return scan;
+      entries.push({ agent, path, hash: treeHash(path), managed, vendor, ...(agent === "codex" && path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep) ? { system: true } : {}), ...(bridge ? { bridge: true, bridgeHome: resolve(home) } : {}), ...(rootAlias ? { rootAlias } : {}) }); return scan;
     }
     if (depth > (vendor ? 8 : 3)) return { ...scan, complete: false };
     const children = readdirSync(path, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
@@ -135,10 +144,16 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     if (pluginCache) cacheScans.set(path, scan);
     return scan;
   }
-  for (const [agent, path] of roots) visit(agent, path);
-  if (options.includeVendor) {
-    for (const agent of ["codex", "claude"]) visit(agent, canonicalAgentPath(join(home, `.${agent}`, "plugins", "cache"), aliases), true, 0, true);
+  function scanRoot(agent: string, path: string, vendor = false, pluginCache = false): void {
+    if (!visit(agent, path, vendor, 0, pluginCache).complete) throw new Error(`Native skill discovery limit exceeded; review this root before continuing: ${path}`);
   }
+  for (const [agent, path] of roots) scanRoot(agent, path);
+  if (options.includeVendor) {
+    for (const agent of ["codex", "claude"]) scanRoot(agent, canonicalAgentPath(join(home, `.${agent}`, "plugins", "cache"), aliases), true, true);
+    scanRoot("gemini", join(home, ".gemini", "extensions"), true);
+  }
+  const configured = options.configured ? INTEGRATION_AGENTS.flatMap(agent => resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, canonical: path => canonicalAgentPath(path, aliases) }).roots.map(path => ({ agent, path }))) : [];
+  for (const root of [...(options.agentRoots ?? []), ...configured]) scanRoot(root.agent, canonicalAgentPath(root.path, aliases), true);
   recheckRootAliases(aliases);
   return entries;
 }
@@ -149,26 +164,31 @@ function readOptional(path: string): string | null {
 
 function jsonObject(text: string | null, path: string): Record<string, any> {
   if (text === null) return {};
-  const value: unknown = JSON.parse(text);
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { throw new Error(`Invalid JSON configuration: ${path}`); }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Expected configuration object: ${path}`);
   return value;
 }
 
 function shellQuote(value: string): string { return `'${value.replace(/'/g, `'\\''`)}'`; }
 
-function configureHooks(config: Record<string, any>, agent: IntegrationAgent, command: string, profileId: string): void {
+function configureHooks(config: Record<string, any>, agent: IntegrationAgent, command: string, profileId: string, nativeReady: boolean): void {
   config.hooks ??= {};
   if (typeof config.hooks !== "object" || Array.isArray(config.hooks)) throw new Error("Expected hooks configuration object");
-  for (const event of HOOK_EVENTS) {
+  for (const event of AGENT_ADAPTERS[agent].events) {
     const existing: unknown = config.hooks[event] ?? [];
     if (!Array.isArray(existing)) throw new Error(`Expected ${event} hooks array`);
-    const hookCommand = `${shellQuote(command)} hook user-prompt --agent ${agent} --selection-profile ${profileId}`;
+    const hookCommand = `${shellQuote(command)} hook user-prompt --agent ${agent} --selection-profile ${profileId} --event ${event}`;
     const retained = existing.flatMap((entry: any) => {
+      if (agent === "cursor") {
+        if (!entry || typeof entry.command !== "string") throw new Error(`Malformed ${event} hook entry`);
+        return /(?:^|\s)hook user-prompt --agent cursor(?:\s|$)/.test(entry.command) ? [] : [entry];
+      }
       if (!entry || !Array.isArray(entry.hooks)) throw new Error(`Malformed ${event} hook entry`);
-      const hooks = entry.hooks.filter((hook: any) => !(hook?.type === "command" && typeof hook.command === "string" && /(?:^|\s)hook user-prompt --agent (?:claude|codex)(?: --selection-profile [A-Za-z0-9._-]+)?$/.test(hook.command)));
+      const hooks = entry.hooks.filter((hook: any) => !(hook?.type === "command" && typeof hook.command === "string" && /(?:^|\s)hook user-prompt --agent (?:claude|codex|gemini)(?: --selection-profile [A-Za-z0-9._-]+)?(?: --event [A-Za-z]+)?$/.test(hook.command)));
       return hooks.length ? [{ ...entry, hooks }] : [];
     });
-    retained.push({ hooks: [{ type: "command", command: hookCommand, timeout: 15 }] });
+    retained.push(agent === "cursor" ? { command: hookCommand, timeout: 15 } : { hooks: [{ type: "command", command: hookCommand, timeout: agent === "gemini" ? 15000 : 15 }] });
     config.hooks[event] = retained;
   }
   if (agent === "claude") {
@@ -176,50 +196,114 @@ function configureHooks(config: Record<string, any>, agent: IntegrationAgent, co
     if (typeof config.permissions !== "object" || Array.isArray(config.permissions)) throw new Error("Expected permissions configuration object");
     const denied: unknown = config.permissions.deny ?? [];
     if (!Array.isArray(denied)) throw new Error("Expected permission deny array");
-    config.permissions.deny = [...new Set([...denied, "Skill"])];
+    const allowed: unknown = config.permissions.allow ?? [];
+    if (!Array.isArray(allowed)) throw new Error("Expected permission allow array");
+    config.permissions.deny = nativeReady ? denied.filter(rule => rule !== "Skill") : [...new Set([...denied, "Skill"])];
+    config.permissions.allow = nativeReady ? [...new Set([...allowed, `Skill(${CLI_BRIDGE_NAME})`])] : allowed;
+    config.disableBundledSkills = true;
+  }
+  if (agent === "gemini") {
+    config.skills ??= {};
+    if (!config.skills || typeof config.skills !== "object" || Array.isArray(config.skills)) throw new Error("Expected skills configuration object");
+    const disabled = config.skills.disabled ?? [];
+    if (!Array.isArray(disabled) || disabled.some(value => typeof value !== "string")) throw new Error("Expected disabled skills array");
+    config.skills.enabled = true;
+    config.skills.disabled = [...new Set([...disabled.filter(name => name !== CLI_BRIDGE_NAME), "antigravity-support", "skill-creator"])];
+    if (config.hooksConfig?.enabled === false) throw new Error("Gemini hooks are disabled; enable them before installing the Skills bridge");
+  }
+  if (agent === "cursor") config.version = 1;
+  if (agent === "claude" || agent === "gemini") {
+    const event = agent === "claude" ? "PreToolUse" : "BeforeTool", matcher = agent === "claude" ? "Skill" : "activate_skill";
+    const existing = config.hooks[event] ?? [];
+    if (!Array.isArray(existing)) throw new Error(`Expected ${event} hooks array`);
+    const retained = existing.flatMap((entry: any) => {
+      if (!entry || !Array.isArray(entry.hooks)) throw new Error(`Malformed ${event} hook entry`);
+      const hooks = entry.hooks.filter((hook: any) => !(hook?.type === "command" && typeof hook.command === "string" && /(?:^|\s)hook user-prompt --agent (?:claude|gemini) --selection-profile [A-Za-z0-9._-]+ --event (?:PreToolUse|BeforeTool)$/.test(hook.command)));
+      return hooks.length ? [{ ...entry, hooks }] : [];
+    });
+    config.hooks[event] = [...retained, { matcher, hooks: [{ type: "command", command: `${shellQuote(command)} hook user-prompt --agent ${agent} --selection-profile ${profileId} --event ${event}`, timeout: agent === "gemini" ? 15000 : 15 }] }];
   }
 }
 
-function disableCodexSkills(text: string, skills: NativeSkillEntry[], aliases: AgentRootAlias[]): string {
+function disableCodexSkills(text: string, skills: NativeSkillEntry[], aliases: AgentRootAlias[], bridgePath: string): string {
   Bun.TOML.parse(text);
   let result = text;
-  for (const skill of skills.filter(entry => entry.agent === "codex")) {
+  const selections = [...skills.filter(entry => entry.agent === "codex" && !entry.bridge).map(skill => ({ path: skill.path, enabled: false })), { path: bridgePath, enabled: true }];
+  for (const skill of selections) {
     const path = join(skill.path, "SKILL.md"); let found = false;
     result = result.replace(/^\[\[skills\.config\]\][^\n]*(?:\n(?!\s*\[)[^\n]*)*/gm, section => {
       const parsed = Bun.TOML.parse(section) as { skills?: { config?: Array<{ path?: string }> } };
       const declared = parsed.skills?.config?.[0]?.path;
       if (!declared || ![resolve(path), resolve(skill.path)].includes(canonicalAgentPath(declared, aliases))) return section;
       found = true;
-      return /^\s*enabled\s*=/m.test(section) ? section.replace(/^\s*enabled\s*=.*$/m, "enabled = false") : `${section.trimEnd()}\nenabled = false\n`;
+      return /^\s*enabled\s*=/m.test(section) ? section.replace(/^\s*enabled\s*=.*$/m, `enabled = ${skill.enabled}`) : `${section.trimEnd()}\nenabled = ${skill.enabled}\n`;
     });
-    if (!found) result = `${result.trimEnd()}\n\n[[skills.config]]\npath = ${JSON.stringify(path)}\nenabled = false\n`;
+    if (!found && !skill.enabled) result = `${result.trimEnd()}\n\n[[skills.config]]\npath = ${JSON.stringify(path)}\nenabled = false\n`;
   }
   Bun.TOML.parse(result); return result;
 }
 
 /** Planning is read-only; credentials and unrelated settings never appear in CLI output. */
-export function planAgentIntegration(options: { home?: string; dataDir?: string; agents: IntegrationAgent[]; command?: string; profileId?: string; includeVendor?: boolean; projectDir?: string; allowRootAliases?: boolean }): AgentIntegrationPlan {
+export function planAgentIntegration(options: { home?: string; dataDir?: string; agents: IntegrationAgent[]; command?: string; profileId?: string; includeVendor?: boolean; projectDir?: string; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean }): AgentIntegrationPlan {
   const home = options.home ?? homedir(), dataDir = options.dataDir ?? getDataDir();
   const profileId = options.profileId ?? "default";
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(profileId) || profileId.includes("..")) throw new Error("Invalid selection profile id");
   const aliases = rootAliases(home, options.allowRootAliases);
-  const nativeSkills = inventoryNativeSkills(home, { includeVendor: options.includeVendor, projectDir: options.projectDir, allowRootAliases: options.allowRootAliases });
+  const policyPath = join(dataDir, "agent-policy.json"), previousPolicy = readOptional(policyPath), policy = jsonObject(previousPolicy, policyPath);
+  if (policy.bridge !== undefined && (!policy.bridge || typeof policy.bridge !== "object" || Array.isArray(policy.bridge))) throw new Error("Invalid existing Skills bridge policy");
+  if (policy.bridge?.agents !== undefined && (!Array.isArray(policy.bridge.agents) || policy.bridge.agents.some((agent: unknown) => !INTEGRATION_AGENTS.includes(agent as IntegrationAgent)))) throw new Error("Invalid existing bridge agent inventory");
+  for (const field of ["commands", "profiles"]) if (policy.bridge?.[field] !== undefined && (!policy.bridge[field] || typeof policy.bridge[field] !== "object" || Array.isArray(policy.bridge[field]) || Object.entries(policy.bridge[field]).some(([key, value]) => !INTEGRATION_AGENTS.includes(key as IntegrationAgent) || typeof value !== "string" || !value || value.includes("\0")))) throw new Error(`Invalid existing bridge ${field} binding`);
+  const discoveries = [...new Set(options.agents)].map(agent => resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, canonical: path => canonicalAgentPath(path, aliases) }));
+  const nativeSkills = inventoryNativeSkills(home, { includeVendor: true, projectDir: options.projectDir, agentRoots: discoveries.flatMap(binding => binding.roots.map(path => ({ agent: binding.agent, path }))), allowRootAliases: options.allowRootAliases });
   const changes: AgentConfigChange[] = [];
   for (const agent of [...new Set(options.agents)]) {
-    if (agent !== "claude" && agent !== "codex") throw new Error(`Unsupported agent: ${agent}`);
-    const path = canonicalAgentPath(join(home, `.${agent}`, agent === "claude" ? "settings.json" : "hooks.json"), aliases);
+    if (!INTEGRATION_AGENTS.includes(agent)) throw new Error(`Unsupported agent: ${agent}`);
+    const adapter = AGENT_ADAPTERS[agent];
+    const bridgePath = canonicalAgentPath(join(home, adapter.root, CLI_BRIDGE_NAME), aliases);
+    assertSafePath(bridgePath);
+    if (existsSync(bridgePath) && !isOwnedCliBridge(bridgePath, [bridgePath])) throw new Error(`Refusing to overwrite an unrecognized or modified Skills bridge: ${bridgePath}`);
+    for (const [name, after] of Object.entries(CLI_BRIDGE_FILES)) {
+      const path = join(bridgePath, name), before = readOptional(path);
+      if (before !== after) changes.push({ path, before, after });
+    }
+    const path = canonicalAgentPath(join(home, adapter.config), aliases);
     const before = readOptional(path), config = jsonObject(before, path);
-    configureHooks(config, agent, options.command ?? "skills", profileId);
+    if (agent === "opencode") {
+      const permission = config.permission ?? {};
+      if (!permission || typeof permission !== "object" || Array.isArray(permission)) throw new Error("Expected OpenCode permission object");
+      config.permission = { ...permission, skill: { "*": "deny", [CLI_BRIDGE_NAME]: "allow" } };
+      const pluginPath = join(home, ".config", "opencode", "plugins", "skills-cli.js"), pluginBefore = readOptional(pluginPath);
+      const pluginAfter = renderOpenCodePlugin(options.command ?? "skills", profileId);
+      const priorCommand = policy.bridge?.commands?.opencode;
+      const ownedPrevious = typeof priorCommand === "string" && typeof policy.profileId === "string" && pluginBefore === renderOpenCodePlugin(priorCommand, policy.bridge?.profiles?.opencode ?? policy.profileId);
+      if (pluginBefore !== null && pluginBefore !== pluginAfter && !ownedPrevious) throw new Error("Refusing to overwrite a modified OpenCode Skills plugin; preserve and review it first");
+      if (pluginBefore !== pluginAfter) changes.push({ path: pluginPath, before: pluginBefore, after: pluginAfter });
+    } else configureHooks(config, agent, options.command ?? "skills", profileId, !nativeSkills.some(entry => entry.agent === agent && !entry.bridge));
+    if (agent === "gemini") config.skills.disabled = [...new Set([...config.skills.disabled, ...(discoveries.find(binding => binding.agent === agent)?.builtinNames ?? [])])];
     const after = `${JSON.stringify(config, null, 2)}\n`;
     if (before !== after) changes.push({ path, before, after });
     if (agent === "codex") {
       const configPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases), previous = readOptional(configPath);
-      const next = disableCodexSkills(previous ?? "", nativeSkills, aliases);
+      const next = disableCodexSkills(previous ?? "", nativeSkills, aliases, bridgePath);
       if (next !== (previous ?? "")) changes.push({ path: configPath, before: previous, after: next });
     }
   }
+  const discoveryAfter = discoveries.map(binding => rebindAgentDiscovery(binding, new Map(changes.map(change => [change.path, change.after]))));
+  const priorAgents = Array.isArray(policy.bridge?.agents) ? policy.bridge.agents : [];
+  const nextPolicy = { ...policy, version: 1, loading: "cli", profileId, bridge: {
+    ...policy.bridge,
+    version: CLI_BRIDGE_VERSION, digest: CLI_BRIDGE_DIGEST,
+    agents: [...new Set([...priorAgents, ...options.agents])].sort(),
+    home: resolve(home), includeVendor: true,
+    commands: { ...policy.bridge?.commands, ...Object.fromEntries(options.agents.map(agent => [agent, options.command ?? "skills"])) },
+    profiles: Object.fromEntries([...new Set<IntegrationAgent>([...priorAgents, ...options.agents])].sort().map(agent => [agent, options.agents.includes(agent) ? profileId : policy.bridge?.profiles?.[agent] ?? policy.profileId])),
+    disabledBuiltins: options.agents.includes("codex") ? nativeSkills.filter(entry => entry.agent === "codex" && entry.vendor && entry.path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep)).map(entry => ({ path: entry.path, hash: entry.hash })) : (policy.bridge?.disabledBuiltins ?? []),
+    rootAliases: aliases,
+    discovery: { ...policy.bridge?.discovery, ...Object.fromEntries(discoveryAfter.map(binding => [binding.agent, binding])) },
+  } };
+  if (JSON.stringify(policy) !== JSON.stringify(nextPolicy)) changes.push({ path: policyPath, before: previousPolicy, after: `${JSON.stringify(nextPolicy, null, 2)}\n` });
   recheckRootAliases(aliases);
-  return { dataDir, profileId, changes, nativeSkills, ...(aliases.length ? { rootAliases: aliases } : {}) };
+  return { dataDir, profileId, changes, nativeSkills, observedPolicy: { path: policyPath, before: previousPolicy }, discoveryBefore: discoveries, discoveryAfter, ...(aliases.length ? { rootAliases: aliases } : {}) };
 }
 
 function atomicWrite(path: string, content: string): void {
@@ -232,13 +316,12 @@ function atomicWrite(path: string, content: string): void {
 export function applyAgentIntegration(plan: AgentIntegrationPlan): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } {
   const aliases = plan.rootAliases ?? [];
   recheckRootAliases(aliases);
+  for (const binding of plan.discoveryBefore ?? []) verifyAgentDiscovery(binding);
+  if (plan.observedPolicy && readOptional(plan.observedPolicy.path) !== plan.observedPolicy.before) throw new Error("Agent policy changed after planning");
   for (const change of plan.changes) if (readOptional(change.path) !== change.before) throw new Error(`Configuration changed after planning: ${change.path}`);
-  const backupRoot = join(plan.dataDir, "migration", randomUUID()), backups: string[] = [], written: AgentConfigChange[] = [];
+  const backupRoot = join(plan.dataDir, "migration", randomUUID()), backups: string[] = [], written: AgentConfigChange[] = [], createdDirectories = new Set<string>();
   if (!plan.changes.length) {
-    const policyPath = join(plan.dataDir, "agent-policy.json");
-    const policy = jsonObject(readOptional(policyPath), policyPath);
     recheckRootAliases(aliases);
-    if (policy.loading !== "cli" || policy.profileId !== plan.profileId) atomicWrite(policyPath, JSON.stringify({ version: 1, loading: "cli", profileId: plan.profileId, installedAt: new Date().toISOString() }) + "\n");
     return { changed: [], backups, ...(aliases.length ? { rootAliases: aliases } : {}) };
   }
   assertSafePath(backupRoot); mkdirSync(backupRoot, { recursive: true, mode: 0o700 }); chmodSync(backupRoot, 0o700);
@@ -247,34 +330,58 @@ export function applyAgentIntegration(plan: AgentIntegrationPlan): { changed: st
     writeFileSync(backup, change.before, { mode: 0o600, flag: "wx" }); backups.push(backup);
   }
   try {
-    for (const change of plan.changes) { recheckRootAliases(aliases); atomicWrite(change.path, change.after); written.push(change); }
+    for (const change of plan.changes) {
+      recheckRootAliases(aliases);
+      if (readOptional(change.path) !== change.before) throw new Error(`Configuration changed after planning: ${change.path}`);
+      for (let directory = dirname(change.path); !existsSync(directory); directory = dirname(directory)) createdDirectories.add(directory);
+      const after = change.after;
+      atomicWrite(change.path, after); written.push({ path: change.path, before: change.before, after });
+    }
     recheckRootAliases(aliases);
-    atomicWrite(join(plan.dataDir, "agent-policy.json"), JSON.stringify({ version: 1, loading: "cli", profileId: plan.profileId, installedAt: new Date().toISOString() }) + "\n");
+    for (const binding of plan.discoveryAfter ?? []) verifyAgentDiscovery(binding);
+    atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: written.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(aliases.length ? { rootAliases: aliases } : {}) }) + "\n");
   } catch (error) {
     for (const change of written.reverse()) {
+      // Do not erase a concurrent user's edit during compensation.
+      if (readOptional(change.path) !== change.after) continue;
       if (change.before === null) unlinkSync(change.path); else atomicWrite(change.path, change.before);
+    }
+    for (const directory of [...createdDirectories].sort((a, b) => b.length - a.length)) {
+      try { rmdirSync(directory); } catch (cleanupError) {
+        if (!["ENOENT", "ENOTEMPTY"].includes((cleanupError as NodeJS.ErrnoException).code ?? "")) throw cleanupError;
+      }
     }
     throw error;
   }
-  atomicWrite(join(backupRoot, "receipt.json"), JSON.stringify({ version: 1, changes: plan.changes.map(change => ({ path: change.path, beforeHash: change.before === null ? null : sha(change.before), afterHash: sha(change.after) })), backups, ...(aliases.length ? { rootAliases: aliases } : {}) }) + "\n");
   return { changed: plan.changes.map(change => change.path), backups, ...(aliases.length ? { rootAliases: aliases } : {}) };
 }
 
-export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { dataDir?: string; includeUnmanaged?: boolean; allowRootAliases?: boolean }): { entries: Array<{ source: string; archive: string; hash: string }>; rootAliases?: AgentRootAlias[] } {
+export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean }): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; rootAliases?: AgentRootAlias[] } {
   const aliases = [...new Map(inventory.filter(entry => entry.rootAlias).map(entry => [entry.rootAlias!.alias, entry.rootAlias!])).values()];
   if (aliases.length && !options.allowRootAliases) throw new Error("Native migration requires explicit allowRootAliases for agent root aliases");
   recheckRootAliases(aliases);
-  const selected = inventory.filter(entry => !entry.vendor && (entry.managed || options.includeUnmanaged));
+  // Recompute ownership before exempting it: a stale plan or a forged bridge
+  // flag must not protect subsequently modified native instructions.
+  for (const entry of inventory.filter(entry => entry.bridge)) {
+    const adapter = AGENT_ADAPTERS[entry.agent as IntegrationAgent];
+    const expected = adapter && entry.bridgeHome ? canonicalAgentPath(join(entry.bridgeHome, adapter.root, CLI_BRIDGE_NAME), aliases) : undefined;
+    if (!expected || treeHash(entry.path) !== entry.hash || !isOwnedCliBridge(entry.path, [expected])) throw new Error(`Skills bridge changed after planning: ${entry.path}`);
+  }
+  const selected = inventory.filter(entry => !entry.bridge && !entry.system && (entry.vendor ? options.includeVendor : entry.managed || options.includeUnmanaged));
   for (const entry of selected) if (treeHash(entry.path) !== entry.hash) throw new Error(`Native skill changed after planning: ${entry.path}`);
   if (!selected.length) return { entries: [], ...(aliases.length ? { rootAliases: aliases } : {}) };
   const archiveRoot = join(options.dataDir ?? getDataDir(), "migration", randomUUID(), "native");
   assertSafePath(archiveRoot); mkdirSync(archiveRoot, { recursive: true, mode: 0o700 });
-  const entries: Array<{ source: string; archive: string; hash: string }> = [];
+  const entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }> = [];
   try {
     for (const [index, entry] of selected.entries()) {
       recheckRootAliases(aliases);
       const archive = join(archiveRoot, `${index}-${sha(entry.path).slice(0, 12)}`);
-      renameSync(entry.path, archive); entries.push({ source: entry.path, archive, hash: entry.hash });
+      // Plugin hooks or tools may share scripts/assets inside a skill folder.
+      // Retire only its discovery document; keep the rest of the plugin intact.
+      const source = entry.vendor ? join(entry.path, "SKILL.md") : entry.path;
+      const hash = entry.vendor ? sha(readFileSync(source)) : entry.hash;
+      renameSync(source, archive); entries.push({ source, archive, hash, ...(entry.vendor ? { discoveryOnly: true } : {}) });
     }
     recheckRootAliases(aliases);
     atomicWrite(join(archiveRoot, "receipt.json"), JSON.stringify({ version: 1, entries, ...(aliases.length ? { rootAliases: aliases } : {}) }) + "\n");
@@ -285,20 +392,76 @@ export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { da
   return { entries, ...(aliases.length ? { rootAliases: aliases } : {}) };
 }
 
+/** Run before any prompt context load. Missing ownership or reappearing native
+ * discovery files require repair; verified cache availability is not an override. */
+export function assertManagedAgentBridge(agent: IntegrationAgent, options: { home?: string; dataDir?: string; projectDir?: string; projectDirs?: string[] } = {}): void {
+  const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
+  if (!requiresCliSkillLoading(dataDir)) throw new Error("NATIVE_SKILL_DRIFT: install the Skills bridge with skills hook install");
+  const path = join(dataDir, "agent-policy.json"), policy = jsonObject(readOptional(path), path), binding = policy.bridge;
+  if (!binding || binding.version !== CLI_BRIDGE_VERSION || binding.digest !== CLI_BRIDGE_DIGEST || binding.home !== home || !Array.isArray(binding.agents) || !binding.agents.includes(agent)) throw new Error("NATIVE_SKILL_DRIFT: the managed Skills bridge binding is missing or incompatible; run skills hook install");
+  const aliases: AgentRootAlias[] = binding.rootAliases ?? [];
+  if (!Array.isArray(aliases)) throw new Error("NATIVE_SKILL_DRIFT: invalid root alias binding");
+  recheckRootAliases(aliases);
+  const expected = canonicalAgentPath(join(home, AGENT_ADAPTERS[agent].root, CLI_BRIDGE_NAME), aliases);
+  if (!isOwnedCliBridge(expected, [expected])) throw new Error("NATIVE_SKILL_DRIFT: the native Skills bridge is missing or modified; repair it before continuing");
+  const roots = new Set<string>();
+  for (const project of [options.projectDir ?? process.cwd(), ...(options.projectDirs ?? [])]) {
+    for (let path = resolve(project), depth = 0; ; depth++) {
+      if (depth >= 100) throw new Error("NATIVE_SKILL_DRIFT: project ancestor discovery limit exceeded");
+      roots.add(path); const parent = dirname(path); if (parent === path) break; path = parent;
+    }
+  }
+  const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (agent === "opencode" && entry.agent === "claude");
+  assertProjectDiscovery(agent, [...roots], home, path => canonicalAgentPath(path, aliases));
+  const configPath = canonicalAgentPath(join(home, AGENT_ADAPTERS[agent].config), aliases), config = jsonObject(readOptional(configPath), configPath);
+  const command = binding.commands?.[agent], profile = binding.profiles?.[agent];
+  if (typeof command !== "string" || typeof profile !== "string") throw new Error("NATIVE_SKILL_DRIFT: the native hook command/profile binding is missing");
+  if (agent === "opencode") {
+    if (JSON.stringify(config.permission?.skill) !== JSON.stringify({ "*": "deny", [CLI_BRIDGE_NAME]: "allow" }) || readOptional(join(home, ".config", "opencode", "plugins", "skills-cli.js")) !== renderOpenCodePlugin(command, profile)) throw new Error("NATIVE_SKILL_DRIFT: OpenCode bridge protection changed; run skills hook install");
+  } else {
+    const required: Record<string, any> = {}; configureHooks(required, agent, command, profile, true);
+    for (const [event, entries] of Object.entries(required.hooks) as Array<[string, any[]]>) for (const entry of entries) {
+      if (!Array.isArray(config.hooks?.[event]) || config.hooks[event].filter((actual: unknown) => JSON.stringify(actual) === JSON.stringify(entry)).length !== 1) throw new Error("NATIVE_SKILL_DRIFT: required native prompt/skill hooks changed; run skills hook install");
+    }
+    if (agent === "claude" && (config.disableBundledSkills !== true || config.disableAllHooks === true || !config.permissions?.allow?.includes(`Skill(${CLI_BRIDGE_NAME})`) || config.permissions?.deny?.includes("Skill"))) throw new Error("NATIVE_SKILL_DRIFT: Claude bridge or bundled-skill protection changed; retire copies and run skills hook install");
+    if (agent === "gemini" && (config.hooksConfig?.enabled === false || config.skills?.enabled !== true || !["antigravity-support", "skill-creator"].every(name => config.skills?.disabled?.includes(name)) || config.skills?.disabled?.includes(CLI_BRIDGE_NAME))) throw new Error("NATIVE_SKILL_DRIFT: Gemini bridge or bundled-skill protection changed; run skills hook install");
+  }
+  const codexPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases);
+  const codexConfig = agent === "codex" ? Bun.TOML.parse(readOptional(codexPath) ?? "") as { skills?: { config?: Array<{ path?: string; enabled?: boolean }> } } : {};
+  const setting = (path: string) => (codexConfig.skills?.config ?? []).filter(entry => typeof entry.path === "string" && [path, join(path, "SKILL.md")].includes(canonicalAgentPath(entry.path, aliases)));
+  if (agent === "codex" && setting(expected).some(entry => entry.enabled === false)) throw new Error("NATIVE_SKILL_DRIFT: the Codex CLI bridge is disabled; run skills hook install");
+  const disabledBuiltin = (entry: NativeSkillEntry): boolean => {
+    if (agent !== "codex" || !entry.vendor || !entry.path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep)) return false;
+    const matched = Array.isArray(binding.disabledBuiltins) && binding.disabledBuiltins.some((item: any) => item.path === entry.path && item.hash === entry.hash);
+    const settings = setting(entry.path);
+    return matched && settings.length === 1 && settings[0]?.enabled === false;
+  };
+  const discovery: AgentDiscoveryBinding | undefined = binding.discovery?.[agent];
+  if (!discovery || discovery.agent !== agent) throw new Error("NATIVE_SKILL_DRIFT: native discovery coverage is missing; run skills hook install");
+  if (agent === "gemini" && !discovery.builtinNames?.every(name => config.skills.disabled.includes(name))) throw new Error("NATIVE_SKILL_DRIFT: an installed Gemini builtin is not disabled");
+  try {
+    verifyAgentDiscovery(discovery);
+    if (discovery.method === "automatic") {
+      const current = resolveAgentDiscovery({ home, agent, canonical: path => canonicalAgentPath(path, aliases) });
+      if (JSON.stringify(current) !== JSON.stringify(discovery)) throw new Error("Configured native discovery roots changed");
+    }
+  } catch (error) { throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`); }
+  const inventory = inventoryNativeSkills(home, { includeVendor: true, projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0 });
+  if (inventory.some(entry => visible(entry) && !entry.bridge && !disabledBuiltin(entry))) throw new Error("NATIVE_SKILL_DRIFT: unexpected native skill copies were found; review skills migrate native --include-unmanaged --include-vendor before continuing");
+  recheckRootAliases(aliases);
+}
+
 export function hookContextOutput(event: string, result: { context: string; receipt?: unknown; omitted?: Array<{ slug: string; version: string; loadCommand: string }> }): Record<string, unknown> {
   if (!HOOK_EVENTS.includes(event as ContextHookEvent)) throw new Error(`Unsupported context hook event: ${event}`);
   const omitted = result.omitted?.slice(0, 10).map(entry => `Additional selected skill ${entry.slug}@${entry.version}: ${entry.loadCommand}`).join("\n");
   const policy = event === "SessionStart" || event === "SubagentStart"
-    ? "Skills loading policy: discover skills with `skills list` or `skills search`, and read selected instructions with `skills load <slug>`. Use `skills sync` to refresh the shared profile. Load skills through this CLI; do not create, copy or load skills from agent-native skill folders. Context loading does not authorize execution; use `skills run` only when the task calls for running a skill."
+    ? "Skills loading policy: discover skills with `skills list` or `skills search`, and read selected instructions with `skills load <slug>`. Use `skills sync` to refresh the shared profile. The only native skill is the owned skills-cli bridge. Create and edit payload skills in the Skills authoring workspace; do not copy payload instructions into native discovery folders. Context loading does not authorize execution; use `skills run` only when the task calls for running a skill."
     : "";
   const context = [policy, result.context, omitted].filter(Boolean).join("\n\n");
   if (!context) return {};
   return { hookSpecificOutput: { hookEventName: event, additionalContext: context } };
 }
 
-export function assertNativeExportAllowed(dataDir = getDataDir()): void {
-  const path = join(dataDir, "agent-policy.json");
-  if (!existsSync(path)) return;
-  const policy = jsonObject(readOptional(path), path);
-  if (policy.loading === "cli") throw new Error("NATIVE_SKILL_EXPORT_DISABLED: this station loads skills through the Skills CLI; use skills sync --selection-profile <id>");
+export function assertNativeExportAllowed(dataDir = getDataDirReadOnly()): void {
+  if (requiresCliSkillLoading(dataDir)) throw new Error("NATIVE_SKILL_EXPORT_DISABLED: this station loads skills through the Skills CLI; use skills sync --selection-profile <id>");
 }

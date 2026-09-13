@@ -11,9 +11,11 @@ export function readManagedSkillPolicy(dataDir = getDataDirReadOnly()): { loadin
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16_384) throw new Error();
     const policy: unknown = JSON.parse(readFileSync(path, "utf8"));
     if (!policy || typeof policy !== "object" || Array.isArray(policy)) throw new Error();
-    const value = policy as { loading?: unknown; profileId?: unknown };
-    if (value.loading !== undefined && typeof value.loading !== "string") throw new Error();
-    if (value.profileId !== undefined && (typeof value.profileId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.profileId))) throw new Error();
+    const value = policy as { version?: unknown; loading?: unknown; profileId?: unknown };
+    // Absence is the unmanaged compatibility case. An existing policy cannot
+    // silently demote the station through a typo or a future schema version.
+    if (value.loading !== "cli" || (value.version !== undefined && value.version !== 1)) throw new Error();
+    if (value.profileId !== undefined && (typeof value.profileId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.profileId) || value.profileId.includes(".."))) throw new Error();
     return value as { loading?: string; profileId?: string };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
