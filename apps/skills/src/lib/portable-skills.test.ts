@@ -357,6 +357,24 @@ kind: instruction
     });
   });
 
+  test.each(["failed", "pending"])("port excludes local %s dependency preparation state but preserves nested source", status => {
+    withDirs((home, sourceRoot) => {
+      const source = join(sourceRoot, "marker-example");
+      const marker = ".skills-dependency-preparation";
+      mkdirSync(join(source, marker), { recursive: true });
+      mkdirSync(join(source, "references", marker), { recursive: true });
+      writeFileSync(join(source, "SKILL.md"), "---\nname: marker-example\ndescription: Marker portability example.\nkind: instruction\n---\n");
+      const state = JSON.stringify({ version: 1, status });
+      writeFileSync(join(source, marker, "state.json"), state);
+      if (status === "pending") mkdirSync(join(source, marker, "active"));
+      writeFileSync(join(source, "references", marker, "state.json"), "authored nested reference\n");
+      const result = portPortableSkill(source, { rootDir: getPortableSkillsRoot({ homeDir: home }) });
+      expect(existsSync(join(result.path, marker))).toBe(false);
+      expect(readFileSync(join(result.path, "references", marker, "state.json"), "utf8")).toBe("authored nested reference\n");
+      expect(readFileSync(join(source, marker, "state.json"), "utf8")).toBe(state);
+    });
+  });
+
   test("drops build output only at the skill root, keeping nested build/dist content", () => {
     withDirs((home, sourceRoot) => {
       const source = join(sourceRoot, "layered-skill");
