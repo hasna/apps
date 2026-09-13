@@ -75,6 +75,12 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(proof["runtimeImageDigest"], RUNTIME)
         self.assertTrue(proof["buildInputsIdentical"])
         self.assertEqual(proof["priorApiLogSha256"], m.sha(self.log))
+    def test_github_job_log_utf8_bom_preserves_exact_original_log_hash(self):
+        # Direct Actions job logs can start with a UTF-8 BOM before timestamp 1.
+        self.log = b"\xef\xbb\xbf" + self.log
+        proof = self.verify()
+        self.assertEqual(proof["apiImageDigest"], DIGEST)
+        self.assertEqual(proof["priorApiLogSha256"], m.sha(self.log))
     def test_package_lock_or_unreviewed_controller_changes_refuse_before_github(self):
         for name in ["apps/skills/Dockerfile", "apps/skills/src/server/index.ts", "bun.lock", "package.json", "turbo.json", "tooling/ci/other.py", "AGENTS.md"]:
             self.changed = name + "\0"

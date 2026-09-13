@@ -94,7 +94,7 @@ def pushed_digest(log, push, source):
     # Job metadata timestamps have second precision; Docker lines include fractions.
     start, end = timestamp(push.get("started_at")), timestamp(push.get("completed_at"))
     require(0 <= end - start <= 1200, "PUSH_STEP_TIME_INVALID")
-    lines = re.sub(r"\x1b\[[0-9;]*m", "", log.decode("utf-8")).splitlines()
+    lines = re.sub(r"\x1b\[[0-9;]*m", "", log.decode("utf-8-sig")).splitlines()
     matches = []
     for line in lines:
         found = re.fullmatch(r"(\S+) " + re.escape(source) + r": digest: (sha256:[a-f0-9]{64}) size: ([1-9][0-9]*)", line)
