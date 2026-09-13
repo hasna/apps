@@ -181,7 +181,7 @@ jobs:
     environment: production
     timeout-minutes: 45
     outputs:
-      runtime_ecr_url: ${{ steps.m.outputs.runtime_ecr_url }}
+      runtime_configured: ${{ steps.m.outputs.runtime_configured }}
 
     defaults:
       run:
@@ -271,8 +271,8 @@ jobs:
       # task family, container, ECR repo, networking, health URL) is resolved
       # here from the deploy manifest, with an optional CI-variable override.
       # No infrastructure name is written literally anywhere in this repository.
-      # The DEPLOY_MANIFEST line below is the single tracked line that names
-      # where the manifest lives; everything else is read out of it.
+      # DEPLOY_MANIFEST names where the manifest lives; both deployment jobs
+      # resolve infrastructure from it rather than sharing masked identifiers.
       - name: Load deploy manifest
         id: m
         env:
@@ -336,7 +336,11 @@ jobs:
           # runtime image job never reuses the API repository by default.
           runtime_ecr_url="$(jq -r '.runtime_ecr_repository_url // empty' <<<"$M")"
           runtime_ecr_url="${runtime_ecr_url:-${VAR_RUNTIME_ECR_URL:-}}"
-          printf 'runtime_ecr_url=%s\n' "$runtime_ecr_url" >> "$GITHUB_OUTPUT"
+          # GitHub suppresses cross-job outputs containing masked account IDs.
+          # Share only readiness; the runtime job resolves its own repository.
+          runtime_configured=false
+          if [ -n "$runtime_ecr_url" ]; then runtime_configured=true; fi
+          printf 'runtime_configured=%s\n' "$runtime_configured" >> "$GITHUB_OUTPUT"
 
           # Only these non-secret runtime settings may replace existing task
           # environment. Unknown keys or non-string values fail before mutation.
@@ -501,7 +505,7 @@ jobs:
   runtime_image:
     name: build + scan + publish isolated runtime image
     needs: [gate, deploy]
-    if: ${{ needs.gate.outputs.proceed == 'true' && needs.deploy.outputs.runtime_ecr_url != '' && (github.event_name != 'workflow_dispatch' || inputs.publish_runtime_image) }}
+    if: ${{ needs.gate.outputs.proceed == 'true' && needs.deploy.outputs.runtime_configured == 'true' && (github.event_name != 'workflow_dispatch' || inputs.publish_runtime_image) }}
     runs-on: ubuntu-24.04-arm
     environment: production
     timeout-minutes: 30
@@ -573,6 +577,22 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gha-runtime-${{ env.APP }}-${{ github.run_id }}
 
+      - name: Resolve runtime image repository
+        id: runtime_repository
+        env:
+          DEPLOY_MANIFEST: ${{ vars.DEPLOY_MANIFEST || format('/hasna/deploy/{0}', env.APP) }}
+          VAR_RUNTIME_ECR_URL: ${{ vars.RUNTIME_ECR_REPOSITORY_URL }}
+        run: |
+          set -Eeuo pipefail
+          M="$(aws ssm get-parameter --name "$DEPLOY_MANIFEST" --query Parameter.Value --output text)"
+          runtime_ecr_url="$(jq -r '.runtime_ecr_repository_url // empty' <<<"$M")"
+          runtime_ecr_url="${runtime_ecr_url:-${VAR_RUNTIME_ECR_URL:-}}"
+          if [ -z "$runtime_ecr_url" ]; then
+            echo "::error::runtime image repository is no longer configured in the manifest or repository variable" >&2
+            exit 1
+          fi
+          printf 'runtime_ecr_url=%s\n' "$runtime_ecr_url" >> "$GITHUB_OUTPUT"
+
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
         with:
@@ -581,7 +601,7 @@ jobs:
       - name: Publish scanned runtime and record immutable digest
         id: publish
         env:
-          RUNTIME_ECR_URL: ${{ needs.deploy.outputs.runtime_ecr_url }}
+          RUNTIME_ECR_URL: ${{ steps.runtime_repository.outputs.runtime_ecr_url }}
         run: |
           set -Eeuo pipefail
           image="${RUNTIME_ECR_URL}:${SOURCE_SHA}"

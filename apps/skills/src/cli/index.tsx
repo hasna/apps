@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { writeCliOutput } from "./output.js";
 import React from "react";
 import { render } from "ink";
 import { Command } from "commander";
@@ -69,8 +70,8 @@ program
       process.exit(1);
     }
     if (!isTTY) {
-      console.log(JSON.stringify(loadBasicRegistry().map(getCompactSkillDiscovery)));
-      process.exit(0);
+      await writeCliOutput(JSON.stringify(loadBasicRegistry().map(getCompactSkillDiscovery)));
+      return;
     }
     render(<App />);
   });
