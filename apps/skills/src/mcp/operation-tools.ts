@@ -301,13 +301,17 @@ export function registerOperationTools(server: McpServer): void {
       files: z.array(z.object({ name: z.string(), base64: z.string().max(1_398_104), contentType: z.string().optional() })).max(10).optional().describe("Inline remote inputs, at most 1 MiB combined; use CLI or SDK for larger files"),
     },
   }, async ({ name, input, args, detail, maxCostCents, maxCredits, quoteReceipt, remote, target, idempotency_key, files }) => {
-    if (requiresCliSkillLoading()) {
+    let managed: boolean;
+    try { managed = requiresCliSkillLoading(); }
+    catch (error) { return selectedToolError(error); }
+    if (remote && target) return mcpError("CONFLICTING_EXECUTION_MODES", "Use remote for the configured server catalog and quote, or target for selected execution, not both.");
+    if (managed && !remote) {
       try {
         const { resolveSelectedRun, executeSelectedLocal } = await import("../lib/selected-run.js");
         const resolved = await resolveSelectedRun(name, selectedProfileId(), { projectDir: process.cwd() });
         if (resolved.kind === "instruction") return mcpError("INSTRUCTION_SKILL", "This selected skill contains instructions. Load it with skills load instead of running it.");
         if (files?.length) return mcpError("SELECTED_INPUT_REQUIRED", "Selected executions require their declared JSON input; use the CLI cloud execution input contract for files.");
-        if (target === "cloud" || remote) {
+        if (target === "cloud") {
           if (args?.length || quoteReceipt || maxCredits !== undefined || maxCostCents !== undefined) return mcpError("SELECTED_INPUT_REQUIRED", "The selected cloud execution contract accepts declared JSON input, not legacy run arguments or quote receipts.");
           const { CloudExecutionClient } = await import("../lib/cloud-executions.js");
           const client = await CloudExecutionClient.configured();

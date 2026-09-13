@@ -499,7 +499,11 @@ skills mcp --register all       # Register with all supported agents
 Use a named profile for each independently operated instance. A commercial Skills instance
 and an internal instance have separate credentials, accounts,
 credits and data. Selecting one does not change another profile or the fleet
-resolver's existing defaults.
+resolver's existing defaults. `run --remote` uses that instance's catalog and
+credit approval flow even on a managed station. It cannot be combined with
+`--target local` or `--target cloud`; without `--remote`, managed selection
+and execution defaults continue to apply. MCP `run_skill` with `remote: true`
+uses the same hosted approval flow and cannot also specify `target`.
 
 ```bash
 # Configure the commercial instance before signing in.
