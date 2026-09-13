@@ -38,14 +38,17 @@ Good OSS commands:
   run records (`src/cli/commands/runtime.ts`); they require no API origin
 - `runs status`, `exports download` — the remote-client run subcommands; they
   require API access
-- `list`/`ls`, `search`/`s`, `categories`, `tags` — the browse surface; the
-  default read path is folder UNION cloud. Whenever the shared ladder resolves a
-  credential (and therefore an authority),
-  `getBrowseRegistry()` (`src/cli/commands/list.ts`) merges the authenticated
-  remote registry into the local corpus through `mergeRemoteRegistry()`
-  (`src/lib/remote-registry.ts`); an unconfigured or auth-missing install keeps
-  the local corpus (fail closed). `--remote` makes the merge mandatory and
-  errors without a configured origin.
+- `list`/`ls`, `search`/`s`, `categories`, `tags` — the browse surface;
+  `getBrowseRegistry()` (`src/lib/read-access.ts`) shares the same authority
+  selection with MCP discovery. A configured API is authoritative: these
+  commands read only its remote registry, including with `--all` or `--remote`.
+  Local drafts and extension folders cannot shadow or join hosted metadata.
+  Local authoring discovery requires `HASNA_SKILLS_LOCAL=1` with no authority
+  or credential environment variables configured; that explicit local mode
+  reads the on-machine registry without HTTP. Configured authority or credential
+  environment variables outrank the local opt-in. Missing configuration without
+  the opt-in, authentication failures, and network failures fail closed; they
+  never fall back to local content. `--remote` requires a configured origin.
 - `push`, `pull` — send and fetch corpus skills to/from the configured Skills
   instance (`src/cli/commands/publish.ts`, `src/lib/pull.ts`); they require a
   configured origin
