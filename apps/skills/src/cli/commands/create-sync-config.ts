@@ -137,6 +137,7 @@ export function registerCreateSync(parent: Command) {
     .argument("<name>", "Skill name (e.g. my-tool)")
     .option("--category <category>", "Skill category", "Development Tools")
     .option("--description <description>", "Short description of what the skill does")
+    .option("--kind <kind>", "Skill class: executable or instruction", "executable")
     .option("--tags <tags>", "Comma-separated tags (e.g. api,testing,automation)")
     .option("--global", "Deprecated; custom skills are always global", false)
     .option("--json", "Output result as JSON", false)
@@ -194,20 +195,23 @@ export function registerCreateSync(parent: Command) {
     .action((names: string[], options) => handleSync(names, options));
 }
 
-function handleCreate(name: string, options: { category: string; description?: string; tags?: string; global: boolean; json: boolean }) {
+function handleCreate(name: string, options: { category: string; description?: string; tags?: string; kind: string; global: boolean; json: boolean }) {
   try {
+    if (options.kind !== "instruction" && options.kind !== "executable") {
+      throw new Error(`Invalid --kind '${options.kind}'. Use 'executable' or 'instruction'.`);
+    }
     const tags = options.tags?.split(",").map(tag => tag.trim()).filter(Boolean);
     const result = scaffoldPortableSkill(name, {
-      description: options.description, category: options.category, tags,
+      description: options.description, category: options.category, tags, kind: options.kind,
     });
     clearRegistryCache();
-    if (options.json) console.log(JSON.stringify({ created: result.created, name: result.name, path: result.path, category: result.manifest.category, tags: result.manifest.tags }));
+    if (options.json) console.log(JSON.stringify({ created: result.created, name: result.name, path: result.path, category: result.manifest.category, tags: result.manifest.tags, kind: result.manifest.kind }));
     else {
       console.log(chalk.green(`✓ Created custom skill '${result.name}' at ${result.path}`));
       console.log(chalk.dim(`  Category: ${result.manifest.category}`));
       console.log(chalk.dim(`  Tags: ${result.manifest.tags?.join(", ")}`));
-      console.log(`  ${chalk.cyan("Edit:")} ${join(result.path, "src", "index.ts")}`);
-      console.log(`  ${chalk.cyan("Run:")}  skills run ${result.name} --help`);
+      console.log(`  ${chalk.cyan("Edit:")} ${join(result.path, options.kind === "instruction" ? "SKILL.md" : "src/index.ts")}`);
+      console.log(`  ${chalk.cyan("Prepare:")} skills prepare ${result.name} --version <new-semver>`);
     }
   } catch (error) {
     const message = (error as Error).message;

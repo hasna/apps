@@ -20,6 +20,9 @@ import { createSkillsFetchHandler } from "../../server/app.js";
 import { MemorySkillsStore } from "../../server/store.js";
 import { hashApiKey } from "../../server/auth.js";
 import { PushSkillError, pushSkill } from "./publish.js";
+import { scaffoldPortableSkill, validatePortableSkillDirectory } from "../../lib/portable-skills.js";
+import { prepareSkill } from "../../lib/prepare-skill.js";
+import { pullSkills } from "../../lib/pull.js";
 
 const pushAuth = "test-push-token";
 const PRINCIPAL = { orgId: "org_push", orgSlug: "org-push", orgName: "Push Org", userId: "user_push", email: "push@example.com", apiKeyId: "key_push" };
@@ -105,6 +108,65 @@ function catalogueCorpus(slug: string, flavor: string): string {
 }
 
 describe("skills push", () => {
+  test("edited drafts require explicit preparation and round-trip exact versions, kinds and bytes through the API", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-author-roundtrip-"));
+    const pulled = mkdtempSync(join(tmpdir(), "skills-author-receiver-"));
+    try {
+      await withServer(async ({ baseUrl, requests }) => {
+        const client = new RemoteSkillsClient(pushAuth, baseUrl);
+        for (const kind of ["executable", "instruction"] as const) {
+          const name = `reviewed-${kind}`;
+          const created = scaffoldPortableSkill(name, { rootDir: root, kind });
+          const original = readFileSync(join(created.path, "skill.json"), "utf8");
+          const document = readFileSync(join(created.path, "SKILL.md"), "utf8") + "\nReviewed example: use this draft for release preparation.\n";
+          writeFileSync(join(created.path, "SKILL.md"), document);
+          const requestCount = requests.length;
+          try {
+            await pushSkill(name, { rootDir: root, client });
+            throw new Error("Expected stale draft refusal");
+          } catch (error) {
+            expect(error).toBeInstanceOf(PushSkillError);
+            expect((error as PushSkillError).detail?.join("\n")).toContain(`skills prepare ${name} --version`);
+          }
+          expect(requests.length).toBe(requestCount);
+          expect(readFileSync(join(created.path, "skill.json"), "utf8")).toBe(original);
+          const prepared = prepareSkill(name, { rootDir: root, version: "0.2.0" });
+          const exactManifest = readFileSync(join(created.path, "skill.json"), "utf8");
+          const pushed = await pushSkill(name, { rootDir: root, client });
+          expect(pushed).toMatchObject({ published: true, version: "0.2.0" });
+          expect(readFileSync(join(created.path, "skill.json"), "utf8")).toBe(exactManifest);
+          const received = await pullSkills({ names: [`${name}@0.2.0`], rootDir: pulled, client, signingKey: "" });
+          expect(received.results[0]).toMatchObject({ success: true, version: "0.2.0", kind, contentHash: pushed.sha256 });
+          expect(readFileSync(join(pulled, name, "SKILL.md"), "utf8")).toBe(document);
+          expect(readFileSync(join(pulled, name, "skill.json"), "utf8")).toBe(exactManifest);
+          expect(computeContentHash(join(pulled, name))).toBe(prepared.contentHash);
+          expect(validatePortableSkillDirectory(name, join(pulled, name)).valid).toBe(true);
+        }
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(pulled, { recursive: true, force: true });
+    }
+  });
+
+  test("fresh executable and instruction scaffolds retain author intent on the actual API", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-push-author-kind-"));
+    try {
+      await withServer(async ({ baseUrl }) => {
+        const client = new RemoteSkillsClient(pushAuth, baseUrl);
+        for (const kind of ["executable", "instruction"] as const) {
+          const name = `authored-${kind}`;
+          const created = scaffoldPortableSkill(name, { rootDir: root, kind });
+          const original = readFileSync(join(created.path, "skill.json"), "utf8");
+          await pushSkill(name, { rootDir: root, client });
+          const readback = await client.getSkillStatus(name);
+          expect(readback.status).toBe(200);
+          expect(readback.body).toMatchObject({ kind });
+          expect(readFileSync(join(created.path, "skill.json"), "utf8")).toBe(original);
+        }
+      });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("explicit catalogue-only authority permits an initial override and remains organization scoped", async () => {
     await withServer(async ({ baseUrl, store, requests }) => {
       const client = new RemoteSkillsClient(pushAuth, baseUrl);

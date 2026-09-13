@@ -332,6 +332,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills new <name>` | `scaffold` | Scaffold a portable skill under `~/.hasna/skills/installed/<name>` |
 | `skills port <path>` | `add` | Import an existing skill folder into the portable standard |
 | `skills create <name>` | | Scaffold a new custom skill directory |
+| `skills prepare <name> --version <semver>` | | Validate an edited draft and update only its manifest version/hash; `--dry-run` previews, `--kind` resolves legacy manifests without an explicit kind |
 | `skills sync --to claude` | | Disabled by design; use `skills mcp --register <agent|all>` |
 | `skills sync --from claude` | | Disabled by design; agent skill folders are not used |
 | `skills sync [names...] --check --for <agent> --source <path>` | `render` | Legacy native-folder mode only, without CLI loading or a selection profile: check the selected corpus and agent homes without writing. Unknown selections or drift exit nonzero. |
