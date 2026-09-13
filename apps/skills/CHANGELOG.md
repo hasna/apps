@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.3
+
+### Patch Changes
+
+- Honor explicit hosted `run --remote` and MCP `run_skill` with `remote: true` on managed stations, retaining the selected instance's quote and approval flow independently of selected-bundle loading defaults. Refuse conflicting explicit execution modes before making requests.
+- Persist the admitted remote run ID and status before polling or retrieving logs so interrupted CLI processes can resume status lookup using their local run ID.
+
 ## 0.6.2
 
 ### Patch Changes
