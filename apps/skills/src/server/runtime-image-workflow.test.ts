@@ -10,7 +10,27 @@ const workflow = Bun.YAML.parse(
     "utf8",
   ),
 ) as any;
+function resolveManifest(variables: Record<string, string>) {
+  const expression = workflow.env.DEPLOY_MANIFEST.replace(
+    /^\$\{\{\s*|\s*\}\}$/g, "",
+  );
+  return new Function("vars", `return String(${expression});`)(variables);
+}
 describe("isolated runtime publication and environment overrides", () => {
+  test("both deployment jobs inherit one manifest binding with repository-variable precedence", () => {
+    expect(workflow.env.DEPLOY_MANIFEST).toBeTypeOf("string");
+    const defaultManifest = ["", "hasna", "deploy", workflow.env.APP].join("/");
+    expect(resolveManifest({})).toBe(defaultManifest);
+    expect(resolveManifest({ DEPLOY_MANIFEST: "" })).toBe(defaultManifest);
+    expect(resolveManifest({ DEPLOY_MANIFEST: "/fixture/override" })).toBe("/fixture/override");
+    for (const [name, stepId] of [["deploy", "m"], ["runtime_image", "runtime_repository"]] as const) {
+      const job = workflow.jobs[name];
+      expect(job.env?.DEPLOY_MANIFEST).toBeUndefined();
+      const step = job.steps.find((candidate: any) => candidate.id === stepId);
+      expect(step.env.DEPLOY_MANIFEST).toBeUndefined();
+      expect(step.run).toContain('--name "$DEPLOY_MANIFEST"');
+    }
+  });
   test("masked registry identifiers do not suppress runtime publication", async () => {
     const root = mkdtempSync(join(tmpdir(), "skills-runtime-handoff-"));
     try {
@@ -36,7 +56,7 @@ printf '%s\\n' "$FIXTURE_MANIFEST"
           cwd: root,
           env: {
             PATH: `${root}:${process.env.PATH}`, HOME: root,
-            DEPLOY_MANIFEST: "/fixture/skills", GITHUB_OUTPUT: output,
+            DEPLOY_MANIFEST: resolveManifest({ DEPLOY_MANIFEST: "/fixture/skills" }), GITHUB_OUTPUT: output,
             FIXTURE_MANIFEST: JSON.stringify({ ...manifest, ...extra }),
             VAR_RUNTIME_ECR_URL: fallback,
           },
@@ -115,9 +135,6 @@ printf '%s\\n' "$FIXTURE_MANIFEST"
     expect(credentials).toBeGreaterThan(gate);
     expect(repository).toBeGreaterThan(credentials);
     expect(push).toBeGreaterThan(repository);
-    expect(steps[repository].env.DEPLOY_MANIFEST).toBe(
-      workflow.jobs.deploy.steps.find((s: any) => s.id === "m").env.DEPLOY_MANIFEST,
-    );
     expect(steps[repository].env.VAR_RUNTIME_ECR_URL).toBe(
       "${{ vars.RUNTIME_ECR_REPOSITORY_URL }}",
     );

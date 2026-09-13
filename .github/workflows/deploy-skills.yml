@@ -54,6 +54,8 @@ permissions:
 
 env:
   APP: skills
+  # Both deployment jobs inherit the same manifest authority and override.
+  DEPLOY_MANIFEST: ${{ vars.DEPLOY_MANIFEST || '/hasna/deploy/skills' }}
   AWS_REGION: us-east-1
   LOCAL_IMAGE: skills-deploy-candidate
   # The workflow whose successful conclusion is the ONLY automatic entry point
@@ -276,7 +278,6 @@ jobs:
       - name: Load deploy manifest
         id: m
         env:
-          DEPLOY_MANIFEST: ${{ vars.DEPLOY_MANIFEST || format('/hasna/deploy/{0}', env.APP) }}
           VAR_CLUSTER: ${{ vars.ECS_CLUSTER }}
           VAR_SERVICE: ${{ vars.ECS_SERVICE }}
           VAR_WEB_FAMILY: ${{ vars.WEB_TASK_FAMILY }}
@@ -580,7 +581,6 @@ jobs:
       - name: Resolve runtime image repository
         id: runtime_repository
         env:
-          DEPLOY_MANIFEST: ${{ vars.DEPLOY_MANIFEST || format('/hasna/deploy/{0}', env.APP) }}
           VAR_RUNTIME_ECR_URL: ${{ vars.RUNTIME_ECR_REPOSITORY_URL }}
         run: |
           set -Eeuo pipefail
