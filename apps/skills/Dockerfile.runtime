@@ -24,6 +24,8 @@ WORKDIR /opt/skills-runtime
 COPY --from=dependencies /opt/skills-runtime/node_modules ./node_modules
 COPY --from=build /source/supervisor.js ./supervisor.js
 COPY --from=guard /skills-runtime-guard ./guard
+# Verify the final dependency set can load the supervisor without fetching packages.
+RUN bun --no-install -e 'const runtime = await import("./supervisor.js"); if (typeof runtime.executeRuntimeWork !== "function" || typeof runtime.runRuntimeWorker !== "function") process.exit(1)'
 # Supervisor starts as root only to launch uid/gid65534. Its child receives no
 # transport token, service environment or task role. Root filesystem must be
 # read-only in the task definition, with an explicit writable /tmp volume.
