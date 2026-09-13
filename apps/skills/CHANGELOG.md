@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0
+
+### Minor Changes
+
+- Unify skill consumption through exact API profiles, verified immutable station caches, project and session locks, and Skills CLI context hooks for Claude and Codex. Shared profile writes use revision preconditions; station receipts report applied selections. Managed stations load selected bundles through the CLI and refuse native exports, with recoverable migration of existing skill directories.
+
+  Hosted documentation and sync now use shared versioned selections. Executable bundles retain the established SKILL.md, README.md, then CLAUDE.md documentation priority. Add a separate reviewed cloud execution API with durable idempotent admission, isolated execution, verified artifacts, and explicit deployment readiness. Loading context never authorizes execution.
+
+### Patch Changes
+
+- Declare HTTP 400 for invalid identifier inputs in administrative organization, user, entitlement, run, billing and audit operation contracts.
+- Reject malformed, nonpositive and overflowing remote run polling values before quoting or creating a run, instead of silently truncating them or using defaults. Bound polling milliseconds to 2147483647 so native timers cannot overflow into rapid requests.
+- Fix isolated cloud runner startup by loading the shared execution protocol constant without application schema dependencies, and verify supervisor imports in the final runtime image.
+
 ## 0.5.11
 
 ### Patch Changes
