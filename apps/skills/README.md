@@ -15,20 +15,35 @@ Requires [Bun](https://bun.sh/) 1.3+.
 
 ## Quick Start
 
-Configure a Skills API credential using `skills auth login`. The default authority
-is `https://api.hasna.com/skills`; versioned requests use `/skills/v1`.
-Use `skills setup --api-url https://skills.example.com` for your own server.
+The fleet authority is `https://api.hasna.com/skills`; versioned requests use
+`/skills/v1`. Obtain a workspace API key through your administrator's
+provisioning process and configure it using the [credential resolution](#credentials)
+below. Check the selected identity and
+available capabilities before syncing:
+
+```bash
+skills auth whoami --json
+skills capabilities --json
+```
+
+The default authority is `https://api.hasna.com/skills`; a full `/skills/v1`
+base is also accepted. For your own compatible server, select it with
+`skills setup --api-url https://skills.example.com`, then use `skills auth login`.
+Browser/device-code and email-code login are for compatible deployments; the
+fleet gateway has no interactive login service and does not issue keys that way.
 
 A workspace administrator creates a shared profile selecting published skills by
 exact version and SHA-256 digest. Consumers sync that profile into a verified
-Skills cache, then load instructions through the CLI:
+Skills cache, then load instructions through the CLI. Replace `default` with
+your assigned profile; these examples assume it selects `pdf-generate@0.5.2`:
 
 ```bash
 skills list --json
 skills profiles show default --json
 skills sync --selection-profile default --json
-skills load release-notes
-skills context 'Prepare release notes' --json
+skills install pdf-generate@0.5.2 --selection-profile default --json
+skills load pdf-generate@0.5.2 --selection-profile default
+skills context 'Use $pdf-generate to create a PDF' --selection-profile default --json
 
 # Preview agent configuration, then install hooks with recoverable backups.
 skills hook install --agent all --selection-profile default --json
@@ -39,10 +54,20 @@ skills migrate native --json
 skills migrate native --apply --json
 ```
 
+Restart the agent after applying the hooks. In Codex, review and grant normal
+trust to the installed hook definitions before starting a new session. Then
+request a selected skill in a prompt, for example `Use $pdf-generate to create
+a PDF`. The hooks supply instructions; executing the skill remains a separate
+explicit action.
+
 Hook installation enables CLI loading on the station, denies Claude's native
 Skill tool, and disables discovered Codex native skills. It preserves unrelated
-hooks and configuration. Use `--include-vendor` to include Codex system and
-cached plugin skills. Project-local skills require a project discovery audit. Native
+hooks and configuration. Add `--include-vendor` to `skills hook install` to
+include Codex system and cached plugin skills in the disable plan; vendor files
+remain intact. This covers the paths discovered when the plan was made. Project-local skills and
+newly installed plugins require another discovery audit. A third-party plugin
+can also inject instructions through its own hooks or startup behavior; review
+and disable that plugin separately when it conflicts with CLI-only loading. Native
 exports are refused while this policy is active. Archives preserve full skill
 directories; `--include-unmanaged` explicitly includes user-authored copies.
 Archive receipts and configuration backups live under the Skills data directory.
@@ -80,6 +105,25 @@ skills sync --selection-profile default --check --json
 skills station-state station-example --json
 ```
 
+With `--selection-profile`, `sync --check` checks the selected profile and cache
+without writing, and exits nonzero on drift. `sync --station` records a receipt
+for the named station; it is not a native-folder snapshot in this mode.
+`skills install --selection-profile default` without skill names also syncs the
+whole selection.
+
+After hook installation has enabled CLI loading, pull operations obey the same
+profile. `--all` refreshes its selected versions rather than the full catalog,
+and a named pull must belong to that profile:
+
+```bash
+skills pull --all --selection-profile default --json
+skills pull pdf-generate@0.5.2 --selection-profile default --json
+```
+
+Use `sync --selection-profile default --station station-example` when you also
+need a station receipt. Native-folder migration options belong to the older
+sync mode and cannot be mixed with profile sync.
+
 Selection documents contain a `selections` array. Each entry has `slug`,
 `version`, `bundleDigest` (`sha256:` followed by 64 lowercase hex characters),
 and optional `triggers` containing `keywords`, `paths`, or `always`. Profile
@@ -97,10 +141,20 @@ are explicitly changed or a new session starts.
 ## Executable skills
 
 ```bash
-skills run --target cloud --input '{"title":"Example","content":"Hello"}' pdf-generate@0.5.2
-skills executions status RUN_ID --json
+skills capabilities --json
+skills run --target cloud --selection-profile default \
+  --input '{"title":"Example","content":"Hello"}' \
+  --idempotency-key YOUR_UNIQUE_JOB_KEY --wait --json pdf-generate@0.5.2
+skills executions show RUN_ID --json
+skills executions logs RUN_ID --json
+skills executions artifacts RUN_ID --json
 skills executions download RUN_ID document.pdf --output ./document.pdf
 ```
+
+Use a new idempotency key for each new job and retain it with the exact input.
+If a response is lost or polling times out, reconcile the existing execution
+before submitting again. The selected profile must include this exact version,
+and the consumer needs `runs:write` as well as `skills:read`.
 
 Cloud execution is enabled only when the deployment configures a reviewed image
 and exact bundle allowlist. The first supported lane is `pdf-generate`; arbitrary
@@ -240,7 +294,19 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills show <name>` | | Show bundled or portable skill details |
 | `skills docs <name>` | | Show documentation (SKILL.md > README.md > CLAUDE.md) |
 | `skills requires <name>` | | Show env vars, system deps, and npm dependencies |
+| `skills profiles show <id>` / `skills profiles set <id> --file <json>` | | Read an exact shared selection or update it with writer authorization |
+| `skills install [name@version] --selection-profile <id>` | | Cache selected immutable bundles; without names, sync the profile |
+| `skills load <name> --selection-profile <id>` | | Load complete instructions from the verified selection |
+| `skills context <prompt> --selection-profile <id>` | | Resolve instructions matching the prompt and profile triggers |
+| `skills hook install --agent all --selection-profile <id>` | | Plan Claude/Codex integration; `--apply` installs it, then restart and trust the hooks |
+| `skills migrate native` | | Inventory native copies; `--apply` archives managed non-vendor copies |
+| `skills pull --all --selection-profile <id>` | | With CLI loading active, refresh the selected profile into the verified cache |
+| `skills sync --selection-profile <id> [--check] [--station <id>]` | | Sync or check the selected profile/cache; optionally record station state |
+| `skills station-state <id>` | | Read a station's sync receipt in the authenticated workspace |
 | `skills run <name> [args]` | | Execute a skill directly |
+| `skills run --target cloud --selection-profile <id> <name@version>` | | Submit an explicitly selected cloud execution |
+| `skills executions show <id>` / `logs <id>` / `artifacts <id>` | | Inspect a cloud execution and its output |
+| `skills executions download <id> <artifact> --output <path>` | | Download and verify one cloud execution artifact |
 | `skills runs status <run-id>` | | Poll a remote skill run |
 | `skills exports download <run-id>` | | Download completed remote artifacts |
 | `skills update` | | Refresh project pin metadata |
@@ -268,8 +334,8 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills create <name>` | | Scaffold a new custom skill directory |
 | `skills sync --to claude` | | Disabled by design; use `skills mcp --register <agent|all>` |
 | `skills sync --from claude` | | Disabled by design; agent skill folders are not used |
-| `skills sync [names...] --check --for <agent> --source <path>` | `render` | Read-only drift census for the selected corpus, skills and agent; explicit source overrides `SKILLS_SOURCE`, then the installed cache. Unknown selections or drift exit nonzero. Without selectors, check all existing agent homes. |
-| `skills sync --station <id>` | | Per-station snapshot mode: snapshot the installed skill homes into `resources/<station>/skills` with a v3 sync-manifest (dry-run by default; `--populate` writes) |
+| `skills sync [names...] --check --for <agent> --source <path>` | `render` | Legacy native-folder mode only, without CLI loading or a selection profile: check the selected corpus and agent homes without writing. Unknown selections or drift exit nonzero. |
+| `skills sync --station <id>` | | Without CLI loading or a selection profile, legacy snapshot mode writes a v3 sync-manifest under `resources/<station>/skills` only with `--populate`; use explicit `--selection-profile` for API station receipts |
 | `skills hydrate --station <id>` | | Restore the canonical corpus cache from a reviewed per-station snapshot (dry-run by default; `--apply` writes) |
 | `skills validate <name>` | | Check a skill's directory structure |
 | `skills schedule add <skill> <cron>` | | Set up recurring skill execution |

@@ -15,7 +15,7 @@ describe("README versioned cloud onboarding", () => {
       "Cloud execution is enabled only",
       "arbitrary\nuploaded code is not admitted",
       "skills auth login",
-      "skills executions status RUN_ID --json",
+      "skills executions show RUN_ID --json",
       "skills executions download RUN_ID document.pdf --output ./document.pdf",
     ]) {
       expect(readme).toContain(phrase);
