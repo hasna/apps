@@ -25,7 +25,7 @@ function objectHashes(path: string): string[] {
   if (!existsSync(path)) return [];
   return readdirSync(path, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? objectHashes(join(path, entry.name)) : entry.name.endsWith(".tar.gz") ? [createHash("sha256").update(readFileSync(join(path, entry.name))).digest("hex")] : []).sort();
 }
-async function fixture() {
+async function fixture(documentSuffix = "") {
   const root = mkdtempSync(join(scratch, "case-")), database = join(root, "server.sqlite"), token = randomUUID();
   const store = new SqliteSkillsStore(database), governanceStore = new SqliteGovernanceStore(database);
   const principal = publicPrincipal({ orgId: "workspace_e2e", orgSlug: "e2e", userId: "actor_e2e", apiKeyId: "key_e2e" });
@@ -33,7 +33,7 @@ async function fixture() {
   const versions = [];
   let previous: string | undefined;
   for (const version of ["1.0.0", "2.0.0"]) {
-    const source = join(root, `source-${version}`), skillMd = `---\nname: review-code\ndescription: Review changed code\nkind: instruction\n---\nPublished ${version} review instructions.\n`;
+    const source = join(root, `source-${version}`), skillMd = `---\nname: review-code\ndescription: Review changed code\nkind: instruction\n---\nPublished ${version} review instructions.\n${documentSuffix}`;
     put(join(source, "SKILL.md"), skillMd); put(join(source, "references", "example.txt"), `asset-${version}`);
     put(join(source, "package.json"), JSON.stringify({ name: "review-code", version, skills: { kind: "instruction" } }));
     const bundle = packSkillBundle(source);
@@ -51,8 +51,11 @@ async function fixture() {
     const home = join(root, id, "home"), data = join(home, ".hasna", "skills"), project = join(root, id, "project");
     const env = { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, USERPROFILE: home, HASNA_HOME: join(home, ".hasna"), HASNA_SKILLS_DIR: data, HASNA_SKILLS_API_KEY: token, HASNA_SKILLS_API_URL: origin, HASNA_STATION: id, NO_COLOR: "1", TERM: "dumb", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", TMPDIR: join(root, id, "tmp") };
     for (const path of [home, data, project, env.TMPDIR]) mkdirSync(path, { recursive: true });
-    async function run(args: string[], options: { stdin?: unknown; env?: Record<string, string>; cwd?: string; shellCommand?: string } = {}) {
-      const child = Bun.spawn(options.shellCommand ? ["/bin/sh", "-c", options.shellCommand] : [process.execPath, "--no-env-file", binary, ...args], { cwd: options.cwd ?? project, env: { ...env, ...options.env }, stdin: options.stdin === undefined ? "ignore" : new Blob([JSON.stringify(options.stdin)]), stdout: "pipe", stderr: "pipe" });
+    async function run(args: string[], options: { stdin?: unknown; env?: Record<string, string>; cwd?: string; shellCommand?: string; slowPipe?: boolean } = {}) {
+      const command = [process.execPath, "--no-env-file", binary, ...args];
+      // A shell creates a kernel pipe, unlike Bun.spawn's socket-backed capture.
+      // Delay its reader to exercise backpressure before the command returns.
+      const child = Bun.spawn(options.shellCommand ? ["/bin/sh", "-c", options.shellCommand] : options.slowPipe ? ["bash", "-o", "pipefail", "-c", '"$@" | { sleep 0.2; cat; }', "skills-pipe", ...command] : command, { cwd: options.cwd ?? project, env: { ...env, ...options.env }, stdin: options.stdin === undefined ? "ignore" : new Blob([JSON.stringify(options.stdin)]), stdout: "pipe", stderr: "pipe" });
       const timer = setTimeout(() => child.kill("SIGKILL"), 12_000);
       try { const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]); return { stdout, stderr, exitCode }; }
       finally { clearTimeout(timer); }
@@ -67,8 +70,58 @@ async function fixture() {
     }
     return { home, data, project, env, run, ok, install, hook };
   }
-  return { root, store, versions, requests, a: station("station-a"), b: station("station-b"), close: async () => { server.stop(true); await handler?.close(); await governanceStore.close(); await store.close(); } };
+  return { root, store, principal, versions, requests, a: station("station-a"), b: station("station-b"), close: async () => { server.stop(true); await handler?.close(); await governanceStore.close(); await store.close(); } };
 }
+
+test("built CLI flushes a complete large skill document through a pipe", async () => {
+  const f = await fixture("Unicode instructions: căutare 🧭\n".repeat(4000));
+  try {
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    const args = ["load", "review-code@1.0.0", "--selection-profile", "engineering"];
+    const raw = await f.a.run(args, { slowPipe: true });
+    expect(raw.exitCode).toBe(0); expect(raw.stderr).toBe("");
+    expect(Buffer.byteLength(raw.stdout)).toBe(Buffer.byteLength(f.versions[0]!.skillMd) + 1);
+    expect(raw.stdout).toBe(`${f.versions[0]!.skillMd}\n`);
+    const loaded = await f.a.ok([...args, "--json"], { slowPipe: true });
+    expect(loaded.content).toBe(f.versions[0]!.skillMd);
+  } finally { await f.close(); }
+});
+
+test("built CLI flushes large profile, sync and station receipts through pipes", async () => {
+  const f = await fixture();
+  try {
+    const selections = [];
+    for (let i = 0; i < 120; i++) {
+      const slug = `large-profile-skill-${i}`, source = join(f.root, slug);
+      const skillMd = `---\nname: ${slug}\ndescription: Large profile fixture\n---\nInstructions for ${slug}.\n`;
+      put(join(source, "SKILL.md"), skillMd);
+      put(join(source, "package.json"), JSON.stringify({ name: slug, version: "1.0.0" }));
+      const bundle = packSkillBundle(source);
+      await f.store.publishSkill({ principal: f.principal, slug, displayName: slug, description: "Large profile fixture", category: "Development Tools", tags: [], source: "custom", kind: "instruction", version: "1.0.0", skillMd, bundle: { sha256: bundle.sha256, byteSize: bundle.bytes.length, contentType: "application/gzip", storageKind: "db", bytes: bundle.bytes } });
+      selections.push({ slug, version: "1.0.0", bundleDigest: `sha256:${bundle.sha256}`, triggers: { keywords: Array.from({ length: 12 }, (_, j) => `fixture-keyword-${i}-${j}`) } });
+    }
+    const file = join(f.root, "large-profile.json"); put(file, JSON.stringify({ selections }));
+    selections.sort((a, b) => a.slug.localeCompare(b.slug));
+    const created = await f.a.run(["profiles", "set", "engineering", "--file", file, "--json"], { slowPipe: true });
+    expect(created.exitCode).toBe(0); expect(created.stderr).toBe("");
+    const synced = await f.a.run(["sync", "--selection-profile", "engineering", "--json"], { slowPipe: true });
+    expect(synced.exitCode).toBe(0); expect(synced.stderr).toBe("");
+    expect(Buffer.byteLength(synced.stdout)).toBeGreaterThan(128 * 1024);
+    const receipt = JSON.parse(synced.stdout);
+    expect(receipt.profile.selections).toHaveLength(selections.length);
+    expect(receipt.receipt.profile).toEqual(receipt.profile);
+    expect(receipt.stationReported).toBe(true);
+    const checked = await f.a.ok(["sync", "--selection-profile", "engineering", "--check", "--json"], { slowPipe: true });
+    expect(checked.changed).toBe(false); expect(checked.downloaded).toBe(0);
+    expect(checked.profile).toEqual(receipt.profile);
+    const shown = await f.a.ok(["profiles", "show", "engineering", "--json"], { slowPipe: true });
+    expect(shown.selections).toEqual(selections);
+    expect(JSON.parse(created.stdout).selections).toEqual(selections);
+    const state = await f.a.ok(["station-state", "station-a", "--json"], { slowPipe: true });
+    expect(state.profileRevision).toBe(receipt.profile.profileRevision);
+    expect(state.selections).toHaveLength(selections.length);
+  } finally { await f.close(); }
+});
 
 test("built CLI performs profile CAS/rollback, two-station sync, pinned hook restore and subagent inheritance over HTTP", async () => {
   const f = await fixture();
