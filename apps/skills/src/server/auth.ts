@@ -30,6 +30,25 @@ export function publicPrincipal(partial: Partial<ApiPrincipal> = {}): ApiPrincip
     userId: partial.userId || "user_dev",
     email: partial.email || "dev@example.com",
     role: partial.role || "owner",
-    scopes: partial.scopes || ["skills:read", "runs:write"],
+    // This helper provisions the administrative bootstrap principal. Explicit
+    // narrow scopes, even for owners, are never expanded by authorization.
+    scopes: partial.scopes ?? ["*"],
   };
+}
+
+/** Scope checks apply to the key, independently of its user's workspace role. */
+export function permitsSkillsRoute(principal: ApiPrincipal, method: string, resource: string): boolean {
+  const scopes = new Set(principal.scopes);
+  if (scopes.has("*")) return true;
+  const read = method === "GET" || method === "HEAD";
+  if (resource === "capabilities" && read) return true;
+  let allowed: string[];
+  if (resource === "runs" || resource === "executions") {
+    allowed = read ? ["runs:read", "runs:*", "skills:read", "skills:*"] : ["runs:write", "runs:*"];
+  } else if (resource === "stations") {
+    allowed = read ? ["stations:read", "stations:*", "skills:read", "skills:*"] : ["stations:write", "stations:*", "skills:*"];
+  } else if (["skills", "pins", "tags", "profiles", "capabilities"].includes(resource)) {
+    allowed = read ? ["skills:read", "skills:*"] : ["skills:write", "skills:publish", "skills:*"];
+  } else return true; // Unknown resources retain the router's 404 contract.
+  return allowed.some(scope => scopes.has(scope));
 }

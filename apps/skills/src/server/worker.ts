@@ -54,7 +54,7 @@ Environment:
   // server on one: it claims runs out of a queue nobody else can see, so the API's runs
   // stay queued forever with nothing logged anywhere.
   assertDurableStore(store, config);
-  const storage = new ArtifactStorage({ bucket: config.artifactBucket, prefix: config.artifactPrefix });
+  const storage = new ArtifactStorage({ bucket: config.artifactBucket, prefix: config.artifactPrefix, runPrefix: config.runArtifactPrefix });
   // Name the database for the same reason the server does. An API container and a
   // worker container that each defaulted to their own local SQLite file would otherwise
   // present as a queue that never drains, with no error on either side; two different

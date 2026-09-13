@@ -10,6 +10,8 @@ import { loadConfig, saveConfig, unsetConfig, getConfigPath } from "../../lib/co
 import { readStoredApiUrl, saveApiUrl } from "../../lib/auth-store.js";
 import { scaffoldPortableSkill } from "../../lib/portable-skills.js";
 import { clearRegistryCache } from "../../lib/registry.js";
+import { handleProfileSync } from "./profile-sync.js";
+import { requiresCliSkillLoading } from "../../lib/managed-policy.js";
 import {
   resolveSyncAgents,
   resolveSyncCorpus,
@@ -148,6 +150,9 @@ export function registerCreateSync(parent: Command) {
   parent
     .command("sync")
     .alias("render")
+    .option("--selection-profile <id>", "Consume the exact versions selected by an API profile")
+    .option("--profile <id>", "Selection profile (alias for --selection-profile; use before sync for credential profile)")
+    .option("--project", "Record exact selected versions in this project's lockfile", false)
     .argument("[names...]", "Skills to sync (default: every skill in this machine's corpus)")
     .option("--for <agent>", `Target one agent (${SYNC_AGENTS.join(", ")}, or all)`, "all")
     .option("--all", "Sync every corpus skill (the default)", false)
@@ -185,7 +190,7 @@ export function registerCreateSync(parent: Command) {
     .option("--populate", "Write the per-station snapshot (station mode; the default is dry-run)", false)
     .option("--repo-root <path>", "Station snapshot destination repo root (default: cwd)")
     .option("--homes-root <dir>", "Build the station snapshot from a staged mirror of the skill homes instead of this machine's $HOME")
-    .description("Write corpus skills into each coding agent's global skills folder, per-tool adapted; with --station, snapshot the homes into a reviewed snapshot repo instead")
+    .description("Sync an API selection profile into the Skills cache; native migration flags remain available for older installations")
     .action((names: string[], options) => handleSync(names, options));
 }
 
@@ -211,10 +216,20 @@ function handleCreate(name: string, options: { category: string; description?: s
   }
 }
 
-function handleSync(
+async function handleSync(
   names: string[],
-  options: { for: string; all: boolean; source?: string; dryRun: boolean; force: boolean; check: boolean; adopt: boolean; prune: boolean; apply: boolean; json: boolean; station?: string; populate: boolean; repoRoot?: string; homesRoot?: string },
+  options: { for: string; all: boolean; source?: string; dryRun: boolean; force: boolean; check: boolean; adopt: boolean; prune: boolean; apply: boolean; json: boolean; station?: string; populate: boolean; repoRoot?: string; homesRoot?: string; selectionProfile?: string; profile?: string; project?: boolean },
 ) {
+  const profileSync = options.selectionProfile || options.profile || options.project || requiresCliSkillLoading() ||
+    (!names.length && !options.source && !options.adopt && !options.prune && !options.station && !options.all && !options.dryRun && !options.force && options.for === "all" && !options.check);
+  if (profileSync) {
+    if (names.length || options.source || options.adopt || options.prune || options.force || options.populate || options.repoRoot || options.homesRoot || options.for !== "all") {
+      const message = "Profile sync cannot be combined with native-folder migration options";
+      console.error(message); process.exitCode = 1; return;
+    }
+    await handleProfileSync({ ...options, check: options.check || options.dryRun });
+    return;
+  }
   if (options.station) {
     handleStationSnapshot(names, options);
     return;

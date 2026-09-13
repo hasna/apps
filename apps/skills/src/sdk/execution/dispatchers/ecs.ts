@@ -89,6 +89,10 @@ export interface EcsDispatcherOptions {
   /** Claim identity; defaults to "dispatcher". */
   workerId?: string;
   now?: () => Date;
+  /** Trusted per-attempt supervisor transport. Must be deterministic for the frozen
+   * admission: a replay keeps the identical ECS clientToken and request. Never
+   * inherited by the skill process. */
+  supervisorEnvironment?: (admission: FrozenAdmission, attempt: AttemptRecord) => { name: string; value: string }[];
 }
 
 /** Terminal ECS task statuses, per the ECS task lifecycle. */
@@ -138,6 +142,7 @@ export class EcsDispatcher implements Dispatcher {
   private readonly receipts: ReceiptService;
   private readonly workerId: string;
   private readonly now: () => Date;
+  private readonly supervisorEnvironment: NonNullable<EcsDispatcherOptions["supervisorEnvironment"]>;
 
   constructor(
     private readonly config: EcsDispatcherConfig,
@@ -149,6 +154,7 @@ export class EcsDispatcher implements Dispatcher {
     this.receipts = options.receipts ?? createReceiptService(options.store);
     this.workerId = options.workerId ?? "dispatcher";
     this.now = options.now ?? (() => new Date());
+    this.supervisorEnvironment = options.supervisorEnvironment ?? (() => []);
   }
 
   /** sdk Dispatcher surface: submit an ADMITTED run (execution domain) to the launch machinery. */
@@ -330,6 +336,7 @@ export class EcsDispatcher implements Dispatcher {
       subnets: this.config.subnets,
       securityGroups: this.config.securityGroups,
       environment: [
+        ...this.supervisorEnvironment(admission, attempt),
         { name: "SKILLS_RUN_ID", value: admission.runId },
         { name: "SKILLS_ATTEMPT_ID", value: attempt.attemptId },
         { name: "SKILLS_BUNDLE_DIGEST", value: admission.bundleDigest },

@@ -6,7 +6,9 @@ import { GOVERNANCE_ERROR_CODES, GovernanceError } from "../sdk/governance.js";
 import { createGovernanceStore, type GovernanceStore } from "../sdk/governance-store.js";
 import { ArtifactStorage } from "./artifact-storage.js";
 import { seedBundledCorpus } from "./seed-bundled.js";
-import { authenticateRequest, publicPrincipal } from "./auth.js";
+import { authenticateRequest, publicPrincipal, permitsSkillsRoute } from "./auth.js";
+import { handleProfileApi } from "./profile-api.js";
+import { createRuntimeService, handleRuntimeApiRequest, handleRuntimeWorkerRequest, type RuntimeService } from "./runtime-api.js";
 import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
 import { resolveDatabaseTarget } from "./database-url.js";
 import { executeRun } from "./handlers.js";
@@ -45,7 +47,11 @@ export interface SkillsServerOptions {
   store?: SkillsProductStore;
   /** Lifecycle ledger and ceiling reads for governance surfaces (cancellation). Defaults to the store's database. */
   governanceStore?: GovernanceStore;
+  /** Inject a configured cloud runtime, or null to explicitly disable cloud execution. */
+  runtime?: RuntimeService | null;
 }
+
+export type SkillsFetchHandler = ((request: Request) => Promise<Response>) & { close(): Promise<void> };
 
 /**
  * Refuse to serve traffic from storage that will not survive a restart.
@@ -78,7 +84,7 @@ export function assertDurableTarget(
   );
 }
 
-export async function createSkillsFetchHandler(options: SkillsServerOptions = {}): Promise<(request: Request) => Promise<Response>> {
+export async function createSkillsFetchHandler(options: SkillsServerOptions = {}): Promise<SkillsFetchHandler> {
   const config = { ...resolveServerConfig(), ...options.config };
   // Refuse before opening anything. Resolving the target is pure, so a configuration we
   // are going to reject never gets as far as creating a database file or a connection
@@ -97,7 +103,9 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
   const artifactStorage = options.artifactStorage ?? new ArtifactStorage({
     bucket: config.artifactBucket,
     prefix: config.artifactPrefix,
+    runPrefix: config.runArtifactPrefix,
   });
+  const runtime = options.runtime !== undefined ? options.runtime : await createRuntimeService({ databaseUrl: config.databaseUrl, productStore: store, artifacts: artifactStorage });
   // Seed the registry from the bundled corpus once per package version (hasna/apps#1630).
   // Only on a real boot with a durable store and a bootstrap key: injected test stores skip it.
   if (!options.store && config.bootstrapApiKey && config.seedBundledCorpus) {
@@ -105,7 +113,7 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
       .catch((error) => console.error(`skills: bundled corpus seed failed: ${(error as Error).message}`));
   }
 
-  return async function fetch(request: Request): Promise<Response> {
+  const fetch = async function fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     // API-FIRST aliases delegate to the existing handlers and credential gate.
     // The fleet gateway strips only /skills; standalone /api routes stay valid.
@@ -122,6 +130,8 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
     const segments = pathSegments(url.pathname);
 
     try {
+      const callback = await handleRuntimeWorkerRequest(request, runtime);
+      if (callback) return callback;
       if (request.method === "GET" && url.pathname === "/health") {
         return json({ ok: true, service: "skills", time: new Date().toISOString() });
       }
@@ -141,6 +151,15 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
       if (url.pathname.startsWith("/api/")) {
         const principal = await authenticateRequest(store, request);
         if (!principal) return json({ error: "authentication required", code: "AUTH_REQUIRED" }, { status: 401 });
+
+        const execution = await handleRuntimeApiRequest(request, principal, runtime);
+        if (execution) return execution;
+
+        if (request.method === "GET" && url.pathname === "/api/v1/capabilities") {
+          const response = await handleProfileApi(store, principal, request, ["capabilities"], config);
+          const payload = await response!.json() as Record<string, any>;
+          return json({ ...payload, cloudExecution: Boolean(runtime), capabilities: [...payload.capabilities, ...(runtime ? ["skills.cloud-execution"] : [])] });
+        }
 
         if (request.method === "GET" && url.pathname === "/api/auth/whoami") {
           return json(identityPayload(principal));
@@ -190,6 +209,14 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
       return json({ error: "internal server error", detail: (error as Error).message }, { status: 500 });
     }
   };
+  let closed = false;
+  return Object.assign(fetch, { async close() {
+    if (closed) return;
+    closed = true;
+    if (options.runtime === undefined) await runtime?.close?.();
+    if (!options.governanceStore) await governanceStore.close?.();
+    if (!options.store) await store.close?.();
+  } });
 }
 
 export async function startSkillsServer(options: SkillsServerOptions = {}): Promise<Bun.Server<undefined>> {
@@ -241,6 +268,12 @@ async function handleApiV1(
   if (parts.some(segmentEscapesPath)) {
     return json({ error: "invalid path segment", code: "INVALID_PATH" }, { status: 400 });
   }
+
+  if (!permitsSkillsRoute(principal, request.method, resource ?? "")) {
+    return json({error:"The API key does not allow this operation",code:"INSUFFICIENT_SCOPE"}, {status:403});
+  }
+  const profileResponse = await handleProfileApi(store, principal, request, parts, config);
+  if (profileResponse) return profileResponse;
 
   if (resource === "skills") {
     if (request.method === "GET" && !id) {

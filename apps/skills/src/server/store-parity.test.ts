@@ -187,7 +187,7 @@ for (const backend of backends) {
         const first = await fixture.store.authenticateApiKeyHash(hash);
         const second = await fixture.store.authenticateApiKeyHash(hash);
         expect(second).toEqual(first);
-        expect(first).toMatchObject({ orgId: "org_a", scopes: ["skills:read", "runs:write"] });
+        expect(first).toMatchObject({ orgId: "org_a", scopes: ["*"] });
       } finally {
         await fixture.close();
       }

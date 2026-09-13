@@ -510,3 +510,9 @@ export { RemotePrivatePublicationsClient, PrivatePublicationError, PRIVATE_PUBLI
   type PrivatePublicationDeclaration, type PrivatePublicationView, type PrivatePublicationState, type PrivatePublishingCapability } from "./lib/remote-private-publications.js";
 export { preparePrivatePublication, readPrivatePublicationRecovery, continuePrivatePublication, inspectPrivatePublication,
   type PrivatePublicationRecovery, type PrivatePublicationResult } from "./lib/private-publication-recovery.js";
+
+export { HttpProfileClient, createProfileClient, type ProfileClient } from "./lib/profile-client.js";
+export type { SkillSelection, SkillProfile, ResolvedSkillSelection, ResolvedSkillProfile, StationSkillStateInput, StationSkillState } from "./types/skill-selection.js";
+export { buildSkillContext } from "./lib/skill-context.js";
+export { syncSelectionProfile } from "./lib/selection-resolver.js";
+export { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills } from "./lib/agent-integration.js";

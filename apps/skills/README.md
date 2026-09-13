@@ -15,69 +15,112 @@ Requires [Bun](https://bun.sh/) 1.3+.
 
 ## Quick Start
 
-```bash
-# Browse skills interactively
-skills
+Configure a Skills API credential using `skills auth login`. The default authority
+is `https://api.hasna.com/skills`; versioned requests use `/skills/v1`.
+Use `skills setup --api-url https://skills.example.com` for your own server.
 
-# Sign in. With a credential and no URL, the CLI talks to the fleet gateway;
-# point it at your own instance first if you run one.
-skills setup --api-url https://skills.example.com   # only for your own instance
-skills auth login --api-key "$HASNA_SKILLS_API_KEY"
-
-# With no credential and no URL, skills simply run on this machine
-skills list
-
-# Optionally pin a skill preference in this project
-skills pin logo-design
-
-# Register the Skills MCP server with every supported agent
-skills setup agents
-
-# See what a skill needs
-skills info logo-design
-
-# Server-owned (premium) skills run through the configured Skills API
-skills run <server-owned-skill> --brief "minimal geometric owl mark"
-
-# Every other skill runs on this machine by default, even when an API is
-# configured; local skills may use your own provider keys when documented
-skills requires brand-style-guide
-OPENAI_API_KEY=... skills run brand-style-guide ./brand-notes.md
-```
-
-## Server-Side Runtime Skills
-
-Premium skills run on the server. A skill is premium — server-owned — when its
-published contract carries the server-owned marker (`skills.runtime: "hosted"`
-or `skills.source: "remote" | "private-hosted"` in the skill's `package.json`).
-The CLI and MCP server submit server-owned skills to the configured Skills API,
-create local run metadata, and then expose status and artifact commands. They
-do not fall back to bundled local execution when auth is missing or the server
-runtime is unavailable.
-
-Routing is credential-driven and local is the default: a run is sent to the API
-only when a credential resolves (see **Credentials** below) and the skill carries
-the server-owned marker. Every other skill runs on this machine, whether or not
-a credential exists. No skill in the OSS catalog is server-owned today; the
-marker arrives with skills synced from a Skills API deployment. A server-owned
-skill run without a credential fails closed with an error naming the missing
-setup — it never silently runs locally.
+A workspace administrator creates a shared profile selecting published skills by
+exact version and SHA-256 digest. Consumers sync that profile into a verified
+Skills cache, then load instructions through the CLI:
 
 ```bash
-skills auth login --api-key "$HASNA_SKILLS_API_KEY"
-skills run <server-owned-skill> --brief "minimal geometric owl mark"
-skills runs status <run-id>
-skills exports download <run-id>
+skills list --json
+skills profiles show default --json
+skills sync --selection-profile default --json
+skills load release-notes
+skills context 'Prepare release notes' --json
+
+# Preview agent configuration, then install hooks with recoverable backups.
+skills hook install --agent all --selection-profile default --json
+skills hook install --agent all --selection-profile default --apply --json
+
+# Inventory native copies, then archive managed copies outside agent discovery.
+skills migrate native --json
+skills migrate native --apply --json
 ```
 
-Browser/device-code and email-code login commands are retained for compatible
-deployments. A Skills deployment can bootstrap with a provisioned API key via
-`skills auth login --api-key`.
+Hook installation enables CLI loading on the station, denies Claude's native
+Skill tool, and disables discovered Codex native skills. It preserves unrelated
+hooks and configuration. Use `--include-vendor` to include Codex system and
+cached plugin skills. Project-local skills require a project discovery audit. Native
+exports are refused while this policy is active. Archives preserve full skill
+directories; `--include-unmanaged` explicitly includes user-authored copies.
+Archive receipts and configuration backups live under the Skills data directory.
 
-`HASNA_SKILLS_API_KEY` is the Skills API credential. It is not a provider
-credential. Provider keys such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or
-`GEMINI_API_KEY` remain supported only for free/local OSS skills whose
-requirements explicitly document local provider use.
+If your home `.claude` or `.codex` directory intentionally links to another
+directory within your home, add `--allow-root-aliases` to hook installation and
+native migration. The plan records and rechecks the exact link and target;
+links inside skill contents or configuration files remain refused.
+
+At session start, the hook authenticates and refreshes the profile. Prompt hooks
+select complete skill instructions from that verified cache using explicit
+`$skill` references, profile keywords, paths and always-required selections.
+A session retains its selected versions; compaction restores loaded instructions,
+and subagents inherit the parent's selection. Instructions that exceed the
+context budget produce an explicit `skills load` command. A hook never executes
+a skill. Cached use is explicit and expires after 24 hours; authentication
+failures do not silently switch to a local catalog.
+
+## Profiles, station sync and rollback
+
+```bash
+# A writer creates a profile from a JSON selection document.
+skills profiles set default --file selections.json --json
+skills profiles show default --save profile-before.json --json
+
+# Update only the revision you reviewed. Restoring a saved document rolls back
+# the selection while producing a new profile revision.
+skills profiles set default --file profile-next.json --if-match REVISION --json
+skills profiles set default --file profile-before.json --if-match NEW_REVISION --json
+
+# Use the same profile on another station; record exact project selections.
+skills sync --selection-profile default --station station-example --json
+skills sync --selection-profile default --project --json
+skills sync --selection-profile default --check --json
+skills station-state station-example --json
+```
+
+Selection documents contain a `selections` array. Each entry has `slug`,
+`version`, `bundleDigest` (`sha256:` followed by 64 lowercase hex characters),
+and optional `triggers` containing `keywords`, `paths`, or `always`. Profile
+writes use compare-and-swap revisions. Station receipts belong to the workspace,
+user and stable station ID, so rotating a key does not create a new station.
+Consumers need `skills:read` and `stations:write`; profile publishers need
+`skills:write`. Key scopes apply even to workspace owners.
+
+`--selection-profile` chooses the shared skill selection. The top-level
+`--profile` option chooses an isolated credential file; these are separate
+settings. `HASNA_SKILLS_SELECTION_PROFILE` overrides the installed selection
+profile. A project lock and an existing session keep exact versions until they
+are explicitly changed or a new session starts.
+
+## Executable skills
+
+```bash
+skills run --target cloud --input '{"title":"Example","content":"Hello"}' pdf-generate@0.5.2
+skills executions status RUN_ID --json
+skills executions download RUN_ID document.pdf --output ./document.pdf
+```
+
+Cloud execution is enabled only when the deployment configures a reviewed image
+and exact bundle allowlist. The first supported lane is `pdf-generate`; arbitrary
+uploaded code is not admitted. Runs capture version, bundle digest, input digest,
+runtime image digest, limits and policy. The cloud worker runs in a separate
+Fargate task; the skill process has no API/provider credentials, no network, a
+read-only root and bounded temporary storage, execution time and output.
+`GET /skills/v1/capabilities` reports whether this deployment has cloud execution
+configured. Authorization and runtime availability are checked separately.
+
+On a managed station, local execution also resolves the selected immutable
+bundle. Self-contained local executables run with explicit environment references
+and bounded time/output; declarations requiring isolation or dependency
+preparation are refused with cloud guidance. Local execution has the station
+user's filesystem privileges. Instruction skills use `skills load`.
+
+Browser/device-code login remains available for compatible custom deployments.
+The fleet gateway uses provisioned API keys. `HASNA_SKILLS_API_KEY` is a Skills
+API credential, not a provider key. Provider keys such as `OPENAI_API_KEY`
+are supplied only to local skills that explicitly declare them.
 
 ## Credentials
 
@@ -127,8 +170,7 @@ customer-owned instance explicitly with `HASNA_SKILLS_API_URL=https://skills.exa
 its own profile/credential; configuring one instance does not select the other.
 The OSS server accepts `/v1/...` aliases through the same handlers as its
 `/api/v1/...` routes, plus `/v1/auth/whoami` for existing API-key identity and
-`/v1/health` for liveness. Gateway integration is incomplete until the internal
-origin runs this version and passes authenticated live acceptance. Login and
+`/v1/health` for liveness. Profile and runtime availability can be checked on the authenticated capabilities endpoint. Login and
 device authorization still use `/api/auth/...` on standalone instances; the
 internal gateway has no interactive login service, so these operations stop
 before transmitting account input or credentials. This is an explicit readiness gap, not support for

@@ -1,0 +1,31 @@
+# One isolated run per task. No task role or service credentials belong here.
+ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0
+FROM ${BUN_IMAGE} AS dependencies
+WORKDIR /opt/skills-runtime
+COPY runtime/package.manifest.json ./package.json
+COPY runtime/bun.lock ./bun.lock
+RUN bun install --frozen-lockfile --ignore-scripts
+
+FROM ${BUN_IMAGE} AS guard
+RUN apk add --no-cache gcc musl-dev linux-headers
+COPY runtime/guard.c /source/guard.c
+RUN cc -O2 -Wall -Wextra -Werror -static -o /skills-runtime-guard /source/guard.c
+# Build-time proof: child identity dropped and socket creation denied.
+RUN /skills-runtime-guard --self-test && /skills-runtime-guard /usr/local/bin/bun -e 'if (process.getuid() !== 65534) process.exit(1); console.log("runtime guard verified")'
+
+FROM ${BUN_IMAGE} AS build
+WORKDIR /source
+COPY src ./src
+RUN bun build src/server/runtime-worker.ts --outfile supervisor.js --target bun --packages external
+
+FROM ${BUN_IMAGE}
+RUN apk add --no-cache libcrypto3=3.5.8-r0 libssl3=3.5.8-r0
+WORKDIR /opt/skills-runtime
+COPY --from=dependencies /opt/skills-runtime/node_modules ./node_modules
+COPY --from=build /source/supervisor.js ./supervisor.js
+COPY --from=guard /skills-runtime-guard ./guard
+# Supervisor starts as root only to launch uid/gid65534. Its child receives no
+# transport token, service environment or task role. Root filesystem must be
+# read-only in the task definition, with an explicit writable /tmp volume.
+USER root
+CMD ["bun", "/opt/skills-runtime/supervisor.js"]

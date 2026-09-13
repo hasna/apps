@@ -33,8 +33,7 @@
 
 import { resolveSkillsConnection, type SkillsFleetOptions } from "./fleet-credentials.js";
 import { loadRegistryProfile, type SkillMeta, type SkillRegistryProfile } from "./registry.js";
-import { mergeSkillRegistryLists } from "./registry-merge.js";
-import { loadRemoteRegistry, mergeRemoteRegistry } from "./remote-registry.js";
+import { loadRemoteRegistry } from "./remote-registry.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -60,37 +59,13 @@ export async function requireSkillsReadAccess(
  * The registry a browsing surface should show — the CLI's `list` / `search` /
  * `categories` / `tags` and the MCP discovery tools, from ONE implementation.
  *
- * The default read path is folder UNION cloud: whenever the install is pointed
- * at a hosted instance (a resolved credential, and HASNA_SKILLS_API_URL for your
- * own instance) the authenticated remote registry joins the local listing even
- * without `--remote`. The explicit local opt-in keeps today's exact local
- * output; an unconfigured or auth-missing install is a refusal, thrown from the
- * shared ladder (fail-closed R1 — see mergeRemoteRegistry()).
- *
- * `--remote` used to REPLACE the local registry: `skills list --remote` returned exactly
- * what the instance served and nothing else, so the bundled corpus and every skill the
- * operator had written locally disappeared from the listing the moment they pointed the
- * CLI at their own server. It now MERGES, under the precedence documented in
- * src/lib/registry-merge.ts: custom > extension > local > remote > official, "whichever
- * copy this machine would actually use wins the listing".
- *
- * The profile (`all` vs the curated basic set) applies to the local half only. The
- * instance's skills are never filtered by it: the basic profile is a hand-written list of
- * ten bundled names, so applying it to remote entries would drop every published skill
- * from `skills list --remote` - the same disappearance this change exists to fix.
- *
- * A remote failure is still fatal. An explicit `--remote` request (and a configured,
- * authenticated default read) that fails surfaces a clear error, and silently returning
- * the local half of a merge the user asked to include the remote half in would report
- * success for a listing that is missing entries.
+ * A configured API is authoritative. Drafts and extension folders cannot shadow
+ * published metadata. Local authoring discovery requires the explicit local opt-in;
+ * authentication and network failures never fall back to local content.
  */
 export async function getBrowseRegistry(options: { all?: boolean; remote?: boolean } = {}): Promise<SkillMeta[]> {
+  const access = await requireSkillsReadAccess();
+  if (options.remote || access.mode === "hosted") return loadRemoteRegistry();
   const profile: SkillRegistryProfile = options.all ? "all" : "basic";
-  const local = loadRegistryProfile(profile);
-  if (options.remote) {
-    // Explicit request: the merge is mandatory, and a missing origin is an error.
-    const remote = await loadRemoteRegistry();
-    return mergeSkillRegistryLists(local, remote);
-  }
-  return mergeRemoteRegistry(local);
+  return loadRegistryProfile(profile);
 }

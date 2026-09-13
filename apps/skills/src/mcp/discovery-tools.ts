@@ -8,6 +8,9 @@ import {
   type SkillRegistryProfile,
 } from "../lib/registry.js";
 import { getBrowseRegistry, requireSkillsReadAccess } from "../lib/read-access.js";
+import { requiresCliSkillLoading } from "../lib/managed-policy.js";
+import { loadSelectedSkill, selectedSkillRequirements } from "../lib/selection-resolver.js";
+import { selectedProfileId } from "../cli/commands/context.js";
 import { getInstalledSkills } from "../lib/installer.js";
 import { getSkillBestDoc, getSkillRequirements } from "../lib/skillinfo.js";
 import { createSkillMcpMetadata } from "../lib/mcp-contracts.js";
@@ -131,6 +134,10 @@ export function registerDiscoveryTools(server: McpServer): void {
     },
   }, async ({ name }) => readSurface(async () => {
     await requireSkillsReadAccess();
+    if (requiresCliSkillLoading()) {
+      const result = await selectedSkillRequirements(name, selectedProfileId(), { projectDir: process.cwd() });
+      return mcpJson({ name: result.selection.slug, version: result.selection.version, source: "remote", ...result });
+    }
     const skill = getSkill(name);
     if (!skill) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
@@ -160,6 +167,10 @@ export function registerDiscoveryTools(server: McpServer): void {
     },
   }, async ({ name }) => readSurface(async () => {
     await requireSkillsReadAccess();
+    if (requiresCliSkillLoading()) {
+      const result = await loadSelectedSkill(name, selectedProfileId(), { projectDir: process.cwd() });
+      return mcpJson(result);
+    }
     const doc = getSkillBestDoc(name);
     if (!doc) {
       return mcpError("NO_DOCS", `No documentation found for '${name}'`);

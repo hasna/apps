@@ -47,6 +47,10 @@ import {
 import { cacheClear, mcpError, mcpJson, readSurface, remoteRunNextActions } from "./helpers.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
 import { resolveConfiguredRunRouting } from "../lib/run-routing.js";
+import { requiresCliSkillLoading } from "../lib/managed-policy.js";
+import { pinSelectedSkillVersion, selectedSkillRequirements } from "../lib/selection-resolver.js";
+import { selectedProfileId } from "../cli/commands/context.js";
+import { SkillSelectionError } from "../lib/selection-cache.js";
 
 export function registerOperationTools(server: McpServer): void {
   server.registerTool("scaffold_skill", {
@@ -101,6 +105,13 @@ export function registerOperationTools(server: McpServer): void {
       scope: z.string().optional(),
     },
   }, async ({ name, for: agentArg, scope }) => {
+    if (requiresCliSkillLoading()) {
+      if (agentArg) return mcpError("NATIVE_SKILL_EXPORT_DISABLED", "This station loads skills through the Skills CLI. Use skills sync --selection-profile <id>.");
+      try {
+        const result = await pinSelectedSkillVersion(name, selectedProfileId(), { projectDir: process.cwd() });
+        return mcpJson({ success: true, skill: result.selection.slug, version: result.selection.version, source: "remote", ...result });
+      } catch (error) { return selectedToolError(error); }
+    }
     if (agentArg) {
       let agents: AgentTarget[];
       try {
@@ -140,6 +151,7 @@ export function registerOperationTools(server: McpServer): void {
       scope: z.string().optional(),
     },
   }, async ({ category, for: agentArg, scope }) => {
+    if (requiresCliSkillLoading()) return mcpError("SELECTION_PROFILE_REQUIRED", "Managed station pins come from selection profiles. Use skills sync --selection-profile <id>.");
     // Validate category
     const matchedCategory = CATEGORIES.find(
       (c) => c.toLowerCase() === category.toLowerCase()
@@ -264,6 +276,7 @@ export function registerOperationTools(server: McpServer): void {
     },
   }, async ({ name }) => readSurface(async () => {
     await requireSkillsReadAccess();
+    if (requiresCliSkillLoading()) return mcpJson(await selectedSkillRequirements(name, selectedProfileId(), { projectDir: process.cwd() }));
     const reqs = getSkillRequirements(name);
     if (!reqs) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
@@ -283,10 +296,29 @@ export function registerOperationTools(server: McpServer): void {
       maxCredits: z.number().int().min(0).max(2_147_483_647).optional(),
       quoteReceipt: z.string().min(1).max(4096).refine(value => Buffer.byteLength(value, "utf8") <= 4096, "Quote receipt exceeds 4096 UTF-8 bytes").optional().describe("Opaque receipt from the approved quote; send unchanged with the same input, args and files. Never refresh after confirmation."),
       remote: z.boolean().optional().describe("Use the configured server catalog, including skills not installed locally"),
+      target: z.enum(["local", "cloud"]).optional().describe("Execution target for an exact profile-selected skill on a managed station"),
       idempotency_key: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional().describe("Reuse for the same approved submission after an interrupted response"),
       files: z.array(z.object({ name: z.string(), base64: z.string().max(1_398_104), contentType: z.string().optional() })).max(10).optional().describe("Inline remote inputs, at most 1 MiB combined; use CLI or SDK for larger files"),
     },
-  }, async ({ name, input, args, detail, maxCostCents, maxCredits, quoteReceipt, remote, idempotency_key, files }) => {
+  }, async ({ name, input, args, detail, maxCostCents, maxCredits, quoteReceipt, remote, target, idempotency_key, files }) => {
+    if (requiresCliSkillLoading()) {
+      try {
+        const { resolveSelectedRun, executeSelectedLocal } = await import("../lib/selected-run.js");
+        const resolved = await resolveSelectedRun(name, selectedProfileId(), { projectDir: process.cwd() });
+        if (resolved.kind === "instruction") return mcpError("INSTRUCTION_SKILL", "This selected skill contains instructions. Load it with skills load instead of running it.");
+        if (files?.length) return mcpError("SELECTED_INPUT_REQUIRED", "Selected executions require their declared JSON input; use the CLI cloud execution input contract for files.");
+        if (target === "cloud" || remote) {
+          if (args?.length || quoteReceipt || maxCredits !== undefined || maxCostCents !== undefined) return mcpError("SELECTED_INPUT_REQUIRED", "The selected cloud execution contract accepts declared JSON input, not legacy run arguments or quote receipts.");
+          const { CloudExecutionClient } = await import("../lib/cloud-executions.js");
+          const client = await CloudExecutionClient.configured();
+          const selection = resolved.selection;
+          const run = await client.submit(selection.slug, selection.version, input ?? {}, idempotency_key ?? crypto.randomUUID(), selection);
+          return mcpJson({ selection, remote: true, run });
+        }
+        const result = await executeSelectedLocal(resolved, { args, input, cwd: process.cwd() });
+        return { ...mcpJson(result), isError: result.exitCode !== 0 };
+      } catch (error) { return selectedToolError(error); }
+    }
     const skill = remote ? { name, serverOwned: true } : getSkill(name);
     if (!skill) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
@@ -543,6 +575,10 @@ export function registerOperationTools(server: McpServer): void {
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   });
 
+}
+
+function selectedToolError(error: unknown) {
+  return mcpError(error instanceof SkillSelectionError ? error.code : "SELECTED_SKILL_FAILED", error instanceof SkillSelectionError ? error.message : "The selected skill operation failed. Check authentication, profile selection and execution capabilities.");
 }
 
 function compactRunToolPayload(payload: Record<string, any>, detailHint: string): Record<string, unknown> {
