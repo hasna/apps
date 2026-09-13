@@ -297,16 +297,35 @@ Configured but missing, unsafe, conflicting or inaccessible remote credentials f
 
 ## Credential bindings
 
-Bind an existing vault key once, then launch without an external wrapper. New bindings use the installed `secrets` CLI and resolve its operator key and API URL through `@hasna/contracts/client`. A configured Keychain item or canonical `~/.hasna/secrets/config/credentials` supplies the operator without shell exports. The default Secrets API URL is `https://api.hasna.com/secrets`; `--vault-url` can select a custom vault but must agree with any configured Secrets authority.
+Bind an existing vault key once, then launch without an external wrapper. New bindings resolve the Secrets operator key and API URL through `@hasna/contracts/client`. A configured Keychain item or canonical `~/.hasna/secrets/config/credentials` supplies the operator without shell exports. The default Secrets API URL is `https://api.hasna.com/secrets`; `--vault-url` can select a custom vault but must agree with any configured Secrets authority.
+
+For stations that update global tools with Bun, give the vault binding a private, version-pinned npm installation. A later global Bun installation can reset the permissions of its `secrets` executable, including one already repaired, and break every provider using it. The private installation keeps that update path separate. This example uses Secrets `0.4.2`; choose an exact verified release and a **new, unused prefix** for each upgrade:
+
+```sh
+SWITCHER_VAULT_PREFIX="$HOME/.hasna/switcher/vault-runtimes/secrets-0.4.2-private"
+(
+  set -e
+  umask 077
+  test ! -e "$SWITCHER_VAULT_PREFIX"
+  mkdir -p "$SWITCHER_VAULT_PREFIX"
+  npm install --prefix "$SWITCHER_VAULT_PREFIX" --save-exact \
+    --ignore-scripts --no-audit --no-fund --umask=077 @hasna/secrets@0.4.2
+)
+```
+
+Both the shell and npm umasks matter: a shell umask of `0002` can leave npm package directories group-writable, which the vault guard also rejects. `--ignore-scripts` prevents lifecycle scripts from running during this installation. Verify the installed package against its integrity-checked release archive before binding it, as described below. Do not run Bun installs inside this prefix. Preserve the previous runtime until the new binding passes a real provider launch.
+
+To migrate an existing binding, record its locator with `credentials list`, then explicitly remove and recreate that same reference with the new `--vault-cli`. Preserve its vault key, URL, operator/account and authorized origins; only the executable path should change. Keep the original locator available to restore if verification fails.
 
 ```sh
 switcher credentials bind deepseek \
-  --vault-key providers/deepseek/live/api_key
+  --vault-key providers/deepseek/live/api_key \
+  --vault-cli "$SWITCHER_VAULT_PREFIX/node_modules/@hasna/secrets/dist/index.js"
 switcher credentials check deepseek
 switcher launch claude --provider deepseek --model deepseek-v4-pro
 ```
 
-`--vault-cli /absolute/path/to/secrets` selects a particular installation. Vault lookup uses `secrets exec` to inject the value into a short-lived receiver, which delivers it over an authenticated loopback connection. Values stay in process memory. The lookup has a 20-second deadline and owns a separate process group; it finishes before the native harness starts. Each lookup reads the vault again. Conflicting Secrets service URL configuration fails explicitly. Vault CLI bindings currently require POSIX; Windows callers can inject provider environment variables.
+`--vault-cli /absolute/path/to/secrets` selects a particular installation; omitting it binds the current `secrets` on `PATH`, which may be replaced by a global tool update. Vault lookup uses `secrets exec` to inject the value into a short-lived receiver, which delivers it over an authenticated loopback connection. Values stay in process memory. The lookup has a 20-second deadline and owns a separate process group; it finishes before the native harness starts. Each lookup reads the vault again. Conflicting Secrets service URL configuration fails explicitly. Vault CLI bindings currently require POSIX; Windows callers can inject provider environment variables.
 
 If launch reports `vault_exec_permissions`, verify the installed Secrets package against its trusted release artifact before repairing it. Bun 1.3.14's [bin-link installer](https://github.com/oven-sh/bun/blob/bun-v1.3.14/src/install/bin.zig#L731-L735) can change an executable member from mode `0755` to `0777`, including with `--ignore-scripts`. Changing the shell umask does not correct that installer behavior.
 
