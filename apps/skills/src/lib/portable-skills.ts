@@ -114,6 +114,11 @@ export function getPortableSkillsRoot(options: PortableSkillOptions = {}): strin
   return resolvePortableSkillsRoot(options, true);
 }
 
+/** Resolve an existing authoring corpus without creating or migrating directories. */
+export function getPortableSkillsRootReadOnly(options: PortableSkillOptions = {}): string {
+  return resolvePortableSkillsRoot(options, false);
+}
+
 function resolvePortableSkillsRoot(options: PortableSkillOptions, migrate: boolean): string {
   // rootDir names the corpus directly - it is not an app folder and gets no
   // `installed` suffix. Callers that hand over a directory of skill folders mean
@@ -285,12 +290,9 @@ export function scaffoldPortableSkill(name: string, options: ScaffoldPortableSki
     rmSync(skillPath, { recursive: true, force: true });
   }
 
-  // Deliberate creation-time template selection (task 568efaaa / P-01641): this default
-  // only chooses WHICH scaffold template to write — neither template records `kind` in
-  // the artifact (portable metadata in skill.json has no kind here; renderSkillMd keeps
-  // consumer frontmatter to name + description), so the default never launders an
-  // absent kind into a claimed `executable`. New skills are kind-less and sync as full
-  // content; a scaffolded skill that is genuinely runnable declares kind when authored.
+  // Creation records the selected template's kind in skill.json. Existing imported
+  // kind-less sources keep their historical reading behavior; creating a new skill
+  // must not lose the author's selection when it is later published.
   const kind: SkillKind = options.kind ?? "executable";
   const description = options.description ?? `${displayName(skillName)} skill`;
 

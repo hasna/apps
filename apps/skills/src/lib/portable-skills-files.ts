@@ -226,6 +226,7 @@ export function createPortableManifest(name: string, options: { description: str
     displayName: displayName(name),
     category: options.category ?? "Development Tools",
     tags: options.tags ?? ["custom", name],
+    kind: "executable",
     inputs: DEFAULT_INPUTS,
     commands: [{
       name,
@@ -562,7 +563,7 @@ function renderEntrypoint(manifest: PortableSkillManifest): string {
 function renderAgentsMd(manifest: PortableSkillManifest): string {
   const command = manifest.commands[0];
   const entry = command?.entry ?? "src/index.ts";
-  return `# Agent Build Instructions: ${manifest.name}\n\nThis folder is a portable @hasna/skills skill. Build it in place and keep it valid against the portable skill standard.\n\n## Contract\n\n- Skill name: \`${manifest.name}\`\n- Description: ${manifest.description}\n- Portable metadata: \`skill.json\` (standard \`hasna.skill.v1\`) — the source of truth\n- Consumer frontmatter: \`SKILL.md\` keeps \`name\` + \`description\` only\n- Runtime entrypoint: \`${entry}\`\n- User command: \`skills run ${manifest.name} [args]\`\n\n## Build Rules\n\n1. Put executable logic in \`${entry}\` or files imported by it.\n2. Keep \`skill.json\` updated when inputs, commands, version, or the runtime contract change. Any content change requires a version bump.\n3. Keep \`SKILL.md\` concise: \`name\` + \`description\` frontmatter only.\n4. Add tests under \`tests/\` when behavior is non-trivial, then run \`bun test\` from this folder if tests exist.\n5. Verify with \`skills validate ${manifest.name}\` (checks the schema and the canonical \`content_hash\`) and smoke-test with \`skills run ${manifest.name} --help\`.\n6. Do not commit secrets, generated credentials, \`.env\`, \`node_modules\`, or build output.\n`;
+  return `# Agent Build Instructions: ${manifest.name}\n\nThis folder is a portable @hasna/skills skill. Build it in place and keep it valid against the portable skill standard.\n\n## Contract\n\n- Skill name: \`${manifest.name}\`\n- Description: ${manifest.description}\n- Portable metadata: \`skill.json\` (standard \`hasna.skill.v1\`) — the source of truth\n- Consumer frontmatter: \`SKILL.md\` keeps \`name\` + \`description\` only\n- Runtime entrypoint: \`${entry}\`\n- User command: \`skills run ${manifest.name} [args]\`\n\n## Build Rules\n\n1. Put executable logic in \`${entry}\` or files imported by it.\n2. Review metadata and source edits, then run \`skills prepare ${manifest.name} --version <new-semver>\` to validate the draft and refresh its manifest version and content hash. Any content change requires a version bump.\n3. Keep \`SKILL.md\` concise: \`name\` + \`description\` frontmatter only.\n4. Add tests under \`tests/\` when behavior is non-trivial, then run \`bun test\` from this folder if tests exist.\n5. Verify with \`skills validate ${manifest.name}\` (checks the schema and the canonical \`content_hash\`) and smoke-test with \`skills run ${manifest.name} --help\`.\n6. Do not commit secrets, generated credentials, \`.env\`, \`node_modules\`, or build output.\n`;
 }
 
 function ensureSkillMdFrontmatter(content: string, manifest: PortableSkillManifest): string {

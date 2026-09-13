@@ -134,7 +134,12 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
   if (!validation.valid) {
     throw new PushSkillError(
       `Skill '${skill.name}' is not valid and was not published.`,
-      validation.issues.map((issue) => `${issue.code}: ${issue.message}`),
+      [
+        ...validation.issues.map((issue) => `${issue.code}: ${issue.message}`),
+        ...(validation.issues.some(issue => issue.code === "contract.content_hash_mismatch")
+          ? [`Review the edited draft, then run skills prepare ${skill.name} --version <new-semver> (add --kind for a legacy kind-less manifest). Push never rewrites your source.`]
+          : []),
+      ],
     );
   }
 
