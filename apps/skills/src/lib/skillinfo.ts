@@ -1,3 +1,4 @@
+import { hasDependencyPreparationMarker, prepareSkillDependencies } from "./dependency-preparation";
 /**
  * Skill info - reads docs, requirements, and metadata from skill source
  */
@@ -203,7 +204,7 @@ export function getSkillDependencyStatus(name: string): SkillDependencyStatus[] 
 export async function runSkill(
   name: string,
   args: string[],
-  options: { installed?: boolean; stdio?: "inherit" | "pipe" | "stderr"; env?: Record<string, string> } = {}
+  options: { installed?: boolean; stdio?: "inherit" | "pipe" | "stderr"; env?: Record<string, string>; preparationTimeoutMs?: number } = {}
 ): Promise<{ exitCode: number; error?: string; stdout?: string; stderr?: string }> {
   // Skills execute from the bundled package source. Project `.skills/` is only
   // for pins, run metadata, logs, and exports; it is never a source directory.
@@ -252,15 +253,12 @@ export async function runSkill(
     return { exitCode: 1, error: `Entry point '${entryPoint}' not found in skill '${name}'` };
   }
 
-  // Install deps if node_modules missing
-  const nodeModules = join(skillPath, "node_modules");
-  if (!existsSync(nodeModules)) {
-    const install = Bun.spawn(["bun", "install", "--no-save"], {
-      cwd: skillPath,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    await install.exited;
+  const env = { ...process.env, ...options.env };
+  // Preparation and execution must use the same selected HOME, cache and PATH.
+  // Failed preparation is terminal: never run an entry with incomplete deps.
+  if (!existsSync(join(skillPath, "node_modules")) || hasDependencyPreparationMarker(skillPath)) {
+    const failure = await prepareSkillDependencies(skillPath, env, options.preparationTimeoutMs);
+    if (failure) return failure;
   }
 
   // Run the skill
@@ -271,7 +269,7 @@ export async function runSkill(
     stdout: options.stdio === "pipe" ? "pipe" : options.stdio === "stderr" ? 2 : "inherit",
     stderr: options.stdio === "pipe" ? "pipe" : "inherit",
     stdin: "inherit",
-    env: { ...process.env, ...options.env },
+    env,
   });
 
   if (options.stdio === "pipe") {
