@@ -161,7 +161,7 @@ function compareVersions(left: string, right: string): number {
 
 // Dependency/VCS/build trees are not authoring input. Everything else is bounded
 // and copied without following symlinks, including hidden source and empty dirs.
-const IGNORED = new Set(["node_modules", ".git", ".ds_store", ".system"]);
+const IGNORED = new Set([".git", ".ds_store", ".system"]);
 const ROOT_IGNORED = new Set(["dist", "build", ".turbo"]);
 function snapshot(root: string): { files: Array<{ path: string; bytes: Buffer; mode: number }>; directories: string[]; identity: string } {
   const rootStat = lstatSync(root);
@@ -176,6 +176,10 @@ function snapshot(root: string): { files: Array<{ path: string; bytes: Buffer; m
       if (++count > 20_000) throw new Error("Skill exceeds the preparation entry limit (20000).");
       const absolute = join(root, path), stat = lstatSync(absolute);
       if (stat.isSymbolicLink()) throw new Error(`Skill contains a symlink: ${path}. No files were changed.`);
+      // Canonical hashing excludes only exact-case dependency directories.
+      // A Node_Modules directory or a regular file named node_modules is source
+      // input and must survive staging, or the written hash will be stale.
+      if (stat.isDirectory() && name === "node_modules") continue;
       hash.update(JSON.stringify([path, stat.dev, stat.ino, stat.mode]));
       if (stat.isDirectory()) { directories.push(path); walk(path); }
       else if (stat.isFile()) {
