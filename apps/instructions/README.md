@@ -265,6 +265,28 @@ manifests for drift, refuses unmanaged file conflicts unless `--force` is
 passed, removes stale managed mirrors only when safe, and writes local snapshots
 before mutating managed files.
 
+Grok Build and Devin CLI can render global instructions into an explicitly
+selected native home. Pass Grok's `GROK_HOME` directory or Devin's resolved user
+config directory as `--target-home`; the renderer writes a flattened `AGENTS.md`
+and its ownership manifest there. Devin's target is the `devin` config directory,
+not its parent `XDG_CONFIG_HOME` or its credential-data directory.
+
+```bash
+instructions session plan --tool grok --profile work \
+  --target-home "$GROK_HOME" --identity-export ./instructions.json --json
+instructions session apply --tool devin --profile work \
+  --target-home /absolute/isolated/config/devin --identity-export ./instructions.json
+```
+
+An explicit `--project-root` keeps the project renderer: Grok writes repository
+`AGENTS.md`; Devin writes `.devin/rules/*.md`. Without either explicit target,
+these providers remain blocked. Compiled native profiles select the
+`native-profile` capability (Grok 1.0.13+, Devin 3000.10.21+); conditional bindings
+require an explicit supported fallback because global `AGENTS.md` is always on.
+The existing conflict, drift, symlink and snapshot checks also apply to native homes.
+See [Devin global rules](https://docs.devin.ai/cli/extensibility/rules) and
+[Grok settings](https://docs.x.ai/build/settings) for native home configuration.
+
 ### Session renderer ownership
 
 Anything the session renderer writes is off limits to `instructions apply` and

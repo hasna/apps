@@ -38,6 +38,33 @@ function runCli(args: string[], env: Record<string, string | undefined> = {}) {
 }
 
 describe("configs session CLI", () => {
+  for (const tool of ["grok", "devin"]) test(`${tool} CLI plans and applies global instructions only inside the explicit native home`, () => {
+    const home = makeTempRoot("instructions-native-session-cli-");
+    try {
+      const native = join(home, tool === "grok" ? "profile/.grok" : "profile/config/devin");
+      const source = join(home, "owned.md");
+      writeFileSync(source, "OWNED_NATIVE_INSTRUCTION_SENTINEL\n");
+      const env = { HOME: home, HASNA_CONFIGS_HOME: join(home, "configs"), HASNA_INSTRUCTIONS_DB_PATH: join(home, "fixture.db") };
+      const args = ["--tool", tool, "--profile", "native-one", "--target-home", native,
+        "--source", `global:owned=${source}`, "--no-station-profile", "--json"];
+      const preview = runCli(["session", "plan", ...args], env);
+      expect(preview.status, preview.stderr).toBe(0);
+      const plan = JSON.parse(preview.stdout);
+      expect(plan.targetKind).toBe("session-home");
+      expect(plan.targetHome).toBe(native);
+      expect(plan.files.map((file: { relativePath: string }) => file.relativePath)).toEqual(["AGENTS.md"]);
+      expect(existsSync(native)).toBe(false);
+      const apply = runCli(["session", "apply", ...args], env);
+      expect(apply.status, apply.stderr).toBe(0);
+      expect(readFileSync(join(native, "AGENTS.md"), "utf8")).toContain("OWNED_NATIVE_INSTRUCTION_SENTINEL");
+      const manifest = JSON.parse(readFileSync(join(native, ".hasna", "session-render-manifest.json"), "utf8"));
+      expect(manifest.targetHome).toBe(native);
+      expect(manifest.targetOwner.kind).toBe("provider-profile");
+      expect(existsSync(join(home, ".devin"))).toBe(false);
+      expect(existsSync(join(home, "AGENTS.md"))).toBe(false);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
   test("help lists accepted source layers and aliases", () => {
     const result = runCli(["session", "plan", "--help"]);
 

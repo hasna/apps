@@ -101,7 +101,9 @@ describe("canonical data root (raw store root)", () => {
   test("a migrated store at the XDG config home is adopted without any override", () => {
     const home = makeTempRoot("ok-instructions-cli-root-migrated-");
     try {
-      const resolved = join(home, ".config", "hasna", "configs");
+      const resolved = process.platform === "darwin"
+        ? join(home, "Library", "Application Support", "Hasna", "configs")
+        : join(home, ".config", "hasna", "configs");
       // Simulate a store already migrated to the resolver config home.
       const { mkdirSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
       mkdirSync(resolved, { recursive: true });

@@ -12,7 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   adoptResolverSnapshotDir,
   getSessionRenderSnapshotDir,
@@ -58,7 +58,9 @@ describe("snapshot dir resolution precedence", () => {
 
   it("resolves the instructions state dir through @hasna/paths (XDG state layout)", () => {
     process.env["HOME"] = tempHome;
-    expect(resolverSnapshotDir()).toBe(join(tempHome, ".local", "state", "hasna", "instructions"));
+    expect(resolverSnapshotDir()).toBe(process.platform === "darwin"
+      ? join(tempHome, "Library", "Logs", "Hasna", "instructions")
+      : join(tempHome, ".local", "state", "hasna", "instructions"));
   });
 
   it("adopts the resolver state dir only for the state-kind override or a migrated store", () => {
@@ -82,13 +84,15 @@ describe("snapshot dir resolution precedence", () => {
 
   it("uses the resolver state dir and its parent workspace root once the store is migrated there", () => {
     process.env["HOME"] = tempHome;
-    const resolved = join(tempHome, ".local", "state", "hasna", "instructions");
+    const resolved = process.platform === "darwin"
+      ? join(tempHome, "Library", "Logs", "Hasna", "instructions")
+      : join(tempHome, ".local", "state", "hasna", "instructions");
     mkdirSync(resolved, { recursive: true });
     writeFileSync(join(resolved, "20260828T000000Z-test.json"), "{}");
     expect(getSessionRenderSnapshotDir(tempHome)).toBe(resolved);
     // The snapshot write anchors to the state dir's parent, which contains it,
     // so the managed-file containment guards accept the path for any target
     // home (including a nested project root).
-    expect(sessionRenderSnapshotWorkspaceRoot(tempHome)).toBe(join(tempHome, ".local", "state", "hasna"));
+    expect(sessionRenderSnapshotWorkspaceRoot(tempHome)).toBe(dirname(resolved));
   });
 });
