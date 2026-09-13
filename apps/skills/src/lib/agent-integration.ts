@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, writeFileSync, unlinkSync, chmodSync } from "node:fs";
+import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, writeFileSync, unlinkSync, chmodSync } from "node:fs";
 import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { homedir } from "node:os";
 import { getDataDir } from "./config.js";
@@ -85,30 +85,59 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
   const roots: Array<readonly [string, string]> = ROOTS.map(([agent, path]) => [agent, canonicalAgentPath(join(home, path), aliases)]);
   if (options.projectDir) for (const [agent, path] of ROOTS) roots.push([agent, join(resolve(options.projectDir), path)]);
   const entries: NativeSkillEntry[] = [], seen = new Set<string>();
-  function visit(agent: string, path: string, vendor = false, depth = 0): void {
+  type Scan = { complete: boolean; hasSkills: boolean; entries: number };
+  const cacheScans = new Map<string, Scan>(), maxAliasProofEntries = 10000;
+  function emptySiblingCacheAlias(path: string, parent: string): boolean {
+    const link = readlinkSync(path), target = resolve(parent, link);
+    // A lexical normalization must not conceal an intermediate symlink escape.
+    if (dirname(target) !== parent || (isAbsolute(link) ? link !== target : dirname(link) !== ".")) return false;
+    if (!lstatSync(target, { throwIfNoEntry: false })?.isDirectory()) return false;
+    const scan = cacheScans.get(target);
+    return Boolean(scan?.complete && !scan.hasSkills && scan.entries <= maxAliasProofEntries);
+  }
+  function visit(agent: string, path: string, vendor = false, depth = 0, pluginCache = false): Scan {
+    const scan: Scan = { complete: true, hasSkills: false, entries: 1 };
     assertSafePath(path);
-    if (!existsSync(path)) return;
-    if (!lstatSync(path).isDirectory()) return;
+    if (!existsSync(path)) return scan;
+    if (!lstatSync(path).isDirectory()) return scan;
     if (existsSync(join(path, "SKILL.md"))) {
-      if (seen.has(path)) return; seen.add(path);
+      scan.hasSkills = true;
+      if (seen.has(path)) return scan; seen.add(path);
       let managed = false;
       const marker = join(path, ".hasna-skills.json");
       if (existsSync(marker)) { try { managed = JSON.parse(readFileSync(marker, "utf8")).managedBy === "@hasna/skills"; } catch { /* Unrecognized markers grant no ownership. */ } }
       const rootAlias = aliases.find(item => path === item.target || path.startsWith(item.target + sep));
-      entries.push({ agent, path, hash: treeHash(path), managed, vendor, ...(rootAlias ? { rootAlias } : {}) }); return;
+      entries.push({ agent, path, hash: treeHash(path), managed, vendor, ...(rootAlias ? { rootAlias } : {}) }); return scan;
     }
-    if (depth > (vendor ? 8 : 3)) return;
-    for (const name of readdirSync(path).sort()) {
+    if (depth > (vendor ? 8 : 3)) return { ...scan, complete: false };
+    const children = readdirSync(path, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    // Complete real sibling scans before considering cache aliases, regardless
+    // of their names. Never recurse through an alias to discover its contents.
+    if (pluginCache) children.sort((a, b) => Number(a.isSymbolicLink()) - Number(b.isSymbolicLink()));
+    for (const { name } of children) {
       if (name === "node_modules") continue;
       if (name.startsWith(".") && name !== ".system") continue;
       const isVendor = vendor || name === ".system";
       if (isVendor && !options.includeVendor) continue;
-      visit(agent, join(path, name), isVendor, depth + 1);
+      const child = join(path, name);
+      // Vendor containers can have linked metadata beside their skills. Follow
+      // only for target metadata; never read its bytes or descend through the
+      // link. Real skills return through treeHash above, which refuses all links.
+      if (isVendor && lstatSync(child, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        const target = statSync(child, { throwIfNoEntry: false });
+        if (target?.isFile() || (pluginCache && target?.isDirectory() && emptySiblingCacheAlias(child, path))) {
+          scan.entries++; continue;
+        }
+      }
+      const childScan = visit(agent, child, isVendor, depth + 1, pluginCache);
+      scan.complete &&= childScan.complete; scan.hasSkills ||= childScan.hasSkills; scan.entries += childScan.entries;
     }
+    if (pluginCache) cacheScans.set(path, scan);
+    return scan;
   }
   for (const [agent, path] of roots) visit(agent, path);
   if (options.includeVendor) {
-    for (const agent of ["codex", "claude"]) visit(agent, canonicalAgentPath(join(home, `.${agent}`, "plugins", "cache"), aliases), true);
+    for (const agent of ["codex", "claude"]) visit(agent, canonicalAgentPath(join(home, `.${agent}`, "plugins", "cache"), aliases), true, 0, true);
   }
   recheckRootAliases(aliases);
   return entries;
