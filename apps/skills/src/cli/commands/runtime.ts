@@ -618,6 +618,12 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
           return;
         }
         const remoteRunId = typeof run.id === "string" ? run.id : undefined;
+        // Admission survives an interrupted wait or log request. A fresh CLI
+        // process can resolve this local receipt to the already admitted run.
+        updateSkillRun(runContext, {
+          status: normalizeRemoteStatus(run.status),
+          remoteRunId,
+        });
         const nextActions = remoteRunNextActions(remoteRunId);
         const polling = parsePollingOptions(options);
         const polled: PollRemoteRunResult = options.wait && remoteRunId && !isTerminalRemoteStatus(run.status)
