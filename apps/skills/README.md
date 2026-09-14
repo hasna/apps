@@ -71,6 +71,12 @@ refuses loading. Most adapters also block the prompt; Hermes has the native
 non-blocking prompt-hook limitation described below. These are checks on configured native discovery, not
 an operating-system restriction on arbitrary file reads.
 
+Agent policies support up to 1 MiB of serialized UTF-8 JSON, with bounded agent
+and discovery collections (2,048 sources and 512 roots per agent). Installation
+validates the complete resulting policy before writing configuration or backups;
+the same limits apply when reading and guarding native context. A rejected plan
+leaves the previous policy intact.
+
 Hermes 0.20.5 uses `pre_llm_call` to add selected context and `pre_tool_call`
 with `fail_closed: true` and a small owned supervisor to guard tool calls. The
 supervisor maps Skills child failures, timeouts and missing/invalid directives

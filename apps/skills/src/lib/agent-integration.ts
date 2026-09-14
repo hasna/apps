@@ -3,7 +3,7 @@ import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, 
 import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
-import { requiresCliSkillLoading } from "./managed-policy.js";
+import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
 import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, type AgentDiscoveryBinding, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
@@ -265,11 +265,12 @@ function disableCodexSkills(text: string, skills: NativeSkillEntry[], aliases: A
 
 /** Planning is read-only; credentials and unrelated settings never appear in CLI output. */
 export function planAgentIntegration(options: { home?: string; dataDir?: string; agents: IntegrationAgent[]; command?: string; profileId?: string; includeVendor?: boolean; projectDir?: string; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean }): AgentIntegrationPlan {
-  const home = options.home ?? homedir(), dataDir = options.dataDir ?? getDataDir();
+  const home = options.home ?? homedir(), dataDir = options.dataDir ?? getDataDirReadOnly();
   const profileId = options.profileId ?? "default";
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(profileId) || profileId.includes("..")) throw new Error("Invalid selection profile id");
   const aliases = rootAliases(home, options.allowRootAliases);
-  const policyPath = join(dataDir, "agent-policy.json"), previousPolicy = readOptional(policyPath), policy = jsonObject(previousPolicy, policyPath);
+  const policyPath = join(dataDir, "agent-policy.json"); assertSafePath(policyPath);
+  const priorSnapshot = readManagedSkillPolicySnapshot(dataDir), previousPolicy = priorSnapshot?.text ?? null, policy = priorSnapshot?.value ?? {};
   if (policy.bridge !== undefined && (!policy.bridge || typeof policy.bridge !== "object" || Array.isArray(policy.bridge))) throw new Error("Invalid existing Skills bridge policy");
   if (policy.bridge?.agents !== undefined && (!Array.isArray(policy.bridge.agents) || policy.bridge.agents.some((agent: unknown) => !INTEGRATION_AGENTS.includes(agent as IntegrationAgent)))) throw new Error("Invalid existing bridge agent inventory");
   for (const field of ["commands", "profiles"]) if (policy.bridge?.[field] !== undefined && (!policy.bridge[field] || typeof policy.bridge[field] !== "object" || Array.isArray(policy.bridge[field]) || Object.entries(policy.bridge[field]).some(([key, value]) => !INTEGRATION_AGENTS.includes(key as IntegrationAgent) || typeof value !== "string" || !value || value.includes("\0")))) throw new Error(`Invalid existing bridge ${field} binding`);
@@ -336,7 +337,8 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     rootAliases: aliases,
     discovery: { ...policy.bridge?.discovery, ...Object.fromEntries(discoveryAfter.map(binding => [binding.agent, binding])) },
   } };
-  if (JSON.stringify(policy) !== JSON.stringify(nextPolicy)) changes.push({ path: policyPath, before: previousPolicy, after: `${JSON.stringify(nextPolicy, null, 2)}\n` });
+  const serializedPolicy = serializeManagedSkillPolicy(nextPolicy);
+  if (JSON.stringify(policy) !== JSON.stringify(nextPolicy)) changes.push({ path: policyPath, before: previousPolicy, after: serializedPolicy });
   recheckRootAliases(aliases);
   return { dataDir, profileId, changes, nativeSkills, observedPolicy: { path: policyPath, before: previousPolicy }, discoveryBefore: discoveries, discoveryAfter, ...(aliases.length ? { rootAliases: aliases } : {}) };
 }
@@ -349,11 +351,16 @@ function atomicWrite(path: string, content: string): void {
 }
 
 export function applyAgentIntegration(plan: AgentIntegrationPlan): { changed: string[]; backups: string[]; rootAliases?: AgentRootAlias[] } {
+  // Refuse an unusable policy before creating backups or changing native config.
+  const policyPath = join(plan.dataDir, "agent-policy.json"); assertSafePath(policyPath);
+  const currentText = (path: string) => resolve(path) === resolve(policyPath) ? readManagedSkillPolicySnapshot(plan.dataDir)?.text ?? null : readOptional(path);
+  readManagedSkillPolicySnapshot(plan.dataDir);
+  for (const change of plan.changes) if (resolve(change.path) === resolve(policyPath)) parseManagedSkillPolicy(change.after);
   const aliases = plan.rootAliases ?? [];
   recheckRootAliases(aliases);
   for (const binding of plan.discoveryBefore ?? []) verifyAgentDiscovery(binding);
-  if (plan.observedPolicy && readOptional(plan.observedPolicy.path) !== plan.observedPolicy.before) throw new Error("Agent policy changed after planning");
-  for (const change of plan.changes) if (readOptional(change.path) !== change.before) throw new Error(`Configuration changed after planning: ${change.path}`);
+  if (plan.observedPolicy && currentText(plan.observedPolicy.path) !== plan.observedPolicy.before) throw new Error("Agent policy changed after planning");
+  for (const change of plan.changes) if (currentText(change.path) !== change.before) throw new Error(`Configuration changed after planning: ${change.path}`);
   const backupRoot = join(plan.dataDir, "migration", randomUUID()), backups: string[] = [], written: AgentConfigChange[] = [], createdDirectories = new Set<string>();
   if (!plan.changes.length) {
     recheckRootAliases(aliases);
@@ -367,7 +374,7 @@ export function applyAgentIntegration(plan: AgentIntegrationPlan): { changed: st
   try {
     for (const change of plan.changes) {
       recheckRootAliases(aliases);
-      if (readOptional(change.path) !== change.before) throw new Error(`Configuration changed after planning: ${change.path}`);
+      if (currentText(change.path) !== change.before) throw new Error(`Configuration changed after planning: ${change.path}`);
       for (let directory = dirname(change.path); !existsSync(directory); directory = dirname(directory)) createdDirectories.add(directory);
       const after = change.after;
       atomicWrite(change.path, after); written.push({ path: change.path, before: change.before, after });
@@ -378,7 +385,11 @@ export function applyAgentIntegration(plan: AgentIntegrationPlan): { changed: st
   } catch (error) {
     for (const change of written.reverse()) {
       // Do not erase a concurrent user's edit during compensation.
-      if (readOptional(change.path) !== change.after) continue;
+      // An unreadable or malformed replacement also belongs to that user;
+      // preserve it while continuing to restore our other unchanged writes.
+      let current: string | null;
+      try { current = currentText(change.path); } catch { continue; }
+      if (current !== change.after) continue;
       if (change.before === null) unlinkSync(change.path); else atomicWrite(change.path, change.before);
     }
     for (const directory of [...createdDirectories].sort((a, b) => b.length - a.length)) {
@@ -496,8 +507,10 @@ export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { da
  * discovery files require repair; verified cache availability is not an override. */
 export function assertManagedAgentBridge(agent: IntegrationAgent, options: { home?: string; dataDir?: string; projectDir?: string; projectDirs?: string[] } = {}): void {
   const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
-  if (!requiresCliSkillLoading(dataDir)) throw new Error("NATIVE_SKILL_DRIFT: install the Skills bridge with skills hook install");
-  const path = join(dataDir, "agent-policy.json"), policy = jsonObject(readOptional(path), path), binding = policy.bridge;
+  assertSafePath(join(dataDir, "agent-policy.json"));
+  const snapshot = readManagedSkillPolicySnapshot(dataDir);
+  if (!snapshot) throw new Error("NATIVE_SKILL_DRIFT: install the Skills bridge with skills hook install");
+  const binding = snapshot.value.bridge;
   if (!binding || binding.version !== CLI_BRIDGE_VERSION || binding.digest !== CLI_BRIDGE_DIGEST || binding.home !== home || !Array.isArray(binding.agents) || !binding.agents.includes(agent)) throw new Error("NATIVE_SKILL_DRIFT: the managed Skills bridge binding is missing or incompatible; run skills hook install");
   const aliases: AgentRootAlias[] = binding.rootAliases ?? [];
   if (!Array.isArray(aliases)) throw new Error("NATIVE_SKILL_DRIFT: invalid root alias binding");
