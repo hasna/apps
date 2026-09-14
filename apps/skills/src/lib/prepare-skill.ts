@@ -98,7 +98,7 @@ export function prepareSkill(name: string, options: PrepareSkillOptions): Prepar
 }
 
 const MAX_PACK_PARITY_PATHS = 8;
-const MAX_PACK_PARITY_PATH_BYTES = 120;
+const MAX_PACK_PARITY_PATH_CHARS = 120;
 
 /**
  * Preparation hashes the canonical source tree, while publishing sends the packed tree.
@@ -121,8 +121,8 @@ function assertPackedCanonicalCoverage(root: string): void {
 }
 
 function escapedRelativePath(path: string): string {
-  const bounded = path.length > MAX_PACK_PARITY_PATH_BYTES - 8
-    ? `${path.slice(0, MAX_PACK_PARITY_PATH_BYTES - 8)}...`
+  const bounded = path.length > MAX_PACK_PARITY_PATH_CHARS - 8
+    ? `${path.slice(0, MAX_PACK_PARITY_PATH_CHARS - 8)}...`
     : path;
   return JSON.stringify(bounded);
 }

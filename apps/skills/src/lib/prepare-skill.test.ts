@@ -33,7 +33,7 @@ function editManifest(path: string, edit: (manifest: Record<string, any>) => voi
 describe("prepare local skill drafts", () => {
   test.each([
     ["mixed-case-directory", "src/Node_Modules/fixture.txt"],
-    ["dependency-named-file", "src/node_modules"],
+    ["dependency-named-file", "scripts/node_modules"],
     ["credential-file", "references/credentials"],
   ])("refuses canonical source input that packing excludes at %s, then accepts deliberate repair", async (label, relativeSource) => asyncFixture(async (root, path) => {
     expect(validatePortableSkillDirectory("prepare-example", path).valid).toBe(true);
@@ -47,6 +47,11 @@ describe("prepare local skill drafts", () => {
     writeFileSync(nested, "preserve nested authored source\n");
     const before = readFileSync(join(path, "skill.json"), "utf8");
     expect(() => prepareSkill("prepare-example", { rootDir: root, version: "0.2.0", dryRun: true })).toThrow("packSkillBundle excludes");
+    expect(readFileSync(join(path, "skill.json"), "utf8")).toBe(before);
+    expect(readFileSync(source, "utf8")).toBe("Reviewed canonical input.\n");
+    expect(readFileSync(marker, "utf8")).toBe("{\"managed\":true}\n");
+    expect(readFileSync(nested, "utf8")).toBe("preserve nested authored source\n");
+    expect(() => prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" })).toThrow("packSkillBundle excludes");
     expect(readFileSync(join(path, "skill.json"), "utf8")).toBe(before);
     expect(readFileSync(source, "utf8")).toBe("Reviewed canonical input.\n");
     expect(readFileSync(marker, "utf8")).toBe("{\"managed\":true}\n");

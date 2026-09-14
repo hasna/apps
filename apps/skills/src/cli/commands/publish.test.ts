@@ -479,17 +479,18 @@ describe("skills push", () => {
     const root = makeCorpus({
       "release-notes": {
         ...VALID_SKILL,
+        "src/Node_Modules/fixture.txt": "Mixed-case dependency-like source.\n",
+        "scripts/node_modules": "Regular dependency-named source.\n",
         "references/credentials": "Credential-like source.\n",
         ".hasna-skills.json": "{\"managed\":true}\n",
         "src/.skills-dependency-preparation/nested-source.ts": "Nested authored source.\n",
       },
     });
     const skillDir = join(root, "release-notes");
-    writeFileSync(join(skillDir, "src/node_modules"), "Regular dependency-named source.\n");
     const manifestPath = join(skillDir, "skill.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     // This is a deliberately repaired canonical declaration: validation accepts it, while
-    // the old push path would silently drop the two canonical files during packing.
+    // the old push path would silently drop the three canonical files during packing.
     manifest.provenance.content_hash = computeContentHash(skillDir);
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
     try {
@@ -501,7 +502,7 @@ describe("skills push", () => {
 
         // Remove only the canonical files the packer excludes. The marker and nested source
         // have distinct semantics and must survive preparation and publication.
-        for (const relative of ["src/node_modules", "references/credentials"]) rmSync(join(skillDir, relative));
+        for (const relative of ["src/Node_Modules/fixture.txt", "scripts/node_modules", "references/credentials"]) rmSync(join(skillDir, relative));
         const prepared = prepareSkill("release-notes", { rootDir: root, version: "2.2.0", kind: "executable" });
         expect(validatePortableSkillDirectory("release-notes", skillDir).valid).toBe(true);
         const packed = packSkillBundle(skillDir);
