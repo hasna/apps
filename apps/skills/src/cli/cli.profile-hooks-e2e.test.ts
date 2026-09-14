@@ -203,13 +203,14 @@ test("built Gemini hook selects the user's request after its native SessionStart
   } finally { await f.close(); }
 });
 
-test("native payload project roots are guarded even when the host launches hooks from its home", async () => {
+test("managed payload project roots are guarded even when the host launches hooks from its home", async () => {
   const f = await fixture();
   try {
     await f.a.install(); await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]); await f.a.ok(["sync", "--json"]);
     for (const [agent, event, root] of [["claude", "UserPromptSubmit", ".claude"], ["gemini", "BeforeAgent", ".gemini"], ["cursor", "beforeSubmitPrompt", ".cursor"]]) {
       const native = join(f.a.project, root!, "skills", "unexpected", "SKILL.md");
       put(native, "Unexpected project instructions\n");
+      put(join(dirname(native), ".hasna-skills.json"), '{"managedBy":"@hasna/skills"}');
       const requestsBefore = f.requests.length;
       const response = await f.a.ok(["hook", "user-prompt", "--agent", agent!, "--event", event!], { cwd: f.a.home, stdin: { hook_event_name: event, prompt: "review", ...(agent === "cursor" ? { workspace_roots: [f.a.project], conversation_id: "cursor-test" } : { cwd: f.a.project, session_id: "test" }) } });
       expect(JSON.stringify(response)).toContain("NATIVE_SKILL_DRIFT");
@@ -221,7 +222,7 @@ test("native payload project roots are guarded even when the host launches hooks
   } finally { await f.close(); }
 });
 
-test("managed prompt hook refuses new native copies and missing or modified bridges before loading cached context", async () => {
+test("managed prompt hook refuses new managed copies and missing or modified bridges before loading cached context", async () => {
   const f = await fixture();
   try {
     await f.a.install();
@@ -230,6 +231,7 @@ test("managed prompt hook refuses new native copies and missing or modified brid
     const bridge = join(f.a.home, ".claude", "skills", "skills-cli", "SKILL.md"), original = readFileSync(bridge, "utf8");
     const unexpected = join(f.a.home, ".claude", "skills", "unexpected", "SKILL.md");
     put(unexpected, "Unexpected native instructions must not be accepted.\n");
+    put(join(dirname(unexpected), ".hasna-skills.json"), '{"managedBy":"@hasna/skills"}');
     const refused = await f.a.hook("claude", "UserPromptSubmit", { prompt: "review this patch" });
     expect(refused.decision).toBe("block"); expect(refused.reason).toContain("native");
     expect(JSON.stringify(refused)).not.toContain("Published 1.0.0");
@@ -254,6 +256,33 @@ test("native Skill invocation admits only the verified bridge and never dispatch
     const allowed = await f.a.hook("claude", "PreToolUse", { tool_name: "Skill", tool_input: { skill: "skills-cli" } });
     expect(allowed.hookSpecificOutput.permissionDecision).toBe("allow");
     expect(f.requests).toEqual(before);
+  } finally { await f.close(); }
+});
+
+test("built Claude hooks coexist with user/project skills and leave native permission decisions intact", async () => {
+  const f = await fixture();
+  try {
+    const files = [join(f.a.home, ".claude/skills/personal-check/SKILL.md"), join(f.a.project, ".claude/skills/skill-deploy/SKILL.md"), join(f.a.project, ".claude/skills/skill-seed/SKILL.md")];
+    for (const file of files) put(file, `---\nname: display-only\ndescription: An independent fixture\n---\nOriginal ${file}\n`);
+    const settings = join(f.a.project, ".claude/settings.local.json"), settingsText = '{"permissions":{"deny":["Skill(skill-deploy)"],"ask":["Skill(skill-seed)"]}}'; put(settings, settingsText);
+    const installed = await f.a.install();
+    expect(installed.requiresNativeRetirement).toBe(false);
+    expect(installed.nativeSkills.filter((entry: any) => entry.independent)).toHaveLength(3);
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    await f.a.ok(["sync", "--json"]);
+    for (const [event, input] of [["UserPromptSubmit", { prompt: "review the project" }], ["SessionStart", { source: "compact" }], ["SubagentStart", { agent_id: "coexistence-child", agent_type: "explorer" }]] as const) {
+      const response = await f.a.hook("claude", event, input);
+      expect(response.hookSpecificOutput.hookEventName).toBe(event);
+      expect(response.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+    }
+    for (const skill of ["personal-check", "skill-deploy", "skill-seed"]) expect(await f.a.hook("claude", "PreToolUse", { tool_name: "Skill", tool_input: { skill } })).toEqual({});
+    for (const skill of ["display-only", "missing-skill", "../skill-deploy", "plugin:skill-deploy"]) expect((await f.a.hook("claude", "PreToolUse", { tool_name: "Skill", tool_input: { skill } })).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(readFileSync(settings, "utf8")).toBe(settingsText);
+    for (const file of files) expect(readFileSync(file, "utf8")).toContain(`Original ${file}`);
+    // Host cwd and supplied cwd both participate in the actual command path.
+    const prompt = await f.a.ok(["hook", "user-prompt", "--agent", "claude", "--event", "UserPromptSubmit", "--selection-profile", "engineering"], { cwd: f.a.home, stdin: { cwd: f.a.project, session_id: "home-launch", prompt: "review the project" } });
+    expect(prompt.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+    expect((await f.a.install()).changed).toEqual([]);
   } finally { await f.close(); }
 });
 
@@ -324,6 +353,53 @@ test.skipIf(!nativeCodex)("installed Codex delivers the managed UserPromptSubmit
 });
 
 const nativeClaude = process.env.HASNA_SKILLS_NATIVE_CLAUDE_BIN;
+test.skipIf(!nativeClaude)("installed Claude loads an independent project skill and enforces its native deny rule", async () => {
+  const f = await fixture(); let modelServer: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    for (const name of ["skill-deploy", "skill-seed"]) put(join(f.a.project, `.claude/skills/${name}/SKILL.md`), `---\ndescription: Independent native fixture\n---\nPRIVATE_BODY_${name}\nRespond without calling any tools.\n`);
+    await f.a.install(); await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    put(join(f.a.project, ".claude/settings.local.json"), '{"permissions":{"allow":["Skill(skill-deploy)"],"deny":["Skill(skill-seed)"]}}');
+    const requests: any[] = [];
+    let selected = "skill-deploy";
+    modelServer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+      const route = new URL(request.url).pathname;
+      if (route.endsWith("/count_tokens")) return Response.json({ input_tokens: 1 });
+      if (!route.endsWith("/messages")) return Response.json({ data: [] });
+      const body = await request.json() as any; requests.push(body);
+      const finished = body.messages?.some((message: any) => Array.isArray(message.content) && message.content.some((block: any) => block.type === "tool_result"));
+      const block = finished ? { type: "text", text: "Fixture complete." } : { type: "tool_use", id: "tool_fixture", name: "Skill", input: { skill: selected } };
+      const message = { id: "msg_fixture", type: "message", role: "assistant", model: body.model, content: [block], stop_reason: finished ? "end_turn" : "tool_use", stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
+      if (!body.stream) return Response.json(message);
+      const events = [
+        { type: "message_start", message: { ...message, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+        { type: "content_block_start", index: 0, content_block: finished ? { type: "text", text: "" } : { type: "tool_use", id: "tool_fixture", name: "Skill", input: {} } },
+        { type: "content_block_delta", index: 0, delta: finished ? { type: "text_delta", text: "Fixture complete." } : { type: "input_json_delta", partial_json: JSON.stringify({ skill: selected }) } },
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: message.stop_reason, stop_sequence: null }, usage: { output_tokens: 1 } },
+        { type: "message_stop" },
+      ];
+      return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "Content-Type": "text/event-stream" } });
+    } });
+    for (const name of ["skill-deploy", "skill-seed"]) {
+      selected = name; requests.length = 0;
+      const child = Bun.spawn([nativeClaude!, "--print", "--no-session-persistence", "--output-format", "json", "--model", "fixture-model", `review with ${name}`], { cwd: f.a.project, env: { ...f.a.env, CLAUDE_CONFIG_DIR: join(f.a.home, ".claude"), ANTHROPIC_BASE_URL: `http://127.0.0.1:${modelServer.port}`, ANTHROPIC_API_KEY: "fixture-local-provider", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
+      try {
+        const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+        expect({ code, stdout: stdout.slice(-2000), stderr: stderr.slice(-2000) }).toMatchObject({ code: 0 });
+        expect(requests.length).toBeGreaterThan(1);
+        const results = requests.flatMap(body => body.messages ?? []).flatMap(message => Array.isArray(message.content) ? message.content : []).filter(block => block.type === "tool_result");
+        expect(results.length).toBeGreaterThan(0);
+        if (name === "skill-deploy") expect(JSON.stringify(requests)).toContain(`PRIVATE_BODY_${name}`);
+        else {
+          expect(JSON.stringify(requests)).not.toContain(`PRIVATE_BODY_${name}`);
+          expect(results.some(result => result.is_error === true)).toBe(true);
+        }
+      } finally { clearTimeout(timer); }
+    }
+  } finally { modelServer?.stop(true); await f.close(); }
+});
+
 test.skipIf(!nativeClaude)("installed Claude delivers selected context and advertises the owned native Skills bridge", async () => {
   const f = await fixture(); let modelServer: ReturnType<typeof Bun.serve> | undefined;
   try {

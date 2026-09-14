@@ -22,6 +22,8 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
     requireBound(object(alias)); for (const key of ["agent", "home", "alias", "target", "link", "aliasIdentity", "targetIdentity"]) text(alias[key]);
   }
   if (bridge.disabledBuiltins !== undefined) for (const builtin of array(bridge.disabledBuiltins, AGENT_POLICY_LIMITS.builtinNames)) { requireBound(object(builtin)); text(builtin.path); text(builtin.hash, 64); }
+  if (bridge.managedNativePaths !== undefined) for (const path of array(bridge.managedNativePaths, AGENT_POLICY_LIMITS.builtinNames)) text(path);
+  if (bridge.retirementDenials !== undefined) for (const [agent, owned] of Object.entries(record(bridge.retirementDenials, AGENT_POLICY_LIMITS.agents))) { text(agent, 128); requireBound(typeof owned === "boolean"); }
   if (bridge.discovery === undefined) return;
   for (const [agent, value] of Object.entries(record(bridge.discovery, AGENT_POLICY_LIMITS.agents))) {
     text(agent, 128); requireBound(object(value)); text(value.agent, 128);

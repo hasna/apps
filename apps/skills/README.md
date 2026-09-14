@@ -45,9 +45,9 @@ skills install pdf-generate@0.5.2 --selection-profile default --json
 skills load pdf-generate@0.5.2 --selection-profile default
 skills context 'Use $pdf-generate to create a PDF' --selection-profile default --json
 
-# Preview retirement, then archive ordinary copies and vendor discovery files.
-skills migrate native --include-unmanaged --include-vendor --json
-skills migrate native --include-unmanaged --include-vendor --apply --json
+# Preview retirement, then archive managed copies and vendor discovery files.
+skills migrate native --include-vendor --json
+skills migrate native --include-vendor --apply --json
 
 # Preview the available adapters, then install one bridge plus hooks per agent.
 skills hook agents --json
@@ -59,6 +59,9 @@ The hook install `--include-vendor` option is retained for compatibility with
 older scripts. Hook planning always inventories and disables discovered vendor
 system skills; use `migrate native --include-vendor` when retiring their
 discovery files.
+Use `--include-unmanaged` only when you intend to archive user-authored native
+skills too. Independent Claude user/project skills can remain in place; other
+adapters still require their native payload copies to be retired.
 
 Restart the agent after applying the hooks. In Codex, review and grant normal
 trust to the installed hook definitions before starting a new session. Then
@@ -67,14 +70,29 @@ a PDF`. The hooks supply instructions; executing the skill remains a separate
 explicit action.
 
 Each supported agent gets one small `skills-cli` native skill containing CLI
-instructions, without a copied catalogue. Claude's native Skill tool admits
-that bridge after other copies are retired. Prompt guards verify the owned
+instructions, without a copied catalogue. Claude can also use independent
+user/project skills directly under `.claude/skills/<name>` through its normal
+permissions. The hook abstains from granting those calls; existing deny/ask
+rules still apply. Skills-managed payload copies and plugin payloads require
+retirement. Prompt guards verify the owned
 bridge bytes, required native configuration, and discovered home/project skill
 paths before loading context. A missing or changed bridge, newly discovered
-copy, stale plugin registration, or incomplete scan reports repair guidance and
+managed copy, bridge shadow, stale plugin registration, or incomplete scan reports repair guidance and
 refuses loading. Most adapters also block the prompt; Hermes has the native
 non-blocking prompt-hook limitation described below. These are checks on configured native discovery, not
 an operating-system restriction on arbitrary file reads.
+
+Installation records observed managed native paths in the private policy and
+keeps that ownership across reinstalls, even if a marker is removed or malformed.
+It cannot recover historical ownership whose marker and records were already
+removed before this inventory. Independent native skill symlinks, nested payload
+layouts, and skill-directory plugins still require a discovery review. Matching
+user/project command names stay under Claude's native precedence and permissions.
+Multiple plugin installation scopes are inventoried separately; conflicting
+records within the same scope still refuse. The exact published version 1 bridge
+upgrades to version 2 with private backups; customized bridges are preserved and
+require review. Previously configured adapters keep their hook settings while
+their owned bridge documents upgrade together.
 
 Agent policies support up to 1 MiB of serialized UTF-8 JSON, with bounded agent
 and discovery collections (2,048 sources and 512 roots per agent). Installation
