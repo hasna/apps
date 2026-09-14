@@ -1,3 +1,4 @@
+import { assertSendBodyUrlBoundary } from "./send-body-boundary.js";
 import { getProvider } from "../db/providers.local.js";
 import { getAdapter } from "../providers/index.js";
 import { getFailoverProviderIds } from "./config.js";
@@ -156,6 +157,7 @@ export async function sendWithFailover(
     }
   }
 
+  assertSendBodyUrlBoundary(opts.text, opts.html);
   validateSendAttachments(opts.attachments);
   await assertWarmingLimit(opts, db);
 

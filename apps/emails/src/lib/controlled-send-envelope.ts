@@ -1,3 +1,4 @@
+import { findSendBodyUrlBoundary } from "./send-body-boundary.js";
 import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import { link, lstat, open, realpath, unlink, type FileHandle } from "node:fs/promises";
@@ -338,6 +339,9 @@ async function parseSendPayload(identity: ControlledDescriptorIdentity): Promise
   if (text === undefined && html === undefined) {
     throw schemaError("$.text", "or $.html must provide a message body source");
   }
+
+  const finding = findSendBodyUrlBoundary(text, html);
+  if (finding) throw new ControlledDescriptorError(`${finding.code}: ${finding.message}`);
 
   const rawAttachments = record["attachments"];
   let attachments: ControlledSendPayload["attachments"];

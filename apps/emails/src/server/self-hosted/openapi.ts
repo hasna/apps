@@ -3834,8 +3834,8 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                   bcc: { type: "array", items: { type: "string" } },
                   reply_to: { type: "string" },
                   subject: { type: "string" },
-                  text: { type: "string" },
-                  html: { type: "string" },
+                  text: { type: "string", description: "Body bytes are preserved. Raw backslash followed by n or r inside an HTTP(S) token is rejected with invalid_body_url_boundary before send intent reservation; use actual line breaks." },
+                  html: { type: "string", description: "HTML body, subject to the same HTTP(S) token boundary check as text, including attribute values." },
                   attachments: {
                     type: "array",
                     maxItems: 5,
@@ -3882,7 +3882,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
             description: "Newly accepted send or an existing send still in progress",
             content: { "application/json": { schema: sendMessageAcceptedResponseSchema } },
           },
-          "400": errorResponse("Invalid send request"),
+          "400": errorResponse("Invalid send request, including invalid_body_url_boundary; no send intent or provider call"),
           "401": errorResponse("Authentication required"),
           "403": errorResponse("Sender or tenant scope is not authorized"),
           "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/SendMessageError" } } } },
@@ -4775,7 +4775,7 @@ emailsSelfHostedOpenApi.paths!["/v1/scheduled/enqueue"] = { post: {
   responses: {
     "200": { description: "Existing enqueue identity", content: { "application/json": { schema: enqueueReceipt } } },
     "201": { description: "New scheduled send; no mail sent", content: { "application/json": { schema: enqueueReceipt } } },
-    "400": errorResponse("Invalid payload or nonfuture new schedule"), "401": errorResponse("Authentication required"),
+    "400": errorResponse("Invalid payload (including invalid_body_url_boundary) or nonfuture new schedule; no job enqueued"), "401": errorResponse("Authentication required"),
     "403": errorResponse("Tenant operator required"), "409": errorResponse("Idempotency key conflict"), "413": errorResponse("Payload too large"),
   },
 } };
