@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 
 type Fields = { dependencies?: Record<string,string>; devDependencies?: Record<string,string>; optionalDependencies?: Record<string,string>; peerDependencies?: Record<string,string>; optionalPeers?: string[] };
 type Manifest = Fields & { name:string; version:string; peerDependenciesMeta?:Record<string,{optional?:boolean}> };
@@ -10,7 +10,7 @@ type Lock = { lockfileVersion:number; workspaces:Record<string,Fields & {name:st
 const sha = (bytes:string|Buffer) => createHash("sha256").update(bytes).digest("hex");
 const canonical = (record:Record<string,string> = {}) => JSON.stringify(Object.entries(record).sort(([a],[b])=>a.localeCompare(b)));
 function insist(value:unknown,label:string):asserts value { if(!value) throw new Error(`Producer dependency verification refused: ${label}`); }
-function inside(parent:string,child:string) { const value=relative(parent,child);return value===""||(!value.startsWith("../")&&value!==".."&&!value.startsWith("/")); }
+function inside(parent:string,child:string) { const value=relative(parent,child);return value===""||(!value.startsWith("../")&&value!==".."&&!isAbsolute(value)); }
 function scopes(key:string) {
  const parts=key.split("/"), names:string[]=[];
  for(let i=0;i<parts.length;i++) names.push(parts[i]!.startsWith("@")?`${parts[i]}/${parts[++i]}`:parts[i]!);
