@@ -187,6 +187,18 @@ Receipts and bundle requests retain the canonical name. Aliases are scoped to
 the authority, workspace and profile revision; project/session locks preserve
 their pinned aliases. They do not create global registry entries or native
 redirect skills. Saving aliases requires an API advertising `selectionAliases`.
+Profiles support up to 4,096 exact selections. API responses and local profile,
+project and session documents share an 8 MiB UTF-8 JSON limit. Resolved profiles
+reserve space within that limit for all session-loaded keys; the API refuses an
+oversized candidate before replacing the existing profile. Saved snapshots and
+owned cache receipts use compact JSON; existing formatted receipts remain readable.
+The authenticated capabilities response advertises `profileLimits`, including
+`maxSelections`, `maxDocumentBytes`, `maxResolvedProfileBytes` and the effective
+`requestBodyLimitBytes`. Larger writes require these advertised limits. Operators
+can set `HASNA_SKILLS_REQUEST_BODY_LIMIT_BYTES=8388608` to admit larger requests;
+the default remains 1,000,000 bytes and a lower configured limit still applies.
+These limits apply to configured memory, SQLite and PostgreSQL stores;
+profile sync does not require S3 or native skill copies.
 Profile
 writes use compare-and-swap revisions. Station receipts belong to the workspace,
 user and stable station ID, so rotating a key does not create a new station.
