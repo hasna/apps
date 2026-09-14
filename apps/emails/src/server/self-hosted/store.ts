@@ -761,6 +761,12 @@ function sendIntentRequiresReconciliation(sendState: string): boolean {
   return !["cancelled", "blocked", "pending", "failed"].includes(sendState);
 }
 
+function sendIntentLookupRequiresReconciliation(sendState: string): boolean {
+  // A completed send has a known outcome. Cancellation still requires operator
+  // reconciliation because it cannot retroactively stop that sent message.
+  return sendState !== "sent" && sendIntentRequiresReconciliation(sendState);
+}
+
 export interface ListOptions {
   limit?: number;
   offset?: number;
@@ -5192,7 +5198,7 @@ export class TenantScopedStore {
       return {
         found: record !== null,
         tombstoned: tombstone !== null || record?.send_state === "cancelled",
-        reconciliation_required: record !== null && sendIntentRequiresReconciliation(record.send_state),
+        reconciliation_required: record !== null && sendIntentLookupRequiresReconciliation(record.send_state),
         message: record,
       };
     });
