@@ -94,6 +94,9 @@ allowlist unchanged: approve the two exact
 managed event/command pairs through Hermes normal hook trust and restart.
 The adapter refuses unreviewed installed plugin sources and custom Hermes
 homes/profiles, user-specific tilde expansion, and `TERMINAL_CWD` overrides.
+Nonempty `HERMES_BUNDLED_PLUGINS` and `HERMES_BUNDLED_SKILLS` overrides are
+also refused during discovery and hook checks; unset them to use the reviewed
+default source paths. Custom bundle locations need a dedicated discovery adapter.
 Retire native payloads before use. Legacy `skills-cli.md` files can shadow the
 bridge and must also be preserved and retired before proceeding. Only `skill_view(name:
 "skills-cli")` is allowed natively; author payloads with Skills CLI commands.
@@ -101,6 +104,25 @@ Hermes itself fails open on `pre_llm_call` errors. A returned refusal is visible
 context, and the trusted pre-tool guard blocks drift and native skill fallback;
 this is not a claim that Hermes can prevent every model call after a failed
 prompt hook or guarantee refusal if the native host/supervisor itself dies. Arbitrary project/plugin paths still require a discovery audit.
+
+Reviewed discovery can also bind `directories: [{ path, sha256 }]` alongside
+its full source-file hashes. The public SDK's `captureDiscoveryDirectories(paths)`
+captures recursive, sorted path/type membership without reading plugin payloads.
+Include every directory the reviewed loader scans, including plugin version
+selection parents and Python entrypoint discovery directories. Membership hashes
+detect added, removed or changed file types; keep source hashes for reviewed bytes.
+Missing directories bind as `sha256: null`. Symlinks and special nodes refuse.
+The bounds are 64 roots, 20,000 total entries, 8 MiB of path/type metadata and
+64 levels of recursion. Capture and checks require stable directory identities;
+quiesce source writers for installation because these checks are not atomic with
+a later native import.
+
+Hermes requires directory witnesses, including when upgrading an older policy.
+For an automatic bridge with no runtime installed, rerun normal `skills hook install`
+to review and apply the new bindings. Existing native trust is preserved.
+Reviewed Hermes installations need fresh source and directory coverage in their
+`--discovery-inputs` file. Other agents may add directory witnesses to their
+reviewed bindings without changing existing source-only reviews.
 
 Hook installation preserves unrelated configuration, hooks, and plugin assets.
 It disables discovered Codex native skills; exact system-skill trees can remain

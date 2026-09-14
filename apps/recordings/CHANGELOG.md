@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.4
+
+### Patch Changes
+
+- Add explicit-consent WAV uploads and streamed audio downloads, including byte ranges, across the SDK, CLI, MCP server and HTTP proxy. Validate transferred byte counts and digests, and release transport resources after refused uploads or cancelled downloads.
+- Add explicit hosted paste receipt saving across the SDK, CLI, MCP server and HTTP proxy.
+- Expose the existing validated hosted recording save operation through the
+  CLI, hosted MCP server and hosted HTTP proxy. Hosted MCP and HTTP save remain
+  behind the existing explicit `--allow-writes` startup option, and all surfaces
+  return metadata without private transcript text.
+- Add explicit hosted transcript export as UTF-8 plain text through the SDK, CLI,
+  MCP and hosted HTTP proxy. CLI export creates a new private file without replacing
+  existing destinations. Ordinary Library reads continue to omit private text.
+- Centralize the native updater's validated product identity, protected paths and
+  candidate metadata policy while keeping installation restricted to the existing
+  legacy product. Add isolated cross-product and ARM64 metadata checks; additional
+  product installation, feed support and packaging remain disabled.
+
 ## 0.5.3
 
 ### Patch Changes

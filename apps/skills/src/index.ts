@@ -516,3 +516,4 @@ export type { SkillSelection, SkillProfile, ResolvedSkillSelection, ResolvedSkil
 export { buildSkillContext } from "./lib/skill-context.js";
 export { syncSelectionProfile } from "./lib/selection-resolver.js";
 export { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills } from "./lib/agent-integration.js";
+export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./lib/agent-discovery.js";
