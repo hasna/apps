@@ -14,8 +14,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { RemoteSkillsClient } from "../../lib/remote-client.js";
-import { computeContentHash } from "../../lib/skill-hash.js";
-import { unpackSkillBundle } from "../../lib/skill-bundle.js";
+import { computeContentHash, computeContentHashFromEntries } from "../../lib/skill-hash.js";
+import { packSkillBundle, unpackSkillBundle } from "../../lib/skill-bundle.js";
 import { createSkillsFetchHandler } from "../../server/app.js";
 import { MemorySkillsStore } from "../../server/store.js";
 import { hashApiKey } from "../../server/auth.js";
@@ -473,6 +473,68 @@ describe("skills push", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("refuses a repaired canonical hash whose packed archive drops source, then accepts the deliberate repair", async () => {
+    const root = makeCorpus({
+      "release-notes": {
+        ...VALID_SKILL,
+        "references/credentials": "Credential-like source.\n",
+        ".hasna-skills.json": "{\"managed\":true}\n",
+        "src/.skills-dependency-preparation/nested-source.ts": "Nested authored source.\n",
+      },
+    });
+    const skillDir = join(root, "release-notes");
+    writeFileSync(join(skillDir, "src/node_modules"), "Regular dependency-named source.\n");
+    const manifestPath = join(skillDir, "skill.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    // This is a deliberately repaired canonical declaration: validation accepts it, while
+    // the old push path would silently drop the two canonical files during packing.
+    manifest.provenance.content_hash = computeContentHash(skillDir);
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    try {
+      await withServer(async ({ baseUrl, requests }) => {
+        const client = new RemoteSkillsClient(pushAuth, baseUrl);
+        const start = requests.length;
+        await expect(pushSkill("release-notes", { rootDir: root, client })).rejects.toThrow("packed archive does not match");
+        expect(requests.length).toBe(start);
+
+        // Remove only the canonical files the packer excludes. The marker and nested source
+        // have distinct semantics and must survive preparation and publication.
+        for (const relative of ["src/node_modules", "references/credentials"]) rmSync(join(skillDir, relative));
+        const prepared = prepareSkill("release-notes", { rootDir: root, version: "2.2.0", kind: "executable" });
+        expect(validatePortableSkillDirectory("release-notes", skillDir).valid).toBe(true);
+        const packed = packSkillBundle(skillDir);
+        expect(await computeContentHashFromEntries(unpackSkillBundle(packed.bytes))).toBe(prepared.contentHash);
+        expect(readFileSync(join(skillDir, ".hasna-skills.json"), "utf8")).toBe("{\"managed\":true}\n");
+        expect(readFileSync(join(skillDir, "src/.skills-dependency-preparation/nested-source.ts"), "utf8")).toBe("Nested authored source.\n");
+
+        const pushed = await pushSkill("release-notes", { rootDir: root, client });
+        expect(pushed).toMatchObject({ published: true, version: "2.2.0", contentHash: packed.sha256 });
+        expect(requests.slice(start)).toEqual([
+          { method: "GET", path: "/api/v1/skills/release-notes", ifMatch: null, status: 404 },
+          { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 201 },
+        ]);
+      });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("legacy SKILL.md-only pushes keep working without a canonical archive declaration", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-push-legacy-"));
+    const skillDir = join(root, "legacy-instruction");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "---\nname: legacy-instruction\ndescription: Legacy prose skill\nversion: 1.0.0\nkind: instruction\n---\n\n# Legacy\n");
+    try {
+      await withServer(async ({ baseUrl, requests }) => {
+        const pushed = await pushSkill("legacy-instruction", { rootDir: root, client: new RemoteSkillsClient(pushAuth, baseUrl) });
+        expect(pushed.published).toBe(true);
+        expect(pushed.paths).toEqual(["SKILL.md"]);
+        expect(requests.map(({ method, path }) => ({ method, path }))).toEqual([
+          { method: "GET", path: "/api/v1/skills/legacy-instruction" },
+          { method: "POST", path: "/api/v1/skills" },
+        ]);
+      });
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   test("--dry-run packs and reports without uploading", async () => {
