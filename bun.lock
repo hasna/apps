@@ -527,7 +527,7 @@
     },
     "apps/instructions": {
       "name": "@hasna/instructions",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "bin": {
         "instructions": "dist/cli/index.js",
         "configs": "dist/cli/index.js",
