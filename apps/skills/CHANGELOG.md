@@ -5,7 +5,7 @@
 ### Patch Changes
 
 - 12f8663: Honor explicit `port --all --allow-shadow` permission for each imported skill, including the `add` alias. Preserve default official-name refusal, separate overwrite consent and partial-failure reporting.
-- Verify actual producer dependency resolution against the selected standalone frozen lock before packing a release.
+- Verify actual producer dependency resolution against the selected standalone frozen lock before publication and in the explicit release packing procedure.
 
 ## 0.7.2
 

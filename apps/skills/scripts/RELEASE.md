@@ -7,7 +7,10 @@ Use that complete `node_modules` graph for the package in its isolated versioned
 worktree; retain the repository metadata used by the existing consumer type
 check. Do not substitute or mix older workspace dependency folders.
 
-Run `bun run verify:producer` before building; `prepack` also runs this gate.
+Run `bun run verify:producer` before building and before packing a release.
+`prepublishOnly` also enforces this gate before an actual npm publication.
+Ordinary `npm pack` retains the workspace build/release/consumer checks; it does
+not establish standalone producer attestation by itself.
 It checks declared root dependencies, actual resolved package versions and
 recursive dependency edges against the selected lock, including optional-peer
 absence. Every resolved package must remain inside the selected `node_modules`

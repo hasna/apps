@@ -62,8 +62,8 @@
     "verify:release": "bun run scripts/release-guard.ts",
     "verify:consumer-types": "bun run scripts/consumer-types.ts",
     "prepare": "bun run build:js",
-    "prepack": "bun run verify:producer && bun run build && bun run verify:release && bun run verify:consumer-types",
-    "prepublishOnly": "bun run typecheck && bun run test",
+    "prepack": "bun run build && bun run verify:release && bun run verify:consumer-types",
+    "prepublishOnly": "bun run verify:producer && bun run typecheck && bun run test",
     "verify:producer": "bun run scripts/release-dependencies.ts"
   },
   "keywords": [
