@@ -5,13 +5,20 @@ import { join } from "node:path";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { prepareSkill } from "./prepare-skill.js";
 import { scaffoldPortableSkill, validatePortableSkillDirectory, type SkillKind } from "./portable-skills.js";
-import { computeContentHash } from "./skill-hash.js";
+import { computeContentHash, computeContentHashFromEntries } from "./skill-hash.js";
+import { packSkillBundle, unpackSkillBundle } from "./skill-bundle.js";
 
 useDefaultTestTimeout();
 
 function fixture(run: (root: string, path: string) => void, kind: SkillKind = "executable") {
   const root = mkdtempSync(join(tmpdir(), "skills-prepare-test-"));
   try { run(root, scaffoldPortableSkill("prepare-example", { rootDir: root, kind }).path); }
+  finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+async function asyncFixture(run: (root: string, path: string) => Promise<void>, kind: SkillKind = "executable") {
+  const root = mkdtempSync(join(tmpdir(), "skills-prepare-test-"));
+  try { await run(root, scaffoldPortableSkill("prepare-example", { rootDir: root, kind }).path); }
   finally { rmSync(root, { recursive: true, force: true }); }
 }
 
@@ -24,6 +31,77 @@ function editManifest(path: string, edit: (manifest: Record<string, any>) => voi
 }
 
 describe("prepare local skill drafts", () => {
+  test.each([
+    ["mixed-case-directory", "src/Node_Modules/fixture.txt"],
+    ["dependency-named-file", "scripts/node_modules"],
+    ["credential-file", "references/credentials"],
+  ])("refuses canonical source input that packing excludes at %s, then accepts deliberate repair", async (label, relativeSource) => asyncFixture(async (root, path) => {
+    expect(validatePortableSkillDirectory("prepare-example", path).valid).toBe(true);
+    const source = join(path, relativeSource);
+    mkdirSync(join(source, ".."), { recursive: true });
+    writeFileSync(source, "Reviewed canonical input.\n");
+    const marker = join(path, ".hasna-skills.json");
+    const nested = join(path, "src/.skills-dependency-preparation/nested-source.ts");
+    mkdirSync(join(nested, ".."), { recursive: true });
+    writeFileSync(marker, "{\"managed\":true}\n");
+    writeFileSync(nested, "preserve nested authored source\n");
+    const before = readFileSync(join(path, "skill.json"), "utf8");
+    expect(() => prepareSkill("prepare-example", { rootDir: root, version: "0.2.0", dryRun: true })).toThrow("packSkillBundle excludes");
+    expect(readFileSync(join(path, "skill.json"), "utf8")).toBe(before);
+    expect(readFileSync(source, "utf8")).toBe("Reviewed canonical input.\n");
+    expect(readFileSync(marker, "utf8")).toBe("{\"managed\":true}\n");
+    expect(readFileSync(nested, "utf8")).toBe("preserve nested authored source\n");
+    expect(() => prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" })).toThrow("packSkillBundle excludes");
+    expect(readFileSync(join(path, "skill.json"), "utf8")).toBe(before);
+    expect(readFileSync(source, "utf8")).toBe("Reviewed canonical input.\n");
+    expect(readFileSync(marker, "utf8")).toBe("{\"managed\":true}\n");
+    expect(readFileSync(nested, "utf8")).toBe("preserve nested authored source\n");
+
+    // Deliberate repair removes the source file that cannot be published while retaining
+    // local marker state and a nested source directory with the same tool-owned name.
+    rmSync(source);
+    const preview = prepareSkill("prepare-example", { rootDir: root, version: "0.2.0", dryRun: true });
+    expect(preview.written).toBe(false);
+    const prepared = prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" });
+    expect(prepared.written).toBe(true);
+    expect(prepared.contentHash).toBe(preview.contentHash);
+    expect(prepared.contentHash).toBe(computeContentHash(path));
+    expect(validatePortableSkillDirectory("prepare-example", path).valid).toBe(true);
+    const packed = packSkillBundle(path);
+    expect(await computeContentHashFromEntries(unpackSkillBundle(packed.bytes))).toBe(prepared.contentHash);
+    expect(readFileSync(marker, "utf8")).toBe("{\"managed\":true}\n");
+    expect(readFileSync(nested, "utf8")).toBe("preserve nested authored source\n");
+    expect(prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" })).toMatchObject({ changed: false, written: false });
+    writeFileSync(join(path, "src/repaired.ts"), "A later source edit.\n");
+    expect(() => prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" })).toThrow("greater");
+  }));
+
+  test("ordinary dependency directories stay outside the prepared content hash", () => fixture((root, path) => {
+    for (const relative of ["node_modules", "src/node_modules"]) {
+      mkdirSync(join(path, relative));
+      writeFileSync(join(path, relative, "fixture.txt"), "Disposable dependency bytes.\n");
+    }
+    const prepared = prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" });
+    expect(prepared.contentHash).toBe(computeContentHash(path));
+    expect(validatePortableSkillDirectory("prepare-example", path).valid).toBe(true);
+    for (const relative of ["node_modules", "src/node_modules"]) {
+      expect(readFileSync(join(path, relative, "fixture.txt"), "utf8")).toBe("Disposable dependency bytes.\n");
+      writeFileSync(join(path, relative, "fixture.txt"), "Changed dependency bytes.\n");
+    }
+    expect(prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" })).toMatchObject({ changed: false, written: false });
+  }));
+
+  test("mixed-case dependency-like source retains symlink refusal", () => fixture((root, path) => {
+    mkdirSync(join(path, "src/Node_Modules"));
+    const outside = join(root, "outside.txt");
+    writeFileSync(outside, "Owned outside bytes.\n");
+    symlinkSync(outside, join(path, "src/Node_Modules/linked.txt"));
+    const before = readFileSync(join(path, "skill.json"), "utf8");
+    expect(() => prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" })).toThrow("symlink");
+    expect(readFileSync(join(path, "skill.json"), "utf8")).toBe(before);
+    expect(readFileSync(outside, "utf8")).toBe("Owned outside bytes.\n");
+  }));
+
   test("preserves extension fields, source bytes and manifest mode; does not run author code", () => fixture((root, path) => {
     const marker = join(root, "must-not-run");
     const source = `throw new Error(${JSON.stringify(marker)});\n`;

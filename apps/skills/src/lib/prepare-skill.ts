@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getPortableSkillsRootReadOnly, normalizePortableSkillName, validatePortableSkillDirectory, type PortableSkillManifest, type PortableSkillOptions, type SkillKind } from "./portable-skills.js";
 import { SEMVER_PATTERN, validatePortableManifestContract } from "./skill-contract.js";
-import { computeContentHash } from "./skill-hash.js";
+import { collectBundleFiles, computeContentHash } from "./skill-hash.js";
+import { collectSkillBundleEntries } from "./skill-bundle.js";
 import { parseSkillFrontmatter } from "./skill-validation.js";
 
 export interface PrepareSkillOptions extends PortableSkillOptions {
@@ -80,6 +81,7 @@ export function prepareSkill(name: string, options: PrepareSkillOptions): Prepar
     validateRuntimeEntrypoint(candidate, staging);
     const validation = validatePortableSkillDirectory(normalized, staging);
     if (!validation.valid) throw new Error(`Skill '${normalized}' cannot be prepared:\n${validation.issues.map(issue => `${issue.code}: ${issue.message}`).join("\n")}`);
+    assertPackedCanonicalCoverage(staging);
     // Optimistic source check: refuse any observed edit during preparation. The
     // final replacement is atomic; this is not a filesystem compare-and-swap.
     if (snapshot(path).identity !== before.identity) throw new Error("Skill changed during preparation; review the draft and run prepare again.");
@@ -93,6 +95,36 @@ export function prepareSkill(name: string, options: PrepareSkillOptions): Prepar
     }
     return { name: normalized, path, previousVersion, version: options.version, kind, contentHash, changed, written: changed && !options.dryRun, warnings: validation.warnings };
   } finally { rmSync(staging, { recursive: true, force: true }); }
+}
+
+const MAX_PACK_PARITY_PATHS = 8;
+const MAX_PACK_PARITY_PATH_CHARS = 120;
+
+/**
+ * Preparation hashes the canonical source tree, while publishing sends the packed tree.
+ * Refuse the draft when the packer's exclusions would silently remove a hash-covered file.
+ * The source snapshot has already applied the preparation entry and byte limits, and the
+ * diagnostic is deliberately capped and escaped so an unusual filename cannot flood output.
+ */
+function assertPackedCanonicalCoverage(root: string): void {
+  const canonicalPaths = new Set(collectBundleFiles(root).map(file => file.rel));
+  const packedPaths = new Set(collectSkillBundleEntries(root).map(entry => entry.path));
+  const omitted = [...canonicalPaths].filter(path => !packedPaths.has(path)).sort();
+  if (omitted.length === 0) return;
+
+  const rendered = omitted.slice(0, MAX_PACK_PARITY_PATHS).map(escapedRelativePath).join(", ");
+  const suffix = omitted.length > MAX_PACK_PARITY_PATHS ? ` (+${omitted.length - MAX_PACK_PARITY_PATHS} more)` : "";
+  throw new Error(
+    `Skill cannot be prepared because packSkillBundle excludes canonical source path(s): ${rendered}${suffix}. `
+      + "Rename or remove the excluded source before preparing; no files were changed.",
+  );
+}
+
+function escapedRelativePath(path: string): string {
+  const bounded = path.length > MAX_PACK_PARITY_PATH_CHARS - 8
+    ? `${path.slice(0, MAX_PACK_PARITY_PATH_CHARS - 8)}...`
+    : path;
+  return JSON.stringify(bounded);
 }
 
 function validateRuntimeEntrypoint(candidate: Record<string, unknown>, root: string): void {
@@ -161,7 +193,7 @@ function compareVersions(left: string, right: string): number {
 
 // Dependency/VCS/build trees are not authoring input. Everything else is bounded
 // and copied without following symlinks, including hidden source and empty dirs.
-const IGNORED = new Set(["node_modules", ".git", ".ds_store", ".system"]);
+const IGNORED = new Set([".git", ".ds_store", ".system"]);
 // Local dependency preparation state must not enter an authoring snapshot.
 const ROOT_IGNORED = new Set(["dist", "build", ".turbo", ".skills-dependency-preparation"]);
 function snapshot(root: string): { files: Array<{ path: string; bytes: Buffer; mode: number }>; directories: string[]; identity: string } {
@@ -177,6 +209,10 @@ function snapshot(root: string): { files: Array<{ path: string; bytes: Buffer; m
       if (++count > 20_000) throw new Error("Skill exceeds the preparation entry limit (20000).");
       const absolute = join(root, path), stat = lstatSync(absolute);
       if (stat.isSymbolicLink()) throw new Error(`Skill contains a symlink: ${path}. No files were changed.`);
+      // Canonical hashing excludes only exact-case dependency directories.
+      // A Node_Modules directory or a regular file named node_modules is source
+      // input and must survive staging, or the written hash will be stale.
+      if (stat.isDirectory() && name === "node_modules") continue;
       hash.update(JSON.stringify([path, stat.dev, stat.ino, stat.mode]));
       if (stat.isDirectory()) { directories.push(path); walk(path); }
       else if (stat.isFile()) {
