@@ -1,6 +1,6 @@
 {
   "name": "@hasna/attachments",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Authenticated HTTPS attachment clients and PostgreSQL-backed service",
   "repository": {
     "type": "git",

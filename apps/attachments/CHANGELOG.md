@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.1
+
+### Patch Changes
+
+- 1916abe: `attachments list --json` is now accepted as an alias of `--format json`, so scripts passing `--json` on the list surface no longer trip commander's unknown-option rejection (hasna/apps#1602).
+- 3425727: Check signed S3 download links with a bounded ranged GET so health-check does not mark working links dead after a rejected HEAD request. Handle empty objects under the same deadline, cancel response bodies, and abort the transport after the check. Retain HEAD for ordinary constrained share links and report failed checks without inventing an HTTP 404 status.
+- 0d19ff3: Drop the misleading local `Preferences:` line from the `attachments status` / `attachments doctor` report and state the transport and its mode on one stable line: `Transport: authenticated HTTPS (remote-only; no local fallback)`. That `remote-only` marker is the documented replacement for the pre-1.2.0 `Mode:` line, which was retired with the local SQLite/`localhost:3459` fallback, so consumers no longer read a local-mode signal off the only diagnostic the CLI offers and mis-triage a healthy remote-only CLI as unconfigured (BUG-0048).
+
 ## 1.2.0
 
 ### Minor Changes
