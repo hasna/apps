@@ -6,7 +6,7 @@ import { type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
 import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-hermes.js";
 import { selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
-import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, type IntegrationAgent } from "../../lib/agent-integration.js";
+import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, type IntegrationAgent } from "../../lib/agent-integration.js";
 
 function agents(value: string): IntegrationAgent[] {
   if (value === "all") return [...INTEGRATION_AGENTS];
@@ -86,6 +86,7 @@ export function registerAgentIntegration(parent: Command): void {
         // Validate event before starting the context operation.
         hookContextOutput(event, { context: "" });
         assertManagedAgentBridge(options.agent, { projectDirs: projects });
+        if (typeof input.prompt === "string") input.prompt = normalizeAgentHookPrompt(options.agent, nativeEvent, input.prompt);
         if (event === "SessionStart") {
           const refresh = Bun.spawn([process.execPath, process.argv[1]!, "sync", "--selection-profile", selectedProfileId(options.selectionProfile), "--json"], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
           const timer = setTimeout(() => refresh.kill("SIGKILL"), 6500);

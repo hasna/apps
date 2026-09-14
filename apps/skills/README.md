@@ -132,6 +132,11 @@ session start and gates later prompt submission; its prompt hook does not
 inject context on the supported installed path. Other inventoried clients do
 not automatically gain a working prompt adapter.
 
+Gemini's `BeforeAgent` prompt can include the Skills policy emitted at session
+start. The hook excludes that exact leading policy from skill selection, so it
+does not displace the user's requested skill. Other hook context and user text
+remain part of the selection input.
+
 Known local plugin registrations are resolved automatically. Plugins with
 instruction-injecting hooks, unresolved runtime registrations, unsupported
 legacy command formats, and higher-precedence project discovery settings need
