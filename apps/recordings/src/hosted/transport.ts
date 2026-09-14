@@ -159,7 +159,9 @@ export class Transport {
     else options.signal?.addEventListener("abort", onAbort, { once: true });
     const timer = setTimeout(() => { timedOut = true; controller.abort(); }, this.#timeout);
     let response: Response | undefined;
+    let requestBody: AudioBody = upload.body;
     try {
+      requestBody = managedAudioBody(upload.body, controller.signal);
       controller.signal.throwIfAborted();
       const token = await this.#getCredential(controller);
       controller.signal.throwIfAborted();
@@ -173,7 +175,7 @@ export class Transport {
       });
       const url = this.base + path;
       response = await abortable(this.#fetch(url, {
-        method: "PUT", headers, body: upload.body as BodyInit, redirect: "manual",
+        method: "PUT", headers, body: requestBody as BodyInit, redirect: "manual",
         credentials: "omit", cache: "no-store", signal: controller.signal,
       }), controller.signal);
       assertNoRedirect(response, url);
@@ -187,8 +189,12 @@ export class Transport {
     } finally {
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);
+      // The request body may still be locked by fetch when an early response
+      // arrives. Abort the body wrapper first so its source closes even then.
+      controller.abort();
       void response?.body?.cancel().catch(() => {});
-      if (!response) cancelAudioBody(upload.body);
+      cancelAudioBody(requestBody);
+      if (requestBody !== upload.body) cancelAudioBody(upload.body);
     }
   }
 
@@ -310,11 +316,41 @@ export class Transport {
 function cancelAudioBody(body: AudioBody): void {
   if (body instanceof ReadableStream) void body.cancel().catch(() => {});
 }
+function managedAudioBody(body: AudioBody, signal: AbortSignal): AudioBody {
+  if (!(body instanceof ReadableStream)) return body;
+  if (body.locked) throw new RecordingsSDKError("invalid_input");
+  const reader = body.getReader();
+  let closed = false;
+  let closePromise: Promise<void> | undefined;
+  const release = () => { try { reader.releaseLock(); } catch {} };
+  const close = (reason?: unknown): Promise<void> => {
+    if (closePromise) return closePromise;
+    closed = true;
+    closePromise = reader.cancel(reason).catch(() => {}).finally(release);
+    return closePromise;
+  };
+  const onAbort = () => { void close(); };
+  signal.addEventListener("abort", onAbort, { once: true });
+  const cleanup = () => signal.removeEventListener("abort", onAbort);
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (closed) { controller.close(); return; }
+      try {
+        const next = await reader.read();
+        if (next.done) { cleanup(); release(); controller.close(); return; }
+        controller.enqueue(next.value);
+      } catch (error) {
+        cleanup(); release(); controller.error(error);
+      }
+    },
+    async cancel(reason) { cleanup(); await close(reason); },
+  });
+}
 function validateAudioUpload(upload: HostedAudioUploadInput): void {
   if (!upload || upload.retainAudio !== true || !Number.isSafeInteger(upload.byteLength) ||
       upload.byteLength < WAV_HEADER_BYTES + 2 || upload.byteLength > MAX_AUDIO_BYTES ||
       (upload.byteLength - WAV_HEADER_BYTES) % 2 !== 0 || !audioSHA256Parser.safeParse(upload.sha256).success ||
-      !isAudioBody(upload.body)) throw new RecordingsSDKError("invalid_input");
+      !isAudioBody(upload.body) || (upload.body instanceof ReadableStream && upload.body.locked)) throw new RecordingsSDKError("invalid_input");
 }
 function isAudioBody(value: unknown): value is AudioBody {
   return value instanceof ArrayBuffer || ArrayBuffer.isView(value) ||

@@ -23,16 +23,16 @@ export function buildHostedServer(client: HostedRecordingsClient, options: { all
   server.registerTool("recordings_hosted_providers", {
     description: "Read server-configured transcription providers, models and optional defaults. Availability is reported by the server; no provider request is made.",
     inputSchema: z.object({}).strict(), annotations,
-  }, () => execute(() => client.providers()));
+  }, (_, extra) => execute(() => client.providers({ signal: extra.signal })));
   server.registerTool("recordings_hosted_list", {
     description: "Read one hosted Library page. Private transcripts require includeText. A cursor permits another request, without an inferred total.",
     inputSchema: { limit: z.number().int().min(1).max(100).optional(), before: z.string().optional(),
       beforeId: z.string().optional(), includeText: z.boolean().optional() }, annotations,
-  }, options => execute(() => library.list(options)));
+  }, (options, extra) => execute(() => library.list(options, { signal: extra.signal })));
   server.registerTool("recordings_hosted_get", {
     description: "Read one hosted recording. Private transcript text is omitted unless includeText is true.",
     inputSchema: { id: z.string(), includeText: z.boolean().optional() }, annotations,
-  }, ({ id, includeText }) => execute(() => library.get(id, { includeText })));
+  }, ({ id, includeText }, extra) => execute(() => library.get(id, { includeText }, { signal: extra.signal })));
   server.registerTool("recordings_hosted_export", {
     description: "Explicitly export one private transcript as UTF-8 plain text. Returns its text and a safe .txt filename; does not write a local file or change the recording.",
     inputSchema: z.object({ id: z.string() }).strict(), annotations,
@@ -96,6 +96,6 @@ export function buildHostedServer(client: HostedRecordingsClient, options: { all
     description: "Read one hosted paste-history page with destination and client-reported delivery evidence. Private pasted text requires includeText. A confirmed report does not mean the server observed delivery.",
     inputSchema: { limit: z.number().int().min(1).max(100).optional(), before: z.string().optional(),
       beforeId: z.string().optional(), includeText: z.boolean().optional() }, annotations,
-  }, options => execute(() => history.list(options)));
+  }, (options, extra) => execute(() => history.list(options, { signal: extra.signal })));
   return server;
 }

@@ -99,6 +99,32 @@ test("upload uses one authenticated raw WAV PUT with exact consent, length and d
   expect(calls).toBe(1);
 });
 
+test("upload closes an unconsumed or partially consumed body after an early response", async () => {
+  for (const [status, code] of [[401, "unauthorized"], [403, "forbidden"], [500, "http_error"]] as const) {
+    for (const consume of [false, true]) {
+      let cancelled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(wav); },
+      cancel() { cancelled++; },
+    });
+    const client = new HostedRecordingsClient({
+      apiBase: base,
+      credentialProvider: () => "fictional-access",
+      fetch: fakeFetch(async (_url, init) => {
+        if (consume) {
+          const reader = (init.body as ReadableStream<Uint8Array>).getReader();
+          await reader.read(); reader.releaseLock();
+        }
+        return Response.json({ error: "early response" }, { status });
+      }),
+    });
+    await expect(client.uploadAudio(id, { body, byteLength: wav.byteLength, sha256: sha, retainAudio: true }))
+      .rejects.toMatchObject({ code });
+    expect(cancelled).toBe(1);
+    }
+  }
+});
+
 test("upload validates size, parity, digest, consent and body before credentials or fetch", async () => {
   let calls = 0;
   let credentials = 0;

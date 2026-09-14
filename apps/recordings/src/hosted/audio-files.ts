@@ -82,7 +82,6 @@ export async function writeAudioDownload(
   const parent = dirname(path);
   const temp = join(parent, "." + basename(path) + ".part-" + randomUUID());
   let handle: Awaited<ReturnType<typeof open>> | undefined;
-  let published = false;
   try {
     handle = await open(temp, "wx", 0o600);
     const reader = response.body.getReader();
@@ -109,13 +108,15 @@ export async function writeAudioDownload(
     }
     const digest = hash.digest("hex");
     if (length !== response.byteLength || digest !== response.sha256) throw new RecordingsSDKError("invalid_response");
+    checkAbort(signal);
     await handle.sync();
+    checkAbort(signal);
     await handle.close();
     handle = undefined;
+    checkAbort(signal);
     // A hard-link publication fails if another process created the destination
     // after the initial absent check, so it cannot overwrite an existing file.
     await link(temp, path);
-    published = true;
     await unlink(temp);
     return { path, byteLength: length, sha256: digest, status: 200 };
   } catch (error) {
@@ -124,7 +125,8 @@ export async function writeAudioDownload(
     throw new RecordingsSDKError("invalid_input");
   } finally {
     if (handle) await handle.close().catch(() => {});
-    if (!published) await unlink(temp).catch(() => {});
+    // Retry cleanup after every outcome, including a failed unlink after link.
+    await unlink(temp).catch(() => {});
   }
 }
 
