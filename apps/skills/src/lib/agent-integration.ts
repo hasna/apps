@@ -568,11 +568,26 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
   recheckRootAliases(aliases);
 }
 
+const SKILLS_LOADING_POLICY = "Skills loading policy: discover skills with `skills list` or `skills search`, and read selected instructions with `skills load <slug>`. Use `skills sync` to refresh the shared profile. The only native skill is the owned skills-cli bridge. Create and edit payload skills in the Skills authoring workspace; do not copy payload instructions into native discovery folders. Context loading does not authorize execution; use `skills run` only when the task calls for running a skill.";
+
+export function normalizeAgentHookPrompt(agent: IntegrationAgent, event: string, prompt: string): string {
+  // Gemini prepends SessionStart context to BeforeAgent.prompt. Exclude only
+  // our exact leading policy from selection; arbitrary hook/user text survives.
+  if (agent !== "gemini" || event !== "BeforeAgent") return prompt;
+  const prefix = `<hook_context>${SKILLS_LOADING_POLICY}`;
+  if (!prompt.startsWith(prefix)) return prompt;
+  const remainder = prompt.slice(prefix.length);
+  const closing = "</hook_context>\n\n";
+  if (remainder.startsWith(closing)) return remainder.slice(closing.length);
+  if (remainder.startsWith("\n\n") && remainder.includes(closing)) return `<hook_context>${remainder.slice(2)}`;
+  return prompt;
+}
+
 export function hookContextOutput(event: string, result: { context: string; receipt?: unknown; omitted?: Array<{ slug: string; version: string; loadCommand: string }> }): Record<string, unknown> {
   if (!HOOK_EVENTS.includes(event as ContextHookEvent)) throw new Error(`Unsupported context hook event: ${event}`);
   const omitted = result.omitted?.slice(0, 10).map(entry => `Additional selected skill ${entry.slug}@${entry.version}: ${entry.loadCommand}`).join("\n");
   const policy = event === "SessionStart" || event === "SubagentStart"
-    ? "Skills loading policy: discover skills with `skills list` or `skills search`, and read selected instructions with `skills load <slug>`. Use `skills sync` to refresh the shared profile. The only native skill is the owned skills-cli bridge. Create and edit payload skills in the Skills authoring workspace; do not copy payload instructions into native discovery folders. Context loading does not authorize execution; use `skills run` only when the task calls for running a skill."
+    ? SKILLS_LOADING_POLICY
     : "";
   const context = [policy, result.context, omitted].filter(Boolean).join("\n\n");
   if (!context) return {};
