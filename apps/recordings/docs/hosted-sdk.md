@@ -68,8 +68,9 @@ growing buffer, not total process memory. Error bodies are cancelled unread.
 validated UUID request ID. It retains no body, endpoint, token, server message or
 original cause. A timed-out mutation may already have committed: reconcile using
 the known recording or receipt ID instead of blindly retrying. This JSON client
-does not implement audio upload/download, WebSocket sessions, native app control,
-tenant storage, usage admission or provider execution.
+does not implement WebSocket sessions, native app control, tenant storage,
+usage admission or provider execution. Audio metadata and raw transfer are
+[documented here](hosted-audio.md).
 
 ## Hosted Library across interfaces
 
