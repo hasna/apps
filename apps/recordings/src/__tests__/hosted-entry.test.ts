@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { signingFixtureCommand } from "./helpers/signing-fixture.js";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runStartupFixture, startupFixtureEnv } from "./helpers/startup-fixture.js";
@@ -94,7 +95,7 @@ test.each([false, true])("real MCP stdio entry preserves reads and gates mutatio
     await client.connect(transport, { timeout: 3000 });
     transport.stderr?.on("data", chunk => { stderr += String(chunk); if (stderr.length > 65536) void transport.close(); });
     const { tools } = await client.listTools({}, { timeout: 3000 });
-    const reads = ["recordings_hosted_export", "recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"];
+    const reads = ["recordings_hosted_audio_metadata", "recordings_hosted_export", "recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"];
     expect(tools.map(tool => tool.name).sort()).toEqual([...reads, ...(allowWrites ? ["recordings_hosted_delete", "recordings_hosted_paste_save", "recordings_hosted_rename", "recordings_hosted_save"] : [])].sort());
     expect(counts()).toEqual({ denied: 0, requests: 0 });
     const result = await client.callTool({ name: "recordings_hosted_paste_history", arguments: { limit: 1 } }, undefined, { timeout: 3000 });
@@ -212,6 +213,87 @@ test("hosted CLI stdin save rejects empty, conflicting, malformed and oversized 
     expect(result.stdout).not.toContain("Hidden fictional transcript.");
   }
 });
+
+function processAudioFixture(): Uint8Array {
+  const pcm = new Uint8Array(4_802);
+  const bytes = new Uint8Array(44 + pcm.byteLength);
+  const view = new DataView(bytes.buffer);
+  bytes.set(new TextEncoder().encode("RIFF"), 0); view.setUint32(4, bytes.byteLength - 8, true);
+  bytes.set(new TextEncoder().encode("WAVE"), 8); bytes.set(new TextEncoder().encode("fmt "), 12);
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, 24_000, true); view.setUint32(28, 48_000, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  bytes.set(new TextEncoder().encode("data"), 36); view.setUint32(40, pcm.byteLength, true); bytes.set(pcm, 44);
+  return bytes;
+}
+
+const PROCESS_AUDIO_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const PROCESS_AUDIO_BASE = "https://fictional.example.test/api/v1/";
+const PROCESS_AUDIO_PRELOAD = join(import.meta.dir, "helpers/hosted-entry-preload.ts");
+
+function readEntryBoundary(home: string) {
+  expect(existsSync(join(home, "boundary.json"))).toBe(true);
+  return JSON.parse(readFileSync(join(home, "boundary.json"), "utf8")) as { denied: number; requests: number };
+}
+
+test("real hosted CLI audio metadata/upload/download use raw files and preserve destinations", async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "recordings-hosted-entry-"))); chmodSync(home, 0o700);
+  const source = join(home, "source.wav"), destination = join(home, "download.wav"), existing = join(home, "existing.wav");
+  const audio = processAudioFixture(), sha256 = createHash("sha256").update(audio).digest("hex");
+  writeFileSync(source, audio);
+  const command = [process.execPath, "--preload", PROCESS_AUDIO_PRELOAD, join(import.meta.dir, "../cli/index.ts")];
+  const connection = ["--json", "hosted", "--api-base", PROCESS_AUDIO_BASE, "--credential-env", "SELECTED_SESSION"];
+  try {
+    const metadata = await runStartupFixture(home, [...command, ...connection, "audio-metadata", PROCESS_AUDIO_ID], startupFixtureEnv(home, { SELECTED_SESSION: "fictional-entry-session" }));
+    expect(metadata.exitCode).toBe(0); expect(readEntryBoundary(home)).toEqual({ denied: 0, requests: 1 });
+    expect(JSON.parse(metadata.stdout)).toMatchObject({ state: "available", byteLength: audio.byteLength, pcmBytes: 4_802, sha256, durationMs: 4_802 / 48 });
+    expect(metadata.stdout).not.toContain("Hidden fictional transcript"); expect(metadata.stderr).toBe("");
+
+    const upload = await runStartupFixture(home, [...command, ...connection, "audio-upload", PROCESS_AUDIO_ID, "--input", source, "--retain-audio"], startupFixtureEnv(home, { SELECTED_SESSION: "fictional-entry-session" }));
+    expect(upload.exitCode).toBe(0); expect(readEntryBoundary(home)).toEqual({ denied: 0, requests: 1 });
+    expect(JSON.parse(upload.stdout)).toMatchObject({ state: "available", byteLength: audio.byteLength, sha256 });
+    expect(upload.stdout).not.toContain("Hidden fictional transcript"); expect(upload.stderr).toBe("");
+
+    const download = await runStartupFixture(home, [...command, ...connection, "audio-download", PROCESS_AUDIO_ID, "--output", destination], startupFixtureEnv(home, { SELECTED_SESSION: "fictional-entry-session" }));
+    expect(download.exitCode).toBe(0); expect(readEntryBoundary(home)).toEqual({ denied: 0, requests: 1 });
+    expect(JSON.parse(download.stdout)).toMatchObject({ byteLength: audio.byteLength, sha256, status: 200 });
+    expect(new Uint8Array(readFileSync(destination))).toEqual(audio); expect(download.stdout).not.toContain("Hidden fictional transcript"); expect(download.stderr).toBe("");
+
+    writeFileSync(existing, Buffer.from("preserve"));
+    const refused = await runStartupFixture(home, [...command, ...connection, "audio-download", PROCESS_AUDIO_ID, "--output", existing], startupFixtureEnv(home, { SELECTED_SESSION: "fictional-entry-session" }));
+    expect(refused.exitCode).toBe(1); expect(readEntryBoundary(home)).toEqual({ denied: 0, requests: 0 });
+    expect(readFileSync(existing, "utf8")).toBe("preserve"); expect(refused.stdout).not.toContain("existing.wav"); expect(refused.stderr).toBe("");
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("real hosted MCP audio tools use configured basenames and raw files", async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "recordings-hosted-entry-"))); chmodSync(home, 0o700);
+  const source = join(home, "source.wav"), destination = join(home, "roundtrip.wav"), audio = processAudioFixture();
+  writeFileSync(source, audio);
+  const command = signingFixtureCommand(home, [process.execPath, "--preload", PROCESS_AUDIO_PRELOAD,
+    join(import.meta.dir, "../mcp/index.ts"), "--hosted", "--stdio", "--allow-writes", "--audio-directory", home,
+    "--api-base", PROCESS_AUDIO_BASE, "--credential-env", "SELECTED_SESSION"]);
+  const transport = new StdioClientTransport({ command: command[0]!, args: command.slice(1), cwd: home,
+    env: startupFixtureEnv(home, { SELECTED_SESSION: "fictional-entry-session" }), stderr: "pipe" });
+  const client = new Client({ name: "fictional-audio-process", version: "1" });
+  let stderr = "";
+  try {
+    await client.connect(transport, { timeout: 3000 });
+    transport.stderr?.on("data", chunk => { stderr += String(chunk); });
+    const listed = await client.listTools({}, { timeout: 3000 });
+    expect(listed.tools.map(tool => tool.name)).toEqual(expect.arrayContaining([
+      "recordings_hosted_audio_metadata", "recordings_hosted_audio_upload", "recordings_hosted_audio_download",
+    ]));
+    const metadata = await client.callTool({ name: "recordings_hosted_audio_metadata", arguments: { id: PROCESS_AUDIO_ID } }, undefined, { timeout: 3000 });
+    expect(metadata.isError).not.toBe(true); expect(metadata.structuredContent).toMatchObject({ state: "available", byteLength: audio.byteLength });
+    const upload = await client.callTool({ name: "recordings_hosted_audio_upload", arguments: { id: PROCESS_AUDIO_ID, fileName: "source.wav", retainAudio: true } }, undefined, { timeout: 3000 });
+    expect(upload.isError).not.toBe(true); expect(upload.structuredContent).toMatchObject({ state: "available", byteLength: audio.byteLength });
+    const download = await client.callTool({ name: "recordings_hosted_audio_download", arguments: { id: PROCESS_AUDIO_ID, fileName: "roundtrip.wav" } }, undefined, { timeout: 3000 });
+    expect(download.isError).not.toBe(true); expect(download.structuredContent).toMatchObject({ fileName: "roundtrip.wav", byteLength: audio.byteLength, status: 200 });
+    expect(JSON.stringify(download)).not.toContain(home); expect(new Uint8Array(readFileSync(destination))).toEqual(audio);
+    expect(readEntryBoundary(home)).toEqual({ denied: 0, requests: 3 }); expect(stderr).toBe("");
+  } finally { await client.close(); await transport.close(); rmSync(home, { recursive: true, force: true }); }
+}, 15000);
 
 test("write startup flag cannot enter legacy MCP or serve modes", async () => {
   for (const surface of ["mcp", "server"] as const) {

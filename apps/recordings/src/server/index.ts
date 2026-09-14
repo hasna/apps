@@ -43,7 +43,7 @@ Options:
   --port <port>   HTTP port to bind. Defaults to ${DEFAULT_PORT} (or $PORT)
   --host <host>   Hostname to bind. Defaults to 127.0.0.1 (or $HOST)
   --hosted       Read-only SaaS Library proxy, bound only to an explicit loopback IP
-  --allow-writes Enable hosted recording and paste-save routes; requires --hosted
+  --allow-writes Enable hosted recording, paste-save, and raw audio transfer routes; requires --hosted
   --api-base <url> Complete upstream /v1/ base, required for --hosted.
                   Hosted requests supply their own Bearer session; no process credential.
   -V, --version   output the version number

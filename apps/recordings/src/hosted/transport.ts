@@ -5,7 +5,7 @@ import { recordingIDParser, type ContractParser } from "../contracts/stream-v1.j
 export type CredentialProvider = (context: Readonly<{ apiBase: string; signal: AbortSignal }>) => string | Promise<string>;
 export type SDKErrorCode = "invalid_configuration" | "invalid_input" | "credential_unavailable" | "aborted" | "timeout" |
   "network_error" | "redirect_refused" | "response_too_large" | "invalid_response" | "unauthorized" | "forbidden" |
-  "not_found" | "recording_deleted" | "conflict" | "rate_limited" | "http_error";
+  "not_found" | "recording_deleted" | "conflict" | "rate_limited" | "range_not_satisfiable" | "http_error";
 const messages: Record<SDKErrorCode, string> = {
   invalid_configuration: "Choose a complete HTTPS v1 API base, or an explicit HTTP loopback v1 base, and valid bounds.",
   invalid_input: "The operation input does not match the hosted Recordings contract.",
@@ -16,7 +16,7 @@ const messages: Record<SDKErrorCode, string> = {
   invalid_response: "The hosted API returned an unexpected response.", unauthorized: "Sign in again to use this hosted session.",
   forbidden: "This hosted account is not permitted to perform the operation.", not_found: "The hosted resource was not found.",
   recording_deleted: "The recording was permanently deleted.", conflict: "The operation conflicts with existing hosted state.",
-  rate_limited: "The hosted usage or request limit was reached.", http_error: "The hosted API refused the request.",
+  rate_limited: "The hosted usage or request limit was reached.", range_not_satisfiable: "The requested audio byte range is unsatisfiable.", http_error: "The hosted API refused the request.",
 };
 /** Never retains a token, request/response body, URL, native Error cause or server message. */
 export class RecordingsSDKError extends Error {
@@ -188,6 +188,7 @@ export class Transport {
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);
       void response?.body?.cancel().catch(() => {});
+      if (!response) cancelAudioBody(upload.body);
     }
   }
 
@@ -306,6 +307,9 @@ export class Transport {
     }
   }
 }
+function cancelAudioBody(body: AudioBody): void {
+  if (body instanceof ReadableStream) void body.cancel().catch(() => {});
+}
 function validateAudioUpload(upload: HostedAudioUploadInput): void {
   if (!upload || upload.retainAudio !== true || !Number.isSafeInteger(upload.byteLength) ||
       upload.byteLength < WAV_HEADER_BYTES + 2 || upload.byteLength > MAX_AUDIO_BYTES ||
@@ -339,6 +343,7 @@ function parseContentRange(value: string | null): HostedAudioRange {
   if (!match) throw new RecordingsSDKError("invalid_response");
   const start = Number(match[1]), end = Number(match[2]), total = Number(match[3]);
   if (![start, end, total].every(Number.isSafeInteger) || start > end || end >= total ||
+      total < WAV_HEADER_BYTES + 2 || (total - WAV_HEADER_BYTES) % 2 !== 0 ||
       total > MAX_AUDIO_BYTES) throw new RecordingsSDKError("invalid_response");
   return { start, end, total };
 }
@@ -350,7 +355,7 @@ function assertNoRedirect(response: Response, url: string): void {
 function statusError(response: Response): RecordingsSDKError {
   const codes: Record<number, SDKErrorCode> = {
     401: "unauthorized", 403: "forbidden", 404: "not_found", 410: "recording_deleted",
-    409: "conflict", 429: "rate_limited",
+    409: "conflict", 416: "range_not_satisfiable", 429: "rate_limited",
   };
   const requestID = response.headers.get("x-request-id");
   return new RecordingsSDKError(codes[response.status] ?? "http_error", response.status,

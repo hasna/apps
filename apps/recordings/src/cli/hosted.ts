@@ -3,6 +3,7 @@ import { transcriptDestination, writeTranscriptExport } from "./hosted-export.js
 import { HostedLibrary } from "../hosted/library.js";
 import { HostedPasteHistory } from "../hosted/paste-history.js";
 import { RecordingsSDKError } from "../hosted/transport.js";
+import { assertAudioDestination, prepareAudioUpload, writeAudioDownload } from "../hosted/audio-files.js";
 import { hostedFailure, hostedProcessClient } from "../hosted/process-options.js";
 import type { HostedRecordingsClient } from "../hosted/index.js";
 
@@ -57,7 +58,8 @@ export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
     .requiredOption("--api-base <url>", "Complete hosted API base ending in /v1/")
     .requiredOption("--credential-env <name>", "Name of the environment variable containing this API's bearer session")
     .exitOverride().configureOutput({ writeOut: write, writeErr: () => {} });
-  const library = () => new HostedLibrary(options.client ?? hostedProcessClient(program.opts(), options.env));
+  const client = () => options.client ?? hostedProcessClient(program.opts(), options.env);
+  const library = () => new HostedLibrary(client());
   program.command("providers").description("Read the server's transcription providers, models and defaults")
     .action(async () => {
       const client = options.client ?? hostedProcessClient(program.opts(), options.env);
@@ -82,6 +84,25 @@ export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
       const destination = transcriptDestination(values.output);
       const exported = await library().export(id);
       write(JSON.stringify(writeTranscriptExport(exported, destination)) + "\n");
+    });
+  program.command("audio-metadata <id>").description("Read hosted audio availability and canonical format metadata")
+    .action(async id => { write(JSON.stringify(await client().getAudioMetadata(id)) + "\n"); });
+  program.command("audio-upload <id>").description("Upload one canonical WAV from an explicit regular file with retention consent")
+    .requiredOption("--input <path>", "Existing regular WAV file to upload")
+    .option("--retain-audio", "Explicitly retain hosted audio", false)
+    .action(async (id, values) => {
+      if (values.retainAudio !== true) throw new RecordingsSDKError("invalid_input");
+      const upload = await prepareAudioUpload(values.input);
+      write(JSON.stringify(await client().uploadAudio(id, upload)) + "\n");
+    });
+  program.command("audio-download <id>").description("Download one complete hosted WAV to a new destination file; existing files are preserved")
+    .requiredOption("--output <path>", "New destination file; an existing path is refused")
+    .action(async (id, values) => {
+      await assertAudioDestination(values.output);
+      const downloaded = await client().downloadAudio(id);
+      const receipt = await writeAudioDownload(values.output, downloaded);
+      write(JSON.stringify(receipt) + "\n");
+    });
     });
   program.command("rename <id> <title>").description("Rename one hosted recording; returns metadata without transcript text")
     .action(async (id, title) => { write(JSON.stringify(await library().rename(id, title)) + "\n"); });

@@ -89,7 +89,7 @@ test("actual MCP discovery and dispatch expose the read-only hosted operations",
   await server.connect(serverTransport); await client.connect(clientTransport);
   try {
     const { tools } = await client.listTools();
-    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_export", "recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"]);
+    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_audio_metadata", "recordings_hosted_export", "recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"]);
     const reads = tools.filter(tool => !["recordings_hosted_rename", "recordings_hosted_delete"].includes(tool.name));
     expect(reads.every(tool => tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === false)).toBe(true);
     const result = await client.callTool({ name: "recordings_hosted_list", arguments: { limit: 1 } });
@@ -442,7 +442,7 @@ test("hosted MCP remains read-only unless startup explicitly allows writes", asy
     const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(b); await client.connect(a);
     try {
       const { tools } = await client.listTools();
-      expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_export", "recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"]);
+    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_audio_metadata", "recordings_hosted_export", "recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"]);
       expect(tools.every(tool => tool.annotations?.readOnlyHint === true)).toBe(true);
       const refused = await client.callTool({ name: "recordings_hosted_delete", arguments: { id } });
       expect(refused.isError).toBe(true); expect(f.calls).toHaveLength(0); expect(f.credentialCount()).toBe(0);

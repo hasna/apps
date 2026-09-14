@@ -896,7 +896,9 @@ Options:
   --stdio        Serve MCP over stdio (Codex/Claude agent form)
   --hosted       Read-only SaaS Library mode; requires --stdio, --api-base <complete-v1-url>
                  and --credential-env <environment-variable-name>
-  --allow-writes Enable hosted recording and paste-save tools; requires --hosted
+  --allow-writes Enable hosted recording, paste-save, and configured audio transfer tools; requires --hosted
+  --audio-directory <dir>
+                 Existing real directory for bounded MCP audio input/output basenames
   --http         Serve MCP over the shared Streamable HTTP endpoint
   --port <port>  HTTP port to bind. Defaults to ${DEFAULT_MCP_HTTP_PORT} (or $MCP_HTTP_PORT)
   -V, --version  output the version number

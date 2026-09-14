@@ -65,18 +65,19 @@ const format = z.object({
   sampleRate: z.literal(24_000),
   channels: z.literal(1),
   bitsPerSample: z.literal(16),
-}).strict();
+});
 const available = z.object({
   state: z.literal("available"),
   format,
   ...descriptorShape,
-}).strict()
+})
   .refine(value => value.pcmBytes === value.byteLength - WAV_HEADER_BYTES)
-  .refine(value => value.durationMs === value.pcmBytes / 48);
+  .refine(value => value.durationMs === value.pcmBytes / 48)
+  .refine(value => Date.parse(value.expiresAt) > Date.parse(value.storedAt));
 const unavailable = z.object({
   state: z.literal("unavailable"),
   reason: z.literal("not_stored_or_expired"),
-}).strict();
+});
 
 export const audioMetadataParser: ContractParser<HostedAudioMetadata> = parser<HostedAudioMetadata>(
   z.union([available, unavailable]),

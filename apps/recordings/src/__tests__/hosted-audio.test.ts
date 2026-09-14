@@ -63,6 +63,11 @@ test("audio metadata parser accepts available and unavailable wire states and re
     durationMs: 2 / 48,
   })).toMatchObject({ byteLength: 46, pcmBytes: 2, durationMs: 2 / 48 });
   expect(audioMetadataParser.safeParse({ ...available, pcmBytes: 2 }).success).toBe(false);
+  const additive = audioMetadataParser.parse({ ...available, futureDescriptorField: "ignored", format: { ...available.format, futureFormatField: "ignored" } });
+  expect(Object.hasOwn(additive, "futureDescriptorField")).toBe(false);
+  expect(Object.hasOwn(additive.format, "futureFormatField")).toBe(false);
+  expect(audioMetadataParser.safeParse({ ...available, byteLength: 47, pcmBytes: 3 }).success).toBe(false);
+  expect(audioMetadataParser.safeParse({ ...available, expiresAt: at }).success).toBe(false);
   expect(audioMetadataParser.safeParse({ ...available, format: { ...available.format, sampleRate: 16_000 } }).success).toBe(false);
   expect(audioMetadataParser.safeParse({ ...unavailable, reason: "deleted" }).success).toBe(false);
 });
@@ -157,6 +162,7 @@ test("download refuses malformed content type, digest, lengths, ranges and unsup
     new Response(wav, { headers: { "content-type": "audio/wav", "content-length": String(wav.byteLength), "accept-ranges": "bytes", "x-audio-sha256": "bad" } }),
     new Response(wav, { headers: { "content-type": "audio/wav", "content-length": String(wav.byteLength + 1), "accept-ranges": "bytes", "x-audio-sha256": sha } }),
     new Response(wav.slice(44, 100), { status: 206, headers: { "content-type": "audio/wav", "content-length": "56", "accept-ranges": "bytes", "content-range": "bytes 44-100/4844", "x-audio-sha256": sha } }),
+    new Response(wav.slice(44, 100), { status: 206, headers: { "content-type": "audio/wav", "content-length": "56", "accept-ranges": "bytes", "content-range": "bytes 44-99/4845", "x-audio-sha256": sha } }),
     new Response(wav, { status: 302, headers: { location: "https://other.example.test/v1/recordings/" + id + "/audio" } }),
   ];
   for (const [index, response] of responses.entries()) {
@@ -180,6 +186,12 @@ test("download refuses malformed content type, digest, lengths, ranges and unsup
     })),
   });
   await expect(client.downloadAudio(id, "bytes=0-1,2-3")).rejects.toMatchObject({ code: "invalid_input" });
+  const rangeClient = new HostedRecordingsClient({
+    apiBase: base,
+    credentialProvider: () => "fictional-access",
+    fetch: fakeFetch(() => new Response(null, { status: 416 })),
+  });
+  await expect(rangeClient.downloadAudio(id, "bytes=999999-")).rejects.toMatchObject({ code: "range_not_satisfiable", status: 416 });
 });
 
 test("audio transport retains caller cancellation through response body consumption and never retries", async () => {

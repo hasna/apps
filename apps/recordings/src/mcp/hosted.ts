@@ -3,10 +3,11 @@ import { z } from "zod";
 import { HostedLibrary } from "../hosted/library.js";
 import { HostedPasteHistory } from "../hosted/paste-history.js";
 import { hostedFailure } from "../hosted/process-options.js";
+import { assertAudioDestination, audioFileInDirectory, prepareAudioUpload, writeAudioDownload } from "../hosted/audio-files.js";
 import type { HostedRecordingsClient } from "../hosted/index.js";
 import { VERSION } from "../version.js";
 
-export function buildHostedServer(client: HostedRecordingsClient, options: { allowWrites?: boolean } = {}): McpServer {
+export function buildHostedServer(client: HostedRecordingsClient, options: { allowWrites?: boolean; audioDirectory?: string } = {}): McpServer {
   const library = new HostedLibrary(client);
   const server = new McpServer({ name: "recordings-hosted", version: VERSION });
   const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
@@ -36,6 +37,33 @@ export function buildHostedServer(client: HostedRecordingsClient, options: { all
     description: "Explicitly export one private transcript as UTF-8 plain text. Returns its text and a safe .txt filename; does not write a local file or change the recording.",
     inputSchema: z.object({ id: z.string() }).strict(), annotations,
   }, ({ id }, extra) => execute(() => library.export(id, { signal: extra.signal })));
+  server.registerTool("recordings_hosted_audio_metadata", {
+    description: "Read hosted audio availability and canonical format metadata. No audio bytes or local paths are returned.",
+    inputSchema: { id: z.string() }, annotations,
+  }, ({ id }, extra) => execute(() => library.getAudioMetadata(id, { signal: extra.signal })));
+  if (options.allowWrites === true && options.audioDirectory !== undefined) {
+    const audioDirectory = options.audioDirectory;
+    server.registerTool("recordings_hosted_audio_upload", {
+      description: "Upload one canonical WAV from a configured audio directory. Requires retainAudio=true and startup --allow-writes.",
+      inputSchema: z.object({ id: z.string(), fileName: z.string(), retainAudio: z.literal(true) }).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    }, ({ id, fileName, retainAudio }, extra) => execute(async () => {
+      const path = audioFileInDirectory(audioDirectory, fileName);
+      const upload = await prepareAudioUpload(path, extra.signal);
+      return library.uploadAudio(id, { ...upload, retainAudio }, { signal: extra.signal });
+    }));
+    server.registerTool("recordings_hosted_audio_download", {
+      description: "Download one complete hosted WAV into a new file in the configured audio directory. Existing files are refused.",
+      inputSchema: z.object({ id: z.string(), fileName: z.string() }).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    }, ({ id, fileName }, extra) => execute(async () => {
+      const path = audioFileInDirectory(audioDirectory, fileName);
+      await assertAudioDestination(path);
+      const response = await library.downloadAudio(id, { signal: extra.signal });
+      const receipt = await writeAudioDownload(path, response, extra.signal);
+      return { fileName, byteLength: receipt.byteLength, sha256: receipt.sha256, status: receipt.status };
+    }));
+  }
   if (options.allowWrites === true) {
     server.registerTool("recordings_hosted_save", {
       description: "Save one hosted recording. Returns metadata without private transcript text and makes one request without automatic retry.",
