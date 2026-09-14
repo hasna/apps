@@ -34,6 +34,14 @@ export const DEVELOPMENT_TOOLS_SKILLS: SkillMeta[] = [
     tags: ["migration", "upgrade", "planning", "frameworks", "databases"],
   },
   {
+    name: "define-for-agents",
+    displayName: "Define For Agents",
+    description: "Define a product for coding agents before building it: standing rules under 150 lines, a one-page plan, screens on a local design server, tokens as data, a closed component catalog, a tool inventory, specs with testable criteria, evals, and a check on a Stop hook",
+    category: "Development Tools",
+    kind: "instruction",
+    tags: ["agents", "spec", "design-system", "product", "method"],
+  },
+  {
     name: "test-suite-generator",
     displayName: "Test Suite Generator",
     description: "Generate runnable API, unit, and browser test suite packages with coverage notes",

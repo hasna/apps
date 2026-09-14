@@ -1,0 +1,10 @@
+{
+  "name": "define-for-agents",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Define a product for coding agents before building it: rules, plan, screens, tokens, tools, specs, evals, and a check on a Stop hook",
+  "type": "module",
+  "skills": {
+    "kind": "instruction"
+  }
+}

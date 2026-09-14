@@ -740,7 +740,7 @@ skills/                      # Public skill contracts and local OSS skills
 
 | Count | Value | Derived from |
 |---|---|---|
-| Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/`) |
+| Catalog skills | 87 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
 | MCP tools | 72 | `tools/list` against a live `buildServer()` |
 
