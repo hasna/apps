@@ -16,6 +16,13 @@ export interface HostedLibraryRecording {
   durationMs: number;
   transcript?: string;
 }
+/** Explicit transcript export; unlike ordinary Library reads, this contains private text. */
+export interface HostedTranscriptExport {
+  recordingId: string;
+  fileName: string;
+  mediaType: "text/plain; charset=utf-8";
+  text: string;
+}
 export interface HostedLibraryPage {
   recordings: HostedLibraryRecording[];
   /** A full page permits another request; it does not prove more rows exist. */
@@ -45,6 +52,12 @@ export class HostedLibrary {
     const includeText = textOption(options, ["includeText"]);
     const { recording } = await this.client.getRecording(id, request);
     return { recording: project(recording, includeText) };
+  }
+  /** Match native plain-text export without changing the hosted recording or invoking a provider. */
+  async export(id: string, request?: RequestOptions): Promise<HostedTranscriptExport> {
+    const { recording } = await this.client.getRecording(id, request);
+    return { recordingId: recording.id, fileName: recording.id + ".txt",
+      mediaType: "text/plain; charset=utf-8", text: recording.transcript };
   }
   /** Renaming never opts the caller into reading the recording's private transcript. */
   async rename(id: string, title: string, request?: RequestOptions): Promise<{ recording: HostedLibraryRecording }> {

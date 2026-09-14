@@ -94,7 +94,7 @@ test.each([false, true])("real MCP stdio entry preserves reads and gates mutatio
     await client.connect(transport, { timeout: 3000 });
     transport.stderr?.on("data", chunk => { stderr += String(chunk); if (stderr.length > 65536) void transport.close(); });
     const { tools } = await client.listTools({}, { timeout: 3000 });
-    const reads = ["recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"];
+    const reads = ["recordings_hosted_export", "recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"];
     expect(tools.map(tool => tool.name).sort()).toEqual([...reads, ...(allowWrites ? ["recordings_hosted_delete", "recordings_hosted_rename", "recordings_hosted_save"] : [])].sort());
     expect(counts()).toEqual({ denied: 0, requests: 0 });
     const result = await client.callTool({ name: "recordings_hosted_paste_history", arguments: { limit: 1 } }, undefined, { timeout: 3000 });
@@ -107,6 +107,11 @@ test.each([false, true])("real MCP stdio entry preserves reads and gates mutatio
     expect(catalog.structuredContent).toMatchObject({ defaultProvider: "fictional", providers: [{ name: "Fictional provider" }] });
     expect(JSON.stringify(catalog)).not.toContain("Hidden fictional provider configuration");
     expect(counts()).toEqual({ denied: 0, requests: 2 }); expect(stderr).toBe("");
+    const exported = await client.callTool({ name: "recordings_hosted_export", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } }, undefined, { timeout: 3000 });
+    expect(exported.isError).not.toBe(true);
+    expect(exported.structuredContent).toEqual({ recordingId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      fileName: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.txt", mediaType: "text/plain; charset=utf-8", text: "Hidden fictional transcript." });
+    expect(counts()).toEqual({ denied: 0, requests: 3 }); expect(stderr).toBe("");
     if (allowWrites) {
       const saved = await client.callTool({ name: "recordings_hosted_save", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         title: "Saved", transcript: "Hidden fictional transcript.", durationMs: 1000 } }, undefined, { timeout: 3000 });
@@ -117,10 +122,10 @@ test.each([false, true])("real MCP stdio entry preserves reads and gates mutatio
       expect(JSON.stringify(renamed)).not.toContain("Hidden fictional transcript");
       const deleted = await client.callTool({ name: "recordings_hosted_delete", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } }, undefined, { timeout: 3000 });
       expect(deleted.isError).not.toBe(true); expect(deleted.structuredContent).toEqual({ state: "pending" });
-      expect(counts()).toEqual({ denied: 0, requests: 5 }); expect(stderr).toBe("");
+      expect(counts()).toEqual({ denied: 0, requests: 6 }); expect(stderr).toBe("");
     } else {
       const refused = await client.callTool({ name: "recordings_hosted_delete", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } }, undefined, { timeout: 3000 });
-      expect(refused.isError).toBe(true); expect(counts()).toEqual({ denied: 0, requests: 2 });
+      expect(refused.isError).toBe(true); expect(counts()).toEqual({ denied: 0, requests: 3 });
     }
   } finally { await client.close(); await transport.close(); rmSync(home, { recursive: true, force: true }); }
 }, 15000);

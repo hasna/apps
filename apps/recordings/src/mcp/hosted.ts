@@ -32,6 +32,10 @@ export function buildHostedServer(client: HostedRecordingsClient, options: { all
     description: "Read one hosted recording. Private transcript text is omitted unless includeText is true.",
     inputSchema: { id: z.string(), includeText: z.boolean().optional() }, annotations,
   }, ({ id, includeText }) => execute(() => library.get(id, { includeText })));
+  server.registerTool("recordings_hosted_export", {
+    description: "Explicitly export one private transcript as UTF-8 plain text. Returns its text and a safe .txt filename; does not write a local file or change the recording.",
+    inputSchema: z.object({ id: z.string() }).strict(), annotations,
+  }, ({ id }, extra) => execute(() => library.export(id, { signal: extra.signal })));
   if (options.allowWrites === true) {
     server.registerTool("recordings_hosted_save", {
       description: "Save one hosted recording. Returns metadata without private transcript text and makes one request without automatic retry.",

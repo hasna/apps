@@ -73,7 +73,7 @@ tenant storage, usage admission or provider execution.
 
 ## Hosted Library across interfaces
 
-The additive `HostedLibrary` adapter provides `list`, `get`, `save`, `rename` and `delete`
+The additive `HostedLibrary` adapter provides `list`, `get`, `export`, `save`, `rename` and `delete`
 operations through CLI, MCP, serve and SDK. `HostedPasteHistory` provides a
 read-only receipt page across the same interfaces. Library output includes only `id`, `title`,
 `createdAt` and `durationMs`; `transcript` requires an explicit option. Unknown
@@ -127,7 +127,9 @@ recordings-mcp --hosted --allow-writes --stdio --api-base "$MY_RECORDINGS_API_BA
 This explicit mode exposes `recordings_hosted_list`, `recordings_hosted_get` and
 `recordings_hosted_paste_history` for these reads; each accepts `includeText: true`.
 The read-only `recordings_hosted_providers` tool accepts no arguments.
-Without `--allow-writes`, the MCP server registers only those four read tools.
+The read-only `recordings_hosted_export` tool accepts `{id}` and explicitly returns
+private transcript text and a safe filename. Without `--allow-writes`, the MCP
+server registers only these five read tools.
 When started with `--allow-writes`, `recordings_hosted_save` accepts `{id, sessionId?, title, transcript, durationMs}`,
 `recordings_hosted_rename` accepts `{id, title}` and `recordings_hosted_delete` accepts `{id}`.
 Save and rename return metadata without transcript text. Save is marked as a non-destructive
@@ -146,9 +148,9 @@ recordings-serve --hosted --allow-writes --api-base "$MY_RECORDINGS_API_BASE" --
 
 The proxy remains read-only by default and binds to `127.0.0.1`; only `127.0.0.1` and `::1`
 are accepted. It supports `GET /v1/recordings`, `GET /v1/recordings/<id>` and
-`GET /v1/paste-history` and `GET /v1/providers`.
+`GET /v1/paste-history`, `GET /v1/providers` and `GET /v1/recordings/<id>/export`.
 Both list routes accept `limit`, `before`, `beforeId` and `includeText=true|false`; get
-accepts only `includeText`. The providers route accepts no query parameters.
+accepts only `includeText`. The providers and export routes accept no query parameters.
 With `--allow-writes`, `POST /v1/recordings` accepts only a validated JSON
 `{id, sessionId?, title, transcript, durationMs}` body and returns metadata.
 The body has a 1 MiB limit and a five-second read deadline. `PATCH /v1/recordings/<id>`
@@ -188,6 +190,36 @@ expose fixed codes/messages without response bodies, credentials or arbitrary
 causes. This addition does not implement sign-in, refresh, recording uploads, microphone
 control, audio transfer or transcription; those hosted parity gates remain
 separate.
+
+### Plain-text transcript export
+
+`HostedLibrary.export(id, {signal})` explicitly returns
+`{recordingId, fileName, mediaType, text}`. It fetches the existing hosted recording
+once, preserves the transcript's UTF-8 text and line endings, and uses the
+validated recording UUID plus `.txt` for the filename. It does not add a title,
+timestamps, a BOM or a trailing newline. Future upstream fields are omitted.
+This matches the native app's plain-text export and does not invoke transcription.
+
+```sh
+recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION export <recording-id> --output ./transcript.txt
+```
+
+CLI export requires a new destination in an existing directory. It refuses an
+existing file or symlink before fetching, and publishes the complete file
+exclusively so a destination created during the request is never replaced.
+The file has mode `0600`; stdout contains only recording ID, format, byte length,
+SHA-256 and `saved: true`. A failed fetch creates no file. Private text is never
+printed by this command. The caller chooses the destination; it is not inferred
+from a server-provided title or path.
+
+MCP `recordings_hosted_export` returns the private text as tool output without
+writing any local file. The hosted proxy's `GET /v1/recordings/<id>/export` returns
+a UTF-8 plain-text attachment with the safe UUID filename and `no-store` caching.
+Both are available in read-only mode because they do not mutate hosted data.
+They preserve cancellation, per-request credentials and the existing bounded
+JSON transport. Export is a shared client operation over the service's existing
+recording read route, not an additional service API requirement. Ordinary
+Library reads still omit transcript text unless explicitly requested.
 
 ### Hosted paste history
 
