@@ -36,6 +36,14 @@ endpoint, no local database, no client DSN and no fallback. Run
   They return BLOCKED on configuration, authentication or transport failure, and
   report the credential tier and source that resolved (never the value).
   whoami does not invent an identity from local files.
+- health-check assesses links returned by the service. Signed S3 download links
+  use a one-byte ranged GET because their signatures reject HEAD; response bodies
+  are cancelled without buffering the object and the request is aborted after
+  the check. An unsatisfiable range is checked
+  once without Range under the same deadline to support empty files.
+  Ordinary share pages retain HEAD
+  so a diagnostic does not consume a constrained download. Expired or failed
+  links still produce exit 1; this is separate from authenticated API health.
 - config show redacts credentials. config set accepts only --expiry and --link-type.
   config test checks authenticated service access.
 - link-task, complete-task, task-journal and watch require authenticated
