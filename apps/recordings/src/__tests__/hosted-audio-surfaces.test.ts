@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { HostedRecordingsClient } from "../hosted/index.js";
+import { prepareAudioUpload } from "../hosted/audio-files.js";
 import { runHostedCLI } from "../cli/hosted.js";
 import { buildHostedServer } from "../mcp/hosted.js";
 import { buildHostedFetch } from "../server/hosted.js";
@@ -91,6 +92,39 @@ test("CLI metadata/upload/download use explicit files, raw bytes, SHA verificati
     expect(calls.length).toBe(before);
     expect(output.join("")).not.toContain("preserve");
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("early upload waits for delayed cancellation of an actual fd-backed source and keeps the primary error", async () => {
+  const root = mkdtempSync(join(tmpdir(), "recordings-audio-fd-cancel-"));
+  const source = join(root, "source.wav");
+  writeFileSync(source, wav);
+  const prepared = await prepareAudioUpload(source);
+  const sourceReader = prepared.body.getReader();
+  let cancelStarted = false;
+  let cancelFinished = false;
+  const delayedBody = new ReadableStream<Uint8Array>({
+    async cancel(reason) {
+      cancelStarted = true;
+      await new Promise(resolve => setTimeout(resolve, 25));
+      await sourceReader.cancel(reason);
+      sourceReader.releaseLock();
+      cancelFinished = true;
+    },
+  });
+  const client = new HostedRecordingsClient({
+    apiBase: base,
+    credentialProvider: () => "fictional-access",
+    fetch: fakeFetch(() => Response.json({ error: "fictional early failure" }, { status: 500 })),
+  });
+  try {
+    await expect(client.uploadAudio(id, { ...prepared, body: delayedBody })).rejects.toMatchObject({ code: "http_error" });
+    expect(cancelStarted).toBe(true);
+    expect(cancelFinished).toBe(true);
+  } finally {
+    await sourceReader.cancel().catch(() => {});
+    try { sourceReader.releaseLock(); } catch {}
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("MCP audio tools require configured directory, write gate, basename paths and retention consent", async () => {

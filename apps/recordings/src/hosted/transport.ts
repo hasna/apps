@@ -192,9 +192,9 @@ export class Transport {
       // The request body may still be locked by fetch when an early response
       // arrives. Abort the body wrapper first so its source closes even then.
       controller.abort();
-      void response?.body?.cancel().catch(() => {});
-      cancelAudioBody(requestBody);
-      if (requestBody !== upload.body) cancelAudioBody(upload.body);
+      await response?.body?.cancel().catch(() => {});
+      await cancelAudioBody(requestBody);
+      if (requestBody !== upload.body) await cancelAudioBody(upload.body);
     }
   }
 
@@ -313,8 +313,12 @@ export class Transport {
     }
   }
 }
-function cancelAudioBody(body: AudioBody): void {
-  if (body instanceof ReadableStream) void body.cancel().catch(() => {});
+const managedAudioCleanup = new WeakMap<ReadableStream<Uint8Array>, () => Promise<void>>();
+async function cancelAudioBody(body: AudioBody): Promise<void> {
+  if (!(body instanceof ReadableStream)) return;
+  const cleanup = managedAudioCleanup.get(body);
+  if (cleanup) { await cleanup(); return; }
+  await body.cancel().catch(() => {});
 }
 function managedAudioBody(body: AudioBody, signal: AbortSignal): AudioBody {
   if (!(body instanceof ReadableStream)) return body;
@@ -332,7 +336,7 @@ function managedAudioBody(body: AudioBody, signal: AbortSignal): AudioBody {
   const onAbort = () => { void close(); };
   signal.addEventListener("abort", onAbort, { once: true });
   const cleanup = () => signal.removeEventListener("abort", onAbort);
-  return new ReadableStream<Uint8Array>({
+  const managed = new ReadableStream<Uint8Array>({
     async pull(controller) {
       if (closed) { controller.close(); return; }
       try {
@@ -345,6 +349,8 @@ function managedAudioBody(body: AudioBody, signal: AbortSignal): AudioBody {
     },
     async cancel(reason) { cleanup(); await close(reason); },
   });
+  managedAudioCleanup.set(managed, close);
+  return managed;
 }
 function validateAudioUpload(upload: HostedAudioUploadInput): void {
   if (!upload || upload.retainAudio !== true || !Number.isSafeInteger(upload.byteLength) ||

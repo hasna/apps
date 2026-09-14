@@ -115,7 +115,6 @@ function audioResponse(response: { status: 200 | 206; headers: Headers; body: Re
   headers.set("x-content-type-options", "nosniff");
   return new Response(response.body, { status: response.status, headers });
 }
-}
 /** Explicit proxy mode: the caller's bearer is the sole credential; the upstream cannot be selected by a request. */
 export function buildHostedFetch(options: { apiBase: string; fetch?: typeof globalThis.fetch; allowWrites?: boolean }) {
   const apiBase = new HostedRecordingsClient({ apiBase: options.apiBase }).apiBase;
