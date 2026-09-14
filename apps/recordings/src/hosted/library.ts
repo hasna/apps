@@ -1,5 +1,7 @@
 import type { HostedRecordingsClient, Cursor } from "./index.js";
 import type { HostedRecording, HostedRecordingInput } from "../contracts/hosted-v1.js";
+import type { HostedAudioMetadata } from "../contracts/audio-v1.js";
+import type { HostedAudioDownloadOptions, HostedAudioDownloadResponse, HostedAudioUploadInput } from "./transport.js";
 import type { RequestOptions } from "./transport.js";
 import { textOption } from "./read-options.js";
 
@@ -58,6 +60,15 @@ export class HostedLibrary {
     const { recording } = await this.client.getRecording(id, request);
     return { recordingId: recording.id, fileName: recording.id + ".txt",
       mediaType: "text/plain; charset=utf-8", text: recording.transcript };
+  }
+  async getAudioMetadata(id: string, request?: RequestOptions): Promise<HostedAudioMetadata> {
+    return this.client.getAudioMetadata(id, request);
+  }
+  async uploadAudio(id: string, upload: HostedAudioUploadInput, request?: RequestOptions): Promise<HostedAudioMetadata> {
+    return this.client.uploadAudio(id, upload, request);
+  }
+  async downloadAudio(id: string, rangeOrOptions?: string | HostedAudioDownloadOptions, request?: RequestOptions): Promise<HostedAudioDownloadResponse> {
+    return this.client.downloadAudio(id, rangeOrOptions, request);
   }
   /** Renaming never opts the caller into reading the recording's private transcript. */
   async rename(id: string, title: string, request?: RequestOptions): Promise<{ recording: HostedLibraryRecording }> {

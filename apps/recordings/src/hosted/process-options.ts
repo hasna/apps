@@ -1,7 +1,8 @@
 import { HostedRecordingsClient } from "./index.js";
 import { RecordingsSDKError } from "./transport.js";
+import { lstatSync } from "node:fs";
 
-export interface HostedProcessOptions { apiBase: string; credentialEnv?: string; host?: string; port?: number; allowWrites?: boolean }
+export interface HostedProcessOptions { apiBase: string; credentialEnv?: string; host?: string; port?: number; allowWrites?: boolean; audioDirectory?: string }
 /** Explicit named input, not an ambient credential resolution chain. */
 export function hostedProcessClient(options: HostedProcessOptions, env: Record<string, string | undefined> = process.env, fetch?: typeof globalThis.fetch) {
   if (!options.credentialEnv || !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(options.credentialEnv)) {
@@ -19,7 +20,7 @@ export function hostedProcessClient(options: HostedProcessOptions, env: Record<s
 export function parseHostedProcessOptions(args: string[], surface: "mcp" | "serve"): HostedProcessOptions {
   const values: Record<string, string> = {};
   const booleans = new Set<string>();
-  const allowed = surface === "mcp" ? ["--api-base", "--credential-env"] : ["--api-base", "--host", "--port"];
+  const allowed = surface === "mcp" ? ["--api-base", "--credential-env", "--audio-directory"] : ["--api-base", "--host", "--port"];
   for (let index = 0; index < args.length; index++) {
     const key = args[index]!;
     if (key === "--hosted" || key === "--allow-writes" || (surface === "mcp" && key === "--stdio")) {
@@ -38,7 +39,15 @@ export function parseHostedProcessOptions(args: string[], surface: "mcp" | "serv
   const apiBase = new HostedRecordingsClient({ apiBase: values["--api-base"] }).apiBase;
   const writes = booleans.has("--allow-writes") ? { allowWrites: true } : {};
   if (surface === "mcp") {
-    const options = { apiBase, credentialEnv: values["--credential-env"], ...writes };
+    const audioDirectory = values["--audio-directory"];
+    if (audioDirectory !== undefined) {
+      try {
+        const stat = lstatSync(audioDirectory);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error();
+      } catch { throw new RecordingsSDKError("invalid_configuration"); }
+    }
+    const options = { apiBase, credentialEnv: values["--credential-env"], ...writes,
+      ...(audioDirectory === undefined ? {} : { audioDirectory }) };
     hostedProcessClient(options, {}); return options;
   }
   const host = values["--host"] ?? "127.0.0.1", rawPort = values["--port"] ?? "8874";

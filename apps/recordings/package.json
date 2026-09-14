@@ -36,6 +36,10 @@
       "import": "./dist/contracts/stream-v1.js",
       "types": "./dist/contracts/stream-v1.d.ts"
     },
+    "./contracts/audio-v1": {
+      "import": "./dist/contracts/audio-v1.js",
+      "types": "./dist/contracts/audio-v1.d.ts"
+    },
     "./contracts/fixtures/v1": "./contracts/v1/fixtures.json",
     "./hosted": {
       "import": "./dist/hosted/index.js",
@@ -80,7 +84,7 @@
     "prepublishOnly": "bun run typecheck && bun run release-suite-gate",
     "release-suite-gate": "bun run scripts/release-suite-gate.ts",
     "typecheck:shortcut-contract": "tsc --noEmit -p tsconfig.test.json",
-    "build:contracts": "bun build src/contracts/hosted-v1.ts src/contracts/stream-v1.ts src/hosted/index.ts --target=bun --root src --outdir=dist --splitting --external=@hasna/contracts"
+    "build:contracts": "bun build src/contracts/hosted-v1.ts src/contracts/stream-v1.ts src/contracts/audio-v1.ts src/hosted/index.ts --target=bun --root src --outdir=dist --splitting --external=@hasna/contracts"
   },
   "files": [
     "dist/",
@@ -103,7 +107,8 @@
     "LICENSE",
     "contracts/v1/fixtures.json",
     "docs/wire-contracts.md",
-    "docs/hosted-sdk.md"
+    "docs/hosted-sdk.md",
+    "docs/hosted-audio.md"
   ],
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1007.0",
