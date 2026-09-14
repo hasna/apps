@@ -8,6 +8,8 @@ import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSIO
 import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, type AgentDiscoveryBinding, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 
+import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesProtection, renderHermesSupervisor, assertNoHermesLegacyShadow, type HermesSupervisorBinding } from "./agent-hermes.js";
+
 export type { IntegrationAgent } from "./agent-adapters.js";
 export type ContextHookEvent = "UserPromptSubmit" | "SessionStart" | "SubagentStart";
 export interface AgentRootAlias { agent: IntegrationAgent; home: string; alias: string; target: string; link: string; aliasIdentity: string; targetIdentity: string }
@@ -85,7 +87,7 @@ function treeHash(root: string): string {
   assertSafePath(root); visit(root); return hash.digest("hex");
 }
 
-export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; projectDir?: string; projectDirs?: string[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean } = {}): NativeSkillEntry[] {
+export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean } = {}): NativeSkillEntry[] {
   const aliases = rootAliases(home, options.allowRootAliases);
   const roots: Array<readonly [string, string]> = ROOTS.map(([agent, path]) => [agent, canonicalAgentPath(join(home, path), aliases)]);
   const bridgePaths = Object.values(AGENT_ADAPTERS).map(adapter => canonicalAgentPath(join(home, adapter.root, CLI_BRIDGE_NAME), aliases));
@@ -125,7 +127,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     if (pluginCache) children.sort((a, b) => Number(a.isSymbolicLink()) - Number(b.isSymbolicLink()));
     for (const { name } of children) {
       if (name === "node_modules") continue;
-      if (name.startsWith(".") && name !== ".system") continue;
+      if (name.startsWith(".") && name !== ".system" && agent !== "hermes" && !(options.guardHermes && `${path}${sep}`.includes(`${sep}.agents${sep}skills${sep}`))) continue;
       const isVendor = vendor || name === ".system";
       if (isVendor && !options.includeVendor) continue;
       const child = join(path, name);
@@ -145,6 +147,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     return scan;
   }
   function scanRoot(agent: string, path: string, vendor = false, pluginCache = false): void {
+    if (agent === "hermes" || (options.guardHermes && `${path}${sep}`.includes(`${sep}.agents${sep}skills${sep}`))) assertNoHermesLegacyShadow(path);
     if (!visit(agent, path, vendor, 0, pluginCache).complete) throw new Error(`Native skill discovery limit exceeded; review this root before continuing: ${path}`);
   }
   for (const [agent, path] of roots) scanRoot(agent, path);
@@ -255,7 +258,7 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
   if (policy.bridge?.agents !== undefined && (!Array.isArray(policy.bridge.agents) || policy.bridge.agents.some((agent: unknown) => !INTEGRATION_AGENTS.includes(agent as IntegrationAgent)))) throw new Error("Invalid existing bridge agent inventory");
   for (const field of ["commands", "profiles"]) if (policy.bridge?.[field] !== undefined && (!policy.bridge[field] || typeof policy.bridge[field] !== "object" || Array.isArray(policy.bridge[field]) || Object.entries(policy.bridge[field]).some(([key, value]) => !INTEGRATION_AGENTS.includes(key as IntegrationAgent) || typeof value !== "string" || !value || value.includes("\0")))) throw new Error(`Invalid existing bridge ${field} binding`);
   const discoveries = [...new Set(options.agents)].map(agent => resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, canonical: path => canonicalAgentPath(path, aliases) }));
-  const nativeSkills = inventoryNativeSkills(home, { includeVendor: true, projectDir: options.projectDir, agentRoots: discoveries.flatMap(binding => binding.roots.map(path => ({ agent: binding.agent, path }))), allowRootAliases: options.allowRootAliases });
+  const nativeSkills = inventoryNativeSkills(home, { includeVendor: true, guardHermes: options.agents.includes("hermes"), projectDir: options.projectDir, agentRoots: discoveries.flatMap(binding => binding.roots.map(path => ({ agent: binding.agent, path }))), allowRootAliases: options.allowRootAliases });
   const changes: AgentConfigChange[] = [];
   for (const agent of [...new Set(options.agents)]) {
     if (!INTEGRATION_AGENTS.includes(agent)) throw new Error(`Unsupported agent: ${agent}`);
@@ -268,7 +271,21 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
       if (before !== after) changes.push({ path, before, after });
     }
     const path = canonicalAgentPath(join(home, adapter.config), aliases);
-    const before = readOptional(path), config = jsonObject(before, path);
+    const before = readOptional(path);
+    if (agent === "hermes") {
+      const supervisorPath = join(dataDir, "agent-hooks", "hermes.js"), supervisorBefore = readOptional(supervisorPath), supervisorAfter = renderHermesSupervisor(options.command ?? "skills", profileId);
+      const priorCommand = policy.bridge?.commands?.hermes, priorProfile = policy.bridge?.profiles?.hermes ?? policy.profileId;
+      const previous = policy.bridge?.supervisors?.hermes as HermesSupervisorBinding | undefined;
+      if (supervisorBefore !== null && supervisorBefore !== supervisorAfter && !(previous?.path === supervisorPath && typeof priorCommand === "string" && typeof priorProfile === "string" && supervisorBefore === renderHermesSupervisor(priorCommand, priorProfile))) throw new Error("Refusing to overwrite an unrecognized Hermes supervisor");
+      if (supervisorBefore !== supervisorAfter) changes.push({ path: supervisorPath, before: supervisorBefore, after: supervisorAfter });
+      const supervisor = { path: supervisorPath, runtime: process.execPath, sha256: sha(supervisorAfter) };
+      const after = configureHermesHooks(before, supervisor, previous);
+      if (before !== after) changes.push({ path, before, after });
+      const optOut = join(home, ".hermes", HERMES_OPT_OUT), optOutBefore = readOptional(optOut);
+      if (optOutBefore === null) changes.push({ path: optOut, before: null, after: "Managed by @hasna/skills: bundled native skill reseeding is disabled.\n" });
+      continue;
+    }
+    const config = jsonObject(before, path);
     if (agent === "opencode") {
       const permission = config.permission ?? {};
       if (!permission || typeof permission !== "object" || Array.isArray(permission)) throw new Error("Expected OpenCode permission object");
@@ -296,6 +313,7 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     version: CLI_BRIDGE_VERSION, digest: CLI_BRIDGE_DIGEST,
     agents: [...new Set([...priorAgents, ...options.agents])].sort(),
     home: resolve(home), includeVendor: true,
+    ...(options.agents.includes("hermes") ? { supervisors: { ...policy.bridge?.supervisors, hermes: { path: join(dataDir, "agent-hooks", "hermes.js"), runtime: process.execPath, sha256: sha(renderHermesSupervisor(options.command ?? "skills", profileId)) } } } : {}),
     commands: { ...policy.bridge?.commands, ...Object.fromEntries(options.agents.map(agent => [agent, options.command ?? "skills"])) },
     profiles: Object.fromEntries([...new Set<IntegrationAgent>([...priorAgents, ...options.agents])].sort().map(agent => [agent, options.agents.includes(agent) ? profileId : policy.bridge?.profiles?.[agent] ?? policy.profileId])),
     disabledBuiltins: options.agents.includes("codex") ? nativeSkills.filter(entry => entry.agent === "codex" && entry.vendor && entry.path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep)).map(entry => ({ path: entry.path, hash: entry.hash })) : (policy.bridge?.disabledBuiltins ?? []),
@@ -424,12 +442,16 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
       roots.add(path); const parent = dirname(path); if (parent === path) break; path = parent;
     }
   }
-  const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (agent === "opencode" && entry.agent === "claude");
+  const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode", "hermes"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (agent === "opencode" && entry.agent === "claude");
   assertProjectDiscovery(agent, [...roots], home, path => canonicalAgentPath(path, aliases));
-  const configPath = canonicalAgentPath(join(home, AGENT_ADAPTERS[agent].config), aliases), config = jsonObject(readOptional(configPath), configPath);
+  const configPath = canonicalAgentPath(join(home, AGENT_ADAPTERS[agent].config), aliases), config = agent === "hermes" ? parseHermesConfig(readOptional(configPath)) : jsonObject(readOptional(configPath), configPath);
   const command = binding.commands?.[agent], profile = binding.profiles?.[agent];
   if (typeof command !== "string" || typeof profile !== "string") throw new Error("NATIVE_SKILL_DRIFT: the native hook command/profile binding is missing");
-  if (agent === "opencode") {
+  if (agent === "hermes") {
+    const supervisor = binding.supervisors?.hermes;
+    if (supervisor?.path !== join(dataDir, "agent-hooks", "hermes.js") || supervisor?.sha256 !== sha(renderHermesSupervisor(command, profile))) throw new Error("NATIVE_SKILL_DRIFT: Hermes supervisor binding changed; run skills hook install");
+    assertHermesProtection(home, config, command, profile, supervisor);
+  } else if (agent === "opencode") {
     if (JSON.stringify(config.permission?.skill) !== JSON.stringify({ "*": "deny", [CLI_BRIDGE_NAME]: "allow" }) || readOptional(join(home, ".config", "opencode", "plugins", "skills-cli.js")) !== renderOpenCodePlugin(command, profile)) throw new Error("NATIVE_SKILL_DRIFT: OpenCode bridge protection changed; run skills hook install");
   } else {
     const required: Record<string, any> = {}; configureHooks(required, agent, command, profile, true);
@@ -459,7 +481,7 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
       if (JSON.stringify(current) !== JSON.stringify(discovery)) throw new Error("Configured native discovery roots changed");
     }
   } catch (error) { throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`); }
-  const inventory = inventoryNativeSkills(home, { includeVendor: true, projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0 });
+  const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0 });
   if (inventory.some(entry => visible(entry) && !entry.bridge && !disabledBuiltin(entry))) throw new Error("NATIVE_SKILL_DRIFT: unexpected native skill copies were found; review skills migrate native --include-unmanaged --include-vendor before continuing");
   recheckRootAliases(aliases);
 }

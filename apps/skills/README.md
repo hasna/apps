@@ -66,8 +66,9 @@ instructions, without a copied catalogue. Claude's native Skill tool admits
 that bridge after other copies are retired. Prompt guards verify the owned
 bridge bytes, required native configuration, and discovered home/project skill
 paths before loading context. A missing or changed bridge, newly discovered
-copy, stale plugin registration, or incomplete scan refuses the prompt and
-reports repair guidance. These are checks on configured native discovery, not
+copy, stale plugin registration, or incomplete scan reports repair guidance and
+refuses loading. Most adapters also block the prompt; Hermes has the native
+non-blocking prompt-hook limitation described below. These are checks on configured native discovery, not
 an operating-system restriction on arbitrary file reads.
 
 Agent policies support up to 1 MiB of serialized UTF-8 JSON, with bounded agent
@@ -75,6 +76,26 @@ and discovery collections (2,048 sources and 512 roots per agent). Installation
 validates the complete resulting policy before writing configuration or backups;
 the same limits apply when reading and guarding native context. A rejected plan
 leaves the previous policy intact.
+
+Hermes 0.20.5 uses `pre_llm_call` to add selected context and `pre_tool_call`
+with `fail_closed: true` and a small owned supervisor to guard tool calls. The
+supervisor maps Skills child failures, timeouts and missing/invalid directives
+to the native explicit block response and exit code 2. Installation edits `config.yaml`
+while preserving unrelated values/comments and creates the native
+`.no-bundled-skills` opt-out marker to prevent bundled payloads from reappearing.
+The supervisor stays in the Skills data directory and its bytes/command are
+checked before native loading. Installation leaves the native shell-hook
+allowlist unchanged: approve the two exact
+managed event/command pairs through Hermes normal hook trust and restart.
+The adapter refuses unreviewed installed plugin sources and custom Hermes
+homes/profiles, user-specific tilde expansion, and `TERMINAL_CWD` overrides.
+Retire native payloads before use. Legacy `skills-cli.md` files can shadow the
+bridge and must also be preserved and retired before proceeding. Only `skill_view(name:
+"skills-cli")` is allowed natively; author payloads with Skills CLI commands.
+Hermes itself fails open on `pre_llm_call` errors. A returned refusal is visible
+context, and the trusted pre-tool guard blocks drift and native skill fallback;
+this is not a claim that Hermes can prevent every model call after a failed
+prompt hook or guarantee refusal if the native host/supervisor itself dies. Arbitrary project/plugin paths still require a discovery audit.
 
 Hook installation preserves unrelated configuration, hooks, and plugin assets.
 It disables discovered Codex native skills; exact system-skill trees can remain
@@ -172,6 +193,18 @@ Receipts and bundle requests retain the canonical name. Aliases are scoped to
 the authority, workspace and profile revision; project/session locks preserve
 their pinned aliases. They do not create global registry entries or native
 redirect skills. Saving aliases requires an API advertising `selectionAliases`.
+Profiles support up to 4,096 exact selections. API responses and local profile,
+project and session documents share an 8 MiB UTF-8 JSON limit. Resolved profiles
+reserve space within that limit for all session-loaded keys; the API refuses an
+oversized candidate before replacing the existing profile. Saved snapshots and
+owned cache receipts use compact JSON; existing formatted receipts remain readable.
+The authenticated capabilities response advertises `profileLimits`, including
+`maxSelections`, `maxDocumentBytes`, `maxResolvedProfileBytes` and the effective
+`requestBodyLimitBytes`. Larger writes require these advertised limits. Operators
+can set `HASNA_SKILLS_REQUEST_BODY_LIMIT_BYTES=8388608` to admit larger requests;
+the default remains 1,000,000 bytes and a lower configured limit still applies.
+These limits apply to configured memory, SQLite and PostgreSQL stores;
+profile sync does not require S3 or native skill copies.
 Profile
 writes use compare-and-swap revisions. Station receipts belong to the workspace,
 user and stable station ID, so rotating a key does not create a new station.
