@@ -4,6 +4,9 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { portPortableSkillDirectory } from "./portable-skills";
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 function snapshot(root: string): Record<string, unknown> {
   const files: Record<string, unknown> = {};
