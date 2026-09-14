@@ -3,6 +3,8 @@ export interface SkillSelection {
   slug: string;
   version: string;
   bundleDigest: string;
+  /** Reviewed alternate names, scoped to this profile and exact version/digest. */
+  aliases?: string[];
   triggers?: { keywords?: string[]; paths?: string[]; always?: boolean };
 }
 export interface SkillProfile {

@@ -114,10 +114,11 @@ export async function readSelectedEntries(selection: ResolvedSkillSelection, con
   return cacheSelectionBundle(selection, await client.getBundle(selection.slug, selection.version), options);
 }
 export function exactProfileSelection(spec: string, profile: ResolvedSkillProfile): ResolvedSkillSelection {
+  validateResolvedProfile(profile);
   const at = spec.lastIndexOf("@");
   const slug = at > 0 ? spec.slice(0, at) : spec;
   const version = at > 0 ? spec.slice(at + 1) : undefined;
-  const selection = profile.selections.find((entry) => entry.slug === slug && (version === undefined || version === entry.version));
+  const selection = profile.selections.find((entry) => (entry.slug === slug || entry.aliases?.includes(slug)) && (version === undefined || version === entry.version));
   if (!selection || version === "") throw new SkillSelectionError("SKILL_NOT_SELECTED", "The requested exact skill version is not selected by this profile or project lock.");
   return selection;
 }

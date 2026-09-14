@@ -5,6 +5,7 @@ import {
   skillsApiRequestUrl,
 } from "./fleet-credentials.js";
 import { readBoundedResponse } from "./remote-files.js";
+import { selectionAliasError, selectionSnapshotsEqual } from "./selection-aliases.js";
 import type {
   ResolvedSkillProfile,
   SkillSelection,
@@ -45,6 +46,7 @@ function validateSelection(value: unknown): asserts value is SkillSelection {
     !/^sha256:[a-f0-9]{64}$/.test(value.bundleDigest)
   )
     invalid();
+  if (selectionAliasError([value as unknown as SkillSelection])) invalid();
   if (value.triggers !== undefined) {
     if (
       !object(value.triggers) ||
@@ -156,6 +158,7 @@ export class HttpProfileClient implements ProfileClient {
         invalid();
       seen.add(item.slug);
     }
+    if (selectionAliasError(result.selections as SkillSelection[])) invalid();
     return result as unknown as ResolvedSkillProfile;
   }
   async recordStation(
@@ -171,6 +174,7 @@ export class HttpProfileClient implements ProfileClient {
     )
       throw new Error("Invalid station state");
     input.selections.forEach(validateSelection);
+    if (selectionAliasError(input.selections)) throw new Error("Invalid station selection aliases");
     const result = await this.read(
       await this.request(`/stations/${encodeURIComponent(id)}/state`, {
         method: "PUT",
@@ -189,6 +193,8 @@ export class HttpProfileClient implements ProfileClient {
     )
       invalid();
     result.selections.forEach(validateSelection);
+    if (selectionAliasError(result.selections as SkillSelection[])) invalid();
+    if (!selectionSnapshotsEqual(input.selections, result.selections as SkillSelection[])) invalid();
     return result as unknown as StationSkillState;
   }
   async getBundle(slug: string, version: string): Promise<Response | null> {

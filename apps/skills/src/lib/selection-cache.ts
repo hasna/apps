@@ -5,6 +5,7 @@ import { dirname, join, parse, resolve } from "node:path";
 import { getDataDirReadOnly } from "./config.js";
 import { inspectSkillBundle, sha256Hex, SKILL_BUNDLE_INSPECTION_LIMITS, type SkillBundleEntry } from "./skill-bundle.js";
 import { isValidSkillVersion } from "./skill-version.js";
+import { selectionAliasError } from "./selection-aliases.js";
 import type { ResolvedSkillProfile, ResolvedSkillSelection } from "../types/skill-selection.js";
 
 export class SkillSelectionError extends Error {
@@ -32,6 +33,8 @@ export function validateSelection(selection: ResolvedSkillSelection): void {
       || typeof selection.profileRevision !== "string" || !selection.profileRevision.trim()) {
     throw new SkillSelectionError("INVALID_SELECTION", "A skill selection must carry an exact version, digest, workspace and profile revision.");
   }
+  const aliasError = selectionAliasError([selection]);
+  if (aliasError) throw new SkillSelectionError("INVALID_SELECTION_ALIASES", aliasError);
   try {
     const url = new URL(selection.authority);
     if (url.username || url.password || url.search || url.hash || !["https:", "http:"].includes(url.protocol)
@@ -54,6 +57,8 @@ export function validateResolvedProfile(profile: ResolvedSkillProfile, authority
     }
     slugs.add(selection.slug);
   }
+  const aliasError = selectionAliasError(profile.selections);
+  if (aliasError) throw new SkillSelectionError("INVALID_SELECTION_ALIASES", aliasError);
 }
 export function selectionBundlePath(selection: ResolvedSkillSelection, options: SelectionCacheOptions = {}): string {
   validateSelection(selection);

@@ -99,11 +99,13 @@ for (const backend of backends) {
       };
       const selection = {
         slug: "release-notes",
+        aliases: ["legacy-release"],
         version: "1.0.0",
         bundleDigest: `sha256:${digest}`,
         triggers: { keywords: ["release"], always: false },
       };
       expect((await call("capabilities")).body).toMatchObject({
+        selectionAliases: true,
         profileResolution: true,
         stationState: true,
         incrementalSync: false,
@@ -133,6 +135,11 @@ for (const backend of backends) {
         { "if-none-match": "*" },
       );
       expect(created.status).toBe(201);
+      expect(created.body.selections[0].aliases).toEqual(["legacy-release"]);
+      for (const aliases of [["release-notes"], ["legacy-release", "legacy-release"], ["../outside"], "legacy-release", Array.from({ length: 33 }, (_, i) => `alias-${i}`)]) {
+        expect((await call("profiles/invalid-alias", "PUT", { selections: [{ ...selection, aliases }] }, { "if-none-match": "*" })).status).toBe(400);
+      }
+      expect((await call("profiles/alias-shadow", "PUT", { selections: [selection, { ...selection, slug: "legacy-release", aliases: [] }] }, { "if-none-match": "*" })).status).toBe(400);
       expect(created.body.workspaceId).toBe(owner.orgId);
       expect(
         (

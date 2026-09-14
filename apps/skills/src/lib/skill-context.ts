@@ -5,6 +5,7 @@ import type { ResolvedSkillSelection } from "../types/skill-selection.js";
 import { exactProfileSelection, readSelectedEntries, resolveSelectionContext, type SelectionResolverOptions } from "./selection-resolver.js";
 import { selectionKey, sessionReceiptPath, SkillSelectionError, writeSelectionJson } from "./selection-cache.js";
 import { readSelectedDocument } from "./selected-document.js";
+import { selectionMatchesName } from "./selection-aliases.js";
 
 export interface SkillContextInput {
   prompt?: string;
@@ -50,7 +51,7 @@ export async function buildSkillContext(input: SkillContextInput, options: Skill
   for (const match of prompt.matchAll(/\$([a-z0-9]+(?:-[a-z0-9]+)*(?:@[a-zA-Z0-9._-]+)?)/g)) {
     const spec = match[1]!;
     const slug = spec.split("@")[0];
-    if (profile.selections.some((entry) => entry.slug === slug)) explicit.add(selectionKey(exactProfileSelection(spec, profile)));
+    if (profile.selections.some((entry) => selectionMatchesName(entry, slug!))) explicit.add(selectionKey(exactProfileSelection(spec, profile)));
   }
   const promptWords = words(prompt);
   const loaded = new Set(resolved.session?.loaded ?? []);
