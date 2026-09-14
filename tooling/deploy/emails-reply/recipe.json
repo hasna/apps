@@ -1,0 +1,110 @@
+{
+  "schema": "emails.reply-overlay-recipe.v1",
+  "baseImageDigest": "sha256:b718e7b1eada661b9bf346d541a75d0ff86b2f84a205d6f8e8bb1e93be761b3e",
+  "previousPatchSha256": "849d5fad1065b837f64ee5caab5133abc13e5981293dd9b308fd176a97e93bf2",
+  "sourceCommit": "7c4bbc4ee13769935522e4a90edc98d0a1b60c4e",
+  "sourcePr": 2284,
+  "urlGuardSourceCommit": "226ca0093b3ea35f9e9cda9906c89f3b37065a27",
+  "patchFile": "reply-headers.patch",
+  "patchSha256": "b6fdef72a42a5ac4002bb6b0b863fe26bd41c510e64f5237b8b40c1a45be22d9",
+  "files": [
+    {
+      "path": "app/src/lib/reply-headers.ts",
+      "beforeSha256": null,
+      "afterSha256": "96c4abb0079d659ac8d49926986b63b15e7bd602a62fad5c9e3018aac0e44a24",
+      "beforeBytes": 0,
+      "afterBytes": 6117,
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "newFile": true
+    },
+    {
+      "path": "app/src/lib/send-body-boundary.ts",
+      "beforeSha256": null,
+      "afterSha256": "435349d75d471610cef1de9dfa67e9d701a4b7f150e4ba6b8bec13a60ac6b819",
+      "beforeBytes": 0,
+      "afterBytes": 1298,
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "newFile": true
+    },
+    {
+      "path": "app/src/providers/ses.ts",
+      "beforeSha256": "0cbca6722498a3114e8b991ebf45170417995504d49e5ae91f6903bec13bd06c",
+      "afterSha256": "f07323f1e50aa5fd8e93f493b994bc30cbb110d70ec9f9f334b71eff940eae04",
+      "beforeBytes": 24426,
+      "afterBytes": 24625,
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "newFile": false
+    },
+    {
+      "path": "app/src/server/self-hosted/openapi.ts",
+      "beforeSha256": "d2d7c4a12f6cb37d5e931b676d48c2bcaf9b189f3a5478d633214ef13e971775",
+      "afterSha256": "3134ea8ac7af1a888cd3c618bf2ab16e053d311f3a15baa583cef790b4bb7d49",
+      "beforeBytes": 158547,
+      "afterBytes": 159037,
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "newFile": false
+    },
+    {
+      "path": "app/src/server/self-hosted/provider-message-identity.ts",
+      "beforeSha256": null,
+      "afterSha256": "43d0beb7c7b376db15e3df73ed9dfbe044d3ed1f0879c3642c3d14aa0f9636d5",
+      "beforeBytes": 0,
+      "afterBytes": 3625,
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "newFile": true
+    },
+    {
+      "path": "app/src/server/self-hosted/sender.ts",
+      "beforeSha256": "ee67c0393b20c4d2035018bc9baaaf825d1678aff1f1347f075bf7b5faf771eb",
+      "afterSha256": "0b760b49d1da14efc81dfd2415a3320e7b0718fee543f2436f4bd587e1500249",
+      "beforeBytes": 8768,
+      "afterBytes": 9247,
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436,
+      "newFile": false
+    },
+    {
+      "path": "app/src/server/self-hosted/service.ts",
+      "beforeSha256": "c30ae1abd86b8fc51cca02e50af82a0208c839520b910f22edab4d75c57409bd",
+      "afterSha256": "09f0dbe31ea608e0158ddd4e19e39e15624dc49d0a51977acd880216801da1f0",
+      "beforeBytes": 114634,
+      "afterBytes": 117285,
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "newFile": false
+    },
+    {
+      "path": "app/src/server/self-hosted/store.ts",
+      "beforeSha256": "db5eda3edbd47c48f3d43e72a5ad3089834c0e8123fd084ef051e7cb2ec9505b",
+      "afterSha256": "1d85806a99d84f17c8e34d1a772a9d8dc09b5828d502ed385db6d7dcf786fee4",
+      "beforeBytes": 223727,
+      "afterBytes": 225507,
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "newFile": false
+    }
+  ],
+  "packageVersionPreserved": "1.4.10",
+  "dependenciesChanged": false,
+  "migrationsChanged": false,
+  "entrypointChanged": false,
+  "fullProducerEquivalenceClaimed": false,
+  "schedulingAdded": false,
+  "baseConfigDigest": "sha256:98960b8c427848f8493bb841d5e9857f7de0d14164bc8b41738324d750ffc4d8",
+  "baseSourceCommit": "65b7210b9cca2b00b4ce6d3ce780b023762cb4e7",
+  "baseReconciliation": null,
+  "sesMessageIdDomains": null
+}

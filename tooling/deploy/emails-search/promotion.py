@@ -38,6 +38,8 @@ OCI_LAYER = "application/vnd.oci.image.layer.v1.tar+gzip"
 READ_ONLY_TASK_FIELDS = {"taskDefinitionArn", "revision", "status", "requiresAttributes", "compatibilities", "registeredAt", "registeredBy", "deregisteredAt"}
 TASK_FIELDS = {"family", "taskRoleArn", "executionRoleArn", "networkMode", "containerDefinitions", "volumes", "placementConstraints", "requiresCompatibilities", "cpu", "memory", "tags", "pidMode", "ipcMode", "proxyConfiguration", "inferenceAccelerators", "ephemeralStorage", "runtimePlatform", "enableFaultInjection"}
 ROOT = Path(__file__).resolve().parent
+TAG_PREFIX = "search-capacity-"
+OVERLAY_DESCRIPTION = "hasna/apps reviewed Emails search overlay "
 
 
 def require(ok, reason):
@@ -187,7 +189,7 @@ def append_overlay(manifest, config, layer, diff_id, source):
     require(re.fullmatch(r"[0-9a-f]{40}", source), "SOURCE_COMMIT")
     updated = copy.deepcopy(config)
     updated["rootfs"]["diff_ids"].append(sha(diff_id))
-    updated.setdefault("history", []).append({"created_by": "hasna/apps reviewed Emails search overlay " + source})
+    updated.setdefault("history", []).append({"created_by": OVERLAY_DESCRIPTION + source})
     config_bytes = encode(updated)
     result = copy.deepcopy(manifest)
     result["config"] = {"mediaType": OCI_CONFIG, "digest": digest(config_bytes), "size": len(config_bytes)}
@@ -286,7 +288,7 @@ def prepare(source, out):
     candidate = task_candidate(before, image_receipt["imageDigest"])
     before_hash = digest(encode(before))
     require(service_binding(current_service()) == before_arn and digest(encode(task_read(before_arn))) == before_hash, "PREPARE_RUNTIME_DRIFT")
-    tag = "search-capacity-" + source
+    tag = TAG_PREFIX + source
     intent = {"schema": "emails.promotion-prepared.v1", "sourceCommit": source, "recipeSha256": hashlib.sha256((ROOT / "recipe.json").read_bytes()).hexdigest(), "taskDefinitionBefore": before_arn, "taskBeforeDigest": before_hash, "taskAfterDigest": digest(encode(candidate)), "desiredCount": service["desiredCount"], "image": image_receipt, "tag": tag}
     save(out / "prepare-intent.json", intent)
     upload_blob(layer, out / "layer-private.bin")

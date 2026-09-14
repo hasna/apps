@@ -1,0 +1,388 @@
+--- /dev/null
++++ b/app/src/lib/reply-headers.ts
+@@ -0,0 +1,97 @@
++import { canonicalSender } from "./email-address.js";
++
++/** A single bounded RFC Message-ID; opaque provider/ledger IDs are not accepted. */
++export function canonicalRfcMessageId(value: unknown): string | null {
++  if (typeof value !== "string" || value.length > 900 || /[^\x20-\x7e]/.test(value)) return null;
++  const text = value.trim();
++  const id = text.startsWith("<") && text.endsWith(">") ? text.slice(1, -1) : text;
++  // RFC 5322 modern msg-id grammar: dot-atom-text / no-fold-literal.
++  const atom = /^[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+(?:\.[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+)*$/;
++  const at = id.indexOf("@");
++  if (id.length > 898 || at <= 0) return null;
++  const left = id.slice(0, at), right = id.slice(at + 1);
++  return atom.test(left) && (atom.test(right) || /^\[[\x21-\x5a\x5e-\x7e]*\]$/.test(right)) ? `<${id}>` : null;
++}
++
++/** Duplicate names or non-text values are ambiguous and cannot supply a header. */
++export function replyHeader(headers: unknown, name: string): string | undefined {
++  if (!headers || typeof headers !== "object" || Array.isArray(headers)) return undefined;
++  const entries = Object.entries(headers).filter(([key]) => key.toLowerCase() === name.toLowerCase());
++  if (entries.length !== 1 || typeof entries[0]![1] !== "string") return undefined;
++  return entries[0]![1] as string;
++}
++
++/** Parse mailbox lists without splitting a quoted display name at its comma. */
++export function replyMailboxes(value: unknown): string[] | null {
++  if (typeof value !== "string" || !value.trim() || value.length > 8192 || /[\r\n\x00-\x1f\x7f]/.test(value)) return null;
++  const parts: string[] = []; let start = 0, quoted = false, escaped = false;
++  for (let i = 0; i < value.length; i++) {
++    const c = value[i];
++    if (escaped) { escaped = false; continue; }
++    if (quoted && c === "\\") { escaped = true; continue; }
++    if (c === '"') quoted = !quoted;
++    if (!quoted && c === ",") { parts.push(value.slice(start, i)); start = i + 1; }
++  }
++  if (quoted || escaped) return null;
++  parts.push(value.slice(start));
++  if (parts.length > 100) return null;
++  const addresses = parts.map(canonicalSender);
++  return addresses.some(address => address === null) ? null : [...new Set(addresses as string[])];
++}
++
++export class ReplyHeaderError extends Error {
++  constructor(readonly reason: string, readonly status: number, message: string) { super(message); }
++}
++
++export interface ReplyParent {
++  direction: string;
++  from_addr: string;
++  to_addrs: string[];
++  cc_addrs: string[];
++  subject: string | null;
++  message_id: string | null;
++  in_reply_to: string | null;
++  headers: Record<string, unknown>;
++}
++
++/** Absence is allowed; present ambiguous or malformed evidence must not disappear. */
++function parentHeader(headers: Record<string, unknown>, name: string, reason: string): string | undefined {
++  const entries = Object.entries(headers).filter(([key]) => key.toLowerCase() === name);
++  if (!entries.length) return undefined;
++  if (entries.length !== 1 || typeof entries[0]![1] !== "string" || !(entries[0]![1] as string).trim()) {
++    throw new ReplyHeaderError(reason, 409, "The parent has ambiguous or malformed transport headers.");
++  }
++  return entries[0]![1] as string;
++}
++
++function parentReferences(value: string | null | undefined): string[] | undefined {
++  if (value == null) return undefined;
++  if (typeof value !== "string" || !value.trim() || value.length > 900 || /[\r\n\x00-\x1f\x7f]/.test(value)) {
++    throw new ReplyHeaderError("reply_parent_references_invalid", 409, "The parent's References header is malformed or exceeds the supported bound.");
++  }
++  const refs = value.trim().split(/\s+/).map(canonicalRfcMessageId);
++  if (refs.some(value => value === null)) throw new ReplyHeaderError("reply_parent_references_invalid", 409, "The parent's References header is malformed or exceeds the supported bound.");
++  return refs as string[];
++}
++
++/** Derive transport-owned headers only from a scoped, authorized parent record. */
++export function deriveReplyHeaders(parent: ReplyParent, from: string, subject: string): Record<string, string> {
++  const participants = parent.direction === "outbound" ? [parent.from_addr] : [...parent.to_addrs, ...parent.cc_addrs];
++  if (!participants.some(address => canonicalSender(address) === from)) throw new ReplyHeaderError("reply_sender_mismatch", 403, "The sender is not an authorized participant of the reply parent.");
++  const normalizeSubject = (value: string) => value.replace(/^(?:\s*re\s*:\s*)+/i, "").trim();
++  if (normalizeSubject(subject) !== normalizeSubject(parent.subject ?? "")) throw new ReplyHeaderError("reply_subject_mismatch", 400, "A reply must retain the parent's subject, with an optional Re: prefix.");
++  const rawHeaderId = parentHeader(parent.headers, "message-id", "reply_parent_identity_invalid");
++  const headerId = canonicalRfcMessageId(rawHeaderId);
++  if (rawHeaderId !== undefined && !headerId) throw new ReplyHeaderError("reply_parent_identity_invalid", 409, "The parent has a malformed RFC Message-ID header.");
++  const references = parentReferences(parentHeader(parent.headers, "references", "reply_parent_references_invalid"));
++  const headerReply = parentReferences(parentHeader(parent.headers, "in-reply-to", "reply_parent_references_invalid"));
++  const recordReply = parentReferences(parent.in_reply_to);
++  const recordId = canonicalRfcMessageId(parent.message_id);
++  if (headerId && recordId && headerId !== recordId) throw new ReplyHeaderError("reply_parent_identity_conflict", 409, "The parent has conflicting RFC Message-ID evidence.");
++  const id = headerId ?? recordId;
++  if (!id) throw new ReplyHeaderError("reply_parent_message_id_unavailable", 409, "The parent's actual RFC Message-ID is unavailable; wait for provider evidence or ingest the original message before replying.");
++  const refs = references ?? recordReply ?? headerReply ?? [];
++  const chain = [...new Set([...refs, id])].join(" ");
++  if (chain.length > 900) throw new ReplyHeaderError("reply_parent_references_invalid", 409, "The reply's References header exceeds the supported bound.");
++  return { "In-Reply-To": id, References: chain };
++}
+--- /dev/null
++++ b/app/src/lib/send-body-boundary.ts
+@@ -0,0 +1,29 @@
++/** A finding contains no body fragments, URLs, or offsets suitable for echoing. */
++export interface SendBodyBoundaryFinding {
++  code: "invalid_body_url_boundary";
++  message: string;
++}
++
++/**
++ * Preserve authored body bytes. HTTP(S) tokens end at whitespace or markup/string
++ * delimiters; a raw backslash followed by n/r inside such a token is refused.
++ * This intentionally also rejects literal malformed-URL teaching examples.
++ * It does not decode percent escapes, rewrite prose, or validate all URL syntax.
++ */
++export function findSendBodyUrlBoundary(text: unknown, html?: unknown): SendBodyBoundaryFinding | null {
++  for (const body of [text, html]) {
++    if (typeof body !== "string") continue;
++    for (const token of body.matchAll(/https?:\/\/[^\s<>"'`]*/gi)) {
++      if (/\\[nr]/.test(token[0])) return {
++        code: "invalid_body_url_boundary",
++        message: "Message body contains a literal newline escape inside an HTTP(S) URL. Use actual line breaks in a --body-file (or text_file/html_file descriptor); body bytes were not changed.",
++      };
++    }
++  }
++  return null;
++}
++
++export function assertSendBodyUrlBoundary(text: unknown, html?: unknown): void {
++  const finding = findSendBodyUrlBoundary(text, html);
++  if (finding) throw new Error(`${finding.code}: ${finding.message}`);
++}
+--- a/app/src/providers/ses.ts
++++ b/app/src/providers/ses.ts
+@@ -1,3 +1,4 @@
++import { replyMailboxes } from "../lib/reply-headers.js";
+ import {
+   SESv2Client,
+   CreateEmailIdentityCommand,
+@@ -350,6 +351,8 @@
+ 
+   async sendEmail(opts: SendEmailOptions): Promise<string> {
+     assertSafeEmailHeaders(opts);
++    const replyTo = opts.reply_to ? replyMailboxes(opts.reply_to) : undefined;
++    if (opts.reply_to && !replyTo) throw new Error("Invalid Reply-To mailbox list");
+     const toArr = Array.isArray(opts.to) ? opts.to : [opts.to];
+     const ccArr = opts.cc ? (Array.isArray(opts.cc) ? opts.cc : [opts.cc]) : [];
+     const bccArr = opts.bcc ? (Array.isArray(opts.bcc) ? opts.bcc : [opts.bcc]) : [];
+@@ -392,7 +395,7 @@
+           CcAddresses: ccArr.length > 0 ? ccArr : undefined,
+           BccAddresses: bccArr.length > 0 ? bccArr : undefined,
+         },
+-        ReplyToAddresses: opts.reply_to ? [opts.reply_to] : undefined,
++        ReplyToAddresses: replyTo ?? undefined,
+         Content: {
+           Simple: {
+             Subject: { Data: opts.subject, Charset: "UTF-8" },
+--- a/app/src/server/self-hosted/openapi.ts
++++ b/app/src/server/self-hosted/openapi.ts
+@@ -3614,7 +3614,8 @@
+                   to: { type: "array", items: { type: "string" } },
+                   cc: { type: "array", items: { type: "string" } },
+                   bcc: { type: "array", items: { type: "string" } },
+-                  reply_to: { type: "string" },
++                  reply_to: { type: "string", description: "Reply mailbox list, with quoted display names supported." },
++                  reply_to_message_id: { type: "string", minLength: 1, maxLength: 256, description: "Parent message ID in this tenant. Server derives RFC In-Reply-To and References from stored actual wire identity; unavailable legacy identity refuses." },
+                   subject: { type: "string" },
+                   text: { type: "string" },
+                   html: { type: "string" },
+@@ -3664,9 +3665,10 @@
+             description: "Newly accepted send or an existing send still in progress",
+             content: { "application/json": { schema: sendMessageAcceptedResponseSchema } },
+           },
+-          "400": errorResponse("Invalid send request"),
++          "400": errorResponse("Invalid send request, including invalid_body_url_boundary; no send intent or provider call"),
+           "401": errorResponse("Authentication required"),
+           "403": errorResponse("Sender or tenant scope is not authorized"),
++          "404": errorResponse("Reply parent not found in this tenant; nothing was sent"),
+           "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/SendMessageError" } } } },
+           "422": {
+             description: "The provider definitively rejected the message (nothing was sent); the body carries the real provider error and sent:false",
+--- /dev/null
++++ b/app/src/server/self-hosted/provider-message-identity.ts
+@@ -0,0 +1,43 @@
++import { canonicalRfcMessageId } from "../../lib/reply-headers.js";
++
++export interface ProviderMessageIdentity {
++  messageId: string;
++  provenance: { source: "resend-retrieval" } | { source: "configured-ses-region-domain"; region: string; domain: string; evidenceSha256: string; verifiedAt: string };
++}
++interface SesDomainBinding { domain: string; evidence_sha256: string; verified_at: string }
++
++/** No region/domain is inferred. Each configured mapping requires operator evidence. */
++export function sesMessageIdentityResolver(env: NodeJS.ProcessEnv, region: string | null): (id: string) => ProviderMessageIdentity | null {
++  const text = env.EMAILS_SES_MESSAGE_ID_DOMAINS;
++  if (text === undefined) return () => null;
++  const invalid = () => new Error("EMAILS_SES_MESSAGE_ID_DOMAINS must be a bounded JSON region map with domain, evidence_sha256 and verified_at for each observed mapping");
++  if (Buffer.byteLength(text) > 8192) throw invalid();
++  let parsed: unknown; try { parsed = JSON.parse(text); } catch { throw invalid(); }
++  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || Object.keys(parsed).length > 32) throw invalid();
++  for (const [key, raw] of Object.entries(parsed)) {
++    if (!/^[a-z]{2}(?:-[a-z]+)+-\d$/.test(key) || !raw || typeof raw !== "object" || Array.isArray(raw)) throw invalid();
++    const value = raw as Record<string, unknown>;
++    if (Object.keys(value).some(key => !["domain","evidence_sha256","verified_at"].includes(key)) || typeof value.domain !== "string" || value.domain.length > 253 || !/^[a-z0-9.-]+$/.test(value.domain) || value.domain.split(".").some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) || typeof value.evidence_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.evidence_sha256) || typeof value.verified_at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value.verified_at) || !Number.isFinite(Date.parse(value.verified_at))) throw invalid();
++  }
++  const map = parsed as Record<string, SesDomainBinding>;
++  const binding = region && Object.hasOwn(map, region) ? map[region] : undefined;
++  return id => {
++    if (!binding || !region || !/^[a-zA-Z0-9-]{1,255}$/.test(id)) return null;
++    return {messageId:`<${id}@${binding.domain}>`,provenance:{source:"configured-ses-region-domain",region,domain:binding.domain,evidenceSha256:binding.evidence_sha256,verifiedAt:binding.verified_at}};
++  };
++}
++
++/** Resend's supported retrieval API exposes the actual outbound RFC Message-ID. */
++export async function readResendMessageIdentity(id: string, apiKey: string, signal: AbortSignal, fetchImpl: typeof fetch = fetch): Promise<ProviderMessageIdentity | null> {
++  if (!/^[a-zA-Z0-9-]{1,255}$/.test(id)) return null;
++  const response = await fetchImpl(`https://api.resend.com/emails/${encodeURIComponent(id)}`, {headers:{Authorization:`Bearer ${apiKey}`},signal,redirect:"error"});
++  if (!response.ok || !response.body) { await response.body?.cancel(); return null; }
++  const reader=response.body.getReader(); const chunks:Uint8Array[]=[];let bytes=0;
++  try {
++    while (true) { const part=await reader.read();if(part.done)break;bytes+=part.value.byteLength;if(bytes>1024*1024)throw Error("Provider identity response exceeds the supported bound");chunks.push(part.value); }
++    const result=JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string,unknown>;
++    const messageId=canonicalRfcMessageId(result.message_id);
++    if(result.id!==id || !messageId)return null;
++    return {messageId,provenance:{source:"resend-retrieval"}};
++  } finally { await reader.cancel().catch(()=>{});reader.releaseLock(); }
++}
+--- a/app/src/server/self-hosted/sender.ts
++++ b/app/src/server/self-hosted/sender.ts
+@@ -1,3 +1,4 @@
++import { readResendMessageIdentity, sesMessageIdentityResolver, type ProviderMessageIdentity } from "./provider-message-identity.js";
+ import { getAdapter } from "../../providers/index.js";
+ import { resolveSesCredentials } from "../../providers/ses.js";
+ import type { Provider, SendEmailOptions } from "../../types/index.js";
+@@ -24,6 +25,7 @@
+ export interface SelfHostedSender {
+   readonly provider: SelfHostedSendProvider;
+   readonly credentialSource?: SelfHostedSenderCredentialSource;
++  readMessageIdentity?(messageId: string, signal: AbortSignal): Promise<ProviderMessageIdentity | null>;
+   send(input: SendEmailOptions): Promise<string>;
+ }
+ 
+@@ -183,6 +185,7 @@
+   }
+   const provider = providerRecord(raw, env);
+   const adapter = getAdapter(provider);
++  const sesIdentity = raw === "ses" ? sesMessageIdentityResolver(env, provider.region) : undefined;
+   return {
+     provider: raw,
+     // Never the credential VALUES — only which identity is in use, so an
+@@ -195,6 +198,7 @@
+     credentialSource: raw === "ses"
+       ? SES_CREDENTIAL_SOURCE_LABEL[resolveSesCredentials(provider).source]
+       : "api_key",
++    readMessageIdentity: async (id, signal) => raw === "ses" ? sesIdentity!(id) : readResendMessageIdentity(id, provider.api_key!, signal),
+     send: (input) => adapter.sendEmail(input),
+   };
+ }
+--- a/app/src/server/self-hosted/service.ts
++++ b/app/src/server/self-hosted/service.ts
+@@ -1,3 +1,5 @@
++import { deriveReplyHeaders, ReplyHeaderError, replyMailboxes, canonicalRfcMessageId } from "../../lib/reply-headers.js";
++import { findSendBodyUrlBoundary } from "../../lib/send-body-boundary.js";
+ import { messageSearchErrorResponse } from "./search-admission.js";
+ // HTTP request handler for the Emails self-hosted service.
+ //
+@@ -1302,6 +1304,8 @@
+       // content, so it reads against the attachment-derived budget rather than
+       // the 1MiB default every other route keeps.
+       const body = await readJsonBody(req, MAX_SEND_JSON_BODY_BYTES);
++      const bodyFinding = findSendBodyUrlBoundary(body.text, body.html);
++      if (bodyFinding) return json(400, {error: bodyFinding.message, reason: bodyFinding.code});
+       const rawFrom = String(body.from ?? "").trim();
+       const rawTo = asStringArray(body.to);
+       if (!rawFrom) return json(400, { error: "from is required" });
+@@ -1364,6 +1368,18 @@
+       } catch (error) {
+         return json(400, { error: error instanceof Error ? error.message : "invalid attachment" });
+       }
++      if (body.reply_to !== undefined && !replyMailboxes(body.reply_to)) return json(400, {error: "reply_to must contain valid mailbox addresses", reason: "invalid_reply_to"});
++      // Only parent records supply transport headers; arbitrary caller headers stay unsupported.
++      let replyParentId: string | undefined;
++      let replyHeaders: Record<string, string> | undefined;
++      if (body.reply_to_message_id !== undefined) {
++        if (typeof body.reply_to_message_id !== "string" || !body.reply_to_message_id.trim() || body.reply_to_message_id.length > 256) return json(400, {error: "reply_to_message_id must be a nonempty parent message identifier", reason: "invalid_reply_parent"});
++        const parent = await auth.store.getMessage(body.reply_to_message_id);
++        if (!parent) return json(404, {error: "Reply parent not found in this tenant", reason: "reply_parent_not_found", sent: false, retry_safe: true});
++        try { replyHeaders = deriveReplyHeaders(parent, from, subject); }
++        catch (error) { if (error instanceof ReplyHeaderError) return json(error.status, {error: error.message, reason: error.reason, sent: false, retry_safe: true}); throw error; }
++        replyParentId = parent.id;
++      }
+       const payload = {
+         from,
+         to,
+@@ -1375,6 +1391,7 @@
+         html: typeof body.html === "string" ? body.html : null,
+         attachments,
+         provider: deps.sender.provider,
++        ...(replyParentId ? {reply_to_message_id: replyParentId, headers: replyHeaders} : {}),
+       };
+       const sendKeyToken = typeof body.send_key === "string"
+         ? body.send_key.trim()
+@@ -1396,6 +1413,7 @@
+           })),
+           idempotency_key: idempotencyKey,
+           send_payload_hash: sendPayloadHash(payload),
++          ...(replyHeaders ? {headers: replyHeaders, in_reply_to: replyHeaders["In-Reply-To"]} : {}),
+         });
+       } catch (error) {
+         if (error instanceof IdempotencyKeyConflictError) {
+@@ -1547,6 +1565,7 @@
+         });
+       }
+ 
++      const acceptedSender = deps.sender;
+       let messageId: string;
+       try {
+         // The provider call is the ONLY surface that may carry the address
+@@ -1564,7 +1583,7 @@
+           fromRecord?.display_name && isSafeFromDisplayName(fromRecord.display_name)
+             ? formatSenderDisplayName(fromRecord.display_name, from)
+             : from;
+-        messageId = await deps.sender.send({
++        messageId = await acceptedSender.send({
+           provider_id: `self-hosted-${deps.sender.provider}`,
+           from: fromForProvider,
+           to,
+@@ -1575,6 +1594,7 @@
+           text: typeof body.text === "string" ? body.text : undefined,
+           html: typeof body.html === "string" ? body.html : undefined,
+           attachments: attachments.length ? attachments : undefined,
++          ...(replyHeaders ? {headers: replyHeaders} : {}),
+         });
+       } catch (error) {
+         // NEVER swallow the provider error (the 2026-07-25 incident): classify
+@@ -1611,7 +1631,16 @@
+         });
+       }
+       try {
+-        const completed = await auth.store.completeSendIntent(claimed.id, messageId);
++        let completed = await auth.store.completeSendIntent(claimed.id, messageId);
++        // This is the same sender instance/receipt that actually sent this message.
++        // Identity lookup/storage failure cannot change sent state or authorize a retry.
++        try {
++          const identity = await acceptedSender.readMessageIdentity?.(messageId, AbortSignal.timeout(5000));
++          if (identity && canonicalRfcMessageId(identity.messageId) === identity.messageId) {
++            const observed = await auth.store.recordAcceptedMessageIdentity(claimed.id, messageId, identity);
++            if (observed && observed.id === claimed.id && observed.provider_message_id === messageId && observed.send_state === "sent") completed = observed;
++          }
++        } catch { /* Sent state remains authoritative; no identity is fabricated. */ }
+         // `sent` + `provider_message_id` sit at the top level on EVERY response
+         // where the provider accepted the message (here, on idempotent replays,
+         // and on the finalization-failure path below), so a client never has to
+--- a/app/src/server/self-hosted/store.ts
++++ b/app/src/server/self-hosted/store.ts
+@@ -4088,6 +4088,32 @@
+     return { id: rows[0]!.id };
+   }
+ 
++  /** Called only after this request's provider receipt is durably marked sent.
++   * No historical provider association or schema migration is assumed.
++   * Pool wait is bounded for the response; an already-started CAS can finish later.
++   */
++  async recordAcceptedMessageIdentity(id: string, receipt: string, identity: import("./provider-message-identity.js").ProviderMessageIdentity): Promise<MessageRecord | null> {
++    if (!this.atomicClient) return null;
++    const deadline = Date.now() + 3000;
++    let timer: ReturnType<typeof setTimeout> | undefined;
++    const work = this.atomicClient.transaction(async tx => {
++      if (Date.now() >= deadline) return null;
++      await tx.execute("SET LOCAL statement_timeout = '2s'");
++      await tx.execute("SET LOCAL lock_timeout = '500ms'");
++      await tx.execute("SELECT set_config('app.current_tenant', $1, true)", [this.tenantId]);
++      if (Date.now() >= deadline) return null;
++      const row = await tx.get<Record<string, unknown>>(
++        `UPDATE messages SET message_id=$4, headers=headers || jsonb_build_object('message-id',$4::text,'provider_message_identity',$5::jsonb), updated_at=now()
++         WHERE id=$1 AND tenant_id=$2 AND provider_message_id=$3 AND direction='outbound' AND send_state='sent'
++           AND message_id IS NULL AND NOT EXISTS (SELECT 1 FROM jsonb_object_keys(headers) AS h(key) WHERE lower(key)='message-id') RETURNING ${MESSAGE_COLUMNS}`,
++        [id, this.tenantId, receipt, identity.messageId, JSON.stringify(identity.provenance)],
++      );
++      return row ? mapMessageRow(row) : null;
++    }).catch(() => null);
++    try { return await Promise.race([work, new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 3000); })]); }
++    finally { if (timer) clearTimeout(timer); }
++  }
++
+   async getMessage(id: string): Promise<MessageRecord | null> {
+     const row = await this.client.get<Record<string, unknown>>(
+       `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = $1 AND tenant_id = $2`,
