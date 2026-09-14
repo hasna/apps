@@ -82,6 +82,9 @@ test("policy discovery bounds accept supported maximums and refuse excessive roo
     { discovery: { claude: { ...discovery, sources: [...discovery.sources, { path: "/extra", sha256: null }] } } },
     { rootAliases: [{}, {}, {}] },
     { agents: Array.from({ length: 17 }, () => "claude") },
+    { managedNativePaths: Array.from({ length: 2049 }, () => "/fixture/managed") },
+    { managedNativePaths: [null] },
+    { retirementDenials: { claude: "true" } },
     { discovery: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [String(i), { ...discovery, roots: [], sources: [] }])) },
   ];
   for (const bridge of invalid) expect(() => { parseManagedSkillPolicy(JSON.stringify({ loading: "cli", bridge })); }).toThrow("bounds");

@@ -61,7 +61,8 @@ test("native discovery limits directory entry allocation even when files contain
 });
 
 test("native discovery bounds UTF-8 path metadata below the entry limit", () => {
-  const f = fixture(), directory = join(f.cache, ...Array(10).fill("é".repeat(100))); mkdirSync(directory, { recursive: true });
-  for (let i = 0; i < 2_100; i++) writeFileSync(join(directory, `asset-${i}`), "");
+  // Exercise the byte budget without exceeding macOS's individual path limit.
+  const f = fixture(), directory = join(f.cache, ...Array(3).fill("é".repeat(100))); mkdirSync(directory, { recursive: true });
+  for (let i = 0; i < 7_000; i++) writeFileSync(join(directory, `asset-${i}`), "");
   expect(() => inventoryNativeSkills(f.home, { includeVendor: true })).toThrow("metadata limit exceeded");
 });

@@ -100,9 +100,11 @@ test("entry and metadata budgets bound real directory listings across all roots"
   writeFileSync(join(second, "extra"), "");
   expect(() => captureDiscoveryDirectories([first, second])).toThrow("entry limit");
   const metadata = join(home, "metadata"); let deep = metadata;
-  for (let i = 0; i < 6; i++) deep = join(deep, "n".repeat(250));
+  // Keep paths below macOS PATH_MAX while exceeding 8 MiB of metadata
+  // before the separate 20,000-entry guard is reached.
+  for (let i = 0; i < 3; i++) deep = join(deep, "n".repeat(200));
   mkdirSync(deep, { recursive: true });
-  for (let i = 0; i < 5600; i++) writeFileSync(join(deep, String(i)), "");
+  for (let i = 0; i < 14000; i++) writeFileSync(join(deep, String(i)), "");
   expect(() => captureDiscoveryDirectories([metadata])).toThrow("metadata limit");
 });
 

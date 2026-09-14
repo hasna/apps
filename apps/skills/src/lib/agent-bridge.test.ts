@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { applyAgentIntegration, archiveNativeSkills, assertManagedAgentBridge, inventoryNativeSkills, planAgentIntegration } from "./agent-integration.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
+import { CLI_BRIDGE_FILES, CLI_BRIDGE_VERSION, PREVIOUS_CLI_BRIDGE_FILES } from "./agent-bridge.js";
 
 useDefaultTestTimeout();
 const roots: string[] = [];
@@ -160,4 +161,100 @@ test("discovery config changes between planning and application refuse before an
   mkdirSync(join(config, ".."), { recursive: true }); writeFileSync(config, '{"enabledPlugins":{"new@personal":true}}');
   expect(() => applyAgentIntegration(plan)).toThrow("discovery input changed");
   expect(existsSync(join(f.home, ".codex/skills/skills-cli"))).toBe(false);
+});
+
+test("Claude preserves independent user and ancestor project skills with the same command name", () => {
+  const f = options(), project = join(f.home, "project"), nested = join(project, "src"); mkdirSync(nested, { recursive: true });
+  for (const root of [f.home, project, nested]) {
+    const path = join(root, ".claude/skills/deploy"); mkdirSync(path, { recursive: true });
+    writeFileSync(join(path, "SKILL.md"), `---\nname: display-label\n---\nInstructions owned by ${root}\n`);
+  }
+  const plan = planAgentIntegration({ ...f, agents: ["claude"], projectDir: nested });
+  expect(plan.nativeSkills.filter(entry => entry.independent)).toHaveLength(3);
+  applyAgentIntegration(plan);
+  expect(assertManagedAgentBridge("claude", { ...f, projectDir: nested }).independentNativeSkills).toEqual(["deploy"]);
+  for (const root of [f.home, project, nested]) expect(readFileSync(join(root, ".claude/skills/deploy/SKILL.md"), "utf8")).toContain(`Instructions owned by ${root}`);
+  // Later user edits are not drift in Skills-owned content.
+  writeFileSync(join(project, ".claude/skills/deploy/SKILL.md"), "Edited project instructions\n");
+  expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: nested })).not.toThrow();
+  const settings = join(nested, ".claude/settings.local.json");
+  writeFileSync(settings, '{"permissions":{"deny":["Skill(deploy)"]}}');
+  expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: nested })).not.toThrow();
+});
+
+test("a tracked managed payload cannot become independent by removing its marker or reinstalling", () => {
+  const f = options(), path = join(f.home, ".claude/skills/deploy"); mkdirSync(path, { recursive: true });
+  writeFileSync(join(path, "SKILL.md"), "Managed payload\n");
+  writeFileSync(join(path, ".hasna-skills.json"), '{"managedBy":"@hasna/skills"}');
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude"] }));
+  for (const marker of [null, "{broken", '{"managedBy":"another-tool"}']) {
+    if (marker === null) rmSync(join(path, ".hasna-skills.json")); else writeFileSync(join(path, ".hasna-skills.json"), marker);
+    const plan = planAgentIntegration({ ...f, agents: ["claude"] });
+    expect(plan.nativeSkills.some(entry => entry.independent)).toBe(false);
+    applyAgentIntegration(plan);
+    expect(JSON.parse(readFileSync(join(f.dataDir, "agent-policy.json"), "utf8")).bridge.managedNativePaths).toEqual([path]);
+    expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home })).toThrow("NATIVE_SKILL_DRIFT");
+  }
+});
+
+for (const kind of ["reserved-directory", "reserved-display-name", "linked-skill", "nested-root", "skill-plugin", "malformed-marker"]) test(`Claude coexistence refuses ${kind} without changing it`, () => {
+  const f = options(); applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude"] }));
+  const project = join(f.home, "project"), root = join(project, ".claude/skills"), path = join(root, kind === "reserved-directory" ? "skills-cli" : kind === "nested-root" ? "nested/deploy" : "deploy");
+  mkdirSync(path, { recursive: true }); writeFileSync(join(path, "SKILL.md"), kind === "reserved-display-name" ? "---\nname: skills-cli\n---\nShadow" : "Independent fixture\n");
+  if (kind === "linked-skill") { const outside = join(f.home, "outside"); renameSync(path, outside); symlinkSync(outside, path); }
+  if (kind === "skill-plugin") { mkdirSync(join(path, ".claude-plugin")); writeFileSync(join(path, ".claude-plugin/plugin.json"), '{"name":"deploy"}'); }
+  if (kind === "malformed-marker") writeFileSync(join(path, ".hasna-skills.json"), "{invalid");
+  expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: project })).toThrow();
+  expect(existsSync(join(path, "SKILL.md"))).toBe(true);
+});
+
+test("an exact v1 bridge upgrades across prior adapters; customized v1 bridges are preserved", () => {
+  const f = options(); applyAgentIntegration(planAgentIntegration(f));
+  const configs = new Map(f.agents.map(agent => [agent, readFileSync(join(f.home, `.${agent}`, agent === "claude" ? "settings.json" : "hooks.json"), "utf8")]));
+  for (const agent of f.agents) for (const [file, content] of Object.entries(PREVIOUS_CLI_BRIDGE_FILES)) writeFileSync(join(f.home, `.${agent}/skills/skills-cli`, file), content);
+  const policyPath = join(f.dataDir, "agent-policy.json"), policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  policy.bridge.version = 1; policy.bridge.digest = JSON.parse(PREVIOUS_CLI_BRIDGE_FILES[".hasna-skills.json"]!).contentSha256;
+  writeFileSync(policyPath, JSON.stringify(policy));
+  const custom = join(f.home, ".codex/skills/skills-cli/SKILL.md"); writeFileSync(custom, PREVIOUS_CLI_BRIDGE_FILES["SKILL.md"]! + "User edit\n");
+  expect(() => planAgentIntegration({ ...f, agents: ["claude"] })).toThrow("BRIDGE_UPGRADE_REQUIRES_ALL_AGENTS");
+  expect(() => planAgentIntegration(f)).toThrow("modified Skills bridge");
+  expect(readFileSync(custom, "utf8")).toContain("User edit");
+  writeFileSync(custom, PREVIOUS_CLI_BRIDGE_FILES["SKILL.md"]!);
+  const plan = planAgentIntegration(f);
+  expect(plan.nativeSkills.every(entry => entry.bridge)).toBe(true);
+  applyAgentIntegration(plan);
+  expect(JSON.parse(readFileSync(policyPath, "utf8")).bridge.version).toBe(CLI_BRIDGE_VERSION);
+  for (const agent of f.agents) {
+    for (const [file, content] of Object.entries(CLI_BRIDGE_FILES)) expect(readFileSync(join(f.home, `.${agent}/skills/skills-cli`, file), "utf8")).toBe(content);
+    expect(readFileSync(join(f.home, `.${agent}`, agent === "claude" ? "settings.json" : "hooks.json"), "utf8")).toBe(configs.get(agent)!);
+    expect(() => assertManagedAgentBridge(agent, { ...f, projectDir: f.home })).not.toThrow();
+  }
+});
+
+test("a configured plugin cannot launder its native-root payload as an independent skill", () => {
+  const f = options(), plugin = join(f.home, ".claude"), skill = join(plugin, "skills/deploy");
+  mkdirSync(skill, { recursive: true }); mkdirSync(join(plugin, ".claude-plugin")); mkdirSync(join(plugin, "plugins"));
+  writeFileSync(join(skill, "SKILL.md"), "Plugin payload in a native root\n");
+  writeFileSync(join(plugin, ".claude-plugin/plugin.json"), '{"name":"overlapping-plugin"}');
+  writeFileSync(join(plugin, "settings.json"), '{"enabledPlugins":{"overlap@personal":true}}');
+  writeFileSync(join(plugin, "plugins/installed_plugins.json"), JSON.stringify({ plugins: { "overlap@personal": [{ scope: "user", installPath: plugin }] } }));
+  const plan = planAgentIntegration({ ...f, agents: ["claude"] });
+  expect(plan.nativeSkills.find(entry => entry.path === skill)).toMatchObject({ vendor: true });
+  expect(plan.nativeSkills.some(entry => entry.independent)).toBe(false);
+  applyAgentIntegration(plan);
+  expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home })).toThrow("NATIVE_SKILL_DRIFT");
+});
+
+test("installation preserves a user's blanket Skill denial and removes only its own temporary denial", () => {
+  for (const userDenied of [true, false]) {
+    const f = options(), settings = join(f.home, ".claude/settings.json"), skill = join(f.home, ".claude/skills/retired");
+    mkdirSync(skill, { recursive: true });
+    writeFileSync(settings, JSON.stringify({ permissions: { deny: userDenied ? ["Skill"] : [] } }));
+    writeFileSync(join(skill, "SKILL.md"), "Owned old payload"); writeFileSync(join(skill, ".hasna-skills.json"), '{"managedBy":"@hasna/skills"}');
+    applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude"] }));
+    rmSync(skill, { recursive: true });
+    applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude"] }));
+    expect(JSON.parse(readFileSync(settings, "utf8")).permissions.deny.includes("Skill")).toBe(userDenied);
+    expect(planAgentIntegration({ ...f, agents: ["claude"] }).changes).toEqual([]);
+  }
 });
