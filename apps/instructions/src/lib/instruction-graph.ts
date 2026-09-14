@@ -22,7 +22,7 @@ import type {
   SessionProviderSurface,
   SessionRenderTool,
 } from "./session-render.js";
-import { planSessionRender, sourceFromConfig } from "./session-render.js";
+import { isNativeProfileSessionTarget, planSessionRender, sourceFromConfig } from "./session-render.js";
 import { providerVersionSatisfies } from "./provider-version.js";
 import { compileAssetPlan, type AssetPlanMode } from "./asset-plan.js";
 
@@ -118,6 +118,12 @@ const DEFAULT_PROVIDER_CAPABILITIES: Readonly<Record<SessionRenderTool, Provider
 
 export const PROVIDER_CAPABILITY_DESCRIPTORS: readonly ProviderCapability[] = Object.freeze([
   ...Object.values(DEFAULT_PROVIDER_CAPABILITIES),
+  capability("grok", ">=1.0.13", "flattened", "AGENTS.md", {
+    provider_variant: "native-profile", default_variant: false, asset_surface: "build",
+  }),
+  capability("devin", ">=3000.10.21", "flattened", "AGENTS.md", {
+    provider_variant: "native-profile", default_variant: false,
+  }),
   capability("opencode", "*", "flattened", "AGENTS.md", {
     provider_variant: "v2-agents",
     default_variant: false,
@@ -490,11 +496,20 @@ export function planProfileSessionRender(input: Omit<SessionRenderInput, "source
    * renderer like any other source. */
   extra_sources?: SessionInstructionSource[];
 }): ProfileSessionRenderPlan {
+  const nativeProfile = isNativeProfileSessionTarget(input);
+  const variant = input.graph_context?.provider_variant;
+  if ((nativeProfile && variant && variant !== "native-profile") ||
+      (!nativeProfile && variant === "native-profile")) {
+    throw new InstructionGraphValidationError([
+      errorDiagnostic(null, "PROVIDER_VARIANT_TARGET_MISMATCH", "The native-profile variant requires a Grok/Devin --target-home without --project-root."),
+    ]);
+  }
   const compiled = compileInstructionGraph({
     profile_id: input.profile_id,
     configs: input.configs,
     bindings: input.bindings,
-    context: { provider: input.tool, provider_version: input.provider_version, ...input.graph_context },
+    context: { provider: input.tool, provider_version: input.provider_version, ...input.graph_context,
+      ...(nativeProfile ? { provider_variant: "native-profile" } : {}) },
   });
   const assetPlan = compileAssetPlan({
     profileId: input.profile_id,
