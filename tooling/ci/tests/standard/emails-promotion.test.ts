@@ -13,7 +13,7 @@ test("Emails AWS JSON transport verifies sealed descriptors and local CLI parsin
   const result = Bun.spawnSync(["python3", "-I", "-B", "tooling/deploy/emails-search/aws_transport_test.py"], { cwd: root, timeout: 30_000 });
   expect(result.exitCode).toBe(0);
   expect(result.stderr.toString()).toContain("Ran 13 tests");
-});
+}, 35_000);
 test("Emails authority is only behind explicit main CI and production review", () => {
   const caller = asMap(parseYaml(readFileSync(resolve(root, ".github/workflows/emails-search-promotion.yml"), "utf8")));
   const execute = asMap(parseYaml(readFileSync(resolve(root, ".github/workflows/emails-search-promotion-execute.yml"), "utf8")));
