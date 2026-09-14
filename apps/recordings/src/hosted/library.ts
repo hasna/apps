@@ -1,5 +1,5 @@
 import type { HostedRecordingsClient, Cursor } from "./index.js";
-import type { HostedRecording } from "../contracts/hosted-v1.js";
+import type { HostedRecording, HostedRecordingInput } from "../contracts/hosted-v1.js";
 import type { RequestOptions } from "./transport.js";
 import { textOption } from "./read-options.js";
 
@@ -49,6 +49,11 @@ export class HostedLibrary {
   /** Renaming never opts the caller into reading the recording's private transcript. */
   async rename(id: string, title: string, request?: RequestOptions): Promise<{ recording: HostedLibraryRecording }> {
     const { recording } = await this.client.renameRecording(id, title, request);
+    return { recording: project(recording, false) };
+  }
+  /** Save one hosted recording through the same validated transport as other Library mutations. */
+  async save(value: HostedRecordingInput, request?: RequestOptions): Promise<{ recording: HostedLibraryRecording }> {
+    const { recording } = await this.client.saveRecording(value, request);
     return { recording: project(recording, false) };
   }
   /** One explicit deletion request. Pending audio cleanup is not completed removal. */

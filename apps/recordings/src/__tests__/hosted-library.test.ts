@@ -169,6 +169,10 @@ function mutationFixture(status = 200) {
       if (status === 401) return Response.json({ privateDetail: row.transcript }, { status });
       if (init.method === "DELETE") return status === 204 ? new Response(null, { status })
         : Response.json({ audioCleanup: { state: "pending" } }, { status: 202 });
+      if (init.method === "POST") {
+        const value = JSON.parse(String(init.body));
+        return Response.json({ recording: { ...row, ...value, updatedAt: row.updatedAt } }, { status: 201 });
+      }
       return Response.json({ recording: { ...row, title: "Renamed" } });
     }) });
   return { client, calls, credentialCount: () => credentials };
@@ -208,6 +212,27 @@ test("hosted CLI exposes rename and delete without implicit retries or private o
   expect(denied.calls).toHaveLength(1); expect(written.join("")).not.toContain(row.transcript);
 });
 
+test("hosted Library and CLI save validate input and omit transcript text", async () => {
+  const f = mutationFixture(), library = new HostedLibrary(f.client), input = { id, title: "Saved", transcript: row.transcript, durationMs: row.durationMs };
+  expect(await library.save(input)).toEqual({ recording: { ...expected, title: "Saved" } });
+  expect(f.calls).toEqual([{ url: apiBase.slice(0, -1) + "/recordings", method: "POST", body: JSON.stringify(input) }]);
+  for (const bad of [{ ...input, id: "../account" }, { ...input, title: " " }, { ...input, durationMs: Number.NaN }, { ...input, extra: true }]) {
+    await expect(library.save(bad as never)).rejects.toMatchObject({ code: "invalid_input" });
+  }
+  expect(f.calls).toHaveLength(1); expect(f.credentialCount()).toBe(1);
+
+  const written: string[] = [], cli = mutationFixture();
+  const connection = ["--api-base", apiBase, "--credential-env", "SELECTED_SESSION"];
+  expect(await runHostedCLI([...connection, "save", id, "Saved", "--transcript", row.transcript, "--duration-ms", "1250"],
+    { client: cli.client, write: value => written.push(value) })).toBe(0);
+  expect(JSON.parse(written.pop()!)).toEqual({ recording: { ...expected, title: "Saved" } });
+  expect(written.join("")).not.toContain(row.transcript);
+  expect(cli.calls).toHaveLength(1);
+  expect(await runHostedCLI([...connection, "save", "../account", "Saved", "--transcript", row.transcript, "--duration-ms", "1250"],
+    { client: cli.client, write: value => written.push(value) })).toBe(1);
+  expect(JSON.parse(written.pop()!).error.code).toBe("invalid_input"); expect(cli.calls).toHaveLength(1);
+});
+
 test("hosted MCP mutations have truthful annotations and preserve pending deletion", async () => {
   const f = mutationFixture(), server = buildHostedServer(f.client, { allowWrites: true });
   const client = new Client({ name: "fictional-mutation-test", version: "1" });
@@ -218,30 +243,43 @@ test("hosted MCP mutations have truthful annotations and preserve pending deleti
       .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false });
     expect(tools.find(tool => tool.name === "recordings_hosted_delete")?.annotations)
       .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+    expect(tools.find(tool => tool.name === "recordings_hosted_save")?.annotations)
+      .toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    const saved = await client.callTool({ name: "recordings_hosted_save", arguments: { id, title: "Saved", transcript: row.transcript, durationMs: row.durationMs } });
+    expect(saved.isError).not.toBe(true); expect(saved.structuredContent).toEqual({ recording: { ...expected, title: "Saved" } });
     const renamed = await client.callTool({ name: "recordings_hosted_rename", arguments: { id, title: " Renamed " } });
     expect(renamed.structuredContent).toEqual({ recording: { ...expected, title: "Renamed" } });
     const deleted = await client.callTool({ name: "recordings_hosted_delete", arguments: { id } });
     expect(deleted.structuredContent).toEqual({ state: "pending" });
-    for (const [name, args] of [["recordings_hosted_rename", { id, title: " " }], ["recordings_hosted_delete", { id: "../account" }]] as const) {
+    for (const [name, args] of [["recordings_hosted_save", { id: "../account", title: "Saved", transcript: row.transcript, durationMs: row.durationMs }],
+      ["recordings_hosted_rename", { id, title: " " }], ["recordings_hosted_delete", { id: "../account" }]] as const) {
       const invalid = await client.callTool({ name, arguments: args });
       expect(invalid.isError).toBe(true);
     }
-    expect(f.calls).toHaveLength(2);
+    expect(f.calls).toHaveLength(3);
   } finally { await client.close(); await server.close(); }
 });
 
-test("hosted HTTP mutations project rename metadata and preserve 202 versus 204", async () => {
+test("hosted HTTP save and other mutations project metadata and preserve 202 versus 204", async () => {
   const calls: string[] = [];
   const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch((url, init) => {
     calls.push(url); expect(new Headers(init.headers).get("authorization")).toBe("Bearer fictional-A");
     expect(init.redirect).toBe("manual"); expect(init.credentials).toBe("omit");
+    if (init.method === "POST") {
+      expect(JSON.parse(String(init.body))).toEqual({ id, title: "Saved", transcript: row.transcript, durationMs: row.durationMs });
+      return Response.json({ recording: { ...row, title: "Saved" } }, { status: 201 });
+    }
     if (init.method === "PATCH") {
       expect(JSON.parse(String(init.body))).toEqual({ title: "Renamed" });
       return Response.json({ recording: { ...row, title: "Renamed" } });
     }
     expect(init.method).toBe("DELETE");
-    return calls.length === 2 ? Response.json({ audioCleanup: { state: "pending" } }, { status: 202 }) : new Response(null, { status: 204 });
+    return calls.length === 3 ? Response.json({ audioCleanup: { state: "pending" } }, { status: 202 }) : new Response(null, { status: 204 });
   }) });
+  const save = await handle(new Request("http://127.0.0.1/v1/recordings", { method: "POST",
+    headers: { authorization: "Bearer fictional-A", "content-type": "application/json" },
+    body: JSON.stringify({ id, title: "Saved", transcript: row.transcript, durationMs: row.durationMs }) }));
+  expect(save.status).toBe(201); expect(await save.json()).toEqual({ recording: { ...expected, title: "Saved" } });
   const request = (method: string, body?: string) => new Request("http://127.0.0.1/v1/recordings/" + id,
     { method, headers: { authorization: "Bearer fictional-A", "content-type": "application/json" }, body });
   const renamed = await handle(request("PATCH", JSON.stringify({ title: " Renamed " })));
@@ -250,15 +288,31 @@ test("hosted HTTP mutations project rename metadata and preserve 202 versus 204"
   expect(pending.status).toBe(202); expect(await pending.json()).toEqual({ audioCleanup: { state: "pending" } });
   const removed = await handle(request("DELETE"));
   expect(removed.status).toBe(204); expect(await removed.text()).toBe("");
-  expect(calls).toEqual(Array(3).fill(apiBase.slice(0, -1) + "/recordings/" + id));
+  expect(calls).toEqual([apiBase.slice(0, -1) + "/recordings", ...Array(3).fill(apiBase.slice(0, -1) + "/recordings/" + id)]);
+});
+
+test("hosted HTTP never routes provider or paste-history POST bodies to recording save", async () => {
+  let calls = 0;
+  const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch(() => { calls++; throw Error("unexpected upstream"); }) });
+  const headers = { authorization: "Bearer fictional-A", "content-type": "application/json" };
+  const body = JSON.stringify({ id, title: "Saved", transcript: row.transcript, durationMs: row.durationMs });
+  for (const path of ["/v1/providers", "/v1/paste-history"]) {
+    const response = await handle(new Request("http://127.0.0.1" + path, { method: "POST", headers, body }));
+    expect(response.status).toBe(405); expect((await response.json()).error.code).toBe("read_only");
+  }
+  expect(calls).toBe(0);
 });
 
 test("hosted HTTP rejects invalid mutations and never retries authorization failures", async () => {
   let calls = 0;
   const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch(() => { calls++; return Response.json({ privateDetail: row.transcript }, { status: 401 }); }) });
   const base = "http://127.0.0.1/v1/recordings/" + id;
+  const collection = "http://127.0.0.1/v1/recordings";
   const headers = { authorization: "Bearer fictional-A", "content-type": "application/json" };
   for (const [url, init] of [
+    [collection, { method: "POST", body: JSON.stringify({ id, title: "Saved", transcript: row.transcript, durationMs: row.durationMs, extra: true }) }],
+    [collection + "?includeText=true", { method: "POST", body: JSON.stringify({ id, title: "Saved", transcript: row.transcript, durationMs: row.durationMs }) }],
+    [collection, { method: "POST", body: JSON.stringify({ id, title: " ", transcript: row.transcript, durationMs: row.durationMs }) }],
     [base, { method: "PATCH", body: JSON.stringify({ title: " " }) }],
     [base, { method: "PATCH", body: JSON.stringify({ title: "Renamed", apiBase }) }],
     [base, { method: "PATCH", body: "{" }],
@@ -290,6 +344,16 @@ test("hosted HTTP bounds streamed rename bodies and cancels a stalled upload bef
   const result = await pending;
   expect((await result.json()).error.code).toBe("aborted");
   expect(cancelled).toBe(2); expect(calls).toBe(0);
+});
+
+test("hosted HTTP bounds streamed save bodies before upstream", async () => {
+  let calls = 0, cancelled = 0;
+  const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch(() => { calls++; throw Error("unexpected upstream"); }) });
+  const oversized = new ReadableStream<Uint8Array>({ pull(controller) { controller.enqueue(new Uint8Array(262_144)); }, cancel() { cancelled++; } });
+  const response = await handle(new Request("http://127.0.0.1/v1/recordings", { method: "POST",
+    headers: { authorization: "Bearer fictional-A", "content-type": "application/json" }, body: oversized }));
+  expect(response.status).toBe(400); expect((await response.json()).error.code).toBe("invalid_input");
+  expect(calls).toBe(0); expect(cancelled).toBe(1);
 });
 
 test("hosted mutation transport failures neither retry nor fall back to another surface", async () => {
@@ -334,7 +398,7 @@ test("hosted HTTP simultaneous mutations use only each caller's bearer", async (
 });
 
 test("cancelling a real MCP mutation before credentials resolve prevents upstream dispatch", async () => {
-  for (const name of ["recordings_hosted_rename", "recordings_hosted_delete"]) {
+  for (const name of ["recordings_hosted_save", "recordings_hosted_rename", "recordings_hosted_delete"]) {
     let entered!: () => void, release!: () => void, completed!: () => void, cancellationSeen!: () => void;
     const credentialEntered = new Promise<void>(resolve => { entered = resolve; });
     const credentialHeld = new Promise<void>(resolve => { release = resolve; });
@@ -344,7 +408,8 @@ test("cancelling a real MCP mutation before credentials resolve prevents upstrea
     const hosted = new HostedRecordingsClient({ apiBase,
       credentialProvider: async ({ signal }) => { credentialSignal = signal; entered(); await credentialHeld; return "fictional-session"; },
       fetch: fakeFetch((_url, init) => { calls++; return init.method === "DELETE" ? new Response(null, { status: 204 }) : Response.json({ recording: row }); }) });
-    const rename = hosted.renameRecording.bind(hosted), remove = hosted.deleteRecording.bind(hosted);
+    const save = hosted.saveRecording.bind(hosted), rename = hosted.renameRecording.bind(hosted), remove = hosted.deleteRecording.bind(hosted);
+    hosted.saveRecording = (...args) => save(...args).finally(completed);
     hosted.renameRecording = (...args) => rename(...args).finally(completed);
     hosted.deleteRecording = (...args) => remove(...args).finally(completed);
     const server = buildHostedServer(hosted, { allowWrites: true }), client = new Client({ name: "fictional-cancelled-mutation", version: "1" });
@@ -357,7 +422,9 @@ test("cancelling a real MCP mutation before credentials resolve prevents upstrea
     };
     const controller = new AbortController();
     try {
-      const result = client.callTool({ name, arguments: name.endsWith("rename") ? { id, title: "Renamed" } : { id } },
+      const argumentsForTool = name.endsWith("save") ? { id, title: "Saved", transcript: row.transcript, durationMs: row.durationMs }
+        : name.endsWith("rename") ? { id, title: "Renamed" } : { id };
+      const result = client.callTool({ name, arguments: argumentsForTool },
         undefined, { signal: controller.signal }).then(() => "completed", () => "cancelled");
       await credentialEntered; controller.abort(); await cancellationHandled;
       const credentialCancelled = credentialSignal?.aborted;
@@ -393,6 +460,13 @@ test("hosted HTTP remains read-only unless startup explicitly allows writes", as
         ...(method === "PATCH" ? { body: JSON.stringify({ title: "Renamed" }) } : {}) }));
       expect(response.status).toBe(405); expect((await response.json()).error.code).toBe("read_only");
     }
+  }
+  for (const options of [{}, { allowWrites: false }]) {
+    const handle = buildHostedFetch({ apiBase, ...options, fetch: fakeFetch(() => { calls++; return new Response(null, { status: 201 }); }) });
+    const response = await handle(new Request("http://127.0.0.1/v1/recordings", { method: "POST",
+      headers: { authorization: "Bearer fictional-A", "content-type": "application/json" },
+      body: JSON.stringify({ id, title: "Saved", transcript: row.transcript, durationMs: row.durationMs }) }));
+    expect(response.status).toBe(405); expect((await response.json()).error.code).toBe("read_only");
   }
   expect(calls).toBe(0);
 });

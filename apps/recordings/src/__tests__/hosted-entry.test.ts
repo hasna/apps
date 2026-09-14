@@ -7,13 +7,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runStartupFixture, startupFixtureEnv } from "./helpers/startup-fixture.js";
 
-async function entry(surface: "cli" | "mcp" | "server", args: string[], token = false) {
+async function entry(surface: "cli" | "mcp" | "server", args: string[], token = false, input: string | Uint8Array = "") {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "recordings-hosted-entry-")));
   chmodSync(home, 0o700);
   try {
     const result = await runStartupFixture(home, [process.execPath, "--preload",
       join(import.meta.dir, "helpers/hosted-entry-preload.ts"), join(import.meta.dir, "../" + surface + "/index.ts"), ...args],
-      startupFixtureEnv(home, token ? { SELECTED_SESSION: "fictional-entry-session" } : {}));
+      startupFixtureEnv(home, token ? { SELECTED_SESSION: "fictional-entry-session" } : {}), input);
     expect(existsSync(join(home, "boundary.json")), result.stderr).toBe(true);
     const counts = JSON.parse(readFileSync(join(home, "boundary.json"), "utf8"));
     expect(counts.denied).toBe(0);
@@ -95,7 +95,7 @@ test.each([false, true])("real MCP stdio entry preserves reads and gates mutatio
     transport.stderr?.on("data", chunk => { stderr += String(chunk); if (stderr.length > 65536) void transport.close(); });
     const { tools } = await client.listTools({}, { timeout: 3000 });
     const reads = ["recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"];
-    expect(tools.map(tool => tool.name).sort()).toEqual([...reads, ...(allowWrites ? ["recordings_hosted_delete", "recordings_hosted_rename"] : [])].sort());
+    expect(tools.map(tool => tool.name).sort()).toEqual([...reads, ...(allowWrites ? ["recordings_hosted_delete", "recordings_hosted_rename", "recordings_hosted_save"] : [])].sort());
     expect(counts()).toEqual({ denied: 0, requests: 0 });
     const result = await client.callTool({ name: "recordings_hosted_paste_history", arguments: { limit: 1 } }, undefined, { timeout: 3000 });
     expect(result.isError).not.toBe(true);
@@ -108,12 +108,16 @@ test.each([false, true])("real MCP stdio entry preserves reads and gates mutatio
     expect(JSON.stringify(catalog)).not.toContain("Hidden fictional provider configuration");
     expect(counts()).toEqual({ denied: 0, requests: 2 }); expect(stderr).toBe("");
     if (allowWrites) {
+      const saved = await client.callTool({ name: "recordings_hosted_save", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        title: "Saved", transcript: "Hidden fictional transcript.", durationMs: 1000 } }, undefined, { timeout: 3000 });
+      expect(saved.isError).not.toBe(true); expect(saved.structuredContent).toMatchObject({ recording: { title: "Saved" } });
+      expect(JSON.stringify(saved)).not.toContain("Hidden fictional transcript");
       const renamed = await client.callTool({ name: "recordings_hosted_rename", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", title: " Renamed " } }, undefined, { timeout: 3000 });
       expect(renamed.isError).not.toBe(true); expect(renamed.structuredContent).toMatchObject({ recording: { title: "Renamed" } });
       expect(JSON.stringify(renamed)).not.toContain("Hidden fictional transcript");
       const deleted = await client.callTool({ name: "recordings_hosted_delete", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } }, undefined, { timeout: 3000 });
       expect(deleted.isError).not.toBe(true); expect(deleted.structuredContent).toEqual({ state: "pending" });
-      expect(counts()).toEqual({ denied: 0, requests: 4 }); expect(stderr).toBe("");
+      expect(counts()).toEqual({ denied: 0, requests: 5 }); expect(stderr).toBe("");
     } else {
       const refused = await client.callTool({ name: "recordings_hosted_delete", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } }, undefined, { timeout: 3000 });
       expect(refused.isError).toBe(true); expect(counts()).toEqual({ denied: 0, requests: 2 });
@@ -137,6 +141,44 @@ test("real hosted CLI rename and delete make one request each without local fall
   for (const args of [["rename", id, " "], ["delete", "../account"]]) {
     const invalid = await entry("cli", [...connection, ...args], true);
     expect(invalid.exitCode).toBe(1); expect(invalid.requests).toBe(0);
+  }
+});
+
+test("real hosted CLI save uses the hosted write path once without private output", async () => {
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const connection = ["hosted", "--api-base", "https://fictional.example.test/api/v1/", "--credential-env", "SELECTED_SESSION"];
+  const result = await entry("cli", [...connection, "save", id, "Saved", "--transcript", "Hidden fictional transcript.", "--duration-ms", "1000"], true);
+  expect(result.exitCode).toBe(0); expect(result.requests).toBe(1); expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout).recording.title).toBe("Saved");
+  expect(result.stdout).not.toContain("Hidden fictional transcript.");
+  const missing = await entry("cli", [...connection, "save", id, "Saved", "--transcript", "Hidden fictional transcript.", "--duration-ms", "1000"]);
+  expect(missing.exitCode).toBe(1); expect(missing.requests).toBe(0);
+});
+
+test("real hosted CLI save reads one bounded UTF-8 transcript from stdin", async () => {
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const connection = ["hosted", "--api-base", "https://fictional.example.test/api/v1/", "--credential-env", "SELECTED_SESSION"];
+  const result = await entry("cli", [...connection, "save", id, "Saved", "--transcript-stdin", "--duration-ms", "1000"], true,
+    "Hidden fictional transcript.");
+  expect(result.exitCode).toBe(0); expect(result.requests).toBe(1); expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout).recording.title).toBe("Saved");
+  expect(result.stdout).not.toContain("Hidden fictional transcript.");
+});
+
+test("hosted CLI stdin save rejects empty, conflicting, malformed and oversized input before credentials or writes", async () => {
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const connection = ["hosted", "--api-base", "https://fictional.example.test/api/v1/", "--credential-env", "SELECTED_SESSION"];
+  for (const [args, input] of [
+    [[...connection, "save", id, "Saved", "--duration-ms", "1000"], ""],
+    [[...connection, "save", id, "Saved", "--transcript-stdin", "--duration-ms", "1000"], ""],
+    [[...connection, "save", id, "Saved", "--transcript", " ", "--duration-ms", "1000"], ""],
+    [[...connection, "save", id, "Saved", "--transcript", "Hidden fictional transcript.", "--transcript-stdin", "--duration-ms", "1000"], "ignored"],
+    [[...connection, "save", id, "Saved", "--transcript-stdin", "--duration-ms", "1000"], new Uint8Array([0xff])],
+    [[...connection, "save", id, "Saved", "--transcript-stdin", "--duration-ms", "1000"], "x".repeat(1_048_577)],
+  ] as const) {
+    const result = await entry("cli", args, true, input);
+    expect(result.exitCode).toBe(1); expect(result.requests).toBe(0); expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain("Hidden fictional transcript.");
   }
 });
 
