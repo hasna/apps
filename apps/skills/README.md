@@ -144,6 +144,17 @@ The bounds are 64 roots, 20,000 total entries, 8 MiB of path/type metadata and
 quiesce source writers for installation because these checks are not atomic with
 a later native import.
 
+For full binary or source-byte coverage, use the public SDK's
+`captureDiscoveryByteSources(paths)` and retain its explicit `hashMode: "bytes"`
+on each source witness. It hashes the exact file bytes, including invalid UTF-8,
+with limits of 64 MiB per file and 256 MiB across one capture or verification.
+Missing files bind as `sha256: null`; symlinks, special files and changing file
+identities refuse. Raw witnesses cannot use configuration field projections.
+Existing witnesses without `hashMode` retain their original UTF-8 decoding
+contract and 16 MiB file limit; they are not silently converted into byte hashes.
+Directory membership and file bytes are separate witnesses. Neither substitutes
+for reviewing the actual executable, import paths or loader behavior.
+
 Hermes requires directory witnesses, including when upgrading an older policy.
 For an automatic bridge with no runtime installed, rerun normal `skills hook install`
 to review and apply the new bindings. Existing native trust is preserved.
@@ -160,6 +171,13 @@ directories in private archives; `--include-unmanaged` includes user-authored
 copies, and `--include-vendor` retires vendor `SKILL.md` discovery files while
 preserving shared scripts and assets. Archive receipts and configuration backups
 live under the Skills data directory.
+
+After vendor documents are archived, inventory still scans their retained asset
+directories for newly introduced skills. Vendor container traversal allows 32
+directory levels; the ordinary native-root limit remains unchanged. Each inventory
+is bounded to 20,000 discovery entries and 4 MiB of UTF-8 path metadata before
+directory entries are retained or sorted. Unsupported special files and unsafe
+directory links are refused.
 
 Native archives persist a version 2 recovery journal before moving payloads;
 `migrate native --json --apply` returns its `receiptPath`. The journal records

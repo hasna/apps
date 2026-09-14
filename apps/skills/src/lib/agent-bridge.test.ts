@@ -105,7 +105,7 @@ test("a failed installation rolls back newly created bridge directories so a fre
 });
 
 for (const vendor of [false, true]) test(`an exhausted ${vendor ? "vendor" : "native"} discovery bound never certifies a partial inventory`, () => {
-  const f = options(), path = join(f.home, ".claude", ...(vendor ? ["plugins", "cache"] : ["skills"]), ...Array.from({ length: 15 }, (_, index) => `nested-${index}`));
+  const f = options(), path = join(f.home, ".claude", ...(vendor ? ["plugins", "cache"] : ["skills"]), ...Array.from({ length: vendor ? 34 : 15 }, (_, index) => `nested-${index}`));
   mkdirSync(path, { recursive: true }); writeFileSync(join(path, "SKILL.md"), "Deep native instructions\n");
   expect(() => inventoryNativeSkills(f.home, { includeVendor: true })).toThrow("discovery limit");
   expect(() => planAgentIntegration(f)).toThrow("discovery limit");
