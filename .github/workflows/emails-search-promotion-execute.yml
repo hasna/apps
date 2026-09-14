@@ -1,0 +1,63 @@
+name: emails-search-promotion-execute
+on:
+  workflow_call:
+    inputs:
+      phase: {type: string, required: true}
+      source: {type: string, required: true}
+      prepared_run_id: {type: string, required: true}
+      prepared_sha256: {type: string, required: true}
+permissions:
+  contents: read
+jobs:
+  execute:
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ inputs.source }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Recheck gates after environment approval and download exact reviewed plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ inputs.source }}
+          PHASE: ${{ inputs.phase }}
+          PREPARED_RUN: ${{ inputs.prepared_run_id }}
+          PREPARED_SHA: ${{ inputs.prepared_sha256 }}
+        run: python3 -I -B tooling/deploy/emails-search/gate.py --source "$SOURCE" --phase "$PHASE" --run "$PREPARED_RUN" --prepared-sha256 "$PREPARED_SHA" --download "$RUNNER_TEMP/emails-reviewed-plan"
+      - name: Verify promotion controls before AWS authority
+        run: python3 -I -B tooling/deploy/emails-search/promotion_test.py
+      - name: Assume only the existing Emails producer role
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
+        with:
+          role-to-assume: arn:aws:iam::789877399345:role/emails-prod-gha-deploy
+          aws-region: us-east-1
+          role-session-name: emails-search-${{ github.run_id }}
+          allowed-account-ids: "789877399345"
+          mask-aws-account-id: true
+      - name: Prepare image or promote exact reviewed task change
+        env:
+          SOURCE: ${{ inputs.source }}
+          PHASE: ${{ inputs.phase }}
+          PREPARED_SHA: ${{ inputs.prepared_sha256 }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # -I excludes ambient Python import paths. The entrypoint explicitly
+          # admits only its checked-in sibling module by exact local path.
+          python3 -I -B tooling/deploy/emails-search/promotion.py "$PHASE" --source "$SOURCE" --out "$RUNNER_TEMP/emails-promotion-receipts" --prepared "$RUNNER_TEMP/emails-reviewed-plan/prepared.json" --prepared-sha256 "$PREPARED_SHA"
+      - name: Retain metadata-only preparation and mutation receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ inputs.phase == 'prepare' && 'emails-search-prepared' || 'emails-search-promoted' }}
+          path: ${{ runner.temp }}/emails-promotion-receipts/*.json
+          if-no-files-found: ignore
+          retention-days: 30
