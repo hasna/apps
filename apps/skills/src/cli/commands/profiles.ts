@@ -1,7 +1,26 @@
 import { writeCliOutput } from "../output.js";
 import type { Command } from "commander";
-import { readFileSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync, writeFileSync } from "node:fs";
 import { readSkillProfile, saveSkillProfile, readStationSkillState } from "../../lib/profile-admin.js";
+import { MAX_PROFILE_DOCUMENT_BYTES } from "../../lib/profile-limits.js";
+
+function readProfileInput(path: string): string {
+  // Open without waiting for a FIFO writer so fstat can reject nonregular input.
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_PROFILE_DOCUMENT_BYTES) throw new Error("Profile input exceeds the size limit or is not a regular file");
+    const bytes = Buffer.alloc(MAX_PROFILE_DOCUMENT_BYTES + 1);
+    let size = 0;
+    while (size < bytes.length) {
+      const read = readSync(fd, bytes, size, bytes.length - size, null);
+      if (!read) break;
+      size += read;
+    }
+    if (size > MAX_PROFILE_DOCUMENT_BYTES) throw new Error("Profile input exceeds the size limit");
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size));
+  } finally { closeSync(fd); }
+}
 
 export function registerProfiles(parent: Command): void {
   const profiles = parent.command("profiles").description("Manage exact, shared skill selections through the API");
@@ -10,7 +29,7 @@ export function registerProfiles(parent: Command): void {
     .action(async (id: string, options) => {
       try {
         const profile = await readSkillProfile(id), text = JSON.stringify(profile, null, 2);
-        if (options.save) writeFileSync(options.save, `${text}\n`, { mode: 0o600, flag: "wx" });
+        if (options.save) writeFileSync(options.save, JSON.stringify(profile), { mode: 0o600, flag: "wx" });
         await writeCliOutput(options.json ? text : `${profile.id} at ${profile.revision}: ${profile.selections.map(skill => `${skill.slug}@${skill.version}`).join(", ")}`);
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
     });
@@ -20,8 +39,7 @@ export function registerProfiles(parent: Command): void {
     .description("Create or update a profile; use a saved snapshot with --if-match to roll back")
     .action(async (id: string, options) => {
       try {
-        const text = readFileSync(options.file, "utf8");
-        if (text.length > 1024 * 1024) throw new Error("Profile input exceeds the size limit");
+        const text = readProfileInput(options.file);
         const input = JSON.parse(text);
         const profile = await saveSkillProfile(id, input.selections, options.ifMatch);
         await writeCliOutput(options.json ? JSON.stringify(profile) : `Saved ${profile.id} at ${profile.revision}`);

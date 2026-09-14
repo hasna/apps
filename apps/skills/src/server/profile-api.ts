@@ -14,6 +14,7 @@ import type { SkillsServerConfig } from "./config.js";
 import { SkillRequestError, assertPublishableSlug } from "./skills-api.js";
 import { permitsSkillsRoute } from "./auth.js";
 import { selectionAliasError } from "../lib/selection-aliases.js";
+import { MAX_PROFILE_SELECTIONS, MAX_PROFILE_DOCUMENT_BYTES, MAX_RESOLVED_PROFILE_BYTES, profileDocumentBytes, resolvedProfileSnapshot } from "../lib/profile-limits.js";
 
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
@@ -27,8 +28,8 @@ function invalid(message: string): never {
   throw new SkillRequestError(400, "INVALID_SELECTION", message);
 }
 function selected(value: unknown): SkillSelection[] {
-  if (!Array.isArray(value) || value.length > 256)
-    invalid("selections must be an array with at most 256 entries");
+  if (!Array.isArray(value) || value.length > MAX_PROFILE_SELECTIONS)
+    invalid(`selections must be an array with at most ${MAX_PROFILE_SELECTIONS} entries`);
   const seen = new Set<string>();
   const selections = value
     .map((item) => {
@@ -164,6 +165,7 @@ async function body(
   return parsed;
 }
 function json(value: unknown, status = 200, revision?: string) {
+  if (profileDocumentBytes(value) > MAX_PROFILE_DOCUMENT_BYTES) throw new SkillRequestError(413, "PROFILE_TOO_LARGE", "Profile document exceeds its size limit");
   return Response.json(value, {
     status,
     headers: {
@@ -199,6 +201,12 @@ export async function handleProfileApi(
       ],
       profileResolution: Boolean(store.selectionStore),
       selectionAliases: Boolean(store.selectionStore),
+      profileLimits: {
+        maxSelections: MAX_PROFILE_SELECTIONS,
+        maxDocumentBytes: MAX_PROFILE_DOCUMENT_BYTES,
+        maxResolvedProfileBytes: MAX_RESOLVED_PROFILE_BYTES,
+        requestBodyLimitBytes: Math.min(config.requestBodyLimitBytes, MAX_PROFILE_DOCUMENT_BYTES),
+      },
       immutableVersions: true,
       stationState: Boolean(store.selectionStore),
       incrementalSync: false,
@@ -230,7 +238,7 @@ export async function handleProfileApi(
     parts.length === 2 &&
     request.method === "PUT"
   ) {
-    const input = await body(request, config.requestBodyLimitBytes),
+    const input = await body(request, Math.min(config.requestBodyLimitBytes, MAX_PROFILE_DOCUMENT_BYTES)),
       selections = selected(input.selections);
     const match = request.headers.get("if-match"),
       create = request.headers.get("if-none-match");
@@ -249,6 +257,17 @@ export async function handleProfileApi(
         "INVALID_PRECONDITION",
         "A quoted revision ETag is required",
       );
+    // Admission must fit the resolved profile, full session envelope and station
+    // submission, not only the smaller profile PUT. Reserve a maximum revision
+    // identifier before the store generates its actual revision, so refusal never
+    // happens after persisting an unusable candidate.
+    const authority = skillsApiRequestUrl(normalizeSkillsApiOrigin(config.publicBaseUrl), "/api/v1/").replace(/\/+$/, "");
+    const revision = "x".repeat(128);
+    const projected = resolvedProfileSnapshot({ id, workspaceId: principal.orgId, revision, selections }, authority);
+    if (profileDocumentBytes(projected) > MAX_RESOLVED_PROFILE_BYTES
+        || profileDocumentBytes({ profileId: id, profileRevision: revision, selections }) > Math.min(config.requestBodyLimitBytes, MAX_PROFILE_DOCUMENT_BYTES)) {
+      throw new SkillRequestError(413, "PROFILE_TOO_LARGE", "The complete resolved profile and station/session receipts must fit the advertised profile limits");
+    }
     await validatePublished(store, principal, selections);
     const saved = await adapter.saveProfile(
       principal,
@@ -276,24 +295,15 @@ export async function handleProfileApi(
         "PROFILE_NOT_FOUND",
         "Profile not found",
       );
+    if (profile.selections.length > MAX_PROFILE_SELECTIONS) throw new SkillRequestError(413, "PROFILE_TOO_LARGE", "Profile exceeds the advertised selection limit");
     if (!child) return json(profile, 200, profile.revision);
-    await validatePublished(store, principal, profile.selections);
     const authority = skillsApiRequestUrl(
       normalizeSkillsApiOrigin(config.publicBaseUrl),
       "/api/v1/",
     ).replace(/\/+$/, "");
-    const result: ResolvedSkillProfile = {
-      profileId: id,
-      workspaceId: principal.orgId,
-      profileRevision: profile.revision,
-      authority,
-      selections: profile.selections.map((selection) => ({
-        ...selection,
-        authority,
-        workspaceId: principal.orgId,
-        profileRevision: profile.revision,
-      })),
-    };
+    const result: ResolvedSkillProfile = resolvedProfileSnapshot(profile, authority);
+    if (result.selections.length > MAX_PROFILE_SELECTIONS || profileDocumentBytes(result) > MAX_RESOLVED_PROFILE_BYTES) throw new SkillRequestError(413, "PROFILE_TOO_LARGE", "Resolved profile exceeds the advertised profile limits");
+    await validatePublished(store, principal, profile.selections);
     return json(result, 200, profile.revision);
   }
   if (resource === "stations" && parts.length === 3 && child === "state") {
@@ -308,7 +318,7 @@ export async function handleProfileApi(
       return json(state);
     }
     if (request.method === "PUT") {
-      const input = await body(request, config.requestBodyLimitBytes);
+      const input = await body(request, Math.min(config.requestBodyLimitBytes, MAX_PROFILE_DOCUMENT_BYTES));
       if (!identifier(input.profileId) || !identifier(input.profileRevision))
         invalid("profileId and profileRevision are required");
       const receipt: StationSkillStateInput = {

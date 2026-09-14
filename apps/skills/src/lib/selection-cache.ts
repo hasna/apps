@@ -1,11 +1,12 @@
 /** Immutable, credential-authority/workspace scoped objects. Authoring corpus is never read or written. */
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, parse, resolve } from "node:path";
 import { getDataDirReadOnly } from "./config.js";
 import { inspectSkillBundle, sha256Hex, SKILL_BUNDLE_INSPECTION_LIMITS, type SkillBundleEntry } from "./skill-bundle.js";
 import { isValidSkillVersion } from "./skill-version.js";
 import { selectionAliasError } from "./selection-aliases.js";
+import { MAX_PROFILE_SELECTIONS, MAX_PROFILE_DOCUMENT_BYTES, MAX_RESOLVED_PROFILE_BYTES, MAX_SKILL_SESSION_ID_CHARS, profileDocumentBytes } from "./profile-limits.js";
 import type { ResolvedSkillProfile, ResolvedSkillSelection } from "../types/skill-selection.js";
 
 export class SkillSelectionError extends Error {
@@ -16,7 +17,6 @@ export interface CachedSelectionProfile { schemaVersion: 1; verifiedAt: string; 
 export interface SkillSessionReceipt extends CachedSelectionProfile { sessionId: string; loaded: string[] }
 export const MAX_CACHED_PROFILE_AGE_MS = 24 * 60 * 60 * 1000;
 export const SELECTION_LOCK_FILE = "selection.lock.json";
-const MAX_RECEIPT_BYTES = 1024 * 1024;
 
 export function selectionCacheRoot(options: SelectionCacheOptions = {}): string {
   return resolve(options.cacheDir ?? join(getDataDirReadOnly(), "selection-cache"));
@@ -43,11 +43,12 @@ export function validateSelection(selection: ResolvedSkillSelection): void {
 }
 export function validateResolvedProfile(profile: ResolvedSkillProfile, authority?: string): void {
   if (!profile || typeof profile.profileId !== "string" || !profile.profileId.trim() || !Array.isArray(profile.selections)
-      || profile.selections.length > 1000 || typeof profile.workspaceId !== "string" || !profile.workspaceId.trim()
+      || profile.selections.length > MAX_PROFILE_SELECTIONS || typeof profile.workspaceId !== "string" || !profile.workspaceId.trim()
       || typeof profile.profileRevision !== "string" || !profile.profileRevision.trim()
       || typeof profile.authority !== "string" || (authority !== undefined && profile.authority !== authority)) {
     throw new SkillSelectionError("PROFILE_IDENTITY_MISMATCH", "The resolved profile does not match the configured Skills authority.");
   }
+  if (profileDocumentBytes(profile) > MAX_RESOLVED_PROFILE_BYTES) throw new SkillSelectionError("RECEIPT_TOO_LARGE", "The resolved Skills profile exceeds its size limit.");
   const slugs = new Set<string>();
   for (const selection of profile.selections) {
     validateSelection(selection);
@@ -87,17 +88,28 @@ function assertRegularPath(path: string, createParents = false): void {
 function readRegularFile(path: string, limit: number): Uint8Array | null {
   assertRegularPath(path);
   let fd: number;
-  try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > limit) throw new SkillSelectionError("INVALID_CACHE_FILE", "The Skills cache contains an invalid or oversized file.");
-    return readFileSync(fd);
+    // Bound the actual read too: a growing file must not bypass the stat limit.
+    const bytes = Buffer.alloc(stat.size + 1);
+    let size = 0;
+    while (size < bytes.length) {
+      const read = readSync(fd, bytes, size, bytes.length - size, null);
+      if (!read) break;
+      size += read;
+    }
+    if (size > stat.size) throw new SkillSelectionError("INVALID_CACHE_FILE", "The Skills cache file grew during its bounded read.");
+    return bytes.subarray(0, size);
   } finally { closeSync(fd); }
 }
 export function writeSelectionJson(path: string, value: unknown): void {
-  const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
-  if (bytes.length > MAX_RECEIPT_BYTES) throw new SkillSelectionError("RECEIPT_TOO_LARGE", "The Skills selection receipt exceeds its size limit.");
+  // Compact encoding keeps the admitted profile plus its reserved session
+  // envelope within one bound. Existing pretty-printed receipts still read.
+  const bytes = Buffer.from(`${JSON.stringify(value)}\n`);
+  if (bytes.length > MAX_PROFILE_DOCUMENT_BYTES) throw new SkillSelectionError("RECEIPT_TOO_LARGE", "The Skills selection receipt exceeds its size limit.");
   atomicWrite(path, bytes, 0o600);
 }
 function atomicWrite(path: string, bytes: Uint8Array, mode: number): void {
@@ -109,7 +121,7 @@ function atomicWrite(path: string, bytes: Uint8Array, mode: number): void {
   } finally { try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; } }
 }
 export function readSelectionJson<T>(path: string): T | null {
-  const bytes = readRegularFile(path, MAX_RECEIPT_BYTES);
+  const bytes = readRegularFile(path, MAX_PROFILE_DOCUMENT_BYTES);
   if (!bytes) return null;
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T; }
   catch { throw new SkillSelectionError("INVALID_RECEIPT", "The Skills selection receipt is unreadable; sync the profile again."); }
@@ -195,14 +207,16 @@ export function readProjectSelection(projectDir: string): CachedSelectionProfile
   return receipt;
 }
 export function sessionReceiptPath(sessionId: string, options: SelectionCacheOptions = {}): string {
-  if (!sessionId.trim() || sessionId.length > 256) throw new SkillSelectionError("INVALID_SESSION", "A Skills session id must contain 1–256 characters.");
+  if (!sessionId.trim() || sessionId.length > MAX_SKILL_SESSION_ID_CHARS) throw new SkillSelectionError("INVALID_SESSION", `A Skills session id must contain 1–${MAX_SKILL_SESSION_ID_CHARS} characters.`);
   return join(selectionCacheRoot(options), "sessions", `${hash(sessionId)}.json`);
 }
 export function readSkillSession(sessionId: string, options: SelectionCacheOptions = {}): SkillSessionReceipt | null {
   const receipt = readSelectionJson<SkillSessionReceipt>(sessionReceiptPath(sessionId, options));
   if (receipt) {
     validateSelectionReceipt(receipt);
-    if (receipt.sessionId !== sessionId || !Array.isArray(receipt.loaded) || !receipt.loaded.every((key) => /^[a-f0-9]{64}$/.test(key))) {
+    const keys = new Set(receipt.profile.selections.map(selectionKey));
+    if (receipt.sessionId !== sessionId || !Array.isArray(receipt.loaded) || receipt.loaded.length > keys.size
+        || new Set(receipt.loaded).size !== receipt.loaded.length || !receipt.loaded.every(key => keys.has(key))) {
       throw new SkillSelectionError("INVALID_RECEIPT", "The Skills session receipt is invalid.");
     }
   }

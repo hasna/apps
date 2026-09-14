@@ -6,6 +6,7 @@ import {
 } from "./fleet-credentials.js";
 import { readBoundedResponse } from "./remote-files.js";
 import { selectionAliasError, selectionSnapshotsEqual } from "./selection-aliases.js";
+import { MAX_PROFILE_SELECTIONS, MAX_PROFILE_DOCUMENT_BYTES, MAX_RESOLVED_PROFILE_BYTES, profileDocumentBytes, profileSelectionSnapshot, requiresProfileCapacity, assertAdvertisedProfileCapacity } from "./profile-limits.js";
 import type {
   ResolvedSkillProfile,
   SkillSelection,
@@ -119,11 +120,11 @@ export class HttpProfileClient implements ProfileClient {
     }
     return response;
   }
-  private async read(response: Response): Promise<unknown> {
+  private async read(response: Response, limit = MAX_PROFILE_DOCUMENT_BYTES): Promise<unknown> {
     try {
       return JSON.parse(
         new TextDecoder().decode(
-          await readBoundedResponse(response, 1_000_000),
+          await readBoundedResponse(response, limit),
         ),
       );
     } catch {
@@ -134,6 +135,7 @@ export class HttpProfileClient implements ProfileClient {
     if (!identifier(id)) throw new Error("Invalid selection profile id");
     const result = await this.read(
       await this.request(`/profiles/${encodeURIComponent(id)}/resolve`),
+      MAX_RESOLVED_PROFILE_BYTES,
     );
     if (
       !object(result) ||
@@ -142,7 +144,7 @@ export class HttpProfileClient implements ProfileClient {
       !identifier(result.workspaceId) ||
       !identifier(result.profileRevision) ||
       !Array.isArray(result.selections) ||
-      result.selections.length > 256
+      result.selections.length > MAX_PROFILE_SELECTIONS
     )
       invalid();
     const seen = new Set<string>();
@@ -170,15 +172,22 @@ export class HttpProfileClient implements ProfileClient {
       !identifier(input.profileId) ||
       !identifier(input.profileRevision) ||
       !Array.isArray(input.selections) ||
-      input.selections.length > 256
+      input.selections.length > MAX_PROFILE_SELECTIONS
     )
       throw new Error("Invalid station state");
     input.selections.forEach(validateSelection);
     if (selectionAliasError(input.selections)) throw new Error("Invalid station selection aliases");
+    const snapshot = { ...input, selections: profileSelectionSnapshot(input.selections) };
+    const bodyBytes = profileDocumentBytes(snapshot);
+    if (bodyBytes > MAX_PROFILE_DOCUMENT_BYTES) throw new Error("Station state exceeds the profile document size limit");
+    if (requiresProfileCapacity(input.selections, bodyBytes)) {
+      const capabilities = await this.read(await this.request("/capabilities"));
+      assertAdvertisedProfileCapacity(capabilities, input.selections.length, bodyBytes);
+    }
     const result = await this.read(
       await this.request(`/stations/${encodeURIComponent(id)}/state`, {
         method: "PUT",
-        body: JSON.stringify(input),
+        body: JSON.stringify(snapshot),
       }),
     );
     if (
@@ -189,7 +198,7 @@ export class HttpProfileClient implements ProfileClient {
       !identifier(result.workspaceId) ||
       !identifier(result.actorId) ||
       typeof result.appliedAt !== "string" ||
-      !Array.isArray(result.selections)
+      !Array.isArray(result.selections) || result.selections.length > MAX_PROFILE_SELECTIONS
     )
       invalid();
     result.selections.forEach(validateSelection);
