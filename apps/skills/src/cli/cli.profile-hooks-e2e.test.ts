@@ -158,6 +158,49 @@ test("built CLI performs profile CAS/rollback, two-station sync, pinned hook res
   } finally { await f.close(); }
 });
 
+test("native hooks refuse stale profile arguments before HTTP refresh or cached context writes", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    for (const profile of ["engineering", "retired-profile"]) {
+      await f.a.ok(["profiles", "set", profile, "--file", f.versions[0]!.file, "--json"]);
+      await f.a.ok(["sync", "--selection-profile", profile, "--json"]);
+    }
+    const sessions = join(f.a.data, "selection-cache", "sessions");
+    const before = existsSync(sessions) ? readdirSync(sessions).sort() : [];
+    const requestCount = f.requests.length;
+    for (const agent of ["claude", "codex"] as const) {
+      for (const event of ["SessionStart", "UserPromptSubmit", "SubagentStart"]) {
+        const result = await f.a.ok(["hook", "user-prompt", "--agent", agent, "--event", event, "--selection-profile", "retired-profile"], {
+          stdin: { cwd: f.a.project, session_id: `stale-${agent}-${event}`, agent_id: "child", prompt: "review this patch" },
+        });
+        expect(JSON.stringify(result)).toContain("NATIVE_SKILL_DRIFT: the hook selection profile differs from its managed binding");
+        expect(JSON.stringify(result)).not.toContain("Published 1.0.0");
+        expect(f.requests).toHaveLength(requestCount);
+        expect(existsSync(sessions) ? readdirSync(sessions).sort() : []).toEqual(before);
+      }
+    }
+    const denied = await f.a.ok(["hook", "user-prompt", "--agent", "claude", "--event", "PreToolUse", "--selection-profile", "retired-profile"], {
+      stdin: { cwd: f.a.project, tool_name: "Skill", tool_input: { skill: "skills-cli" } },
+    });
+    expect(denied.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(denied.hookSpecificOutput.permissionDecisionReason).toContain("hook selection profile differs");
+    const environmentOverride = await f.a.ok(["hook", "user-prompt", "--agent", "codex", "--event", "SessionStart"], {
+      stdin: { cwd: f.a.project, session_id: "stale-environment", prompt: "review this patch" },
+      env: { HASNA_SKILLS_SELECTION_PROFILE: "retired-profile" },
+    });
+    expect(environmentOverride.continue).toBe(false);
+    expect(environmentOverride.stopReason).toContain("hook selection profile differs");
+    expect(f.requests).toHaveLength(requestCount);
+    expect(existsSync(sessions) ? readdirSync(sessions).sort() : []).toEqual(before);
+    // Explicit CLI reads of another profile remain supported outside the native bridge.
+    const direct = await f.a.ok(["load", "review-code@1.0.0", "--selection-profile", "retired-profile", "--cached", "--json"]);
+    expect(direct.content).toContain("Published 1.0.0");
+    const accepted = await f.a.hook("claude", "UserPromptSubmit", { prompt: "review this patch" }, { HASNA_SKILLS_SELECTION_PROFILE: "retired-profile" });
+    expect(accepted.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+  } finally { await f.close(); }
+});
+
 test("built CLI refuses revoked HTTP access without silent cache fallback and blocks failed SessionStart refresh", async () => {
   const f = await fixture();
   try {

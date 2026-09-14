@@ -70,14 +70,15 @@ export function registerAgentIntegration(parent: Command): void {
           input.cwd ??= input.workspace_roots[0] ?? process.cwd();
           input.session_id ??= input.conversation_id;
         }
+        const selectionProfile = selectedProfileId(options.selectionProfile);
         if (options.agent === "hermes" && event === "pre_tool_call") {
-          assertManagedAgentBridge("hermes", { projectDirs: projects });
+          assertManagedAgentBridge("hermes", { projectDirs: projects, profileId: selectionProfile });
           assertHermesTool(input);
           await writeCliOutput(JSON.stringify({ action: "continue" }));
           return;
         }
         if ((options.agent === "claude" && event === "PreToolUse") || (options.agent === "gemini" && event === "BeforeTool")) {
-          assertManagedAgentBridge(options.agent, { projectDirs: projects });
+          assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile });
           const skill = options.agent === "claude" ? input.tool_input?.skill : input.tool_input?.name;
           if (skill !== "skills-cli") throw new Error("NATIVE_SKILL_DRIFT: invoke only skills-cli; load selected payload instructions with skills load");
           await writeCliOutput(JSON.stringify(options.agent === "claude" ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "Verified Skills CLI bridge" } } : {}));
@@ -85,10 +86,10 @@ export function registerAgentIntegration(parent: Command): void {
         }
         // Validate event before starting the context operation.
         hookContextOutput(event, { context: "" });
-        assertManagedAgentBridge(options.agent, { projectDirs: projects });
+        assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile });
         if (typeof input.prompt === "string") input.prompt = normalizeAgentHookPrompt(options.agent, nativeEvent, input.prompt);
         if (event === "SessionStart") {
-          const refresh = Bun.spawn([process.execPath, process.argv[1]!, "sync", "--selection-profile", selectedProfileId(options.selectionProfile), "--json"], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
+          const refresh = Bun.spawn([process.execPath, process.argv[1]!, "sync", "--selection-profile", selectionProfile, "--json"], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
           const timer = setTimeout(() => refresh.kill("SIGKILL"), 6500);
           try {
             const [, , status] = await Promise.all([new Response(refresh.stdout).text(), new Response(refresh.stderr).text(), refresh.exited]);
@@ -96,8 +97,7 @@ export function registerAgentIntegration(parent: Command): void {
           } finally { clearTimeout(timer); }
         }
         // Prompt selection uses the explicitly verified cache; only session start refreshes remotely.
-        const args = [process.execPath, process.argv[1]!, "context", "--stdin", "--json", "--cached"];
-        if (options.selectionProfile) args.push("--selection-profile", options.selectionProfile);
+        const args = [process.execPath, process.argv[1]!, "context", "--stdin", "--json", "--cached", "--selection-profile", selectionProfile];
         const child = Bun.spawn(args, { stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
         const timer = setTimeout(() => child.kill("SIGKILL"), 6500);
         try {

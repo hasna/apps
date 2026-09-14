@@ -521,7 +521,7 @@ export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { da
 
 /** Run before any prompt context load. Missing ownership or reappearing native
  * discovery files require repair; verified cache availability is not an override. */
-export function assertManagedAgentBridge(agent: IntegrationAgent, options: { home?: string; dataDir?: string; projectDir?: string; projectDirs?: string[] } = {}): void {
+export function assertManagedAgentBridge(agent: IntegrationAgent, options: { home?: string; dataDir?: string; projectDir?: string; projectDirs?: string[]; profileId?: string } = {}): void {
   const home = resolve(options.home ?? homedir()), dataDir = options.dataDir ?? getDataDirReadOnly();
   assertSafePath(join(dataDir, "agent-policy.json"));
   const snapshot = readManagedSkillPolicySnapshot(dataDir);
@@ -545,6 +545,7 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
   const configPath = canonicalAgentPath(join(home, AGENT_ADAPTERS[agent].config), aliases), config = agent === "hermes" ? parseHermesConfig(readOptional(configPath)) : jsonObject(readOptional(configPath), configPath);
   const command = binding.commands?.[agent], profile = binding.profiles?.[agent];
   if (typeof command !== "string" || typeof profile !== "string") throw new Error("NATIVE_SKILL_DRIFT: the native hook command/profile binding is missing");
+  if (options.profileId !== undefined && options.profileId !== profile) throw new Error("NATIVE_SKILL_DRIFT: the hook selection profile differs from its managed binding; restart the native client after reviewing skills hook install");
   if (agent === "hermes") {
     const supervisor = binding.supervisors?.hermes;
     if (supervisor?.path !== join(dataDir, "agent-hooks", "hermes.js") || supervisor?.sha256 !== sha(renderHermesSupervisor(command, profile))) throw new Error("NATIVE_SKILL_DRIFT: Hermes supervisor binding changed; run skills hook install");

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.2
+
+### Patch Changes
+
+- bec1b1c: Add explicit bounded byte-hash discovery witnesses for reviewed native source and executable files, preserving existing UTF-8 witness semantics.
+- 4efb3a2: Bind reviewed native discovery directories so newly added plugins or entrypoints cannot evade unchanged source-file hashes. Require fresh Hermes membership coverage and allow normal hook installation to upgrade older automatic policies.
+- 3260f49: Refuse Hermes bundled plugin and skill environment overrides during native discovery and hook checks so unreviewed bundle locations cannot bypass the configured source guards.
+- Reject native hook invocations whose selected profile differs from their installed adapter binding before refreshing or loading context. Preserve explicit CLI access to other profiles and adapter-specific profile settings.
+- aa30103: Keep native discovery working after vendor skill documents are archived while retaining nested shared assets. Bound discovery entry allocation and path metadata, preserve finite traversal depth, and refuse unsupported special files.
+- da303cf: Exclude the exact Skills session policy prepended by Gemini from prompt skill selection, preserving other hook context and the user's request.
+
 ## 0.7.1
 
 ### Patch Changes

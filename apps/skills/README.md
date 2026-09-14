@@ -55,6 +55,12 @@ skills hook install --agent all --selection-profile default --json
 skills hook install --agent all --selection-profile default --apply --json
 ```
 
+Native hook invocations must use their installed adapter's selection profile.
+An old client command or environment override naming another profile refuses
+before synchronization or context loading. Review the hook installation and
+restart the native client to load its current commands. Explicit `skills load`,
+`skills context`, and `skills sync` commands can still select other profiles.
+
 The hook install `--include-vendor` option is retained for compatibility with
 older scripts. Hook planning always inventories and disables discovered vendor
 system skills; use `migrate native --include-vendor` when retiring their
