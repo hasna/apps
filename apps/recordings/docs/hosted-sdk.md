@@ -73,7 +73,7 @@ tenant storage, usage admission or provider execution.
 
 ## Hosted Library across interfaces
 
-The additive `HostedLibrary` adapter provides `list`, `get`, `rename` and `delete`
+The additive `HostedLibrary` adapter provides `list`, `get`, `save`, `rename` and `delete`
 operations through CLI, MCP, serve and SDK. `HostedPasteHistory` provides a
 read-only receipt page across the same interfaces. Library output includes only `id`, `title`,
 `createdAt` and `durationMs`; `transcript` requires an explicit option. Unknown
@@ -87,6 +87,7 @@ environment variable containing that API's existing bearer session:
 ```sh
 recordings --json hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION list --limit 25
 recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION get <recording-id> --include-text
+recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION save <recording-id> "New title" --transcript "Fictional transcript" --duration-ms 1000
 recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION rename <recording-id> "New title"
 recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION delete <recording-id>
 ```
@@ -104,6 +105,12 @@ cleanup is unfinished, or `{state: "removed"}` when cleanup completed.
 Neither state triggers another request. A pending result is not proof of a
 completed audio purge; the caller may explicitly repeat the deletion later.
 
+Save validates the recording ID, title, transcript and duration through the
+same hosted contract before requesting credentials or making the single POST.
+Its response contains recording metadata without transcript text. The transcript
+is supplied explicitly with `--transcript`; the optional session ID uses
+`--session-id`.
+
 A full page returns `nextCursor: {before, beforeId}`; supply both with `--before`
 and `--before-id`. A cursor permits another request without promising another
 row. There is no offset, inferred total, extra count request or automatic
@@ -111,7 +118,7 @@ pagination. Limits are 1–100, default 25.
 
 ```sh
 recordings-mcp --hosted --stdio --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION
-# Explicit startup opt-in for rename/delete:
+# Explicit startup opt-in for save/rename/delete:
 recordings-mcp --hosted --allow-writes --stdio --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION
 ```
 
@@ -119,11 +126,13 @@ This explicit mode exposes `recordings_hosted_list`, `recordings_hosted_get` and
 `recordings_hosted_paste_history` for these reads; each accepts `includeText: true`.
 The read-only `recordings_hosted_providers` tool accepts no arguments.
 Without `--allow-writes`, the MCP server registers only those four read tools.
-When started with `--allow-writes`, `recordings_hosted_rename` accepts `{id, title}` and
-`recordings_hosted_delete` accepts `{id}`. Both are marked as destructive mutations
+When started with `--allow-writes`, `recordings_hosted_save` accepts `{id, sessionId?, title, transcript, durationMs}`,
+`recordings_hosted_rename` accepts `{id, title}` and `recordings_hosted_delete` accepts `{id}`.
+Save and rename return metadata without transcript text. Save is marked as a non-destructive
+mutation; rename and delete are marked as destructive mutations
 because rename replaces metadata and delete removes data. Rename is not marked
 idempotent because the service can update its modification timestamp on each
-request. Delete is resumable and marked idempotent. Their results match the CLI and SDK.
+request. Save is not marked idempotent because an explicit ID can conflict. Delete is resumable and marked idempotent. Their results match the CLI and SDK.
 Stdio is required so the selected session cannot be shared through the legacy
 MCP HTTP listener. Legacy MCP mode is unchanged.
 
@@ -138,8 +147,10 @@ are accepted. It supports `GET /v1/recordings`, `GET /v1/recordings/<id>` and
 `GET /v1/paste-history` and `GET /v1/providers`.
 Both list routes accept `limit`, `before`, `beforeId` and `includeText=true|false`; get
 accepts only `includeText`. The providers route accepts no query parameters.
-With `--allow-writes`, `PATCH /v1/recordings/<id>` accepts only a JSON `{title}` body and returns
-metadata. The body has an 8 KiB limit and a five-second read deadline.
+With `--allow-writes`, `POST /v1/recordings` accepts only a validated JSON
+`{id, sessionId?, title, transcript, durationMs}` body and returns metadata.
+The body has a 1 MiB limit and a five-second read deadline. `PATCH /v1/recordings/<id>`
+accepts only a JSON `{title}` body and returns metadata; its body has an 8 KiB limit.
 `DELETE /v1/recordings/<id>` accepts no body. It preserves the hosted service's
 `202 {audioCleanup: {state: "pending"}}` or empty `204` response. Both mutation
 routes reject query parameters and remain refused with 405 when the startup
@@ -163,6 +174,7 @@ const library = new HostedLibrary(new HostedRecordingsClient({
 }));
 const page = await library.list({ limit: 25 });
 const detail = await library.get(recordingId, { includeText: true });
+const saved = await library.save({ id: crypto.randomUUID(), title: "New title", transcript: "Fictional transcript", durationMs: 1000 });
 const renamed = await library.rename(recordingId, "New title");
 const deletion = await library.delete(recordingId); // pending or removed, never retried automatically
 ```

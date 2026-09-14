@@ -33,6 +33,12 @@ export function buildHostedServer(client: HostedRecordingsClient, options: { all
     inputSchema: { id: z.string(), includeText: z.boolean().optional() }, annotations,
   }, ({ id, includeText }) => execute(() => library.get(id, { includeText })));
   if (options.allowWrites === true) {
+    server.registerTool("recordings_hosted_save", {
+      description: "Save one hosted recording. Returns metadata without private transcript text and makes one request without automatic retry.",
+      inputSchema: z.object({ id: z.string(), sessionId: z.string().optional(), title: z.string(), transcript: z.string().max(256_000),
+        durationMs: z.number().finite().min(0).max(1_800_000) }).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    }, (value, extra) => execute(() => library.save(value, { signal: extra.signal })));
     server.registerTool("recordings_hosted_rename", {
       description: "Rename one hosted recording. Returns metadata without private transcript text. The title is trimmed and must contain 1–200 characters.",
       inputSchema: z.object({ id: z.string(), title: z.string() }).strict(),

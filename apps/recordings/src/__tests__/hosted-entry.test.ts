@@ -95,7 +95,7 @@ test.each([false, true])("real MCP stdio entry preserves reads and gates mutatio
     transport.stderr?.on("data", chunk => { stderr += String(chunk); if (stderr.length > 65536) void transport.close(); });
     const { tools } = await client.listTools({}, { timeout: 3000 });
     const reads = ["recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"];
-    expect(tools.map(tool => tool.name).sort()).toEqual([...reads, ...(allowWrites ? ["recordings_hosted_delete", "recordings_hosted_rename"] : [])].sort());
+    expect(tools.map(tool => tool.name).sort()).toEqual([...reads, ...(allowWrites ? ["recordings_hosted_delete", "recordings_hosted_rename", "recordings_hosted_save"] : [])].sort());
     expect(counts()).toEqual({ denied: 0, requests: 0 });
     const result = await client.callTool({ name: "recordings_hosted_paste_history", arguments: { limit: 1 } }, undefined, { timeout: 3000 });
     expect(result.isError).not.toBe(true);
@@ -108,12 +108,16 @@ test.each([false, true])("real MCP stdio entry preserves reads and gates mutatio
     expect(JSON.stringify(catalog)).not.toContain("Hidden fictional provider configuration");
     expect(counts()).toEqual({ denied: 0, requests: 2 }); expect(stderr).toBe("");
     if (allowWrites) {
+      const saved = await client.callTool({ name: "recordings_hosted_save", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        title: "Saved", transcript: "Hidden fictional transcript.", durationMs: 1000 } }, undefined, { timeout: 3000 });
+      expect(saved.isError).not.toBe(true); expect(saved.structuredContent).toMatchObject({ recording: { title: "Saved" } });
+      expect(JSON.stringify(saved)).not.toContain("Hidden fictional transcript");
       const renamed = await client.callTool({ name: "recordings_hosted_rename", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", title: " Renamed " } }, undefined, { timeout: 3000 });
       expect(renamed.isError).not.toBe(true); expect(renamed.structuredContent).toMatchObject({ recording: { title: "Renamed" } });
       expect(JSON.stringify(renamed)).not.toContain("Hidden fictional transcript");
       const deleted = await client.callTool({ name: "recordings_hosted_delete", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } }, undefined, { timeout: 3000 });
       expect(deleted.isError).not.toBe(true); expect(deleted.structuredContent).toEqual({ state: "pending" });
-      expect(counts()).toEqual({ denied: 0, requests: 4 }); expect(stderr).toBe("");
+      expect(counts()).toEqual({ denied: 0, requests: 5 }); expect(stderr).toBe("");
     } else {
       const refused = await client.callTool({ name: "recordings_hosted_delete", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } }, undefined, { timeout: 3000 });
       expect(refused.isError).toBe(true); expect(counts()).toEqual({ denied: 0, requests: 2 });
@@ -138,6 +142,17 @@ test("real hosted CLI rename and delete make one request each without local fall
     const invalid = await entry("cli", [...connection, ...args], true);
     expect(invalid.exitCode).toBe(1); expect(invalid.requests).toBe(0);
   }
+});
+
+test("real hosted CLI save uses the hosted write path once without private output", async () => {
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const connection = ["hosted", "--api-base", "https://fictional.example.test/api/v1/", "--credential-env", "SELECTED_SESSION"];
+  const result = await entry("cli", [...connection, "save", id, "Saved", "--transcript", "Hidden fictional transcript.", "--duration-ms", "1000"], true);
+  expect(result.exitCode).toBe(0); expect(result.requests).toBe(1); expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout).recording.title).toBe("Saved");
+  expect(result.stdout).not.toContain("Hidden fictional transcript.");
+  const missing = await entry("cli", [...connection, "save", id, "Saved", "--transcript", "Hidden fictional transcript.", "--duration-ms", "1000"]);
+  expect(missing.exitCode).toBe(1); expect(missing.requests).toBe(0);
 });
 
 test("write startup flag cannot enter legacy MCP or serve modes", async () => {

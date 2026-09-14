@@ -37,6 +37,15 @@ export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
     .action(async (id, values) => { write(JSON.stringify(await library().get(id, { includeText: values.includeText })) + "\n"); });
   program.command("rename <id> <title>").description("Rename one hosted recording; returns metadata without transcript text")
     .action(async (id, title) => { write(JSON.stringify(await library().rename(id, title)) + "\n"); });
+  program.command("save <id> <title>").description("Save one hosted recording; returns metadata without transcript text")
+    .requiredOption("--transcript <text>", "Recording transcript")
+    .requiredOption("--duration-ms <number>", "Recording duration in milliseconds")
+    .option("--session-id <id>", "Optional recording session ID")
+    .action(async (id, title, values) => {
+      const input = { id, title, transcript: values.transcript, durationMs: Number(values.durationMs),
+        ...(values.sessionId === undefined ? {} : { sessionId: values.sessionId }) };
+      write(JSON.stringify(await library().save(input)) + "\n");
+    });
   program.command("delete <id>").description("Permanently delete one hosted recording; pending means audio cleanup is unfinished, with no automatic retry")
     .action(async id => { write(JSON.stringify(await library().delete(id)) + "\n"); });
   program.command("paste-history").description("Read client-reported paste history; private text is omitted by default")
