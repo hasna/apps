@@ -1,8 +1,45 @@
 import { Command, CommanderError } from "commander";
 import { HostedLibrary } from "../hosted/library.js";
 import { HostedPasteHistory } from "../hosted/paste-history.js";
+import { RecordingsSDKError } from "../hosted/transport.js";
 import { hostedFailure, hostedProcessClient } from "../hosted/process-options.js";
 import type { HostedRecordingsClient } from "../hosted/index.js";
+
+const MAX_HOSTED_STDIN_BYTES = 1_048_576;
+
+/** Read one bounded, fatal-UTF-8 transcript without retaining shell-visible arguments. */
+async function readHostedTranscriptFromStdin(): Promise<string> {
+  const reader = Bun.stdin.stream().getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > MAX_HOSTED_STDIN_BYTES) throw new RecordingsSDKError("invalid_input");
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    if (error instanceof RecordingsSDKError) throw error;
+    throw new RecordingsSDKError("invalid_input");
+  } finally {
+    void reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
+async function hostedTranscriptInput(text: string | undefined, fromStdin: boolean): Promise<string> {
+  const sourceCount = [text !== undefined, fromStdin].filter(Boolean).length;
+  if (sourceCount !== 1) throw new RecordingsSDKError("invalid_input");
+  const transcript = fromStdin ? await readHostedTranscriptFromStdin() : text!;
+  if (!transcript.trim()) throw new RecordingsSDKError("invalid_input");
+  return transcript;
+}
 
 export interface HostedCLIOptions {
   write?: (value: string) => void;
@@ -38,11 +75,13 @@ export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
   program.command("rename <id> <title>").description("Rename one hosted recording; returns metadata without transcript text")
     .action(async (id, title) => { write(JSON.stringify(await library().rename(id, title)) + "\n"); });
   program.command("save <id> <title>").description("Save one hosted recording; returns metadata without transcript text")
-    .requiredOption("--transcript <text>", "Recording transcript")
+    .option("--transcript <text>", "Recording transcript")
+    .option("--transcript-stdin", "Read recording transcript from bounded UTF-8 stdin")
     .requiredOption("--duration-ms <number>", "Recording duration in milliseconds")
     .option("--session-id <id>", "Optional recording session ID")
     .action(async (id, title, values) => {
-      const input = { id, title, transcript: values.transcript, durationMs: Number(values.durationMs),
+      const transcript = await hostedTranscriptInput(values.transcript, Boolean(values.transcriptStdin));
+      const input = { id, title, transcript, durationMs: Number(values.durationMs),
         ...(values.sessionId === undefined ? {} : { sessionId: values.sessionId }) };
       write(JSON.stringify(await library().save(input)) + "\n");
     });

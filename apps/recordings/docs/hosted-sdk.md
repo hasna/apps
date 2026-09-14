@@ -88,6 +88,7 @@ environment variable containing that API's existing bearer session:
 recordings --json hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION list --limit 25
 recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION get <recording-id> --include-text
 recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION save <recording-id> "New title" --transcript "Fictional transcript" --duration-ms 1000
+printf '%s' 'Fictional transcript' | recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION save <recording-id> "New title" --transcript-stdin --duration-ms 1000
 recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION rename <recording-id> "New title"
 recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION delete <recording-id>
 ```
@@ -108,8 +109,9 @@ completed audio purge; the caller may explicitly repeat the deletion later.
 Save validates the recording ID, title, transcript and duration through the
 same hosted contract before requesting credentials or making the single POST.
 Its response contains recording metadata without transcript text. The transcript
-is supplied explicitly with `--transcript`; the optional session ID uses
-`--session-id`.
+is supplied explicitly with exactly one of `--transcript` or
+`--transcript-stdin`; stdin is bounded to 1 MiB, decoded as fatal UTF-8 and
+rejects empty text. The optional session ID uses `--session-id`.
 
 A full page returns `nextCursor: {before, beforeId}`; supply both with `--before`
 and `--before-id`. A cursor permits another request without promising another

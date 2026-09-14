@@ -7,13 +7,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runStartupFixture, startupFixtureEnv } from "./helpers/startup-fixture.js";
 
-async function entry(surface: "cli" | "mcp" | "server", args: string[], token = false) {
+async function entry(surface: "cli" | "mcp" | "server", args: string[], token = false, input: string | Uint8Array = "") {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "recordings-hosted-entry-")));
   chmodSync(home, 0o700);
   try {
     const result = await runStartupFixture(home, [process.execPath, "--preload",
       join(import.meta.dir, "helpers/hosted-entry-preload.ts"), join(import.meta.dir, "../" + surface + "/index.ts"), ...args],
-      startupFixtureEnv(home, token ? { SELECTED_SESSION: "fictional-entry-session" } : {}));
+      startupFixtureEnv(home, token ? { SELECTED_SESSION: "fictional-entry-session" } : {}), input);
     expect(existsSync(join(home, "boundary.json")), result.stderr).toBe(true);
     const counts = JSON.parse(readFileSync(join(home, "boundary.json"), "utf8"));
     expect(counts.denied).toBe(0);
@@ -153,6 +153,33 @@ test("real hosted CLI save uses the hosted write path once without private outpu
   expect(result.stdout).not.toContain("Hidden fictional transcript.");
   const missing = await entry("cli", [...connection, "save", id, "Saved", "--transcript", "Hidden fictional transcript.", "--duration-ms", "1000"]);
   expect(missing.exitCode).toBe(1); expect(missing.requests).toBe(0);
+});
+
+test("real hosted CLI save reads one bounded UTF-8 transcript from stdin", async () => {
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const connection = ["hosted", "--api-base", "https://fictional.example.test/api/v1/", "--credential-env", "SELECTED_SESSION"];
+  const result = await entry("cli", [...connection, "save", id, "Saved", "--transcript-stdin", "--duration-ms", "1000"], true,
+    "Hidden fictional transcript.");
+  expect(result.exitCode).toBe(0); expect(result.requests).toBe(1); expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout).recording.title).toBe("Saved");
+  expect(result.stdout).not.toContain("Hidden fictional transcript.");
+});
+
+test("hosted CLI stdin save rejects empty, conflicting, malformed and oversized input before credentials or writes", async () => {
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const connection = ["hosted", "--api-base", "https://fictional.example.test/api/v1/", "--credential-env", "SELECTED_SESSION"];
+  for (const [args, input] of [
+    [[...connection, "save", id, "Saved", "--duration-ms", "1000"], ""],
+    [[...connection, "save", id, "Saved", "--transcript-stdin", "--duration-ms", "1000"], ""],
+    [[...connection, "save", id, "Saved", "--transcript", " ", "--duration-ms", "1000"], ""],
+    [[...connection, "save", id, "Saved", "--transcript", "Hidden fictional transcript.", "--transcript-stdin", "--duration-ms", "1000"], "ignored"],
+    [[...connection, "save", id, "Saved", "--transcript-stdin", "--duration-ms", "1000"], new Uint8Array([0xff])],
+    [[...connection, "save", id, "Saved", "--transcript-stdin", "--duration-ms", "1000"], "x".repeat(1_048_577)],
+  ] as const) {
+    const result = await entry("cli", args, true, input);
+    expect(result.exitCode).toBe(1); expect(result.requests).toBe(0); expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain("Hidden fictional transcript.");
+  }
 });
 
 test("write startup flag cannot enter legacy MCP or serve modes", async () => {

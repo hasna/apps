@@ -11,7 +11,7 @@ export function startupFixtureEnv(home: string, extra: Record<string, string> = 
 }
 
 /** Bound output and the owned child lifetime. A timeout is always a test error. */
-export async function runStartupFixture(home: string, command: string[], env: Record<string, string>, input = "", boundMs = 15_000) {
+export async function runStartupFixture(home: string, command: string[], env: Record<string, string>, input: string | Uint8Array = "", boundMs = 15_000) {
   const child = Bun.spawn(signingFixtureCommand(home, command), {
     cwd: home, env, detached: true, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
