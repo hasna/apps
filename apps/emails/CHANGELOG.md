@@ -1,3 +1,53 @@
+## 1.6.3
+
+### Patch Changes
+
+- d2af6c2: Restore domain DNS setup and SES sending provisioning through operator-authorized API jobs with server-bound Cloudflare zones, preserved existing records, explicit MX switching and durable retry receipts.
+- d2af6c2: Require ordinary CLI, TUI, and MCP clients to use the authenticated API. Reject explicit SQLite mail settings before client startup, while retaining explicit storage-library and standalone server compatibility.
+- d2af6c2: Restore provision roundtrip as an authenticated API send-and-receipt probe with stable retry identities, exact receipt markers, interruptible bounded polling and optional server-bound S3 synchronization.
+- Preserve typed reply parents through the CLI, API, SDK and scheduler. Derive authorized In-Reply-To and References from RFC Message-ID evidence, honor incoming Reply-To, and handle mailbox lists consistently. Support bounded Resend identity retrieval and explicitly evidenced SES region/domain mappings without guessing provider Message-ID suffixes.
+- d2af6c2: Route domain add/adopt and AWS inbound setup through authenticated account APIs and registered sources using saved credentials. Preserve partial setup receipts, sandbox send-only registrations, and source-scoped initial sync without client AWS operations or local configuration writes. Label status/readiness as registry evidence when live cloud state is unknown.
+- 14d7cd3: Use Emails API terminology in command help and previews, and name the shared mailbox source All mailboxes.
+- bf58c10: Support controlled send and receipt readback on macOS with descriptor-anchored no-follow filesystem operations, owner-only permissions, ACL checks, and atomic no-overwrite receipt publication.
+- d2af6c2: Add an operator-owned foreground scheduler and sequence supervisor with PostgreSQL ownership leases, atomic generation fences and durable cooperative restart receipts. Report failed or uncertain iterations honestly and reconcile timed-out operations before shutdown.
+- d2af6c2: Display CLI help without API credentials by registering API commands directly. Keep authentication at action time and retain retired local command implementations only as unpublished regression fixtures.
+- d2af6c2: Restore provision up, daemon and retry through durable API jobs for already-owned SES domains. Preserve MX and frozen run intent, checkpoint exact-token delivery tests, and retain stable send identities across interruptions and uncertain provider outcomes.
+- d2af6c2: Save MCP feedback through authenticated tenant API storage with bounded structured fields, PostgreSQL row-level security, and an explicit saved-only receipt.
+- 4b11cfc: A legacy message row answers to its bare canonical uuid on the detail read
+  (BUG-0003). Migration 0007 stores bridged legacy inbound/sent mail under a
+  prefixed row id (`legacy-inbound:<uuid>` / `legacy-sent:<uuid>`), so a caller
+  that held only the pre-unification canonical uuid got a 404 from
+  `GET /v1/messages/{uuid}` and had to retry the raw prefixed id — leaving
+  attachment metadata for legacy mail unreachable on a naive detail fetch. The
+  postgres store's `getMessage` now treats the bare canonical uuid as an alias
+  for those two prefixed row ids (tenant-scoped, only after an exact-id miss, so
+  current rows whose id IS the bare uuid are unaffected and exact-id fetches pay
+  no extra query). `getMessageRaw` inherits the same alias through its existing
+  read. Resolves BUG-0003.
+- d2af6c2: Read registered-domain DNS records through the authenticated API using the account's server-held provider binding. CLI and MCP now retrieve fresh DKIM records and share provider-backed verification without client provider credentials.
+- d2af6c2: Add tenant-scoped encrypted provider credential storage and resumable root-key
+  lifecycle primitives, backed by deployment-configured KMS and PostgreSQL RLS.
+- d2af6c2: Send personalized MCP batches through the authenticated API with validated recipients, stable retry identities, suppression controls, and partial-failure receipts.
+- d2af6c2: Route MCP owned-domain and Cloudflare DNS setup through server-authorized provisioning jobs, preserve MX and provider-registration options, and return incomplete receipts honestly. Reject purchase inputs and client-side Cloudflare tokens before writes.
+- d2af6c2: Route MCP provider credentials through atomic server-managed writes with revision fences, reusable provider IDs, and secret-free receipts.
+- d2af6c2: Prepare and diagnose inboxes through shared address state and authenticated provisioning jobs from MCP.
+- d2af6c2: Read MCP provisioning status from the shared account registry and preserve unsubscribe URLs through authenticated email sending.
+- d2af6c2: Carry scoped MCP send keys as API delegation with capability validation; never store them in scheduled jobs or substitute them for account credentials.
+- d2af6c2: Run MCP S3 sync and provider event reconciliation through the authenticated API, preserving partial receipts and continuation cursors.
+- d2af6c2: Implement owned-domain setup through server-bound provider and DNS jobs, without registrant PII or an implicit domain purchase.
+- 3833f99: Persist device UI preferences across launches without a local mail database, and keep UI actions immediate with a visible warning when saving fails.
+- d2af6c2: Apply recorded provider filters to sent-ledger MCP reads and CLI exports, preserving provenance and rejecting unsupported older API contracts.
+- d2af6c2: Publish tenant-scoped, append-only API worker lifecycle logs and read them through `emails logs tail`, with strict bounds and honest empty states. Preserve operation receipts if a final log write fails.
+- eab84b9: Use patched MIME parsing and URI dependencies, and preserve Alpine distribution metadata in the minimal server image for accurate vulnerability scanning.
+- d2af6c2: Authorize scoped send keys before reserving or replaying send intents, and reject keys revoked during verification without repeating successful provider sends.
+- d2af6c2: Carry validated custom headers and tags through MCP/API sends and scheduled jobs, persist tags for readback, and preserve SES tags on raw MIME messages.
+- 148bfcc: Report completed sends as resolved in send-intent lookups while preserving cancellation and uncertain-outcome safeguards.
+- d2af6c2: Restore MCP SES inbound setup through an operator-authorized API using explicit server ingest bindings. Configure the bound bucket and receipt rule, preserve existing policy/actions, verify readback, and report uncertain partial mutations without claiming a worker or delivery test ran.
+- d2af6c2: Describe the shared API and account registry in client setup, package metadata, and agent guidance, while preserving explicit storage and standalone server compatibility documentation.
+- d2af6c2: Require PostgreSQL API readiness for container health and exercise it with an isolated non-bypass PostgreSQL smoke fixture. Remove obsolete deployment selectors from release probes while preserving explicit local-database and tenant-isolation refusals.
+- 9c44c5f: Admit eight concurrent message searches by default, with a configurable bounded search budget sized against the PostgreSQL connection pool. Preserve ordinary-read capacity, transaction-local cancellation, overload retry advice, and sending/authentication safeguards.
+- 1c48d93: Reject literal newline escapes inside HTTP(S) body URL tokens before send or scheduled enqueue, with the same generic diagnostic in CLI dry runs, controlled sends, and SDK sends. Preserve body bytes, real line breaks, percent-encoded URL data, and unrelated prose backslashes; document body-file authoring.
+
 ## 1.6.2
 
 ### Patch Changes
