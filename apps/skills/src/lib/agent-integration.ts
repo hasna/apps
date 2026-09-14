@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, writeFileSync, unlinkSync, chmodSync } from "node:fs";
+import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, writeFileSync, unlinkSync, chmodSync, openSync, closeSync, fsyncSync, fstatSync, readSync, constants, linkSync } from "node:fs";
 import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
@@ -71,6 +71,23 @@ function recheckRootAliases(aliases: AgentRootAlias[]): void {
   }
 }
 
+/** Ownership hashing must not follow a replacement link or block on a FIFO. */
+function readNativeBytes(path: string, maximum = 64 * 1024 * 1024): Buffer {
+  assertSafePath(path);
+  const before = lstatSync(path);
+  if (!before.isFile() || before.size > maximum) throw new Error("Unsupported or oversized native skill file");
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const opened = fstatSync(descriptor);
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size) throw new Error("Native skill file changed while reading");
+    const bytes = Buffer.allocUnsafe(before.size + 1); let length = 0;
+    while (length < bytes.length) { const count = readSync(descriptor, bytes, length, bytes.length - length, null); if (!count) break; length += count; }
+    const after = fstatSync(descriptor);
+    if (length !== before.size || after.size !== before.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) throw new Error("Native skill file changed while reading");
+    return bytes.subarray(0, length);
+  } finally { closeSync(descriptor); }
+}
+
 /** Hash every relative filename and byte; refuse links, devices, and oversized migration input. */
 function treeHash(root: string): string {
   const hash = createHash("sha256"); let bytes = 0, files = 0;
@@ -82,7 +99,7 @@ function treeHash(root: string): string {
     if (!stat.isFile()) throw new Error(`Unsupported skill file: ${path}`);
     bytes += stat.size; files++;
     if (bytes > 64 * 1024 * 1024 || files > 10000) throw new Error("Native skill exceeds migration size limits");
-    hash.update(`f\0${rel}\0${stat.size}\0`); hash.update(readFileSync(path));
+    hash.update(`f\0${rel}\0${stat.size}\0`); hash.update(readNativeBytes(path, stat.size));
   }
   assertSafePath(root); visit(root); return hash.digest("hex");
 }
@@ -374,7 +391,28 @@ export function applyAgentIntegration(plan: AgentIntegrationPlan): { changed: st
   return { changed: plan.changes.map(change => change.path), backups, ...(aliases.length ? { rootAliases: aliases } : {}) };
 }
 
-export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean }): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; rootAliases?: AgentRootAlias[] } {
+function syncArchiveDirectory(path: string): void {
+  assertSafePath(path);
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try { fsyncSync(descriptor); } finally { closeSync(descriptor); }
+}
+
+/** Persist the journal file and its containing directory before proceeding. */
+function writeArchiveJournal(path: string, value: unknown): void {
+  assertSafePath(path);
+  const temporary = `${path}.skills-${randomUUID()}`;
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    writeFileSync(descriptor, `${JSON.stringify(value)}\n`); fsyncSync(descriptor); closeSync(descriptor); descriptor = undefined;
+    renameSync(temporary, path); syncArchiveDirectory(dirname(path));
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+    if (lstatSync(temporary, { throwIfNoEntry: false })) unlinkSync(temporary);
+  }
+}
+
+export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean }): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; receiptPath?: string; rootAliases?: AgentRootAlias[] } {
   const aliases = [...new Map(inventory.filter(entry => entry.rootAlias).map(entry => [entry.rootAlias!.alias, entry.rootAlias!])).values()];
   if (aliases.length && !options.allowRootAliases) throw new Error("Native migration requires explicit allowRootAliases for agent root aliases");
   recheckRootAliases(aliases);
@@ -388,26 +426,70 @@ export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { da
   const selected = inventory.filter(entry => !entry.bridge && !entry.system && (entry.vendor ? options.includeVendor : entry.managed || options.includeUnmanaged));
   for (const entry of selected) if (treeHash(entry.path) !== entry.hash) throw new Error(`Native skill changed after planning: ${entry.path}`);
   if (!selected.length) return { entries: [], ...(aliases.length ? { rootAliases: aliases } : {}) };
-  const archiveRoot = join(options.dataDir ?? getDataDir(), "migration", randomUUID(), "native");
-  assertSafePath(archiveRoot); mkdirSync(archiveRoot, { recursive: true, mode: 0o700 });
-  const entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }> = [];
+  const operationId = randomUUID(), archiveRoot = join(options.dataDir ?? getDataDir(), "migration", operationId, "native"), receiptPath = join(archiveRoot, "receipt.json");
+  type Move = { source: string; archive: string; hash: string; discoveryOnly?: boolean; status: "planned" | "moving" | "archived" | "restored" | "recovery-required"; conflict?: string };
+  const entries: Move[] = selected.map((entry, index) => ({
+    source: entry.vendor ? join(entry.path, "SKILL.md") : entry.path,
+    archive: join(archiveRoot, `${index}-${sha(entry.path).slice(0, 12)}`),
+    hash: entry.vendor ? sha(readNativeBytes(join(entry.path, "SKILL.md"))) : entry.hash,
+    ...(entry.vendor ? { discoveryOnly: true } : {}), status: "planned",
+  }));
+  const journal = { version: 2, operationId, status: "planned", entries, ...(aliases.length ? { rootAliases: aliases } : {}) };
+  const moved: Move[] = [];
+  const verifyArchive = (entry: Move): void => {
+    assertSafePath(entry.archive);
+    const stat = lstatSync(entry.archive);
+    if (entry.discoveryOnly ? !stat.isFile() : !stat.isDirectory()) throw new Error("Archive type changed");
+    if ((entry.discoveryOnly ? sha(readNativeBytes(entry.archive)) : treeHash(entry.archive)) !== entry.hash) throw new Error("Archive bytes changed");
+  };
+  assertSafePath(archiveRoot);
+  const created: string[] = [];
+  for (let path = archiveRoot; !existsSync(path); path = dirname(path)) created.push(path);
+  mkdirSync(archiveRoot, { recursive: true, mode: 0o700 });
   try {
+    for (const directory of created) syncArchiveDirectory(directory);
+    if (created.length) syncArchiveDirectory(dirname(created.at(-1)!));
+    writeArchiveJournal(receiptPath, journal);
     for (const [index, entry] of selected.entries()) {
       recheckRootAliases(aliases);
-      const archive = join(archiveRoot, `${index}-${sha(entry.path).slice(0, 12)}`);
-      // Plugin hooks or tools may share scripts/assets inside a skill folder.
-      // Retire only its discovery document; keep the rest of the plugin intact.
-      const source = entry.vendor ? join(entry.path, "SKILL.md") : entry.path;
-      const hash = entry.vendor ? sha(readFileSync(source)) : entry.hash;
-      renameSync(source, archive); entries.push({ source, archive, hash, ...(entry.vendor ? { discoveryOnly: true } : {}) });
+      if (treeHash(entry.path) !== entry.hash) throw new Error("Native skill changed after planning");
+      const move = entries[index]!;
+      journal.status = "archiving"; move.status = "moving"; writeArchiveJournal(receiptPath, journal);
+      // Vendor discovery documents move alone; shared scripts/assets remain.
+      renameSync(move.source, move.archive); moved.push(move);
+      syncArchiveDirectory(dirname(move.source)); syncArchiveDirectory(archiveRoot);
+      verifyArchive(move); move.status = "archived"; writeArchiveJournal(receiptPath, journal);
     }
     recheckRootAliases(aliases);
-    atomicWrite(join(archiveRoot, "receipt.json"), JSON.stringify({ version: 1, entries, ...(aliases.length ? { rootAliases: aliases } : {}) }) + "\n");
+    for (const entry of moved) verifyArchive(entry);
+    journal.status = "completed"; writeArchiveJournal(receiptPath, journal);
   } catch (error) {
-    for (const entry of entries.reverse()) renameSync(entry.archive, entry.source);
-    throw error;
+    journal.status = "compensating";
+    try { writeArchiveJournal(receiptPath, journal); } catch { /* The durable intent still names every source and archive. */ }
+    for (const entry of [...moved].reverse()) {
+      try {
+        recheckRootAliases(aliases); assertSafePath(entry.source); assertSafePath(entry.archive);
+        if (lstatSync(entry.source, { throwIfNoEntry: false })) { entry.status = "recovery-required"; entry.conflict = "source-occupied"; continue; }
+        try { verifyArchive(entry); } catch { entry.status = "recovery-required"; entry.conflict = "archive-unverified"; continue; }
+        if (entry.discoveryOnly) {
+          // A hard link refuses EEXIST atomically, so a concurrent document wins.
+          linkSync(entry.archive, entry.source); syncArchiveDirectory(dirname(entry.source)); unlinkSync(entry.archive);
+        } else {
+          // Portable directory rename has no no-replace option. Recheck directly
+          // before it; callers must keep native writers quiescent during recovery.
+          if (lstatSync(entry.source, { throwIfNoEntry: false })) { entry.status = "recovery-required"; entry.conflict = "source-occupied"; continue; }
+          renameSync(entry.archive, entry.source);
+        }
+        entry.status = "restored";
+        syncArchiveDirectory(dirname(entry.source)); syncArchiveDirectory(archiveRoot);
+      } catch { entry.status = "recovery-required"; entry.conflict = "compensation-io"; }
+      finally { try { writeArchiveJournal(receiptPath, journal); } catch { /* Preserve other recoverable entries even if journaling fails. */ } }
+    }
+    journal.status = "failed";
+    try { writeArchiveJournal(receiptPath, journal); } catch { /* Inspect the last durable intent before retrying. */ }
+    throw new Error(`Native archive failed; inspect the recovery journal at ${receiptPath} before retrying.`, { cause: error });
   }
-  return { entries, ...(aliases.length ? { rootAliases: aliases } : {}) };
+  return { entries: entries.map(({ status, conflict, ...entry }) => entry), receiptPath, ...(aliases.length ? { rootAliases: aliases } : {}) };
 }
 
 /** Run before any prompt context load. Missing ownership or reappearing native

@@ -101,6 +101,19 @@ copies, and `--include-vendor` retires vendor `SKILL.md` discovery files while
 preserving shared scripts and assets. Archive receipts and configuration backups
 live under the Skills data directory.
 
+Native archives persist a version 2 recovery journal before moving payloads;
+`migrate native --json --apply` returns its `receiptPath`. The journal records
+every source, archive path, expected hash, and move status, then marks successful
+completion. Interrupted operations can be inspected against that durable intent.
+On failure, recovery restores verified archives only when the original path is
+still absent. It preserves occupied paths or unverified archives, records that
+they require recovery, and continues compensating other unchanged entries.
+Keep native agents and other skill writers stopped throughout migration and
+recovery: portable directory rename cannot atomically reserve an absent target.
+Vendor file restoration uses an exclusive hard link to preserve concurrent files.
+Do not retry an interrupted operation until its journal and both paths have been
+reconciled; a failed final journal write may leave the earlier durable intent.
+
 `skills hook agents --json` reports the supported adapters and coverage limits.
 Claude and Codex have lifecycle context hooks; Gemini uses `BeforeAgent`, and
 OpenCode uses its awaited message plugin. Cursor receives selected context at
