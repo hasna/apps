@@ -27,37 +27,6 @@ test("known Claude registrations resolve enabled local plugins outside the cache
   expect(() => verifyAgentDiscovery(binding)).toThrow("discovery input changed");
 });
 
-test("Claude binds duplicate user/project plugin scopes and rejects conflicting records within one scope", () => {
-  const home = fixture(), user = join(home, "user-plugin"), project = join(home, "project-plugin"), projectPath = join(home, "repo");
-  put(join(home, ".claude/settings.json"), '{"enabledPlugins":{"local@personal":true}}');
-  const path = join(home, ".claude/plugins/installed_plugins.json");
-  const records = [{ scope: "user", installPath: user }, { scope: "project", projectPath, installPath: project }];
-  for (const root of [user, project]) put(join(root, ".claude-plugin/plugin.json"), '{"name":"local"}');
-  const write = (values: unknown[]) => put(path, JSON.stringify({ version: 2, plugins: { "local@personal": values } }));
-  write(records);
-  const binding = resolveAgentDiscovery({ home, agent: "claude" });
-  expect(binding.roots).toEqual([join(project, "skills"), join(user, "skills")].sort());
-  write([...records, { scope: "user", installPath: project }]);
-  expect(() => resolveAgentDiscovery({ home, agent: "claude" })).toThrow("ambiguous within its scope");
-  expect(() => verifyAgentDiscovery(binding)).toThrow("discovery input changed");
-  write([...records, { scope: "project", projectPath, installPath: user }]);
-  expect(() => resolveAgentDiscovery({ home, agent: "claude" })).toThrow("ambiguous within its scope");
-  write([{ scope: "project", projectPath: "relative", installPath: project }]);
-  expect(() => resolveAgentDiscovery({ home, agent: "claude" })).toThrow("absolute project path");
-});
-
-test("project native permission rules preserve independent skills while bridge denials still fail", () => {
-  const home = fixture(), project = join(home, "project"), path = join(project, ".claude/settings.local.json");
-  for (const rule of ["Skill(deploy)", "Skill(deploy:*)", "Skill(other-*)"]) {
-    put(path, JSON.stringify({ permissions: { deny: [rule] } }));
-    expect(() => assertProjectDiscovery("claude", [project], home)).not.toThrow();
-  }
-  for (const rule of ["Skill", "Skill(*)", "Skill(skills-cli)", "Skill(skills-*)", "Skill(skills-cli:*)"]) {
-    put(path, JSON.stringify({ permissions: { deny: [rule] } }));
-    expect(() => assertProjectDiscovery("claude", [project], home)).toThrow("NATIVE_SKILL_DRIFT");
-  }
-});
-
 test("an unresolved enabled plugin refuses a cache-only claim and explicit reviewed sources cannot become stale", () => {
   const home = fixture(), config = join(home, ".codex/config.toml"), plugin = join(home, "runtime-plugin");
   const original = '[plugins."local@personal"]\nenabled = true\n'; put(config, original);

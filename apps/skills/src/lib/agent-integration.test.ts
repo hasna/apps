@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { useDefaultTestTimeout } from "../test-preload.js";
-import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, hookContextOutput } from "./agent-integration.js";
+import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, hookContextOutput, assertManagedAgentBridge } from "./agent-integration.js";
 
 useDefaultTestTimeout();
 const roots: string[] = [];
@@ -14,6 +14,19 @@ function fixture() {
   return { home, dataDir };
 }
 function put(path: string, body: string) { mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, body); }
+
+test("native invocation profile must match the adapter binding, including retained adapter profiles", () => {
+  const f = fixture();
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude"], profileId: "engineering", command: "/opt/bin/skills" }));
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["codex"], profileId: "research", command: "/opt/bin/skills" }));
+  const options = { ...f, projectDir: f.home };
+  expect(() => assertManagedAgentBridge("claude", { ...options, profileId: "engineering" })).not.toThrow();
+  expect(() => assertManagedAgentBridge("codex", { ...options, profileId: "research" })).not.toThrow();
+  expect(() => assertManagedAgentBridge("claude", { ...options, profileId: "research" })).toThrow("hook selection profile differs");
+  expect(() => assertManagedAgentBridge("codex", { ...options, profileId: "retired-profile" })).toThrow("hook selection profile differs");
+  // Read-only SDK callers that verify the installed bridge without invoking a profile retain their contract.
+  expect(() => assertManagedAgentBridge("claude", options)).not.toThrow();
+});
 
 test("hook install plans without writes, preserves unrelated hooks and is idempotent", () => {
   const f = fixture(), path = join(f.home, ".claude", "settings.json");

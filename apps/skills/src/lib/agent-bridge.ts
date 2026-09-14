@@ -3,8 +3,8 @@ import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 export const CLI_BRIDGE_NAME = "skills-cli";
-export const CLI_BRIDGE_VERSION = 2;
-const previousMarkdown = `---
+export const CLI_BRIDGE_VERSION = 1;
+const markdown = `---
 name: skills-cli
 description: Discover, load, author, and run versioned skills through the Skills CLI when a task needs reusable instructions or an executable skill.
 ---
@@ -18,15 +18,7 @@ Use the Skills CLI as the skill authority for this station.
 
 This bridge contains no skill payloads. Do not copy skill content into agent-native skill directories or load other native skill copies. If a Skills command refuses authority, selection, integrity, or native drift, report that refusal and use its repair guidance; do not substitute bundled or stale local content. Explicit local draft authoring remains available.
 `;
-const markdown = previousMarkdown.replace(
-  "Do not copy skill content into agent-native skill directories or load other native skill copies.",
-  "Load Skills-managed payloads only through the Skills CLI; do not copy them into agent-native directories. Independent Claude user and project skills remain available through Claude's normal permission controls; they are not Skills-managed payloads.",
-);
 export const CLI_BRIDGE_DIGEST = createHash("sha256").update(markdown).digest("hex");
-export const PREVIOUS_CLI_BRIDGE_FILES: Readonly<Record<string, string>> = Object.freeze({
-  "SKILL.md": previousMarkdown,
-  ".hasna-skills.json": `${JSON.stringify({ managedBy: "@hasna/skills", kind: "cli-bridge", version: 1, protocol: "selection-v1", contentSha256: createHash("sha256").update(previousMarkdown).digest("hex") }, null, 2)}\n`,
-});
 export const CLI_BRIDGE_FILES: Readonly<Record<string, string>> = Object.freeze({
   "SKILL.md": markdown,
   ".hasna-skills.json": `${JSON.stringify({ managedBy: "@hasna/skills", kind: "cli-bridge", version: CLI_BRIDGE_VERSION, protocol: "selection-v1", contentSha256: CLI_BRIDGE_DIGEST }, null, 2)}\n`,
@@ -34,20 +26,11 @@ export const CLI_BRIDGE_FILES: Readonly<Record<string, string>> = Object.freeze(
 
 /** Ownership is exact bytes at an expected location, never a marker's claim alone. */
 export function isOwnedCliBridge(path: string, expectedPaths: readonly string[]): boolean {
-  return matchesBridgeFiles(path, expectedPaths, CLI_BRIDGE_FILES);
-}
-
-/** Only the exact published predecessor can be upgraded without replacing user edits. */
-export function isPreviousCliBridge(path: string, expectedPaths: readonly string[]): boolean {
-  return matchesBridgeFiles(path, expectedPaths, PREVIOUS_CLI_BRIDGE_FILES);
-}
-
-function matchesBridgeFiles(path: string, expectedPaths: readonly string[], files: Readonly<Record<string, string>>): boolean {
   if (!expectedPaths.includes(path)) return false;
   try {
     if (!lstatSync(path).isDirectory()) return false;
-    if (JSON.stringify(readdirSync(path).sort()) !== JSON.stringify(Object.keys(files).sort())) return false;
-    return Object.entries(files).every(([name, content]) => {
+    if (JSON.stringify(readdirSync(path).sort()) !== JSON.stringify(Object.keys(CLI_BRIDGE_FILES).sort())) return false;
+    return Object.entries(CLI_BRIDGE_FILES).every(([name, content]) => {
       const file = join(path, name), stat = lstatSync(file);
       return stat.isFile() && !stat.isSymbolicLink() && stat.size === Buffer.byteLength(content) && readFileSync(file, "utf8") === content;
     });

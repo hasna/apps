@@ -72,16 +72,6 @@ export function captureDiscoveryByteSources(paths: string[]): DiscoverySource[] 
   return paths.map(path => ({ path, hashMode: "bytes", sha256: hashRawDiscoveryFile(path, budget) }));
 }
 
-function deniesBridge(rule: unknown): boolean {
-  if (typeof rule !== "string") return false;
-  if (rule === "Skill") return true;
-  const match = rule.match(/^Skill\(([^)]*)\)$/);
-  if (!match) return false;
-  const pattern = match[1]!.replace(/(?::\*| \*)$/, "");
-  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*");
-  return new RegExp(`^${escaped}$`).test("skills-cli");
-}
-
 /** Project settings can introduce a higher-precedence discovery source. Until
  * its native merge format is supported, refuse that layer rather than certify
  * the home-only inventory. Ordinary unrelated project settings remain usable. */
@@ -103,7 +93,7 @@ export function assertProjectDiscovery(agent: IntegrationAgent, directories: str
         : agent === "codex" ? ["plugins", "marketplaces", "skills"]
         : agent === "gemini" ? ["skills", "extensions"]
         : agent === "opencode" ? ["plugin", "skills"] : ["hooks"];
-      if (keys.some(key => config[key] !== undefined) || config.disableAllHooks === true || config.disableBundledSkills === false || config.hooksConfig?.enabled === false || config.permission?.skill !== undefined || config.permissions?.deny?.some(deniesBridge)) throw new Error(`NATIVE_SKILL_DRIFT: higher-precedence project skill or hook configuration requires review: ${path}`);
+      if (keys.some(key => config[key] !== undefined) || config.disableAllHooks === true || config.disableBundledSkills === false || config.hooksConfig?.enabled === false || config.permission?.skill !== undefined || config.permissions?.deny?.some((rule: unknown) => typeof rule === "string" && /^Skill(?:\(|$)/.test(rule))) throw new Error(`NATIVE_SKILL_DRIFT: higher-precedence project skill or hook configuration requires review: ${path}`);
     }
     if (agent === "claude") {
       const commands = canonical(join(directory, ".claude/commands")); safe(commands);
@@ -202,18 +192,8 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
       if (enabled === false) continue;
       if (enabled !== true) unresolved("unsupported plugin enablement");
       const matches = installed?.[id];
-      if (!Array.isArray(matches) || !matches.length) unresolved("enabled plugin registration is missing or ambiguous");
-      const scopes = new Set<string>();
-      for (const match of matches) {
-        if (!match || typeof match.installPath !== "string" || !isAbsolute(match.installPath) || !["user", "project", "local"].includes(match.scope)) unresolved("enabled plugin registration has an unsupported scope or path");
-        if (match.scope !== "user" && (typeof match.projectPath !== "string" || !isAbsolute(match.projectPath))) unresolved("project plugin registration has no absolute project path");
-        const scope = `${match.scope}:${match.scope === "user" ? "" : resolve(match.projectPath)}`;
-        if (scopes.has(scope)) unresolved("enabled plugin registration is ambiguous within its scope");
-        scopes.add(scope);
-        // Bind every registered scope conservatively instead of interpreting
-        // two valid scope records as an ambiguous single user installation.
-        plugin(match.installPath);
-      }
+      if (!Array.isArray(matches) || matches.length !== 1 || typeof matches[0]?.installPath !== "string" || matches[0]?.scope !== "user") unresolved("enabled plugin registration is missing or ambiguous");
+      plugin(matches[0].installPath);
     }
   } else if (agent === "codex") {
     for (const [id, value] of Object.entries(config.plugins ?? {}) as Array<[string, any]>) {

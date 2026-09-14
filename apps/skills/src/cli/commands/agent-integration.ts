@@ -1,6 +1,6 @@
 import { writeCliOutput } from "../output.js";
 import type { Command } from "commander";
-import { accessSync, constants, readFileSync, realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
 import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-hermes.js";
@@ -10,17 +10,8 @@ import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, arc
 
 function agents(value: string): IntegrationAgent[] {
   if (value === "all") return [...INTEGRATION_AGENTS];
-  const selected = value.split(",");
-  if (selected.length && selected.every(agent => INTEGRATION_AGENTS.includes(agent as IntegrationAgent))) return [...new Set(selected)] as IntegrationAgent[];
+  if (INTEGRATION_AGENTS.includes(value as IntegrationAgent)) return [value as IntegrationAgent];
   throw new Error(`Supported agents: ${INTEGRATION_AGENTS.join(", ")}, all`);
-}
-
-function currentHookExecutable(): string {
-  try {
-    const path = realpathSync(process.argv[1]!);
-    accessSync(path, constants.X_OK);
-    return path;
-  } catch { throw new Error("The running Skills entrypoint is not executable. Build an executable candidate or pass --command with its explicit executable path; an ambient skills command is not selected automatically."); }
 }
 
 export function registerAgentIntegration(parent: Command): void {
@@ -29,8 +20,8 @@ export function registerAgentIntegration(parent: Command): void {
     .description("Show maintained native adapters and explicit coverage limits")
     .action(async () => { await writeCliOutput(JSON.stringify({ agents: INTEGRATION_AGENTS.map(agent => ({ agent, bridge: true, ...AGENT_ADAPTERS[agent] })), inventoryOnly: ["codewith", "windsurf", "pi", "amp", "cline", "roo", "copilot"], limitations: ["Cursor prompt hooks gate submission; selected context is injected at session start only.", "Native discovery checks cover known home roots and current project ancestors. External plugin hook injection and arbitrary added directories require separate review.", "Hermes injects selected prompt context, but native pre_llm_call fails open. Exact native hook trust, bundled reseeding opt-out, native payload retirement and a supervised pre-tool guard are required. Child failures block explicitly; native host/supervisor death is not a universal fail-closed guarantee.", "Restart agents and use their normal hook trust controls after installation."] }, null, 2)); });
   hook.command("install")
-    .option("--agent <agent>", `Agent or comma-separated adapters to configure: ${INTEGRATION_AGENTS.join(", ")}, all`, "all")
-    .option("--command <path>", "Skills executable used by the hook (defaults to this running executable)")
+    .option("--agent <agent>", `Agent to configure: ${INTEGRATION_AGENTS.join(", ")}, all`, "all")
+    .option("--command <path>", "Skills executable used by the hook", "skills")
     .option("--selection-profile <id>", "Shared selection profile", "default")
     .option("--include-vendor", "Retained for compatibility; vendor system skills are always inventoried and disabled", false)
     .option("--discovery-inputs <file>", "Advanced reviewed active plugin roots and source hashes for unsupported registrations")
@@ -41,10 +32,10 @@ export function registerAgentIntegration(parent: Command): void {
     .action(async (options) => {
       try {
         const discoveryInputs: ReviewedDiscoveryInputs | undefined = options.discoveryInputs ? JSON.parse(readFileSync(options.discoveryInputs, "utf8")) : undefined;
-        const plan = planAgentIntegration({ agents: agents(options.agent), command: options.command ?? currentHookExecutable(), profileId: options.selectionProfile, includeVendor: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, projectDir: process.cwd() });
+        const plan = planAgentIntegration({ agents: agents(options.agent), command: options.command, profileId: options.selectionProfile, includeVendor: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases });
         const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
         // Configuration contents can include credentials. Only paths/counts leave this command.
-        const receipt = { applied: options.apply, planned: plan.changes.map(change => change.path), ...result, rootAliases: plan.rootAliases ?? [], discovery: plan.discoveryAfter, nativeSkills: plan.nativeSkills.map(entry => ({ agent: entry.agent, path: entry.path, managed: entry.managed, vendor: entry.vendor, system: entry.system === true, bridge: entry.bridge === true, independent: entry.independent === true })), requiresNativeRetirement: plan.nativeSkills.some(entry => !entry.bridge && !entry.system && !entry.independent) };
+        const receipt = { applied: options.apply, planned: plan.changes.map(change => change.path), ...result, rootAliases: plan.rootAliases ?? [], discovery: plan.discoveryAfter, nativeSkills: plan.nativeSkills.map(entry => ({ agent: entry.agent, path: entry.path, managed: entry.managed, vendor: entry.vendor, system: entry.system === true, bridge: entry.bridge === true })), requiresNativeRetirement: plan.nativeSkills.some(entry => !entry.bridge && !entry.system) };
         if (options.json) await writeCliOutput(JSON.stringify(receipt));
         else await writeCliOutput(`${options.apply ? "Configured" : "Planned"} ${plan.changes.length} agent configuration change(s).${options.apply ? " Restart the agent and trust the installed hook configuration." : " Use --apply to install."}`);
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
@@ -79,31 +70,26 @@ export function registerAgentIntegration(parent: Command): void {
           input.cwd ??= input.workspace_roots[0] ?? process.cwd();
           input.session_id ??= input.conversation_id;
         }
+        const selectionProfile = selectedProfileId(options.selectionProfile);
         if (options.agent === "hermes" && event === "pre_tool_call") {
-          assertManagedAgentBridge("hermes", { projectDirs: projects });
+          assertManagedAgentBridge("hermes", { projectDirs: projects, profileId: selectionProfile });
           assertHermesTool(input);
           await writeCliOutput(JSON.stringify({ action: "continue" }));
           return;
         }
         if ((options.agent === "claude" && event === "PreToolUse") || (options.agent === "gemini" && event === "BeforeTool")) {
-          const { independentNativeSkills } = assertManagedAgentBridge(options.agent, { projectDirs: projects });
+          assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile });
           const skill = options.agent === "claude" ? input.tool_input?.skill : input.tool_input?.name;
-          if (options.agent === "claude" && input.tool_name === "Skill" && independentNativeSkills.includes(skill)) {
-            // Abstain: Claude must still enforce the user's deny/ask rules and
-            // the skill's own invocation controls. Never pre-approve its tools.
-            await writeCliOutput(JSON.stringify({}));
-            return;
-          }
           if (skill !== "skills-cli") throw new Error("NATIVE_SKILL_DRIFT: invoke only skills-cli; load selected payload instructions with skills load");
           await writeCliOutput(JSON.stringify(options.agent === "claude" ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: "Verified Skills CLI bridge" } } : {}));
           return;
         }
         // Validate event before starting the context operation.
         hookContextOutput(event, { context: "" });
-        assertManagedAgentBridge(options.agent, { projectDirs: projects });
+        assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile });
         if (typeof input.prompt === "string") input.prompt = normalizeAgentHookPrompt(options.agent, nativeEvent, input.prompt);
         if (event === "SessionStart") {
-          const refresh = Bun.spawn([process.execPath, process.argv[1]!, "sync", "--selection-profile", selectedProfileId(options.selectionProfile), "--json"], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
+          const refresh = Bun.spawn([process.execPath, process.argv[1]!, "sync", "--selection-profile", selectionProfile, "--json"], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
           const timer = setTimeout(() => refresh.kill("SIGKILL"), 6500);
           try {
             const [, , status] = await Promise.all([new Response(refresh.stdout).text(), new Response(refresh.stderr).text(), refresh.exited]);
@@ -111,8 +97,7 @@ export function registerAgentIntegration(parent: Command): void {
           } finally { clearTimeout(timer); }
         }
         // Prompt selection uses the explicitly verified cache; only session start refreshes remotely.
-        const args = [process.execPath, process.argv[1]!, "context", "--stdin", "--json", "--cached"];
-        if (options.selectionProfile) args.push("--selection-profile", options.selectionProfile);
+        const args = [process.execPath, process.argv[1]!, "context", "--stdin", "--json", "--cached", "--selection-profile", selectionProfile];
         const child = Bun.spawn(args, { stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
         const timer = setTimeout(() => child.kill("SIGKILL"), 6500);
         try {
