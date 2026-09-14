@@ -2,7 +2,7 @@ import { HostedRecordingsClient } from "../hosted/index.js";
 import { HostedLibrary, type HostedLibraryOptions } from "../hosted/library.js";
 import { HostedPasteHistory } from "../hosted/paste-history.js";
 import { input, RecordingsSDKError } from "../hosted/transport.js";
-import { recordingInputParser, renameInputParser, type ContractParser, type HostedRecordingInput } from "../contracts/hosted-v1.js";
+import { pasteInputParser, recordingInputParser, renameInputParser, type ContractParser, type HostedPasteInput, type HostedRecordingInput } from "../contracts/hosted-v1.js";
 import { recordingIDParser } from "../contracts/stream-v1.js";
 import { hostedFailure } from "../hosted/process-options.js";
 
@@ -67,6 +67,9 @@ async function renameTitle(request: Request): Promise<string> {
 async function saveInput(request: Request): Promise<HostedRecordingInput> {
   return readJSON(request, 1_048_576, recordingInputParser);
 }
+async function pasteSaveInput(request: Request): Promise<HostedPasteInput> {
+  return readJSON(request, 1_048_576, pasteInputParser);
+}
 /** Explicit proxy mode: the caller's bearer is the sole credential; the upstream cannot be selected by a request. */
 export function buildHostedFetch(options: { apiBase: string; fetch?: typeof globalThis.fetch; allowWrites?: boolean }) {
   const apiBase = new HostedRecordingsClient({ apiBase: options.apiBase }).apiBase;
@@ -80,8 +83,10 @@ export function buildHostedFetch(options: { apiBase: string; fetch?: typeof glob
       const isPasteHistory = url.pathname === "/v1/paste-history";
       const isProviders = url.pathname === "/v1/providers";
       if (!match && !exportMatch && !isPasteHistory && !isProviders) return json({ error: { code: "not_found", message: "This hosted Library route does not exist." } }, 404);
-      const mutation = match !== null && ((Boolean(match[1]) && ["PATCH", "DELETE"].includes(request.method)) ||
+      const recordingMutation = match !== null && ((Boolean(match[1]) && ["PATCH", "DELETE"].includes(request.method)) ||
         (!match[1] && request.method === "POST"));
+      const pasteMutation = isPasteHistory && request.method === "POST";
+      const mutation = recordingMutation || pasteMutation;
       if (request.method !== "GET" && (!mutation || options.allowWrites !== true)) return json({ error: { code: "read_only",
         message: options.allowWrites === true ? "This hosted Library route does not support the requested method." : "Hosted Library mode supports GET only." } }, 405);
       if ((isProviders || mutation || exportMatch) && url.searchParams.size) throw new RecordingsSDKError("invalid_input");
@@ -99,6 +104,9 @@ export function buildHostedFetch(options: { apiBase: string; fetch?: typeof glob
           "cache-control": "no-store", "x-content-type-options": "nosniff" } });
       }
       if (mutation) {
+        if (pasteMutation) {
+          return json(await new HostedPasteHistory(client).save(await pasteSaveInput(request), { signal: request.signal }), 201);
+        }
         if (request.method === "POST") return json(await library.save(await saveInput(request), { signal: request.signal }), 201);
         const id = input(recordingIDParser, decodeURIComponent(match![1]!));
         if (request.method === "PATCH") return json(await library.rename(id, await renameTitle(request), { signal: request.signal }));

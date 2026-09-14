@@ -28,16 +28,23 @@ const row = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", title: "Fictional", tr
 globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input);
   const read = init?.method === "GET" && ["https://fictional.example.test/api/v1/recordings?limit=1", "https://fictional.example.test/api/v1/recordings/" + row.id, "https://fictional.example.test/api/v1/paste-history?limit=1", "https://fictional.example.test/api/v1/providers"].includes(url);
+  const paste = { id: row.id, recordingId: row.id, text: "Hidden fictional paste.", status: "confirmed" };
+  const pasteMutation = url === "https://fictional.example.test/api/v1/paste-history" && init?.method === "POST" &&
+    init.body === JSON.stringify(paste);
   const mutation = (url === "https://fictional.example.test/api/v1/recordings/" + row.id &&
     ((init?.method === "PATCH" && init.body === JSON.stringify({ title: "Renamed" })) || (init?.method === "DELETE" && init.body === undefined))) ||
     (url === "https://fictional.example.test/api/v1/recordings" && init?.method === "POST" && init.body === JSON.stringify({
       id: row.id, title: "Saved", transcript: "Hidden fictional transcript.", durationMs: 1000,
-    }));
+    })) || pasteMutation;
   if ((!read && !mutation) || !init || new Headers(init.headers).get("authorization") !== "Bearer fictional-entry-session" ||
       init.redirect !== "manual" || init.credentials !== "omit") return refuse();
   counts.requests++; writeBoundary();
-  if (mutation) return init.method === "DELETE" ? Response.json({ audioCleanup: { state: "pending" } }, { status: 202 })
-    : Response.json({ recording: { ...row, title: init.method === "POST" ? "Saved" : "Renamed" } }, { status: init.method === "POST" ? 201 : 200 });
+  if (mutation) {
+    if (pasteMutation) return Response.json({ receipt: { ...paste, occurredAt: row.createdAt, createdAt: row.createdAt,
+      updatedAt: row.updatedAt, evidenceSource: "client_reported" } }, { status: 201 });
+    return init.method === "DELETE" ? Response.json({ audioCleanup: { state: "pending" } }, { status: 202 })
+      : Response.json({ recording: { ...row, title: init.method === "POST" ? "Saved" : "Renamed" } }, { status: init.method === "POST" ? 201 : 200 });
+  }
   if (url.endsWith("/recordings/" + row.id)) return Response.json({ recording: row });
   if (url.endsWith("/providers")) {
     const catalog = vectors.cases.find(value => value.name === "provider catalog with explicit defaults")!.value;

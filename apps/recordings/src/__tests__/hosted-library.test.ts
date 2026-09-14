@@ -296,10 +296,10 @@ test("hosted HTTP never routes provider or paste-history POST bodies to recordin
   const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch(() => { calls++; throw Error("unexpected upstream"); }) });
   const headers = { authorization: "Bearer fictional-A", "content-type": "application/json" };
   const body = JSON.stringify({ id, title: "Saved", transcript: row.transcript, durationMs: row.durationMs });
-  for (const path of ["/v1/providers", "/v1/paste-history"]) {
-    const response = await handle(new Request("http://127.0.0.1" + path, { method: "POST", headers, body }));
-    expect(response.status).toBe(405); expect((await response.json()).error.code).toBe("read_only");
-  }
+  const provider = await handle(new Request("http://127.0.0.1/v1/providers", { method: "POST", headers, body }));
+  expect(provider.status).toBe(405); expect((await provider.json()).error.code).toBe("read_only");
+  const paste = await handle(new Request("http://127.0.0.1/v1/paste-history", { method: "POST", headers, body }));
+  expect(paste.status).toBe(400); expect((await paste.json()).error.code).toBe("invalid_input");
   expect(calls).toBe(0);
 });
 

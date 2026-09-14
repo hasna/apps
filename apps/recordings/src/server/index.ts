@@ -43,7 +43,7 @@ Options:
   --port <port>   HTTP port to bind. Defaults to ${DEFAULT_PORT} (or $PORT)
   --host <host>   Hostname to bind. Defaults to 127.0.0.1 (or $HOST)
   --hosted       Read-only SaaS Library proxy, bound only to an explicit loopback IP
-  --allow-writes Enable hosted POST/PATCH/DELETE recording routes; requires --hosted
+  --allow-writes Enable hosted recording and paste-save routes; requires --hosted
   --api-base <url> Complete upstream /v1/ base, required for --hosted.
                   Hosted requests supply their own Bearer session; no process credential.
   -V, --version   output the version number
@@ -87,7 +87,7 @@ async function main() {
       const options = parseHostedProcessOptions(process.argv.slice(2), "serve");
       const { buildHostedFetch } = await import("./hosted.js");
       Bun.serve({ hostname: options.host, port: options.port, fetch: buildHostedFetch(options) });
-      console.error(options.allowWrites ? "recordings-serve: hosted Library mode with explicit save/rename/delete" : "recordings-serve: read-only hosted Library mode");
+      console.error(options.allowWrites ? "recordings-serve: hosted Library mode with explicit recording and paste-save writes" : "recordings-serve: read-only hosted Library mode");
     } catch (error) { console.error(JSON.stringify(hostedFailure(error))); process.exitCode = 1; }
     return;
   }

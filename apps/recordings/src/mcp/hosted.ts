@@ -55,6 +55,15 @@ export function buildHostedServer(client: HostedRecordingsClient, options: { all
     }, ({ id }, extra) => execute(() => library.delete(id, { signal: extra.signal })));
   }
   const history = new HostedPasteHistory(client);
+  if (options.allowWrites === true) {
+    server.registerTool("recordings_hosted_paste_save", {
+      description: "Save one client-reported paste receipt. Private text is accepted for the explicit write but omitted from the returned receipt.",
+      inputSchema: z.object({ id: z.string(), recordingId: z.string().nullable().optional(), text: z.string().max(256_000),
+        destinationAppId: z.string().min(1).max(255).optional(), destinationAppName: z.string().min(1).max(200).optional(),
+        status: z.enum(["attempted", "confirmed", "failed"]), occurredAt: z.string().optional() }).strict(),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    }, (value, extra) => execute(() => history.save(value, { signal: extra.signal })));
+  }
   server.registerTool("recordings_hosted_paste_history", {
     description: "Read one hosted paste-history page with destination and client-reported delivery evidence. Private pasted text requires includeText. A confirmed report does not mean the server observed delivery.",
     inputSchema: { limit: z.number().int().min(1).max(100).optional(), before: z.string().optional(),
