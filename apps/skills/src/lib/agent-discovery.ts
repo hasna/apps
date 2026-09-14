@@ -5,9 +5,10 @@ import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { parseHermesConfig, assertHermesEnvironment } from "./agent-hermes.js";
 import type { IntegrationAgent } from "./agent-adapters.js";
 import { captureDiscoveryDirectories, verifyDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
+import { discoveryByteBudget, hashRawDiscoveryFile } from "./agent-discovery-bytes.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
-export interface DiscoverySource { path: string; sha256: string | null; format?: "json" | "toml" | "yaml"; fields?: string[] }
+export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes"; format?: "json" | "toml" | "yaml"; fields?: string[] }
 export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[] }
 export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -34,7 +35,12 @@ function read(path: string, changes?: Map<string, string>): string | null {
   if (!stat.isFile() || stat.size > 16 * 1024 * 1024) throw new Error(`Unsupported or oversized native discovery input: ${path}`);
   return readFileSync(path, "utf8");
 }
-function projected(source: DiscoverySource, changes?: Map<string, string>): string | null {
+function projected(source: DiscoverySource, changes?: Map<string, string>, budget = discoveryByteBudget()): string | null {
+  if (source.hashMode !== undefined) {
+    if (source.hashMode !== "bytes") throw new Error("Invalid native discovery hash mode");
+    if (source.format !== undefined || source.fields !== undefined) throw new Error("Raw discovery witnesses cannot project configuration fields");
+    return hashRawDiscoveryFile(source.path, budget, changes);
+  }
   const text = read(source.path, changes);
   if (text === null) return null;
   if (!source.format) return digest(text);
@@ -46,15 +52,24 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding): void {
   if (!binding || !Array.isArray(binding.sources) || !Array.isArray(binding.roots) || binding.sources.length > AGENT_POLICY_LIMITS.discoverySources || binding.roots.length > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Invalid native discovery binding");
   if (binding.agent === "hermes" && !binding.directories?.length) throw new Error("Hermes discovery requires directory membership coverage; run skills hook install with a fresh discovery review");
   if (binding.directories !== undefined) verifyDiscoveryDirectories(binding.directories);
+  const budget = discoveryByteBudget();
   for (const source of binding.sources) {
     if (source.format !== undefined && (!["json", "toml", "yaml"].includes(source.format) || !Array.isArray(source.fields) || !source.fields.length || source.fields.length > 64 || source.fields.some(field => typeof field !== "string" || !field))) throw new Error("Invalid native discovery projection");
     if (source.sha256 !== null && !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Invalid native discovery digest");
-    if (projected(source) !== source.sha256) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
+    if (projected(source, undefined, budget) !== source.sha256) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
   }
   for (const root of binding.roots) safe(root);
 }
 export function rebindAgentDiscovery(binding: AgentDiscoveryBinding, changes: Map<string, string>): AgentDiscoveryBinding {
-  return { ...binding, sources: binding.sources.map(source => ({ ...source, sha256: projected(source, changes) })) };
+  const budget = discoveryByteBudget();
+  return { ...binding, sources: binding.sources.map(source => ({ ...source, sha256: projected(source, changes, budget) })) };
+}
+
+/** Capture full byte witnesses for reviewed source or executable files; never import or execute them. */
+export function captureDiscoveryByteSources(paths: string[]): DiscoverySource[] {
+  if (!Array.isArray(paths) || paths.length > AGENT_POLICY_LIMITS.discoverySources || new Set(paths).size !== paths.length) throw new Error("Invalid raw discovery source collection");
+  const budget = discoveryByteBudget();
+  return paths.map(path => ({ path, hashMode: "bytes", sha256: hashRawDiscoveryFile(path, budget) }));
 }
 
 /** Project settings can introduce a higher-precedence discovery source. Until
