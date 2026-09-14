@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.5
+
+### Patch Changes
+
+- Fix native microphone conversion for three or more channel input layouts by selecting the primary channel explicitly before mono transcription conversion. Add opt-in aggregate capture diagnostics for input, conversion, engine and configuration state without retaining audio samples.
+
 ## 0.5.4
 
 ### Patch Changes
