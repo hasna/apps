@@ -94,6 +94,9 @@ allowlist unchanged: approve the two exact
 managed event/command pairs through Hermes normal hook trust and restart.
 The adapter refuses unreviewed installed plugin sources and custom Hermes
 homes/profiles, user-specific tilde expansion, and `TERMINAL_CWD` overrides.
+Nonempty `HERMES_BUNDLED_PLUGINS` and `HERMES_BUNDLED_SKILLS` overrides are
+also refused during discovery and hook checks; unset them to use the reviewed
+default source paths. Custom bundle locations need a dedicated discovery adapter.
 Retire native payloads before use. Legacy `skills-cli.md` files can shadow the
 bridge and must also be preserved and retired before proceeding. Only `skill_view(name:
 "skills-cli")` is allowed natively; author payloads with Skills CLI commands.
