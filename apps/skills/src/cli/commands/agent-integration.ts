@@ -23,7 +23,7 @@ export function registerAgentIntegration(parent: Command): void {
     .option("--agent <agent>", `Agent to configure: ${INTEGRATION_AGENTS.join(", ")}, all`, "all")
     .option("--command <path>", "Skills executable used by the hook", "skills")
     .option("--selection-profile <id>", "Shared selection profile", "default")
-    .option("--include-vendor", "Also disable discovered vendor system skills in Codex", false)
+    .option("--include-vendor", "Retained for compatibility; vendor system skills are always inventoried and disabled", false)
     .option("--discovery-inputs <file>", "Advanced reviewed active plugin roots and source hashes for unsupported registrations")
     .option("--allow-root-aliases", "Allow home .claude/.codex aliases to existing directories within this home", false)
     .option("--apply", "Apply the plan, preserving prior configuration in private backups", false)
