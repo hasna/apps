@@ -3642,3 +3642,27 @@ describe("SDK send URL boundary validation", () => {
     });
   }
 });
+
+
+describe("typed remote replies", () => {
+  it("forwards the parent record through the advertised send contract", async () => {
+    const { serve } = make([]);
+    const ds = new SelfHostedMailDataSource({baseUrl:"https://emails.example/v1",apiKey:crypto.randomUUID(),fetchImpl:async (url, init) => url.endsWith("openapi.json") ? {status:200,text:async () => JSON.stringify(emailsSelfHostedOpenApi)} : serve.fetchImpl(url, init)});
+    await ds.send({from:"me@example.com",to:"other@example.com",subject:"Re: Topic",body:"Reply",markdown:false,replyToId:"parent-record"});
+    expect(serve.posted[0]).toMatchObject({reply_to_message_id:"parent-record"});
+  });
+  it("refuses an old server before posting a reply", async () => {
+    const methods: string[] = [];
+    const ds = new SelfHostedMailDataSource({baseUrl:"https://emails.example/v1",apiKey:crypto.randomUUID(),fetchImpl:async (_url, init) => {
+      methods.push(init?.method ?? "GET");
+      return {status:200,text:async () => JSON.stringify({...emailsSelfHostedOpenApi,paths:{}})};
+    }});
+    await expect(ds.send({from:"me@example.com",to:"other@example.com",subject:"Re: Topic",body:"Reply",replyToId:"parent-record"})).rejects.toThrow("API needs an update");
+    expect(methods).toEqual(["GET"]);
+  });
+  it("projects inbound Reply-To for reply defaults", async () => {
+    const {ds} = make([v1("5", {headers:{"Reply-To":"Reply Desk <reply@example.com>"}})]);
+    const {replyDefaults} = await import("./mail-types.js");
+    expect(replyDefaults((await ds.getMessage("5"))!).to).toBe("reply@example.com");
+  });
+});

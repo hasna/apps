@@ -56,7 +56,7 @@ function seedInbound(overrides: Partial<InboundEmail> = {}): InboundEmail {
     html_body: overrides.html_body ?? null,
     attachments: [],
     attachment_paths: [],
-    headers: {},
+    headers: overrides.headers ?? {},
     raw_size: 100,
     received_at: overrides.received_at ?? "2026-01-01T00:00:00.000Z",
   });
@@ -67,7 +67,7 @@ function outboundRows() {
 }
 
 beforeAll(async () => {
-  stub = await startV1Stub();
+  stub = await startV1Stub({openapi:true});
 });
 afterAll(() => stub.stop());
 beforeEach(async () => {
@@ -128,6 +128,7 @@ describe("reply command", () => {
     ]);
     const data = result.data as { thread_id: string | null; to: string[]; subject: string };
 
+    expect((await stub.sendRequests())[0]?.reply_to_message_id).toBe(inbound.id);
     expect(data.subject).toBe("Re: Question");
     expect(data.to).toEqual(["ext@ext.com"]);
     // The self-hosted store has no thread_id column, but it does have a
@@ -157,6 +158,16 @@ describe("reply command", () => {
     const data = result.data as { to: string[] };
 
     expect(data.to).toEqual(["ext@ext.com", "other@acme.com"]);
+  });
+
+  it("uses incoming Reply-To and canonicalizes quoted reply-all participants", async () => {
+    const inbound = seedInbound({headers:{"Reply-To":'"Reply, Desk" <reply@ext.com>'},to_addresses:['"Me, Owner" <me@acme.com>',"other@acme.com"],cc_addresses:["other@acme.com","copy@acme.com"]});
+    const result=await runReplyCommand(["reply",inbound.id,"--all","--body","Reply"]);
+    expect((result.data as {to:string[]}).to).toEqual(["reply@ext.com","other@acme.com","copy@acme.com"]);
+    const sent=await stub.sendRequests();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({reply_to_message_id:inbound.id,to:["reply@ext.com","other@acme.com","copy@acme.com"]});
+    expect(sent[0]?.bcc).toBeUndefined();
   });
 
   it("fails a reply to an unknown id instead of sending", async () => {

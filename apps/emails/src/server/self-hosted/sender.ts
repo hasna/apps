@@ -1,3 +1,4 @@
+import { readResendMessageIdentity, sesMessageIdentityResolver, type ProviderMessageIdentity } from "./provider-message-identity.js";
 import type { DomainConnectionEvidence } from "./domain-connect-provider.js";
 import type { ProviderDeliveryRead, ProviderDeliveryObservation } from "./provider-delivery.js";
 import { getAdapter } from "../../providers/index.js";
@@ -37,6 +38,8 @@ export interface SelfHostedSender {
   setMailFrom?(domain: string, mailFrom: string, signal: AbortSignal): Promise<string>;
   readDomainConnection?(domain: string, signal: AbortSignal): Promise<DomainConnectionEvidence>;
   readDelivery?(messageId: string, signal: AbortSignal): Promise<ProviderDeliveryRead>;
+  /** RFC wire identity, distinct from the opaque provider receipt ID. Read-only. */
+  readMessageIdentity?(messageId: string, signal: AbortSignal): Promise<ProviderMessageIdentity | null>;
   probe?(signal: AbortSignal): Promise<{ sendingEnabled?: boolean; productionAccessEnabled?: boolean }>;
   send(input: SendEmailOptions, signal?: AbortSignal): Promise<string>;
 }
@@ -197,6 +200,7 @@ export function buildSelfHostedSender(env: NodeJS.ProcessEnv = process.env): Sel
   }
   const provider = providerRecord(raw, env);
   const adapter = getAdapter(provider);
+  const sesIdentity = raw === "ses" ? sesMessageIdentityResolver(env, provider.region) : undefined;
   return {
     provider: raw,
     // Never the credential VALUES — only which identity is in use, so an
@@ -216,6 +220,7 @@ export function buildSelfHostedSender(env: NodeJS.ProcessEnv = process.env): Sel
       const { readDomainConnection } = await import("./domain-connect-provider.js");
       return readDomainConnection(provider, domain, signal);
     },
+    readMessageIdentity: async (messageId, signal) => raw === "ses" ? sesIdentity!(messageId) : readResendMessageIdentity(messageId, provider.api_key!, signal),
     readDelivery: async (messageId, signal) => {
       if (raw === "ses") {
         const { SESv2Client, GetMessageInsightsCommand } = await import("@aws-sdk/client-sesv2");

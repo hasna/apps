@@ -97,7 +97,7 @@ const SERVICE_STATUS_MATRIX: ReadonlyArray<readonly [string, string, readonly nu
   ["/v1/messages/counts", "get", [200, 401, 403, 500]],
   ["/v1/messages/groups", "get", [200, 401, 403, 500]],
   ["/v1/messages/threads", "get", [200, 401, 403, 500]],
-  ["/v1/messages/send", "post", [200, 202, 400, 401, 403, 409, 413, 422, 429, 500, 502, 503]],
+  ["/v1/messages/send", "post", [200, 202, 400, 401, 403, 404, 409, 413, 422, 429, 500, 502, 503]],
   ["/v1/messages/send-intents/lookup", "post", [200, 400, 401, 403, 413, 500]],
   ["/v1/messages/send-intents/uncertain", "get", [200, 401, 403, 500]],
   ["/v1/messages/send-intents/reconcile", "post", [200, 400, 401, 403, 404, 409, 413, 500]],

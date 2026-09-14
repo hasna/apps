@@ -1,3 +1,4 @@
+import { replyMailboxes } from "./reply-headers.js";
 // Shared mail domain types + PURE helpers.
 //
 // Extracted from src/cli/tui/data.ts (and AttachmentPath from src/db/inbound.ts)
@@ -117,6 +118,8 @@ export interface TuiMessage {
   id: string;
   from: string;
   to: string;
+  /** Validated inbound Reply-To mailbox list, when available. */
+  reply_to?: string;
   /** Comma-joined CC recipients; empty/undefined when the backend has none. */
   cc?: string;
   subject: string;
@@ -606,8 +609,8 @@ export interface ComposeInput {
 /** Pre-fill values for replying to a message. */
 export function replyDefaults(msg: TuiMessage): { from: string; to: string; subject: string } {
   const subject = /^re:/i.test(msg.subject) ? msg.subject : `Re: ${msg.subject}`;
-  const to = msg.sentByMe ? msg.to : msg.from;
-  const from = msg.sentByMe ? msg.from : (msg.to.split(",")[0]?.trim() ?? "");
+  const to = msg.sentByMe ? msg.to : (msg.reply_to || msg.from);
+  const from = msg.sentByMe ? msg.from : (replyMailboxes(msg.to)?.[0] ?? "");
   return { from, to, subject };
 }
 

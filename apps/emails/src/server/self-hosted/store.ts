@@ -4763,6 +4763,17 @@ export class TenantScopedStore {
     return { id: rows[0]!.id };
   }
 
+  /** Preserve concurrent identity changes; attach only a provider-bound observation. */
+  async recordProviderMessageIdentity(id: string, providerMessageId: string, senderProviderId: string, identity: import("./provider-message-identity.js").ProviderMessageIdentity): Promise<MessageRecord | null> {
+    const row = await this.client.get<Record<string, unknown>>(
+      `UPDATE messages SET message_id=$5, headers=headers || jsonb_build_object('message-id',$5::text,'provider_message_identity',$6::jsonb), updated_at=now()
+       WHERE id=$1 AND tenant_id=$2 AND provider_message_id=$3 AND provider_id=$4 AND direction='outbound' AND send_state='sent'
+         AND message_id IS NULL AND NOT EXISTS (SELECT 1 FROM jsonb_object_keys(headers) AS h(key) WHERE lower(key)='message-id') RETURNING ${MESSAGE_COLUMNS}`,
+      [id, this.tenantId, providerMessageId, senderProviderId, identity.messageId, JSON.stringify(identity.provenance)],
+    );
+    return row ? mapMessageRow(row) : this.getMessage(id);
+  }
+
   async getMessage(id: string): Promise<MessageRecord | null> {
     const row = await this.client.get<Record<string, unknown>>(
       `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = $1 AND tenant_id = $2`,
@@ -6035,7 +6046,7 @@ export class TenantScopedStore {
     const params = [randomUUID(), this.tenantId, input.key, input.hash, input.scheduledAt,
       p.provider_id ?? null, p.from, JSON.stringify(p.to), JSON.stringify(p.cc ?? []), JSON.stringify(p.bcc ?? []),
       p.reply_to ?? null, p.subject, p.text ?? null, p.html ?? null, JSON.stringify(p.attachments ?? []),
-      JSON.stringify({ headers: p.headers, tags: p.tags, track_opens: p.track_opens, track_clicks: p.track_clicks, tracking_url: p.tracking_url, unsubscribe_url: p.unsubscribe_url, allow_suppressed_recipients: p.allow_suppressed_recipients === true })];
+      JSON.stringify({ reply_to_message_id: p.reply_to_message_id, headers: p.headers, tags: p.tags, track_opens: p.track_opens, track_clicks: p.track_clicks, tracking_url: p.tracking_url, unsubscribe_url: p.unsubscribe_url, allow_suppressed_recipients: p.allow_suppressed_recipients === true })];
     const row = await this.client.get<Record<string, unknown>>(
       `INSERT INTO scheduled_emails(id,tenant_id,enqueue_key,enqueue_hash,scheduled_at,provider_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,text_body,html,attachments_json,send_options,status)
        SELECT $1,$2,$3,$4,$5::timestamptz,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15::jsonb,$16::jsonb,'pending' WHERE $5::timestamptz > now()

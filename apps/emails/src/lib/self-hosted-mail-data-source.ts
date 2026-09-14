@@ -1,3 +1,4 @@
+import { replyHeader, replyMailboxes } from "./reply-headers.js";
 import { assertSendBodyUrlBoundary } from "./send-body-boundary.js";
 import { searchAdmissionError } from "./search-admission-error.js";
 import { normalizeSendMetadata } from "./send-metadata.js";
@@ -798,6 +799,7 @@ function v1ToTuiMessage(m: V1Message, rules: PrioritySenderRule[] = []): TuiMess
     from: m.from_addr ?? "",
     to: (m.to_addrs ?? []).join(", "),
     cc: (m.cc_addrs ?? []).join(", "),
+    reply_to: replyMailboxes(replyHeader(m.headers, "reply-to"))?.join(", "),
     subject: m.subject || "(no subject)",
     date: messageDate(m),
     is_read: outbound ? true : isRead,
@@ -2286,13 +2288,15 @@ export class SelfHostedMailDataSource implements MailDataSource {
       html,
       idempotency_key: input.idempotencyKey ?? crypto.randomUUID(),
     };
+    if (input.replyToId !== undefined && (typeof input.replyToId !== "string" || !input.replyToId.trim() || input.replyToId.length > 256)) throw new Error("replyToId must be a nonempty parent message identifier");
     const trackingRequested = input.trackOpens === true || input.trackClicks === true;
     for (const value of [input.trackOpens,input.trackClicks]) if (value !== undefined && typeof value !== "boolean") throw new Error("Tracking switches must be boolean");
     if (input.trackingUrl !== undefined && (typeof input.trackingUrl !== "string" || !input.trackingUrl.trim() || !trackingRequested)) throw new Error("trackingUrl requires a nonempty URL and trackOpens or trackClicks");
-    if (input.providerId || input.unsubscribeUrl || input.sendKey || trackingRequested || input.headers !== undefined || input.tags !== undefined) {
+    if (input.replyToId || input.providerId || input.unsubscribeUrl || input.sendKey || trackingRequested || input.headers !== undefined || input.tags !== undefined) {
       const contract = await this.request("GET", "/openapi.json");
       const doc = contract.json as { paths?: Record<string, { post?: { requestBody?: { content?: Record<string, { schema?: { properties?: Record<string, unknown> } }> } } }> };
       const properties = doc?.paths?.[input.scheduledAt ? "/v1/scheduled/enqueue" : "/v1/messages/send"]?.post?.requestBody?.content?.["application/json"]?.schema?.properties;
+      if (input.replyToId && (contract.status !== 200 || !properties?.reply_to_message_id)) throw new Error("The Emails API needs an update to support threaded replies; no message was sent.");
       if ((input.headers !== undefined && !properties?.headers) || (input.tags !== undefined && !properties?.tags)) throw new Error("The Emails API needs an update to support custom send headers and tags; no message was sent.");
       if (input.sendKey && !properties?.send_key) throw new Error("The Emails API needs an update to support scoped send keys; no message was sent.");
       if (trackingRequested && (!properties?.track_opens || !properties?.track_clicks || !properties?.tracking_url)) throw new Error("The Emails API needs an update to support tracking; no message was sent.");
@@ -2311,6 +2315,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     if (input.cc) body["cc"] = input.cc.split(",").map((v) => v.trim()).filter(Boolean);
     if (input.bcc) body["bcc"] = input.bcc.split(",").map((v) => v.trim()).filter(Boolean);
     if (input.replyTo) body["reply_to"] = input.replyTo;
+    if (input.replyToId) body["reply_to_message_id"] = input.replyToId;
     // The `--force` suppression override: the server honors it only for
     // tenant-wide send authority and refuses it otherwise (403
     // suppression_override_forbidden), so the CLI never needs to know its own
