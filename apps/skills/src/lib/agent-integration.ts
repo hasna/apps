@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, writeFileSync, unlinkSync, chmodSync, openSync, closeSync, fsyncSync, fstatSync, readSync, constants, linkSync } from "node:fs";
+import { existsSync, lstatSync, statSync, mkdirSync, readFileSync, readdirSync, opendirSync, readlinkSync, realpathSync, renameSync, rmdirSync, writeFileSync, unlinkSync, chmodSync, openSync, closeSync, fsyncSync, fstatSync, readSync, constants, linkSync, type Dirent } from "node:fs";
 import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { homedir } from "node:os";
 import { getDataDir, getDataDirReadOnly } from "./config.js";
@@ -114,6 +114,12 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
   const entries: NativeSkillEntry[] = [], seen = new Set<string>();
   type Scan = { complete: boolean; hasSkills: boolean; entries: number };
   const cacheScans = new Map<string, Scan>(), maxAliasProofEntries = 10000;
+  let discoveryEntries = 0, discoveryPathBytes = 0;
+  function admit(path: string): void {
+    if (++discoveryEntries > 20000) throw new Error("Native skill discovery entry limit exceeded");
+    discoveryPathBytes += Buffer.byteLength(path, "utf8");
+    if (discoveryPathBytes > 4 * 1024 * 1024) throw new Error("Native skill discovery metadata limit exceeded");
+  }
   function emptySiblingCacheAlias(path: string, parent: string): boolean {
     const link = readlinkSync(path), target = resolve(parent, link);
     // A lexical normalization must not conceal an intermediate symlink escape.
@@ -122,11 +128,14 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
     const scan = cacheScans.get(target);
     return Boolean(scan?.complete && !scan.hasSkills && scan.entries <= maxAliasProofEntries);
   }
-  function visit(agent: string, path: string, vendor = false, depth = 0, pluginCache = false): Scan {
+  function visit(agent: string, path: string, vendor = false, depth = 0, pluginCache = false, admitted = false): Scan {
+    if (!admitted) admit(path);
     const scan: Scan = { complete: true, hasSkills: false, entries: 1 };
     assertSafePath(path);
     if (!existsSync(path)) return scan;
-    if (!lstatSync(path).isDirectory()) return scan;
+    const stat = lstatSync(path);
+    if (stat.isFile()) return scan;
+    if (!stat.isDirectory()) throw new Error(`Unsupported native discovery entry: ${path}`);
     if (existsSync(join(path, "SKILL.md"))) {
       scan.hasSkills = true;
       if (seen.has(path)) return scan; seen.add(path);
@@ -137,8 +146,15 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
       const rootAlias = aliases.find(item => path === item.target || path.startsWith(item.target + sep));
       entries.push({ agent, path, hash: treeHash(path), managed, vendor, ...(agent === "codex" && path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep) ? { system: true } : {}), ...(bridge ? { bridge: true, bridgeHome: resolve(home) } : {}), ...(rootAlias ? { rootAlias } : {}) }); return scan;
     }
-    if (depth > (vendor ? 8 : 3)) return { ...scan, complete: false };
-    const children = readdirSync(path, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    if (depth > (vendor ? 32 : 3)) return { ...scan, complete: false };
+    // Retired vendor documents leave their shared assets in place. Bound the
+    // entire discovery walk before retaining or sorting directory entries.
+    const children: Dirent[] = [], directory = opendirSync(path);
+    try {
+      let child: Dirent | null;
+      while ((child = directory.readSync()) !== null) { admit(join(path, child.name)); children.push(child); }
+    } finally { directory.closeSync(); }
+    children.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     // Complete real sibling scans before considering cache aliases, regardless
     // of their names. Never recurse through an alias to discover its contents.
     if (pluginCache) children.sort((a, b) => Number(a.isSymbolicLink()) - Number(b.isSymbolicLink()));
@@ -157,7 +173,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
           scan.entries++; continue;
         }
       }
-      const childScan = visit(agent, child, isVendor, depth + 1, pluginCache);
+      const childScan = visit(agent, child, isVendor, depth + 1, pluginCache, true);
       scan.complete &&= childScan.complete; scan.hasSkills ||= childScan.hasSkills; scan.entries += childScan.entries;
     }
     if (pluginCache) cacheScans.set(path, scan);

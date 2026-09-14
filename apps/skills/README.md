@@ -112,6 +112,13 @@ copies, and `--include-vendor` retires vendor `SKILL.md` discovery files while
 preserving shared scripts and assets. Archive receipts and configuration backups
 live under the Skills data directory.
 
+After vendor documents are archived, inventory still scans their retained asset
+directories for newly introduced skills. Vendor container traversal allows 32
+directory levels; the ordinary native-root limit remains unchanged. Each inventory
+is bounded to 20,000 discovery entries and 4 MiB of UTF-8 path metadata before
+directory entries are retained or sorted. Unsupported special files and unsafe
+directory links are refused.
+
 Native archives persist a version 2 recovery journal before moving payloads;
 `migrate native --json --apply` returns its `receiptPath`. The journal records
 every source, archive path, expected hash, and move status, then marks successful
