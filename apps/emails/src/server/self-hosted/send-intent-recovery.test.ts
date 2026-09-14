@@ -50,8 +50,8 @@ describe("send-intent recovery store boundary", () => {
     expect(calls).toBe(0);
   });
 
-  it("requires reconciliation consistently for keyed legacy none rows", async () => {
-    const key = "legacy-none-key";
+  it.each(["none", "sending", "uncertain", "sent"] as const)("keeps lookup and cancellation outcomes honest for %s rows", async (sendState) => {
+    const key = `lookup-${sendState}-key`;
     const record = {
       id: "11111111-1111-4111-8111-111111111111",
       direction: "outbound",
@@ -74,7 +74,7 @@ describe("send-intent recovery store boundary", () => {
       source_id: null,
       idempotency_key: key,
       send_payload_hash: null,
-      send_state: "none",
+      send_state: sendState,
       send_started_at: null,
       created_at: "2026-01-01T00:00:00.000Z",
       updated_at: "2026-01-01T00:00:00.000Z",
@@ -98,15 +98,16 @@ describe("send-intent recovery store boundary", () => {
     expect(lookup).toMatchObject({
       found: true,
       tombstoned: false,
-      reconciliation_required: true,
-      message: { id: record.id, send_state: "none" },
+      reconciliation_required: sendState !== "sent",
+      message: { id: record.id, send_state: sendState },
     });
     expect(cancellation).toMatchObject({
       outcome: "reconciliation_required",
       tombstoned: true,
       reconciliation_required: true,
-      message: { id: record.id, send_state: "none" },
+      message: { id: record.id, send_state: sendState },
     });
-    expect(lookup.reconciliation_required).toBe(cancellation.reconciliation_required);
+    // A delivered message has a known outcome, but cannot be cancelled retroactively.
+    expect(record.send_state).toBe(sendState);
   });
 });
