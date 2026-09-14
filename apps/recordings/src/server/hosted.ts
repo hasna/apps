@@ -76,20 +76,28 @@ export function buildHostedFetch(options: { apiBase: string; fetch?: typeof glob
       if (request.headers.has("origin") || request.headers.has("cookie")) throw new RecordingsSDKError("forbidden");
       if (url.pathname === "/health" && request.method === "GET") return json({ status: "ok", mode: "hosted-library" });
       const match = /^\/v1\/recordings(?:\/([^/]+))?$/.exec(url.pathname);
+      const exportMatch = /^\/v1\/recordings\/([^/]+)\/export$/.exec(url.pathname);
       const isPasteHistory = url.pathname === "/v1/paste-history";
       const isProviders = url.pathname === "/v1/providers";
-      if (!match && !isPasteHistory && !isProviders) return json({ error: { code: "not_found", message: "This hosted Library route does not exist." } }, 404);
+      if (!match && !exportMatch && !isPasteHistory && !isProviders) return json({ error: { code: "not_found", message: "This hosted Library route does not exist." } }, 404);
       const mutation = match !== null && ((Boolean(match[1]) && ["PATCH", "DELETE"].includes(request.method)) ||
         (!match[1] && request.method === "POST"));
       if (request.method !== "GET" && (!mutation || options.allowWrites !== true)) return json({ error: { code: "read_only",
         message: options.allowWrites === true ? "This hosted Library route does not support the requested method." : "Hosted Library mode supports GET only." } }, 405);
-      if ((isProviders || mutation) && url.searchParams.size) throw new RecordingsSDKError("invalid_input");
+      if ((isProviders || mutation || exportMatch) && url.searchParams.size) throw new RecordingsSDKError("invalid_input");
       if (request.method === "DELETE" && request.body !== null) throw new RecordingsSDKError("invalid_input");
-      const page = isProviders || mutation ? {} : readOptions(url, isPasteHistory || match?.[1] === undefined);
+      const page = isProviders || mutation || exportMatch ? {} : readOptions(url, isPasteHistory || match?.[1] === undefined);
       const bearer = /^Bearer ([A-Za-z0-9._~+/-]{1,16000}={0,2})$/i.exec(request.headers.get("authorization") ?? "")?.[1];
       if (!bearer) throw new RecordingsSDKError("unauthorized");
       const client = new HostedRecordingsClient({ apiBase, fetch: options.fetch, credentialProvider: () => bearer });
       const library = new HostedLibrary(client);
+      if (exportMatch) {
+        const exported = await library.export(decodeURIComponent(exportMatch[1]!), { signal: request.signal });
+        return new Response(exported.text, { headers: { "content-type": exported.mediaType,
+          "content-disposition": 'attachment; filename="' + exported.fileName + '"',
+          "content-length": String(new TextEncoder().encode(exported.text).byteLength),
+          "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+      }
       if (mutation) {
         if (request.method === "POST") return json(await library.save(await saveInput(request), { signal: request.signal }), 201);
         const id = input(recordingIDParser, decodeURIComponent(match![1]!));

@@ -1,4 +1,5 @@
 import { Command, CommanderError } from "commander";
+import { transcriptDestination, writeTranscriptExport } from "./hosted-export.js";
 import { HostedLibrary } from "../hosted/library.js";
 import { HostedPasteHistory } from "../hosted/paste-history.js";
 import { RecordingsSDKError } from "../hosted/transport.js";
@@ -72,6 +73,13 @@ export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
   program.command("get <id>").description("Read one hosted recording's metadata")
     .option("--include-text", "Include its private transcript", false)
     .action(async (id, values) => { write(JSON.stringify(await library().get(id, { includeText: values.includeText })) + "\n"); });
+  program.command("export <id>").description("Export a private transcript as UTF-8 plain text to a new file; never overwrites an existing path")
+    .requiredOption("--output <path>", "Destination for the transcript file")
+    .action(async (id, values) => {
+      const destination = transcriptDestination(values.output);
+      const exported = await library().export(id);
+      write(JSON.stringify(writeTranscriptExport(exported, destination)) + "\n");
+    });
   program.command("rename <id> <title>").description("Rename one hosted recording; returns metadata without transcript text")
     .action(async (id, title) => { write(JSON.stringify(await library().rename(id, title)) + "\n"); });
   program.command("save <id> <title>").description("Save one hosted recording; returns metadata without transcript text")
