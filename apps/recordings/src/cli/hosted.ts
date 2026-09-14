@@ -8,8 +8,8 @@ import type { HostedRecordingsClient } from "../hosted/index.js";
 
 const MAX_HOSTED_STDIN_BYTES = 1_048_576;
 
-/** Read one bounded, fatal-UTF-8 transcript without retaining shell-visible arguments. */
-async function readHostedTranscriptFromStdin(): Promise<string> {
+/** Read one bounded, fatal-UTF-8 private text value without retaining shell-visible arguments. */
+async function readHostedTextFromStdin(): Promise<string> {
   const reader = Bun.stdin.stream().getReader();
   const chunks: Uint8Array[] = [];
   let length = 0;
@@ -34,10 +34,13 @@ async function readHostedTranscriptFromStdin(): Promise<string> {
   }
 }
 
-async function hostedTranscriptInput(text: string | undefined, fromStdin: boolean): Promise<string> {
+async function hostedTextInput(text: string | undefined, fromStdin: boolean): Promise<string> {
   const sourceCount = [text !== undefined, fromStdin].filter(Boolean).length;
   if (sourceCount !== 1) throw new RecordingsSDKError("invalid_input");
-  const transcript = fromStdin ? await readHostedTranscriptFromStdin() : text!;
+  return fromStdin ? await readHostedTextFromStdin() : text!;
+}
+async function hostedTranscriptInput(text: string | undefined, fromStdin: boolean): Promise<string> {
+  const transcript = await hostedTextInput(text, fromStdin);
   if (!transcript.trim()) throw new RecordingsSDKError("invalid_input");
   return transcript;
 }
@@ -95,6 +98,24 @@ export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
     });
   program.command("delete <id>").description("Permanently delete one hosted recording; pending means audio cleanup is unfinished, with no automatic retry")
     .action(async id => { write(JSON.stringify(await library().delete(id)) + "\n"); });
+  program.command("paste-save <id>").description("Save one client-reported paste receipt; private text is read explicitly and omitted from output")
+    .option("--text <text>", "Pasted text")
+    .option("--text-stdin", "Read pasted text from bounded UTF-8 stdin")
+    .requiredOption("--status <status>", "Delivery status: attempted, confirmed or failed")
+    .option("--recording-id <id>", "Optional source recording ID")
+    .option("--destination-app-id <id>", "Destination application bundle or application ID")
+    .option("--destination-app-name <name>", "Destination application name")
+    .option("--occurred-at <timestamp>", "Optional UTC timestamp ending in Z")
+    .action(async (id, values) => {
+      const text = await hostedTextInput(values.text, Boolean(values.textStdin));
+      const value = { id, text, status: values.status,
+        ...(values.recordingId === undefined ? {} : { recordingId: values.recordingId }),
+        ...(values.destinationAppId === undefined ? {} : { destinationAppId: values.destinationAppId }),
+        ...(values.destinationAppName === undefined ? {} : { destinationAppName: values.destinationAppName }),
+        ...(values.occurredAt === undefined ? {} : { occurredAt: values.occurredAt }) };
+      const history = new HostedPasteHistory(options.client ?? hostedProcessClient(program.opts(), options.env));
+      write(JSON.stringify(await history.save(value)) + "\n");
+    });
   program.command("paste-history").description("Read client-reported paste history; private text is omitted by default")
     .option("--limit <number>", "Page size, 1–100", "25")
     .option("--before <timestamp>", "UTC timestamp from the returned nextCursor")

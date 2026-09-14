@@ -95,7 +95,7 @@ test.each([false, true])("real MCP stdio entry preserves reads and gates mutatio
     transport.stderr?.on("data", chunk => { stderr += String(chunk); if (stderr.length > 65536) void transport.close(); });
     const { tools } = await client.listTools({}, { timeout: 3000 });
     const reads = ["recordings_hosted_export", "recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"];
-    expect(tools.map(tool => tool.name).sort()).toEqual([...reads, ...(allowWrites ? ["recordings_hosted_delete", "recordings_hosted_rename", "recordings_hosted_save"] : [])].sort());
+    expect(tools.map(tool => tool.name).sort()).toEqual([...reads, ...(allowWrites ? ["recordings_hosted_delete", "recordings_hosted_paste_save", "recordings_hosted_rename", "recordings_hosted_save"] : [])].sort());
     expect(counts()).toEqual({ denied: 0, requests: 0 });
     const result = await client.callTool({ name: "recordings_hosted_paste_history", arguments: { limit: 1 } }, undefined, { timeout: 3000 });
     expect(result.isError).not.toBe(true);
@@ -122,7 +122,13 @@ test.each([false, true])("real MCP stdio entry preserves reads and gates mutatio
       expect(JSON.stringify(renamed)).not.toContain("Hidden fictional transcript");
       const deleted = await client.callTool({ name: "recordings_hosted_delete", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } }, undefined, { timeout: 3000 });
       expect(deleted.isError).not.toBe(true); expect(deleted.structuredContent).toEqual({ state: "pending" });
-      expect(counts()).toEqual({ denied: 0, requests: 6 }); expect(stderr).toBe("");
+      const pasted = await client.callTool({ name: "recordings_hosted_paste_save", arguments: {
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", recordingId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        text: "Hidden fictional paste.", status: "confirmed",
+      } }, undefined, { timeout: 3000 });
+      expect(pasted.isError).not.toBe(true); expect(pasted.structuredContent).toMatchObject({ receipt: { status: "confirmed" } });
+      expect(JSON.stringify(pasted)).not.toContain("Hidden fictional paste.");
+      expect(counts()).toEqual({ denied: 0, requests: 7 }); expect(stderr).toBe("");
     } else {
       const refused = await client.callTool({ name: "recordings_hosted_delete", arguments: { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" } }, undefined, { timeout: 3000 });
       expect(refused.isError).toBe(true); expect(counts()).toEqual({ denied: 0, requests: 3 });
@@ -168,6 +174,26 @@ test("real hosted CLI save reads one bounded UTF-8 transcript from stdin", async
   expect(result.exitCode).toBe(0); expect(result.requests).toBe(1); expect(result.stderr).toBe("");
   expect(JSON.parse(result.stdout).recording.title).toBe("Saved");
   expect(result.stdout).not.toContain("Hidden fictional transcript.");
+});
+
+test("real hosted CLI paste-save reads bounded UTF-8 stdin and omits private output", async () => {
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const connection = ["hosted", "--api-base", "https://fictional.example.test/api/v1/", "--credential-env", "SELECTED_SESSION"];
+  const result = await entry("cli", [...connection, "paste-save", id, "--text-stdin", "--status", "confirmed", "--recording-id", id],
+    true, "Hidden fictional paste.");
+  expect(result.exitCode).toBe(0); expect(result.requests).toBe(1); expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout).receipt.status).toBe("confirmed");
+  expect(result.stdout).not.toContain("Hidden fictional paste.");
+});
+
+test("hosted CLI paste-save rejects malformed and oversized stdin before credentials or writes", async () => {
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const connection = ["hosted", "--api-base", "https://fictional.example.test/api/v1/", "--credential-env", "SELECTED_SESSION",
+    "paste-save", id, "--text-stdin", "--status", "confirmed"];
+  for (const input of [new Uint8Array([0xff]), "x".repeat(1_048_577)] as const) {
+    const result = await entry("cli", connection, true, input);
+    expect(result.exitCode).toBe(1); expect(result.requests).toBe(0); expect(result.stderr).toBe("");
+  }
 });
 
 test("hosted CLI stdin save rejects empty, conflicting, malformed and oversized input before credentials or writes", async () => {

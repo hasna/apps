@@ -1,5 +1,5 @@
 import { pasteCursor, type HostedRecordingsClient, type Cursor } from "./index.js";
-import type { HostedPasteReceipt } from "../contracts/hosted-v1.js";
+import type { HostedPasteInput, HostedPasteReceipt } from "../contracts/hosted-v1.js";
 import type { RequestOptions } from "./transport.js";
 import { textOption } from "./read-options.js";
 
@@ -32,7 +32,7 @@ function project(row: HostedPasteReceipt, includeText: boolean): HostedPasteHist
     status: row.status, evidenceSource: row.evidenceSource, ...(includeText ? { text: row.text } : {}) };
 }
 
-/** Read-only receipt projection; never reads a native/local store or upgrades delivery evidence. */
+/** Hosted receipt projection; never reads a native/local store or upgrades delivery evidence. */
 export class HostedPasteHistory {
   constructor(private readonly client: HostedRecordingsClient) {}
   async list(options: HostedPasteHistoryOptions = {}, request?: RequestOptions): Promise<HostedPasteHistoryPage> {
@@ -45,5 +45,10 @@ export class HostedPasteHistory {
     const last = receipts.at(-1);
     return { receipts: receipts.map(row => project(row, includeText)),
       nextCursor: receipts.length === limit && last ? pasteCursor(last) : null };
+  }
+  /** Save one client-reported receipt without echoing its private text. */
+  async save(value: HostedPasteInput, request?: RequestOptions): Promise<{ receipt: HostedPasteHistoryReceipt }> {
+    const { receipt } = await this.client.savePasteReceipt(value, request);
+    return { receipt: project(receipt, false) };
   }
 }

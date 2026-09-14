@@ -75,7 +75,8 @@ tenant storage, usage admission or provider execution.
 
 The additive `HostedLibrary` adapter provides `list`, `get`, `export`, `save`, `rename` and `delete`
 operations through CLI, MCP, serve and SDK. `HostedPasteHistory` provides a
-read-only receipt page across the same interfaces. Library output includes only `id`, `title`,
+receipt page and an explicit paste-save operation across the same interfaces.
+Library output includes only `id`, `title`,
 `createdAt` and `durationMs`; `transcript` requires an explicit option. Unknown
 upstream fields are omitted. Metadata can itself be private. The upstream
 currently returns transcript text before projection, so this minimizes output
@@ -91,6 +92,7 @@ recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECOR
 printf '%s' 'Fictional transcript' | recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION save <recording-id> "New title" --transcript-stdin --duration-ms 1000
 recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION rename <recording-id> "New title"
 recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION delete <recording-id>
+printf '%s' 'Fictional pasted text' | recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION paste-save <receipt-id> --text-stdin --status confirmed --recording-id <recording-id> --destination-app-name "Fictional editor"
 ```
 
 The named variable is read fresh per request. No token argument, implicit API
@@ -113,6 +115,12 @@ is supplied explicitly with exactly one of `--transcript` or
 `--transcript-stdin`; stdin is bounded to 1 MiB, decoded as fatal UTF-8 and
 rejects empty text. The optional session ID uses `--session-id`.
 
+Paste-save accepts exactly one explicit text source, plus status and optional
+recording, destination and UTC occurrence fields. Empty pasted text is valid
+for metadata-only retention. Its response omits private pasted text. Stdin is
+bounded to 1 MiB, decoded as fatal UTF-8, and the hosted contract caps text at
+256,000 characters.
+
 A full page returns `nextCursor: {before, beforeId}`; supply both with `--before`
 and `--before-id`. A cursor permits another request without promising another
 row. There is no offset, inferred total, extra count request or automatic
@@ -120,7 +128,7 @@ pagination. Limits are 1–100, default 25.
 
 ```sh
 recordings-mcp --hosted --stdio --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION
-# Explicit startup opt-in for save/rename/delete:
+# Explicit startup opt-in for recording and paste-save writes:
 recordings-mcp --hosted --allow-writes --stdio --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION
 ```
 
@@ -132,7 +140,8 @@ private transcript text and a safe filename. Without `--allow-writes`, the MCP
 server registers only these five read tools.
 When started with `--allow-writes`, `recordings_hosted_save` accepts `{id, sessionId?, title, transcript, durationMs}`,
 `recordings_hosted_rename` accepts `{id, title}` and `recordings_hosted_delete` accepts `{id}`.
-Save and rename return metadata without transcript text. Save is marked as a non-destructive
+`recordings_hosted_paste_save` accepts the hosted paste input.
+Save, rename and paste-save return metadata without private text. Save is marked as a non-destructive
 mutation; rename and delete are marked as destructive mutations
 because rename replaces metadata and delete removes data. Rename is not marked
 idempotent because the service can update its modification timestamp on each
@@ -142,7 +151,7 @@ MCP HTTP listener. Legacy MCP mode is unchanged.
 
 ```sh
 recordings-serve --hosted --api-base "$MY_RECORDINGS_API_BASE" --port 8874
-# Explicit startup opt-in for recording mutations:
+# Explicit startup opt-in for recording and paste-save mutations:
 recordings-serve --hosted --allow-writes --api-base "$MY_RECORDINGS_API_BASE" --port 8874
 ```
 
@@ -153,7 +162,10 @@ Both list routes accept `limit`, `before`, `beforeId` and `includeText=true|fals
 accepts only `includeText`. The providers and export routes accept no query parameters.
 With `--allow-writes`, `POST /v1/recordings` accepts only a validated JSON
 `{id, sessionId?, title, transcript, durationMs}` body and returns metadata.
-The body has a 1 MiB limit and a five-second read deadline. `PATCH /v1/recordings/<id>`
+The body has a 1 MiB limit and a five-second read deadline. POST
+/v1/paste-history accepts the validated hosted paste input and returns a
+receipt with private text omitted; its body has the same 1 MiB limit and
+five-second read deadline. `PATCH /v1/recordings/<id>`
 accepts only a JSON `{title}` body and returns metadata; its body has an 8 KiB limit.
 `DELETE /v1/recordings/<id>` accepts no body. It preserves the hosted service's
 `202 {audioCleanup: {state: "pending"}}` or empty `204` response. Both mutation
@@ -234,6 +246,10 @@ recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECOR
 remains `client_reported`. A confirmed client report does not mean the server
 observed delivery to the target app.
 
+The save operation makes one explicit client-reported write, never attempts a
+paste and never upgrades delivery evidence. Receipt deletion and history
+clearing remain separate operations.
+
 Private pasted text is omitted unless `--include-text`, MCP `includeText: true`,
 or HTTP `includeText=true` is supplied. Explicit inclusion preserves an empty
 string when retained text is empty. Unknown upstream fields are omitted.
@@ -255,11 +271,17 @@ const history = new HostedPasteHistory(new HostedRecordingsClient({
   credentialProvider: ({ apiBase, signal }) => session.accessTokenFor(apiBase, signal),
 }));
 const page = await history.list({ limit: 25 });
+const saved = await history.save({
+  id: crypto.randomUUID(), text: "", status: "confirmed",
+  destinationAppName: "Fictional editor",
+});
 ```
 
 The same class and its option, receipt and page types are exported from
-`@hasna/recordings/hosted`. This read operation neither creates/deletes receipts
-nor controls an app or attempts a paste.
+`@hasna/recordings/hosted`. The list operation neither creates/deletes receipts
+nor controls an app or attempts a paste. The save method validates text before
+credentials or network access; empty text remains valid for metadata-only
+retention. It never controls an app or attempts a paste.
 
 ### Transcription provider catalog
 
