@@ -146,6 +146,27 @@ test("Hermes refuses TERMINAL_CWD instead of certifying a different trusted proj
   finally { if (previous === undefined) delete process.env.TERMINAL_CWD; else process.env.TERMINAL_CWD = previous; }
 });
 
+for (const variable of ["HERMES_BUNDLED_PLUGINS", "HERMES_BUNDLED_SKILLS"] as const) {
+  test(`Hermes refuses ${variable} during discovery and after bridge installation`, () => {
+    const f = fixture(), previous = process.env[variable];
+    try {
+      delete process.env[variable]; install(f); trust(f); check(f);
+      const configPath = join(f.home, ".hermes/config.yaml"), before = readFileSync(configPath, "utf8");
+      for (const value of [join(f.home, "unreviewed-bundle"), "relative-bundle", " "]) {
+        process.env[variable] = value;
+        expect(() => planAgentIntegration({ ...f, agents: [...f.agents] })).toThrow(variable);
+        expect(() => inventoryNativeSkills(f.home, { configured: true })).toThrow(variable);
+        expect(() => check(f)).toThrow(variable);
+        expect(readFileSync(configPath, "utf8")).toBe(before);
+      }
+      process.env[variable] = "";
+      expect(() => check(f)).not.toThrow();
+    } finally {
+      if (previous === undefined) delete process.env[variable]; else process.env[variable] = previous;
+    }
+  });
+}
+
 for (const root of [".hermes/skills", ".agents/skills"]) test(`Hermes refuses nested legacy flat bridge shadow in ${root}`, () => {
   const f = fixture(); install(f); trust(f); check(f);
   put(join(f.home, root, "nested/skills-cli.md"), "Legacy shadow instructions\n");

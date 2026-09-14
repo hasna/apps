@@ -172,6 +172,37 @@ test("built CLI refuses revoked HTTP access without silent cache fallback and bl
   } finally { await f.close(); }
 });
 
+test("built Gemini hook selects the user's request after its native SessionStart policy prefix", async () => {
+  const f = await fixture();
+  try {
+    const selections = [];
+    for (const [slug, length, keywords] of [["skills-author", 7500, ["skills", "skill", "authoring", "workspace"]], ["backup-verify", 1000, ["backup", "verify"]]] as const) {
+      const source = join(f.root, slug), skillMd = `---\nname: ${slug}\ndescription: A synthetic procedure\nkind: instruction\n---\n${"x".repeat(length)}\n`;
+      put(join(source, "SKILL.md"), skillMd);
+      put(join(source, "package.json"), JSON.stringify({ name: slug, version: "1.0.0", skills: { kind: "instruction" } }));
+      const bundle = packSkillBundle(source);
+      await f.store.publishSkill({ principal: f.principal, slug, displayName: slug, description: "Gemini hook fixture", category: "Development Tools", tags: [], source: "custom", kind: "instruction", version: "1.0.0", skillMd, bundle: { sha256: bundle.sha256, byteSize: bundle.bytes.length, contentType: "application/gzip", storageKind: "db", bytes: bundle.bytes } });
+      selections.push({ slug, version: "1.0.0", bundleDigest: `sha256:${bundle.sha256}`, triggers: { keywords: [...keywords] } });
+    }
+    const profile = join(f.root, "gemini-profile.json"); put(profile, JSON.stringify({ selections }));
+    await f.a.install();
+    await f.a.ok(["profiles", "set", "engineering", "--file", profile, "--json"]);
+    const start = await f.a.ok(["hook", "user-prompt", "--agent", "gemini", "--event", "SessionStart", "--selection-profile", "engineering"], { stdin: { cwd: f.a.project, hook_event_name: "SessionStart" } });
+    const user = "Use backup-verify to explain the backup verification process briefly; respond without tools.";
+    const invoke = (prompt: string) => f.a.ok(["hook", "user-prompt", "--agent", "gemini", "--event", "BeforeAgent", "--selection-profile", "engineering"], { stdin: { cwd: f.a.project, hook_event_name: "BeforeAgent", session_id: randomUUID(), prompt } });
+    const requestsBefore = f.requests.length;
+    const result = await invoke(`<hook_context>${start.hookSpecificOutput.additionalContext}</hook_context>\n\n${user}`);
+    expect(result.hookSpecificOutput.hookEventName).toBe("BeforeAgent");
+    expect(result.hookSpecificOutput.additionalContext).toContain("name: backup-verify");
+    expect(result.hookSpecificOutput.additionalContext).not.toContain("name: skills-author");
+    // Arbitrary hook context still participates in selection; it is not erased.
+    const arbitrary = await invoke(`<hook_context>skills skill authoring workspace</hook_context>\n\n${user}`);
+    expect(arbitrary.hookSpecificOutput.additionalContext).toContain("name: skills-author");
+    expect(arbitrary.hookSpecificOutput.additionalContext).not.toContain("name: backup-verify");
+    expect(f.requests).toHaveLength(requestsBefore);
+  } finally { await f.close(); }
+});
+
 test("native payload project roots are guarded even when the host launches hooks from its home", async () => {
   const f = await fixture();
   try {
