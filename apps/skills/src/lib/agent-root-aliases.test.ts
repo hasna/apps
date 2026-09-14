@@ -4,7 +4,7 @@ useDefaultTestTimeout();
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { applyAgentIntegration, archiveNativeSkills, inventoryNativeSkills, planAgentIntegration } from "./agent-integration.js";
+import { applyAgentIntegration, archiveNativeSkills, assertManagedAgentBridge, inventoryNativeSkills, planAgentIntegration } from "./agent-integration.js";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -38,7 +38,7 @@ test("root aliases require opt-in and hooks use canonical paths while preserving
   const before = bytes(join(f.workspace, ".claude", "skills"));
   const plan = planAgentIntegration({ ...f, agents: ["claude", "codex"], allowRootAliases: true });
   expect(plan.rootAliases?.map(binding => ({ alias: binding.alias, target: binding.target }))).toEqual(["claude", "codex"].map(agent => ({ alias: join(f.home, "." + agent), target: join(f.workspace, "." + agent) })));
-  expect(plan.changes.every(change => change.path.startsWith(f.workspace))).toBe(true);
+  expect(plan.changes.every(change => change.path.startsWith(f.workspace) || change.path === join(f.dataDir, "agent-policy.json"))).toBe(true);
   expect(plan.nativeSkills.some(entry => entry.path === join(f.home, ".agents", "skills", "separate") && !entry.rootAlias)).toBe(true);
   expect(plan.nativeSkills.filter(entry => entry.rootAlias)).toHaveLength(2);
   const result = applyAgentIntegration(plan);
@@ -49,7 +49,9 @@ test("root aliases require opt-in and hooks use canonical paths while preserving
   expect(config.skills.config.every((entry: any) => entry.enabled === false)).toBe(true);
   const settings = JSON.parse(readFileSync(join(f.workspace, ".claude", "settings.json"), "utf8"));
   expect(settings.existing).toBe(true); expect(settings.permissions.allow).toEqual(["Read"]);
-  expect(bytes(join(f.workspace, ".claude", "skills"))).toEqual(before);
+  const after = bytes(join(f.workspace, ".claude", "skills"));
+  for (const [path, content] of Object.entries(before)) expect(after[path]).toBe(content);
+  expect(inventoryNativeSkills(f.home, { allowRootAliases: true }).filter(entry => entry.bridge)).toHaveLength(2);
   expect(lstatSync(join(f.home, ".claude")).isSymbolicLink()).toBe(true);
   expect(readFileSync(join(f.home, ".agents", "skills", "separate", "SKILL.md"), "utf8")).toContain("Separate");
   const receipt = JSON.parse(readFileSync(join(dirname(result.backups[0]!), "receipt.json"), "utf8"));
@@ -105,4 +107,17 @@ test("replacing a canonical root directory at the same path invalidates the plan
   const target = join(f.workspace, ".claude"); renameSync(target, target + "-preserved"); mkdirSync(target);
   expect(() => applyAgentIntegration(plan)).toThrow("changed after planning");
   expect(existsSync(join(target + "-preserved", "skills", "claude", "SKILL.md"))).toBe(true);
+});
+
+
+test("managed prompts support reviewed home aliases and still refuse local discovery overrides or file aliases", () => {
+  const f = fixture();
+  archiveNativeSkills(inventoryNativeSkills(f.home, { allowRootAliases: true }), { dataDir: f.dataDir, allowRootAliases: true, includeUnmanaged: true });
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude", "codex"], allowRootAliases: true }));
+  expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home })).not.toThrow();
+  const local = join(f.workspace, ".claude", "settings.local.json");
+  put(local, '{"enabledPlugins":{"unexpected@personal":true}}');
+  expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home })).toThrow("NATIVE_SKILL_DRIFT");
+  unlinkSync(local); put(join(f.home, "outside-local.json"), '{}'); symlinkSync(join(f.home, "outside-local.json"), local);
+  expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home })).toThrow("symlink");
 });
