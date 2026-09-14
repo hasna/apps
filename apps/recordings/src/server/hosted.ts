@@ -79,8 +79,8 @@ export function buildHostedFetch(options: { apiBase: string; fetch?: typeof glob
       const isPasteHistory = url.pathname === "/v1/paste-history";
       const isProviders = url.pathname === "/v1/providers";
       if (!match && !isPasteHistory && !isProviders) return json({ error: { code: "not_found", message: "This hosted Library route does not exist." } }, 404);
-      const mutation = (Boolean(match?.[1]) && ["PATCH", "DELETE"].includes(request.method)) ||
-        (!match?.[1] && request.method === "POST");
+      const mutation = match !== null && ((Boolean(match[1]) && ["PATCH", "DELETE"].includes(request.method)) ||
+        (!match[1] && request.method === "POST"));
       if (request.method !== "GET" && (!mutation || options.allowWrites !== true)) return json({ error: { code: "read_only",
         message: options.allowWrites === true ? "This hosted Library route does not support the requested method." : "Hosted Library mode supports GET only." } }, 405);
       if ((isProviders || mutation) && url.searchParams.size) throw new RecordingsSDKError("invalid_input");

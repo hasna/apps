@@ -291,6 +291,18 @@ test("hosted HTTP save and other mutations project metadata and preserve 202 ver
   expect(calls).toEqual([apiBase.slice(0, -1) + "/recordings", ...Array(3).fill(apiBase.slice(0, -1) + "/recordings/" + id)]);
 });
 
+test("hosted HTTP never routes provider or paste-history POST bodies to recording save", async () => {
+  let calls = 0;
+  const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch(() => { calls++; throw Error("unexpected upstream"); }) });
+  const headers = { authorization: "Bearer fictional-A", "content-type": "application/json" };
+  const body = JSON.stringify({ id, title: "Saved", transcript: row.transcript, durationMs: row.durationMs });
+  for (const path of ["/v1/providers", "/v1/paste-history"]) {
+    const response = await handle(new Request("http://127.0.0.1" + path, { method: "POST", headers, body }));
+    expect(response.status).toBe(405); expect((await response.json()).error.code).toBe("read_only");
+  }
+  expect(calls).toBe(0);
+});
+
 test("hosted HTTP rejects invalid mutations and never retries authorization failures", async () => {
   let calls = 0;
   const handle = buildHostedFetch({ apiBase, allowWrites: true, fetch: fakeFetch(() => { calls++; return Response.json({ privateDetail: row.transcript }, { status: 401 }); }) });
