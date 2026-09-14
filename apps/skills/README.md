@@ -55,6 +55,11 @@ skills hook install --agent all --selection-profile default --json
 skills hook install --agent all --selection-profile default --apply --json
 ```
 
+The hook install `--include-vendor` option is retained for compatibility with
+older scripts. Hook planning always inventories and disables discovered vendor
+system skills; use `migrate native --include-vendor` when retiring their
+discovery files.
+
 Restart the agent after applying the hooks. In Codex, review and grant normal
 trust to the installed hook definitions before starting a new session. Then
 request a selected skill in a prompt, for example `Use $pdf-generate to create

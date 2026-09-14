@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- 4d9f485: Install one owned native CLI bridge with supported coding-agent prompt adapters. Refuse native skill/configuration drift and incomplete plugin discovery, preserve retired copies with recovery receipts, and keep managed loading separate from local draft authoring.
+- 378d502: Resolve reviewed profile aliases to the selected canonical skill version and digest. Reject ambiguous aliases and require server capability support before saving them.
+
+### Patch Changes
+
+- 26df947: Stop local skill execution when dependency preparation fails or times out. Drain installer output without exposing registry diagnostics, and use the selected execution environment for preparation. Programmatic callers can bound preparation with `preparationTimeoutMs`; the default is 60 seconds. Remember incomplete preparation so partially created dependencies cannot bypass a failed attempt on retry; document recovery for interrupted attempts. Forwarded skill arguments and explicit local routing are unchanged.
+
+  Exclude local dependency preparation state from bundles, portable copies, and authoring snapshots while preserving nested source with the same name.
+
+- 3f82998: Add an explicit prepare command for reviewed draft versions and content hashes, preserve the selected kind in new skill scaffolds, and explain how to prepare stale drafts before publication.
+- b704eb0: Support 4,096 exact selections with advertised bounded API, client and cache capacity. Reserve room for project/session/station receipts before saving a profile, preserve operator request limits, and refuse unsupported large writes without truncation.
+- 18ba31e: Add a Hermes Skills CLI bridge with native YAML hooks, explicit normal trust checks, bundled skill reseeding opt-out, and guarded native skill tools. Keep Hermes prompt-hook failure semantics and discovery limits explicit.
+- 9e2f178: Preserve mixed-case dependency-like source directories and regular files named node_modules when preparing skill manifests, so the written content hash matches the unchanged authoring files.
+
 ## 0.6.3
 
 ### Patch Changes
