@@ -1,0 +1,20 @@
+# Skills producer checks
+
+Build release archives with the package's standalone `bun.lock`. Install the exact
+`package.json` and lock in a separate directory with
+`bun install --frozen-lockfile --ignore-scripts`, using a clean HOME and cache.
+Use that complete `node_modules` graph for the package in its isolated versioned
+worktree; retain the repository metadata used by the existing consumer type
+check. Do not substitute or mix older workspace dependency folders.
+
+Run `bun run verify:producer` before building; `prepack` also runs this gate.
+It checks declared root dependencies, actual resolved package versions and
+recursive dependency edges against the selected lock, including optional-peer
+absence. Every resolved package must remain inside the selected `node_modules`
+graph. An intentional `zod/v3` import from the locked Zod4 package and a separately
+locked nested Zod3 dependency are valid.
+
+The result binds package/lock hashes and resolved package manifest hashes. It is
+not a package payload integrity attestation: retain the clean frozen-install
+receipt, build evidence and installed-archive acceptance separately. Recheck the
+graph before packing and verify the actual published archive after publication.
