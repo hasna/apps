@@ -20,6 +20,7 @@ import { resolveDataBackend } from "./cloud-config.js";
 import { handleV1Request } from "./v1.js";
 import { buildV1OpenApiDocument } from "./openapi.js";
 import { resolveRequestClientIp, resolveTrustProxy, trustedProxiesFromEnv } from "./client-ip.js";
+import { resolveRateLimitMax } from "./rate-limit-config.js";
 
 export const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -38,7 +39,6 @@ function jsonResponse(data: unknown, status = 200, headers?: HeadersInit): Respo
 // ── Simple per-IP rate limiter ──────────────────────────────────────────────
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX = Number.parseInt(process.env["RECORDINGS_RATE_LIMIT_MAX"] || "240", 10);
 
 /**
  * Resolve the rate-limit bucket key for a request.
@@ -63,7 +63,7 @@ function resolveClientIp(
   }) ?? "unknown";
 }
 
-function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
+function checkRateLimit(ip: string, maximum: number): { allowed: boolean; retryAfter?: number } {
   const now = Date.now();
   const entry = rateLimitMap.get(ip);
   if (!entry || now > entry.resetAt) {
@@ -71,7 +71,7 @@ function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
     return { allowed: true };
   }
   entry.count++;
-  if (entry.count > RATE_LIMIT_MAX) {
+  if (entry.count > maximum) {
     return { allowed: false, retryAfter: Math.ceil((entry.resetAt - now) / 1000) };
   }
   return { allowed: true };
@@ -88,6 +88,9 @@ export interface BuildFetchOptions {
 }
 
 export function buildFetch(options: BuildFetchOptions = {}) {
+  const rateLimitMax = resolveRateLimitMax(
+    process.env.HASNA_RECORDINGS_RATE_LIMIT_MAX ?? process.env.RECORDINGS_RATE_LIMIT_MAX,
+  );
   const checkCloudAuth = options.checkCloudAuth ?? (async () => {
     const { getCloudVerifier } = await import("./cloud.js");
     return getCloudVerifier();
@@ -118,7 +121,7 @@ export function buildFetch(options: BuildFetchOptions = {}) {
 
     // Rate limiting (all requests), keyed on the real socket peer.
     const ip = resolveClientIp(req, server);
-    const rl = checkRateLimit(ip);
+    const rl = checkRateLimit(ip, rateLimitMax);
     if (!rl.allowed) {
       return jsonResponse({ error: "Too many requests", retry_after: rl.retryAfter }, 429, {
         "Retry-After": String(rl.retryAfter ?? 60),
