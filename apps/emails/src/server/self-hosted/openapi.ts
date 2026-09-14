@@ -3832,7 +3832,8 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                   to: { type: "array", items: { type: "string" } },
                   cc: { type: "array", items: { type: "string" } },
                   bcc: { type: "array", items: { type: "string" } },
-                  reply_to: { type: "string" },
+                  reply_to: { type: "string", description: "Reply-To mailbox list, including quoted display names." },
+                  reply_to_message_id: { type: "string", minLength: 1, maxLength: 256, description: "Parent message record ID in this tenant. The server authorizes the sender as a parent participant and derives In-Reply-To and References from actual RFC Message-ID evidence. Retain the parent subject; unavailable evidence refuses before sending." },
                   subject: { type: "string" },
                   text: { type: "string", description: "Body bytes are preserved. Raw backslash followed by n or r inside an HTTP(S) token is rejected with invalid_body_url_boundary before send intent reservation; use actual line breaks." },
                   html: { type: "string", description: "HTML body, subject to the same HTTP(S) token boundary check as text, including attribute values." },
@@ -3885,6 +3886,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
           "400": errorResponse("Invalid send request, including invalid_body_url_boundary; no send intent or provider call"),
           "401": errorResponse("Authentication required"),
           "403": errorResponse("Sender or tenant scope is not authorized"),
+          "404": errorResponse("Reply parent not found in this tenant; nothing was sent"),
           "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/SendMessageError" } } } },
           "422": {
             description: "The provider definitively rejected the message (nothing was sent); the body carries the real provider error and sent:false",
@@ -4776,7 +4778,7 @@ emailsSelfHostedOpenApi.paths!["/v1/scheduled/enqueue"] = { post: {
     "200": { description: "Existing enqueue identity", content: { "application/json": { schema: enqueueReceipt } } },
     "201": { description: "New scheduled send; no mail sent", content: { "application/json": { schema: enqueueReceipt } } },
     "400": errorResponse("Invalid payload (including invalid_body_url_boundary) or nonfuture new schedule; no job enqueued"), "401": errorResponse("Authentication required"),
-    "403": errorResponse("Tenant operator required"), "409": errorResponse("Idempotency key conflict"), "413": errorResponse("Payload too large"),
+    "403": errorResponse("Tenant operator required"), "404": errorResponse("Reply parent not found in this tenant; no job enqueued"), "409": errorResponse("Idempotency or reply parent conflict"), "413": errorResponse("Payload too large"),
   },
 } };
 

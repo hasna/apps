@@ -25629,6 +25629,15 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "method": "POST",
     "operationId": "sendMessage",
     "path": "/v1/messages/send",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "sendMessage",
+    "path": "/v1/messages/send",
     "status": 409,
     "schema": {
       "$ref": "#/components/schemas/SendMessageError"
@@ -38326,6 +38335,15 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
         "error",
         "reason"
       ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "enqueueScheduledSend",
+    "path": "/v1/scheduled/enqueue",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
     }
   },
   {

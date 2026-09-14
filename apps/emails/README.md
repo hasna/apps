@@ -762,3 +762,15 @@ new StreamableHTTPClientTransport(new URL("http://127.0.0.1:8861/mcp"), {
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE)
+
+### Reply-To and threaded replies
+
+`emails reply <message-id> --body "Reply text"` and `emails send --in-reply-to <message-id>` send the parent record as the typed API field `reply_to_message_id`. The API derives `In-Reply-To` and `References`; custom `X-*` headers cannot override them. The parent must belong to the authenticated tenant, the sender must be the original outbound sender or an inbound recipient, and the subject must retain the parent's subject with an optional `Re:` prefix. Scheduled sends persist the parent and validate it again when executing. An older API that cannot advertise this field refuses before sending.
+
+Incoming `Reply-To` takes precedence over `From` when choosing a reply target. Reply-all adds the visible To/CC recipients, removes the sender and deduplicates canonical addresses, including quoted display names. Explicit `--reply-to` controls the header on a new outgoing message; it does not identify a parent. Configure sender names on the address's `display_name` field through the address API/SDK; the provider renders the configured name while authorization retains the canonical address.
+
+A provider receipt ID is distinct from an RFC Message-ID. A reply requires the latter. Resend can read the actual `message_id` through its normal retrieval API, bounded to five seconds and a 1 MiB response. The parent provider binding is used even if the reply selects a different provider. Identity admission compares tenant, parent/provider identity and sent state, preserves concurrent header changes, and stores provenance. An unavailable, unbound legacy or conflicting parent identity refuses before a new send intent or queue entry.
+
+SES rewrites Message-ID. No suffix is guessed from the sending region, custom MAIL FROM domain or opaque receipt. Operators may configure `EMAILS_SES_MESSAGE_ID_DOMAINS` as a JSON object keyed by exact SES region. Each entry must contain `domain`, `evidence_sha256` (64 lowercase hex characters) and `verified_at` (UTC ISO timestamp). First observe a received message's original headers, compare its full RFC Message-ID to the corresponding SES send receipt, and retain that evidence. The map is an explicit operator attestation, not a provider readback; its provenance remains attached to the recorded identity. It applies only to the named region, including managed SES bindings. Leave it unset when no mapping has been verified. The map is limited to 8 KiB and 32 entries; unsupported entries fail at startup.
+
+Replies with malformed or oversized References refuse rather than silently dropping ancestry (the supported joined header is at most 900 characters). Recipient applications decide conversation grouping. A local subject-based conversation ID is not the recipient's Gmail thread ID, and correct headers alone do not prove how an inbox displays a message.

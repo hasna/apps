@@ -1,3 +1,4 @@
+import { replyMailboxes } from "../lib/reply-headers.js";
 import {
   SESv2Client,
   CreateEmailIdentityCommand,
@@ -353,6 +354,8 @@ export class SESAdapter implements ProviderAdapter {
   async sendEmail(opts: SendEmailOptions, signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted();
     assertSafeEmailHeaders(opts);
+    const replyTo = opts.reply_to ? replyMailboxes(opts.reply_to) : undefined;
+    if (opts.reply_to && !replyTo) throw new Error("Invalid Reply-To mailbox list");
     const toArr = Array.isArray(opts.to) ? opts.to : [opts.to];
     const ccArr = opts.cc ? (Array.isArray(opts.cc) ? opts.cc : [opts.cc]) : [];
     const bccArr = opts.bcc ? (Array.isArray(opts.bcc) ? opts.bcc : [opts.bcc]) : [];
@@ -397,7 +400,7 @@ export class SESAdapter implements ProviderAdapter {
           CcAddresses: ccArr.length > 0 ? ccArr : undefined,
           BccAddresses: bccArr.length > 0 ? bccArr : undefined,
         },
-        ReplyToAddresses: opts.reply_to ? [opts.reply_to] : undefined,
+        ReplyToAddresses: replyTo ?? undefined,
         Content: {
           Simple: {
             Subject: { Data: opts.subject, Charset: "UTF-8" },
