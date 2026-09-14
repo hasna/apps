@@ -24,6 +24,52 @@ function editManifest(path: string, edit: (manifest: Record<string, any>) => voi
 }
 
 describe("prepare local skill drafts", () => {
+  test.each(["mixed-case-directory", "dependency-named-file"])("preserves canonical source input at %s", entry => fixture((root, path) => {
+    expect(validatePortableSkillDirectory("prepare-example", path).valid).toBe(true);
+    const source = entry === "mixed-case-directory" ? join(path, "src/Node_Modules/fixture.txt") : join(path, "src/node_modules");
+    if (entry === "mixed-case-directory") mkdirSync(join(path, "src/Node_Modules"));
+    writeFileSync(source, "Reviewed canonical input.\n");
+    const before = readFileSync(join(path, "skill.json"), "utf8");
+    const preview = prepareSkill("prepare-example", { rootDir: root, version: "0.2.0", dryRun: true });
+    expect(preview.written).toBe(false);
+    expect(readFileSync(join(path, "skill.json"), "utf8")).toBe(before);
+    const prepared = prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" });
+    expect(prepared.written).toBe(true);
+    expect(prepared.contentHash).toBe(preview.contentHash);
+    expect(prepared.contentHash).toBe(computeContentHash(path));
+    expect(validatePortableSkillDirectory("prepare-example", path).valid).toBe(true);
+    expect(readFileSync(source, "utf8")).toBe("Reviewed canonical input.\n");
+    expect(prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" })).toMatchObject({ changed: false, written: false });
+    writeFileSync(source, "A later source edit.\n");
+    expect(() => prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" })).toThrow("greater");
+  }));
+
+  test("ordinary dependency directories stay outside the prepared content hash", () => fixture((root, path) => {
+    for (const relative of ["node_modules", "src/node_modules"]) {
+      mkdirSync(join(path, relative));
+      writeFileSync(join(path, relative, "fixture.txt"), "Disposable dependency bytes.\n");
+    }
+    const prepared = prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" });
+    expect(prepared.contentHash).toBe(computeContentHash(path));
+    expect(validatePortableSkillDirectory("prepare-example", path).valid).toBe(true);
+    for (const relative of ["node_modules", "src/node_modules"]) {
+      expect(readFileSync(join(path, relative, "fixture.txt"), "utf8")).toBe("Disposable dependency bytes.\n");
+      writeFileSync(join(path, relative, "fixture.txt"), "Changed dependency bytes.\n");
+    }
+    expect(prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" })).toMatchObject({ changed: false, written: false });
+  }));
+
+  test("mixed-case dependency-like source retains symlink refusal", () => fixture((root, path) => {
+    mkdirSync(join(path, "src/Node_Modules"));
+    const outside = join(root, "outside.txt");
+    writeFileSync(outside, "Owned outside bytes.\n");
+    symlinkSync(outside, join(path, "src/Node_Modules/linked.txt"));
+    const before = readFileSync(join(path, "skill.json"), "utf8");
+    expect(() => prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" })).toThrow("symlink");
+    expect(readFileSync(join(path, "skill.json"), "utf8")).toBe(before);
+    expect(readFileSync(outside, "utf8")).toBe("Owned outside bytes.\n");
+  }));
+
   test("preserves extension fields, source bytes and manifest mode; does not run author code", () => fixture((root, path) => {
     const marker = join(root, "must-not-run");
     const source = `throw new Error(${JSON.stringify(marker)});\n`;
