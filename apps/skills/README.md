@@ -102,6 +102,25 @@ context, and the trusted pre-tool guard blocks drift and native skill fallback;
 this is not a claim that Hermes can prevent every model call after a failed
 prompt hook or guarantee refusal if the native host/supervisor itself dies. Arbitrary project/plugin paths still require a discovery audit.
 
+Reviewed discovery can also bind `directories: [{ path, sha256 }]` alongside
+its full source-file hashes. The public SDK's `captureDiscoveryDirectories(paths)`
+captures recursive, sorted path/type membership without reading plugin payloads.
+Include every directory the reviewed loader scans, including plugin version
+selection parents and Python entrypoint discovery directories. Membership hashes
+detect added, removed or changed file types; keep source hashes for reviewed bytes.
+Missing directories bind as `sha256: null`. Symlinks and special nodes refuse.
+The bounds are 64 roots, 20,000 total entries, 8 MiB of path/type metadata and
+64 levels of recursion. Capture and checks require stable directory identities;
+quiesce source writers for installation because these checks are not atomic with
+a later native import.
+
+Hermes requires directory witnesses, including when upgrading an older policy.
+For an automatic bridge with no runtime installed, rerun normal `skills hook install`
+to review and apply the new bindings. Existing native trust is preserved.
+Reviewed Hermes installations need fresh source and directory coverage in their
+`--discovery-inputs` file. Other agents may add directory witnesses to their
+reviewed bindings without changing existing source-only reviews.
+
 Hook installation preserves unrelated configuration, hooks, and plugin assets.
 It disables discovered Codex native skills; exact system-skill trees can remain
 only with their hash-bound disabled paths; migration preserves these package files. A client that restores or changes
