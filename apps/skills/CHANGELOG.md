@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1
+
+### Patch Changes
+
+- eabb7cc: Use shared bounded agent-policy validation so plugin-rich bridge installations remain readable. Reject oversized policies and excessive discovery collections before activation or backup writes, and keep installation planning free of legacy data migration.
+- a9f73e8: Persist native archive recovery intent before moving payloads, preserve concurrent source edits and changed archives during compensation, and bound ownership reads against replaced files and FIFO races.
+
 ## 0.7.0
 
 ### Minor Changes

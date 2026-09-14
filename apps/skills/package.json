@@ -1,6 +1,6 @@
 {
   "name": "@hasna/skills",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Skills library for AI coding agents",
   "type": "module",
   "bin": {
@@ -119,8 +119,8 @@
     "url": "https://github.com/hasna/apps.git",
     "directory": "apps/skills"
   },
-  "homepage": "https://github.com/hasna/skills",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/skills",
   "bugs": {
-    "url": "https://github.com/hasna/skills/issues"
+    "url": "https://github.com/hasna/apps/issues"
   }
 }
