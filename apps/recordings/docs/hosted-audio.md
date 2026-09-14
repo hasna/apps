@@ -5,6 +5,9 @@ recording metadata. Audio is canonical mono PCM16 WAV at 24 kHz. The maximum
 PCM payload is 86,400,000 bytes (30 minutes), plus the 44-byte WAV header.
 Audio stays a raw stream: the SDK, CLI, MCP server, and HTTP proxy do not put
 audio in JSON or base64, and transfer requests are never retried.
+On the supported Bun runtime, uploads disable connection reuse so an early server refusal cannot leave the
+next request waiting on that transfer. Cancelling a download aborts its network
+request as well as its reader.
 
 The shared client exposes these operations:
 

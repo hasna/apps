@@ -211,6 +211,48 @@ test("MCP binary tools stay unavailable without both explicit directory and allo
   } finally { await client.close(); await server.close(); }
 });
 
+test("a long-lived HTTP process can save after an upstream refuses a streaming upload", async () => {
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    if (request.method !== "POST") return Response.json({}, { status: 404 });
+    const value = await request.json() as Record<string, unknown>;
+    return Response.json({ recording: { ...value, createdAt: at, updatedAt: at } }, { status: 201 });
+  } });
+  const moduleURL = new URL("../server/hosted.ts", import.meta.url).href;
+  const code = `import { buildHostedFetch } from ${JSON.stringify(moduleURL)};
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0,
+      fetch: buildHostedFetch({ apiBase: ${JSON.stringify(upstream.url + "v1/")}, allowWrites: true }) });
+    console.log(server.port);`;
+  const child = Bun.spawn([process.execPath, "-e", code], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const stderr = new Response(child.stderr).text();
+  const stdout = child.stdout.getReader();
+  const auth = { authorization: "Bearer fictional-access" };
+  try {
+    const first = await stdout.read();
+    const port = Number(new TextDecoder().decode(first.value).trim());
+    expect(Number.isInteger(port) && port > 0).toBe(true);
+    const url = `http://127.0.0.1:${port}/v1/recordings`;
+    for (const [method, body, headers] of [
+      ["GET", undefined, {}], ["PATCH", JSON.stringify({ title: "Renamed fictional recording" }), { "content-type": "application/json" }],
+      ["DELETE", undefined, {}], ["PUT", wav, { "content-type": "audio/wav", "content-length": String(wav.byteLength),
+        "x-audio-sha256": sha, "x-audio-retention-consent": "true" }],
+    ] as const) {
+      const response = await fetch(url + "/" + id + (method === "PUT" ? "/audio" : ""), {
+        method, headers: { ...auth, ...headers }, body, signal: AbortSignal.timeout(2000),
+      });
+      expect(response.status).toBe(404); await response.body?.cancel();
+    }
+    const response = await fetch(url, { method: "POST", headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ id, title: "Fictional alternate caller", transcript: "Fictional café recording.\r\nPreserve this second line.\n", durationMs: metadata.durationMs }),
+      signal: AbortSignal.timeout(2000),
+    });
+    expect(response.status).toBe(201);
+    expect((await response.json() as { recording: { id: string } }).recording.id).toBe(id);
+  } finally {
+    if (child.exitCode === null) child.kill("SIGTERM");
+    await child.exited; stdout.releaseLock(); await stderr; await upstream.stop(true);
+  }
+}, 10_000);
+
 test("real Bun streamed audio uses x-audio-byte-length through the HTTP proxy", async () => {
   const upstream = Bun.serve({
     hostname: "127.0.0.1",

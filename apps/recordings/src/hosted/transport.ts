@@ -180,7 +180,9 @@ export class Transport {
       const url = this.base + path;
       response = await abortable(this.#fetch(url, {
         method: "PUT", headers, body: requestBody as BodyInit, redirect: "manual",
-        credentials: "omit", cache: "no-store", signal: controller.signal,
+        // Bun can retain a refused streamed upload in its reusable connection
+        // pool. Isolate transfers so the next authenticated request can proceed.
+        keepalive: false, credentials: "omit", cache: "no-store", signal: controller.signal,
       }), controller.signal);
       assertNoRedirect(response, url);
       if (response.status !== 200) throw statusError(response);
@@ -286,6 +288,7 @@ export class Transport {
         },
         async cancel(reason) {
           cleanup();
+          controller.abort();
           await reader.cancel(reason).catch(() => {});
         },
       });

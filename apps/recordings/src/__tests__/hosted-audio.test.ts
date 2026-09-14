@@ -205,6 +205,31 @@ test("metadata and download preserve the raw stream and validate full-file and r
   expect(calls).toBe(2);
 });
 
+test("cancelling a live audio download closes the upstream response", async () => {
+  let cancelled!: () => void;
+  const closed = new Promise<void>(resolve => { cancelled = resolve; });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(wav.subarray(0, 44)); },
+      cancel() { cancelled(); },
+    }), { headers: { "content-type": "audio/wav", "accept-ranges": "bytes", "x-audio-sha256": sha,
+      "x-audio-byte-length": String(wav.byteLength) } });
+  } });
+  const client = new HostedRecordingsClient({ apiBase: server.url + "v1/", credentialProvider: () => "fictional-access" });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    reader = (await client.downloadAudio(id)).body.getReader();
+    const first = await reader.read(); expect(first.done).toBe(false); expect(first.value?.byteLength).toBe(44);
+    await reader.cancel();
+    await Promise.race([closed, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Upstream download remained open after cancellation")), 2000);
+    })]);
+  } finally {
+    clearTimeout(timer); await reader?.cancel().catch(() => {}); reader?.releaseLock(); await server.stop(true);
+  }
+}, 5000);
+
 test("download accepts the exact audio length header for chunked responses and rejects conflicts", async () => {
   const headers = (extra: Record<string, string>) => ({
     "content-type": "audio/wav", "accept-ranges": "bytes", "x-audio-sha256": sha, ...extra,
