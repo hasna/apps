@@ -53,6 +53,10 @@ export function configureHermesHooks(text: string | null, supervisor: HermesSupe
 }
 export function assertHermesEnvironment(home: string): void {
   if (process.env.TERMINAL_CWD) throw new Error("NATIVE_SKILL_DRIFT: Hermes TERMINAL_CWD requires a separately reviewed effective project; unset it before using this adapter");
+  for (const variable of ["HERMES_BUNDLED_PLUGINS", "HERMES_BUNDLED_SKILLS"] as const) {
+    // Hermes accepts relative plugin overrides, including whitespace-only paths.
+    if (process.env[variable]) throw new Error(`NATIVE_SKILL_DRIFT: Hermes ${variable} requires a dedicated discovery adapter; unset it before using this adapter`);
+  }
   const selected = process.env.HERMES_HOME?.trim();
   if (selected && (!isAbsolute(selected) || resolve(selected) !== join(resolve(home), ".hermes"))) throw new Error("NATIVE_SKILL_DRIFT: custom Hermes homes/profiles require their own reviewed bridge");
   if (process.env.HERMES_ENABLE_PROJECT_PLUGINS?.trim() && !["0", "false", "no", "off"].includes(process.env.HERMES_ENABLE_PROJECT_PLUGINS.trim().toLowerCase())) throw new Error("NATIVE_SKILL_DRIFT: Hermes project plugins require a dedicated discovery review");

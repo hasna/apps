@@ -1,5 +1,5 @@
 /** Shared bounds for stored policy, discovery, and pre-activation validation. */
-export const AGENT_POLICY_LIMITS = Object.freeze({ bytes: 1024 * 1024, agents: 16, discoverySources: 2048, discoveryRoots: 512, builtinNames: 2048, rootAliases: 2, fields: 64, pathCharacters: 4096 });
+export const AGENT_POLICY_LIMITS = Object.freeze({ bytes: 1024 * 1024, agents: 16, discoverySources: 2048, discoveryRoots: 512, discoveryDirectories: 64, discoveryDirectoryEntries: 20000, discoveryDirectoryBytes: 8 * 1024 * 1024, builtinNames: 2048, rootAliases: 2, fields: 64, pathCharacters: 4096 });
 function object(value: unknown): value is Record<string, any> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
 function requireBound(value: unknown): asserts value { if (!value) throw new Error("Agent policy collection bounds are invalid"); }
 function array(value: unknown, maximum: number): any[] { requireBound(Array.isArray(value) && value.length <= maximum); return value; }
@@ -33,6 +33,10 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
       requireBound(source.sha256 === null || typeof source.sha256 === "string" && /^[a-f0-9]{64}$/.test(source.sha256));
       if (source.format !== undefined) requireBound(["json", "toml", "yaml"].includes(source.format));
       if (source.fields !== undefined) for (const field of array(source.fields, AGENT_POLICY_LIMITS.fields)) text(field, 256);
+    }
+    if (value.directories !== undefined) for (const directory of array(value.directories, AGENT_POLICY_LIMITS.discoveryDirectories)) {
+      requireBound(object(directory)); text(directory.path);
+      requireBound(directory.sha256 === null || typeof directory.sha256 === "string" && /^[a-f0-9]{64}$/.test(directory.sha256));
     }
     if (value.builtinNames !== undefined) for (const name of array(value.builtinNames, AGENT_POLICY_LIMITS.builtinNames)) text(name, 128);
   }

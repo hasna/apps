@@ -80,23 +80,34 @@ test.skipIf(!previousCli)("actual previous CLI survives a refused partial upgrad
   try {
     const oldCommand = join(f.root, "previous-skills");
     put(oldCommand, `#!/bin/sh\nexec '${process.execPath.replace(/'/g, "'\\''")}' '${previousCli!.replace(/'/g, "'\\''")}' "$@"\n`); chmodSync(oldCommand, 0o700);
-    for (const agent of ["claude", "codex"]) await f.a.ok(["hook", "install", "--agent", agent, "--selection-profile", "engineering", "--command", oldCommand, "--apply", "--json"], { cli: previousCli });
+    const installedAgents = ["claude", "codex", "hermes"];
+    for (const agent of installedAgents) await f.a.ok(["hook", "install", "--agent", agent, "--selection-profile", "engineering", "--command", oldCommand, "--apply", "--json"], { cli: previousCli });
+    const hermesConfig = join(f.a.home, ".hermes/config.yaml"), hermesSupervisor = join(f.a.data, "agent-hooks/hermes.js");
+    const hermesHooks = (Bun.YAML.parse(readFileSync(hermesConfig, "utf8")) as any).hooks;
+    const approvals = ["pre_llm_call", "pre_tool_call"].map(event => ({ event, command: hermesHooks[event][0].command }));
+    const allowlist = join(f.a.home, ".hermes/shell-hooks-allowlist.json");
+    put(allowlist, JSON.stringify({ approvals }));
+    const hermesInput = { cwd: f.a.project, session_id: "hermes-upgrade", hook_event_name: "pre_llm_call", extra: { user_message: "$review-code", is_first_turn: true } };
+    const hermesPrompt = () => f.a.ok([], { stdin: hermesInput, shellCommand: approvals[0]!.command });
     await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"], { cli: previousCli });
     await f.a.ok(["sync", "--json"], { cli: previousCli });
     const policyPath = join(f.a.data, "agent-policy.json"), migration = join(f.a.data, "migration");
-    const paths = [policyPath, join(f.a.home, ".claude/settings.json"), join(f.a.home, ".codex/hooks.json"), ...["claude", "codex"].flatMap(agent => [join(f.a.home, `.${agent}/skills/skills-cli/SKILL.md`), join(f.a.home, `.${agent}/skills/skills-cli/.hasna-skills.json`)])];
+    const paths = [policyPath, join(f.a.home, ".claude/settings.json"), join(f.a.home, ".codex/hooks.json"), hermesConfig, hermesSupervisor, allowlist, ...installedAgents.flatMap(agent => [join(f.a.home, `.${agent}/skills/skills-cli/SKILL.md`), join(f.a.home, `.${agent}/skills/skills-cli/.hasna-skills.json`)])];
     const before = new Map(paths.map(path => [path, readFileSync(path, "utf8")])), backupsBefore = readdirSync(migration).sort();
     expect(json(policyPath).bridge.version).toBe(1);
+    expect(json(policyPath).bridge.discovery.hermes.directories).toBeUndefined();
     const refused = await f.a.run(["hook", "install", "--agent", "claude", "--command", executable, "--apply", "--json"]);
-    expect(refused.exitCode).toBe(1); expect(refused.stderr).toContain("BRIDGE_UPGRADE_REQUIRES_ALL_AGENTS"); expect(refused.stderr).toContain("--agent claude,codex");
+    expect(refused.exitCode).toBe(1); expect(refused.stderr).toContain("BRIDGE_UPGRADE_REQUIRES_ALL_AGENTS"); expect(refused.stderr).toContain("--agent claude,codex,hermes");
     for (const [path, bytes] of before) expect(readFileSync(path, "utf8")).toBe(bytes);
     expect(readdirSync(migration).sort()).toEqual(backupsBefore);
     for (const agent of ["claude", "codex"] as const) expect((await f.a.hook(agent, "UserPromptSubmit", { session_id: `old-${agent}`, prompt: "review the unchanged setup" })).hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+    expect((await hermesPrompt()).context).toContain("Published 1.0.0");
     // A staged candidate must not silently keep the ambient old Skills command.
-    const installed = await f.a.ok(["hook", "install", "--agent", "claude,codex", "--selection-profile", "engineering", "--apply", "--json"]);
+    const installed = await f.a.ok(["hook", "install", "--agent", "claude,codex,hermes", "--selection-profile", "engineering", "--apply", "--json"]);
     const after = json(policyPath);
     expect(after.bridge.version).toBe(2);
-    expect(after.bridge.commands).toEqual({ claude: binary, codex: binary });
+    expect(after.bridge.commands).toEqual({ claude: binary, codex: binary, hermes: binary });
+    expect(after.bridge.discovery.hermes.directories).toEqual(["plugins", "hermes-agent"].map(name => ({ path: join(f.a.home, ".hermes", name), sha256: null })));
     expect(installed.backups.length).toBeGreaterThan(0);
     expect(installed.backups.some((path: string) => readFileSync(path, "utf8") === before.get(policyPath))).toBe(true);
     const rollback = json(join(dirname(installed.backups[0]), "receipt.json"));
@@ -112,14 +123,23 @@ test.skipIf(!previousCli)("actual previous CLI survives a refused partial upgrad
       expect(JSON.stringify(hooks)).toContain(binary); expect(JSON.stringify(hooks)).not.toContain(oldCommand);
       expect((await f.a.hook(agent, "UserPromptSubmit", { session_id: `candidate-${agent}`, prompt: "review the upgraded setup" })).hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
     }
-    expect((await f.a.ok(["hook", "install", "--agent", "claude,codex", "--selection-profile", "engineering", "--apply", "--json"])).changed).toEqual([]);
+    expect(readFileSync(allowlist, "utf8")).toBe(before.get(allowlist)!);
+    expect(readFileSync(hermesSupervisor, "utf8")).toContain(binary);
+    expect(readFileSync(hermesSupervisor, "utf8")).not.toContain(oldCommand);
+    expect((await hermesPrompt()).context).toContain("Published 1.0.0");
+    expect((await f.a.ok(["hook", "install", "--agent", "claude,codex,hermes", "--selection-profile", "engineering", "--apply", "--json"])).changed).toEqual([]);
+    put(join(f.a.home, ".hermes/plugins/unreviewed/plugin.yaml"), "name: unreviewed\n");
+    const drift = await hermesPrompt();
+    expect(drift.context).toContain("Required Skills context is unavailable");
+    expect(drift.context).not.toContain("Published 1.0.0");
     // The ordinary no-agent-flag command upgrades a real v1 setup as well.
-    for (const agent of ["claude", "codex"]) await f.b.ok(["hook", "install", "--agent", agent, "--selection-profile", "engineering", "--command", oldCommand, "--apply", "--json"], { cli: previousCli });
+    for (const agent of installedAgents) await f.b.ok(["hook", "install", "--agent", agent, "--selection-profile", "engineering", "--command", oldCommand, "--apply", "--json"], { cli: previousCli });
     const secondPolicy = join(f.b.data, "agent-policy.json"); expect(json(secondPolicy).bridge.version).toBe(1);
     const all = await f.b.ok(["hook", "install", "--selection-profile", "engineering", "--apply", "--json"]);
     expect(all.applied).toBe(true);
     expect(json(secondPolicy).bridge.version).toBe(2);
     expect(Object.values(json(secondPolicy).bridge.commands).every(command => command === binary)).toBe(true);
+    expect(json(secondPolicy).bridge.discovery.hermes.directories).toHaveLength(2);
   } finally { await f.close(); }
 });
 
