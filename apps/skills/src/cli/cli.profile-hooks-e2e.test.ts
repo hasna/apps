@@ -331,3 +331,37 @@ test.skipIf(!nativeClaude)("installed Claude delivers selected context and adver
     } finally { clearTimeout(timer); }
   } finally { modelServer?.stop(true); await f.close(); }
 });
+
+test("Hermes compiled native adapter emits selected context through shlex commands and blocks native fallback", async () => {
+  const f = await fixture();
+  try {
+    await f.a.ok(["hook", "install", "--agent", "hermes", "--selection-profile", "engineering", "--command", executable, "--apply", "--json"]);
+    const config = Bun.YAML.parse(readFileSync(join(f.a.home, ".hermes/config.yaml"), "utf8")) as any;
+    const definitions = ["pre_llm_call", "pre_tool_call"].map(event => ({ event, command: config.hooks[event][0].command }));
+    // Normal trust records in an isolated fixture HOME; no native client is launched.
+    put(join(f.a.home, ".hermes/shell-hooks-allowlist.json"), JSON.stringify({ approvals: definitions }));
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    const python = Bun.which("python3"); if (!python) throw new Error("Python shlex is required for Hermes adapter verification");
+    async function invoke(event: string, payload: unknown) {
+      const command = definitions.find(entry => entry.event === event)!.command;
+      const child = Bun.spawn([python!, "-c", "import shlex,subprocess,sys; sys.exit(subprocess.call(shlex.split(sys.argv[1])))", command], { cwd: f.a.project, env: f.a.env, stdin: new Blob([JSON.stringify(payload)]), stdout: "pipe", stderr: "pipe" });
+      const timeout = setTimeout(() => child.kill("SIGKILL"), 12_000);
+      try { const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]); expect(stderr).toBe(""); expect(exitCode).toBe(0); return JSON.parse(stdout); }
+      finally { clearTimeout(timeout); }
+    }
+    const input = { cwd: f.a.project, session_id: "hermes-fixture", hook_event_name: "pre_llm_call", extra: { user_message: "$review-code", is_first_turn: true } };
+    const result = await invoke("pre_llm_call", input);
+    expect(result.context).toContain(f.versions[0]!.skillMd); expect(result.context).toContain("Skills loading policy");
+    expect(result.hookSpecificOutput).toBeUndefined();
+    const requestCount = f.requests.length;
+    const tool = { cwd: f.a.project, hook_event_name: "pre_tool_call", tool_name: "skill_view", tool_input: { name: "skills-cli" } };
+    expect(await invoke("pre_tool_call", tool)).toEqual({ action: "continue" });
+    for (const body of [[], { ...tool, tool_input: { name: "review-code" } }, { ...tool, tool_name: "skill_manage" }]) expect((await invoke("pre_tool_call", body)).action).toBe("block");
+    expect(f.requests).toHaveLength(requestCount);
+    put(join(f.a.home, ".hermes/skills/reintroduced/SKILL.md"), "Native fallback must never load.\n");
+    expect((await invoke("pre_tool_call", { ...tool, tool_name: "terminal", tool_input: {} })).action).toBe("block");
+    const refused = await invoke("pre_llm_call", { ...input, extra: { user_message: "continue", is_first_turn: false } });
+    expect(refused.context).toContain("Required Skills context is unavailable"); expect(refused.context).not.toContain("Native fallback must never load");
+    expect(f.requests).toHaveLength(requestCount);
+  } finally { await f.close(); }
+});
