@@ -398,3 +398,32 @@ Invalid selections fail before any apply write. Prune requires the marker
 deletion authority. Adoption also leaves every already-marked directory alone.
 Rollback records contain identities, hashes and markers, not backups of removed
 file content.
+
+## Recovering interrupted dependency preparation
+
+Local executable skills prepare missing dependencies before running their entry,
+including when `--help` is forwarded to that entry. Preparation has a 60-second
+default deadline; callers of the public root `runSkill` export can set
+`preparationTimeoutMs`. Installer diagnostics are drained without exposing
+registry URLs or lifecycle output. A failed preparation returns a nonzero result
+and the CLI records a failed run.
+
+The selected skill directory temporarily contains `.skills-dependency-preparation`.
+Successful preparation removes this marker. A confirmed failure keeps a retryable
+failed state, so a later invocation prepares again even if `node_modules` was
+partially created. Existing dependencies are preserved.
+
+An interrupted, active, malformed, or symlinked marker refuses execution. To recover:
+
+1. Identify the selected skill directory and confirm that no dependency installer
+   or lifecycle child is still running for it. Do not terminate a process based on
+   a PID found in a skill directory.
+2. Review the skill's package and lifecycle scripts, then run `bun install --no-save`
+   in that exact directory with the intended environment. Require a successful exit.
+3. Remove only that directory's `.skills-dependency-preparation` marker, then retry
+   the original Skills command. Preserve `node_modules` and all other skill files.
+
+Do not remove an incomplete marker merely to bypass preparation. If the directory
+is read-only, prepare it through its owner before running it.
+
+The root `.skills-dependency-preparation` directory is local runtime state. Bundles, portable copies, and authoring snapshots exclude it; a nested directory with that name remains authored content. Moving an existing local corpus preserves its dependency tree and preparation state together.

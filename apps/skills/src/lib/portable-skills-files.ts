@@ -43,12 +43,13 @@ const ANY_SEGMENT_COPY_EXCLUDES = new Set([
   "node_modules",
 ]);
 
-// Build-output directories excluded only at the FIRST path segment (the skill root).
+// Build output and local runtime state excluded only at the FIRST path segment (the skill root).
 // A nested `references/build/` or `docs/dist/` is legitimate content and must survive.
 const FIRST_SEGMENT_COPY_EXCLUDES = new Set([
   "dist",
   "build",
   ".turbo",
+  ".skills-dependency-preparation",
 ]);
 
 const DEFAULT_INPUTS: PortableSkillInput[] = [
@@ -471,7 +472,7 @@ export function copySkillDirectory(source: string, destination: string): void {
 
 function isExcludedCopyEntry(name: string, isFirstSegment: boolean): boolean {
   if (ANY_SEGMENT_COPY_EXCLUDES.has(name)) return true;
-  // Build output only counts as junk at the skill root; nested copies are real content.
+  // Root build output/runtime state is not portable; nested copies are real content.
   if (isFirstSegment && FIRST_SEGMENT_COPY_EXCLUDES.has(name)) return true;
   // AppleDouble sidecar files (`._SKILL.md`, `._foo`) written by macOS — any depth.
   if (name.startsWith("._")) return true;
