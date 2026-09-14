@@ -1,3 +1,4 @@
+import { AGENT_POLICY_LIMITS } from "./agent-policy-limits.js";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -39,7 +40,7 @@ function projected(source: DiscoverySource, changes?: Map<string, string>): stri
   return digest(JSON.stringify(Object.fromEntries((source.fields ?? []).map(field => [field, (object as Record<string, unknown>)[field] ?? null]))));
 }
 export function verifyAgentDiscovery(binding: AgentDiscoveryBinding): void {
-  if (!binding || !Array.isArray(binding.sources) || !Array.isArray(binding.roots) || binding.sources.length > 2048 || binding.roots.length > 512) throw new Error("Invalid native discovery binding");
+  if (!binding || !Array.isArray(binding.sources) || !Array.isArray(binding.roots) || binding.sources.length > AGENT_POLICY_LIMITS.discoverySources || binding.roots.length > AGENT_POLICY_LIMITS.discoveryRoots) throw new Error("Invalid native discovery binding");
   for (const source of binding.sources) {
     if (source.format !== undefined && (!["json", "toml"].includes(source.format) || !Array.isArray(source.fields) || !source.fields.length || source.fields.length > 64 || source.fields.some(field => typeof field !== "string" || !field))) throw new Error("Invalid native discovery projection");
     if (source.sha256 !== null && !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Invalid native discovery digest");

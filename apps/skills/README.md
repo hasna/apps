@@ -70,6 +70,12 @@ copy, stale plugin registration, or incomplete scan refuses the prompt and
 reports repair guidance. These are checks on configured native discovery, not
 an operating-system restriction on arbitrary file reads.
 
+Agent policies support up to 1 MiB of serialized UTF-8 JSON, with bounded agent
+and discovery collections (2,048 sources and 512 roots per agent). Installation
+validates the complete resulting policy before writing configuration or backups;
+the same limits apply when reading and guarding native context. A rejected plan
+leaves the previous policy intact.
+
 Hook installation preserves unrelated configuration, hooks, and plugin assets.
 It disables discovered Codex native skills; exact system-skill trees can remain
 only with their hash-bound disabled paths; migration preserves these package files. A client that restores or changes
