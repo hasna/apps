@@ -125,6 +125,29 @@ test("upload closes an unconsumed or partially consumed body after an early resp
   }
 });
 
+test("hung upload cancellation is deadline-bounded without replacing a primary error or claiming success", async () => {
+  for (const [status, expectedCode] of [[500, "http_error"], [200, "timeout"]] as const) {
+    let cancelInvoked = false;
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelInvoked = true;
+        return new Promise<void>(() => {});
+      },
+    });
+    const client = new HostedRecordingsClient({
+      apiBase: base,
+      timeoutMs: 30,
+      credentialProvider: () => "fictional-access",
+      fetch: fakeFetch(() => Response.json(status === 200 ? available : { error: "fictional early failure" }, { status })),
+    });
+    const started = Date.now();
+    await expect(client.uploadAudio(id, { body, byteLength: wav.byteLength, sha256: sha, retainAudio: true }))
+      .rejects.toMatchObject({ code: expectedCode });
+    expect(cancelInvoked).toBe(true);
+    expect(Date.now() - started).toBeLessThan(500);
+  }
+});
+
 test("upload validates size, parity, digest, consent and body before credentials or fetch", async () => {
   let calls = 0;
   let credentials = 0;

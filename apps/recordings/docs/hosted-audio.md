@@ -21,6 +21,11 @@ The shared client exposes these operations:
   `Content-Length`, `Accept-Ranges: bytes`, `x-audio-sha256`, and, for 206,
   `Content-Range`.
 
+Upload cleanup is awaited through the operation deadline. A caller-provided
+`ReadableStream` controls its own `cancel()` callback; JavaScript cannot
+force-close a callback that never settles. In that case the SDK returns a
+`timeout` after the deadline, while preserving an earlier transport error.
+
 The CLI reads and writes explicit regular files. Upload and download commands
 are available under hosted mode:
 

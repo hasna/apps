@@ -157,9 +157,13 @@ export class Transport {
     const onAbort = () => controller.abort();
     if (options.signal?.aborted) controller.abort();
     else options.signal?.addEventListener("abort", onAbort, { once: true });
+    const deadline = Date.now() + this.#timeout;
     const timer = setTimeout(() => { timedOut = true; controller.abort(); }, this.#timeout);
     let response: Response | undefined;
     let requestBody: AudioBody = upload.body;
+    let result: { status: 200; data?: unknown } | undefined;
+    let failure: RecordingsSDKError | undefined;
+    let cleanupTimedOut = false;
     try {
       requestBody = managedAudioBody(upload.body, controller.signal);
       controller.signal.throwIfAborted();
@@ -181,21 +185,26 @@ export class Transport {
       assertNoRedirect(response, url);
       if (response.status !== 200) throw statusError(response);
       const data = await readJSON(response, controller.signal, this.#limit);
-      return { status: 200, data };
+      result = { status: 200, data };
     } catch (error) {
-      if (controller.signal.aborted) throw new RecordingsSDKError(timedOut ? "timeout" : "aborted");
-      if (error instanceof RecordingsSDKError) throw error;
-      throw new RecordingsSDKError("network_error");
+      failure = controller.signal.aborted ? new RecordingsSDKError(timedOut ? "timeout" : "aborted")
+        : error instanceof RecordingsSDKError ? error : new RecordingsSDKError("network_error");
     } finally {
-      clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);
       // The request body may still be locked by fetch when an early response
       // arrives. Abort the body wrapper first so its source closes even then.
       controller.abort();
-      await response?.body?.cancel().catch(() => {});
-      await cancelAudioBody(requestBody);
-      if (requestBody !== upload.body) await cancelAudioBody(upload.body);
+      if (!await boundedCleanup(() => response?.body ? response.body.cancel() : Promise.resolve(), deadline)) cleanupTimedOut = true;
+      if (!await boundedCleanup(() => cancelAudioBody(requestBody), deadline)) cleanupTimedOut = true;
+      if (requestBody !== upload.body && !await boundedCleanup(() => cancelAudioBody(upload.body), deadline)) cleanupTimedOut = true;
+      clearTimeout(timer);
     }
+    // A caller controls ReadableStream.cancel(). JavaScript cannot force-close a
+    // callback that never settles, so a successful request becomes a timeout at
+    // the operation deadline; an existing transport failure remains primary.
+    if (failure) throw failure;
+    if (cleanupTimedOut) throw new RecordingsSDKError("timeout");
+    return result!;
   }
 
   /**
@@ -319,6 +328,21 @@ async function cancelAudioBody(body: AudioBody): Promise<void> {
   const cleanup = managedAudioCleanup.get(body);
   if (cleanup) { await cleanup(); return; }
   await body.cancel().catch(() => {});
+}
+async function boundedCleanup(task: () => Promise<unknown>, deadline: number): Promise<boolean> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return false;
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (completed: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(completed);
+    };
+    const timer = setTimeout(() => finish(false), remaining);
+    Promise.resolve().then(task).then(() => finish(true), () => finish(true));
+  });
 }
 function managedAudioBody(body: AudioBody, signal: AbortSignal): AudioBody {
   if (!(body instanceof ReadableStream)) return body;
