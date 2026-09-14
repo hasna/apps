@@ -1,5 +1,5 @@
 ---
-"@hasna/recordings": minor
+"@hasna/recordings": patch
 ---
 
 Expose the existing validated hosted recording save operation through the
