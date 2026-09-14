@@ -18,8 +18,13 @@ The shared client exposes these operations:
   `retainAudio: true`.
 - `GET /v1/recordings/:id/audio` returns a bounded raw stream with status 200
   or 206. A range request uses one `bytes=...` range. The response includes
-  `Content-Length`, `Accept-Ranges: bytes`, `x-audio-sha256`, and, for 206,
-  `Content-Range`.
+  `x-audio-byte-length`, `Accept-Ranges: bytes`, `x-audio-sha256`, and, for 206,
+  `Content-Range`. The byte-length header describes this response body, including
+  only the selected span for a range. `Content-Length` is retained when the HTTP
+  server supports it for streaming bodies. Clients accept either size header,
+  require them to agree when both are present, and verify the exact streamed
+  byte count within the configured maximum. This also supports chunked responses
+  without buffering the recording or an extra metadata request.
 
 Upload cleanup is awaited through the operation deadline. A caller-provided
 `ReadableStream` controls its own `cancel()` callback; JavaScript cannot

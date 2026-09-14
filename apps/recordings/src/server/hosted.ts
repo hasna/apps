@@ -105,13 +105,14 @@ function audioUploadInput(request: Request): { body: ReadableStream<Uint8Array>;
   }
   return { body: request.body, byteLength, sha256: sha256!, retainAudio: true };
 }
-function audioResponse(response: { status: 200 | 206; headers: Headers; body: ReadableStream<Uint8Array> }): Response {
+function audioResponse(response: { status: 200 | 206; headers: Headers; body: ReadableStream<Uint8Array>; byteLength: number }): Response {
   const headers = new Headers();
   for (const name of ["content-type", "content-length", "cache-control", "accept-ranges", "etag",
-    "x-audio-sha256", "content-disposition", "content-range"]) {
+    "x-audio-sha256", "x-audio-byte-length", "content-disposition", "content-range"]) {
     const value = response.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
+  headers.set("x-audio-byte-length", String(response.byteLength));
   headers.set("x-content-type-options", "nosniff");
   return new Response(response.body, { status: response.status, headers });
 }

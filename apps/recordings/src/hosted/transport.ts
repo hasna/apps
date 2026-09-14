@@ -241,12 +241,7 @@ export class Transport {
         ? response.headers.get("x-audio-sha256")! : undefined;
       if (!sha256) throw new RecordingsSDKError("invalid_response");
       if (response.headers.get("accept-ranges")?.trim().toLowerCase() !== "bytes") throw new RecordingsSDKError("invalid_response");
-      const declared = response.headers.get("content-length");
-      if (declared === null || !/^\d+$/.test(declared)) throw new RecordingsSDKError("invalid_response");
-      const byteLength = Number(declared);
-      if (!Number.isSafeInteger(byteLength) || byteLength > this.#audioLimit || byteLength > MAX_AUDIO_BYTES) {
-        throw new RecordingsSDKError("response_too_large");
-      }
+      const byteLength = audioResponseByteLength(response.headers, this.#audioLimit);
       if (response.status === 200 && byteLength < WAV_HEADER_BYTES + 2) {
         throw new RecordingsSDKError("invalid_response");
       }
@@ -403,6 +398,24 @@ function validateAudioRange(value: string | undefined): void {
   if (!Number.isSafeInteger(start) || (end !== undefined && (!Number.isSafeInteger(end) || end < start))) {
     throw new RecordingsSDKError("invalid_input");
   }
+}
+function audioResponseByteLength(headers: Headers, limit: number): number {
+  const contentLength = parseAudioLengthHeader(headers.get("content-length"));
+  const audioLength = parseAudioLengthHeader(headers.get("x-audio-byte-length"));
+  if (contentLength === undefined && audioLength === undefined ||
+      contentLength !== undefined && audioLength !== undefined && contentLength !== audioLength) {
+    throw new RecordingsSDKError("invalid_response");
+  }
+  const byteLength = contentLength ?? audioLength!;
+  if (byteLength > limit || byteLength > MAX_AUDIO_BYTES) throw new RecordingsSDKError("response_too_large");
+  return byteLength;
+}
+function parseAudioLengthHeader(value: string | null): number | undefined {
+  if (value === null) return undefined;
+  if (!/^\d+$/.test(value)) throw new RecordingsSDKError("invalid_response");
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new RecordingsSDKError("response_too_large");
+  return parsed;
 }
 function parseContentRange(value: string | null): HostedAudioRange {
   const match = value?.match(/^bytes (\d+)-(\d+)\/(\d+)$/);

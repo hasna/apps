@@ -211,6 +211,48 @@ test("MCP binary tools stay unavailable without both explicit directory and allo
   } finally { await client.close(); await server.close(); }
 });
 
+test("real Bun streamed audio uses x-audio-byte-length through the HTTP proxy", async () => {
+  const upstream = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      expect(new URL(request.url).pathname).toBe("/v1/recordings/" + id + "/audio");
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(wav); controller.close(); },
+      }), { headers: {
+        "content-type": "audio/wav", "accept-ranges": "bytes", "x-audio-sha256": sha,
+        "x-audio-byte-length": String(wav.byteLength),
+      } });
+    },
+  });
+  const upstreamFetch = fakeFetch(async (input, init) => {
+    const response = await globalThis.fetch(input, init);
+    expect(response.headers.get("content-length")).toBeNull();
+    return response;
+  });
+  const proxy = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: buildHostedFetch({
+      apiBase: "http://127.0.0.1:" + upstream.port + "/v1/",
+      fetch: upstreamFetch,
+    }),
+  });
+  const client = new HostedRecordingsClient({
+    apiBase: "http://127.0.0.1:" + proxy.port + "/v1/",
+    credentialProvider: () => "fictional-access",
+  });
+  try {
+    const response = await client.downloadAudio(id);
+    expect(response.byteLength).toBe(wav.byteLength);
+    expect(response.headers.get("x-audio-byte-length")).toBe(String(wav.byteLength));
+    expect(await new Response(response.body).arrayBuffer()).toEqual(wav.buffer);
+  } finally {
+    await proxy.stop(true);
+    await upstream.stop(true);
+  }
+}, 10_000);
+
 test("HTTP audio routes keep metadata JSON separate from raw transfer, enforce write gate and preserve 416", async () => {
   let calls = 0;
   const upstream = fakeFetch(async (url, init) => {
@@ -248,6 +290,7 @@ test("HTTP audio routes keep metadata JSON separate from raw transfer, enforce w
   expect(uploadReply.status).toBe(200); expect(await uploadReply.json()).toEqual(metadata);
   const downloadReply = await readOnly(new Request("http://127.0.0.1/v1/recordings/" + id + "/audio", { headers: auth }));
   expect(downloadReply.status).toBe(200); expect(downloadReply.headers.get("x-audio-sha256")).toBe(sha);
+  expect(downloadReply.headers.get("x-audio-byte-length")).toBe(String(wav.byteLength));
   expect(await downloadReply.arrayBuffer()).toEqual(wav.buffer);
   const bad = await writeEnabled(new Request("http://127.0.0.1/v1/recordings/" + id + "/audio", { method: "PUT",
     headers: { ...auth, "content-type": "audio/wav", "content-length": String(wav.byteLength), "x-audio-sha256": sha }, body: wav }));

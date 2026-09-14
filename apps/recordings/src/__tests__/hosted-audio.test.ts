@@ -205,6 +205,58 @@ test("metadata and download preserve the raw stream and validate full-file and r
   expect(calls).toBe(2);
 });
 
+test("download accepts the exact audio length header for chunked responses and rejects conflicts", async () => {
+  const headers = (extra: Record<string, string>) => ({
+    "content-type": "audio/wav", "accept-ranges": "bytes", "x-audio-sha256": sha, ...extra,
+  });
+  const responses: Response[] = [
+    new Response(wav, { headers: headers({ "x-audio-byte-length": String(wav.byteLength) }) }),
+    new Response(wav.slice(44, 100), { status: 206, headers: headers({
+      "x-audio-byte-length": "56", "content-range": "bytes 44-99/" + wav.byteLength,
+    }) }),
+    new Response(wav, { headers: headers({
+      "content-length": String(wav.byteLength), "x-audio-byte-length": String(wav.byteLength),
+    }) }),
+    new Response(wav, { headers: headers({
+      "content-length": String(wav.byteLength), "x-audio-byte-length": String(wav.byteLength + 2),
+    }) }),
+    new Response(wav, { headers: headers({ "x-audio-byte-length": "not-a-length" }) }),
+    new Response(wav, { headers: headers({
+      "content-length": "not-a-length", "x-audio-byte-length": String(wav.byteLength),
+    }) }),
+  ];
+  const client = new HostedRecordingsClient({
+    apiBase: base,
+    credentialProvider: () => "fictional-access",
+    fetch: fakeFetch(() => responses.shift()!),
+  });
+  const full = await client.downloadAudio(id);
+  expect(full.byteLength).toBe(wav.byteLength);
+  expect(await new Response(full.body).arrayBuffer()).toEqual(wav.buffer);
+  const range = await client.downloadAudio(id, "bytes=44-99");
+  expect(range.byteLength).toBe(56);
+  expect(range.range).toEqual({ start: 44, end: 99, total: wav.byteLength });
+  expect(await new Response(range.body).arrayBuffer()).toEqual(wav.slice(44, 100).buffer);
+  const matching = await client.downloadAudio(id);
+  expect(await new Response(matching.body).arrayBuffer()).toEqual(wav.buffer);
+  for (let index = 0; index < 3; index++) {
+    await expect(client.downloadAudio(id)).rejects.toMatchObject({ code: "invalid_response" });
+  }
+});
+
+test.each([-2, 2])("chunked download enforces the declared byte count with delta %i", async delta => {
+  const bytes = new Uint8Array(wav.byteLength + delta);
+  bytes.set(wav.subarray(0, Math.min(wav.byteLength, bytes.byteLength)));
+  const client = new HostedRecordingsClient({ apiBase: base, credentialProvider: () => "fictional-access",
+    fetch: fakeFetch(() => new Response(bytes, { headers: {
+      "content-type": "audio/wav", "accept-ranges": "bytes", "x-audio-sha256": sha,
+      "x-audio-byte-length": String(wav.byteLength),
+    } })),
+  });
+  const result = await client.downloadAudio(id);
+  await expect(new Response(result.body).arrayBuffer()).rejects.toMatchObject({ code: "invalid_response" });
+});
+
 test("download refuses malformed content type, digest, lengths, ranges and unsupported status without consuming body", async () => {
   const responses = [
     new Response(wav, { headers: { "content-type": "application/json", "content-length": String(wav.byteLength), "accept-ranges": "bytes", "x-audio-sha256": sha } }),
