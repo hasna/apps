@@ -66,9 +66,30 @@ instructions, without a copied catalogue. Claude's native Skill tool admits
 that bridge after other copies are retired. Prompt guards verify the owned
 bridge bytes, required native configuration, and discovered home/project skill
 paths before loading context. A missing or changed bridge, newly discovered
-copy, stale plugin registration, or incomplete scan refuses the prompt and
-reports repair guidance. These are checks on configured native discovery, not
+copy, stale plugin registration, or incomplete scan reports repair guidance and
+refuses loading. Most adapters also block the prompt; Hermes has the native
+non-blocking prompt-hook limitation described below. These are checks on configured native discovery, not
 an operating-system restriction on arbitrary file reads.
+
+Hermes 0.20.5 uses `pre_llm_call` to add selected context and `pre_tool_call`
+with `fail_closed: true` and a small owned supervisor to guard tool calls. The
+supervisor maps Skills child failures, timeouts and missing/invalid directives
+to the native explicit block response and exit code 2. Installation edits `config.yaml`
+while preserving unrelated values/comments and creates the native
+`.no-bundled-skills` opt-out marker to prevent bundled payloads from reappearing.
+The supervisor stays in the Skills data directory and its bytes/command are
+checked before native loading. Installation leaves the native shell-hook
+allowlist unchanged: approve the two exact
+managed event/command pairs through Hermes normal hook trust and restart.
+The adapter refuses unreviewed installed plugin sources and custom Hermes
+homes/profiles, user-specific tilde expansion, and `TERMINAL_CWD` overrides.
+Retire native payloads before use. Legacy `skills-cli.md` files can shadow the
+bridge and must also be preserved and retired before proceeding. Only `skill_view(name:
+"skills-cli")` is allowed natively; author payloads with Skills CLI commands.
+Hermes itself fails open on `pre_llm_call` errors. A returned refusal is visible
+context, and the trusted pre-tool guard blocks drift and native skill fallback;
+this is not a claim that Hermes can prevent every model call after a failed
+prompt hook or guarantee refusal if the native host/supervisor itself dies. Arbitrary project/plugin paths still require a discovery audit.
 
 Hook installation preserves unrelated configuration, hooks, and plugin assets.
 It disables discovered Codex native skills; exact system-skill trees can remain

@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
+import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-hermes.js";
 import { selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, type IntegrationAgent } from "../../lib/agent-integration.js";
@@ -17,7 +18,7 @@ export function registerAgentIntegration(parent: Command): void {
   const hook = parent.command("hook").description("Load selected Skills context through agent lifecycle hooks");
   hook.command("agents").option("--json", "Output the adapter capability inventory", false)
     .description("Show maintained native adapters and explicit coverage limits")
-    .action(async () => { await writeCliOutput(JSON.stringify({ agents: INTEGRATION_AGENTS.map(agent => ({ agent, bridge: true, ...AGENT_ADAPTERS[agent] })), inventoryOnly: ["hermes", "codewith", "windsurf", "pi", "amp", "cline", "roo", "copilot"], limitations: ["Cursor prompt hooks gate submission; selected context is injected at session start only.", "Native discovery checks cover known home roots and current project ancestors. External plugin hook injection and arbitrary added directories require separate review.", "Hermes is inventoried; a hook that fails open is not equivalent to a managed prompt guard.", "Restart agents and use their normal hook trust controls after installation."] }, null, 2)); });
+    .action(async () => { await writeCliOutput(JSON.stringify({ agents: INTEGRATION_AGENTS.map(agent => ({ agent, bridge: true, ...AGENT_ADAPTERS[agent] })), inventoryOnly: ["codewith", "windsurf", "pi", "amp", "cline", "roo", "copilot"], limitations: ["Cursor prompt hooks gate submission; selected context is injected at session start only.", "Native discovery checks cover known home roots and current project ancestors. External plugin hook injection and arbitrary added directories require separate review.", "Hermes injects selected prompt context, but native pre_llm_call fails open. Exact native hook trust, bundled reseeding opt-out, native payload retirement and a supervised pre-tool guard are required. Child failures block explicitly; native host/supervisor death is not a universal fail-closed guarantee.", "Restart agents and use their normal hook trust controls after installation."] }, null, 2)); });
   hook.command("install")
     .option("--agent <agent>", `Agent to configure: ${INTEGRATION_AGENTS.join(", ")}, all`, "all")
     .option("--command <path>", "Skills executable used by the hook", "skills")
@@ -46,15 +47,17 @@ export function registerAgentIntegration(parent: Command): void {
     .option("--selection-profile <id>", "Selection profile to load")
     .description("Read native lifecycle JSON on stdin and return selected context")
     .action(async (options) => {
-      let event = "UserPromptSubmit";
+      // The installed blocking event must survive malformed JSON/input too.
+      let event = options.agent === "hermes" && options.event === "pre_tool_call" ? "pre_tool_call" : "UserPromptSubmit";
       try {
         if (agents(options.agent).length !== 1) throw new Error("A hook invocation requires one agent");
         const inputText = readFileSync(0, "utf8");
         if (inputText.length > 1024 * 1024) throw new Error("Hook input is too large");
-        const input = JSON.parse(inputText);
+        let input = JSON.parse(inputText);
         if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Expected hook input object");
         const nativeEvent = options.event ?? input.hook_event_name ?? event;
-        event = normalizeAgentHookEvent(options.agent, nativeEvent);
+        if (options.agent === "hermes") input = normalizeHermesHookInput({ ...input, hook_event_name: nativeEvent });
+        event = options.agent === "hermes" ? input.hook_event_name : normalizeAgentHookEvent(options.agent, nativeEvent);
         input.hook_event_name = event;
         const projects: string[] = [process.cwd()];
         if (input.cwd !== undefined) {
@@ -66,6 +69,12 @@ export function registerAgentIntegration(parent: Command): void {
           projects.push(...input.workspace_roots);
           input.cwd ??= input.workspace_roots[0] ?? process.cwd();
           input.session_id ??= input.conversation_id;
+        }
+        if (options.agent === "hermes" && event === "pre_tool_call") {
+          assertManagedAgentBridge("hermes", { projectDirs: projects });
+          assertHermesTool(input);
+          await writeCliOutput(JSON.stringify({ action: "continue" }));
+          return;
         }
         if ((options.agent === "claude" && event === "PreToolUse") || (options.agent === "gemini" && event === "BeforeTool")) {
           assertManagedAgentBridge(options.agent, { projectDirs: projects });
@@ -96,7 +105,9 @@ export function registerAgentIntegration(parent: Command): void {
           const result = JSON.parse(stdout);
           if (typeof result.context !== "string") throw new Error("Invalid Skills context response");
           const output = hookContextOutput(event, result) as { hookSpecificOutput?: { hookEventName: string; additionalContext: string } };
-          if (options.agent === "cursor") {
+          if (options.agent === "hermes") {
+            await writeCliOutput(JSON.stringify({ context: output.hookSpecificOutput?.additionalContext ?? "" }));
+          } else if (options.agent === "cursor") {
             await writeCliOutput(JSON.stringify(event === "SessionStart" ? { additional_context: output.hookSpecificOutput?.additionalContext ?? "" } : { continue: true }));
           } else {
             if (options.agent === "gemini" && output.hookSpecificOutput) output.hookSpecificOutput.hookEventName = nativeEvent;
@@ -107,7 +118,11 @@ export function registerAgentIntegration(parent: Command): void {
         const reason = error instanceof Error && error.message.startsWith("NATIVE_SKILL_DRIFT:")
           ? error.message
           : "Skills context is unavailable. Run skills sync --selection-profile <id> and skills context --stdin --json to diagnose the selected profile.";
-        if (options.agent === "claude" && event === "PreToolUse") await writeCliOutput(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }));
+        if (options.agent === "hermes") {
+          // pre_llm_call is non-blocking in Hermes. Make the refusal visible;
+          // pre_tool_call has native fail_closed and uses the blocking shape.
+          await writeCliOutput(JSON.stringify(event === "pre_tool_call" ? { action: "block", message: reason } : { context: `Required Skills context is unavailable. ${reason} Do not substitute native skill payloads; stop and repair the bridge before task actions.` }));
+        } else if (options.agent === "claude" && event === "PreToolUse") await writeCliOutput(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }));
         else if (options.agent === "cursor") await writeCliOutput(JSON.stringify({ continue: false, user_message: reason }));
         else if (options.agent === "gemini") await writeCliOutput(JSON.stringify({ decision: "deny", continue: false, reason }));
         else if (event === "UserPromptSubmit") await writeCliOutput(JSON.stringify({ decision: "block", reason }));

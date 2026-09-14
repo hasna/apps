@@ -1,10 +1,11 @@
-export const INTEGRATION_AGENTS = ["claude", "codex", "gemini", "opencode", "cursor"] as const;
+export const INTEGRATION_AGENTS = ["claude", "codex", "gemini", "opencode", "cursor", "hermes"] as const;
 export type IntegrationAgent = typeof INTEGRATION_AGENTS[number];
 export const AGENT_ADAPTERS = {
   claude: { root: ".claude/skills", config: ".claude/settings.json", events: ["UserPromptSubmit", "SessionStart", "SubagentStart"], promptContext: true },
   codex: { root: ".codex/skills", config: ".codex/hooks.json", events: ["UserPromptSubmit", "SessionStart", "SubagentStart"], promptContext: true },
   gemini: { root: ".gemini/skills", config: ".gemini/settings.json", events: ["BeforeAgent", "SessionStart"], promptContext: true },
   opencode: { root: ".config/opencode/skills", config: ".config/opencode/opencode.json", events: ["chat.message"], promptContext: true },
+  hermes: { root: ".hermes/skills", config: ".hermes/config.yaml", events: ["pre_llm_call", "pre_tool_call"], promptContext: true, promptFailureMode: "open", toolFailureMode: "supervised-child-errors-block", requiresNativeTrust: true },
   cursor: { root: ".cursor/skills", config: ".cursor/hooks.json", events: ["beforeSubmitPrompt", "sessionStart"], promptContext: false },
 } as const;
 
