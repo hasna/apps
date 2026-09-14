@@ -308,6 +308,11 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
   const priorSnapshot = readManagedSkillPolicySnapshot(dataDir), previousPolicy = priorSnapshot?.text ?? null, policy = priorSnapshot?.value ?? {};
   if (policy.bridge !== undefined && (!policy.bridge || typeof policy.bridge !== "object" || Array.isArray(policy.bridge))) throw new Error("Invalid existing Skills bridge policy");
   if (policy.bridge?.agents !== undefined && (!Array.isArray(policy.bridge.agents) || policy.bridge.agents.some((agent: unknown) => !INTEGRATION_AGENTS.includes(agent as IntegrationAgent)))) throw new Error("Invalid existing bridge agent inventory");
+  const priorAgents: IntegrationAgent[] = policy.bridge?.agents ?? [];
+  if (priorAgents.length && (policy.bridge.version !== CLI_BRIDGE_VERSION || policy.bridge.digest !== CLI_BRIDGE_DIGEST)) {
+    const omitted = priorAgents.filter(agent => !options.agents.includes(agent));
+    if (omitted.length) throw new Error(`BRIDGE_UPGRADE_REQUIRES_ALL_AGENTS: the shared bridge version is changing; include every configured adapter with --agent ${[...new Set([...priorAgents, ...options.agents])].sort().join(",")} and --command pointing to this candidate executable, or use the default --agent all. No configuration has been changed.`);
+  }
   for (const field of ["commands", "profiles"]) if (policy.bridge?.[field] !== undefined && (!policy.bridge[field] || typeof policy.bridge[field] !== "object" || Array.isArray(policy.bridge[field]) || Object.entries(policy.bridge[field]).some(([key, value]) => !INTEGRATION_AGENTS.includes(key as IntegrationAgent) || typeof value !== "string" || !value || value.includes("\0")))) throw new Error(`Invalid existing bridge ${field} binding`);
   const discoveries = [...new Set(options.agents)].map(agent => resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, canonical: path => canonicalAgentPath(path, aliases) }));
   const projects = projectAncestors(options.projectDir ? [options.projectDir] : []);
@@ -375,7 +380,6 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     }
   }
   const discoveryAfter = discoveries.map(binding => rebindAgentDiscovery(binding, new Map(changes.map(change => [change.path, change.after]))));
-  const priorAgents = Array.isArray(policy.bridge?.agents) ? policy.bridge.agents : [];
   const nextPolicy = { ...policy, version: 1, loading: "cli", profileId, bridge: {
     ...policy.bridge,
     version: CLI_BRIDGE_VERSION, digest: CLI_BRIDGE_DIGEST,

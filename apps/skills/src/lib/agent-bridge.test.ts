@@ -216,10 +216,11 @@ test("an exact v1 bridge upgrades across prior adapters; customized v1 bridges a
   policy.bridge.version = 1; policy.bridge.digest = JSON.parse(PREVIOUS_CLI_BRIDGE_FILES[".hasna-skills.json"]!).contentSha256;
   writeFileSync(policyPath, JSON.stringify(policy));
   const custom = join(f.home, ".codex/skills/skills-cli/SKILL.md"); writeFileSync(custom, PREVIOUS_CLI_BRIDGE_FILES["SKILL.md"]! + "User edit\n");
-  expect(() => planAgentIntegration({ ...f, agents: ["claude"] })).toThrow("modified Skills bridge");
+  expect(() => planAgentIntegration({ ...f, agents: ["claude"] })).toThrow("BRIDGE_UPGRADE_REQUIRES_ALL_AGENTS");
+  expect(() => planAgentIntegration(f)).toThrow("modified Skills bridge");
   expect(readFileSync(custom, "utf8")).toContain("User edit");
   writeFileSync(custom, PREVIOUS_CLI_BRIDGE_FILES["SKILL.md"]!);
-  const plan = planAgentIntegration({ ...f, agents: ["claude"] });
+  const plan = planAgentIntegration(f);
   expect(plan.nativeSkills.every(entry => entry.bridge)).toBe(true);
   applyAgentIntegration(plan);
   expect(JSON.parse(readFileSync(policyPath, "utf8")).bridge.version).toBe(CLI_BRIDGE_VERSION);

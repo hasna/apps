@@ -1,6 +1,6 @@
 import { writeCliOutput } from "../output.js";
 import type { Command } from "commander";
-import { readFileSync } from "node:fs";
+import { accessSync, constants, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
 import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-hermes.js";
@@ -10,8 +10,17 @@ import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, arc
 
 function agents(value: string): IntegrationAgent[] {
   if (value === "all") return [...INTEGRATION_AGENTS];
-  if (INTEGRATION_AGENTS.includes(value as IntegrationAgent)) return [value as IntegrationAgent];
+  const selected = value.split(",");
+  if (selected.length && selected.every(agent => INTEGRATION_AGENTS.includes(agent as IntegrationAgent))) return [...new Set(selected)] as IntegrationAgent[];
   throw new Error(`Supported agents: ${INTEGRATION_AGENTS.join(", ")}, all`);
+}
+
+function currentHookExecutable(): string {
+  try {
+    const path = realpathSync(process.argv[1]!);
+    accessSync(path, constants.X_OK);
+    return path;
+  } catch { throw new Error("The running Skills entrypoint is not executable. Build an executable candidate or pass --command with its explicit executable path; an ambient skills command is not selected automatically."); }
 }
 
 export function registerAgentIntegration(parent: Command): void {
@@ -20,8 +29,8 @@ export function registerAgentIntegration(parent: Command): void {
     .description("Show maintained native adapters and explicit coverage limits")
     .action(async () => { await writeCliOutput(JSON.stringify({ agents: INTEGRATION_AGENTS.map(agent => ({ agent, bridge: true, ...AGENT_ADAPTERS[agent] })), inventoryOnly: ["codewith", "windsurf", "pi", "amp", "cline", "roo", "copilot"], limitations: ["Cursor prompt hooks gate submission; selected context is injected at session start only.", "Native discovery checks cover known home roots and current project ancestors. External plugin hook injection and arbitrary added directories require separate review.", "Hermes injects selected prompt context, but native pre_llm_call fails open. Exact native hook trust, bundled reseeding opt-out, native payload retirement and a supervised pre-tool guard are required. Child failures block explicitly; native host/supervisor death is not a universal fail-closed guarantee.", "Restart agents and use their normal hook trust controls after installation."] }, null, 2)); });
   hook.command("install")
-    .option("--agent <agent>", `Agent to configure: ${INTEGRATION_AGENTS.join(", ")}, all`, "all")
-    .option("--command <path>", "Skills executable used by the hook", "skills")
+    .option("--agent <agent>", `Agent or comma-separated adapters to configure: ${INTEGRATION_AGENTS.join(", ")}, all`, "all")
+    .option("--command <path>", "Skills executable used by the hook (defaults to this running executable)")
     .option("--selection-profile <id>", "Shared selection profile", "default")
     .option("--include-vendor", "Retained for compatibility; vendor system skills are always inventoried and disabled", false)
     .option("--discovery-inputs <file>", "Advanced reviewed active plugin roots and source hashes for unsupported registrations")
@@ -32,7 +41,7 @@ export function registerAgentIntegration(parent: Command): void {
     .action(async (options) => {
       try {
         const discoveryInputs: ReviewedDiscoveryInputs | undefined = options.discoveryInputs ? JSON.parse(readFileSync(options.discoveryInputs, "utf8")) : undefined;
-        const plan = planAgentIntegration({ agents: agents(options.agent), command: options.command, profileId: options.selectionProfile, includeVendor: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, projectDir: process.cwd() });
+        const plan = planAgentIntegration({ agents: agents(options.agent), command: options.command ?? currentHookExecutable(), profileId: options.selectionProfile, includeVendor: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases, projectDir: process.cwd() });
         const result = options.apply ? applyAgentIntegration(plan) : { changed: [], backups: [] };
         // Configuration contents can include credentials. Only paths/counts leave this command.
         const receipt = { applied: options.apply, planned: plan.changes.map(change => change.path), ...result, rootAliases: plan.rootAliases ?? [], discovery: plan.discoveryAfter, nativeSkills: plan.nativeSkills.map(entry => ({ agent: entry.agent, path: entry.path, managed: entry.managed, vendor: entry.vendor, system: entry.system === true, bridge: entry.bridge === true, independent: entry.independent === true })), requiresNativeRetirement: plan.nativeSkills.some(entry => !entry.bridge && !entry.system && !entry.independent) };

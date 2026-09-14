@@ -16,6 +16,7 @@ useDefaultTestTimeout();
 const scratch = mkdtempSync(join(tmpdir(), "skills-profile-hooks-cli-")), binary = join(scratch, "skills.js"), executable = join(scratch, "skills");
 beforeAll(async () => {
   await buildCliFixture(resolve(import.meta.dir, "index.tsx"), binary);
+  chmodSync(binary, 0o700);
   writeFileSync(executable, `#!/bin/sh\nexec '${process.execPath.replace(/'/g, "'\\''")}' '${binary.replace(/'/g, "'\\''")}' "$@"\n`); chmodSync(executable, 0o700);
 });
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -51,8 +52,8 @@ async function fixture(documentSuffix = "") {
     const home = join(root, id, "home"), data = join(home, ".hasna", "skills"), project = join(root, id, "project");
     const env = { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, USERPROFILE: home, HASNA_HOME: join(home, ".hasna"), HASNA_SKILLS_DIR: data, HASNA_SKILLS_API_KEY: token, HASNA_SKILLS_API_URL: origin, HASNA_STATION: id, NO_COLOR: "1", TERM: "dumb", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", TMPDIR: join(root, id, "tmp") };
     for (const path of [home, data, project, env.TMPDIR]) mkdirSync(path, { recursive: true });
-    async function run(args: string[], options: { stdin?: unknown; env?: Record<string, string>; cwd?: string; shellCommand?: string; slowPipe?: boolean } = {}) {
-      const command = [process.execPath, "--no-env-file", binary, ...args];
+    async function run(args: string[], options: { stdin?: unknown; env?: Record<string, string>; cwd?: string; shellCommand?: string; slowPipe?: boolean; cli?: string } = {}) {
+      const command = [process.execPath, "--no-env-file", options.cli ?? binary, ...args];
       // A shell creates a kernel pipe, unlike Bun.spawn's socket-backed capture.
       // Delay its reader to exercise backpressure before the command returns.
       const child = Bun.spawn(options.shellCommand ? ["/bin/sh", "-c", options.shellCommand] : options.slowPipe ? ["bash", "-o", "pipefail", "-c", '"$@" | { sleep 0.2; cat; }', "skills-pipe", ...command] : command, { cwd: options.cwd ?? project, env: { ...env, ...options.env }, stdin: options.stdin === undefined ? "ignore" : new Blob([JSON.stringify(options.stdin)]), stdout: "pipe", stderr: "pipe" });
@@ -72,6 +73,55 @@ async function fixture(documentSuffix = "") {
   }
   return { root, store, principal, versions, requests, a: station("station-a"), b: station("station-b"), close: async () => { server.stop(true); await handler?.close(); await governanceStore.close(); await store.close(); } };
 }
+
+const previousCli = process.env.HASNA_SKILLS_PREVIOUS_CLI_BIN;
+test.skipIf(!previousCli)("actual previous CLI survives a refused partial upgrade and all installed hooks switch to the running candidate", async () => {
+  const f = await fixture();
+  try {
+    const oldCommand = join(f.root, "previous-skills");
+    put(oldCommand, `#!/bin/sh\nexec '${process.execPath.replace(/'/g, "'\\''")}' '${previousCli!.replace(/'/g, "'\\''")}' "$@"\n`); chmodSync(oldCommand, 0o700);
+    for (const agent of ["claude", "codex"]) await f.a.ok(["hook", "install", "--agent", agent, "--selection-profile", "engineering", "--command", oldCommand, "--apply", "--json"], { cli: previousCli });
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"], { cli: previousCli });
+    await f.a.ok(["sync", "--json"], { cli: previousCli });
+    const policyPath = join(f.a.data, "agent-policy.json"), migration = join(f.a.data, "migration");
+    const paths = [policyPath, join(f.a.home, ".claude/settings.json"), join(f.a.home, ".codex/hooks.json"), ...["claude", "codex"].flatMap(agent => [join(f.a.home, `.${agent}/skills/skills-cli/SKILL.md`), join(f.a.home, `.${agent}/skills/skills-cli/.hasna-skills.json`)])];
+    const before = new Map(paths.map(path => [path, readFileSync(path, "utf8")])), backupsBefore = readdirSync(migration).sort();
+    expect(json(policyPath).bridge.version).toBe(1);
+    const refused = await f.a.run(["hook", "install", "--agent", "claude", "--command", executable, "--apply", "--json"]);
+    expect(refused.exitCode).toBe(1); expect(refused.stderr).toContain("BRIDGE_UPGRADE_REQUIRES_ALL_AGENTS"); expect(refused.stderr).toContain("--agent claude,codex");
+    for (const [path, bytes] of before) expect(readFileSync(path, "utf8")).toBe(bytes);
+    expect(readdirSync(migration).sort()).toEqual(backupsBefore);
+    for (const agent of ["claude", "codex"] as const) expect((await f.a.hook(agent, "UserPromptSubmit", { session_id: `old-${agent}`, prompt: "review the unchanged setup" })).hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+    // A staged candidate must not silently keep the ambient old Skills command.
+    const installed = await f.a.ok(["hook", "install", "--agent", "claude,codex", "--selection-profile", "engineering", "--apply", "--json"]);
+    const after = json(policyPath);
+    expect(after.bridge.version).toBe(2);
+    expect(after.bridge.commands).toEqual({ claude: binary, codex: binary });
+    expect(installed.backups.length).toBeGreaterThan(0);
+    expect(installed.backups.some((path: string) => readFileSync(path, "utf8") === before.get(policyPath))).toBe(true);
+    const rollback = json(join(dirname(installed.backups[0]), "receipt.json"));
+    for (const [path, bytes] of before) {
+      const change = rollback.changes.find((entry: any) => entry.path === path);
+      if (change) {
+        expect(change.beforeHash).toBe(createHash("sha256").update(bytes).digest("hex"));
+        expect(installed.backups.some((backup: string) => readFileSync(backup, "utf8") === bytes)).toBe(true);
+      } else expect(readFileSync(path, "utf8")).toBe(bytes);
+    }
+    for (const agent of ["claude", "codex"] as const) {
+      const hooks = json(join(f.a.home, `.${agent}`, agent === "claude" ? "settings.json" : "hooks.json")).hooks;
+      expect(JSON.stringify(hooks)).toContain(binary); expect(JSON.stringify(hooks)).not.toContain(oldCommand);
+      expect((await f.a.hook(agent, "UserPromptSubmit", { session_id: `candidate-${agent}`, prompt: "review the upgraded setup" })).hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+    }
+    expect((await f.a.ok(["hook", "install", "--agent", "claude,codex", "--selection-profile", "engineering", "--apply", "--json"])).changed).toEqual([]);
+    // The ordinary no-agent-flag command upgrades a real v1 setup as well.
+    for (const agent of ["claude", "codex"]) await f.b.ok(["hook", "install", "--agent", agent, "--selection-profile", "engineering", "--command", oldCommand, "--apply", "--json"], { cli: previousCli });
+    const secondPolicy = join(f.b.data, "agent-policy.json"); expect(json(secondPolicy).bridge.version).toBe(1);
+    const all = await f.b.ok(["hook", "install", "--selection-profile", "engineering", "--apply", "--json"]);
+    expect(all.applied).toBe(true);
+    expect(json(secondPolicy).bridge.version).toBe(2);
+    expect(Object.values(json(secondPolicy).bridge.commands).every(command => command === binary)).toBe(true);
+  } finally { await f.close(); }
+});
 
 test("built CLI flushes a complete large skill document through a pipe", async () => {
   const f = await fixture("Unicode instructions: căutare 🧭\n".repeat(4000));
@@ -356,7 +406,7 @@ const nativeClaude = process.env.HASNA_SKILLS_NATIVE_CLAUDE_BIN;
 test.skipIf(!nativeClaude)("installed Claude loads an independent project skill and enforces its native deny rule", async () => {
   const f = await fixture(); let modelServer: ReturnType<typeof Bun.serve> | undefined;
   try {
-    for (const name of ["skill-deploy", "skill-seed"]) put(join(f.a.project, `.claude/skills/${name}/SKILL.md`), `---\ndescription: Independent native fixture\n---\nPRIVATE_BODY_${name}\nRespond without calling any tools.\n`);
+    for (const name of ["skill-deploy", "skill-seed"]) put(join(f.a.project, `.claude/skills/${name}/SKILL.md`), `---\nname: display-label-for-${name}\ndescription: Independent native fixture\n---\nPRIVATE_BODY_${name}\nRespond without calling any tools.\n`);
     await f.a.install(); await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
     put(join(f.a.project, ".claude/settings.local.json"), '{"permissions":{"allow":["Skill(skill-deploy)"],"deny":["Skill(skill-seed)"]}}');
     const requests: any[] = [];

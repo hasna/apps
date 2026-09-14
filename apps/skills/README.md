@@ -91,8 +91,17 @@ user/project command names stay under Claude's native precedence and permissions
 Multiple plugin installation scopes are inventoried separately; conflicting
 records within the same scope still refuse. The exact published version 1 bridge
 upgrades to version 2 with private backups; customized bridges are preserved and
-require review. Previously configured adapters keep their hook settings while
-their owned bridge documents upgrade together.
+require review. A bridge version upgrade requires every previously configured
+adapter in the same plan. A partial request refuses before any writes and prints
+the required `--agent claude,codex` selection (using the actual installed list).
+The default `--agent all` also covers the upgrade. All selected hooks bind to the
+running executable by default, including a separately installed candidate; use
+`--command /absolute/path/to/skills` to select another executable explicitly.
+The plan previews every changed path and applying it saves the old policy,
+bridges and settings in private backups for coordinated rollback. Restart the
+affected native clients after activation, and retain the previous executable
+until their actual hook paths pass. Never mix a version 2 bridge policy with
+hooks still running the version 1 CLI.
 
 Agent policies support up to 1 MiB of serialized UTF-8 JSON, with bounded agent
 and discovery collections (2,048 sources and 512 roots per agent). Installation
