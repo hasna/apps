@@ -118,6 +118,29 @@ EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails db migrate
 EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails self-hosted key create
 ```
 
+## Message body files
+
+For multiline mail, write a UTF-8 file with actual line breaks, review the complete
+file, then use `emails send --body-file /absolute/path/body.txt --dry-run` with the
+sender, recipients, and subject. Send the same reviewed file after authorization.
+For a private structured message and durable receipt, `send-controlled apply`
+accepts `text_file` and `html_file` body sources in its descriptor.
+
+The CLI (including dry-run), SDK send paths, and API send/enqueue routes reject
+`invalid_body_url_boundary` when an HTTP(S) token contains literal backslash-plus-`n`
+or backslash-plus-`r`, such as `https://example.com/file\nRegards`. The API refuses
+before reserving a send intent, enqueueing, or calling a provider. The diagnostic
+contains no body or URL. Body bytes are never unescaped or repaired automatically.
+Actual LF/CRLF, percent-encoded URL data such as `%5Cn`, and ordinary backslashes
+outside URLs remain valid. Tokens end at whitespace or `<`, `>`, double quote,
+single quote, or backtick. Literal malformed-URL examples inside prose or code are
+also rejected; use a valid encoded URL or describe the example without an HTTP(S)
+token. This check does not prove that a link exists or that its recipient can open it.
+
+A shared link is not a MIME attachment: use the attachment option or descriptor
+when promising an attached file, and verify the send receipt rather than treating
+a dry run as delivery proof.
+
 ## Domains and readiness
 
 Emails is a multi-domain aggregator. DNS, inbound routing, outbound permission,

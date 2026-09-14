@@ -1,3 +1,4 @@
+import { assertSendBodyUrlBoundary } from "./send-body-boundary.js";
 import { searchAdmissionError } from "./search-admission-error.js";
 import { normalizeSendMetadata } from "./send-metadata.js";
 // SelfHostedMailDataSource maps the operator-configured Emails service onto the
@@ -2266,6 +2267,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
   }
 
   async send(input: MailSendInput): Promise<MailSendResult> {
+    assertSendBodyUrlBoundary(input.body, input.html);
     const metadata = normalizeSendMetadata(input.headers, input.tags);
     if (input.sendKey !== undefined && (typeof input.sendKey !== "string" || !input.sendKey.trim())) throw new Error("sendKey must be a nonempty scoped send key");
     if (input.sendKey !== undefined && input.scheduledAt) throw new Error("Scoped send keys cannot be stored in scheduled jobs");

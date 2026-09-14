@@ -113,3 +113,17 @@ describe("local send idempotency fences the PROVIDER call, not just the ledger r
     expect(second.providerId).toBe(first.providerId);
   });
 });
+
+
+it("local compatibility SDK refuses malformed body URLs before sandbox delivery or ledger writes", async () => {
+  for (const content of [
+    { text: String.raw`https://example.test/a\nRegards` },
+    { html: String.raw`<a href="https://example.test/a\r\n">Download</a>` },
+  ]) {
+    await expect(sendWithFailover(providerId, {
+      from: "agent@acme.com", to: ["client@ext.com"], subject: "Fixture", ...content,
+    }, db)).rejects.toThrow("invalid_body_url_boundary");
+  }
+  expect(await listSandboxEmails(providerId, 10, 0)).toHaveLength(0);
+  expect(ledgerCount()).toBe(0);
+});

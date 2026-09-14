@@ -1,3 +1,4 @@
+import { findSendBodyUrlBoundary } from "../../lib/send-body-boundary.js";
 import { messageSearchErrorResponse } from "./search-admission.js";
 import { setupBoundSesInbound, type SesInboundSetupCloudFactory, type SesInboundSetupInput } from "./ses-inbound-setup.js";
 import { readDomainDnsRecords, DomainDnsReadError } from "./domain-dns-read.js";
@@ -1571,6 +1572,8 @@ export async function handleSelfHostedRequest(
       // content, so it reads against the attachment-derived budget rather than
       // the 1MiB default every other route keeps.
       const body = await readJsonBody(req, MAX_SEND_JSON_BODY_BYTES);
+      const bodyFinding = findSendBodyUrlBoundary(body.text, body.html);
+      if (bodyFinding) return json(400, { error: bodyFinding.message, reason: bodyFinding.code });
       let metadata: ReturnType<typeof normalizeSendMetadata>;
       try { metadata = normalizeSendMetadata(body.headers, body.tags); }
       catch (error) { return json(400, { error: error instanceof Error ? error.message : "Invalid send metadata", reason: "invalid_send_metadata" }); }
