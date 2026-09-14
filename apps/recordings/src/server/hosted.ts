@@ -176,7 +176,6 @@ export function buildHostedFetch(options: { apiBase: string; fetch?: typeof glob
         const response = await library.downloadAudio(id, { range: audioRangeHeader(request), signal: request.signal });
         return audioResponse(response);
       }
-      }
       if (mutation) {
         if (pasteMutation) {
           return json(await new HostedPasteHistory(client).save(await pasteSaveInput(request), { signal: request.signal }), 201);

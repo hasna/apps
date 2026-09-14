@@ -103,7 +103,6 @@ export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
       const receipt = await writeAudioDownload(values.output, downloaded);
       write(JSON.stringify(receipt) + "\n");
     });
-    });
   program.command("rename <id> <title>").description("Rename one hosted recording; returns metadata without transcript text")
     .action(async (id, title) => { write(JSON.stringify(await library().rename(id, title)) + "\n"); });
   program.command("save <id> <title>").description("Save one hosted recording; returns metadata without transcript text")
