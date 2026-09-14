@@ -119,13 +119,13 @@ export function registerPortableSkillCommands(parent: Command) {
     });
 }
 
-function handleBulkPort(path: string, options: { name?: string; overwrite: boolean; json: boolean }): void {
+function handleBulkPort(path: string, options: { name?: string; overwrite: boolean; allowShadow: boolean; json: boolean }): void {
   if (options.name) {
     writePortableError(new Error("--name cannot be used with --all"), options.json);
     return;
   }
   try {
-    const summary = portPortableSkillDirectory(path, { overwrite: options.overwrite });
+    const summary = portPortableSkillDirectory(path, { overwrite: options.overwrite, allowShadow: options.allowShadow });
     clearRegistryCache();
     if (options.json) {
       console.log(JSON.stringify(summary, null, 2));
