@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { COMPLETION_SHELLS, createCliManual, generateCompletionScript, renderCliManualMarkdown, type CompletionShell } from "../../lib/cli-help.js";
-import { handleError } from "../helpers.js";
+import { handleError, printJson } from "../helpers.js";
 import { isTodosCliCommandVisibleForRoute } from "../stage-a.js";
 import type { TodosCliAuthorityInitialization } from "../stage-a.js";
 import type { TodosRemoteCommandCapability } from "../cloud-router.js";
@@ -50,7 +50,7 @@ export function registerHelpCommands(
         });
         const format = (opts.json || globalOpts.json) ? "json" : opts.format || "markdown";
         if (format === "json") {
-          console.log(JSON.stringify(manual));
+          printJson(manual);
           return;
         }
         if (format !== "markdown") throw new Error("--format must be markdown or json");
