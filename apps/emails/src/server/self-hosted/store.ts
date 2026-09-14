@@ -1,4 +1,4 @@
-import { runMessageListQuery } from "./search-admission.js";
+import { runMessageListQuery, type MessageSearchAdmission } from "./search-admission.js";
 import { WorkerSupervisorStore, WORKER_CLAIM_CTE, type WorkerFence } from "./worker-supervisor.js";
 import type { RuntimeLogEntry, RuntimeComponent } from "./runtime-log.js";
 import { ProvisionUpJobs } from "./provision-up-store.js";
@@ -1762,6 +1762,7 @@ export class EmailsSelfHostedStore {
     private readonly options: {
       allowUnsafeTestTransactions?: boolean;
       attachmentRepairPolicy?: Partial<AttachmentRepairPolicy>;
+      searchAdmission?: MessageSearchAdmission;
     } = {},
   ) {}
 
@@ -1781,6 +1782,8 @@ export class EmailsSelfHostedStore {
       isTransactional(this.client) ? this.client : undefined,
       this.options.allowUnsafeTestTransactions === true,
       attachmentRepairPolicy(this.options.attachmentRepairPolicy),
+      undefined,
+      this.options.searchAdmission,
     );
   }
 
@@ -2343,6 +2346,7 @@ export class TenantScopedStore {
     private readonly allowUnsafeTestTransactions = false,
     private readonly repairPolicy: AttachmentRepairPolicy = attachmentRepairPolicy(undefined),
     private readonly workerFence?: WorkerFence,
+    private readonly searchAdmission?: MessageSearchAdmission,
   ) {}
 
   workerSupervisor(): WorkerSupervisorStore {
@@ -2350,7 +2354,7 @@ export class TenantScopedStore {
     return new WorkerSupervisorStore(this.atomicClient, this.tenantId);
   }
   withWorkerFence(fence: WorkerFence): TenantScopedStore {
-    return new TenantScopedStore(this.client, this.tenantId, this.atomicClient, this.allowUnsafeTestTransactions, this.repairPolicy, fence);
+    return new TenantScopedStore(this.client, this.tenantId, this.atomicClient, this.allowUnsafeTestTransactions, this.repairPolicy, fence, this.searchAdmission);
   }
 
   async appendRuntimeLog(entry: Omit<RuntimeLogEntry, "id" | "created_at">): Promise<void> {
@@ -2417,7 +2421,7 @@ export class TenantScopedStore {
       ]);
       return domainConnectStore.completeDomainConnect(
         tx,
-        new TenantScopedStore(tx, this.tenantId),
+        new TenantScopedStore(tx, this.tenantId, undefined, false, undefined, undefined, this.searchAdmission),
         this.tenantId,
         claim,
         result,
@@ -2482,7 +2486,7 @@ export class TenantScopedStore {
       ]);
       return addressProvisioningStore.completeAddressProvisioning(
         tx,
-        new TenantScopedStore(tx, this.tenantId),
+        new TenantScopedStore(tx, this.tenantId, undefined, false, undefined, undefined, this.searchAdmission),
         this.tenantId,
         job,
         refs,
@@ -2589,7 +2593,7 @@ export class TenantScopedStore {
         return this.atomicClient.transaction(async tx => {
           await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
           await this.lockInboundPersistenceFence(tx, fence);
-          return new TenantScopedStore(tx, this.tenantId).recordInboundSourceProvenance(input);
+          return new TenantScopedStore(tx, this.tenantId, undefined, false, undefined, undefined, this.searchAdmission).recordInboundSourceProvenance(input);
         });
       },
     };
@@ -2599,7 +2603,7 @@ export class TenantScopedStore {
     await this.atomicClient.transaction(async tx => {
       await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
       await this.lockInboundPersistenceFence(tx, fence);
-      await new TenantScopedStore(tx, this.tenantId).recordRelayReceipt(provider, eventId, resourceId);
+      await new TenantScopedStore(tx, this.tenantId, undefined, false, undefined, undefined, this.searchAdmission).recordRelayReceipt(provider, eventId, resourceId);
     });
   }
   async findRelayReceipt(provider: string, eventId: string): Promise<{ resourceId: string | null } | null> {
@@ -3267,6 +3271,7 @@ export class TenantScopedStore {
       tenantId: this.tenantId,
       scopedClient: this.client,
       atomicClient: this.atomicClient,
+      admission: this.searchAdmission,
       query: (client) => client.many<Record<string, unknown>>(
       `SELECT ${MESSAGE_LIST_COLUMNS}
        FROM (

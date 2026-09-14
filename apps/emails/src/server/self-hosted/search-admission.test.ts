@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import type { TypedQueryClient } from "../../storage-kit/index.js";
+import { MessageSearchAdmission } from "./search-admission.js";
 import { EmailsSelfHostedStore } from "./store.js";
 import { handleSelfHostedRequest, type SelfHostedServiceDeps } from "./service.js";
 import { testAuthDeps } from "./auth/test-support.js";
@@ -12,7 +13,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function fixture(cancelSearch = false) {
+function fixture(cancelSearch = false, limit = 1) {
   const gate = deferred<never[]>();
   const started = deferred<void>();
   let searchCalls = 0;
@@ -22,7 +23,7 @@ function fixture(cancelSearch = false) {
       if (sql.includes("lower(concat_ws(")) {
         searchCalls++;
         if (cancelSearch) throw { code: "57014" };
-        if (searchCalls === 1) { started.resolve(); return gate.promise; }
+        if (searchCalls <= limit) { if (searchCalls === limit) started.resolve(); return gate.promise; }
       }
       return [];
     },
@@ -30,7 +31,7 @@ function fixture(cancelSearch = false) {
     async one<T>(): Promise<T> { return {} as T; },
     async execute() {},
   };
-  const store = new EmailsSelfHostedStore(client);
+  const store = new EmailsSelfHostedStore(client, { searchAdmission: new MessageSearchAdmission(limit) });
   const deps: SelfHostedServiceDeps = {
     client, store,
     verifier: verifyApiKey({ app: "emails", signingSecret: SIGNING_SECRET, keyStatus: async () => "active" }),
@@ -99,4 +100,20 @@ test("database search cancellation reaches both HTTP operations and aliases as a
     }
   }
   expect((await f.request("/v1/messages?limit=1"))!.status).toBe(200);
+});
+
+
+test("eight authenticated API searches share the configured store budget across route spellings and filters", async () => {
+  const f = fixture(false, 8);
+  const paths = ["/v1/messages?q=one", "/api/v1/messages?search=two", "/v1/mailbox-filters/fixture/apply", "/api/v1/mailbox-filters/fixture/apply"];
+  const requests = Array.from({ length: 8 }, (_, n) => f.request(paths[n % paths.length]!));
+  await f.started.promise;
+  try {
+    expect(f.calls()).toBe(8);
+    expect((await f.request("/v1/messages?q=overflow"))!.status).toBe(429);
+    expect((await f.request("/v1/messages?limit=1"))!.status).toBe(200);
+    expect((await f.request("/v1/messages?q=unauthenticated", false))!.status).toBe(401);
+    expect(f.calls()).toBe(8);
+  } finally { f.gate.resolve([]); }
+  expect((await Promise.all(requests)).map(response => response!.status)).toEqual(Array(8).fill(200));
 });

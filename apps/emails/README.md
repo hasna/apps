@@ -463,6 +463,25 @@ Full-text search over `/v1/messages` is passed as the `q` query parameter
 return an unfiltered page instead of a search — callers should use `q` (or
 `search`).
 
+Message searches share a bounded concurrency budget across all tenants and saved
+filters in each API process. The default admits eight simultaneous searches with
+the default ten-connection PostgreSQL pool. Set `EMAILS_SEARCH_CONCURRENCY` to a
+positive integer from 1 to 64 to change it; `EMAILS_PG_POOL_MAX` must leave at least
+one additional connection for ordinary operations. An unconfigured search budget
+shrinks to fit a smaller pool; a single-connection pool permits one search and
+cannot reserve a separate connection. Invalid explicit budgets refuse startup.
+For example, concurrency 16 requires a pool of at least 17 connections. Size the
+pool and replica count against measured database and task capacity before raising
+these settings.
+
+Excess searches refuse immediately with HTTP 429 `search_busy` and
+`Retry-After: 5`; admitted searches retain PostgreSQL's 30-second statement limit
+and return HTTP 504 `search_timeout` on cancellation. Ordinary list/read requests
+do not acquire search slots. This is a concurrency budget, not a requests-per-minute
+quota. Authentication throttles, daily send limits, provider quotas and warming
+limits remain separate. The CLI/SDK report search retry advice without automatically
+replaying a send or other write.
+
 ### Standalone compatibility surfaces
 
 The package still includes a legacy SQLite dashboard under `/api/*` and explicit
