@@ -10,7 +10,7 @@ import { handleProfileApi } from "./profile-api.js";
 import { createRuntimeService, handleRuntimeApiRequest, handleRuntimeWorkerRequest, type RuntimeService } from "./runtime-api.js";
 import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
 import { resolveDatabaseTarget } from "./database-url.js";
-import { executeRun } from "./handlers.js";
+import { LEGACY_EXECUTION_GUIDANCE, LEGACY_EXECUTION_RETIRED } from "./handlers.js";
 import {
   SkillRequestError,
   assertPublishableSlug,
@@ -364,7 +364,7 @@ async function handleApiV1(
       if (resolved.kind === "published") {
         return json(publishedPayload(resolved.record), { headers: { ETag: revisionEtag(resolved.record.revisionId) } });
       }
-      // Absent from this org's registry: the bundled corpus may still serve the slug.
+      // Resolve only the authenticated organization's published catalog.
       const skill = await getMergedSkill(store, artifactStorage, principal, id);
       return skill ? json(skill) : json({ error: "skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
     }
@@ -439,18 +439,7 @@ async function handleApiV1(
     }
 
     if (request.method === "POST" && id && !subresource) {
-      const body = await readJson(request, config.requestBodyLimitBytes);
-      const input = isRecord(body.input) ? body.input : {};
-      const args = Array.isArray(body.args) ? body.args.map(String) : [];
-      const run = await store.createRun({
-        principal,
-        slug: id,
-        input,
-        args,
-        idempotencyKey: request.headers.get("idempotency-key") || stringField(body.idempotencyKey),
-      });
-      if (config.inlineWorker) void executeRun(store, run, artifactStorage);
-      return json(runPayload(run), { status: 202 });
+      return json({ error: LEGACY_EXECUTION_GUIDANCE, code: LEGACY_EXECUTION_RETIRED }, { status: 410 });
     }
 
     if (request.method === "GET" && id && !subresource) {

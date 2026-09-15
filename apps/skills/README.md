@@ -899,7 +899,14 @@ const run = await client.submitQuotedRun("blog-article", {}, ["--topic", "Your t
 });
 ```
 
-`submitRun` remains a low-level compatibility transport. New paid integrations
+`submitRun` remains a compatibility transport for servers implementing the legacy
+submission protocol. This OSS server returns HTTP 410 (`LEGACY_EXECUTION_RETIRED`)
+for unversioned submissions and never queues or executes them. Use a selected,
+immutable executable version through `skills run <name>@<version> --target cloud`;
+see [versioned cloud execution](docs/architecture/cloud-execution-runtime.md).
+Historical run reads, logs, artifacts, and cancellation remain available.
+
+On servers that implement paid submission, new integrations
 should use `submitQuotedRun` or `submitQuotedRunWithFiles` so capability and
 approval checks run before submission. Credit counts are integers; `maxCostCents`
 is a legacy spelling for the same credit ceiling. An optional receipt is a

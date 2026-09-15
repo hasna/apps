@@ -18,6 +18,7 @@ export interface SkillsServerConfig {
   artifactPrefix: string;
   /** Optional expiring run-output namespace; immutable bundles retain artifactPrefix. */
   runArtifactPrefix?: string;
+  /** @deprecated Unversioned execution is retired; this flag cannot enable it. */
   inlineWorker: boolean;
   /**
    * HMAC key for signing served skill bundles. When set, the bundle endpoint adds
