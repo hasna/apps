@@ -29,12 +29,12 @@ export function recurringFixtureRequest(): RecurringRequest {
     maxCreditsPerRun: 1, maxCreditsPerPeriod: 2, maxCreditsTotal: 2, maxOccurrencesPerPeriod: 2, maxOccurrencesTotal: 2 };
 }
 function setup() {
-  const root = mkdtempSync(join(realpathSync(tmpdir()), "recurring-surface-unit-")), origin = "https://recurring.example.test/prefix";
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "recurring-surface-unit-")), origin = "https://recurring.example.com/prefix";
   const rootOwner = lstatSync(root);
   const env: Record<string, string | undefined> = { HOME: root, HASNA_HOME: join(root, "hasna"), HASNA_CONFIG_HOME: join(root, "config"),
     HASNA_PROFILE: "selected", HASNA_STATION: "recurring-owned-unit" };
   saveApiUrl(origin, env); saveAuthConfig({ apiKey: "inert-selected-key" }, env);
-  const sibling = { ...env, HASNA_PROFILE: "sibling" }; saveApiUrl("https://sibling.example.test", sibling); saveAuthConfig({ apiKey: "inert-sibling-key" }, sibling);
+  const sibling = { ...env, HASNA_PROFILE: "sibling" }; saveApiUrl("https://sibling.example.com", sibling); saveAuthConfig({ apiKey: "inert-sibling-key" }, sibling);
   const context = { userId: id(1), membershipId: id(2) }, identity = { user: { id: id(1), membershipId: id(2), email: "owner@example.test", displayName: null, role: "owner" }, organization: { id: id(3), name: "Owned", slug: "owned" } };
   let current: RecurringPreview, consent: RecurringConsentView | null = null, revokedAt: string | null = null, loseActivation = false;
   const calls: Array<{ path: string; method: string; body: any; authorization: string | null }> = [];
