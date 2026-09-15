@@ -152,6 +152,13 @@ async function seedRemote(client: RemoteSkillsClient, seedCorpus: string, slug: 
   return result.sha256;
 }
 
+/** A real account-owned record with no bundle; verified sync must not hydrate it. */
+async function seedMetadataOnly(client: RemoteSkillsClient, slug: string): Promise<void> {
+  const response = await client.publishSkill({ slug, displayName: slug, description: "Metadata-only fixture",
+    category: "Development Tools", tags: [], kind: "instruction", source: "custom" });
+  expect(response.status).toBe(201);
+}
+
 async function findRemote(client: RemoteSkillsClient, slug: string): Promise<Record<string, unknown> | undefined> {
   const listed = await client.listSkills();
   return listed.find((skill) => (skill.slug ?? skill.name) === slug);
@@ -166,21 +173,23 @@ describe("reconcileRegistry", () => {
         const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
         const seedDigest = await seedRemote(client, seed, "sync-b");
         const localDigest = packDigest(join(local, "sync-a"));
+        await seedMetadataOnly(client, "sync-metadata-only");
 
         const result = await reconcileRegistry({ rootDir: local, client });
 
         expect(result.summary.conflicts).toBe(0);
         expect(result.summary.errors).toBe(0);
         expect(result.summary.pushed).toBe(1);
-        // Verified pulls only: the seeded published skill pulls; the bundled corpus rows
-        // (no bundle digest) are skipped, never pulled through the unverifiable fallback.
+        // Verified pulls only: the bundle pulls, while a published metadata-only
+        // record is skipped because it cannot provide verifiable content.
         expect(result.summary.pulled).toBe(1);
         const entryA = result.skills.find((entry) => entry.slug === "sync-a");
         expect(entryA?.action).toBe("push");
         const entryB = result.skills.find((entry) => entry.slug === "sync-b");
         expect(entryB?.action).toBe("pull");
-        const bundledSkip = result.skills.find((entry) => entry.state === "remote-only" && entry.action === "skip");
-        expect(bundledSkip?.reason).toMatch(/no bundle digest/);
+        const metadataSkip = result.skills.find((entry) => entry.slug === "sync-metadata-only");
+        expect(metadataSkip?.action).toBe("skip");
+        expect(metadataSkip?.reason).toMatch(/no bundle digest/);
 
         // Local-only skill reached the registry with the local digest.
         const reader = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
@@ -614,19 +623,15 @@ describe("reconcileRegistry", () => {
     }
   });
 
-  test("a local divergence from a bundled row is pushed, not declared in-sync", async () => {
-    // The bundled corpus rows carry no bundle digest AND no version, so the version axis
-    // cannot fire for them. Local divergence is detected through the baseline marker:
-    // once a sync recorded a baseline, a local digest that moved away from it is
-    // changed-locally and pushed (a published row overrides the bundled one).
+  test("a local divergence from a metadata-only published row is pushed", async () => {
+    // A metadata-only row has no bundle digest or version. The prior sync marker
+    // still detects a subsequent local edit, which publishes a verifiable bundle.
     try {
       await withServer(async (ctx) => {
         const client = new RemoteSkillsClient(SYNC_AUTH, ctx.baseUrl);
-        const listed = await client.listSkills();
-        const bundled = listed.find((row) => !row.bundleSha256 && typeof (row.slug ?? row.name) === "string") as
-          { slug?: string; name?: string } | undefined;
-        const slug = bundled?.slug ?? bundled?.name;
-        expect(slug).toBeDefined();
+        const slug = "sync-metadata-divergence";
+        await seedMetadataOnly(client, slug);
+        expect((await findRemote(client, slug))?.bundleSha256).toBeUndefined();
 
         const local = makeCorpus({ [slug!]: skillFiles(slug!, "0.0.1", "local-edit") });
         // A baseline from an earlier sync whose digest the current local pack no longer

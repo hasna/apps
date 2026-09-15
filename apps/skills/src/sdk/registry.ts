@@ -1,8 +1,8 @@
 /**
  * Registry + version service seam.
  *
- * The registry half wraps the shipped server registry (src/server/registry.ts): the
- * merged catalog, slug resolution, and SKILL.md docs. The version service is the seam
+ * Unscoped registry helpers are retained as empty compatibility exports. Private
+ * catalogs require an authenticated RemoteSkillsClient. The version service is the seam
  * for skills_registry versioning — the `version` column a published record carries, and
  * the contract sibling work (hasna.skill.v1, skill-hash) builds on.
  */
@@ -23,7 +23,7 @@ export interface RegistryService {
   isValidSlug(slug: string): boolean;
 }
 
-/** Current implementation: the bundled registry served by the shipped server. */
+/** @deprecated Always empty. Use RemoteSkillsClient with the account's credentials. */
 export const bundledRegistry: RegistryService = {
   list: listServerSkills,
   get: getServerSkill,

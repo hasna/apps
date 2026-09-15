@@ -13,6 +13,21 @@ bun install -g @hasna/skills
 
 Requires [Bun](https://bun.sh/) 1.3+.
 
+## Private skill catalogs
+
+The public package provides the CLI, API, SDK, hooks, and runtime. A skill's
+instructions and executable bundle belong to the organization that publishes
+them. API reads require authentication and use that organization's catalog,
+including tag filters, versions, and downloads. An empty account starts empty;
+neither a repository checkout nor files on the server machine supply defaults.
+Server startup and upgrades never import a bundled catalog.
+
+Each operator can use their own compatible server and storage. S3 is optional:
+the server supports durable SQLite or PostgreSQL and database-backed bundles
+when no S3 bucket is configured. Publishing through an authenticated account
+does not publish to GitHub or npm. Keep private source documents and executable
+payloads outside public software repositories.
+
 ## Quick Start
 
 The fleet authority is `https://api.hasna.com/skills`; versioned requests use
