@@ -30,13 +30,16 @@ test("compiled recurring CLI preserves its profile through approval, history and
     const child = Bun.spawn([process.execPath, "--no-env-file", cli, "recurring", ...args,
       "--user-id", f.context.userId, "--membership-id", f.context.membershipId, "--json"], {
       cwd: f.root, env: { ...env, PATH: process.env.PATH ?? "/usr/bin:/bin", NO_COLOR: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
-      stdin: new Blob([code]), stdout: "pipe", stderr: "pipe", detached: process.platform !== "win32",
+      stdin: "pipe", stdout: "pipe", stderr: "pipe", detached: process.platform !== "win32",
     });
     const owned = capturePreparationProcess(child);
     cleanupSafe = false;
     let timedOut = false;
     const timeout = setTimeout(() => { timedOut = true; owned.kill(); }, 15_000);
     try {
+      // Match the terminal's pipe and explicitly deliver EOF. A Blob-backed
+      // descriptor is not the stdin transport exercised by customer commands.
+      child.stdin.write(code); await child.stdin.end();
       const [stdout, stderr, exitCode] = await Promise.all([
         new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
       ]);
@@ -55,7 +58,8 @@ test("compiled recurring CLI preserves its profile through approval, history and
   };
   const success = async (args: string[]) => {
     const result = await invoke(args);
-    expect(result.exitCode, `${args[0]}: ${result.stderr || result.stdout}`).toBe(0);
+    const diagnostic = result.exitCode === 0 ? "" : JSON.stringify(f.calls.map(({ method, path }) => ({ method, path })));
+    expect(result.exitCode, `${args[0]}: ${result.stderr || result.stdout}; HTTP paths: ${diagnostic}`).toBe(0);
     return JSON.parse(result.stdout);
   };
   try {
@@ -66,9 +70,18 @@ test("compiled recurring CLI preserves its profile through approval, history and
     expect(await success(["verification", f.draftId, "--email", "owner@example.test", "--confirm"]))
       .toMatchObject({ verificationRequested: true, activated: false });
     const directory = join(f.root, "compiled-activation");
-    const activated = await success(["activate", f.draftId, "--accepted-terms", f.approval.acceptedTermsSha256,
+    const activation = (recovery: string) => ["activate", f.draftId, "--accepted-terms", f.approval.acceptedTermsSha256,
       "--idempotency-key", f.approval.idempotencyKey, "--acceptance", f.approval.acceptance, "--confirm",
-      "--recovery-dir", directory, "--email", "owner@example.test", "--code-stdin"]);
+      "--recovery-dir", recovery, "--email", "owner@example.test", "--code-stdin"];
+    const rejectedDirectory = join(f.root, "compiled-invalid-code");
+    const beforeInvalidCode = f.calls.length;
+    const refused = await invoke(activation(rejectedDirectory), "invalid-inert-code\n");
+    expect(refused.exitCode).toBe(1);
+    expect(JSON.parse(refused.stdout)).toMatchObject({ code: "RECURRING_VERIFICATION_INPUT_INVALID", outcomeUnknown: false });
+    expect(refused.stdout + refused.stderr).not.toContain("invalid-inert-code");
+    expect(f.calls.slice(beforeInvalidCode).some(call => call.path.endsWith("/auth/verify") || call.path.endsWith("/activate"))).toBe(false);
+    expect((await success(["recover", "--recovery-dir", rejectedDirectory])).phase).toBe("prepared");
+    const activated = await success(activation(directory));
     const consentId = activated.result.consent.consentId;
     expect((await success(["list", "--limit", "1"])).items.map((row: { consentId: string }) => row.consentId)).toEqual([consentId]);
     expect((await success(["get", consentId])).consentId).toBe(consentId);

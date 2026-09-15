@@ -2,9 +2,9 @@ import type { Command } from "commander";
 import { constants, closeSync, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { executeRecurringSurface, recurringSurfaceOperations, type RecurringSurfaceAction } from "../../lib/recurring-surface.js";
-import { recurringCustomerError } from "../../lib/recurring-customer.js";
+import { RecurringCustomerError, recurringCustomerError } from "../../lib/recurring-customer.js";
 import { RecurringInputError, type RecurringPreview } from "../../lib/remote-recurring.js";
-import { promptCode, readCode } from "./customer-verification.js";
+import { NameInputError, promptCode, readCode } from "./customer-verification.js";
 import { writeCliOutput } from "../output.js";
 
 const acceptance = "authorize-recurring-credit-use";
@@ -89,7 +89,14 @@ export function registerRecurringCommands(parent: Command) {
         const result = await executeRecurringSurface(action, input(action, command.args[0], options), process.env, {
           accept: async draft => tty ? acceptAtTerminal(draft) : true,
           verification: async (_email, requestCode) => {
-            if (options.codeStdin) return readCode();
+            if (options.codeStdin) {
+              try { return await readCode(); }
+              catch (error) {
+                if (error instanceof NameInputError) throw new RecurringCustomerError("RECURRING_VERIFICATION_INPUT_INVALID",
+                  "Supply a fresh six-digit verification code through stdin. No recurring activation was submitted.");
+                throw error;
+              }
+            }
             if (!tty) throw new RecurringInputError();
             await requestCode(); return promptCode();
           },
