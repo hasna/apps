@@ -1,5 +1,4 @@
 ---
-"@hasna/skills": patch
 "@hasna/instructions": patch
 "@hasna/servers": patch
 "@hasna/files": patch
