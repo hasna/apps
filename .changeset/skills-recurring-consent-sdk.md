@@ -2,4 +2,4 @@
 "@hasna/skills": patch
 ---
 
-Add recurring consent wire types and seven remote SDK operations with bounded response validation, captured account and server targeting, and explicit recovery of uncertain mutation outcomes using the original approval and request key.
+Add recurring consent SDK, CLI and MCP operations with bounded wire validation, captured account/server targeting, fresh human approval of immutable terms, budget/history visibility, revocation and durable recovery using the original approval and request key. Server policy and live enablement remain separate.

@@ -671,8 +671,82 @@ promise cancellation of an already authorized attempt. Exact domain not-found
 responses return `null` only for draft/consent reads. Malformed or oversized
 responses fail closed. Pages accept 1–100 items and an opaque cursor; a large
 terms page can exceed the 64-MiB response bound, so request a smaller page
-explicitly. JSON input is limited to 1 MiB and 64 nesting levels. These SDK
-methods do not add recurring CLI, MCP or dashboard controls.
+explicitly. JSON input is limited to 1 MiB and 64 nesting levels. Dashboard
+approval and server enablement remain separate from these client interfaces.
+
+### Recurring consent from the terminal or MCP
+
+`skills recurring` uses the same hosted SDK methods. Existing `skills schedule`
+commands retain their local metadata and one-shot behavior. A compatible server
+must already support recurring consent; these commands install no server policy,
+daemon or default key scopes. Read/draft/history require `schedules:read`, and
+preview/revocation require `schedules:manage`.
+
+| Command | MCP tool |
+| --- | --- |
+| `recurring preview --request <file>` | `preview_recurring_consent` |
+| `recurring draft <draft-id>` | `get_recurring_draft` |
+| `recurring activate <draft-id>` | `activate_recurring_consent` |
+| `recurring list` / `recurring get <consent-id>` | `list_recurring_consents` / `get_recurring_consent` |
+| `recurring occurrences <consent-id>` | `list_recurring_occurrences` |
+| `recurring revoke <consent-id> --confirm` | `revoke_recurring_consent` |
+| `recurring recover --recovery-dir <original-directory>` | `recover_recurring_consent` |
+| `recurring verification <draft-id> --email <email> --confirm` | `request_recurring_verification` |
+
+Use the CLI's existing `--profile <name>` before the command, or the MCP host's
+explicitly configured connection. Fresh approval needs an enrolled workspace
+profile or both observed `--user-id` and `--membership-id`; those IDs restrict
+current authority. The target, profile and credential are captured before prompts
+and checked again before changes. No operation switches or overwrites saved
+credentials. A normal API-key login alone cannot activate recurring spend.
+Before requesting or verifying a code, the client checks the selected key's
+current account email, trimming whitespace and ignoring case as the server does.
+A different email is refused before the login endpoint can create an account.
+
+The request file contains every explicit `RecurringRequest` field, including
+JSON input/args, runtime and connector limits, cadence/start/expiry/grace, UTC-day
+period, finish-authorized-attempt policy, all three credit ceilings and both
+occurrence ceilings. No policy values are inferred. Preview and draft retrieval
+show the original server terms/hash, quote, first due instants and approval
+deadline. They create no run or credit reservation. Each grant adds its own
+budget; an occurrence reprices within the approved limits.
+
+To activate, provide `--accepted-terms <original-sha256>`,
+`--idempotency-key <original-key>`, `--recovery-dir <new-absolute-directory>`,
+`--email <email>` and `--confirm`. A terminal displays the complete immutable
+draft and requires typing `authorize-recurring-credit-use`, then requests a
+fresh code and reads it masked. For JSON or noninteractive use, also supply
+`--acceptance authorize-recurring-credit-use --code-stdin`; request the code
+first with `recurring verification`. Do not put the code or session in argv.
+Cancellation/EOF does not grant consent. The server independently verifies fresh,
+eligible, non-impersonated human authority and the original terms.
+
+MCP activation takes the same original draft, approval object, recovery directory
+and explicit `confirm: true`, plus account email and a fresh code. The MCP host
+may retain supplied code arguments in its history; the masked terminal flow
+avoids that disclosure. No tool returns or stores the resulting session. A tool
+confirmation boolean or API key never substitutes for verified human approval.
+
+Activation and revocation require a new recovery directory under an existing
+canonical parent. It is created privately and contains the original server,
+profile, account/membership, draft/hash/approval key or consent ID and attempt
+state. It contains no bearer, OTP or raw input payload. Preserve it after errors;
+unknown mutation outcomes exit 2 in the CLI and set MCP `isError` with
+`outcomeUnknown: true`. Read-only `recover` never resubmits. Explicit
+`recover --confirm` reuses the original activation key/terms and fresh approval,
+or the same revoked consent; it never creates a replacement request. An expired
+draft or lost current authority does not resolve an earlier unknown outcome.
+Aliased, replaced, malformed or locked recovery directories refuse changes.
+
+List/history expose one page (1–100 items, default 20) and the unchanged opaque
+cursor. Consent output includes period/total reserved and settled credits,
+admitted counts, ceilings, deployment and next due time; history includes stable
+occurrence/run IDs, outcomes, refusal reasons and allocation state. All hosts
+read the same server identities. Revocation reports residual authorized exposure
+and does not promise cancellation/refund of an already authorized attempt.
+Cancellation is separate. A lost preview response has no draft lookup key:
+report that uncertainty and explicitly choose any new preview, without silently
+turning it into an activation.
 
 ## Portable Skills
 
