@@ -1,5 +1,5 @@
 /** Shared bounds for stored policy, discovery, and pre-activation validation. */
-export const AGENT_POLICY_LIMITS = Object.freeze({ bytes: 1024 * 1024, agents: 16, discoverySources: 2048, discoveryRawSourceBytes: 64 * 1024 * 1024, discoveryRawTotalBytes: 256 * 1024 * 1024, discoveryRoots: 512, discoveryDirectories: 64, discoveryDirectoryEntries: 20000, discoveryDirectoryBytes: 8 * 1024 * 1024, builtinNames: 2048, rootAliases: 2, fields: 64, pathCharacters: 4096 });
+export const AGENT_POLICY_LIMITS = Object.freeze({ bytes: 1024 * 1024, agents: 16, discoverySources: 2048, discoveryRawSourceBytes: 64 * 1024 * 1024, discoveryRawTotalBytes: 256 * 1024 * 1024, discoveryPathLinks: 40, discoveryPathSteps: 256, discoveryPathSourceMetadataBytes: 64 * 1024, discoveryPathTotalMetadataBytes: 8 * 1024 * 1024, discoveryRoots: 512, discoveryDirectories: 64, discoveryDirectoryEntries: 20000, discoveryDirectoryBytes: 8 * 1024 * 1024, builtinNames: 2048, rootAliases: 2, fields: 64, pathCharacters: 4096 });
 function object(value: unknown): value is Record<string, any> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
 function requireBound(value: unknown): asserts value { if (!value) throw new Error("Agent policy collection bounds are invalid"); }
 function array(value: unknown, maximum: number): any[] { requireBound(Array.isArray(value) && value.length <= maximum); return value; }
@@ -29,7 +29,7 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
     for (const source of array(value.sources, AGENT_POLICY_LIMITS.discoverySources)) {
       requireBound(object(source)); text(source.path);
       requireBound(source.sha256 === null || typeof source.sha256 === "string" && /^[a-f0-9]{64}$/.test(source.sha256));
-      if (source.hashMode !== undefined) requireBound(source.hashMode === "bytes" && source.format === undefined && source.fields === undefined);
+      if (source.hashMode !== undefined) requireBound(["bytes", "path-bytes"].includes(source.hashMode) && source.format === undefined && source.fields === undefined && (source.hashMode !== "path-bytes" || source.sha256 !== null));
       if (source.format !== undefined) requireBound(["json", "toml", "yaml"].includes(source.format));
       if (source.fields !== undefined) for (const field of array(source.fields, AGENT_POLICY_LIMITS.fields)) text(field, 256);
     }

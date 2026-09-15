@@ -7,6 +7,7 @@ Unknown writes stop for reconciliation; ECS has a precheck, not an atomic CAS.
 """
 import argparse
 import copy
+import fcntl
 import gzip
 import hashlib
 import io
@@ -78,10 +79,31 @@ def aws(*args, body=None, timeout=120):
     # raw diagnostic text: task environments can contain credential values.
     env = {**os.environ, "AWS_MAX_ATTEMPTS": "1", "AWS_PAGER": ""}
     command = ["aws", "--region", REGION, "--output", "json", "--no-cli-pager", *args]
-    if body is not None:
-        # /dev/stdin keeps complete task definitions out of argv and files.
-        command += ["--cli-input-json", "file:///dev/stdin"]
-    result = subprocess.run(command, input=None if body is None else encode(body), capture_output=True, timeout=timeout, env=env)
+    fd = None
+    try:
+        if body is not None:
+            data = encode(body)
+            require(len(data) <= 8 * 1024 * 1024, "AWS_REQUEST_LIMIT")
+            require(callable(getattr(os, "memfd_create", None)), "AWS_MEMFD_REQUIRED")
+            # AWS CLI file loading needs a reopenable file, not /dev/stdin.
+            # Linux CI passes only this sealed, anonymous memory descriptor.
+            # Complete task bodies never become argv or named disk files.
+            fd = os.memfd_create("emails-aws-json", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+            os.fchmod(fd, 0o600)
+            remaining = memoryview(data)
+            while remaining:
+                written = os.write(fd, remaining)
+                require(written > 0, "AWS_REQUEST_WRITE_REFUSED")
+                remaining = remaining[written:]
+            os.lseek(fd, 0, os.SEEK_SET)
+            seals = fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
+            fcntl.fcntl(fd, fcntl.F_ADD_SEALS, seals)
+            require(fcntl.fcntl(fd, fcntl.F_GET_SEALS) == seals, "AWS_REQUEST_SEAL_REFUSED")
+            command += ["--cli-input-json", f"file:///proc/self/fd/{fd}"]
+        result = subprocess.run(command, stdin=subprocess.DEVNULL, pass_fds=() if fd is None else (fd,), capture_output=True, timeout=timeout, env=env)
+    finally:
+        if fd is not None:
+            os.close(fd)
     require(result.returncode == 0, "AWS_OPERATION_REFUSED_OR_UNCERTAIN:" + "/".join(args[:2]))
     require(len(result.stdout) <= 8 * 1024 * 1024, "AWS_RESPONSE_LIMIT")
     return json.loads(result.stdout or b"{}")
