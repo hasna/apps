@@ -9,14 +9,12 @@
  */
 
 import { existsSync, readFileSync, rmSync } from "fs";
-import { dirname, join } from "path";
+import { join } from "path";
 import { homedir } from "os";
-import { fileURLToPath } from "url";
 import { adaptSkillMdForAgent, hasSkillsOwnershipMarker, writeManagedSkillDir } from "./agent-sync.js";
 import { normalizeSkillName } from "./utils.js";
-import { getDataDir } from "./config.js";
 import { assertNativeExportAllowed } from "./agent-integration.js";
-import { findPortableSkill } from "./portable-skills.js";
+import { findPortableSkill, getPortableSkillsRoot } from "./portable-skills.js";
 import { findExtensionSkillPath, getSkill, type SkillMeta } from "./registry.js";
 import { normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
 import {
@@ -30,21 +28,6 @@ import {
   type ProjectSkillPin,
   type SkillsProjectConfig,
 } from "./project-state.js";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// Find the bundled skills directory - works from both src/lib/ and built dist.
-function findSkillsDir(): string {
-  let dir = __dirname;
-  for (let i = 0; i < 5; i++) {
-    const candidate = join(dir, "skills");
-    if (existsSync(candidate) && !dir.includes(".skills")) return candidate;
-    dir = dirname(dir);
-  }
-  return join(__dirname, "..", "skills");
-}
-
-const SKILLS_DIR = findSkillsDir();
 
 export interface InstallResult {
   skill: string;
@@ -92,17 +75,15 @@ interface MetaFile {
 }
 
 /**
- * Get the path to a bundled skill in the package.
+ * Resolve a skill only inside the owned cache or an explicit authoring source.
  */
 export function getSkillPath(name: string): string {
   const skillName = normalizeSkillName(getCanonicalSkillName(name));
   const portable = findPortableSkill(skillName);
   if (portable) return portable.path;
-  const legacyCustomPath = join(getDataDir(), "custom", skillName);
-  if (existsSync(legacyCustomPath)) return legacyCustomPath;
   const extensionPath = findExtensionSkillPath(skillName);
   if (extensionPath) return extensionPath;
-  return join(SKILLS_DIR, skillName);
+  return join(getPortableSkillsRoot(), skillName);
 }
 
 function getCanonicalSkillName(name: string): string {

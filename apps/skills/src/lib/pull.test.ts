@@ -280,8 +280,8 @@ describe("pullSkills", () => {
     const found = all.find((skill) => skill.name === "pulled-runbook");
     expect(found).toBeDefined();
     expect(found?.kind).toBe("instruction");
-    // It is NOT in the curated basic profile (custom/pulled skills are gated out of it).
-    expect(loadRegistryProfile("basic").some((s) => s.name === "pulled-runbook")).toBe(false);
+    // Both compatibility profiles expose the owner's verified records.
+    expect(loadRegistryProfile("basic").some((s) => s.name === "pulled-runbook")).toBe(true);
   });
 
   test("--all enumerates every skill the instance serves", async () => {

@@ -157,8 +157,8 @@ describe("I4: bulk directory import", () => {
   });
 });
 
-describe("I5: custom skills gated out of the basic profile", () => {
-  test("loadBasicRegistry excludes non-basic custom skills; 'all' profile includes them", () => {
+describe("owned skills are visible through both profiles", () => {
+  test("both compatibility profiles include the owned custom skill", () => {
     const home = mkdtempSync(join(tmpdir(), "bulk-home-"));
     const prevHome = process.env["HOME"];
     try {
@@ -175,9 +175,9 @@ describe("I5: custom skills gated out of the basic profile", () => {
       withHomeDataDir(() => {
         clearRegistryCache();
         const basicNames = loadBasicRegistry().map((skill) => skill.name);
-        expect(basicNames).not.toContain("my-custom-skill");
+        expect(basicNames).toContain("my-custom-skill");
         // Basic profile must not carry arbitrary custom entries.
-        expect(basicNames.every((name) => name !== "my-custom-skill")).toBe(true);
+        expect(basicNames).toEqual(["my-custom-skill"]);
 
         clearRegistryCache();
         const allNames = loadRegistryProfile("all").map((skill) => skill.name);

@@ -22,7 +22,7 @@ useDefaultTestTimeout();
 // $HASNA_SKILLS_DIR. (Run/export metadata still lands under the project cwd.)
 const FIXTURE_HOME = mkdtempSyncTop(joinTop(tmpdirTop(), "cli-run-fixtures-"));
 {
-  const dir = joinTop(FIXTURE_HOME, "custom", "lorem-generator");
+  const dir = joinTop(FIXTURE_HOME, "installed", "lorem-generator");
   mkdirSyncTop(joinTop(dir, "src"), { recursive: true });
   writeFileSyncTop(joinTop(dir, "package.json"), JSON.stringify({ name: "lorem-generator", version: "0.1.0", bin: { "lorem-generator": "src/index.ts" } }));
   writeFileSyncTop(joinTop(dir, "src", "index.ts"), 'console.log("lorem-generator " + process.argv.slice(2).join(" "));');

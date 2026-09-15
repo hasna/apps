@@ -1,17 +1,16 @@
 #!/usr/bin/env bun
 /**
- * bundle-skills — build signed, versioned bundles for the canonical skill corpus.
+ * bundle-skills — build versioned bundles from an explicitly selected private source.
  *
- * The npm package ships zero corpus; this script is the CI-side producer that turns
- * the canonical corpus (the monorepo checkout: `skills/`) into one
- * tar.gz + manifest per skill, the format `skills pull` verifies and installs.
+ * The public software includes no skill corpus. Operators keep their own source
+ * outside this checkout and use --source to produce private bundle artifacts.
  *
- *   bun run scripts/bundle-skills.ts [--source <dir>] [--out <dir>] [--commit <sha>]
+ *   bun run scripts/bundle-skills.ts --source <dir> [--out <dir>] [--commit <sha>]
  *
  *   --source   canonical corpus: a package root with skills/, or a
- *              flat corpus dir. Default: the package root of this checkout.
+ *              flat corpus dir. Required unless SKILLS_SOURCE is explicitly configured.
  *   --out      output directory for <name>-<version>.tar.gz + .manifest.json pairs.
- *              Default: dist/bundles (gitignored).
+ *              Default: .bundles under the explicitly selected source.
  *   --commit   source_commit recorded in every manifest. Default: $SKILLS_SOURCE_COMMIT,
  *              else `git rev-parse HEAD` from the source tree, else "unknown".
  *
@@ -24,8 +23,7 @@
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 import {
   buildSkillBundle,
@@ -48,7 +46,7 @@ function parseArgs(argv: string[]): { source?: string; out?: string; commit?: st
     } else if (arg.startsWith("--source=") || arg.startsWith("--out=") || arg.startsWith("--commit=")) {
       args[arg.slice(2, arg.indexOf("="))] = arg.slice(arg.indexOf("=") + 1);
     } else if (arg === "--help" || arg === "-h") {
-      console.log("bundle-skills [--source <dir>] [--out <dir>] [--commit <sha>]");
+      console.log("bundle-skills --source <dir> [--out <dir>] [--commit <sha>]");
       process.exit(0);
     } else {
       console.error(`Unknown argument: ${arg}`);
@@ -58,14 +56,9 @@ function parseArgs(argv: string[]): { source?: string; out?: string; commit?: st
   return args;
 }
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PACKAGE_ROOT = resolve(__dirname, "..");
-
 /**
- * The canonical corpus roots: the package root's skills/ directory, or a flat dir.
- * `agent-skills/` is not bundled: the fleet workflow skills there moved to the private
- * per-station store (owner ruling 2026-08-15) and distribute to station caches through
- * fleet-resources, not through the public `skills pull` bundles.
+ * An explicitly selected private package root's skills/ directory, or a flat dir.
+ * No other directory is used as a source fallback.
  */
 function resolveSourceRoots(source: string): string[] {
   const roots: string[] = [];
@@ -92,8 +85,13 @@ function resolveSourceCommit(source: string, explicit?: string): string {
 }
 
 const args = parseArgs(process.argv.slice(2));
-const source = resolve(args.source ?? process.env[SKILLS_SOURCE_ENV] ?? PACKAGE_ROOT);
-const outDir = resolve(args.out ?? join(PACKAGE_ROOT, "dist", "bundles"));
+const selectedSource = args.source?.trim() || process.env[SKILLS_SOURCE_ENV]?.trim();
+if (!selectedSource) {
+  console.error("An explicit private skill source is required: use --source <dir> or SKILLS_SOURCE");
+  process.exit(2);
+}
+const source = resolve(selectedSource);
+const outDir = resolve(args.out ?? join(source, ".bundles"));
 const commit = resolveSourceCommit(source, args.commit);
 
 const roots = resolveSourceRoots(source);

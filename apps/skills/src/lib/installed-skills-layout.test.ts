@@ -93,8 +93,8 @@ describe("skill names the denylist used to swallow", () => {
   }
 });
 
-describe("migration onto the installed/ layout", () => {
-  test("folds both old layouts into installed/ without deleting the originals", () => {
+describe("retired layouts cannot reactivate skills", () => {
+  test("leaves both old layouts dormant without copying or deleting originals", () => {
     const app = tempAppDir();
     // Layout 1: skills written straight into the app root.
     const oldRootSkill = writeSkill(app, "root-layout-skill");
@@ -108,9 +108,9 @@ describe("migration onto the installed/ layout", () => {
 
     const installed = getPortableSkillsRoot();
 
-    // Both skills arrived.
-    expect(existsSync(join(installed, "root-layout-skill", "SKILL.md"))).toBe(true);
-    expect(existsSync(join(installed, "custom-layout-skill", "SKILL.md"))).toBe(true);
+    // Neither legacy location is an implicit source.
+    expect(existsSync(join(installed, "root-layout-skill", "SKILL.md"))).toBe(false);
+    expect(existsSync(join(installed, "custom-layout-skill", "SKILL.md"))).toBe(false);
 
     // Copy, never delete: the originals are still exactly where they were.
     expect(existsSync(join(oldRootSkill, "SKILL.md"))).toBe(true);
@@ -125,13 +125,13 @@ describe("migration onto the installed/ layout", () => {
     expect(existsSync(join(installed, "notes"))).toBe(false);
     expect(existsSync(join(installed, "custom"))).toBe(false);
 
-    // And both are discoverable through the normal read paths.
+    // Ordinary discovery remains empty.
     expect(listPortableSkills().map((s) => s.name).sort())
-      .toEqual(["custom-layout-skill", "root-layout-skill"]);
+      .toEqual([]);
     clearRegistryCache();
     const names = loadRegistry().map((s) => s.name);
-    expect(names).toContain("root-layout-skill");
-    expect(names).toContain("custom-layout-skill");
+    expect(names).not.toContain("root-layout-skill");
+    expect(names).not.toContain("custom-layout-skill");
   });
 
   test("never overwrites a skill already present under installed/", () => {
@@ -149,11 +149,11 @@ describe("migration onto the installed/ layout", () => {
     writeSkill(app, "root-layout-skill");
 
     const installed = getPortableSkillsRoot();
-    expect(existsSync(join(installed, "root-layout-skill"))).toBe(true);
+    expect(existsSync(join(installed, "root-layout-skill"))).toBe(false);
 
     // Repeated resolution must not duplicate or re-copy anything.
     expect(getPortableSkillsRoot()).toBe(installed);
-    expect(listPortableSkills().map((s) => s.name)).toEqual(["root-layout-skill"]);
+    expect(listPortableSkills()).toEqual([]);
   });
 
   test("a leftover staging directory is not served as a skill", () => {
@@ -167,10 +167,10 @@ describe("migration onto the installed/ layout", () => {
     writeSkill(app, "half-copied");
 
     expect(getPortableSkillsRoot()).toBe(installed);
-    // The real skill migrated, and the debris is invisible to the corpus.
+    // Neither the legacy source nor staging debris is admitted.
     const names = listPortableSkills().map((s) => s.name);
-    expect(names).toEqual(["half-copied"]);
-    expect(existsSync(join(installed, "half-copied", "SKILL.md"))).toBe(true);
+    expect(names).toEqual([]);
+    expect(existsSync(join(installed, "half-copied", "SKILL.md"))).toBe(false);
   });
 
   test("survives an app folder that cannot be migrated", () => {

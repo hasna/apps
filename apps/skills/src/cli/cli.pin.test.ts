@@ -9,6 +9,7 @@ import {
   runCliInCwd,
   stderrWithoutLocalNotice,
 } from "./cli.test-utils";
+import { writeTestCatalog, TEST_CATALOG } from "../lib/private-corpus-test-utils.js";
 import { packSkillBundle } from "../lib/skill-bundle.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -17,12 +18,12 @@ useDefaultTestTimeout();
 
 describe("CLI pin and search controls", () => {
   describe("pin", () => {
-    test("pins a legacy alias to the canonical skill name", async () => {
+    test("pins an owner-chosen slug without consulting retired aliases", async () => {
       const { existsSync, mkdtempSync, readFileSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-alias-install-"));
       try {
-        const { stdout, exitCode } = await runCliInCwd(["pin", "create-blog-article", "--json"], tmpDir, { HOME: tmpDir });
+        const { stdout, exitCode } = await runCliInCwd(["pin", "blog-article", "--json"], tmpDir);
         const data = JSON.parse(stdout);
         expect(exitCode).toBe(0);
         expect(data[0].skill).toBe("blog-article");
@@ -260,6 +261,7 @@ describe("CLI pin and search controls", () => {
     const { tmpdir } = require("os");
 
     async function runCliInDir(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+      writeTestCatalog(require("path").join(cwd, ".hasna", "skills", "installed"));
       return runCliInCwd(args, cwd, { HOME: cwd });
     }
 
@@ -273,7 +275,7 @@ describe("CLI pin and search controls", () => {
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
         expect(Array.isArray(data)).toBe(true);
-        expect(data.length).toBe(2);
+        expect(data.length).toBe(TEST_CATALOG.filter(row => row[1] === "Research & Writing").length);
         for (const r of data) {
           expect(r).toHaveProperty("success");
           expect(r).toHaveProperty("skill");
@@ -293,7 +295,7 @@ describe("CLI pin and search controls", () => {
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
         expect(Array.isArray(data)).toBe(true);
-        expect(data.length).toBe(2);
+        expect(data.length).toBe(TEST_CATALOG.filter(row => row[1] === "Research & Writing").length);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -396,7 +398,7 @@ describe("CLI pin and search controls", () => {
 
       // No pins: fresh HOME + cwd with nothing pinned.
       const emptyDir = mkdtempSync(join(tmpdir(), "cli-doctor-empty-"));
-      // Pinned: a cwd that pins a real skill via .skills/project.json.
+      // Pinned: a cwd that pins an owned fixture via .skills/project.json.
       const pinnedDir = mkdtempSync(join(tmpdir(), "cli-doctor-pinned-"));
       try {
         const emptyRes = await runCliInCwd(["doctor", "--json"], emptyDir, { HOME: emptyDir });
@@ -405,6 +407,7 @@ describe("CLI pin and search controls", () => {
         expect(emptyData).toEqual([]);
         expect(emptyRes.exitCode).toBe(0);
 
+        writeTestCatalog(join(pinnedDir, ".hasna", "skills", "installed"));
         const pinRes = await runCliInCwd(["pin", "market-research-report", "--json"], pinnedDir, { HOME: pinnedDir });
         expect(pinRes.exitCode).toBe(0);
         const doctorRes = await runCliInCwd(["doctor", "--json"], pinnedDir, { HOME: pinnedDir });
