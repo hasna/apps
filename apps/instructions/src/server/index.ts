@@ -125,5 +125,13 @@ app.all("/v1/*", async (c) => {
 // the unauthenticated health/version probes above) are exposed by the server.
 
 const HOST = process.env["HOST"] ?? process.env["INSTRUCTIONS_HOST"] ?? "localhost";
-if (import.meta.main) console.log(`instructions-serve listening on http://${HOST}:${PORT} (backend: ${serviceBackend()})`);
-export default { port: PORT, hostname: HOST, fetch: app.fetch };
+export const serverOptions = { port: PORT, hostname: HOST, fetch: app.fetch } as const;
+if (import.meta.main) {
+  console.log(`instructions-serve listening on http://${HOST}:${PORT} (backend: ${serviceBackend()})`);
+  // Start explicitly instead of relying on Bun's default-export server magic.
+  // Bun 1.4 stopped keeping this module alive when it also exported the Hono
+  // app for tests, so the binary printed "listening" and then exited 0 without
+  // a listener. Explicit ownership is stable across the supported Bun range.
+  Bun.serve(serverOptions);
+}
+export default app;
