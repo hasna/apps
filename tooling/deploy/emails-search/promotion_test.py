@@ -118,8 +118,10 @@ class FakeCloud:
   if kind==("ecs","describe-task-definition"):
    arn=args[args.index("--task-definition")+1];row=copy.deepcopy(self.before if arn==self.old else self.registered)
    if arn!=self.old and self.mode in {"registered_drift","foreign_rollback"}:row["memory"]="4096"
+   if arn!=self.old and self.mode=="registered_tag_drift":row["tags"]=[{"key":"owner","value":"changed"}]
    tags=row.pop("tags",[]);return {"taskDefinition":row,"tags":tags}
   if kind==("ecs","register-task-definition"):
+   if body.get("tags")==[]:raise ValueError("Tags can not be empty.")
    self.registered={**copy.deepcopy(body),"taskDefinitionArn":self.new,"revision":89,"status":"ACTIVE"}
    return {"taskDefinition":self.registered}
   if kind==("ecs","update-service"):
@@ -134,13 +136,13 @@ class FakeCloud:
  def mutations(self, operation):return [r for r in self.calls if r["args"][:2]==("ecs",operation)]
 
 class OrchestrationControls(unittest.TestCase):
- def context(self, mode="healthy", rollback=False):
-  fixture=PromotionControls();fixture.setUp();before={**fixture.base,"tags":[]}
+ def context(self, mode="healthy", rollback=False, tags=None):
+  fixture=PromotionControls();fixture.setUp();before={**fixture.base,"tags":copy.deepcopy(tags) if tags is not None else []}
   manifest={"schemaVersion":2,"mediaType":m.OCI_MANIFEST,"config":{},"layers":[]};image=m.digest(m.encode(manifest));candidate=m.task_candidate(before,image);receipt={"imageDigest":image,"fixtureImmutableImage":True}
   plan={"schema":"emails.promotion-prepared.v1","sourceCommit":"a"*40,"recipeSha256":hashlib.sha256((m.ROOT/"recipe.json").read_bytes()).hexdigest(),"taskDefinitionBefore":before["taskDefinitionArn"],"taskBeforeDigest":m.digest(m.encode(before)),"taskAfterDigest":m.digest(m.encode(candidate)),"desiredCount":1,"image":receipt}
   return FakeCloud(before,candidate,image,mode,rollback),plan,(manifest,b"config",b"layer",receipt)
- def execute(self, mode="healthy", rollback=False):
-  cloud,plan,built=self.context(mode,rollback)
+ def execute(self, mode="healthy", rollback=False, tags=None):
+  cloud,plan,built=self.context(mode,rollback,tags)
   with tempfile.TemporaryDirectory() as tmp:
    out=pathlib.Path(tmp);p=out/"prepared.json";p.write_bytes(m.encode(plan));ph=hashlib.sha256(p.read_bytes()).hexdigest()
    with patch.object(m,"aws",side_effect=cloud),patch.object(m,"build",return_value=built):
@@ -152,9 +154,20 @@ class OrchestrationControls(unittest.TestCase):
  def test_actual_healthy_promotion_registers_and_updates_once(self):
   cloud,error,receipts=self.execute();self.assertIsNone(error)
   self.assertEqual(len(cloud.mutations("register-task-definition")),1);self.assertEqual(len(cloud.mutations("update-service")),1)
-  self.assertEqual(cloud.mutations("register-task-definition")[0]["body"],cloud.candidate)
+  wire=cloud.mutations("register-task-definition")[0]["body"]
+  self.assertNotIn("tags",wire);self.assertEqual({**wire,"tags":[]},cloud.candidate)
+  self.assertEqual(cloud.candidate["tags"],[])
   self.assertEqual(receipts["promoted.json"]["taskAfter"],cloud.new);self.assertEqual(receipts["promoted.json"]["imageDigest"],cloud.image)
   self.assertEqual(cloud.mutations("update-service")[0]["args"],("ecs","update-service","--cluster",m.CLUSTER,"--service",m.SERVICE,"--task-definition",cloud.new))
+ def test_nonempty_tags_are_preserved_in_registration_and_readback(self):
+  tags=[{"key":"owner","value":"fixture"},{"key":"purpose","value":"capacity"}]
+  cloud,error,receipts=self.execute(tags=tags);self.assertIsNone(error)
+  self.assertEqual(cloud.mutations("register-task-definition")[0]["body"],cloud.candidate)
+  self.assertEqual(cloud.candidate["tags"],tags);self.assertIn("promoted.json",receipts)
+ def test_tag_readback_drift_prevents_service_update(self):
+  cloud,error,receipts=self.execute("registered_tag_drift",tags=[{"key":"owner","value":"fixture"}])
+  self.assertEqual(str(error),"REGISTERED_TASK_DRIFT");self.assertEqual(cloud.mutations("update-service"),[])
+  self.assertIn("registered.json",receipts);self.assertNotIn("promoted.json",receipts)
  def test_registered_task_drift_prevents_update(self):
   cloud,error,receipts=self.execute("registered_drift");self.assertEqual(str(error),"REGISTERED_TASK_DRIFT");self.assertEqual(len(cloud.mutations("register-task-definition")),1);self.assertEqual(cloud.mutations("update-service"),[]);self.assertIn("registered.json",receipts);self.assertNotIn("promoted.json",receipts)
  def test_service_changes_after_registration_prevent_update(self):

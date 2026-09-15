@@ -348,7 +348,12 @@ def promote(source, out, prepared, expected_hash):
     candidate = task_candidate(before, image_receipt["imageDigest"])
     require(digest(encode(candidate)) == plan["taskAfterDigest"], "CANDIDATE_PLAN_DRIFT")
     save(out / "register-intent.json", {"preparedSha256": expected_hash, "taskBefore": before_arn, "taskCandidateDigest": plan["taskAfterDigest"], "imageDigest": image_receipt["imageDigest"]})
-    result = aws("ecs", "register-task-definition", body=candidate)
+    # ECS describes an untagged task as tags=[], but rejects that field during
+    # registration. Preserve the canonical candidate for digest/readback checks.
+    request = copy.deepcopy(candidate)
+    if request.get("tags") == []:
+        del request["tags"]
+    result = aws("ecs", "register-task-definition", body=request)
     new_arn = result["taskDefinition"]["taskDefinitionArn"]
     require(new_arn.startswith(f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{SERVICE}:"), "REGISTERED_FAMILY")
     save(out / "registered.json", {"taskDefinition": new_arn})

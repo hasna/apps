@@ -7,7 +7,7 @@ const root = resolve(import.meta.dir, "../../../..");
 test("Emails promotion executes bounded source, OCI, task, gate and refusal controls", () => {
   const result = Bun.spawnSync(["python3", "-I", "-B", "tooling/deploy/emails-search/promotion_test.py"], { cwd: root, timeout: 30_000 });
   expect(result.exitCode).toBe(0);
-  expect(result.stderr.toString()).toContain("Ran 22 tests");
+  expect(result.stderr.toString()).toContain("Ran 24 tests");
 });
 test("Emails AWS JSON transport verifies sealed descriptors and local CLI parsing", () => {
   const result = Bun.spawnSync(["python3", "-I", "-B", "tooling/deploy/emails-search/aws_transport_test.py"], { cwd: root, timeout: 30_000 });
