@@ -7,7 +7,7 @@ import { detectHarness, validateHarnessConfiguration } from "./harnesses";
 import { launch, validateOriForPlan, type LaunchBackend } from "./launcher";
 import { openCliRuntime } from "./runtime";
 import { providerFromPreset, type PresetOptions } from "./presets";
-import { resolveLaunchProvider, selectModel, ensureLaunchProfile } from "./direct-launch";
+import { resolveLaunchProvider, selectModel, ensureLaunchProfile, launchCatalog } from "./direct-launch";
 import { CredentialResolver, bindingTarget, credentialReference, credentialBindingSchema, deliverVaultCredential, ensureProviderCredential, repairVaultExecutablePermissions } from "./credentials";
 import { detectChatGPTApp, detectClaudeDesktopApp } from "./desktop-apps";
 import { reasoningEffortSchema, codexReasoning } from "./reasoning";
@@ -76,7 +76,9 @@ before catalog refresh or an interactive model picker. When no source exists in
 an interactive terminal, it searches Hasna Secrets metadata, displays the selected
 Secrets account/source and matching key references, and requires a selection.
 Noninteractive launches return credential_setup_required with exact binding syntax.
-Dry-runs do not discover, bind, resolve, or authenticate an inference credential.
+Dry-runs do not bind, resolve, or authenticate provider credentials. Public and
+credentialless catalogs may refresh; authenticated catalogs use a saved snapshot
+and name the explicit refresh command when no snapshot exists.
 Vault bindings use the installed secrets CLI and its canonical Contracts URL/key
 by default. --vault-account pins a Keychain account; --vault-operator env requires
 per-process HASNA_SECRETS_API_KEY. Explicit operators also require --vault-url.
@@ -229,7 +231,9 @@ export async function main(args = process.argv.slice(2)) {
     const harness=parse(harnessSchema,chatgpt ? "codex" : claudeDesktop ? "claude" : action);assertHarnessArguments(harness,nativeArgs);
     await validateHarnessConfiguration(harness,values.cwd??process.cwd(),nativeArgs);
   }
-  const runtime = await openCliRuntime(process.env,provider=>credentials.resolve(provider));
+  const dryLaunch = command==="launch"&&Boolean(values["dry-run"]);
+  const runtimeEnvironment = dryLaunch ? Object.fromEntries(Object.entries(process.env).filter(([name])=>!name.startsWith("SWITCHER_PROVIDER_"))) : process.env;
+  const runtime = await openCliRuntime(runtimeEnvironment,dryLaunch?undefined:provider=>credentials.resolve(provider));
   const client = runtime.client;
   try {
   const presetOptions = (): PresetOptions => ({
@@ -261,7 +265,7 @@ export async function main(args = process.argv.slice(2)) {
       const provider = await resolveLaunchProvider(client, values.provider, {...presetOptions(), harness});
       validateHarnessProvider(harness, provider);
       if (!values["dry-run"]) { const prepared=await ensureProviderCredential(provider,{resolver:credentials});credentialPreflight=prepared.providerFingerprint;resolvePreparedCredential=prepared.resolveCredential; }
-      const catalog = await client.refreshModels(provider.id);
+      const catalog = await launchCatalog(client,provider,Boolean(values["dry-run"]));
       const model = values.model ?? await selectModel(catalog.models, values.search,harness);
       const selected = catalog.models.find(m => m.id === model);
       if (!selected) throw new Fault(422, "model_missing", "Selected model is not in the provider catalog.");
@@ -278,7 +282,7 @@ export async function main(args = process.argv.slice(2)) {
       const provider = await client.getProvider(profile.providerId);
       if (profile.harness === "gemini") validateHarnessProvider(profile.harness, provider);
       if (!values["dry-run"]) { const prepared=await ensureProviderCredential(provider,{resolver:credentials});credentialPreflight=prepared.providerFingerprint;resolvePreparedCredential=prepared.resolveCredential; }
-      await client.refreshModels(profile.providerId);
+      await launchCatalog(client,provider,Boolean(values["dry-run"]));
     }
     if (values["dry-run"]) {
       const plan = await client.launchPlan(profileId);

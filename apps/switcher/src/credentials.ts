@@ -17,8 +17,9 @@ const reference = z.string().regex(/^SWITCHER_PROVIDER_[A-Z0-9_]+$/).max(120);
 const item = z.string().min(1).max(500).regex(/^[^\x00-\x1f\x7f]+$/);
 const vaultKey = z.string().max(500).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9][A-Za-z0-9_.-]*)*$/, "Use a vault key path, not an option or secret value");
 const keychain = z.object({kind:z.literal("keychain"), service:item, account:item}).strict();
+const credentialTier = z.enum(["argument","override","pointer","profile","keychain","disk","env"]);
 const operator = z.discriminatedUnion("kind", [
-  z.object({kind:z.literal("contracts")}).strict(),
+  z.object({kind:z.literal("contracts"),expectedSource:item.optional(),expectedTier:credentialTier.optional()}).strict(),
   z.object({kind:z.literal("env")}).strict(),
   z.object({kind:z.literal("keychain"), account:item.refine(value=>value.trim().length>0 && value===value.trim(),"Vault account must be nonblank without surrounding whitespace")}).strict(),
 ]);
@@ -32,6 +33,8 @@ export const credentialBindingSchema = z.object({
 }).strict().superRefine((binding,ctx)=>{
   if (binding.source.kind === "vault" && binding.source.operator.kind !== "contracts" && !binding.source.url)
     ctx.addIssue({code:"custom",path:["source","url"],message:"An explicit env or Keychain operator binding requires a vault URL."});
+  if(binding.source.kind==="vault"&&binding.source.operator.kind==="contracts"&&Boolean(binding.source.operator.expectedSource)!==Boolean(binding.source.operator.expectedTier))
+    ctx.addIssue({code:"custom",path:["source","operator"],message:"A pinned Contracts operator requires both expectedSource and expectedTier."});
 });
 export type CredentialBinding = z.infer<typeof credentialBindingSchema>;
 const fingerprint = (binding: CredentialBinding) => createHash("sha256").update(JSON.stringify(binding)).digest("hex");
@@ -263,7 +266,7 @@ export class CredentialInterrupted extends CommandInterrupted {
   constructor(exitCode: number) { super(exitCode,"Credential lookup was interrupted; no harness was started."); }
 }
 
-type VaultOperatorResolution = {environment:NodeJS.ProcessEnv;source:string};
+type VaultOperatorResolution = {environment:NodeJS.ProcessEnv;source:string;tier:z.infer<typeof credentialTier>;url:string};
 
 /** Select an operator through the shared credential seam, then pin that choice. */
 async function resolveVaultOperatorEnvironment(binding: CredentialBinding, env: NodeJS.ProcessEnv, options: Pick<CredentialChainOptions,"keychain"> = {}): Promise<VaultOperatorResolution> {
@@ -296,6 +299,8 @@ async function resolveVaultOperatorEnvironment(binding: CredentialBinding, env: 
       const first = pair(), second = pair();
       if (first.key.apiKey !== second.key.apiKey || first.key.source !== second.key.source || first.key.tier !== second.key.tier || first.url !== second.url)
         throw new Fault(422,"vault_operator_changed","The vault operator or authority changed during resolution; no credential was sent. Retry after configuration is stable.");
+      if(source.operator.expectedSource&&(second.key.source!==source.operator.expectedSource||second.key.tier!==source.operator.expectedTier))
+        throw new Fault(422,"vault_operator_changed",`The selected Secrets account/source changed from ${source.operator.expectedSource}; no alternate account was selected. Restore that source or rebind explicitly.`);
       credential = second.key; url = second.url;
     } else {
       // Legacy bindings deliberately select one exact source. Never reinterpret
@@ -326,7 +331,7 @@ async function resolveVaultOperatorEnvironment(binding: CredentialBinding, env: 
   next.HASNA_SECRETS_API_KEY = credential.apiKey;
   next.HASNA_SECRETS_API_KEY_OVERRIDE = credential.apiKey;
   if (binding.source.operator.kind === "keychain") next.HASNA_STATION = binding.source.operator.account;
-  return {environment:next,source:credential.source};
+  return {environment:next,source:credential.source,tier:credential.tier,url:url!};
 }
 
 /** Select an operator through the shared credential seam, then pin that choice. */
@@ -399,7 +404,7 @@ const secretMetadataSchema = z.object({
 }).strict();
 export type VaultCredentialReference = {
   account:string;key:string;url?:string;executable:string;
-  operator:{kind:"contracts"}|{kind:"env"}|{kind:"keychain";account:string};
+  operator:{kind:"contracts";expectedSource?:string;expectedTier?:z.infer<typeof credentialTier>}|{kind:"env"}|{kind:"keychain";account:string};
 };
 type CredentialResolverLike = Pick<CredentialResolver,"resolve"> & {bindings:Pick<CredentialBindings,"get"|"bind">};
 export type ProviderAuthenticationResult = {authenticated:boolean;status?:number;unsupported?:boolean};
@@ -454,7 +459,7 @@ export async function discoverVaultReferences(provider:ProviderInput, env:NodeJS
     for(const entry of result.data)entries.set(entry.key,entry);
     if(entries.size>256)throw new Fault(422,"credential_matches_too_many","More than 256 credential references matched. Bind an exact vault key explicitly.");
   }
-  return [...entries.values()].sort((a,b)=>a.key.localeCompare(b.key)).map(entry=>({account:operator.source,key:entry.key,executable:vaultExecutable,operator:{kind:"contracts" as const}}));
+  return [...entries.values()].sort((a,b)=>a.key.localeCompare(b.key)).map(entry=>({account:operator.source,key:entry.key,url:operator.url,executable:vaultExecutable,operator:{kind:"contracts" as const,expectedSource:operator.source,expectedTier:operator.tier}}));
 }
 
 export async function selectVaultReference({provider,matches}:{provider:ProviderInput;matches:VaultCredentialReference[]}) {
@@ -555,8 +560,7 @@ export async function ensureProviderCredential(provider:ProviderInput,options:En
   const verify=options.verifyProviderAuthentication??(request=>verifyProviderAuthentication(request));
   const result=await verify({provider,credential});
   if(result.unsupported){
-    if(configured)throw new Fault(422,"provider_auth_check_unsupported","This provider has no configured non-inference authentication check. The selected binding was preserved; configure credentialCheck or verify it explicitly before launch.");
-    return preparedProviderCredential(provider,credential,{source:existing?"binding":"environment",configured,verified:false});
+    throw new Fault(422,"provider_auth_check_unsupported",`This provider has no configured non-inference authentication check.${configured?" The selected binding was preserved.":""} Configure credentialCheck before launch; no unverified credential was sent.`);
   }
   if(!result.authenticated)throw new Fault(401,"provider_credential_rejected",`The provider rejected the selected credential${result.status?` with HTTP ${result.status}`:""}. No alternate account was selected.${configured?` To choose a different reference, run: switcher credentials remove ${provider.credentialEnv}.`:""}`);
   return preparedProviderCredential(provider,credential,{source:existing||configured?"binding":"environment",configured,verified:true});

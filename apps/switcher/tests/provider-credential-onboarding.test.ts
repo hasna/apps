@@ -185,6 +185,15 @@ test("interactive setup distinguishes an unavailable Secrets CLI from no matchin
   await expect(ensure(provider(),{interactive:true,resolver,discoverVaultReferences:async()=>[],selectVaultReference:async()=>{throw new Error("must not prompt");},verifyProviderAuthentication:successfulAuth})).rejects.toMatchObject({code:"credential_match_missing"});
 });
 
+test("a newly saved binding cannot bypass an unsupported authentication check on the next launch",async()=>{
+  const ensure=expectedApi();const state=fixture();let discoveries=0;
+  const options:EnsureOptions={interactive:true,resolver:state.resolver,discoverVaultReferences:async()=>{discoveries++;return [references[0]];},selectVaultReference:async({matches})=>matches[0],verifyProviderAuthentication:async()=>({authenticated:false,unsupported:true} as any)};
+  await expect(ensure(provider(),options)).rejects.toMatchObject({code:"provider_auth_check_unsupported"});
+  expect(state.binding()?.source.key).toBe(references[0].key);
+  await expect(ensure(provider(),options)).rejects.toMatchObject({code:"provider_auth_check_unsupported"});
+  expect(discoveries).toBe(1);
+});
+
 test("rejected provider credentials remain on the selected account and do not fall through to another match", async () => {
   const ensure = expectedApi();
   const { resolver, events, binding } = fixture();
@@ -298,10 +307,13 @@ console.log(JSON.stringify([{key:"accounts/openrouter/live/api_key",type:"api_ke
     expect(matches).toEqual([{
       account: "HASNA_SECRETS_API_KEY",
       key: "accounts/openrouter/live/api_key",
+      url: "https://vault.example",
       executable,
-      operator: { kind: "contracts" },
+      operator: { kind: "contracts", expectedSource:"HASNA_SECRETS_API_KEY", expectedTier:"env" },
     }]);
     expect(JSON.stringify(matches)).not.toContain("fixture-operator");
+    const pinned=credentialModule.credentialBindingSchema.parse({schema:1,credentialEnv:"SWITCHER_PROVIDER_OPENROUTER",origins:["https://openrouter.ai"],source:{kind:"vault",key:matches[0].key,url:matches[0].url,executable,operator:matches[0].operator}});
+    await expect(credentialModule.vaultEnvironment(pinned,{HOME:root,HASNA_SECRETS_API_URL:"https://vault.example",HASNA_SECRETS_API_KEY_OVERRIDE:"fixture-other-operator"})).rejects.toMatchObject({code:"vault_operator_changed"});
   } finally {
     await rm(root, { recursive: true, force: true });
   }

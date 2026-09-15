@@ -165,7 +165,7 @@ process.exit(await child.exited);
     try{expect(await first.exited,output).toBe(0);expect(selected,output).toBe(true);expect(timedOut,output).toBe(false);}
     finally{clearTimeout(timer);first.terminal?.close();}
     const binding=await readFile(join(dir,"data/config/credential-bindings/SWITCHER_PROVIDER_ACME.json"),"utf8");
-    expect(JSON.parse(binding)).toMatchObject({credentialEnv:"SWITCHER_PROVIDER_ACME",origins:[upstream.url.origin],source:{kind:"vault",key:"accounts/acme/live/api_key",operator:{kind:"contracts"}}});
+    expect(JSON.parse(binding)).toMatchObject({credentialEnv:"SWITCHER_PROVIDER_ACME",origins:[upstream.url.origin],source:{kind:"vault",key:"accounts/acme/live/api_key",url:"https://vault.example",operator:{kind:"contracts",expectedSource:"HASNA_SECRETS_API_KEY",expectedTier:"env"}}});
     const before=(await readFile(operations,"utf8")).split("\n").filter(Boolean);expect(before.filter(line=>line.startsWith("search:"))).not.toHaveLength(0);
     expect(paths).toEqual(["/auth","/models"]);expect(await Bun.file(join(dir,"native-started")).exists()).toBe(true);
 
@@ -177,6 +177,21 @@ process.exit(await child.exited);
     for(const secret of ["fixture-vault-operator","fixture-provider-value-one","fixture-provider-value-two"]){expect(output+second.stdout+second.stderr+binding+(await readFile(operations,"utf8"))).not.toContain(secret);}
   }finally{await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
 },30_000);
+
+test("dry-run reads an authenticated catalog snapshot without resolving or transmitting its credential",async()=>{
+  const dir=await directory(),providerFile=join(dir,"dry-provider.json");let requests=0;
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:req=>{requests++;if(req.headers.get("authorization")!=="Bearer fixture-catalog-key")return new Response(null,{status:401});return Response.json({data:[{id:"fixture-model",supported_parameters:["tools"]}]});}});
+  try{
+    await writeFile(providerFile,JSON.stringify({id:"dry-provider",name:"Dry Provider",baseUrl:upstream.url.origin,protocol:"openai-responses",credentialEnv:"SWITCHER_PROVIDER_DRY"}));
+    expect((await command(dir,["providers","add","dry-provider","--file",providerFile])).code).toBe(0);
+    const refreshed=await command(dir,["models","dry-provider","--refresh"],{SWITCHER_PROVIDER_DRY:"fixture-catalog-key"});expect(refreshed.code,refreshed.stderr).toBe(0);expect(requests).toBe(1);
+    const dry=await command(dir,["launch","codex","--provider","dry-provider","--model","fixture-model","--dry-run"],{SWITCHER_PROVIDER_DRY:"fixture-must-not-be-read"});
+    expect(dry.code,dry.stderr).toBe(0);expect(requests).toBe(1);expect(dry.stdout+dry.stderr).not.toContain("fixture-must-not-be-read");
+    expect((await command(dir,["profiles","add","dry-profile","--provider","dry-provider","--harness","codex","--model","fixture-model"])).code).toBe(0);
+    const saved=await command(dir,["launch","dry-profile","--dry-run"],{SWITCHER_PROVIDER_DRY:"fixture-must-not-be-read"});
+    expect(saved.code,saved.stderr).toBe(0);expect(requests).toBe(1);expect(saved.stdout+saved.stderr).not.toContain("fixture-must-not-be-read");
+  }finally{await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
+});
 
 test.skipIf(process.platform === "win32")("owned native process group retains terminal input, resize and Ctrl-C",async()=>{
   const dir=await directory();
