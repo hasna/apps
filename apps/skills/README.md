@@ -134,6 +134,27 @@ contract and 16 MiB file limit; they are not silently converted into byte hashes
 Directory membership and file bytes are separate witnesses. Neither substitutes
 for reviewing the actual executable, import paths or loader behavior.
 
+For an explicitly reviewed launcher or interpreter reached through symlinks,
+use `captureDiscoveryPathSources(paths)` and retain `hashMode: "path-bytes"`.
+Its digest binds the canonical input, directory identities, each link's identity
+and target, and the resolved regular file's identity and exact bytes. Relative
+link targets resolve component by component, including `..` after an alias.
+Missing targets also receive a digest that binds the path leading to their
+absence. Retargeting to identical bytes, replacing a link or an ancestor, or
+changing a file's metadata requires a fresh review. Unrelated sibling writes
+do not change directory identity witnesses.
+
+Path witnesses share the 64 MiB file and 256 MiB aggregate byte limits. Each
+path allows at most 40 links, 256 traversal steps and 64 KiB of metadata; one
+capture or verification permits 8 MiB of path metadata. Special nodes, cycles,
+oversized inputs and changes during capture refuse. Native hook checks repeat
+the witness verification; this does not make a later native execution atomic
+with external writers. Keep source writers quiescent during activation.
+Use `bytes` mode for configuration that hook installation will replace: path
+witnesses cannot predict the future identity of a planned write. Existing raw
+byte and directory witnesses still refuse links. Older clients reject the new
+mode; upgrade the CLI before installing a policy that uses it.
+
 Hermes requires directory witnesses, including when upgrading an older policy.
 For an automatic bridge with no runtime installed, rerun normal `skills hook install`
 to review and apply the new bindings. Existing native trust is preserved.

@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, type St
 import { dirname, isAbsolute, resolve } from "node:path";
 import { AGENT_POLICY_LIMITS } from "./agent-policy-limits.js";
 
-export interface DiscoveryByteBudget { remaining: number }
+export interface DiscoveryByteBudget { remaining: number; pathMetadataRemaining?: number }
 export function discoveryByteBudget(): DiscoveryByteBudget { return { remaining: AGENT_POLICY_LIMITS.discoveryRawTotalBytes }; }
 function safe(path: string): void {
   if (typeof path !== "string" || !isAbsolute(path) || path !== resolve(path) || path.length > AGENT_POLICY_LIMITS.pathCharacters || path.includes("\0")) throw new Error("Expected a canonical absolute raw discovery path");

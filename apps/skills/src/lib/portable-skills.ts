@@ -324,6 +324,7 @@ export function portPortableSkillDirectory(
   const continueOnError = options.continueOnError ?? true;
   const portOptions: PortPortableSkillOptions = {
     overwrite: options.overwrite,
+    allowShadow: options.allowShadow,
     ...(options.rootDir ? { rootDir: options.rootDir } : {}),
     ...(options.homeDir ? { homeDir: options.homeDir } : {}),
   };

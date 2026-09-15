@@ -33,7 +33,9 @@ jobs:
           PREPARED_SHA: ${{ inputs.prepared_sha256 }}
         run: python3 -I -B tooling/deploy/emails-search/gate.py --source "$SOURCE" --phase "$PHASE" --run "$PREPARED_RUN" --prepared-sha256 "$PREPARED_SHA" --download "$RUNNER_TEMP/emails-reviewed-plan"
       - name: Verify promotion controls before AWS authority
-        run: python3 -I -B tooling/deploy/emails-search/promotion_test.py
+        run: |
+          python3 -I -B tooling/deploy/emails-search/promotion_test.py
+          python3 -I -B tooling/deploy/emails-search/aws_transport_test.py
       - name: Assume only the existing Emails producer role
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
         with:

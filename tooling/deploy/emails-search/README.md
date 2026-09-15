@@ -59,3 +59,19 @@ exclusive operator window reduce races; they do not claim a universal CAS.
 This lane grants or invokes no RunTask, database migration, customer-email send,
 secret-value read/write, task deregistration or role-authority mutation. Those
 operations are outside this promotion.
+
+AWS JSON request bodies use a Linux anonymous memory file, capped at 8 MiB,
+sealed against writes and resizing before the AWS CLI starts. The child receives
+only that descriptor through `file:///proc/self/fd/`; stdin is closed and the
+parent closes the descriptor on success, failure, or timeout. This avoids AWS
+CLI's rejected `/dev/stdin` input without putting complete task definitions in
+argv or named disk files. Linux memfd support is required; there is no disk
+fallback. Memory files are not a defense against privileged process inspection
+or system swapping. The existing one-attempt behavior and uncertain-write stop
+remain unchanged.
+
+Before AWS authority, controls exercise descriptor sealing, closure, bounds,
+failure paths and actual AWS CLI `--generate-cli-skeleton output` parsing with
+synthetic requests, no credentials and a loopback-only endpoint. These checks
+do not publish an image or prove service permissions; an actual protected
+preparation and its independent receipts are still required.

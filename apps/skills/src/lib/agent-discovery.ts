@@ -6,9 +6,10 @@ import { parseHermesConfig, assertHermesEnvironment } from "./agent-hermes.js";
 import type { IntegrationAgent } from "./agent-adapters.js";
 import { captureDiscoveryDirectories, verifyDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 import { discoveryByteBudget, hashRawDiscoveryFile } from "./agent-discovery-bytes.js";
+import { hashDiscoveryPathFile } from "./agent-discovery-path-bytes.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
-export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes"; format?: "json" | "toml" | "yaml"; fields?: string[] }
+export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes"; format?: "json" | "toml" | "yaml"; fields?: string[] }
 export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[] }
 export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -37,8 +38,9 @@ function read(path: string, changes?: Map<string, string>): string | null {
 }
 function projected(source: DiscoverySource, changes?: Map<string, string>, budget = discoveryByteBudget()): string | null {
   if (source.hashMode !== undefined) {
-    if (source.hashMode !== "bytes") throw new Error("Invalid native discovery hash mode");
+    if (source.hashMode !== "bytes" && source.hashMode !== "path-bytes") throw new Error("Invalid native discovery hash mode");
     if (source.format !== undefined || source.fields !== undefined) throw new Error("Raw discovery witnesses cannot project configuration fields");
+    if (source.hashMode === "path-bytes") return hashDiscoveryPathFile(source.path, budget, changes);
     return hashRawDiscoveryFile(source.path, budget, changes);
   }
   const text = read(source.path, changes);
@@ -70,6 +72,13 @@ export function captureDiscoveryByteSources(paths: string[]): DiscoverySource[] 
   if (!Array.isArray(paths) || paths.length > AGENT_POLICY_LIMITS.discoverySources || new Set(paths).size !== paths.length) throw new Error("Invalid raw discovery source collection");
   const budget = discoveryByteBudget();
   return paths.map(path => ({ path, hashMode: "bytes", sha256: hashRawDiscoveryFile(path, budget) }));
+}
+
+/** Capture executable/source path identity, including links and absent targets. */
+export function captureDiscoveryPathSources(paths: string[]): DiscoverySource[] {
+  if (!Array.isArray(paths) || paths.length > AGENT_POLICY_LIMITS.discoverySources || new Set(paths).size !== paths.length) throw new Error("Invalid path discovery source collection");
+  const budget = discoveryByteBudget();
+  return paths.map(path => ({ path, hashMode: "path-bytes", sha256: hashDiscoveryPathFile(path, budget) }));
 }
 
 /** Project settings can introduce a higher-precedence discovery source. Until
