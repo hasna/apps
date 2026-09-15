@@ -684,6 +684,118 @@ and version-skew contract: `docs/architecture/remote-client-pins-tags-sync.md`.
 For the reusable upstream contract, see
 `docs/architecture/reusable-skills-engine.md`.
 
+### Recurring consent SDK
+
+The SDK exposes `previewRecurringConsent`, `getRecurringDraft`,
+`activateRecurringConsent`, `listRecurringConsents`, `getRecurringConsent`,
+`listRecurringOccurrences` and `revokeRecurringConsent`. These require a server
+that explicitly advertises the version-1 recurring capability; an unavailable
+server raises `RemoteRecurringUnavailableError`. This client does not create
+local schedules or enable a server policy. Use `createRemoteSkillsClient` for the
+existing selected-profile/API binding, or construct `RemoteSkillsClient` with an
+explicit bearer and API URL. Each operation captures that connection and all
+inputs before asynchronous work. An optional final `RemoteWorkspaceContext`
+restricts it to an observed user and membership; profile files are unchanged.
+
+`RecurringRequest` carries explicit cadence, lifetime, runtime limits and credit
+and occurrence ceilings. A preview returns immutable terms, their hash, the
+original quote and approval deadline; its quote states that admission reprices.
+Draft retrieval retains those values even after expiry and never refreshes the
+deadline. Activation requires the original draft ID and `RecurringActivation`:
+`contractVersion: 1`, its exact `acceptedTermsSha256`, the literal acceptance
+`authorize-recurring-credit-use`, and a caller-owned idempotency key. The client
+reads the stored draft before submitting; the server independently requires
+current fresh human authority. Client metadata cannot grant that authority.
+Read operations require `schedules:read`, while preview and revocation require
+`schedules:manage`; API keys cannot activate a grant. Consent read/history/revoke
+preserve tenant-wide control, including retained grants from other deployments.
+
+`RemoteRecurringUnconfirmedError` means a dispatched mutation could have
+committed. Keep its original server/account, inputs, terms hash and request key;
+explicitly reconcile that same identity with current authority. The client never
+retries a POST, creates a replacement key or asserts rollback. After uncertain
+revocation, inspect the original consent and occurrences; revocation does not
+promise cancellation of an already authorized attempt. Exact domain not-found
+responses return `null` only for draft/consent reads. Malformed or oversized
+responses fail closed. Pages accept 1–100 items and an opaque cursor; a large
+terms page can exceed the 64-MiB response bound, so request a smaller page
+explicitly. JSON input is limited to 1 MiB and 64 nesting levels. Dashboard
+approval and server enablement remain separate from these client interfaces.
+
+### Recurring consent from the terminal or MCP
+
+`skills recurring` uses the same hosted SDK methods. Existing `skills schedule`
+commands retain their local metadata and one-shot behavior. A compatible server
+must already support recurring consent; these commands install no server policy,
+daemon or default key scopes. Read/draft/history require `schedules:read`, and
+preview/revocation require `schedules:manage`.
+
+| Command | MCP tool |
+| --- | --- |
+| `recurring preview --request <file>` | `preview_recurring_consent` |
+| `recurring draft <draft-id>` | `get_recurring_draft` |
+| `recurring activate <draft-id>` | `activate_recurring_consent` |
+| `recurring list` / `recurring get <consent-id>` | `list_recurring_consents` / `get_recurring_consent` |
+| `recurring occurrences <consent-id>` | `list_recurring_occurrences` |
+| `recurring revoke <consent-id> --confirm` | `revoke_recurring_consent` |
+| `recurring recover --recovery-dir <original-directory>` | `recover_recurring_consent` |
+| `recurring verification <draft-id> --email <email> --confirm` | `request_recurring_verification` |
+
+Use the CLI's existing `--profile <name>` before the command, or the MCP host's
+explicitly configured connection. Fresh approval needs an enrolled workspace
+profile or both observed `--user-id` and `--membership-id`; those IDs restrict
+current authority. The target, profile and credential are captured before prompts
+and checked again before changes. No operation switches or overwrites saved
+credentials. A normal API-key login alone cannot activate recurring spend.
+Before requesting or verifying a code, the client checks the selected key's
+current account email, trimming whitespace and ignoring case as the server does.
+A different email is refused before the login endpoint can create an account.
+
+The request file contains every explicit `RecurringRequest` field, including
+JSON input/args, runtime and connector limits, cadence/start/expiry/grace, UTC-day
+period, finish-authorized-attempt policy, all three credit ceilings and both
+occurrence ceilings. No policy values are inferred. Preview and draft retrieval
+show the original server terms/hash, quote, first due instants and approval
+deadline. They create no run or credit reservation. Each grant adds its own
+budget; an occurrence reprices within the approved limits.
+
+To activate, provide `--accepted-terms <original-sha256>`,
+`--idempotency-key <original-key>`, `--recovery-dir <new-absolute-directory>`,
+`--email <email>` and `--confirm`. A terminal displays the complete immutable
+draft and requires typing `authorize-recurring-credit-use`, then requests a
+fresh code and reads it masked. For JSON or noninteractive use, also supply
+`--acceptance authorize-recurring-credit-use --code-stdin`; request the code
+first with `recurring verification`. Do not put the code or session in argv.
+Cancellation/EOF does not grant consent. The server independently verifies fresh,
+eligible, non-impersonated human authority and the original terms.
+
+MCP activation takes the same original draft, approval object, recovery directory
+and explicit `confirm: true`, plus account email and a fresh code. The MCP host
+may retain supplied code arguments in its history; the masked terminal flow
+avoids that disclosure. No tool returns or stores the resulting session. A tool
+confirmation boolean or API key never substitutes for verified human approval.
+
+Activation and revocation require a new recovery directory under an existing
+canonical parent. It is created privately and contains the original server,
+profile, account/membership, draft/hash/approval key or consent ID and attempt
+state. It contains no bearer, OTP or raw input payload. Preserve it after errors;
+unknown mutation outcomes exit 2 in the CLI and set MCP `isError` with
+`outcomeUnknown: true`. Read-only `recover` never resubmits. Explicit
+`recover --confirm` reuses the original activation key/terms and fresh approval,
+or the same revoked consent; it never creates a replacement request. An expired
+draft or lost current authority does not resolve an earlier unknown outcome.
+Aliased, replaced, malformed or locked recovery directories refuse changes.
+
+List/history expose one page (1–100 items, default 20) and the unchanged opaque
+cursor. Consent output includes period/total reserved and settled credits,
+admitted counts, ceilings, deployment and next due time; history includes stable
+occurrence/run IDs, outcomes, refusal reasons and allocation state. All hosts
+read the same server identities. Revocation reports residual authorized exposure
+and does not promise cancellation/refund of an already authorized attempt.
+Cancellation is separate. A lost preview response has no draft lookup key:
+report that uncertainty and explicitly choose any new preview, without silently
+turning it into an activation.
+
 ## Portable Skills
 
 Portable skills live under `~/.hasna/skills/installed/<name>/` and follow the
@@ -1055,7 +1167,7 @@ src/
 |---|---|---|
 | Catalog skills | 0 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 72 | `tools/list` against a live `buildServer()` |
+| MCP tools | 81 | `tools/list` against a live `buildServer()` |
 
 Every number in this table is re-derived from the source tree on each test run by
 `src/lib/readme-derived-counts.test.ts`, so a drifted figure fails a test rather
