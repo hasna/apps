@@ -4,8 +4,8 @@ import { program } from "commander";
 import chalk from "chalk";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { applyConfigsWithReport, expandPath, getConfigHome, normalizeTargetPath } from "../lib/apply.js";
+import { basename, dirname, join, resolve } from "node:path";
+import { applyConfigsWithReport, compactPathForConfigHome, expandPath, normalizeTargetPath } from "../lib/apply.js";
 import { findConfigsByTargetPath, findDuplicateTargetPathGroups, findReferenceConfigsByName, findDuplicateReferenceNameGroups } from "../lib/config-target-identity.js";
 import { diffConfig, syncKnown, syncToDisk, syncProject, detectCategory, detectAgent, detectFormat, KNOWN_CONFIGS } from "../lib/sync.js";
 import { syncFromDir } from "../lib/sync-dir.js";
@@ -702,17 +702,7 @@ program
     // `<CONFIGS_HOME>/<absolute-path-without-os-home>` and could write the
     // wrong file. Keep the boundary segment-safe so `/home/user2` is never
     // treated as a child of `/home/user`.
-    const configHome = resolve(getConfigHome());
-    const conventionalHome = resolve(process.env["HOME"] || homedir());
-    const relativeToConfigHome = relative(configHome, abs);
-    const targetPath =
-      configHome === conventionalHome &&
-      relativeToConfigHome &&
-      relativeToConfigHome !== ".." &&
-      !relativeToConfigHome.startsWith(`..${sep}`) &&
-      !isAbsolute(relativeToConfigHome)
-        ? `~/${relativeToConfigHome}`
-        : abs;
+    const targetPath = compactPathForConfigHome(abs);
     const name = opts.name || filePath.split("/").pop()!;
     const store = resolveConfigStore();
 
