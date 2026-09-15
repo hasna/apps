@@ -23,6 +23,8 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
+import { writeTestCatalog } from "../lib/private-corpus-test-utils.js";
+import { getPortableSkillsRoot } from "../lib/portable-skills.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { resetLocalSkillsModeNotice } from "../lib/fleet-credentials.js";
 import { runCli } from "../cli/cli.test-utils.js";
@@ -127,8 +129,9 @@ describe("MCP data tools refuse when the fleet ladder refuses (no credential, no
     }
   });
 
-  test("control: the explicit local opt-in serves the bundled corpus on every tool", async () => {
+  test("control: the explicit local opt-in serves owned fixtures on every tool", async () => {
     process.env.HASNA_SKILLS_LOCAL = "1";
+    writeTestCatalog(getPortableSkillsRoot());
     const { client, close } = await connectedClient();
     try {
       for (const tool of DATA_TOOLS) {
@@ -156,7 +159,7 @@ describe("MCP data tools refuse when the fleet ladder refuses (no credential, no
       await close();
     }
 
-    process.env.HASNA_SKILLS_API_KEY = "sk_read_gate_never_printed";
+    process.env.HASNA_SKILLS_API_KEY = "dummy-read-gate-fixture";
     try {
       const { client: hosted, close: closeHosted } = await connectedClient();
       try {
@@ -166,7 +169,7 @@ describe("MCP data tools refuse when the fleet ladder refuses (no credential, no
         expect(payload.credential.apiKeySource).toBe("HASNA_SKILLS_API_KEY");
         expect(payload.credential.apiKeyTier).toBe("env");
         expect(payload.credential.apiUrlSource).toBe("default");
-        expect(raw).not.toContain("sk_read_gate_never_printed");
+        expect(raw).not.toContain("dummy-read-gate-fixture");
       } finally {
         await closeHosted();
       }

@@ -21,7 +21,7 @@ useDefaultTestTimeout();
 // path is exercised against a fixture the CLI resolves via $HASNA_SKILLS_DIR.
 const FIXTURE_HOME = mkdtempSyncTop(joinTop(tmpdirTop(), "cli-runtime-fixtures-"));
 {
-  const dir = joinTop(FIXTURE_HOME, "custom", "deps-fixture");
+  const dir = joinTop(FIXTURE_HOME, "installed", "deps-fixture");
   mkdirSyncTop(dir, { recursive: true });
   writeFileSyncTop(joinTop(dir, "package.json"), JSON.stringify({ name: "deps-fixture", version: "0.1.0", dependencies: { "csv-parse": "^5.0.0" } }));
   writeFileSyncTop(joinTop(dir, "SKILL.md"), "---\nname: deps-fixture\ndescription: Declares an npm dependency.\n---\n# Deps\n");
@@ -30,14 +30,14 @@ const FIXTURE_HOME = mkdtempSyncTop(joinTop(tmpdirTop(), "cli-runtime-fixtures-"
   // (package.json skills.runtime: "hosted"), docs but no runnable source. A
   // local run of this skill must fail (no entry point); the only correct
   // outcome for a scheduled run is the routing fail-closed error.
-  const hosted = joinTop(FIXTURE_HOME, "custom", "hosted-schedule-fixture");
+  const hosted = joinTop(FIXTURE_HOME, "installed", "hosted-schedule-fixture");
   mkdirSyncTop(hosted, { recursive: true });
   writeFileSyncTop(joinTop(hosted, "package.json"), JSON.stringify({ name: "hosted-schedule-fixture", version: "0.1.0", skills: { runtime: "hosted" } }));
   writeFileSyncTop(joinTop(hosted, "SKILL.md"), "---\nname: hosted-schedule-fixture\ndescription: Server-owned fixture for schedule routing.\n---\n# Hosted\n");
 
   // Local fixture: runnable, silent, exits 0. Proves the schedule surface still
   // executes non-server-owned skills locally.
-  const local = joinTop(FIXTURE_HOME, "custom", "local-schedule-fixture");
+  const local = joinTop(FIXTURE_HOME, "installed", "local-schedule-fixture");
   mkdirSyncTop(joinTop(local, "src"), { recursive: true });
   writeFileSyncTop(joinTop(local, "package.json"), JSON.stringify({ name: "local-schedule-fixture", version: "0.1.0", bin: { "local-schedule-fixture": "src/index.ts" } }));
   writeFileSyncTop(joinTop(local, "src", "index.ts"), "");

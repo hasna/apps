@@ -37,7 +37,7 @@ describe("runSkill", () => {
   // the resolved corpus. The decoy under the project .skills tree must never run.
   function writeCorpusExecutable(): string {
     const corpusRoot = mkdtempSync(join(tmpdir(), "runskill-corpus-"));
-    const skillDir = join(corpusRoot, "custom", "lorem-generator");
+    const skillDir = join(corpusRoot, "installed", "lorem-generator");
     mkdirSync(join(skillDir, "src"), { recursive: true });
     writeFileSync(
       join(skillDir, "package.json"),
@@ -129,7 +129,7 @@ source: private
   // overridden by the CLI-supplied environment.
   function writeCorpusWriter(): string {
     const corpusRoot = mkdtempSync(join(tmpdir(), "runskill-writer-"));
-    const skillDir = join(corpusRoot, "custom", "lorem-writer");
+    const skillDir = join(corpusRoot, "installed", "lorem-writer");
     mkdirSync(join(skillDir, "src"), { recursive: true });
     writeFileSync(
       join(skillDir, "package.json"),
@@ -157,7 +157,8 @@ source: private
 
   test("run environment makes the skill write into the project, never into its own directory", async () => {
     const corpusRoot = writeCorpusWriter();
-    const skillDir = join(corpusRoot, "custom", "lorem-writer");
+    const skillDir = join(corpusRoot, "installed", "lorem-writer");
+    mkdirSync(join(skillDir, "node_modules")); // This test begins with a prepared runtime.
     const previous = process.env["HASNA_SKILLS_DIR"];
     process.env["HASNA_SKILLS_DIR"] = corpusRoot;
     try {
@@ -171,7 +172,7 @@ source: private
       expect(existsSync(join(testDir, ".skills", "exports", "lorem-writer", "derived.txt"))).toBe(true);
 
       // Nothing was created under the resolved skill directory.
-      expect(readdirSync(skillDir).sort()).toEqual(["package.json", "src"]);
+      expect(readdirSync(skillDir).sort()).toEqual(["node_modules", "package.json", "src"]);
       expect(existsSync(join(skillDir, ".skills"))).toBe(false);
       expect(existsSync(join(skillDir, "artifact.txt"))).toBe(false);
       expect(existsSync(join(skillDir, "src", "artifact.txt"))).toBe(false);

@@ -6,7 +6,7 @@ import { runCliInCwd } from "./cli.test-utils";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
-for (const command of ["port", "add"]) test(command + " --all forwards explicit shadow permission without granting overwrite", async () => {
+for (const command of ["port", "add"]) test(command + " --all imports a formerly reserved name without granting overwrite", async () => {
   const work = mkdtempSync(join(tmpdir(), "cli-bulk-shadow-")), home = join(work, "home"), source = join(work, "source"), skill = join(source, "instruction");
   mkdirSync(home); mkdirSync(skill, { recursive: true });
   const document = "---\nname: blog-article\ndescription: Owned bulk CLI fixture\nkind: instruction\n---\n\nReviewed local instruction.\n";
@@ -14,11 +14,7 @@ for (const command of ["port", "add"]) test(command + " --all forwards explicit 
   const destination = join(home, ".hasna/skills/installed/blog-article");
   try {
     const env = { HOME: home };
-    const refusal = await runCliInCwd([command, source, "--all", "--json"], work, env);
-    expect(refusal.exitCode).toBe(1);
-    expect(JSON.parse(refusal.stdout)).toMatchObject({ succeeded: 0, failed: 1 });
-    expect(existsSync(destination)).toBe(false);
-    const accepted = await runCliInCwd([command, source, "--all", "--allow-shadow", "--json"], work, env);
+    const accepted = await runCliInCwd([command, source, "--all", "--json"], work, env);
     expect(accepted.exitCode).toBe(0);
     expect(JSON.parse(accepted.stdout)).toMatchObject({ total: 1, succeeded: 1, failed: 0, skipped: [] });
     expect(readFileSync(join(destination, "SKILL.md"), "utf8")).toBe(document);

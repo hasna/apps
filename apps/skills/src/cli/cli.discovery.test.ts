@@ -12,7 +12,7 @@ import {
   stderrWithoutLocalNotice,
 } from "./cli.test-utils";
 
-import { useDefaultTestTimeout } from "../test-preload.js";
+import { useDefaultTestTimeout, withoutDataDirOverrideEnv } from "../test-preload.js";
 
 useDefaultTestTimeout();
 
@@ -151,7 +151,7 @@ describe("CLI discovery", () => {
       const proc = Bun.spawn(["bash", "-c", command], {
         stdout: "pipe",
         stderr: "pipe",
-        env: { ...process.env, HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1", HASNA_SKILLS_LOCAL: "1" },
+        env: { ...withoutDataDirOverrideEnv({ ...process.env }), HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1", HASNA_SKILLS_LOCAL: "1" },
       });
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();
@@ -258,8 +258,8 @@ describe("CLI discovery", () => {
 
     test("lists full-registry categories with --all", async () => {
       const { stdout } = await runCli(["list", "--category", "Development Tools", "--all"]);
-      // 5 instruction + 24 restored credential-free executable skills.
-      expect(stdout).toContain("Development Tools (29)");
+      // Both owned Development Tools fixtures are discoverable.
+      expect(stdout).toContain("Development Tools (2)");
       expect(stdout).toContain("repo-onboarding-report");
     });
 
@@ -568,7 +568,7 @@ describe("CLI discovery", () => {
       const proc = Bun.spawn(["bash", "-c", command], {
         stdout: "pipe",
         stderr: "pipe",
-        env: { ...process.env, HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1", HASNA_SKILLS_LOCAL: "1" },
+        env: { ...withoutDataDirOverrideEnv({ ...process.env }), HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1", HASNA_SKILLS_LOCAL: "1" },
       });
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();

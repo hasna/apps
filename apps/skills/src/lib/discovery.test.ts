@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 
+import { writeOwnedFixture } from "./private-corpus-test-utils.js";
 import { getCompactSkillDiscovery, sanitizePublicDiscoveryText } from "./discovery.js";
 import { loadBasicRegistry, loadRegistryProfile } from "./registry.js";
 import type { SkillMeta } from "./registry-types.js";
@@ -7,6 +8,7 @@ import type { SkillMeta } from "./registry-types.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
+beforeEach(() => writeOwnedFixture("owned-discovery-fixture"));
 
 describe("getCompactSkillDiscovery", () => {
   test("includes name, category, and a description", () => {
