@@ -6,6 +6,7 @@
 
 - 12f8663: Honor explicit `port --all --allow-shadow` permission for each imported skill, including the `add` alias. Preserve default official-name refusal, separate overwrite consent and partial-failure reporting.
 - Verify actual producer dependency resolution against the selected standalone frozen lock before publication and in the explicit release packing procedure.
+- 8a3026a: Bind explicitly reviewed launcher and interpreter symlink paths, ancestor identities, and resolved bytes during native hook checks. Preserve strict byte and directory modes; refuse retargeting, special files, oversized traversal, concurrent changes and planned writes that replace a bound path or create its missing ancestor.
 
 ## 0.7.2
 

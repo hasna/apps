@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { useDefaultTestTimeout } from "../test-preload.js";
 useDefaultTestTimeout();
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import * as discovery from "./agent-discovery.js";
@@ -80,8 +80,9 @@ test("path witnesses refuse non-files, link cycles, excessive hops, malformed co
 
 test("path witnesses refuse non-UTF8 link targets and malformed Unicode input paths", () => {
   const dir = root(), link = join(dir, "launcher"), raw = Buffer.from([0xff]);
-  writeFileSync(Buffer.concat([Buffer.from(dir + "/"), raw]), "actual native file");
+  // Link text can contain raw bytes even where filenames must be valid UTF-8.
   symlinkSync(raw, link);
+  expect(readlinkSync(link, { encoding: "buffer" }).equals(raw)).toBe(true);
   expect(() => capture([link])).toThrow("non-UTF8 discovery link target");
   expect(() => capture([dir + "/\ud800"])).toThrow("canonical absolute discovery path");
 });
@@ -102,6 +103,28 @@ test("path witnesses refuse projected configuration and planned replacement thro
   }
   expect(() => discovery.rebindAgentDiscovery(binding(sources), new Map([[file, "after"]]))).toThrow("planned write");
   expect(() => discovery.rebindAgentDiscovery(binding(sources), new Map([[link, "after"]]))).toThrow("planned write");
+});
+
+test("planned writes cannot create a missing alias ancestor but allow unrelated sibling paths", () => {
+  const dir = root(), missing = join(dir, "missing-parent"), link = join(dir, "launcher");
+  symlinkSync("missing-parent/child/file", link);
+  const absent = binding(capture([link]));
+  for (const target of [missing, join(missing, "child"), join(missing, "child/file"), join(missing, "other")]) {
+    expect(() => discovery.rebindAgentDiscovery(absent, new Map([[target, "planned"]]))).toThrow("planned write");
+  }
+  expect(existsSync(missing)).toBe(false);
+  const neighbor = join(dir, "missing-parent-neighbor"), unrelated = join(neighbor, "file");
+  const unchanged = discovery.rebindAgentDiscovery(absent, new Map([[unrelated, "unrelated"]]));
+  mkdirSync(neighbor); writeFileSync(unrelated, "unrelated");
+  expect(() => discovery.verifyAgentDiscovery(unchanged)).not.toThrow();
+
+  const existing = join(dir, "existing"), existingLink = join(dir, "existing-launcher");
+  mkdirSync(existing); writeFileSync(join(existing, "file"), "retained"); symlinkSync("existing/file", existingLink);
+  const sibling = join(existing, "sibling");
+  const retained = discovery.rebindAgentDiscovery(binding(capture([existingLink])), new Map([[sibling, "unrelated"]]));
+  writeFileSync(sibling, "unrelated");
+  expect(() => discovery.verifyAgentDiscovery(retained)).not.toThrow();
+  expect(readFileSync(join(existing, "file"), "utf8")).toBe("retained");
 });
 
 test("normal bridge plans preserve explicit aliases and refuse retargeting before any native write", () => {
@@ -138,12 +161,14 @@ test("post-write alias drift compensates owned bridge files and preserves the ne
 
 test("path metadata has finite per-source and aggregate budgets", () => {
   let dir = root();
-  for (let n = 0; n < 10; n++) { dir = join(dir, "d".repeat(190) + n); mkdirSync(dir); }
+  // Short components keep real paths portable; repeated witnesses and absolute
+  // link traversal still exceed the unchanged aggregate and per-source budgets.
+  for (let n = 0; n < 20; n++) { dir = join(dir, "d".repeat(20) + n); mkdirSync(dir); }
   const file = join(dir, "file"); writeFileSync(file, "fixture");
   const sources = capture([file]);
-  expect(() => verify(Array(1000).fill(sources[0]))).toThrow("aggregate metadata limit");
-  for (let n = 0; n < 35; n++) symlinkSync(n === 34 ? "file" : "link-" + (n + 1), join(dir, "link-" + n));
-  expect(() => capture([join(dir, "link-0")])).toThrow("metadata limit");
+  expect(() => verify(Array(1500).fill(sources[0]))).toThrow("aggregate metadata limit");
+  for (let n = 0; n < 35; n++) symlinkSync(join(dir, n === 34 ? "file" : "link-" + (n + 1)), join(dir, "link-" + n));
+  expect(() => capture([join(dir, "link-0")])).toThrow("Discovery path metadata limit exceeded");
 });
 
 test("real path races refuse link, ancestor, regular-file, FIFO and growth replacements without hanging", () => {
