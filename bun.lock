@@ -1006,7 +1006,7 @@
     },
     "apps/skills": {
       "name": "@hasna/skills",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "bin": {
         "skills": "bin/index.js",
         "skills-mcp": "bin/mcp.js",
@@ -1074,7 +1074,7 @@
     },
     "apps/switcher": {
       "name": "@hasna/switcher",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "bin": {
         "switcher": "dist/cli/index.js",
         "switcher-mcp": "dist/mcp/index.js",
