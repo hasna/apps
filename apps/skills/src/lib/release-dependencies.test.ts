@@ -107,3 +107,110 @@ test("unlocked installed optional peers and additional metadata edges both refus
     expect(() => verifyProducerDependencies(f.root)).toThrow("locked metadata differs");
   } finally { f.dispose(); }
 });
+
+/** Real Node/Bun resolution, with one tuple instantiated under two peer parents
+ * and an ordinary broad-range dependency that is hoisted across those parents. */
+function peerContextFixture() {
+  const owner = realpathSync(mkdtempSync(join(tmpdir(), "skills-producer-context-"))), root = join(owner, "producer");
+  const manifest = { name: "peer-context-fixture", version: "1.0.0", dependencies: { consumer: "1.0.0", a: "1.0.0", b: "1.0.0", adapter: "1.0.0", zod: "^4.0.0" } };
+  const consumer = { name: "consumer", version: "1.0.0", peerDependencies: { zod: "^3.0.0 || ^4.0.0" } };
+  const parent = (name: string) => ({ name, version: "1.0.0", dependencies: { consumer: "1.0.0", adapter: "1.0.0", zod: "^3.0.0" } });
+  const adapter = { name: "adapter", version: "1.0.0", dependencies: { consumer: "1.0.0", zod: "^3.0.0 || ^4.0.0" } };
+  const lock: any = { lockfileVersion: 1, workspaces: { "": manifest }, packages: {
+    consumer: ["consumer@1.0.0", "", { peerDependencies: consumer.peerDependencies }, "fixture-integrity"],
+    a: ["a@1.0.0", "", { dependencies: parent("a").dependencies }, "fixture-integrity"],
+    b: ["b@1.0.0", "", { dependencies: parent("b").dependencies }, "fixture-integrity"],
+    adapter: ["adapter@1.0.0", "", { dependencies: adapter.dependencies }, "fixture-integrity"],
+    zod: ["zod@4.5.4", "", {}, "fixture-integrity"],
+    "a/zod": ["zod@3.25.76", "", {}, "fixture-integrity"],
+    "b/zod": ["zod@3.25.76", "", {}, "fixture-integrity"],
+  } };
+  const install = (relative: string, value: unknown) => {
+    const directory = join(root, relative); mkdirSync(directory, { recursive: true }); write(join(directory, "package.json"), value); return directory;
+  };
+  install("node_modules/consumer", consumer); install("node_modules/adapter", adapter);
+  install("node_modules/zod", { name: "zod", version: "4.5.4" });
+  for (const name of ["a", "b"]) {
+    install(`node_modules/${name}`, parent(name));
+    install(`node_modules/${name}/node_modules/consumer`, consumer);
+    install(`node_modules/${name}/node_modules/zod`, { name: "zod", version: "3.25.76" });
+  }
+  write(join(root, "package.json"), manifest); write(join(root, "bun.lock"), lock);
+  function resolved(parent: string, name: string) {
+    const directory = realpathSync(join(root, parent)), node = realpathSync(createRequire(join(directory, "package.json")).resolve(`${name}/package.json`));
+    expect(realpathSync(Bun.resolveSync(`${name}/package.json`, directory))).toBe(node);
+    return { path: node, ...JSON.parse(readFileSync(node, "utf8")) };
+  }
+  return { root, owner, lock, consumer, install, resolved, dispose: () => rmSync(owner, { recursive: true, force: true }) };
+}
+
+test("one peer tuple retains each parent's binding while ordinary broad-range dependencies use their own hoisted context", () => {
+  const f = peerContextFixture();
+  try {
+    expect(f.resolved("node_modules/consumer", "zod").version).toBe("4.5.4");
+    for (const parent of ["a", "b"]) expect(f.resolved(`node_modules/${parent}/node_modules/consumer`, "zod").version).toBe("3.25.76");
+    expect(f.resolved("node_modules/adapter", "zod").version).toBe("4.5.4");
+    const before = bytes(f.root), result = verifyProducerDependencies(f.root);
+    const peers = result.nodes.filter(node => node.name === "consumer");
+    expect(new Set(peers.map(node => node.context.zod))).toEqual(new Set(["zod", "a/zod", "b/zod"]));
+    expect(result.nodes.filter(node => node.name === "adapter").every(node => node.context.zod === "zod")).toBe(true);
+    expect(bytes(f.root)).toBe(before);
+  } finally { f.dispose(); }
+});
+
+test("same-version peer substitution cannot reuse an earlier physical-package visit from another context", () => {
+  const f = peerContextFixture();
+  try {
+    const path = join(f.root, "node_modules/a/node_modules/consumer"), target = join(f.root, "node_modules/consumer");
+    rmSync(path, { recursive: true }); symlinkSync(target, path);
+    expect(f.resolved("node_modules/a", "consumer").version).toBe("1.0.0");
+    expect(f.resolved("node_modules/a/node_modules/consumer", "zod").version).toBe("4.5.4");
+    const before = bytes(f.root);
+    expect(() => verifyProducerDependencies(f.root)).toThrow("zod resolved zod@4.5.4, lock requires zod@3.25.76");
+    expect(bytes(f.root)).toBe(before); expect(realpathSync(path)).toBe(target);
+  } finally { f.dispose(); }
+});
+
+test("an ordinary dependency cannot select a different inherited lock entry merely because both satisfy its broad range", () => {
+  const f = peerContextFixture();
+  try {
+    const directory = join(f.root, "node_modules/adapter/node_modules"); mkdirSync(directory);
+    symlinkSync(join(f.root, "node_modules/a/node_modules/zod"), join(directory, "zod"));
+    expect(f.resolved("node_modules/adapter", "zod").version).toBe("3.25.76");
+    expect(Bun.semver.satisfies("3.25.76", "^3.0.0 || ^4.0.0")).toBe(true);
+    expect(Bun.semver.satisfies("4.5.4", "^3.0.0 || ^4.0.0")).toBe(true);
+    const before = bytes(f.root);
+    expect(() => verifyProducerDependencies(f.root)).toThrow("zod resolved zod@3.25.76, lock requires zod@4.5.4");
+    expect(bytes(f.root)).toBe(before);
+  } finally { f.dispose(); }
+});
+
+test("hoisted tuples retain their own nested lock entries after another importing parent", () => {
+  const f = peerContextFixture();
+  try {
+    f.lock.packages["adapter/zod"] = ["zod@3.25.76", "", {}, "fixture-integrity"];
+    f.install("node_modules/adapter/node_modules/zod", { name: "zod", version: "3.25.76" });
+    // Adapter's ordinary consumer resolves the global tuple, but its peer must
+    // now inherit adapter/zod rather than the grandparent a/zod or root zod.
+    f.install("node_modules/adapter/node_modules/consumer", f.consumer);
+    write(join(f.root, "bun.lock"), f.lock);
+    const before = bytes(f.root), result = verifyProducerDependencies(f.root);
+    expect(result.nodes.some(node => node.name === "consumer" && node.context.zod === "adapter/zod")).toBe(true);
+    expect(f.resolved("node_modules/adapter/node_modules/consumer", "zod").version).toBe("3.25.76");
+    expect(bytes(f.root)).toBe(before);
+  } finally { f.dispose(); }
+});
+
+test("cyclic peer graphs terminate with finite contexts and still inspect each binding", () => {
+  const f = peerContextFixture();
+  try {
+    const consumer = { ...f.consumer, peerDependencies: { ...f.consumer.peerDependencies, a: "1.0.0" } };
+    f.lock.packages.consumer[2].peerDependencies = consumer.peerDependencies;
+    for (const relative of ["node_modules/consumer", "node_modules/a/node_modules/consumer", "node_modules/b/node_modules/consumer"]) f.install(relative, consumer);
+    write(join(f.root, "bun.lock"), f.lock);
+    const before = bytes(f.root), result = verifyProducerDependencies(f.root);
+    expect(result.nodeCount).toBeLessThan(40); expect(result.edgeCount).toBeLessThan(100);
+    expect(new Set(result.nodes.filter(node => node.name === "consumer").map(node => node.context.zod))).toEqual(new Set(["zod", "a/zod", "b/zod"]));
+    expect(bytes(f.root)).toBe(before);
+  } finally { f.dispose(); }
+});

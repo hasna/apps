@@ -123,9 +123,7 @@ function secretScanContractFailures(workflow: string): string[] {
 
 describe("private fleet workflow skills", () => {
   test("agent-skills/ carries no skill corpus in the public repo", () => {
-    // Only the pointer README remains; the fleet workflow skills live in the
-    // private per-station store (hasna-internal/fleet-resources), not here.
-    expect(readdirSync(AGENT_SKILLS_DIR).sort()).toEqual(["README.md"]);
+    expect(existsSync(AGENT_SKILLS_DIR)).toBe(false);
   });
 
   test("the moved skills are absent from the repo and the customer catalog", () => {
@@ -137,25 +135,7 @@ describe("private fleet workflow skills", () => {
     }
   });
 
-  test("any agent-skills directory that appears later must carry valid frontmatter", () => {
-    // Future-proof guard: if a genuinely public skill is ever placed here again,
-    // its frontmatter must match its folder name exactly.
-    const failures: string[] = [];
-    for (const folder of readdirSync(AGENT_SKILLS_DIR)) {
-      const directory = join(AGENT_SKILLS_DIR, folder);
-      if (!statSync(directory).isDirectory()) continue;
-      const skillPath = join(directory, "SKILL.md");
-      if (!existsSync(skillPath)) {
-        failures.push(`${folder}: missing SKILL.md`);
-        continue;
-      }
-      const frontmatter = parseSkillFrontmatter(readFileSync(skillPath, "utf8"));
-      if (!frontmatter || frontmatter.name !== folder || !frontmatter.description) {
-        failures.push(`${folder}: invalid or mismatched frontmatter`);
-      }
-    }
-    expect(failures).toEqual([]);
-  });
+
 });
 
 describe("CI secret-scan contract", () => {

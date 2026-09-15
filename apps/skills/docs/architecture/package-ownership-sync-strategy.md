@@ -19,7 +19,7 @@ approaches create duplicate engines that drift.
 | Skill engine APIs | Open upstream | `hasna/skills`, npm `@hasna/skills` | Registry, pinning, validation, docs, config, scheduler primitives, and API types. |
 | Agent CLI | Open upstream | `@hasna/skills`, command `skills` | Local for free/user-key skills; server-executed skills submit to an explicitly configured Skills API. |
 | MCP server | Open upstream | `@hasna/skills`, command `skills-mcp` | Agent protocol wrapper over shared engine APIs. |
-| Bundled skill corpus | Open upstream | `hasna/skills/skills/*` | Source corpus for free and explicitly local execution; server-executed entries expose contracts, not protected source. |
+| Skill corpus | Operator | Private account storage and CLI cache | Versioned documents and executable sources are never part of the public software tree. |
 | Server API | Private service wrapper | Same open repo or separate service repo | Auth, account state, billing, approvals, registry sync, and runs. |
 | Server workers | Private service wrapper | Same open repo or separate service repo | Queues, sandbox execution, exports, logs, retries, and connector bindings. |
 | Web app | Private service wrapper | Same open repo or separate service repo | Web UI consuming the same API contracts as CLI and MCP. |
@@ -38,8 +38,8 @@ Wrappers should use public APIs for:
 
 - Registry enumeration and search seed data.
 - Skill documentation and requirements extraction.
-- Project pinning and remote/bundled registry metadata.
-- Validation of uploaded, synced, and bundled skills.
+- Project pinning and account registry metadata.
+- Validation of uploaded and synced private skills.
 - Shared API response types for CLI, MCP, SDK, and web clients.
 
 Wrappers should not import upstream CLI or MCP internals directly. They should
@@ -84,16 +84,16 @@ Wrappers can set a default API origin such as `https://your-server.example`.
 
 ## Generated Registry Sync
 
-A server-side registry should be populated from upstream through an idempotent sync
-command, not by treating upstream files as the live database.
+An account registry is populated through authenticated, explicit publication of
+operator-owned bundles. Software installation and startup never seed a catalog.
 
 Expected sync behavior:
 
-1. Load upstream registry data from `@hasna/skills`.
+1. Select the operator-owned source and authenticated destination account.
 2. Validate each skill directory or package artifact with upstream validators.
 3. Normalize names, slugs, categories, tags, versions, docs, requirements, and
    source provenance.
-4. Upsert into server registry tables with source version and git/npm
+4. Upsert into server registry tables with immutable bundle version and source
    provenance.
 5. Preserve server-only fields such as moderation state, pricing, visibility,
    owner, cost, and execution profile.

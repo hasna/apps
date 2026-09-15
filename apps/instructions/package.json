@@ -24,7 +24,6 @@
   },
   "files": [
     "dist",
-    "assets/skills/inbox/SKILL.md",
     "LICENSE",
     "README.md",
     "!dist/**/*.test.d.ts",

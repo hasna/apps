@@ -24,21 +24,18 @@
  *     statically imports @hasna/contracts/auth and secrets' build bundles
  *     it, so secrets' build needs contracts' built dist and declaration
  *     files first.
- * The edge removed is contracts -> secrets: @hasna/contracts now declares
- * @hasna/secrets as a peerDependency (exact 0.3.3 — npm 7+ and bun
- * auto-install peers, so the published runtime path keeps resolving), which
- * takes that edge out of turbo's package graph while leaving the load-bearing
- * secrets -> contracts devDependency edge (and its correct build ordering)
- * untouched.
+ * Contracts keeps Secrets as an optional runtime peer and pins the registry
+ * tarball separately for development acceptance. An ordinary version pin (even
+ * an npm alias) can resolve the same-version workspace and create a cycle when
+ * Secrets builds against current Contracts. The explicit published tarball
+ * keeps this SDK independent; Secrets retains its declared Contracts build edge.
  *
  * This test is the two-sided gate for that shape:
  *   RED  — the graph is cyclic again and turbo refuses to construct it
- *          (rc != 0), or the secrets -> contracts build edge returns or
- *          disagrees with the installed workspace/registry target, or @hasna/secrets moves back into contracts'
- *          dependencies (the cycle edge);
- *   GREEN — the graph constructs (rc 0) with secrets#build waiting on
- *          contracts#build only when it resolves that workspace; an older
- *          registry pin needs no workspace build. The reverse peer edge is absent.
+ *          (rc != 0), either build edge disagrees with the installed target,
+ *          or the optional runtime peer becomes a production dependency;
+ *   GREEN — the graph constructs (rc 0), each build edge follows its actual
+ *          workspace resolution, and registry pins require no sibling build.
  */
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
@@ -94,7 +91,7 @@ describe("turbo task graph", () => {
     expect(graph.rc, `turbo rc=${graph.rc}\n${graph.stderr}`).toBe(0);
   });
 
-  test("secrets#build follows its resolved Contracts target without a reverse peer edge", () => {
+  test("both build edges follow their resolved workspace or registry targets", () => {
     const graph = turboBuildGraph();
     expect(graph.rc, `turbo rc=${graph.rc}\n${graph.stderr}`).toBe(0);
 
@@ -106,24 +103,35 @@ describe("turbo task graph", () => {
     // A registry pin outside the workspace version (e.g. 0.14.2 vs 1.0.0)
     // consumes the registry artifact, not this checkout's breaking release.
     // Only an actual workspace resolution should create a workspace build edge.
-    const resolvedAuth = fs.realpathSync(Bun.resolveSync("@hasna/contracts/auth", path.join(APPS_DIR, "secrets")));
+    // Resolve package metadata: CI runs this before build, when Secrets dist
+    // intentionally does not exist yet. A missing SDK build is not a graph cycle.
+    const resolvedContracts = fs.realpathSync(Bun.resolveSync("@hasna/contracts/package.json", path.join(APPS_DIR, "secrets")));
     const workspaceContracts = fs.realpathSync(path.join(APPS_DIR, "contracts"));
-    const usesWorkspace = resolvedAuth.startsWith(workspaceContracts + path.sep);
+    const usesWorkspace = resolvedContracts.startsWith(workspaceContracts + path.sep);
     expect(secretsBuild!.includes("@hasna/contracts#build")).toBe(usesWorkspace);
-    // The removed direction: contracts' runtime use of @hasna/secrets is a
-    // peerDependency, which turbo 2.5.4 does not traverse — no package-graph
-    // cycle, and contracts' build (which deliberately never resolves sibling
-    // dist, see src/cli/secrets-bridge.ts) waits on nothing.
-    expect(contractsBuild).not.toContain("@hasna/secrets#build");
+    const resolvedSecrets = fs.realpathSync(Bun.resolveSync("@hasna/secrets/package.json", path.join(APPS_DIR, "contracts")));
+    const workspaceSecrets = fs.realpathSync(path.join(APPS_DIR, "secrets"));
+    const usesWorkspaceSecrets = resolvedSecrets.startsWith(workspaceSecrets + path.sep);
+    expect(contractsBuild!.includes("@hasna/secrets#build")).toBe(usesWorkspaceSecrets);
+    expect(usesWorkspaceSecrets, "Contracts acceptance must use the published SDK, independent of the Secrets workspace").toBe(false);
+    expect(usesWorkspace && usesWorkspaceSecrets, "mutual workspace development edges would recreate the package cycle").toBe(false);
   });
 
   test("the dependency classes keep the load-bearing edges in the right direction", () => {
-    // contracts' runtime import of @hasna/secrets must be a peerDependency
-    // (a move back to dependencies would re-create the package-graph cycle).
+    // Consumers may omit the runtime peer. The exact development pin is for
+    // producer acceptance and must not become a required production dependency.
     const contracts = readMemberManifest("contracts");
     const peers = (contracts.peerDependencies ?? {}) as Record<string, string>;
     expect(peers["@hasna/secrets"], "@hasna/contracts must declare @hasna/secrets in peerDependencies").toBeDefined();
-    for (const section of ["dependencies", "devDependencies", "optionalDependencies"] as const) {
+    const peerMeta = (contracts.peerDependenciesMeta ?? {}) as Record<string, { optional?: boolean }>;
+    expect(peerMeta["@hasna/secrets"]?.optional).toBe(true);
+    const contractsDev = (contracts.devDependencies ?? {}) as Record<string, string>;
+    const sdkPin = /^https:\/\/registry\.npmjs\.org\/@hasna\/secrets\/-\/secrets-(\d+\.\d+\.\d+)\.tgz$/.exec(contractsDev["@hasna/secrets"] ?? "");
+    expect(sdkPin, "the development SDK must name an exact public registry artifact").not.toBeNull();
+    const sdkManifest = JSON.parse(fs.readFileSync(Bun.resolveSync("@hasna/secrets/package.json", path.join(APPS_DIR, "contracts")), "utf8"));
+    expect(sdkManifest.name).toBe("@hasna/secrets");
+    expect(sdkManifest.version).toBe(sdkPin![1]);
+    for (const section of ["dependencies", "optionalDependencies"] as const) {
       const deps = (contracts[section] ?? {}) as Record<string, string>;
       expect(deps["@hasna/secrets"], `@hasna/contracts must not declare @hasna/secrets in ${section}`).toBeUndefined();
     }

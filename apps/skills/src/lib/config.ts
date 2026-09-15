@@ -4,16 +4,14 @@
  * Loads configuration from:
  *   1. Project-local: ./skills.config.json (highest priority)
  *   2. Global: ~/.hasna/skills/config.json (JSON format, lowest priority)
- *      (backward compat: also checks ~/.skillsrc)
  *
  * Values from the project config override global config.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync, statSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
-import { homedir } from "os";
 import { RETIRED_CONFIG_KEYS, assertNoRetiredConfigKeys } from "./retired-settings.js";
-import { effectiveHome, getDataRoot, hasOperatorOverride } from "./app-home.js";
+import { getDataRoot } from "./app-home.js";
 
 /**
  * Environment variable that relocates the skills data directory.
@@ -64,27 +62,6 @@ function validKeys(): string[] {
 
 function allowedValues(key: keyof SkillsConfig): readonly string[] | undefined {
   return ENUM_KEYS[key];
-}
-
-function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
-  if (!existsSync(sourceDir)) return;
-
-  mkdirSync(targetDir, { recursive: true });
-  for (const entry of readdirSync(sourceDir)) {
-    const sourcePath = join(sourceDir, entry);
-    const targetPath = join(targetDir, entry);
-
-    try {
-      const sourceStat = statSync(sourcePath);
-      if (sourceStat.isDirectory()) {
-        mergeDirectoryContents(sourcePath, targetPath);
-        continue;
-      }
-      if (!existsSync(targetPath)) copyFileSync(sourcePath, targetPath);
-    } catch {
-      // Skip entries that can't be inspected or copied.
-    }
-  }
 }
 
 function normalizeConfigValue(key: keyof SkillsConfig, value: unknown): string | undefined {
@@ -147,73 +124,19 @@ export function isOwnerLayoutMigrated(appDir: string): boolean {
 /**
  * Get the data directory for skills global config/data.
  * Default: ~/.hasna/skills/, overridable with $HASNA_SKILLS_DIR.
- * Auto-migrates from ~/.skills/ and ~/.skillsrc without deleting legacy data.
+ * Legacy directories and configuration are never imported during resolution.
  */
 export function getDataDir(): string {
-  // The effective data root is resolved by the @hasna/paths-based app-home
-  // resolver (app-home.ts): an exact-app override (HASNA_SKILLS_DIR, then the
-  // HASNA_SKILLS_HOME / SKILLS_HOME aliases) wins unconditionally; otherwise the
-  // resolver's XDG data root once adopted (server.db / config.json present there,
-  // or HASNA_DATA_HOME set); otherwise the legacy ~/.hasna/skills default.
-  //
-  // Every app-root path is routed through here. auth-store.ts resolves auth.json
-  // through getDataDir() (its own history is documented in that file),
-  // create-sync-config.ts composes from getPortableSkillsRoot() / getConfigPath(),
-  // and the server's default SQLite database resolves through defaultSqlitePath().
-  // A grep for join(homedir(), ...) in src/ finds no remaining app-root path
-  // composition.
-  //
-  // NOTE: this also relocates the global config file, since getConfigPath()
-  // derives from getDataDir(). See the PR description - it is intentional and
-  // user-visible.
   const root = getDataRoot();
-
-  // Best-effort mkdir, like the migration below. Read paths (`skills list`,
-  // `search`, `info`) must not throw because the root names a read-only parent or
-  // an existing file; callers that actually write surface their own error, and
-  // readers already treat a missing root as "no custom skills".
   try {
     mkdirSync(root, { recursive: true });
   } catch {
-    // Keep returning the root; the caller decides whether it needs to exist.
+    // Writers report inaccessible storage; a read never imports another source.
   }
-
-  // Legacy ~/.skills migration is deliberately skipped when the operator named a
-  // data root (an exact-app override or HASNA_DATA_HOME): it is a $HOME concern,
-  // and copying a stray legacy tree into an operator-chosen (often temporary)
-  // directory would be a surprising write.
-  if (hasOperatorOverride()) return root;
-
-  const home = effectiveHome();
-  const oldDir = join(home, ".skills");
-  const oldConfigFile = join(home, ".skillsrc");
-
-  try {
-    mergeDirectoryContents(oldDir, root);
-  } catch {
-    // If we can't copy legacy files, keep using the new path.
-  }
-
-  // Auto-migrate: if old config exists and new dir doesn't have config.json, copy it
-  if (existsSync(oldConfigFile) && !existsSync(join(root, "config.json"))) {
-    try {
-      copyFileSync(oldConfigFile, join(root, "config.json"));
-    } catch {
-      // If we can't copy, just continue with the new path
-    }
-  }
-
   return root;
 }
 
-/**
- * Write-free data-dir resolution for read-only paths (e.g. `sync --dry-run`).
- *
- * getDataDir() itself writes: it mkdirs the app folder, merges legacy ~/.skills
- * content and copies the legacy config file. A dry run must resolve the SAME
- * directory a real run would use without performing any of that — the app-home
- * resolver (getDataRoot) is already write-free, so this mirrors it directly.
- */
+/** Resolve the same app data root without creating directories. */
 export function getDataDirReadOnly(): string {
   return getDataRoot();
 }
@@ -226,41 +149,9 @@ export function getConfigPathReadOnly(scope: ConfigScope): string {
   return join(process.cwd(), "skills.config.json");
 }
 
-/**
- * Load merged config (project-local overrides global) without the writes
- * getDataDir() performs on the write path.
- *
- * The write path folds the legacy ~/.skillsrc into canonical config.json as part of
- * getDataDir()'s migration — copied ONLY when canonical config.json is absent, and
- * the legacy migration is skipped entirely when a data-directory override is active.
- * This mirrors that FILE-LEVEL precedence, never field-level merging: canonical
- * config.json, when present, is the whole global config; legacy ~/.skillsrc is read
- * only in the exact situation the write path would copy it (no canonical file, no
- * override). Field-level merging would inherit stale legacy values beneath a
- * canonical config that omits them, so the two paths must agree exactly.
- */
+/** Read only the canonical global and explicitly selected project configuration. */
 export function loadConfigReadOnly(): SkillsConfig {
-  const canonicalConfigPath = getConfigPathReadOnly("global");
-  let globalConfig: SkillsConfig;
-  if (existsSync(canonicalConfigPath)) {
-    globalConfig = readConfigFile(canonicalConfigPath);
-  } else if (hasOperatorOverride()) {
-    // Override active: the write path skips the legacy migration entirely, so a
-    // data-directory without config.json has no global config.
-    globalConfig = {};
-  } else {
-    globalConfig = readConfigFile(legacyConfigFilePath());
-  }
-  const projectConfig = readConfigFile(getConfigPathReadOnly("project"));
-  return { ...globalConfig, ...projectConfig };
-}
-
-/**
- * The legacy ~/.skillsrc config file, resolved write-free from $HOME exactly the
- * way getDataDir()'s migration reads it.
- */
-function legacyConfigFilePath(): string {
-  return join(process.env["HOME"] || process.env["USERPROFILE"] || homedir(), ".skillsrc");
+  return { ...readConfigFile(getConfigPathReadOnly("global")), ...readConfigFile(getConfigPathReadOnly("project")) };
 }
 
 /**

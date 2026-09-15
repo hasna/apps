@@ -6,12 +6,12 @@ infrastructure.
 
 ## Executive Decision
 
-Keep `hasna/skills` as the upstream engine and public skill corpus. Build hosted
+Keep `hasna/skills` as the upstream software engine. Build hosted
 products as wrappers around stable upstream contracts instead of copying the
 skill engine into a private-only product.
 
-Hosted wrappers may depend on upstream package APIs, consume its local skill
-source and hosted skill metadata, and propose generic improvements back to
+Hosted wrappers may depend on upstream package APIs, consume their own private skill
+source and account metadata, and propose generic improvements back to
 `hasna/skills`. They must not push private account state, billing systems,
 deployment code, hosted execution secrets, hosted worker source, or
 wrapper-specific product flows into upstream.
@@ -21,18 +21,18 @@ wrapper-specific product flows into upstream.
 | Area | Path | Reuse Decision | Hosted Wrapper Role |
 | --- | --- | --- | --- |
 | Public package API | `src/index.ts` | Reuse directly | Import typed contracts from one package boundary. |
-| Registry | `src/lib/registry.ts` | Reuse with small upstream improvements | Source bundled metadata and normalize remote registry records. |
+| Registry | `src/lib/registry.ts` | Reuse with small upstream improvements | Read owned cache metadata and normalize account registry records. |
 | Remote registry client | `src/lib/remote-registry.ts` | Reuse and extend upstream | Let CLI/MCP read hosted registry endpoints without changing local defaults. |
 | Installer | `src/lib/installer.ts` | Reuse pin-only mode | Write `.skills/project.json` pins and keep source-copy paths disabled. |
 | Skill docs and metadata | `src/lib/skillinfo.ts` | Reuse with execution caveats | Render docs, requirements, generated env examples, and local metadata. |
-| Validation | `src/lib/skill-validation.ts` | Reuse and strengthen upstream | Validate uploaded, bundled, and synced skills before publishing or execution. |
+| Validation | `src/lib/skill-validation.ts` | Reuse and strengthen upstream | Validate uploaded and synced private skills before publishing or execution. |
 | Scheduler | `src/lib/scheduler.ts` | Reference only for hosted services | Good local scheduler semantics, but hosted scheduling needs server state and workers. |
 | Config | `src/lib/config.ts` | Reuse for local agent config | Store API URL and local CLI/MCP preferences, not tenant state. |
 | API types | `src/types/api.ts` | Reuse and expand upstream | Keep CLI/MCP/web responses machine-readable and SDK-friendly. |
 | CLI | `src/cli/index.tsx` | Reuse as client surface | Add hosted commands and keep local-first commands intact. |
 | MCP server | `src/mcp/index.ts` | Reuse as agent protocol surface | Wrap registry, pinning, run, validation, and session tools with stable JSON. |
-| Skill corpus | `skills/*` | Public corpus | Local OSS skills keep source; hosted skills keep docs and metadata only. |
-| Shared skill helpers | `skills/_common` | Reuse carefully | Promote stable helpers upstream; server workers can vendor by package import. |
+| Skill corpus | Operator-owned `skills/*` outside this repo | Private data | Instructions, executable source and metadata belong to each account. |
+| Shared skill helpers | Operator-owned source outside this repo | Private data | Generic software primitives can be proposed upstream separately, without skill payloads. |
 | Workflows | `.github/workflows/*` | Reference only | Public CI/publish workflows are not hosted deployment pipelines. |
 
 ## Upstream Modules To Modify
@@ -57,7 +57,7 @@ even without the private SaaS:
 - Public boundary automation: keep scripts and docs that make package ownership
   boundaries explicit.
 - Skill corpus hygiene: fix package shape, metadata, docs, and source entry
-  point issues in upstream when they are generic local skill quality problems.
+  point issues in the private corpus; propose generic validator fixes upstream.
 
 ## Hosted-Only Modules To Build
 

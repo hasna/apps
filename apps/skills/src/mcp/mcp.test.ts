@@ -169,7 +169,7 @@ version: 0.3.0
     const tmpDir = mkdtempSync(join(tmpdir(), "mcp-local-with-auth-"));
     // The declarative-only catalog ships no bundled executable to run, so scaffold
     // a local executable skill in the server's corpus (resolved from $HOME=tmpDir).
-    const skillDir = join(tmpDir, ".hasna", "skills", "custom", "lorem-generator");
+    const skillDir = join(tmpDir, ".hasna", "skills", "installed", "lorem-generator");
     mkdirSync(join(skillDir, "src"), { recursive: true });
     writeFileSync(join(skillDir, "package.json"), JSON.stringify({ name: "lorem-generator", version: "0.1.0", bin: { "lorem-generator": "src/index.ts" } }));
     writeFileSync(join(skillDir, "src", "index.ts"), 'console.log("lorem-generator " + process.argv.slice(2).join(" "));');
@@ -403,7 +403,7 @@ version: 0.3.0
       expect(result.total).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
       expect(result.hasMore).toBe(false);
-      expect(skills.map((s: any) => s.name)).not.toContain("brand-kit");
+      expect(skills.map((s: any) => s.name)).toContain("brand-kit");
       expect(skills[0]).not.toHaveProperty("pricing");
       // Compact list must surface descriptions so agents can discover
       // without a per-skill get_skill_docs / get_skill_info round-trip.
@@ -449,9 +449,9 @@ version: 0.3.0
       const result = JSON.parse(response.result.content[0].text);
       const skills = result.skills;
       expect(Array.isArray(skills)).toBe(true);
-      // 5 instruction + 24 restored credential-free executable skills.
-      expect(skills.length).toBe(29);
-      expect(result.total).toBe(29);
+      // Both owned Development Tools fixtures are discoverable.
+      expect(skills.length).toBe(2);
+      expect(result.total).toBe(2);
       for (const s of skills) {
         expect(s.category).toBe("Development Tools");
       }

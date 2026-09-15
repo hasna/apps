@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import { writeOwnedFixture } from "./lib/private-corpus-test-utils.js";
 import * as publicAPI from "./index";
 
 import { useDefaultTestTimeout } from "./test-preload.js";
@@ -16,10 +17,10 @@ describe("public API exports", () => {
     expect(undefinedExports).toEqual([]);
   });
 
-  test("SKILLS array is populated", () => {
+  test("SKILLS compatibility array has no bundled entries", () => {
     expect(Array.isArray(publicAPI.SKILLS)).toBe(true);
     // OSS catalog: 20 instruction skills + 66 credential-free executable skills.
-    expect(publicAPI.SKILLS.length).toBe(86);
+    expect(publicAPI.SKILLS).toEqual([]);
   });
 
   test("CATEGORIES array is populated", () => {
@@ -27,9 +28,9 @@ describe("public API exports", () => {
     expect(publicAPI.CATEGORIES.length).toBe(17);
   });
 
-  test("BASIC_SKILL_NAMES array is populated", () => {
+  test("BASIC_SKILL_NAMES compatibility array contains no selection", () => {
     expect(Array.isArray(publicAPI.BASIC_SKILL_NAMES)).toBe(true);
-    expect(publicAPI.BASIC_SKILL_NAMES.length).toBe(8);
+    expect(publicAPI.BASIC_SKILL_NAMES).toEqual([]);
   });
 
   test("AGENT_TARGETS array is populated", () => {
@@ -150,6 +151,7 @@ describe("public API exports", () => {
   });
 
   test("key functions return expected results", () => {
+    writeOwnedFixture("brand-kit");
     // Verify getSkill works through the public API
     const skill = publicAPI.getSkill("brand-kit");
     expect(skill).toBeDefined();
@@ -162,7 +164,7 @@ describe("public API exports", () => {
     // Verify clean basic profile works through the public API
     const basic = publicAPI.loadRegistryProfile("basic");
     expect(basic.filter((s) => s.source !== "custom").map((s) => s.name)).toEqual([...publicAPI.BASIC_SKILL_NAMES]);
-    expect(publicAPI.isBasicSkillName("blog-article")).toBe(true);
+    expect(publicAPI.isBasicSkillName("blog-article")).toBe(false);
     expect(publicAPI.isBasicSkillName("brand-kit")).toBe(false);
 
     // Verify skillExists works through the public API

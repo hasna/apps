@@ -13,6 +13,21 @@ bun install -g @hasna/skills
 
 Requires [Bun](https://bun.sh/) 1.3+.
 
+## Private skill catalogs
+
+The public package provides the CLI, API, SDK, hooks, and runtime. A skill's
+instructions and executable bundle belong to the organization that publishes
+them. API reads require authentication and use that organization's catalog,
+including tag filters, versions, and downloads. An empty account starts empty;
+neither a repository checkout nor files on the server machine supply defaults.
+Server startup and upgrades never import a bundled catalog.
+
+Each operator can use their own compatible server and storage. S3 is optional:
+the server supports durable SQLite or PostgreSQL and database-backed bundles
+when no S3 bucket is configured. Publishing through an authenticated account
+does not publish to GitHub or npm. Keep private source documents and executable
+payloads outside public software repositories.
+
 ## Quick Start
 
 The fleet authority is `https://api.hasna.com/skills`; versioned requests use
@@ -435,8 +450,8 @@ as silent aliases one rung below the canonical names, for one release. Use the
   and the bare `skills` listing all exit 1; `skills-mcp` exits 1 at startup
   before answering `initialize` or binding a port, and each MCP data tool
   answers `AUTH_REQUIRED` on its own;
-- the explicit local opt-in → **local**. Skills ships its corpus, so running on
-  this machine is a real mode — but it must be asked for:
+- the explicit local opt-in → **local**, using only owned drafts and the verified
+  local cache. An empty installation has no skills. Opt in with:
   `HASNA_SKILLS_LOCAL=1` (alias `SKILLS_LOCAL=1`). It prints one line saying
   "local mode" on stderr. A configured environment always outranks the opt-in:
   with an authority or credential in the environment, `HASNA_SKILLS_LOCAL` is
@@ -453,7 +468,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 |---|---|
 | `HASNA_SKILLS_API_KEY` | The API key (tier 5 of the ladder). The silent alias `SKILLS_API_KEY` is accepted for one release. |
 | `HASNA_SKILLS_API_URL` | The Skills API origin (HTTPS, or loopback HTTP). The silent alias `SKILLS_API_URL` is accepted for one release. |
-| `HASNA_SKILLS_LOCAL` | Explicit unhosted opt-in: run on this machine against the bundled corpus when no authority is configured. Any non-blank value (`1`). Alias `SKILLS_LOCAL`. Ignored whenever an authority or credential variable IS set. |
+| `HASNA_SKILLS_LOCAL` | Explicit unhosted opt-in: run on this machine against owned drafts and the verified cache when no authority is configured. Any non-blank value (`1`). Alias `SKILLS_LOCAL`. Ignored whenever an authority or credential variable IS set. |
 | `HASNA_SKILLS_API_KEY_OVERRIDE` | Deliberate tier-2 key that outranks every store. |
 | `HASNA_SKILLS_API_KEY_REF` | Deliberate tier-2 vault-item pointer (resolved through `@hasna/secrets`). |
 | `HASNA_PROFILE` | Selects an isolated `credentials-<profile>` file (tier 1). |
@@ -474,7 +489,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills list` | `ls` | List available skills (filter with `-c`, `--pinned`, `-t`, `--brief`) |
 | `skills search <query>` | `s` | Search by name, description, or tags |
 | `skills info <name>` | | Show metadata, env vars, and system dependencies |
-| `skills show <name>` | | Show bundled or portable skill details |
+| `skills show <name>` | | Show account or owned portable skill details |
 | `skills docs <name>` | | Show documentation (SKILL.md > README.md > CLAUDE.md) |
 | `skills requires <name>` | | Show env vars, system deps, and npm dependencies |
 | `skills profiles show <id>` / `skills profiles set <id> --file <json>` | | Read an exact shared selection or update it with writer authorization |
@@ -494,7 +509,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills runs status <run-id>` | | Poll a remote skill run |
 | `skills exports download <run-id>` | | Download completed remote artifacts |
 | `skills update` | | Refresh project pin metadata |
-| `skills diff <name>` | | Compare pin metadata against the bundled registry |
+| `skills diff <name>` | | Compare pin metadata against the active registry |
 | `skills init` | | Generate `.env.example` and update `.gitignore` for pinned skills |
 | `skills categories` | | List all categories with skill counts |
 | `skills tags` | | List all unique tags with occurrence counts |
@@ -634,11 +649,9 @@ Stable command shapes:
 
 ## Remote Registry
 
-The npm package ships no bundled skill corpus. Discovery reads the local corpus
-cache (`~/.hasna/skills/installed`, filled by `skills pull`) and, when a
-credential resolves, the server's registry. This is not a mode you select:
-whether browse/search commands read a server's registry is one fact, whether a
-credential resolves (see [Credentials](#credentials)). To point at your own
+The npm package ships no skill corpus. Authenticated discovery reads the
+account catalog. Explicit local mode reads owned drafts and verified downloads.
+A failed hosted read never substitutes local content. To point at your own
 instance:
 
 ```bash
@@ -1016,8 +1029,8 @@ src/
 ├── cli/index.tsx           # Commander.js CLI + Ink TUI
 ├── mcp/index.ts            # MCP server (stdio)
 ├── lib/
-│   ├── registry-data/       # The catalogue entries themselves, one file per category
-│   ├── registry.ts          # Registry API over registry-data: search, categories, tags
+│   ├── registry-data/       # Empty compatibility export; no catalog content
+│   ├── registry.ts          # Discovery over owned cache and explicit sources
 │   ├── installer.ts         # Project pins and disabled source-copy paths
 │   ├── project-state.ts     # .skills/project.json preferences
 │   ├── run-state.ts         # .skills/runs and .skills/exports metadata
@@ -1027,17 +1040,13 @@ src/
 │   └── utils.ts             # normalizeSkillName()
 ├── index.ts                 # Library re-exports (npm package entry)
 └── *.test.ts                # Test files
-
-skills/                      # Public skill contracts and local OSS skills
-├── _common/                 # Shared utilities
-└── */                       # Local skills include src/; server-executed skills expose metadata/contracts
 ```
 
 ### Derived counts
 
 | Count | Value | Derived from |
 |---|---|---|
-| Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/`) |
+| Catalog skills | 0 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
 | MCP tools | 72 | `tools/list` against a live `buildServer()` |
 

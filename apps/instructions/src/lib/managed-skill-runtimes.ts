@@ -71,6 +71,7 @@ export interface ManagedSkillRuntimeReconcileReport {
 
 export interface ManagedSkillRuntimeOptions {
   homeDir?: string;
+  /** @deprecated Explicit compatibility input only; manage private skills through the Skills CLI. */
   assetPath?: string;
   conversationsCommand?: string;
   agent?: string;
@@ -148,16 +149,7 @@ function assertNoSymlinkAncestors(path: string): void {
 
 function packagedInboxSkillPath(explicitPath?: string): string {
   if (explicitPath) return explicitPath;
-  const candidates = [
-    join(import.meta.dir, "..", "..", "assets", "skills", "inbox", "SKILL.md"),
-    join(import.meta.dir, "..", "assets", "skills", "inbox", "SKILL.md"),
-    join(process.cwd(), "assets", "skills", "inbox", "SKILL.md"),
-  ];
-  const found = candidates.find((candidate) => existsSync(candidate));
-  if (!found) {
-    throw new Error(`packaged inbox skill contract is missing (checked ${candidates.length} package-relative locations)`);
-  }
-  return found;
+  throw new Error("Bundled skill contracts are retired; use the Skills CLI to manage private skills");
 }
 
 function readCanonicalSkill(explicitPath?: string): { content: string; sha256: string } {
