@@ -55,7 +55,7 @@ test("bundled migration refuses a recursive vault bootstrap before reading secre
       cwd: dir, env: { HOME: dir, PATH: process.env.PATH }, stdout: "pipe", stderr: "pipe",
     });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect(code).toBe(0);
+    expect(code, stderr).toBe(0);
     expect(stderr).toBe("");
     expect(JSON.parse(stdout)).toEqual({ reads: 0, requests: 0, refusals: 2 });
   } finally { rmSync(dir, { recursive: true, force: true }); }

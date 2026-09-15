@@ -1,5 +1,82 @@
 # Changelog
 
+## 1.1.0
+
+### Minor Changes
+
+- d5641cb: Operator key lifecycle routes, app-scoped revocation, and a signing-secret
+  check command.
+
+  **Operator key lifecycle routes.** `createKeyLifecycleRoutes` (hasna/apps#1641)
+  adds the `/v1/admin/keys` surface — mint, list, read, revoke — as
+  framework-agnostic route handlers gated on a `keys.admin`-scoped operator key,
+  with a default 365-day client-key TTL. Revocation is scoped by app: a
+  `revoke` on a shared key store removes only the calling app's key, so an
+  operator for one app can no longer revoke another app's key by kid.
+
+  **`contracts check-signing-secret`.** The new CLI command validates a signing
+  secret through the shared `signing-secret` module (whitespace-wrapped secrets
+  are rejected with the trimmed value's location, not silently accepted), and
+  `--app`-based checks resolve the secret from the environment exactly as the
+  server reads it.
+
+  The key-store revoke path and the trim-on-read semantics of signing secrets
+  keep the guard rails of hasna/apps#1543 and #1638. This bump is additive over
+  1.0.1: the credential-tier and project-layout redesigns this work originally
+  carried are already released within 1.0.1, so nothing here re-breaks a 1.0.x
+  consumer.
+
+- 370f800: Declare a gateway route in `hasna.contract.json` with an optional `serving`
+  block.
+
+  **The gap.** `hosting` could only say who a product story is for
+  (`user-hosted` | `hasna-saas`), and the manifest is a `.strict()` object, so a
+  top-level `serving` key was rejected outright. A served app therefore had no
+  way to record the route it answers on — the fact the fleet registry
+  (`tooling/fleet/hosted-apps.json`) carries per hosted app, and the reason
+  `messages-prod` shipped routed and healthy while nothing on any station could
+  call it.
+
+  **The shape.** `serving` mirrors the triple the fleet registry already
+  expresses, named for a contract:
+
+  ```jsonc
+  "serving": {
+    "routeSlug": "notes",
+    "access": "api-key",
+    "targetClientBase": "https://api.hasna.com/notes"
+  }
+  ```
+
+  - `routeSlug` — the gateway path segment (`AppNameSchema`), i.e. the fleet
+    registry's `app`.
+  - `access` — `public` | `api-key` | `signature`; named explicitly, never
+    defaulted, because a route's credential gate is a security fact. `api-key`
+    keys live at `hasna/oss/<routeSlug>/api-key` (`clientKeySecretRefFor`).
+  - `targetClientBase` — absolute https, no credentials/query/fragment/trailing
+    slash, never ending in `/v1` (clients append the version segment). A base on
+    `api.hasna.com` must be path-prefixed with its `routeSlug`
+    (`gatewayClientBaseFor`) — the gateway strips the prefix, so a mismatched
+    segment would route to another app.
+
+  **Why not a new `hosting` value.** `hosting` drives the conformance
+  `hosting_story` check (`saas` repos must declare `hasna-saas`, every public OSS
+  core must declare `user-hosted`). Route placement is orthogonal — an OSS core
+  that is `user-hosted` is still served at `https://api.hasna.com/<slug>` — and a
+  route value in that enum would let a repo satisfy the product-story check with
+  a value that says nothing about the story. The enum is unchanged.
+
+  **Backwards compatible.** The block is optional, so every existing manifest
+  validates unchanged and the top-level object stays strict (an unknown key is
+  still rejected). A `library` repo, which ships no serve surface, must not
+  declare `serving`.
+
+### Patch Changes
+
+- 1472c04: Allow a hosted Secrets vault reference in an owner-only canonical or profile credential file without storing a raw application key. Preserve existing provider precedence and terminal bootstrap/vault failures. Skills retains the normal Secrets bootstrap context, file-instance binding, and configuration checks across asynchronous vault reads; login, logout, and URL changes handle stored references explicitly.
+
+  Resolve the installed SDK's ESM export without registry downloads or global/CWD package searches, while preserving caller stdin and strict compiled consumers. A missing or broken SDK and a recursive Secrets bootstrap remain terminal.
+
 ## 1.0.2
 
 ### Patch Changes

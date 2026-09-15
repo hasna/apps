@@ -1,5 +1,4 @@
 ---
-"@hasna/contracts": patch
 "@hasna/skills": patch
 ---
 
