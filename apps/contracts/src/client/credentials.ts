@@ -73,7 +73,9 @@ import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { hostname as osHostname } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { resolve as resolveInstalledModule } from "import-meta-resolve";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { resolveInstalledSecrets } from "./installed-secrets.js";
 import type { Env } from "../env-token.js";
 import {
   CREDENTIAL_PROFILE_ENV_KEY,
@@ -1243,16 +1245,14 @@ interface SecretsPointerModule {
   createSecretsClientFromEnv(env: Record<string, string | undefined>): SecretsPointerClient;
 }
 
-// Non-literal by design — the same seam `src/cli/secrets-bridge.ts` uses, so
-// `bun build` leaves the import as a runtime import (the pointer is a rare,
-// deliberate path) and `tsc` never statically resolves it against a sibling
-// member whose dist is absent at install time.
-const SECRETS_PACKAGE_SPECIFIER = "@hasna/" + "secrets";
-
 // Use the package's ESM import condition: the published SDK has no require
 // export. Keep loading optional and relative to this consumer, with no CWD or
 // global package search when it is absent. Compiled virtual-filesystem entries
 // also refuse when an external SDK is not resolvable from their entry point.
+// Bun can require the SDK's synchronous ESM module by its resolved file path.
+// Retain this runtime loader for strict compiled consumers, which reject an
+// opaque import() expression. Package resolution above still selects "import".
+const requireSecretsSdk = createRequire(import.meta.url);
 
 /**
  * Complete a pointer-tier resolution through the secrets vault.
@@ -1265,7 +1265,7 @@ const SECRETS_PACKAGE_SPECIFIER = "@hasna/" + "secrets";
  * principal than the one the operator named is exactly the failure a
  * deliberate pointer exists to prevent.
  *
- * The @hasna/secrets module is imported lazily (via a non-literal specifier)
+ * The @hasna/secrets module is loaded lazily from its installed ESM entry file
  * so consumers that never set a pointer pay no import cost and need no peer
  * dependency at load time; a pointer REQUIRES it, and its absence is one of
  * the TERMINAL cases.
@@ -1297,10 +1297,10 @@ export async function completePointerCredential(
   }
   let secretsSdk: SecretsPointerModule;
   try {
-    // Use filesystem-only Node ESM resolution. Bun's import.meta.resolve can
-    // auto-install absent packages; credential lookup must never do that.
-    const sdkUrl = resolveInstalledModule(SECRETS_PACKAGE_SPECIFIER, import.meta.url);
-    secretsSdk = await import(sdkUrl) as SecretsPointerModule;
+    // Resolve installed files before loading: Bun's native package
+    // resolver can auto-install missing peers during credential lookup.
+    const sdkUrl = resolveInstalledSecrets(import.meta.url);
+    secretsSdk = requireSecretsSdk(fileURLToPath(sdkUrl)) as SecretsPointerModule;
   } catch {
     throw new CredentialResolutionError(
       name,
