@@ -240,7 +240,7 @@ describe("sdk surface", () => {
     expect(new DispatcherNotImplementedError("EcsDispatcher", "submit").message).toContain("EcsDispatcher");
   });
 
-  test("executor interface exists with the current local implementation wired", async () => {
+  test("the compatibility executor terminates legacy records without executing a skill", async () => {
     const store = await seededSqliteStore();
     const run = await store.createRun({
       principal: PRINCIPAL,
@@ -250,7 +250,7 @@ describe("sdk surface", () => {
     });
     const result = await localRunExecutor.execute(store, run);
     expect(result.status).toBe("failed");
-    expect(result.errorCode).toBe("HANDLER_UNAVAILABLE");
+    expect(result.errorCode).toBe("LEGACY_EXECUTION_RETIRED");
   });
 
   test("object-store seam: the database column is the default artifact backend", async () => {

@@ -34,6 +34,13 @@ execution policy.
 
 ## API and persistence
 
+The legacy `POST /runs/:slug` endpoint returns HTTP 410 with
+`LEGACY_EXECUTION_RETIRED` before creating any run. The old worker marks queued
+unversioned records failed with that code and produces no artifacts. Historical
+run reads, logs, artifact downloads, and cancellation remain available. Neither
+the inline-worker setting nor a familiar skill name can enable embedded
+execution; new hosted executions enter through the versioned endpoint below.
+
 `POST /skills/v1/executions/:slug` takes
 `{version,input,idempotencyKey,bundleDigest?,workspaceId?}`; the usual standalone aliases are supported.
 `GET /executions/:id`, `/logs`, `/artifacts`, and `/artifacts/:name` return the

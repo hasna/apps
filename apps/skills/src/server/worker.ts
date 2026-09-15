@@ -35,7 +35,8 @@ if (import.meta.main) {
   if (EARLY_ARGV.includes("--help") || EARLY_ARGV.includes("-h")) {
     console.log(`Usage: skills-worker [options]
 
-Drains @hasna/skills runs from the store.
+Marks queued legacy unversioned runs as retired. Published executable bundles
+run through the managed runtime.
 
 Options:
   -V, --version  output the version number

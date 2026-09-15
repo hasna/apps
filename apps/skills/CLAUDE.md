@@ -80,7 +80,7 @@ src/
 ├── server/
 │   ├── index.ts                  # skills-server entry
 │   ├── app.ts                    # Bun.serve fetch handler + /api/v1 dispatch + durability guards
-│   ├── handlers.ts               # executeRun(): what a queued run actually does
+│   ├── handlers.ts               # executeRun(): retire historical unversioned queue records
 │   ├── store.ts                  # createStore(): postgres | sqlite | memory
 │   ├── sqlite-store.ts           # bun:sqlite backend (the zero-config default)
 │   ├── database-url.ts           # Pure URL -> backend target resolution
@@ -236,7 +236,7 @@ exactly four path segments after `/api/v1`.
 | GET | `/api/v1/tags` | Distinct tags across the authenticated org's published catalog, sorted `string[]` |
 | GET | `/api/v1/tags/:tag/skills` | Merged skills carrying the exact tag, as `RemoteSkillSummary[]` |
 | GET | `/api/v1/runs` | `?limit=` default 20, clamped to 100 |
-| POST | `/api/v1/runs/:slug` | `:slug` is a **skill** slug. Enqueues, returns 202. Honours `idempotency-key`. |
+| POST | `/api/v1/runs/:slug` | Retired: returns `410 LEGACY_EXECUTION_RETIRED` without enqueueing. |
 | GET | `/api/v1/runs/:runId` | |
 | GET | `/api/v1/runs/:runId/logs` | |
 | GET | `/api/v1/runs/:runId/artifacts` | |
@@ -262,12 +262,13 @@ raw token never reaches the store. `HASNA_SKILLS_BOOTSTRAP_API_KEY` seeds a dev
 org/user/key. Scopes and roles are parsed and returned but not yet enforced —
 authorization today is org scoping.
 
-`skills-worker` claims one run at a time via `store.claimNextRun()`, honours
+`skills-worker` drains historical unversioned queue records, honours
 `cancel_requested`, and on error backs off linearly (`idle × consecutiveErrors`,
-capped at 30s). `executeRun()` in
-`handlers.ts` currently implements a provider-free handler for three skills only
-(`audio-transcript-pack`, `transcript`, `video-highlight-pack`); anything else fails
-with `HANDLER_UNAVAILABLE` rather than pretending.
+capped at 30s). `executeRun()` in `handlers.ts` performs no skill work: it fails
+unfinished records with `LEGACY_EXECUTION_RETIRED` through the generation fence.
+Historical completed records and outputs remain readable. Versioned cloud
+execution uses `/api/v1/executions/:slug` and the managed runtime; `inlineWorker`
+cannot restore the retired submission path.
 
 ### Library — `src/index.ts`
 
@@ -424,21 +425,17 @@ from `.skills/`.
 
 `kind` in SKILL.md frontmatter, mirrored into `SkillMeta.kind`. `executable` (the
 default when absent) means a runnable folder with `package.json` + `src/`.
-`instruction` means SKILL.md-primary prose an agent follows — no credentials, no
+`instruction` means SKILL.md-primary prose an agent follows, with no standalone
 runtime. `runSkill()` refuses instruction skills with an explanatory error rather
 than trying to spawn them.
 
-The public OSS catalog is **mixed**: 19 `kind: "instruction"` skills plus 66
-**executable** skills, so there are **66** executable skills and **zero** hosted
-skills (the hosted/premium set stays empty). The single ship criterion for an
-executable skill is that it requires **no credential**: `src/lib/catalog-runnable.test.ts`
-asserts the hosted set stays empty, that every executable skill ships a runnable
-entry point in both repo and tarball, that every instruction skill ships SKILL.md
-prose with no `src/`, that **no shipped executable skill reads or documents a
-credential env var** (with a positive-control fixture so the check can't go vacuous),
-and that the package ships no credential value. The credential-requiring executable
-skills from the archive stay out of the package — they are preserved in the archive
-tag/tarball noted in the skill-structure section, not shipped here.
+The public package contains the skill-management software and no skill catalog.
+Owners publish instruction and executable bundles to their own authenticated
+catalogs. Executable dependencies and required secret references belong to those
+private bundles; credential values never belong in a bundle or the public tree.
+`src/lib/catalog-runnable.test.ts` verifies the empty public corpus and the
+explicit-source bundler using synthetic fixtures. Private executable validation
+and runtime admission are separate from testing the public package.
 
 ### Hermetic tests
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,6 +10,9 @@ import { verifyBundleSignature } from "../lib/skill-bundles.js";
 import { createSkillsFetchHandler } from "./app.js";
 import { resolveStoreBackends, storeBackendNotices, type StoreBackendFixture } from "./store-fixtures.js";
 import { runWorkerOnce } from "./worker.js";
+import { ArtifactStorage } from "./artifact-storage.js";
+import { hashApiKey } from "./auth.js";
+import type { ServerRunRecord } from "./types.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -87,6 +91,28 @@ async function testServer(backend: StoreBackendFixture, configOverrides: Record<
       await fixture.close();
     },
   };
+}
+
+/** Persisted legacy rows model data from before the submission route was retired. */
+async function historicalRun(ctx: Awaited<ReturnType<typeof testServer>>, text: string, completed = false) {
+  const principal = await ctx.store.authenticateApiKeyHash(hashApiKey(SEED[0].token));
+  if (!principal) throw new Error("historical fixture principal missing");
+  const run = await ctx.store.createRun({ principal, slug: "historical-fixture", input: { text }, args: [] });
+  if (!completed) return run;
+  const bodyText = `${text}\n`;
+  await ctx.store.addArtifact(await new ArtifactStorage().materialize(run, {
+    id: `artifact_${run.id}`,
+    orgId: principal.orgId,
+    runId: run.id,
+    fileName: "transcript.md",
+    relativePath: "transcript.md",
+    contentType: "text/markdown",
+    byteSize: Buffer.byteLength(bodyText),
+    sha256: createHash("sha256").update(bodyText).digest("hex"),
+    visibility: "private",
+  }, { relativePath: "transcript.md", bodyText, contentType: "text/markdown" }));
+  await ctx.store.appendLog(run.id, principal.orgId, "info", "historical completed run");
+  return await ctx.store.updateRun(run.id, { status: "succeeded", completedAt: new Date().toISOString() }) as ServerRunRecord;
 }
 
 for (const backend of backends) {
@@ -280,7 +306,7 @@ for (const backend of backends) {
       }
     });
 
-    test("lists skills, runs a deterministic worker path, and downloads authorized artifacts", async () => {
+    test("refuses unversioned submissions and retains historical run and artifact reads", async () => {
       const ctx = await testServer(backend);
       try {
         const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
@@ -288,16 +314,17 @@ for (const backend of backends) {
         expect(Array.isArray(skills)).toBe(true);
         expect(skills).toEqual([]);
 
-        const submitted = await client.submitRun("video-highlight-pack", { transcript: "Hello world from server-run skills." }, ["--title", "Demo"]);
-        expect(submitted.status).toBe("queued");
+        await expect(client.submitRun("unpublished-fixture", { text: "cannot enqueue" }, [])).rejects.toMatchObject({ status: 410 });
+        expect(await client.listRuns()).toEqual([]);
+        expect(await runWorkerOnce(ctx.store, "worker_test")).toBe(false);
+        const submitted = await historicalRun(ctx, "Hello world from historical skills.", true);
         expect(submitted.id).toBeTruthy();
 
-        expect(await runWorkerOnce(ctx.store, "worker_test")).toBe(true);
         const run = await client.getRun(submitted.id!);
-        expect(run).toMatchObject({ status: "succeeded", skill: "video-highlight-pack" });
+        expect(run).toMatchObject({ status: "succeeded", skill: "historical-fixture" });
 
         const logs = await client.getRunLogs(submitted.id!);
-        expect(logs.map((log) => log.message).join("\n")).toContain("generated");
+        expect(logs.map((log) => log.message).join("\n")).toContain("historical completed run");
 
         const artifacts = await client.getRunArtifacts(submitted.id!);
         expect(artifacts.map((artifact) => artifact.relativePath)).toContain("transcript.md");
@@ -310,13 +337,26 @@ for (const backend of backends) {
       }
     });
 
+    test("drains a historical queued run without executing or producing outputs", async () => {
+      const ctx = await testServer(backend);
+      try {
+        const client = new RemoteSkillsClient(SEED[0].token, ctx.baseUrl);
+        const queued = await historicalRun(ctx, "owned queued fixture");
+        expect(await runWorkerOnce(ctx.store, "retirement_worker")).toBe(true);
+        expect(await client.getRun(queued.id)).toMatchObject({ status: "failed", errorCode: "LEGACY_EXECUTION_RETIRED" });
+        expect(await client.getRunArtifacts(queued.id)).toEqual([]);
+        expect(await runWorkerOnce(ctx.store, "retirement_worker")).toBe(false);
+      } finally {
+        await ctx.stop();
+      }
+    });
+
     test("enforces organization ownership on run and artifact routes", async () => {
       const ctx = await testServer(backend);
       try {
         const orgA = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
         const orgB = new RemoteSkillsClient("sk_test_org_b", ctx.baseUrl);
-        const submitted = await orgA.submitRun("video-highlight-pack", { text: "secret run text" }, []);
-        expect(await runWorkerOnce(ctx.store, "worker_test")).toBe(true);
+        const submitted = await historicalRun(ctx, "owned private fixture output", true);
 
         const crossRun = await orgB.getRun(submitted.id!);
         expect(crossRun).toBeNull();
@@ -344,7 +384,7 @@ for (const backend of backends) {
       const ctx = await testServer(backend);
       try {
         const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
-        const submitted = await client.submitRun("video-highlight-pack", { text: "never run" }, []);
+        const submitted = await historicalRun(ctx, "never run");
         expect(submitted.status).toBe("queued");
 
         // On the table-backed governance stores (sqlite/postgres) the active-run
@@ -389,7 +429,7 @@ for (const backend of backends) {
       const ctx = await testServer(backend);
       try {
         const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
-        const submitted = await client.submitRun("video-highlight-pack", { text: "claimed" }, []);
+        const submitted = await historicalRun(ctx, "claimed");
         const claimed = await ctx.store.claimNextRun({ workerId: "worker_fenced" });
         expect(claimed?.id).toBe(submitted.id);
         expect(claimed?.leaseGeneration).toBeGreaterThan(0);
