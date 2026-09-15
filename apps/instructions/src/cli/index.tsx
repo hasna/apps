@@ -2,10 +2,10 @@
 import { registerEventsCommands } from "@hasna/events/commander";
 import { program } from "commander";
 import chalk from "chalk";
-import { existsSync, lstatSync, readFileSync, readSync, writeSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
-import { applyConfigsWithReport, expandPath, normalizeTargetPath } from "../lib/apply.js";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { applyConfigsWithReport, expandPath, getConfigHome, normalizeTargetPath } from "../lib/apply.js";
 import { findConfigsByTargetPath, findDuplicateTargetPathGroups, findReferenceConfigsByName, findDuplicateReferenceNameGroups } from "../lib/config-target-identity.js";
 import { diffConfig, syncKnown, syncToDisk, syncProject, detectCategory, detectAgent, detectFormat, KNOWN_CONFIGS } from "../lib/sync.js";
 import { syncFromDir } from "../lib/sync-dir.js";
@@ -18,6 +18,7 @@ import { applySessionRender, restoreSessionRenderSnapshot } from "../lib/session
 import type { ClaudeOwnedAuthority } from "../lib/session-authority.js";
 import { normalizeSessionInstructionSourceId, planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
 import { getRawStoreRoot } from "../lib/raw-store-root.js";
+import { selectsInstructionsLocalStore } from "../lib/local-opt-in.js";
 import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
 import { normalizeProfileConfigBinding, planProfileSessionRender, type InstructionGraphRenderPlan } from "../lib/instruction-graph.js";
 import { accountedGlobalSourceSlugs, computeGlobalSourceCoverage, formatGlobalSourceCoverageWarnings, type GlobalSourceCoverageResult } from "../lib/global-source-coverage.js";
@@ -695,7 +696,23 @@ program
     const storedFmt = detectFormat(abs);
     const fmt = redactFormatForTarget(abs, storedFmt);
     const { content, redacted, isTemplate } = redactContent(rawContent, fmt);
-    const targetPath = abs.startsWith(homedir()) ? abs.replace(homedir(), "~") : abs;
+    // Store `~/...` relative to the SAME effective config home that apply
+    // later uses to expand it. Using os.homedir() here while expandPath()
+    // honored CONFIGS_HOME made an isolated root turn into
+    // `<CONFIGS_HOME>/<absolute-path-without-os-home>` and could write the
+    // wrong file. Keep the boundary segment-safe so `/home/user2` is never
+    // treated as a child of `/home/user`.
+    const configHome = resolve(getConfigHome());
+    const conventionalHome = resolve(process.env["HOME"] || homedir());
+    const relativeToConfigHome = relative(configHome, abs);
+    const targetPath =
+      configHome === conventionalHome &&
+      relativeToConfigHome &&
+      relativeToConfigHome !== ".." &&
+      !relativeToConfigHome.startsWith(`..${sep}`) &&
+      !isAbsolute(relativeToConfigHome)
+        ? `~/${relativeToConfigHome}`
+        : abs;
     const name = opts.name || filePath.split("/").pop()!;
     const store = resolveConfigStore();
 
@@ -2447,6 +2464,58 @@ mcpCmd.command("uninstall")
     if (failed) process.exitCode = 1;
   });
 
+// ── legacy local-store migration ─────────────────────────────────────────────
+program
+  .command("migrate-legacy")
+  .description("Migrate the historical ~/.hasna/configs/configs.db store into the current local Instructions SQLite store")
+  .option("--source <path>", "legacy configs.db path")
+  .option("--destination <path>", "current instructions.db path")
+  .option("--backup <path>", "exclusive destination backup path")
+  .option("--apply", "apply the migration (default is a no-write dry-run)")
+  .option("--merge-preserve-destination", "merge into a non-empty destination without overwriting existing rows")
+  .option("--confirm-local", "confirm this is an explicit on-box local-store operation")
+  .option("--json", "print a structured metadata-only result")
+  .action(async (opts) => {
+    if (!selectsInstructionsLocalStore(process.env)) {
+      throw new Error(
+        "migrate-legacy is local-only: set HASNA_INSTRUCTIONS_LOCAL=1 and remove every hosted Instructions authority/credential first",
+      );
+    }
+    if (!opts.confirmLocal) {
+      throw new Error("migrate-legacy requires --confirm-local");
+    }
+    const destinationPath = resolve(
+      opts.destination || process.env["HASNA_INSTRUCTIONS_DB_PATH"] || join(getRawStoreRoot(), "instructions.db"),
+    );
+    // Keep bun:sqlite behind a dynamic import. The hosted CLI/MCP entry chunks
+    // remain SQLite-free, and this code is loaded only for the explicit local
+    // migration command.
+    const database = await import("../db/database.js");
+    database.getDatabase(destinationPath);
+    database.resetDatabase();
+    const { migrateLegacyInstructionsStore } = await import("../lib/legacy-store-migration.js");
+    const result = migrateLegacyInstructionsStore({
+      ...(opts.source ? { sourcePath: resolve(opts.source) } : {}),
+      destinationPath,
+      ...(opts.backup ? { backupPath: resolve(opts.backup) } : {}),
+      dryRun: !opts.apply,
+      ...(opts.mergePreserveDestination ? { mergePolicy: "preserve-destination" as const } : {}),
+      operatorConfirmed: true,
+    });
+    if (opts.json) {
+      printJson(result);
+      return;
+    }
+    const total = Object.values(result.migrated).reduce((sum, count) => sum + count, 0);
+    const skipped = Object.values(result.skipped).reduce((sum, count) => sum + count, 0);
+    const mode = result.dryRun ? "Dry-run" : "Migrated";
+    console.log(chalk.green("✓") + ` ${mode}: ${total} row(s), skipped ${skipped}, conflicts ${result.conflicts}`);
+    if (result.snapshotsCreated > 0) {
+      console.log(chalk.dim(`  created ${result.snapshotsCreated} missing current-version snapshot(s)`));
+    }
+    if (result.backupCreated) console.log(chalk.dim("  destination backup created before mutation"));
+  });
+
 // ── init ──────────────────────────────────────────────────────────────────────
 program
   .command("init")
@@ -2602,6 +2671,145 @@ managedSkillsCmd
 
 // ── diff --all ────────────────────────────────────────────────────────────────
 // Extend existing diff command to support --all
+
+// ── native S3 backup plane ───────────────────────────────────────────────────
+const storageCmd = program.command("storage").description("Inspect and use the optional native S3 backup plane");
+
+storageCmd.command("status")
+  .description("Show redacted S3 configuration status without opening SQLite or contacting S3")
+  .option("--json", "output JSON")
+  .action(async (opts) => {
+    const { loadInstructionsS3Config } = await import("../storage/s3-config.js");
+    const config = loadInstructionsS3Config(process.env);
+    const status = config
+      ? {
+          configured: true,
+          provider: "s3" as const,
+          region: config.region,
+          prefix: config.prefix,
+          endpointConfigured: Boolean(config.endpoint),
+          forcePathStyle: config.forcePathStyle,
+          credentialSource: config.credentials ? "static-explicit" : "runtime-default-chain",
+          includesCredentialValues: false as const,
+          databaseAuthority: false as const,
+        }
+      : {
+          configured: false,
+          provider: null,
+          region: null,
+          prefix: null,
+          endpointConfigured: false,
+          forcePathStyle: false,
+          credentialSource: null,
+          includesCredentialValues: false as const,
+          databaseAuthority: false as const,
+        };
+    if (opts.json) printJson(status);
+    else if (!config) console.log(chalk.dim("S3 backup storage is not configured."));
+    else console.log(chalk.green("✓") + ` S3 backup storage configured (${config.region}, prefix ${config.prefix}; database authority: no)`);
+  });
+
+const storageBackupCmd = storageCmd.command("backup").description("Push, pull, and verify immutable Instructions backup objects");
+
+storageBackupCmd.command("push <file>")
+  .description("Upload an immutable backup archive and integrity manifest")
+  .requiredOption("--id <backup-id>", "stable immutable backup identifier")
+  .option("--content-type <type>", "payload content type", "application/gzip")
+  .option("--dry-run", "plan keys and hashes without contacting S3")
+  .option("--json", "output JSON")
+  .action(async (file, opts) => {
+    const abs = resolve(file);
+    if (!existsSync(abs) || !lstatSync(abs).isFile()) throw new Error(`Backup file not found: ${abs}`);
+    const [{ loadInstructionsS3Config }, backup, objectStore] = await Promise.all([
+      import("../storage/s3-config.js"),
+      import("../storage/s3-backup.js"),
+      import("../storage/s3-object-store.js"),
+    ]);
+    const config = loadInstructionsS3Config(process.env);
+    if (!config) throw new Error("S3 backup storage is not configured (set HASNA_INSTRUCTIONS_S3_BUCKET)");
+    const bytes = await Bun.file(abs).bytes();
+    if (opts.dryRun) {
+      const plan = await backup.planInstructionsBackupPush({
+        store: { put: async () => {}, get: async () => undefined, head: async () => undefined, delete: async () => {} },
+        prefix: config.prefix,
+        backupId: opts.id,
+        bytes,
+        contentType: opts.contentType,
+      });
+      if (opts.json) printJson(plan);
+      else console.log(chalk.dim(`Would upload ${plan.sizeBytes} bytes to ${plan.payloadKey} (sha256 ${plan.sha256})`));
+      return;
+    }
+    const result = await backup.pushInstructionsBackup({
+      store: objectStore.createInstructionsS3ObjectStore(config),
+      prefix: config.prefix,
+      backupId: opts.id,
+      bytes,
+      contentType: opts.contentType,
+    });
+    const safe = { status: result.status, backupId: result.manifest.backupId, sha256: result.manifest.sha256, sizeBytes: result.manifest.sizeBytes };
+    if (opts.json) printJson(safe);
+    else console.log(chalk.green("✓") + ` S3 backup ${result.status}: ${safe.backupId} (${safe.sizeBytes} bytes, sha256 ${safe.sha256})`);
+  });
+
+storageBackupCmd.command("verify <backup-id>")
+  .description("Verify the immutable S3 payload against its manifest")
+  .option("--json", "output JSON")
+  .action(async (backupId, opts) => {
+    const [{ loadInstructionsS3Config }, backup, objectStore] = await Promise.all([
+      import("../storage/s3-config.js"),
+      import("../storage/s3-backup.js"),
+      import("../storage/s3-object-store.js"),
+    ]);
+    const config = loadInstructionsS3Config(process.env);
+    if (!config) throw new Error("S3 backup storage is not configured (set HASNA_INSTRUCTIONS_S3_BUCKET)");
+    const verified = await backup.verifyInstructionsBackup({
+      store: objectStore.createInstructionsS3ObjectStore(config),
+      prefix: config.prefix,
+      backupId,
+    });
+    if (opts.json) printJson(verified);
+    else console.log(chalk.green("✓") + ` Verified ${verified.backupId}: ${verified.sizeBytes} bytes, sha256 ${verified.sha256}`);
+  });
+
+storageBackupCmd.command("pull <backup-id>")
+  .description("Download and verify an immutable S3 backup before writing it locally")
+  .requiredOption("-o, --output <path>", "destination archive path")
+  .option("--force", "replace an existing regular destination file")
+  .option("--json", "output JSON")
+  .action(async (backupId, opts) => {
+    const [{ loadInstructionsS3Config }, backup, objectStore] = await Promise.all([
+      import("../storage/s3-config.js"),
+      import("../storage/s3-backup.js"),
+      import("../storage/s3-object-store.js"),
+    ]);
+    const config = loadInstructionsS3Config(process.env);
+    if (!config) throw new Error("S3 backup storage is not configured (set HASNA_INSTRUCTIONS_S3_BUCKET)");
+    const pulled = await backup.pullInstructionsBackup({
+      store: objectStore.createInstructionsS3ObjectStore(config),
+      prefix: config.prefix,
+      backupId,
+    });
+    const output = resolve(opts.output);
+    if (existsSync(output)) {
+      if (!opts.force) throw new Error(`Refusing to overwrite existing backup file: ${output}`);
+      if (!lstatSync(output).isFile() || lstatSync(output).isSymbolicLink()) {
+        throw new Error(`Refusing to replace a non-regular backup destination: ${output}`);
+      }
+    }
+    mkdirSync(dirname(output), { recursive: true, mode: 0o700 });
+    const temp = join(dirname(output), `.${basename(output)}.tmp-${process.pid}-${Date.now()}`);
+    try {
+      writeFileSync(temp, pulled.bytes, { flag: "wx", mode: 0o600 });
+      renameSync(temp, output);
+    } catch (error) {
+      try { unlinkSync(temp); } catch { /* no temp to remove */ }
+      throw error;
+    }
+    const safe = { backupId: pulled.manifest.backupId, output, sha256: pulled.manifest.sha256, sizeBytes: pulled.manifest.sizeBytes };
+    if (opts.json) printJson(safe);
+    else console.log(chalk.green("✓") + ` Restored ${safe.backupId} to ${safe.output} (${safe.sizeBytes} bytes)`);
+  });
 
 // ── backup / restore ──────────────────────────────────────────────────────────
 program

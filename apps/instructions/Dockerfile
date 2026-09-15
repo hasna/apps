@@ -5,12 +5,12 @@
 # HASNA_INSTRUCTIONS_DATABASE_URL). The ECS one-shot migration task overrides
 # the command with `... migrate`.
 
-FROM --platform=linux/arm64 oven/bun:1 AS deps
+FROM --platform=linux/arm64 oven/bun:1.3.14-alpine AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --ignore-scripts
 
-FROM --platform=linux/arm64 oven/bun:1 AS build
+FROM --platform=linux/arm64 oven/bun:1.3.14-alpine AS build
 WORKDIR /app
 COPY package.json bun.lock tsconfig.json ./
 COPY --from=deps /app/node_modules ./node_modules
@@ -18,7 +18,7 @@ COPY src ./src
 COPY scripts ./scripts
 RUN bun run build:server
 
-FROM --platform=linux/arm64 oven/bun:1 AS runner
+FROM --platform=linux/arm64 oven/bun:1.3.14-alpine AS runner
 WORKDIR /app
 # Amazon RDS global CA bundle so TLS to the shared RDS succeeds under
 # verify-full-capable clients.
@@ -33,6 +33,7 @@ COPY package.json bun.lock ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 EXPOSE 8080
+USER bun
 # Fail-closed: instructions-serve /v1 refuses to serve without a cloud DSN +
 # signing secret (503), and /ready reports DB reachability — no silent stub.
 CMD ["bun", "dist/server/index.js"]

@@ -13,6 +13,19 @@ import { getCloudClient, ensureCloudSchema } from "./cloud.js";
 import * as store from "../storage/cloud-store.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json" } as const;
+export const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+export const MAX_SEARCH_QUERY_CHARS = 512;
+
+export class HttpInputError extends Error {
+  constructor(
+    readonly status: 400 | 413,
+    readonly code: "REQUEST_BODY_TOO_LARGE" | "SEARCH_QUERY_TOO_LONG",
+    message: string,
+  ) {
+    super(message);
+    this.name = "HttpInputError";
+  }
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
@@ -36,14 +49,54 @@ function completeLegacyPage<T>(items: T[]) {
   } as const;
 }
 
-async function readJson<T>(req: Request): Promise<T | null> {
+export async function readJson<T>(req: Request): Promise<T | null> {
+  const declaredLength = req.headers.get("content-length");
+  if (declaredLength !== null) {
+    const parsed = Number(declaredLength);
+    if (!Number.isSafeInteger(parsed) || parsed < 0) return null;
+    if (parsed > MAX_REQUEST_BODY_BYTES) {
+      throw new HttpInputError(413, "REQUEST_BODY_TOO_LARGE", "request body exceeds the 1 MiB limit");
+    }
+  }
+  if (!req.body) return {} as T;
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
   try {
-    const text = await req.text();
-    if (!text) return {} as T;
-    return JSON.parse(text) as T;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > MAX_REQUEST_BODY_BYTES) {
+        await reader.cancel();
+        throw new HttpInputError(413, "REQUEST_BODY_TOO_LARGE", "request body exceeds the 1 MiB limit");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (total === 0) return {} as T;
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as T;
   } catch {
     return null;
   }
+}
+
+export function boundedSearchQuery(value: string | null): string | undefined {
+  if (value === null || value === "") return undefined;
+  if (value.length > MAX_SEARCH_QUERY_CHARS) {
+    throw new HttpInputError(400, "SEARCH_QUERY_TOO_LONG", `search query exceeds ${MAX_SEARCH_QUERY_CHARS} characters`);
+  }
+  return value;
 }
 
 /**
@@ -63,7 +116,8 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
   try {
     await ensureCloudSchema();
   } catch (e) {
-    return errorResponse(503, `database unavailable: ${(e as Error).message}`);
+    console.error("instructions /v1: database unavailable");
+    return errorResponse(503, "Instructions database is unavailable", { code: "DATABASE_UNAVAILABLE" });
   }
   const client = getCloudClient();
 
@@ -77,11 +131,12 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
     if (resource === "configs") {
       if (!id) {
         if (method === "GET") {
+          const search = boundedSearchQuery(url.searchParams.get("search"));
           const filter = {
             ...(url.searchParams.get("category") ? { category: url.searchParams.get("category") as never } : {}),
             ...(url.searchParams.get("agent") ? { agent: url.searchParams.get("agent") as never } : {}),
             ...(url.searchParams.get("kind") ? { kind: url.searchParams.get("kind") as never } : {}),
-            ...(url.searchParams.get("search") ? { search: url.searchParams.get("search")! } : {}),
+            ...(search ? { search } : {}),
           };
           const configs = await store.listConfigs(client, filter);
           return json({ configs, count: configs.length });
@@ -321,9 +376,11 @@ export async function handleV1Request(req: Request, url: URL): Promise<Response 
 
     return errorResponse(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
+    if (e instanceof HttpInputError) return errorResponse(e.status, e.message, { code: e.code });
     if (e instanceof ConfigNotFoundError || e instanceof ProfileNotFoundError) {
       return errorResponse(404, e.message);
     }
-    return errorResponse(500, (e as Error).message || "internal error");
+    console.error("instructions /v1: request failed");
+    return errorResponse(500, "Instructions request failed", { code: "INTERNAL_ERROR" });
   }
 }

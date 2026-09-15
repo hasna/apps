@@ -18,9 +18,15 @@ bun add --global @hasna/instructions
 
 ```bash
 instructions --help
-instructions init
+
+# Hosted-by-default: resolves the approved key and uses
+# https://api.hasna.com/instructions/v1.
+instructions status
 instructions list
-instructions profile resolve
+
+# Explicit on-box SQLite mode; there is never an implicit fallback.
+HASNA_INSTRUCTIONS_LOCAL=1 instructions init
+HASNA_INSTRUCTIONS_LOCAL=1 instructions list
 ```
 
 ## Migrating from `@hasna/configs`
@@ -28,6 +34,19 @@ instructions profile resolve
 This package was formerly `@hasna/configs`. The `configs` CLI alias and
 `configs-mcp` alias remain available for existing integrations; new usage can
 use the `instructions` names.
+
+Historical on-box rows can be migrated without overwriting the current store:
+
+```bash
+export HASNA_INSTRUCTIONS_LOCAL=1
+instructions migrate-legacy --confirm-local --json          # no-write plan
+instructions migrate-legacy --confirm-local --apply --json  # backup + transaction
+```
+
+The source defaults to `~/.hasna/configs/configs.db`; the destination defaults
+to the current `instructions.db`. A non-empty destination is refused unless
+`--merge-preserve-destination` is explicit, and that merge never overwrites an
+existing row.
 
 ## CLI Usage
 
@@ -109,8 +128,9 @@ instructions-mcp --http          # http://127.0.0.1:8807/mcp
 MCP_HTTP=1 instructions-mcp
 ```
 
-Health: `GET http://127.0.0.1:8807/health`. MCP is also mounted on
-`instructions-serve` at `/mcp`.
+Health: `GET http://127.0.0.1:8807/health`. The production
+`instructions-serve` process deliberately does **not** mount MCP; local MCP and
+the authenticated `/v1` service remain separate authorities.
 
 ## HTTP API server (`instructions-serve`)
 
@@ -120,14 +140,20 @@ instructions-serve
 
 Surfaces:
 
-- `GET /health`, `GET /ready`, `GET /version` → `{ status, version, mode }`
+- `GET /health`, `GET /ready`, `GET /version` → `{ status, version, backend }`
 - `GET /openapi.json`, `GET /v1/openapi.json` → the OpenAPI 3.1 document the SDK
   is generated from.
 - `/v1/*` — versioned cloud API (configs, profiles, snapshots, stats).
 - No `/api/*` — the former local REST surface is not mounted (the removed
   bundled dashboard was its only consumer).
 
-### Server data backend (postgresql)
+### Server data backend (PostgreSQL, fail closed)
+
+`instructions-serve` requires `HASNA_INSTRUCTIONS_DATABASE_URL` (or its documented
+alias) for a usable `/v1` service. Without a DSN, `/health` remains a liveness
+probe but reports `backend: "unconfigured"`; `/ready` returns 503 and `/v1`
+returns a stable unavailable error. It never exposes local SQLite over the
+service boundary.
 
 When `HASNA_INSTRUCTIONS_DATABASE_URL` is set the `/v1` API reads/writes the
 shared Postgres **directly** (no local sync/cache in the service) and every
@@ -214,6 +240,38 @@ transport is decided by what resolves, never by a mode word.
 
 Clients never hold a database DSN. The raw Postgres connection is a server-only
 concern (`instructions-serve`), selected by `HASNA_INSTRUCTIONS_DATABASE_URL`.
+
+
+## Native S3 backup storage
+
+S3 is an **adjunct immutable backup plane**, never a database selector. SQLite
+remains the explicit local authority and PostgreSQL remains the hosted `/v1`
+authority. Setting S3 variables alone never opens SQLite, never selects HTTP,
+and never changes CRUD routing.
+
+```bash
+export HASNA_INSTRUCTIONS_S3_BUCKET=your-private-bucket
+export HASNA_INSTRUCTIONS_AWS_REGION=us-east-1
+# Optional: HASNA_INSTRUCTIONS_S3_PREFIX (default: instructions/)
+# Optional local/S3-compatible endpoint and explicit static credentials.
+
+instructions storage status --json
+instructions export --output ./instructions-backup.tar.gz
+instructions storage backup push ./instructions-backup.tar.gz   --id 2026-09-15-pre-deploy --dry-run --json
+instructions storage backup push ./instructions-backup.tar.gz   --id 2026-09-15-pre-deploy --json
+instructions storage backup verify 2026-09-15-pre-deploy --json
+instructions storage backup pull 2026-09-15-pre-deploy   --output ./restored-instructions.tar.gz --json
+```
+
+Each backup uses traversal-safe deterministic keys, an immutable payload, and a
+manifest containing SHA-256, byte size, content type, and creation time. Pulls
+verify the payload before an owner-only local file is written. Identical replay
+is idempotent; the same backup ID with different bytes is refused. AWS runtime
+credentials may come from Bun's standard AWS chain (including an ECS task role);
+explicit static credentials are optional and must be a complete pair. Status
+never prints credential values or the bucket name.
+
+The public importable surface is available at `@hasna/instructions/storage`.
 
 ## Data Directory
 

@@ -29,6 +29,68 @@ contain zero `bun:sqlite` references. A hosted run never loads that chunk;
 `getDatabase()` additionally refuses to open a file in a process whose
 environment configures a hosted authority.
 
+
+## Legacy `@hasna/configs` SQLite migration
+
+The renamed app does not silently adopt a different database. Migrate the
+historical store only through the explicit local command:
+
+```bash
+export HASNA_INSTRUCTIONS_LOCAL=1
+instructions migrate-legacy --confirm-local --json
+instructions migrate-legacy --confirm-local --apply --json
+```
+
+The source defaults to `~/.hasna/configs/configs.db`; the destination is the
+current `instructions.db`. Dry-run is the default. Apply checkpoints and copies
+the destination to an exclusive owner-only backup, then inserts compatible rows
+in one transaction. A non-empty destination requires
+`--merge-preserve-destination`; conflicts are counted and existing rows are
+never overwritten. Missing current-version snapshots are created with stable
+IDs. Hosted intent outranks the local opt-in, so this command cannot mutate a
+local file while a hosted Instructions authority is configured.
+
+## Native S3 backup plane
+
+`HASNA_INSTRUCTIONS_S3_BUCKET` enables optional immutable backup objects. S3 is
+not a third `ConfigStore` and never participates in CLI/MCP/SDK authority
+selection. It stores archives produced by `instructions export`; SQLite or
+PostgreSQL remains the record source of truth.
+
+Configuration:
+
+| Variable | Purpose |
+| --- | --- |
+| `HASNA_INSTRUCTIONS_S3_BUCKET` | Private bucket; required when any S3 setting is present. |
+| `HASNA_INSTRUCTIONS_S3_PREFIX` | Object prefix, default `instructions/`; traversal is rejected. |
+| `HASNA_INSTRUCTIONS_AWS_REGION` | AWS region, default `us-east-1`. |
+| `HASNA_INSTRUCTIONS_S3_ENDPOINT` | Optional HTTPS S3-compatible origin; plain HTTP is loopback-only. |
+| `HASNA_INSTRUCTIONS_S3_FORCE_PATH_STYLE` | Strict boolean for S3-compatible development endpoints. |
+| `HASNA_INSTRUCTIONS_S3_ACCESS_KEY_ID` / `...SECRET_ACCESS_KEY` | Optional explicit pair; partial pairs fail closed. |
+| `HASNA_INSTRUCTIONS_S3_SESSION_TOKEN` | Optional only with the complete pair. |
+
+The temporary unprefixed `INSTRUCTIONS_*` aliases remain lower priority. A
+present canonical variable, including a blank canonical bucket, never revives a
+stale alias.
+
+Commands:
+
+```bash
+instructions storage status --json
+instructions storage backup push FILE --id BACKUP_ID --dry-run --json
+instructions storage backup push FILE --id BACKUP_ID --json
+instructions storage backup verify BACKUP_ID --json
+instructions storage backup pull BACKUP_ID --output FILE --json
+```
+
+The key layout is
+`<prefix>/backups/<encoded-backup-id>/{payload,manifest.json}`. The manifest is
+`hasna.instructions.backup-object/v1` and binds exact SHA-256 and byte length.
+Dry-run is network-free. Existing bytes may be reused only when their digest and
+size match; an occupied backup ID with different bytes is an integrity failure.
+Pull validates before writing and refuses existing or non-regular destinations
+unless the caller explicitly selects the supported replacement behavior.
+
 ## API transport
 
 Every client surface resolves its credential and authority through the ONE

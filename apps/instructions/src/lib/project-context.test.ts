@@ -644,12 +644,18 @@ describe("legacy migration and compatibility", () => {
     const contract = JSON.parse(readFileSync(join(repoRoot, "hasna.contract.json"), "utf8")) as { bins: string[] };
     expect(pkg.name).toBe("@hasna/instructions");
     expect(pkg.bin.configs).toBe("dist/cli/index.js");
-    // The configs aliases ship in package.json for fleet compatibility but are
-    // not contract-declarable (the contract bin allowlist names only
-    // instructions* surfaces), so the manifest must NOT carry them.
-    expect(contract.bins).not.toContain("configs");
-    expect(contract.bins).not.toContain("configs-mcp");
-    expect(contract.bins).toEqual(["instructions", "instructions-mcp", "instructions-serve"]);
+    // Contracts 1.1.1 registers these two exact rename aliases while keeping
+    // every other app's bin allowlist closed, so package and contract stay in
+    // sync instead of carrying a permanent conformance exception.
+    expect(contract.bins).toContain("configs");
+    expect(contract.bins).toContain("configs-mcp");
+    expect(contract.bins).toEqual([
+      "instructions",
+      "instructions-mcp",
+      "instructions-serve",
+      "configs",
+      "configs-mcp",
+    ]);
   });
 
   test("dual-reads the pre-canonical BEGIN/END marker form without adding a second block", () => {

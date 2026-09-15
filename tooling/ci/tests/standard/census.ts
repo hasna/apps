@@ -424,11 +424,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: hooks lane (W6); remove the retired location from the manifest",
   },
   {
-    member: "instructions",
-    cause: "bins_match_package: legacy alias bins configs/configs-mcp undeclared; storage_capabilities: storage.pgTestGate required; published_artifact_gate: metadata.release.artifactScan.script required (in-tree kit 1.0.2).",
-    task: "todos c15cca18 (contracts task — instructions)",
-  },
-  {
     member: "logs",
     cause: "storage_capabilities: storage.pgTestGate required; published_artifact_gate: metadata.release.artifactScan.script required (in-tree kit 1.0.2).",
     task: "todos d166125e (contracts task — logs)",
