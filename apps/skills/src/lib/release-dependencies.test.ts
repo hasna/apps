@@ -214,3 +214,41 @@ test("cyclic peer graphs terminate with finite contexts and still inspect each b
     expect(bytes(f.root)).toBe(before);
   } finally { f.dispose(); }
 });
+
+test("a hoisted peer-only dependency uses its installation scope across callers with nested peers", () => {
+  const f = peerContextFixture();
+  try {
+    for (const parent of ["a", "b"]) {
+      rmSync(join(f.root, `node_modules/${parent}/node_modules/consumer`), { recursive: true });
+      expect(f.resolved(`node_modules/${parent}`, "consumer").path).toBe(join(f.root, "node_modules/consumer/package.json"));
+    }
+    expect(f.resolved("node_modules/consumer", "zod").version).toBe("4.5.4");
+    const before = bytes(f.root), result = verifyProducerDependencies(f.root);
+    const peers = result.nodes.filter(node => node.name === "consumer");
+    expect(peers).toHaveLength(1);
+    expect(peers[0]!.context.zod).toBe("zod");
+    expect(result.nodes.filter(node => node.version === "3.25.76")).toHaveLength(2);
+    expect(bytes(f.root)).toBe(before);
+  } finally { f.dispose(); }
+});
+
+test("a dependency hoisted within a subtree keeps that scope rather than the caller or root peers", () => {
+  const f = peerContextFixture();
+  try {
+    const parent = JSON.parse(readFileSync(join(f.root, "node_modules/a/package.json"), "utf8"));
+    parent.dependencies.nested = "1.0.0";
+    f.install("node_modules/a", parent);
+    f.lock.packages.a[2].dependencies = parent.dependencies;
+    const nested = { name: "nested", version: "1.0.0", dependencies: { consumer: "1.0.0", zod: "^4.0.0" } };
+    f.lock.packages.nested = ["nested@1.0.0", "", { dependencies: nested.dependencies }, "fixture-integrity"];
+    f.install("node_modules/a/node_modules/nested", nested);
+    f.install("node_modules/a/node_modules/nested/node_modules/zod", { name: "zod", version: "4.5.4" });
+    write(join(f.root, "bun.lock"), f.lock);
+    expect(f.resolved("node_modules/a/node_modules/nested", "zod").version).toBe("4.5.4");
+    expect(f.resolved("node_modules/a/node_modules/nested", "consumer").path).toBe(join(f.root, "node_modules/a/node_modules/consumer/package.json"));
+    expect(f.resolved("node_modules/a/node_modules/consumer", "zod").version).toBe("3.25.76");
+    const before = bytes(f.root), result = verifyProducerDependencies(f.root);
+    expect(result.nodes.filter(node => node.name === "consumer" && node.relativePath === "a/node_modules/consumer")).toHaveLength(1);
+    expect(bytes(f.root)).toBe(before);
+  } finally { f.dispose(); }
+});

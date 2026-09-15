@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.0
+
+### Minor Changes
+
+- 5537fc2: Retire unversioned server submissions and embedded skill implementations. The
+  legacy worker terminates queued records without executing them; historical run
+  reads, outputs, and cancellation remain available. Managed executions continue
+  to require an immutable published bundle. Pin the published Contracts 1.1.0
+  credential resolver for reproducible CLI builds.
+
+### Patch Changes
+
+- Verify peer dependencies in their actual installation scope when Bun hoists shared packages, retaining locked-version checks and refusal of substituted dependencies.
+
+- 1472c04: Allow a hosted Secrets vault reference in an owner-only canonical or profile credential file without storing a raw application key. Preserve existing provider precedence and terminal bootstrap/vault failures. Skills retains the normal Secrets bootstrap context, file-instance binding, and configuration checks across asynchronous vault reads; login, logout, and URL changes handle stored references explicitly.
+
+  Resolve the installed SDK's ESM export without registry downloads or global/CWD package searches, while preserving caller stdin and strict compiled consumers. A missing or broken SDK and a recursive Secrets bootstrap remain terminal.
+
+- e64c60c: Serve only the authenticated organization's published skills. Remove machine-local catalog fallback, automatic bundled-corpus imports on startup, and skill files from the server image. Preserve the old unscoped SDK registry exports as empty compatibility helpers; use an authenticated client to read private catalogs.
+- 6728edc: Remove operational skill content from the public repository and package assets. Keep Skills catalogs and payloads in operator-owned storage, retire static selections and implicit legacy source imports, and reject tracked skill payloads in CI. Instructions no longer reloads a bundled or working-directory inbox contract by default. Project recommendations use the owner's skill tags rather than a shipped list of skill names.
+
 ## 0.7.3
 
 ### Patch Changes

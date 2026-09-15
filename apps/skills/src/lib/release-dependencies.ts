@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 
 type Fields = { dependencies?: Record<string,string>; devDependencies?: Record<string,string>; optionalDependencies?: Record<string,string>; peerDependencies?: Record<string,string>; optionalPeers?: string[] };
 type Manifest = Fields & { name:string; version:string; peerDependenciesMeta?:Record<string,{optional?:boolean}> };
@@ -35,7 +35,7 @@ function installedPackage(parent:string,name:string) {
   const directory=join(candidate,name);
   if(!existsSync(directory))continue;
   const manifest=join(realpathSync(directory),"package.json");insist(existsSync(manifest)&&statSync(manifest).isFile(),`missing resolved manifest for ${name}`);
-  return {directory:realpathSync(directory),manifest,bytes:readFileSync(manifest)};
+  return {directory:realpathSync(directory),owner:realpathSync(dirname(candidate)),manifest,bytes:readFileSync(manifest)};
  }
  return null;
 }
@@ -48,8 +48,8 @@ export function verifyProducerDependencies(packageRoot:string) {
  const manifest=JSON.parse(manifestBytes.toString()) as Manifest, lock=Bun.JSONC.parse(lockBytes.toString()) as Lock;
  insist(lock.lockfileVersion===1&&lock.workspaces[""]?.name===manifest.name&&Object.keys(lock.workspaces).length===1,"selected standalone lock authority");
  for(const field of ["dependencies","devDependencies","optionalDependencies","peerDependencies"] as const) insist(canonical(manifest[field])===canonical(lock.workspaces[""]![field]),`root ${field} mismatch`);
- // Peer installations inherit the importing package's effective bindings,
- // not merely a global tuple key or an unbounded logical ancestry. Ordinary
+ // Peer installations inherit their installation scope's effective bindings,
+ // not a caller that reaches them through hoisting. Ordinary
  // dependencies replace earlier bindings: a hoisted adapter's broad ordinary
  // Zod dependency can use root Zod4 even beneath an importer that uses Zod3.
  // Only peer names matter; each maps to one exact key (or absence) in this
@@ -62,6 +62,7 @@ export function verifyProducerDependencies(packageRoot:string) {
   return normalize(next);
  };
  const initial=inherited({},undefined,undefined,{dependencies:{...manifest.dependencies,...manifest.devDependencies,...manifest.optionalDependencies,...manifest.peerDependencies}});
+ const scopeContexts=new Map<string,Context>([[root,initial]]);
  const graphRoot=realpathSync(join(root,"node_modules")), queue:{parent:string;parentKey?:string;context:Context;name:string;peer:boolean;optional:boolean}[]=[];
  const nodes:{lockKey:string;name:string;version:string;manifestSha256:string;relativePath:string;context:Context}[]=[], edges:{from:string;name:string;to:string|null;optionalAbsent?:boolean}[]=[];
  const visited=new Set<string>();
@@ -76,8 +77,14 @@ export function verifyProducerDependencies(packageRoot:string) {
   insist(value.name===name&&value.version===version,`${edge.name} resolved ${value.name}@${value.version}, lock requires ${name}@${version}`);
   insist(inside(graphRoot,installed.directory),`resolved ${edge.name} escapes selected dependency graph`);
   edges.push({from:edge.parentKey??"root",name:edge.name,to:selected.key});
-  const context=inherited(edge.context,selected.key,name,selected.tuple[2]);
+  // Keep the lookup owner before resolving package symlinks. A genuinely
+  // hoisted package uses its ancestor scope; a nested alias cannot rescue a
+  // substituted peer by adopting the target's different scope.
+  const scope=installed.owner===edge.parent?edge.context:scopeContexts.get(installed.owner);
+  insist(scope,`unknown installation scope for ${edge.name}`);
+  const context=inherited(scope,selected.key,name,selected.tuple[2]);
   const identity=JSON.stringify([selected.key,installed.directory,context]);if(visited.has(identity))continue;visited.add(identity);
+  scopeContexts.set(installed.directory,context);
   nodes.push({lockKey:selected.key,name,version,manifestSha256:sha(installed.bytes),relativePath:relative(graphRoot,installed.directory),context});
   const metadata=selected.tuple[2];
   // Only the package root's dev dependencies are build inputs. Nested dev
