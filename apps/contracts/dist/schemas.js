@@ -9171,7 +9171,7 @@ function createDeploymentEnvelopeSchema(primitives) {
 
 // src/schemas.ts
 var CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-var CONTRACTS_PACKAGE_VERSION = "1.1.0";
+var CONTRACTS_PACKAGE_VERSION = "1.1.1";
 var SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
   resourceRef: "hasna.resource_ref.v1",
@@ -13381,7 +13381,8 @@ var ALLOWED_BIN_SUFFIXES = [
   "-doctor"
 ];
 var CANONICAL_HASNA_BIN_ALIASES = Object.freeze({
-  deployment: Object.freeze(["hasna-deploy"])
+  deployment: Object.freeze(["hasna-deploy"]),
+  instructions: Object.freeze(["configs", "configs-mcp"])
 });
 function allowedBinsForName(name) {
   return [
