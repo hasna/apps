@@ -71,6 +71,26 @@ try {
 import { createRunService, runAdmissionSchema, runTerminalSchema, type SkillsProductStore, RemoteCapabilityUnavailableError, RemoteRequestError } from "@hasna/skills/sdk";
 import { RemoteSkillsClient, RemoteSkillsAuthClient, RemoteCapabilityUnavailableError as RootCapabilityError, runSkill } from "@hasna/skills";
 import { RemoteSkillsClient as SdkQuoteClient, type RemoteRunQuote, type RemoteRunApproval } from "@hasna/skills/sdk";
+import { type RecurringRequest, type RecurringActivation, type RecurringPreview, type RecurringConsentView,
+  type RecurringPage, type RecurringOccurrenceView, type RecurringRevocation, type RecurringActivationResult,
+  RemoteRecurringUnconfirmedError, canonicalJsonSha256 } from "@hasna/skills/sdk";
+declare const recurringRequest: RecurringRequest;
+declare const recurringApproval: RecurringActivation;
+const recurringClient = new SdkQuoteClient("fixture", "https://skills.example.test");
+const recurringPreview: Promise<RecurringPreview> = recurringClient.previewRecurringConsent(recurringRequest);
+const recurringDraft: Promise<RecurringPreview | null> = recurringClient.getRecurringDraft("00000000-0000-4000-8000-000000000001");
+const recurringActivated: Promise<RecurringActivationResult> = recurringClient.activateRecurringConsent("00000000-0000-4000-8000-000000000001", recurringApproval);
+const recurringPage: Promise<RecurringPage<RecurringConsentView>> = recurringClient.listRecurringConsents({ limit: 10 });
+const recurringConsent: Promise<RecurringConsentView | null> = recurringClient.getRecurringConsent("00000000-0000-4000-8000-000000000001");
+const recurringHistory: Promise<RecurringPage<RecurringOccurrenceView>> = recurringClient.listRecurringOccurrences("00000000-0000-4000-8000-000000000001");
+const recurringRevoked: Promise<RecurringRevocation> = recurringClient.revokeRecurringConsent("00000000-0000-4000-8000-000000000001");
+const recurringUnknown: true = new RemoteRecurringUnconfirmedError().outcomeUnknown;
+const portableHash: string = canonicalJsonSha256({ nested: [1, true] });
+// @ts-expect-error Original caller-owned idempotency identity is mandatory.
+const recurringMissingKey: RecurringActivation = { contractVersion: 1, acceptedTermsSha256: "a".repeat(64), acceptance: "authorize-recurring-credit-use" };
+// @ts-expect-error A client boolean is not fresh human authority.
+const recurringForgedAuthority: RecurringActivation = { ...recurringApproval, human: true };
+
 import type { RemoteRunQuote as RootRunQuote, RemoteRunApproval as RootRunApproval } from "@hasna/skills";
 declare const receiptQuote: RemoteRunQuote;
 const opaqueReceipt: string | undefined = receiptQuote.quoteReceipt;

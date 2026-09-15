@@ -1,3 +1,7 @@
+import { recurringInput, recurringRequest, recurringFailure, parseRecurringResult, parseRecurringCapability, assertRecurringCapability,
+  RemoteRecurringError, RemoteRecurringUnavailableError, RemoteRecurringReadError, RemoteRecurringUnconfirmedError,
+  type RecurringAction, type RecurringInputs, type RecurringResults, type RecurringRequest, type RecurringActivation,
+  type RecurringListOptions, type RecurringCapability, type RecurringConsentView, type RecurringOccurrenceView, type RecurringPage } from "./remote-recurring.js";
 import { invitationInput, invitationRequest, invitationFailure, parseInvitationResult,
   RemoteWorkspaceInvitationError, RemoteWorkspaceInvitationUnconfirmedError, RemoteWorkspaceInvitationReadError,
   type InvitationAction, type InvitationInputs, type InvitationResults, type ListRemoteWorkspaceInvitations,
@@ -136,7 +140,7 @@ export interface UpdatedSincePage {
 export class RemoteSkillsClient {
   private apiUrl: string;
   private apiKey: string;
-  private capabilities?: Promise<{ contractVersion: 1; apiVersion: 1; capabilities: string[]; billing?: { boundedRunApproval?: boolean; unit?: string } }>;
+  private capabilities?: Promise<{ contractVersion: 1; apiVersion: 1; capabilities: string[]; billing?: { boundedRunApproval?: boolean; unit?: string }; recurringConsents?: RecurringCapability }>;
 
   constructor(apiKey: string, apiUrl = getApiUrl()) {
     this.apiKey = apiKey;
@@ -279,7 +283,8 @@ export class RemoteSkillsClient {
       const value = await (await this.requestNewRoute("/api/v1/capabilities")).json() as Record<string, unknown>;
       if (value.contractVersion !== 1 || value.apiVersion !== 1 || !Array.isArray(value.capabilities) || value.capabilities.some(item => typeof item !== "string")) throw new Error("Unsupported Skills server capability contract");
       const billing = value.billing as { boundedRunApproval?: boolean; unit?: string } | undefined;
-      return { contractVersion: 1 as const, apiVersion: 1 as const, capabilities: value.capabilities as string[], ...(billing ? { billing } : {}) };
+      const recurringConsents = parseRecurringCapability(value.recurringConsents);
+      return { contractVersion: 1 as const, apiVersion: 1 as const, capabilities: value.capabilities as string[], ...(billing ? { billing } : {}), ...(recurringConsents ? { recurringConsents } : {}) };
     })();
     return this.capabilities;
   }
@@ -468,6 +473,91 @@ export class RemoteSkillsClient {
     }
     try { return parseInvitationResult(action, value, captured, identity.organization.id); }
     catch { throw read ? new RemoteWorkspaceInvitationReadError() : new RemoteWorkspaceInvitationUnconfirmedError(); }
+  }
+  previewRecurringConsent(request: RecurringRequest, context?: RemoteWorkspaceContext) {
+    return this.requestRecurring("preview", request, context);
+  }
+  getRecurringDraft(draftId: string, context?: RemoteWorkspaceContext) {
+    return this.requestRecurring("draft", { draftId }, context);
+  }
+  activateRecurringConsent(draftId: string, approval: RecurringActivation, context?: RemoteWorkspaceContext) {
+    return this.requestRecurring("activate", { draftId, approval }, context);
+  }
+  listRecurringConsents(options: RecurringListOptions = {}, context?: RemoteWorkspaceContext) {
+    return this.requestRecurring("list", options, context);
+  }
+  getRecurringConsent(consentId: string, context?: RemoteWorkspaceContext) {
+    return this.requestRecurring("get", { consentId }, context);
+  }
+  listRecurringOccurrences(consentId: string, options: RecurringListOptions = {}, context?: RemoteWorkspaceContext) {
+    return this.requestRecurring("occurrences", { ...options, consentId }, context);
+  }
+  revokeRecurringConsent(consentId: string, context?: RemoteWorkspaceContext) {
+    return this.requestRecurring("revoke", { consentId }, context);
+  }
+  /** One explicit operation on a captured connection. No policy inference,
+   * credential persistence, POST retries or replacement idempotency keys. */
+  private async requestRecurring<A extends RecurringAction>(action: A, input: RecurringInputs[A], context?: RemoteWorkspaceContext): Promise<RecurringResults[A]> {
+    const captured = recurringInput(action, input), target = context === undefined ? undefined : workspaceContext(context);
+    const connection = new RemoteSkillsClient(this.apiKey, this.apiUrl);
+    let capability: unknown;
+    try {
+      const response = await connection.request("/api/v1/capabilities");
+      if (!response.ok) { await response.body?.cancel(); throw new RemoteRecurringUnavailableError(); }
+      capability = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readBoundedResponse(response, 64 * 1024)));
+      assertRecurringCapability(capability, action);
+    } catch { throw new RemoteRecurringUnavailableError(); }
+    let identity: RemoteWorkspaceIdentity, identityValue: Record<string, unknown>;
+    try {
+      const response = await connection.request("/api/auth/whoami");
+      if (!response.ok) { await response.body?.cancel(); throw new RemoteRecurringReadError(); }
+      identityValue = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readBoundedResponse(response, 64 * 1024)));
+      const observedUser = (identityValue.user as Record<string, unknown> | undefined)?.id;
+      identity = parseWorkspaceIdentity(identityValue, target?.userId ?? workspaceExpectedUserId(observedUser));
+      if (target && identity.user.membershipId !== target.membershipId) throw new WorkspaceIdentityMismatchError();
+    } catch { throw new RemoteRecurringReadError(); }
+    if (action === "activate") {
+      // This is only a preflight refusal; metadata never establishes freshness.
+      // The original credential still reaches the server's session/SQL verifier.
+      if (identityValue.authMethod !== "jwt") throw new RemoteRecurringError("RECURRING_HUMAN_APPROVAL_REQUIRED");
+      assertRecurringCapability(capability, "draft");
+      const selected = captured as RecurringInputs["activate"];
+      const draft = await connection.dispatchRecurring("draft", { draftId: selected.draftId }, identity);
+      if (!draft || draft.termsSha256 !== selected.approval.acceptedTermsSha256)
+        throw new RemoteRecurringError("RECURRING_TERMS_UNAVAILABLE");
+    }
+    let selectedConsent: RecurringConsentView | null | undefined;
+    if (action === "occurrences") {
+      assertRecurringCapability(capability, "get");
+      selectedConsent = await connection.dispatchRecurring("get", { consentId: (captured as RecurringInputs["occurrences"]).consentId }, identity);
+    }
+    const result = await connection.dispatchRecurring(action, captured, identity);
+    if (action === "occurrences") {
+      const items = (result as RecurringPage<RecurringOccurrenceView>).items;
+      if (items.length && (!selectedConsent || items.some(item => item.scheduleId !== selectedConsent.scheduleId)))
+        throw new RemoteRecurringReadError();
+    }
+    return result;
+  }
+  private async dispatchRecurring<A extends RecurringAction>(action: A, input: RecurringInputs[A], identity: RemoteWorkspaceIdentity): Promise<RecurringResults[A]> {
+    const request = recurringRequest(action, input);
+    let response: Response, value: unknown;
+    try {
+      response = await this.request(request.path, { method: request.method, ...(request.body === undefined ? {} : { body: request.body }) });
+      value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readBoundedResponse(response,
+        response.ok ? action === "list" ? 64 * 1024 * 1024 : 2 * 1024 * 1024 : 4096)));
+    } catch { throw request.read ? new RemoteRecurringReadError() : new RemoteRecurringUnconfirmedError(); }
+    if (!response.ok) {
+      const code = recurringFailure(value, response.status);
+      if (code === "RECURRING_NOT_FOUND" && (action === "draft" || action === "get")) return null as RecurringResults[A];
+      if (code) throw new RemoteRecurringError(code);
+      throw request.read ? new RemoteRecurringReadError() : new RemoteRecurringUnconfirmedError();
+    }
+    try {
+      if (response.status !== 200 || value === null) throw new RemoteRecurringReadError();
+      return parseRecurringResult(action, value, input, identity);
+    }
+    catch { throw request.read ? new RemoteRecurringReadError() : new RemoteRecurringUnconfirmedError(); }
   }
   async listApiKeys(): Promise<Record<string, unknown>[]> { return this.arrayResponse("/api/auth/keys"); }
   async createApiKey(name: string, scopes?: string[]): Promise<{ key: string; [field: string]: unknown }> {

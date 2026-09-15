@@ -100,6 +100,8 @@ registerRuntime(program);
 
 const { registerRemoteAccount } = await import("./commands/remote-account.js");
 registerRemoteAccount(program);
+const { registerRecurringCommands } = await import("./commands/recurring.js");
+registerRecurringCommands(program);
 
 const { registerCompletion } = await import("./commands/completion.js");
 registerCompletion(program);
