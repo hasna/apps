@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1
+
+### Patch Changes
+
+- Register `configs` and `configs-mcp` as the exact compatibility binaries for
+  `@hasna/instructions`. The allowlist stays closed for every other app, so a
+  package cannot use the rename bridge to declare arbitrary legacy entrypoints.
+
 ## 1.1.0
 
 ### Minor Changes
