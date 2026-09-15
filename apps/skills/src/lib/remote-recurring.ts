@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v4";
 import { canonicalJson, canonicalJsonAtDepth, canonicalJsonSha256 } from "./canonical-json.js";
 import { recurringRequestSchema, recurringTermsSchema, recurringActivationSchema, MAX_RECURRING_CREDITS,
   type RecurringRequest, type RecurringActivation, type RecurringPreview, type RecurringConsentView,

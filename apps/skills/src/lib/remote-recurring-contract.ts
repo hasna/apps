@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v4";
 
 /** Portable versioned wire values only. Eligibility, repricing, freshness, budgets
  * and execution authority are verified by the configured server. */
