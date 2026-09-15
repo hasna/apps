@@ -167,48 +167,48 @@ describe("skills push", () => {
       });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
-  test("explicit catalogue-only authority permits an initial override and remains organization scoped", async () => {
+  test("initial publication into an empty account remains organization scoped", async () => {
     await withServer(async ({ baseUrl, store, requests }) => {
       const client = new RemoteSkillsClient(pushAuth, baseUrl);
       const principal = await store.authenticateApiKeyHash(hashApiKey(pushAuth));
       expect(principal).not.toBeNull();
-      const bundled = (await client.listSkills()).find(row => !row.bundleSha256 && typeof row.name === "string");
-      expect(bundled).toBeDefined(); const slug = bundled!.name as string;
+      expect(await client.listSkills()).toEqual([]);
+      const slug = "private-publication-control";
       const root = catalogueCorpus(slug, "Owned catalogue override");
       try {
         expect(await store.getSkill(principal!, slug)).toBeNull();
         const observed = await client.getSkillStatus(slug);
-        expect(observed.status).toBe(200); expect(observed.body).toMatchObject({ name: slug, publicationState: "catalogue-only", revisionId: null });
+        expect(observed.status).toBe(404); expect(observed.body).toMatchObject({ code: "SKILL_NOT_FOUND" });
         const start = requests.length, result = await pushSkill(slug, { rootDir: root, client });
         expect(result.published).toBe(true);
-        expect(requests.slice(start)).toEqual([{ method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 200 },
+        expect(requests.slice(start)).toEqual([{ method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 404 },
           { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 201 }]);
         const published = await client.getSkillStatus(slug);
         expect(published.body).toMatchObject({ slug, bundleSha256: result.sha256 });
         expect((published.body as Record<string, unknown>).revisionId).toMatch(/^[a-f0-9]{64}$/);
         expect((published.body as Record<string, unknown>).publicationState).not.toBe("catalogue-only");
         const other = await new RemoteSkillsClient("test-other-token", baseUrl).getSkillStatus(slug);
-        expect(other.body).toMatchObject({ name: slug, publicationState: "catalogue-only", revisionId: null });
+        expect(other.status).toBe(404); expect(other.body).toMatchObject({ code: "SKILL_NOT_FOUND" });
         const otherPrincipal = await store.authenticateApiKeyHash(hashApiKey("test-other-token"));
         expect(otherPrincipal).not.toBeNull(); expect(await store.getSkill(otherPrincipal!, slug)).toBeNull();
       } finally { rmSync(root, { recursive: true, force: true }); }
     });
   });
 
-  test("publication after a catalogue-only read refuses the stale upload without overwriting the winner", async () => {
+  test("publication after an absent-record read refuses the stale upload without overwriting the winner", async () => {
     await withServer(async ({ baseUrl, store, requests }) => {
       const client = new RemoteSkillsClient(pushAuth, baseUrl);
       const principal = await store.authenticateApiKeyHash(hashApiKey(pushAuth));
       expect(principal).not.toBeNull();
-      const bundled = (await client.listSkills()).find(row => !row.bundleSha256 && typeof row.name === "string");
-      expect(bundled).toBeDefined(); const slug = bundled!.name as string;
+      expect(await client.listSkills()).toEqual([]);
+      const slug = "private-publication-control";
       const local = catalogueCorpus(slug, "Owned losing edit"), competing = catalogueCorpus(slug, "Owned winning edit");
       let winner: Awaited<ReturnType<MemorySkillsStore["getSkill"]>>, intercepted = 0;
       let winnerVersions: Awaited<ReturnType<MemorySkillsStore["listSkillVersions"]>> = [];
       class RacingClient extends RemoteSkillsClient {
         override async getSkillStatus(requested: string) {
           const observation = await super.getSkillStatus(requested);
-          expect(requested).toBe(slug); expect(observation.body).toMatchObject({ publicationState: "catalogue-only", revisionId: null }); intercepted++;
+          expect(requested).toBe(slug); expect(observation.status).toBe(404); expect(observation.body).toMatchObject({ code: "SKILL_NOT_FOUND" }); intercepted++;
           // The real first GET has completed. Commit another real HTTP publication
           // before releasing this exact observation to the losing push.
           await pushSkill(slug, { rootDir: competing, client });
@@ -221,8 +221,8 @@ describe("skills push", () => {
         const start = requests.length;
         await expect(pushSkill(slug, { rootDir: local, client: new RacingClient(pushAuth, baseUrl) })).rejects.toThrow("NEWER revision");
         expect(intercepted).toBe(1);
-        expect(requests.slice(start)).toEqual([{ method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 200 },
-          { method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 200 },
+        expect(requests.slice(start)).toEqual([{ method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 404 },
+          { method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 404 },
           { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 201 },
           { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 409 }]);
         expect(winner!).not.toBeNull(); expect(winner!.skillMd).toContain("Owned winning edit");
@@ -279,8 +279,7 @@ describe("skills push", () => {
           source: "remote",
           bundleSha256: result.sha256,
         });
-        // Merged with the bundled corpus, not replacing it.
-        expect(listed.length).toBeGreaterThan(1);
+        expect(listed).toHaveLength(1);
 
         expect(await reader.getSkillMd("release-notes")).toBe(VALID_SKILL["SKILL.md"]);
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createSkillsFetchHandler } from "./app.js";
 import { getServerSkill, getServerSkillMd } from "./registry.js";
+import { publicPrincipal } from "./auth.js";
 import { MemorySkillsStore } from "./store.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -21,7 +22,7 @@ useDefaultTestTimeout();
 // routing and registry resolution, which are storage-agnostic, so parameterising over
 // backends would only make the guard slower and load-sensitive for no extra coverage.
 
-const TOKEN = "sk_test_traversal";
+const TRAVERSAL_FIXTURE = "traversal-fixture";
 const SEED_PRINCIPAL = {
   orgId: "org_a",
   orgSlug: "org-a",
@@ -31,11 +32,9 @@ const SEED_PRINCIPAL = {
   apiKeyId: "key_a",
 };
 
-// A real, in-registry skill whose SKILL.md lives at skills/brand-kit/SKILL.md. The POSITIVE
-// CONTROL: proves the endpoint actually serves a 200 with real content, so a fix that broke
-// the whole route (or a test blind to 200s) cannot masquerade as "traversal blocked".
-const CONTROL_SLUG = "brand-kit";
-const CONTROL_MARKER = "name: brand-kit"; // frontmatter unique to the control's SKILL.md
+// An explicitly published synthetic document proves the route can serve content.
+const CONTROL_SLUG = "route-document-control";
+const CONTROL_MARKER = "name: route-document-control";
 
 // The exact incident payload. The id segment is `..%2Fagent-skills%2Fskill-project-create`;
 // the trailing `/skill.md` is a separate, literal segment.
@@ -53,7 +52,10 @@ const MISSING_SLUG = "definitely-not-a-real-skill-xyz";
 
 async function startTestServer() {
   const store = new MemorySkillsStore();
-  await store.ensureBootstrapApiKey(TOKEN, SEED_PRINCIPAL);
+  await store.ensureBootstrapApiKey(TRAVERSAL_FIXTURE, SEED_PRINCIPAL);
+  const principal = publicPrincipal(SEED_PRINCIPAL);
+  await store.publishSkill({ principal, slug: CONTROL_SLUG, displayName: "Traversal control", description: "Synthetic route control",
+    category: "Development Tools", tags: [], source: "custom", kind: "instruction", skillMd: `---\n${CONTROL_MARKER}\n---\n# Synthetic document\n` });
   const fetch = await createSkillsFetchHandler({
     store,
     config: { inlineWorker: false, allowEphemeralStore: true },
@@ -63,13 +65,13 @@ async function startTestServer() {
     baseUrl: `http://127.0.0.1:${server.port}`,
     async get(path: string) {
       return fetch(new Request(`http://127.0.0.1:${server.port}${path}`, {
-        headers: { authorization: `Bearer ${TOKEN}` },
+        headers: { authorization: `Bearer ${TRAVERSAL_FIXTURE}` },
       }));
     },
     async post(path: string) {
       return fetch(new Request(`http://127.0.0.1:${server.port}${path}`, {
         method: "POST",
-        headers: { authorization: `Bearer ${TOKEN}` },
+        headers: { authorization: `Bearer ${TRAVERSAL_FIXTURE}` },
       }));
     },
     stop() {
@@ -161,10 +163,8 @@ describe("skill.md path traversal (registry layer, HTTP decoding bypassed)", () 
   // the fix does not depend on the router boundary alone: even if a future refactor fed a
   // raw slug straight in, the registry layer refuses to escape skills/.
 
-  test("POSITIVE CONTROL: getServerSkillMd serves the in-registry control's content", () => {
-    const md = getServerSkillMd(CONTROL_SLUG);
-    expect(md).toBeTruthy();
-    expect(md).toContain(CONTROL_MARKER);
+  test("the retired unscoped registry never reads a local skill document", () => {
+    expect(getServerSkillMd(CONTROL_SLUG)).toBeNull();
   });
 
   test("getServerSkillMd refuses a traversal slug and returns null", () => {

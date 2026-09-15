@@ -205,12 +205,17 @@ for (const backend of backends) {
         const manifest = manifestFor("team-runbook", "t7marker", bundle.skillMd, bundle.sha256);
         expect((await orgA.publishSkill(manifest, bundle.bytes)).status).toBe(201);
 
-        // The distinct-tags surface is the org's merged registry view: the published tags
-        // plus the bundled corpus's, scoped so another org never sees this org's tags.
+        const apiBundle = fixtureBundle("api-original");
+        const apiManifest = { ...manifestFor("api-test-suite", "api-original", apiBundle.skillMd, apiBundle.sha256, "1.0.0"), tags: ["api"] };
+        const apiPublished = await orgA.publishSkill(apiManifest, apiBundle.bytes);
+        expect(apiPublished.status).toBe(201);
+        const apiRevision = (await apiPublished.json()).revisionId as string;
+
+        // Tags come only from this organization's explicitly published records.
         const tags = await orgA.listTags();
         expect(tags).toContain("t7marker");
         expect(tags).toContain("ops");
-        expect(tags).toContain("api"); // a bundled-corpus tag
+        expect(tags).toContain("api");
         expect(await orgB.listTags()).not.toContain("t7marker");
 
         // A skill tagged in the hosted registry appears under its tag filter.
@@ -225,11 +230,11 @@ for (const backend of backends) {
         expect(filtered.some((s) => s.slug === "team-runbook")).toBe(true);
         expect(filtered.every((s) => Array.isArray(s.tags) && (s.tags as string[]).includes("t7marker"))).toBe(true);
 
-        // Bundled skills are inside the filtered universe as well.
-        const bundledTag = await fetch(`${ctx.baseUrl}/api/v1/skills?tag=api`, { headers: { authorization: "Bearer sk_test_org_a" } });
-        const bundledFiltered = (await bundledTag.json()) as Array<Record<string, unknown>>;
-        expect(bundledFiltered.length).toBeGreaterThan(0);
-        expect(bundledFiltered.every((s) => Array.isArray(s.tags) && (s.tags as string[]).includes("api"))).toBe(true);
+        // A second skill explicitly published by this account is also filterable.
+        const publishedTag = await fetch(`${ctx.baseUrl}/api/v1/skills?tag=api`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        const publishedFiltered = (await publishedTag.json()) as Array<Record<string, unknown>>;
+        expect(publishedFiltered.length).toBeGreaterThan(0);
+        expect(publishedFiltered.every((s) => Array.isArray(s.tags) && (s.tags as string[]).includes("api"))).toBe(true);
 
         // Pins carry their skill's tags: pin the tagged skill, then filter by its tag.
         await orgA.pin("team-runbook", { reason: "tagged" });
@@ -238,26 +243,24 @@ for (const backend of backends) {
         const filteredPins = (await pinsByTag.json()) as Array<Record<string, unknown>>;
         expect(filteredPins.map((p) => p.slug)).toEqual(["team-runbook"]);
 
-        // A pin of a BUNDLED skill appears under that skill's bundled tag.
+        // The second published skill contributes its own tags to its pin.
         await orgA.pin("api-test-suite");
-        const bundledPins = await fetch(`${ctx.baseUrl}/api/v1/pins?tag=api`, { headers: { authorization: "Bearer sk_test_org_a" } });
-        expect((await bundledPins.json()) as Array<Record<string, unknown>>).toContainEqual(
+        const publishedPins = await fetch(`${ctx.baseUrl}/api/v1/pins?tag=api`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        expect((await publishedPins.json()) as Array<Record<string, unknown>>).toContainEqual(
           expect.objectContaining({ slug: "api-test-suite" }),
         );
         const pinsOtherTag = await fetch(`${ctx.baseUrl}/api/v1/pins?tag=zzz-none`, { headers: { authorization: "Bearer sk_test_org_a" } });
         expect((await pinsOtherTag.json()) as unknown[]).toEqual([]);
         // An empty tag query falls back to the unfiltered pin list (both pins
-        // above: the published team-runbook and the bundled api-test-suite).
+        // above: team-runbook and api-test-suite).
         const pinsNoTag = await fetch(`${ctx.baseUrl}/api/v1/pins`, { headers: { authorization: "Bearer sk_test_org_a" } });
         expect((await pinsNoTag.json()) as unknown[]).toHaveLength(2);
 
-        // Published-wins precedence: a published row occupying a bundled slug
-        // must not let the bundled copy resurface under a tag filter, in the
-        // tag list, or via pins. Publish an override of api-test-suite whose
-        // tags drop "api".
+        // Replacing a published version must remove its former tags consistently
+        // from the catalog, tag summaries, and pin filters.
         const override = fixtureBundle("override");
         const overrideManifest = manifestFor("api-test-suite", "override", override.skillMd, override.sha256);
-        expect((await orgA.publishSkill(overrideManifest, override.bytes)).status).toBe(201);
+        expect((await orgA.publishSkill(overrideManifest, override.bytes, apiRevision)).status).toBe(201);
         const filteredApi = await fetch(`${ctx.baseUrl}/api/v1/skills?tag=api`, { headers: { authorization: "Bearer sk_test_org_a" } });
         const apiRows = (await filteredApi.json()) as Array<Record<string, unknown>>;
         expect(apiRows.some((s) => s.slug === "api-test-suite")).toBe(false);
@@ -283,7 +286,7 @@ for (const backend of backends) {
         const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
         const skills = await client.listSkills();
         expect(Array.isArray(skills)).toBe(true);
-        expect(skills.some((skill) => skill.name === "video-highlight-pack")).toBe(true);
+        expect(skills).toEqual([]);
 
         const submitted = await client.submitRun("video-highlight-pack", { transcript: "Hello world from server-run skills." }, ["--title", "Demo"]);
         expect(submitted.status).toBe("queued");
@@ -408,7 +411,7 @@ for (const backend of backends) {
       }
     });
 
-    test("publishes a skill, serves it alongside the bundled corpus, and returns its bundle intact", async () => {
+    test("publishes a skill into an empty account and returns its bundle intact", async () => {
       const ctx = await testServer(backend);
       try {
         const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
@@ -430,8 +433,8 @@ for (const backend of backends) {
 
         const listed = await client.listSkills();
         expect(listed.some((skill) => skill.name === "team-runbook")).toBe(true);
-        // Merged, not replaced: a bundled skill must still be there.
-        expect(listed.some((skill) => skill.name === "video-highlight-pack")).toBe(true);
+        expect(listed).toHaveLength(1);
+        expect(listed.some((skill) => skill.name === "video-highlight-pack")).toBe(false);
 
         expect(await client.getSkill("team-runbook")).toMatchObject({ slug: "team-runbook", bundleSha256: bundle.sha256 });
         expect(await client.getSkillMd("team-runbook")).toBe(bundle.skillMd);
@@ -485,7 +488,7 @@ for (const backend of backends) {
       }
     });
 
-    test("a published skill overrides a bundled skill of the same slug for that org only", async () => {
+    test("publishing a familiar slug does not expose a default copy to another organization", async () => {
       const ctx = await testServer(backend);
       try {
         const orgA = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
@@ -499,9 +502,7 @@ for (const backend of backends) {
         expect(listedA.filter((skill) => skill.name === "video-highlight-pack")).toHaveLength(1);
         expect(listedA.find((skill) => skill.name === "video-highlight-pack")).toMatchObject({ displayName: "override Runbook" });
 
-        // Org B still sees the bundled one, unchanged.
-        const bundledForB = await orgB.getSkill("video-highlight-pack");
-        expect(bundledForB.description).not.toBe("override deployment runbook");
+        expect(await orgB.getSkill("video-highlight-pack")).toBeNull();
         expect((await orgB.downloadSkillBundle("video-highlight-pack")).status).toBe(404);
       } finally {
         await ctx.stop();
@@ -569,24 +570,22 @@ for (const backend of backends) {
       }
     });
 
-    test("a published skill with no SKILL.md does not serve the bundled skill's instructions", async () => {
+    test("a published skill with no SKILL.md does not substitute another document", async () => {
       const ctx = await testServer(backend);
       try {
         const client = new RemoteSkillsClient("sk_test_org_a", ctx.baseUrl);
         const bundle = fixtureBundle("shadow");
 
-        // Control: the bundled skill's document is served before anything is published,
-        // so the null below is the override taking effect and not a route that never works.
-        const bundledDoc = await client.getSkillMd("video-highlight-pack");
-        expect(bundledDoc).toBeTruthy();
+        // A separately published document proves that the endpoint can serve content.
+        expect((await client.publishSkill(manifestFor("document-control", "control", bundle.skillMd, bundle.sha256), bundle.bytes)).status).toBe(201);
+        expect(await client.getSkillMd("document-control")).toBe(bundle.skillMd);
 
         const manifest = manifestFor("video-highlight-pack", "shadow", "", bundle.sha256);
         delete manifest.skillMd;
         expect((await client.publishSkill(manifest, bundle.bytes)).status).toBe(201);
 
-        // Falling through to the bundled document here would hand an agent one skill's
-        // instructions under another skill's name - the published row is what this
-        // instance serves under that slug, and it has no document.
+        // This record has no document; neither the other record nor local files
+        // may provide substitute instructions.
         expect(await client.getSkillMd("video-highlight-pack")).toBeNull();
         expect(await client.getSkill("video-highlight-pack")).toMatchObject({ description: "shadow deployment runbook" });
       } finally {

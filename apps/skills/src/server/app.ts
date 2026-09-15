@@ -5,8 +5,7 @@ import { createCancelService } from "../sdk/cancel.js";
 import { GOVERNANCE_ERROR_CODES, GovernanceError } from "../sdk/governance.js";
 import { createGovernanceStore, type GovernanceStore } from "../sdk/governance-store.js";
 import { ArtifactStorage } from "./artifact-storage.js";
-import { seedBundledCorpus } from "./seed-bundled.js";
-import { authenticateRequest, publicPrincipal, permitsSkillsRoute } from "./auth.js";
+import { authenticateRequest, permitsSkillsRoute } from "./auth.js";
 import { handleProfileApi } from "./profile-api.js";
 import { createRuntimeService, handleRuntimeApiRequest, handleRuntimeWorkerRequest, type RuntimeService } from "./runtime-api.js";
 import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
@@ -106,12 +105,8 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
     runPrefix: config.runArtifactPrefix,
   });
   const runtime = options.runtime !== undefined ? options.runtime : await createRuntimeService({ databaseUrl: config.databaseUrl, productStore: store, artifacts: artifactStorage });
-  // Seed the registry from the bundled corpus once per package version (hasna/apps#1630).
-  // Only on a real boot with a durable store and a bootstrap key: injected test stores skip it.
-  if (!options.store && config.bootstrapApiKey && config.seedBundledCorpus) {
-    void seedBundledCorpus({ store, artifactStorage, principal: publicPrincipal(), log: (line) => console.log(line) })
-      .catch((error) => console.error(`skills: bundled corpus seed failed: ${(error as Error).message}`));
-  }
+  // Startup creates authentication and storage only. Skill content enters an
+  // organization through its authenticated publish API, never the server's home.
 
   const fetch = async function fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -294,9 +289,8 @@ async function handleApiV1(
     }
 
     if (request.method === "GET" && id && subresource === "skill.md") {
-      // Traversal defence for this route lives at the router boundary (segmentEscapesPath,
-      // #65) and inside the getServerSkillMd() fallback getMergedSkillMd() delegates to;
-      // no per-route slug assertion is re-applied here.
+      // The router rejects path escapes; document reads resolve only through the
+      // authenticated organization's store and never construct filesystem paths.
       const resolved = await resolvePublishedSkill(store, artifactStorage, principal, id);
       if (resolved.kind === "tombstone") {
         return json({ error: "skill was deleted", ...resolved.payload }, { status: 410 });

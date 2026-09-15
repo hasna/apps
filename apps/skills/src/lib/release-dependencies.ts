@@ -16,9 +16,17 @@ function scopes(key:string) {
  for(let i=0;i<parts.length;i++) names.push(parts[i]!.startsWith("@")?`${parts[i]}/${parts[++i]}`:parts[i]!);
  return names.map((_,i)=>names.slice(0,i+1).join("/")).reverse();
 }
-function lockedEdge(lock:Lock,parentKey:string|undefined,name:string) {
- for(const prefix of parentKey?scopes(parentKey):[]) { const key=`${prefix}/${name}`;if(lock.packages[key])return {key,tuple:lock.packages[key]!}; }
+type Context = Record<string,string|null>;
+function lockedEdge(lock:Lock,parentKey:string|undefined,context:Context,name:string,peer:boolean) {
+ for(const prefix of parentKey?scopes(parentKey):[]) {const key=`${prefix}/${name}`;if(lock.packages[key])return {key,tuple:lock.packages[key]!};}
+ if(peer&&name in context) {const key=context[name];return key&&lock.packages[key]?{key,tuple:lock.packages[key]!}:null;}
  return lock.packages[name]?{key:name,tuple:lock.packages[name]!}:null;
+}
+function dependencies(metadata:Fields) {
+ return Object.keys({...metadata.dependencies,...metadata.optionalDependencies,...metadata.peerDependencies}).map(name=>({
+  name,peer:name in (metadata.peerDependencies??{})&&!(name in (metadata.dependencies??{}))&&!(name in (metadata.optionalDependencies??{})),
+  optional:name in (metadata.optionalDependencies??{})||(metadata.optionalPeers??[]).includes(name),
+ }));
 }
 function installedPackage(parent:string,name:string) {
  insist(/^(@[a-z0-9._-]+\/)?[a-z0-9._-]+$/.test(name),"unsupported package name");
@@ -40,12 +48,26 @@ export function verifyProducerDependencies(packageRoot:string) {
  const manifest=JSON.parse(manifestBytes.toString()) as Manifest, lock=Bun.JSONC.parse(lockBytes.toString()) as Lock;
  insist(lock.lockfileVersion===1&&lock.workspaces[""]?.name===manifest.name&&Object.keys(lock.workspaces).length===1,"selected standalone lock authority");
  for(const field of ["dependencies","devDependencies","optionalDependencies","peerDependencies"] as const) insist(canonical(manifest[field])===canonical(lock.workspaces[""]![field]),`root ${field} mismatch`);
- const graphRoot=realpathSync(join(root,"node_modules")), queue:{parent:string;parentKey?:string;name:string;optional:boolean}[]=[];
- const nodes:{lockKey:string;name:string;version:string;manifestSha256:string;relativePath:string}[]=[], edges:{from:string;name:string;to:string|null;optionalAbsent?:boolean}[]=[];
+ // Peer installations inherit the importing package's effective bindings,
+ // not merely a global tuple key or an unbounded logical ancestry. Ordinary
+ // dependencies replace earlier bindings: a hoisted adapter's broad ordinary
+ // Zod dependency can use root Zod4 even beneath an importer that uses Zod3.
+ // Only peer names matter; each maps to one exact key (or absence) in this
+ // frozen lock. This finite, sorted context also makes cyclic walks stable.
+ const peerNames=new Set(Object.values(lock.packages).flatMap(tuple=>Object.keys(tuple[2]?.peerDependencies??{})));
+ const normalize=(context:Context):Context=>Object.fromEntries(Object.entries(context).sort(([a],[b])=>a.localeCompare(b)));
+ const inherited=(context:Context,key:string|undefined,name:string|undefined,metadata:Fields):Context=>{
+  const next={...context};if(key&&name&&peerNames.has(name))next[name]=key;
+  for(const edge of dependencies(metadata)) if(peerNames.has(edge.name))next[edge.name]=lockedEdge(lock,key,context,edge.name,edge.peer)?.key??null;
+  return normalize(next);
+ };
+ const initial=inherited({},undefined,undefined,{dependencies:{...manifest.dependencies,...manifest.devDependencies,...manifest.optionalDependencies,...manifest.peerDependencies}});
+ const graphRoot=realpathSync(join(root,"node_modules")), queue:{parent:string;parentKey?:string;context:Context;name:string;peer:boolean;optional:boolean}[]=[];
+ const nodes:{lockKey:string;name:string;version:string;manifestSha256:string;relativePath:string;context:Context}[]=[], edges:{from:string;name:string;to:string|null;optionalAbsent?:boolean}[]=[];
  const visited=new Set<string>();
- for(const [name] of Object.entries({...manifest.dependencies,...manifest.devDependencies,...manifest.optionalDependencies,...manifest.peerDependencies})) queue.push({parent:root,name,optional:name in (manifest.optionalDependencies??{})});
+ for(const [name] of Object.entries({...manifest.dependencies,...manifest.devDependencies,...manifest.optionalDependencies,...manifest.peerDependencies})) queue.push({parent:root,context:initial,name,peer:false,optional:name in (manifest.optionalDependencies??{})});
  while(queue.length) {
-  const edge=queue.shift()!, selected=lockedEdge(lock,edge.parentKey,edge.name), installed=installedPackage(edge.parent,edge.name);
+  const edge=queue.shift()!, selected=lockedEdge(lock,edge.parentKey,edge.context,edge.name,edge.peer), installed=installedPackage(edge.parent,edge.name);
   if(!installed) { insist(edge.optional,`missing required ${edge.name}`);edges.push({from:edge.parentKey??"root",name:edge.name,to:null,optionalAbsent:true});continue; }
   insist(selected,`unlocked installed ${edge.name}`);
   const at=selected.tuple[0].lastIndexOf("@"), name=selected.tuple[0].slice(0,at), version=selected.tuple[0].slice(at+1);
@@ -54,8 +76,9 @@ export function verifyProducerDependencies(packageRoot:string) {
   insist(value.name===name&&value.version===version,`${edge.name} resolved ${value.name}@${value.version}, lock requires ${name}@${version}`);
   insist(inside(graphRoot,installed.directory),`resolved ${edge.name} escapes selected dependency graph`);
   edges.push({from:edge.parentKey??"root",name:edge.name,to:selected.key});
-  const identity=`${selected.key}\0${installed.directory}`;if(visited.has(identity))continue;visited.add(identity);
-  nodes.push({lockKey:selected.key,name,version,manifestSha256:sha(installed.bytes),relativePath:relative(graphRoot,installed.directory)});
+  const context=inherited(edge.context,selected.key,name,selected.tuple[2]);
+  const identity=JSON.stringify([selected.key,installed.directory,context]);if(visited.has(identity))continue;visited.add(identity);
+  nodes.push({lockKey:selected.key,name,version,manifestSha256:sha(installed.bytes),relativePath:relative(graphRoot,installed.directory),context});
   const metadata=selected.tuple[2];
   // Only the package root's dev dependencies are build inputs. Nested dev
   // dependencies are not installed. Optional peer absence is explicit.
@@ -69,9 +92,8 @@ export function verifyProducerDependencies(packageRoot:string) {
    }
    insist(canonical(actual)===canonical(metadata[field]),`locked metadata differs for ${selected.key} ${field}`);
   }
-  const optionalPeers=new Set(metadata.optionalPeers??[]);
-  for(const [dependency] of Object.entries({...metadata.dependencies,...metadata.optionalDependencies,...metadata.peerDependencies})) queue.push({parent:installed.directory,parentKey:selected.key,name:dependency,optional:dependency in (metadata.optionalDependencies??{})||optionalPeers.has(dependency)});
+  for(const dependency of dependencies(metadata)) queue.push({parent:installed.directory,parentKey:selected.key,context,...dependency});
  }
- nodes.sort((a,b)=>a.lockKey.localeCompare(b.lockKey)||a.relativePath.localeCompare(b.relativePath));
+ nodes.sort((a,b)=>a.lockKey.localeCompare(b.lockKey)||a.relativePath.localeCompare(b.relativePath)||JSON.stringify(a.context).localeCompare(JSON.stringify(b.context)));
  return {status:"verified",package:{name:manifest.name,version:manifest.version},manifestSha256:sha(manifestBytes),lockSha256:sha(lockBytes),nodeCount:nodes.length,edgeCount:edges.length,nodes,edges};
 }

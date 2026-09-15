@@ -85,7 +85,7 @@
   "author": "Hasna",
   "license": "Apache-2.0",
   "devDependencies": {
-    "@hasna/contracts": "1.0.2",
+    "@hasna/contracts": "1.1.0",
     "@hasna/secrets": "0.4.2",
     "@types/bun": "1.3.14",
     "@types/node": "25.2.3",
