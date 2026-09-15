@@ -61,7 +61,13 @@ test("native discovery limits directory entry allocation even when files contain
 });
 
 test("native discovery bounds UTF-8 path metadata below the entry limit", () => {
-  const f = fixture(), directory = join(f.cache, ...Array(10).fill("é".repeat(100))); mkdirSync(directory, { recursive: true });
-  for (let i = 0; i < 2_100; i++) writeFileSync(join(directory, `asset-${i}`), "");
+  // Keep individual paths portable while distinguishing UTF-8 bytes from characters.
+  const f = fixture(), component = "é".repeat(100), directory = join(f.cache, component, component);
+  const fileCount = 9_000, prefix = "a".repeat(100);
+  expect(fileCount + 2).toBeLessThan(20_000);
+  expect(fileCount * Buffer.byteLength(`${component}/${component}/${prefix}0`)).toBeGreaterThan(4 * 1024 * 1024);
+  expect((fileCount + 2) * join(directory, `${prefix}${fileCount - 1}`).length).toBeLessThan(4 * 1024 * 1024);
+  mkdirSync(directory, { recursive: true });
+  for (let i = 0; i < fileCount; i++) writeFileSync(join(directory, `${prefix}${i}`), "");
   expect(() => inventoryNativeSkills(f.home, { includeVendor: true })).toThrow("metadata limit exceeded");
 });
