@@ -144,7 +144,7 @@ else { console.log(JSON.stringify({auth:!!process.env.ANTHROPIC_AUTH_TOKEN&&proc
     const result = await command(dir,args,poisoned);
     expect(result.code,result.stderr).toBe(7);
     expect(JSON.parse(result.stdout)).toEqual({auth:true,model:"fixture-pro",subagent:"fixture-pro",leaked:[]});
-    expect(requests).toBe(1);
+    expect(requests).toBe(2);
     const invocation = await Bun.file(join(dir,"vault-invoked.json")).json();
     await expect(fetch(invocation.deliveryAddress)).rejects.toThrow();
     expect(result.stdout+result.stderr).not.toContain("fixture-provider-key");
@@ -160,7 +160,7 @@ else { console.log(JSON.stringify({auth:!!process.env.ANTHROPIC_AUTH_TOKEN&&proc
     expect(JSON.parse(check.stdout)).toMatchObject({available:true,length:12,sha256:"a".repeat(64),providerAuthentication:"not tested"});
     const missing = await command(dir,args,{SWITCHER_PROVIDER_FIXTURE:"fixture-fallback"});
     expect(missing.code).toBe(1); expect(JSON.parse(missing.stderr).error.code).toBe("vault_operator_missing");
-    expect(requests).toBe(1);
+    expect(requests).toBe(2);
   } finally { await upstream.stop(true); await rm(dir,{recursive:true,force:true}); }
 },30_000);
 

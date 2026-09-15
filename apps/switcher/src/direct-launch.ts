@@ -23,9 +23,9 @@ export async function resolveLaunchProvider(client: SwitcherClient, selector: st
   const {version, updatedAt, ...input} = existing;
   // Additive model metadata belongs to the saved provider. A preset gaining a
   // preview must not invalidate an existing provider or replace its additions.
-  const {additionalModels: _savedAdditions, ...savedSettings} = parse(providerInputSchema, input);
-  const {additionalModels: _presetAdditions, ...presetSettings} = desired;
-  if (JSON.stringify(savedSettings) !== JSON.stringify(presetSettings))
+  const {additionalModels: _savedAdditions, credentialCheck:savedCredentialCheck, ...savedSettings} = parse(providerInputSchema, input);
+  const {additionalModels: _presetAdditions, credentialCheck:presetCredentialCheck, ...presetSettings} = desired;
+  if (JSON.stringify(savedSettings) !== JSON.stringify(presetSettings) || (savedCredentialCheck !== undefined && JSON.stringify(savedCredentialCheck) !== JSON.stringify(presetCredentialCheck)))
     throw new Fault(409, "provider_conflict", "A saved provider with this preset ID has different settings. Select its ID directly or update it explicitly.");
   return existing;
 }

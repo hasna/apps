@@ -5,7 +5,7 @@ export { modelPolicySchema, routingEventSchema, routingEventsSchema } from "./mo
 export type { ModelPolicy, RoutingEvent } from "./model-policy-schema";
 export type { AuthStyle } from "./auth";
 
-export const VERSION = "0.2.1";
+export const VERSION = "0.2.2";
 export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode", "opencode2", "pi", "omp", "dsh", "cline", "hermes", "prime-agent", "gemini", "aider", "kilo"]);
 export const protocolSchema = z.enum(["anthropic-messages", "openai-responses", "openai-chat", "gemini-generate-content"]);
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
@@ -22,6 +22,9 @@ export function endpoint(value: string): string {
 const urlSchema = z.string().max(2000).superRefine((v, ctx) => {
   try { endpoint(v); } catch { ctx.addIssue({code: "custom", message: "Invalid endpoint URL"}); }
 }).transform(endpoint);
+const credentialCheckPath = z.string().min(1).max(200).regex(/^[a-zA-Z0-9_~!$&'()*+,;=:@%./-]+$/)
+  .refine(value => !value.startsWith("/") && !value.split("/").some(part => part === "." || part === ".."), "credentialCheck.path must be relative without dot segments");
+export const credentialCheckSchema = z.object({method:z.enum(["GET","HEAD"]).default("GET"),path:credentialCheckPath}).strict();
 export const expiresOnSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
   const day = new Date(`${value}T00:00:00.000Z`);
   return Number.isFinite(day.getTime()) && day.toISOString().slice(0, 10) === value;
@@ -41,6 +44,7 @@ export const providerInputSchema = z.object({
   id: idSchema, name: label, baseUrl: urlSchema, protocol: protocolSchema,
   credentialEnv: envRef.optional(),
   authStyle: z.enum(["bearer", "x-api-key", "api-key"]).default("bearer"),
+  credentialCheck: credentialCheckSchema.optional(),
   catalogBaseUrl: urlSchema.optional(),
   catalogFormat: z.enum(["openai", "ollama", "mistral", "together", "fireworks", "dashscope", "gemini", "none"]).optional(),
   catalogAuthStyle: z.enum(["bearer", "x-api-key", "api-key", "none"]).optional(),
@@ -56,6 +60,7 @@ export const providerPresetSchema = z.object({
   protocols: z.array(z.object({
     protocol: protocolSchema, baseUrl: urlSchema.optional(),
     authStyle: z.enum(["bearer", "x-api-key", "api-key"]),
+    credentialCheck: credentialCheckSchema.optional(),
     catalogBaseUrl: urlSchema.optional(), catalogFormat: z.enum(["openai", "ollama", "mistral", "together", "fireworks", "dashscope", "gemini", "none"]),
     catalogAuthStyle: z.enum(["bearer", "x-api-key", "api-key", "none"]).optional(),
     modelsPath: z.string(), notes: z.array(z.string()),

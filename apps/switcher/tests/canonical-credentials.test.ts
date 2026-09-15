@@ -172,7 +172,7 @@ console.log('CANONICAL_LAUNCH_OK');
     expect(result.code,result.stderr).toBe(0); expect(result.stdout).toContain("CANONICAL_LAUNCH_OK");
     expect(result.stdout+result.stderr).not.toContain("fixture-vault-operator");
     expect(result.stdout+result.stderr).not.toContain("fixture-provider-from-vault");
-    expect(requests).toBe(1);
+    expect(requests).toBe(2);
     const runs=await command(["runs","list"]);
     expect(runs.code,runs.stderr).toBe(0); expect(JSON.parse(runs.stdout).data[0]).toMatchObject({status:"exited",exitCode:0});
   } finally {await upstream.stop(true);}

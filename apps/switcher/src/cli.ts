@@ -8,7 +8,7 @@ import { launch, validateOriForPlan, type LaunchBackend } from "./launcher";
 import { openCliRuntime } from "./runtime";
 import { providerFromPreset, type PresetOptions } from "./presets";
 import { resolveLaunchProvider, selectModel, ensureLaunchProfile } from "./direct-launch";
-import { CredentialResolver, bindingTarget, credentialReference, credentialBindingSchema, deliverVaultCredential, repairVaultExecutablePermissions } from "./credentials";
+import { CredentialResolver, bindingTarget, credentialReference, credentialBindingSchema, deliverVaultCredential, ensureProviderCredential, repairVaultExecutablePermissions } from "./credentials";
 import { detectChatGPTApp, detectClaudeDesktopApp } from "./desktop-apps";
 import { reasoningEffortSchema, codexReasoning } from "./reasoning";
 const HELP = `switcher — launch coding harnesses and desktop apps with your provider and model
@@ -71,6 +71,12 @@ Use --catalog-format none for a manual catalog; otherwise discovery stays active
 models update replaces saved metadata; omit expiry in its JSON to clear it.
 models remove removes saved metadata, not entries in an upstream catalog.
 Credential bindings contain references only. Custom destinations require --origin URL.
+Before a real launch, Switcher resolves and authenticates the provider credential
+before catalog refresh or an interactive model picker. When no source exists in
+an interactive terminal, it searches Hasna Secrets metadata, displays the selected
+Secrets account/source and matching key references, and requires a selection.
+Noninteractive launches return credential_setup_required with exact binding syntax.
+Dry-runs do not discover, bind, resolve, or authenticate an inference credential.
 Vault bindings use the installed secrets CLI and its canonical Contracts URL/key
 by default. --vault-account pins a Keychain account; --vault-operator env requires
 per-process HASNA_SECRETS_API_KEY. Explicit operators also require --vault-url.
@@ -247,11 +253,14 @@ export async function main(args = process.argv.slice(2)) {
     const timeoutMs = values.timeout ? Number(values.timeout) * 1000 : undefined;
     if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) throw new Error("--timeout must be positive seconds.");
     let profileId = action;
+    let credentialPreflight: string | undefined;
+    let resolvePreparedCredential: ((provider: Parameters<CredentialResolver["resolve"]>[0])=>Promise<string|undefined>) | undefined;
     if (values.provider) {
       const harness = parse(harnessSchema, chatgpt ? "codex" : claudeDesktop ? "claude" : action);
       const modelPolicy = await readModelPolicy(values["model-policy-file"], values["role-model"]);
       const provider = await resolveLaunchProvider(client, values.provider, {...presetOptions(), harness});
       validateHarnessProvider(harness, provider);
+      if (!values["dry-run"]) { const prepared=await ensureProviderCredential(provider,{resolver:credentials});credentialPreflight=prepared.providerFingerprint;resolvePreparedCredential=prepared.resolveCredential; }
       const catalog = await client.refreshModels(provider.id);
       const model = values.model ?? await selectModel(catalog.models, values.search,harness);
       const selected = catalog.models.find(m => m.id === model);
@@ -264,9 +273,11 @@ export async function main(args = process.argv.slice(2)) {
       if (values.model || values.protocol || values.url || values["credential-env"] || values["model-policy-file"] || values["role-model"])
         throw new Error("Use --provider PROVIDER for a direct launch, or update the saved profile explicitly.");
       const profile = await client.getProfile(profileId);
-      if (profile.harness === "gemini") validateHarnessProvider(profile.harness, await client.getProvider(profile.providerId));
       assertHarnessArguments(profile.harness,nativeArgs);
       await validateHarnessConfiguration(profile.harness,values.cwd??process.cwd(),nativeArgs);
+      const provider = await client.getProvider(profile.providerId);
+      if (profile.harness === "gemini") validateHarnessProvider(profile.harness, provider);
+      if (!values["dry-run"]) { const prepared=await ensureProviderCredential(provider,{resolver:credentials});credentialPreflight=prepared.providerFingerprint;resolvePreparedCredential=prepared.resolveCredential; }
       await client.refreshModels(profile.providerId);
     }
     if (values["dry-run"]) {
@@ -280,7 +291,7 @@ export async function main(args = process.argv.slice(2)) {
       } else output({...plan,...(desktop?{desktop:{...desktop,mode:"isolated-provider",sessionProfile:profileId}}:{}),...(claudeApp?{desktop:{...claudeApp,mode:"claude-3p-gateway",sessionProfile:profileId}}:{}),...(reasoning?{reasoning}:{}),...(dangerouslyBypassApprovalsAndSandbox?{permissions:{approvalPolicy:"never",sandboxMode:"danger-full-access"}}:{})});
       return;
     }
-    process.exitCode = await launch(client, profileId, {desktop, claudeDesktop:claudeApp, reasoning,dangerouslyBypassApprovalsAndSandbox,backend: backend as LaunchBackend, oriExecutable: values["ori-executable"], cwd: values.cwd, executable: values.executable, stateDir: values["state-dir"], args: nativeArgs, timeoutMs, refresh: false, resolveCredential: provider=>credentials.resolve(provider)});
+    process.exitCode = await launch(client, profileId, {desktop, claudeDesktop:claudeApp, reasoning,dangerouslyBypassApprovalsAndSandbox,backend: backend as LaunchBackend, oriExecutable: values["ori-executable"], cwd: values.cwd, executable: values.executable, stateDir: values["state-dir"], args: nativeArgs, timeoutMs, refresh: false, credentialPreflight, resolveCredential: resolvePreparedCredential??(provider=>credentials.resolve(provider))});
     return;
   }
   if (editingModel) {
