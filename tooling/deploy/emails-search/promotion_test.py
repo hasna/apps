@@ -50,6 +50,32 @@ class PromotionControls(unittest.TestCase):
    b=copy.deepcopy(s);b[key]=value
    with self.assertRaises(ValueError):m.service_binding(b)
 
+class CompletionControls(unittest.TestCase):
+ def service(self, state="COMPLETED"):
+  return {"serviceName":m.SERVICE,"status":"ACTIVE","desiredCount":1,"runningCount":1,"pendingCount":0,"taskDefinition":"reviewed","deployments":[{"status":"PRIMARY","taskDefinition":"reviewed","rolloutState":state}]}
+ def test_running_counts_do_not_finish_before_rollout_completion(self):
+  pending=self.service("IN_PROGRESS");ready=self.service()
+  with patch.object(m,"current_service",side_effect=[pending,ready]) as reads,patch.object(m.time,"sleep") as sleep,patch.object(m,"aws",side_effect=AssertionError("NO_MUTATION")):
+   self.assertEqual(m.wait_for_service("reviewed",1),ready)
+   self.assertEqual(reads.call_count,2);sleep.assert_called_once()
+ def test_changed_task_or_scale_is_terminal_without_wait(self):
+  for key,value in [("taskDefinition","foreign"),("desiredCount",2)]:
+   with patch.object(m,"current_service",return_value={**self.service("IN_PROGRESS"),key:value}) as reads,patch.object(m.time,"sleep") as sleep:
+    with self.assertRaisesRegex(ValueError,"^LIVE_SERVICE_DRIFT$"):m.wait_for_service("reviewed",1)
+    self.assertEqual(reads.call_count,1);sleep.assert_not_called()
+ def test_failed_rollout_is_terminal_without_wait(self):
+  with patch.object(m,"current_service",return_value=self.service("FAILED")),patch.object(m.time,"sleep") as sleep:
+   with self.assertRaisesRegex(ValueError,"^DEPLOYMENT_FAILED$"):m.wait_for_service("reviewed",1)
+   sleep.assert_not_called()
+ def test_completion_wait_has_a_deadline(self):
+  with patch.object(m,"current_service",return_value=self.service("IN_PROGRESS")) as reads,patch.object(m.time,"monotonic",side_effect=[0,0,2]),patch.object(m.time,"sleep") as sleep:
+   with self.assertRaisesRegex(ValueError,"^DEPLOYMENT_COMPLETION_TIMEOUT$"):m.wait_for_service("reviewed",1,timeout=1)
+   self.assertEqual(reads.call_count,2);sleep.assert_called_once_with(1)
+ def test_api_read_failure_is_terminal_without_retry(self):
+  with patch.object(m,"current_service",side_effect=ValueError("SERVICE_UNAVAILABLE")) as reads,patch.object(m.time,"sleep") as sleep:
+   with self.assertRaisesRegex(ValueError,"^SERVICE_UNAVAILABLE$"):m.wait_for_service("reviewed",1)
+   self.assertEqual(reads.call_count,1);sleep.assert_not_called()
+
 class AdditionalControls(unittest.TestCase):
  def setUp(self):
   sp=importlib.util.spec_from_file_location("strict",pathlib.Path(__file__).with_name("strict_patch.py"));self.strict=importlib.util.module_from_spec(sp);sp.loader.exec_module(self.strict)
@@ -114,7 +140,8 @@ class FakeCloud:
   if kind==("ecs","describe-services"):
    self.service_reads+=1
    arn="foreign" if self.mode=="service_drift" and self.service_reads>=2 else self.current
-   return {"services":[{"serviceName":m.SERVICE,"status":"ACTIVE","desiredCount":1,"runningCount":1,"pendingCount":0,"taskDefinition":arn,"deployments":[{"status":"PRIMARY","taskDefinition":arn,"rolloutState":"COMPLETED"}]}]}
+   state="IN_PROGRESS" if self.mode=="late_completion" and self.current==self.new and self.service_reads==3 else "COMPLETED"
+   return {"services":[{"serviceName":m.SERVICE,"status":"ACTIVE","desiredCount":1,"runningCount":1,"pendingCount":0,"taskDefinition":arn,"deployments":[{"status":"PRIMARY","taskDefinition":arn,"rolloutState":state}]}]}
   if kind==("ecs","describe-task-definition"):
    arn=args[args.index("--task-definition")+1];row=copy.deepcopy(self.before if arn==self.old else self.registered)
    if arn!=self.old and self.mode in {"registered_drift","foreign_rollback"}:row["memory"]="4096"
@@ -164,6 +191,12 @@ class OrchestrationControls(unittest.TestCase):
   cloud,error,receipts=self.execute(tags=tags);self.assertIsNone(error)
   self.assertEqual(cloud.mutations("register-task-definition")[0]["body"],cloud.candidate)
   self.assertEqual(cloud.candidate["tags"],tags);self.assertIn("promoted.json",receipts)
+ def test_delayed_completion_does_not_repeat_registration_or_update(self):
+  with patch.object(m.time,"sleep") as sleep:
+   cloud,error,receipts=self.execute("late_completion")
+  self.assertIsNone(error);sleep.assert_called_once()
+  self.assertEqual(len(cloud.mutations("register-task-definition")),1);self.assertEqual(len(cloud.mutations("update-service")),1)
+  self.assertIn("promoted.json",receipts);self.assertNotIn("reconciliation-required.json",receipts)
  def test_tag_readback_drift_prevents_service_update(self):
   cloud,error,receipts=self.execute("registered_tag_drift",tags=[{"key":"owner","value":"fixture"}])
   self.assertEqual(str(error),"REGISTERED_TASK_DRIFT");self.assertEqual(cloud.mutations("update-service"),[])

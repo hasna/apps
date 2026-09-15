@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 import tarfile
 import time
 import urllib.parse
@@ -278,6 +279,24 @@ def current_service():
     return result["services"][0]
 
 
+def wait_for_service(task_definition, desired_count, timeout=1200, interval=15):
+    """Wait for our stronger completion contract without repeating any write."""
+    deadline = time.monotonic() + timeout
+    while True:
+        service = current_service()
+        require(service.get("taskDefinition") == task_definition and service.get("desiredCount") == desired_count, "LIVE_SERVICE_DRIFT")
+        require(not any(row.get("rolloutState") == "FAILED" for row in service.get("deployments", [])), "DEPLOYMENT_FAILED")
+        try:
+            service_binding(service)
+            return service
+        except ValueError as error:
+            if str(error) not in {"SERVICE_NOT_STABLE", "DEPLOYMENT_NOT_STABLE"}:
+                raise
+        remaining = deadline - time.monotonic()
+        require(remaining > 0, "DEPLOYMENT_COMPLETION_TIMEOUT")
+        time.sleep(min(interval, remaining))
+
+
 def task_read(arn):
     result = aws("ecs", "describe-task-definition", "--task-definition", arn, "--include", "TAGS")
     return {**result["taskDefinition"], "tags": result.get("tags", [])}
@@ -367,8 +386,7 @@ def promote(source, out, prepared, expected_hash):
     # window remains required; do not overwrite a concurrently changed service.
     aws("ecs", "update-service", "--cluster", CLUSTER, "--service", SERVICE, "--task-definition", new_arn)
     try:
-        aws("ecs", "wait", "services-stable", "--cluster", CLUSTER, "--services", SERVICE, timeout=1200)
-        live = current_service()
+        live = wait_for_service(new_arn, plan["desiredCount"])
         require(service_binding(live) == new_arn and live["desiredCount"] == plan["desiredCount"], "LIVE_SERVICE_DRIFT")
         tasks = aws("ecs", "list-tasks", "--cluster", CLUSTER, "--service-name", SERVICE, "--desired-status", "RUNNING")["taskArns"]
         require(len(tasks) == plan["desiredCount"] and len(tasks) <= 100, "LIVE_TASK_COUNT")
@@ -403,8 +421,7 @@ def rollback(source, out, prepared, expected_hash):
     require(fresh.get("taskDefinition") == current and fresh.get("desiredCount") == plan["desiredCount"], "ROLLBACK_PRE_UPDATE_DRIFT")
     save(out / "rollback-intent.json", {"preparedSha256": expected_hash, "from": current, "to": before_arn})
     aws("ecs", "update-service", "--cluster", CLUSTER, "--service", SERVICE, "--task-definition", before_arn)
-    aws("ecs", "wait", "services-stable", "--cluster", CLUSTER, "--services", SERVICE, timeout=1200)
-    live = current_service()
+    live = wait_for_service(before_arn, plan["desiredCount"])
     require(service_binding(live) == before_arn and live["desiredCount"] == plan["desiredCount"], "ROLLBACK_LIVE_DRIFT")
     save(out / "rolled-back.json", {"preparedSha256": expected_hash, "taskBefore": current, "taskAfter": before_arn, "newRegistrations": 0, "deregisteredTasks": 0})
 
