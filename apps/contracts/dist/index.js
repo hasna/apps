@@ -17,7 +17,7 @@ var __export = (target, all) => {
 // src/todos/common.ts
 import { createHash } from "crypto";
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/core.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/core.js
 var NEVER = Object.freeze({
   status: "aborted"
 });
@@ -77,7 +77,7 @@ function config(newConfig) {
     Object.assign(globalConfig, newConfig);
   return globalConfig;
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/util.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/util.js
 var exports_util = {};
 __export(exports_util, {
   unwrapMessage: () => unwrapMessage,
@@ -591,7 +591,7 @@ class Class {
   constructor(..._args) {}
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/errors.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/errors.js
 var initializer = (inst, def) => {
   inst.name = "$ZodError";
   Object.defineProperty(inst, "_zod", {
@@ -665,7 +665,7 @@ function formatError(error, _mapper) {
   return fieldErrors;
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/parse.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/parse.js
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
   const ctx = _ctx ? Object.assign(_ctx, { async: false }) : { async: false };
   const result = schema._zod.run({ value, issues: [] }, ctx);
@@ -714,7 +714,7 @@ var _safeParseAsync = (_Err) => async (schema, value, _ctx) => {
   } : { success: true, data: result.value };
 };
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync($ZodRealError);
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/regexes.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/regexes.js
 var cuid = /^[cC][^\s-]{8,}$/;
 var cuid2 = /^[0-9a-z]+$/;
 var ulid = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/;
@@ -772,7 +772,7 @@ var _null = /null/i;
 var lowercase = /^[^A-Z]*$/;
 var uppercase = /^[^a-z]*$/;
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/checks.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
   var _a;
   inst._zod ?? (inst._zod = {});
@@ -1156,7 +1156,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
   };
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/doc.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/doc.js
 class Doc {
   constructor(args = []) {
     this.content = [];
@@ -1194,14 +1194,14 @@ class Doc {
   }
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/versions.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 0,
   patch: 0
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/schemas.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
   var _a;
   inst ?? (inst = {});
@@ -2275,7 +2275,7 @@ function handleRefineResult(result, payload, input, inst) {
     payload.issues.push(issue(_iss));
   }
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/locales/en.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/locales/en.js
 var parsedType = (data) => {
   const t = typeof data;
   switch (t) {
@@ -2392,7 +2392,7 @@ function en_default() {
     localeError: error()
   };
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/registries.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/registries.js
 var $output = Symbol("ZodOutput");
 var $input = Symbol("ZodInput");
 
@@ -2442,7 +2442,7 @@ function registry() {
   return new $ZodRegistry;
 }
 var globalRegistry = /* @__PURE__ */ registry();
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/api.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/core/api.js
 function _string(Class2, params) {
   return new Class2({
     type: "string",
@@ -2866,7 +2866,7 @@ function _refine(Class2, fn, _params) {
   });
   return schema;
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/iso.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/iso.js
 var exports_iso = {};
 __export(exports_iso, {
   time: () => time2,
@@ -2907,7 +2907,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/errors.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/errors.js
 var initializer2 = (inst, issues) => {
   $ZodError.init(inst, issues);
   inst.name = "ZodError";
@@ -2936,13 +2936,13 @@ var ZodRealError = $constructor("ZodError", initializer2, {
   Parent: Error
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/parse.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/parse.js
 var parse2 = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError);
 var safeParseAsync2 = /* @__PURE__ */ _safeParseAsync(ZodRealError);
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/schemas.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/schemas.js
 var ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
   $ZodType.init(inst, def);
   inst.def = def;
@@ -3504,7 +3504,7 @@ function superRefine(fn) {
   });
   return ch;
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/external.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v4/classic/external.js
 config(en_default());
 
 // src/todos/common.ts
@@ -3576,7 +3576,7 @@ function sha256TodosText(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/external.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/external.js
 var exports_external = {};
 __export(exports_external, {
   void: () => voidType,
@@ -3688,7 +3688,7 @@ __export(exports_external, {
   BRAND: () => BRAND
 });
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/util.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/util.js
 var util;
 (function(util2) {
   util2.assertEqual = (_) => {};
@@ -3819,7 +3819,7 @@ var getParsedType2 = (data) => {
   }
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/ZodError.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/ZodError.js
 var ZodIssueCode = util.arrayToEnum([
   "invalid_type",
   "invalid_literal",
@@ -3938,7 +3938,7 @@ ZodError2.create = (issues) => {
   return error2;
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/locales/en.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/locales/en.js
 var errorMap = (issue2, _ctx) => {
   let message;
   switch (issue2.code) {
@@ -4041,7 +4041,7 @@ var errorMap = (issue2, _ctx) => {
 };
 var en_default2 = errorMap;
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/errors.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/errors.js
 var overrideErrorMap = en_default2;
 function setErrorMap(map) {
   overrideErrorMap = map;
@@ -4049,7 +4049,7 @@ function setErrorMap(map) {
 function getErrorMap() {
   return overrideErrorMap;
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
   const { data, path, errorMaps, issueData } = params;
   const fullPath = [...path, ...issueData.path || []];
@@ -4155,14 +4155,14 @@ var isAborted = (x) => x.status === "aborted";
 var isDirty = (x) => x.status === "dirty";
 var isValid = (x) => x.status === "valid";
 var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/errorUtil.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
 (function(errorUtil2) {
   errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
   errorUtil2.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil || (errorUtil = {}));
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod@3.25.76/node_modules/zod/v3/types.js
+// ../../node_modules/.bun/zod@3.25.76/node_modules/zod/v3/types.js
 class ParseInputLazyPath {
   constructor(parent, value, path, key) {
     this._cachedPath = [];
@@ -14218,7 +14218,7 @@ function parseEmbeddedContract(value) {
   return result.data;
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/Options.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/Options.js
 var ignoreOverride = Symbol("Let zodToJsonSchema decide on which parser to use");
 var defaultOptions = {
   name: undefined,
@@ -14251,7 +14251,7 @@ var getDefaultOptions = (options) => typeof options === "string" ? {
   ...defaultOptions,
   ...options
 };
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/Refs.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/Refs.js
 var getRefs = (options) => {
   const _options = getDefaultOptions(options);
   const currentPath = _options.name !== undefined ? [..._options.basePath, _options.definitionPath, _options.name] : _options.basePath;
@@ -14270,7 +14270,7 @@ var getRefs = (options) => {
     ]))
   };
 };
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/errorMessages.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/errorMessages.js
 function addErrorMessage(res, key, errorMessage, refs) {
   if (!refs?.errorMessages)
     return;
@@ -14285,7 +14285,7 @@ function setResponseValueAndErrors(res, key, value, errorMessage, refs) {
   res[key] = value;
   addErrorMessage(res, key, errorMessage, refs);
 }
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/getRelativePath.js
 var getRelativePath = (pathA, pathB) => {
   let i = 0;
   for (;i < pathA.length && i < pathB.length; i++) {
@@ -14294,7 +14294,7 @@ var getRelativePath = (pathA, pathB) => {
   }
   return [(pathA.length - i).toString(), ...pathB.slice(i)].join("/");
 };
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/any.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/any.js
 function parseAnyDef(refs) {
   if (refs.target !== "openAi") {
     return {};
@@ -14310,7 +14310,7 @@ function parseAnyDef(refs) {
   };
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/array.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/array.js
 function parseArrayDef(def, refs) {
   const res = {
     type: "array"
@@ -14334,7 +14334,7 @@ function parseArrayDef(def, refs) {
   return res;
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/bigint.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/bigint.js
 function parseBigintDef(def, refs) {
   const res = {
     type: "integer",
@@ -14380,24 +14380,24 @@ function parseBigintDef(def, refs) {
   return res;
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/boolean.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/boolean.js
 function parseBooleanDef() {
   return {
     type: "boolean"
   };
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/branded.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/branded.js
 function parseBrandedDef(_def, refs) {
   return parseDef(_def.type._def, refs);
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/catch.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/catch.js
 var parseCatchDef = (def, refs) => {
   return parseDef(def.innerType._def, refs);
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/date.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/date.js
 function parseDateDef(def, refs, overrideDateStrategy) {
   const strategy = overrideDateStrategy ?? refs.dateStrategy;
   if (Array.isArray(strategy)) {
@@ -14442,7 +14442,7 @@ var integerDateParser = (def, refs) => {
   return res;
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/default.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/default.js
 function parseDefaultDef(_def, refs) {
   return {
     ...parseDef(_def.innerType._def, refs),
@@ -14450,12 +14450,12 @@ function parseDefaultDef(_def, refs) {
   };
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/effects.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/effects.js
 function parseEffectsDef(_def, refs) {
   return refs.effectStrategy === "input" ? parseDef(_def.schema._def, refs) : parseAnyDef(refs);
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/enum.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/enum.js
 function parseEnumDef(def) {
   return {
     type: "string",
@@ -14463,7 +14463,7 @@ function parseEnumDef(def) {
   };
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/intersection.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/intersection.js
 var isJsonSchema7AllOfType = (type) => {
   if ("type" in type && type.type === "string")
     return false;
@@ -14505,7 +14505,7 @@ function parseIntersectionDef(def, refs) {
   } : undefined;
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/literal.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/literal.js
 function parseLiteralDef(def, refs) {
   const parsedType2 = typeof def.value;
   if (parsedType2 !== "bigint" && parsedType2 !== "number" && parsedType2 !== "boolean" && parsedType2 !== "string") {
@@ -14525,7 +14525,7 @@ function parseLiteralDef(def, refs) {
   };
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/string.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/string.js
 var emojiRegex2 = undefined;
 var zodPatterns = {
   cuid: /^[cC][^\s-]{8,}$/,
@@ -14822,7 +14822,7 @@ function stringifyRegExpWithFlags(regex, refs) {
   return pattern;
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/record.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/record.js
 function parseRecordDef(def, refs) {
   if (refs.target === "openAi") {
     console.warn("Warning: OpenAI may not support records in schemas! Try an array of key-value pairs instead.");
@@ -14874,7 +14874,7 @@ function parseRecordDef(def, refs) {
   return schema;
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/map.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/map.js
 function parseMapDef(def, refs) {
   if (refs.mapStrategy === "record") {
     return parseRecordDef(def, refs);
@@ -14899,7 +14899,7 @@ function parseMapDef(def, refs) {
   };
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/nativeEnum.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/nativeEnum.js
 function parseNativeEnumDef(def) {
   const object = def.values;
   const actualKeys = Object.keys(def.values).filter((key) => {
@@ -14913,7 +14913,7 @@ function parseNativeEnumDef(def) {
   };
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/never.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/never.js
 function parseNeverDef(refs) {
   return refs.target === "openAi" ? undefined : {
     not: parseAnyDef({
@@ -14923,7 +14923,7 @@ function parseNeverDef(refs) {
   };
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/null.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/null.js
 function parseNullDef(refs) {
   return refs.target === "openApi3" ? {
     enum: ["null"],
@@ -14933,7 +14933,7 @@ function parseNullDef(refs) {
   };
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/union.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/union.js
 var primitiveMappings = {
   ZodString: "string",
   ZodNumber: "number",
@@ -15001,7 +15001,7 @@ var asAnyOf = (def, refs) => {
   return anyOf.length ? { anyOf } : undefined;
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/nullable.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/nullable.js
 function parseNullableDef(def, refs) {
   if (["ZodString", "ZodNumber", "ZodBigInt", "ZodBoolean", "ZodNull"].includes(def.innerType._def.typeName) && (!def.innerType._def.checks || !def.innerType._def.checks.length)) {
     if (refs.target === "openApi3") {
@@ -15033,7 +15033,7 @@ function parseNullableDef(def, refs) {
   return base && { anyOf: [base, { type: "null" }] };
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/number.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/number.js
 function parseNumberDef(def, refs) {
   const res = {
     type: "number"
@@ -15082,7 +15082,7 @@ function parseNumberDef(def, refs) {
   return res;
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/object.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/object.js
 function parseObjectDef(def, refs) {
   const forceOptionalIntoNullable = refs.target === "openAi";
   const result = {
@@ -15152,7 +15152,7 @@ function safeIsOptional(schema) {
   }
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/optional.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/optional.js
 var parseOptionalDef = (def, refs) => {
   if (refs.currentPath.toString() === refs.propertyPath?.toString()) {
     return parseDef(def.innerType._def, refs);
@@ -15171,7 +15171,7 @@ var parseOptionalDef = (def, refs) => {
   } : parseAnyDef(refs);
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/pipeline.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/pipeline.js
 var parsePipelineDef = (def, refs) => {
   if (refs.pipeStrategy === "input") {
     return parseDef(def.in._def, refs);
@@ -15191,12 +15191,12 @@ var parsePipelineDef = (def, refs) => {
   };
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/promise.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/promise.js
 function parsePromiseDef(def, refs) {
   return parseDef(def.type._def, refs);
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/set.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/set.js
 function parseSetDef(def, refs) {
   const items = parseDef(def.valueType._def, {
     ...refs,
@@ -15216,7 +15216,7 @@ function parseSetDef(def, refs) {
   return schema;
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/tuple.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/tuple.js
 function parseTupleDef(def, refs) {
   if (def.rest) {
     return {
@@ -15244,24 +15244,24 @@ function parseTupleDef(def, refs) {
   }
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/undefined.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/undefined.js
 function parseUndefinedDef(refs) {
   return {
     not: parseAnyDef(refs)
   };
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/unknown.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/unknown.js
 function parseUnknownDef(refs) {
   return parseAnyDef(refs);
 }
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/readonly.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parsers/readonly.js
 var parseReadonlyDef = (def, refs) => {
   return parseDef(def.innerType._def, refs);
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/selectParser.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/selectParser.js
 var selectParser = (def, typeName, refs) => {
   switch (typeName) {
     case ZodFirstPartyTypeKind.ZodString:
@@ -15339,7 +15339,7 @@ var selectParser = (def, typeName, refs) => {
   }
 };
 
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parseDef.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/parseDef.js
 function parseDef(def, refs, forceResolution = false) {
   const seenItem = refs.seen.get(def);
   if (refs.override) {
@@ -15394,7 +15394,7 @@ var addMeta = (def, refs, jsonSchema) => {
   }
   return jsonSchema;
 };
-// ../../../../../clones/hasna/apps/node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/zodToJsonSchema.js
+// ../../node_modules/.bun/zod-to-json-schema@3.25.2+27912429049419a2/node_modules/zod-to-json-schema/dist/esm/zodToJsonSchema.js
 var zodToJsonSchema = (schema, options) => {
   const refs = getRefs(options);
   let definitions = typeof options === "object" && options.definitions ? Object.entries(options.definitions).reduce((acc, [name2, schema2]) => ({
@@ -21361,9 +21361,1020 @@ import { isIP } from "net";
 import { spawnSync } from "child_process";
 import { closeSync, fstatSync, openSync, readFileSync as readFileSync6 } from "fs";
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "constants";
-import { createRequire } from "module";
 import { hostname as osHostname } from "os";
 import { isAbsolute, join as join7 } from "path";
+
+// ../../node_modules/.bun/import-meta-resolve@4.2.0/node_modules/import-meta-resolve/lib/resolve.js
+import assert3 from "assert";
+import { statSync as statSync4, realpathSync } from "fs";
+import process2 from "process";
+import { fileURLToPath as fileURLToPath4, pathToFileURL } from "url";
+import path2 from "path";
+import { builtinModules } from "module";
+
+// ../../node_modules/.bun/import-meta-resolve@4.2.0/node_modules/import-meta-resolve/lib/get-format.js
+import { fileURLToPath as fileURLToPath3 } from "url";
+
+// ../../node_modules/.bun/import-meta-resolve@4.2.0/node_modules/import-meta-resolve/lib/package-json-reader.js
+import fs from "fs";
+import path from "path";
+import { fileURLToPath as fileURLToPath2 } from "url";
+
+// ../../node_modules/.bun/import-meta-resolve@4.2.0/node_modules/import-meta-resolve/lib/errors.js
+import v8 from "v8";
+import assert2 from "assert";
+import { format, inspect } from "util";
+var own = {}.hasOwnProperty;
+var classRegExp = /^([A-Z][a-z\d]*)+$/;
+var kTypes = new Set([
+  "string",
+  "function",
+  "number",
+  "object",
+  "Function",
+  "Object",
+  "boolean",
+  "bigint",
+  "symbol"
+]);
+var codes = {};
+function formatList(array3, type = "and") {
+  return array3.length < 3 ? array3.join(` ${type} `) : `${array3.slice(0, -1).join(", ")}, ${type} ${array3[array3.length - 1]}`;
+}
+var messages = new Map;
+var nodeInternalPrefix = "__node_internal_";
+var userStackTraceLimit;
+codes.ERR_INVALID_ARG_TYPE = createError("ERR_INVALID_ARG_TYPE", (name, expected, actual) => {
+  assert2.ok(typeof name === "string", "'name' must be a string");
+  if (!Array.isArray(expected)) {
+    expected = [expected];
+  }
+  let message = "The ";
+  if (name.endsWith(" argument")) {
+    message += `${name} `;
+  } else {
+    const type = name.includes(".") ? "property" : "argument";
+    message += `"${name}" ${type} `;
+  }
+  message += "must be ";
+  const types2 = [];
+  const instances = [];
+  const other = [];
+  for (const value of expected) {
+    assert2.ok(typeof value === "string", "All expected entries have to be of type string");
+    if (kTypes.has(value)) {
+      types2.push(value.toLowerCase());
+    } else if (classRegExp.exec(value) === null) {
+      assert2.ok(value !== "object", 'The value "object" should be written as "Object"');
+      other.push(value);
+    } else {
+      instances.push(value);
+    }
+  }
+  if (instances.length > 0) {
+    const pos = types2.indexOf("object");
+    if (pos !== -1) {
+      types2.slice(pos, 1);
+      instances.push("Object");
+    }
+  }
+  if (types2.length > 0) {
+    message += `${types2.length > 1 ? "one of type" : "of type"} ${formatList(types2, "or")}`;
+    if (instances.length > 0 || other.length > 0)
+      message += " or ";
+  }
+  if (instances.length > 0) {
+    message += `an instance of ${formatList(instances, "or")}`;
+    if (other.length > 0)
+      message += " or ";
+  }
+  if (other.length > 0) {
+    if (other.length > 1) {
+      message += `one of ${formatList(other, "or")}`;
+    } else {
+      if (other[0].toLowerCase() !== other[0])
+        message += "an ";
+      message += `${other[0]}`;
+    }
+  }
+  message += `. Received ${determineSpecificType(actual)}`;
+  return message;
+}, TypeError);
+codes.ERR_INVALID_MODULE_SPECIFIER = createError("ERR_INVALID_MODULE_SPECIFIER", (request, reason, base = undefined) => {
+  return `Invalid module "${request}" ${reason}${base ? ` imported from ${base}` : ""}`;
+}, TypeError);
+codes.ERR_INVALID_PACKAGE_CONFIG = createError("ERR_INVALID_PACKAGE_CONFIG", (path, base, message) => {
+  return `Invalid package config ${path}${base ? ` while importing ${base}` : ""}${message ? `. ${message}` : ""}`;
+}, Error);
+codes.ERR_INVALID_PACKAGE_TARGET = createError("ERR_INVALID_PACKAGE_TARGET", (packagePath, key, target, isImport = false, base = undefined) => {
+  const relatedError = typeof target === "string" && !isImport && target.length > 0 && !target.startsWith("./");
+  if (key === ".") {
+    assert2.ok(isImport === false);
+    return `Invalid "exports" main target ${JSON.stringify(target)} defined ` + `in the package config ${packagePath}package.json${base ? ` imported from ${base}` : ""}${relatedError ? '; targets must start with "./"' : ""}`;
+  }
+  return `Invalid "${isImport ? "imports" : "exports"}" target ${JSON.stringify(target)} defined for '${key}' in the package config ${packagePath}package.json${base ? ` imported from ${base}` : ""}${relatedError ? '; targets must start with "./"' : ""}`;
+}, Error);
+codes.ERR_MODULE_NOT_FOUND = createError("ERR_MODULE_NOT_FOUND", (path, base, exactUrl = false) => {
+  return `Cannot find ${exactUrl ? "module" : "package"} '${path}' imported from ${base}`;
+}, Error);
+codes.ERR_NETWORK_IMPORT_DISALLOWED = createError("ERR_NETWORK_IMPORT_DISALLOWED", "import of '%s' by %s is not supported: %s", Error);
+codes.ERR_PACKAGE_IMPORT_NOT_DEFINED = createError("ERR_PACKAGE_IMPORT_NOT_DEFINED", (specifier, packagePath, base) => {
+  return `Package import specifier "${specifier}" is not defined${packagePath ? ` in package ${packagePath}package.json` : ""} imported from ${base}`;
+}, TypeError);
+codes.ERR_PACKAGE_PATH_NOT_EXPORTED = createError("ERR_PACKAGE_PATH_NOT_EXPORTED", (packagePath, subpath, base = undefined) => {
+  if (subpath === ".")
+    return `No "exports" main defined in ${packagePath}package.json${base ? ` imported from ${base}` : ""}`;
+  return `Package subpath '${subpath}' is not defined by "exports" in ${packagePath}package.json${base ? ` imported from ${base}` : ""}`;
+}, Error);
+codes.ERR_UNSUPPORTED_DIR_IMPORT = createError("ERR_UNSUPPORTED_DIR_IMPORT", "Directory import '%s' is not supported " + "resolving ES modules imported from %s", Error);
+codes.ERR_UNSUPPORTED_RESOLVE_REQUEST = createError("ERR_UNSUPPORTED_RESOLVE_REQUEST", 'Failed to resolve module specifier "%s" from "%s": Invalid relative URL or base scheme is not hierarchical.', TypeError);
+codes.ERR_UNKNOWN_FILE_EXTENSION = createError("ERR_UNKNOWN_FILE_EXTENSION", (extension, path) => {
+  return `Unknown file extension "${extension}" for ${path}`;
+}, TypeError);
+codes.ERR_INVALID_ARG_VALUE = createError("ERR_INVALID_ARG_VALUE", (name, value, reason = "is invalid") => {
+  let inspected = inspect(value);
+  if (inspected.length > 128) {
+    inspected = `${inspected.slice(0, 128)}...`;
+  }
+  const type = name.includes(".") ? "property" : "argument";
+  return `The ${type} '${name}' ${reason}. Received ${inspected}`;
+}, TypeError);
+function createError(sym, value, constructor) {
+  messages.set(sym, value);
+  return makeNodeErrorWithCode(constructor, sym);
+}
+function makeNodeErrorWithCode(Base, key) {
+  return NodeError;
+  function NodeError(...parameters) {
+    const limit = Error.stackTraceLimit;
+    if (isErrorStackTraceLimitWritable())
+      Error.stackTraceLimit = 0;
+    const error2 = new Base;
+    if (isErrorStackTraceLimitWritable())
+      Error.stackTraceLimit = limit;
+    const message = getMessage(key, parameters, error2);
+    Object.defineProperties(error2, {
+      message: {
+        value: message,
+        enumerable: false,
+        writable: true,
+        configurable: true
+      },
+      toString: {
+        value() {
+          return `${this.name} [${key}]: ${this.message}`;
+        },
+        enumerable: false,
+        writable: true,
+        configurable: true
+      }
+    });
+    captureLargerStackTrace(error2);
+    error2.code = key;
+    return error2;
+  }
+}
+function isErrorStackTraceLimitWritable() {
+  try {
+    if (v8.startupSnapshot.isBuildingSnapshot()) {
+      return false;
+    }
+  } catch {}
+  const desc = Object.getOwnPropertyDescriptor(Error, "stackTraceLimit");
+  if (desc === undefined) {
+    return Object.isExtensible(Error);
+  }
+  return own.call(desc, "writable") && desc.writable !== undefined ? desc.writable : desc.set !== undefined;
+}
+function hideStackFrames(wrappedFunction) {
+  const hidden = nodeInternalPrefix + wrappedFunction.name;
+  Object.defineProperty(wrappedFunction, "name", { value: hidden });
+  return wrappedFunction;
+}
+var captureLargerStackTrace = hideStackFrames(function(error2) {
+  const stackTraceLimitIsWritable = isErrorStackTraceLimitWritable();
+  if (stackTraceLimitIsWritable) {
+    userStackTraceLimit = Error.stackTraceLimit;
+    Error.stackTraceLimit = Number.POSITIVE_INFINITY;
+  }
+  Error.captureStackTrace(error2);
+  if (stackTraceLimitIsWritable)
+    Error.stackTraceLimit = userStackTraceLimit;
+  return error2;
+});
+function getMessage(key, parameters, self) {
+  const message = messages.get(key);
+  assert2.ok(message !== undefined, "expected `message` to be found");
+  if (typeof message === "function") {
+    assert2.ok(message.length <= parameters.length, `Code: ${key}; The provided arguments length (${parameters.length}) does not ` + `match the required ones (${message.length}).`);
+    return Reflect.apply(message, self, parameters);
+  }
+  const regex = /%[dfijoOs]/g;
+  let expectedLength = 0;
+  while (regex.exec(message) !== null)
+    expectedLength++;
+  assert2.ok(expectedLength === parameters.length, `Code: ${key}; The provided arguments length (${parameters.length}) does not ` + `match the required ones (${expectedLength}).`);
+  if (parameters.length === 0)
+    return message;
+  parameters.unshift(message);
+  return Reflect.apply(format, null, parameters);
+}
+function determineSpecificType(value) {
+  if (value === null || value === undefined) {
+    return String(value);
+  }
+  if (typeof value === "function" && value.name) {
+    return `function ${value.name}`;
+  }
+  if (typeof value === "object") {
+    if (value.constructor && value.constructor.name) {
+      return `an instance of ${value.constructor.name}`;
+    }
+    return `${inspect(value, { depth: -1 })}`;
+  }
+  let inspected = inspect(value, { colors: false });
+  if (inspected.length > 28) {
+    inspected = `${inspected.slice(0, 25)}...`;
+  }
+  return `type ${typeof value} (${inspected})`;
+}
+
+// ../../node_modules/.bun/import-meta-resolve@4.2.0/node_modules/import-meta-resolve/lib/package-json-reader.js
+var hasOwnProperty = {}.hasOwnProperty;
+var { ERR_INVALID_PACKAGE_CONFIG } = codes;
+var cache = new Map;
+function read(jsonPath, { base, specifier }) {
+  const existing = cache.get(jsonPath);
+  if (existing) {
+    return existing;
+  }
+  let string4;
+  try {
+    string4 = fs.readFileSync(path.toNamespacedPath(jsonPath), "utf8");
+  } catch (error2) {
+    const exception = error2;
+    if (exception.code !== "ENOENT") {
+      throw exception;
+    }
+  }
+  const result = {
+    exists: false,
+    pjsonPath: jsonPath,
+    main: undefined,
+    name: undefined,
+    type: "none",
+    exports: undefined,
+    imports: undefined
+  };
+  if (string4 !== undefined) {
+    let parsed;
+    try {
+      parsed = JSON.parse(string4);
+    } catch (error_) {
+      const cause = error_;
+      const error2 = new ERR_INVALID_PACKAGE_CONFIG(jsonPath, (base ? `"${specifier}" from ` : "") + fileURLToPath2(base || specifier), cause.message);
+      error2.cause = cause;
+      throw error2;
+    }
+    result.exists = true;
+    if (hasOwnProperty.call(parsed, "name") && typeof parsed.name === "string") {
+      result.name = parsed.name;
+    }
+    if (hasOwnProperty.call(parsed, "main") && typeof parsed.main === "string") {
+      result.main = parsed.main;
+    }
+    if (hasOwnProperty.call(parsed, "exports")) {
+      result.exports = parsed.exports;
+    }
+    if (hasOwnProperty.call(parsed, "imports")) {
+      result.imports = parsed.imports;
+    }
+    if (hasOwnProperty.call(parsed, "type") && (parsed.type === "commonjs" || parsed.type === "module")) {
+      result.type = parsed.type;
+    }
+  }
+  cache.set(jsonPath, result);
+  return result;
+}
+function getPackageScopeConfig(resolved) {
+  let packageJSONUrl = new URL("package.json", resolved);
+  while (true) {
+    const packageJSONPath2 = packageJSONUrl.pathname;
+    if (packageJSONPath2.endsWith("node_modules/package.json")) {
+      break;
+    }
+    const packageConfig = read(fileURLToPath2(packageJSONUrl), {
+      specifier: resolved
+    });
+    if (packageConfig.exists) {
+      return packageConfig;
+    }
+    const lastPackageJSONUrl = packageJSONUrl;
+    packageJSONUrl = new URL("../package.json", packageJSONUrl);
+    if (packageJSONUrl.pathname === lastPackageJSONUrl.pathname) {
+      break;
+    }
+  }
+  const packageJSONPath = fileURLToPath2(packageJSONUrl);
+  return {
+    pjsonPath: packageJSONPath,
+    exists: false,
+    type: "none"
+  };
+}
+function getPackageType(url) {
+  return getPackageScopeConfig(url).type;
+}
+
+// ../../node_modules/.bun/import-meta-resolve@4.2.0/node_modules/import-meta-resolve/lib/get-format.js
+var { ERR_UNKNOWN_FILE_EXTENSION } = codes;
+var hasOwnProperty2 = {}.hasOwnProperty;
+var extensionFormatMap = {
+  __proto__: null,
+  ".cjs": "commonjs",
+  ".js": "module",
+  ".json": "json",
+  ".mjs": "module"
+};
+function mimeToFormat(mime) {
+  if (mime && /\s*(text|application)\/javascript\s*(;\s*charset=utf-?8\s*)?/i.test(mime))
+    return "module";
+  if (mime === "application/json")
+    return "json";
+  return null;
+}
+var protocolHandlers = {
+  __proto__: null,
+  "data:": getDataProtocolModuleFormat,
+  "file:": getFileProtocolModuleFormat,
+  "http:": getHttpProtocolModuleFormat,
+  "https:": getHttpProtocolModuleFormat,
+  "node:"() {
+    return "builtin";
+  }
+};
+function getDataProtocolModuleFormat(parsed) {
+  const { 1: mime } = /^([^/]+\/[^;,]+)[^,]*?(;base64)?,/.exec(parsed.pathname) || [null, null, null];
+  return mimeToFormat(mime);
+}
+function extname(url) {
+  const pathname = url.pathname;
+  let index = pathname.length;
+  while (index--) {
+    const code = pathname.codePointAt(index);
+    if (code === 47) {
+      return "";
+    }
+    if (code === 46) {
+      return pathname.codePointAt(index - 1) === 47 ? "" : pathname.slice(index);
+    }
+  }
+  return "";
+}
+function getFileProtocolModuleFormat(url, _context, ignoreErrors) {
+  const value = extname(url);
+  if (value === ".js") {
+    const packageType = getPackageType(url);
+    if (packageType !== "none") {
+      return packageType;
+    }
+    return "commonjs";
+  }
+  if (value === "") {
+    const packageType = getPackageType(url);
+    if (packageType === "none" || packageType === "commonjs") {
+      return "commonjs";
+    }
+    return "module";
+  }
+  const format2 = extensionFormatMap[value];
+  if (format2)
+    return format2;
+  if (ignoreErrors) {
+    return;
+  }
+  const filepath = fileURLToPath3(url);
+  throw new ERR_UNKNOWN_FILE_EXTENSION(value, filepath);
+}
+function getHttpProtocolModuleFormat() {}
+function defaultGetFormatWithoutErrors(url, context) {
+  const protocol = url.protocol;
+  if (!hasOwnProperty2.call(protocolHandlers, protocol)) {
+    return null;
+  }
+  return protocolHandlers[protocol](url, context, true) || null;
+}
+
+// ../../node_modules/.bun/import-meta-resolve@4.2.0/node_modules/import-meta-resolve/lib/utils.js
+var { ERR_INVALID_ARG_VALUE } = codes;
+var DEFAULT_CONDITIONS = Object.freeze(["node", "import"]);
+var DEFAULT_CONDITIONS_SET = new Set(DEFAULT_CONDITIONS);
+function getDefaultConditions() {
+  return DEFAULT_CONDITIONS;
+}
+function getDefaultConditionsSet() {
+  return DEFAULT_CONDITIONS_SET;
+}
+function getConditionsSet(conditions) {
+  if (conditions !== undefined && conditions !== getDefaultConditions()) {
+    if (!Array.isArray(conditions)) {
+      throw new ERR_INVALID_ARG_VALUE("conditions", conditions, "expected an array");
+    }
+    return new Set(conditions);
+  }
+  return getDefaultConditionsSet();
+}
+
+// ../../node_modules/.bun/import-meta-resolve@4.2.0/node_modules/import-meta-resolve/lib/resolve.js
+var RegExpPrototypeSymbolReplace = RegExp.prototype[Symbol.replace];
+var {
+  ERR_NETWORK_IMPORT_DISALLOWED,
+  ERR_INVALID_MODULE_SPECIFIER,
+  ERR_INVALID_PACKAGE_CONFIG: ERR_INVALID_PACKAGE_CONFIG2,
+  ERR_INVALID_PACKAGE_TARGET,
+  ERR_MODULE_NOT_FOUND,
+  ERR_PACKAGE_IMPORT_NOT_DEFINED,
+  ERR_PACKAGE_PATH_NOT_EXPORTED,
+  ERR_UNSUPPORTED_DIR_IMPORT,
+  ERR_UNSUPPORTED_RESOLVE_REQUEST
+} = codes;
+var own2 = {}.hasOwnProperty;
+var invalidSegmentRegEx = /(^|\\|\/)((\.|%2e)(\.|%2e)?|(n|%6e|%4e)(o|%6f|%4f)(d|%64|%44)(e|%65|%45)(_|%5f)(m|%6d|%4d)(o|%6f|%4f)(d|%64|%44)(u|%75|%55)(l|%6c|%4c)(e|%65|%45)(s|%73|%53))?(\\|\/|$)/i;
+var deprecatedInvalidSegmentRegEx = /(^|\\|\/)((\.|%2e)(\.|%2e)?|(n|%6e|%4e)(o|%6f|%4f)(d|%64|%44)(e|%65|%45)(_|%5f)(m|%6d|%4d)(o|%6f|%4f)(d|%64|%44)(u|%75|%55)(l|%6c|%4c)(e|%65|%45)(s|%73|%53))(\\|\/|$)/i;
+var invalidPackageNameRegEx = /^\.|%|\\/;
+var patternRegEx = /\*/g;
+var encodedSeparatorRegEx = /%2f|%5c/i;
+var emittedPackageWarnings = new Set;
+var doubleSlashRegEx = /[/\\]{2}/;
+function emitInvalidSegmentDeprecation(target, request, match, packageJsonUrl, internal, base, isTarget) {
+  if (process2.noDeprecation) {
+    return;
+  }
+  const pjsonPath = fileURLToPath4(packageJsonUrl);
+  const double = doubleSlashRegEx.exec(isTarget ? target : request) !== null;
+  process2.emitWarning(`Use of deprecated ${double ? "double slash" : "leading or trailing slash matching"} resolving "${target}" for module ` + `request "${request}" ${request === match ? "" : `matched to "${match}" `}in the "${internal ? "imports" : "exports"}" field module resolution of the package at ${pjsonPath}${base ? ` imported from ${fileURLToPath4(base)}` : ""}.`, "DeprecationWarning", "DEP0166");
+}
+function emitLegacyIndexDeprecation(url, packageJsonUrl, base, main) {
+  if (process2.noDeprecation) {
+    return;
+  }
+  const format2 = defaultGetFormatWithoutErrors(url, { parentURL: base.href });
+  if (format2 !== "module")
+    return;
+  const urlPath = fileURLToPath4(url.href);
+  const packagePath = fileURLToPath4(new URL(".", packageJsonUrl));
+  const basePath = fileURLToPath4(base);
+  if (!main) {
+    process2.emitWarning(`No "main" or "exports" field defined in the package.json for ${packagePath} resolving the main entry point "${urlPath.slice(packagePath.length)}", imported from ${basePath}.
+Default "index" lookups for the main are deprecated for ES modules.`, "DeprecationWarning", "DEP0151");
+  } else if (path2.resolve(packagePath, main) !== urlPath) {
+    process2.emitWarning(`Package ${packagePath} has a "main" field set to "${main}", ` + `excluding the full filename and extension to the resolved file at "${urlPath.slice(packagePath.length)}", imported from ${basePath}.
+ Automatic extension resolution of the "main" field is ` + "deprecated for ES modules.", "DeprecationWarning", "DEP0151");
+  }
+}
+function tryStatSync(path3) {
+  try {
+    return statSync4(path3);
+  } catch {}
+}
+function fileExists(url) {
+  const stats = statSync4(url, { throwIfNoEntry: false });
+  const isFile2 = stats ? stats.isFile() : undefined;
+  return isFile2 === null || isFile2 === undefined ? false : isFile2;
+}
+function legacyMainResolve(packageJsonUrl, packageConfig, base) {
+  let guess;
+  if (packageConfig.main !== undefined) {
+    guess = new URL(packageConfig.main, packageJsonUrl);
+    if (fileExists(guess))
+      return guess;
+    const tries2 = [
+      `./${packageConfig.main}.js`,
+      `./${packageConfig.main}.json`,
+      `./${packageConfig.main}.node`,
+      `./${packageConfig.main}/index.js`,
+      `./${packageConfig.main}/index.json`,
+      `./${packageConfig.main}/index.node`
+    ];
+    let i2 = -1;
+    while (++i2 < tries2.length) {
+      guess = new URL(tries2[i2], packageJsonUrl);
+      if (fileExists(guess))
+        break;
+      guess = undefined;
+    }
+    if (guess) {
+      emitLegacyIndexDeprecation(guess, packageJsonUrl, base, packageConfig.main);
+      return guess;
+    }
+  }
+  const tries = ["./index.js", "./index.json", "./index.node"];
+  let i = -1;
+  while (++i < tries.length) {
+    guess = new URL(tries[i], packageJsonUrl);
+    if (fileExists(guess))
+      break;
+    guess = undefined;
+  }
+  if (guess) {
+    emitLegacyIndexDeprecation(guess, packageJsonUrl, base, packageConfig.main);
+    return guess;
+  }
+  throw new ERR_MODULE_NOT_FOUND(fileURLToPath4(new URL(".", packageJsonUrl)), fileURLToPath4(base));
+}
+function finalizeResolution(resolved, base, preserveSymlinks) {
+  if (encodedSeparatorRegEx.exec(resolved.pathname) !== null) {
+    throw new ERR_INVALID_MODULE_SPECIFIER(resolved.pathname, 'must not include encoded "/" or "\\" characters', fileURLToPath4(base));
+  }
+  let filePath;
+  try {
+    filePath = fileURLToPath4(resolved);
+  } catch (error2) {
+    const cause = error2;
+    Object.defineProperty(cause, "input", { value: String(resolved) });
+    Object.defineProperty(cause, "module", { value: String(base) });
+    throw cause;
+  }
+  const stats = tryStatSync(filePath.endsWith("/") ? filePath.slice(-1) : filePath);
+  if (stats && stats.isDirectory()) {
+    const error2 = new ERR_UNSUPPORTED_DIR_IMPORT(filePath, fileURLToPath4(base));
+    error2.url = String(resolved);
+    throw error2;
+  }
+  if (!stats || !stats.isFile()) {
+    const error2 = new ERR_MODULE_NOT_FOUND(filePath || resolved.pathname, base && fileURLToPath4(base), true);
+    error2.url = String(resolved);
+    throw error2;
+  }
+  if (!preserveSymlinks) {
+    const real = realpathSync(filePath);
+    const { search, hash } = resolved;
+    resolved = pathToFileURL(real + (filePath.endsWith(path2.sep) ? "/" : ""));
+    resolved.search = search;
+    resolved.hash = hash;
+  }
+  return resolved;
+}
+function importNotDefined(specifier, packageJsonUrl, base) {
+  return new ERR_PACKAGE_IMPORT_NOT_DEFINED(specifier, packageJsonUrl && fileURLToPath4(new URL(".", packageJsonUrl)), fileURLToPath4(base));
+}
+function exportsNotFound(subpath, packageJsonUrl, base) {
+  return new ERR_PACKAGE_PATH_NOT_EXPORTED(fileURLToPath4(new URL(".", packageJsonUrl)), subpath, base && fileURLToPath4(base));
+}
+function throwInvalidSubpath(request, match, packageJsonUrl, internal, base) {
+  const reason = `request is not a valid match in pattern "${match}" for the "${internal ? "imports" : "exports"}" resolution of ${fileURLToPath4(packageJsonUrl)}`;
+  throw new ERR_INVALID_MODULE_SPECIFIER(request, reason, base && fileURLToPath4(base));
+}
+function invalidPackageTarget(subpath, target, packageJsonUrl, internal, base) {
+  target = typeof target === "object" && target !== null ? JSON.stringify(target, null, "") : `${target}`;
+  return new ERR_INVALID_PACKAGE_TARGET(fileURLToPath4(new URL(".", packageJsonUrl)), subpath, target, internal, base && fileURLToPath4(base));
+}
+function resolvePackageTargetString(target, subpath, match, packageJsonUrl, base, pattern, internal, isPathMap, conditions) {
+  if (subpath !== "" && !pattern && target[target.length - 1] !== "/")
+    throw invalidPackageTarget(match, target, packageJsonUrl, internal, base);
+  if (!target.startsWith("./")) {
+    if (internal && !target.startsWith("../") && !target.startsWith("/")) {
+      let isURL = false;
+      try {
+        new URL(target);
+        isURL = true;
+      } catch {}
+      if (!isURL) {
+        const exportTarget = pattern ? RegExpPrototypeSymbolReplace.call(patternRegEx, target, () => subpath) : target + subpath;
+        return packageResolve(exportTarget, packageJsonUrl, conditions);
+      }
+    }
+    throw invalidPackageTarget(match, target, packageJsonUrl, internal, base);
+  }
+  if (invalidSegmentRegEx.exec(target.slice(2)) !== null) {
+    if (deprecatedInvalidSegmentRegEx.exec(target.slice(2)) === null) {
+      if (!isPathMap) {
+        const request = pattern ? match.replace("*", () => subpath) : match + subpath;
+        const resolvedTarget = pattern ? RegExpPrototypeSymbolReplace.call(patternRegEx, target, () => subpath) : target;
+        emitInvalidSegmentDeprecation(resolvedTarget, request, match, packageJsonUrl, internal, base, true);
+      }
+    } else {
+      throw invalidPackageTarget(match, target, packageJsonUrl, internal, base);
+    }
+  }
+  const resolved = new URL(target, packageJsonUrl);
+  const resolvedPath = resolved.pathname;
+  const packagePath = new URL(".", packageJsonUrl).pathname;
+  if (!resolvedPath.startsWith(packagePath))
+    throw invalidPackageTarget(match, target, packageJsonUrl, internal, base);
+  if (subpath === "")
+    return resolved;
+  if (invalidSegmentRegEx.exec(subpath) !== null) {
+    const request = pattern ? match.replace("*", () => subpath) : match + subpath;
+    if (deprecatedInvalidSegmentRegEx.exec(subpath) === null) {
+      if (!isPathMap) {
+        const resolvedTarget = pattern ? RegExpPrototypeSymbolReplace.call(patternRegEx, target, () => subpath) : target;
+        emitInvalidSegmentDeprecation(resolvedTarget, request, match, packageJsonUrl, internal, base, false);
+      }
+    } else {
+      throwInvalidSubpath(request, match, packageJsonUrl, internal, base);
+    }
+  }
+  if (pattern) {
+    return new URL(RegExpPrototypeSymbolReplace.call(patternRegEx, resolved.href, () => subpath));
+  }
+  return new URL(subpath, resolved);
+}
+function isArrayIndex(key) {
+  const keyNumber = Number(key);
+  if (`${keyNumber}` !== key)
+    return false;
+  return keyNumber >= 0 && keyNumber < 4294967295;
+}
+function resolvePackageTarget(packageJsonUrl, target, subpath, packageSubpath, base, pattern, internal, isPathMap, conditions) {
+  if (typeof target === "string") {
+    return resolvePackageTargetString(target, subpath, packageSubpath, packageJsonUrl, base, pattern, internal, isPathMap, conditions);
+  }
+  if (Array.isArray(target)) {
+    const targetList = target;
+    if (targetList.length === 0)
+      return null;
+    let lastException;
+    let i = -1;
+    while (++i < targetList.length) {
+      const targetItem = targetList[i];
+      let resolveResult;
+      try {
+        resolveResult = resolvePackageTarget(packageJsonUrl, targetItem, subpath, packageSubpath, base, pattern, internal, isPathMap, conditions);
+      } catch (error2) {
+        const exception = error2;
+        lastException = exception;
+        if (exception.code === "ERR_INVALID_PACKAGE_TARGET")
+          continue;
+        throw error2;
+      }
+      if (resolveResult === undefined)
+        continue;
+      if (resolveResult === null) {
+        lastException = null;
+        continue;
+      }
+      return resolveResult;
+    }
+    if (lastException === undefined || lastException === null) {
+      return null;
+    }
+    throw lastException;
+  }
+  if (typeof target === "object" && target !== null) {
+    const keys2 = Object.getOwnPropertyNames(target);
+    let i = -1;
+    while (++i < keys2.length) {
+      const key = keys2[i];
+      if (isArrayIndex(key)) {
+        throw new ERR_INVALID_PACKAGE_CONFIG2(fileURLToPath4(packageJsonUrl), base, '"exports" cannot contain numeric property keys.');
+      }
+    }
+    i = -1;
+    while (++i < keys2.length) {
+      const key = keys2[i];
+      if (key === "default" || conditions && conditions.has(key)) {
+        const conditionalTarget = target[key];
+        const resolveResult = resolvePackageTarget(packageJsonUrl, conditionalTarget, subpath, packageSubpath, base, pattern, internal, isPathMap, conditions);
+        if (resolveResult === undefined)
+          continue;
+        return resolveResult;
+      }
+    }
+    return null;
+  }
+  if (target === null) {
+    return null;
+  }
+  throw invalidPackageTarget(packageSubpath, target, packageJsonUrl, internal, base);
+}
+function isConditionalExportsMainSugar(exports, packageJsonUrl, base) {
+  if (typeof exports === "string" || Array.isArray(exports))
+    return true;
+  if (typeof exports !== "object" || exports === null)
+    return false;
+  const keys2 = Object.getOwnPropertyNames(exports);
+  let isConditionalSugar = false;
+  let i = 0;
+  let keyIndex = -1;
+  while (++keyIndex < keys2.length) {
+    const key = keys2[keyIndex];
+    const currentIsConditionalSugar = key === "" || key[0] !== ".";
+    if (i++ === 0) {
+      isConditionalSugar = currentIsConditionalSugar;
+    } else if (isConditionalSugar !== currentIsConditionalSugar) {
+      throw new ERR_INVALID_PACKAGE_CONFIG2(fileURLToPath4(packageJsonUrl), base, `"exports" cannot contain some keys starting with '.' and some not.` + " The exports object must either be an object of package subpath keys" + " or an object of main entry condition name keys only.");
+    }
+  }
+  return isConditionalSugar;
+}
+function emitTrailingSlashPatternDeprecation(match, pjsonUrl, base) {
+  if (process2.noDeprecation) {
+    return;
+  }
+  const pjsonPath = fileURLToPath4(pjsonUrl);
+  if (emittedPackageWarnings.has(pjsonPath + "|" + match))
+    return;
+  emittedPackageWarnings.add(pjsonPath + "|" + match);
+  process2.emitWarning(`Use of deprecated trailing slash pattern mapping "${match}" in the ` + `"exports" field module resolution of the package at ${pjsonPath}${base ? ` imported from ${fileURLToPath4(base)}` : ""}. Mapping specifiers ending in "/" is no longer supported.`, "DeprecationWarning", "DEP0155");
+}
+function packageExportsResolve(packageJsonUrl, packageSubpath, packageConfig, base, conditions) {
+  let exports = packageConfig.exports;
+  if (isConditionalExportsMainSugar(exports, packageJsonUrl, base)) {
+    exports = { ".": exports };
+  }
+  if (own2.call(exports, packageSubpath) && !packageSubpath.includes("*") && !packageSubpath.endsWith("/")) {
+    const target = exports[packageSubpath];
+    const resolveResult = resolvePackageTarget(packageJsonUrl, target, "", packageSubpath, base, false, false, false, conditions);
+    if (resolveResult === null || resolveResult === undefined) {
+      throw exportsNotFound(packageSubpath, packageJsonUrl, base);
+    }
+    return resolveResult;
+  }
+  let bestMatch = "";
+  let bestMatchSubpath = "";
+  const keys2 = Object.getOwnPropertyNames(exports);
+  let i = -1;
+  while (++i < keys2.length) {
+    const key = keys2[i];
+    const patternIndex = key.indexOf("*");
+    if (patternIndex !== -1 && packageSubpath.startsWith(key.slice(0, patternIndex))) {
+      if (packageSubpath.endsWith("/")) {
+        emitTrailingSlashPatternDeprecation(packageSubpath, packageJsonUrl, base);
+      }
+      const patternTrailer = key.slice(patternIndex + 1);
+      if (packageSubpath.length >= key.length && packageSubpath.endsWith(patternTrailer) && patternKeyCompare(bestMatch, key) === 1 && key.lastIndexOf("*") === patternIndex) {
+        bestMatch = key;
+        bestMatchSubpath = packageSubpath.slice(patternIndex, packageSubpath.length - patternTrailer.length);
+      }
+    }
+  }
+  if (bestMatch) {
+    const target = exports[bestMatch];
+    const resolveResult = resolvePackageTarget(packageJsonUrl, target, bestMatchSubpath, bestMatch, base, true, false, packageSubpath.endsWith("/"), conditions);
+    if (resolveResult === null || resolveResult === undefined) {
+      throw exportsNotFound(packageSubpath, packageJsonUrl, base);
+    }
+    return resolveResult;
+  }
+  throw exportsNotFound(packageSubpath, packageJsonUrl, base);
+}
+function patternKeyCompare(a, b) {
+  const aPatternIndex = a.indexOf("*");
+  const bPatternIndex = b.indexOf("*");
+  const baseLengthA = aPatternIndex === -1 ? a.length : aPatternIndex + 1;
+  const baseLengthB = bPatternIndex === -1 ? b.length : bPatternIndex + 1;
+  if (baseLengthA > baseLengthB)
+    return -1;
+  if (baseLengthB > baseLengthA)
+    return 1;
+  if (aPatternIndex === -1)
+    return 1;
+  if (bPatternIndex === -1)
+    return -1;
+  if (a.length > b.length)
+    return -1;
+  if (b.length > a.length)
+    return 1;
+  return 0;
+}
+function packageImportsResolve(name, base, conditions) {
+  if (name === "#" || name.startsWith("#/") || name.endsWith("/")) {
+    const reason = "is not a valid internal imports specifier name";
+    throw new ERR_INVALID_MODULE_SPECIFIER(name, reason, fileURLToPath4(base));
+  }
+  let packageJsonUrl;
+  const packageConfig = getPackageScopeConfig(base);
+  if (packageConfig.exists) {
+    packageJsonUrl = pathToFileURL(packageConfig.pjsonPath);
+    const imports = packageConfig.imports;
+    if (imports) {
+      if (own2.call(imports, name) && !name.includes("*")) {
+        const resolveResult = resolvePackageTarget(packageJsonUrl, imports[name], "", name, base, false, true, false, conditions);
+        if (resolveResult !== null && resolveResult !== undefined) {
+          return resolveResult;
+        }
+      } else {
+        let bestMatch = "";
+        let bestMatchSubpath = "";
+        const keys2 = Object.getOwnPropertyNames(imports);
+        let i = -1;
+        while (++i < keys2.length) {
+          const key = keys2[i];
+          const patternIndex = key.indexOf("*");
+          if (patternIndex !== -1 && name.startsWith(key.slice(0, -1))) {
+            const patternTrailer = key.slice(patternIndex + 1);
+            if (name.length >= key.length && name.endsWith(patternTrailer) && patternKeyCompare(bestMatch, key) === 1 && key.lastIndexOf("*") === patternIndex) {
+              bestMatch = key;
+              bestMatchSubpath = name.slice(patternIndex, name.length - patternTrailer.length);
+            }
+          }
+        }
+        if (bestMatch) {
+          const target = imports[bestMatch];
+          const resolveResult = resolvePackageTarget(packageJsonUrl, target, bestMatchSubpath, bestMatch, base, true, true, false, conditions);
+          if (resolveResult !== null && resolveResult !== undefined) {
+            return resolveResult;
+          }
+        }
+      }
+    }
+  }
+  throw importNotDefined(name, packageJsonUrl, base);
+}
+function parsePackageName(specifier, base) {
+  let separatorIndex = specifier.indexOf("/");
+  let validPackageName = true;
+  let isScoped = false;
+  if (specifier[0] === "@") {
+    isScoped = true;
+    if (separatorIndex === -1 || specifier.length === 0) {
+      validPackageName = false;
+    } else {
+      separatorIndex = specifier.indexOf("/", separatorIndex + 1);
+    }
+  }
+  const packageName2 = separatorIndex === -1 ? specifier : specifier.slice(0, separatorIndex);
+  if (invalidPackageNameRegEx.exec(packageName2) !== null) {
+    validPackageName = false;
+  }
+  if (!validPackageName) {
+    throw new ERR_INVALID_MODULE_SPECIFIER(specifier, "is not a valid package name", fileURLToPath4(base));
+  }
+  const packageSubpath = "." + (separatorIndex === -1 ? "" : specifier.slice(separatorIndex));
+  return { packageName: packageName2, packageSubpath, isScoped };
+}
+function packageResolve(specifier, base, conditions) {
+  if (builtinModules.includes(specifier)) {
+    return new URL("node:" + specifier);
+  }
+  const { packageName: packageName2, packageSubpath, isScoped } = parsePackageName(specifier, base);
+  const packageConfig = getPackageScopeConfig(base);
+  if (packageConfig.exists) {
+    const packageJsonUrl2 = pathToFileURL(packageConfig.pjsonPath);
+    if (packageConfig.name === packageName2 && packageConfig.exports !== undefined && packageConfig.exports !== null) {
+      return packageExportsResolve(packageJsonUrl2, packageSubpath, packageConfig, base, conditions);
+    }
+  }
+  let packageJsonUrl = new URL("./node_modules/" + packageName2 + "/package.json", base);
+  let packageJsonPath = fileURLToPath4(packageJsonUrl);
+  let lastPath;
+  do {
+    const stat = tryStatSync(packageJsonPath.slice(0, -13));
+    if (!stat || !stat.isDirectory()) {
+      lastPath = packageJsonPath;
+      packageJsonUrl = new URL((isScoped ? "../../../../node_modules/" : "../../../node_modules/") + packageName2 + "/package.json", packageJsonUrl);
+      packageJsonPath = fileURLToPath4(packageJsonUrl);
+      continue;
+    }
+    const packageConfig2 = read(packageJsonPath, { base, specifier });
+    if (packageConfig2.exports !== undefined && packageConfig2.exports !== null) {
+      return packageExportsResolve(packageJsonUrl, packageSubpath, packageConfig2, base, conditions);
+    }
+    if (packageSubpath === ".") {
+      return legacyMainResolve(packageJsonUrl, packageConfig2, base);
+    }
+    return new URL(packageSubpath, packageJsonUrl);
+  } while (packageJsonPath.length !== lastPath.length);
+  throw new ERR_MODULE_NOT_FOUND(packageName2, fileURLToPath4(base), false);
+}
+function isRelativeSpecifier(specifier) {
+  if (specifier[0] === ".") {
+    if (specifier.length === 1 || specifier[1] === "/")
+      return true;
+    if (specifier[1] === "." && (specifier.length === 2 || specifier[2] === "/")) {
+      return true;
+    }
+  }
+  return false;
+}
+function shouldBeTreatedAsRelativeOrAbsolutePath(specifier) {
+  if (specifier === "")
+    return false;
+  if (specifier[0] === "/")
+    return true;
+  return isRelativeSpecifier(specifier);
+}
+function moduleResolve(specifier, base, conditions, preserveSymlinks) {
+  if (conditions === undefined) {
+    conditions = getConditionsSet();
+  }
+  const protocol = base.protocol;
+  const isData = protocol === "data:";
+  const isRemote = isData || protocol === "http:" || protocol === "https:";
+  let resolved;
+  if (shouldBeTreatedAsRelativeOrAbsolutePath(specifier)) {
+    try {
+      resolved = new URL(specifier, base);
+    } catch (error_) {
+      const error2 = new ERR_UNSUPPORTED_RESOLVE_REQUEST(specifier, base);
+      error2.cause = error_;
+      throw error2;
+    }
+  } else if (protocol === "file:" && specifier[0] === "#") {
+    resolved = packageImportsResolve(specifier, base, conditions);
+  } else {
+    try {
+      resolved = new URL(specifier);
+    } catch (error_) {
+      if (isRemote && !builtinModules.includes(specifier)) {
+        const error2 = new ERR_UNSUPPORTED_RESOLVE_REQUEST(specifier, base);
+        error2.cause = error_;
+        throw error2;
+      }
+      resolved = packageResolve(specifier, base, conditions);
+    }
+  }
+  assert3.ok(resolved !== undefined, "expected to be defined");
+  if (resolved.protocol !== "file:") {
+    return resolved;
+  }
+  return finalizeResolution(resolved, base, preserveSymlinks);
+}
+function checkIfDisallowedImport(specifier, parsed, parsedParentURL) {
+  if (parsedParentURL) {
+    const parentProtocol = parsedParentURL.protocol;
+    if (parentProtocol === "http:" || parentProtocol === "https:") {
+      if (shouldBeTreatedAsRelativeOrAbsolutePath(specifier)) {
+        const parsedProtocol = parsed?.protocol;
+        if (parsedProtocol && parsedProtocol !== "https:" && parsedProtocol !== "http:") {
+          throw new ERR_NETWORK_IMPORT_DISALLOWED(specifier, parsedParentURL, "remote imports cannot import from a local location.");
+        }
+        return { url: parsed?.href || "" };
+      }
+      if (builtinModules.includes(specifier)) {
+        throw new ERR_NETWORK_IMPORT_DISALLOWED(specifier, parsedParentURL, "remote imports cannot import from a local location.");
+      }
+      throw new ERR_NETWORK_IMPORT_DISALLOWED(specifier, parsedParentURL, "only relative and absolute specifiers are supported.");
+    }
+  }
+}
+function isURL(self) {
+  return Boolean(self && typeof self === "object" && "href" in self && typeof self.href === "string" && "protocol" in self && typeof self.protocol === "string" && self.href && self.protocol);
+}
+function throwIfInvalidParentURL(parentURL) {
+  if (parentURL === undefined) {
+    return;
+  }
+  if (typeof parentURL !== "string" && !isURL(parentURL)) {
+    throw new codes.ERR_INVALID_ARG_TYPE("parentURL", ["string", "URL"], parentURL);
+  }
+}
+function defaultResolve(specifier, context = {}) {
+  const { parentURL } = context;
+  assert3.ok(parentURL !== undefined, "expected `parentURL` to be defined");
+  throwIfInvalidParentURL(parentURL);
+  let parsedParentURL;
+  if (parentURL) {
+    try {
+      parsedParentURL = new URL(parentURL);
+    } catch {}
+  }
+  let parsed;
+  let protocol;
+  try {
+    parsed = shouldBeTreatedAsRelativeOrAbsolutePath(specifier) ? new URL(specifier, parsedParentURL) : new URL(specifier);
+    protocol = parsed.protocol;
+    if (protocol === "data:") {
+      return { url: parsed.href, format: null };
+    }
+  } catch {}
+  const maybeReturn = checkIfDisallowedImport(specifier, parsed, parsedParentURL);
+  if (maybeReturn)
+    return maybeReturn;
+  if (protocol === undefined && parsed) {
+    protocol = parsed.protocol;
+  }
+  if (protocol === "node:") {
+    return { url: specifier };
+  }
+  if (parsed && parsed.protocol === "node:")
+    return { url: specifier };
+  const conditions = getConditionsSet(context.conditions);
+  const url = moduleResolve(specifier, new URL(parentURL), conditions, false);
+  return {
+    url: url.href,
+    format: defaultGetFormatWithoutErrors(url, { parentURL })
+  };
+}
+
+// ../../node_modules/.bun/import-meta-resolve@4.2.0/node_modules/import-meta-resolve/index.js
+function resolve4(specifier, parent) {
+  if (!parent) {
+    throw new Error("Please pass `parent`: `import-meta-resolve` cannot ponyfill that");
+  }
+  try {
+    return defaultResolve(specifier, { parentURL: parent }).url;
+  } catch (error2) {
+    const exception = error2;
+    if ((exception.code === "ERR_UNSUPPORTED_DIR_IMPORT" || exception.code === "ERR_MODULE_NOT_FOUND") && typeof exception.url === "string") {
+      return exception.url;
+    }
+    throw error2;
+  }
+}
+
+// src/client/credentials.ts
 class CredentialResolutionError extends Error {
   appName;
   attempted;
@@ -21377,10 +22388,10 @@ class CredentialResolutionError extends Error {
 
 class CredentialFileUnsafeError extends Error {
   path;
-  constructor(path, reason) {
-    super(`Refusing unsafe credential/config file ${path}: ${reason}.`);
+  constructor(path3, reason) {
+    super(`Refusing unsafe credential/config file ${path3}: ${reason}.`);
     this.name = "CredentialFileUnsafeError";
-    this.path = path;
+    this.path = path3;
   }
 }
 var HASNA_HOME_ENV_KEY = "HASNA_HOME";
@@ -21475,13 +22486,13 @@ function configFileModeAllowed(mode) {
 function configFileReadsCoherent(before, after) {
   return before.dev === after.dev && before.ino === after.ino && before.size === after.size && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs;
 }
-function readAppConfigFile(path) {
+function readAppConfigFile(path3) {
   const unsafe = (reason) => {
-    throw new CredentialFileUnsafeError(path, reason);
+    throw new CredentialFileUnsafeError(path3, reason);
   };
   let fd = -1;
   try {
-    fd = openSync(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    fd = openSync(path3, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
   } catch (error2) {
     const code = error2.code;
     if (code === "ENOENT" || code === "ENOTDIR")
@@ -21513,42 +22524,50 @@ function readAppConfigFile(path) {
       closeSync(fd);
   }
 }
-function readCredentialFile(path, apiKeyKeys) {
-  const parsed = readAppConfigFile(path);
+function readCredentialFile(path3, apiKeyKeys, pointerKey) {
+  const parsed = readAppConfigFile(path3);
   if (!parsed)
     return null;
-  for (const key of apiKeyKeys) {
+  for (const key of [...apiKeyKeys, pointerKey]) {
     if (parsed.unusable.has(key)) {
-      throw new CredentialFileUnsafeError(path, `${key} is declared but blank or malformed`);
+      throw new CredentialFileUnsafeError(path3, `${key} is declared but blank or malformed`);
     }
   }
   const values = apiKeyKeys.map((key) => parsed.values.get(key)?.trim()).filter((value) => Boolean(value));
-  if (new Set(values).size > 1) {
-    throw new CredentialFileUnsafeError(path, "credential aliases disagree");
+  const pointer = parsed.values.get(pointerKey)?.trim();
+  if (pointer !== undefined) {
+    if (!VAULT_POINTER_SHAPE.test(pointer))
+      throw new CredentialFileUnsafeError(path3, `${pointerKey} must name a vault item`);
+    if (values.length)
+      throw new CredentialFileUnsafeError(path3, "a credential file cannot select both a literal key and a vault reference");
+    return { apiKey: "", pointerVaultKey: pointer };
   }
-  return values[0] ?? null;
+  if (new Set(values).size > 1) {
+    throw new CredentialFileUnsafeError(path3, "credential aliases disagree");
+  }
+  return values[0] === undefined ? null : { apiKey: values[0] };
 }
 var CREDENTIAL_SHAPED_KEY = /(?:^|_)(?:API_KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)(?:_|$)/;
 function appConfigDiskValue(name, env, keys2) {
   const wanted = keys2.filter((key) => !CREDENTIAL_SHAPED_KEY.test(key));
   if (wanted.length === 0)
     return null;
-  for (const path of credentialDiskSources(name, env)) {
-    const parsed = readAppConfigFile(path);
+  for (const path3 of credentialDiskSources(name, env)) {
+    const parsed = readAppConfigFile(path3);
     if (!parsed)
       continue;
     if (wanted.some((key) => parsed.unusable.has(key))) {
-      return { key: wanted.find((key) => parsed.unusable.has(key)), value: "", path, unusable: true };
+      return { key: wanted.find((key) => parsed.unusable.has(key)), value: "", path: path3, unusable: true };
     }
     const values = wanted.map((key) => parsed.values.get(key)?.trim()).filter((value) => Boolean(value));
     if (new Set(values).size > 1)
-      throw new CredentialFileUnsafeError(path, "configuration aliases disagree");
+      throw new CredentialFileUnsafeError(path3, "configuration aliases disagree");
     for (const key of wanted) {
       if (parsed.unusable.has(key))
-        return { key, value: "", path, unusable: true };
+        return { key, value: "", path: path3, unusable: true };
       const value = parsed.values.get(key)?.trim();
       if (value)
-        return { key, value, path };
+        return { key, value, path: path3 };
     }
   }
   return null;
@@ -21825,21 +22844,22 @@ function resolveCredential(name, env, options = {}) {
       throw new CredentialResolutionError(name, `Profile name from ${profileSource} is not usable in a path. ` + `Use letters, digits, dot, dash, or underscore.`, [profileSource]);
     }
     const paths = profileDiskSources(name, env, profile);
-    for (const path of paths) {
-      const value = readCredentialFile(path, apiKeyKeys);
+    for (const path3 of paths) {
+      const value = readCredentialFile(path3, apiKeyKeys, pointerKeyName);
       if (value) {
-        assertUsableCredential(name, path, value);
+        if (!value.pointerVaultKey)
+          assertUsableCredential(name, path3, value.apiKey);
         return sealCredential({
-          apiKey: value,
-          tier: "profile",
-          source: path,
+          ...value,
+          tier: value.pointerVaultKey ? "pointer" : "profile",
+          source: path3,
           deliberate: true,
           diskCandidates: paths,
           warning: null
         });
       }
     }
-    throw new CredentialResolutionError(name, `Profile '${profile}' (from ${profileSource}) has no ${apiKeyKeys[0]} for '${name}'. ` + `Looked in: ${paths.join(", ") || "<no HOME in this environment>"}. ` + `A profile names WHICH identity to use, so it is never resolved around \u2014 ` + `create the profile's credential file or unset ${CREDENTIAL_PROFILE_ENV_KEY}.`, paths);
+    throw new CredentialResolutionError(name, `Profile '${profile}' (from ${profileSource}) has no ${apiKeyKeys[0]} or ${pointerKeyName} for '${name}'. ` + `Looked in: ${paths.join(", ") || "<no HOME in this environment>"}. ` + `A profile names WHICH identity to use, so it is never resolved around \u2014 ` + `create the profile's credential file or unset ${CREDENTIAL_PROFILE_ENV_KEY}.`, paths);
   }
   const definedEnvEntries = apiKeyKeys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, value: String(env[key]).trim() }));
   const blankEnv = definedEnvEntries.find((entry) => entry.value.length === 0);
@@ -21864,17 +22884,27 @@ function resolveCredential(name, env, options = {}) {
     });
   }
   const diskSourceList = credentialDiskSourceList(name, env, null);
-  const diskHits = diskSourceList.map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys) })).filter((hit) => hit.value !== null);
+  const diskHits = diskSourceList.map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys, pointerKeyName) })).filter((hit) => hit.value !== null);
   if (diskHits.length > 0) {
     const winner = diskHits[0];
-    assertUsableCredential(name, winner.src.path, winner.value);
+    if (winner.value.pointerVaultKey) {
+      return sealCredential({
+        ...winner.value,
+        tier: "pointer",
+        source: winner.src.path,
+        deliberate: false,
+        diskCandidates: diskPaths,
+        warning: null
+      });
+    }
+    assertUsableCredential(name, winner.src.path, winner.value.apiKey);
     const divergentSources = [
-      ...diskHits.slice(1).filter((hit) => hit.value !== winner.value).map((hit) => hit.src.path),
-      ...envHit && envHit.value !== winner.value ? [envHit.key] : []
+      ...diskHits.slice(1).filter((hit) => hit.value.apiKey !== winner.value.apiKey || hit.value.pointerVaultKey !== winner.value.pointerVaultKey).map((hit) => hit.src.path),
+      ...envHit && envHit.value !== winner.value.apiKey ? [envHit.key] : []
     ];
     const warning = divergentSources.length > 0 ? `Credential sources disagree for '${name}': ${winner.src.path} and ` + `${divergentSources.join(", ")} hold different keys. ${winner.src.path} wins, because a file on ` + `disk is re-read on every call while an environment variable is a snapshot. Reconcile them \u2014 ` + `a rotation that updated only one leaves the other to fail 401 wherever it is loaded first.` : null;
     return sealCredential({
-      apiKey: winner.value,
+      apiKey: winner.value.apiKey,
       tier: winner.src.tier,
       source: winner.src.path,
       deliberate: false,
@@ -21896,30 +22926,38 @@ function resolveCredential(name, env, options = {}) {
   return null;
 }
 var SECRETS_PACKAGE_SPECIFIER = "@hasna/" + "secrets";
-var requireSecretsSdk = createRequire(import.meta.url);
 async function completePointerCredential(name, pointerResolution, env = process.env) {
+  const secretsEnv = snapshotClientEnvironment("secrets", env);
   const vaultKey = pointerResolution.pointerVaultKey;
   const pointerEnvKey = pointerResolution.source;
   if (!vaultKey) {
     throw new CredentialResolutionError(name, `Pointer resolution from ${pointerEnvKey} carries no vault item key; this is a defect in the resolver.`, [pointerEnvKey]);
   }
+  if (name === "secrets") {
+    throw new CredentialResolutionError(name, "The Secrets bootstrap credential cannot reference the same hosted vault; configure an independent bootstrap provider.", [pointerEnvKey]);
+  }
   let secretsSdk;
   try {
-    secretsSdk = requireSecretsSdk(SECRETS_PACKAGE_SPECIFIER);
+    const sdkUrl = resolve4(SECRETS_PACKAGE_SPECIFIER, import.meta.url);
+    secretsSdk = await import(sdkUrl);
   } catch {
-    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the secrets SDK (@hasna/secrets) is not installed ` + `in this process. A vault pointer is TERMINAL: install @hasna/secrets to resolve it, or unset ${pointerEnvKey}.`, [pointerEnvKey]);
+    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the secrets SDK (@hasna/secrets) is not installed in this process. A vault pointer is TERMINAL: install @hasna/secrets to resolve it, or unset ${pointerEnvKey}.`, [pointerEnvKey]);
   }
   let client;
   try {
-    client = secretsSdk.createSecretsClientFromEnv(env);
+    const bootstrap = resolveCredential("secrets", secretsEnv);
+    if (!bootstrap || bootstrap.tier === "pointer") {
+      throw new CredentialResolutionError("secrets", "The Secrets vault requires an independent, non-reference bootstrap credential.", bootstrap ? [bootstrap.source] : []);
+    }
+    client = secretsSdk.createSecretsClientFromEnv(secretsEnv);
   } catch {
-    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the secrets client could not be configured from this ` + `environment (the secrets service URL and key env are missing or invalid). A vault pointer is TERMINAL and ` + `never falls through to a literal or disk credential.`, [pointerEnvKey]);
+    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the secrets client could not be configured from this environment (the secrets service URL and key env are missing or invalid). A vault pointer is TERMINAL and never falls through to a literal or disk credential.`, [pointerEnvKey]);
   }
   let secret;
   try {
     secret = await client.getSecret({ key: vaultKey });
   } catch {
-    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the vault could not be reached or the item is ` + `unavailable. A vault pointer is TERMINAL and never falls through to a literal or disk credential.`, [pointerEnvKey]);
+    throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the vault could not be reached or the item is unavailable. A vault pointer is TERMINAL and never falls through to a literal or disk credential.`, [pointerEnvKey]);
   }
   const value = secret.value;
   if (!value) {
@@ -21930,7 +22968,7 @@ async function completePointerCredential(name, pointerResolution, env = process.
     apiKey: value,
     tier: "pointer",
     source: `${pointerEnvKey} -> vault:${vaultKey}`,
-    deliberate: true,
+    deliberate: pointerResolution.deliberate,
     diskCandidates: pointerResolution.diskCandidates,
     warning: null
   });
@@ -22112,10 +23150,10 @@ function toV1BaseUrl(apiUrl) {
   if (url.search || url.hash) {
     throw new Error("API URL must not include a query string or fragment.");
   }
-  let path = url.pathname.replace(/\/+$/, "");
-  if (path.endsWith("/v1"))
-    path = path.slice(0, -"/v1".length);
-  url.pathname = `${path}/v1`;
+  let path3 = url.pathname.replace(/\/+$/, "");
+  if (path3.endsWith("/v1"))
+    path3 = path3.slice(0, -"/v1".length);
+  url.pathname = `${path3}/v1`;
   return url.toString().replace(/\/+$/, "");
 }
 var CLIENT_TRANSPORTS = ["http"];
@@ -22223,13 +23261,13 @@ class HasnaHttpError extends Error {
   path;
   credentialSource;
   credentialTier;
-  constructor(method, path, status, body, credential) {
+  constructor(method, path3, status, body, credential) {
     const guidance = credential ? `. ${credential.guidance}` : "";
-    super(`Hasna cloud request failed: ${method} ${path} -> ${status}${guidance}`);
+    super(`Hasna cloud request failed: ${method} ${path3} -> ${status}${guidance}`);
     this.name = "HasnaHttpError";
     this.status = status;
     this.method = method;
-    this.path = path;
+    this.path = path3;
     Object.defineProperty(this, "body", {
       value: body,
       enumerable: status !== 401 && status !== 403,
@@ -22286,9 +23324,9 @@ function assertNoAuthorityOverrideHeaders(headers, source) {
     throw new Error(`Authenticated ${source} headers must not set authority header '${forbidden}'.`);
   }
 }
-function appendQuery(path, query) {
+function appendQuery(path3, query) {
   if (!query)
-    return path;
+    return path3;
   const params = query instanceof URLSearchParams ? query : new URLSearchParams;
   if (!(query instanceof URLSearchParams)) {
     for (const [key, value] of Object.entries(query)) {
@@ -22304,10 +23342,10 @@ function appendQuery(path, query) {
   }
   const qs = params.toString();
   if (!qs)
-    return path;
-  return `${path}${path.includes("?") ? "&" : "?"}${qs}`;
+    return path3;
+  return `${path3}${path3.includes("?") ? "&" : "?"}${qs}`;
 }
-var defaultSleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
+var defaultSleep = (ms) => new Promise((resolve5) => setTimeout(resolve5, ms));
 function createHasnaHttpTransportInternal(options, requestBindingProvider) {
   const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
   const base = toV1BaseUrl(options.baseUrl);
@@ -22411,9 +23449,9 @@ function createHasnaHttpTransportInternal(options, requestBindingProvider) {
     }
     return { ok: true, value: parsed };
   }
-  async function request(method, path, body, opts = {}) {
+  async function request(method, path3, body, opts = {}) {
     const upper = method.toUpperCase();
-    const rel = appendQuery(path.startsWith("/") ? path : `/${path}`, opts.query);
+    const rel = appendQuery(path3.startsWith("/") ? path3 : `/${path3}`, opts.query);
     const retry = resolveRetry(opts.retry);
     const methodRetryable = IDEMPOTENT_METHODS.has(upper) || Boolean(opts.idempotencyKey);
     const maxAttempts = retry && methodRetryable ? retry.retries + 1 : 1;
@@ -22441,11 +23479,11 @@ function createHasnaHttpTransportInternal(options, requestBindingProvider) {
   return {
     baseUrl: base,
     request,
-    get: (path, opts) => request("GET", path, undefined, opts),
-    post: (path, body, opts) => request("POST", path, body, opts),
-    put: (path, body, opts) => request("PUT", path, body, opts),
-    patch: (path, body, opts) => request("PATCH", path, body, opts),
-    del: (path, body, opts) => request("DELETE", path, body, opts)
+    get: (path3, opts) => request("GET", path3, undefined, opts),
+    post: (path3, body, opts) => request("POST", path3, body, opts),
+    put: (path3, body, opts) => request("PUT", path3, body, opts),
+    patch: (path3, body, opts) => request("PATCH", path3, body, opts),
+    del: (path3, body, opts) => request("DELETE", path3, body, opts)
   };
 }
 function createHasnaHttpTransport(options) {

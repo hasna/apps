@@ -157,3 +157,49 @@ describe("the credential this CLI writes", () => {
     });
   });
 });
+
+describe("credential-file vault reference lifecycle", () => {
+  const ref = "fixture/skills/live/api_key";
+  function configured(env: Record<string, string | undefined>) {
+    const file = getAuthFilePath(env);
+    mkdirSync(join(file, ".."), { recursive: true, mode: 0o700 });
+    writeFileSync(file, `HASNA_SKILLS_API_KEY_REF=${ref}\nHASNA_SKILLS_API_URL=https://skills.example.test\n`, { mode: 0o600 });
+    return file;
+  }
+  test("explicit login replaces the selected file reference without a mixed credential", () => {
+    withFleetHome(env => {
+      const file = configured(env);
+      saveAuthConfig(SAMPLE_CONFIG, env, "https://skills.example.test");
+      expect(readFileSync(file, "utf8")).not.toContain("HASNA_SKILLS_API_KEY_REF");
+      expect(getApiKey(env)).toBe(SAMPLE_CONFIG.apiKey);
+    });
+  });
+  test("logout removes only the app's stored reference", () => {
+    withFleetHome(env => {
+      const file = configured(env);
+      const result = clearAuthConfig(env);
+      expect(readFileSync(file, "utf8")).not.toContain("HASNA_SKILLS_API_KEY_REF");
+      expect(result.stillResolves).toBe(false);
+    });
+  });
+  test("failed logout cannot report an unsafe profile reference as removed", () => {
+    withFleetHome(baseEnv => {
+      const env = { ...baseEnv, HASNA_PROFILE: "work" };
+      const file = configured(env);
+      const parent = join(file, "..");
+      chmodSync(file, 0o644);
+      chmodSync(parent, 0o500);
+      try {
+        expect(clearAuthConfig(env).stillResolves).toBe(true);
+        expect(readFileSync(file, "utf8")).toContain("HASNA_SKILLS_API_KEY_REF");
+      } finally { chmodSync(parent, 0o700); }
+    });
+  });
+  test("changing an unbound reference URL first preserves its original instance", () => {
+    withFleetHome(env => {
+      const file = configured(env);
+      saveApiUrl("https://other.example.test", env);
+      expect(readFileSync(file, "utf8")).toContain("HASNA_SKILLS_BOUND_API_URL=https://skills.example.test");
+    });
+  });
+});

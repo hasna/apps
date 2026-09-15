@@ -27,7 +27,8 @@
 //   3. the macOS Keychain (darwin only)— generic-password item
 //                                        `hasna.credentials.<app>.api-key`, account
 //                                        `HASNA_STATION`, else the short hostname, else `USER`
-//   4. DISK, read at call time         — `~/.hasna/<app>/config/credentials`
+//   4. DISK, read at call time         — a literal key OR API_KEY_REF in
+//                                        `~/.hasna/<app>/config/credentials`
 //                                        (`HASNA_HOME` replaces `~/.hasna`; `HASNA_CONFIG_HOME`
 //                                        replaces the config root, giving
 //                                        `<HASNA_CONFIG_HOME>/<app>/credentials`; a profile
@@ -70,9 +71,9 @@
 import { spawnSync } from "node:child_process";
 import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
-import { createRequire } from "node:module";
 import { hostname as osHostname } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { resolve as resolveInstalledModule } from "import-meta-resolve";
 import type { Env } from "../env-token.js";
 import {
   CREDENTIAL_PROFILE_ENV_KEY,
@@ -474,19 +475,30 @@ function readAppConfigFile(path: string): ParsedConfigFile | null {
   }
 }
 
-function readCredentialFile(path: string, apiKeyKeys: readonly string[]): string | null {
+interface FileCredential {
+  apiKey: string;
+  pointerVaultKey?: string;
+}
+
+function readCredentialFile(path: string, apiKeyKeys: readonly string[], pointerKey: string): FileCredential | null {
   const parsed = readAppConfigFile(path);
   if (!parsed) return null;
-  for (const key of apiKeyKeys) {
+  for (const key of [...apiKeyKeys, pointerKey]) {
     if (parsed.unusable.has(key)) {
       throw new CredentialFileUnsafeError(path, `${key} is declared but blank or malformed`);
     }
   }
   const values = apiKeyKeys.map((key) => parsed.values.get(key)?.trim()).filter((value): value is string => Boolean(value));
+  const pointer = parsed.values.get(pointerKey)?.trim();
+  if (pointer !== undefined) {
+    if (!VAULT_POINTER_SHAPE.test(pointer)) throw new CredentialFileUnsafeError(path, `${pointerKey} must name a vault item`);
+    if (values.length) throw new CredentialFileUnsafeError(path, "a credential file cannot select both a literal key and a vault reference");
+    return { apiKey: "", pointerVaultKey: pointer };
+  }
   if (new Set(values).size > 1) {
     throw new CredentialFileUnsafeError(path, "credential aliases disagree");
   }
-  return values[0] ?? null;
+  return values[0] === undefined ? null : { apiKey: values[0] };
 }
 
 /** A non-secret config value read off disk, with the file that supplied it. */
@@ -1069,12 +1081,12 @@ export function resolveCredential(
     }
     const paths = profileDiskSources(name, env, profile);
     for (const path of paths) {
-      const value = readCredentialFile(path, apiKeyKeys);
+      const value = readCredentialFile(path, apiKeyKeys, pointerKeyName);
       if (value) {
-        assertUsableCredential(name, path, value);
+        if (!value.pointerVaultKey) assertUsableCredential(name, path, value.apiKey);
         return sealCredential({
-          apiKey: value,
-          tier: "profile",
+          ...value,
+          tier: value.pointerVaultKey ? "pointer" : "profile",
           source: path,
           deliberate: true,
           diskCandidates: paths,
@@ -1084,7 +1096,7 @@ export function resolveCredential(
     }
     throw new CredentialResolutionError(
       name,
-      `Profile '${profile}' (from ${profileSource}) has no ${apiKeyKeys[0]} for '${name}'. ` +
+      `Profile '${profile}' (from ${profileSource}) has no ${apiKeyKeys[0]} or ${pointerKeyName} for '${name}'. ` +
         `Looked in: ${paths.join(", ") || "<no HOME in this environment>"}. ` +
         `A profile names WHICH identity to use, so it is never resolved around — ` +
         `create the profile's credential file or unset ${CREDENTIAL_PROFILE_ENV_KEY}.`,
@@ -1152,12 +1164,22 @@ export function resolveCredential(
   // app's config directory.
   const diskSourceList = credentialDiskSourceList(name, env, null);
   const diskHits = diskSourceList
-    .map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys) }))
-    .filter((hit): hit is { src: DiskCredentialSource; value: string } => hit.value !== null);
+    .map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys, pointerKeyName) }))
+    .filter((hit): hit is { src: DiskCredentialSource; value: FileCredential } => hit.value !== null);
 
   if (diskHits.length > 0) {
     const winner = diskHits[0]!;
-    assertUsableCredential(name, winner.src.path, winner.value);
+    if (winner.value.pointerVaultKey) {
+      return sealCredential({
+        ...winner.value,
+        tier: "pointer",
+        source: winner.src.path,
+        deliberate: false,
+        diskCandidates: diskPaths,
+        warning: null,
+      });
+    }
+    assertUsableCredential(name, winner.src.path, winner.value.apiKey);
     // The paths and the FACT of disagreement are the whole diagnostic. A
     // fingerprint of the secret — even a truncated digest — is a derived
     // encoding of credential material and a confirmation oracle, so none is
@@ -1168,8 +1190,8 @@ export function resolveCredential(
     // starts using a DIFFERENT key the moment a stale file exists on disk, and
     // would otherwise get no signal at all.
     const divergentSources = [
-      ...diskHits.slice(1).filter((hit) => hit.value !== winner.value).map((hit) => hit.src.path),
-      ...(envHit && envHit.value !== winner.value ? [envHit.key] : []),
+      ...diskHits.slice(1).filter((hit) => hit.value.apiKey !== winner.value.apiKey || hit.value.pointerVaultKey !== winner.value.pointerVaultKey).map((hit) => hit.src.path),
+      ...(envHit && envHit.value !== winner.value.apiKey ? [envHit.key] : []),
     ];
     const warning =
       divergentSources.length > 0
@@ -1180,7 +1202,7 @@ export function resolveCredential(
         : null;
 
     return sealCredential({
-      apiKey: winner.value,
+      apiKey: winner.value.apiKey,
       tier: winner.src.tier,
       source: winner.src.path,
       deliberate: false,
@@ -1227,12 +1249,10 @@ interface SecretsPointerModule {
 // member whose dist is absent at install time.
 const SECRETS_PACKAGE_SPECIFIER = "@hasna/" + "secrets";
 
-// Runtime-only load of the secrets SDK. `createRequire` + a non-literal
-// specifier keeps this a runtime require in consumer bundles (`bun build
-// --compile` and friends), unlike `await import(<non-literal>)` which the
-// bundler refuses. The pointer tier is a rare, deliberate path; its SDK is
-// loaded only when a pointer is actually resolved.
-const requireSecretsSdk = createRequire(import.meta.url);
+// Use the package's ESM import condition: the published SDK has no require
+// export. Keep loading optional and relative to this consumer, with no CWD or
+// global package search when it is absent. Compiled virtual-filesystem entries
+// also refuse when an external SDK is not resolvable from their entry point.
 
 /**
  * Complete a pointer-tier resolution through the secrets vault.
@@ -1255,6 +1275,10 @@ export async function completePointerCredential(
   pointerResolution: ResolvedCredential,
   env: Env = process.env,
 ): Promise<ResolvedCredential> {
+  // Capture the bootstrap provider in its original context before loading its
+  // SDK. A caller-built dictionary remains hermetic; an ambient invocation
+  // retains the shared Keychain marker and never silently skips that tier.
+  const secretsEnv = snapshotClientEnvironment("secrets", env);
   const vaultKey = pointerResolution.pointerVaultKey;
   const pointerEnvKey = pointerResolution.source;
   if (!vaultKey) {
@@ -1264,9 +1288,19 @@ export async function completePointerCredential(
       [pointerEnvKey],
     );
   }
+  if (name === "secrets") {
+    throw new CredentialResolutionError(
+      name,
+      "The Secrets bootstrap credential cannot reference the same hosted vault; configure an independent bootstrap provider.",
+      [pointerEnvKey],
+    );
+  }
   let secretsSdk: SecretsPointerModule;
   try {
-    secretsSdk = requireSecretsSdk(SECRETS_PACKAGE_SPECIFIER) as SecretsPointerModule;
+    // Use filesystem-only Node ESM resolution. Bun's import.meta.resolve can
+    // auto-install absent packages; credential lookup must never do that.
+    const sdkUrl = resolveInstalledModule(SECRETS_PACKAGE_SPECIFIER, import.meta.url);
+    secretsSdk = await import(sdkUrl) as SecretsPointerModule;
   } catch {
     throw new CredentialResolutionError(
       name,
@@ -1277,7 +1311,18 @@ export async function completePointerCredential(
   }
   let client: SecretsPointerClient;
   try {
-    client = secretsSdk.createSecretsClientFromEnv(env);
+    // Older SDK bundles do not understand references in credential files.
+    // Admit the bootstrap with this resolver first so they cannot ignore a
+    // declared reference and rescue it with a stale literal environment key.
+    const bootstrap = resolveCredential("secrets", secretsEnv);
+    if (!bootstrap || bootstrap.tier === "pointer") {
+      throw new CredentialResolutionError(
+        "secrets",
+        "The Secrets vault requires an independent, non-reference bootstrap credential.",
+        bootstrap ? [bootstrap.source] : [],
+      );
+    }
+    client = secretsSdk.createSecretsClientFromEnv(secretsEnv);
   } catch {
     throw new CredentialResolutionError(
       name,
@@ -1311,7 +1356,7 @@ export async function completePointerCredential(
     apiKey: value,
     tier: "pointer",
     source: `${pointerEnvKey} -> vault:${vaultKey}`,
-    deliberate: true,
+    deliberate: pointerResolution.deliberate,
     diskCandidates: pointerResolution.diskCandidates,
     warning: null,
   });
