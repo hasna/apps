@@ -24,12 +24,11 @@
  *     statically imports @hasna/contracts/auth and secrets' build bundles
  *     it, so secrets' build needs contracts' built dist and declaration
  *     files first.
- * Contracts keeps Secrets as an optional runtime peer and pins it separately
- * for development acceptance. A development pin can resolve a workspace or
- * a registry release; only the workspace resolution creates a build edge.
- * Secrets likewise keeps its declared Contracts development dependency.
- * The two workspace edges must never coexist, but either direction is valid
- * when the opposite dependency resolves to its declared registry release.
+ * Contracts keeps Secrets as an optional runtime peer and pins the registry
+ * tarball separately for development acceptance. An ordinary version pin (even
+ * an npm alias) can resolve the same-version workspace and create a cycle when
+ * Secrets builds against current Contracts. The explicit published tarball
+ * keeps this SDK independent; Secrets retains its declared Contracts build edge.
  *
  * This test is the two-sided gate for that shape:
  *   RED  — the graph is cyclic again and turbo refuses to construct it
@@ -114,6 +113,7 @@ describe("turbo task graph", () => {
     const workspaceSecrets = fs.realpathSync(path.join(APPS_DIR, "secrets"));
     const usesWorkspaceSecrets = resolvedSecrets.startsWith(workspaceSecrets + path.sep);
     expect(contractsBuild!.includes("@hasna/secrets#build")).toBe(usesWorkspaceSecrets);
+    expect(usesWorkspaceSecrets, "Contracts acceptance must use the published SDK, independent of the Secrets workspace").toBe(false);
     expect(usesWorkspace && usesWorkspaceSecrets, "mutual workspace development edges would recreate the package cycle").toBe(false);
   });
 
@@ -126,7 +126,11 @@ describe("turbo task graph", () => {
     const peerMeta = (contracts.peerDependenciesMeta ?? {}) as Record<string, { optional?: boolean }>;
     expect(peerMeta["@hasna/secrets"]?.optional).toBe(true);
     const contractsDev = (contracts.devDependencies ?? {}) as Record<string, string>;
-    expect(contractsDev["@hasna/secrets"]).toMatch(/^\d+\.\d+\.\d+$/);
+    const sdkPin = /^https:\/\/registry\.npmjs\.org\/@hasna\/secrets\/-\/secrets-(\d+\.\d+\.\d+)\.tgz$/.exec(contractsDev["@hasna/secrets"] ?? "");
+    expect(sdkPin, "the development SDK must name an exact public registry artifact").not.toBeNull();
+    const sdkManifest = JSON.parse(fs.readFileSync(Bun.resolveSync("@hasna/secrets/package.json", path.join(APPS_DIR, "contracts")), "utf8"));
+    expect(sdkManifest.name).toBe("@hasna/secrets");
+    expect(sdkManifest.version).toBe(sdkPin![1]);
     for (const section of ["dependencies", "optionalDependencies"] as const) {
       const deps = (contracts[section] ?? {}) as Record<string, string>;
       expect(deps["@hasna/secrets"], `@hasna/contracts must not declare @hasna/secrets in ${section}`).toBeUndefined();
