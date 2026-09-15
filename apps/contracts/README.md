@@ -1,5 +1,19 @@
 # @hasna/contracts
 
+The shared client accepts `HASNA_<APP>_API_KEY_REF` in the existing owner-only
+`~/.hasna/<app>/config/credentials` file, or its selected `credentials-<profile>`
+file. The value names a hosted Secrets vault item. A reference keeps that file's
+existing precedence; it does not bypass an explicit argument, an environment
+selection, or the normal Keychain tier. A file containing both a literal key
+and a reference is refused.
+
+References are fetched through the normal `@hasna/secrets` SDK for each request.
+Keep Secrets' independent bootstrap provider configured. Missing SDKs, locked
+bootstrap Keychains, unavailable vaults, and missing or empty values are terminal;
+no other credential is substituted. Secrets cannot bootstrap itself through a
+reference to the same hosted vault. Credential values are excluded from
+serialized credential objects; diagnostics retain provider provenance.
+
 Public app data access follows one canonical boundary: authenticated HTTPS to
 the app service, backed by authoritative server-side PostgreSQL. Missing or
 invalid URL/credential/database configuration fails closed; clients never

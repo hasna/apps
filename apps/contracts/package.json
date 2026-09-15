@@ -160,6 +160,7 @@
     "@types/node": "26.2.0",
     "@types/pg": "^8.11.10",
     "pg": "^8.13.1",
+    "resolve.exports": "2.0.3",
     "typescript": "^5.7.3"
   },
   "peerDependencies": {

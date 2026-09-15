@@ -377,6 +377,20 @@ to be installed in the process. Every way that fetch can fail (SDK absent, vault
 unreachable, item missing or empty) is terminal and exits non-zero; a pointer
 never falls through to another tier, and never to the local corpus.
 
+For a durable reference without a raw Skills key, the same
+`HASNA_SKILLS_API_KEY_REF` field can be stored in the owner-only canonical or
+selected-profile credentials file, alongside its `HASNA_SKILLS_API_URL` and
+`HASNA_SKILLS_BOUND_API_URL`. Do not keep a literal API key in that file too.
+The file retains its existing priority, and the reference remains bound to its
+recorded Skills instance. Secrets needs its own working bootstrap provider;
+this setup does not unlock a Keychain or copy a Secrets bootstrap credential.
+If the file changes during a vault lookup, the request is refused.
+
+An explicit `skills auth login` replaces a stored reference with the newly
+authenticated key. `skills auth logout` removes the app's file reference, not
+the vault item or Secrets' credential. Changing the service URL preserves the
+reference's previous instance binding.
+
 **The service address, in the same shape:**
 
 `HASNA_SKILLS_API_URL` → the Keychain item `hasna.credentials.skills.api-url` →

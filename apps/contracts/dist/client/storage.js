@@ -40,11 +40,132 @@ function credentialPointerEnvKey(name) {
 
 // src/client/credentials.ts
 import { spawnSync } from "child_process";
-import { closeSync, fstatSync, openSync, readFileSync } from "fs";
-import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "constants";
-import { createRequire } from "module";
+import { closeSync as closeSync2, fstatSync as fstatSync2, openSync as openSync2, readFileSync as readFileSync2 } from "fs";
+import { O_NOFOLLOW as O_NOFOLLOW2, O_NONBLOCK as O_NONBLOCK2, O_RDONLY as O_RDONLY2 } from "constants";
 import { hostname as osHostname } from "os";
-import { isAbsolute, join } from "path";
+import { isAbsolute, join as join2 } from "path";
+import { createRequire } from "module";
+import { fileURLToPath as fileURLToPath2 } from "url";
+
+// src/client/installed-secrets.ts
+import { closeSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync } from "fs";
+import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "constants";
+import { basename, dirname, join, relative, sep } from "path";
+import { fileURLToPath, pathToFileURL } from "url";
+
+// ../../node_modules/.bun/resolve.exports@2.0.3/node_modules/resolve.exports/dist/index.mjs
+function e(e2, n, r) {
+  throw new Error(r ? `No known conditions for "${n}" specifier in "${e2}" package` : `Missing "${n}" specifier in "${e2}" package`);
+}
+function n(n2, i, o, f) {
+  let s, u, l = r(n2, o), c = function(e2) {
+    let n3 = new Set(["default", ...e2.conditions || []]);
+    return e2.unsafe || n3.add(e2.require ? "require" : "import"), e2.unsafe || n3.add(e2.browser ? "browser" : "node"), n3;
+  }(f || {}), a = i[l];
+  if (a === undefined) {
+    let e2, n3, r, t;
+    for (t in i)
+      n3 && t.length < n3.length || (t[t.length - 1] === "/" && l.startsWith(t) ? (u = l.substring(t.length), n3 = t) : t.length > 1 && (r = t.indexOf("*", 1), ~r && (e2 = RegExp("^" + t.substring(0, r) + "(.*)" + t.substring(1 + r) + "$").exec(l), e2 && e2[1] && (u = e2[1], n3 = t))));
+    a = i[n3];
+  }
+  return a || e(n2, l), s = t(a, c), s || e(n2, l, 1), u && function(e2, n3) {
+    let r, t = 0, i2 = e2.length, o2 = /[*]/g, f2 = /[/]$/;
+    for (;t < i2; t++)
+      e2[t] = o2.test(r = e2[t]) ? r.replace(o2, n3) : f2.test(r) ? r + n3 : r;
+  }(s, u), s;
+}
+function r(e2, n2, r2) {
+  if (e2 === n2 || n2 === ".")
+    return ".";
+  let t = e2 + "/", i = t.length, o = n2.slice(0, i) === t, f = o ? n2.slice(i) : n2;
+  return f[0] === "#" ? f : o || !r2 ? f.slice(0, 2) === "./" ? f : "./" + f : f;
+}
+function t(e2, n2, r2) {
+  if (e2) {
+    if (typeof e2 == "string")
+      return r2 && r2.add(e2), [e2];
+    let i, o;
+    if (Array.isArray(e2)) {
+      for (o = r2 || new Set, i = 0;i < e2.length; i++)
+        t(e2[i], n2, o);
+      if (!r2 && o.size)
+        return [...o];
+    } else
+      for (i in e2)
+        if (n2.has(i))
+          return t(e2[i], n2, r2);
+  }
+}
+function o(e2, r2, t2) {
+  let i, o2 = e2.exports;
+  if (o2) {
+    if (typeof o2 == "string")
+      o2 = { ".": o2 };
+    else
+      for (i in o2) {
+        i[0] !== "." && (o2 = { ".": o2 });
+        break;
+      }
+    return n(e2.name, o2, r2 || ".", t2);
+  }
+}
+
+// src/client/installed-secrets.ts
+var PACKAGE = "@hasna/secrets";
+var MAX_PACKAGE_BYTES = 1024 * 1024;
+function entryPoint(directory) {
+  const root = realpathSync(directory);
+  const fd = openSync(join(root, "package.json"), O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+  let pkg;
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_PACKAGE_BYTES)
+      throw new Error("Invalid Secrets package metadata");
+    pkg = JSON.parse(readFileSync(fd, "utf8"));
+  } finally {
+    closeSync(fd);
+  }
+  if (!pkg || typeof pkg !== "object" || !("name" in pkg) || pkg.name !== PACKAGE) {
+    throw new Error("Invalid Secrets package identity");
+  }
+  const target = o(pkg, ".")?.[0];
+  if (typeof target !== "string" || !target.startsWith("./"))
+    throw new Error("Missing Secrets import export");
+  const parts = target.slice(2).split("/");
+  if (/[\\%?#\0]/.test(target) || parts.some((part) => !part || part === "." || part === ".." || part === "node_modules")) {
+    throw new Error("Invalid Secrets import export");
+  }
+  const file = realpathSync(join(root, ...parts));
+  const within = relative(root, file);
+  if (!within || within === ".." || within.startsWith(`..${sep}`) || !statSync(file).isFile()) {
+    throw new Error("Secrets import export escapes its package or is not a file");
+  }
+  return pathToFileURL(file).href;
+}
+function resolveInstalledSecrets(parentUrl) {
+  let directory = dirname(fileURLToPath(parentUrl));
+  for (;; ) {
+    if (basename(directory) !== "node_modules") {
+      const candidate = join(directory, "node_modules", PACKAGE);
+      let absent = false;
+      try {
+        lstatSync(candidate);
+      } catch (error) {
+        if (error.code !== "ENOENT")
+          throw error;
+        absent = true;
+      }
+      if (!absent)
+        return entryPoint(candidate);
+    }
+    const parent = dirname(directory);
+    if (parent === directory)
+      throw new Error("Secrets SDK is not installed for this consumer");
+    directory = parent;
+  }
+}
+
+// src/client/credentials.ts
 class CredentialResolutionError extends Error {
   appName;
   attempted;
@@ -92,14 +213,14 @@ function hasnaHomeDir(env) {
   if (override)
     return override;
   const home = homeDir(env);
-  return home ? join(home, HASNA_HOME_DIR) : null;
+  return home ? join2(home, HASNA_HOME_DIR) : null;
 }
 function appConfigDir(name, env) {
   const configRoot = absoluteOverride(env, HASNA_CONFIG_HOME_ENV_KEY);
   if (configRoot)
-    return join(configRoot, name);
+    return join2(configRoot, name);
   const root = hasnaHomeDir(env);
-  return root ? join(root, name, CONFIG_SUBDIR) : null;
+  return root ? join2(root, name, CONFIG_SUBDIR) : null;
 }
 function credentialDiskSourceList(name, env, profile = null) {
   if (!SAFE_APP_SLUG.test(name))
@@ -108,7 +229,7 @@ function credentialDiskSourceList(name, env, profile = null) {
   if (!directory)
     return [];
   const file = profile ? `${CREDENTIALS_FILE}-${profile}` : CREDENTIALS_FILE;
-  return [{ path: join(directory, file), tier: "disk" }];
+  return [{ path: join2(directory, file), tier: "disk" }];
 }
 function credentialDiskSources(name, env) {
   return credentialDiskSourceList(name, env, null).map((s) => s.path);
@@ -162,7 +283,7 @@ function readAppConfigFile(path) {
   };
   let fd = -1;
   try {
-    fd = openSync(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    fd = openSync2(path, O_RDONLY2 | O_NOFOLLOW2 | O_NONBLOCK2);
   } catch (error) {
     const code = error.code;
     if (code === "ENOENT" || code === "ENOTDIR")
@@ -172,7 +293,7 @@ function readAppConfigFile(path) {
     unsafe(`the path could not be opened (${code ?? "unknown error"})`);
   }
   try {
-    const before = fstatSync(fd);
+    const before = fstatSync2(fd);
     if (!before.isFile())
       unsafe("the path is not a regular file");
     if (!configFileModeAllowed(before.mode)) {
@@ -183,31 +304,39 @@ function readAppConfigFile(path) {
       unsafe("the file is not owned by the current user");
     if (before.size > MAX_CREDENTIAL_FILE_BYTES)
       unsafe("the file exceeds the size limit");
-    const bytes = readFileSync(fd);
-    const after = fstatSync(fd);
+    const bytes = readFileSync2(fd);
+    const after = fstatSync2(fd);
     if (!configFileReadsCoherent(before, after)) {
       unsafe("the file changed while being read");
     }
     return parseEnvFile(bytes.toString("utf8"));
   } finally {
     if (fd !== -1)
-      closeSync(fd);
+      closeSync2(fd);
   }
 }
-function readCredentialFile(path, apiKeyKeys) {
+function readCredentialFile(path, apiKeyKeys, pointerKey) {
   const parsed = readAppConfigFile(path);
   if (!parsed)
     return null;
-  for (const key of apiKeyKeys) {
+  for (const key of [...apiKeyKeys, pointerKey]) {
     if (parsed.unusable.has(key)) {
       throw new CredentialFileUnsafeError(path, `${key} is declared but blank or malformed`);
     }
   }
   const values = apiKeyKeys.map((key) => parsed.values.get(key)?.trim()).filter((value) => Boolean(value));
+  const pointer = parsed.values.get(pointerKey)?.trim();
+  if (pointer !== undefined) {
+    if (!VAULT_POINTER_SHAPE.test(pointer))
+      throw new CredentialFileUnsafeError(path, `${pointerKey} must name a vault item`);
+    if (values.length)
+      throw new CredentialFileUnsafeError(path, "a credential file cannot select both a literal key and a vault reference");
+    return { apiKey: "", pointerVaultKey: pointer };
+  }
   if (new Set(values).size > 1) {
     throw new CredentialFileUnsafeError(path, "credential aliases disagree");
   }
-  return values[0] ?? null;
+  return values[0] === undefined ? null : { apiKey: values[0] };
 }
 var CREDENTIAL_SHAPED_KEY = /(?:^|_)(?:API_KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)(?:_|$)/;
 function appConfigDiskValue(name, env, keys) {
@@ -507,12 +636,13 @@ function resolveCredential(name, env, options = {}) {
     }
     const paths = profileDiskSources(name, env, profile);
     for (const path of paths) {
-      const value = readCredentialFile(path, apiKeyKeys);
+      const value = readCredentialFile(path, apiKeyKeys, pointerKeyName);
       if (value) {
-        assertUsableCredential(name, path, value);
+        if (!value.pointerVaultKey)
+          assertUsableCredential(name, path, value.apiKey);
         return sealCredential({
-          apiKey: value,
-          tier: "profile",
+          ...value,
+          tier: value.pointerVaultKey ? "pointer" : "profile",
           source: path,
           deliberate: true,
           diskCandidates: paths,
@@ -520,7 +650,7 @@ function resolveCredential(name, env, options = {}) {
         });
       }
     }
-    throw new CredentialResolutionError(name, `Profile '${profile}' (from ${profileSource}) has no ${apiKeyKeys[0]} for '${name}'. ` + `Looked in: ${paths.join(", ") || "<no HOME in this environment>"}. ` + `A profile names WHICH identity to use, so it is never resolved around \u2014 ` + `create the profile's credential file or unset ${CREDENTIAL_PROFILE_ENV_KEY}.`, paths);
+    throw new CredentialResolutionError(name, `Profile '${profile}' (from ${profileSource}) has no ${apiKeyKeys[0]} or ${pointerKeyName} for '${name}'. ` + `Looked in: ${paths.join(", ") || "<no HOME in this environment>"}. ` + `A profile names WHICH identity to use, so it is never resolved around \u2014 ` + `create the profile's credential file or unset ${CREDENTIAL_PROFILE_ENV_KEY}.`, paths);
   }
   const definedEnvEntries = apiKeyKeys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, value: String(env[key]).trim() }));
   const blankEnv = definedEnvEntries.find((entry) => entry.value.length === 0);
@@ -545,17 +675,27 @@ function resolveCredential(name, env, options = {}) {
     });
   }
   const diskSourceList = credentialDiskSourceList(name, env, null);
-  const diskHits = diskSourceList.map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys) })).filter((hit) => hit.value !== null);
+  const diskHits = diskSourceList.map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys, pointerKeyName) })).filter((hit) => hit.value !== null);
   if (diskHits.length > 0) {
     const winner = diskHits[0];
-    assertUsableCredential(name, winner.src.path, winner.value);
+    if (winner.value.pointerVaultKey) {
+      return sealCredential({
+        ...winner.value,
+        tier: "pointer",
+        source: winner.src.path,
+        deliberate: false,
+        diskCandidates: diskPaths,
+        warning: null
+      });
+    }
+    assertUsableCredential(name, winner.src.path, winner.value.apiKey);
     const divergentSources = [
-      ...diskHits.slice(1).filter((hit) => hit.value !== winner.value).map((hit) => hit.src.path),
-      ...envHit && envHit.value !== winner.value ? [envHit.key] : []
+      ...diskHits.slice(1).filter((hit) => hit.value.apiKey !== winner.value.apiKey || hit.value.pointerVaultKey !== winner.value.pointerVaultKey).map((hit) => hit.src.path),
+      ...envHit && envHit.value !== winner.value.apiKey ? [envHit.key] : []
     ];
     const warning = divergentSources.length > 0 ? `Credential sources disagree for '${name}': ${winner.src.path} and ` + `${divergentSources.join(", ")} hold different keys. ${winner.src.path} wins, because a file on ` + `disk is re-read on every call while an environment variable is a snapshot. Reconcile them \u2014 ` + `a rotation that updated only one leaves the other to fail 401 wherever it is loaded first.` : null;
     return sealCredential({
-      apiKey: winner.value,
+      apiKey: winner.value.apiKey,
       tier: winner.src.tier,
       source: winner.src.path,
       deliberate: false,
@@ -576,23 +716,31 @@ function resolveCredential(name, env, options = {}) {
   }
   return null;
 }
-var SECRETS_PACKAGE_SPECIFIER = "@hasna/" + "secrets";
 var requireSecretsSdk = createRequire(import.meta.url);
 async function completePointerCredential(name, pointerResolution, env = process.env) {
+  const secretsEnv = snapshotClientEnvironment("secrets", env);
   const vaultKey = pointerResolution.pointerVaultKey;
   const pointerEnvKey = pointerResolution.source;
   if (!vaultKey) {
     throw new CredentialResolutionError(name, `Pointer resolution from ${pointerEnvKey} carries no vault item key; this is a defect in the resolver.`, [pointerEnvKey]);
   }
+  if (name === "secrets") {
+    throw new CredentialResolutionError(name, "The Secrets bootstrap credential cannot reference the same hosted vault; configure an independent bootstrap provider.", [pointerEnvKey]);
+  }
   let secretsSdk;
   try {
-    secretsSdk = requireSecretsSdk(SECRETS_PACKAGE_SPECIFIER);
+    const sdkUrl = resolveInstalledSecrets(import.meta.url);
+    secretsSdk = requireSecretsSdk(fileURLToPath2(sdkUrl));
   } catch {
     throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the secrets SDK (@hasna/secrets) is not installed ` + `in this process. A vault pointer is TERMINAL: install @hasna/secrets to resolve it, or unset ${pointerEnvKey}.`, [pointerEnvKey]);
   }
   let client;
   try {
-    client = secretsSdk.createSecretsClientFromEnv(env);
+    const bootstrap = resolveCredential("secrets", secretsEnv);
+    if (!bootstrap || bootstrap.tier === "pointer") {
+      throw new CredentialResolutionError("secrets", "The Secrets vault requires an independent, non-reference bootstrap credential.", bootstrap ? [bootstrap.source] : []);
+    }
+    client = secretsSdk.createSecretsClientFromEnv(secretsEnv);
   } catch {
     throw new CredentialResolutionError(name, `${pointerEnvKey} names vault item '${vaultKey}', but the secrets client could not be configured from this ` + `environment (the secrets service URL and key env are missing or invalid). A vault pointer is TERMINAL and ` + `never falls through to a literal or disk credential.`, [pointerEnvKey]);
   }
@@ -611,7 +759,7 @@ async function completePointerCredential(name, pointerResolution, env = process.
     apiKey: value,
     tier: "pointer",
     source: `${pointerEnvKey} -> vault:${vaultKey}`,
-    deliberate: true,
+    deliberate: pointerResolution.deliberate,
     diskCandidates: pointerResolution.diskCandidates,
     warning: null
   });
@@ -999,12 +1147,12 @@ function createHasnaHttpTransportInternal(options, requestBindingProvider) {
     const chosen = callRetry !== undefined ? callRetry : defaultRetry;
     if (chosen === false)
       return null;
-    const r = chosen ?? {};
+    const r2 = chosen ?? {};
     return {
-      retries: r.retries ?? 2,
-      baseDelayMs: r.baseDelayMs ?? 200,
-      maxDelayMs: r.maxDelayMs ?? 2000,
-      retryStatuses: r.retryStatuses ?? [...DEFAULT_RETRY_STATUSES]
+      retries: r2.retries ?? 2,
+      baseDelayMs: r2.baseDelayMs ?? 200,
+      maxDelayMs: r2.maxDelayMs ?? 2000,
+      retryStatuses: r2.retryStatuses ?? [...DEFAULT_RETRY_STATUSES]
     };
   }
   async function once(method, rel, url, body, opts, credential) {
