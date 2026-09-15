@@ -139,9 +139,10 @@ describe("sdk surface", () => {
     const fetched = await store.getRun(PRINCIPAL, run.id);
     expect(fetched?.status).toBe("queued");
 
-    // The bundled registry still resolves catalog skills next to the store.
-    expect(bundledRegistry.list().length).toBeGreaterThan(0);
-    expect(bundledRegistry.get("pdf-generate")).not.toBeNull();
+    // Unscoped compatibility exports cannot read a machine or tenant catalog.
+    expect(bundledRegistry.list()).toEqual([]);
+    expect(bundledRegistry.get("pdf-generate")).toBeNull();
+    expect(bundledRegistry.getSkillMd("pdf-generate")).toBeNull();
     expect(bundledRegistry.isValidSlug("pdf-generate")).toBe(true);
     expect(bundledRegistry.isValidSlug("../escape")).toBe(false);
   });

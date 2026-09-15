@@ -14,8 +14,6 @@ export interface SkillsServerConfig {
   port: number;
   databaseUrl?: string;
   bootstrapApiKey?: string;
-  /** Publish the bundled corpus as versioned skills on boot (default on; set HASNA_SKILLS_SEED_BUNDLED_CORPUS=0 to skip). */
-  seedBundledCorpus: boolean;
   artifactBucket?: string;
   artifactPrefix: string;
   /** Optional expiring run-output namespace; immutable bundles retain artifactPrefix. */
@@ -84,7 +82,6 @@ export function resolveServerConfig(env: Record<string, string | undefined> = pr
     port,
     databaseUrl: env[DATABASE_URL_ENV] || env.DATABASE_URL || undefined,
     bootstrapApiKey: env.HASNA_SKILLS_BOOTSTRAP_API_KEY || undefined,
-    seedBundledCorpus: (env.HASNA_SKILLS_SEED_BUNDLED_CORPUS ?? "1") !== "0",
     artifactBucket: env.HASNA_SKILLS_S3_BUCKET || env.SKILLS_S3_BUCKET || undefined,
     artifactPrefix: normalizePrefix(env.HASNA_SKILLS_S3_PREFIX || env.SKILLS_S3_PREFIX || "skills/artifacts"),
     runArtifactPrefix: env.HASNA_SKILLS_S3_RUN_PREFIX ? normalizePrefix(env.HASNA_SKILLS_S3_RUN_PREFIX) : undefined,
