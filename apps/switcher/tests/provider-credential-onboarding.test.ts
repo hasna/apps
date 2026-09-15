@@ -26,6 +26,7 @@ type CredentialBindingRecord = {
   schema: 1;
   credentialEnv: string;
   origins: string[];
+  requireProviderAuthentication?: true;
   source: { kind: "vault"; key: string; url?: string; executable: string; operator: VaultReference["operator"] };
 };
 type ResolverSeam = {
@@ -118,6 +119,7 @@ test("first-run setup binds the chosen metadata reference, authenticates it, and
     schema: 1,
     credentialEnv: "SWITCHER_PROVIDER_OPENROUTER",
     origins: ["https://openrouter.ai"],
+    requireProviderAuthentication: true,
     source: { kind: "vault", key: references[0].key, executable: references[0].executable, operator: references[0].operator },
   });
   await expect(ensure(provider(), options)).resolves.toMatchObject({ source: "binding", configured: false, providerFingerprint: expect.any(String) });
@@ -192,6 +194,25 @@ test("a newly saved binding cannot bypass an unsupported authentication check on
   expect(state.binding()?.source.key).toBe(references[0].key);
   await expect(ensure(provider(),options)).rejects.toMatchObject({code:"provider_auth_check_unsupported"});
   expect(discoveries).toBe(1);
+});
+
+test("legacy bindings without a verification requirement remain compatible when no safe check is declared",async()=>{
+  const ensure=expectedApi();const legacy=fixture({existing:{schema:1,credentialEnv:"SWITCHER_PROVIDER_OPENROUTER",origins:["https://openrouter.ai"],source:{kind:"vault",key:references[0].key,executable:references[0].executable,operator:references[0].operator}},resolved:"fixture-current-vault-value"});
+  await expect(ensure(provider(),{interactive:false,resolver:legacy.resolver,discoverVaultReferences:async()=>{throw new Error("must not discover");},verifyProviderAuthentication:async()=>({authenticated:false,unsupported:true} as any)})).resolves.toMatchObject({source:"binding",configured:false,verified:false});
+});
+
+test("existing built-in bindings without safe checks retain their pre-onboarding launch contract",async()=>{
+  const ensure=expectedApi();
+  const providers=[
+    providerFromPreset("azure-openai",{harness:"codex",baseUrl:"https://fixture.openai.azure.com/openai/v1"}),
+    providerFromPreset("dashscope",{harness:"opencode"}),
+    providerFromPreset("zai",{harness:"opencode"}),
+  ];
+  for(const input of providers){
+    const existing:CredentialBindingRecord={schema:1,credentialEnv:input.credentialEnv!,origins:[new URL(input.baseUrl).origin],source:{kind:"vault",key:references[0].key,executable:references[0].executable,operator:references[0].operator}};
+    const state=fixture({existing,resolved:"fixture-current-vault-value"});
+    await expect(ensure(input,{interactive:false,resolver:state.resolver,discoverVaultReferences:async()=>{throw new Error("must not discover");},verifyProviderAuthentication:credentialModule.verifyProviderAuthentication})).resolves.toMatchObject({source:"binding",configured:false,verified:false});
+  }
 });
 
 test("rejected provider credentials remain on the selected account and do not fall through to another match", async () => {
@@ -284,6 +305,13 @@ test("existing OpenRouter providers created before credential checks remain laun
 test("provider authentication distinguishes rejected credentials from transient or redirected checks",async()=>{
   for(const status of [302,429,500])await expect(credentialModule.verifyProviderAuthentication({provider:provider(),credential:"fixture",fetch:(async()=>new Response(null,{status})) as typeof fetch})).rejects.toMatchObject({code:"provider_auth_unavailable"});
   await expect(credentialModule.verifyProviderAuthentication({provider:provider(),credential:"fixture",fetch:(async()=>{throw new Error("offline");}) as typeof fetch})).rejects.toMatchObject({code:"provider_auth_unavailable"});
+});
+
+test("catalog configuration alone never proves provider authentication",async()=>{
+  const configured={...providerFromPreset("generic-openai-responses",{harness:"codex",baseUrl:"https://provider.example/v1",credentialEnv:"SWITCHER_PROVIDER_GENERIC"}),catalogAuthStyle:"bearer" as const};
+  let requests=0;
+  expect(await credentialModule.verifyProviderAuthentication({provider:configured,credential:"fixture-invalid",fetch:(async()=>{requests++;return new Response(null,{status:200});}) as typeof fetch})).toEqual({authenticated:false,unsupported:true});
+  expect(requests).toBe(0);
 });
 
 test("default vault discovery runs metadata-only searches and reports the selected Contracts source", async () => {

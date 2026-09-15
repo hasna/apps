@@ -165,7 +165,7 @@ process.exit(await child.exited);
     try{expect(await first.exited,output).toBe(0);expect(selected,output).toBe(true);expect(timedOut,output).toBe(false);}
     finally{clearTimeout(timer);first.terminal?.close();}
     const binding=await readFile(join(dir,"data/config/credential-bindings/SWITCHER_PROVIDER_ACME.json"),"utf8");
-    expect(JSON.parse(binding)).toMatchObject({credentialEnv:"SWITCHER_PROVIDER_ACME",origins:[upstream.url.origin],source:{kind:"vault",key:"accounts/acme/live/api_key",url:"https://vault.example",operator:{kind:"contracts",expectedSource:"HASNA_SECRETS_API_KEY",expectedTier:"env"}}});
+    expect(JSON.parse(binding)).toMatchObject({credentialEnv:"SWITCHER_PROVIDER_ACME",origins:[upstream.url.origin],requireProviderAuthentication:true,source:{kind:"vault",key:"accounts/acme/live/api_key",url:"https://vault.example",operator:{kind:"contracts",expectedSource:"HASNA_SECRETS_API_KEY",expectedTier:"env"}}});
     const before=(await readFile(operations,"utf8")).split("\n").filter(Boolean);expect(before.filter(line=>line.startsWith("search:"))).not.toHaveLength(0);
     expect(paths).toEqual(["/auth","/models"]);expect(await Bun.file(join(dir,"native-started")).exists()).toBe(true);
 
@@ -324,7 +324,7 @@ test("actual CLI auto-configures split DeepSeek catalog, launches a harness, reu
       expect(output.authCorrect).toBe(true); expect(output.operatorPresent).toBe(false); expect(output.unrelatedPresent).toBe(false);
       expect(result.stdout).not.toContain("fixture-deepseek-key");
     }
-    expect(requested).toEqual(["/models","/models","/models","/models"]);
+    expect(requested).toEqual(["/models","/models"]);
     const profiles = await command(dir,["profiles","list"]);
     expect(profiles.code, profiles.stderr).toBe(0); expect(JSON.parse(profiles.stdout).total).toBe(1);
     const runs = await command(dir,["runs","list"]);

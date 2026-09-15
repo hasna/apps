@@ -71,10 +71,12 @@ Use --catalog-format none for a manual catalog; otherwise discovery stays active
 models update replaces saved metadata; omit expiry in its JSON to clear it.
 models remove removes saved metadata, not entries in an upstream catalog.
 Credential bindings contain references only. Custom destinations require --origin URL.
-Before a real launch, Switcher resolves and authenticates the provider credential
-before catalog refresh or an interactive model picker. When no source exists in
+Before a real launch, Switcher resolves the provider credential and runs its
+declared safe authentication check before catalog refresh or a model picker. When no source exists in
 an interactive terminal, it searches Hasna Secrets metadata, displays the selected
 Secrets account/source and matching key references, and requires a selection.
+Auto-onboarded bindings refuse providers without a safe check; older explicit
+bindings remain compatible and are never validated by inferring catalog behavior.
 Noninteractive launches return credential_setup_required with exact binding syntax.
 Dry-runs do not bind, resolve, or authenticate provider credentials. Public and
 credentialless catalogs may refresh; authenticated catalogs use a saved snapshot

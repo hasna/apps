@@ -26,6 +26,7 @@ const operator = z.discriminatedUnion("kind", [
 const origin = z.string().transform(value => new URL(endpoint(value)).origin);
 export const credentialBindingSchema = z.object({
   schema:z.literal(1), credentialEnv:reference, origins:z.array(origin).min(1).max(30),
+  requireProviderAuthentication:z.literal(true).optional(),
   source:z.discriminatedUnion("kind", [keychain, z.object({
     kind:z.literal("vault"), key:vaultKey, url:z.string().max(2000).transform(endpoint).optional(),
     executable:z.string().max(4096).regex(/^[^\x00-\x1f\x7f]+$/).refine(isAbsolute,"Secrets executable must be an absolute path"), operator,
@@ -492,14 +493,7 @@ function authenticationProbe(provider:ProviderInput):{url:URL;method:"GET"|"HEAD
   const base=new URL(provider.baseUrl);
   if(provider.credentialEnv==="SWITCHER_PROVIDER_OPENROUTER"&&base.origin==="https://openrouter.ai"&&base.pathname.replace(/\/+$/,"")==="/api/v1")
     return {url:new URL("https://openrouter.ai/api/v1/key"),method:"GET",authStyle:provider.authStyle??"bearer"};
-  const authStyle=provider.catalogAuthStyle??provider.authStyle??"bearer";
-  const catalogCredentialEnv=provider.catalogCredentialEnv??provider.credentialEnv;
-  if(authStyle==="none"||catalogCredentialEnv!==provider.credentialEnv||provider.catalogFormat==="none")return undefined;
-  const root=provider.catalogBaseUrl??(provider.catalogFormat==="fireworks"&&provider.catalogAccountId?`https://api.fireworks.ai/v1/accounts/${encodeURIComponent(provider.catalogAccountId)}`:provider.baseUrl);
-  const url=new URL(`${root}/${provider.modelsPath??"models"}`);
-  if(url.origin!==new URL(provider.baseUrl).origin&&!provider.catalogCredentialEnv)throw new Fault(422,"catalog_credential_authority","A different catalog origin requires an explicit catalog credential reference.");
-  if(provider.catalogFormat==="fireworks")url.searchParams.set("pageSize","1");
-  return {url,method:"GET",authStyle};
+  return undefined;
 }
 
 export async function verifyProviderAuthentication({provider,credential,fetch:fetchImpl=fetch}:{provider:ProviderInput;credential:string;fetch?:typeof fetch}):Promise<ProviderAuthenticationResult>{
@@ -553,14 +547,15 @@ export async function ensureProviderCredential(provider:ProviderInput,options:En
     const selected=matches.find(match=>match.account===candidate.account&&match.key===candidate.key&&match.executable===candidate.executable&&JSON.stringify(match.operator)===JSON.stringify(candidate.operator));
     if(!selected)throw new Fault(400,"credential_selection_invalid","Choose one of the displayed credential references.");
     const source={kind:"vault" as const,key:selected.key,...(selected.url?{url:selected.url}:{}),executable:selected.executable,operator:selected.operator};
-    await resolver.bindings.bind(parse(credentialBindingSchema,{schema:1,credentialEnv:provider.credentialEnv,origins:credentialOrigins(provider),source}));
+    await resolver.bindings.bind(parse(credentialBindingSchema,{schema:1,credentialEnv:provider.credentialEnv,origins:credentialOrigins(provider),requireProviderAuthentication:true,source}));
     configured=true;credential=await resolver.resolve(provider);
     if(!credential)throw new Fault(422,"vault_delivery_failed","The selected credential reference did not provide a usable value; no alternate account was selected.");
   }
   const verify=options.verifyProviderAuthentication??(request=>verifyProviderAuthentication(request));
   const result=await verify({provider,credential});
   if(result.unsupported){
-    throw new Fault(422,"provider_auth_check_unsupported",`This provider has no configured non-inference authentication check.${configured?" The selected binding was preserved.":""} Configure credentialCheck before launch; no unverified credential was sent.`);
+    if(configured||existing?.requireProviderAuthentication)throw new Fault(422,"provider_auth_check_unsupported",`This provider has no configured non-inference authentication check.${configured?" The selected binding was preserved.":""} Configure credentialCheck before launch; no unverified credential was sent.`);
+    return preparedProviderCredential(provider,credential,{source:existing?"binding":"environment",configured,verified:false});
   }
   if(!result.authenticated)throw new Fault(401,"provider_credential_rejected",`The provider rejected the selected credential${result.status?` with HTTP ${result.status}`:""}. No alternate account was selected.${configured?` To choose a different reference, run: switcher credentials remove ${provider.credentialEnv}.`:""}`);
   return preparedProviderCredential(provider,credential,{source:existing||configured?"binding":"environment",configured,verified:true});
