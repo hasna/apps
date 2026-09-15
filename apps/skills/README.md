@@ -636,6 +636,44 @@ and version-skew contract: `docs/architecture/remote-client-pins-tags-sync.md`.
 For the reusable upstream contract, see
 `docs/architecture/reusable-skills-engine.md`.
 
+### Recurring consent SDK
+
+The SDK exposes `previewRecurringConsent`, `getRecurringDraft`,
+`activateRecurringConsent`, `listRecurringConsents`, `getRecurringConsent`,
+`listRecurringOccurrences` and `revokeRecurringConsent`. These require a server
+that explicitly advertises the version-1 recurring capability; an unavailable
+server raises `RemoteRecurringUnavailableError`. This client does not create
+local schedules or enable a server policy. Use `createRemoteSkillsClient` for the
+existing selected-profile/API binding, or construct `RemoteSkillsClient` with an
+explicit bearer and API URL. Each operation captures that connection and all
+inputs before asynchronous work. An optional final `RemoteWorkspaceContext`
+restricts it to an observed user and membership; profile files are unchanged.
+
+`RecurringRequest` carries explicit cadence, lifetime, runtime limits and credit
+and occurrence ceilings. A preview returns immutable terms, their hash, the
+original quote and approval deadline; its quote states that admission reprices.
+Draft retrieval retains those values even after expiry and never refreshes the
+deadline. Activation requires the original draft ID and `RecurringActivation`:
+`contractVersion: 1`, its exact `acceptedTermsSha256`, the literal acceptance
+`authorize-recurring-credit-use`, and a caller-owned idempotency key. The client
+reads the stored draft before submitting; the server independently requires
+current fresh human authority. Client metadata cannot grant that authority.
+Read operations require `schedules:read`, while preview and revocation require
+`schedules:manage`; API keys cannot activate a grant. Consent read/history/revoke
+preserve tenant-wide control, including retained grants from other deployments.
+
+`RemoteRecurringUnconfirmedError` means a dispatched mutation could have
+committed. Keep its original server/account, inputs, terms hash and request key;
+explicitly reconcile that same identity with current authority. The client never
+retries a POST, creates a replacement key or asserts rollback. After uncertain
+revocation, inspect the original consent and occurrences; revocation does not
+promise cancellation of an already authorized attempt. Exact domain not-found
+responses return `null` only for draft/consent reads. Malformed or oversized
+responses fail closed. Pages accept 1–100 items and an opaque cursor; a large
+terms page can exceed the 64-MiB response bound, so request a smaller page
+explicitly. JSON input is limited to 1 MiB and 64 nesting levels. These SDK
+methods do not add recurring CLI, MCP or dashboard controls.
+
 ## Portable Skills
 
 Portable skills live under `~/.hasna/skills/installed/<name>/` and follow the
