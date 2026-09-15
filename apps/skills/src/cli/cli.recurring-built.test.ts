@@ -55,7 +55,7 @@ test("compiled recurring CLI preserves its profile through approval, history and
   };
   const success = async (args: string[]) => {
     const result = await invoke(args);
-    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.exitCode, `${args[0]}: ${result.stderr || result.stdout}`).toBe(0);
     return JSON.parse(result.stdout);
   };
   try {
