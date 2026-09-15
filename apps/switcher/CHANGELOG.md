@@ -9,6 +9,12 @@ status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
+## 0.2.2
+
+### Patch Changes
+
+- Preflight provider credentials before catalog refresh and interactive model selection for direct and saved-profile launches. Add first-run metadata-only Hasna Secrets discovery with exact selected-source pinning, explicit account/reference selection, immutable binding reuse, bounded declared non-inference authentication checks, actionable structured errors, credential-free dry-run planning from public or cached catalogs, and final-plan authority revalidation. OpenRouter authentication uses its protected key metadata endpoint rather than its public model catalog; catalog behavior is never inferred as credential proof, while older explicit bindings without a declared safe check retain their existing compatibility contract.
+
 ## 0.2.1
 
 ### Patch Changes

@@ -255,6 +255,14 @@ export interface components {
                 baseUrl?: string;
                 /** @enum {string} */
                 authStyle: "bearer" | "x-api-key" | "api-key";
+                credentialCheck?: {
+                    /**
+                     * @default GET
+                     * @enum {string}
+                     */
+                    method: "GET" | "HEAD";
+                    path: string;
+                };
                 catalogBaseUrl?: string;
                 /** @enum {string} */
                 catalogFormat: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "gemini" | "none";
@@ -279,6 +287,14 @@ export interface components {
              * @enum {string}
              */
             authStyle: "bearer" | "x-api-key" | "api-key";
+            credentialCheck?: {
+                /**
+                 * @default GET
+                 * @enum {string}
+                 */
+                method: "GET" | "HEAD";
+                path: string;
+            };
             catalogBaseUrl?: string;
             /** @enum {string} */
             catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "gemini" | "none";
@@ -330,6 +346,14 @@ export interface components {
              * @enum {string}
              */
             authStyle: "bearer" | "x-api-key" | "api-key";
+            credentialCheck?: {
+                /**
+                 * @default GET
+                 * @enum {string}
+                 */
+                method: "GET" | "HEAD";
+                path: string;
+            };
             catalogBaseUrl?: string;
             /** @enum {string} */
             catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "gemini" | "none";
@@ -547,6 +571,14 @@ export interface components {
                  * @enum {string}
                  */
                 authStyle: "bearer" | "x-api-key" | "api-key";
+                credentialCheck?: {
+                    /**
+                     * @default GET
+                     * @enum {string}
+                     */
+                    method: "GET" | "HEAD";
+                    path: string;
+                };
                 catalogBaseUrl?: string;
                 /** @enum {string} */
                 catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "gemini" | "none";

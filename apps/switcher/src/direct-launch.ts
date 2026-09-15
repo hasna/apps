@@ -2,7 +2,7 @@ import { canonicalPolicyJSON } from "./model-policy-schema";
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { SwitcherClient, SwitcherError, type Provider, type Profile } from "./sdk";
-import { codingEligible, harnessEligible, Fault, CommandInterrupted, parse, providerInputSchema, profileInputSchema, modelPolicySchema, type Model, type ModelPolicy } from "./domain";
+import { codingEligible, harnessEligible, Fault, CommandInterrupted, parse, providerInputSchema, profileInputSchema, modelPolicySchema, type Catalog, type Model, type ModelPolicy } from "./domain";
 import { providerFromPreset, type PresetOptions } from "./presets";
 
 const absent = (error: unknown) => error instanceof SwitcherError && error.status === 404;
@@ -23,11 +23,32 @@ export async function resolveLaunchProvider(client: SwitcherClient, selector: st
   const {version, updatedAt, ...input} = existing;
   // Additive model metadata belongs to the saved provider. A preset gaining a
   // preview must not invalidate an existing provider or replace its additions.
-  const {additionalModels: _savedAdditions, ...savedSettings} = parse(providerInputSchema, input);
-  const {additionalModels: _presetAdditions, ...presetSettings} = desired;
-  if (JSON.stringify(savedSettings) !== JSON.stringify(presetSettings))
+  const {additionalModels: _savedAdditions, credentialCheck:savedCredentialCheck, ...savedSettings} = parse(providerInputSchema, input);
+  const {additionalModels: _presetAdditions, credentialCheck:presetCredentialCheck, ...presetSettings} = desired;
+  if (JSON.stringify(savedSettings) !== JSON.stringify(presetSettings) || (savedCredentialCheck !== undefined && JSON.stringify(savedCredentialCheck) !== JSON.stringify(presetCredentialCheck)))
     throw new Fault(409, "provider_conflict", "A saved provider with this preset ID has different settings. Select its ID directly or update it explicitly.");
   return existing;
+}
+
+function catalogRequiresCredential(provider:Provider){
+  if(provider.manualModels.length)return false;
+  return (provider.catalogAuthStyle??provider.authStyle)!=="none"&&Boolean(provider.catalogCredentialEnv??provider.credentialEnv);
+}
+
+export async function launchCatalog(client:SwitcherClient,provider:Provider,dryRun=false):Promise<Catalog>{
+  if(!dryRun||!catalogRequiresCredential(provider))return client.refreshModels(provider.id);
+  const models:Model[]=[];let offset=0,refreshedAt:string|undefined,source:Catalog["source"]|undefined,total:number|undefined;
+  for(let pageNumber=0;pageNumber<10;pageNumber++){
+    let page:Awaited<ReturnType<SwitcherClient["listModels"]>>;
+    try{page=await client.listModels(provider.id,{limit:1000,offset});}
+    catch(error){if(absent(error))throw new Fault(400,"dry_run_catalog_unavailable",`Dry-run will not retrieve provider credentials. Refresh ${provider.id} explicitly with switcher models ${provider.id} --refresh, then rerun the plan.`);throw error;}
+    if(total===undefined){total=page.total;refreshedAt=page.refreshedAt;source=page.source;}
+    else if(total!==page.total||refreshedAt!==page.refreshedAt||source!==page.source)throw new Fault(409,"catalog_changed","The cached catalog changed while the dry-run plan was being read; retry.");
+    for(const row of page.data){const {codingEligible:_codingEligible,expired:_expired,...model}=row;models.push(model);}
+    offset+=page.data.length;if(offset>=page.total)break;if(!page.data.length)throw new Fault(502,"invalid_catalog","The cached catalog page did not advance.");
+  }
+  if(total===undefined||models.length!==total||!refreshedAt||!source)throw new Fault(502,"invalid_catalog","The cached catalog exceeds the bounded dry-run reader or is incomplete.");
+  return {models,refreshedAt,source};
 }
 
 const display = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f]/g, "");

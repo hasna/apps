@@ -8,6 +8,7 @@ import type {SwitcherClient} from "../src/sdk";
 import {SwitcherError} from "../src/sdk";
 import {providerFromPreset} from "../src/presets";
 import {resolveLaunchProvider} from "../src/direct-launch";
+import {providerCredentialFingerprint} from "../src/credentials";
 test("Gemini auth mismatch is rejected before discovery or credential lookup",async()=>{
   let touched=false;
   const client={
@@ -154,6 +155,17 @@ test("a changed API launch plan is checked again before local credential lookup"
   let credentialRead=false;
   const client={getProfile:async()=>({harness:"claude"}),launchPlan:async()=>({profile:{harness:"codex"}})} as unknown as SwitcherClient;
   await expect(launch(client,"changed",{refresh:false,args:["-moutside"],resolveCredential:async()=>{credentialRead=true;return "fixture";}})).rejects.toThrow("profile");
+  expect(credentialRead).toBe(false);
+});
+
+test("a provider authority change after credential preflight is rejected before credential lookup",async()=>{
+  let credentialRead=false;
+  const authenticated={id:"fixture",name:"Fixture",baseUrl:"https://provider.example/v1",protocol:"openai-responses" as const,authStyle:"bearer" as const,credentialEnv:"SWITCHER_PROVIDER_TEST"};
+  const client={
+    getProfile:async()=>({harness:"codex",providerId:"fixture",model:"fixture-model"}),
+    launchPlan:async()=>({profile:{harness:"codex",model:"fixture-model"},provider:{...authenticated,baseUrl:"https://changed.example/v1"},catalog:{models:[{id:"fixture-model",name:"Fixture"}]},warnings:[]}),
+  } as unknown as SwitcherClient;
+  await expect(launch(client,"changed",{refresh:false,credentialPreflight:providerCredentialFingerprint(authenticated),resolveCredential:async()=>{credentialRead=true;return "fixture";}})).rejects.toMatchObject({code:"credential_preflight_changed"});
   expect(credentialRead).toBe(false);
 });
 

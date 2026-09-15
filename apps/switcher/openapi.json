@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Switcher API",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "description": "Authenticated provider/profile/catalog control plane. Launches run locally; the API never returns provider credentials."
   },
   "security": [
@@ -1232,6 +1232,29 @@
                     "api-key"
                   ]
                 },
+                "credentialCheck": {
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "type": "string",
+                      "enum": [
+                        "GET",
+                        "HEAD"
+                      ],
+                      "default": "GET"
+                    },
+                    "path": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "pattern": "^[a-zA-Z0-9_~!$&'()*+,;=:@%./-]+$"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "additionalProperties": false
+                },
                 "catalogBaseUrl": {
                   "type": "string",
                   "maxLength": 2000
@@ -1340,6 +1363,29 @@
               "api-key"
             ],
             "default": "bearer"
+          },
+          "credentialCheck": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "GET",
+                  "HEAD"
+                ],
+                "default": "GET"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[a-zA-Z0-9_~!$&'()*+,;=:@%./-]+$"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
           },
           "catalogBaseUrl": {
             "type": "string",
@@ -1618,6 +1664,29 @@
               "api-key"
             ],
             "default": "bearer"
+          },
+          "credentialCheck": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "GET",
+                  "HEAD"
+                ],
+                "default": "GET"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[a-zA-Z0-9_~!$&'()*+,;=:@%./-]+$"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
           },
           "catalogBaseUrl": {
             "type": "string",
@@ -2740,6 +2809,29 @@
                   "api-key"
                 ],
                 "default": "bearer"
+              },
+              "credentialCheck": {
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "GET",
+                      "HEAD"
+                    ],
+                    "default": "GET"
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "pattern": "^[a-zA-Z0-9_~!$&'()*+,;=:@%./-]+$"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "additionalProperties": false
               },
               "catalogBaseUrl": {
                 "type": "string",

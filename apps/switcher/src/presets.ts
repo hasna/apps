@@ -23,7 +23,7 @@ export const providerPresets: readonly ProviderPreset[] = [
     route("anthropic-messages", "https://api.deepseek.com/anthropic/v1", {catalogBaseUrl: "https://api.deepseek.com"}),
   ], ["https://api-docs.deepseek.com/guides/anthropic_api", "https://api-docs.deepseek.com/api/list-models", "https://api-docs.deepseek.com/updates/", "https://api-docs.deepseek.com/guides/responses_api/"], "DEEPSEEK_API_KEY"),
   preset("openrouter", "OpenRouter", ["openai-chat", "openai-responses", "anthropic-messages"].map(protocol =>
-    route(protocol as Protocol, "https://openrouter.ai/api/v1", {catalogAuthStyle: "none"})),
+    route(protocol as Protocol, "https://openrouter.ai/api/v1", {catalogAuthStyle: "none",credentialCheck:{method:"GET",path:"key"}})),
     ["https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties", "https://openrouter.ai/docs/guides/overview"], "OPENROUTER_API_KEY"),
   preset("anthropic", "Anthropic", [route("anthropic-messages", "https://api.anthropic.com/v1", {authStyle: "x-api-key"})],
     ["https://platform.claude.com/docs/en/api/overview", "https://platform.claude.com/docs/en/api/models/list"], "ANTHROPIC_API_KEY"),
@@ -121,6 +121,7 @@ export function providerFromPreset(presetId: string, options: PresetOptions = {}
   return parse(providerInputSchema, {
     id: options.id ?? `${preset.id}-${suffix}`, name: preset.name, baseUrl, protocol: selected.protocol,
     credentialEnv: options.credentialEnv ?? preset.credentialEnv, authStyle: options.authStyle ?? selected.authStyle,
+    credentialCheck:selected.credentialCheck,
     catalogBaseUrl, catalogCredentialEnv: options.catalogCredentialEnv,
     catalogAuthStyle: options.catalogAuthStyle ?? selected.catalogAuthStyle,
     catalogFormat: options.catalogFormat ?? selected.catalogFormat, catalogAccountId: options.catalogAccountId,
