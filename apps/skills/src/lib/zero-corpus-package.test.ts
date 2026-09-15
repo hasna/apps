@@ -39,10 +39,9 @@ describe("zero-corpus package", () => {
     const packed = getPackedFiles(PACKAGE_DIR);
     expect(packed.length).toBeGreaterThan(0);
     expect(corpusEntries(packed)).toEqual([]);
-    // The public corpus still EXISTS in the repo — this is about the tarball, not the
-    // tree. agent-skills/ exists as the private-store pointer; neither may ship.
-    expect(existsSync(join(PACKAGE_DIR, "skills"))).toBe(true);
-    expect(existsSync(join(PACKAGE_DIR, "agent-skills"))).toBe(true);
+    // Neither the source tree nor the tarball contains an operational corpus.
+    expect(existsSync(join(PACKAGE_DIR, "skills"))).toBe(false);
+    expect(existsSync(join(PACKAGE_DIR, "agent-skills"))).toBe(false);
   });
 
   test("a real packed tarball contains no corpus paths", () => {

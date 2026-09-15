@@ -1,13 +1,13 @@
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
+import { TEST_CATALOG, writeTestCatalog } from "../lib/private-corpus-test-utils.js";
 import { withoutDataDirOverrideEnv } from "../test-preload.js";
 
 
 const MCP_PATH = join(import.meta.dir, "index.ts");
-export const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
-export const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
+export const EXPECTED_ALL_SKILL_COUNT = TEST_CATALOG.length;
+export const EXPECTED_BASIC_SKILL_COUNT = TEST_CATALOG.length;
 const CLEAN_STORAGE_ENV = {
   HASNA_SKILLS_DATABASE_URL: "",
   HASNA_SKILLS_DATABASE_SSL: "",
@@ -42,7 +42,10 @@ export class McpClient {
 
   constructor(env: Record<string, string> = {}) {
     const home = env.HOME ?? mkdtempSync(join(tmpdir(), "skills-mcp-home-"));
+    writeTestCatalog(join(home, ".hasna", "skills", "installed"));
     this.proc = Bun.spawn(["bun", "run", MCP_PATH], {
+      // Pin and import tools must never write project state into the checkout.
+      cwd: home,
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",

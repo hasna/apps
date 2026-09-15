@@ -91,12 +91,37 @@ afterEach(() => {
 });
 
 describe("managed inbox skill runtime", () => {
+  test("default reconciliation cannot reactivate a skill payload from the working directory", async () => {
+    const root = makeRoot("no-cwd-payload");
+    const homeDir = join(root, "home");
+    const skillPath = installInboxSkill(homeDir);
+    const assetDir = join(root, "assets", "skills", "inbox");
+    mkdirSync(assetDir, { recursive: true });
+    writeFileSync(join(assetDir, "SKILL.md"), canonicalSkill);
+    const conversationsCommand = writeConversationsRuntime(root);
+    const previousCwd = process.cwd();
+    process.chdir(root);
+    try {
+      const result = await reconcileManagedSkillRuntimes({ homeDir, conversationsCommand });
+      expect(result).toMatchObject({ changed: 0, failed: 1 });
+      expect(result.runtimes[0]).toMatchObject({
+        action: "failed", expected_skill_sha256: null,
+        reason: "Bundled skill contracts are retired; use the Skills CLI to manage private skills",
+      });
+      expect(readFileSync(skillPath, "utf8")).toBe("stale inbox contract\n");
+      expect(readFileSync(join(assetDir, "SKILL.md"), "utf8")).toBe(canonicalSkill);
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
   test("does not report an installed inbox skill healthy when conversations watch is unavailable", () => {
     const homeDir = makeRoot("missing-runtime");
     installInboxSkill(homeDir);
 
     const report = inspectManagedSkillRuntimes({
       homeDir,
+      assetPath: writeCanonicalAsset(homeDir),
       conversationsCommand: join(homeDir, "missing-conversations"),
     });
 

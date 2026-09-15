@@ -192,20 +192,18 @@ describe("config", () => {
     });
   });
 
-  describe("loadConfigReadOnly (write-free legacy precedence)", () => {
-    test("legacy-only HOME: reads the legacy ~/.skillsrc as the global config", () => {
+  describe("loadConfigReadOnly (canonical sources only)", () => {
+    test("legacy-only HOME: ignores the retired ~/.skillsrc global config", () => {
       withTempHome((home) => {
         writeFileSync(join(home, ".skillsrc"), JSON.stringify({ defaultAgent: "codex" }));
         const config = loadConfigReadOnly();
-        expect(config.defaultAgent).toBe("codex");
+        expect(config.defaultAgent).toBeUndefined();
+        expect(readFileSync(join(home, ".skillsrc"), "utf8")).toContain("codex");
       });
     });
 
     test("canonical config.json present: the global config is the canonical file alone — never field-merged with a stale legacy origin", () => {
-      // The write path copies ~/.skillsrc into config.json only when config.json is
-      // absent. When a canonical config exists but omits a key, the read-only path
-      // must NOT inherit the legacy file's value for it: the two paths would then
-      // disagree about the effective configuration.
+      // A canonical config never inherits fields from a retired home file.
       withTempHome((home) => {
         const appDir = join(home, ".hasna", "skills");
         mkdirSync(appDir, { recursive: true });
@@ -298,7 +296,7 @@ describe("config", () => {
         expect(getDataDir()).toBe(file);
         clearRegistryCache();
         expect(() => loadRegistry()).not.toThrow();
-        expect(loadRegistry().length).toBeGreaterThan(0);
+        expect(loadRegistry()).toEqual([]);
       } finally {
         if (previous === undefined) delete process.env[DATA_DIR_ENV];
         else process.env[DATA_DIR_ENV] = previous;
@@ -307,7 +305,7 @@ describe("config", () => {
       }
     });
 
-    test("copies missing legacy ~/.skills files into an existing ~/.hasna/skills without overwriting", () => {
+    test("leaves legacy ~/.skills files in place without copying them into the active home", () => {
       const originalHome = process.env.HOME;
       const home = join(tmpdir(), `skills-home-migration-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
@@ -327,7 +325,7 @@ describe("config", () => {
 
         expect(dir).toBe(join(home, ".hasna", "skills"));
         expect(readFileSync(join(dir, "config.json"), "utf-8")).toContain("codex");
-        expect(readFileSync(join(dir, "custom", "legacy-skill", "SKILL.md"), "utf-8")).toBe("legacy");
+        expect(existsSync(join(dir, "custom", "legacy-skill", "SKILL.md"))).toBe(false);
         expect(existsSync(join(home, ".skills", "custom", "legacy-skill", "SKILL.md"))).toBe(true);
       } finally {
         if (originalHome === undefined) delete process.env.HOME;

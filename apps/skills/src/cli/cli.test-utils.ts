@@ -2,16 +2,15 @@ import { join } from "path";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import pkg from "../../package.json" with { type: "json" };
-import { BASIC_SKILL_NAMES, SKILLS } from "../lib/registry.js";
+import { TEST_CATALOG, writeTestCatalog } from "../lib/private-corpus-test-utils.js";
 import { DEFAULT_TEST_TIMEOUT_MS, withoutDataDirOverrideEnv } from "../test-preload.js";
 
 export const CLI_PATH = join(import.meta.dir, "index.tsx");
-export const EXPECTED_ALL_SKILL_COUNT = SKILLS.length;
-export const EXPECTED_BASIC_SKILL_COUNT = BASIC_SKILL_NAMES.length;
+export const EXPECTED_ALL_SKILL_COUNT = TEST_CATALOG.length;
+export const EXPECTED_BASIC_SKILL_COUNT = TEST_CATALOG.length;
 // The `categories` command lists only categories that hold at least one skill.
-// The declarative-only catalog populates a subset of CATEGORIES, so derive the
-// expected count from the registry rather than hardcoding it.
-export const EXPECTED_POPULATED_CATEGORY_COUNT = new Set(SKILLS.map((s) => s.category)).size;
+// The synthetic owned catalog populates a subset of CATEGORIES.
+export const EXPECTED_POPULATED_CATEGORY_COUNT = new Set(TEST_CATALOG.map((s) => s[1])).size;
 export const PACKAGE_VERSION = pkg.version;
 
 /**
@@ -26,6 +25,7 @@ export const PACKAGE_VERSION = pkg.version;
  */
 export const SLOW_TEST_TIMEOUT = DEFAULT_TEST_TIMEOUT_MS;
 export const CLEAN_CLI_HOME = mkdtempSync(join(tmpdir(), "skills-cli-home-"));
+writeTestCatalog(join(CLEAN_CLI_HOME, ".hasna", "skills", "installed"));
 
 /**
  * The one line an opted-in local install is allowed to print on stderr.

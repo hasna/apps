@@ -24,7 +24,7 @@ describe("package ownership and sync strategy", () => {
       "`hasna/skills`, npm `@hasna/skills`",
       "Agent CLI",
       "MCP server",
-      "Bundled skill corpus",
+      "| Skill corpus | Operator | Private account storage and CLI cache |",
       "| Server API | Private service wrapper |",
       "| Server workers | Private service wrapper |",
       "| Web app | Private service wrapper |",

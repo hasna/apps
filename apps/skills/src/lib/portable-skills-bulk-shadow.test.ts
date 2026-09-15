@@ -24,19 +24,13 @@ function input(root: string, folder: string, name: string, body = "Reviewed loca
   return path;
 }
 
-describe("explicit bulk shadow permission", () => {
-  test("default refusal writes nothing; explicit permission imports the reviewed instruction", () => {
+describe("bulk imports after the bundled namespace is retired", () => {
+  test("an explicit source imports a formerly reserved slug without changing its bytes", () => {
     const work = mkdtempSync(join(tmpdir(), "bulk-shadow-default-"));
     try {
       const source = join(work, "source"), rootDir = join(work, "installed");
       const skill = input(source, "instruction", "blog-article"), before = snapshot(work);
-      const refused = portPortableSkillDirectory(source, { rootDir });
-      expect(refused).toMatchObject({ total: 1, succeeded: 0, failed: 1, imported: [] });
-      expect(refused.skipped[0]?.reason).toContain("would shadow");
-      expect(snapshot(work)).toEqual(before); expect(existsSync(rootDir)).toBe(false);
-      expect(() => portPortableSkillDirectory(source, { rootDir, continueOnError: false })).toThrow("would shadow");
-      expect(snapshot(work)).toEqual(before);
-      const imported = portPortableSkillDirectory(source, { rootDir, allowShadow: true });
+      const imported = portPortableSkillDirectory(source, { rootDir });
       expect(imported).toMatchObject({ total: 1, succeeded: 1, failed: 0, skipped: [] });
       expect(imported.imported).toEqual([{ name: "blog-article", path: join(rootDir, "blog-article"), sourcePath: skill }]);
       expect(readFileSync(join(rootDir, "blog-article/SKILL.md"), "utf8")).toBe(readFileSync(join(skill, "SKILL.md"), "utf8"));
@@ -53,13 +47,13 @@ describe("explicit bulk shadow permission", () => {
       input(source, "b-custom", "owned-bulk-custom");
       mkdirSync(join(source, "c-not-a-skill"));
       const initial = portPortableSkillDirectory(source, { rootDir });
-      expect(initial).toMatchObject({ total: 3, succeeded: 1, failed: 2 });
-      expect(initial.imported.map(row => row.name)).toEqual(["owned-bulk-custom"]);
+      expect(initial).toMatchObject({ total: 3, succeeded: 2, failed: 1 });
+      expect(initial.imported.map(row => row.name)).toEqual(["blog-article", "owned-bulk-custom"]);
       const allowed = portPortableSkillDirectory(source, { rootDir, allowShadow: true });
-      expect(allowed).toMatchObject({ total: 3, succeeded: 1, failed: 2 });
-      expect(allowed.imported.map(row => row.name)).toEqual(["blog-article"]);
+      expect(allowed).toMatchObject({ total: 3, succeeded: 0, failed: 3 });
+      expect(allowed.imported).toEqual([]);
       expect(allowed.skipped.map(row => row.reason)).toEqual([
-        expect.stringContaining("already exists"), expect.stringContaining("Not a skill folder"),
+        expect.stringContaining("already exists"), expect.stringContaining("already exists"), expect.stringContaining("Not a skill folder"),
       ]);
       const beforeReplay = snapshot(work);
       expect(portPortableSkillDirectory(source, { rootDir, allowShadow: true })).toMatchObject({ succeeded: 0, failed: 3 });

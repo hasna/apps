@@ -8,6 +8,7 @@ import {
   getMcpResourceContracts,
   listMcpToolContracts,
 } from "./mcp-contracts.js";
+import { writeOwnedFixture } from "./private-corpus-test-utils.js";
 import { getSkill } from "./registry.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -108,6 +109,7 @@ describe("MCP contract manifest", () => {
   });
 
   test("creates per-skill MCP metadata with install and run schemas", () => {
+    writeOwnedFixture("brand-kit");
     const image = getSkill("brand-kit");
     expect(image).toBeDefined();
 
@@ -117,7 +119,7 @@ describe("MCP contract manifest", () => {
       schemaVersion: 1,
       name: "brand-kit",
       slug: "brand-kit",
-      source: "official",
+      source: "custom",
       cliCommand: "skills run brand-kit",
     });
     expect(metadata.schemas.install.inputSchema.properties?.name).toEqual({

@@ -37,7 +37,7 @@ describe("CLI portable skills", () => {
       // discoverable via `list --all`.
       const basicListed = await runCliInCwd(["list", "--json"], cwd, env);
       expect(basicListed.exitCode).toBe(0);
-      expect(JSON.parse(basicListed.stdout).find((skill: any) => skill.name === "my-skill")).toBeUndefined();
+      expect(JSON.parse(basicListed.stdout).map((skill: any) => skill.name)).toEqual(["my-skill"]);
 
       const listed = await runCliInCwd(["list", "--all", "--json"], cwd, env);
       expect(listed.exitCode).toBe(0);
@@ -174,13 +174,13 @@ version: 0.2.0
 
       const listed = await runCliInCwd(["list", "--json"], cwd, env);
       expect(listed.exitCode).toBe(0);
-      expect(JSON.parse(listed.stdout).length).toBeGreaterThan(0);
+      expect(JSON.parse(listed.stdout)).toEqual([]);
 
       const searched = await runCliInCwd(["search", "brand-kit", "--json"], cwd, env);
       expect(searched.exitCode).toBe(0);
 
       const info = await runCliInCwd(["info", "brand-kit", "--json"], cwd, env);
-      expect(info.exitCode).toBe(0);
+      expect(info.exitCode).toBe(1);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

@@ -91,7 +91,7 @@ src/
 │   ├── redaction.ts              # Scrub credentials out of logs and error text
 │   └── config.ts, registry.ts, rows.ts, types.ts, migrations-dir.ts, store-fixtures.ts
 ├── lib/
-│   ├── registry-data/            # The SKILLS array, one file per category + index.ts
+│   ├── registry-data/            # Empty compatibility export; no bundled catalog
 │   ├── registry.ts               # Registry loading, merging, caching, lookup
 │   ├── registry-types.ts         # SkillMeta, SkillKind, SkillSource, CATEGORIES, BASIC_SKILL_NAMES
 │   ├── installer.ts              # Project pins; installSkillForAgent() writes agent folders (agent-sync)
@@ -112,19 +112,6 @@ src/
 ├── storage.ts                    # @hasna/skills/storage subpath entry
 └── test-preload.ts               # Per-test throwaway data dir (see Hermetic tests)
 
-skills/                           # The catalog: bare-named directories, no skill- prefix
-├── _common/                      # Shared helpers, not a skill
-├── pdf-generate/
-├── read-image/
-└── …
-
-agent-skills/                     # Private-store pointer only: the 9 fleet workflow skills
-                                  # (fleet-package-rollout, goal-plan-coordination, inbox,
-                                  # inbox-monitor, merge-pr, skill-goal-execute, skill-login,
-                                  # skill-project-create, skill-publish) moved to the private
-                                  # per-station store (hasna-internal/fleet-resources) per
-                                  # owner ruling 2026-08-15; the sync paths for them run from
-                                  # the machine-local skill cache, never from this repo.
 migrations/{postgres,sqlite}/     # One numbered migration per dialect, kept at parity
 docs/{architecture,product,release}/  # Design docs, several of them test-asserted
 scripts/                          # release-guard.ts + corpus/upstream drift checks
@@ -136,23 +123,18 @@ There is no `dashboard/` directory and no `src/server/serve.ts`.
 
 | Count | Value | Derived from |
 |---|---|---|
-| Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/index.ts`) |
-| Instruction-kind skills | 20 | `SKILLS` entries with `kind: "instruction"` |
+| Catalog skills | 0 | `SKILLS.length` (`src/lib/registry-data/index.ts`) |
+| Instruction-kind skills | 0 | `SKILLS` entries with `kind: "instruction"` |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
 | MCP tools | 72 | `tools/list` against a live `buildServer()` |
 | MCP resources | 4 | `resources/list` + `resources/templates/list` (3 static + 1 template) |
 | Published bins | 6 | `bin` in `package.json` |
 | bun build invocations | 6 | the `build` script in `package.json` |
 
-`skills/` holds those 86 catalog directories plus `_common`. The catalog is
-**mixed**: 20 `kind: "instruction"` skills (SKILL.md prose, no `src/`) plus 66
-**executable** skills (each with `src/` + `package.json` + `bin`) restored from the
-archive. Every restored executable skill requires **no credential** — it reads and
-documents no provider API key (`catalog-runnable.test.ts` enforces this over the
-whole executable set, with a positive control). The remaining archived executable
-skills that DO need a key stay out of the package. `CATEGORIES` still lists 17
-categories even though only some hold a skill, so a further restored dev skill drops
-back into its category without a schema change.
+Skill content is private operator data. The public package and server image
+include no skill corpus. The authenticated server reads only the caller's
+organization records and never seeds from local files on startup. Local drafts
+and verified caches are owned by the Skills CLI outside this repository.
 
 ## Interfaces
 
@@ -251,7 +233,7 @@ exactly four path segments after `/api/v1`.
 | GET | `/api/v1/skills/:slug` | |
 | GET | `/api/v1/skills/:slug/skill.md` | `text/markdown` |
 | POST | `/api/v1/skills/:slug/quote` | |
-| GET | `/api/v1/tags` | Distinct tags across the org's registry view (published + bundled), sorted `string[]` |
+| GET | `/api/v1/tags` | Distinct tags across the authenticated org's published catalog, sorted `string[]` |
 | GET | `/api/v1/tags/:tag/skills` | Merged skills carrying the exact tag, as `RemoteSkillSummary[]` |
 | GET | `/api/v1/runs` | `?limit=` default 20, clamped to 100 |
 | POST | `/api/v1/runs/:slug` | `:slug` is a **skill** slug. Enqueues, returns 202. Honours `idempotency-key`. |
@@ -270,14 +252,10 @@ rather than rejecting it, so `/api/v1/skills/pdf-generate/skill.md/junk` still s
 markdown. Every JSON response carries `Cache-Control: no-store`. Org isolation is
 enforced by `principal.orgId` predicates in the store layer.
 
-Skill slugs are validated with `/^[a-z0-9-]+$/` (`isValidSkillSlug` in
-`src/server/registry.ts`); `getServerSkill`/`getServerSkillMd`/`quoteServerSkill`
-resolve only registered skills and `getServerSkillMd` additionally confines the
-resolved file to `skills/`. As defence in depth `handleApiV1` rejects any decoded
-path segment carrying a separator or `..` with `400 INVALID_PATH`. This is why an
-encoded traversal such as `/api/v1/skills/..%2Fagent-skills%2F.../skill.md` — where
-`pathSegments()` decodes `%2F` back into separators after splitting — cannot escape
-`skills/`. Regression: `src/server/path-traversal.test.ts`.
+Skill slugs are validated with `/^[a-z0-9-]+$/`. Authenticated document reads
+resolve through organization storage and never construct a local filesystem
+path. The router rejects decoded path escapes. Deprecated unscoped server
+registry exports return empty results. Regression: `src/server/path-traversal.test.ts`.
 
 Auth is a bearer token hashed with SHA-256 and looked up as `api_keys.key_hash`; the
 raw token never reaches the store. `HASNA_SKILLS_BOOTSTRAP_API_KEY` seeds a dev
@@ -330,7 +308,7 @@ other command rejects.
 The one fact that survives is whether an API origin is configured, and
 `src/lib/api-url.ts` is the only place that is resolved: `resolveApiUrl()` returns
 `undefined` on read paths ONLY under the explicit local opt-in
-(`HASNA_SKILLS_LOCAL=1` — callers then fall back to the bundled registry), and
+(`HASNA_SKILLS_LOCAL=1` — callers then use only their owned local registry), and
 `requireApiUrl()` throws `MissingApiUrlError` on auth and write paths. Without the
 opt-in, an unconfigured install fails closed: `src/lib/fleet-credentials.ts` throws
 a `MISSING_API_CREDENTIAL` refusal naming the opt-in, no SQLite is opened and no
@@ -405,25 +383,14 @@ Artifact bodies live in the `skills_artifacts.body_text` column unless
 `HASNA_SKILLS_S3_BUCKET` is set, in which case they go to S3. There is no
 local-filesystem artifact backend.
 
-### Skill names are bare; the corpus lives under the app root
+### Private identities and owned storage
 
-`skills/pdf-generate`, not `skills/skill-pdf-generate`. `normalizeSkillName()` in `src/lib/utils.ts`
-is now the identity function and is kept only so call sites do not have to change.
-`src/lib/skill-aliases.ts` holds the handful of real renames (`generate-pdf` →
-`pdf-generate`, etc.).
-
-The installed corpus is `~/.hasna/skills/installed/<name>/`, with app data
-(`config.json`, `auth.json`, `skills.db`) at the app root — matching every sibling
-Hasna app. `$HASNA_SKILLS_DIR` relocates everything resolved through `getDataDir()`
-and outranks `$HOME` there; `auth-store.ts` resolves `auth.json` through the same
-function, so the credential file moves with the app folder too. There is no
-separate local-skills-folder override — the corpus is always
-`<app folder>/installed` — and `create-sync-config.ts` composes paths from
-`getPortableSkillsRoot()` / `getDataDir()`, so no remaining path is composed from
-`homedir()`.
-
-The legacy `~/.hasna/skills/custom/` path is still read as a migration safety net,
-and `~/.skills` / `~/.skillsrc` are merged forward without deleting the originals.
+Skill names come from the owner's account catalog. The software ships no names,
+aliases or default selection. The CLI-owned installed store is resolved through
+`getPortableSkillsRoot()`; supported app-home overrides remain available.
+Normal reads never merge ~/.skillsrc or copy ~/.skills, flat app-home payloads,
+or legacy custom/ folders into that store. Explicit import and storage migration
+commands remain the only way to admit reviewed old content.
 
 ### Pins, not installs (except the agent-folder sync)
 
@@ -433,17 +400,11 @@ return `success: false`: nothing copies runtime source or a SKILL.md manifest in
 *project*, and the MCP `pin_skill`/`unpin_skill` tools still redirect a `for: <agent>`
 argument to `skills mcp --register <agent>`.
 
-The one deliberate exception is the last-mile **agent-folder sync** (`skills sync`,
-`src/lib/agent-sync.ts`). It writes a per-tool-adapted `SKILL.md` from the corpus into
-each coding agent's *global* skills directory (`~/.claude/skills/<name>/SKILL.md`,
-`~/.codewith/…`, `~/.codex/…`, `~/.config/opencode/…`, `~/.cursor/…`) so the agent
-auto-loads it — instruction skills as prose, executable portable skills as a pointer.
-An explicitly named bundled skill resolves from the package when the portable corpus
-does not contain it, allowing a reviewed source skill to repair a stale agent copy.
-`installSkillForAgent()` is its single-skill entry point (no longer a stub). Writes are
-**non-clobbering**: every directory the sync writes carries a `.hasna-skills.json`
-marker, and a skill directory without that marker is treated as the user's own and
-skipped unless `--force`. `.skills/` itself remains output state and is never an
+CLI-mode integrations install a small Skills CLI bridge and prompt hooks; private
+payloads remain in the CLI-owned cache. Legacy native-folder sync is an explicit
+compatibility mode and cannot resolve missing skills from the package. Managed
+fleet integrations refuse native drift and never silently select that mode.
+`.skills/` itself remains output state and is never an
 install target:
 
 ```
@@ -455,7 +416,7 @@ install target:
 └── schedules.json
 ```
 
-Skills execute from the bundled package source, the portable corpus under
+Skills execute from the owned portable store under
 `~/.hasna/skills/installed/` (`runPortableSkill()`), or the configured API — never
 from `.skills/`.
 
@@ -503,43 +464,12 @@ reading.
 
 ## Skill structure
 
-```
-skills/<name>/                # bare name, matches SkillMeta.name exactly
-├── SKILL.md                  # frontmatter: name, description, [kind], [category], [tags]
-├── package.json              # skills.kind: "instruction" for prose; "bin" for runnable ones
-├── src/                      # executable skills only — absent in instruction skills
-│   └── index.ts
-├── README.md                 # optional
-└── CLAUDE.md                 # optional
-```
-
-The catalog holds both kinds. Instruction skills are just `SKILL.md` +
-`package.json`, with `kind: instruction` in the frontmatter and
-`skills.kind: "instruction"` in the package, and no `src/` at all. Executable skills
-have a `bin` entry, `src/index.ts`, and a `tsconfig.json` extending
-`../tsconfig.base.json`; 66 credential-free ones ship, while the credential-requiring
-ones stay archived. The full 229-skill catalog (210 executable + 19 instruction) is
-preserved at git tag `archive/skills-catalog-229-2026-07-27` and in the rescue
-tarball under `~/.hasna/repos/rescue/skills-catalog-229/`; restore another dev skill
-by copying its directory back and re-adding its `SkillMeta` entry to the matching
-`src/lib/registry-data/*.ts` file — provided it requires no credential.
-
-Every shipped skill carries a SKILL.md — for instruction skills the SKILL.md *is*
-the skill, always present and always the source of `kind`. Executable skills may omit
-it (their metadata lives in the `src/lib/registry-data/` entry and `generateSkillMd()`
-synthesises a document on demand); the shipped executable skills each carry one.
-
-`src/lib/skillinfo.ts` picks the best doc in the order SKILL.md → README.md →
-CLAUDE.md, extracts env vars with `ENV_VAR_PATTERN` (suffixes: `_API_KEY`, `_KEY`,
-`_TOKEN`, `_SECRET`, `_URL`, `_ID`, `_PASSWORD`, `_ENDPOINT`, `_REGION`, `_BUCKET`)
-and `GENERIC_ENV_PATTERN` (known provider prefixes), and detects system dependencies
-by scanning docs for known tool names.
-
-`findSkillsDir()` — in `src/lib/installer.ts`, not `skillinfo.ts` — walks up to 5
-parents from `__dirname` looking for a `skills/` directory that is not inside a
-`.skills` path, so it resolves from both `src/lib/` in development and `bin/`/`dist/`
-when built. It falls back silently to `<__dirname>/../skills` if nothing matches.
-`src/lib/validation.test.ts` carries its own slightly different copy.
+Operational skills live in private operator storage, outside this checkout.
+Instruction bundles contain SKILL.md and metadata; executable bundles also
+include their own entrypoint and declared dependencies. The Skills CLI owns
+local drafts and verified downloads. Agents load content through that CLI.
+Do not restore archived skills into this repository or static registry exports.
+Missing owner records never resolve through package-relative paths.
 
 ## MCP tool reference
 
@@ -656,23 +586,13 @@ and a *partial* build still fails it.
 
 ## Adding a new skill
 
-1. Create `skills/<name>/` (bare name, no prefix) with `SKILL.md` and `package.json`.
-   Executable skills also need `src/index.ts`, a `bin` entry, and `tsconfig.json`
-   extending `../tsconfig.base.json`. Instruction skills set `kind: instruction` in
-   both SKILL.md frontmatter and `package.json` `skills.kind`, and ship no `src/`.
-2. Add the entry to the right category file under `src/lib/registry-data/` — one file
-   per category, re-exported by `registry-data/index.ts`. Do **not** add it to
-   `src/lib/registry.ts`; that file no longer holds the array.
-3. Bump the `Catalog skills` row (and `Instruction-kind skills`, if applicable) in
-   [Derived counts](#derived-counts).
-4. `bun run build && bun test`. `validation.test.ts` checks registry↔directory
-   consistency both ways; `catalog-runnable.test.ts` checks the skill is actually
-   runnable from the packed package.
+Use `skills new <name> --kind instruction` or `--kind executable` to create an
+owned draft outside the software checkout. Validate it and publish an explicit
+version through the authenticated Skills API. Do not add a skill folder or
+static registry entry here. See `docs/architecture/adding-public-skills.md`.
 
 ## TypeScript
 
 Strict mode. Target ES2022, module ESNext, `moduleResolution: bundler`, and
-`jsx: react-jsx` for Ink. The root `tsconfig.json` compiles `src/**/*` only —
-`skills/` is explicitly excluded, and executable skills carry their own tsconfig
-extending `skills/tsconfig.base.json`. So `bun run typecheck` does **not** type-check
-the skill corpus.
+`jsx: react-jsx` for Ink. The root tsconfig compiles the software under src/.
+Private executable bundles are validated and tested in their own source roots.

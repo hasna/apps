@@ -96,10 +96,10 @@ describe("canonical corpus root — migrated owner layout", () => {
     process.env[DATA_DIR_ENV] = app;
     clearRegistryCache();
 
-    // Registry + list: 86 official catalog entries + the migrated-corpus skill.
+    // Only the owner's migrated-corpus skill is visible.
     const registry = loadRegistry();
     expect(registry.find((s) => s.name === "migrated-only-skill")).toBeDefined();
-    expect(registry.length).toBe(87);
+    expect(registry.length).toBe(1);
 
     // Search.
     const hits = searchSkills("migrated-only-skill");

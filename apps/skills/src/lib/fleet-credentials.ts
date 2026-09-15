@@ -366,7 +366,7 @@ export function noticeLocalSkillsMode(write: (line: string) => void = (line) => 
   if (localNoticePrinted) return;
   localNoticePrinted = true;
   write(
-    `skills: local mode (${SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]}=1) — running on this machine against the bundled corpus.`,
+    `skills: local mode (${SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]}=1) — running on this machine against the Skills-owned local cache.`,
   );
 }
 
