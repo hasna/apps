@@ -1,14 +1,16 @@
 /** Local execution reads a verified immutable object; it never resolves the mutable authoring corpus. */
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, hostname as stationHostname } from "node:os";
+import { resolveExecutionGrant } from "./execution-grant-client.js";
+import { grantIdentifier, type ExecutionGrantRequest, type ResolvedExecutionGrant } from "./execution-grants.js";
 import type { ResolvedSkillSelection } from "../types/skill-selection.js";
 import type { SkillBundleEntry } from "./skill-bundle.js";
 import { exactProfileSelection, readSelectedEntries, resolveSelectionContext, type SelectionResolverOptions } from "./selection-resolver.js";
 import { readCachedSelection, selectionCacheRoot, SkillSelectionError } from "./selection-cache.js";
-import { parseSkillFrontmatter } from "./skill-validation.js";
+import { describeEntries } from "./selected-manifest.js";
 import { SkillEntryPaths } from "./skill-entry-path.js";
 import { declaredSecretNames, validateSelectedSecretBindings, resolveSelectedSecrets, redactExecutionSecrets, selectedSecretBindingsTemplate, type SelectedSecretBindings, type SelectedSecretsClient } from "./execution-secrets.js";
 
@@ -20,22 +22,6 @@ export interface ResolvedSelectedRun {
   manifest: Record<string, any>;
   packageJson: Record<string, any>;
   cacheDir: string;
-}
-function jsonEntry(entries: SkillBundleEntry[], path: string): Record<string, any> {
-  const entry = entries.find((candidate) => candidate.path === path);
-  if (!entry) return {};
-  try {
-    const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(entry.bytes));
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
-    return value;
-  } catch { throw new SkillSelectionError("INVALID_SKILL_MANIFEST", "The selected skill has an invalid execution manifest."); }
-}
-function describeEntries(entries: SkillBundleEntry[]) {
-  const manifest = jsonEntry(entries, "skill.json"), packageJson = jsonEntry(entries, "package.json");
-  const docs = entries.find((entry) => entry.path === "SKILL.md");
-  const frontmatter = docs ? parseSkillFrontmatter(new TextDecoder().decode(docs.bytes)) : null;
-  const kind = frontmatter?.kind === "instruction" || manifest.kind === "instruction" || packageJson.skills?.kind === "instruction" ? "instruction" as const : "executable" as const;
-  return { kind, manifest, packageJson };
 }
 export async function resolveSelectedRun(spec: string, profileId: string, options: SelectionResolverOptions = {}): Promise<ResolvedSelectedRun> {
   const context = await resolveSelectionContext(profileId, options);
@@ -54,6 +40,10 @@ export interface SelectedLocalRunOptions {
   secretBindings?: SelectedSecretBindings;
   /** SDK injection seam. The default uses the independently configured Secrets SDK. */
   createSecretsClient?: () => SelectedSecretsClient;
+  /** Disable network authorization for explicit cached execution; declared secrets then need caller bindings. */
+  sharedExecutionGrants?: boolean;
+  /** SDK seam for current shared authorization; responses still undergo exact binding validation. */
+  resolveExecutionGrant?: (request: ExecutionGrantRequest) => Promise<ResolvedExecutionGrant>;
 }
 export async function prepareSelectedSecretBindings(selected: ResolvedSelectedRun, cwd = process.cwd()): Promise<SelectedSecretBindings> {
   const entries = await readCachedSelection(selected.selection, { cacheDir: selected.cacheDir });
@@ -99,9 +89,11 @@ export async function executeSelectedLocal(selected: ResolvedSelectedRun, option
   for (const key of ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TERM"]) if (process.env[key]) env[key] = process.env[key]!;
   const names = declaredSecretNames(runtime.env);
   if (options.secretBindings !== undefined && options.env !== undefined) throw new SkillSelectionError("INVALID_SECRET_BINDINGS", "Choose explicit vault bindings or SDK environment values, never both.");
-  const bindings = options.secretBindings === undefined ? undefined : validateSelectedSecretBindings(options.secretBindings, { selection, profileId, cwd: options.cwd ?? process.cwd() }, names);
+  let bindings = options.secretBindings === undefined ? undefined : validateSelectedSecretBindings(options.secretBindings, { selection, profileId, cwd: options.cwd ?? process.cwd() }, names);
   let secretEnv: Record<string, string> = {};
-  if (!bindings) for (const name of names) {
+  const shared = names.length > 0 && options.secretBindings === undefined && options.env === undefined;
+  if (shared && options.sharedExecutionGrants === false) throw new SkillSelectionError("EXECUTION_GRANT_FRESH_SELECTION_REQUIRED", "Shared secret grants require a fresh API selection; cached execution is refused.");
+  if (!bindings && !shared) for (const name of names) {
     const value = options.env && Object.hasOwn(options.env, name) ? options.env[name] : undefined;
     if (value === undefined) throw new SkillSelectionError("LOCAL_ENV_REQUIRED", `The selected runtime requires an explicit binding for ${name}; use --secret-bindings. Ambient credentials are not inherited.`);
     if (typeof value !== "string" || value.includes("\0") || Buffer.byteLength(value) > 16_384) throw new SkillSelectionError("INVALID_SECRET_BINDINGS", "Explicit environment values must be bounded strings without NUL bytes.");
@@ -125,11 +117,24 @@ export async function executeSelectedLocal(selected: ResolvedSelectedRun, option
     if (version.exitCode !== 0 || actual !== runtime.version) throw new SkillSelectionError("LOCAL_RUNTIME_VERSION_MISMATCH", "The installed runtime version differs from the version selected by the skill.");
   }
   // Resolve only after source, input, runtime and grant validation. Version probes never receive secrets.
+  let executionGrant: {policyRevision: string; grantId: string} | undefined;
+  if (shared) {
+    const {authority, workspaceId, profileRevision, slug, version, bundleDigest} = selection;
+    const request: ExecutionGrantRequest = {
+      selection: {authority, workspaceId, profileId, profileRevision, slug, version, bundleDigest},
+      consumer: {stationId: process.env.HASNA_STATION || stationHostname(), workspaceDirectory: realpathSync(options.cwd ?? process.cwd())},
+    };
+    const grant = await (options.resolveExecutionGrant ?? resolveExecutionGrant)(request);
+    if (!grant || !grantIdentifier(grant.policyRevision) || !grantIdentifier(grant.grantId)) throw new SkillSelectionError("INVALID_EXECUTION_GRANT", "The Skills API returned an invalid execution grant.");
+    bindings = validateSelectedSecretBindings(grant.bindings, {selection, profileId, cwd:options.cwd ?? process.cwd()}, names);
+    executionGrant = {policyRevision:grant.policyRevision, grantId:grant.grantId};
+  }
   if (bindings) secretEnv = await resolveSelectedSecrets(bindings, options.createSecretsClient);
   const result = await subprocess([executable, ...(runtimeName === "bun" ? ["--no-env-file"] : []), join(runDirectory, declaredEntry), ...args], runDirectory, { ...env, ...secretEnv }, input, timeoutMs);
   result.stdout = redactExecutionSecrets(result.stdout, secretEnv);
   result.stderr = redactExecutionSecrets(result.stderr, secretEnv);
   const receipt = { selection, target: "local" as const, runtime: runtimeName, inputDigest: `sha256:${createHash("sha256").update(input).digest("hex")}`, runDirectory,
+    ...(executionGrant ? {executionGrant} : {}),
     ...(bindings ? { secretBinding: { schema: bindings.schema, selection: bindings.selection, consumer: bindings.consumer, secretsAuthority: bindings.secretsAuthority, bindings: bindings.bindings } } : {}), ...result };
   writeFileSync(join(runDirectory, ".execution-receipt.json"), JSON.stringify({ ...receipt, stdout: undefined, stderr: undefined }), { mode: 0o600 });
   return receipt;

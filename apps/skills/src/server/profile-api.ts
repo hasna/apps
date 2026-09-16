@@ -195,10 +195,12 @@ export async function handleProfileApi(
       capabilities: [
         "skills.registry",
         "skills.versions",
+        ...(store.selectionStore && store.executionGrantStore ? ["skills.execution-grants"] : []),
         ...(store.selectionStore
           ? ["skills.profiles", "skills.station-state"]
           : []),
       ],
+      executionGrants: Boolean(store.selectionStore && store.executionGrantStore),
       profileResolution: Boolean(store.selectionStore),
       selectionAliases: Boolean(store.selectionStore),
       profileLimits: {
@@ -212,6 +214,9 @@ export async function handleProfileApi(
       incrementalSync: false,
       scopes: [...principal.scopes].sort(),
       permissions: {
+        executionGrantsRead: permitsSkillsRoute(principal, "GET", "execution-grants"),
+        executionGrantsWrite: permitsSkillsRoute(principal, "PUT", "execution-grants"),
+        executionGrantsResolve: permitsSkillsRoute(principal, "POST", "execution-grants"),
         read: permitsSkillsRoute(principal, "GET", "skills"),
         publish: permitsSkillsRoute(principal, "POST", "skills"),
         profilesWrite: permitsSkillsRoute(principal, "PUT", "profiles"),

@@ -79,6 +79,18 @@ const bindingTemplate: Promise<SelectedSecretBindings> = prepareSelectedSecretBi
 const bindingFile: SelectedSecretBindings = readSelectedSecretBindings("bindings.json");
 const localRunOptions: SelectedLocalRunOptions = { secretBindings: executionBindings, createSecretsClient: () => executionVaultClient };
 const selectedExecutionResult = executeSelectedLocal(selectedExecution, localRunOptions);
+import { readExecutionGrantPolicy, saveExecutionGrantPolicy, resolveExecutionGrant,
+  type ExecutionGrant, type ExecutionGrantPolicy, type ExecutionGrantRequest, type ResolvedExecutionGrant } from "@hasna/skills/sdk";
+declare const reviewedGrant: ExecutionGrant;
+declare const grantRequest: ExecutionGrantRequest;
+const policyRead: Promise<ExecutionGrantPolicy> = readExecutionGrantPolicy("default");
+const policyUpdate: Promise<ExecutionGrantPolicy> = saveExecutionGrantPolicy("default", [reviewedGrant], "reviewed-revision");
+const grantDecision: Promise<ResolvedExecutionGrant> = resolveExecutionGrant(grantRequest);
+const sharedRunOptions: SelectedLocalRunOptions = { resolveExecutionGrant, sharedExecutionGrants: true };
+// @ts-expect-error Shared local grants do not authorize a cloud execution target.
+const unsupportedSharedTarget: ExecutionGrant = { ...reviewedGrant, target: "cloud" };
+// @ts-expect-error Shared authorization carries the selected revision and exact digest.
+const incompleteSharedRequest: ExecutionGrantRequest = { consumer: executionBindings.consumer };
 // @ts-expect-error Only the versioned reference binding contract is accepted.
 const unsupportedBinding: SelectedSecretBindings = { ...executionBindings, schema: "unversioned" };
 import { RemoteSkillsClient, RemoteSkillsAuthClient, RemoteCapabilityUnavailableError as RootCapabilityError, runSkill } from "@hasna/skills";

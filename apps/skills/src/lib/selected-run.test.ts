@@ -42,7 +42,7 @@ test("local execution fails closed for instruction skills, unenforced isolation,
   await expect(executeSelectedLocal((await fixture("", { sandbox: "read-only" })).resolved)).rejects.toMatchObject({ code: "LOCAL_SANDBOX_REQUIRED" });
   await expect(executeSelectedLocal((await fixture("", { needs_network: false })).resolved)).rejects.toMatchObject({ code: "LOCAL_SANDBOX_REQUIRED" });
   await expect(executeSelectedLocal((await fixture("", {}, { dependencies: { example: "1.0.0" }, scripts: { postinstall: "never-run" } })).resolved)).rejects.toMatchObject({ code: "LOCAL_DEPENDENCY_BUILD_REQUIRED" });
-  await expect(executeSelectedLocal((await fixture("", { env: ["DECLARED_FIXTURE"] })).resolved)).rejects.toMatchObject({ code: "LOCAL_ENV_REQUIRED" });
+  await expect(executeSelectedLocal((await fixture("", { env: ["DECLARED_FIXTURE"] })).resolved, {env:{}})).rejects.toMatchObject({ code: "LOCAL_ENV_REQUIRED" });
 });
 test("local execution enforces its deadline and bounded output", async () => {
   const timeout = await executeSelectedLocal((await fixture("setInterval(() => {}, 1000)")).resolved, { timeoutMs: 100 }); roots.push(timeout.runDirectory);

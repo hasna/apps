@@ -508,7 +508,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         if (options.secretBindingsTemplate) {
           await writeCliOutput(JSON.stringify(await prepareSelectedSecretBindings(selected), null, 2)); return;
         }
-        const result = await executeSelectedLocal(selected, { args, input, cwd: process.cwd(), ...(options.secretBindings ? { secretBindings: readSelectedSecretBindings(options.secretBindings) } : {}) });
+        const result = await executeSelectedLocal(selected, { args, input, cwd: process.cwd(), sharedExecutionGrants: !options.cached, ...(options.secretBindings ? { secretBindings: readSelectedSecretBindings(options.secretBindings) } : {}) });
         if (options.json) await writeCliOutput(JSON.stringify(result, null, 2));
         else { await writeCliOutput(result.stdout, false); process.stderr.write(result.stderr); console.error(JSON.stringify({ selection: result.selection, target: result.target, exitCode: result.exitCode, runDirectory: result.runDirectory })); }
         process.exitCode = result.exitCode;

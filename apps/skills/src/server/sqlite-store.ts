@@ -1,3 +1,4 @@
+import { SqliteExecutionGrantStore } from "./execution-grant-store.js";
 /**
  * SQLite implementation of SkillsProductStore.
  *
@@ -87,6 +88,7 @@ const LAST_USED_RESOLUTION_MS = 60_000;
 
 export class SqliteSkillsStore implements SkillsProductStore {
   get selectionStore() { return new SqliteSkillSelectionStore(this.db); }
+  get executionGrantStore() { return new SqliteExecutionGrantStore(this.db); }
   readonly backend: StoreBackendInfo;
   private db: Database;
   private closed = false;

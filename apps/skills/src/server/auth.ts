@@ -39,6 +39,14 @@ export function publicPrincipal(partial: Partial<ApiPrincipal> = {}): ApiPrincip
 /** Scope checks apply to the key, independently of its user's workspace role. */
 export function permitsSkillsRoute(principal: ApiPrincipal, method: string, resource: string): boolean {
   const scopes = new Set(principal.scopes);
+  if (resource === "execution-grants") {
+    const read = method === "GET" || method === "HEAD";
+    if (!read && method !== "POST" && !["owner", "admin"].includes(principal.role)) return false;
+    const allowed = read ? ["*", "execution-grants:*", "execution-grants:read"]
+      : method === "POST" ? ["*", "execution-grants:*", "execution-grants:resolve", "skills:read", "skills:*"]
+      : ["*", "execution-grants:*", "execution-grants:write"];
+    return allowed.some(scope => scopes.has(scope));
+  }
   if (scopes.has("*")) return true;
   const read = method === "GET" || method === "HEAD";
   if (resource === "capabilities" && read) return true;

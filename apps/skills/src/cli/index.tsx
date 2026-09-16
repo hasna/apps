@@ -115,6 +115,8 @@ const { registerAgentIntegration } = await import("./commands/agent-integration.
 registerAgentIntegration(program);
 const { registerProfiles } = await import("./commands/profiles.js");
 registerProfiles(program);
+const { registerGrants } = await import("./commands/grants.js");
+registerGrants(program);
 
 const { registerHydrate } = await import("./commands/hydrate.js");
 registerHydrate(program);
