@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2
+
+### Patch Changes
+
+- 3c5f098: Resolve declared executable secrets through explicit bindings to the selected bundle, profile and local consumer. Add a CLI binding template, configured Secrets SDK resolution, bounded value injection and output redaction. Missing or mismatched grants fail without ambient fallback.
+
 ## 0.8.1
 
 ### Patch Changes
