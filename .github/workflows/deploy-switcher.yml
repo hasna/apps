@@ -230,7 +230,7 @@ jobs:
       - name: Build the Switcher distribution
         run: |
           set -Eeuo pipefail
-          bun install --frozen-lockfile
+          bun install --frozen-lockfile --ignore-scripts
           bun run build
 
       - name: Set up Docker Buildx
