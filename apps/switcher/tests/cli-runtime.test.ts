@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openCliRuntime } from "../src/runtime";
+import { startServer } from "../src/server";
 import { providerFromPreset, providerCredential } from "../src/presets";
 import { SwitcherClient } from "../src/sdk";
 
@@ -288,7 +289,7 @@ test("owned API is authenticated, persists data on reopen and closes its listene
     runtime = await openCliRuntime({HASNA_SWITCHER_LOCAL: "1", HASNA_SWITCHER_HOME: join(dir, "data")});
     expect(runtime.mode).toBe("local");
     expect((await runtime.client.health()).backend).toBe("sqlite");
-    expect((await runtime.client.ready()).ready).toBe(true);
+    expect(await runtime.client.ready()).toMatchObject({status:"ready",backend:"sqlite"});
     expect((await fetch(runtime.client.baseUrl + "/v1/providers")).status).toBe(401);
     expect((await runtime.client.getProviderPreset("deepseek")).protocols.find(p => p.protocol === "anthropic-messages")?.catalogBaseUrl).toBe("https://api.deepseek.com");
     await runtime.client.createProvider(providerFromPreset("deepseek", {harness:"claude"}));
@@ -432,3 +433,30 @@ test("CLI rejects conflicting file and saved-profile overrides before opening an
     expect((await readdir(dir)).filter(name=>!["Library",".bun"].includes(name))).toEqual([]); // Bun caches under Library on macOS and .bun on Linux; app data must remain absent.
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
+
+test("hosted API launch authenticates and discovers locally, then persists only the catalog",async()=>{
+  const dir=await directory(),clientDir=join(dir,"client"),native=join(dir,"codex-hosted-fixture"),providerFile=join(dir,"provider.json");
+  await mkdir(clientDir);
+  const providerKey="fixture-hosted-provider-key-never-logged";const paths:string[]=[];
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){
+    const path=new URL(request.url).pathname;paths.push(path);
+    if(request.headers.get("authorization")!==`Bearer ${providerKey}`)return new Response(null,{status:401});
+    if(path==="/auth")return Response.json({ok:true});
+    if(path==="/models")return Response.json({data:[{id:"hosted-model",name:"Hosted model",supported_parameters:["tools"]}]});
+    return new Response(null,{status:404});
+  }});
+  const service=await startServer({apiKey:"fixture-hosted-switcher-api-token",sqlitePath:join(dir,"remote.db"),providerEnv:{}});
+  try{
+    await writeFile(native,`#!${process.execPath}\nif(process.argv.includes('--version'))console.log('codex-cli 0.153.4');\n`,{mode:0o700});
+    await writeFile(providerFile,JSON.stringify({id:"hosted-provider",name:"Hosted provider",baseUrl:upstream.url.origin,protocol:"openai-responses",credentialEnv:"SWITCHER_PROVIDER_HOSTED_TEST",credentialCheck:{method:"GET",path:"auth"}}));
+    const env={HASNA_SWITCHER_API_URL:service.url,HASNA_SWITCHER_API_KEY:"fixture-hosted-switcher-api-token",SWITCHER_PROVIDER_HOSTED_TEST:providerKey};
+    const created=await command(clientDir,["providers","add","hosted-provider","--file",providerFile],env);expect(created.code,created.stderr).toBe(0);
+    const launched=await command(clientDir,["launch","codex","--provider","hosted-provider","--model","hosted-model","--executable",native],env);
+    expect(launched.code,launched.stderr).toBe(0);expect(paths).toEqual(["/auth","/models"]);
+    const client=new SwitcherClient({baseUrl:service.url,apiKey:"fixture-hosted-switcher-api-token"});
+    expect((await client.listModels("hosted-provider")).data.map(model=>model.id)).toEqual(["hosted-model"]);
+    const run=(await client.listRuns()).data[0];expect(run).toMatchObject({providerId:"hosted-provider",model:"hosted-model",status:"exited"});
+    expect(created.stdout+created.stderr+launched.stdout+launched.stderr+JSON.stringify(run)).not.toContain(providerKey);
+    expect(await Bun.file(join(clientDir,"data","switcher.db")).exists()).toBe(false);
+  }finally{await service.close();await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
+},30000);

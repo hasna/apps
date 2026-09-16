@@ -4,10 +4,17 @@ title: "Switcher changelog"
 type: "release-notes"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:54:59Z"
-updated_at: "2026-09-09T14:35:00Z"
+updated_at: "2026-09-16T06:10:00Z"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+## 0.2.3
+
+### Patch Changes
+
+- Separate provider credential onboarding from credential storage and delivery into a focused module while preserving explicit environment credentials, source/account pins, origin restrictions, metadata-only Secrets discovery, bounded provider authentication, noninteractive setup errors, dry-run behavior, and final-plan fingerprint checks.
+- Add first-class hosted API operation at `https://api.hasna.com/switcher`: local mode remains an owned authenticated loopback API backed by SQLite, while hosted mode requires PostgreSQL, Contracts-signed revocable API keys, an owner-only terminating migration, DML-only runtime schema validation, and fail-closed remote configuration. Hosted catalog refresh authenticates and discovers in the local launcher, then persists version/fingerprint-bound catalog metadata without sending provider credentials to the service; the hosted server refuses provider URL refreshes to close the SSRF boundary. Add a zero-desired-count bootstrap migration receipt, prebuilt immutable fleet-key minting, protected image retention, explicit local-flag parsing, public readiness/OpenAPI probes, deployment metadata, and regression coverage for CLI, MCP, SDK, local and hosted paths.
 
 ## 0.2.2
 

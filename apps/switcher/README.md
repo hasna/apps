@@ -226,7 +226,7 @@ switcher launch codex --provider openrouter --model anthropic/claude-sonnet-4.6
 
 An interactive terminal can choose or search the catalog when `--model` is omitted. Noninteractive launches require an explicit model. `--dry-run` resolves and saves the provider/profile and fresh catalog, then prints the launch plan without starting the harness or creating a run record. Existing `switcher launch PROFILE` commands remain supported. Direct launches create or reuse records without overwriting customized providers or profiles.
 
-With no Switcher API credential configured, the CLI and `switcher-mcp` exit non-zero and name the sources they consulted (Keychain item `hasna.credentials.switcher.api-key`, `~/.hasna/switcher/config/credentials`, `HASNA_SWITCHER_API_KEY`); they never open local data by default. Set `HASNA_SWITCHER_LOCAL=1` (alias `SWITCHER_LOCAL=1`) to deliberately run on the box: each invocation then starts an authenticated loopback API on an allocated port, stores SQLite data in `~/.hasna/switcher`, prints one `switcher: LOCAL mode` line on stderr, and closes its own listener on completion. Its random operator key remains in memory. Under that opt-in, use `HASNA_SWITCHER_HOME` to choose another owner-only home, `HASNA_SWITCHER_SQLITE_PATH` for an explicit database, or `HASNA_SWITCHER_DATABASE_URL` for PostgreSQL. A configured API URL or key outranks the flag. API and SDK data access remains HTTP.
+With no Switcher API credential configured, the CLI and `switcher-mcp` exit non-zero and name the sources they consulted (Keychain item `hasna.credentials.switcher.api-key`, `~/.hasna/switcher/config/credentials`, `HASNA_SWITCHER_API_KEY`); they never open local data by default. Set `HASNA_SWITCHER_LOCAL=1` (alias `SWITCHER_LOCAL=1`; affirmative values are `1`, `true`, `yes`, or `on`) to deliberately run on the box: each invocation then starts an authenticated loopback API on an allocated port, stores SQLite data in `~/.hasna/switcher`, prints one `switcher: LOCAL mode` line on stderr, and closes its own listener on completion. Its random operator key remains in memory. Under that opt-in, use `HASNA_SWITCHER_HOME` to choose another owner-only home, `HASNA_SWITCHER_SQLITE_PATH` for an explicit database, or `HASNA_SWITCHER_DATABASE_URL` for PostgreSQL. A configured API URL or key outranks the flag. API and SDK data access remains HTTP.
 
 Remote API configuration is resolved through Contracts, including canonical credential stores and the default gateway URL. Invalid, unavailable or unauthorized remote services fail without opening local SQLite.
 
@@ -347,7 +347,7 @@ The digest is a release-artifact checksum, not a credential. Do not substitute t
 
 For provider keys already stored in macOS Keychain, use `--keychain-service SERVICE --keychain-account ACCOUNT` instead of vault options. Bindings contain only references and authorized origins under `~/.hasna/switcher/config/credential-bindings`, in owner-only files. They remain local even when Switcher uses a remote API. A configured binding takes precedence over environment aliases; an unavailable binding never falls back to another account.
 
-`credentials list` displays bindings; `credentials remove PRESET_OR_REFERENCE` removes only the locator. Replacement requires explicit removal. Custom credential references require `--origin URL` (repeatable); preset bindings authorize their documented origins by default. `credentials check` reports availability, length and hash, not successful provider authentication. Provider credentials needed by a remote API's catalog discovery must still be configured on that server independently.
+`credentials list` displays bindings; `credentials remove PRESET_OR_REFERENCE` removes only the locator. Replacement requires explicit removal. Custom credential references require `--origin URL` (repeatable); preset bindings authorize their documented origins by default. `credentials check` reports availability, length and hash, not successful provider authentication. When the selected Switcher API is hosted, catalog discovery still runs in the local launcher after credential authentication; only validated catalog metadata is committed to the API. Provider values are never sent to or stored by the hosted Switcher service.
 
 Explicit `--vault-account ACCOUNT` pins one macOS Keychain account and requires `--vault-url`; it never falls back when that account is missing or locked. `--vault-operator env` preserves the per-process `HASNA_SECRETS_API_KEY` mode and also requires `--vault-url`. Existing bindings keep their original operator mode. To adopt canonical resolution for an old binding, explicitly remove and rebind its same provider key reference. A Secrets operator cannot bootstrap itself through `HASNA_SECRETS_API_KEY_REF`; use a literal operator from its canonical store or explicit override. On Linux the shared resolver reads the owner-only canonical credentials file or process environment. The binding stores only the locator and optional vault authority. Alternatively, let the authenticated `secrets` CLI inject a provider credential for one command:
 
@@ -455,19 +455,24 @@ Cline uses its native ACP backend with per-launch configuration, durable session
 
 ## Run a persistent service
 
-Inject a random operator token of at least 24 characters as `HASNA_SWITCHER_API_KEY` through your secret manager. Inject provider credentials separately, using names beginning `SWITCHER_PROVIDER_`. Only environment references are persisted. Explicitly hosted servers read `SWITCHER_PROVIDER_*` references; the local launcher also accepts the standard aliases declared by each built-in preset.
+For a private local/self-hosted service, inject a random operator token of at least 24 characters as `HASNA_SWITCHER_API_KEY`. For a hosted PostgreSQL service, inject `HASNA_SWITCHER_API_SIGNING_KEY` (or the shared `HASNA_API_SIGNING_KEY` / `API_KEY_SIGNING_SECRET`) and issue revocable, scoped `switcher:read` / `switcher:write` client keys through `@hasna/contracts`. Exactly one authentication mode is accepted. Provider credentials stay in each launcher process; hosted catalog refresh uploads metadata only.
 
 ```sh
-# SQLite: persistent hosted service and database.
+# SQLite: private persistent API with a static operator token.
 switcher-serve --data-dir ~/.hasna/switcher --port 8080
 
-# PostgreSQL: inject HASNA_SWITCHER_DATABASE_URL, then:
+# PostgreSQL self-hosting with the same private token:
 switcher-serve --port 8080
+
+# Hosted PostgreSQL: inject HASNA_SWITCHER_DATABASE_URL and
+# HASNA_SWITCHER_API_SIGNING_KEY. Apply the terminating migration first:
+switcher-serve migrate
+switcher-serve --host 0.0.0.0 --port 8080
 ```
 
-Choose exactly one backend. There is no automatic fallback. Both backends run migrations and the same behavioral tests. SQLite HTTP hosting is an explicit switcher-specific product requirement; clients always use HTTP. Use PostgreSQL for multiple service instances.
+Choose exactly one backend. There is no automatic fallback. SQLite HTTP hosting is an explicit switcher-specific product requirement; clients always use HTTP. Hosted signed-key mode requires PostgreSQL and refuses a SQLite path. The migration command applies the domain and API-key lifecycle schema with the owner DSN and exits. The long-running hosted service validates that exact schema with its application DSN and performs no DDL.
 
-Set `HASNA_SWITCHER_API_URL=http://127.0.0.1:8080` for clients and inject the operator token into each process. Remote URLs require HTTPS. The service binds loopback by default; put a TLS reverse proxy in front of an explicitly hosted listener. This release has one operator authority per service, not tenant isolation.
+Set `HASNA_SWITCHER_API_URL=http://127.0.0.1:8080` for a self-hosted client and inject its operator token. A configured client key with no URL selects `https://api.hasna.com/switcher`; remote URLs require HTTPS. A selected hosted authority that is missing, unreachable or unauthorized fails closed and never opens local SQLite. Values `0`, `false`, `no`, and `off` do not enable local mode; unknown nonblank local-flag values are rejected. The service binds loopback by default; put a TLS reverse proxy in front of an explicitly hosted listener.
 
 For containers, build the package first, then use `docker compose --profile sqlite up --build`. For PostgreSQL, inject `SWITCHER_POSTGRES_PASSWORD` and a matching URI in `HASNA_SWITCHER_DATABASE_URL` using hostname `postgres`, database/user `switcher`; run `docker compose --profile postgres up --build`. URI-encode password characters. Choose one profile. Compose exposes only loopback port 8080 and persists named volumes.
 
@@ -489,7 +494,7 @@ The model ID is an example; choose an exact ID from the current catalog and veri
 
 For Claude use `--harness claude` with `anthropic-messages`; for Grok, Hermes or OpenCode 2 use their supported protocol. Pass native arguments after `--`, such as `switcher launch coding -- exec "Reply with exactly: connected"`. `--backend direct` is the default; the optional `--backend ori` is OpenRouter-only and accepts `--ori-executable PATH`, while `--executable` remains the direct adapter option. `--cwd`, `--state-dir`, and `--timeout SECONDS` are local launcher options. Native approval and sandbox settings remain in effect. See [the Ori backend contract](https://github.com/hasna/apps/blob/main/apps/switcher/docs/ori-backend-integration.md) for its supported target and catalog boundaries.
 
-When the API runs remotely, inject the provider credential into the API process for authenticated catalog discovery and into the local launcher for direct inference. The API never returns a provider key. An external compatible gateway can be the configured provider. Switcher does not translate between wire protocols.
+When the API runs remotely, provider authentication and model discovery happen in the local launcher. The launcher commits the resulting validated catalog through the versioned API, then uses the same prepared credential for direct inference. The hosted service never receives or stores the provider key and refuses server-side provider refreshes; authenticated callers cannot make the hosted service contact provider URLs. An external compatible gateway can be the configured provider. Switcher does not translate between wire protocols.
 
 ## Catalog refresh and offline use
 
@@ -591,7 +596,7 @@ The SDK supports Node and Bun. It has no database or launcher imports. Explicit 
 
 SDK and CLI API-error diagnostics validate code/request-ID fields, bound message length, remove terminal control characters, and redact the operator credential actually sent with that request. Redaction covers raw, JSON-string-escaped, URL-encoded and Base64/Base64url representations. Native harness stdout and terminal output remain under the native client's control.
 
-Public lifecycle endpoints: `GET /health`, `/ready`, `/version`. Authenticated OpenAPI: `GET /v1/openapi.json`. Provider/profile CRUD, `/v1/provider-presets`, catalog list/refresh, launch-plan validation and run metadata are under `/v1`. The SDK includes `listProviderPresets()`, `getProviderPreset()`, `health()`, `ready()`, and `version()`. SDK types are generated from that OpenAPI document. API errors include code, message and request ID.
+Public lifecycle endpoints: `GET /health`, `/ready`, `/version`, `/openapi.json`, and `/v1/openapi.json`. Provider/profile CRUD, `/v1/provider-presets`, catalog list/refresh, version-checked catalog metadata commits, launch-plan validation and run metadata are under `/v1`. The SDK includes `listProviderPresets()`, `getProviderPreset()`, `health()`, `ready()`, and `version()`. SDK types are generated from that OpenAPI document. API errors include code, message and request ID.
 
 All mutations require `Idempotency-Key`. Reuse the same key and payload after an uncertain response; changing the payload returns 409. Updates/deletes also require the numeric record version in `If-Match`. SDK methods supply these headers and accept a caller-provided idempotency key. Run creation requires the `planToken` from a launch plan; a changed provider, profile or catalog rejects the stale plan with 409 before local execution. List endpoints accept `limit` (1–1000), `offset` and `search`. Referenced providers/profiles cannot be deleted while children exist.
 

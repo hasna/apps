@@ -148,6 +148,7 @@ export class SwitcherClient {
   updateModel(providerId: string, model: Model) { return this.editModel(providerId, "update", model); }
   removeModel(providerId: string, modelId: string) { return this.editModel(providerId, "remove", modelId); }
   refreshModels(id: string, idempotencyKey?: string) { return this.request<Catalog>("POST", `/v1/providers/${encodeURIComponent(id)}/refresh`, {}, {idempotencyKey}); }
+  saveCatalog(id:string,providerVersion:number,catalog:Catalog,idempotencyKey?:string){return this.request<Catalog>("PUT",`/v1/providers/${encodeURIComponent(id)}/catalog`,catalog,{version:providerVersion,idempotencyKey});}
   listModels(id: string, options = {}) { return this.request<components["schemas"]["ModelPage"]>("GET", `/v1/providers/${encodeURIComponent(id)}/models?${this.query(options)}`); }
   listProfiles(options = {}) { return this.request<Page<Profile>>("GET", `/v1/profiles?${this.query(options)}`); }
   getProfile(id: string) { return this.request<Profile>("GET", `/v1/profiles/${encodeURIComponent(id)}`); }

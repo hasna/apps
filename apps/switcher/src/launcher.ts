@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { SwitcherClient } from "./sdk";
 import { CommandInterrupted, Fault, codingEligible, harnessEligible, modelExpired, validateHarnessProvider, type LaunchPlan, type ProviderInput } from "./domain";
 import { providerCredential } from "./presets";
-import { providerCredentialFingerprint, providerCredentialSetupCommand } from "./credentials";
+import { providerCredentialFingerprint, providerCredentialSetupCommand } from "./provider-credential-onboarding";
 import { privateDirectory, switcherHome } from "./runtime";
 import { prepareHarnessLaunch, detectHarness, codexModel, validateHarnessVersion, validateHarnessConfiguration } from "./harnesses";
 import { harnessInstallationMessage } from "./harness-installation";

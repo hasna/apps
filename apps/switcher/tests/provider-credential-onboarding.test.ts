@@ -8,10 +8,13 @@ import { providerFromPreset } from "../src/presets";
 import { resolveLaunchProvider } from "../src/direct-launch";
 import { SwitcherError, type SwitcherClient } from "../src/sdk";
 
+let onboardingModule: Record<string, unknown> = {};
+try { onboardingModule = await import(new URL("../src/provider-credential-onboarding.ts", import.meta.url).href); } catch {}
+
 /**
  * Proposed production seam: credential onboarding belongs ahead of catalog/model
  * selection for both direct and saved-profile launches. The implementation should
- * export ensureProviderCredential from credentials.ts and accept the narrow
+ * export ensureProviderCredential from provider-credential-onboarding.ts and accept the narrow
  * collaborators below so discovery/prompt/auth can be tested without exposing a
  * credential value or invoking a real vault.
  */
@@ -51,10 +54,22 @@ type EnsureProviderCredential = (provider: ProviderInput, options: EnsureOptions
 }>;
 
 function expectedApi(): EnsureProviderCredential {
-  const candidate = (credentialModule as Record<string, unknown>).ensureProviderCredential;
-  expect(candidate, "credentials.ts must export the shared pre-picker onboarding seam ensureProviderCredential").toBeFunction();
+  const candidate = onboardingModule.ensureProviderCredential;
+  expect(candidate, "provider-credential-onboarding.ts must export the shared pre-picker onboarding seam ensureProviderCredential").toBeFunction();
   return candidate as EnsureProviderCredential;
 }
+
+function expectedOnboardingExport<T>(name: string): T {
+  const candidate = onboardingModule[name];
+  expect(candidate, `provider-credential-onboarding.ts must export ${name}`).toBeFunction();
+  return candidate as T;
+}
+type DiscoverVaultReferences = (provider: ProviderInput, env?: NodeJS.ProcessEnv, vaultExecutable?: string) => Promise<VaultReference[]>;
+type VerifyProviderAuthentication = (request: {provider: ProviderInput; credential: string; fetch?: typeof fetch}) => Promise<{authenticated:boolean;status?:number;unsupported?:boolean}>;
+type LaunchCatalog = (client: SwitcherClient, provider: ReturnType<typeof provider>, dryRun?: boolean) => Promise<{models:Array<{id:string;name:string}>;refreshedAt:string;source:string}>;
+const expectedDiscovery = () => expectedOnboardingExport<DiscoverVaultReferences>("discoverVaultReferences");
+const expectedVerification = () => expectedOnboardingExport<VerifyProviderAuthentication>("verifyProviderAuthentication");
+const expectedLaunchCatalog = () => expectedOnboardingExport<LaunchCatalog>("launchCatalog");
 
 const provider = () => providerFromPreset("openrouter", { harness: "codex" });
 const references = [
@@ -183,7 +198,7 @@ test("noninteractive setup never prompts and returns a structured error with an 
 
 test("interactive setup distinguishes an unavailable Secrets CLI from no matching metadata",async()=>{
   const ensure=expectedApi();const {resolver}=fixture();
-  await expect(credentialModule.discoverVaultReferences(provider(),{},"")).rejects.toMatchObject({code:"vault_exec_unavailable"});
+  await expect(expectedDiscovery()(provider(),{},"")).rejects.toMatchObject({code:"vault_exec_unavailable"});
   await expect(ensure(provider(),{interactive:true,resolver,discoverVaultReferences:async()=>[],selectVaultReference:async()=>{throw new Error("must not prompt");},verifyProviderAuthentication:successfulAuth})).rejects.toMatchObject({code:"credential_match_missing"});
 });
 
@@ -211,8 +226,13 @@ test("existing built-in bindings without safe checks retain their pre-onboarding
   for(const input of providers){
     const existing:CredentialBindingRecord={schema:1,credentialEnv:input.credentialEnv!,origins:[new URL(input.baseUrl).origin],source:{kind:"vault",key:references[0].key,executable:references[0].executable,operator:references[0].operator}};
     const state=fixture({existing,resolved:"fixture-current-vault-value"});
-    await expect(ensure(input,{interactive:false,resolver:state.resolver,discoverVaultReferences:async()=>{throw new Error("must not discover");},verifyProviderAuthentication:credentialModule.verifyProviderAuthentication})).resolves.toMatchObject({source:"binding",configured:false,verified:false});
+    await expect(ensure(input,{interactive:false,resolver:state.resolver,discoverVaultReferences:async()=>{throw new Error("must not discover");},verifyProviderAuthentication:expectedVerification()})).resolves.toMatchObject({source:"binding",configured:false,verified:false});
   }
+});
+
+test("a rejected saved binding always includes the exact remove-and-rebind recovery",async()=>{
+  const ensure=expectedApi();const state=fixture({existing:{schema:1,credentialEnv:"SWITCHER_PROVIDER_OPENROUTER",origins:["https://openrouter.ai"],requireProviderAuthentication:true,source:{kind:"vault",key:references[0].key,executable:references[0].executable,operator:references[0].operator}},resolved:"fixture-current-vault-value"});
+  await expect(ensure(provider(),{interactive:false,resolver:state.resolver,discoverVaultReferences:async()=>{throw new Error("must not discover");},verifyProviderAuthentication:async()=>({authenticated:false,status:401})})).rejects.toMatchObject({code:"provider_credential_rejected",message:expect.stringContaining("switcher credentials remove SWITCHER_PROVIDER_OPENROUTER")});
 });
 
 test("rejected provider credentials remain on the selected account and do not fall through to another match", async () => {
@@ -281,7 +301,7 @@ test("an unauthenticated OpenRouter model catalog response is not accepted as pr
 
 test("OpenRouter authentication uses the bounded key endpoint rather than its public catalog", async () => {
   const calls: Array<{ path: string; authorization: string | null }> = [];
-  const result = await credentialModule.verifyProviderAuthentication({
+  const result = await expectedVerification()({
     provider: provider(),
     credential: "fixture-invalid-openrouter",
     fetch: (async (input,init) => {
@@ -293,7 +313,29 @@ test("OpenRouter authentication uses the bounded key endpoint rather than its pu
   expect(result).toEqual({ authenticated: false, status: 401 });
   expect(calls).toEqual([{path:"/api/v1/key",authorization:"Bearer fixture-invalid-openrouter"}]);
   const legacy=provider();delete (legacy as {credentialCheck?:unknown}).credentialCheck;
-  expect(await credentialModule.verifyProviderAuthentication({provider:legacy,credential:"fixture",fetch:(async()=>new Response(null,{status:204})) as typeof fetch})).toEqual({authenticated:true,status:204});
+  expect(await expectedVerification()({provider:legacy,credential:"fixture",fetch:(async()=>new Response(null,{status:204})) as typeof fetch})).toEqual({authenticated:true,status:204});
+});
+
+test("prepared credentials preserve the final-plan fingerprint boundary after extraction", async () => {
+  const ensure = expectedApi();
+  const state = fixture({environmentCredential:"fixture-explicit-environment"});
+  const prepared = await ensure(provider(), {
+    interactive:false, resolver:state.resolver, discoverVaultReferences:async()=>[], verifyProviderAuthentication:successfulAuth,
+  });
+  await expect(prepared.resolveCredential({...provider(),baseUrl:"https://changed.example/v1"})).rejects.toMatchObject({code:"credential_preflight_changed"});
+  expect(state.events.filter(event=>event.startsWith("resolve:"))).toHaveLength(1);
+});
+
+test("dry-run catalog policy reads a cached authenticated catalog without refresh or credential access", async () => {
+  const launchCatalog = expectedLaunchCatalog();
+  const input = {...provider(), catalogAuthStyle:"bearer" as const, manualModels:[]};
+  let refreshes=0, reads=0;
+  const client={
+    async refreshModels(){refreshes++;throw new Error("dry-run must not refresh an authenticated catalog");},
+    async listModels(_id:string,options:{offset?:number}){reads++;expect(options.offset).toBe(0);return {data:[{id:"fixture-model",name:"Fixture model",codingEligible:true,expired:false}],total:1,limit:1000,offset:0,refreshedAt:"2026-09-15T00:00:00.000Z",source:"remote"};},
+  } as unknown as SwitcherClient;
+  await expect(launchCatalog(client,input,true)).resolves.toEqual({models:[{id:"fixture-model",name:"Fixture model"}],refreshedAt:"2026-09-15T00:00:00.000Z",source:"remote"});
+  expect({refreshes,reads}).toEqual({refreshes:0,reads:1});
 });
 
 test("existing OpenRouter providers created before credential checks remain launch-compatible",async()=>{
@@ -303,14 +345,14 @@ test("existing OpenRouter providers created before credential checks remain laun
 });
 
 test("provider authentication distinguishes rejected credentials from transient or redirected checks",async()=>{
-  for(const status of [302,429,500])await expect(credentialModule.verifyProviderAuthentication({provider:provider(),credential:"fixture",fetch:(async()=>new Response(null,{status})) as typeof fetch})).rejects.toMatchObject({code:"provider_auth_unavailable"});
-  await expect(credentialModule.verifyProviderAuthentication({provider:provider(),credential:"fixture",fetch:(async()=>{throw new Error("offline");}) as typeof fetch})).rejects.toMatchObject({code:"provider_auth_unavailable"});
+  for(const status of [302,429,500])await expect(expectedVerification()({provider:provider(),credential:"fixture",fetch:(async()=>new Response(null,{status})) as typeof fetch})).rejects.toMatchObject({code:"provider_auth_unavailable"});
+  await expect(expectedVerification()({provider:provider(),credential:"fixture",fetch:(async()=>{throw new Error("offline");}) as typeof fetch})).rejects.toMatchObject({code:"provider_auth_unavailable"});
 });
 
 test("catalog configuration alone never proves provider authentication",async()=>{
   const configured={...providerFromPreset("generic-openai-responses",{harness:"codex",baseUrl:"https://provider.example/v1",credentialEnv:"SWITCHER_PROVIDER_GENERIC"}),catalogAuthStyle:"bearer" as const};
   let requests=0;
-  expect(await credentialModule.verifyProviderAuthentication({provider:configured,credential:"fixture-invalid",fetch:(async()=>{requests++;return new Response(null,{status:200});}) as typeof fetch})).toEqual({authenticated:false,unsupported:true});
+  expect(await expectedVerification()({provider:configured,credential:"fixture-invalid",fetch:(async()=>{requests++;return new Response(null,{status:200});}) as typeof fetch})).toEqual({authenticated:false,unsupported:true});
   expect(requests).toBe(0);
 });
 
@@ -326,7 +368,7 @@ if(args[0]!=="search"||args[2]!=="--json")process.exit(91);
 if(process.env.HASNA_SECRETS_API_URL!=="https://vault.example"||process.env.HASNA_SECRETS_API_KEY_OVERRIDE!=="fixture-operator")process.exit(92);
 console.log(JSON.stringify([{key:"accounts/openrouter/live/api_key",type:"api_key",label:"OpenRouter",expires_at:null,created_at:"2026-09-01",updated_at:"2026-09-15"}]));
 `, { mode: 0o700 });
-    const matches = await credentialModule.discoverVaultReferences(provider(), {
+    const matches = await expectedDiscovery()(provider(), {
       PATH: root,
       HOME: root,
       HASNA_SECRETS_API_URL: "https://vault.example",
@@ -345,4 +387,23 @@ console.log(JSON.stringify([{key:"accounts/openrouter/live/api_key",type:"api_ke
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("hosted refresh discovers with the prepared local credential and persists only catalog metadata",async()=>{
+  const launchCatalog=expectedLaunchCatalog() as unknown as (client:SwitcherClient,provider:any,dryRun:boolean,options:any)=>Promise<any>;
+  let authorization:string|null=null,serverRefreshes=0,saved:any;
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){authorization=request.headers.get("authorization");return Response.json({data:[{id:"hosted/model",name:"Hosted model"}]});}});
+  try{
+    const input={...provider(),baseUrl:`${upstream.url.origin}/v1`,catalogBaseUrl:`${upstream.url.origin}/v1`,catalogAuthStyle:"bearer" as const};
+    const client={
+      async refreshModels(){serverRefreshes++;throw new Error("hosted API must not receive provider credentials");},
+      async saveCatalog(id:string,version:number,catalog:any){saved={id,version,catalog};return catalog;},
+    } as unknown as SwitcherClient;
+    const catalog=await launchCatalog(client,input,false,{clientSide:true,credential:"fixture-local-provider-key",resolveCredential:async()=>{throw new Error("same provider credential must reuse the authenticated value");}});
+    expect(authorization).toBe("Bearer fixture-local-provider-key");
+    expect(serverRefreshes).toBe(0);
+    expect(saved).toEqual({id:input.id,version:input.version,catalog});
+    expect(JSON.stringify(saved)).not.toContain("fixture-local-provider-key");
+    expect(catalog.models.map((model:any)=>model.id)).toEqual(["hosted/model"]);
+  }finally{await upstream.stop(true);}
 });

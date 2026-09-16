@@ -1,9 +1,12 @@
 import { SQL } from "bun";
 import { chmod, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import { Fault } from "./domain";
+import { apiKeyMigrations, type AuthQueryClient } from "@hasna/contracts/auth";
 
 type Connection = Pick<SQL, "unsafe">;
+const authMigrationPlan=()=>apiKeyMigrations().map(migration=>({...migration,checksum:createHash("sha256").update(migration.sql).digest("hex")}));
 export type Resource = "providers" | "profiles" | "runs" | "catalogs";
 export type RecordValue = {id: string; version: number; updatedAt: string; [key: string]: unknown};
 export class Store {
@@ -17,7 +20,7 @@ export class Store {
   readonly sql: SQL;
   readonly engine: "sqlite" | "postgresql";
   private constructor(sql: SQL, engine: "sqlite" | "postgresql") { this.sql = sql; this.engine = engine; }
-  static async open(config: {databaseUrl?: string; sqlitePath?: string}) {
+  static async open(config: {databaseUrl?: string; sqlitePath?: string; migrate?: boolean}) {
     if (!!config.databaseUrl === !!config.sqlitePath) throw new Fault(500, "storage_config", "Choose exactly one PostgreSQL URL or SQLite path.");
     const engine = config.databaseUrl ? "postgresql" : "sqlite";
     if (config.databaseUrl && !/^postgres(ql)?:\/\//.test(config.databaseUrl))
@@ -38,7 +41,7 @@ export class Store {
           if (file !== ":memory:") await chmod(file!, 0o600);
         }
         const store = new Store(sql, engine);
-        await store.migrate();
+        if(config.migrate===false)await store.verifySchema();else await store.migrate();
         return store;
       } catch (error) {
         await sql?.close().catch(() => {});
@@ -58,17 +61,53 @@ export class Store {
       if (this.engine === "postgresql") await tx.unsafe("SELECT pg_advisory_xact_lock(782034215)");
       await tx.unsafe("CREATE TABLE IF NOT EXISTS switcher_migrations (version INTEGER PRIMARY KEY)");
       const versions = await tx.unsafe("SELECT version FROM switcher_migrations ORDER BY version");
-      if (versions.some((v: any) => v.version > 1)) throw new Error("Newer database schema");
-      if (versions.length) return;
-      await tx.unsafe("CREATE TABLE switcher_providers (id TEXT PRIMARY KEY, version INTEGER NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL)");
-      await tx.unsafe("CREATE TABLE switcher_profiles (id TEXT PRIMARY KEY, provider_id TEXT NOT NULL REFERENCES switcher_providers(id), version INTEGER NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL)");
-      await tx.unsafe("CREATE TABLE switcher_catalogs (id TEXT PRIMARY KEY REFERENCES switcher_providers(id) ON DELETE CASCADE, version INTEGER NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL)");
-      await tx.unsafe("CREATE TABLE switcher_runs (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES switcher_profiles(id), version INTEGER NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL)");
-      await tx.unsafe("CREATE TABLE switcher_idempotency (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)");
-      await tx.unsafe("INSERT INTO switcher_migrations(version) VALUES (1)");
+      if (versions.some((v: any) => v.version > 2)) throw new Error("Newer database schema");
+      const applied = new Set(versions.map((v:any)=>Number(v.version)));
+      if (!applied.has(1)) {
+        await tx.unsafe("CREATE TABLE switcher_providers (id TEXT PRIMARY KEY, version INTEGER NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL)");
+        await tx.unsafe("CREATE TABLE switcher_profiles (id TEXT PRIMARY KEY, provider_id TEXT NOT NULL REFERENCES switcher_providers(id), version INTEGER NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL)");
+        await tx.unsafe("CREATE TABLE switcher_catalogs (id TEXT PRIMARY KEY REFERENCES switcher_providers(id) ON DELETE CASCADE, version INTEGER NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL)");
+        await tx.unsafe("CREATE TABLE switcher_runs (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES switcher_profiles(id), version INTEGER NOT NULL, updated_at TEXT NOT NULL, payload TEXT NOT NULL)");
+        await tx.unsafe("CREATE TABLE switcher_idempotency (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)");
+        await tx.unsafe("INSERT INTO switcher_migrations(version) VALUES (1)");
+      }
+      if (this.engine === "postgresql") {
+        await tx.unsafe("CREATE TABLE IF NOT EXISTS switcher_auth_migrations (id TEXT PRIMARY KEY, checksum TEXT NOT NULL)");
+        const migrations=authMigrationPlan();
+        const authRows=await tx.unsafe("SELECT id, checksum FROM switcher_auth_migrations ORDER BY id");
+        const known=new Map(migrations.map(migration=>[migration.id,migration.checksum]));
+        for(const row of authRows){
+          if(known.get(String(row.id))!==String(row.checksum))throw new Error("Unknown or changed API-key migration");
+        }
+        const completed=new Set(authRows.map((row:any)=>String(row.id)));
+        for(const migration of migrations)if(!completed.has(migration.id)){
+          await tx.unsafe(migration.sql);
+          await tx.unsafe("INSERT INTO switcher_auth_migrations(id,checksum) VALUES ($1,$2)",[migration.id,migration.checksum]);
+        }
+        if(!applied.has(2))await tx.unsafe("INSERT INTO switcher_migrations(version) VALUES (2)");
+      }
     });
   }
+  private async verifySchema(){
+    const versions=await this.sql.unsafe("SELECT version FROM switcher_migrations ORDER BY version");
+    const applied=new Set(versions.map((row:any)=>Number(row.version)));
+    if(!applied.has(1)||(this.engine==="postgresql"&&!applied.has(2))||versions.some((row:any)=>Number(row.version)>2))throw new Error("Unsupported database schema");
+    if(this.engine==="postgresql"){
+      const expected=authMigrationPlan(),rows=await this.sql.unsafe("SELECT id, checksum FROM switcher_auth_migrations ORDER BY id");
+      const actual=new Map(rows.map((row:any)=>[String(row.id),String(row.checksum)]));
+      if(actual.size!==expected.length||expected.some(migration=>actual.get(migration.id)!==migration.checksum))throw new Error("Unsupported API-key schema");
+      await this.sql.unsafe("SELECT kid, app, agent, tid, scopes, token_hash, issued_at, expires_at, revoked_at, revoked_reason, last_used_at, created_by FROM api_keys LIMIT 0");
+    }
+  }
   async ready() { await this.exclusive(async () => { await this.sql.unsafe("SELECT 1"); }); }
+  authQueryClient(): AuthQueryClient {
+    if (this.engine !== "postgresql") throw new Fault(500,"auth_config","Signed API keys require the PostgreSQL backend.");
+    return {
+      many: async <T extends Record<string,unknown>>(sql:string,params:readonly unknown[]=[]):Promise<T[]> => await this.sql.unsafe(sql,[...params]) as T[],
+      get: async <T extends Record<string,unknown>>(sql:string,params:readonly unknown[]=[]):Promise<T|null> => (await this.sql.unsafe(sql,[...params]) as T[])[0] ?? null,
+      execute: async (sql:string,params:readonly unknown[]=[]):Promise<void> => { await this.sql.unsafe(sql,[...params]); },
+    };
+  }
   async close() { await this.tail; await this.sql.close(); }
   async get<T>(kind: Resource, id: string, db: Connection = this.sql): Promise<T> {
     if (db === this.sql && this.engine === "sqlite") return this.exclusive(() => this.read<T>(kind, id, db));

@@ -5,14 +5,15 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "1.0.2",
-  "description": "Universal provider and model switcher for coding harnesses with an API, SDK and self-hosted storage",
+  "description": "Universal provider and model switcher with API-first local and hosted operation. CLI, MCP and SDK resolve one authenticated HTTP authority through @hasna/contracts and fail closed when hosted configuration is missing or invalid. HASNA_SWITCHER_LOCAL=1 deliberately selects an owned loopback API backed by SQLite; hosted https://api.hasna.com/switcher uses PostgreSQL and signed revocable API keys. Provider credentials remain local to the launcher and are never stored or returned by the service.",
   "bins": [
     "switcher",
     "switcher-mcp",
     "switcher-serve"
   ],
   "hosting": [
-    "user-hosted"
+    "user-hosted",
+    "hasna-saas"
   ],
   "serviceSurfaces": [
     {
@@ -37,7 +38,7 @@
         "public": true
       },
       "apiBasePath": "/v1",
-      "openApiPath": "/v1/openapi.json"
+      "openApiPath": "/openapi.json"
     },
     {
       "name": "package-sdk",
@@ -45,7 +46,7 @@
       "status": "supported",
       "authMode": "api-key",
       "exportSubpath": "./sdk",
-      "generatedFrom": "/v1/openapi.json"
+      "generatedFrom": "/openapi.json"
     },
     {
       "name": "mcp",
@@ -63,7 +64,7 @@
     }
   ],
   "storage": {
-    "backend": "postgresql",
+    "backend": "sqlite",
     "engines": [
       "sqlite",
       "postgresql"
@@ -88,7 +89,20 @@
         "sqlite",
         "postgresql"
       ],
-      "scope": "Only switcher HTTP server; all CLI, SDK and MCP data access remains authenticated HTTP. PostgreSQL remains canonical backend."
+      "scope": "The owned local HTTP API uses SQLite; the hosted HTTP API uses PostgreSQL. CLI, SDK and MCP always use authenticated HTTP, and a selected hosted authority never falls back to local storage."
+    },
+    "service": {
+      "port": 8080,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key"
+    },
+    "client": {
+      "apiUrlEnv": "HASNA_SWITCHER_API_URL",
+      "apiKeyEnv": "HASNA_SWITCHER_API_KEY"
     }
   }
 }
