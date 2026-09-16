@@ -3462,6 +3462,7 @@ function registerProjectCommands(program: Command): void {
     .option("--slug <slug>", "Project slug")
     .option("--description <text>", "Description")
     .option("--kind <kind>", `Project kind (${WORKSPACE_KINDS.join(", ")})`)
+    .option("--status <status>", `Project status (${WORKSPACE_STATUSES.join(", ")}); registry state only`)
     .option("--path <path>", "Primary path (alias for --primary-path)")
     .option("--primary-path <path>", "Primary path (alias for --path)")
     .option("--git-remote <url>", "Git remote URL")
@@ -3487,6 +3488,7 @@ function registerProjectCommands(program: Command): void {
           slug: opts.slug,
           description: opts.description,
           kind: parseKind(opts.kind),
+          status: parseStatus(opts.status),
           primary_path: primaryPath ?? path,
           git_remote: opts.gitRemote,
           metadata: parseJsonObject(opts.metadataJson, "--metadata-json"),
