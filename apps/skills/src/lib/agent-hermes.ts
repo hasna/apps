@@ -52,7 +52,10 @@ export function configureHermesHooks(text: string | null, supervisor: HermesSupe
   return doc.toString({ lineWidth: 0 });
 }
 export function assertHermesEnvironment(home: string): void {
-  if (process.env.TERMINAL_CWD) throw new Error("NATIVE_SKILL_DRIFT: Hermes TERMINAL_CWD requires a separately reviewed effective project; unset it before using this adapter");
+  // Native Hermes sets this to its working directory before running hooks.
+  // Admit that exact directory only: relative paths, aliases and a distinct
+  // terminal project would change discovery without changing the hook cwd.
+  if (process.env.TERMINAL_CWD && process.env.TERMINAL_CWD !== process.cwd()) throw new Error("NATIVE_SKILL_DRIFT: Hermes TERMINAL_CWD must match the checked process working directory; review the effective project before using this adapter");
   for (const variable of ["HERMES_BUNDLED_PLUGINS", "HERMES_BUNDLED_SKILLS"] as const) {
     // Hermes accepts relative plugin overrides, including whitespace-only paths.
     if (process.env[variable]) throw new Error(`NATIVE_SKILL_DRIFT: Hermes ${variable} requires a dedicated discovery adapter; unset it before using this adapter`);
