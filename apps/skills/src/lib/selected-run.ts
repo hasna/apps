@@ -10,9 +10,11 @@ import { exactProfileSelection, readSelectedEntries, resolveSelectionContext, ty
 import { readCachedSelection, selectionCacheRoot, SkillSelectionError } from "./selection-cache.js";
 import { parseSkillFrontmatter } from "./skill-validation.js";
 import { SkillEntryPaths } from "./skill-entry-path.js";
+import { declaredSecretNames, validateSelectedSecretBindings, resolveSelectedSecrets, redactExecutionSecrets, selectedSecretBindingsTemplate, type SelectedSecretBindings, type SelectedSecretsClient } from "./execution-secrets.js";
 
 export interface ResolvedSelectedRun {
   selection: ResolvedSkillSelection;
+  profileId: string;
   kind: "instruction" | "executable";
   entries: SkillBundleEntry[];
   manifest: Record<string, any>;
@@ -39,7 +41,7 @@ export async function resolveSelectedRun(spec: string, profileId: string, option
   const context = await resolveSelectionContext(profileId, options);
   const selection = exactProfileSelection(spec, context.receipt.profile);
   const entries = await readSelectedEntries(selection, context, options);
-  return { selection, entries, ...describeEntries(entries), cacheDir: selectionCacheRoot(options) };
+  return { selection, profileId: context.receipt.profile.profileId, entries, ...describeEntries(entries), cacheDir: selectionCacheRoot(options) };
 }
 export interface SelectedLocalRunOptions {
   args?: string[];
@@ -48,10 +50,24 @@ export interface SelectedLocalRunOptions {
   timeoutMs?: number;
   /** Only explicitly supplied environment values are available to declared secret references. */
   env?: Record<string, string>;
+  /** Explicit value-free vault grants; mutually exclusive with env. */
+  secretBindings?: SelectedSecretBindings;
+  /** SDK injection seam. The default uses the independently configured Secrets SDK. */
+  createSecretsClient?: () => SelectedSecretsClient;
+}
+export async function prepareSelectedSecretBindings(selected: ResolvedSelectedRun, cwd = process.cwd()): Promise<SelectedSecretBindings> {
+  const entries = await readCachedSelection(selected.selection, { cacheDir: selected.cacheDir });
+  if (!entries) throw new SkillSelectionError("CACHED_BUNDLE_MISSING", "The selected execution bundle is not cached.");
+  const { kind, manifest } = describeEntries(entries);
+  if (kind !== "executable") throw new SkillSelectionError("INSTRUCTION_SKILL", "Instruction skills do not accept execution secret bindings.");
+  const names = declaredSecretNames(manifest.runtime?.env);
+  if (!names.length) throw new SkillSelectionError("NO_DECLARED_SECRETS", "This selected executable does not declare any environment references.");
+  return selectedSecretBindingsTemplate({ selection: selected.selection, profileId: selected.profileId, cwd }, names);
 }
 export async function executeSelectedLocal(selected: ResolvedSelectedRun, options: SelectedLocalRunOptions = {}) {
+  const selection = structuredClone(selected.selection), profileId = selected.profileId;
   // Re-read and verify so a caller cannot mutate returned entries between resolution and execution.
-  const entries = await readCachedSelection(selected.selection, { cacheDir: selected.cacheDir });
+  const entries = await readCachedSelection(selection, { cacheDir: selected.cacheDir });
   if (!entries) throw new SkillSelectionError("CACHED_BUNDLE_MISSING", "The selected local execution bundle is not cached.");
   const { kind, manifest, packageJson } = describeEntries(entries);
   if (kind === "instruction") throw new SkillSelectionError("INSTRUCTION_SKILL", "This selected skill contains instructions. Use skills load instead of skills run.");
@@ -81,11 +97,15 @@ export async function executeSelectedLocal(selected: ResolvedSelectedRun, option
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000 || !Number.isFinite(declaredTimeout) || declaredTimeout <= 0 || timeoutMs > declaredTimeout) throw new SkillSelectionError("INVALID_RUN_TIMEOUT", "Local skill timeout must be positive, at most five minutes and no longer than the selected runtime allows.");
   const env: Record<string, string> = {};
   for (const key of ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TERM"]) if (process.env[key]) env[key] = process.env[key]!;
-  if (runtime.env !== undefined && (!Array.isArray(runtime.env) || runtime.env.some((name: unknown) => typeof name !== "string" || !/^[A-Z][A-Z0-9_]{0,127}$/.test(name)))) throw new SkillSelectionError("INVALID_SKILL_MANIFEST", "Runtime environment references are invalid.");
-  for (const name of runtime.env ?? []) {
-    const value = options.env?.[name];
-    if (value === undefined) throw new SkillSelectionError("LOCAL_ENV_REQUIRED", `The selected runtime requires an explicit value for ${name}; ambient credentials are not inherited.`);
-    env[name] = value;
+  const names = declaredSecretNames(runtime.env);
+  if (options.secretBindings !== undefined && options.env !== undefined) throw new SkillSelectionError("INVALID_SECRET_BINDINGS", "Choose explicit vault bindings or SDK environment values, never both.");
+  const bindings = options.secretBindings === undefined ? undefined : validateSelectedSecretBindings(options.secretBindings, { selection, profileId, cwd: options.cwd ?? process.cwd() }, names);
+  let secretEnv: Record<string, string> = {};
+  if (!bindings) for (const name of names) {
+    const value = options.env && Object.hasOwn(options.env, name) ? options.env[name] : undefined;
+    if (value === undefined) throw new SkillSelectionError("LOCAL_ENV_REQUIRED", `The selected runtime requires an explicit binding for ${name}; use --secret-bindings. Ambient credentials are not inherited.`);
+    if (typeof value !== "string" || value.includes("\0") || Buffer.byteLength(value) > 16_384) throw new SkillSelectionError("INVALID_SECRET_BINDINGS", "Explicit environment values must be bounded strings without NUL bytes.");
+    secretEnv[name] = value;
   }
   // Explicit caller environment is not a way to override runtime internals or inject undeclared credentials.
   const runDirectory = mkdtempSync(join(tmpdir(), "skills-execution-"));
@@ -100,12 +120,17 @@ export async function executeSelectedLocal(selected: ResolvedSelectedRun, option
   env.SKILLS_WORKSPACE_DIR = resolve(options.cwd ?? process.cwd());
   env.SKILLS_RUN_DIR = runDirectory;
   if (runtime.version) {
-    const version = await subprocess([executable, "--version"], runDirectory, env, "", Math.min(timeoutMs, 5000));
+    const version = await subprocess([executable, ...(runtimeName === "bun" ? ["--no-env-file"] : []), "--version"], runDirectory, env, "", Math.min(timeoutMs, 5000));
     const actual = version.stdout.trim().replace(/^v/, "").replace(/^Python /, "");
     if (version.exitCode !== 0 || actual !== runtime.version) throw new SkillSelectionError("LOCAL_RUNTIME_VERSION_MISMATCH", "The installed runtime version differs from the version selected by the skill.");
   }
-  const result = await subprocess([executable, join(runDirectory, declaredEntry), ...args], runDirectory, env, input, timeoutMs);
-  const receipt = { selection: selected.selection, target: "local" as const, runtime: runtimeName, inputDigest: `sha256:${createHash("sha256").update(input).digest("hex")}`, runDirectory, ...result };
+  // Resolve only after source, input, runtime and grant validation. Version probes never receive secrets.
+  if (bindings) secretEnv = await resolveSelectedSecrets(bindings, options.createSecretsClient);
+  const result = await subprocess([executable, ...(runtimeName === "bun" ? ["--no-env-file"] : []), join(runDirectory, declaredEntry), ...args], runDirectory, { ...env, ...secretEnv }, input, timeoutMs);
+  result.stdout = redactExecutionSecrets(result.stdout, secretEnv);
+  result.stderr = redactExecutionSecrets(result.stderr, secretEnv);
+  const receipt = { selection, target: "local" as const, runtime: runtimeName, inputDigest: `sha256:${createHash("sha256").update(input).digest("hex")}`, runDirectory,
+    ...(bindings ? { secretBinding: { schema: bindings.schema, selection: bindings.selection, consumer: bindings.consumer, secretsAuthority: bindings.secretsAuthority, bindings: bindings.bindings } } : {}), ...result };
   writeFileSync(join(runDirectory, ".execution-receipt.json"), JSON.stringify({ ...receipt, stdout: undefined, stderr: undefined }), { mode: 0o600 });
   return receipt;
 }

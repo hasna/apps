@@ -324,6 +324,48 @@ are explicitly changed or a new session starts.
 
 ## Executable skills
 
+For a selected local executable that declares `runtime.env`, prepare a binding
+template using the configured Skills and Secrets clients:
+
+```bash
+skills run --target local --selection-profile default \
+  --secret-bindings-template --json your-skill@1.0.0 > bindings.json
+# Fill each empty entry in bindings with its reviewed vault key, never its value.
+skills run --target local --selection-profile default \
+  --secret-bindings ./bindings.json --input '{"requested":"work"}' \
+  --json your-skill@1.0.0
+```
+
+The template contains no credential values and does not execute the skill or
+read the declared secrets. Keep the reviewed file in your private configuration,
+outside the skill bundle and agent discovery directories. It uses
+`hasna.skills-secret-bindings.v1` and binds the exact Skills authority, workspace,
+profile ID and revision, canonical skill name, version and bundle digest, plus
+the current station ID (`HASNA_STATION`, otherwise the hostname), canonical
+working directory and independently configured Secrets `/v1` authority. Its
+`bindings` object maps each declared environment name to one vault key. Changing
+any bound field requires reviewing a fresh template. These are explicit local
+execution grants; selection sync does not distribute or implicitly approve them.
+
+The CLI validates the complete binding before fetching values through
+`@hasna/secrets`. It resolves current values for each run, checks returned keys
+and expiry, and injects only the declared variables into the child process.
+Missing, extra, stale or mismatched bindings refuse execution; a failing vault
+read never falls back to an ambient value or a local vault. Wrapping `skills run`
+in `secrets exec` alone does not bind a declared variable. Runtime controls such
+as `PATH`, `NODE_OPTIONS` and `SKILLS_INPUT_JSON` cannot be credential names.
+Bindings require an explicit local target and a fresh API selection; they cannot
+be used with cached, cloud or legacy remote execution. No S3 deployment is required.
+
+Run receipts retain references and scope, never resolved values or captured
+output. Returned child output redacts literal, JSON-escaped, base64 and URL-encoded
+forms of injected values. This limits accidental disclosure; local execution
+has the calling user's filesystem and network access and is not a sandbox for
+hostile code. Review the exact executable and grant only the credentials its
+effects require. Cloud admission and cloud credential delivery remain separate.
+SDK callers use `resolveSelectedRun`, `prepareSelectedSecretBindings` and
+`executeSelectedLocal(selected, { secretBindings })` through `@hasna/skills/sdk`.
+
 ```bash
 skills capabilities --json
 skills run --target cloud --selection-profile default \

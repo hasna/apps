@@ -69,6 +69,18 @@ try {
   }, files: ["consumer.ts"] }));
   await writeFile(join(workspace, "consumer.ts"), `
 import { createRunService, runAdmissionSchema, runTerminalSchema, type SkillsProductStore, RemoteCapabilityUnavailableError, RemoteRequestError } from "@hasna/skills/sdk";
+import { resolveSelectedRun, executeSelectedLocal, prepareSelectedSecretBindings, readSelectedSecretBindings,
+  type ResolvedSelectedRun, type SelectedLocalRunOptions, type SelectedSecretBindings, type SelectedSecretsClient } from "@hasna/skills/sdk";
+declare const selectedExecution: ResolvedSelectedRun;
+declare const executionBindings: SelectedSecretBindings;
+declare const executionVaultClient: SelectedSecretsClient;
+const selectedResolution: Promise<ResolvedSelectedRun> = resolveSelectedRun("example@1.0.0", "default");
+const bindingTemplate: Promise<SelectedSecretBindings> = prepareSelectedSecretBindings(selectedExecution);
+const bindingFile: SelectedSecretBindings = readSelectedSecretBindings("bindings.json");
+const localRunOptions: SelectedLocalRunOptions = { secretBindings: executionBindings, createSecretsClient: () => executionVaultClient };
+const selectedExecutionResult = executeSelectedLocal(selectedExecution, localRunOptions);
+// @ts-expect-error Only the versioned reference binding contract is accepted.
+const unsupportedBinding: SelectedSecretBindings = { ...executionBindings, schema: "unversioned" };
 import { RemoteSkillsClient, RemoteSkillsAuthClient, RemoteCapabilityUnavailableError as RootCapabilityError, runSkill } from "@hasna/skills";
 import { RemoteSkillsClient as SdkQuoteClient, type RemoteRunQuote, type RemoteRunApproval } from "@hasna/skills/sdk";
 import { type RecurringRequest, type RecurringActivation, type RecurringPreview, type RecurringConsentView,
