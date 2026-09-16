@@ -787,7 +787,7 @@
     },
     "apps/projects": {
       "name": "@hasna/projects",
-      "version": "1.1.2",
+      "version": "1.2.0",
       "bin": {
         "projects": "dist/cli/index.js",
         "projects-mcp": "dist/mcp/index.js",
