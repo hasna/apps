@@ -2,17 +2,33 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Instructions V1 API 0.5.6
+// Source: Instructions V1 API 0.7.0
 
 export interface Config { "id"?: string; "name"?: string; "slug"?: string; "kind"?: string; "category"?: string; "agent"?: string; "target_path"?: string | null; "outputs"?: Array<Record<string, unknown>>; "format"?: string; "content"?: string; "description"?: string | null; "tags"?: Array<string>; "is_template"?: boolean; "version"?: number; "created_at"?: string; "updated_at"?: string; "synced_at"?: string | null }
 
+export interface ConfigIdentity { "id": string; "name": string; "slug": string; "kind": string; "category": string; "agent": string; "format": string; "is_template": boolean; "version": number; "created_at": string; "updated_at": string; "synced_at": string | null }
+
 export interface Profile { "id"?: string; "name"?: string; "slug"?: string; "description"?: string | null; "selectors"?: Record<string, unknown>; "variables"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
+
+export interface ProfileIdentity { "id": string; "name": string; "slug": string; "created_at": string; "updated_at": string }
+
+export interface Machine { "id": string; "hostname": string; "os": string | null; "arch": string | null; "last_applied_at": string | null; "created_at": string }
+
+export interface ConfigSnapshot { "id": string; "config_id": string; "content": string; "version": number; "created_at": string }
 
 export interface CreateConfigInput { "name": string; "category": string; "content": string; "kind"?: string; "agent"?: string; "target_path"?: string; "format"?: string; "description"?: string; "tags"?: Array<string>; "is_template"?: boolean }
 
-export interface UpdateConfigInput { "name"?: string; "category"?: string; "agent"?: string; "content"?: string; "description"?: string; "tags"?: Array<string>; "is_template"?: boolean }
+export interface UpdateConfigInput { "name"?: string; "kind"?: string; "category"?: string; "agent"?: string; "target_path"?: string | null; "outputs"?: Array<Record<string, unknown>>; "format"?: string; "content"?: string; "description"?: string | null; "tags"?: Array<string>; "is_template"?: boolean; "synced_at"?: string | null }
 
 export interface CreateProfileInput { "name": string; "description"?: string; "selectors"?: Record<string, unknown>; "variables"?: Record<string, unknown> }
+
+export interface UpdateProfileInput { "name"?: string; "description"?: string | null; "selectors"?: Record<string, unknown>; "variables"?: Record<string, unknown> }
+
+export interface PruneSnapshotsInput { "keep"?: number }
+
+export interface MachineAppliedInput { "hostname": string }
+
+export interface FeedbackInput { "message": string; "email"?: string; "category"?: string; "version"?: string }
 
 export interface AddProfileConfigInput { "config_id": string }
 
@@ -34,13 +50,25 @@ export interface ProfileWithConfigs { "id"?: string; "name"?: string; "slug"?: s
 
 export interface BoundedProfilePage { "profiles"?: Array<Profile>; "items": Array<Profile>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
 
-export interface BoundedConfigPage { "items": Array<Config>; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
+export interface BoundedConfigPage { "configs"?: Array<Config>; "items": Array<Config>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
+
+export interface BoundedConfigIdentityPage { "configs"?: Array<ConfigIdentity>; "items": Array<ConfigIdentity>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
+
+export interface BoundedProfileIdentityPage { "profiles"?: Array<ProfileIdentity>; "items": Array<ProfileIdentity>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
+
+export interface BoundedSnapshotPage { "snapshots"?: Array<ConfigSnapshot>; "items": Array<ConfigSnapshot>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
+
+export interface BoundedMachinePage { "machines"?: Array<Machine>; "items": Array<Machine>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
+
+export interface BoundedProfileConfigBindingPage { "bindings"?: Array<ProfileConfigBinding>; "items": Array<ProfileConfigBinding>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
+
+export interface BoundedProfileAssetBindingPage { "assets"?: Array<ProfileAssetBinding>; "items": Array<ProfileAssetBinding>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
 
 export interface ProfileShowResponse { "profile": ProfileWithConfigs; "configs": BoundedConfigPage }
 
 export interface ProfileResolutionRead { "profile": Profile | null; "scanned": number | null; "total": number | null; "batch_limit": number | null; "source_bounded": boolean; "complete": boolean; "truncated": boolean }
 
-export interface InstructionsV1ClientOptions {
+export interface GeneratedInstructionsV1ClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
   /** API key, e.g. process.env.APP_API_KEY. Sent as the 'x-api-key' header. */
@@ -58,14 +86,14 @@ export class ApiError extends Error {
   }
 }
 
-export class InstructionsV1Client {
+export class GeneratedInstructionsV1Client {
   private readonly baseUrl: string;
   private readonly apiKey: string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly baseHeaders: Record<string, string>;
 
-  constructor(options: InstructionsV1ClientOptions) {
-    if (!options.baseUrl) throw new Error("InstructionsV1Client requires a baseUrl.");
+  constructor(options: GeneratedInstructionsV1ClientOptions) {
+    if (!options.baseUrl) throw new Error("GeneratedInstructionsV1Client requires a baseUrl.");
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.apiKey = options.apiKey;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
@@ -103,7 +131,7 @@ export class InstructionsV1Client {
   }
 
     /** List configs */
-    async listConfigs(query?: { "category"?: string; "agent"?: string; "kind"?: string; "search"?: string }, init?: RequestInit): Promise<{ "configs"?: Array<Config>; "count"?: number }> {
+    async listConfigs(query?: { "category"?: string; "agent"?: string; "kind"?: string; "search"?: string; "limit"?: number; "cursor"?: number; "view"?: "identity" }, init?: RequestInit): Promise<BoundedConfigPage | BoundedConfigIdentityPage> {
       return this.request("GET", `/v1/configs`, {
         body: undefined,
         query,
@@ -129,6 +157,15 @@ export class InstructionsV1Client {
       });
     }
 
+    /** Update a config via PUT */
+    async putConfig(id: string, body: UpdateConfigInput, init?: RequestInit): Promise<{ "config"?: Config }> {
+      return this.request("PUT", `/v1/configs/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Delete a config */
     async deleteConfig(id: string, init?: RequestInit): Promise<{ "deleted"?: boolean; "id"?: string }> {
       return this.request("DELETE", `/v1/configs/${encodeURIComponent(String(id))}`, {
@@ -148,25 +185,79 @@ export class InstructionsV1Client {
     }
 
     /** List a config's version snapshots */
-    async listSnapshots(id: string, init?: RequestInit): Promise<{ "snapshots"?: Array<Record<string, unknown>>; "count"?: number }> {
+    async listSnapshots(id: string, query?: { "limit"?: number; "cursor"?: number }, init?: RequestInit): Promise<BoundedSnapshotPage> {
       return this.request("GET", `/v1/configs/${encodeURIComponent(String(id))}/snapshots`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Snapshot a config's current content */
+    async createSnapshot(id: string, body?: { "content"?: string; "version"?: number }, init?: RequestInit): Promise<{ "snapshot"?: ConfigSnapshot }> {
+      return this.request("POST", `/v1/configs/${encodeURIComponent(String(id))}/snapshots`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Prune older snapshots for a config */
+    async pruneSnapshots(id: string, body?: PruneSnapshotsInput, init?: RequestInit): Promise<{ "pruned": number }> {
+      return this.request("POST", `/v1/configs/${encodeURIComponent(String(id))}/snapshots/prune`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get one config snapshot by version */
+    async getSnapshotByVersion(id: string, version: number, init?: RequestInit): Promise<{ "snapshot"?: ConfigSnapshot }> {
+      return this.request("GET", `/v1/configs/${encodeURIComponent(String(id))}/snapshots/${encodeURIComponent(String(version))}`, {
         body: undefined,
         query: undefined,
         init,
       });
     }
 
-    /** Snapshot a config's current content */
-    async createSnapshot(id: string, init?: RequestInit): Promise<{ "snapshot"?: Record<string, unknown> }> {
-      return this.request("POST", `/v1/configs/${encodeURIComponent(String(id))}/snapshots`, {
+    /** Submit Instructions feedback */
+    async createFeedback(body: FeedbackInput, init?: RequestInit): Promise<{ "ok": boolean }> {
+      return this.request("POST", `/v1/feedback`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List registered machines with producer-side bounds */
+    async listMachines(query?: { "limit"?: number; "cursor"?: number; "view"?: "identity" }, init?: RequestInit): Promise<BoundedMachinePage> {
+      return this.request("GET", `/v1/machines`, {
         body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Register or refresh a machine */
+    async registerMachine(body: { "hostname": string; "os"?: string | null; "arch"?: string | null }, init?: RequestInit): Promise<{ "machine"?: Machine }> {
+      return this.request("POST", `/v1/machines`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Mark a machine as having applied its resolved instructions */
+    async markMachineApplied(body: MachineAppliedInput, init?: RequestInit): Promise<{ "updated": boolean }> {
+      return this.request("POST", `/v1/machines/applied`, {
+        body,
         query: undefined,
         init,
       });
     }
 
     /** List profiles with producer-side bounds */
-    async listProfiles(query?: { "limit"?: number; "cursor"?: number }, init?: RequestInit): Promise<BoundedProfilePage> {
+    async listProfiles(query?: { "limit"?: number; "cursor"?: number; "view"?: "identity" }, init?: RequestInit): Promise<BoundedProfilePage | BoundedProfileIdentityPage> {
       return this.request("GET", `/v1/profiles`, {
         body: undefined,
         query,
@@ -201,6 +292,15 @@ export class InstructionsV1Client {
       });
     }
 
+    /** Update a profile via PUT */
+    async putProfile(id: string, body: UpdateProfileInput, init?: RequestInit): Promise<{ "profile"?: Profile }> {
+      return this.request("PUT", `/v1/profiles/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Delete a profile */
     async deleteProfile(id: string, init?: RequestInit): Promise<{ "deleted"?: boolean; "id"?: string }> {
       return this.request("DELETE", `/v1/profiles/${encodeURIComponent(String(id))}`, {
@@ -210,11 +310,20 @@ export class InstructionsV1Client {
       });
     }
 
+    /** Update a profile */
+    async updateProfile(id: string, body: UpdateProfileInput, init?: RequestInit): Promise<{ "profile"?: Profile }> {
+      return this.request("PATCH", `/v1/profiles/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List typed asset bindings for a profile */
-    async getProfileAssetBindings(id: string, init?: RequestInit): Promise<{ "assets"?: Array<ProfileAssetBinding> }> {
+    async getProfileAssetBindings(id: string, query?: { "limit"?: number; "cursor"?: number }, init?: RequestInit): Promise<BoundedProfileAssetBindingPage> {
       return this.request("GET", `/v1/profiles/${encodeURIComponent(String(id))}/assets`, {
         body: undefined,
-        query: undefined,
+        query,
         init,
       });
     }
@@ -247,10 +356,10 @@ export class InstructionsV1Client {
     }
 
     /** List schema-versioned config bindings for a profile */
-    async getProfileConfigBindings(id: string, init?: RequestInit): Promise<{ "bindings"?: Array<ProfileConfigBinding> }> {
+    async getProfileConfigBindings(id: string, query?: { "limit"?: number; "cursor"?: number }, init?: RequestInit): Promise<BoundedProfileConfigBindingPage> {
       return this.request("GET", `/v1/profiles/${encodeURIComponent(String(id))}/bindings`, {
         body: undefined,
-        query: undefined,
+        query,
         init,
       });
     }
@@ -276,6 +385,15 @@ export class InstructionsV1Client {
     /** Remove a config from a profile */
     async removeConfigFromProfile(id: string, configId: string, init?: RequestInit): Promise<ProfileConfigRemovedResponse> {
       return this.request("DELETE", `/v1/profiles/${encodeURIComponent(String(id))}/configs/${encodeURIComponent(String(configId))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get a snapshot by id */
+    async getSnapshot(id: string, init?: RequestInit): Promise<{ "snapshot"?: ConfigSnapshot }> {
+      return this.request("GET", `/v1/snapshots/${encodeURIComponent(String(id))}`, {
         body: undefined,
         query: undefined,
         init,

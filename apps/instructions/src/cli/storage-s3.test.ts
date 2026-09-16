@@ -55,6 +55,29 @@ describe("instructions storage S3 CLI", () => {
     expect(JSON.parse(result.stdout.toString())).toMatchObject({ operation: "push", dryRun: true, noNetwork: true, backupId: "backup-2026-09-15", sizeBytes: 29 });
   });
 
+  test("pull and verify expose exact payload and manifest version authority", () => {
+    for (const command of ["pull", "verify"] as const) {
+      const { result } = run(["backup", command, "backup-1", "--help"]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toString()).toContain("--payload-version-id <version-id>");
+      expect(result.stdout.toString()).toContain("--manifest-version-id <version-id>");
+    }
+  });
+
+  test("pull and verify reject a partial version authority before contacting S3", () => {
+    for (const command of ["pull", "verify"] as const) {
+      const args = ["backup", command, "backup-1", "--payload-version-id", "payload-v1"];
+      if (command === "pull") args.push("--output", "/tmp/must-not-write-instructions-backup.tgz");
+      const { result } = run(args, {
+        HASNA_INSTRUCTIONS_S3_BUCKET: "instructions-test-bucket",
+        HASNA_INSTRUCTIONS_S3_ACCESS_KEY_ID: "not-used",
+        HASNA_INSTRUCTIONS_S3_SECRET_ACCESS_KEY: "not-used",
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toContain("must be provided together");
+    }
+  });
+
   test("S3 configuration without a bucket fails closed", () => {
     const { result } = run(["status", "--json"], { HASNA_INSTRUCTIONS_S3_PREFIX: "instructions/" });
     expect(result.exitCode).not.toBe(0);

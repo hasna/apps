@@ -55,9 +55,8 @@ function mockCloudBoundary() {
 }
 
 describe("mixed-version profile HTTP compatibility", () => {
-  test("old client list request receives every legacy profile instead of the default bounded page", async () => {
+  test("default profile list is source bounded while retaining legacy aliases", async () => {
     mockCloudBoundary();
-    track(spyOn(store, "listProfiles").mockResolvedValue(profiles));
     track(spyOn(store, "listProfilesPage").mockResolvedValue({
       items: profiles.slice(0, 20),
       total: profiles.length,
@@ -76,15 +75,14 @@ describe("mixed-version profile HTTP compatibility", () => {
     );
     const payload = await response?.json() as { profiles: unknown[]; items: unknown[]; complete: boolean };
 
-    expect(payload.profiles).toHaveLength(25);
-    expect(payload.items).toHaveLength(25);
-    expect(payload.complete).toBe(true);
+    expect(payload.profiles).toHaveLength(20);
+    expect(payload.items).toHaveLength(20);
+    expect(payload.complete).toBe(false);
   });
 
-  test("old client show request receives every embedded config instead of the default bounded page", async () => {
+  test("default embedded profile membership is source bounded while retaining legacy aliases", async () => {
     mockCloudBoundary();
     track(spyOn(store, "getProfile").mockResolvedValue(profiles[0]!));
-    track(spyOn(store, "getProfileConfigs").mockResolvedValue(configs));
     track(spyOn(store, "getProfileConfigsPage").mockResolvedValue({
       items: configs.slice(0, 20),
       total: configs.length,
@@ -106,9 +104,9 @@ describe("mixed-version profile HTTP compatibility", () => {
       configs: { items: unknown[]; complete: boolean };
     };
 
-    expect(payload.profile.configs).toHaveLength(25);
-    expect(payload.configs.items).toHaveLength(25);
-    expect(payload.configs.complete).toBe(true);
+    expect(payload.profile.configs).toHaveLength(20);
+    expect(payload.configs.items).toHaveLength(20);
+    expect(payload.configs.complete).toBe(false);
   });
 
   test("profile membership handlers match the documented success statuses and envelopes", async () => {
@@ -151,7 +149,11 @@ describe("mixed-version profile HTTP compatibility", () => {
         fallback: "fail",
       },
     };
-    const list = track(spyOn(store, "getProfileConfigBindings").mockResolvedValue([binding]));
+    const bindingPage = {
+      items: [binding], total: 1, limit: 20, cursor: 0, next_cursor: null,
+      has_more: false, complete: true, truncated: false as const, source_bounded: true,
+    };
+    const list = track(spyOn(store, "getProfileConfigBindingsPage").mockResolvedValue(bindingPage));
     const set = track(spyOn(store, "setProfileConfigBinding").mockResolvedValue(binding));
     const listResponse = await handleV1Request(
       new Request("https://instructions.hasna.xyz/v1/profiles/profile-1/bindings"),
@@ -164,8 +166,8 @@ describe("mixed-version profile HTTP compatibility", () => {
       }),
       new URL("https://instructions.hasna.xyz/v1/profiles/profile-1/configs/config-2"),
     );
-    expect(await listResponse?.json()).toEqual({ bindings: [binding] });
-    expect(list).toHaveBeenCalledWith(expect.anything(), "profile-1");
+    expect(await listResponse?.json()).toEqual({ ...bindingPage, bindings: [binding], count: 1 });
+    expect(list).toHaveBeenCalledWith(expect.anything(), "profile-1", { limit: undefined, cursor: undefined });
     expect(await setResponse?.json()).toEqual({ binding });
     expect(set).toHaveBeenCalledWith(expect.anything(), "profile-1", "config-2", binding.binding);
   });
@@ -195,7 +197,11 @@ describe("mixed-version profile HTTP compatibility", () => {
         rollback: "snapshot",
       },
     };
-    const list = track(spyOn(store, "getProfileAssetBindings").mockResolvedValue([asset]));
+    const assetPage = {
+      items: [asset], total: 1, limit: 20, cursor: 0, next_cursor: null,
+      has_more: false, complete: true, truncated: false as const, source_bounded: true,
+    };
+    const list = track(spyOn(store, "getProfileAssetBindingsPage").mockResolvedValue(assetPage));
     const add = track(spyOn(store, "addAssetToProfile").mockResolvedValue(asset));
     const set = track(spyOn(store, "setProfileAssetBinding").mockResolvedValue(asset));
     const remove = track(spyOn(store, "removeAssetFromProfile").mockResolvedValue(undefined));
@@ -223,8 +229,8 @@ describe("mixed-version profile HTTP compatibility", () => {
       new URL("https://instructions.hasna.xyz/v1/profiles/profile-1/assets/review-skill"),
     );
 
-    expect(await listResponse?.json()).toEqual({ assets: [asset] });
-    expect(list).toHaveBeenCalledWith(expect.anything(), "profile-1");
+    expect(await listResponse?.json()).toEqual({ ...assetPage, assets: [asset], count: 1 });
+    expect(list).toHaveBeenCalledWith(expect.anything(), "profile-1", { limit: undefined, cursor: undefined });
     expect(addResponse?.status).toBe(201);
     expect(await addResponse?.json()).toEqual({ asset });
     expect(add).toHaveBeenCalledWith(expect.anything(), "profile-1", "config-2", asset.binding);
@@ -246,7 +252,10 @@ describe("profile OpenAPI and generated SDK contract", () => {
     expect(schemas.BoundedProfilePage).toBeDefined();
     expect(schemas.BoundedConfigPage).toBeDefined();
     expect(schemas.ProfileResolutionRead).toBeDefined();
-    expect(listResponse.$ref).toBe("#/components/schemas/BoundedProfilePage");
+    expect(listResponse.oneOf).toEqual([
+      { $ref: "#/components/schemas/BoundedProfilePage" },
+      { $ref: "#/components/schemas/BoundedProfileIdentityPage" },
+    ]);
     expect(schemas.BoundedProfilePage.properties.items.items.$ref).toBe("#/components/schemas/Profile");
     expect(showResponse.$ref).toBe("#/components/schemas/ProfileShowResponse");
     expect(schemas.ProfileShowResponse.properties.configs.$ref).toBe("#/components/schemas/BoundedConfigPage");
@@ -262,9 +271,15 @@ describe("profile OpenAPI and generated SDK contract", () => {
 
     expect(spec.security).toEqual([{ apiKey: [] }]);
     expect(add.security).toEqual([{ apiKey: [] }]);
-    expect(add.parameters).toEqual([
+    expect(add.parameters[0]).toEqual(
       { name: "id", in: "path", required: true, schema: { type: "string" } },
-    ]);
+    );
+    expect(add.parameters[1]).toMatchObject({
+      name: "Idempotency-Key",
+      in: "header",
+      required: false,
+    });
+    expect(add.responses["409"]).toBeDefined();
     expect(add.requestBody.required).toBe(true);
     expect(add.requestBody.content["application/json"].schema.$ref).toBe(
       "#/components/schemas/AddProfileConfigInput",

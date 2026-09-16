@@ -176,6 +176,16 @@ they resolve `HASNA_INSTRUCTIONS_API_KEY` (or the Keychain / credentials-file
 tiers) through the one `@hasna/contracts` client resolver, and the authority
 defaults to the fleet gateway `https://api.hasna.com/instructions`.
 
+Collection responses are producer-bounded with `limit`/`cursor` envelopes.
+Current clients follow every page; `view=identity` returns an allowlisted
+metadata-only projection for configs, profiles, and machines, without loading
+instruction content or private profile fields. Retryable create and binding
+writes may send `Idempotency-Key`; PostgreSQL stores the authenticated
+principal, operation, canonical request digest, and first committed response in
+the same transaction as the domain mutation. A same-body retry replays that
+response, while key reuse with different bytes returns
+`409 IDEMPOTENCY_KEY_REUSED`.
+
 ## SDK
 
 The importable module ships INSIDE `@hasna/instructions` at the `./sdk` export
@@ -242,6 +252,51 @@ Clients never hold a database DSN. The raw Postgres connection is a server-only
 concern (`instructions-serve`), selected by `HASNA_INSTRUCTIONS_DATABASE_URL`.
 
 
+
+## Domain export and import
+
+`instructions export` writes a restorable Instructions domain archive v2. The
+archive contains config content and every retained config snapshot, profiles,
+ordered profile membership and config-binding metadata, profile asset bindings,
+and registered machines. Relationships are recorded by stable config/profile
+slugs and machine hostnames, so import can map them safely onto destination IDs.
+
+```bash
+instructions export --output ./instructions-domain.tar.gz
+instructions import ./instructions-domain.tar.gz # exact recovery into an empty destination
+```
+
+V2 is deliberately a recovery format, not a merge format. Import validates the
+complete archive and requires a destination with zero configs, profiles, and
+machines before the first mutation. `--overwrite` is rejected for v2 before
+destination inspection or mutation. Any validation, mutation, or readback
+failure throws and makes the CLI exit nonzero; discard that attempted
+destination and retry from a newly empty database.
+
+The manifest contains deterministic per-collection counts and SHA-256 logical
+hashes for pre/post deployment comparison without placing instruction content
+in logs. Exact deployment integrity includes config `created_at`, `updated_at`,
+and `synced_at`; snapshot `created_at`; profile `created_at` and `updated_at`;
+and machine `created_at` plus the exact `last_applied_at` value. After recovery,
+import reads the complete domain back through `ConfigStore` and verifies every
+field that interface can reproduce: config data and versions, retained snapshot
+contents, profiles, ordered bindings, asset mappings, machines, and whether a
+machine was ever applied.
+
+`ConfigStore` cannot assign archived config/profile/snapshot/machine creation or
+update timestamps, nor an exact machine `last_applied_at`; generated destination
+IDs are also intentionally remapped by stable slugs and hostnames. These values
+remain protected in the archive's exact integrity hashes but are not recreated
+by recovery. ConfigStore also has no cross-entity transaction, so an operational
+failure may leave a partial destination; the nonzero result is terminal and that
+destination must not be reused. Legacy v1 config-only archives remain importable,
+including their historical skip/overwrite conflict behavior.
+
+API keys and idempotency receipts are intentionally excluded: they are security
+and transport state that must be provisioned independently. Feedback is also
+excluded because it is product telemetry, not part of the Instructions
+configuration domain.
+
 ## Native S3 backup storage
 
 S3 is an **adjunct immutable backup plane**, never a database selector. SQLite
@@ -263,10 +318,14 @@ instructions storage backup verify 2026-09-15-pre-deploy --json
 instructions storage backup pull 2026-09-15-pre-deploy   --output ./restored-instructions.tar.gz --json
 ```
 
-Each backup uses traversal-safe deterministic keys, an immutable payload, and a
-manifest containing SHA-256, byte size, content type, and creation time. Pulls
-verify the payload before an owner-only local file is written. Identical replay
-is idempotent; the same backup ID with different bytes is refused. AWS runtime
+Each backup uses traversal-safe deterministic keys, an atomically created
+payload, and an atomically created manifest containing SHA-256, byte size,
+content type, and creation time. Native S3 creation uses `If-None-Match: *`;
+concurrent different-byte writers cannot replace the winner, identical replay
+is idempotent, and an injected store without conditional-create support fails
+closed. Pulls verify the payload before an owner-only local file is written.
+Production backup buckets must enable versioning, encryption, public-access
+blocking, and S3 Object Lock with a default retention period. AWS runtime
 credentials may come from Bun's standard AWS chain (including an ECS task role);
 explicit static credentials are optional and must be a complete pair. Status
 never prints credential values or the bucket name.

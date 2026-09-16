@@ -1015,32 +1015,29 @@ program
 // ── export ────────────────────────────────────────────────────────────────────
 program
   .command("export")
-  .description("Export configs as a tar.gz bundle")
-  .option("-o, --output <path>", "output file", "./configs-export.tar.gz")
+  .description("Export the complete Instructions configuration domain as a tar.gz bundle")
+  .option("-o, --output <path>", "output file", "./instructions-domain-export.tar.gz")
   .option("-c, --category <cat>", "filter by category")
   .action(async (opts) => {
     const result = await exportConfigs(opts.output, {
       filter: opts.category ? { category: opts.category as ConfigCategory } : undefined,
       store: resolveConfigStore(),
     });
-    console.log(chalk.green("✓") + ` Exported ${result.count} configs to ${result.path}`);
+    console.log(chalk.green("✓") + ` Exported domain to ${result.path}: configs=${result.counts.configs} snapshots=${result.counts.config_snapshots} profiles=${result.counts.profiles} profile_bindings=${result.counts.profile_config_bindings} assets=${result.counts.profile_asset_bindings} machines=${result.counts.machines}`);
   });
 
 // ── import ────────────────────────────────────────────────────────────────────
 program
   .command("import <file>")
-  .description("Import configs from a tar.gz bundle")
-  .option("--overwrite", "overwrite existing configs")
+  .description("Restore a v2 Instructions domain archive into an empty destination, or import legacy v1")
+  .option("--overwrite", "overwrite existing configs in a legacy v1 archive (v2 rejects this option)")
   .action(async (file, opts) => {
     const result = await importConfigs(file, {
       conflict: opts.overwrite ? "overwrite" : "skip",
       store: resolveConfigStore(),
     });
+    if (result.errors.length > 0) throw new Error(`Import failed: ${result.errors.join("; ")}`);
     console.log(chalk.green("✓") + ` Import complete: +${result.created} updated:${result.updated} skipped:${result.skipped}`);
-    if (result.errors.length > 0) {
-      console.log(chalk.red("Errors:"));
-      for (const e of result.errors) console.log(chalk.red("  " + e));
-    }
   });
 
 // ── whoami ────────────────────────────────────────────────────────────────────
@@ -2662,6 +2659,18 @@ managedSkillsCmd
 // ── diff --all ────────────────────────────────────────────────────────────────
 // Extend existing diff command to support --all
 
+function normalizeBackupVersionOptions(opts: {
+  payloadVersionId?: string;
+  manifestVersionId?: string;
+}): { payloadVersionId?: string; manifestVersionId?: string } {
+  const payloadVersionId = opts.payloadVersionId?.trim();
+  const manifestVersionId = opts.manifestVersionId?.trim();
+  if (Boolean(payloadVersionId) !== Boolean(manifestVersionId)) {
+    throw new Error("S3 backup payload and manifest version ids must be provided together");
+  }
+  return payloadVersionId && manifestVersionId ? { payloadVersionId, manifestVersionId } : {};
+}
+
 // ── native S3 backup plane ───────────────────────────────────────────────────
 const storageCmd = program.command("storage").description("Inspect and use the optional native S3 backup plane");
 
@@ -2720,7 +2729,7 @@ storageBackupCmd.command("push <file>")
     const bytes = await Bun.file(abs).bytes();
     if (opts.dryRun) {
       const plan = await backup.planInstructionsBackupPush({
-        store: { put: async () => {}, get: async () => undefined, head: async () => undefined, delete: async () => {} },
+        store: { get: async () => undefined, head: async () => undefined },
         prefix: config.prefix,
         backupId: opts.id,
         bytes,
@@ -2737,15 +2746,24 @@ storageBackupCmd.command("push <file>")
       bytes,
       contentType: opts.contentType,
     });
-    const safe = { status: result.status, backupId: result.manifest.backupId, sha256: result.manifest.sha256, sizeBytes: result.manifest.sizeBytes };
+    const safe = {
+      status: result.status,
+      backupId: result.manifest.backupId,
+      sha256: result.manifest.sha256,
+      sizeBytes: result.manifest.sizeBytes,
+      ...(result.versions ? result.versions : {}),
+    };
     if (opts.json) printJson(safe);
     else console.log(chalk.green("✓") + ` S3 backup ${result.status}: ${safe.backupId} (${safe.sizeBytes} bytes, sha256 ${safe.sha256})`);
   });
 
 storageBackupCmd.command("verify <backup-id>")
   .description("Verify the immutable S3 payload against its manifest")
+  .option("--payload-version-id <version-id>", "exact immutable S3 payload VersionId")
+  .option("--manifest-version-id <version-id>", "exact immutable S3 manifest VersionId")
   .option("--json", "output JSON")
   .action(async (backupId, opts) => {
+    const versions = normalizeBackupVersionOptions(opts);
     const [{ loadInstructionsS3Config }, backup, objectStore] = await Promise.all([
       import("../storage/s3-config.js"),
       import("../storage/s3-backup.js"),
@@ -2757,17 +2775,26 @@ storageBackupCmd.command("verify <backup-id>")
       store: objectStore.createInstructionsS3ObjectStore(config),
       prefix: config.prefix,
       backupId,
+      ...versions,
     });
-    if (opts.json) printJson(verified);
-    else console.log(chalk.green("✓") + ` Verified ${verified.backupId}: ${verified.sizeBytes} bytes, sha256 ${verified.sha256}`);
+    const safe = {
+      ...verified,
+      ...(verified.versions ? verified.versions : {}),
+      versions: undefined,
+    };
+    if (opts.json) printJson(safe);
+    else console.log(chalk.green("✓") + ` Verified ${verified.backupId}: ${verified.sizeBytes} bytes, sha256 ${verified.sha256}${verified.versionPinned ? " (exact S3 versions)" : ""}`);
   });
 
 storageBackupCmd.command("pull <backup-id>")
   .description("Download and verify an immutable S3 backup before writing it locally")
   .requiredOption("-o, --output <path>", "destination archive path")
+  .option("--payload-version-id <version-id>", "exact immutable S3 payload VersionId")
+  .option("--manifest-version-id <version-id>", "exact immutable S3 manifest VersionId")
   .option("--force", "replace an existing regular destination file")
   .option("--json", "output JSON")
   .action(async (backupId, opts) => {
+    const versions = normalizeBackupVersionOptions(opts);
     const [{ loadInstructionsS3Config }, backup, objectStore] = await Promise.all([
       import("../storage/s3-config.js"),
       import("../storage/s3-backup.js"),
@@ -2779,6 +2806,7 @@ storageBackupCmd.command("pull <backup-id>")
       store: objectStore.createInstructionsS3ObjectStore(config),
       prefix: config.prefix,
       backupId,
+      ...versions,
     });
     const output = resolve(opts.output);
     if (existsSync(output)) {
@@ -2796,7 +2824,14 @@ storageBackupCmd.command("pull <backup-id>")
       try { unlinkSync(temp); } catch { /* no temp to remove */ }
       throw error;
     }
-    const safe = { backupId: pulled.manifest.backupId, output, sha256: pulled.manifest.sha256, sizeBytes: pulled.manifest.sizeBytes };
+    const safe = {
+      backupId: pulled.manifest.backupId,
+      output,
+      sha256: pulled.manifest.sha256,
+      sizeBytes: pulled.manifest.sizeBytes,
+      versionPinned: pulled.versionPinned,
+      ...(pulled.versions ? pulled.versions : {}),
+    };
     if (opts.json) printJson(safe);
     else console.log(chalk.green("✓") + ` Restored ${safe.backupId} to ${safe.output} (${safe.sizeBytes} bytes)`);
   });
@@ -2819,14 +2854,12 @@ program
 
 program
   .command("restore <file>")
-  .description("Restore configs from a backup file")
-  .option("--overwrite", "overwrite existing configs (default: skip)")
+  .description("Restore a v2 domain backup into an empty destination, or restore legacy v1 configs")
+  .option("--overwrite", "overwrite existing configs in a legacy v1 archive (v2 rejects this option)")
   .action(async (file, opts) => {
     const result = await importConfigs(file, { conflict: opts.overwrite ? "overwrite" : "skip", store: resolveConfigStore() });
+    if (result.errors.length > 0) throw new Error(`Restore failed: ${result.errors.join("; ")}`);
     console.log(chalk.green("✓") + ` Restored: +${result.created} updated:${result.updated} skipped:${result.skipped}`);
-    if (result.errors.length > 0) {
-      for (const e of result.errors) console.log(chalk.red("  " + e));
-    }
   });
 
 // ── doctor ────────────────────────────────────────────────────────────────────

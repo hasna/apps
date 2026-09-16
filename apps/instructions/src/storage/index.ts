@@ -12,15 +12,22 @@ export type {
 
 export {
   assertSafeInstructionsObjectKey,
+  assertSafeInstructionsObjectVersionId,
   createInstructionsS3ObjectStore,
   memoryInstructionsObjectStore,
 } from "./s3-object-store.js";
 export type {
   InstructionsNativeS3Client,
+  InstructionsAtomicObjectStore,
+  InstructionsConditionalCreateFetch,
   InstructionsNativeS3ClientFactory,
   InstructionsNativeS3File,
+  InstructionsObjectCreateResult,
   InstructionsObjectMetadata,
+  InstructionsObjectReadOptions,
   InstructionsObjectStore,
+  InstructionsS3Fetch,
+  InstructionsS3OperationDeadlines,
 } from "./s3-object-store.js";
 
 export {
@@ -34,6 +41,7 @@ export {
 export type {
   InstructionsBackupKeys,
   InstructionsBackupManifest,
+  InstructionsBackupObjectVersions,
   InstructionsBackupPullResult,
   InstructionsBackupPushInput,
   InstructionsBackupPushPlan,

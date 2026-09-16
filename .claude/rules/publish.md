@@ -21,9 +21,11 @@ publish` from the package directory:
 NPMRC="$(mktemp)"; chmod 600 "$NPMRC"
 printf '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n' > "$NPMRC"
 secrets exec hasna/npm/live/publish-token --as NODE_AUTH_TOKEN -- \
-  npm publish --userconfig "$NPMRC" --access public
+  npm publish --userconfig "$NPMRC" --access public --provenance=false
 rm -f "$NPMRC"
 ```
+
+Local vault-token publication must pass `--provenance=false`: npm provenance is reserved for the separate CI trusted-publisher/OIDC lane, and enabling it from a local shell fails before registry mutation because no supported CI provider exists.
 
 Run from the package directory (`apps/<name>`). Never `VAR=$(secrets get …)`
 (assigns a redacted/empty string); never print the token; never rely on an

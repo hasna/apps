@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Hono } from "hono";
+import type { ApiKeyPrincipal } from "@hasna/contracts/auth";
 import { cors } from "hono/cors";
 import { getPackageVersion } from "../lib/package-version.js";
 import { handleV1Request } from "./v1.js";
@@ -59,7 +60,7 @@ const PORT = Number(
   process.env["PORT"] ?? process.env["INSTRUCTIONS_PORT"] ?? 3457,
 );
 
-export const app = new Hono();
+export const app = new Hono<{ Variables: { apiKey: ApiKeyPrincipal } }>();
 app.use("*", cors());
 
 // ── Service surface probes (unauthenticated): /health /ready /version ─────────
@@ -107,7 +108,9 @@ app.use("/v1/*", async (c, next) => {
 });
 
 app.all("/v1/*", async (c) => {
-  const res = await handleV1Request(c.req.raw, new URL(c.req.url));
+  const res = await handleV1Request(c.req.raw, new URL(c.req.url), {
+    principal: c.get("apiKey"),
+  });
   return res ?? c.json({ error: "Not found" }, 404);
 });
 

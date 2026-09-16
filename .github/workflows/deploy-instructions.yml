@@ -359,47 +359,262 @@ jobs:
             printf 'previous_image=%s\n' "${previous_image}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Export and validate complete pre-migration domain archive
+        id: data-before
+        run: |
+          set -Eeuo pipefail
+          client_key="$(aws secretsmanager get-secret-value --secret-id "${CLIENT_KEY_SECRET_ID}" --query SecretString --output text)"
+          [[ -n "${client_key}" && "${client_key}" != "None" ]] || { echo "Instructions client key is unavailable" >&2; exit 1; }
+          echo "::add-mask::${client_key}"
+          export HASNA_INSTRUCTIONS_API_KEY="${client_key}"
+          archive_dir="${RUNNER_TEMP}/instructions-deploy-domain"
+          mkdir -p "${archive_dir}"
+          chmod 700 "${archive_dir}"
+          pre_archive="${archive_dir}/instructions-domain-pre.tar.gz"
+          pre_manifest="${archive_dir}/pre-domain-manifest.json"
+          validate_domain_archive() {
+            local archive_path="$1"
+            local manifest_path="$2"
+            local archive_members
+            archive_members="$(tar -tzf "${archive_path}")"
+            [[ "${archive_members}" == $'manifest.json\ndomain.json' ]] || {
+              echo "Instructions domain archive contains unexpected members" >&2
+              return 1
+            }
+            tar -xOzf "${archive_path}" manifest.json > "${manifest_path}.tmp"
+            chmod 600 "${manifest_path}.tmp"
+            mv "${manifest_path}.tmp" "${manifest_path}"
+            jq -e '
+              ["configs", "config_snapshots", "profiles", "profile_config_bindings", "profile_asset_bindings", "machines"] as $collections |
+              .schema == "hasna.instructions.domain-archive/v2" and
+              .version == "2.0.0" and
+              .payload.path == "domain.json" and
+              (.payload.sha256 | strings | test("^[0-9a-f]{64}$")) and
+              (.payload.size_bytes | numbers | select(. > 0 and floor == .)) and
+              .integrity.algorithm == "sha256" and
+              .integrity.canonicalization == "hasna.instructions.logical-json/v1" and
+              ((.integrity.counts | keys | sort) == ($collections | sort)) and
+              ((.integrity.hashes | keys | sort) == ($collections | sort)) and
+              (.integrity.counts | all(. as $count | ($count | type) == "number" and $count >= 0 and ($count | floor) == $count)) and
+              (.integrity.hashes | all(. as $hash | ($hash | type) == "string" and ($hash | test("^[0-9a-f]{64}$")))) and
+              (.integrity.domain_sha256 | strings | test("^[0-9a-f]{64}$"))
+            ' "${manifest_path}" >/dev/null || {
+              echo "Instructions domain archive manifest is not a complete v2 integrity manifest" >&2
+              return 1
+            }
+          }
+
+          max_capture_attempts=5
+          previous_archive=""
+          previous_manifest=""
+          stable_archive=false
+          for capture_attempt in $(seq 1 "${max_capture_attempts}"); do
+            candidate_archive="${archive_dir}/instructions-domain-candidate-${capture_attempt}.tar.gz"
+            candidate_manifest="${archive_dir}/candidate-domain-manifest-${capture_attempt}.json"
+            rm -f "${candidate_archive}" "${candidate_manifest}"
+            if ! docker run --rm \
+              --user "$(id -u):$(id -g)" \
+              -e HASNA_INSTRUCTIONS_API_KEY \
+              -v "${archive_dir}:/archive" \
+              --entrypoint sh \
+              "${LOCAL_IMAGE}:${SOURCE_SHA}" \
+              -c "set -eu; bun dist/cli/index.js export --output /archive/instructions-domain-candidate-${capture_attempt}.tar.gz; chmod 600 /archive/instructions-domain-candidate-${capture_attempt}.tar.gz"; then
+              rm -f "${candidate_archive}" "${candidate_manifest}"
+              if [[ -n "${previous_archive}" ]]; then rm -f "${previous_archive}" "${previous_manifest}"; fi
+              previous_archive=""
+              previous_manifest=""
+              continue
+            fi
+            if ! validate_domain_archive "${candidate_archive}" "${candidate_manifest}"; then
+              rm -f "${candidate_archive}" "${candidate_manifest}"
+              if [[ -n "${previous_archive}" ]]; then rm -f "${previous_archive}" "${previous_manifest}"; fi
+              previous_archive=""
+              previous_manifest=""
+              continue
+            fi
+            if [[ -n "${previous_manifest}" ]] && jq -e --slurpfile previous "${previous_manifest}" '
+              .integrity == $previous[0].integrity
+            ' "${candidate_manifest}" >/dev/null; then
+              mv "${candidate_archive}" "${pre_archive}"
+              mv "${candidate_manifest}" "${pre_manifest}"
+              rm -f "${previous_archive}" "${previous_manifest}"
+              stable_archive=true
+              break
+            fi
+            if [[ -n "${previous_archive}" ]]; then rm -f "${previous_archive}" "${previous_manifest}"; fi
+            previous_archive="${candidate_archive}"
+            previous_manifest="${candidate_manifest}"
+          done
+          unset client_key HASNA_INSTRUCTIONS_API_KEY
+          [[ "${stable_archive}" == "true" ]] || {
+            if [[ -n "${previous_archive}" ]]; then rm -f "${previous_archive}" "${previous_manifest}"; fi
+            rm -f "${pre_archive}" "${pre_manifest}"
+            echo "Instructions failed to capture two consecutive identical valid archives after ${max_capture_attempts} attempts" >&2
+            exit 1
+          }
+          [[ -f "${pre_archive}" && -f "${pre_manifest}" ]] || { echo "stable Instructions archive authority is unavailable" >&2; exit 1; }
+          [[ "$(stat -c '%a' "${pre_archive}")" == "600" && "$(stat -c '%a' "${pre_manifest}")" == "600" ]] || {
+            echo "stable Instructions archive permissions are not owner-only" >&2
+            exit 1
+          }
+          validate_domain_archive "${pre_archive}" "${pre_manifest}"
+          {
+            printf 'archive=%s\n' "${pre_archive}"
+            printf 'manifest=%s\n' "${pre_manifest}"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Create immutable pre-deploy S3 backup
         id: backup
+        env:
+          PRE_DEPLOY_ARCHIVE: ${{ steps.data-before.outputs.archive }}
         run: |
           set -Eeuo pipefail
           aws s3api head-bucket --bucket "${EXPECTED_BACKUP_BUCKET}"
           [[ "$(aws s3api get-bucket-versioning --bucket "${EXPECTED_BACKUP_BUCKET}" --query Status --output text)" == "Enabled" ]]
+          object_lock="$(aws s3api get-object-lock-configuration --bucket "${EXPECTED_BACKUP_BUCKET}" --output json)"
+          jq -e '
+            .ObjectLockConfiguration as $lock |
+            $lock.Rule.DefaultRetention as $retention |
+            $lock.ObjectLockEnabled == "Enabled" and
+            $retention.Mode == "COMPLIANCE" and
+            (
+              (($retention | has("Days")) and ($retention | has("Years") | not) and ($retention.Days as $days | ($days | type) == "number" and $days > 0 and ($days | floor) == $days)) or
+              (($retention | has("Years")) and ($retention | has("Days") | not) and ($retention.Years as $years | ($years | type) == "number" and $years > 0 and ($years | floor) == $years))
+            )
+          ' <<<"${object_lock}" >/dev/null || { echo "Instructions backup bucket Object Lock lacks a valid COMPLIANCE default retention period" >&2; exit 1; }
           public_block="$(aws s3api get-public-access-block --bucket "${EXPECTED_BACKUP_BUCKET}" --query PublicAccessBlockConfiguration --output json)"
           jq -e '.BlockPublicAcls == true and .IgnorePublicAcls == true and .BlockPublicPolicy == true and .RestrictPublicBuckets == true' <<<"${public_block}" >/dev/null
           encryption="$(aws s3api get-bucket-encryption --bucket "${EXPECTED_BACKUP_BUCKET}" --query 'ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.SSEAlgorithm' --output text)"
           [[ "${encryption}" == "aws:kms" || "${encryption}" == "AES256" ]] || { echo "Instructions backup bucket encryption is not enabled" >&2; exit 1; }
 
-          client_key="$(aws secretsmanager get-secret-value --secret-id "${CLIENT_KEY_SECRET_ID}" --query SecretString --output text)"
-          [[ -n "${client_key}" && "${client_key}" != "None" ]] || { echo "Instructions client key is unavailable" >&2; exit 1; }
-          echo "::add-mask::${client_key}"
-          export HASNA_INSTRUCTIONS_API_KEY="${client_key}"
-          backup_dir="${RUNNER_TEMP}/instructions-predeploy-backup"
-          mkdir -p "${backup_dir}"
-          chmod 700 "${backup_dir}"
+          backup_dir="${RUNNER_TEMP}/instructions-deploy-domain"
+          [[ "${PRE_DEPLOY_ARCHIVE}" == "${backup_dir}/instructions-domain-pre.tar.gz" ]] || { echo "pre-deploy archive authority mismatch" >&2; exit 1; }
+          [[ -f "${PRE_DEPLOY_ARCHIVE}" && ! -L "${PRE_DEPLOY_ARCHIVE}" ]] || { echo "pre-deploy archive is unavailable" >&2; exit 1; }
+          [[ "$(stat -c '%a' "${PRE_DEPLOY_ARCHIVE}")" == "600" ]] || { echo "pre-deploy archive permissions are not owner-only" >&2; exit 1; }
           backup_id="pre-deploy-${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           docker run --rm \
             --user "$(id -u):$(id -g)" \
-            -e HASNA_INSTRUCTIONS_API_KEY \
             -e HASNA_INSTRUCTIONS_S3_BUCKET="${EXPECTED_BACKUP_BUCKET}" \
             -e HASNA_INSTRUCTIONS_AWS_REGION="${AWS_REGION}" \
             -e AWS_ACCESS_KEY_ID \
             -e AWS_SECRET_ACCESS_KEY \
             -e AWS_SESSION_TOKEN \
+            -e BACKUP_ID="${backup_id}" \
             -v "${backup_dir}:/backup" \
             --entrypoint sh \
             "${LOCAL_IMAGE}:${SOURCE_SHA}" \
-            -c "set -eu; bun dist/cli/index.js export --output /backup/instructions.tgz; chmod 600 /backup/instructions.tgz; bun dist/cli/index.js storage backup push /backup/instructions.tgz --id '${backup_id}' --json > /backup/s3-backup.json; bun dist/cli/index.js storage backup verify '${backup_id}' --json > /backup/s3-verify.json"
-          unset client_key HASNA_INSTRUCTIONS_API_KEY
-          jq -e --arg id "${backup_id}" '.status == "created" and .backupId == $id and (.sizeBytes | numbers) > 0 and (.sha256 | strings | test("^[0-9a-f]{64}$"))' "${backup_dir}/s3-backup.json" >/dev/null
-          jq -e --arg id "${backup_id}" '.ok == true and .backupId == $id and (.sizeBytes | numbers) > 0 and (.sha256 | strings | test("^[0-9a-f]{64}$"))' "${backup_dir}/s3-verify.json" >/dev/null
-          backup_sha256="$(jq -er '.sha256' "${backup_dir}/s3-backup.json")"
-          backup_size="$(jq -er '.sizeBytes' "${backup_dir}/s3-backup.json")"
+            -c 'set -eu
+              bun dist/cli/index.js storage backup push /backup/instructions-domain-pre.tar.gz --id "${BACKUP_ID}" --json > /backup/s3-backup.json
+              payload_version_id="$(jq -er ".payloadVersionId | strings | select(length > 0 and . != \"null\")" /backup/s3-backup.json)"
+              manifest_version_id="$(jq -er ".manifestVersionId | strings | select(length > 0 and . != \"null\")" /backup/s3-backup.json)"
+              bun dist/cli/index.js storage backup verify "${BACKUP_ID}" \
+                --payload-version-id "${payload_version_id}" \
+                --manifest-version-id "${manifest_version_id}" \
+                --json > /backup/s3-verify.json'
+          archive_sha256="$(sha256sum "${PRE_DEPLOY_ARCHIVE}" | awk '{print $1}')"
+          archive_size="$(stat -c '%s' "${PRE_DEPLOY_ARCHIVE}")"
+          jq -e --arg id "${backup_id}" --arg sha256 "${archive_sha256}" --argjson size_bytes "${archive_size}" '
+            .status == "created" and .backupId == $id and .sha256 == $sha256 and .sizeBytes == $size_bytes and
+            (.payloadVersionId | strings | length > 0) and (.manifestVersionId | strings | length > 0)
+          ' "${backup_dir}/s3-backup.json" >/dev/null
+          jq -e --arg id "${backup_id}" --arg sha256 "${archive_sha256}" --argjson size_bytes "${archive_size}" '
+            .ok == true and .versionPinned == true and .backupId == $id and
+            (.payloadKey | strings | length > 0) and (.manifestKey | strings | length > 0) and
+            (.payloadVersionId | strings | length > 0) and (.manifestVersionId | strings | length > 0) and
+            .sha256 == $sha256 and .sizeBytes == $size_bytes
+          ' "${backup_dir}/s3-verify.json" >/dev/null
+          backup_receipt="${backup_dir}/s3-backup-receipt.json"
+          jq -n \
+            --arg id "${backup_id}" \
+            --slurpfile pushed "${backup_dir}/s3-backup.json" \
+            --slurpfile verified "${backup_dir}/s3-verify.json" \
+            '($pushed[0]) as $push | ($verified[0]) as $verify |
+             if ($push.backupId == $id and $verify.backupId == $id and
+                 $push.sha256 == $verify.sha256 and $push.sizeBytes == $verify.sizeBytes and
+                 $push.payloadVersionId == $verify.payloadVersionId and
+                 $push.manifestVersionId == $verify.manifestVersionId and
+                 $verify.versionPinned == true)
+             then {
+               schema: "hasna.instructions.redacted-backup-receipt.v2",
+               status: $push.status,
+               backupId: $id,
+               payloadKey: $verify.payloadKey,
+               manifestKey: $verify.manifestKey,
+               payloadVersionId: $verify.payloadVersionId,
+               manifestVersionId: $verify.manifestVersionId,
+               sha256: $push.sha256,
+               sizeBytes: $push.sizeBytes
+             }
+             else error("backup receipts disagree") end' > "${backup_receipt}"
+          chmod 600 "${backup_receipt}"
+          jq -e '
+            .schema == "hasna.instructions.redacted-backup-receipt.v2" and
+            .status == "created" and
+            (.payloadKey | strings | length > 0) and
+            (.manifestKey | strings | length > 0) and
+            (.payloadVersionId | strings | length > 0) and
+            (.manifestVersionId | strings | length > 0) and
+            (.sha256 | strings | test("^[0-9a-f]{64}$")) and
+            (.sizeBytes | numbers) > 0
+          ' "${backup_receipt}" >/dev/null || { echo "redacted backup receipt is invalid" >&2; exit 1; }
+          payload_key="$(jq -er '.payloadKey' "${backup_receipt}")"
+          manifest_key="$(jq -er '.manifestKey' "${backup_receipt}")"
+          payload_version_id="$(jq -er '.payloadVersionId' "${backup_receipt}")"
+          manifest_version_id="$(jq -er '.manifestVersionId' "${backup_receipt}")"
+          verify_worm_object() {
+            local object_label="$1"
+            local object_key="$2"
+            local object_version_id="$3"
+            local head_object retain_until retain_until_epoch now_epoch
+            head_object="$(aws s3api head-object \
+              --bucket "${EXPECTED_BACKUP_BUCKET}" \
+              --key "${object_key}" \
+              --version-id "${object_version_id}" \
+              --output json)"
+            retain_until="$(jq -er '.ObjectLockRetainUntilDate | strings | select(length > 0)' <<<"${head_object}")" || {
+              echo "${object_label} backup object lacks a retention deadline" >&2
+              return 1
+            }
+            if ! retain_until_epoch="$(date -u --date="${retain_until}" +%s 2>/dev/null)"; then
+              echo "${object_label} backup object has an invalid retention deadline" >&2
+              return 1
+            fi
+            now_epoch="$(date -u +%s)"
+            jq -e \
+              --arg object_version_id "${object_version_id}" \
+              --argjson now_epoch "${now_epoch}" \
+              --argjson retain_until_epoch "${retain_until_epoch}" '
+                (.VersionId == $object_version_id) and
+                .ObjectLockMode == "COMPLIANCE" and
+                (.ObjectLockRetainUntilDate | type == "string" and length > 0) and
+                ($retain_until_epoch > $now_epoch)
+              ' <<<"${head_object}" >/dev/null || {
+                echo "${object_label} backup object is not protected by future COMPLIANCE retention" >&2
+                return 1
+              }
+          }
+          verify_worm_object "payload" "${payload_key}" "${payload_version_id}"
+          verify_worm_object "manifest" "${manifest_key}" "${manifest_version_id}"
+          versioned_payload="${backup_dir}/s3-versioned-payload"
+          rm -f "${versioned_payload}"
+          aws s3api get-object \
+            --bucket "${EXPECTED_BACKUP_BUCKET}" \
+            --key "${payload_key}" \
+            --version-id "${payload_version_id}" \
+            "${versioned_payload}" >/dev/null
+          chmod 600 "${versioned_payload}"
+          [[ "$(sha256sum "${versioned_payload}" | awk '{print $1}')" == "${archive_sha256}" ]] || { echo "exact retained payload digest mismatch" >&2; exit 1; }
+          [[ "$(stat -c '%s' "${versioned_payload}")" == "${archive_size}" ]] || { echo "exact retained payload size mismatch" >&2; exit 1; }
+          rm -f "${versioned_payload}"
+          backup_sha256="$(jq -er '.sha256' "${backup_receipt}")"
+          backup_size="$(jq -er '.sizeBytes' "${backup_receipt}")"
           {
             printf 'backup_id=%s\n' "${backup_id}"
             printf 'sha256=%s\n' "${backup_sha256}"
             printf 'size_bytes=%s\n' "${backup_size}"
-            printf 'receipt=%s\n' "${backup_dir}/s3-backup.json"
+            printf 'payload_version_id=%s\n' "${payload_version_id}"
+            printf 'manifest_version_id=%s\n' "${manifest_version_id}"
+            printf 'receipt=%s\n' "${backup_receipt}"
             printf 'verification=%s\n' "${backup_dir}/s3-verify.json"
           } >> "${GITHUB_OUTPUT}"
 
@@ -613,6 +828,7 @@ jobs:
           WEB_CONTAINER: ${{ steps.manifest.outputs.web_container }}
           HEALTH_URL: ${{ steps.manifest.outputs.health_url }}
           DEPLOYED_TASK_DEFINITION: ${{ steps.deploy.outputs.deployed_task_definition }}
+          PRE_DEPLOY_MANIFEST: ${{ steps.data-before.outputs.manifest }}
         run: |
           set -Eeuo pipefail
           verified=false
@@ -646,13 +862,54 @@ jobs:
           client_key="$(aws secretsmanager get-secret-value --secret-id "${CLIENT_KEY_SECRET_ID}" --query SecretString --output text)"
           [[ -n "${client_key}" && "${client_key}" != "None" ]] || { echo "Instructions client key is unavailable" >&2; exit 1; }
           echo "::add-mask::${client_key}"
-          existing_data="$(curl --fail --silent --show-error --retry 3 --retry-all-errors --max-time 20 \
-            --header "x-api-key: ${client_key}" \
-            --header "Authorization: Bearer ${client_key}" \
-            "${PUBLIC_BASE_URL}/v1/configs")"
-          config_count="$(jq -er '.count | numbers | select(. >= 1 and floor == .)' <<<"${existing_data}")"
-          [[ "${config_count}" -ge 1 ]] || { echo "authenticated read did not preserve the existing Instructions dataset" >&2; exit 1; }
-          unset client_key existing_data
+          export HASNA_INSTRUCTIONS_API_KEY="${client_key}"
+          archive_dir="${RUNNER_TEMP}/instructions-deploy-domain"
+          post_archive="${archive_dir}/instructions-domain-post.tar.gz"
+          post_manifest="${archive_dir}/post-domain-manifest.json"
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HASNA_INSTRUCTIONS_API_KEY \
+            -v "${archive_dir}:/archive" \
+            --entrypoint sh \
+            "${LOCAL_IMAGE}:${SOURCE_SHA}" \
+            -c "set -eu; bun dist/cli/index.js export --output /archive/instructions-domain-post.tar.gz; chmod 600 /archive/instructions-domain-post.tar.gz"
+          unset client_key HASNA_INSTRUCTIONS_API_KEY
+          validate_domain_archive() {
+            local archive_path="$1"
+            local manifest_path="$2"
+            local archive_members
+            archive_members="$(tar -tzf "${archive_path}")"
+            [[ "${archive_members}" == $'manifest.json\ndomain.json' ]] || {
+              echo "Instructions domain archive contains unexpected members" >&2
+              return 1
+            }
+            tar -xOzf "${archive_path}" manifest.json > "${manifest_path}.tmp"
+            chmod 600 "${manifest_path}.tmp"
+            mv "${manifest_path}.tmp" "${manifest_path}"
+            jq -e '
+              ["configs", "config_snapshots", "profiles", "profile_config_bindings", "profile_asset_bindings", "machines"] as $collections |
+              .schema == "hasna.instructions.domain-archive/v2" and
+              .version == "2.0.0" and
+              .payload.path == "domain.json" and
+              (.payload.sha256 | strings | test("^[0-9a-f]{64}$")) and
+              (.payload.size_bytes | numbers | select(. > 0 and floor == .)) and
+              .integrity.algorithm == "sha256" and
+              .integrity.canonicalization == "hasna.instructions.logical-json/v1" and
+              ((.integrity.counts | keys | sort) == ($collections | sort)) and
+              ((.integrity.hashes | keys | sort) == ($collections | sort)) and
+              (.integrity.counts | all(. as $count | ($count | type) == "number" and $count >= 0 and ($count | floor) == $count)) and
+              (.integrity.hashes | all(. as $hash | ($hash | type) == "string" and ($hash | test("^[0-9a-f]{64}$")))) and
+              (.integrity.domain_sha256 | strings | test("^[0-9a-f]{64}$"))
+            ' "${manifest_path}" >/dev/null || {
+              echo "Instructions domain archive manifest is not a complete v2 integrity manifest" >&2
+              return 1
+            }
+          }
+          validate_domain_archive "${post_archive}" "${post_manifest}"
+          jq -e --slurpfile pre "${PRE_DEPLOY_MANIFEST}" '
+            .integrity == $pre[0].integrity and
+            .integrity.domain_sha256 == $pre[0].integrity.domain_sha256
+          ' "${post_manifest}" >/dev/null || { echo "Instructions domain integrity changed during deployment" >&2; exit 1; }
 
           jq -n \
             --arg source_sha "${SOURCE_SHA}" \
@@ -664,13 +921,20 @@ jobs:
             --arg service "${SERVICE}" \
             --arg previous_task_definition "${{ steps.before.outputs.previous_task_definition }}" \
             --arg previous_image "${{ steps.before.outputs.previous_image }}" \
+            --arg backup_id "${{ steps.backup.outputs.backup_id }}" \
+            --arg backup_sha256 "${{ steps.backup.outputs.sha256 }}" \
+            --arg backup_size_bytes "${{ steps.backup.outputs.size_bytes }}" \
+            --arg backup_payload_version_id "${{ steps.backup.outputs.payload_version_id }}" \
+            --arg backup_manifest_version_id "${{ steps.backup.outputs.manifest_version_id }}" \
+            --slurpfile pre_manifest "${PRE_DEPLOY_MANIFEST}" \
+            --slurpfile post_manifest "${post_manifest}" \
             --arg migration_task_definition "${{ steps.migration.outputs.task_definition }}" \
             --arg migration_task "${{ steps.migration.outputs.task }}" \
             --arg deployed_task_definition "${DEPLOYED_TASK_DEFINITION}" \
             --arg deployed_image "${deployed_image}" \
             --arg health_url "${HEALTH_URL}" \
             --arg run_id "${GITHUB_RUN_ID}" \
-            '{schema:"hasna.instructions.production_deploy.v1",source_sha:$source_sha,image_tag:$image_tag,image_digest:$image_digest,image:$image,account:$account,cluster:$cluster,service:$service,rollback:{task_definition:$previous_task_definition,image:$previous_image},backup:{id:$backup_id,sha256:$backup_sha256,size_bytes:($backup_size_bytes|tonumber)},migration:{task_definition:$migration_task_definition,task:$migration_task,exit_code:0},deployed:{task_definition:$deployed_task_definition,image:$deployed_image,health_url:$health_url},github_run_id:$run_id}' \
+            '{schema:"hasna.instructions.production_deploy.v1",source_sha:$source_sha,image_tag:$image_tag,image_digest:$image_digest,image:$image,account:$account,cluster:$cluster,service:$service,rollback:{task_definition:$previous_task_definition,image:$previous_image},backup:{id:$backup_id,sha256:$backup_sha256,size_bytes:($backup_size_bytes|tonumber),payload_version_id:$backup_payload_version_id,manifest_version_id:$backup_manifest_version_id},data_integrity:{policy:"exact_domain_integrity",pre:{counts:$pre_manifest[0].integrity.counts,integrity:$pre_manifest[0].integrity},post:{counts:$post_manifest[0].integrity.counts,integrity:$post_manifest[0].integrity}},migration:{task_definition:$migration_task_definition,task:$migration_task,exit_code:0},deployed:{task_definition:$deployed_task_definition,image:$deployed_image,health_url:$health_url},github_run_id:$run_id}' \
             > deploy-evidence.json
 
       - name: Restore rollback anchor after a failed service rollout
