@@ -137,6 +137,11 @@
       "notes": "Internal ecosystem target; independent Skills origin registration and authenticated live acceptance remain required. Commercial skills.md uses a separately selected instance."
     },
     {
+      "app": "switcher",
+      "source": "monorepo",
+      "probePath": "/v1/providers"
+    },
+    {
       "app": "telephony",
       "source": "monorepo",
       "probePath": "/v1/calls"

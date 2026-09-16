@@ -2,10 +2,13 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Switcher API",
-    "version": "0.2.2",
+    "version": "0.2.3",
     "description": "Authenticated provider/profile/catalog control plane. Launches run locally; the API never returns provider credentials."
   },
   "security": [
+    {
+      "apiKeyAuth": []
+    },
     {
       "bearerAuth": []
     }
@@ -780,6 +783,73 @@
               }
             }
           }
+        },
+        "description": "Self-hosted/local server refresh. Hosted clients discover locally and commit catalog metadata through the version-checked catalog endpoint."
+      }
+    },
+    "/v1/providers/{id}/catalog": {
+      "put": {
+        "operationId": "saveCatalog",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Catalog"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Catalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -1147,6 +1217,36 @@
     },
     "/v1/openapi.json": {
       "get": {
+        "operationId": "openApiV1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/openapi.json": {
+      "get": {
         "operationId": "openApi",
         "parameters": [],
         "responses": {
@@ -1171,12 +1271,18 @@
               }
             }
           }
-        }
+        },
+        "security": []
       }
     }
   },
   "components": {
     "securitySchemes": {
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key"
+      },
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer"
@@ -2749,10 +2855,12 @@
                 "name"
               ],
               "additionalProperties": false
-            }
+            },
+            "maxItems": 10000
           },
           "refreshedAt": {
-            "type": "string"
+            "type": "string",
+            "format": "date-time"
           },
           "source": {
             "type": "string",
@@ -3337,10 +3445,12 @@
                     "name"
                   ],
                   "additionalProperties": false
-                }
+                },
+                "maxItems": 10000
               },
               "refreshedAt": {
-                "type": "string"
+                "type": "string",
+                "format": "date-time"
               },
               "source": {
                 "type": "string",
@@ -3966,15 +4076,31 @@
       "Ready": {
         "type": "object",
         "properties": {
-          "ready": {
-            "type": "boolean"
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "unavailable"
+            ]
+          },
+          "version": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "sqlite",
+              "postgresql"
+            ]
           },
           "reason": {
             "type": "string"
           }
         },
         "required": [
-          "ready"
+          "status",
+          "version",
+          "backend"
         ],
         "additionalProperties": false
       },

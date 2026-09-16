@@ -1,18 +1,18 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import openapiTS, { astToString } from "openapi-typescript";
-import { providerInputSchema, providerPresetSchema, profileInputSchema, modelSchema, runInputSchema, runUpdateSchema, modelPolicySchema, routingEventSchema, idSchema, VERSION } from "../src/domain";
+import { providerInputSchema, providerPresetSchema, profileInputSchema, modelSchema, runInputSchema, runUpdateSchema, catalogSchema, modelPolicySchema, routingEventSchema, idSchema, VERSION } from "../src/domain";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 const meta = {version: z.number().int().positive(), updatedAt: z.string()};
 const provider = providerInputSchema.innerType().required({authStyle: true, modelsPath: true, manualModels: true}).extend(meta);
 const profile = profileInputSchema.extend(meta);
-const catalog = z.object({models: z.array(modelSchema), refreshedAt: z.string(), source: z.enum(["remote", "manual"])});
+const catalog = catalogSchema;
 const run = runInputSchema.extend({...meta, modelPolicyVersion:z.literal(1).optional(), providerId:idSchema,providerVersion:z.number().int().positive(),profileVersion:z.number().int().positive(), id: idSchema, status: z.enum(["running","exited","failed","interrupted"]), startedAt: z.string(), endedAt: z.string().optional(), exitCode: z.number().int().optional(),routingEvents:runUpdateSchema.shape.routingEvents,routingEventsDropped:runUpdateSchema.shape.routingEventsDropped});
 const definitions = {
   ProviderPreset: providerPresetSchema, ProviderInput: providerInputSchema, Provider: provider, ProfileInput: profileInputSchema, Profile: profile,
   Model: modelSchema, ModelPolicy: modelPolicySchema, RoutingEvent: routingEventSchema, ModelPage:z.object({data:z.array(modelSchema.extend({codingEligible:z.boolean(),expired:z.boolean()})),total:z.number().int(),limit:z.number().int(),offset:z.number().int(),refreshedAt:z.string(),source:z.enum(["remote","manual"])}),Catalog: catalog, LaunchPlan: z.object({provider, profile, catalog, planToken:z.string(),warnings: z.array(z.string())}),
   RunInput: runInputSchema, RunUpdate: runUpdateSchema, Run: run,
-  Health: z.object({status:z.enum(["ok","degraded","unavailable"]),version:z.string(),backend:z.enum(["sqlite","postgresql"])}), Ready:z.object({ready:z.boolean(),reason:z.string().optional()}), Version:z.object({version:z.string()}),
+  Health: z.object({status:z.enum(["ok","degraded","unavailable"]),version:z.string(),backend:z.enum(["sqlite","postgresql"])}), Ready:z.object({status:z.enum(["ready","unavailable"]),version:z.string(),backend:z.enum(["sqlite","postgresql"]),reason:z.string().optional()}), Version:z.object({version:z.string()}),
   LaunchInput: z.object({profileId: idSchema}), Empty: z.object({}).strict(),
   Error: z.object({error: z.object({code: z.string(), message: z.string(), requestId: z.string()})}),
 };
@@ -42,7 +42,8 @@ for (const [plural, singular] of [["providers","Provider"],["profiles","Profile"
 op("/v1/provider-presets","get","listProviderPresets",{type:"object",required:["data"],properties:{data:{type:"array",items:ref("ProviderPreset")}}});
 op("/v1/provider-presets/{id}","get","getProviderPreset",ref("ProviderPreset"));
 op("/v1/providers/{id}/models","get","listModels",ref("ModelPage"),undefined,true);
-op("/v1/providers/{id}/refresh","post","refreshModels",ref("Catalog"),"Empty");
+op("/v1/providers/{id}/refresh","post","refreshModels",ref("Catalog"),"Empty"); paths["/v1/providers/{id}/refresh"].post.description="Self-hosted/local server refresh. Hosted clients discover locally and commit catalog metadata through the version-checked catalog endpoint.";
+op("/v1/providers/{id}/catalog","put","saveCatalog",ref("Catalog"),"Catalog");
 op("/v1/launch-plans","post","launchPlan",ref("LaunchPlan"),"LaunchInput");
 op("/v1/runs","get","listRuns",page("Run"),undefined,true);
 op("/v1/runs/{id}","get","getRun",ref("Run"));
@@ -51,8 +52,9 @@ op("/v1/runs/{id}","patch","finishRun",ref("Run"),"RunUpdate");
 for (const path of ["/health","/ready","/version"]) {
   op(path,"get",path.slice(1),ref(path==="/health"?"Health":path==="/ready"?"Ready":"Version")); paths[path].get.security = [];
 }
-op("/v1/openapi.json","get","openApi",{type:"object",additionalProperties:true});
-const document: any = {openapi:"3.0.3",info:{title:"Switcher API",version:VERSION,description:"Authenticated provider/profile/catalog control plane. Launches run locally; the API never returns provider credentials."},security:[{bearerAuth:[]}],paths,components:{securitySchemes:{bearerAuth:{type:"http",scheme:"bearer"}},schemas}};
+op("/v1/openapi.json","get","openApiV1",{type:"object",additionalProperties:true}); paths["/v1/openapi.json"].get.security = [];
+op("/openapi.json","get","openApi",{type:"object",additionalProperties:true}); paths["/openapi.json"].get.security = [];
+const document: any = {openapi:"3.0.3",info:{title:"Switcher API",version:VERSION,description:"Authenticated provider/profile/catalog control plane. Launches run locally; the API never returns provider credentials."},security:[{apiKeyAuth:[]},{bearerAuth:[]}],paths,components:{securitySchemes:{apiKeyAuth:{type:"apiKey",in:"header",name:"x-api-key"},bearerAuth:{type:"http",scheme:"bearer"}},schemas}};
 const spec = JSON.stringify(document,null,2)+"\n";
 const types = "// Generated from openapi.json. Run bun run generate.\n"+astToString(await openapiTS(document));
 await mkdir(new URL("../src/generated/",import.meta.url),{recursive:true});

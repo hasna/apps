@@ -5,7 +5,7 @@ export { modelPolicySchema, routingEventSchema, routingEventsSchema } from "./mo
 export type { ModelPolicy, RoutingEvent } from "./model-policy-schema";
 export type { AuthStyle } from "./auth";
 
-export const VERSION = "0.2.2";
+export const VERSION = "0.2.3";
 export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode", "opencode2", "pi", "omp", "dsh", "cline", "hermes", "prime-agent", "gemini", "aider", "kilo"]);
 export const protocolSchema = z.enum(["anthropic-messages", "openai-responses", "openai-chat", "gemini-generate-content"]);
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
@@ -87,7 +87,8 @@ export type ProfileInput = z.infer<typeof profileInputSchema>;
 export type Profile = ProfileInput & {version: number; updatedAt: string};
 export type Model = z.infer<typeof modelSchema>;
 export type Run = Omit<z.infer<typeof runInputSchema>,"modelPolicyVersion"> & {modelPolicyVersion?:1;providerId:string;providerVersion:number;profileVersion:number;id: string; status: "running"|"exited"|"failed"|"interrupted"; startedAt: string; endedAt?: string; exitCode?: number; routingEvents?:RoutingEvent[];routingEventsDropped?:number;version: number; updatedAt: string};
-export type Catalog = {models: Model[]; refreshedAt: string; source: "remote"|"manual"};
+export const catalogSchema = z.object({models:z.array(modelSchema).max(10000),refreshedAt:z.string().datetime(),source:z.enum(["remote","manual"])}).strict();
+export type Catalog = z.infer<typeof catalogSchema>;
 export type LaunchPlan = {planToken:string; profile: Profile; provider: Provider; catalog: Catalog; warnings: string[]};
 export class Fault extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }

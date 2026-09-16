@@ -59,10 +59,12 @@ test("the opt-in is answered from the environment, selects the owned local API a
   expect(lines).toHaveLength(1);
   expect(lines[0]).toContain("switcher: LOCAL mode");
   expect(lines[0]).toContain("HASNA_SWITCHER_LOCAL");
-  for (const flag of [{HASNA_SWITCHER_LOCAL: "1"}, {SWITCHER_LOCAL: "yes"}]) {
+  for (const flag of [{HASNA_SWITCHER_LOCAL: "1"}, {SWITCHER_LOCAL: "yes"}, {HASNA_SWITCHER_LOCAL:"true"}, {SWITCHER_LOCAL:"on"}]) {
     expect(selectsSwitcherLocalMode({HOME: root, ...flag})).toBe(true);
   }
-  expect(selectsSwitcherLocalMode({HOME: root, HASNA_SWITCHER_LOCAL: "  "})).toBe(false);
+  for(const value of ["","  ","0","false","no","off"])expect(selectsSwitcherLocalMode({HOME:root,HASNA_SWITCHER_LOCAL:value})).toBe(false);
+  expect(()=>selectsSwitcherLocalMode({HOME:root,HASNA_SWITCHER_LOCAL:"maybe"})).toThrow("must be one of");
+  expect(()=>selectsSwitcherLocalMode({HOME:root,HASNA_SWITCHER_LOCAL:"0",SWITCHER_LOCAL:"1"})).toThrow("must not disagree");
   const runtime = await openCliRuntime({HOME: root, HASNA_SWITCHER_LOCAL: "1"});
   try {
     expect(runtime.mode).toBe("local");

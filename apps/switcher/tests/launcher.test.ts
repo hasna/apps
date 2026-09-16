@@ -8,7 +8,7 @@ import type {SwitcherClient} from "../src/sdk";
 import {SwitcherError} from "../src/sdk";
 import {providerFromPreset} from "../src/presets";
 import {resolveLaunchProvider} from "../src/direct-launch";
-import {providerCredentialFingerprint} from "../src/credentials";
+import {providerCredentialFingerprint} from "../src/provider-credential-onboarding";
 test("Gemini auth mismatch is rejected before discovery or credential lookup",async()=>{
   let touched=false;
   const client={

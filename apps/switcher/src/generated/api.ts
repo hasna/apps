@@ -121,7 +121,24 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Self-hosted/local server refresh. Hosted clients discover locally and commit catalog metadata through the version-checked catalog endpoint. */
         post: operations["refreshModels"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/providers/{id}/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["saveCatalog"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -225,6 +242,22 @@ export interface paths {
         trace?: never;
     };
     "/v1/openapi.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["openApiV1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/openapi.json": {
         parameters: {
             query?: never;
             header?: never;
@@ -554,6 +587,7 @@ export interface components {
                 reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                 supportedGenerationMethods?: string[];
             }[];
+            /** Format: date-time */
             refreshedAt: string;
             /** @enum {string} */
             source: "remote" | "manual";
@@ -669,6 +703,7 @@ export interface components {
                     reasoningEfforts?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra")[];
                     supportedGenerationMethods?: string[];
                 }[];
+                /** Format: date-time */
                 refreshedAt: string;
                 /** @enum {string} */
                 source: "remote" | "manual";
@@ -800,7 +835,11 @@ export interface components {
             backend: "sqlite" | "postgresql";
         };
         Ready: {
-            ready: boolean;
+            /** @enum {string} */
+            status: "ready" | "unavailable";
+            version: string;
+            /** @enum {string} */
+            backend: "sqlite" | "postgresql";
             reason?: string;
         };
         Version: {
@@ -1316,6 +1355,44 @@ export interface operations {
             };
         };
     };
+    saveCatalog: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "If-Match": number;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Catalog"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Catalog"];
+                };
+            };
+            /** @description Structured error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     launchPlan: {
         parameters: {
             query?: never;
@@ -1567,6 +1644,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Version"];
+                };
+            };
+            /** @description Structured error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    openApiV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Structured error */

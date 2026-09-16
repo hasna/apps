@@ -8,7 +8,8 @@ import { launch, validateOriForPlan, type LaunchBackend } from "./launcher";
 import { openCliRuntime } from "./runtime";
 import { providerFromPreset, type PresetOptions } from "./presets";
 import { resolveLaunchProvider, selectModel, ensureLaunchProfile, launchCatalog } from "./direct-launch";
-import { CredentialResolver, bindingTarget, credentialReference, credentialBindingSchema, deliverVaultCredential, ensureProviderCredential, repairVaultExecutablePermissions } from "./credentials";
+import { CredentialResolver, bindingTarget, credentialReference, credentialBindingSchema, deliverVaultCredential, repairVaultExecutablePermissions } from "./credentials";
+import { ensureProviderCredential } from "./provider-credential-onboarding";
 import { detectChatGPTApp, detectClaudeDesktopApp } from "./desktop-apps";
 import { reasoningEffortSchema, codexReasoning } from "./reasoning";
 const HELP = `switcher — launch coding harnesses and desktop apps with your provider and model
@@ -237,6 +238,12 @@ export async function main(args = process.argv.slice(2)) {
   const runtimeEnvironment = dryLaunch ? Object.fromEntries(Object.entries(process.env).filter(([name])=>!name.startsWith("SWITCHER_PROVIDER_"))) : process.env;
   const runtime = await openCliRuntime(runtimeEnvironment,dryLaunch?undefined:provider=>credentials.resolve(provider));
   const client = runtime.client;
+  const refreshCatalog = async (provider: Awaited<ReturnType<typeof client.getProvider>>, prepared?: Awaited<ReturnType<typeof ensureProviderCredential>>) => {
+    if(runtime.mode!=="remote")return client.refreshModels(provider.id);
+    const checked=prepared??await ensureProviderCredential(provider,{resolver:credentials});
+    const credential=await checked.resolveCredential(provider);
+    return launchCatalog(client,provider,false,{clientSide:true,credential,resolveCredential:candidate=>credentials.resolve(candidate)});
+  };
   try {
   const presetOptions = (): PresetOptions => ({
     protocol: values.protocol ? parse(protocolSchema, values.protocol) : undefined,
@@ -266,8 +273,9 @@ export async function main(args = process.argv.slice(2)) {
       const modelPolicy = await readModelPolicy(values["model-policy-file"], values["role-model"]);
       const provider = await resolveLaunchProvider(client, values.provider, {...presetOptions(), harness});
       validateHarnessProvider(harness, provider);
-      if (!values["dry-run"]) { const prepared=await ensureProviderCredential(provider,{resolver:credentials});credentialPreflight=prepared.providerFingerprint;resolvePreparedCredential=prepared.resolveCredential; }
-      const catalog = await launchCatalog(client,provider,Boolean(values["dry-run"]));
+      let prepared:Awaited<ReturnType<typeof ensureProviderCredential>>|undefined;
+      if (!values["dry-run"]) { prepared=await ensureProviderCredential(provider,{resolver:credentials});credentialPreflight=prepared.providerFingerprint;resolvePreparedCredential=prepared.resolveCredential; }
+      const catalog = values["dry-run"]?await launchCatalog(client,provider,true):await refreshCatalog(provider,prepared);
       const model = values.model ?? await selectModel(catalog.models, values.search,harness);
       const selected = catalog.models.find(m => m.id === model);
       if (!selected) throw new Fault(422, "model_missing", "Selected model is not in the provider catalog.");
@@ -283,8 +291,9 @@ export async function main(args = process.argv.slice(2)) {
       await validateHarnessConfiguration(profile.harness,values.cwd??process.cwd(),nativeArgs);
       const provider = await client.getProvider(profile.providerId);
       if (profile.harness === "gemini") validateHarnessProvider(profile.harness, provider);
-      if (!values["dry-run"]) { const prepared=await ensureProviderCredential(provider,{resolver:credentials});credentialPreflight=prepared.providerFingerprint;resolvePreparedCredential=prepared.resolveCredential; }
-      await launchCatalog(client,provider,Boolean(values["dry-run"]));
+      let prepared:Awaited<ReturnType<typeof ensureProviderCredential>>|undefined;
+      if (!values["dry-run"]) { prepared=await ensureProviderCredential(provider,{resolver:credentials});credentialPreflight=prepared.providerFingerprint;resolvePreparedCredential=prepared.resolveCredential; }
+      if(values["dry-run"])await launchCatalog(client,provider,true);else await refreshCatalog(provider,prepared);
     }
     if (values["dry-run"]) {
       const plan = await client.launchPlan(profileId);
@@ -312,11 +321,11 @@ export async function main(args = process.argv.slice(2)) {
   }
   if (command === "models" && action) {
     const provider = await resolveLaunchProvider(client, listingModels ? id : action, presetOptions());
-    if (values.refresh) await client.refreshModels(provider.id);
+    if (values.refresh) await refreshCatalog(provider);
     try { output(await client.listModels(provider.id, page)); }
     catch (error) {
       if (!(error instanceof SwitcherError && error.status === 404)) throw error;
-      await client.refreshModels(provider.id); output(await client.listModels(provider.id, page));
+      await refreshCatalog(provider); output(await client.listModels(provider.id, page));
     }
     return;
   }
@@ -325,7 +334,7 @@ export async function main(args = process.argv.slice(2)) {
     if(action==="presets") {output(id ? await client.getProviderPreset(id) : await client.listProviderPresets());return;}
     if(action==="list") {output(await client.listProviders(page));return;}
     if(action==="get"&&id) {output(await client.getProvider(id));return;}
-    if(action==="refresh"&&id) {output(await client.refreshModels(id));return;}
+    if(action==="refresh"&&id) {const provider=await client.getProvider(id);output(await refreshCatalog(provider));return;}
     if(action==="delete"&&id) {output(await client.deleteProvider(id,currentVersion()));return;}
     if(["add","update"].includes(action)&&id) {
       let input = parse(providerInputSchema, values.file ? await readInput(values.file) : values.preset ?
