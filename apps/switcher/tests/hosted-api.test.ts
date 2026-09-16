@@ -8,6 +8,7 @@ import { createHandler } from "../src/service";
 import { startServer } from "../src/server";
 import { main as serveMain } from "../src/serve";
 import { SwitcherClient } from "../src/sdk";
+import { VERSION } from "../src/domain";
 
 const signingSecret = "switcher-hosted-test-signing-secret-not-for-production";
 const roots: string[] = [];
@@ -84,5 +85,5 @@ test("serve help and version exit before database or authentication resolution",
   try{await serveMain(["--help"]);await serveMain(["--version"]);}
   finally{console.log=original;}
   expect(lines[0]).toContain("switcher-serve [migrate]");
-  expect(lines[1]).toMatch(/^0\.2\.3$/);
+  expect(lines[1]).toBe(VERSION);
 });

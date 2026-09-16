@@ -9,6 +9,13 @@ status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
+## 0.2.4
+
+### Patch Changes
+
+- Scale inference request limits to the selected and explicitly allowed models, capped at 64 MiB, so large-context requests can exceed the former 4 MiB limit.
+- Stop gateway fallback replay after ambiguous provider connection failures and return a distinct, redacted network error. Native harness retry behavior remains controlled by that harness.
+
 ## 0.2.3
 
 ### Patch Changes
