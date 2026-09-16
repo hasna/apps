@@ -324,8 +324,68 @@ are explicitly changed or a new session starts.
 
 ## Executable skills
 
-For a selected local executable that declares `runtime.env`, prepare a binding
-template using the configured Skills and Secrets clients:
+Selected local executables declaring `runtime.env` use shared execution grants
+by default. An owner or admin reviews a policy containing exact skill versions
+and bundle digests, actor IDs, station IDs, canonical workspace directories, a
+Secrets authority and vault reference names. Actual secret values stay in Secrets.
+Policy documents are private workspace data stored by the Skills service, with
+immutable revision history in SQLite or PostgreSQL; S3 is optional.
+
+For example, keep this policy input in private configuration outside the repository
+and skill bundles, replacing the example identifiers and digest with reviewed values:
+
+```json
+{
+  "grants": [{
+    "id": "provider-access",
+    "target": "local",
+    "selection": {
+      "slug": "your-skill",
+      "version": "1.0.0",
+      "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "actors": ["user-example"],
+    "consumers": [{"stationId": "workstation", "workspaceDirectory": "/workspace/project"}],
+    "secretsAuthority": "https://vault.example.com/v1",
+    "bindings": {"PROVIDER_TOKEN": "my/provider/key"}
+  }]
+}
+```
+
+```bash
+skills grants set default --file ./policy.json --json
+skills grants show default --json --save ./policy-snapshot.json
+skills run --target local --selection-profile default \
+  --input '{"requested":"work"}' --json your-skill@1.0.0
+# Updates and revocation require the current policy revision, not the profile revision:
+skills grants set default --file ./reviewed-policy.json --if-match <policy-revision>
+skills grants show default --revision <prior-policy-revision> --json
+```
+
+Updating a policy appends a revision and atomically changes its current pointer.
+An empty `grants` array revokes shared execution access. Historical policies remain
+readable and can be submitted as a new reviewed revision for rollback; they cannot
+authorize an execution directly. Unrelated selection-profile edits do not require
+rewriting the policy. A changed executable version or digest needs a new grant.
+
+Each run resolves current authorization through the Skills API before reading
+Secrets. Missing, expired, ambiguous or revoked grants, changed selections and API
+failures stop execution without using a cached grant. Optional `expiresAt` is an
+ISO timestamp; `includeDescendants: true` permits canonical directories beneath a
+consumer's workspace root. Station and path conditions describe client context;
+they are not cryptographic machine attestation. Revocation applies to subsequent
+authorization requests, not already running processes.
+
+Grant writers need an owner/admin role and `execution-grants:write` (or
+`execution-grants:*`/`*`); `skills:*` alone cannot grant access. Policy and history
+reads need `execution-grants:read`. Execution resolution accepts `skills:read` or
+`execution-grants:resolve`. Each client still needs independent Secrets access
+to the reviewed references. Managed MCP `run_skill` and SDK `executeSelectedLocal`
+use the same fresh authorization path. `--cached` cannot consume shared grants.
+
+Explicit local binding files remain available for callers that manage their own
+authorization. These caller-supplied grants are independent of shared-policy
+revocation. Prepare a template using the configured Skills and Secrets clients:
 
 ```bash
 skills run --target local --selection-profile default \
@@ -365,6 +425,14 @@ hostile code. Review the exact executable and grant only the credentials its
 effects require. Cloud admission and cloud credential delivery remain separate.
 SDK callers use `resolveSelectedRun`, `prepareSelectedSecretBindings` and
 `executeSelectedLocal(selected, { secretBindings })` through `@hasna/skills/sdk`.
+The same SDK exports `readExecutionGrantPolicy`, `saveExecutionGrantPolicy` and
+`resolveExecutionGrant`. The HTTP contract is GET/PUT
+`/v1/execution-grants/:profile`, GET
+`/v1/execution-grants/:profile/versions/:revision`, and POST
+`/v1/execution-grants/:profile/resolve`. Writes use `If-None-Match: *` to create or
+the quoted policy revision in `If-Match` to update. The API advertises
+`executionGrants: true` and grant permissions in `/v1/capabilities` when supported.
+Upgrade the API and apply its database migrations before enabling shared grants.
 
 ```bash
 skills capabilities --json

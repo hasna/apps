@@ -181,9 +181,9 @@ console.log(JSON.stringify({ mode, tables }));
     // full migrated schema. A single "database is locked" here is the bug.
     for (const result of results) {
       expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
-      // Includes profiles, station receipts and durable cloud execution jobs.
+      // Includes profiles, station receipts, cloud jobs and execution grant policy/history.
       // Exact count catches a migration that silently failed to apply.
-      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 20 });
+      expect(JSON.parse(result.stdout.split("\n").at(-1)!)).toEqual({ mode: "wal", tables: 22 });
     }
   }, 60_000);
 

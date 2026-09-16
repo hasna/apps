@@ -6,6 +6,7 @@ import { GOVERNANCE_ERROR_CODES, GovernanceError } from "../sdk/governance.js";
 import { createGovernanceStore, type GovernanceStore } from "../sdk/governance-store.js";
 import { ArtifactStorage } from "./artifact-storage.js";
 import { authenticateRequest, permitsSkillsRoute } from "./auth.js";
+import { handleExecutionGrantApi } from "./execution-grants-api.js";
 import { handleProfileApi } from "./profile-api.js";
 import { createRuntimeService, handleRuntimeApiRequest, handleRuntimeWorkerRequest, type RuntimeService } from "./runtime-api.js";
 import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
@@ -267,6 +268,8 @@ async function handleApiV1(
   if (!permitsSkillsRoute(principal, request.method, resource ?? "")) {
     return json({error:"The API key does not allow this operation",code:"INSUFFICIENT_SCOPE"}, {status:403});
   }
+  const grantResponse = await handleExecutionGrantApi(store, principal, request, parts, config, artifactStorage);
+  if (grantResponse) return grantResponse;
   const profileResponse = await handleProfileApi(store, principal, request, parts, config);
   if (profileResponse) return profileResponse;
 
