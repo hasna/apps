@@ -54,24 +54,30 @@ export async function buildSkillContext(input: SkillContextInput, options: Skill
     if (profile.selections.some((entry) => selectionMatchesName(entry, slug!))) explicit.add(selectionKey(exactProfileSelection(spec, profile)));
   }
   const promptWords = words(prompt);
+  // Keep complete kebab-case names intact: "inspect" is a broad keyword in
+  // "inspect-follow", but is not an exact mention of the shorter skill.
+  const promptNames = new Set(prompt.toLowerCase().match(/[a-z0-9]+(?:-[a-z0-9]+)*/g) ?? []);
   const loaded = new Set(resolved.session?.loaded ?? []);
   const paths = [...(input.paths ?? []), ...(input.cwd ? [input.cwd, resolve(input.cwd)] : [])];
   const candidates = profile.selections.map((selection) => {
     const key = selectionKey(selection);
-    if (input.restore && loaded.has(key)) return { selection, reason: "session-restore", score: 2000 };
-    if (resolved.inheritedLoaded?.includes(key)) return { selection, reason: "subagent-inherit", score: 2000 };
-    if (explicit.has(key)) return { selection, reason: "explicit", score: 1000 };
-    if (selection.triggers?.always) return { selection, reason: "profile-required", score: 900 };
+    if (input.restore && loaded.has(key)) return { selection, reason: "session-restore", priority: 6, score: 2000 };
+    if (resolved.inheritedLoaded?.includes(key)) return { selection, reason: "subagent-inherit", priority: 6, score: 2000 };
+    if (explicit.has(key)) return { selection, reason: "explicit", priority: 5, score: 1000 };
+    if (selection.triggers?.always) return { selection, reason: "profile-required", priority: 4, score: 900 };
     const matchedPath = selection.triggers?.paths?.some((pattern) => paths.some((path) => pathMatch(pattern, path)));
-    if (matchedPath) return { selection, reason: "path", score: 500 };
+    if (matchedPath) return { selection, reason: "path", priority: 3, score: 500 };
     const keywords = selection.triggers?.keywords ?? selection.slug.split("-").filter((word) => word.length >= 4);
     const matches = keywords.filter((keyword) => {
       const tokens = [...words(keyword)];
       return tokens.length > 0 && tokens.every((token) => promptWords.has(token));
     }).length;
-    return { selection, reason: "prompt", score: matches * 100 };
+    const named = promptNames.has(selection.slug) || selection.aliases?.some(alias => promptNames.has(alias));
+    // Rank only existing keyword matches; an empty keyword list still disables
+    // prompt matching. Keyword volume cannot overtake names or explicit rules.
+    return { selection, reason: "prompt", priority: named ? 2 : 1, score: matches * 100 };
   }).filter((candidate) => candidate.score > 0)
-    .sort((a, b) => b.score - a.score || a.selection.slug.localeCompare(b.selection.slug));
+    .sort((a, b) => b.priority - a.priority || b.score - a.score || a.selection.slug.localeCompare(b.selection.slug));
   const sections: string[] = [];
   const selections: ContextSelectionReceipt[] = [];
   const omitted: SkillContextResult["omitted"] = [];

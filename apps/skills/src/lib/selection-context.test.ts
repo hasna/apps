@@ -89,6 +89,40 @@ describe("immutable selected Skills cache", () => {
 });
 
 describe("selected prompt context", () => {
+  test.each(["inspect-follow", "LEGACY-INSPECT-FOLLOW"])("a complete named match wins a tight budget over a broad keyword: %s", async (name) => {
+    const broad = fixture("1.0.0", "General guidance. ".repeat(20), "inspect");
+    const specific = fixture("1.0.0", "Targeted observation. ".repeat(25), "inspect-follow");
+    const snapshot = profile([
+      { ...broad.selection, triggers: { keywords: ["inspect"] } },
+      { ...specific.selection, aliases: ["legacy-inspect-follow"], triggers: { keywords: ["inspect-follow"] } },
+    ]);
+    const client = clientFor(specific, snapshot);
+    client.getBundle = async (slug) => slug === broad.selection.slug ? broad.response() : specific.response();
+    const result = await buildSkillContext({ prompt: `Please use ${name}.`, profileId: "engineering" }, { client, cacheDir: directory(), maxChars: 1000 });
+    expect(result.selections.map(entry => entry.slug)).toEqual([specific.selection.slug]);
+    expect(result.context).toContain(specific.markdown);
+    expect(result.omitted).toContainEqual(expect.objectContaining({ slug: broad.selection.slug, reason: "context-budget" }));
+  });
+  test("many broad keywords cannot outrank a named match or higher-priority context rules", async () => {
+    const broad = fixture("1.0.0", "General guidance.", "inspect");
+    const specific = fixture("1.0.0", "Targeted guidance.", "inspect-follow");
+    const keywords = ["inspect", "follow", "please", "check", "this", "change", "carefully", "now", "review", "code", "again"];
+    const snapshot = profile([
+      { ...broad.selection, triggers: { keywords } },
+      { ...specific.selection, triggers: { keywords: ["inspect-follow"] } },
+    ]);
+    const client = clientFor(specific, snapshot);
+    client.getBundle = async (slug) => slug === broad.selection.slug ? broad.response() : specific.response();
+    const options = { client, cacheDir: directory(), maxSkills: 1 };
+    const prompt = "inspect-follow: please check this change carefully now; review code again.";
+    expect((await buildSkillContext({ prompt, profileId: "engineering" }, options)).selections[0]?.slug).toBe(specific.selection.slug);
+    expect((await buildSkillContext({ prompt: `${prompt} $inspect-follow`, profileId: "engineering" }, options)).selections[0]?.reason).toBe("explicit");
+    snapshot.selections[1]!.triggers = { always: true };
+    expect((await buildSkillContext({ prompt, profileId: "engineering" }, options)).selections[0]?.reason).toBe("profile-required");
+    snapshot.selections[1]!.triggers = { keywords: [], paths: ["**/src/*.ts"] };
+    expect((await buildSkillContext({ prompt, paths: ["repo/src/example.ts"], profileId: "engineering" }, options)).selections[0]?.reason).toBe("path");
+    expect((await buildSkillContext({ prompt, profileId: "engineering" }, options)).selections[0]?.slug).toBe(broad.selection.slug);
+  });
   test("reviewed aliases load one canonical bundle and retain exact project pins", async () => {
     const f = fixture(); const cacheDir = directory(), projectDir = directory();
     const snapshot = profile([{ ...f.selection, aliases: ["legacy-review"] }]);
