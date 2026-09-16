@@ -86,3 +86,66 @@ for (const [name,responses] of [
 ] as const) test(`rejects malformed or multi-document ${name}`,()=>{
   const r=run([...responses]);expect(r.status).not.toBe(0);expect(r.stdout).not.toContain('verified');
 });
+
+const transientRouteFailures = [[404,{error:"unknown_app"}],[0,{}],[502,{}],[503,{}],[504,{}]];
+for (const stage of ["version","anonymous"] as const) {
+  const prefix = stage === "version" ? [accepted[0]] : accepted.slice(0,2);
+  const prefixPaths = stage === "version" ? ["/ready","/version"] : ["/ready","/version","/v1/providers"];
+  for (const response of transientRouteFailures) {
+    test(`restarts the entire canonical attempt after ${response[0]} at ${stage}`,()=>{
+      const r=run([...prefix,response,...accepted]);
+      expect(r.status).toBe(0);
+      expect(r.calls).toBe(prefix.length+1+accepted.length);
+      expect(r.requests).toBe([...prefixPaths,"/ready","/version","/v1/providers"].map(path=>"https://api.hasna.com/switcher"+path+"\n").join(""));
+    });
+    test(`direct origin does not retry ${response[0]} at ${stage}`,()=>{
+      const r=run([...prefix,response,...accepted],false);
+      expect(r.status).not.toBe(0);
+      expect(r.calls).toBe(prefix.length+1);
+      expect(r.stdout).not.toContain("verified");
+    });
+  }
+  for (const response of [[302,{}],[404,{error:"other"}],[404,{raw:'{}\n{"error":"unknown_app"}'}],[200,{raw:"{"}],[200,{version:"0.2.4"}]]) {
+    test(`does not retry terminal ${JSON.stringify(response)} at ${stage}`,()=>{
+      const r=run([...prefix,response,...accepted]);
+      expect(r.status).not.toBe(0);
+      expect(r.calls).toBe(prefix.length+1);
+      expect(r.stdout).not.toContain("verified");
+    });
+  }
+  test(`revalidates readiness after transient failure at ${stage}`,()=>{
+    const r=run([...prefix,[503,{}],[200,{...ready,backend:"sqlite"}],...accepted]);
+    expect(r.status).not.toBe(0);
+    expect(r.calls).toBe(prefix.length+2);
+    expect(r.stdout).not.toContain("verified");
+  });
+  test(`one deadline bounds repeated downstream failure at ${stage}`,()=>{
+    // Bash SECONDS advances at integer boundaries; leave time for multiple attempts.
+    const r=run(Array.from({length:100},()=>[...prefix,[503,{}]]).flat(),true,"3");
+    expect(r.status).not.toBe(0);
+    expect(r.calls).toBeGreaterThan(prefix.length+1);
+    expect(r.stderr).toContain("deadline");
+    expect(r.stdout).not.toContain("verified");
+  });
+}
+test("revalidates package version after anonymous-endpoint propagation failure",()=>{
+  const r=run([accepted[0],accepted[1],[503,{}],accepted[0],[200,{version:"0.2.4"}],...accepted]);
+  expect(r.status).not.toBe(0);
+  expect(r.calls).toBe(5);
+  expect(r.stdout).not.toContain("verified");
+});
+
+for (const [name,endpoint,prefix,response,status,errorClass] of [
+  ["readiness","/ready",[],[200,{...ready,backend:"sqlite",detail:"fixture-sensitive-payload"}],"200","readiness_contract_mismatch"],
+  ["version","/version",[accepted[0]],[200,{version:"0.2.4",detail:"fixture-sensitive-payload"}],"200","version_contract_mismatch"],
+  ["anonymous success","/v1/providers",accepted.slice(0,2),[200,{detail:"fixture-sensitive-payload"}],"200","anonymous_auth_denial_mismatch"],
+  ["malformed denial","/v1/providers",accepted.slice(0,2),[401,{detail:"fixture-sensitive-payload"}],"401","anonymous_auth_denial_mismatch"],
+] as const) test(`failure diagnostics identify ${name} without response contents`,()=>{
+  const r=run([...prefix,response,...accepted]);
+  expect(r.status).not.toBe(0);
+  expect(r.calls).toBe(prefix.length+1);
+  expect(r.stderr).toContain(`endpoint=${endpoint} http_status=${status} error_class=${errorClass}`);
+  expect(r.stderr.length).toBeLessThan(300);
+  expect(r.stderr).not.toContain("fixture-sensitive-payload");
+  expect(r.stdout).not.toContain("fixture-sensitive-payload");
+});
