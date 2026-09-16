@@ -16,6 +16,8 @@
  * variable of its own. See lib/fleet-credentials.ts.
  */
 export { HttpProfileClient, createProfileClient, type ProfileClient } from "../lib/profile-client.js";
+export { resolveSelectedRun, executeSelectedLocal, prepareSelectedSecretBindings, type ResolvedSelectedRun, type SelectedLocalRunOptions } from "../lib/selected-run.js";
+export { readSelectedSecretBindings, type SelectedSecretBindings, type SelectedSecretsClient } from "../lib/execution-secrets.js";
 export type { SkillSelection, SkillProfile, ResolvedSkillSelection, ResolvedSkillProfile, StationSkillStateInput, StationSkillState } from "../types/skill-selection.js";
 export {
   MissingSkillsFleetError,

@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { packSkillBundle } from "./skill-bundle.js";
 import { resolveSelectedRun, executeSelectedLocal } from "./selected-run.js";
+import type { SelectedSecretBindings, SelectedSecretsClient } from "./execution-secrets.js";
 import type { ProfileClient } from "./profile-client.js";
 import type { ResolvedSkillSelection } from "../types/skill-selection.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -48,4 +49,90 @@ test("local execution enforces its deadline and bounded output", async () => {
   expect(timeout.exitCode).toBe(124); expect(timeout.error).toBe("LOCAL_RUN_TIMEOUT");
   const overflow = await executeSelectedLocal((await fixture('process.stdout.write("x".repeat(2 * 1024 * 1024))')).resolved); roots.push(overflow.runDirectory);
   expect(overflow.exitCode).toBe(1); expect(overflow.error).toBe("LOCAL_RUN_OUTPUT_LIMIT"); expect(Buffer.byteLength(overflow.stdout)).toBeLessThanOrEqual(1024 * 1024);
+});
+
+function bindingsFor(f: Awaited<ReturnType<typeof fixture>>): SelectedSecretBindings {
+  return {
+    schema: "hasna.skills-secret-bindings.v1",
+    selection: { ...f.resolved.selection, profileId: "engineering" },
+    consumer: { stationId: process.env.HASNA_STATION || hostname(), workspaceDirectory: realpathSync(process.cwd()) },
+    secretsAuthority: "https://vault.example.com/v1",
+    bindings: { DECLARED_FIXTURE: "demo/provider/key" },
+  };
+}
+test("selected execution resolves explicit vault bindings instead of inheriting ambient credentials", async () => {
+  const f = await fixture('console.log(process.env.DECLARED_FIXTURE ? "bound" : "missing")', { env: ["DECLARED_FIXTURE"] });
+  let reads = 0;
+  const result = await executeSelectedLocal(f.resolved, {
+    secretBindings: bindingsFor(f),
+    createSecretsClient: () => ({
+      baseUrl: "https://vault.example.com/v1",
+      async getSecret({ key }: { key: string }) { reads++; return { key, value: crypto.randomUUID() }; },
+    }),
+  });
+  roots.push(result.runDirectory);
+  expect(result.exitCode).toBe(0); expect(result.stdout).toBe("bound\n"); expect(reads).toBe(1);
+});
+
+test("all binding scopes and declared names are checked before any vault access", async () => {
+  const f = await fixture('throw new Error("must not run")', { env: ["DECLARED_FIXTURE"] });
+  const changes: Array<(b: SelectedSecretBindings) => void> = [
+    ...["authority", "workspaceId", "profileId", "profileRevision", "slug", "version", "bundleDigest"].map(key => (b: SelectedSecretBindings) => { (b.selection as unknown as Record<string, string>)[key] = "wrong"; }),
+    b => { b.consumer.stationId = "wrong-station"; }, b => { b.consumer.workspaceDirectory += "/elsewhere"; },
+    b => { b.bindings = {}; }, b => { b.bindings.EXTRA = "demo/other"; }, b => { b.bindings.DECLARED_FIXTURE = "../outside"; },
+    b => { b.secretsAuthority = "http://vault.example.com/v1"; }, b => { (b as any).value = "not-a-binding"; },
+  ];
+  let factories = 0;
+  for (const change of changes) {
+    const binding = bindingsFor(f); change(binding);
+    await expect(executeSelectedLocal(f.resolved, { secretBindings: binding, createSecretsClient: () => { factories++; throw new Error("unexpected client"); } })).rejects.toBeInstanceOf(Error);
+  }
+  expect(factories).toBe(0);
+});
+
+test("vault errors, wrong authorities and expired or mismatched values fail without ambient fallback", async () => {
+  const f = await fixture('throw new Error("must not run")', { env: ["DECLARED_FIXTURE"] });
+  let reads = 0;
+  await expect(executeSelectedLocal(f.resolved, { secretBindings: bindingsFor(f), createSecretsClient: () => ({ baseUrl: "https://other.example.com/v1", async getSecret() { reads++; throw new Error(); } }) })).rejects.toMatchObject({ code: "SECRET_BINDING_AUTHORITY_MISMATCH" });
+  expect(reads).toBe(0);
+  const privateError = crypto.randomUUID();
+  const providers: Array<SelectedSecretsClient["getSecret"]> = [
+    async () => { throw new Error(privateError); },
+    async () => ({ key: "wrong-key", value: privateError }),
+    async ({ key }) => ({ key, value: privateError, expires_at: "2000-01-01T00:00:00Z" }),
+    async ({ key }) => ({ key, value: privateError, expires_at: "invalid" }),
+    async ({ key }) => ({ key, value: "" }), async ({ key }) => ({ key, value: "a\0b" }),
+  ];
+  const old = process.env.DECLARED_FIXTURE; process.env.DECLARED_FIXTURE = privateError;
+  try {
+    for (const getSecret of providers) {
+      let caught: any;
+      try { await executeSelectedLocal(f.resolved, { secretBindings: bindingsFor(f), createSecretsClient: () => ({ baseUrl: "https://vault.example.com/v1", getSecret }) }); } catch (error) { caught = error; }
+      expect(caught?.code).toBe("LOCAL_SECRET_UNAVAILABLE"); expect(caught?.message).not.toContain(privateError);
+    }
+  } finally { if (old === undefined) delete process.env.DECLARED_FIXTURE; else process.env.DECLARED_FIXTURE = old; }
+});
+
+test("secret rotation is fresh, returned output is redacted, and execution files contain no values", async () => {
+  const f = await fixture('console.log(JSON.stringify({ value: process.env.DECLARED_FIXTURE })); console.error(Buffer.from(process.env.DECLARED_FIXTURE!).toString("base64"))', { env: ["DECLARED_FIXTURE"] });
+  const values = [crypto.randomUUID(), crypto.randomUUID()]; let reads = 0;
+  for (let index = 0; index < values.length; index++) {
+    const result = await executeSelectedLocal(f.resolved, { secretBindings: bindingsFor(f), createSecretsClient: () => ({ baseUrl: "https://vault.example.com/v1", async getSecret({ key }) { return { key, value: values[reads++]! }; } }) });
+    roots.push(result.runDirectory);
+    expect(result.exitCode).toBe(0); expect(JSON.parse(result.stdout)).toEqual({ value: "[REDACTED]" }); expect(result.stderr).toBe("[REDACTED]\n");
+    for (const value of values) {
+      expect(JSON.stringify(result)).not.toContain(value);
+      expect(readFileSync(join(result.runDirectory, ".execution-receipt.json"), "utf8")).not.toContain(value);
+    }
+  }
+  expect(reads).toBe(2);
+});
+
+test("runtime control injection and mixed credential mechanisms are refused", async () => {
+  for (const name of ["PATH", "HOME", "NODE_OPTIONS", "BUN_OPTIONS", "PYTHONPATH", "LD_PRELOAD", "SKILLS_INPUT_JSON"]) {
+    await expect(executeSelectedLocal((await fixture("", { env: [name] })).resolved, { env: { [name]: "synthetic" } })).rejects.toMatchObject({ code: "INVALID_SKILL_MANIFEST" });
+  }
+  const f = await fixture("", { env: ["DECLARED_FIXTURE"] });
+  await expect(executeSelectedLocal(f.resolved, { secretBindings: bindingsFor(f), env: { DECLARED_FIXTURE: "synthetic" } })).rejects.toMatchObject({ code: "INVALID_SECRET_BINDINGS" });
+  await expect(executeSelectedLocal((await fixture("", { env: ["DUPLICATE", "DUPLICATE"] })).resolved)).rejects.toMatchObject({ code: "INVALID_SKILL_MANIFEST" });
 });

@@ -7,7 +7,8 @@ import chalk from "chalk";
 import { createHash, randomUUID } from "node:crypto";
 import { CloudExecutionClient } from "../../lib/cloud-executions.js";
 import { requiresCliSkillLoading } from "../../lib/managed-policy.js";
-import { resolveSelectedRun, executeSelectedLocal } from "../../lib/selected-run.js";
+import { resolveSelectedRun, executeSelectedLocal, prepareSelectedSecretBindings } from "../../lib/selected-run.js";
+import { readSelectedSecretBindings } from "../../lib/execution-secrets.js";
 import { selectedProfileId, contextResolverOptions } from "./context.js";
 import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "fs";
 import { basename, dirname, isAbsolute, join } from "path";
@@ -58,6 +59,8 @@ export function registerRuntime(parent: Command) {
     .option("--json", "Output result as JSON", false)
     .option("--remote", "Run on the configured server, using its catalog and quote", false)
     .option("--target <target>", "Execution target: local or cloud")
+    .option("--secret-bindings <path>", "Reviewed, exact-selection local execution vault bindings (JSON file)")
+    .option("--secret-bindings-template", "Print a scoped bindings template without resolving secrets or running the skill", false)
     .option("--input <json>", "Structured cloud execution input")
     .option("--skill-version <version>", "Exact selected skill version")
     .option("--selection-profile <id>", "Selected Skills profile")
@@ -437,6 +440,8 @@ function promptLine(question: string): Promise<string | null> {
 interface RunCommandOptions {
   json: boolean;
   target?: string;
+  secretBindings?: string;
+  secretBindingsTemplate?: boolean;
   input?: string;
   skillVersion?: string;
   selectionProfile?: string;
@@ -458,9 +463,9 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   // Commander preserves arguments after <skill>. Reserve run-control options
   // for selected executions, and keep legacy skill arguments unchanged.
   const targetIndex = args.indexOf("--target");
-  if ((managed && !options.remote) || options.target || targetIndex >= 0) {
+  if ((managed && !options.remote) || options.target || targetIndex >= 0 || options.secretBindings || options.secretBindingsTemplate || args.includes("--secret-bindings") || args.includes("--secret-bindings-template")) {
     options = { ...options }; args = [...args];
-    for (const [flag, key] of [["--target", "target"], ["--input", "input"], ["--skill-version", "skillVersion"], ["--selection-profile", "selectionProfile"], ["--session", "session"], ["--idempotency-key", "idempotencyKey"], ["--poll-timeout-ms", "pollTimeoutMs"], ["--poll-interval-ms", "pollIntervalMs"]] as const) {
+    for (const [flag, key] of [["--target", "target"], ["--secret-bindings", "secretBindings"], ["--input", "input"], ["--skill-version", "skillVersion"], ["--selection-profile", "selectionProfile"], ["--session", "session"], ["--idempotency-key", "idempotencyKey"], ["--poll-timeout-ms", "pollTimeoutMs"], ["--poll-interval-ms", "pollIntervalMs"]] as const) {
       const at = args.indexOf(flag);
       if (at >= 0) {
         const value = args[at + 1];
@@ -470,7 +475,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         options[key] = value; args.splice(at, 2);
       }
     }
-    for (const [flag, key] of [["--json", "json"], ["--wait", "wait"], ["--cached", "cached"], ["--remote", "remote"]] as const) {
+    for (const [flag, key] of [["--json", "json"], ["--secret-bindings-template", "secretBindingsTemplate"], ["--wait", "wait"], ["--cached", "cached"], ["--remote", "remote"]] as const) {
       const at = args.indexOf(flag); if (at >= 0) { options[key] = true; args.splice(at, 1); }
     }
   }
@@ -480,7 +485,10 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     console.error("Conflicting --remote and --target execution modes"); process.exitCode = 1; return;
   }
   if (options.target && !["local", "cloud"].includes(options.target)) { console.error("Execution target must be local or cloud"); process.exitCode = 1; return; }
-  if (options.target === "cloud" || (managed && !options.remote)) {
+  if ((options.secretBindings || options.secretBindingsTemplate) && (options.target !== "local" || options.remote || options.cached || (options.secretBindings && options.secretBindingsTemplate))) {
+    console.log(JSON.stringify({ error: "Secret bindings require --target local and a fresh API selection; cached and remote execution are not supported.", exitCode: 1 })); process.exitCode = 1; return;
+  }
+  if (options.target === "cloud" || options.target === "local" || (managed && !options.remote)) {
     try {
       let input: unknown = {};
       if (options.input !== undefined) { try { input = JSON.parse(options.input); } catch { throw new Error("Run --input must be valid JSON"); } }
@@ -489,7 +497,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       if (namedVersion && options.skillVersion && namedVersion !== options.skillVersion) throw new Error("Conflicting exact skill versions");
       let slug = at > 0 ? name.slice(0, at) : name;
       let version = options.skillVersion ?? namedVersion;
-      const selected = managed ? await resolveSelectedRun(version ? `${slug}@${version}` : slug, selectedProfileId(options.selectionProfile), {
+      const selected = managed || options.target === "local" ? await resolveSelectedRun(version ? `${slug}@${version}` : slug, selectedProfileId(options.selectionProfile), {
         ...contextResolverOptions({ cached: options.cached }), projectDir: process.cwd(), sessionId: options.session,
       }) : undefined;
       if (selected?.kind === "instruction") throw new Error("This selected skill contains instructions. Use skills load instead of skills run.");
@@ -497,7 +505,10 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       if (options.target !== "cloud") {
         if (!selected) throw new Error("A selected skill is required for managed execution");
         if (options.file?.length) throw new Error("Selected local execution accepts arguments and structured --input only");
-        const result = await executeSelectedLocal(selected, { args, input, cwd: process.cwd() });
+        if (options.secretBindingsTemplate) {
+          await writeCliOutput(JSON.stringify(await prepareSelectedSecretBindings(selected), null, 2)); return;
+        }
+        const result = await executeSelectedLocal(selected, { args, input, cwd: process.cwd(), ...(options.secretBindings ? { secretBindings: readSelectedSecretBindings(options.secretBindings) } : {}) });
         if (options.json) await writeCliOutput(JSON.stringify(result, null, 2));
         else { await writeCliOutput(result.stdout, false); process.stderr.write(result.stderr); console.error(JSON.stringify({ selection: result.selection, target: result.target, exitCode: result.exitCode, runDirectory: result.runDirectory })); }
         process.exitCode = result.exitCode;
