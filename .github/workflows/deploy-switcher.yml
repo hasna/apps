@@ -396,15 +396,19 @@ jobs:
           scan_complete=false
           for _ in {1..60}; do
             response="$(aws ecr describe-image-scan-findings --repository-name "${EXPECTED_ECR_REPOSITORY}" --image-id imageDigest="${digest}" --query '{status:imageScanStatus.status,counts:imageScanFindings.findingSeverityCounts}' --output json 2>/dev/null || true)"
-            status="$(jq -r '.status // ""' <<<"${response:-{}}")"
-            if [[ "${status}" == "COMPLETE" ]]; then scan_complete=true; break; fi
+            if [[ -z "${response}" ]]; then response='{}'; fi
+            status="$(jq -r '.status // ""' <<<"${response}")"
+            if [[ "${status}" == "COMPLETE" ]]; then
+              findings="$(jq -ce '.counts | if type == "object" then . else error("invalid counts") end' <<<"${response}")"
+              scan_complete=true
+              break
+            fi
             [[ -z "${status}" || "${status}" == "IN_PROGRESS" ]] || { echo "bootstrap image scan entered terminal status ${status}" >&2; exit 1; }
             sleep 15
           done
           [[ "${scan_complete}" == "true" ]] || { echo "bootstrap image scan did not complete" >&2; exit 1; }
-          critical="$(jq -r '.counts.CRITICAL // 0' <<<"${response}")"
-          high="$(jq -r '.counts.HIGH // 0' <<<"${response}")"
-          [[ "${critical}" =~ ^[0-9]+$ && "${high}" =~ ^[0-9]+$ ]]
+          critical="$(jq -er '(if has("CRITICAL") then .CRITICAL else 0 end) | numbers | select(. >= 0 and floor == .)' <<<"${findings}")"
+          high="$(jq -er '(if has("HIGH") then .HIGH else 0 end) | numbers | select(. >= 0 and floor == .)' <<<"${findings}")"
           (( critical == 0 && high == 0 )) || { echo "bootstrap image scan rejected the candidate: critical=${critical}, high=${high}" >&2; exit 1; }
           {
             printf 'digest=%s\n' "${digest}"
