@@ -416,9 +416,10 @@ test("Hermes compiled native adapter emits selected context through shlex comman
     put(join(f.a.home, ".hermes/shell-hooks-allowlist.json"), JSON.stringify({ approvals: definitions }));
     await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
     const python = Bun.which("python3"); if (!python) throw new Error("Python shlex is required for Hermes adapter verification");
-    async function invoke(event: string, payload: unknown) {
+    async function invoke(event: string, payload: unknown, terminalCwd = f.a.project) {
       const command = definitions.find(entry => entry.event === event)!.command;
-      const child = Bun.spawn([python!, "-c", "import shlex,subprocess,sys; sys.exit(subprocess.call(shlex.split(sys.argv[1])))", command], { cwd: f.a.project, env: f.a.env, stdin: new Blob([JSON.stringify(payload)]), stdout: "pipe", stderr: "pipe" });
+      // Native Hermes supplies TERMINAL_CWD before invoking these commands.
+      const child = Bun.spawn([python!, "-c", "import shlex,subprocess,sys; sys.exit(subprocess.call(shlex.split(sys.argv[1])))", command], { cwd: f.a.project, env: { ...f.a.env, TERMINAL_CWD: terminalCwd }, stdin: new Blob([JSON.stringify(payload)]), stdout: "pipe", stderr: "pipe" });
       const timeout = setTimeout(() => child.kill("SIGKILL"), 12_000);
       try { const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]); expect(stderr).toBe(""); expect(exitCode).toBe(0); return JSON.parse(stdout); }
       finally { clearTimeout(timeout); }
@@ -430,6 +431,10 @@ test("Hermes compiled native adapter emits selected context through shlex comman
     const requestCount = f.requests.length;
     const tool = { cwd: f.a.project, hook_event_name: "pre_tool_call", tool_name: "skill_view", tool_input: { name: "skills-cli" } };
     expect(await invoke("pre_tool_call", tool)).toEqual({ action: "continue" });
+    for (const terminalCwd of [f.a.home, "."]) {
+      expect((await invoke("pre_llm_call", input, terminalCwd)).context).toContain("Required Skills context is unavailable");
+      expect((await invoke("pre_tool_call", tool, terminalCwd)).action).toBe("block");
+    }
     for (const body of [[], { ...tool, tool_input: { name: "review-code" } }, { ...tool, tool_name: "skill_manage" }]) expect((await invoke("pre_tool_call", body)).action).toBe("block");
     expect(f.requests).toHaveLength(requestCount);
     put(join(f.a.home, ".hermes/skills/reintroduced/SKILL.md"), "Native fallback must never load.\n");

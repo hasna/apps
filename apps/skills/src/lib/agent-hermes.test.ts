@@ -140,6 +140,51 @@ test("Hermes matches native external-dir whitespace/tilde roots and refuses unsu
   expect(() => install(f)).toThrow("tilde");
 });
 
+test("Hermes normal startup TERMINAL_CWD matches the checked process directory", () => {
+  const f = fixture(), cwd = process.cwd(), previous = process.env.TERMINAL_CWD;
+  try {
+    process.chdir(f.home); process.env.TERMINAL_CWD = process.cwd();
+    expect(() => install(f)).not.toThrow(); trust(f);
+    expect(() => check(f)).not.toThrow();
+    expect(planAgentIntegration({ ...f, agents: [...f.agents] }).changes).toEqual([]);
+    put(join(f.home, ".agents/skills/unmanaged/SKILL.md"), "Synthetic unmanaged instructions\n");
+    expect(() => check(f)).toThrow("native skill copies");
+  } finally {
+    process.chdir(cwd);
+    if (previous === undefined) delete process.env.TERMINAL_CWD; else process.env.TERMINAL_CWD = previous;
+  }
+});
+
+test("Hermes checks its effective working directory even when an SDK caller supplies another project", () => {
+  const f = fixture(), effective = fixture().home, cwd = process.cwd(), previous = process.env.TERMINAL_CWD;
+  try {
+    delete process.env.TERMINAL_CWD; install(f); trust(f);
+    process.chdir(effective); process.env.TERMINAL_CWD = process.cwd();
+    expect(() => check(f)).not.toThrow();
+    put(join(effective, ".agents/skills/unmanaged/SKILL.md"), "Synthetic effective-project instructions\n");
+    expect(() => check(f)).toThrow("native skill copies");
+  } finally {
+    process.chdir(cwd);
+    if (previous === undefined) delete process.env.TERMINAL_CWD; else process.env.TERMINAL_CWD = previous;
+  }
+});
+
+test("Hermes TERMINAL_CWD cannot redirect discovery through relative paths or aliases", () => {
+  const f = fixture(), cwd = process.cwd(), previous = process.env.TERMINAL_CWD;
+  try {
+    process.chdir(f.home); delete process.env.TERMINAL_CWD; install(f); trust(f);
+    const alias = join(f.home, "alias"); symlinkSync(f.home, alias);
+    for (const target of [".", " ", f.home + "/.", f.home + "/", alias, join(f.home, "other-project")]) {
+      process.env.TERMINAL_CWD = target;
+      expect(() => install(f)).toThrow("TERMINAL_CWD");
+      expect(() => check(f)).toThrow("TERMINAL_CWD");
+    }
+  } finally {
+    process.chdir(cwd);
+    if (previous === undefined) delete process.env.TERMINAL_CWD; else process.env.TERMINAL_CWD = previous;
+  }
+});
+
 test("Hermes refuses TERMINAL_CWD instead of certifying a different trusted project", () => {
   const f = fixture(), previous = process.env.TERMINAL_CWD;
   try { process.env.TERMINAL_CWD = join(f.home, "other-project"); expect(() => install(f)).toThrow("TERMINAL_CWD"); }

@@ -534,7 +534,7 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
   const expected = canonicalAgentPath(join(home, AGENT_ADAPTERS[agent].root, CLI_BRIDGE_NAME), aliases);
   if (!isOwnedCliBridge(expected, [expected])) throw new Error("NATIVE_SKILL_DRIFT: the native Skills bridge is missing or modified; repair it before continuing");
   const roots = new Set<string>();
-  for (const project of [options.projectDir ?? process.cwd(), ...(options.projectDirs ?? [])]) {
+  for (const project of [options.projectDir ?? process.cwd(), ...(options.projectDirs ?? []), ...(agent === "hermes" && process.env.TERMINAL_CWD ? [process.cwd()] : [])]) {
     for (let path = resolve(project), depth = 0; ; depth++) {
       if (depth >= 100) throw new Error("NATIVE_SKILL_DRIFT: project ancestor discovery limit exceeded");
       roots.add(path); const parent = dirname(path); if (parent === path) break; path = parent;
