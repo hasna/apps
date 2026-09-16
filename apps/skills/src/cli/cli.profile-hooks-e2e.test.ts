@@ -238,10 +238,15 @@ test("built Gemini hook selects the user's request after its native SessionStart
     expect(result.hookSpecificOutput.hookEventName).toBe("BeforeAgent");
     expect(result.hookSpecificOutput.additionalContext).toContain("name: backup-verify");
     expect(result.hookSpecificOutput.additionalContext).not.toContain("name: skills-author");
-    // Arbitrary hook context still participates in selection; it is not erased.
-    const arbitrary = await invoke(`<hook_context>skills skill authoring workspace</hook_context>\n\n${user}`);
+    // Arbitrary hook context still participates in keyword selection; it is not erased.
+    const arbitrary = await invoke(`<hook_context>skills skill authoring workspace</hook_context>\n\n${user.replace("backup-verify", "backup verify")}`);
     expect(arbitrary.hookSpecificOutput.additionalContext).toContain("name: skills-author");
     expect(arbitrary.hookSpecificOutput.additionalContext).not.toContain("name: backup-verify");
+    // A complete name takes priority even when other context matches more keywords.
+    const named = await invoke(`<hook_context>skills skill authoring workspace</hook_context>\n\n${user}`);
+    expect(named.hookSpecificOutput.additionalContext).toContain("name: backup-verify");
+    expect(named.hookSpecificOutput.additionalContext).not.toContain("name: skills-author");
+    expect(named.hookSpecificOutput.additionalContext).toContain("skills load skills-author@1.0.0");
     expect(f.requests).toHaveLength(requestsBefore);
   } finally { await f.close(); }
 });
