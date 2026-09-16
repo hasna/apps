@@ -677,14 +677,14 @@ jobs:
           deployed_definition="$(aws ecs describe-task-definition --task-definition "${DEPLOYED_TASK_DEFINITION}" --output json)"
           deployed_image="$(jq -er --arg c "${WEB_CONTAINER}" '.taskDefinition.containerDefinitions[] | select(.name == $c) | .image' <<<"${deployed_definition}")"
           [[ "${deployed_image}" == "${IMAGE}" ]] || { echo "live task definition image digest mismatch" >&2; exit 1; }
-          curl --fail --silent --show-error --retry 5 --retry-all-errors --max-time 15 "${HEALTH_URL}" >/dev/null
-          ready_json="$(curl --fail --silent --show-error --retry 5 --retry-all-errors --max-time 15 "${PUBLIC_BASE_URL}/ready")"
-          [[ "$(jq -r '.status' <<<"${ready_json}")" == "ready" ]] || { echo "public readiness response was not ready" >&2; exit 1; }
           expected_version="$(node -p 'require("./package.json").version')"
-          version_json="$(curl --fail --silent --show-error --retry 5 --retry-all-errors --max-time 15 "${PUBLIC_BASE_URL}/version")"
-          [[ "$(jq -r '.version' <<<"${version_json}")" == "${expected_version}" ]] || { echo "public version does not match the deployed package" >&2; exit 1; }
-          anonymous_status="$(curl --silent --show-error --max-time 15 --output /dev/null --write-out '%{http_code}' "${PUBLIC_BASE_URL}/v1/providers")"
-          [[ "${anonymous_status}" == "401" || "${anonymous_status}" == "403" ]] || { echo "anonymous Switcher API request was not denied" >&2; exit 1; }
+          bash scripts/ci/verify-public-api.sh "${HEALTH_URL%/ready}" "${expected_version}"
+          # First routing is deliberately coordinated here: the operator proves
+          # the deployed origin with its client credential before activating the
+          # reviewed gateway artifact. No release receipt is emitted while this
+          # bounded wait is pending; a timeout still invokes the rollback below.
+          echo "::notice title=Switcher origin verified::source=${SOURCE_SHA} image=${IMAGE} taskDefinition=${DEPLOYED_TASK_DEFINITION}; awaiting canonical route acceptance (maximum 20 minutes)"
+          bash scripts/ci/verify-public-api.sh "${PUBLIC_BASE_URL}" "${expected_version}" --wait-for-route
 
           jq -n \
             --arg source_sha "${SOURCE_SHA}" \

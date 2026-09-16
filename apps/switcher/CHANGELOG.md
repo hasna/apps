@@ -4,10 +4,16 @@ title: "Switcher changelog"
 type: "release-notes"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:54:59Z"
-updated_at: "2026-09-16T06:10:00Z"
+updated_at: "2026-09-16T20:04:05Z"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+## 0.2.5
+
+### Patch Changes
+
+- Start the Docker server with an explicit all-interface bind so container networking and load balancer health checks can reach it. Remove the unused HOST environment setting while preserving the CLI loopback default and authentication requirements.
 
 ## 0.2.4
 

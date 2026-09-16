@@ -182,10 +182,12 @@ describe("monorepo deploy context (hasna/apps)", () => {
   });
 
   test("verifies the public boundary and provisions the fleet key only after deploy", () => {
-    expect(workflow).toContain('${PUBLIC_BASE_URL}/ready');
-    expect(workflow).toContain('${PUBLIC_BASE_URL}/version');
-    expect(workflow).toContain('${PUBLIC_BASE_URL}/v1/providers');
-    expect(workflow).toContain('anonymous_status');
+    const publicVerifier = readFileSync(join(import.meta.dir, "verify-public-api.sh"), "utf8");
+    expect(workflow).toContain('bash scripts/ci/verify-public-api.sh "${PUBLIC_BASE_URL}" "${expected_version}" --wait-for-route');
+    expect(publicVerifier).toContain('request /ready');
+    expect(publicVerifier).toContain('request /version');
+    expect(publicVerifier).toContain('request /v1/providers');
+    expect(publicVerifier).toContain('anonymous Switcher API request was not denied by authentication');
     expect(workflow).toContain('needs: [gate, deploy]');
     expect(workflow).toContain('uses: ./.github/workflows/fleet-key-provision.yml');
     expect(workflow).toContain('app: switcher');
