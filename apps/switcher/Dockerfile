@@ -15,8 +15,7 @@ RUN bun run generate \
 
 FROM --platform=linux/arm64 oven/bun:1.3.14-alpine AS runtime
 ENV NODE_ENV=production \
-    PORT=8080 \
-    HOST=0.0.0.0
+    PORT=8080
 WORKDIR /app
 RUN apk upgrade --no-cache \
  && apk add --no-cache ca-certificates wget \
@@ -38,4 +37,4 @@ USER bun
 EXPOSE 8080
 HEALTHCHECK --interval=20s --timeout=5s --start-period=15s --retries=3 \
   CMD bun -e 'fetch("http://127.0.0.1:8080/ready").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'
-CMD ["switcher-serve"]
+CMD ["switcher-serve", "--host", "0.0.0.0"]
