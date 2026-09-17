@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KNOWLEDGE_BOUNDED_QUERY_CAPABILITY } from '../src/query-contract';
@@ -124,5 +124,68 @@ describe('KnowledgeService bounded producer query path', () => {
     expect(result.context.results[0]!.scores.keyword).toBe(0.875);
     expect(result.context.search_counts.keyword_results).toBe(7);
     expect(result.answer).toContain('relevant knowledge excerpt');
+  });
+
+  test('hosted and local context packs enforce the same token and UTF-8 byte ceilings', async () => {
+    const maxTokens = 800;
+    const maxBytes = 3_200;
+    const hosted = await serviceFor('hosted-pack-budget').contextPack({
+      query: 'producer doctrine',
+      limit: 1,
+      maxItems: 1,
+      maxTokens,
+      maxBytes,
+    });
+    expectOneProducerRequest('producer doctrine');
+
+    const localHome = mkdtempSync(join(tmpdir(), 'knowledge-local-pack-budget-'));
+    const dbPath = join(localHome, 'knowledge.db');
+    const sourcePath = join(localHome, 'source.md');
+    writeFileSync(sourcePath, producerItem.content);
+    const childEnv = { ...process.env, HASNA_KNOWLEDGE_LOCAL: '1' } as Record<string, string>;
+    delete childEnv.HASNA_KNOWLEDGE_API_URL;
+    delete childEnv.HASNA_KNOWLEDGE_API_KEY;
+    delete childEnv.KNOWLEDGE_API_KEY;
+    const localScript = `
+      import { buildKnowledgeAgentContextPack } from ${JSON.stringify(new URL('../src/context-pack.ts', import.meta.url).href)};
+      import { ingestSourceRef } from ${JSON.stringify(new URL('../src/source-ingest.ts', import.meta.url).href)};
+      import { defaultKnowledgeConfig, workspaceForHome } from ${JSON.stringify(new URL('../src/workspace.ts', import.meta.url).href)};
+      import { resolveSafetyPolicy } from ${JSON.stringify(new URL('../src/safety.ts', import.meta.url).href)};
+      const dbPath = ${JSON.stringify(dbPath)};
+      const localHome = ${JSON.stringify(localHome)};
+      await ingestSourceRef({ dbPath, sourceRef: ${JSON.stringify(`file://${sourcePath}`)}, purpose: 'knowledge_index' });
+      const pack = await buildKnowledgeAgentContextPack({
+        dbPath,
+        safetyPolicy: resolveSafetyPolicy(defaultKnowledgeConfig(), workspaceForHome(localHome)),
+        source: 'search',
+        query: 'producer doctrine',
+        maxItems: 1,
+        maxTokens: ${maxTokens},
+        maxBytes: ${maxBytes},
+      });
+      console.log(JSON.stringify(pack));
+    `;
+    const child = Bun.spawn([process.execPath, '--eval', localScript], {
+      env: childEnv,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [exitCode, localStdout, localStderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(exitCode, localStderr).toBe(0);
+    const local = JSON.parse(localStdout);
+
+    for (const pack of [hosted, local]) {
+      expect(pack.budgets.max_tokens).toBe(maxTokens);
+      expect(pack.budgets.max_bytes).toBe(maxBytes);
+      expect(pack.budgets.estimated_tokens).toBeLessThanOrEqual(maxTokens);
+      expect(pack.budgets.encoded_bytes).toBeLessThanOrEqual(maxBytes);
+      expect(pack.budgets.token_budget_exceeded).toBe(false);
+      expect(pack.budgets.byte_budget_exceeded).toBe(false);
+      expect(Buffer.byteLength(JSON.stringify(pack))).toBeLessThanOrEqual(maxBytes);
+    }
   });
 });

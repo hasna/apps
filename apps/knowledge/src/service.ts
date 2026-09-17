@@ -33,7 +33,13 @@ import {
   fetchAllHttpItems,
   type KnowledgeHttpStore,
 } from './http-store';
-import { buildKnowledgeAgentContextPack, type KnowledgeAgentContextPack, type KnowledgeAgentContextPackOptions } from './context-pack';
+import {
+  buildKnowledgeAgentContextPack,
+  fitKnowledgeAgentContextPackToBudget,
+  resolveKnowledgeContextPackBudgets,
+  type KnowledgeAgentContextPack,
+  type KnowledgeAgentContextPackOptions,
+} from './context-pack';
 import {
   proposeKnowledgeSyncConflictResolutionWithAi,
   type KnowledgeSyncConflictAiProposalOptions,
@@ -1034,11 +1040,6 @@ function legacyStorePathForRead(scope: string, workspace: KnowledgeWorkspace, pr
   return current;
 }
 
-function estimateTokensForValue(value: unknown): number {
-  const text = JSON.stringify(value);
-  return Math.max(1, Math.ceil(text.length / 4));
-}
-
 function compactText(value: string | null | undefined, maxChars: number): string {
   const normalized = (value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ');
   if (normalized.length <= maxChars) return normalized;
@@ -1059,8 +1060,7 @@ function legacyAgentContextPack(
   const source = options.source ?? 'search';
   const purpose = options.purpose ?? (source === 'loops' || source === 'runs' ? 'proposal' : 'agent_context');
   const query = (options.query ?? options.topic ?? context.query).normalize('NFKC').trim().replace(/\s+/g, ' ');
-  const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
-  const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 100000));
+  const { maxItems, maxTokens, maxBytes } = resolveKnowledgeContextPackBudgets(options);
   let redactions = 0;
   const citations = context.citations.slice(0, Math.max(maxItems * 2, maxItems)).map((citation, index) => {
     const quote = redactPreviewForPack(citation.quote, policy, index < 3 ? 220 : 140);
@@ -1130,11 +1130,14 @@ function legacyAgentContextPack(
     budgets: {
       max_tokens: maxTokens,
       estimated_tokens: 0,
+      max_bytes: maxBytes,
+      encoded_bytes: 0,
       max_items: maxItems,
       items_included: evidence.length,
       items_available: context.excerpts.length,
       items_truncated: Math.max(0, context.excerpts.length - evidence.length),
       token_budget_exceeded: false,
+      byte_budget_exceeded: false,
     },
     safety: {
       raw_artifact_content_included: false,
@@ -1164,10 +1167,7 @@ function legacyAgentContextPack(
     warnings,
     message: `${evidence.length} bounded evidence item(s), estimated under ${maxTokens} token(s)`,
   };
-  pack.budgets.estimated_tokens = estimateTokensForValue(pack);
-  pack.budgets.token_budget_exceeded = pack.budgets.estimated_tokens > maxTokens;
-  pack.message = `${pack.evidence.length} bounded evidence item(s), estimated ${pack.budgets.estimated_tokens}/${maxTokens} token(s)`;
-  return pack;
+  return fitKnowledgeAgentContextPackToBudget(pack);
 }
 
 function emptyReindexHealth(): ReturnType<typeof reindexHealth> {
@@ -1233,13 +1233,12 @@ function emptyAgentContextPack(
   const source = options.source ?? 'search';
   const purpose = options.purpose ?? (source === 'loops' || source === 'runs' ? 'proposal' : 'agent_context');
   const query = (options.query ?? options.topic ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ');
-  const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
-  const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 100000));
+  const { maxItems, maxTokens, maxBytes } = resolveKnowledgeContextPackBudgets(options);
   const idempotencyKey = `ctx_${createHash('sha256')
     .update(['empty', source, purpose, query, options.topic ?? '', options.since ?? ''].join('\u0000'))
     .digest('hex')
     .slice(0, 20)}`;
-  return {
+  return fitKnowledgeAgentContextPackToBudget({
     ok: true,
     format: 'knowledge-agent-context-pack',
     version: 1,
@@ -1254,11 +1253,14 @@ function emptyAgentContextPack(
     budgets: {
       max_tokens: maxTokens,
       estimated_tokens: 0,
+      max_bytes: maxBytes,
+      encoded_bytes: 0,
       max_items: maxItems,
       items_included: 0,
       items_available: 0,
       items_truncated: 0,
       token_budget_exceeded: false,
+      byte_budget_exceeded: false,
     },
     safety: {
       raw_artifact_content_included: false,
@@ -1281,7 +1283,7 @@ function emptyAgentContextPack(
     },
     warnings: ['knowledge_db_missing'],
     message: `0 bounded evidence item(s), estimated 0/${maxTokens} token(s)`,
-  };
+  });
 }
 
 function storagePrefixKey(storage: StorageContract): string | null {

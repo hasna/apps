@@ -14,6 +14,7 @@ import {
 } from './client-transport.ts';
 import { parseSourceRef } from './source-ref.ts';
 import { createKnowledgeService } from './service.ts';
+import { projectKnowledgeContextResult, projectKnowledgeSearchResult } from './search-output.ts';
 import { getStorageStatus as getDatabaseStorageStatus } from './storage.ts';
 
 const storePathField = z.string().optional().describe('Path to the JSON store file');
@@ -1272,10 +1273,13 @@ export function buildServer() {
     model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+    detail: z.enum(['compact', 'full', 'legacy']).optional().describe('Additive response detail. Omitted/legacy preserves the historical full response; compact returns bounded previews.'),
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake, detail }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.search({ query, limit, semantic, modelRef: model, dimensions, fake }) });
+      const result = await service.search({ query, limit, semantic, modelRef: model, dimensions, fake });
+      const projected = detail ? projectKnowledgeSearchResult(result, { detail }) : result;
+      return detail === 'compact' ? compactJsonText({ ok: true, ...projected }) : jsonText({ ok: true, ...projected });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -1289,22 +1293,26 @@ export function buildServer() {
     model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+    detail: z.enum(['compact', 'full', 'legacy']).optional().describe('Additive response detail. Omitted/legacy preserves the historical context body; compact removes duplicated raw result bodies.'),
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake, detail }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake }) });
+      const context = await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake });
+      const projected = detail ? projectKnowledgeContextResult(context, { detail }) : context;
+      return detail === 'compact' ? compactJsonText({ ok: true, ...projected }) : jsonText({ ok: true, ...projected });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
   });
 
-  registerTool(server, 'knowledge_context_pack', 'Bounded knowledge context pack', 'Return compact cited JSON for agents under token and item budgets', {
+  registerTool(server, 'knowledge_context_pack', 'Bounded knowledge context pack', 'Return compact cited JSON for agents under enforced token, UTF-8 byte, and item budgets', {
     scope: scopeField,
     query: z.string().optional().describe('Search query or prompt for search packs'),
     topic: z.string().optional().describe('Topic for loop/run proposal packs'),
     from: z.enum(['search', 'loops', 'runs']).optional().describe('Pack source, default search'),
     since: z.string().optional().describe('Run/loop evidence age filter such as 7d or an ISO timestamp'),
     max_tokens: z.number().optional().describe('Approximate maximum JSON token budget'),
+    max_bytes: z.number().optional().describe('Maximum UTF-8 JSON response bytes'),
     max_items: z.number().optional().describe('Maximum evidence items'),
     limit: z.number().optional().describe('Maximum retrieval rows before packing'),
     semantic: z.boolean().optional().describe('Include vector semantic results for search packs'),
@@ -1312,7 +1320,7 @@ export function buildServer() {
     model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
-  }, async ({ scope, query, topic, from, since, max_tokens, max_items, limit, semantic, dedupe, model, dimensions, fake }) => {
+  }, async ({ scope, query, topic, from, since, max_tokens, max_bytes, max_items, limit, semantic, dedupe, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope });
     try {
       return compactJsonText({
@@ -1324,6 +1332,7 @@ export function buildServer() {
           topic,
           since,
           maxTokens: max_tokens,
+          maxBytes: max_bytes,
           maxItems: max_items,
           limit,
           semantic,

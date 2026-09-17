@@ -10678,8 +10678,10 @@ import { createHash as createHash9 } from "crypto";
 var DEFAULT_MAX_TOKENS = 1200;
 var DEFAULT_MAX_ITEMS = 6;
 var MAX_MAX_TOKENS = 12000;
+var MAX_MAX_BYTES = 1048576;
 var MAX_MAX_ITEMS = 50;
 var MIN_MAX_TOKENS = 800;
+var MIN_MAX_BYTES = 2048;
 function stableId5(prefix, value, size = 16) {
   return `${prefix}_${createHash9("sha256").update(value).digest("hex").slice(0, size)}`;
 }
@@ -10769,6 +10771,9 @@ function estimateTokensForText(text) {
 function estimateTokensForValue(value) {
   return estimateTokensForText(JSON.stringify(value));
 }
+function encodedBytesForValue(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
 function coerceMaxTokens(value) {
   if (!Number.isFinite(value ?? NaN))
     return DEFAULT_MAX_TOKENS;
@@ -10776,6 +10781,14 @@ function coerceMaxTokens(value) {
   if (floor < MIN_MAX_TOKENS)
     throw new Error(`--max-tokens must be at least ${MIN_MAX_TOKENS} for the stable context-pack schema.`);
   return Math.min(floor, MAX_MAX_TOKENS);
+}
+function coerceMaxBytes(value, maxTokens) {
+  if (!Number.isFinite(value ?? NaN))
+    return Math.min(maxTokens * 4, MAX_MAX_BYTES);
+  const floor = Math.floor(value);
+  if (floor < MIN_MAX_BYTES)
+    throw new Error(`--max-bytes must be at least ${MIN_MAX_BYTES} for the stable context-pack schema.`);
+  return Math.min(floor, MAX_MAX_BYTES);
 }
 function coerceMaxItems(value, limit) {
   const raw = Number.isFinite(value ?? NaN) ? value : limit;
@@ -11128,20 +11141,55 @@ function syncOutline(pack) {
   pack.outline.bullets = pack.evidence.length > 0 ? pack.evidence.slice(0, 5).map((entry) => `${entry.id}: ${entry.title}`) : ["No matching bounded evidence was found."];
   pack.outline.duplicate_candidate_ids = pack.duplicate_candidates.slice(0, 5).map((entry) => entry.id);
 }
-function fitPackToBudget(pack) {
-  const maxTokens = pack.budgets.max_tokens;
+function updateBudgetMeasurements(pack) {
+  for (let attempt = 0;attempt < 6; attempt += 1) {
+    const estimatedTokens = estimateTokensForValue(pack);
+    const encodedBytes = encodedBytesForValue(pack);
+    if (pack.budgets.estimated_tokens === estimatedTokens && pack.budgets.encoded_bytes === encodedBytes)
+      break;
+    pack.budgets.estimated_tokens = estimatedTokens;
+    pack.budgets.encoded_bytes = encodedBytes;
+  }
+  pack.budgets.token_budget_exceeded = pack.budgets.estimated_tokens > pack.budgets.max_tokens;
+  pack.budgets.byte_budget_exceeded = pack.budgets.encoded_bytes > pack.budgets.max_bytes;
+}
+function resolveKnowledgeContextPackBudgets(options) {
+  const maxTokens = coerceMaxTokens(options.maxTokens);
+  return {
+    maxTokens,
+    maxBytes: coerceMaxBytes(options.maxBytes, maxTokens),
+    maxItems: coerceMaxItems(options.maxItems, options.limit)
+  };
+}
+function fitKnowledgeAgentContextPackToBudget(pack) {
   const warnings = new Set(pack.warnings);
-  while (estimateTokensForValue(pack) > maxTokens) {
+  const syncWarnings = () => {
+    pack.warnings = Array.from(warnings).sort();
+  };
+  syncWarnings();
+  updateBudgetMeasurements(pack);
+  while (pack.budgets.token_budget_exceeded || pack.budgets.byte_budget_exceeded) {
+    const budgetKinds = [
+      pack.budgets.token_budget_exceeded ? "token" : null,
+      pack.budgets.byte_budget_exceeded ? "byte" : null
+    ].filter((value) => Boolean(value));
+    const warn = (suffix) => {
+      for (const kind of budgetKinds)
+        warnings.add(`${suffix}_for_${kind}_budget`);
+      syncWarnings();
+    };
     const longest = pack.evidence.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry.text_preview.length > 180).sort((a, b) => b.entry.text_preview.length - a.entry.text_preview.length)[0];
     if (longest) {
       longest.entry.text_preview = truncateText(longest.entry.text_preview, 180);
-      warnings.add("text_preview_truncated_for_token_budget");
+      warn("text_preview_truncated");
+      updateBudgetMeasurements(pack);
       continue;
     }
     const longCitation = pack.citations.filter((citation) => (citation.quote_preview?.length ?? 0) > 120).sort((a, b) => (b.quote_preview?.length ?? 0) - (a.quote_preview?.length ?? 0))[0];
     if (longCitation?.quote_preview) {
       longCitation.quote_preview = truncateText(longCitation.quote_preview, 120);
-      warnings.add("citation_quote_truncated_for_token_budget");
+      warn("citation_quote_truncated");
+      updateBudgetMeasurements(pack);
       continue;
     }
     if (pack.evidence.length > 0) {
@@ -11152,35 +11200,40 @@ function fitPackToBudget(pack) {
         evidence_ids: candidate.evidence_ids.filter((id) => pack.evidence.some((entry) => entry.id === id))
       })).filter((candidate) => candidate.evidence_ids.length > 1);
       syncOutline(pack);
-      warnings.add("evidence_truncated_for_token_budget");
+      warn("evidence_truncated");
       pruneCitations(pack);
+      updateBudgetMeasurements(pack);
       continue;
     }
     if (pack.outline.next_actions.length > 1) {
       pack.outline.next_actions.pop();
-      warnings.add("outline_truncated_for_token_budget");
+      warn("outline_truncated");
+      updateBudgetMeasurements(pack);
       continue;
     }
-    warnings.add("token_budget_floor_exceeded");
+    for (const kind of budgetKinds)
+      warnings.add(`${kind}_budget_floor_exceeded`);
+    syncWarnings();
     break;
   }
-  pack.warnings = Array.from(warnings).sort();
+  syncWarnings();
   pack.budgets.items_included = pack.evidence.length;
   syncOutline(pack);
-  pack.budgets.estimated_tokens = estimateTokensForValue(pack);
-  pack.budgets.token_budget_exceeded = pack.budgets.estimated_tokens > maxTokens;
-  if (pack.budgets.token_budget_exceeded) {
-    throw new Error(`Unable to build context pack within ${maxTokens} token budget; increase --max-tokens.`);
+  updateBudgetMeasurements(pack);
+  if (pack.budgets.token_budget_exceeded || pack.budgets.byte_budget_exceeded) {
+    const exceeded = [
+      pack.budgets.token_budget_exceeded ? `${pack.budgets.max_tokens} token` : null,
+      pack.budgets.byte_budget_exceeded ? `${pack.budgets.max_bytes} byte` : null
+    ].filter(Boolean).join(" and ");
+    throw new Error(`Unable to build context pack within ${exceeded} budget; increase the corresponding limit.`);
   }
-  pack.message = `${pack.evidence.length} bounded evidence item(s), estimated ${pack.budgets.estimated_tokens}/${maxTokens} token(s)`;
   return pack;
 }
 async function buildKnowledgeAgentContextPack(options) {
   const now = options.now ?? new Date;
   const source = options.source ?? "search";
   const purpose = options.purpose ?? (source === "loops" || source === "runs" ? "proposal" : "agent_context");
-  const maxTokens = coerceMaxTokens(options.maxTokens);
-  const maxItems = coerceMaxItems(options.maxItems, options.limit);
+  const { maxTokens, maxBytes, maxItems } = resolveKnowledgeContextPackBudgets(options);
   const query = normalizeText(options.query ?? options.topic ?? "");
   if (purpose === "proposal" && source !== "search" && !query) {
     throw new Error("Proposal context requires --topic <text> or a positional topic.");
@@ -11220,6 +11273,7 @@ async function buildKnowledgeAgentContextPack(options) {
       options.modelRef ?? "",
       options.limit ?? "",
       maxTokens,
+      maxBytes,
       maxItems,
       sortedEvidence.map((entry) => entry.id).join(","),
       sortedCitations.map((entry) => entry.id).join(",")
@@ -11227,11 +11281,14 @@ async function buildKnowledgeAgentContextPack(options) {
     budgets: {
       max_tokens: maxTokens,
       estimated_tokens: 0,
+      max_bytes: maxBytes,
+      encoded_bytes: 0,
       max_items: maxItems,
       items_included: sortedEvidence.length,
       items_available: draft.available,
       items_truncated: Math.max(0, draft.available - sortedEvidence.length),
-      token_budget_exceeded: false
+      token_budget_exceeded: false,
+      byte_budget_exceeded: false
     },
     safety: {
       raw_artifact_content_included: false,
@@ -11247,7 +11304,7 @@ async function buildKnowledgeAgentContextPack(options) {
     message: `${sortedEvidence.length} bounded evidence item(s), estimated under ${maxTokens} token(s)`
   };
   pruneCitations(pack);
-  return fitPackToBudget(pack);
+  return fitKnowledgeAgentContextPackToBudget(pack);
 }
 
 // src/conflict-agent.ts
@@ -20005,10 +20062,6 @@ function legacyStorePathForRead(scope, workspace, preferred) {
   }
   return current;
 }
-function estimateTokensForValue2(value) {
-  const text = JSON.stringify(value);
-  return Math.max(1, Math.ceil(text.length / 4));
-}
 function compactText(value, maxChars) {
   const normalized = (value ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
   if (normalized.length <= maxChars)
@@ -20024,8 +20077,7 @@ function legacyAgentContextPack(options, context, policy) {
   const source = options.source ?? "search";
   const purpose = options.purpose ?? (source === "loops" || source === "runs" ? "proposal" : "agent_context");
   const query = (options.query ?? options.topic ?? context.query).normalize("NFKC").trim().replace(/\s+/g, " ");
-  const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
-  const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 1e5));
+  const { maxItems, maxTokens, maxBytes } = resolveKnowledgeContextPackBudgets(options);
   let redactions = 0;
   const citations = context.citations.slice(0, Math.max(maxItems * 2, maxItems)).map((citation, index) => {
     const quote = redactPreviewForPack(citation.quote, policy, index < 3 ? 220 : 140);
@@ -20092,11 +20144,14 @@ function legacyAgentContextPack(options, context, policy) {
     budgets: {
       max_tokens: maxTokens,
       estimated_tokens: 0,
+      max_bytes: maxBytes,
+      encoded_bytes: 0,
       max_items: maxItems,
       items_included: evidence.length,
       items_available: context.excerpts.length,
       items_truncated: Math.max(0, context.excerpts.length - evidence.length),
-      token_budget_exceeded: false
+      token_budget_exceeded: false,
+      byte_budget_exceeded: false
     },
     safety: {
       raw_artifact_content_included: false,
@@ -20124,10 +20179,7 @@ function legacyAgentContextPack(options, context, policy) {
     warnings,
     message: `${evidence.length} bounded evidence item(s), estimated under ${maxTokens} token(s)`
   };
-  pack.budgets.estimated_tokens = estimateTokensForValue2(pack);
-  pack.budgets.token_budget_exceeded = pack.budgets.estimated_tokens > maxTokens;
-  pack.message = `${pack.evidence.length} bounded evidence item(s), estimated ${pack.budgets.estimated_tokens}/${maxTokens} token(s)`;
-  return pack;
+  return fitKnowledgeAgentContextPackToBudget(pack);
 }
 function emptyReindexHealth() {
   return {
@@ -20187,10 +20239,9 @@ function emptyAgentContextPack(options) {
   const source = options.source ?? "search";
   const purpose = options.purpose ?? (source === "loops" || source === "runs" ? "proposal" : "agent_context");
   const query = (options.query ?? options.topic ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
-  const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
-  const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 1e5));
+  const { maxItems, maxTokens, maxBytes } = resolveKnowledgeContextPackBudgets(options);
   const idempotencyKey = `ctx_${createHash20("sha256").update(["empty", source, purpose, query, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
-  return {
+  return fitKnowledgeAgentContextPackToBudget({
     ok: true,
     format: "knowledge-agent-context-pack",
     version: 1,
@@ -20205,11 +20256,14 @@ function emptyAgentContextPack(options) {
     budgets: {
       max_tokens: maxTokens,
       estimated_tokens: 0,
+      max_bytes: maxBytes,
+      encoded_bytes: 0,
       max_items: maxItems,
       items_included: 0,
       items_available: 0,
       items_truncated: 0,
-      token_budget_exceeded: false
+      token_budget_exceeded: false,
+      byte_budget_exceeded: false
     },
     safety: {
       raw_artifact_content_included: false,
@@ -20232,7 +20286,7 @@ function emptyAgentContextPack(options) {
     },
     warnings: ["knowledge_db_missing"],
     message: `0 bounded evidence item(s), estimated 0/${maxTokens} token(s)`
-  };
+  });
 }
 function storagePrefixKey(storage) {
   const prefix = storage.artifact_store.s3?.prefix?.replace(/^\/+|\/+$/g, "");
@@ -22123,6 +22177,133 @@ function createKnowledgeService(options = {}) {
   return new KnowledgeService(options);
 }
 
+// src/search-output.ts
+var DEFAULT_SEARCH_PREVIEW_CHARS = 320;
+var DEFAULT_CONTEXT_PREVIEW_CHARS = 520;
+var DEFAULT_CITATION_PREVIEW_CHARS = 240;
+function compactText2(value, maxChars) {
+  if (value === null || value === undefined)
+    return null;
+  const normalized = value.normalize("NFKC").trim().replace(/\s+/g, " ");
+  if (normalized.length <= maxChars)
+    return normalized;
+  if (maxChars <= 3)
+    return normalized.slice(0, Math.max(0, maxChars));
+  return `${normalized.slice(0, maxChars - 3).trim()}...`;
+}
+function boundedPreviewChars(value, fallback) {
+  if (!Number.isFinite(value ?? NaN))
+    return fallback;
+  return Math.max(80, Math.min(Math.floor(value), 2000));
+}
+function compactSource(source) {
+  if (!source)
+    return null;
+  return {
+    uri: compactText2(source.uri, 512),
+    ref: compactText2(source.ref, 512),
+    kind: compactText2(source.kind, 80),
+    revision: compactText2(source.revision, 160),
+    hash: compactText2(source.hash, 160)
+  };
+}
+function compactArtifact(artifact) {
+  if (!artifact)
+    return null;
+  return {
+    uri: compactText2(artifact.uri, 512),
+    path: compactText2(artifact.path, 512),
+    hash: compactText2(artifact.hash, 160),
+    shard_key: compactText2(artifact.shard_key, 160)
+  };
+}
+function compactSearchEntry(entry, options) {
+  const textLength = entry.text?.length ?? 0;
+  const titleLength = entry.title?.length ?? 0;
+  return {
+    kind: entry.kind,
+    id: entry.id,
+    title: compactText2(entry.title, 160),
+    title_length: titleLength,
+    title_truncated: titleLength > 160,
+    score: entry.score,
+    ...options.includePreview ? {
+      text_preview: compactText2(entry.text, options.previewChars),
+      text_length: textLength,
+      text_truncated: textLength > options.previewChars
+    } : {},
+    source: compactSource(entry.source),
+    citation: entry.citation,
+    artifact: compactArtifact(entry.artifact),
+    reasons: entry.reasons.slice(0, 8).map((reason) => compactText2(reason, 80)),
+    ..."rerank" in entry ? { rerank: entry.rerank } : {}
+  };
+}
+function compactCitation(citation) {
+  const quoteLength = citation.quote?.length ?? 0;
+  return {
+    id: citation.id,
+    result_id: citation.result_id,
+    kind: citation.kind,
+    source_uri: compactText2(citation.source_uri, 512),
+    source_ref: compactText2(citation.source_ref, 512),
+    artifact_uri: compactText2(citation.artifact_uri, 512),
+    artifact_path: compactText2(citation.artifact_path, 512),
+    revision: compactText2(citation.revision, 160),
+    hash: compactText2(citation.hash, 160),
+    chunk_id: citation.chunk_id,
+    start_offset: citation.start_offset,
+    end_offset: citation.end_offset,
+    quote_preview: compactText2(citation.quote, DEFAULT_CITATION_PREVIEW_CHARS),
+    quote_length: quoteLength,
+    quote_truncated: quoteLength > DEFAULT_CITATION_PREVIEW_CHARS
+  };
+}
+function compactExcerpt(excerpt2, previewChars) {
+  return {
+    id: excerpt2.id,
+    result_id: excerpt2.result_id,
+    citation_id: excerpt2.citation_id,
+    kind: excerpt2.kind,
+    text_preview: compactText2(excerpt2.text, previewChars),
+    text_length: excerpt2.text.length,
+    text_truncated: excerpt2.text.length > previewChars,
+    score: excerpt2.score
+  };
+}
+function projectKnowledgeSearchResult(result, options) {
+  if (options.detail === "legacy")
+    return result;
+  if (options.detail === "full")
+    return { ...result, detail: "full" };
+  const previewChars = boundedPreviewChars(options.previewChars, DEFAULT_SEARCH_PREVIEW_CHARS);
+  return {
+    ...result,
+    detail: "compact",
+    results: result.results.map((entry) => compactSearchEntry(entry, { previewChars, includePreview: true })),
+    detail_hint: "Use detail='full' (MCP) or --detail full --json (CLI) only when complete result text is required."
+  };
+}
+function projectKnowledgeContextResult(context, options) {
+  if (options.detail === "legacy")
+    return context;
+  if (options.detail === "full")
+    return { ...context, detail: "full" };
+  const previewChars = boundedPreviewChars(options.contextPreviewChars, DEFAULT_CONTEXT_PREVIEW_CHARS);
+  return {
+    ...context,
+    detail: "compact",
+    results: context.results.map((entry) => compactSearchEntry(entry, { previewChars, includePreview: false })),
+    citations: context.citations.map(compactCitation),
+    excerpts: context.excerpts.map((entry) => compactExcerpt(entry, previewChars)),
+    graph: {
+      ...context.graph,
+      citations: context.graph.citations.map(({ quote: _quote, ...citation }) => citation)
+    },
+    detail_hint: "Use detail='full' (MCP) or --detail full --json (CLI) only when raw result, excerpt, and citation bodies are required."
+  };
+}
+
 // src/db/storage-sync.ts
 var STORAGE_TABLES = [
   "sources",
@@ -23213,11 +23394,14 @@ function buildServer() {
     semantic: exports_external.boolean().optional().describe("Include vector semantic results"),
     model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
-    fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+    fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests"),
+    detail: exports_external.enum(["compact", "full", "legacy"]).optional().describe("Additive response detail. Omitted/legacy preserves the historical full response; compact returns bounded previews.")
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake, detail }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.search({ query, limit, semantic, modelRef: model, dimensions, fake }) });
+      const result = await service.search({ query, limit, semantic, modelRef: model, dimensions, fake });
+      const projected = detail ? projectKnowledgeSearchResult(result, { detail }) : result;
+      return detail === "compact" ? compactJsonText({ ok: true, ...projected }) : jsonText({ ok: true, ...projected });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -23229,22 +23413,26 @@ function buildServer() {
     semantic: exports_external.boolean().optional().describe("Include vector semantic results"),
     model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
-    fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+    fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests"),
+    detail: exports_external.enum(["compact", "full", "legacy"]).optional().describe("Additive response detail. Omitted/legacy preserves the historical context body; compact removes duplicated raw result bodies.")
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake, detail }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake }) });
+      const context = await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake });
+      const projected = detail ? projectKnowledgeContextResult(context, { detail }) : context;
+      return detail === "compact" ? compactJsonText({ ok: true, ...projected }) : jsonText({ ok: true, ...projected });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
   });
-  registerTool(server, "knowledge_context_pack", "Bounded knowledge context pack", "Return compact cited JSON for agents under token and item budgets", {
+  registerTool(server, "knowledge_context_pack", "Bounded knowledge context pack", "Return compact cited JSON for agents under enforced token, UTF-8 byte, and item budgets", {
     scope: scopeField,
     query: exports_external.string().optional().describe("Search query or prompt for search packs"),
     topic: exports_external.string().optional().describe("Topic for loop/run proposal packs"),
     from: exports_external.enum(["search", "loops", "runs"]).optional().describe("Pack source, default search"),
     since: exports_external.string().optional().describe("Run/loop evidence age filter such as 7d or an ISO timestamp"),
     max_tokens: exports_external.number().optional().describe("Approximate maximum JSON token budget"),
+    max_bytes: exports_external.number().optional().describe("Maximum UTF-8 JSON response bytes"),
     max_items: exports_external.number().optional().describe("Maximum evidence items"),
     limit: exports_external.number().optional().describe("Maximum retrieval rows before packing"),
     semantic: exports_external.boolean().optional().describe("Include vector semantic results for search packs"),
@@ -23252,7 +23440,7 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
-  }, async ({ scope, query, topic, from, since, max_tokens, max_items, limit, semantic, dedupe, model, dimensions, fake }) => {
+  }, async ({ scope, query, topic, from, since, max_tokens, max_bytes, max_items, limit, semantic, dedupe, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope });
     try {
       return compactJsonText({
@@ -23264,6 +23452,7 @@ function buildServer() {
           topic,
           since,
           maxTokens: max_tokens,
+          maxBytes: max_bytes,
           maxItems: max_items,
           limit,
           semantic,

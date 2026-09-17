@@ -14,6 +14,7 @@ export interface KnowledgeAgentContextPackOptions extends Omit<RetrievalOptions,
     since?: string;
     dedupe?: boolean;
     maxTokens?: number;
+    maxBytes?: number;
     maxItems?: number;
     now?: Date;
 }
@@ -72,11 +73,14 @@ export interface KnowledgeAgentContextPack {
     budgets: {
         max_tokens: number;
         estimated_tokens: number;
+        max_bytes: number;
+        encoded_bytes: number;
         max_items: number;
         items_included: number;
         items_available: number;
         items_truncated: number;
         token_budget_exceeded: boolean;
+        byte_budget_exceeded: boolean;
     };
     safety: {
         raw_artifact_content_included: false;
@@ -97,4 +101,15 @@ export interface KnowledgeAgentContextPack {
     warnings: string[];
     message: string;
 }
+export declare function resolveKnowledgeContextPackBudgets(options: {
+    maxTokens?: number;
+    maxBytes?: number;
+    maxItems?: number;
+    limit?: number;
+}): {
+    maxTokens: number;
+    maxBytes: number;
+    maxItems: number;
+};
+export declare function fitKnowledgeAgentContextPackToBudget(pack: KnowledgeAgentContextPack): KnowledgeAgentContextPack;
 export declare function buildKnowledgeAgentContextPack(options: KnowledgeAgentContextPackOptions): Promise<KnowledgeAgentContextPack>;

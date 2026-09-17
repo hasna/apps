@@ -3467,6 +3467,24 @@ describe('knowledge cli', () => {
     const sourceSearchOut = JSON.parse(new TextDecoder().decode(sourceSearch.stdout));
     expect(sourceSearchOut.mode.semantic).toBe(false);
     expect(sourceSearchOut.results.some((entry: any) => entry.kind === 'source_chunk' && entry.source.uri === sourceRef)).toBe(true);
+    expect(sourceSearchOut.results[0].text).toContain('source-governed company wiki content');
+
+    const compactJsonSearch = runCli(['search', 'source', 'company', 'wiki', '--scope', 'project', '--json', '--detail', 'compact'], dir);
+    expect(compactJsonSearch.exitCode).toBe(0);
+    const compactJsonText = new TextDecoder().decode(compactJsonSearch.stdout).trim();
+    const compactJsonOut = JSON.parse(compactJsonText);
+    expect(compactJsonText).not.toContain('\n');
+    expect(compactJsonOut.detail).toBe('compact');
+    expect(compactJsonOut.results[0].text).toBeUndefined();
+    expect(compactJsonOut.results[0].text_preview).toContain('source-governed company wiki content');
+
+    const fullJsonSearch = runCli(['search', 'source', 'company', 'wiki', '--scope', 'project', '--json', '--detail', 'full'], dir);
+    expect(fullJsonSearch.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(fullJsonSearch.stdout)).results[0].text).toContain('source-governed company wiki content');
+
+    const legacyJsonSearch = runCli(['search', 'source', 'company', 'wiki', '--scope', 'project', '--json', '--detail', 'legacy'], dir);
+    expect(legacyJsonSearch.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(legacyJsonSearch.stdout)).detail).toBeUndefined();
 
     const compactSourceSearch = runCli(['search', 'source', 'company', 'wiki', '--scope', 'project'], dir);
     expect(compactSourceSearch.exitCode).toBe(0);
@@ -3496,6 +3514,15 @@ describe('knowledge cli', () => {
     expect(contextOut.excerpts.length).toBeGreaterThan(0);
     expect(contextOut.citations[0].provenance.source_owner).toBe('open-files');
 
+    const compactJsonContext = runCli(['search', 'company', 'wiki', 'content', '--context', '--scope', 'project', '--semantic', '--fake', '--dimensions', '8', '--json', '--detail', 'compact'], dir);
+    expect(compactJsonContext.exitCode).toBe(0);
+    const compactJsonContextOut = JSON.parse(new TextDecoder().decode(compactJsonContext.stdout));
+    expect(compactJsonContextOut.detail).toBe('compact');
+    expect(compactJsonContextOut.results[0].text).toBeUndefined();
+    expect(compactJsonContextOut.excerpts[0].text).toBeUndefined();
+    expect(compactJsonContextOut.excerpts[0].text_preview.length).toBeGreaterThan(0);
+    expect(compactJsonContextOut.citations[0].quote).toBeUndefined();
+
     const compactContext = runCli(['search', 'company', 'wiki', 'content', '--context', '--scope', 'project', '--semantic', '--fake', '--dimensions', '8'], dir);
     expect(compactContext.exitCode).toBe(0);
     const compactContextOut = new TextDecoder().decode(compactContext.stdout);
@@ -3513,13 +3540,15 @@ describe('knowledge cli', () => {
     const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
     expect(ingest.exitCode).toBe(0);
 
-    const pack = runCli(['context', 'pack', 'alpha', 'roadmap', '--scope', 'project', '--max-tokens', '1200', '--max-items', '1', '--json'], dir);
+    const pack = runCli(['context', 'pack', 'alpha', 'roadmap', '--scope', 'project', '--max-tokens', '1200', '--max-bytes', '4800', '--max-items', '1', '--json'], dir);
     expect(pack.exitCode).toBe(0);
     const packOut = JSON.parse(new TextDecoder().decode(pack.stdout));
     expect(packOut.format).toBe('knowledge-agent-context-pack');
     expect(packOut.source).toBe('search');
     expect(packOut.budgets.items_included).toBeLessThanOrEqual(1);
     expect(packOut.budgets.estimated_tokens).toBeLessThanOrEqual(packOut.budgets.max_tokens);
+    expect(packOut.budgets.encoded_bytes).toBeLessThanOrEqual(packOut.budgets.max_bytes);
+    expect(Buffer.byteLength(new TextDecoder().decode(pack.stdout).trim())).toBeLessThanOrEqual(packOut.budgets.max_bytes);
     expect(packOut.evidence[0].citation_ids.length).toBeGreaterThan(0);
 
     const db = openKnowledgeDb(join(projectKnowledgeHome(dir), 'knowledge.db'));

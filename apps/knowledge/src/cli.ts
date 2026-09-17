@@ -22,6 +22,7 @@ import {
 } from './client-transport';
 import { openKnowledgeDb } from './knowledge-db';
 import { createKnowledgeService } from './service';
+import { parseKnowledgeSearchDetail, projectKnowledgeContextResult, projectKnowledgeSearchResult } from './search-output';
 import { createKnowledgeProjectPanel, formatKnowledgeProjectPanel } from './project-panel';
 import {
   KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
@@ -96,7 +97,9 @@ interface Flags {
   dimensions?: number;
   semantic?: boolean;
   context?: boolean;
+  detail?: string;
   maxTokens?: number;
+  maxBytes?: number;
   maxItems?: number;
   from?: string;
   to?: string;
@@ -308,7 +311,9 @@ function parseArgs(argv: string[]): ParseResult {
       case '--dimensions': flags.dimensions = Number(argv[i + 1]); i += 1; break;
       case '--semantic': flags.semantic = true; break;
       case '--context': flags.context = true; break;
+      case '--detail': flags.detail = argv[i + 1]; i += 1; break;
       case '--max-tokens': flags.maxTokens = Number(argv[i + 1]); i += 1; break;
+      case '--max-bytes': flags.maxBytes = Number(argv[i + 1]); i += 1; break;
       case '--max-items': flags.maxItems = Number(argv[i + 1]); i += 1; break;
       case '--from': flags.from = argv[i + 1]; i += 1; break;
       case '--to': flags.to = argv[i + 1]; i += 1; break;
@@ -499,7 +504,9 @@ Global Options:
   --dimensions <n>             Embedding dimensions for local/fake providers
   --semantic                   Include vector semantic results in search
   --context                    Return a reranked citation context pack for search
+  --detail <compact|full|legacy> Additive search JSON projection; omitted preserves legacy JSON
   --max-tokens <n>             Token budget for agent context packs
+  --max-bytes <n>              UTF-8 byte budget for agent context packs
   --max-items <n>              Item budget for agent context packs
   --from search|loops|runs      Context-pack source
   --since <duration|ISO>       Filter run/loop evidence by age, e.g. 7d or 2026-06-23
@@ -619,9 +626,9 @@ function printCommandHelp(command: string): void {
   if (command === 'source') { console.log('Usage: knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'ingest') { console.log('Usage: knowledge ingest manifest <file|s3://bucket/key> | source <source-ref> | rules [--workspace <path>] [--owner <name>] [--dry-run] [--max-items <n>] [--limit <n>] [--purpose knowledge_index] [--scope local|global|project] [--json]'); return; }
   if (command === 'reindex') { console.log('Usage: knowledge reindex status|enqueue|embeddings|outbox [file|s3://bucket/key] [--full] [--fake] [--scope local|global|project] [--json]'); return; }
-  if (command === 'search') { console.log('Usage: knowledge search <query> [--context] [--semantic] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--verbose] [--json]'); return; }
-  if (command === 'context') { console.log('Usage: knowledge context pack <query> [--from search|runs|loops] [--max-tokens <n>] [--max-items <n>] [--limit <n>] [--semantic] [--model openai:text-embedding-3-small] [--dimensions <n>] [--fake] [--scope local|global|project] [--verbose] [--json]'); return; }
-  if (command === 'proposals') { console.log('Usage: knowledge proposals context --from loops --topic <text> [--since <duration|ISO>] [--dedupe] [--max-tokens <n>] [--max-items <n>] [--scope local|global|project] [--json]'); return; }
+  if (command === 'search') { console.log('Usage: knowledge search <query> [--context] [--detail compact|full|legacy] [--semantic] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--verbose] [--json]'); return; }
+  if (command === 'context') { console.log('Usage: knowledge context pack <query> [--from search|runs|loops] [--max-tokens <n>] [--max-bytes <n>] [--max-items <n>] [--limit <n>] [--semantic] [--model openai:text-embedding-3-small] [--dimensions <n>] [--fake] [--scope local|global|project] [--verbose] [--json]'); return; }
+  if (command === 'proposals') { console.log('Usage: knowledge proposals context --from loops --topic <text> [--since <duration|ISO>] [--dedupe] [--max-tokens <n>] [--max-bytes <n>] [--max-items <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'web') { console.log('Usage: knowledge web search <query> [--provider openai|anthropic] [--model provider:model] [--domain <domain>] [--file-results] [--fake] [--scope local|global|project] [--verbose] [--json]'); return; }
   if (command === 'ask' || command === 'build') { console.log('Usage: knowledge ask|build <prompt> [--generate] [--semantic] [--model default|provider:model] [--approve-write] [--scope local|global|project] [--verbose] [--json]'); return; }
   if (command === 'embeddings') { console.log('Usage: knowledge embeddings status|index|search [query] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--verbose] [--json]'); return; }
@@ -1000,13 +1007,13 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-    console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "${COMMANDS.join(' ')} --json --verbose --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --rev --to --format --completions --purpose --model --dimensions --semantic --context --max-tokens --max-items --from --since --topic --dedupe --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --owner --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived --project --operation-id --step-id --idempotency-key --slug --name --collection-id --collection-slug --collection-name --item-id --receipt-id --cursor --kind --all --contract --source-ref --allow-global" -- "$cur")); }; complete -F _knowledge knowledge`);
+    console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "${COMMANDS.join(' ')} --json --verbose --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --rev --to --format --completions --purpose --model --dimensions --semantic --context --detail --max-tokens --max-bytes --max-items --from --since --topic --dedupe --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --owner --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived --project --operation-id --step-id --idempotency-key --slug --name --collection-id --collection-slug --collection-name --item-id --receipt-id --cursor --kind --all --contract --source-ref --allow-global" -- "$cur")); }; complete -F _knowledge knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(${COMMANDS.join(' ')})" "(--json)--json" "(--verbose)--verbose" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--dedupe)--dedupe" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(--all)--all" "(--contract)--contract" "(--allow-global)--allow-global" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(--search)--search[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--max-tokens)--max-tokens[token budget]:number:" "(--max-items)--max-items[item budget]:number:" "(--from)--from"\{search,loops,runs\}:" "(--to)--to[diff target: version number or current]:" "(--rev)--rev[entry version for diff]:number:" "(--since)--since[duration or ISO time]:" "(--topic)--topic[topic text]:" "(--provider)--provider[provider]:" "(--mode)--mode"\{deterministic,ai\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[HTTP API URL]:" "(--api-key)--api-key[HTTP API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--owner)--owner[provenance owner]:" "(--domain)--domain[domain]:" "(--project)--project[project id/name/slug]:" "(--operation-id)--operation-id[registration operation id]:" "(--step-id)--step-id[registration step id]:" "(--idempotency-key)--idempotency-key[caller idempotency key]:" "(--slug)--slug[project slug]:" "(--name)--name[project name]:" "(--collection-id)--collection-id[exact collection id]:" "(--collection-slug)--collection-slug[collection slug]:" "(--collection-name)--collection-name[collection name]:" "(--item-id)--item-id[exact item id]:" "(--receipt-id)--receipt-id[exact receipt id]:" "(--cursor)--cursor[resource cursor]:" "(--kind)--kind[resource kind]:(project collection item taxonomy):" "(--source-ref)--source-ref[source ref]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
+      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(${COMMANDS.join(' ')})" "(--json)--json" "(--verbose)--verbose" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--detail)--detail[search output detail]:(compact full legacy)" "(--dedupe)--dedupe" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(--all)--all" "(--contract)--contract" "(--allow-global)--allow-global" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(--search)--search[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--max-tokens)--max-tokens[token budget]:number:" "(--max-bytes)--max-bytes[UTF-8 byte budget]:number:" "(--max-items)--max-items[item budget]:number:" "(--from)--from"\{search,loops,runs\}:" "(--to)--to[diff target: version number or current]:" "(--rev)--rev[entry version for diff]:number:" "(--since)--since[duration or ISO time]:" "(--topic)--topic[topic text]:" "(--provider)--provider[provider]:" "(--mode)--mode"\{deterministic,ai\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[HTTP API URL]:" "(--api-key)--api-key[HTTP API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--owner)--owner[provenance owner]:" "(--domain)--domain[domain]:" "(--project)--project[project id/name/slug]:" "(--operation-id)--operation-id[registration operation id]:" "(--step-id)--step-id[registration step id]:" "(--idempotency-key)--idempotency-key[caller idempotency key]:" "(--slug)--slug[project slug]:" "(--name)--name[project name]:" "(--collection-id)--collection-id[exact collection id]:" "(--collection-slug)--collection-slug[collection slug]:" "(--collection-name)--collection-name[collection name]:" "(--item-id)--item-id[exact item id]:" "(--receipt-id)--receipt-id[exact receipt id]:" "(--cursor)--cursor[resource cursor]:" "(--kind)--kind[resource kind]:(project collection item taxonomy):" "(--source-ref)--source-ref[source ref]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
     } else if (shell === 'fish') {
       const fishOptions = [
         'json', 'verbose', 'yes', 'help', 'version', 'desc', 'archived', 'include-archived',
-        'semantic', 'context', 'max-tokens', 'max-items', 'from', 'to', 'rev', 'since', 'topic',
+        'semantic', 'context', 'detail', 'max-tokens', 'max-bytes', 'max-items', 'from', 'to', 'rev', 'since', 'topic',
         'dedupe', 'generate', 'approve-write', 'allow-global', 'canonical-example', 'provider',
         'mode', 'machine', 'workspace', 'peer-workspace', 'api-url', 'api-key', 'email', 'org',
         'org-id', 'user-id', 'owner', 'domain', 'project', 'operation-id', 'step-id',
@@ -2297,6 +2304,7 @@ async function run(argv: string[]): Promise<void> {
       since: flags.since,
       dedupe: flags.dedupe,
       maxTokens: flags.maxTokens,
+      maxBytes: flags.maxBytes,
       maxItems: flags.maxItems,
       limit: flags.limit,
       semantic: flags.semantic,
@@ -2324,6 +2332,7 @@ async function run(argv: string[]): Promise<void> {
       since: flags.since,
       dedupe: flags.dedupe ?? true,
       maxTokens: flags.maxTokens,
+      maxBytes: flags.maxBytes,
       maxItems: flags.maxItems,
       limit: flags.limit,
     });
@@ -2334,6 +2343,8 @@ async function run(argv: string[]): Promise<void> {
   if (command === 'search') {
     const query = positional.slice(1).join(' ');
     if (!query) throw new Error('Usage: knowledge search <query>');
+    const detail = parseKnowledgeSearchDetail(flags.detail);
+    if (detail && !flags.json) throw new Error('--detail requires --json for knowledge search.');
     if (flags.context) {
       const context = await service.retrieveContext({
         query,
@@ -2344,8 +2355,10 @@ async function run(argv: string[]): Promise<void> {
         fake: flags.fake,
         legacyStorePath: storePath,
       });
-      const contextResult = { ok: true, ...context, message: `${context.excerpts.length} context excerpt(s)` };
-      output(flags.json || flags.verbose ? contextResult : formatContextPack(contextResult), flags.json, flags);
+      const projected = detail ? projectKnowledgeContextResult(context, { detail }) : context;
+      const contextResult = { ok: true, ...projected, message: `${context.excerpts.length} context excerpt(s)` };
+      if (flags.json && detail === 'compact') outputCompactJson(contextResult);
+      else output(flags.json || flags.verbose ? contextResult : formatContextPack(contextResult), flags.json, flags);
       return;
     }
     const result = await service.search({
@@ -2357,8 +2370,10 @@ async function run(argv: string[]): Promise<void> {
       fake: flags.fake,
       legacyStorePath: storePath,
     });
-    const searchResult = { ok: true, ...result, message: `${result.results.length} search result(s)` };
-    output(flags.json || flags.verbose ? searchResult : formatSearchResults(searchResult), flags.json, flags);
+    const projected = detail ? projectKnowledgeSearchResult(result, { detail }) : result;
+    const searchResult = { ok: true, ...projected, message: `${result.results.length} search result(s)` };
+    if (flags.json && detail === 'compact') outputCompactJson(searchResult);
+    else output(flags.json || flags.verbose ? searchResult : formatSearchResults(searchResult), flags.json, flags);
     return;
   }
 

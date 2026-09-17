@@ -19,6 +19,7 @@ export interface KnowledgeAgentContextPackOptions extends Omit<RetrievalOptions,
   since?: string;
   dedupe?: boolean;
   maxTokens?: number;
+  maxBytes?: number;
   maxItems?: number;
   now?: Date;
 }
@@ -81,11 +82,14 @@ export interface KnowledgeAgentContextPack {
   budgets: {
     max_tokens: number;
     estimated_tokens: number;
+    max_bytes: number;
+    encoded_bytes: number;
     max_items: number;
     items_included: number;
     items_available: number;
     items_truncated: number;
     token_budget_exceeded: boolean;
+    byte_budget_exceeded: boolean;
   };
   safety: {
     raw_artifact_content_included: false;
@@ -142,8 +146,10 @@ interface DraftPack {
 const DEFAULT_MAX_TOKENS = 1200;
 const DEFAULT_MAX_ITEMS = 6;
 const MAX_MAX_TOKENS = 12000;
+const MAX_MAX_BYTES = 1_048_576;
 const MAX_MAX_ITEMS = 50;
 const MIN_MAX_TOKENS = 800;
+const MIN_MAX_BYTES = 2_048;
 
 function stableId(prefix: string, value: string, size = 16): string {
   return `${prefix}_${createHash('sha256').update(value).digest('hex').slice(0, size)}`;
@@ -240,11 +246,22 @@ function estimateTokensForValue(value: unknown): number {
   return estimateTokensForText(JSON.stringify(value));
 }
 
+function encodedBytesForValue(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
 function coerceMaxTokens(value: number | undefined): number {
   if (!Number.isFinite(value ?? NaN)) return DEFAULT_MAX_TOKENS;
   const floor = Math.floor(value as number);
   if (floor < MIN_MAX_TOKENS) throw new Error(`--max-tokens must be at least ${MIN_MAX_TOKENS} for the stable context-pack schema.`);
   return Math.min(floor, MAX_MAX_TOKENS);
+}
+
+function coerceMaxBytes(value: number | undefined, maxTokens: number): number {
+  if (!Number.isFinite(value ?? NaN)) return Math.min(maxTokens * 4, MAX_MAX_BYTES);
+  const floor = Math.floor(value as number);
+  if (floor < MIN_MAX_BYTES) throw new Error(`--max-bytes must be at least ${MIN_MAX_BYTES} for the stable context-pack schema.`);
+  return Math.min(floor, MAX_MAX_BYTES);
 }
 
 function coerceMaxItems(value: number | undefined, limit: number | undefined): number {
@@ -656,17 +673,56 @@ function syncOutline(pack: KnowledgeAgentContextPack): void {
   pack.outline.duplicate_candidate_ids = pack.duplicate_candidates.slice(0, 5).map((entry) => entry.id);
 }
 
-function fitPackToBudget(pack: KnowledgeAgentContextPack): KnowledgeAgentContextPack {
-  const maxTokens = pack.budgets.max_tokens;
+function updateBudgetMeasurements(pack: KnowledgeAgentContextPack): void {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const estimatedTokens = estimateTokensForValue(pack);
+    const encodedBytes = encodedBytesForValue(pack);
+    if (pack.budgets.estimated_tokens === estimatedTokens && pack.budgets.encoded_bytes === encodedBytes) break;
+    pack.budgets.estimated_tokens = estimatedTokens;
+    pack.budgets.encoded_bytes = encodedBytes;
+  }
+  pack.budgets.token_budget_exceeded = pack.budgets.estimated_tokens > pack.budgets.max_tokens;
+  pack.budgets.byte_budget_exceeded = pack.budgets.encoded_bytes > pack.budgets.max_bytes;
+}
+
+export function resolveKnowledgeContextPackBudgets(options: {
+  maxTokens?: number;
+  maxBytes?: number;
+  maxItems?: number;
+  limit?: number;
+}): { maxTokens: number; maxBytes: number; maxItems: number } {
+  const maxTokens = coerceMaxTokens(options.maxTokens);
+  return {
+    maxTokens,
+    maxBytes: coerceMaxBytes(options.maxBytes, maxTokens),
+    maxItems: coerceMaxItems(options.maxItems, options.limit),
+  };
+}
+
+export function fitKnowledgeAgentContextPackToBudget(pack: KnowledgeAgentContextPack): KnowledgeAgentContextPack {
   const warnings = new Set(pack.warnings);
-  while (estimateTokensForValue(pack) > maxTokens) {
+  const syncWarnings = () => {
+    pack.warnings = Array.from(warnings).sort();
+  };
+  syncWarnings();
+  updateBudgetMeasurements(pack);
+  while (pack.budgets.token_budget_exceeded || pack.budgets.byte_budget_exceeded) {
+    const budgetKinds = [
+      pack.budgets.token_budget_exceeded ? 'token' : null,
+      pack.budgets.byte_budget_exceeded ? 'byte' : null,
+    ].filter((value): value is string => Boolean(value));
+    const warn = (suffix: string) => {
+      for (const kind of budgetKinds) warnings.add(`${suffix}_for_${kind}_budget`);
+      syncWarnings();
+    };
     const longest = pack.evidence
       .map((entry, index) => ({ entry, index }))
       .filter(({ entry }) => entry.text_preview.length > 180)
       .sort((a, b) => b.entry.text_preview.length - a.entry.text_preview.length)[0];
     if (longest) {
       longest.entry.text_preview = truncateText(longest.entry.text_preview, 180);
-      warnings.add('text_preview_truncated_for_token_budget');
+      warn('text_preview_truncated');
+      updateBudgetMeasurements(pack);
       continue;
     }
     const longCitation = pack.citations
@@ -674,7 +730,8 @@ function fitPackToBudget(pack: KnowledgeAgentContextPack): KnowledgeAgentContext
       .sort((a, b) => (b.quote_preview?.length ?? 0) - (a.quote_preview?.length ?? 0))[0];
     if (longCitation?.quote_preview) {
       longCitation.quote_preview = truncateText(longCitation.quote_preview, 120);
-      warnings.add('citation_quote_truncated_for_token_budget');
+      warn('citation_quote_truncated');
+      updateBudgetMeasurements(pack);
       continue;
     }
     if (pack.evidence.length > 0) {
@@ -687,27 +744,32 @@ function fitPackToBudget(pack: KnowledgeAgentContextPack): KnowledgeAgentContext
         }))
         .filter((candidate) => candidate.evidence_ids.length > 1);
       syncOutline(pack);
-      warnings.add('evidence_truncated_for_token_budget');
+      warn('evidence_truncated');
       pruneCitations(pack);
+      updateBudgetMeasurements(pack);
       continue;
     }
     if (pack.outline.next_actions.length > 1) {
       pack.outline.next_actions.pop();
-      warnings.add('outline_truncated_for_token_budget');
+      warn('outline_truncated');
+      updateBudgetMeasurements(pack);
       continue;
     }
-    warnings.add('token_budget_floor_exceeded');
+    for (const kind of budgetKinds) warnings.add(`${kind}_budget_floor_exceeded`);
+    syncWarnings();
     break;
   }
-  pack.warnings = Array.from(warnings).sort();
+  syncWarnings();
   pack.budgets.items_included = pack.evidence.length;
   syncOutline(pack);
-  pack.budgets.estimated_tokens = estimateTokensForValue(pack);
-  pack.budgets.token_budget_exceeded = pack.budgets.estimated_tokens > maxTokens;
-  if (pack.budgets.token_budget_exceeded) {
-    throw new Error(`Unable to build context pack within ${maxTokens} token budget; increase --max-tokens.`);
+  updateBudgetMeasurements(pack);
+  if (pack.budgets.token_budget_exceeded || pack.budgets.byte_budget_exceeded) {
+    const exceeded = [
+      pack.budgets.token_budget_exceeded ? `${pack.budgets.max_tokens} token` : null,
+      pack.budgets.byte_budget_exceeded ? `${pack.budgets.max_bytes} byte` : null,
+    ].filter(Boolean).join(' and ');
+    throw new Error(`Unable to build context pack within ${exceeded} budget; increase the corresponding limit.`);
   }
-  pack.message = `${pack.evidence.length} bounded evidence item(s), estimated ${pack.budgets.estimated_tokens}/${maxTokens} token(s)`;
   return pack;
 }
 
@@ -715,8 +777,7 @@ export async function buildKnowledgeAgentContextPack(options: KnowledgeAgentCont
   const now = options.now ?? new Date();
   const source = options.source ?? 'search';
   const purpose = options.purpose ?? (source === 'loops' || source === 'runs' ? 'proposal' : 'agent_context');
-  const maxTokens = coerceMaxTokens(options.maxTokens);
-  const maxItems = coerceMaxItems(options.maxItems, options.limit);
+  const { maxTokens, maxBytes, maxItems } = resolveKnowledgeContextPackBudgets(options);
   const query = normalizeText(options.query ?? options.topic ?? '');
   if (purpose === 'proposal' && source !== 'search' && !query) {
     throw new Error('Proposal context requires --topic <text> or a positional topic.');
@@ -765,6 +826,7 @@ export async function buildKnowledgeAgentContextPack(options: KnowledgeAgentCont
       options.modelRef ?? '',
       options.limit ?? '',
       maxTokens,
+      maxBytes,
       maxItems,
       sortedEvidence.map((entry) => entry.id).join(','),
       sortedCitations.map((entry) => entry.id).join(','),
@@ -772,11 +834,14 @@ export async function buildKnowledgeAgentContextPack(options: KnowledgeAgentCont
     budgets: {
       max_tokens: maxTokens,
       estimated_tokens: 0,
+      max_bytes: maxBytes,
+      encoded_bytes: 0,
       max_items: maxItems,
       items_included: sortedEvidence.length,
       items_available: draft.available,
       items_truncated: Math.max(0, draft.available - sortedEvidence.length),
       token_budget_exceeded: false,
+      byte_budget_exceeded: false,
     },
     safety: {
       raw_artifact_content_included: false,
@@ -792,5 +857,5 @@ export async function buildKnowledgeAgentContextPack(options: KnowledgeAgentCont
     message: `${sortedEvidence.length} bounded evidence item(s), estimated under ${maxTokens} token(s)`,
   };
   pruneCitations(pack);
-  return fitPackToBudget(pack);
+  return fitKnowledgeAgentContextPackToBudget(pack);
 }

@@ -1210,8 +1210,9 @@ only refreshes SQLite source/wiki chunks and vector rows.
 ### search
 ```bash
 knowledge search <query> [--scope project] [--limit <n>] [--verbose] [--json]
+knowledge search <query> --json --detail compact|full|legacy
 knowledge search <query> --semantic [--model openai:text-embedding-3-small] [--scope project] [--verbose] [--json]
-knowledge search <query> --context [--semantic] [--scope project] [--verbose] [--json]
+knowledge search <query> --context [--semantic] [--scope project] [--verbose] [--json] [--detail compact|full|legacy]
 ```
 Run hybrid search over active JSON-store notes, `chunks_fts`, generated wiki
 chunks, wiki/index catalog rows, and optional vector results. Keyword search
@@ -1227,8 +1228,12 @@ are keyword-only results with `kind: legacy_item` and
 `knowledge://item/<id>` source refs.
 
 Default terminal search output shows compact result rows with source refs and
-text previews. Use `--context` for an agent-ready citation pack, `--verbose` for
-full human-readable result objects, or `--json` for stable structured output.
+text previews. Existing `--json` behavior remains unchanged when `--detail` is
+omitted. New agent-oriented callers can use `--json --detail compact` for
+minified rows with bounded `text_preview` values, `--detail full` to request
+complete result text explicitly, or `--detail legacy` to name the historical
+response contract. Compact context output keeps bounded excerpt previews and
+removes the duplicated raw bodies from `results` and graph citations.
 
 `--context` returns a reranked context pack for agents: selected excerpts,
 assembled citations, freshness and permission notes, graph evidence from
@@ -1237,14 +1242,17 @@ assembled citations, freshness and permission notes, graph evidence from
 
 ### context pack / proposals context
 ```bash
-knowledge context pack <query> [--from search|runs|loops] [--max-tokens <n>] [--max-items <n>] [--scope project] [--json]
-knowledge proposals context --from loops --topic <text> [--since <duration|ISO>] [--dedupe] [--max-tokens <n>] [--scope project] [--json]
+knowledge context pack <query> [--from search|runs|loops] [--max-tokens <n>] [--max-bytes <n>] [--max-items <n>] [--scope project] [--json]
+knowledge proposals context --from loops --topic <text> [--since <duration|ISO>] [--dedupe] [--max-tokens <n>] [--max-bytes <n>] [--scope project] [--json]
 ```
 Return compact deterministic JSON bundles for agents and loops. Packs are
 read-only dry runs: they include bounded evidence previews, citation ids,
 source/run/artifact refs, safety reminders, duplicate candidates when requested,
 and a small write-ready outline. Raw artifact bodies are not embedded; callers
-should inspect cited refs only when the bounded preview is insufficient.
+should inspect cited refs only when the bounded preview is insufficient. Token
+and UTF-8 byte ceilings use the same fitter for local and hosted reads; an
+impossible pack fails instead of returning `ok: true` with an exceeded budget.
+The receipt includes `max_bytes`, `encoded_bytes`, and `byte_budget_exceeded`.
 
 `context pack` defaults to indexed search evidence. `--from runs|loops` builds
 from the `runs`/`run_events` ledger, and `proposals context` defaults to loop
@@ -1376,8 +1384,8 @@ knowledge-mcp
 
 The stable agent-facing MCP tools are:
 
-- `knowledge_search`: return a reranked citation context pack.
-- `knowledge_context_pack`: return compact cited JSON under token/item budgets.
+- `knowledge_search`: return a reranked citation context pack; `detail=compact` removes duplicated raw bodies and minifies the MCP response, while `full` and `legacy` retain complete text contracts.
+- `knowledge_context_pack`: return compact cited JSON under token/item/UTF-8 byte budgets.
 - `knowledge_ask`: answer with read-only local knowledge and optional AI SDK
   generation.
 - `knowledge_build`: run the prompt flow and optionally file a cited wiki answer
