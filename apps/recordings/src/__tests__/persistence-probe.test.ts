@@ -57,11 +57,11 @@ function seedLocalDb(dbPath: string, rows: number): void {
 const FAKE_API_KEY = "not-a-real-key-4f2b9c8e-do-not-log";
 
 describe("describeActiveStore", () => {
-  test("with no API env vars it reports the legacy file AND the fail-closed refusal", () => {
+  test("with no API env vars it reports the legacy file AND the fail-closed refusal", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
     seedLocalDb(dbPath, 3);
 
-    const description = describeActiveStore(makeConfig(dbPath), {});
+    const description = await describeActiveStore(makeConfig(dbPath), {});
 
     expect(description.transport).toBe("none");
     expect(description.mode_source).toBe("unresolved");
@@ -82,10 +82,10 @@ describe("describeActiveStore", () => {
 
   // The station03 shape: a credential resolving from the process env, where
   // nothing in a config file or a login profile reveals where the writes go.
-  test("reports the http store and names the credential/authority sources", () => {
+  test("reports the http store and names the credential/authority sources", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
 
-    const description = describeActiveStore(makeConfig(dbPath), {
+    const description = await describeActiveStore(makeConfig(dbPath), {
       HASNA_RECORDINGS_API_URL: "https://recordings.example.test",
       HASNA_RECORDINGS_API_KEY: FAKE_API_KEY,
     });
@@ -96,10 +96,10 @@ describe("describeActiveStore", () => {
     expect(description.warning).toContain("launchctl getenv");
   });
 
-  test("never puts the API key value in the report", () => {
+  test("never puts the API key value in the report", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
 
-    const description = describeActiveStore(makeConfig(dbPath), {
+    const description = await describeActiveStore(makeConfig(dbPath), {
       HASNA_RECORDINGS_API_URL: "https://recordings.example.test",
       HASNA_RECORDINGS_API_KEY: FAKE_API_KEY,
     });
@@ -109,11 +109,11 @@ describe("describeActiveStore", () => {
 
   // The failure that produced two wrong audits: writes go to the API while a
   // populated legacy SQLite file sits on disk looking authoritative.
-  test("flags divergence when writes go to the API but a populated local DB remains", () => {
+  test("flags divergence when writes go to the API but a populated local DB remains", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
     seedLocalDb(dbPath, 936);
 
-    const description = describeActiveStore(makeConfig(dbPath), {
+    const description = await describeActiveStore(makeConfig(dbPath), {
       HASNA_RECORDINGS_API_URL: "https://recordings.example.test",
       HASNA_RECORDINGS_API_KEY: FAKE_API_KEY,
     });
@@ -123,10 +123,10 @@ describe("describeActiveStore", () => {
     expect(description.warning).toContain("NOT the live store");
   });
 
-  test("does not flag divergence when the local DB is absent", () => {
+  test("does not flag divergence when the local DB is absent", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
 
-    const description = describeActiveStore(makeConfig(dbPath), {
+    const description = await describeActiveStore(makeConfig(dbPath), {
       HASNA_RECORDINGS_API_URL: "https://recordings.example.test",
       HASNA_RECORDINGS_API_KEY: FAKE_API_KEY,
     });
@@ -138,19 +138,19 @@ describe("describeActiveStore", () => {
 
   // A diagnostic that creates a store invents the divergence it looks for, and
   // running migrations over a legacy file is a write to something we only read.
-  test("creates no database file while inspecting a missing one", () => {
+  test("creates no database file while inspecting a missing one", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
 
-    describeActiveStore(makeConfig(dbPath), {});
+    await describeActiveStore(makeConfig(dbPath), {});
 
     expect(existsSync(dbPath)).toBe(false);
   });
 
-  test("reports an unreadable local DB as unknown rather than throwing", () => {
+  test("reports an unreadable local DB as unknown rather than throwing", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
     writeFileSync(dbPath, "this is not a sqlite database");
 
-    const description = describeActiveStore(makeConfig(dbPath), {});
+    const description = await describeActiveStore(makeConfig(dbPath), {});
 
     expect(description.local_db_present).toBe(true);
     expect(description.local_db_recordings).toBeNull();
@@ -158,11 +158,11 @@ describe("describeActiveStore", () => {
 
   // An uncountable file must not read as "no second dataset". Reporting a silent
   // divergent:false there is the same failure as reporting the wrong count.
-  test("says UNKNOWN, not none, when a present local DB cannot be counted", () => {
+  test("says UNKNOWN, not none, when a present local DB cannot be counted", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
     writeFileSync(dbPath, "this is not a sqlite database");
 
-    const description = describeActiveStore(makeConfig(dbPath), {
+    const description = await describeActiveStore(makeConfig(dbPath), {
       HASNA_RECORDINGS_API_URL: "https://recordings.example.test",
       HASNA_RECORDINGS_API_KEY: FAKE_API_KEY,
     });
@@ -340,10 +340,10 @@ describe("credential safety in reports", () => {
   // not contain it.
   const URL_WITH_PASSWORD = `https://svc:${FAKE_API_KEY}@recordings.example.test`;
 
-  test("a password embedded in the API URL never reaches the report", () => {
+  test("a password embedded in the API URL never reaches the report", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
 
-    const description = describeActiveStore(makeConfig(dbPath), {
+    const description = await describeActiveStore(makeConfig(dbPath), {
       HASNA_RECORDINGS_API_URL: URL_WITH_PASSWORD,
       HASNA_RECORDINGS_API_KEY: FAKE_API_KEY,
     });
@@ -356,11 +356,11 @@ describe("credential safety in reports", () => {
     expect(JSON.stringify(description)).not.toContain("recordings.example.test");
   });
 
-  test("the divergence warning does not leak the URL password either", () => {
+  test("the divergence warning does not leak the URL password either", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
     seedLocalDb(dbPath, 5);
 
-    const description = describeActiveStore(makeConfig(dbPath), {
+    const description = await describeActiveStore(makeConfig(dbPath), {
       HASNA_RECORDINGS_API_URL: URL_WITH_PASSWORD,
       HASNA_RECORDINGS_API_KEY: FAKE_API_KEY,
     });
@@ -386,10 +386,10 @@ describe("credential safety in reports", () => {
     expect(JSON.stringify(result)).not.toContain(FAKE_API_KEY);
   });
 
-  test("a key-shaped env value is never echoed in the store description", () => {
+  test("a key-shaped env value is never echoed in the store description", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
 
-    const description = describeActiveStore(makeConfig(dbPath), {
+    const description = await describeActiveStore(makeConfig(dbPath), {
       HASNA_RECORDINGS_API_URL: "https://api.example.com",
       HASNA_RECORDINGS_API_KEY: "fixture-value-not-a-secret-abcdef123456",
     });
@@ -399,10 +399,10 @@ describe("credential safety in reports", () => {
     expect(description.warning ?? "").not.toContain("fixture-value-not-a-secret");
   });
 
-  test("a partial hosted configuration fails closed and names variables, never values", () => {
+  test("a partial hosted configuration fails closed and names variables, never values", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
 
-    const description = describeActiveStore(makeConfig(dbPath), {
+    const description = await describeActiveStore(makeConfig(dbPath), {
       HASNA_RECORDINGS_API_URL: "fixture-value-not-a-secret-abcdef123456",
     });
 
@@ -585,41 +585,41 @@ describe("legacy local stores are not migrated silently", () => {
 });
 
 describe("localStoreIsBehindSchema", () => {
-  test("is null for a database that does not exist", () => {
-    expect(localStoreIsBehindSchema(join(makeTempDir(), "missing.db"))).toBeNull();
+  test("is null for a database that does not exist", async () => {
+    expect(await localStoreIsBehindSchema(join(makeTempDir(), "missing.db"))).toBeNull();
   });
 
-  test("is null for a file it cannot read as SQLite", () => {
+  test("is null for a file it cannot read as SQLite", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
     writeFileSync(dbPath, "not a sqlite database");
 
-    expect(localStoreIsBehindSchema(dbPath)).toBeNull();
+    expect(await localStoreIsBehindSchema(dbPath)).toBeNull();
   });
 
-  test("reports a store with no _migrations table as behind", () => {
+  test("reports a store with no _migrations table as behind", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
     seedLocalDb(dbPath, 1);
 
     // seedLocalDb writes a bare `recordings` table with no _migrations, which is
     // what a genuinely old file looks like.
-    expect(localStoreIsBehindSchema(dbPath)).toBeNull();
+    expect(await localStoreIsBehindSchema(dbPath)).toBeNull();
   });
 
-  test("reports a store at an older migration level as behind", () => {
+  test("reports a store at an older migration level as behind", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
     const db = new Database(dbPath);
     db.run("CREATE TABLE _migrations (id INTEGER PRIMARY KEY)");
     db.run("INSERT INTO _migrations (id) VALUES (0)");
     db.close();
 
-    expect(localStoreIsBehindSchema(dbPath)).toBe(true);
+    expect(await localStoreIsBehindSchema(dbPath)).toBe(true);
   });
 
   // Does not create the file it inspects — same rule as describeActiveStore.
-  test("creates nothing while inspecting a missing database", () => {
+  test("creates nothing while inspecting a missing database", async () => {
     const dbPath = join(makeTempDir(), "recordings.db");
 
-    localStoreIsBehindSchema(dbPath);
+    await localStoreIsBehindSchema(dbPath);
 
     expect(existsSync(dbPath)).toBe(false);
   });
