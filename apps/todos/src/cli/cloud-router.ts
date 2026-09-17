@@ -1523,6 +1523,10 @@ export async function cloudCreateTask(
 ): Promise<Task> {
   const expectedParentId = typeof input["parent_id"] === "string" ? input["parent_id"] : null;
   const expectedPlanId = typeof input["plan_id"] === "string" ? input["plan_id"] : null;
+  const expectedTaskListId = typeof input["task_list_id"] === "string" ? input["task_list_id"] : null;
+  const expectedAssignedTo = typeof input["assigned_to"] === "string" ? input["assigned_to"] : null;
+  const verifyTaskListId = expectedTaskListId !== null;
+  const verifyAssignedTo = expectedAssignedTo !== null;
   const expectedCreatedBy = typeof verification.expectedCreatedBy === "string"
     && verification.expectedCreatedBy.trim()
     ? verification.expectedCreatedBy
@@ -1562,6 +1566,8 @@ export async function cloudCreateTask(
     || persisted.id !== created.id
     || (persisted.parent_id ?? null) !== expectedParentId
     || (persisted.plan_id ?? null) !== expectedPlanId
+    || (verifyTaskListId && (persisted.task_list_id ?? null) !== expectedTaskListId)
+    || (verifyAssignedTo && (persisted.assigned_to ?? null) !== expectedAssignedTo)
     || (expectedCreatedBy !== null && persisted.created_by !== expectedCreatedBy)
   ) {
     const creatorDetail = expectedCreatedBy === null
@@ -1571,8 +1577,10 @@ export async function cloudCreateTask(
     throw new Error(
       `TASK_CREATE_PERSISTENCE_UNVERIFIED: configured Todos authority ${remoteAuthorityBase(client)} accepted ` +
         `POST /v1/tasks but authoritative GET /v1/tasks/${encodeURIComponent(created.id)} did not return the same ` +
-        `stored task id, parent_id, and plan_id ` +
-        `(requested plan_id=${JSON.stringify(expectedPlanId)}, readback=${JSON.stringify(persisted?.plan_id ?? null)})` +
+        `stored task id, parent_id, plan_id, and every explicitly requested routing field ` +
+        `(requested plan_id=${JSON.stringify(expectedPlanId)}, readback=${JSON.stringify(persisted?.plan_id ?? null)}; ` +
+        `${verifyTaskListId ? `requested task_list_id=${JSON.stringify(expectedTaskListId)}, readback=${JSON.stringify(persisted?.task_list_id ?? null)}; ` : ""}` +
+        `${verifyAssignedTo ? `requested assigned_to=${JSON.stringify(expectedAssignedTo)}, readback=${JSON.stringify(persisted?.assigned_to ?? null)}` : ""})` +
         `${creatorDetail}; no success row or local SQLite fallback is permitted`,
     );
   }
@@ -2774,17 +2782,72 @@ export async function cloudCountTasks(client: HasnaStorageClient, filter: TaskFi
  * transport throws — surfaced to the caller as a conflict error (parity with the
  * local conflict path) rather than a silent duplicate.
  */
+function isCloudAgentRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+function assertCloudAgentEnvelope(raw: unknown, expectedId: string): Agent {
+  if (!isCloudAgentRecord(raw) || !Object.prototype.hasOwnProperty.call(raw, "agent")) {
+    throw new Error(
+      "REMOTE_API_INCOMPATIBLE: GET /v1/agents/:id did not return the required { agent } envelope",
+    );
+  }
+  const agent = raw["agent"];
+  if (!isCloudAgentRecord(agent)) {
+    throw new Error(
+      "REMOTE_API_INCOMPATIBLE: GET /v1/agents/:id returned a malformed agent object",
+    );
+  }
+  if (agent["id"] !== expectedId) {
+    throw new Error(
+      "REMOTE_API_INCOMPATIBLE: GET /v1/agents/:id returned an agent with a different immutable ID",
+    );
+  }
+  if (
+    typeof agent["name"] !== "string" || !agent["name"] ||
+    !isNullableString(agent["description"]) ||
+    !isNullableString(agent["role"]) ||
+    !isNullableString(agent["title"]) ||
+    !isNullableString(agent["level"]) ||
+    !Array.isArray(agent["permissions"]) || agent["permissions"].some((value) => typeof value !== "string") ||
+    !isNullableString(agent["reports_to"]) ||
+    !isNullableString(agent["org_id"]) ||
+    !Array.isArray(agent["capabilities"]) || agent["capabilities"].some((value) => typeof value !== "string") ||
+    !["active", "archived"].includes(String(agent["status"])) ||
+    !isCloudAgentRecord(agent["metadata"]) ||
+    typeof agent["created_at"] !== "string" || !agent["created_at"] ||
+    typeof agent["last_seen_at"] !== "string" || !agent["last_seen_at"] ||
+    !isNullableString(agent["session_id"]) ||
+    !isNullableString(agent["working_dir"]) ||
+    !isNullableString(agent["active_project_id"])
+  ) {
+    throw new Error(
+      "REMOTE_API_INCOMPATIBLE: GET /v1/agents/:id returned an incomplete agent record",
+    );
+  }
+  for (const optionalString of ["identity_id", "project_id", "runtime_instance_id", "machine_id", "synced_at"] as const) {
+    if (agent[optionalString] !== undefined && !isNullableString(agent[optionalString])) {
+      throw new Error(
+        "REMOTE_API_INCOMPATIBLE: GET /v1/agents/:id returned invalid optional agent fields",
+      );
+    }
+  }
+  return agent as unknown as Agent;
+}
+
 /**
- * One agent from the shared roster (`GET /v1/agents/:id`, which resolves by id
- * OR name). Returns null on 404 rather than throwing, matching the local
- * `getAgent(...) || getAgentByName(...)` contract this replaces.
+ * One agent from the shared roster by exact immutable ID
+ * (`GET /v1/agents/:id`). Returns null on 404 and refuses any malformed or
+ * identity-mismatched successful response.
  */
-export async function cloudGetAgent(client: HasnaStorageClient, idOrName: string): Promise<Agent | null> {
+export async function cloudGetAgent(client: HasnaStorageClient, id: string): Promise<Agent | null> {
   try {
-    const raw = await client.transport.get<unknown>(`/agents/${encodeURIComponent(idOrName)}`);
-    const envelope = (raw ?? {}) as { agent?: Agent };
-    const agent = envelope.agent ?? (raw as Agent | null);
-    return agent && typeof agent.id === "string" && agent.id ? agent : null;
+    const raw = await client.transport.get<unknown>(`/agents/${encodeURIComponent(id)}`);
+    return assertCloudAgentEnvelope(raw, id);
   } catch (error) {
     if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return null;
     throw error;
@@ -3835,17 +3898,97 @@ export async function cloudClaimNext(client: HasnaStorageClient, agentId: string
   return task && (task as Task).id ? task : null;
 }
 
+/** Maximum dependency edges any client-side analytics call may materialize. */
+const CLOUD_DEPENDENCY_LIMIT = 10_000;
+const CLOUD_DEPENDENCY_PAGE_SIZE = 500;
+
+function dependencyEnvelopeError(detail: string): Error {
+  return new Error(
+    `REMOTE_API_INCOMPATIBLE: /v1/dependencies ${detail}; refusing incomplete dependency analytics`,
+  );
+}
+
 /**
- * Every dependency edge in the shared dataset (`GET /v1/dependencies`). Edges are
- * far fewer than tasks, so this stays cheap even on the full cloud set. Powers the
- * blocked/ready/sprint/recap dependency analytics. Requires the `/v1/dependencies`
- * route (ECS redeploy).
+ * Read the complete dependency edge set through bounded server pages.
+ *
+ * Analytics must never interpret `{}` or an unmarked first page as an empty,
+ * complete graph. Current authorities return count/total/offset continuation
+ * evidence; older or malformed success responses are refused rather than
+ * producing a false "nothing is blocked" answer.
  */
 export async function cloudAllDependencies(client: HasnaStorageClient): Promise<TaskDependency[]> {
-  const raw = await client.transport.get<unknown>("/dependencies");
-  const envelope = (raw ?? {}) as { dependencies?: TaskDependency[] };
-  if (Array.isArray(envelope.dependencies)) return envelope.dependencies;
-  return Array.isArray(raw) ? (raw as TaskDependency[]) : [];
+  const edges: TaskDependency[] = [];
+  const seen = new Set<string>();
+  let offset = 0;
+  let expectedTotal: number | null = null;
+
+  while (true) {
+    const raw = await requiredRemoteRoute(client, "/v1/dependencies", () =>
+      client.transport.get<unknown>("/dependencies", {
+        query: { limit: CLOUD_DEPENDENCY_PAGE_SIZE, offset },
+      }));
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw dependencyEnvelopeError("did not return an object envelope");
+    }
+    const envelope = raw as Record<string, unknown>;
+    const page = envelope["dependencies"];
+    const count = envelope["count"];
+    const total = envelope["total"];
+    const returnedLimit = envelope["limit"];
+    const returnedOffset = envelope["offset"];
+    const hasMore = envelope["has_more"];
+    const nextOffset = envelope["next_offset"];
+
+    if (!Array.isArray(page)) throw dependencyEnvelopeError("did not return a dependencies array");
+    if (!Number.isSafeInteger(count) || count !== page.length) {
+      throw dependencyEnvelopeError("returned a count that does not match the page");
+    }
+    if (!Number.isSafeInteger(total) || (total as number) < 0) {
+      throw dependencyEnvelopeError("did not return a non-negative total");
+    }
+    if ((total as number) > CLOUD_DEPENDENCY_LIMIT) {
+      throw new Error(
+        `REMOTE_RESULT_TOO_LARGE: /v1/dependencies reports ${total} edges, above the ` +
+          `${CLOUD_DEPENDENCY_LIMIT}-edge analytics limit; narrow the operation or use a server aggregate`,
+      );
+    }
+    if (returnedLimit !== CLOUD_DEPENDENCY_PAGE_SIZE || returnedOffset !== offset) {
+      throw dependencyEnvelopeError("did not honor the requested bounded page");
+    }
+    const computedHasMore = offset + page.length < (total as number);
+    if (typeof hasMore !== "boolean" || hasMore !== computedHasMore) {
+      throw dependencyEnvelopeError("returned inconsistent has_more evidence");
+    }
+    if (hasMore ? nextOffset !== offset + page.length : nextOffset !== null) {
+      throw dependencyEnvelopeError("returned an invalid next_offset");
+    }
+    if (expectedTotal === null) expectedTotal = total as number;
+    else if (expectedTotal !== total) throw dependencyEnvelopeError("changed total during pagination");
+    if (hasMore && page.length === 0) throw dependencyEnvelopeError("made no pagination progress");
+
+    for (const value of page) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw dependencyEnvelopeError("returned a non-object edge");
+      }
+      const edge = value as Record<string, unknown>;
+      if (typeof edge["task_id"] !== "string" || !edge["task_id"] ||
+          typeof edge["depends_on"] !== "string" || !edge["depends_on"]) {
+        throw dependencyEnvelopeError("returned an edge without task_id and depends_on");
+      }
+      const key = `${edge["task_id"]}\u0000${edge["depends_on"]}`;
+      if (seen.has(key)) throw dependencyEnvelopeError("repeated an edge across pages");
+      seen.add(key);
+      edges.push(value as TaskDependency);
+    }
+
+    if (!hasMore) {
+      if (edges.length !== expectedTotal) {
+        throw dependencyEnvelopeError(`returned ${edges.length} edges for total ${expectedTotal}`);
+      }
+      return edges;
+    }
+    offset = nextOffset as number;
+  }
 }
 
 /** Fetch a set of tasks by id via bounded parallel `GET /v1/tasks/:id`. */

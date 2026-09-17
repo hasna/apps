@@ -6,6 +6,7 @@ import {
   cloudCreateTemplate,
   cloudDeleteTemplate,
   cloudResolveProjectRef,
+  cloudResolveTaskListRef,
 } from "../../cli/cloud-router.js";
 import {
   initializeSharedTemplates,
@@ -126,13 +127,23 @@ export function registerTemplateTools(server: McpServer, { shouldRegisterTool, r
             if (!template) return { content: [{ type: "text" as const, text: `Template not found: ${params.template_id}` }], isError: true };
             const projectRef = params.project_id ? await cloudResolveProjectRef(cloud, params.project_id) : undefined;
             const effectiveProject = projectRef ?? template.project_id ?? undefined;
+            const taskListId = params.task_list_id
+              ? await cloudResolveTaskListRef(cloud, params.task_list_id, effectiveProject)
+              : undefined;
             const { tasks } = await createRemoteTemplateTasks(
               cloud,
               template,
               effectiveProject,
               params.variables ?? {},
-              params.assigned_to,
-              { title: params.title, description: params.description, priority: params.priority as never },
+              {
+                assignedTo: params.assigned_to,
+                taskListId,
+                overrides: {
+                  title: params.title,
+                  description: params.description,
+                  priority: params.priority as never,
+                },
+              },
             );
             const remoteText = tasks.map(t => `${t.id.slice(0, 8)} | ${t.priority} | ${t.title}`).join("\n");
             return { content: [{ type: "text" as const, text: `${tasks.length} task(s) created from template:\n${remoteText}` }] };

@@ -1340,6 +1340,112 @@ describe("/v1 plan cloud parity", () => {
   });
 });
 
+
+describe("/v1 dependency analytics pagination", () => {
+  test("returns storage-bounded pages with explicit completeness evidence", async () => {
+    const edges = [
+      { task_id: "task-2", depends_on: "task-1" },
+      { task_id: "task-3", depends_on: "task-2" },
+    ];
+    const pageCalls: Array<{ limit: number; offset: number }> = [];
+    let listAllCalls = 0;
+    store = {
+      ...store,
+      dependencies: {
+        add: async (taskId, dependsOn) => ({ task_id: taskId, depends_on: dependsOn }),
+        remove: async () => false,
+        list: async () => ({ dependencies: [], blocks: [], blocked_by: [] }),
+        listPage: async (page) => {
+          pageCalls.push(page);
+          return { dependencies: edges.slice(page.offset, page.offset + page.limit), total: edges.length };
+        },
+        listAll: async () => {
+          listAllCalls++;
+          return edges;
+        },
+      },
+    };
+
+    const pageOne = await request("/v1/dependencies?limit=1&offset=0");
+    expect(pageOne?.status).toBe(200);
+    expect(await pageOne!.json()).toMatchObject({
+      count: 1,
+      total: 2,
+      limit: 1,
+      offset: 0,
+      has_more: true,
+      next_offset: 1,
+    });
+
+    const pageTwo = await request("/v1/dependencies?limit=1&offset=1");
+    expect(pageTwo?.status).toBe(200);
+    expect(await pageTwo!.json()).toMatchObject({
+      count: 1,
+      total: 2,
+      limit: 1,
+      offset: 1,
+      has_more: false,
+      next_offset: null,
+    });
+
+    expect(pageCalls).toEqual([{ limit: 1, offset: 0 }, { limit: 1, offset: 1 }]);
+    expect(listAllCalls).toBe(0);
+
+    const legacy = await request("/v1/dependencies");
+    expect(await legacy!.json()).toMatchObject({
+      count: 2,
+      total: 2,
+      offset: 0,
+      has_more: false,
+      next_offset: null,
+    });
+    expect(listAllCalls).toBe(1);
+
+    expect((await request("/v1/dependencies?limit=501"))?.status).toBe(400);
+    expect((await request("/v1/dependencies?offset=-1"))?.status).toBe(400);
+  });
+
+  test("a large graph materializes only the requested storage page", async () => {
+    const pageCalls: Array<{ limit: number; offset: number }> = [];
+    let listAllCalls = 0;
+    store = {
+      ...store,
+      dependencies: {
+        add: async (taskId, dependsOn) => ({ task_id: taskId, depends_on: dependsOn }),
+        remove: async () => false,
+        list: async () => ({ dependencies: [], blocks: [], blocked_by: [] }),
+        listPage: async (page) => {
+          pageCalls.push(page);
+          return {
+            dependencies: Array.from({ length: page.limit }, (_, index) => ({
+              task_id: `task-${page.offset + index + 1}`,
+              depends_on: `dependency-${page.offset + index + 1}`,
+            })),
+            total: 25_000,
+          };
+        },
+        listAll: async () => {
+          listAllCalls++;
+          throw new Error("paged route must not materialize the complete graph");
+        },
+      },
+    };
+
+    const response = await request("/v1/dependencies?limit=500&offset=10000");
+    expect(response?.status).toBe(200);
+    const body = await response!.json() as {
+      dependencies: unknown[];
+      count: number;
+      total: number;
+      next_offset: number;
+    };
+    expect(body.dependencies).toHaveLength(500);
+    expect(body).toMatchObject({ count: 500, total: 25_000, next_offset: 10_500 });
+    expect(pageCalls).toEqual([{ limit: 500, offset: 10_000 }]);
+    expect(listAllCalls).toBe(0);
+  });
+});
+
 describe("/v1 reusable template cloud parity", () => {
   test("creates, scopes, reads, and deletes an imported checklist without losing its steps", async () => {
     const project = await store.projects.create({ name: "Ro Accounting", path: "/tmp/ro-accounting" });

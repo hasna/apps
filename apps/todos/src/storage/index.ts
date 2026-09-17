@@ -17,6 +17,8 @@ export type {
   TodosStorageSnapshot,
   TodosSyncStore,
   TodosTaskClaimFilter,
+  TodosDependencyPage,
+  TodosDependencyPageOptions,
   TodosTaskCompletionOptions,
   TodosTaskFailureOptions,
   TodosTaskFailureResult,

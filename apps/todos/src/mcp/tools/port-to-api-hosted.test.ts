@@ -19,6 +19,38 @@ import { withHostedTools } from "./hosted-tool-harness.js";
 
 const iso = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
 
+const dependencyPage = (dependencies: Array<{ task_id: string; depends_on: string }>) => ({
+  dependencies,
+  count: dependencies.length,
+  total: dependencies.length,
+  limit: 500,
+  offset: 0,
+  has_more: false,
+  next_offset: null,
+});
+
+const hostedAgent = (id: string, over: Record<string, unknown> = {}) => ({
+  id,
+  name: "ada",
+  identity_id: null,
+  description: "hosted agent",
+  role: null,
+  title: null,
+  level: null,
+  permissions: [],
+  reports_to: null,
+  org_id: null,
+  capabilities: [],
+  status: "active",
+  metadata: {},
+  created_at: iso(-1000),
+  last_seen_at: iso(0),
+  session_id: null,
+  working_dir: null,
+  active_project_id: null,
+  ...over,
+});
+
 const task = (over: Record<string, unknown> = {}) => ({
   id: "aaaaaaaa-0000-0000-0000-000000000001",
   short_id: "T-1", title: "hosted task", status: "pending", priority: "high",
@@ -39,7 +71,7 @@ test("task-adv: standup, claim_task, release_task, extend_task, get_comments and
     {
       "GET /v1/tasks": () => ({ tasks: [{ ...mine, status: "in_progress" }, other, blocker], total: 3 }),
       "GET /v1/agents": () => ({ agents: [{ id: "ada", name: "ada", last_seen_at: iso(0) }], count: 1 }),
-      "GET /v1/dependencies": () => ({ dependencies: [{ task_id: mine.id, depends_on: blocker.id }], count: 1 }),
+      "GET /v1/dependencies": () => dependencyPage([{ task_id: mine.id, depends_on: blocker.id }]),
       "GET /v1/tasks/:id": (req) => ({ task: req.path.includes(blocker.id) ? blocker : mine }),
       "POST /v1/tasks/:id/start": () => ({ task: { ...mine, status: "in_progress", assigned_to: "ada" } }),
       "PATCH /v1/tasks/:id": (req) => ({ task: { ...mine, ...(req.body as Record<string, unknown>) } }),
@@ -53,6 +85,10 @@ test("task-adv: standup, claim_task, release_task, extend_task, get_comments and
 
       expect(await ctx.call("claim_task", { task_id: mine.id, agent_id: "ada" })).toContain(mine.id.slice(0, 8));
       expect(ctx.requests.some((r) => r.method === "POST" && r.path === `/v1/tasks/${mine.id}/start`)).toBe(true);
+      const requestCountBeforeMissingIdentity = ctx.requests.length;
+      expect(await ctx.callExpectingError("claim_task", { task_id: mine.id })).toContain("requires agent_id");
+      expect(ctx.requests).toHaveLength(requestCountBeforeMissingIdentity);
+      expect(ctx.requests.some((r) => (r.body as { agent_id?: string } | undefined)?.agent_id === "mcp")).toBe(false);
 
       await ctx.call("release_task", { task_id: mine.id });
       const release = ctx.requests.filter((r) => r.method === "PATCH").at(-1)!;
@@ -87,7 +123,7 @@ test("task-auto: workload, deadlines, sla, stale, blocked, blocking and doctor r
         return { tasks: rows, total: rows.length };
       },
       "GET /v1/tasks/:id": (req) => ({ task: all.find((t) => req.path.endsWith(t.id)) ?? null }),
-      "GET /v1/dependencies": () => ({ dependencies: [{ task_id: blocked.id, depends_on: blocker.id }], count: 1 }),
+      "GET /v1/dependencies": () => dependencyPage([{ task_id: blocked.id, depends_on: blocker.id }]),
       "GET /v1/integrity": () => ({ integrity: { conditions: [], checked_at: iso(0) } }),
     },
     async (ctx) => {
@@ -132,6 +168,13 @@ test("task-resources: commit, git-ref and verification links go to the shared ta
     async (ctx) => {
       expect(await ctx.call("link_task_to_commit", { task_id: target.id, sha: "abc1234", message: "fix" })).toContain("abc1234");
       expect(ctx.requests.some((r) => r.method === "POST" && r.path === `/v1/tasks/${target.id}/commits`)).toBe(true);
+      const commitRequestCount = ctx.requests.length;
+      expect(await ctx.callExpectingError("link_task_to_commit", {
+        task_id: target.id,
+        sha: "def5678",
+        committed_at: iso(-60_000),
+      })).toContain("committed_at is not accepted");
+      expect(ctx.requests).toHaveLength(commitRequestCount);
 
       expect(await ctx.call("get_task_commits", { task_id: target.id })).toContain("abc1234");
       expect(ctx.requests.some((r) => r.method === "GET" && r.path === `/v1/tasks/${target.id}/commits`)).toBe(true);
@@ -146,23 +189,62 @@ test("task-resources: commit, git-ref and verification links go to the shared ta
 
       expect(await ctx.call("add_task_verification", { task_id: target.id, command: "bun test", status: "passed" })).toContain("bun test");
       expect(ctx.requests.some((r) => r.method === "POST" && r.path === `/v1/tasks/${target.id}/verifications`)).toBe(true);
+      const verificationRequestCount = ctx.requests.length;
+      expect(await ctx.callExpectingError("add_task_verification", {
+        task_id: target.id,
+        command: "bun test",
+        run_at: iso(-60_000),
+      })).toContain("run_at is not accepted");
+      expect(ctx.requests).toHaveLength(verificationRequestCount);
     },
   );
 });
 
-test("agents: get_agent resolves against the shared roster on GET /v1/agents/:id", async () => {
+test("agents: get_agent requires a valid envelope bound to the exact immutable ID", async () => {
+  const agentId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const mismatchedRequestId = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
+  const bareRequestId = "cccccccc-dddd-4eee-8fff-aaaaaaaaaaaa";
   await withHostedTools(
     registerAgentTools as never,
     {
-      "GET /v1/agents/:id": (req) =>
-        req.path.endsWith("ada")
-          ? { agent: { id: "ada", name: "ada", description: "hosted agent", metadata: {}, created_at: iso(-1000), last_seen_at: iso(0) } }
-          : new Response(JSON.stringify({ error: "agent not found" }), { status: 404, headers: { "content-type": "application/json" } }),
+      "GET /v1/agents/:id": (req) => {
+        if (req.path.endsWith(agentId)) return { agent: hostedAgent(agentId) };
+        if (req.path.endsWith(mismatchedRequestId)) {
+          return { agent: hostedAgent("different-agent-id", { name: "wrong" }) };
+        }
+        if (req.path.endsWith(bareRequestId)) return hostedAgent(bareRequestId);
+        return new Response(JSON.stringify({ error: "agent not found" }), { status: 404, headers: { "content-type": "application/json" } });
+      },
     },
     async (ctx) => {
-      expect(await ctx.call("get_agent", { name: "ada" })).toContain("Name: ada");
-      expect(ctx.requests.some((r) => r.method === "GET" && r.path === "/v1/agents/ada")).toBe(true);
-      expect(await ctx.callExpectingError("get_agent", { name: "nobody" })).toContain("Agent not found");
+      expect(await ctx.call("get_agent", { agent_id: agentId })).toContain("Name: ada");
+      expect(ctx.requests.some((r) => r.method === "GET" && r.path === `/v1/agents/${agentId}`)).toBe(true);
+      expect(await ctx.callExpectingError("get_agent", { agent_id: mismatchedRequestId }))
+        .toContain("different immutable ID");
+      expect(await ctx.callExpectingError("get_agent", { agent_id: bareRequestId }))
+        .toContain("required { agent } envelope");
+      const requestCount = ctx.requests.length;
+      expect(await ctx.callExpectingError("get_agent", { name: "ada" })).toContain("exact agent_id");
+      expect(ctx.requests).toHaveLength(requestCount);
     },
   );
+});
+
+test("dependency analytics reject malformed or incomplete hosted success envelopes", async () => {
+  for (const response of [
+    {},
+    { dependencies: [], count: 0 },
+    { dependencies: [{ task_id: "a", depends_on: "b" }], count: 0, total: 1, limit: 500, offset: 0, has_more: false, next_offset: null },
+    { dependencies: [], count: 0, total: 1, limit: 500, offset: 0, has_more: true, next_offset: 0 },
+  ]) {
+    await withHostedTools(
+      registerTaskAutoTools as never,
+      { "GET /v1/dependencies": () => response },
+      async (ctx) => {
+        expect(await ctx.callExpectingError("get_blocking_tasks", {})).toContain("refusing incomplete dependency analytics");
+        expect(ctx.requests[0]?.query.get("limit")).toBe("500");
+        expect(ctx.requests[0]?.query.get("offset")).toBe("0");
+      },
+    );
+  }
 });

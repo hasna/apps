@@ -1987,17 +1987,64 @@ export async function handleV1Request(
       return error(405, `method ${method} not allowed on /v1/task-lists${id ? "/:id" : ""}`);
     }
 
-    // ── /v1/dependencies — every dependency edge in the dataset ──
-    // Edges are far fewer than tasks, so the whole set is cheap to return; the CLI
-    // derives blocked/ready/sprint/recap dependency analytics from it client-side
-    // instead of reading local sqlite.
+    // ── /v1/dependencies — dependency edges for bounded analytics ──
     if (resource === "dependencies" && !id) {
       if (method !== "GET") return error(405, `method ${method} not allowed on /v1/dependencies`);
-      if (typeof store.dependencies?.listAll !== "function") {
-        return error(501, "dependency edge listing is not supported by this storage backend");
+      const limitParam = url.searchParams.get("limit");
+      const offsetParam = url.searchParams.get("offset");
+      const requestedPage = limitParam !== null || offsetParam !== null;
+      const limit = limitParam === null ? 500 : Number(limitParam);
+      const offset = offsetParam === null ? 0 : Number(offsetParam);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+        return error(400, "dependency limit must be an integer from 1 to 500");
       }
-      const dependencies = await store.dependencies.listAll();
-      return json({ dependencies, count: dependencies.length });
+      if (!Number.isSafeInteger(offset) || offset < 0) {
+        return error(400, "dependency offset must be a non-negative integer");
+      }
+      if (!requestedPage) {
+        if (typeof store.dependencies?.listAll !== "function") {
+          return error(501, "complete legacy dependency listing is not supported by this storage backend");
+        }
+        const dependencies = await store.dependencies.listAll(contextFromPrincipal(principal));
+        // Preserve the original complete response for older callers. New
+        // clients always send limit/offset and take the storage-bounded path.
+        return json({
+          dependencies,
+          count: dependencies.length,
+          total: dependencies.length,
+          limit: dependencies.length,
+          offset: 0,
+          has_more: false,
+          next_offset: null,
+        });
+      }
+      if (typeof store.dependencies?.listPage !== "function") {
+        return error(501, "bounded dependency pagination is not supported by this storage backend");
+      }
+      const page = await store.dependencies.listPage(
+        { limit, offset },
+        contextFromPrincipal(principal),
+      );
+      if (
+        !page || !Array.isArray(page.dependencies) ||
+        !Number.isSafeInteger(page.total) || page.total < 0 ||
+        page.dependencies.length > limit || offset + page.dependencies.length > page.total
+      ) {
+        return error(500, "dependency storage returned an invalid bounded page");
+      }
+      const hasMore = offset + page.dependencies.length < page.total;
+      if (hasMore && page.dependencies.length === 0) {
+        return error(500, "dependency storage returned a stalled bounded page");
+      }
+      return json({
+        dependencies: page.dependencies,
+        count: page.dependencies.length,
+        total: page.total,
+        limit,
+        offset,
+        has_more: hasMore,
+        next_offset: hasMore ? offset + page.dependencies.length : null,
+      });
     }
 
     // ── /v1/commits/:sha — find the task that explains a commit SHA ──

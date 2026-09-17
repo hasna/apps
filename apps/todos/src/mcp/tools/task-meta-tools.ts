@@ -214,7 +214,7 @@ export function registerTaskMetaTools(server: McpServer, ctx: TaskMetaContext) {
             fail_task: "fail_task — Mark task failed. Params: task_id, reason, agent_id, version",
             register_agent: "register_agent — Register an agent. Params: name, description, role, title, capabilities, session_id, working_dir, force",
             list_agents: "list_agents — List registered agents. Params: include_archived",
-            get_agent: "get_agent — Get agent details. Params: agent_id, id, name",
+            get_agent: "get_agent — Get agent details by exact ID. Params: agent_id (or id alias)",
             update_agent: "update_agent — Update an agent. Params: agent_id, id, name, description, role, title, level, capabilities, permissions, metadata",
             delete_agent: "delete_agent — Archive an agent. Params: agent_id, id, name",
             unarchive_agent: "unarchive_agent — Restore an archived agent. Params: agent_id, id, name",

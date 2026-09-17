@@ -235,27 +235,26 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
   if (shouldRegisterTool("get_agent")) {
     server.tool(
       "get_agent",
-      "Get agent details by ID or name. Provide one of id or name.",
+      "Get agent details by exact immutable ID. Use list_agents to resolve a name first.",
       {
-        agent_id: z.string().optional(),
-        id: z.string().optional(),
-        name: z.string().optional(),
+        agent_id: z.string().optional().describe("Exact immutable agent ID"),
+        id: z.string().optional().describe("Compatibility alias for agent_id; exact immutable agent ID"),
       },
-      async ({ agent_id, id, name }) => {
+      async ({ agent_id, id }) => {
         try {
-          const identifier = agent_id || id || name;
+          const identifier = (agent_id || id || "").trim();
           if (!identifier) {
-            return { content: [{ type: "text" as const, text: "Provide agent_id, id, or name." }], isError: true };
+            return { content: [{ type: "text" as const, text: "Provide the exact agent_id. Use list_agents to resolve a name first." }], isError: true };
           }
-          // http authority routing: GET /v1/agents/:id (the route resolves by id
-          // OR name). `register_agent`/`list_agents` already read the shared
-          // roster, so reading this one locally 404'd every cloud-only agent.
+          // GET /v1/agents/:id is an exact-ID contract. The previous tool
+          // advertised name lookup even though the authority adapter calls
+          // store.agents.get(id), which made a name-shaped request a false 404.
           const cloud = getTodosCloudClient();
           const agent = cloud
             ? await cloudGetAgent(cloud, identifier)
-            : (getAgent(identifier) || getAgentByName(identifier));
+            : getAgent(identifier);
           if (!agent) {
-            return { content: [{ type: "text" as const, text: `Agent not found: ${identifier}` }], isError: true };
+            return { content: [{ type: "text" as const, text: `Agent not found by exact ID: ${identifier}` }], isError: true };
           }
           const parts = [
             `ID: ${agent.id}`,

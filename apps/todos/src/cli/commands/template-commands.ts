@@ -175,11 +175,13 @@ export function registerTemplateCommands(program: Command): void {
               template,
               targetProjectId,
               variables,
-              globalOpts.agent,
               {
-                title: opts.title,
-                description: opts.description,
-                priority: opts.priority,
+                actorAgentId: globalOpts.agent,
+                overrides: {
+                  title: opts.title,
+                  description: opts.description,
+                  priority: opts.priority,
+                },
               },
             );
             if (globalOpts.json) {
