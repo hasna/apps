@@ -1,4 +1,4 @@
-import { LocalStore } from "../../db/store.js";
+import { LocalStore } from "../../db/local-store.js";
 import { useLocalStoreFixture } from "../../test/local-store-fixture.test-support.js";
 useLocalStoreFixture();
 import React from "react";
