@@ -336,6 +336,14 @@ credentials may come from Bun's standard AWS chain (including an ECS task role);
 explicit static credentials are optional and must be a complete pair. Status
 never prints credential values or the bucket name.
 
+The production deployment runs the immutable predeploy backup push and verify
+as direct Bun commands in the exact candidate image. The GitHub runner alone
+parses the push receipt, then supplies the recorded payload and manifest version
+IDs to verification; it also checks the receipt digest and size, COMPLIANCE
+Object Lock retention for both versions, and an exact versioned-payload
+readback. Every backup gate completes before any ECR push, database migration,
+or ECS update.
+
 The public importable surface is available at `@hasna/instructions/storage`.
 
 ## Data Directory
