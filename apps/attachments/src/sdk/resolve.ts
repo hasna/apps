@@ -141,12 +141,14 @@ export function createAttachmentsApiClient(
     new Headers(init?.headers ?? {}).forEach((value, key) => {
       headers[key] = value;
     });
-    try {
-      const fresh = resolveAttachmentsSdkTransport(refreshOptions).apiKey;
-      if (fresh) headers["x-api-key"] = fresh;
-    } catch {
-      // keep the credential the client was constructed with
+    // A failed refresh is terminal: using the construction-time key would
+    // silently undo a removal or an explicit credential selection.
+    const fresh = resolveAttachmentsSdkTransport(refreshOptions);
+    if (fresh.baseUrl !== resolved.baseUrl) {
+      throw new Error("Attachments API authority changed; construct a new client explicitly.");
     }
+    if (!fresh.apiKey) throw new Error("ATTACHMENTS_CREDENTIAL_MISSING: no current API key resolved.");
+    headers["x-api-key"] = fresh.apiKey;
     return baseFetch(input, { ...init, headers });
   }) as typeof fetch;
   return new AttachmentsApiClient({
