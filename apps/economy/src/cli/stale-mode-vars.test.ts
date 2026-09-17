@@ -123,58 +123,56 @@ describe('stale storage-mode variables gate no command (owner directive 2026-08-
     }
   })
 
-  test('hosted: transport and data reads resolve with every retired variable set', async () => {
+  // Give each retired variable its own result and two-child timeout budget.
+  // The former eight-child case exceeded Bun's 5s default on CI.
+  test.each(STALE_MODE_VARS)('hosted: transport and data reads ignore %s', async (staleKey) => {
     const db = openDatabase(':memory:', true)
     upsertSession(db, session())
     upsertRequest(db, request())
     const api = startCloudApi(db)
 
-    for (const staleKey of STALE_MODE_VARS) {
-      const env = {
-        HOME: '',
-        HASNA_ECONOMY_API_URL: api.url,
-        HASNA_ECONOMY_API_KEY: 'test-key',
-        [staleKey]: 'cloud',
-      }
-
-      const transport = await runCli(['transport', '--json'], env)
-      expect(transport.exitCode, `${staleKey} must not fail transport`).toBe(0)
-      expect(transport.stdout).toContain('"transport": "http"')
-      expect(transport.stderr).not.toContain('was removed')
-
-      const sessions = await runCli(['sessions', '--limit', '5'], env)
-      expect(sessions.exitCode, `${staleKey} must not fail sessions`).toBe(0)
-      expect(sessions.stdout).toContain('stale-mode')
+    const env = {
+      HOME: '',
+      HASNA_ECONOMY_API_URL: api.url,
+      HASNA_ECONOMY_API_KEY: 'test-key',
+      [staleKey]: 'cloud',
     }
+
+    const transport = await runCli(['transport', '--json'], env)
+    expect(transport.exitCode, `${staleKey} must not fail transport`).toBe(0)
+    expect(transport.stdout).toContain('"transport": "http"')
+    expect(transport.stderr).not.toContain('was removed')
+
+    const sessions = await runCli(['sessions', '--limit', '5'], env)
+    expect(sessions.exitCode, `${staleKey} must not fail sessions`).toBe(0)
+    expect(sessions.stdout).toContain('stale-mode')
   })
 
-  test('local opt-in: transport and data reads resolve with every retired variable set', async () => {
-    for (const staleKey of STALE_MODE_VARS) {
-      const tempRoot = mkdtempSync(join(tmpdir(), 'economy-stale-mode-local-'))
-      tempRoots.push(tempRoot)
-      mkdirSync(join(tempRoot, '.claude'), { recursive: true })
-      const dbPath = join(tempRoot, 'economy.db')
-      const db = openDatabase(dbPath)
-      upsertSession(db, session())
-      upsertRequest(db, request())
-      db.close()
+  test.each(STALE_MODE_VARS)('local opt-in: transport and data reads ignore %s', async (staleKey) => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'economy-stale-mode-local-'))
+    tempRoots.push(tempRoot)
+    mkdirSync(join(tempRoot, '.claude'), { recursive: true })
+    const dbPath = join(tempRoot, 'economy.db')
+    const db = openDatabase(dbPath)
+    upsertSession(db, session())
+    upsertRequest(db, request())
+    db.close()
 
-      const env = {
-        HOME: tempRoot,
-        HASNA_HOME: join(tempRoot, '.hasna'),
-        HASNA_ECONOMY_LOCAL: '1',
-        HASNA_ECONOMY_DB_PATH: dbPath,
-        [staleKey]: 'local',
-      }
-
-      const transport = await runCli(['transport', '--json'], env)
-      expect(transport.exitCode, `${staleKey} must not fail transport`).toBe(0)
-      expect(transport.stdout).toContain('"transport": "sqlite"')
-
-      const sessions = await runCli(['sessions', '--limit', '5'], env)
-      expect(sessions.exitCode, `${staleKey} must not fail sessions`).toBe(0)
-      expect(sessions.stdout).toContain('stale-mode')
-      expect(sessions.stderr).not.toContain('was removed')
+    const env = {
+      HOME: tempRoot,
+      HASNA_HOME: join(tempRoot, '.hasna'),
+      HASNA_ECONOMY_LOCAL: '1',
+      HASNA_ECONOMY_DB_PATH: dbPath,
+      [staleKey]: 'local',
     }
+
+    const transport = await runCli(['transport', '--json'], env)
+    expect(transport.exitCode, `${staleKey} must not fail transport`).toBe(0)
+    expect(transport.stdout).toContain('"transport": "sqlite"')
+
+    const sessions = await runCli(['sessions', '--limit', '5'], env)
+    expect(sessions.exitCode, `${staleKey} must not fail sessions`).toBe(0)
+    expect(sessions.stdout).toContain('stale-mode')
+    expect(sessions.stderr).not.toContain('was removed')
   })
 })
