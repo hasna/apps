@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -572,6 +572,11 @@ describe("restore max-age gate", () => {
   };
   const now = "2026-08-24T00:00:00.000Z"; // exactly 66 days after the snapshot
   const DAY_MS = 86_400_000;
+
+  // createRestorePlan uses the system clock, unlike the explicitly timed
+  // assertSnapshotWithinMaxAge calls below. Keep both on the same fixture date.
+  beforeEach(() => setSystemTime(new Date(now)));
+  afterEach(() => setSystemTime());
 
   function projectResource(id: string): StoredSnapshotResource {
     return {
