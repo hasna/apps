@@ -191,7 +191,7 @@ test("leaves an unwaived extra package bin fatal", () => {
     // The runtime /health probe serves the richer foundation envelope
     // { status, version, storage, connection } (asserted in scripts/smoke-serve.ts);
     // the conformance sample must match the strict { status, version, backend }
-    // HealthResponseSchema of @hasna/contracts 1.0.2, which rejects extra keys
+    // HealthResponseSchema of @hasna/contracts 1.1.0, which rejects extra keys
     // and represents exactly one server backend: postgresql.
     const configured = contractHealthResponse({ HASNA_LOOPS_DATABASE_URL: "postgres://loops.example.test/openloops" });
     expect(configured).toEqual({ status: "ok", version: expect.any(String), backend: "postgresql" });

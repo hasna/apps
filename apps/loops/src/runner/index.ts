@@ -16,7 +16,7 @@ import type {
 import { executeLoop } from "../lib/executor.js";
 import { classifyLoopExecutionResult } from "../lib/loop-result.js";
 import { executeLoopTarget, type WorkflowExecutionStore } from "../lib/workflow-runner.js";
-import { resolveClientTransport, resolveCredential } from "@hasna/contracts/client";
+import { completePointerCredential, resolveClientTransport, resolveCredential, type ResolvedCredential } from "@hasna/contracts/client";
 import { loopControlPlaneConfig, type RuntimeConfig } from "../lib/runtime-config.js";
 import { applyRunnerEnvFile } from "./env-file.js";
 import { LoopsApiError, RunnerRefusalError, VersionProbeError } from "./errors.js";
@@ -70,29 +70,47 @@ program
   .version(packageVersion())
   .option("-j, --json", "print JSON");
 
-function configuredApiUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  // The shared @hasna/contracts resolver decides the authority, fresh on every
-  // call: HASNA_LOOPS_API_URL, the Keychain api-url item, the credential file,
-  // then the fleet gateway — so a station needs no inline env prefix and a
-  // rotation heals without a restart. The runner dials root-level paths
-  // (/version) and /v1/... paths, so the transport's `<origin>/v1` base is
-  // stripped back to the origin. A forbidden/refused URL propagates loudly; an
-  // absent credential falls through to the caller's stable refusal message.
-  try {
-    return resolveClientTransport("loops", env).baseUrl.replace(/\/v1\/?$/, "");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!/no API key could be resolved/.test(message)) throw error;
-    return undefined;
-  }
+interface RunnerBindingSnapshot {
+  baseUrl: string;
+  credential: ResolvedCredential;
 }
 
-function configuredApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  // The shared resolver's full chain: an explicit argument/override, the
-  // Keychain item hasna.credentials.loops.api-key, the credential file
-  // ~/.hasna/loops/config/credentials, then HASNA_LOOPS_API_KEY. A deliberate
-  // tier that cannot be honoured throws rather than falling through.
-  return resolveCredential("loops", env)?.apiKey;
+function runnerBindingSnapshot(env: NodeJS.ProcessEnv): RunnerBindingSnapshot {
+  const baseUrl = resolveClientTransport("loops", env).baseUrl;
+  const credential = resolveCredential("loops", env);
+  if (!credential) throw new Error("loops-runner requires HASNA_LOOPS_API_KEY");
+  return { baseUrl, credential };
+}
+
+function sameRunnerBinding(left: RunnerBindingSnapshot, right: RunnerBindingSnapshot): boolean {
+  return left.baseUrl === right.baseUrl &&
+    left.credential.apiKey === right.credential.apiKey &&
+    left.credential.pointerVaultKey === right.credential.pointerVaultKey &&
+    left.credential.source === right.credential.source &&
+    left.credential.tier === right.credential.tier;
+}
+
+async function stableRunnerBinding(
+  env: NodeJS.ProcessEnv,
+  completePointer: (name: string, pointer: ResolvedCredential, env: NodeJS.ProcessEnv) => Promise<ResolvedCredential> = completePointerCredential,
+): Promise<{ apiUrl: string; token: string }> {
+  const first = runnerBindingSnapshot(env);
+  const reviewed = runnerBindingSnapshot(env);
+  if (!sameRunnerBinding(first, reviewed)) {
+    throw new Error("the Loops authority or credential changed while preparing the runner request; no request was sent");
+  }
+  const completed = reviewed.credential.tier === "pointer"
+    ? await completePointer("loops", reviewed.credential, env)
+    : reviewed.credential;
+  if (!completed.apiKey) throw new Error("loops-runner requires HASNA_LOOPS_API_KEY");
+  const immediatelyBeforeDispatch = runnerBindingSnapshot(env);
+  if (!sameRunnerBinding(reviewed, immediatelyBeforeDispatch)) {
+    throw new Error("the Loops authority or credential changed during Secrets completion; no request was sent");
+  }
+  return {
+    apiUrl: immediatelyBeforeDispatch.baseUrl.replace(/\/v1\/?$/, ""),
+    token: completed.apiKey,
+  };
 }
 
 /**
@@ -214,6 +232,8 @@ export interface RunRunnerOnceOptions {
   fetchImpl?: typeof fetch;
   execute?: (loop: Loop, run: LoopRun, opts?: { signal?: AbortSignal }) => Promise<ExecutorResult>;
   env?: NodeJS.ProcessEnv;
+  /** Test seam for Secrets-pointer completion; production uses the installed SDK. */
+  completePointer?: (name: string, pointer: ResolvedCredential, env: NodeJS.ProcessEnv) => Promise<ResolvedCredential>;
 }
 
 export interface RunRunnerLoopOptions extends RunRunnerOnceOptions {
@@ -241,18 +261,37 @@ function resolveClaimScope(
   return value as RunnerClaimScope;
 }
 
-function resolveRunnerConfig(opts: RunRunnerOnceOptions): {
+async function resolveRunnerConfig(opts: RunRunnerOnceOptions): Promise<{
   apiUrl: string;
   token?: string;
   runnerId: string;
   machineId?: string;
   claimScope?: RunnerClaimScope;
-} {
+}> {
   const env = opts.env ?? process.env;
-  const apiUrl = opts.apiUrl ?? configuredApiUrl(env);
-  if (!apiUrl) throw new Error("loops-runner requires HASNA_LOOPS_API_URL");
-  const token = opts.apiKey ?? configuredApiKey(env);
-  if (!token) throw new Error("loops-runner requires HASNA_LOOPS_API_KEY");
+  let apiUrl: string;
+  let token: string;
+  if (opts.apiKey !== undefined) {
+    token = opts.apiKey;
+    if (!token) throw new Error("loops-runner requires HASNA_LOOPS_API_KEY");
+    if (opts.apiUrl !== undefined) apiUrl = opts.apiUrl;
+    else apiUrl = runnerBindingSnapshot(env).baseUrl.replace(/\/v1\/?$/, "");
+  } else {
+    if (opts.apiUrl !== undefined && resolveCredential("loops", env) === null) {
+      throw new Error("loops-runner requires HASNA_LOOPS_API_KEY");
+    }
+    const binding = await stableRunnerBinding(env, opts.completePointer);
+    apiUrl = binding.apiUrl;
+    token = binding.token;
+    if (opts.apiUrl !== undefined) {
+      const explicit = opts.apiUrl.replace(/\/v1\/?$/, "").replace(/\/$/, "");
+      const resolved = apiUrl.replace(/\/$/, "");
+      if (explicit !== resolved) {
+        throw new Error("the explicit Loops runner authority does not match the authority paired with the resolved credential");
+      }
+      apiUrl = explicit;
+    }
+  }
   return {
     apiUrl,
     token,
@@ -594,7 +633,7 @@ class RunnerWorkflowApiStore implements WorkflowExecutionStore {
 }
 
 export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<RunnerOnceResult> {
-  const config = resolveRunnerConfig(opts);
+  const config = await resolveRunnerConfig(opts);
   const fetchImpl = opts.fetchImpl ?? fetch;
   if (config.claimScope === "bound") await assertClaimScopeEnforceable(fetchImpl, config);
   const runnerBody = {
@@ -652,7 +691,7 @@ export async function runRunnerOnce(opts: RunRunnerOnceOptions = {}): Promise<Ru
 }
 
 export async function runRunnerLoop(opts: RunRunnerLoopOptions = {}): Promise<RunnerLoopResult> {
-  resolveRunnerConfig(opts);
+  await resolveRunnerConfig(opts);
   const pollIntervalMs = normalizedInteger(opts.pollIntervalMs ?? DEFAULT_RUNNER_POLL_INTERVAL_MS, "pollIntervalMs", 1);
   const maxIterations = opts.maxIterations === undefined
     ? undefined

@@ -49,7 +49,7 @@ async function runMcp(args: string[], probeHttp = false): Promise<RunResult> {
       HASNA_HOME: join(root, "home"),
       HASNA_CONFIG_HOME: join(root, "config"),
       LOOPS_DATA_DIR: join(root, "data"),
-      HASNA_LOOPS_CONNECTION: "file",
+      HASNA_LOOPS_LOCAL: "1",
       MCP_HTTP_PORT: "0",
     },
     stdout: "pipe",

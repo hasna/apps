@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
+import type { ResolvedCredential } from "@hasna/contracts/client";
 import { createLoopsApiServer } from "../api/index.js";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
 import { applyRunnerEnvFile } from "./env-file.js";
@@ -374,6 +375,97 @@ describe("loops-runner", () => {
       if (previousApiKey === undefined) delete process.env.HASNA_LOOPS_API_KEY;
       else process.env.HASNA_LOOPS_API_KEY = previousApiKey;
     }
+  });
+
+  test("runRunnerOnce completes a Secrets pointer before the first claim and never falls back locally", async () => {
+    const seen: ResolvedCredential[] = [];
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+    const result = await runRunnerOnce({
+      env: {
+        HASNA_LOOPS_API_URL: "https://api.hasna.com/loops",
+        HASNA_LOOPS_API_KEY_REF: "fleet/loops/live/api_key",
+      },
+      completePointer: async (_name, pointer) => {
+        seen.push(pointer);
+        return {
+          ...pointer,
+          apiKey: "completed-runner-key",
+          tier: "pointer",
+          source: "HASNA_LOOPS_API_KEY_REF -> vault item fleet/loops/live/api_key",
+          deliberate: true,
+          diskCandidates: pointer.diskCandidates,
+          warning: null,
+        };
+      },
+      fetchImpl: (async (input: string | URL | Request, init?: RequestInit) => {
+        const request = new Request(input, init);
+        requests.push({ url: request.url, authorization: request.headers.get("authorization") });
+        return new Response(JSON.stringify({ claims: [] }), { status: 200 });
+      }) as unknown as typeof fetch,
+      runnerId: "runner-pointer",
+    });
+
+    expect(result).toEqual({ ok: true, claimed: 0, completed: [] });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.pointerVaultKey).toBe("fleet/loops/live/api_key");
+    expect(requests).toEqual([{
+      url: "https://api.hasna.com/loops/v1/runners/claim",
+      authorization: "Bearer completed-runner-key",
+    }]);
+
+    const racingEnv: NodeJS.ProcessEnv = {
+      HASNA_LOOPS_API_URL: "https://api.hasna.com/loops",
+      HASNA_LOOPS_API_KEY_REF: "fleet/loops/live/api_key",
+    };
+    let dispatched = false;
+    await expect(runRunnerOnce({
+      env: racingEnv,
+      completePointer: async (_name, pointer) => {
+        racingEnv.HASNA_LOOPS_API_URL = "https://other.example.test";
+        return {
+          ...pointer,
+          apiKey: "completed-racing-runner-key",
+          tier: "pointer",
+          source: "HASNA_LOOPS_API_KEY_REF -> vault item fleet/loops/live/api_key",
+          deliberate: true,
+          diskCandidates: pointer.diskCandidates,
+          warning: null,
+        };
+      },
+      fetchImpl: (async () => {
+        dispatched = true;
+        return new Response(JSON.stringify({ claims: [] }), { status: 200 });
+      }) as unknown as typeof fetch,
+      runnerId: "runner-pointer-race",
+    })).rejects.toThrow(/changed during Secrets completion/);
+    expect(dispatched).toBe(false);
+
+    const pointerDriftEnv: NodeJS.ProcessEnv = {
+      HASNA_LOOPS_API_URL: "https://api.hasna.com/loops",
+      HASNA_LOOPS_API_KEY_REF: "fleet/loops/live/api_key",
+    };
+    let pointerDriftDispatched = false;
+    await expect(runRunnerOnce({
+      env: pointerDriftEnv,
+      completePointer: async (_name, pointer) => {
+        pointerDriftEnv.HASNA_LOOPS_API_KEY_REF = "other/loops/live/api_key";
+        return {
+          ...pointer,
+          apiKey: "completed-pointer-drift-runner-key",
+          tier: "pointer",
+          source: "HASNA_LOOPS_API_KEY_REF -> vault item fleet/loops/live/api_key",
+          deliberate: true,
+          diskCandidates: pointer.diskCandidates,
+          warning: null,
+        };
+      },
+      fetchImpl: (async () => {
+        pointerDriftDispatched = true;
+        return new Response(JSON.stringify({ claims: [] }), { status: 200 });
+      }) as unknown as typeof fetch,
+      runnerId: "runner-pointer-identity-race",
+    })).rejects.toThrow(/changed during Secrets completion/);
+    expect(pointerDriftDispatched).toBe(false);
   });
 
   test("runRunnerOnce claims, executes, and finalizes one API run", async () => {

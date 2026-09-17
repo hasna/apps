@@ -212,7 +212,7 @@ function foundationEnvelope(
 }
 
 /**
- * Strict health payload for the @hasna/contracts 1.0.2 `HealthResponseSchema`
+ * Strict health payload for the @hasna/contracts 1.1.0 `HealthResponseSchema`
  * ({ status, version, backend } — extra keys are rejected). This is the
  * conformance sample, not the wire envelope: the runtime /health probe serves
  * the richer foundationEnvelope ({ status, version, storage, connection }).

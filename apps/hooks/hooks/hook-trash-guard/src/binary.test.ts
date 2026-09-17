@@ -20,7 +20,7 @@ function fixture(name = "@hasna/trash", protocol = "hasna.trash.guard.v1") {
   const pkg = join(root, "node_modules/@hasna/trash");
   mkdirSync(join(pkg, "dist/cli"), { recursive: true });
   mkdirSync(join(root, "bin"), { recursive: true });
-  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name, version: "0.1.1", bin: { trash: "dist/cli/index.js" } }));
+  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name, version: "0.1.1", bin: { trash: "dist/cli/index.js" } }), { mode: 0o600 });
   const executable = join(pkg, "dist/cli/index.js");
   writeFileSync(executable, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ name, version: "0.1.1", guardProtocol: protocol })}'\n`);
   chmodSync(executable, 0o755);
