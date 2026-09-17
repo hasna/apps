@@ -28,8 +28,9 @@ import {
   type MessagesClientResolveOptions,
   type MessagesClientTransportReport,
 } from "../sdk";
-import { MessagesService } from "../service";
-import { SqliteMessagesStore } from "../server/sqlite-store";
+import type { MessagesService } from "../service";
+import { loadLocalMessagesService } from "../local-store-loader";
+import { loadServeEntry } from "../serve-loader";
 import { version } from "../version";
 import { AGENT_DEFAULT_HINT, requireAgent } from "./identity";
 
@@ -59,11 +60,11 @@ function cliResolveOptions(opts: CliOpts): MessagesClientResolveOptions {
  * @hasna/contracts resolver. Fails closed: hosted with no credential throws
  * and the top-level handler exits non-zero with the actionable error.
  */
-function resolveStore(opts: CliOpts): {
+async function resolveStore(opts: CliOpts): Promise<{
   transport: "http" | "local";
   local?: MessagesService;
   remote?: ReturnType<typeof createMessagesClient>;
-} {
+}> {
   const report = resolveMessagesClientTransport(
     process.env,
     cliResolveOptions(opts),
@@ -79,7 +80,7 @@ function resolveStore(opts: CliOpts): {
   }
   return {
     transport: "local",
-    local: new MessagesService(new SqliteMessagesStore()),
+    local: await loadLocalMessagesService(process.env),
   };
 }
 
@@ -192,7 +193,7 @@ withJsonFlag(program.command("register"))
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
   .action(async (opts: { name?: string; displayName?: string } & CliOpts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     if (store.transport === "http") {
       print(
         await store.remote!.registerAgent(
@@ -221,7 +222,7 @@ withJsonFlag(program.command("agents"))
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
   .action(async (opts: CliOpts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     const agents =
       store.transport === "http"
         ? (await store.remote!.listAgents()).agents
@@ -245,7 +246,7 @@ withJsonFlag(program.command("discover"))
   .action(async (opts) => {
     if (opts.online && opts.offline)
       throw new Error("choose --online or --offline");
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     const svc = store.remote ?? store.local!;
     print(
       await svc.discoverAgents({
@@ -270,7 +271,7 @@ withJsonFlag(program.command("heartbeat"))
   .option("--url <url>", "messages-serve base URL")
   .option("--api-key <key>", "explicit API key")
   .action(async (opts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     print(
       await (store.remote ?? store.local!).heartbeat({
         runtime_id: opts.runtime,
@@ -291,7 +292,7 @@ withJsonFlag(program.command("inbox"))
   .option("--url <url>", "messages-serve base URL")
   .option("--api-key <key>", "explicit API key")
   .action(async (opts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     print(
       store.remote
         ? await store.remote.runtimeInbox(
@@ -312,7 +313,7 @@ withJsonFlag(program.command("ack"))
   .option("--url <url>", "messages-serve base URL")
   .option("--api-key <key>", "explicit API key")
   .action(async (opts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     print(
       await (store.remote ?? store.local!).acknowledge(opts.runtime, opts.ids),
     );
@@ -330,7 +331,7 @@ withJsonFlag(program.command("whoami"))
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
   .action(async (opts: { agent?: string } & CliOpts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     const agent =
       store.transport === "http"
         ? (await store.remote!.registerAgent(requireAgent(opts.agent))).agent
@@ -371,7 +372,7 @@ withJsonFlag(program.command("send"))
         idempotencyKey?: string;
       } & CliOpts,
     ) => {
-      const store = resolveStore(opts);
+      const store = await resolveStore(opts);
       const result =
         store.transport === "http"
           ? await store.remote!.send(
@@ -406,7 +407,7 @@ withJsonFlag(program.command("receive"))
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
   .action(async (opts: { agent?: string } & CliOpts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     const messages =
       store.transport === "http"
         ? (await store.remote!.receive(requireAgent(opts.agent))).messages
@@ -428,7 +429,7 @@ withJsonFlag(program.command("delivery"))
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
   .action(async (opts: { id: string } & CliOpts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     const deliveries =
       store.transport === "http"
         ? (await store.remote!.deliveryStatus(opts.id)).deliveries
@@ -454,7 +455,7 @@ withJsonFlag(program.command("threads"))
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
   .action(async (opts: { agent?: string; all?: boolean } & CliOpts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     const threads =
       store.transport === "http"
         ? (await store.remote!.threads(requireAgent(opts.agent), !opts.all))
@@ -480,7 +481,7 @@ withJsonFlag(program.command("thread"))
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
   .action(async (opts: { id: string; agent?: string } & CliOpts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     const result =
       store.transport === "http"
         ? await store.remote!.thread(opts.id, requireAgent(opts.agent))
@@ -500,7 +501,7 @@ withJsonFlag(program.command("unread"))
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
   .action(async (opts: { agent?: string } & CliOpts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     if (store.transport === "http") {
       print(await store.remote!.unread(requireAgent(opts.agent)));
       return;
@@ -527,7 +528,7 @@ withJsonFlag(program.command("read"))
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
   .action(async (opts: { id: string; agent?: string } & CliOpts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     if (store.transport === "http") {
       await store.remote!.markRead(opts.id, requireAgent(opts.agent));
     } else {
@@ -551,7 +552,7 @@ withJsonFlag(program.command("close"))
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
   .action(async (opts: { id: string; agent?: string } & CliOpts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     const thread =
       store.transport === "http"
         ? (await store.remote!.closeThread(opts.id, requireAgent(opts.agent)))
@@ -573,7 +574,7 @@ withJsonFlag(program.command("reopen"))
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
   .action(async (opts: { id: string; agent?: string } & CliOpts) => {
-    const store = resolveStore(opts);
+    const store = await resolveStore(opts);
     const thread =
       store.transport === "http"
         ? (await store.remote!.reopenThread(opts.id, requireAgent(opts.agent)))
@@ -618,7 +619,7 @@ program
   .command("serve")
   .description("Start the messages-serve HTTP API")
   .action(async () => {
-    const { serve } = await import("../server/serve-entry");
+    const { serve } = await loadServeEntry();
     await serve();
   });
 
