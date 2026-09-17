@@ -26,6 +26,14 @@ import {
   ProjectContactLinkOperationError,
 } from "../lib/project-contact-links.js";
 import { ContactsAuthorityHttpError } from "../lib/contacts-authority-adapter.js";
+import {
+  isProjectQueryScope,
+  MAX_PROJECT_QUERY_LENGTH,
+  MAX_PROJECT_QUERY_TAG_LENGTH,
+  MAX_PROJECT_QUERY_TAGS,
+  PROJECT_LIST_V2_CONTRACT,
+  type ProjectQueryScope,
+} from "../lib/project-list-output.js";
 
 export interface ServeAppOptions {
   store: ProjectsPgStore;
@@ -181,18 +189,45 @@ async function route(
     if (!id) {
       if (method === "GET") {
         const q = url.searchParams;
-        const tag = q.get("tag");
+        const rawQueryScope = q.get("query_scope");
+        const additiveTags = q.getAll("tags");
+        const usesV2Filters = rawQueryScope !== null || additiveTags.length > 0 || q.has("exclude_evals");
+        const legacyTag = q.get("tag");
+        const rawTags = usesV2Filters
+          ? [...(legacyTag ? [legacyTag] : []), ...additiveTags]
+          : legacyTag ? [legacyTag] : [];
+        if (usesV2Filters && rawTags.length > MAX_PROJECT_QUERY_TAGS) {
+          throw new ValidationError(`at most ${MAX_PROJECT_QUERY_TAGS} project tags may be queried`);
+        }
+        const tags = [...new Set(rawTags.filter(Boolean))];
+        if (usesV2Filters && tags.some((value) => value.length > MAX_PROJECT_QUERY_TAG_LENGTH)) {
+          throw new ValidationError(`project query tags must be at most ${MAX_PROJECT_QUERY_TAG_LENGTH} characters`);
+        }
+        const query = q.get("query");
+        if (usesV2Filters && query && query.length > MAX_PROJECT_QUERY_LENGTH) {
+          throw new ValidationError(`query must be at most ${MAX_PROJECT_QUERY_LENGTH} characters`);
+        }
+        let queryScope: ProjectQueryScope | undefined;
+        if (rawQueryScope) {
+          if (!isProjectQueryScope(rawQueryScope)) {
+            throw new ValidationError("query_scope must be one of: identity, discovery, structured, all");
+          }
+          queryScope = rawQueryScope;
+        }
         // Registry-fixture rows are excluded from default reads (same contract
         // as the CLI's `--include-fixtures` opt-in); `include_fixtures=true`
         // opts back into seeing them.
         const includeFixtures = q.get("include_fixtures") === "true";
+        const excludeEvals = q.get("exclude_evals") === "true";
         const filter = {
           ...(q.get("status") ? { status: q.get("status") as never } : {}),
           ...(q.get("kind") ? { kind: q.get("kind") as never } : {}),
           ...(q.get("root_id") ? { root_id: q.get("root_id")! } : {}),
-          ...(q.get("query") ? { query: q.get("query")! } : {}),
-          ...(tag ? { tags: [tag] } : {}),
+          ...(query ? { query } : {}),
+          ...(queryScope ? { query_scope: queryScope } : {}),
+          ...(tags.length ? { tags } : {}),
           ...(includeFixtures ? {} : { exclude_registry_fixtures: true }),
+          ...(excludeEvals ? { exclude_eval_artifacts: true } : {}),
           ...(q.get("limit") ? { limit: Number(q.get("limit")) } : {}),
           ...(q.get("offset") ? { offset: Number(q.get("offset")) } : {}),
         };
@@ -204,6 +239,13 @@ async function route(
         const offset = Math.max(Number(q.get("offset") ?? 0) || 0, 0);
         const total = await store.countWorkspaces(filter);
         return jsonResponse({
+          filter_contract: PROJECT_LIST_V2_CONTRACT,
+          applied_filters: {
+            query_scope: queryScope ?? "legacy",
+            tags,
+            exclude_evals: excludeEvals,
+            exclude_registry_fixtures: !includeFixtures,
+          },
           workspaces,
           count: workspaces.length,
           total,

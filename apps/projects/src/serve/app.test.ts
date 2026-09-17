@@ -629,7 +629,7 @@ describe("projects-serve auth", () => {
     expect(postRes.status).toBe(403);
   });
 
-  test("GET /v1/projects excludes registry fixtures by default; include_fixtures=true opts out", async () => {
+  test("GET /v1/projects passes query scope and explicit fixture/eval filters", async () => {
     const filters: Array<Record<string, unknown>> = [];
     const store = {
       ...fakeStore(),
@@ -642,15 +642,54 @@ describe("projects-serve auth", () => {
     const h = handler(store);
     const token = keyWith(["projects:read"]);
 
-    const def = await h(new Request("http://x/v1/projects", { headers: { "x-api-key": token } }));
+    const def = await h(new Request("http://x/v1/projects?query=projects&query_scope=discovery", { headers: { "x-api-key": token } }));
     expect(def.status).toBe(200);
+    expect(await def.json()).toMatchObject({
+      filter_contract: "projects.list.v2",
+      applied_filters: {
+        query_scope: "discovery",
+        tags: [],
+        exclude_evals: false,
+        exclude_registry_fixtures: true,
+      },
+    });
     const inc = await h(
       new Request("http://x/v1/projects?include_fixtures=true", { headers: { "x-api-key": token } }),
     );
     expect(inc.status).toBe(200);
 
-    expect(filters[0]).toMatchObject({ exclude_registry_fixtures: true });
+    expect(filters[0]).toMatchObject({
+      query: "projects",
+      query_scope: "discovery",
+      exclude_registry_fixtures: true,
+    });
+    expect(filters[0]).not.toHaveProperty("exclude_eval_artifacts");
     expect(filters[1]).not.toHaveProperty("exclude_registry_fixtures");
+    expect(filters[1]).not.toHaveProperty("exclude_eval_artifacts");
+
+    const repeated = await h(
+      new Request("http://x/v1/projects?tag=web&tags=ts&tags=web", { headers: { "x-api-key": token } }),
+    );
+    expect(repeated.status).toBe(200);
+    expect(filters[2]).toMatchObject({ tags: ["web", "ts"] });
+
+    const excluded = await h(
+      new Request("http://x/v1/projects?exclude_evals=true", { headers: { "x-api-key": token } }),
+    );
+    expect(excluded.status).toBe(200);
+    expect(filters[3]).toMatchObject({ exclude_eval_artifacts: true });
+
+    const invalid = await h(
+      new Request("http://x/v1/projects?query_scope=filesystem", { headers: { "x-api-key": token } }),
+    );
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({ error: "query_scope must be one of: identity, discovery, structured, all" });
+
+    const tooManyTags = new URL("http://x/v1/projects");
+    for (let index = 0; index < 51; index += 1) tooManyTags.searchParams.append("tags", `tag-${index}`);
+    const bounded = await h(new Request(tooManyTags, { headers: { "x-api-key": token } }));
+    expect(bounded.status).toBe(400);
+    expect(await bounded.json()).toEqual({ error: "at most 50 project tags may be queried" });
   });
 
   test("wildcard key can create and read back a project", async () => {

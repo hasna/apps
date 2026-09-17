@@ -26,9 +26,22 @@ import {
   type ProjectBudgetStatus,
 } from "../lib/budget.js";
 import { filterProjectEvalArtifacts } from "../lib/project-eval-artifacts.js";
+import { filterRegistryFixtures } from "../lib/project-registry-fixtures.js";
 import { assertProjectChannelIntegrationWritable, projectChannelSummary, resolveProjectChannelForProject } from "../lib/project-channel.js";
 import { repairProjectPermissions } from "../lib/project-permissions.js";
 import { redactProjectValue } from "../lib/redaction.js";
+import {
+  DEFAULT_PROJECT_LIST_MAX_BYTES,
+  MAX_PROJECT_LIST_MAX_BYTES,
+  MIN_PROJECT_LIST_MAX_BYTES,
+  MAX_PROJECT_QUERY_LENGTH,
+  MAX_PROJECT_QUERY_TAG_LENGTH,
+  MAX_PROJECT_QUERY_TAGS,
+  PROJECT_LIST_FIELDS,
+  buildBoundedProjectListOutput,
+  projectListRow,
+  resolveProjectListFields,
+} from "../lib/project-list-output.js";
 import {
   PROJECT_PRIORITIES,
   PROJECT_STAGES,
@@ -76,7 +89,7 @@ import {
   type WorkspaceCreationPlanAction,
 } from "../lib/workspace-plan.js";
 import { applyWorkspaceTmuxProfile, workspaceMarkerPath } from "../lib/workspace-runtime.js";
-import { PROJECT_AGENT_ROLES, type AgentKind, type JsonObject, type Workspace, type WorkspaceEvent, type WorkspaceIntegrations, type WorkspaceKind, type WorkspaceLocation, type WorkspaceLock } from "../types/workspace.js";
+import { PROJECT_AGENT_ROLES, WORKSPACE_KINDS, type AgentKind, type JsonObject, type Workspace, type WorkspaceEvent, type WorkspaceIntegrations, type WorkspaceKind, type WorkspaceLocation, type WorkspaceLock } from "../types/workspace.js";
 
 const DEFAULT_MCP_LIST_LIMIT = 25;
 const DEFAULT_MCP_EVENT_LIMIT = 20;
@@ -893,6 +906,97 @@ server.tool(
       has_more: projects.length > visible.length,
       next_steps: "Use projects_show with an id/slug for details, omit compact or pass verbose=true for full records, or limit/query/tags filters to narrow results.",
     });
+  },
+);
+
+server.tool(
+  "projects_search",
+  "Search registered projects with a compact bounded page by default. Searches discovery fields unless query_scope is explicit; use projects_show for full detail. Legacy projects_list remains unchanged.",
+  {
+    query: z.string().trim().min(1).max(MAX_PROJECT_QUERY_LENGTH),
+    query_scope: z.enum(["identity", "discovery", "structured", "all"]).optional(),
+    kind: z.enum(WORKSPACE_KINDS).optional(),
+    status: z.enum(["active", "archived", "deleted"]).optional(),
+    tags: z.array(z.string().trim().min(1).max(MAX_PROJECT_QUERY_TAG_LENGTH)).max(MAX_PROJECT_QUERY_TAGS).optional(),
+    include_evals: z.boolean().optional(),
+    include_fixtures: z.boolean().optional(),
+    limit: z.number().int().positive().max(100).optional(),
+    offset: z.number().int().nonnegative().optional(),
+    detail: z.enum(["compact", "full"]).optional(),
+    fields: z.array(z.enum(PROJECT_LIST_FIELDS)).min(1).max(PROJECT_LIST_FIELDS.length).optional(),
+    max_bytes: z.number().int().min(MIN_PROJECT_LIST_MAX_BYTES).max(MAX_PROJECT_LIST_MAX_BYTES).optional(),
+    pretty: z.boolean().optional(),
+  },
+  async (input) => {
+    try {
+      const store = resolveProjectStore();
+      const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
+      const offset = input.offset ?? 0;
+      const detail = input.detail ?? "compact";
+      if (detail === "full" && input.fields) {
+        return errorText("fields is only available with detail=compact");
+      }
+      const fields = detail === "compact" ? resolveProjectListFields(input.fields) : null;
+      const queryScope = input.query_scope ?? "discovery";
+      const page = await store.listProjectsPage({
+        kind: input.kind as WorkspaceKind | undefined,
+        status: input.status,
+        query: input.query,
+        query_scope: queryScope,
+        tags: input.tags,
+        exclude_eval_artifacts: !input.include_evals,
+        exclude_registry_fixtures: !input.include_fixtures,
+        limit,
+        offset,
+        require_list_v2_contract: true,
+      });
+      const projects = filterRegistryFixtures(
+        filterProjectEvalArtifacts(page.projects, input.include_evals),
+        input.include_fixtures,
+      );
+      if (projects.length !== page.projects.length) {
+        return errorText("Projects producer attested the v2 filter contract but returned an excluded eval/fixture row.");
+      }
+      const total = page.total;
+      const rows: unknown[] = detail === "full"
+        ? projects
+        : projects.map((project) => projectListRow(project, fields ?? undefined));
+      const safeRows = redactProjectValue(rows) as unknown[];
+      const nextArguments = redactProjectValue({
+        query: input.query,
+        query_scope: queryScope,
+        ...(input.kind ? { kind: input.kind } : {}),
+        ...(input.status ? { status: input.status } : {}),
+        ...(input.tags ? { tags: input.tags } : {}),
+        ...(input.include_evals ? { include_evals: true } : {}),
+        ...(input.include_fixtures ? { include_fixtures: true } : {}),
+        detail,
+        ...(fields ? { fields } : {}),
+        max_bytes: input.max_bytes ?? DEFAULT_PROJECT_LIST_MAX_BYTES,
+        ...(input.pretty ? { pretty: true } : {}),
+      }) as Record<string, unknown>;
+      const output = buildBoundedProjectListOutput({
+        projects: safeRows,
+        total,
+        offset: page.offset,
+        limit: page.limit,
+        detail,
+        fields,
+        queryScope,
+        hasMore: page.has_more,
+        complete: page.complete,
+        nextOffset: page.has_more ? page.offset + page.projects.length : null,
+        nextArguments,
+      }, {
+        maxBytes: input.max_bytes ?? DEFAULT_PROJECT_LIST_MAX_BYTES,
+        pretty: input.pretty,
+      });
+      return {
+        content: [{ type: "text" as const, text: output.text }],
+      };
+    } catch (err) {
+      return errorText(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    }
   },
 );
 

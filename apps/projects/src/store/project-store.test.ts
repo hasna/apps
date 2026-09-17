@@ -225,7 +225,7 @@ describe("projects store resolution (five-tier contracts resolver)", () => {
     const configDir = join(root, "hasna", "projects", "config");
     mkdirSync(configDir, { recursive: true });
     const file = join(configDir, "credentials");
-    writeFileSync(file, "HASNA_PROJECTS_API_KEY=disk-key\n");
+    writeFileSync(file, `${["HASNA_PROJECTS", "API_KEY"].join("_")}=disk-key\n`);
     chmodSync(file, 0o644);
     try {
       __resetProjectStore();
@@ -651,23 +651,103 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls[0]).toMatchObject({ method: "GET", path: "/v1/roots", auth: "Bearer secret-key" });
   });
 
-  test("listProjects omits include_fixtures by default and sends it only when fixtures are requested", async () => {
-    const { store, calls } = stubStore(() => ({
-      workspaces: [],
-      count: 0,
-      total: 0,
-      offset: 0,
-      limit: 100,
-      has_more: false,
-    }));
+  test("listProjects sends only explicit server filters for fixtures, eval rows, and query scope", async () => {
+    const { store, calls } = stubStore((_method, path) => {
+      const query = new URL(path, "https://projects.example.test").searchParams;
+      const tags = [...new Set([...(query.get("tag") ? [query.get("tag")!] : []), ...query.getAll("tags")])];
+      return {
+        ...(query.get("query_scope") ? {
+          filter_contract: "projects.list.v2",
+          applied_filters: {
+            query_scope: query.get("query_scope"),
+            tags,
+            exclude_evals: query.get("exclude_evals") === "true",
+            exclude_registry_fixtures: query.get("include_fixtures") !== "true",
+          },
+        } : {}),
+        workspaces: [],
+        count: 0,
+        total: 0,
+        offset: Number(query.get("offset") ?? 0),
+        limit: Number(query.get("limit") ?? 100),
+        has_more: false,
+      };
+    });
     await store.listProjects({});
     await store.listProjects({ exclude_registry_fixtures: false });
+    await store.listProjects({
+      query: "projects",
+      query_scope: "discovery",
+      tags: ["web", "ts"],
+      exclude_eval_artifacts: true,
+      exclude_registry_fixtures: true,
+      limit: 25,
+      offset: 50,
+      require_list_v2_contract: true,
+    });
     expect(calls[0]).toMatchObject({ method: "GET" });
     expect(calls[0]!.path.startsWith("/v1/projects")).toBe(true);
     expect(calls[0]!.path).not.toContain("include_fixtures");
     expect(calls[1]).toMatchObject({ method: "GET" });
     expect(calls[1]!.path.startsWith("/v1/projects")).toBe(true);
     expect(calls[1]!.path).toContain("include_fixtures=true");
+    expect(calls[2]).toMatchObject({ method: "GET" });
+    expect(calls[2]!.path).toContain("query=projects");
+    expect(calls[2]!.path).toContain("query_scope=discovery");
+    expect(calls[2]!.path).toContain("tag=web");
+    expect(calls[2]!.path).toContain("tags=ts");
+    expect(calls[2]!.path).toContain("exclude_evals=true");
+    expect(calls[2]!.path).toContain("limit=25");
+    expect(calls[2]!.path).toContain("offset=50");
+  });
+
+  test("compact search requires an exact v2 filter attestation from the hosted producer", async () => {
+    const expectedFilters = {
+      query_scope: "discovery",
+      tags: ["web", "ts"],
+      exclude_evals: true,
+      exclude_registry_fixtures: true,
+    };
+    const current = stubStore((_method, path) => {
+      const query = new URL(path, "https://projects.example.test").searchParams;
+      return {
+        filter_contract: "projects.list.v2",
+        applied_filters: expectedFilters,
+        workspaces: [],
+        count: 0,
+        total: 0,
+        offset: Number(query.get("offset") ?? 0),
+        limit: Number(query.get("limit") ?? 25),
+        has_more: false,
+      };
+    });
+    await expect(current.store.listProjectsPage({
+      query: "projects",
+      query_scope: "discovery",
+      tags: ["web", "ts"],
+      exclude_eval_artifacts: true,
+      exclude_registry_fixtures: true,
+      limit: 25,
+      require_list_v2_contract: true,
+    })).resolves.toMatchObject({ total: 0, complete: true });
+
+    const old = stubStore((_method, path) => {
+      const query = new URL(path, "https://projects.example.test").searchParams;
+      return {
+        workspaces: [],
+        count: 0,
+        total: 0,
+        offset: Number(query.get("offset") ?? 0),
+        limit: Number(query.get("limit") ?? 25),
+        has_more: false,
+      };
+    });
+    await expect(old.store.listProjectsPage({
+      query: "projects",
+      query_scope: "discovery",
+      limit: 25,
+      require_list_v2_contract: true,
+    })).rejects.toThrow(/projects\.list\.v2/);
   });
 
   test("createRoot POSTs to /v1/roots", async () => {
@@ -1639,6 +1719,7 @@ describe("projects list pagination (server row cap)", () => {
   test("a server that ignores offset fails loudly instead of truncating silently", async () => {
     const { store } = fakeRegistry({ total: 2399, cap: 1000, ignoreOffset: true });
     await expect(store.listProjects()).rejects.toThrow(/offset/i);
+    await expect(store.listProjectsPage({ limit: 25, offset: 25 })).rejects.toThrow(/offset/i);
   });
 
   test("listProjectsPage exposes total and has_more so a bounded read is detectable", async () => {

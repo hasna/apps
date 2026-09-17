@@ -57,4 +57,26 @@ describe("project eval artifacts", () => {
     db.close();
     rmSync(root, { recursive: true, force: true });
   });
+
+  test("SQLite exclusion matches the canonical case-sensitive boolean predicate", () => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    const inputs = [
+      { name: "Eval Hidden", slug: "hidden-by-name", metadata: {} },
+      { name: "eval visible", slug: "visible-lower-name", metadata: {} },
+      { name: "Boolean Hidden", slug: "hidden-by-boolean", metadata: { eval_fixture: true } },
+      { name: "String Visible", slug: "visible-string", metadata: { eval_fixture: "true" } },
+      { name: "Number Visible", slug: "visible-number", metadata: { eval_fixture: 1 } },
+      { name: "Upper Tag Visible", slug: "visible-upper-tag", tags: ["Eval-fixture"], metadata: {} },
+    ];
+    for (const input of inputs) createWorkspace({ kind: "generic", ...input }, db);
+
+    const all = listWorkspaces({}, db);
+    const expected = filterProjectEvalArtifacts(all).map((project) => project.id);
+    const actual = listWorkspaces({ exclude_eval_artifacts: true }, db).map((project) => project.id);
+    expect(actual).toEqual(expected);
+    expect(actual).toHaveLength(4);
+
+    db.close();
+  });
 });

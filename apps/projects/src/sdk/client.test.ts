@@ -106,6 +106,55 @@ const terminalFixture: GuardedProjectMutationResult = {
 };
 
 describe("generated Projects SDK server parity", () => {
+  test("serializes additive list query scopes, repeated tags, and eval exclusion on the existing /v1 route", async () => {
+    let requested = "";
+    const client = new ProjectsClient({
+      baseUrl: "https://projects.example.test",
+      fetch: (async (input: string | URL | Request) => {
+        requested = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        return Response.json({
+          filter_contract: "projects.list.v2",
+          applied_filters: {
+            query_scope: "discovery",
+            tags: ["web", "ts"],
+            exclude_evals: true,
+            exclude_registry_fixtures: true,
+          },
+          workspaces: [],
+          count: 0,
+          total: 0,
+          offset: 0,
+          limit: 25,
+          has_more: false,
+          complete: true,
+        });
+      }) as typeof fetch,
+    });
+
+    await client.listProjects({
+      query: "billing",
+      query_scope: "discovery",
+      tags: ["web", "ts"],
+      exclude_evals: true,
+      limit: 25,
+    });
+
+    const url = new URL(requested);
+    expect(url.pathname).toBe("/v1/projects");
+    expect(url.searchParams.get("query_scope")).toBe("discovery");
+    expect(url.searchParams.getAll("tags")).toEqual(["web", "ts"]);
+    expect(url.searchParams.get("exclude_evals")).toBe("true");
+
+    const oldServer = new ProjectsClient({
+      baseUrl: "https://projects.example.test",
+      fetch: (async (_input: string | URL | Request, _init?: RequestInit) => Response.json({
+        workspaces: [], count: 0, total: 0, offset: 0, limit: 25, has_more: false, complete: true,
+      })) as typeof fetch,
+    });
+    await expect(oldServer.listProjects({ query: "billing", query_scope: "discovery", limit: 25 }))
+      .rejects.toThrow(/projects\.list\.v2/);
+  });
+
   test("keeps the getVersion response aligned with the HTTP server", async () => {
     const client = new ProjectsClient({
       baseUrl: "https://projects.example.test",

@@ -134,6 +134,7 @@ import type {
   Machine,
   MachineRow,
 } from "../types/workspace.js";
+import type { ProjectQueryScope } from "../lib/project-list-output.js";
 
 type TransactionCapableClient = TypedQueryClient & {
   transaction?: <T>(fn: (client: TypedQueryClient) => Promise<T>) => Promise<T>;
@@ -356,7 +357,9 @@ export interface WorkspaceFilter {
   kind?: WorkspaceKind;
   root_id?: string;
   query?: string;
+  query_scope?: ProjectQueryScope;
   tags?: string[];
+  exclude_eval_artifacts?: boolean;
   /** Exclude rows tagged `registry-fixture` (the normalization program's generated test rows). Default reads exclude them. */
   exclude_registry_fixtures?: boolean;
   limit?: number;
@@ -586,17 +589,39 @@ export class ProjectsPgStore {
     if (filter.kind) push((i) => `kind = $${i}`, filter.kind);
     if (filter.root_id) push((i) => `root_id = $${i}`, filter.root_id);
     if (filter.query) {
-      params.push(`%${filter.query.toLowerCase()}%`);
+      const scope = filter.query_scope;
+      const normalizedQuery = filter.query.toLowerCase();
+      params.push(`%${scope === undefined ? normalizedQuery : normalizedQuery.replace(/[\\%_]/g, "\\$&")}%`);
       const i = params.length;
-      conditions.push(
-        `(lower(name) LIKE $${i} OR lower(slug) LIKE $${i} OR lower(COALESCE(description,'')) LIKE $${i} OR lower(COALESCE(primary_path,'')) LIKE $${i} OR lower(COALESCE(tags,'')) LIKE $${i} OR lower(COALESCE(metadata,'')) LIKE $${i})`,
-      );
+      const columns = scope === undefined
+        ? ["name", "slug", "COALESCE(description,'')", "COALESCE(primary_path,'')", "COALESCE(tags,'')", "COALESCE(metadata,'')"]
+        : scope === "identity"
+          ? ["name", "slug"]
+          : scope === "discovery"
+            ? ["name", "slug", "COALESCE(description,'')", "COALESCE(tags,'')"]
+            : scope === "structured"
+              ? ["name", "slug", "COALESCE(description,'')", "COALESCE(tags,'')", "COALESCE(integrations,'')", "COALESCE(metadata,'')"]
+              : ["name", "slug", "COALESCE(description,'')", "COALESCE(primary_path,'')", "COALESCE(tags,'')", "COALESCE(integrations,'')", "COALESCE(metadata,'')"];
+      const escape = scope === undefined ? "" : " ESCAPE '\\'";
+      conditions.push(`(${columns.map((column) => `lower(${column}) LIKE $${i}${escape}`).join(" OR ")})`);
     }
     if (filter.tags && filter.tags.length > 0) {
       for (const tag of filter.tags) {
         params.push(tag);
         conditions.push(`(tags::jsonb ? $${params.length})`);
       }
+    }
+    if (filter.exclude_eval_artifacts) {
+      conditions.push(`NOT (
+        slug LIKE 'eval-%'
+        OR name LIKE 'Eval %'
+        OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements_text(tags::jsonb) AS tag(value)
+          WHERE tag.value = 'eval' OR tag.value LIKE 'eval-%'
+        )
+        OR COALESCE(metadata::jsonb -> 'eval_fixture', 'false'::jsonb) = 'true'::jsonb
+        OR COALESCE(metadata::jsonb -> 'agent_eval_fixture', 'false'::jsonb) = 'true'::jsonb
+      )`);
     }
     if (filter.exclude_registry_fixtures) {
       // The normalization program tagged generated registry rows with

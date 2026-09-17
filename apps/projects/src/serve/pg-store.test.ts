@@ -1942,6 +1942,37 @@ describe("pg-store hosted sub-resource writes", () => {
   });
 });
 
+describe("pg-store project query scopes", () => {
+  test("discovery omits primary paths while all includes them, and eval exclusion is shared by rows and totals", async () => {
+    const calls: Array<{ kind: "many" | "get"; sql: string; params: readonly unknown[] }> = [];
+    const client = {
+      async many<T>(sql: string, params: readonly unknown[] = []): Promise<T[]> {
+        calls.push({ kind: "many", sql, params });
+        return [];
+      },
+      async get<T>(sql: string, params: readonly unknown[] = []): Promise<T | null> {
+        calls.push({ kind: "get", sql, params });
+        return { n: 0 } as T;
+      },
+      async execute() { throw new Error("Unexpected execute query"); },
+      async one() { throw new Error("Unexpected one query"); },
+      async query() { throw new Error("Unexpected query"); },
+    } as TypedQueryClient;
+    const store = new ProjectsPgStore(client);
+
+    await store.listWorkspaces({ query: "projects", query_scope: "discovery", exclude_eval_artifacts: true });
+    await store.countWorkspaces({ query: "projects", query_scope: "discovery", exclude_eval_artifacts: true });
+    await store.listWorkspaces({ query: "projects", query_scope: "all" });
+
+    expect(calls[0]?.sql).not.toContain("lower(COALESCE(primary_path,''))");
+    expect(calls[0]?.sql).toContain("ESCAPE '\\'");
+    expect(calls[0]?.sql).toContain("jsonb_array_elements_text(tags::jsonb)");
+    expect(calls[1]?.sql).toContain("jsonb_array_elements_text(tags::jsonb)");
+    expect(calls[2]?.sql).toContain("lower(COALESCE(primary_path,''))");
+    expect(calls[2]?.sql).toContain("lower(COALESCE(integrations,''))");
+  });
+});
+
 // Live CRUD against a real Postgres, gated on PROJECTS_TEST_DATABASE_URL.
 const LIVE_URL = process.env.PROJECTS_TEST_DATABASE_URL;
 

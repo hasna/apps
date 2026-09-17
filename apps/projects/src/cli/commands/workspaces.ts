@@ -132,6 +132,17 @@ import {
 } from "../../lib/project-management.js";
 import { PROJECT_RESOURCE_LINK_INTEGRATION_KEYS } from "../../lib/project-resource-links.js";
 import {
+  buildBoundedProjectListOutput,
+  MAX_PROJECT_LIST_MAX_BYTES,
+  MAX_PROJECT_QUERY_LENGTH,
+  parseProjectListDetail,
+  parseProjectQueryScope,
+  projectListMaxBytes,
+  projectListRow,
+  resolveProjectListFields,
+  type ProjectListDetail,
+} from "../../lib/project-list-output.js";
+import {
   PROJECT_AGENT_ROLES,
   WORKSPACE_KINDS,
   WORKSPACE_STATUSES,
@@ -2556,7 +2567,8 @@ function registerProjectCommands(program: Command): void {
     .description("List registered projects")
     .option("--kind <kind>", "Filter by kind")
     .option("--status <status>", "Filter by status")
-    .option("--query <text>", "Search name, slug, description, path, tags, integrations, or metadata")
+    .option("--query <text>", "Search project fields selected by --query-scope")
+    .option("--query-scope <scope>", "Search scope: identity, discovery, structured, or all (compact default: discovery; omitted preserves legacy matching)")
     .option("--tags <tags>", "Comma-separated tag filter")
     .option("--label <labels>", "Comma-separated label filter (labels are stored as tags)")
     .option("--labels <labels>", "Comma-separated label filter (alias for --label)")
@@ -2564,20 +2576,53 @@ function registerProjectCommands(program: Command): void {
     .option("--include-fixtures", "Include registry-fixture projects (excluded from default reads)")
     .option(
       "--limit <n>",
-      `Max rows (terminal output defaults to ${DEFAULT_LIST_LIMIT} and caps at ${MAX_HUMAN_LIMIT}; --json returns every matching project unless you pass this)`,
+      `Max rows (terminal and --detail output default to ${DEFAULT_LIST_LIMIT}; legacy --json returns every matching project unless you pass this)`,
     )
     .option("--offset <n>", "Skip this many matching projects before listing")
     .option("--meta", "With --json, wrap the array in { projects, count, total, has_more, complete }")
+    .option("--detail <detail>", "Machine detail: compact or full; enables the bounded metadata envelope")
+    .option("--fields <fields>", "Comma-separated compact fields (stable id is always retained)")
+    .option("--all", "With --detail, explicitly return the complete matching population")
+    .option("--max-bytes <n>", "Maximum UTF-8 bytes for the additive machine envelope (default 32768)")
+    .option("--pretty", "Pretty-print the additive machine envelope (compact JSON is the default)")
     .option("--verbose", "Show additional columns in terminal output")
     .option("--render-spec", "Output a JSON Render spec")
     .option("-j, --json", "Output JSON")
     .action(async (opts) => {
       try {
         const json = wantsJson(opts);
+        const machineEnvelope = opts.detail !== undefined
+          || opts.fields !== undefined
+          || Boolean(opts.all)
+          || opts.maxBytes !== undefined;
+        if (machineEnvelope && !json) {
+          throw new Error("--detail, --fields, --all, and --max-bytes require --json");
+        }
+        if (opts.pretty && !json) throw new Error("--pretty requires --json");
+        if (opts.all && opts.limit !== undefined) throw new Error("--all cannot be combined with --limit");
+        if (opts.all && opts.offset !== undefined) throw new Error("--all cannot be combined with --offset");
+        const detail = parseProjectListDetail(opts.detail) ?? (machineEnvelope ? "compact" : undefined);
+        if (opts.all && detail === "full") throw new Error("--all is only available with --detail compact");
+        if (opts.fields !== undefined && detail === "full") throw new Error("--fields is only available with --detail compact");
+        const fields = detail === "compact" ? resolveProjectListFields(opts.fields) : null;
+        const maxBytes = machineEnvelope
+          ? projectListMaxBytes(
+              parsePositiveInteger(opts.maxBytes, "--max-bytes")
+                ?? (opts.all ? MAX_PROJECT_LIST_MAX_BYTES : undefined),
+            )
+          : undefined;
+        if (machineEnvelope && typeof opts.query === "string" && opts.query.length > MAX_PROJECT_QUERY_LENGTH) {
+          throw new Error(`--query must be at most ${MAX_PROJECT_QUERY_LENGTH} characters for bounded machine output`);
+        }
+        const queryScope = parseProjectQueryScope(
+          opts.queryScope,
+          machineEnvelope && opts.query ? "discovery" : "all",
+        );
         const baseFilter = {
           kind: parseKind(opts.kind),
           status: parseStatus(opts.status),
           query: opts.query,
+          ...(opts.queryScope || machineEnvelope ? { query_scope: queryScope } : {}),
           tags: splitLabelFilters(opts.tags, opts.label, opts.labels),
           offset: parseNonNegativeInteger(opts.offset, "--offset"),
         };
@@ -2593,6 +2638,64 @@ function registerProjectCommands(program: Command): void {
           return;
         }
         if (json) {
+          if (machineEnvelope) {
+            const requestedLimit = opts.all
+              ? undefined
+              : parsePositiveInteger(opts.limit, "--limit") ?? DEFAULT_LIST_LIMIT;
+            const page = await store.listProjectsPage({
+              ...baseFilter,
+              offset: opts.all ? undefined : baseFilter.offset,
+              exclude_eval_artifacts: !opts.includeEvals,
+              exclude_registry_fixtures: !opts.includeFixtures,
+              limit: requestedLimit,
+              require_list_v2_contract: true,
+            });
+            const projects = filterRegistryFixtures(filterProjectEvalArtifacts(page.projects, opts.includeEvals), opts.includeFixtures);
+            if (projects.length !== page.projects.length) {
+              throw new Error("Projects producer attested the v2 filter contract but returned an excluded eval/fixture row.");
+            }
+            const total = page.total;
+            const rows: unknown[] = detail === "full"
+              ? projects
+              : projects.map((project) => projectListRow(project, fields ?? undefined));
+            const safeRows = redactProjectValue(rows) as unknown[];
+            const nextArguments = redactProjectValue({
+              ...(opts.query ? { query: opts.query } : {}),
+              query_scope: queryScope,
+              ...(opts.kind ? { kind: opts.kind } : {}),
+              ...(opts.status ? { status: opts.status } : {}),
+              ...(baseFilter.tags.length ? { tags: baseFilter.tags.join(",") } : {}),
+              ...(opts.includeEvals ? { include_evals: true } : {}),
+              ...(opts.includeFixtures ? { include_fixtures: true } : {}),
+              detail,
+              ...(fields ? { fields: fields.join(",") } : {}),
+              max_bytes: maxBytes,
+              ...(opts.pretty ? { pretty: true } : {}),
+            }) as Record<string, unknown>;
+            const output = buildBoundedProjectListOutput({
+              projects: safeRows,
+              total,
+              offset: page.offset,
+              limit: page.limit,
+              detail: detail as ProjectListDetail,
+              fields,
+              queryScope,
+              hasMore: page.has_more,
+              complete: page.complete,
+              nextOffset: page.has_more ? page.offset + page.projects.length : null,
+              nextArguments,
+            }, {
+              maxBytes,
+              pretty: Boolean(opts.pretty),
+            });
+            if (opts.all && output.envelope.truncated) {
+              throw new Error(
+                `--all requires a complete response, but the compact population exceeds ${maxBytes} bytes; narrow the filters or split the read into pages.`,
+              );
+            }
+            process.stdout.write(output.text);
+            return;
+          }
           // No --limit means every matching project: the store walks the
           // server's pages so a capped response can no longer masquerade as the
           // whole registry. A caller-supplied --limit is still honoured, but the
