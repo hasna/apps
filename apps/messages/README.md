@@ -161,6 +161,25 @@ messages-serve
 curl -H "x-api-key: $HASNA_MESSAGES_API_KEY" localhost:8081/v1/threads?agent=silvanus
 ```
 
+## Container runtime
+
+Build the server image from this directory with `docker build --pull -t messages .`.
+The build uses Bun 1.3.14; the final image copies that exact runtime into a
+pinned Debian 13 distroless base. It includes the system CA certificates and
+Amazon RDS CA bundle at `/etc/ssl/certs/rds-global-bundle.pem`. It has no shell
+or package manager. Use exec-form commands such as `["bun", "bin/serve.js"]` for
+container command overrides and health checks.
+
+The image runs as UID 65532 by default, with a writable home at `/home/nonroot`.
+For persistent SQLite storage, mount a directory writable by that UID and set
+`HASNA_MESSAGES_SQLITE_PATH` to a file inside it. PostgreSQL deployments use
+`HASNA_MESSAGES_DATABASE_URL` as before. The HTTP server still requires
+credentials when listening beyond loopback.
+
+The runtime base digest can be refreshed independently of the Bun build pin.
+When refreshing it, scan the final image and test both database backends;
+retain its OS and package inventory so the scan can identify installed versions.
+
 ## Delivery model
 
 A send records the recipient's delivery state as `stored`. The recipient's
