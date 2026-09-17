@@ -79,7 +79,8 @@ export type InstallSmokeCommand = {
 
 const PACKAGE_NAME = "@hasna/todos";
 const REPOSITORY_URL = "https://github.com/hasna/apps.git";
-const HOMEPAGE_URL = "https://github.com/hasna/apps";
+const ROOT_HOMEPAGE_URL = "https://github.com/hasna/apps/tree/main/apps/todos#readme";
+const SDK_HOMEPAGE_URL = "https://github.com/hasna/apps";
 const ISSUES_URL = "https://github.com/hasna/apps/issues";
 
 const FORBIDDEN_DEPENDENCY_PARTS = [
@@ -371,7 +372,7 @@ export function validateRootPackageMetadata(packageJson: PackageJson): ReleaseGa
     "repository-url",
     `repository.url must be ${REPOSITORY_URL}`,
   );
-  addIf(failures, packageJson.homepage !== HOMEPAGE_URL, "homepage", `homepage must be ${HOMEPAGE_URL}`);
+  addIf(failures, packageJson.homepage !== ROOT_HOMEPAGE_URL, "homepage", `homepage must be ${ROOT_HOMEPAGE_URL}`);
   addIf(failures, packageJson.bugs?.url !== ISSUES_URL, "bugs-url", `bugs.url must be ${ISSUES_URL}`);
 
   const bin = packageJson.bin ?? {};
@@ -433,7 +434,7 @@ export function validateSdkPackageMetadata(packageJson: PackageJson): ReleaseGat
   addIf(failures, packageJson.name !== "@hasna/todos-sdk", "sdk-name", "SDK package name must be @hasna/todos-sdk");
   addIf(failures, packageJson.publishConfig?.access !== "public", "sdk-publish-access", "SDK publishConfig.access must be public");
   addIf(failures, packageJson.repository?.url !== REPOSITORY_URL, "sdk-repository-url", `SDK repository.url must be ${REPOSITORY_URL}`);
-  addIf(failures, packageJson.homepage !== HOMEPAGE_URL, "sdk-homepage", `SDK homepage must be ${HOMEPAGE_URL}`);
+  addIf(failures, packageJson.homepage !== SDK_HOMEPAGE_URL, "sdk-homepage", `SDK homepage must be ${SDK_HOMEPAGE_URL}`);
   addIf(failures, packageJson.bugs?.url !== ISSUES_URL, "sdk-bugs-url", `SDK bugs.url must be ${ISSUES_URL}`);
   return failures;
 }

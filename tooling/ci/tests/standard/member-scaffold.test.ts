@@ -61,6 +61,7 @@ export interface ScaffoldProduct {
   binPaths: string[];
   entries: string[];
   manifest: Record<string, unknown>;
+  packageManifest: Record<string, unknown>;
   memberDir: string;
 }
 
@@ -90,6 +91,7 @@ export function generateInto(root: string, name = "probe-member"): ScaffoldProdu
     binPaths: Object.values(pkg.bin ?? {}),
     entries: entries.sort(),
     manifest: JSON.parse(fs.readFileSync(path.join(memberDir, "hasna.contract.json"), "utf8")) as Record<string, unknown>,
+    packageManifest: JSON.parse(fs.readFileSync(path.join(memberDir, "package.json"), "utf8")) as Record<string, unknown>,
     memberDir,
   };
 }
@@ -140,6 +142,24 @@ describe("standard-adherence: member scaffold", () => {
         missing,
         `declared bin paths with no matching src/<kind>/index.ts entry (the build would emit dist/<kind>/<kind>.js, so the tarball packs no such bin): ${missing.join(", ")}`,
       ).toEqual([]);
+    } finally {
+      cleanupSandbox(root);
+    }
+  });
+
+  test("the generated package declares its exact public monorepo identity", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "standard-scaffold-identity-"));
+    try {
+      const product = generateInto(root);
+      expect(product.packageManifest.repository).toEqual({
+        type: "git",
+        url: "https://github.com/hasna/apps.git",
+        directory: "apps/probe-member",
+      });
+      expect(product.packageManifest.homepage).toBe(
+        "https://github.com/hasna/apps/tree/main/apps/probe-member#readme",
+      );
+      expect(product.packageManifest.bugs).toEqual({ url: "https://github.com/hasna/apps/issues" });
     } finally {
       cleanupSandbox(root);
     }

@@ -6,10 +6,10 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/apps.git",
+    "url": "https://github.com/hasna/apps.git",
     "directory": "apps/contracts"
   },
-  "homepage": "https://github.com/hasna/apps/tree/main/apps/contracts",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/contracts#readme",
   "bugs": {
     "url": "https://github.com/hasna/apps/issues"
   },

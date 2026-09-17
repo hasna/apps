@@ -1,7 +1,7 @@
 {
   "name": "@hasna/files",
   "version": "0.4.1",
-  "description": "Agent-first file management \u2014 index local folders and S3 buckets, sync Google Drive, tag, search, and retrieve files via CLI + MCP",
+  "description": "Agent-first file management — index local folders and S3 buckets, sync Google Drive, tag, search, and retrieve files via CLI + MCP",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -79,7 +79,8 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/files.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/files"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -112,5 +113,9 @@
     "bun-types": "latest",
     "typescript": "^5.8.2",
     "@smithy/types": "^4.16.1"
+  },
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/files#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/apps/issues"
   }
 }

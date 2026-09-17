@@ -20,7 +20,7 @@ const root = join(import.meta.dir, "..");
 // These assertions pin the package identity independently of release-version
 // history or the separate cloud CLI.
 const CANONICAL_PACKAGE = "@hasna/emails";
-const CANONICAL_REPOSITORY = "git+https://github.com/hasna/apps.git";
+const CANONICAL_REPOSITORY = "https://github.com/hasna/apps.git";
 const CANONICAL_BINS = ["emails", "emails-mcp", "emails-serve"];
 
 describe("published package identity", () => {
