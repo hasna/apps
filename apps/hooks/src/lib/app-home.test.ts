@@ -74,7 +74,10 @@ describe("resolver (XDG) data-root resolution", () => {
 
   test("resolver data root follows @hasna/paths under a fake HOME", () => {
     const home = isolateHome();
-    expect(getResolverDataRoot()).toBe(join(home, ".local", "share", "hasna", "hooks"));
+    const expected = process.platform === "darwin"
+      ? join(home, "Library", "Application Support", "Hasna", "hooks")
+      : join(home, ".local", "share", "hasna", "hooks");
+    expect(getResolverDataRoot()).toBe(expected);
     expect(getLegacyDataRoot()).toBe(join(home, ".hasna", "hooks"));
   });
 });
@@ -107,7 +110,9 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
 
   test("an existing store at the resolver data root adopts it even without HASNA_DATA_HOME", () => {
     const home = isolateHome();
-    const xdg = join(home, ".local", "share", "hasna", "hooks");
+    const xdg = process.platform === "darwin"
+      ? join(home, "Library", "Application Support", "Hasna", "hooks")
+      : join(home, ".local", "share", "hasna", "hooks");
     mkdirSync(xdg, { recursive: true });
     writeFileSync(join(xdg, "hooks.db"), "existing-migrated-store");
     expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(true);

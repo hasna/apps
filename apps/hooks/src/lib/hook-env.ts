@@ -45,7 +45,8 @@
  */
 
 import { dirname, isAbsolute } from "path";
-import { existsSync, statSync } from "fs";
+import { existsSync, realpathSync, statSync } from "fs";
+import { tmpdir } from "node:os";
 
 const ALLOWLIST = new Set(["PATH", "HOME", "LANG", "TZ", "SHELL", "TERM", "USER", "PWD"]);
 
@@ -161,6 +162,12 @@ export function isUnsafePathEntry(entry: string, home: string | undefined): bool
   if (home && (entry === home || entry.startsWith(home + "/"))) return true;
   if (entry === "/tmp" || entry.startsWith("/tmp/")) return true;
   if (entry === "/var/tmp" || entry.startsWith("/var/tmp/")) return true;
+  const canonical = (path: string) => { try { return realpathSync(path); } catch { return path; } };
+  const resolved = canonical(entry);
+  for (const root of [home, tmpdir(), "/tmp", "/var/tmp"].filter((value): value is string => Boolean(value))) {
+    const blocked = canonical(root);
+    if (resolved === blocked || resolved.startsWith(blocked + "/")) return true;
+  }
   try {
     if ((statSync(entry).mode & 0o002) !== 0) return true;
   } catch {

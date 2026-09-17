@@ -15,8 +15,13 @@ import { tmpdir } from "os";
 
 const CLI = join(import.meta.dir, "index.tsx");
 const TEST_HOME = mkdtempSync(join(tmpdir(), "hooks-qa6-"));
+const changedEnv = ["HASNA_HOOKS_DATA_DIR", "HASNA_HOOKS_DB_PATH", "HASNA_HOOKS_LOCK_PATH",
+  "HASNA_HOOKS_CONFIG_PATH", "HASNA_HOOKS_CLAUDE_SETTINGS_PATH", "HASNA_HOOKS_API_KEY",
+  "HASNA_HOOKS_LOCAL", "HASNA_HOOKS_API_URL", "HOME", "NO_COLOR"];
+let savedEnv: Map<string, string | undefined>;
 
 beforeAll(() => {
+  savedEnv = new Map(changedEnv.map((key) => [key, process.env[key]]));
   process.env.HASNA_HOOKS_DATA_DIR = join(TEST_HOME, ".hasna", "hooks");
   process.env.HASNA_HOOKS_DB_PATH = join(TEST_HOME, ".hasna", "hooks", "hooks.db");
   process.env.HASNA_HOOKS_LOCK_PATH = join(TEST_HOME, ".hasna", "hooks", "hooks.lock");
@@ -24,7 +29,7 @@ beforeAll(() => {
   // The pinned-install tests talk to a mock registry; the pair is provided
   // through the env tier (strict pair, hasna/apps#1720). The fake HOME keeps
   // the machine's real disk/Keychain credentials out of the resolution.
-  process.env.HASNA_HOOKS_API_KEY = "qa6-test-key";
+  process.env.HASNA_HOOKS_API_KEY = crypto.randomUUID();
   process.env.HOME = TEST_HOME;
   // Explicit local-mode opt-in (fleet fail-closed doctrine): these CLI
   // subprocess tests exercise the bundled registry + local store on purpose.
@@ -33,16 +38,10 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  delete process.env.HASNA_HOOKS_DATA_DIR;
-  delete process.env.HASNA_HOOKS_DB_PATH;
-  delete process.env.HASNA_HOOKS_LOCK_PATH;
-  delete process.env.HASNA_HOOKS_CONFIG_PATH;
-  delete process.env.HASNA_HOOKS_CLAUDE_SETTINGS_PATH;
-  delete process.env.HASNA_HOOKS_API_KEY;
-  delete process.env.HASNA_HOOKS_LOCAL;
-  delete process.env.HASNA_HOOKS_API_URL;
-  delete process.env.HOME;
-  delete process.env.NO_COLOR;
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
 

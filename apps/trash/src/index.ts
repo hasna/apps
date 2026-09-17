@@ -1,24 +1,10 @@
-/**
- * `@hasna/trash` — reversible deletion.
- *
- * The store plane: a per-entry capture spool with crash-safe publishing, an
- * lstat-only source inspection that never follows or canonicalizes a user
- * path, and a retention sweep whose invariant is asserted in code
- * (`lib/retention.ts`) and pinned by tests.
- *
- * The shell guard (phase 2) is the `trash guard` verb plus `guard/scan.ts` —
- * the source-span scanner that turns a command STRING into a rewrite, which is
- * what a Bash hook needs and what a tokenizing decoder cannot provide (§15,
- * correction: `shellWords`/`splitShellSegments` decode quoting and keep no byte
- * offsets). It is exported from `./sdk`, not here, so the store plane stays
- * free of shell semantics.
- *
- * What is NOT here, and is phase 3/4 by design: the always-on daemon that runs
- * the sweeper on an independent timer, the remote transport, and the
- * `hook-trash-guard` binding in `@hasna/hooks`. `trash doctor` reports those
- * absences rather than implying coverage.
- */
-
+/** Hosted reversible deletion. Legacy TrashStore is available only for explicit offline use. */
+export { createTrash, createLocalTrash } from "./sdk.js";
+export { HostedTrash, HostedOperationError } from "./hosted.js";
+export { TrashApi, TrashApiError } from "./client.js";
+export type { HostedOptions, RestoreOutcome } from "./hosted.js";
+export type { TrashApiOptions, RemoteEntry, CompactEntry, EntryPage, ApiStatus } from "./client.js";
+export { detectStation, detectAgent } from "./identity.js";
 export { TrashStore, TrashStoreRefusalError } from "./lib/store.js";
 export type {
   CrashPoint,

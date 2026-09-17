@@ -507,16 +507,12 @@ describe("capture refusals (§11.7)", () => {
 });
 
 describe("the store is not bypassed", () => {
-  test("an excluded path whose capture FAILS is deleted without a capture, and recorded", () => {
-    // The exclude list is not "skip the capture" — a capturable path is still
-    // captured. It is the fallback that keeps a full disk from self-locking the
-    // machine (§6): when capture is impossible AND the path is in the excluded
-    // class, the delete proceeds and the refusal is journaled.
+  test("failed capture of a build folder preserves it even under rm -rf", () => {
     const h = harness({ maxEntryBytes: 4 });
     const target = sandbox.file("proj/node_modules/pkg/index.js", "0123456789");
     const result = h.run(["-rf", join(sandbox.root, "proj/node_modules")]);
-    expect(result.code).toBe(0);
-    expect(existsSync(target)).toBe(false);
+    expect(result.code).toBe(2);
+    expect(existsSync(target)).toBe(true);
     expect(h.store.list()).toHaveLength(0);
     expect(h.store.status().refusals.total).toBeGreaterThan(0);
   });

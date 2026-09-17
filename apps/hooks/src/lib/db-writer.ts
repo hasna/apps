@@ -16,7 +16,7 @@
  */
 
 import { getDb, isLocalStoreRefused, localStoreRefusalMessage } from "../db/index.js";
-import type { HookEventRow } from "../db/schema";
+import type { HookEventRow } from "../db/schema.js";
 import { hooksEventSinkRefusal, selectsHooksLocalStore } from "./local-opt-in.js";
 import type { HooksLocalOptInEnv } from "./resolver-types.js";
 import { redactEventPayload } from "./redact.js";

@@ -49,6 +49,14 @@ function run(command: string, cwd = CWD, options = deps(), tool_input: Record<st
 }
 
 describe("hook-trash-guard", () => {
+  test("file deletion through apply_patch is refused with an explicit Trash path", () => {
+    for (const tool_name of ["apply_patch", "ApplyPatch", "functions.apply_patch"]) {
+      const result = decide(evaluate({ hook_event_name: "PreToolUse", tool_name, tool_input: { command: "*** Begin Patch\n*** Delete File: /tmp/fixture\n*** End Patch" } } as CodewithHookInput, deps()));
+      expect(result.decision).toBe("deny"); expect(result.reason).toContain("trash put");
+    }
+    expect(decide(evaluate({ hook_event_name: "PreToolUse", tool_name: "apply_patch", tool_input: {} } as CodewithHookInput, deps())).decision).toBe("deny");
+    expect(decide(evaluate({ hook_event_name: "PreToolUse", tool_name: "apply_patch", tool_input: { command: "*** Begin Patch\n*** Add File: /tmp/fixture\n+content\n*** End Patch" } } as CodewithHookInput, deps())).decision).toBe("continue");
+  });
   describe("positive controls — never touched", () => {
     test("non-Bash tools and non-PreToolUse events continue", () => {
       expect(evaluate({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: {} } as CodewithHookInput, deps())).toEqual({ continue: true });
@@ -162,7 +170,7 @@ describe("hook-trash-guard", () => {
       expect(typeof input.command).toBe("string");
       expect(typeof input.description).toBe("string");
       expect(typeof input.timeout).toBe("number");
-      expect((input.timeout as number) > 0).toBe(true);
+      expect(input.timeout).toBe(600000);
       expect(input.run_in_background).toBe(false);
     });
 

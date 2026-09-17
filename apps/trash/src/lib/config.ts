@@ -71,7 +71,7 @@ export interface TrashCaptureConfig {
   linkWhenSameDevice: boolean;
   /** `record`: journal every refusal (§11.7). */
   onRefuse: "record";
-  /** The not-precious class — see glob.ts for why this list is load-bearing. */
+  /** Legacy classification only; matching never permits uncaptured deletion. */
   excludeGlobs: string[];
 }
 
@@ -94,7 +94,7 @@ export const DEFAULT_TRASH_CONFIG: TrashConfig = {
   retention: {
     maxTotalBytes: 21_474_836_480,
     maxEntries: 100_000,
-    retentionDays: 30,
+    retentionDays: 90,
     minUnuploadedKeep: 100,
     dryRun: true,
     requireExplicitApply: true,
@@ -105,14 +105,7 @@ export const DEFAULT_TRASH_CONFIG: TrashConfig = {
     minFreeBytes: 2_147_483_648,
     linkWhenSameDevice: true,
     onRefuse: "record",
-    excludeGlobs: [
-      "**/node_modules/**",
-      "**/.git/objects/**",
-      "**/target/**",
-      "**/dist/**",
-      "**/.venv/**",
-      "**/__pycache__/**",
-    ],
+    excludeGlobs: [],
   },
   cloud: { retentionDays: 90 },
 };

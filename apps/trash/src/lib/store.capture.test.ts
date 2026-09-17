@@ -172,15 +172,15 @@ describe("put — §11.7, the load-bearing refusal rule", () => {
     expect(refusals[0]!.excludeGlob).toBeNull();
   });
 
-  test("capture refused on an EXCLUDED path ⇒ the delete PROCEEDS and the refusal is recorded", () => {
-    const store = makeTestStore(sandbox, { config: SMALL_CAP });
+  test("capture refused on a legacy excluded path preserves the source and records classification", () => {
+    const store = makeTestStore(sandbox, { config: { ...SMALL_CAP, capture: { ...SMALL_CAP.capture, excludeGlobs: ["**/node_modules/**"] } } });
     const big = sandbox.file("proj/node_modules/big.bin", "x".repeat(64));
 
     const outcome = store.put(big)[0]!;
 
-    expect(outcome.status).toBe("deleted_without_capture");
-    expect(existsSync(big)).toBe(false);
-    // Nothing entered the store: the delete was not captured, it was recorded.
+    expect(outcome.status).toBe("refused");
+    expect(existsSync(big)).toBe(true);
+    // Classification is recorded but does not authorize permanent deletion.
     expect(store.list()).toHaveLength(0);
 
     const refusals = listRefusals(store.roots.refusals);
@@ -188,14 +188,14 @@ describe("put — §11.7, the load-bearing refusal rule", () => {
     expect(refusals[0]!.reason).toBe("too_large");
     expect(refusals[0]!.excluded).toBe(true);
     expect(refusals[0]!.excludeGlob).toBe("**/node_modules/**");
-    expect(refusals[0]!.deleted).toBe(true);
+    expect(refusals[0]!.deleted).toBe(false);
   });
 
-  test("--force lets a non-excluded refusal through, and the record says it was forced", () => {
+  test("explicit allowUncaptured permits the operator override and records it", () => {
     const store = makeTestStore(sandbox, { config: SMALL_CAP });
     const big = sandbox.file("work/big.bin", "x".repeat(64));
 
-    const outcome = store.put(big, { force: true })[0]!;
+    const outcome = store.put(big, { allowUncaptured: true })[0]!;
 
     expect(outcome.status).toBe("deleted_without_capture");
     expect(existsSync(big)).toBe(false);
@@ -222,7 +222,7 @@ describe("put — §11.7, the load-bearing refusal rule", () => {
 
     const outcomes = store.put([sandbox.path("proj/node_modules/huge.bin"), good]);
 
-    expect(outcomes[0]!.status).toBe("deleted_without_capture");
+    expect(outcomes[0]!.status).toBe("refused");
     expect(outcomes[1]!.status).toBe("captured");
     expect(store.list()).toHaveLength(1);
   });
@@ -474,7 +474,7 @@ describe("put — concurrency", () => {
     store.init();
     const cli = new URL("../cli/index.ts", import.meta.url).pathname;
     const target = sandbox.file("race.txt", "only one may have it");
-    const env = spawnEnv(sandbox);
+    const env = spawnEnv(sandbox, { HASNA_TRASH_LOCAL: "1" });
 
     const spawnCli = (): ReturnType<typeof Bun.spawn> =>
       Bun.spawn({
@@ -507,7 +507,7 @@ describe("put — concurrency", () => {
     store.init();
     const cli = new URL("../cli/index.ts", import.meta.url).pathname;
     const files = Array.from({ length: 6 }, (_, i) => sandbox.file(`multi/f${i}.txt`, `multi ${i}`));
-    const env = spawnEnv(sandbox);
+    const env = spawnEnv(sandbox, { HASNA_TRASH_LOCAL: "1" });
 
     const procs = files.map((file) =>
       Bun.spawn({ cmd: ["bun", cli, "--spool", spool, "--json", "put", file], env, stdout: "pipe", stderr: "pipe" }),
@@ -530,7 +530,7 @@ describe("put — concurrency", () => {
       // `refused`, exit 2 — in 19 of 36 runs under 3x load. Three rounds, each
       // on a fresh spool, so the cold-start window is hit every time.
       const cli = new URL("../cli/index.ts", import.meta.url).pathname;
-      const env = spawnEnv(sandbox);
+      const env = spawnEnv(sandbox, { HASNA_TRASH_LOCAL: "1" });
       for (let round = 0; round < 3; round += 1) {
         const spool = sandbox.path(`spool-load-${round}`);
         const files = Array.from({ length: 8 }, (_, i) => sandbox.file(`load/r${round}/f${i}.txt`, `round ${round} file ${i}`));

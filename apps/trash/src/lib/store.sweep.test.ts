@@ -326,23 +326,21 @@ describe("sweep — the quota gate on new captures", () => {
     expect(store.refusals().map((r) => r.reason)).toContain("quota_exceeded");
   });
 
-  test("an over-quota refusal inside an excluded tree still deletes (the self-lock case §6 names)", () => {
+  test("quota pressure preserves uncaptured files even inside build folders", () => {
     const store = makeTestStore(sandbox, { config: { retention: { maxTotalBytes: 8, maxEntries: 100 } } });
     store.put(sandbox.file("first.txt", "12345678"))[0]!;
 
     const build = sandbox.file("proj/node_modules/cache.bin", "abcdefgh");
     const outcome = store.put(build)[0]!;
 
-    // If the trash could refuse a delete because its OWN disk is full, the
-    // machine would deadlock: the one thing that frees space could not run.
-    expect(outcome.status).toBe("deleted_without_capture");
-    expect(existsSync(build)).toBe(false);
-    expect(store.refusals()[0]!.deleted).toBe(true);
+    expect(outcome.status).toBe("refused");
+    expect(existsSync(build)).toBe(true);
+    expect(store.refusals()[0]!.deleted).toBe(false);
   });
 });
 
 describe("sweep — the lock", () => {
-  test("a stale lock from a dead sweeper does not block a live one forever", async () => {
+  test("a stale lock remains visible and a dry-run does not take it over", async () => {
     const time = clock();
     const store = makeTestStore(sandbox, { now: time.now, verifyRemote: confirmingVerifier() });
     store.init();
@@ -353,10 +351,9 @@ describe("sweep — the lock", () => {
     const old = new Date(Date.now() - 10 * 60_000);
     utimesSync(store.roots.lock, old, old);
 
-    const report = await store.sweep({ apply: true });
+    const report = await store.sweep();
 
-    expect(report.applied).toBe(true);
-    // The takeover is not silent, and it is not permanent.
-    expect(existsSync(store.roots.lock)).toBe(false);
+    expect(report.applied).toBe(false);
+    expect(existsSync(store.roots.lock)).toBe(true);
   });
 });

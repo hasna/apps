@@ -94,8 +94,7 @@ advisory warning.
 The registration is written with `timeout: 5`. The harness's documented
 default is 600s, and a hook that times out **does not block** — only a verdict
 already on stdout does. Five seconds is several orders of magnitude above this
-hook's measured cost (a single-pass lexer, no process spawns, no I/O beyond
-one `statSync` per PATH entry).
+hook's measured cost (a bounded lexer and a 500 ms identity check against a verified package binary).
 
 ## Known limitations
 
@@ -111,8 +110,7 @@ The guard is a best-effort **text** classifier, not an execution sandbox.
   here.
 - **A hook only ever sees the agent's own tool calls.** It cannot stop a file
   being deleted by another process, by a build tool, by a script the agent
-  runs, or by `unlink(2)` called directly. Coverage is the Bash tool, wave 1,
-  nothing else — `Write`/`Edit` pre-image capture is wave 2.
+  runs, or by `unlink(2)` called directly. Bash `rm` is rewritten, and native `apply_patch` whole-file deletion is refused with an instruction to call Trash first. Ordinary `Write`/`Edit` pre-image capture is not implemented.
 - **Nested and generated commands escape it.** `bash -c`, `eval`, `make`,
   `npm run`, a `Dockerfile`, a heredoc-fed interpreter: the hook can only see
   that a shell string mentions a delete verb and refuse it, never redirect
@@ -128,5 +126,22 @@ The guard is a best-effort **text** classifier, not an execution sandbox.
 ## Configuration
 
 None. The home directory comes from `os.homedir()`; the trash binary is
-resolved by scanning `PATH` for an executable `trash` and rewriting to the
+resolved by scanning `PATH` for a verified `@hasna/trash` package and its `--identity` protocol and rewriting to the
 absolute path found, so the rewritten command does not depend on `PATH` again.
+
+## Native Codex and Claude
+
+The guard emits their documented `PreToolUse` decision contract, including a
+complete `updatedInput.command`. No-op hooks emit no output. Codex unified exec
+also matches `Bash`; a `Delete File` patch must use `trash put` first. Configure
+Codex in `~/.codex/hooks.json` with matcher
+`^(Bash|apply_patch|ApplyPatch|functions\\.apply_patch)$` and the command
+`hooks run trash-guard`, with hook timeout 5 seconds. Preserve other registrations
+and refuse a second overlapping input-rewriting hook. Claude registration uses
+`hooks install trash-guard --target claude`. The command rewrite defaults to
+600 seconds for upload and verification, preserving an explicitly supplied timeout.
+
+After installation, prove the native harness actually executes the rewritten
+command using a disposable file and a hosted entry/restore receipt; a hook JSON
+response alone does not prove interception. Other harnesses can use the Trash
+CLI/MCP directly; this hook does not claim their native interception.
