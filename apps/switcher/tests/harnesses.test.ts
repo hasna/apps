@@ -596,11 +596,9 @@ test("Prime Agent rejects case-colliding model IDs before native launch",async()
 test("Prime Agent uses a private Switcher runtime when TMPDIR is too long for derived worker sockets",async()=>{
   const input=await fixture();
   const previousTmp=process.env.TMPDIR, previousHome=process.env.HASNA_SWITCHER_HOME;
-  const scratch=join(homedir(),"Workspace","scratch");
-  await mkdir(scratch,{recursive:true});
-  // Keep the generated home short enough for Prime's derived worker socket;
-  // mkdtemp makes cleanup scoped to this test's owned directory.
-  const fallbackHome=await mkdtemp(join(scratch,"p"));
+  // A private fixture under the short OS path keeps the test independent of
+  // the user's HOME length, including Linux UID 1000 worker socket suffixes.
+  const fallbackHome=await mkdtemp("/tmp/sp-");
   try {
     process.env.TMPDIR=join(input.stateDir,"a-very-long-private-runtime-directory-name");
     process.env.HASNA_SWITCHER_HOME=fallbackHome;

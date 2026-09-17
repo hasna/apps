@@ -4,6 +4,8 @@ import type { HarnessId } from "./harness-types";
 import { aiderArguments } from "./aider-args";
 
 const reserved: Record<HarnessId, readonly string[]> = {
+  antigravity: ["--model", "--agent", "--remote-control", "--project", "--new-project"],
+  junie: ["--model","--provider","--auth","-a","--openai-api-key","--anthropic-api-key","--grok-api-key","--openrouter-api-key","--google-api-key","--litellm-api-key","--litellm-url","--config-location","--config-default-locations","--model-location","--model-default-locations","--cache-dir","-c","--project","-p","--acp","--gateway","--gateway-stop","--gateway-status"],
   gemini: ["--model", "--no-model", "--no-m", "-m", "--settings", "--acp", "--experimental-acp", "--experimentalAcp"],
   "prime-agent": ["--model", "--provider", "--api-key", "--models", "--session-dir", "--daemon-socket"],
   hermes: ["--model", "-m", "--provider", "--config", "--profile", "-p", "--api-key", "--base-url", "--ignore-user-config", "--safe-mode", "--worktree", "-w"],
@@ -25,6 +27,8 @@ const reserved: Record<HarnessId, readonly string[]> = {
 // Only option tokens are inspected: a required value or text following -- is
 // not another flag. These are the supported native launch option contracts.
 const values: Record<HarnessId, readonly string[]> = {
+  antigravity: ["--add-dir","--conversation","--effort","-i","--prompt-interactive","--input-format","--json-schema","--log-file","--mode","--output-format","-p","--print","--prompt","--print-timeout"],
+  junie: ["--task","--prompt","--session-id","--share-anonymous-statistics","--input-format","--output-format","--json-output-file","--agent-mode","--guidelines-filename","--ide-guidelines","--effort","--mcp-default-locations","--mcp-location","--extensions-default-location","--skill-default-locations","--skill-location","--command-default-location","--command-location","--agent-default-location","--agent-location"],
   gemini: ["--prompt", "-p", "--prompt-interactive", "--promptInteractive", "-i", "--approval-mode", "--approvalMode", "--policy", "--admin-policy", "--adminPolicy", "--allowed-mcp-server-names", "--allowedMcpServerNames", "--extensions", "-e", "--session-file", "--sessionFile", "--session-id", "--sessionId", "--include-directories", "--includeDirectories", "--output-format", "--outputFormat", "-o", "--allowed-tools", "--allowedTools", "--delete-session", "--deleteSession"],
   "prime-agent": ["--mode", "--system-prompt", "--append-system-prompt", "--name", "--session", "--session-id", "--fork", "--tools", "--exclude-tools", "--thinking", "--export", "--extension", "--skill", "--prompt-template", "--theme", "--use-theme", "--tui-mode", "--prompt", "--output-format"],
   hermes: ["--model", "--provider", "--reasoning", "--toolsets", "--skills", "--resume", "--usage-file", "--in", "--oneshot", "--query", "--query-file", "--image", "--max-turns", "--run-budget", "--source"],
@@ -55,6 +59,7 @@ const optionalValues: Partial<Record<HarnessId, readonly string[]>> = {
 // -pTEXT in Grok or -oFILE in Codex cannot turn text into model flags. Pi's
 // multi-letter options use its own exact-token parser and are not clusters.
 const short: Partial<Record<HarnessId, { required: string; optional: string; boolean: string }>> = {
+  junie: { required: "apc", optional: "", boolean: "hv" },
   hermes: { required: "zmtsrqp", optional: "c", boolean: "VhvQw" },
   cline: { required: "Pmksct", optional: "", boolean: "yz" },
   codex: { required: "cimpsCao", optional: "", boolean: "hV" },
@@ -96,6 +101,7 @@ export function assertHarnessArguments(harness: HarnessId, args: readonly string
   if(harness==="kilo"){validateKiloArgs([...args]);return;}
   if(harness==="aider"){aiderArguments(args);return;}
   const blocked = new Set([...reserved[harness], ...options.additionalReserved ?? []]);
+  if(harness==="antigravity"&&args[0]&&!args[0].startsWith("-"))throw new Error("Antigravity subcommands are outside the managed inference launch; pass prompts with -p.");
   const reject = (): never => { throw new Error("Provider/model configuration arguments are reserved by the launch profile; update the profile instead."); };
   if (harness === "hermes") {
     // Hermes 0.21.0 scans profile selectors BEFORE argparse with the top-level
@@ -117,6 +123,8 @@ export function assertHarnessArguments(harness: HarnessId, args: readonly string
     if (!arg.startsWith("-") || arg === "-") { if (harness === "hermes" && arg === "chat") hermesChat = true; continue; }
     const equals = arg.indexOf("=");
     let flag = equals < 0 ? arg : arg.slice(0, equals);
+    // Antigravity uses Go-style flags: one or two leading dashes are equivalent.
+    if (harness === "antigravity" && /^-[^-].+/.test(flag)) flag = "-" + flag;
     if (harness === "hermes" && flag.startsWith("--")) {
       // Python argparse accepts unique long-option prefixes. Ambiguous
       // prefixes cannot launch; reserving any profile prefix also keeps a

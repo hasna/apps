@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Switcher API",
-    "version": "0.2.6",
+    "version": "0.2.7",
     "description": "Authenticated provider/profile/catalog control plane. Launches run locally; the API never returns provider credentials."
   },
   "security": [
@@ -2075,6 +2075,8 @@
               "hermes",
               "prime-agent",
               "gemini",
+              "antigravity",
+              "junie",
               "aider",
               "kilo"
             ]
@@ -2093,6 +2095,13 @@
                   1
                 ],
                 "default": 1
+              },
+              "selection": {
+                "type": "string",
+                "enum": [
+                  "restricted",
+                  "catalog"
+                ]
               },
               "roles": {
                 "type": "object",
@@ -2224,6 +2233,8 @@
               "hermes",
               "prime-agent",
               "gemini",
+              "antigravity",
+              "junie",
               "aider",
               "kilo"
             ]
@@ -2242,6 +2253,13 @@
                   1
                 ],
                 "default": 1
+              },
+              "selection": {
+                "type": "string",
+                "enum": [
+                  "restricted",
+                  "catalog"
+                ]
               },
               "roles": {
                 "type": "object",
@@ -2452,6 +2470,13 @@
               1
             ],
             "default": 1
+          },
+          "selection": {
+            "type": "string",
+            "enum": [
+              "restricted",
+              "catalog"
+            ]
           },
           "roles": {
             "type": "object",
@@ -3222,6 +3247,8 @@
                   "hermes",
                   "prime-agent",
                   "gemini",
+                  "antigravity",
+                  "junie",
                   "aider",
                   "kilo"
                 ]
@@ -3240,6 +3267,13 @@
                       1
                     ],
                     "default": 1
+                  },
+                  "selection": {
+                    "type": "string",
+                    "enum": [
+                      "restricted",
+                      "catalog"
+                    ]
                   },
                   "roles": {
                     "type": "object",
@@ -3514,6 +3548,8 @@
               "hermes",
               "prime-agent",
               "gemini",
+              "antigravity",
+              "junie",
               "aider",
               "kilo"
             ]
@@ -3532,6 +3568,13 @@
                   1
                 ],
                 "default": 1
+              },
+              "selection": {
+                "type": "string",
+                "enum": [
+                  "restricted",
+                  "catalog"
+                ]
               },
               "roles": {
                 "type": "object",
@@ -3779,6 +3822,8 @@
               "hermes",
               "prime-agent",
               "gemini",
+              "antigravity",
+              "junie",
               "aider",
               "kilo"
             ]
@@ -3797,6 +3842,13 @@
                   1
                 ],
                 "default": 1
+              },
+              "selection": {
+                "type": "string",
+                "enum": [
+                  "restricted",
+                  "catalog"
+                ]
               },
               "roles": {
                 "type": "object",

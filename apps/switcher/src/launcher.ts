@@ -32,9 +32,10 @@ async function writeOriCodexCatalog(stateDir: string, models: LaunchPlan["catalo
 }
 
 type OriPreparationOptions = Pick<LaunchOptions, "oriExecutable" | "args" | "resolveCredential" | "credentialEnv"> & {stateDir?: string; cwd?: string; onRoutingEvent?:(event:RoutingEvent)=>void};
-type OriSupportedHarness = Exclude<LaunchPlan["profile"]["harness"], "omp" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "opencode" | "kilo">;
+type OriSupportedHarness = Exclude<LaunchPlan["profile"]["harness"], "omp" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "opencode" | "kilo" | "antigravity" | "junie">;
 
 function oriTarget(harness: LaunchPlan["profile"]["harness"]): OriSupportedHarness {
+  if (harness === "antigravity" || harness === "junie") throw new Error("This CLI is supported through the direct Switcher backend only.");
   if (harness === "kilo") throw new Error("Ori does not launch Kilo; use the direct backend.");
   if (harness === "opencode") throw new Error("Ori does not launch legacy OpenCode; use the direct backend.");
   if (harness === "aider") throw new Error("Ori does not launch Aider; use the direct backend.");
@@ -105,7 +106,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   const profile = await client.getProfile(profileId);
   if((options.reasoning||options.dangerouslyBypassApprovalsAndSandbox)&&(profile.harness!=="codex"||(options.backend??"direct")!=="direct"))throw new Error("Reasoning and full-access launch options require direct Codex or ChatGPT.");
   assertHarnessArguments(profile.harness,options.args ?? []);
-  if (profile.harness === "gemini") validateHarnessProvider(profile.harness, await client.getProvider(profile.providerId));
+  if (profile.harness === "gemini" || profile.harness === "antigravity") validateHarnessProvider(profile.harness, await client.getProvider(profile.providerId));
   await validateHarnessConfiguration(profile.harness,resolve(options.cwd??process.cwd()),options.args);
   // Respect Grok's deployment lockdown. Silently dropping this setting could
   // bypass policy; inheriting it without checking can switch to native login.
@@ -174,7 +175,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
       reasoning:options.reasoning,dangerouslyBypassApprovalsAndSandbox:options.dangerouslyBypassApprovalsAndSandbox,
       credential, authStyle:plan.provider.authStyle, executable:nativeExecutable ?? detection?.executable, args:options.args ?? [], stateDir,
       cwd:resolve(options.cwd ?? process.cwd()), version:detection?.version,
-      ...(["pi","omp","dsh","cline","hermes","prime-agent","gemini","aider","opencode","kilo"].includes(plan.profile.harness) ? {sessionDir:join(root,"sessions",plan.profile.harness,profileId)} : {}),
+      ...(["pi","omp","dsh","cline","hermes","prime-agent","gemini","aider","opencode","kilo","antigravity","junie"].includes(plan.profile.harness) ? {sessionDir:join(root,"sessions",plan.profile.harness,profileId)} : {}),
     });
     cleanup = prepared.cleanup;
     if (options.desktop) {

@@ -11,7 +11,7 @@ source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 
 # Switcher
 
-Launch Claude Code, Codex, Grok Build, OpenCode 2, legacy OpenCode, Kilo, Pi, OMP, DeepSeek Harness, Cline, Hermes, Prime Agent, Gemini CLI or Aider with a chosen compatible provider and its model catalog. An authenticated API owns profiles and run metadata; the CLI starts the native harness on your computer. Import the same HTTP client from `@hasna/switcher/sdk`.
+Launch Claude Code, Codex, Grok Build, OpenCode 2, legacy OpenCode, Kilo, Pi, OMP, DeepSeek Harness, Cline, Hermes, Prime Agent, Antigravity CLI, Junie, Gemini CLI or Aider with a chosen compatible provider and its model catalog. An authenticated API owns profiles and run metadata; the CLI starts the native harness on your computer. Import the same HTTP client from `@hasna/switcher/sdk`.
 
 Requires Bun 1.3.14 or newer. Install the native harnesses separately.
 
@@ -33,6 +33,8 @@ installation guidance for every adapter. If a harness is installed outside
 | Cline | `cline`, >=3.0.61 | `cline` | [CLI project](https://github.com/cline/cline/tree/main/apps/cli) |
 | Hermes Agent | `hermes`, >=0.21.0 | NousResearch Hermes Agent official installer | [Quick install](https://github.com/NousResearch/hermes-agent#quick-install) |
 | Prime Agent | `prime-agent`, >=0.9.2 | PrimeIntellect versioned release artifact | [Project](https://github.com/PrimeIntellect-ai/prime-agent) |
+| Antigravity CLI | `agy`, exactly 1.2.5 | Google official distribution | [Installation](https://antigravity.google/docs/cli/install) |
+| Junie CLI | `junie`, build 3196.5 | JetBrains official distribution | [Documentation](https://junie.jetbrains.com/docs/) |
 | Gemini CLI | `gemini`, exactly 0.58.0 | `@google/gemini-cli` | [Project](https://github.com/google-gemini/gemini-cli) |
 | Aider | `aider`, exactly 0.86.2 | `aider-chat` | [Installation](https://aider.chat/docs/install.html) |
 | Kilo Code | `kilo`, >=7.5.15 | `@kilocode/cli` | [Release v7.5.15](https://github.com/Kilo-Org/kilocode/releases/tag/v7.5.15) |
@@ -419,6 +421,29 @@ Preflight rejects conflicting configured startup commands, blanket approval, upg
 
 Aider has no session ID. Each launch writes a separate owner-only transcript under Switcher state, and `--restore-chat-history` copies the last closed conversation for that profile into a new transcript before native restoration. Concurrent runs keep independent history; diagnostic-only runs do not replace it. This does not import an existing standalone Aider transcript. Set `SWITCHER_TEST_AIDER_EXECUTABLE` and run `bun run test:native-aider` for controlled installed-native protocol, edit, history, catalog, hostile-routing and dry-run checks. Paid-provider, Linux and interactive-terminal acceptance remain separate gates.
 
+## Antigravity CLI and Junie
+
+```sh
+switcher launch antigravity --provider gemini --model gemini-2.5-flash
+switcher launch junie --provider openrouter --model '~anthropic/claude-sonnet-latest'
+```
+
+Antigravity 1.2.5 uses the native Gemini API. Switcher creates a private native home, supplies the launch directory with `--add-dir`, preserves permission settings and global `GEMINI.md`, and keeps conversations in the profile session directory. Its built-in Flash Lite helper is routed to the policy's `fast` model, which defaults to main. Use `--role-model fast=MODEL` to assign it explicitly. Other non-main roles are unsupported. Global plugins and shared app authentication are not imported, and `~` inside native tools resolves to the private home. Inherited custom routing settings fail preflight.
+
+Junie build 3196.5 uses an isolated `custom:switcher` JSON model profile for Chat Completions, Responses or Anthropic Messages. Its primary and faster slots use the managed gateway, with `fast` defaulting to main. Switcher snapshots native user/project settings, disables inherited model/config discovery and keeps a durable profile cache and sessions for native resume. Native permissions, project guidelines and Junie's noninteractive trust behavior remain active. Provider/config/model override flags are reserved. Neither adapter receives the upstream provider key; the child receives an ephemeral gateway credential.
+
+The native Gemini preset now uses the distinct `gemini-generate-content` provider ID. Existing saved providers retain their IDs and remain usable by name.
+
+## Claude Code with Amazon Bedrock
+
+```sh
+switcher launch claude --provider bedrock \
+  --url https://bedrock-mantle.us-east-1.api.aws/anthropic/v1 \
+  --model anthropic.claude-sonnet-5
+```
+
+Use your account's regional Mantle endpoint and a Bedrock API key through `SWITCHER_PROVIDER_BEDROCK`, `AWS_BEARER_TOKEN_BEDROCK`, or a scoped credential binding. Switcher verifies authentication with the same origin's `/v1/models`, discovers the regional catalog, and sends native Anthropic Messages through its managed gateway. AWS credentials and native Bedrock mode are not inherited by the child. IAM/model access, regional availability, billing and key expiry remain provider requirements; catalog visibility alone does not prove inference entitlement. See [Amazon's Messages API contract](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html).
+
 ## Gemini CLI
 
 The native Gemini adapter supports exactly Gemini CLI 0.58.0 and the `gemini-generate-content` protocol with `x-api-key` authentication (the native wire header is `x-goog-api-key`). Use `switcher launch gemini --provider gemini --model MODEL`, selecting an ID from the discovered catalog. A compatible custom gateway must implement the same Gemini protocol and discovery contract. Chat Completions, OAuth, Vertex/ADC and Ori are separate interfaces and are not provided by this native adapter.
@@ -511,7 +536,7 @@ Discovery allows at most two retries per page for network failures and HTTP 408,
 | Harness | Required wire protocol | Native catalog |
 | --- | --- | --- |
 | Claude Code ≥2.1.257 | Anthropic Messages | Per-launch `modelPicker` on compatible Claude versions |
-| Codex ≥0.153.0 | OpenAI Responses | Startup `model_catalog_json` |
+| Codex ≥0.153.0 | OpenAI Responses | Startup `model_catalog_json`, filtered to the launch policy |
 | Grok Build ≥1.0.13 | Chat Completions, Responses or Messages | Authenticated loopback remote catalog with upstream model IDs |
 | OpenCode 2 (tested beta-19157) | Chat Completions, Responses or Messages | Version 2 provider/model configuration and standalone server |
 | Pi ≥0.85.1 | Chat, Responses, Messages | Provider-scoped native picker and model cycling |
@@ -522,8 +547,12 @@ Discovery allows at most two retries per page for network failures and HTTP 408,
 | Prime Agent ≥0.9.2 | Chat, Responses, Messages | Native catalog, RPC selection and owned supervisor |
 | Legacy OpenCode (tested 1.18.29) | Chat, Responses, Messages | Singular-provider models and native diagnostic |
 | Kilo ≥7.5.15 | Chat, Responses, Messages | Native provider catalog with scoped bridge |
+| Antigravity CLI 1.2.5 | Gemini generateContent | Managed custom model and helper routing |
+| Junie build 3196.5 | Chat, Responses, Messages | Managed custom primary/faster profile |
 | Gemini CLI 0.58.0 | Gemini generateContent | Exact native dynamic model catalog |
 | Aider 0.86.2 | Chat, Responses, Messages | Native available-model listing; Responses is buffered |
+
+New direct Codex launches allow switching among the authenticated eligible catalog snapshot. Explicit and saved restricted policies remain restricted, and their picker shows only permitted models. Subagent and utility models remain pinned to the configured role defaults. See [model policy](docs/MODEL-POLICY.md).
 
 The CLI catalog includes all provider output modalities. Native coding pickers exclude unavailable models and those explicitly lacking a required generation method, text output or tool support; unknown metadata remains unknown. This is a capability filter, not a guarantee of successful tool use. Catalog refresh happens before every launch. Native pickers are startup snapshots, not promised live reloads. OpenCode requires a complete capability object; missing fields use text-only/tool-enabled native defaults with a warning. Its beta `models --standalone` command may return an early empty snapshot; the native `/api/model` API and interactive picker expose the settled catalog.
 

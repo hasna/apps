@@ -63,7 +63,8 @@ export async function selectModel(models: Model[], query = "", harness?: Profile
 }
 
 export async function ensureLaunchProfile(client: SwitcherClient, provider: Provider, harness: Profile["harness"], model: string, modelPolicy?: ModelPolicy): Promise<Profile> {
-  const normalizedPolicy = modelPolicy === undefined ? undefined : parse(modelPolicySchema, modelPolicy);
+  const policy = modelPolicy ?? (harness === "codex" ? { version: 1, selection: "catalog" } : undefined);
+  const normalizedPolicy = policy === undefined ? undefined : parse(modelPolicySchema, policy);
   const identity=normalizedPolicy===undefined?[provider.id,harness,model]:[provider.id,harness,model,normalizedPolicy];
   const hash = createHash("sha256").update(canonicalPolicyJSON(identity)).digest("hex").slice(0, 24);
   const desired = parse(profileInputSchema, {id: `launch-${harness}-${hash}`, name: `${harness}: ${model}`.slice(0, 200), providerId: provider.id, harness, model, ...(normalizedPolicy ? {modelPolicy: normalizedPolicy} : {})});

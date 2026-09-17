@@ -17,6 +17,7 @@ const fallbacksSchema = z.record(policyModelIdSchema, z.array(policyModelIdSchem
 
 export const modelPolicySchema = z.object({
   version: z.literal(1).default(1),
+  selection: z.enum(["restricted", "catalog"]).optional(),
   roles: z.object({
     subagent: policyModelIdSchema.optional(), fast: policyModelIdSchema.optional(), planning: policyModelIdSchema.optional(),
     review: policyModelIdSchema.optional(), summary: policyModelIdSchema.optional(), compaction: policyModelIdSchema.optional(),

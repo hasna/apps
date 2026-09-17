@@ -433,7 +433,7 @@ export interface components {
             name: string;
             providerId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
+            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "antigravity" | "junie" | "aider" | "kilo";
             model: string;
             modelPolicy?: {
                 /**
@@ -441,6 +441,8 @@ export interface components {
                  * @enum {number}
                  */
                 version: 1;
+                /** @enum {string} */
+                selection?: "restricted" | "catalog";
                 roles?: {
                     subagent?: string;
                     fast?: string;
@@ -465,7 +467,7 @@ export interface components {
             name: string;
             providerId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
+            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "antigravity" | "junie" | "aider" | "kilo";
             model: string;
             modelPolicy?: {
                 /**
@@ -473,6 +475,8 @@ export interface components {
                  * @enum {number}
                  */
                 version: 1;
+                /** @enum {string} */
+                selection?: "restricted" | "catalog";
                 roles?: {
                     subagent?: string;
                     fast?: string;
@@ -514,6 +518,8 @@ export interface components {
              * @enum {number}
              */
             version: 1;
+            /** @enum {string} */
+            selection?: "restricted" | "catalog";
             roles?: {
                 subagent?: string;
                 fast?: string;
@@ -659,7 +665,7 @@ export interface components {
                 name: string;
                 providerId: string;
                 /** @enum {string} */
-                harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
+                harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "antigravity" | "junie" | "aider" | "kilo";
                 model: string;
                 modelPolicy?: {
                     /**
@@ -667,6 +673,8 @@ export interface components {
                      * @enum {number}
                      */
                     version: 1;
+                    /** @enum {string} */
+                    selection?: "restricted" | "catalog";
                     roles?: {
                         subagent?: string;
                         fast?: string;
@@ -716,7 +724,7 @@ export interface components {
             modelPolicyVersion: 1;
             profileId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
+            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "antigravity" | "junie" | "aider" | "kilo";
             model: string;
             modelPolicy?: {
                 /**
@@ -724,6 +732,8 @@ export interface components {
                  * @enum {number}
                  */
                 version: 1;
+                /** @enum {string} */
+                selection?: "restricted" | "catalog";
                 roles?: {
                     subagent?: string;
                     fast?: string;
@@ -771,7 +781,7 @@ export interface components {
             modelPolicyVersion?: 1;
             profileId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
+            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "antigravity" | "junie" | "aider" | "kilo";
             model: string;
             modelPolicy?: {
                 /**
@@ -779,6 +789,8 @@ export interface components {
                  * @enum {number}
                  */
                 version: 1;
+                /** @enum {string} */
+                selection?: "restricted" | "catalog";
                 roles?: {
                     subagent?: string;
                     fast?: string;

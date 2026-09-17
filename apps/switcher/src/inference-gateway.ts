@@ -1,3 +1,4 @@
+import { antigravityHelperModel } from "./antigravity-config";
 import { proxyProviderStream } from "./provider-stream";
 import { createProviderRequest, type ProviderRequestTiming } from "./provider-request";
 import { isContextOverflow } from "./provider-error";
@@ -32,7 +33,7 @@ export function createInferenceGateway(input: GatewayInput, timing: ProviderRequ
   const digest=(value:string)=>createHash("sha256").update(value).digest();
   const expected=digest(token), policy=input.compiledPolicy;
   const known=new Set(input.models.map(m=>m.id));
-  const safeModel=(value:unknown)=>typeof value==="string" && value!==input.credential && (known.has(value)||Object.hasOwn(policy.aliases,value)) ? value : "<unrecognized>";
+  const safeModel=(value:unknown)=>typeof value==="string" && value!==input.credential && (known.has(value)||Object.hasOwn(policy.aliases,value)||input.harness==="antigravity"&&value===antigravityHelperModel) ? value : "<unrecognized>";
   const fail=(status:number,code:string,message?:string)=>Response.json({error:{type:"switcher_model_policy",code,message:message??(code==="model_not_allowed"?"This model is outside the launch policy. Select it with switcher launch --model or explicitly assign an allowed role model.":`Switcher inference gateway: ${code}.`)}},{status});
   let closing=false,stopped:Promise<void>|undefined;
   const active=new Set<{abort:AbortController;done:Promise<void>;cancel?:()=>Promise<void>}>();
@@ -64,7 +65,9 @@ export function createInferenceGateway(input: GatewayInput, timing: ProviderRequ
     try {
       for(const part of [body,...(gemini&&body.generateContentRequest?[body.generateContentRequest]:[])])if(routingFields.some(k=>Object.hasOwn(part,k)))throw new Fault(403,"routing_override","Unmanaged model routing is disabled.");
       if(typeof requested!=="string")throw new Fault(400,"model_required","A model is required.");
-      resolved=resolvePolicyModel(policy,requested);
+      const nativeHelper=input.harness==="antigravity"&&requested===antigravityHelperModel;
+      resolved=resolvePolicyModel(policy,nativeHelper?policy.roles.fast:requested);
+      if(nativeHelper)event.reason="antigravity_helper_model";
       if(input.models.some(model=>model.id===resolved&&modelExpired(model)))throw new Fault(422,"model_expired","Selected model has expired.");
       if(gemini)for(const declared of [body.model,body.generateContentRequest?.model])if(declared!==undefined&&declared!==requested&&declared!==`models/${requested}`)throw new Fault(403,"conflicting_model","Conflicting model identity.");
     } catch(error) {event.reason=error instanceof Fault?error.code:"invalid_model";emit();return fail(error instanceof Fault?error.status:400,event.reason);}

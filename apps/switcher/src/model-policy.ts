@@ -4,7 +4,7 @@ import { modelPolicySchema } from "./model-policy-schema";
 
 export const MODEL_POLICY_VERSION = 1 as const;
 export type ModelRole = "subagent" | "fast" | "planning" | "review" | "summary" | "compaction" | "weak" | "editor";
-export type ModelPolicy = { version?: 1; roles?: Partial<Record<ModelRole, string>>; allowedModels?: string[]; aliases?: Record<string, string>; fallbacks?: Record<string, string[]> };
+export type ModelPolicy = { version?: 1; selection?: "restricted" | "catalog"; roles?: Partial<Record<ModelRole, string>>; allowedModels?: string[]; aliases?: Record<string, string>; fallbacks?: Record<string, string[]> };
 export type CompiledModelPolicy = { version: 1; model: string; roles: Record<ModelRole, string>; allowedModels: string[]; aliases: Record<string, string>; fallbacks: Record<string, string[]>; digest: string };
 export type ModelGuidanceContext = { harness: string; providerId?: string; baseUrl?: string; model: string; compiled: CompiledModelPolicy; catalogPath?: string };
 
@@ -31,6 +31,9 @@ export function compileModelPolicy(model: string, catalog: readonly Model[], pol
   const explicitAllowed = (p.allowedModels ?? []).map((v, i) => id(v, `allowedModels[${i}]`));
   if (explicitAllowed.length > 500) throw new Fault(400, "invalid_model_policy", "Model policy allowedModels is too large.");
   for (const value of explicitAllowed) requireAvailable(value, "An allowed model is not present in the eligible catalog.");
+  // Catalog selection authorizes only this launch's available provider snapshot.
+  // Native role assignments remain pinned independently of the main picker.
+  const catalogAllowed = p.selection === "catalog" ? [...available] : [];
   const aliases: Record<string, string> = Object.create(null);
   for (const [name, target] of Object.entries(p.aliases ?? {})) {
     if (Object.keys(aliases).length >= 200 || !/^[A-Za-z0-9._/-]{1,120}$/.test(name) || ["__proto__", "prototype", "constructor"].includes(name)) throw new Fault(400, "invalid_model_policy", "A model alias is invalid or too numerous.");
@@ -40,7 +43,7 @@ export function compileModelPolicy(model: string, catalog: readonly Model[], pol
     aliases[name] = canonical;
   }
   const fallbacks: Record<string, string[]> = Object.create(null);
-  const allowedSources = new Set([selected, ...Object.values(compiledRoles), ...explicitAllowed]);
+  const allowedSources = new Set([selected, ...Object.values(compiledRoles), ...explicitAllowed, ...catalogAllowed]);
   for (const [source, targets] of Object.entries(p.fallbacks ?? {})) {
     if (!allowedSources.has(source) || !available.has(source) || !Array.isArray(targets) || Object.keys(fallbacks).length >= 200 || targets.length > 20) throw new Fault(400, "invalid_model_policy", "Fallback source or list is invalid.");
     const values = targets.map((v, i) => id(v, `fallbacks.${source}[${i}]`));
@@ -48,7 +51,7 @@ export function compileModelPolicy(model: string, catalog: readonly Model[], pol
     if (values.includes(source)) throw new Fault(400, "invalid_model_policy", "A model cannot fall back to itself.");
     fallbacks[source] = uniq(values);
   }
-  const allowedModels = uniq([selected, ...Object.values(compiledRoles), ...explicitAllowed, ...Object.values(fallbacks).flat()]).sort();
+  const allowedModels = uniq([selected, ...Object.values(compiledRoles), ...explicitAllowed, ...catalogAllowed, ...Object.values(fallbacks).flat()]).sort();
   if(Object.values(aliases).some(value=>!allowedModels.includes(value)))throw new Fault(422,"model_not_allowed","A model alias target must be explicitly allowed by the launch policy.");
   const result = { version: 1 as const, model: selected, roles: compiledRoles, allowedModels, aliases, fallbacks };
   return { ...result, digest: createHash("sha256").update(stable(result)).digest("hex") };

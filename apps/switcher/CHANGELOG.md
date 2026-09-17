@@ -9,6 +9,15 @@ status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
+## 0.2.7
+
+### Patch Changes
+
+- Make available catalog models selectable in new direct Codex profiles, including switching models within one session. Keep explicit restricted policies and existing saved profiles unchanged; filter the native picker to the effective policy.
+- Add direct Antigravity 1.2.5 with Gemini and Junie build 3196.5 with compatible Chat Completions, Responses and Messages providers. Isolate routing credentials, preserve native permission settings and instructions, retain sessions across launches, and reject native argument forms that override the managed profile.
+- Route Antigravity's native helper to the configured fast role, rejecting ambiguous assignments. Give Junie an explicit faster-model profile and preserve its global action rules and instructions.
+- Add the regional AWS Bedrock Mantle Messages preset with a bounded bearer-authenticated catalog check and Claude-only inference selection. Native Gemini uses a distinct provider ID and authenticated first-run model discovery. Bedrock inference still requires the account's model access and billing to be valid.
+
 ## 0.2.6
 
 ### Patch Changes

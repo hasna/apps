@@ -18,6 +18,8 @@ export type HarnessInstallation = {
 };
 
 const records: Record<HarnessId, HarnessInstallation> = {
+  antigravity: {displayName:"Antigravity CLI",executable:"agy",versionRequirement:"1.2.5",packageOrProject:"Google Antigravity official distribution",documentationUrl:"https://antigravity.google/docs/cli/install",installationGuidance:"install the official Antigravity CLI 1.2.5 and ensure agy is on PATH, or pass the absolute binary path with --executable"},
+  junie: {displayName:"Junie CLI",executable:"junie",versionRequirement:"build 3196.5",packageOrProject:"JetBrains Junie official distribution",documentationUrl:"https://junie.jetbrains.com/docs/quickstart.html",installationGuidance:"install official Junie build 3196.5 and ensure junie is on PATH, or pass its absolute path with --executable"},
   claude: {
     displayName: "Claude Code",
     executable: "claude",
