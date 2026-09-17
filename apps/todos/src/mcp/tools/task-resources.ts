@@ -7,6 +7,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { InputValidationError } from "../../types/index.js";
+import {
+  getTodosCloudClient,
+  cloudLinkCommit,
+  cloudFindCommit,
+  cloudListTaskRefs,
+  cloudLinkRef,
+  cloudFindRefs,
+  cloudRecordVerification,
+  cloudListTaskCommits,
+  cloudGetTask,
+} from "../../cli/cloud-router.js";
 import { listTasks, getTask } from "../../db/tasks.js";
 import { listProjects } from "../../db/projects.js";
 import { listAgents } from "../../db/agents.js";
@@ -1135,6 +1146,14 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       },
       async ({ task_id, sha, message, author, files_changed, committed_at }) => {
         try {
+          // http authority routing: POST /v1/tasks/:id/commits. Writing the link
+          // locally attached the commit to a row that does not exist in the
+          // shared store, so the audit trail was invisible to every other agent.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const linked = await cloudLinkCommit(cloud, task_id, { sha, message, author, files_changed });
+            return { content: [{ type: "text" as const, text: JSON.stringify(linked, null, 2) }] };
+          }
           const resolvedId = resolveId(task_id);
           const commit = linkTaskToCommit({ task_id: resolvedId, sha, message, author, files_changed, committed_at });
           return { content: [{ type: "text" as const, text: JSON.stringify(commit, null, 2) }] };
@@ -1150,6 +1169,14 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       { task_id: z.string().describe("Task ID") },
       async ({ task_id }) => {
         try {
+          // http authority routing: GET /v1/tasks/:id/commits.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const task = await cloudGetTask(cloud, task_id);
+            if (!task) throw new Error(`Task not found: ${task_id}`);
+            const remote = await cloudListTaskCommits(cloud, task.id);
+            return { content: [{ type: "text" as const, text: JSON.stringify(remote, null, 2) }] };
+          }
           const commits = getTaskCommits(resolveId(task_id));
           return { content: [{ type: "text" as const, text: JSON.stringify(commits, null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
@@ -1164,6 +1191,13 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       { sha: z.string().describe("Git commit SHA (full or short prefix)") },
       async ({ sha }) => {
         try {
+          // http authority routing: GET /v1/commits/:sha.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const remote = await cloudFindCommit(cloud, sha);
+            if (!remote) return { content: [{ type: "text" as const, text: `No task linked to commit ${sha}` }] };
+            return { content: [{ type: "text" as const, text: JSON.stringify(remote, null, 2) }] };
+          }
           const result = findTaskByCommit(sha);
           if (!result) return { content: [{ type: "text" as const, text: `No task linked to commit ${sha}` }] };
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
@@ -1186,6 +1220,12 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       },
       async ({ task_id, ref_type, name, url, provider, metadata }) => {
         try {
+          // http authority routing: POST /v1/tasks/:id/refs.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const linked = await cloudLinkRef(cloud, task_id, { ref_type, name, url, provider, metadata });
+            return { content: [{ type: "text" as const, text: JSON.stringify(linked, null, 2) }] };
+          }
           const resolvedId = resolveId(task_id);
           const ref = linkTaskGitRef({ task_id: resolvedId, ref_type, name, url, provider, metadata });
           return { content: [{ type: "text" as const, text: JSON.stringify(ref, null, 2) }] };
@@ -1201,6 +1241,12 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       { task_id: z.string().describe("Task ID") },
       async ({ task_id }) => {
         try {
+          // http authority routing: GET /v1/tasks/:id/refs.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const remote = await cloudListTaskRefs(cloud, task_id);
+            return { content: [{ type: "text" as const, text: JSON.stringify(remote, null, 2) }] };
+          }
           const refs = getTaskGitRefs(resolveId(task_id));
           return { content: [{ type: "text" as const, text: JSON.stringify(refs, null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
@@ -1215,6 +1261,12 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       { ref: z.string().describe("Branch name, PR number, or PR URL substring") },
       async ({ ref }) => {
         try {
+          // http authority routing: GET /v1/refs/:ref.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const remote = await cloudFindRefs(cloud, ref);
+            return { content: [{ type: "text" as const, text: JSON.stringify(remote, null, 2) }] };
+          }
           const refs = findTasksByGitRef(ref);
           return { content: [{ type: "text" as const, text: JSON.stringify(refs, null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
@@ -1237,6 +1289,13 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
       },
       async ({ task_id, command, status, output_summary, artifact_path, agent_id, run_at }) => {
         try {
+          // http authority routing: POST /v1/tasks/:id/verifications. The local
+          // write hit a FOREIGN KEY failure for cloud-only tasks.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const recorded = await cloudRecordVerification(cloud, task_id, { command, status, output_summary, artifact_path, agent_id });
+            return { content: [{ type: "text" as const, text: JSON.stringify(recorded, null, 2) }] };
+          }
           const verification = addTaskVerification({
             task_id: resolveId(task_id),
             command,

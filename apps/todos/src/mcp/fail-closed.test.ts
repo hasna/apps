@@ -277,11 +277,14 @@ describe("todos-mcp on the hosted route never opens the local store", () => {
     expect(resource?.error?.message).toContain("REMOTE_COMMAND_UNSUPPORTED");
     expect(resource?.error?.message).toContain("HASNA_TODOS_LOCAL=1");
 
-    // Each still-local-only tool family (templates, handoffs, dispatches):
+    // Each still-local-only tool family (handoffs = id 5, dispatches = id 6):
     // isError with the same stable code, passed through by formatError. The
-    // machine families are API-routed on the merged tree (hasna/apps#1966) and
-    // are asserted with the hosted tools below.
-    for (const id of [4, 5, 6]) {
+    // machine families are API-routed on the merged tree (hasna/apps#1966), and
+    // `list_templates` (id 4) joined them in the PORT-TO-API slice — all three
+    // are asserted with the hosted tools below. Handoffs and dispatches stay
+    // here because neither has a /v1 route: handoffs is an unported resource
+    // family and the dispatch CLI is abandoned.
+    for (const id of [5, 6]) {
       const { text, isError } = toolText(byId.get(id));
       expect(isError).toBe(true);
       const parsed = JSON.parse(text) as { code: string; message: string };
@@ -290,10 +293,13 @@ describe("todos-mcp on the hosted route never opens the local store", () => {
       expect(parsed.message).toContain(`127.0.0.1:${port}`);
     }
 
-    // API-routed tools (machines_list since hasna/apps#1966, and list_tasks)
-    // reached for the authority (refused at the closed port) and their
-    // REMOTE_API_* refusal reaches the client under its own code.
-    for (const id of [3, 7]) {
+    // API-routed tools (machines_list since hasna/apps#1966, list_templates
+    // since the PORT-TO-API slice, and list_tasks) reached for the authority
+    // (refused at the closed port) and their REMOTE_API_* refusal reaches the
+    // client under its own code. A tool moving from the set above into this one
+    // is the whole point of the port: the refusal it gives now is "the
+    // authority is unreachable", not "this command does not exist here".
+    for (const id of [3, 4, 7]) {
       const hosted = toolText(byId.get(id));
       expect(hosted.isError).toBe(true);
       const hostedError = JSON.parse(hosted.text) as { code: string; message: string };

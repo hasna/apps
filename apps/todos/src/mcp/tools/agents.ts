@@ -4,7 +4,7 @@ import { registerAgent, isAgentConflict, releaseAgent, getAgent, getAgentByName,
 import { getAgentPoolForProject } from "../../lib/config.js";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
 import { IdentityAliasAmbiguousError } from "../../types/index.js";
-import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent, cloudHeartbeatAgent, cloudReleaseAgent } from "../../cli/cloud-router.js";
+import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent, cloudHeartbeatAgent, cloudReleaseAgent, cloudGetAgent } from "../../cli/cloud-router.js";
 
 interface AgentFocus {
   agent_id: string;
@@ -247,7 +247,13 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
           if (!identifier) {
             return { content: [{ type: "text" as const, text: "Provide agent_id, id, or name." }], isError: true };
           }
-          const agent = getAgent(identifier) || getAgentByName(identifier);
+          // http authority routing: GET /v1/agents/:id (the route resolves by id
+          // OR name). `register_agent`/`list_agents` already read the shared
+          // roster, so reading this one locally 404'd every cloud-only agent.
+          const cloud = getTodosCloudClient();
+          const agent = cloud
+            ? await cloudGetAgent(cloud, identifier)
+            : (getAgent(identifier) || getAgentByName(identifier));
           if (!agent) {
             return { content: [{ type: "text" as const, text: `Agent not found: ${identifier}` }], isError: true };
           }
@@ -256,7 +262,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
             `Name: ${agent.name}`,
           ];
           if (agent.description) parts.push(`Description: ${agent.description}`);
-          if (Object.keys(agent.metadata).length > 0) parts.push(`Metadata: ${JSON.stringify(agent.metadata)}`);
+          if (agent.metadata && Object.keys(agent.metadata).length > 0) parts.push(`Metadata: ${JSON.stringify(agent.metadata)}`);
           parts.push(`Created: ${agent.created_at}`);
           parts.push(`Last seen: ${agent.last_seen_at}`);
           return { content: [{ type: "text" as const, text: parts.join("\n") }] };
